@@ -50,7 +50,7 @@ A design lives in one of three places:
    A chip says "3 edits by hand · go with your next message". The next message tells the agent what changed.
 6. The user asks for two more variants of the Git section. The agent adds `git-a.html` and `git-b.html`. **Overview** shows the three pages side by side, each labelled ("rows", "cards", "compact").
 7. History lists the snapshots. The user previews the one from before variant B, then goes back to the current state.
-8. **Build it** opens the New session composer in the design system's first source project. The design is its source, the pages and `tokens.css` are attached, and the prompt reads "Implement the Settings page design". The design's header then says "Building in moonlet · implement-settings-page".
+8. **Build it** opens the New session composer in the design system's first source project. The design is its source, its pages and styles are listed as attachments, and the prompt reads "Implement the Settings page design". Create copies the design into the new session as a session design, so the session has a Design tab and can go on to the spec and the PR as in journey B. The design's header then says "Building in moonlet · implement-settings-page".
 
 ### B session design: requirements, design, spec, code in one session
 
@@ -111,7 +111,7 @@ A design lives in one of three places:
   - Claude Code, in the structured agent view (X6)
   - owned by moonletd and restored after a restart (S4)
   - started in the design's folder with the design system's folder given with `--add-dir`
-  - in Accept edits mode
+  - in Accept edits mode, with `--settings` deny rules `Edit(//<design system folder>/**)`, so it can read the design system but never edit it (Accept edits would otherwise accept edits in an `--add-dir` folder too)
 - [ ] A session design uses the session's agent. It reads the design system from the copy in `.moonlet/design/<slug>/system/` inside the worktree, so it needs no extra directory access. The chat shows a note: "Design view opened. The design system is copied into the session for Claude to read".
 - [ ] The first prompt is the brief. The chat shows a note that the brief went with the design system's `README.md` and the design rules. (The design export's boards say `GUIDE.md`; X64 follows design-sync and names it `README.md`.) The rules:
   - link only the design system's `styles.css`
@@ -196,7 +196,7 @@ A design lives in one of three places:
 - [ ] The Palette lists the design system's snippets by group, with search. Dragging a snippet onto the canvas, or picking it with an element selected, inserts it after the selection with fresh `data-mid` ids.
 - [ ] Delete removes an element, ⌘D duplicates it, ⌥⌘G wraps it in a box and ⇧⌥⌘G unwraps it. ⌘C and ⌘V copy and paste elements between pages of the same design.
 - [ ] ⌘Z and ⇧⌘Z undo and redo the editor's changes since the design was opened. The toolbar has an undo button too.
-- [ ] Style changes are written as the element's inline `style`, and text changes as its text. Each change is saved to the page file within 500 ms, without editor outlines or attributes. Reading the saved file gives back exactly the edited page.
+- [ ] Style changes are written as the element's inline `style`, and text changes as its text. Each change is saved to the page file within 500 ms. The save strips only the editor's own transient markup (outlines, selection and hover attributes, the bridge script). It keeps every `data-mid` as it is: an element keeps its id through saves, reloads and edits by hand, and only an inserted or duplicated element gets a new one. Reading the saved file gives back exactly the edited page, ids included.
 - [ ] While the agent is working, Edit is locked (shown with a lock) and comments still work.
 - [ ] The chip "<n> edits by hand · go with your next message" counts the edits not yet told to the agent. The next message starts with `Edits by hand since your last turn:` and one line per element: page, `data-mid`, and what changed (moved above `m22`, restyled with the properties, the new text, inserted, deleted).
 - [ ] A save whose file changed on disk since the canvas loaded it is refused. The canvas reloads and shows the yellow bar.
@@ -216,10 +216,15 @@ A design lives in one of three places:
   - the project: the design system's first source
   - the design as the composer's source chip ("Design · Settings page")
   - the branch: `<prefix>implement-<design slug>`
-  - attached: each page with its label, and the design system's `styles.css` closure (tokens, fonts, `components.css`)
   - the prompt: `Implement the <design name> design`
   - a note: "The project is the design system's first source. The design keeps a link to the session it starts."
-- [ ] The design records the session. Its header shows "Building in <project> · <session>", and the Designs index shows "built in <session>".
+- [ ] The design arrives as X54 attachments that follow its text contract: each sends the text it shows, in the order shown, before the prompt. There is one attachment per page, in `design.toml` order with `index.html` first, then one for the styles. Each sends one line:
+  - a page: `<design dir>/<slug>/pages/<page>.html · <design name>, <label>`
+  - the styles: `<design dir>/<slug>/system/styles.css · <design system> styles`
+
+  Unfolding a page's attachment shows its line and a thumbnail of the page. × leaves that page out of the copy and the message, but the styles cannot be left out. No HTML is pasted into the message, so the first message stays small whatever the design's size.
+- [ ] Create starts the session with `session.create {…, design: {workspace, slug, pages}}`. Before the agent starts, the daemon copies the design into the new worktree as a session design: the pages kept, `assets/`, `system/` and `design.toml`, as X65's session-design storage says. So the paths the attachments name exist when the agent reads them.
+- [ ] The design records the session. Its header shows "Building in <project> · <session>", and the Designs index shows "built in <session>". From there on the session design is the one that changes; the workspace design stays as it was.
 
 ### Session designs, spec and PR
 
@@ -265,6 +270,7 @@ The boards of the design export are the reference. Layout of the design screen:
 
 - `design.list {workspace}` → `[{slug, name, kind: "workspace" | "session" | "project", system, project?, session?, path, pages, updated_at, open_comments, agent_state, built_in?}]`
 - `design.create {workspace, name, system, brief, session?, spawned_by?}` → the design. With `session` it is a session design in that worktree. Otherwise it is a workspace design, and its agent starts.
+- `session.create` (X54) gains `design?: {workspace, slug, pages}`. Before the agent starts, the daemon copies that workspace design into the new worktree as a session design and records the session on the workspace design. Without `design`, `session.create` is unchanged.
 - `design.copy {workspace, from: {project, path}, name}` copies a project design into a new workspace design.
 - `design.remove {workspace, slug}`
 - `design.write_page {design, page, html, base_version}` → `{version}`, or the error `stale`
@@ -286,6 +292,7 @@ The boards of the design export are the reference. Layout of the design screen:
 - Pages are untrusted HTML and JavaScript written by an agent. The canvas iframe has `sandbox="allow-scripts"` and never `allow-same-origin`, so a page cannot reach the app, Tauri's IPC or another design.
 - Every page is served with `Content-Security-Policy: default-src moonlet-design: data: blob: 'unsafe-inline'; connect-src 'none'; form-action 'none'; frame-src 'none'`. A prototype cannot fetch or post anywhere.
 - The editor bridge talks to the app only through `postMessage`. The app accepts only messages from the canvas frame's window, with a known message type, and checks every `data-mid` and page name it gets before it writes anything.
+- A workspace design's agent and the sync agent (X64) get `--add-dir` folders they may only read. Their `--settings` deny `Edit(//<folder>/**)`, which covers every Claude Code file-editing tool. Bash is not covered by those rules, but in Accept edits mode every Bash command other than `"$MOONLET_BIN" design …` asks first, so the user sees any command that could write there.
 - `design.write_page` writes only `pages/*.html` of the named design. For a session design it resolves inside the worktree's design folder and rejects any path that leaves it.
 - A project design is read from git objects (`git show <base>:<path>`), never checked out, and is rendered in the same sandbox.
 
@@ -302,11 +309,15 @@ The boards of the design export are the reference. Layout of the design screen:
 
 ## Test plan
 
+While the spec is a draft, the plan names test files and areas. Each criterion gets the exact test names that cover it, as in X50, when its stack entry is implemented.
+
 - Desktop `lib/` (Vitest, jsdom):
   - `designComments`: the comment line, Send all's message, orphaning against a reloaded page, and the Comments tab's grouping and footer count
   - `designEdits`: each editor operation applied to a captured page, compared with a literal expected HTML; serialization that strips editor attributes and round-trips exactly; the "Edits by hand" block and the chip's count
   - `designTokens`: matching a value to a token, the popover's order, and the off-system flag
   - `designViewport`: fit-to-canvas scale and the zoom steps
+  - `buildIt`: the composer's attachments for a design, with their literal lines, order and the page left out with ×
+  - `designEdits`: a page saved and reloaded keeps every `data-mid`, compared with the literal captured page
   - `designBars`: which bar shows for a given state, one at a time, in priority order
   - `designsIndex`: grouping into In sessions, Workspace designs and In projects
   - `changesGroups`: Design, Spec and Code grouping
@@ -322,6 +333,8 @@ The boards of the design export are the reference. Layout of the design screen:
 - `crates/moonletd/tests/`:
   - `design.create` with `spawned_by` sends the `design.open` toast event
   - `design.create` with `session` writes into the worktree
+  - `session.create` with `design` copies the kept pages, `system/` and `design.toml` into the worktree before the agent starts
+  - a design agent's settings deny edits in the design system's folder
   - `design.write_page` with a stale version
 - e2e `design-mode.e2e.ts` (a crucial feature, X12), with a fixture design and a fake agent binary:
   - ⌃⌘D opens Design mode, and the canvas shows the page
@@ -351,10 +364,10 @@ X64 and X65 ship as one `gh stack` on `main`. Each entry carries its criteria's 
 | 8 | `app: comments` | Comment mode, pins, Keep and Send, Comments tab, Send all, orphaned, chat cards; e2e | comment mode on Phone, right rail |
 | 9 | `app: visual editor, structure` | Select, Layers, breadcrumb, text editing, delete, duplicate, wrap, copy and paste, undo, save and the bridge, "Edits by hand" | edit mode |
 | 10 | `app: visual editor, styling` | Drag to move, resize, Inspector, token popover, off-system, Palette; e2e | edit mode, right rail |
-| 11 | `app: history and Build it` | Snapshots, History tab and preview, restore; Build it into the composer, "Building in"; e2e | History, Build it |
-| 12 | `app: session designs` | `design new --here`, the session Design tab, the pinned `system/` copy and Update, the slash menu, `/moonlet-design new` toast, Changes grouping, spec-from-design replies, the PR's Design and build, the Designs index with project designs; e2e | `/moonlet-design new`, A–F |
+| 11 | `app: history` | Snapshots, History tab and preview, restore; e2e | History |
+| 12 | `app: session designs and Build it` | `design new --here`, Build it (its attachments, and `session.create` copying the design into the session, "Building in"), the session Design tab, the pinned `system/` copy and Update, the slash menu, `/moonlet-design new` toast, Changes grouping, spec-from-design replies, the PR's Design and build, the Designs index with project designs; e2e | Build it, `/moonlet-design new`, A–F |
 
-Entries 2–4 come first because everything in the app needs the folder format and the RPCs. 5 and 6 make the design system usable on its own, and moonlet's own desktop app is the first design system to build with it. 7–11 make workspace designs complete, and 12 brings designs into sessions.
+Entries 2–4 come first because everything in the app needs the folder format and the RPCs. 5 and 6 make the design system usable on its own, and moonlet's own desktop app is the first design system to build with it. 7–11 make workspace designs complete. 12 brings designs into sessions, and Build it comes with it, because it turns a workspace design into a session design.
 
 ## Open questions
 
