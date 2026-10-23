@@ -714,6 +714,7 @@ async fn a_failing_destroy_is_retried_and_reported_after_three_tries() {
     assert_eq!(reported["state"], json!("removing"), "{reported}");
     assert_eq!(reported["error"], json!("503 Service Unavailable"));
     assert!(reported["error_since"].is_u64());
+    assert!(reported["error_at"].as_u64() >= reported["error_since"].as_u64());
     let removed = c.until(&id, "removed").await;
     assert_eq!(removed["error"], Value::Null);
 }

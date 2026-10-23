@@ -495,6 +495,7 @@ impl Machines {
                 running: 0,
                 error: None,
                 error_since: None,
+                error_at: None,
                 reason: None,
             },
             image: setting.image.clone(),
@@ -1150,6 +1151,7 @@ impl Machines {
                             self.update(&id, |r| {
                                 r.shown.error = Some(message.clone());
                                 r.shown.error_since.get_or_insert(started);
+                                r.shown.error_at = Some(now_ms());
                             });
                         }
                     }
@@ -1165,6 +1167,7 @@ impl Machines {
             r.removed_at = Some(now);
             r.shown.error = None;
             r.shown.error_since = None;
+            r.shown.error_at = None;
         });
         // A provider being removed goes once its last machine has.
         if !self.has_machines(&r.shown.provider) {
