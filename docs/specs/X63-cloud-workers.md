@@ -74,7 +74,7 @@ A cloud machine is a worker like any other in X62. It runs routed commands in a 
   - `moonletd join` does what X61's `link.pair` does, with device kind `cloud`, then turns the link on (`enabled: true`). The token stays on the machine.
   - A join code used twice, after 30 minutes, or for another machine id is refused.
 - [ ] A machine is **ready** once its worker has registered and its machine setup has finished. A machine made for a session (overflow from it, or a session that asked for the cloud) also makes that session's routing copy and runs the project's `setup` before it is ready. A machine made without a session makes a session's routing copy when that session first routes a command to it, and the job waits with "Copying fix-cart to moonlet-shop-7k2q…". A cloud machine runs `setup` without asking for approval: the machine holds no git credentials or user tokens to protect.
-- [ ] A cloud machine gets the project from the central host (X60's `sync.fetch`, with nothing in `have`), never from origin.
+- [ ] A cloud machine gets the project from the central host, never from origin, and gets no older history. Its routing copy is a shallow repository: the session's `HEAD` commit, recorded as a shallow boundary with no parents, plus that commit's tree and the snapshot tree. Later fences send only the objects after that base, as in X60. A file that is only in older commits, such as a secret committed and later removed and ignored, never reaches a cloud machine. Commands that read history, such as `git log` or `git describe`, see one commit there. Macs and remote hosts keep X60's full history.
 - [ ] **Startup steps.** A starting machine reports these steps, each `pending`, `running`, `done {took}` or `failed {error}`:
 
   | Step | Known from |
@@ -165,6 +165,7 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
   - **Image** ("An image name, or the id of an image in your provider project.");
   - **Machine setup**, read-only from `[heavy] machine_setup` ("Runs as root on each new machine, after moonlet pairs it.");
   - a footer, "4 machines for shop · 2 running commands · Workers", with **Start a machine**.
+  - under the toggle, the note "Cloud machines get every tracked file of the session, and untracked files that are not ignored. Remove secrets from the files, not only from the history."
 - **Workers page, Cloud machines** ([workers-page.png](design/x62-x63/workers-page.png)): the line "4 of 4 machines: at the limit, so no new one starts · 12.5 of 40 machine-hours this month · Cloud workers settings". Each machine's row has the X62 columns and one of these state lines:
   - "Running 2 · Hetzner cpx41 · fsn1 · shop", with its jobs under it;
   - "Starting · 0:40 · for big-refactor, which asked for the cloud";
@@ -224,7 +225,8 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
 - **The provider token** can create and delete anything in its provider project. It is stored only in `cloud.json` (mode 0600) on the central host, never returned by `cloud.get`, and never written to logs or `user_data`. The UI recommends a dedicated provider project.
 - **The Tailscale OAuth secret** stays on the central host. A machine gets a one-off key that expires within an hour and is tagged. An untagged or unrestricted tag would let a machine reach the whole tailnet, so the help text gives an ACL that limits the tag to the central host's listener.
 - **`user_data` is readable** through the provider's API and from inside the machine. It holds the one-off Tailscale key and the join code: each is usable once, expires within an hour, and the join code is bound to its machine.
-- **What a machine holds:** the project's files and history from the central host, including untracked files that are not ignored, and the variables named in `[heavy] env`. Those reach a cloud machine only after the user has approved the exact names (X62), and the approval banner names secret-looking ones. A machine never gets `.env` or the other never-synced files (X60), git credentials, the provider token or the Tailscale secret. A project that must keep a file away from cloud machines ignores it in git.
+- **What a machine holds:** the session's current files and its `HEAD` commit, with no older history. That includes every tracked file and every untracked file that is not ignored, plus the variables named in `[heavy] env`. Those variables reach a cloud machine only after the user has approved the exact names (X62), and the approval banner names secret-looking ones. A machine never gets `.env` or the other never-synced files (X60), files that are only in older commits, git credentials, the provider token or the Tailscale secret.
+- **A secret in the current files is sent.** Ignoring a file in git keeps it away only while it is untracked: a tracked file stays tracked until it is removed with `git rm --cached`, so it travels until then. The project page's cloud section says so: "Cloud machines get every tracked file of the session, and untracked files that are not ignored. Remove secrets from the files, not only from the history."
 - **`machine_setup` runs as root** with content the agent can edit, but only on a fresh, disposable machine with no user secrets.
 - **A compromised machine** holds a `cloud` device token that reaches only worker methods for its own routing copies. Removing the machine revokes it.
 - **Join codes are minted by the central host for machines it creates, and nothing else.** No RPC makes one on request, so X61's rule stands: a paired Mac cannot add devices to the central host.
@@ -254,19 +256,19 @@ Where the tests live:
 |---|---|
 | The adapter and its settings description | Vitest "the form from an adapter's description" |
 | Hetzner calls | `creates_a_server_as_in_the_captured_request`, `reads_a_captured_server`, `lists_servers_by_label`, `a_404_means_gone`, `reads_captured_server_types` |
-| Provider errors | `a_401_says_the_token_was_refused`, `a_429_waits_for_the_reset_time`; Vitest "the last provider error with its time" |
+| Provider errors | `a_401_says_the_token_was_refused`, `a_403_says_the_token_was_refused`, `a_429_waits_for_the_reset_time`, `a_429_without_a_reset_time_waits_five_seconds`, `another_error_shows_the_providers_message`; Vitest "the last provider error with its time" |
 | The fake provider | `the_fake_provider_is_off_without_its_setting` |
 | Name and labels | `names_fit_the_providers_limit_and_characters`, `labels_carry_the_host_machine_and_project` |
 | Recorded before creating, limit under a lock | `a_machine_is_recorded_before_the_create_call`, `two_cloud_up_calls_at_once_never_pass_the_limit` |
 | `user_data` | `renders_the_worked_cloud_init_script` |
 | The Tailscale key | `asks_for_a_one_off_ephemeral_tagged_key_as_captured` |
-| `machine_setup` | `machine_setup_comes_from_the_sessions_worktree`, `machine_setup_without_a_session_comes_from_the_projects_folder`, `a_machine_setup_over_16_kib_makes_no_machine`, `a_machine_setup_outside_the_folder_makes_no_machine`, `a_missing_machine_setup_makes_no_machine` |
+| `machine_setup` | `machine_setup_comes_from_the_sessions_worktree`, `machine_setup_without_a_session_comes_from_the_projects_folder`, `a_machine_setup_over_16_kib_makes_no_machine`, `a_machine_setup_outside_the_folder_makes_no_machine`, `a_missing_machine_setup_makes_no_machine`, `a_machine_without_machine_setup_skips_that_step` |
 | Joining | `a_join_code_works_once`, `an_expired_join_code_is_refused`, `a_join_code_for_another_machine_is_refused` |
 | Ready | `a_machine_made_for_a_session_is_ready_with_its_copy_and_setup`, `a_machine_made_without_a_session_copies_on_its_first_command` |
-| The project comes from the central host | `a_cloud_machine_never_contacts_origin` |
+| The project comes from the central host, without older history | `a_cloud_machine_never_contacts_origin`, `a_cloud_machine_gets_no_older_history`, `a_secret_removed_from_the_files_never_reaches_a_cloud_machine` |
 | Startup steps | `startup_steps_arrive_in_order_with_durations`, `a_failing_machine_setup_fails_and_removes_the_machine`; Vitest "the startup checklist" |
 | Startup deadline | `a_machine_that_never_joins_is_removed_at_the_deadline` |
-| Overflow | `overflow_starts_a_machine_and_the_next_command_runs_there` |
+| Overflow | `overflow_starts_a_machine_and_the_next_command_runs_there`, `overflow_starts_no_second_machine_while_one_is_starting` |
 | A session that asked for the cloud | `a_cloud_session_waits_for_its_machine_and_runs_there`, `a_cloud_session_runs_on_the_central_host_when_no_machine_can_start` |
 | `moonlet worker up`, `ls`, `down` | `worker_up_ls_and_down` |
 | Start a machine | e2e "Start a machine shows Starting, then Ready" |
@@ -296,7 +298,6 @@ Where the tests live:
   - the design shows "At most 4 machines". The default stays 2, and 4 is the example's own setting.
 
 - **Hetzner's billing step** (per started hour or finer) decides whether a short idle time saves money. Check it against Hetzner's current pricing page before release. The default stays 15 minutes either way.
-- **Big histories.** A fresh machine fetches the whole history from the central host. A shallow fetch would be faster, but X60's packs assume full history.
 - **The Tailscale key API's field names** (`capabilities.devices.create.ephemeral`, `preauthorized`, `tags`, `expirySeconds`) are to be confirmed against a captured response when the adapter is built.
 
 Decided by the user on 2026-10-22:

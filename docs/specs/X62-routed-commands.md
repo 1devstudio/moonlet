@@ -147,7 +147,7 @@ This is ADR 0009's routing slice. It adds two things the ADR did not decide: an 
 - [ ] **During:** the routing copy takes no updates, and edits on the central host during the run stay.
 - [ ] **After:** when the command exits, the worker snapshots the copy and offers it against the fence's tree, with the objects of any commit the run made. The central host applies it. `moonlet exec` returns the exit status only after the central host has applied it. A test: a command that writes `out.txt` and exits 0, then `cat out.txt` in the next Bash call on the central host, prints its contents.
 - [ ] A file that both the run and the central host changed during the run keeps the central host's version. The run's version is saved to `$MOONLET_HOME/sync-leftovers/<session>-run-<YYYYMMDD-HHMMSS>/` on the central host. The last output line reads "moonlet: src/cart.ts changed on studio-mini during the run; the run's version is in ~/.moonlet/sync-leftovers/fix-cart-run-20261022-104200".
-- [ ] Ignored files a run makes stay on the worker, as git's rules decide (X60), except the paths in `[heavy] outputs`. Those replace the same paths on the central host after the run. A path outside the worktree, or one with `..`, is refused when the config is read. Symbolic links are never followed:
+- [ ] Ignored files a run makes stay on the worker, as git's rules decide (X60), except the paths in `[heavy] outputs`. Those replace the same paths on the central host after the run. Each `outputs` path must be a non-empty relative path below the worktree root. The root itself (`.`, `./` or an empty string), a path outside the worktree, and one with `..` are refused when the config is read. Symbolic links are never followed:
   - an `outputs` path that is itself a symbolic link is skipped with "moonlet: coverage is a symbolic link; not brought back";
   - a link inside an `outputs` path comes back as a link, with its target text unchanged, and is never resolved on either side;
   - on the central host, a path is replaced only when none of its parent folders inside the worktree is a symbolic link. Otherwise it is skipped with the same kind of line.
@@ -313,7 +313,7 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
 - `exec.route` and `exec.run` take the tool call's id (`tool_use_id` from the hook payload), so the chat can match its row to the job.
 - `heavy.get {project}` returns `{entries: [{command, approved}], os, env, outputs, approved_on: [worker]}`.
 - `heavy.set {project, commands, os, env, outputs}` writes `[heavy]` in `.moonlet/config.toml` as X8 writes the other keys. It never approves.
-- `heavy.approve {project, commands}` approves exactly that list. It needs the app or a paired desktop.
+- `heavy.approve {project, commands, env}` approves exactly those commands and `env` names, together as one record. It fails with `changed` when either list differs from the config as it is now, so the user never approves a list they did not see. It needs the app or a paired desktop.
 
 **Central host to worker:**
 
@@ -336,8 +336,8 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
 ## Data and config
 
 - **`.moonlet/config.toml`:** a `[heavy]` table with `commands`, `os`, `env` and `outputs`. It is read by `ProjectConfig` and edited by X8's dialog.
-- **Central host, `$MOONLET_HOME/heavy.json`:** approved entries per project identity, as exact strings. Example: `{"github.com/acme/shop 4171b03…": ["pnpm build", "pnpm test"]}`.
-- **Each linked worker, `$MOONLET_HOME/sync/projects.json`:** each project gains `approved_heavy`, the list approved for that worker, under X60's `<host> <origin> <root>` key.
+- **Central host, `$MOONLET_HOME/heavy.json`:** the approval per project identity: the exact commands and the exact `env` names, saved together. Example: `{"github.com/acme/shop 4171b03…": {"commands": ["pnpm build", "pnpm test"], "env": ["CI", "NPM_TOKEN"]}}`. A routed command needs both lists to match the config.
+- **Each linked worker, `$MOONLET_HOME/sync/projects.json`:** each project gains `approved_heavy {commands, env}`, the lists approved for that worker, under X60's `<host> <origin> <root>` key.
 - **`link.json`:** `worker` gains `slots`. The central host keeps its own slots in `heavy.json`.
 - **Routing copies:** `$MOONLET_HOME/runs/`, listed in `sync/copies.json` with `kind: "run"`.
 - **Jobs, on the central host:** `$MOONLET_HOME/jobs/<session>/jobs.json` (the last 50 jobs) and `<job>.out`, the output as tagged stdout and stderr chunks. They are removed with the session.
@@ -375,7 +375,7 @@ Where the tests live:
 | `[heavy]` keys | `heavy_table_reads_commands_os_env_and_outputs` |
 | Which commands are routed (worked examples) | `routes_exactly_the_worked_examples` |
 | Only Claude Code Bash calls in a session's worktree, not background | `a_background_bash_call_is_not_routed`, `a_terminal_outside_a_session_is_not_routed`, `a_call_outside_the_sessions_worktree_is_not_routed` |
-| Approval of the exact entries and `env` names | `an_unapproved_entry_is_not_routed`, `a_changed_entry_needs_approving_again`, `a_new_env_name_stops_routing_until_approved`, `removing_an_entry_needs_no_approval` |
+| Approval of the exact entries and `env` names | `an_unapproved_entry_is_not_routed`, `a_changed_entry_needs_approving_again`, `a_new_env_name_stops_routing_until_approved`, `removing_an_entry_needs_no_approval`, `approving_records_the_commands_and_env_names_together`, `approving_a_list_that_changed_meanwhile_fails` |
 | Who approves | `only_the_app_or_a_paired_mac_approves_heavy_commands` |
 | Each linked worker's own approval | `a_worker_that_has_not_approved_refuses_and_the_next_one_runs_it`; Vitest "the approval toast names every machine it covers", "a worker that was not reachable is named in the toast" |
 | The user's Claude Code deny and ask rules | `deny_and_ask_rules_stop_routing_in_each_form`, `a_rule_moonlet_cannot_read_stops_routing_for_its_first_word` |
@@ -397,7 +397,7 @@ Where the tests live:
 | Fence during | `an_edit_on_the_central_host_during_a_run_stays` |
 | Fence after | `a_file_written_by_the_run_is_on_the_central_host_before_the_exit_status`, `a_commit_made_by_the_run_moves_the_sessions_branch` |
 | Leftovers | `a_file_changed_on_both_sides_during_a_run_keeps_the_central_version_and_saves_the_runs` |
-| `outputs` | `outputs_bring_back_an_ignored_coverage_folder`, `an_outputs_path_outside_the_worktree_is_refused`, `a_symbolic_link_in_outputs_is_never_followed`, `an_outputs_path_that_is_a_symbolic_link_is_skipped`, `outputs_over_one_gib_stay_on_the_worker_and_say_so` |
+| `outputs` | `outputs_bring_back_an_ignored_coverage_folder`, `an_outputs_path_outside_the_worktree_is_refused`, `the_worktree_root_is_refused_as_an_outputs_path`, `a_symbolic_link_in_outputs_is_never_followed`, `an_outputs_path_that_is_a_symbolic_link_is_skipped`, `outputs_over_one_gib_stay_on_the_worker_and_say_so` |
 | First line and output streams | `a_routed_commands_output_and_exit_status_come_back` |
 | Exit status and signals | `a_routed_commands_output_and_exit_status_come_back`, `a_command_killed_by_a_signal_exits_with_128_plus_it` |
 | stdin | `a_routed_command_reads_an_empty_stdin` |
