@@ -272,6 +272,18 @@ pub const SYNC_PROJECT_SET: &str = "sync.project_set";
 /// [`SyncStart`] → `true`: the session gets no copy, even when its project
 /// keeps new sessions in sync; the composer's unticked checkbox.
 pub const SYNC_DECLINE: &str = "sync.decline";
+/// [`HeavyGet`] → [`HeavyInfo`]: a project's heavy commands and what the
+/// user approved of them (X62).
+pub const HEAVY_GET: &str = "heavy.get";
+/// [`HeavySet`] → [`HeavyInfo`]: writes `[heavy]` in the project's
+/// `.moonlet/config.toml`. Never approves.
+pub const HEAVY_SET: &str = "heavy.set";
+/// [`HeavyApprove`] → [`HeavyInfo`]: approves exactly these commands and
+/// `env` names, as the config has them now. The Mac's app or a paired Mac.
+pub const HEAVY_APPROVE: &str = "heavy.approve";
+/// [`ExecRoute`] → [`ExecRouted`]: whether an agent's Bash call may run on
+/// another machine (X62).
+pub const EXEC_ROUTE: &str = "exec.route";
 /// A [`CopyChanged`], on every change of a copy's state.
 pub const EV_SYNC_CHANGED: &str = "sync.changed";
 
@@ -1622,4 +1634,63 @@ pub enum CloseReason {
 pub struct SyncClosing {
     pub copy: String,
     pub reason: CloseReason,
+}
+
+/// `heavy.get` params.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HeavyGet {
+    pub project: String,
+}
+
+/// `heavy.set` params.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HeavySet {
+    pub project: String,
+    pub heavy: crate::types::HeavyConfig,
+}
+
+/// `heavy.approve` params: `project` on the central host, the lists as the
+/// user saw them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HeavyApprove {
+    pub project: String,
+    pub commands: Vec<String>,
+    pub env: Vec<String>,
+}
+
+/// What the user approved of a project's heavy commands: the exact
+/// commands and `env` names, together.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct HeavyApproval {
+    pub commands: Vec<String>,
+    pub env: Vec<String>,
+}
+
+/// A project's heavy commands as its config has them, and the approval.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HeavyInfo {
+    pub config: crate::types::HeavyConfig,
+    pub approved: Option<HeavyApproval>,
+    /// Why `[heavy]` cannot be used as written; nothing is routed then.
+    pub error: Option<String>,
+}
+
+/// `exec.route` params, from moonlet's `PreToolUse` hook.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExecRoute {
+    pub session: String,
+    pub command: String,
+    pub cwd: String,
+    /// The tool call's id, so the app can match the call to its job.
+    #[serde(default)]
+    pub tool_use_id: Option<String>,
+}
+
+/// `exec.route`'s answer. `reason` says why a call stays where it is:
+/// `no_session`, `outside_worktree`, `invalid_config`, `not_heavy`,
+/// `not_approved`, `env_not_approved` or `claude_rule`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExecRouted {
+    pub route: bool,
+    pub reason: Option<String>,
 }
