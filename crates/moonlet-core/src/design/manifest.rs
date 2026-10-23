@@ -64,7 +64,11 @@ pub fn build(root: &Path) -> Result<Manifest> {
 /// Writes `_ds_manifest.json`.
 pub fn write(root: &Path) -> Result<()> {
     let json = serde_json::to_string_pretty(&build(root)?)?;
-    std::fs::write(root.join("_ds_manifest.json"), json + "\n")?;
+    super::fsx::write_inside(
+        root,
+        &root.join("_ds_manifest.json"),
+        (json + "\n").as_bytes(),
+    )?;
     Ok(())
 }
 

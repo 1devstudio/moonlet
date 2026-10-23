@@ -100,25 +100,25 @@ pub fn sync_launch(
 fn changes(cards: &[CardStatus]) -> String {
     let mut out = String::from("Since the last sync:\n");
     for c in cards {
-        let what = if c.new {
+        let mut what = if c.new {
             "new, not in the last sync".to_string()
         } else if c.orphaned {
             "orphaned: its sources are gone; leave it for the user".to_string()
         } else if !c.changed_sources.is_empty() {
-            let edited = if c.edited_by_hand {
-                "; edited by hand, so write a proposal"
-            } else {
-                ""
-            };
-            format!(
-                "its sources changed: {}{edited}",
-                c.changed_sources.join(", ")
-            )
+            format!("its sources changed: {}", c.changed_sources.join(", "))
         } else if c.exceptions_changed {
             "its settings in config.toml changed".to_string()
         } else {
-            "edited by hand; keep it".to_string()
+            String::new()
         };
+        // Whatever else changed, a card edited by hand is never overwritten.
+        if c.edited_by_hand && !c.new && !c.orphaned {
+            what = if what.is_empty() {
+                "edited by hand; keep it".into()
+            } else {
+                format!("{what}; edited by hand, so write a proposal")
+            };
+        }
         out.push_str(&format!("- {}: {what}\n", c.path));
     }
     out
@@ -239,5 +239,30 @@ Follow the moonlet-design skill's sync: rewrite only these cards, and write a ca
                 "{bad} was accepted"
             );
         }
+    }
+
+    #[test]
+    fn a_card_edited_by_hand_keeps_its_warning_whatever_else_changed() {
+        let card = CardStatus {
+            path: "components/custom/row/row.html".into(),
+            changed_sources: vec![],
+            edited_by_hand: true,
+            orphaned: false,
+            new: false,
+            exceptions_changed: true,
+        };
+        let launch = sync_launch(
+            Path::new("/d"),
+            &config(),
+            &[],
+            Path::new("/bin/moonlet"),
+            Task::Resync(std::slice::from_ref(&card)),
+        )
+        .unwrap();
+        assert!(
+            launch.prompt.contains("- components/custom/row/row.html: its settings in config.toml changed; edited by hand, so write a proposal\n"),
+            "{}",
+            launch.prompt
+        );
     }
 }

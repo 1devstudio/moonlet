@@ -2080,4 +2080,27 @@ done
         c.request(methods::DESIGN_SYSTEM_SYNC, serde_json::json!({"workspace": ws.id, "slug": "moonlet-desktop"})).await.unwrap();
     let third = third["agent"].as_u64().unwrap();
     assert!(third != other_agent && third != agent as u64, "reused chat {third}");
+
+    // Two syncs at once of a system with no agent yet start only one.
+    let _: serde_json::Value = c
+        .request(
+            methods::DESIGN_SYSTEM_CREATE,
+            serde_json::json!({"workspace": ws.id, "name": "pricing", "sources": [{"project": project.id}], "agent": false}),
+        )
+        .await
+        .unwrap();
+    let mut c2 = d.client().await;
+    let sync = serde_json::json!({"workspace": ws.id, "slug": "pricing"});
+    let (a, b) = tokio::join!(
+        c.request::<_, serde_json::Value>(methods::DESIGN_SYSTEM_SYNC, sync.clone()),
+        c2.request::<_, serde_json::Value>(methods::DESIGN_SYSTEM_SYNC, sync.clone())
+    );
+    assert_eq!(a.unwrap()["agent"], b.unwrap()["agent"]);
+    let terminals: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
+    assert_eq!(terminals.iter().filter(|t| t.title == "Design · pricing").count(), 1);
+
+    // Removing a system stops its agent.
+    let _: bool = c.request(methods::DESIGN_SYSTEM_REMOVE, serde_json::json!({"workspace": ws.id, "slug": "pricing"})).await.unwrap();
+    let terminals: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
+    assert!(!terminals.iter().any(|t| t.title == "Design · pricing"), "the agent of a removed system still runs");
 }
