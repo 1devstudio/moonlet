@@ -74,6 +74,12 @@ async fn boot(dir: PathBuf, user_data: String, join: bool) {
     let socket = home.join("run").join("d.sock");
     let setup_dir = dir.join("setup");
     let _ = std::fs::create_dir_all(&setup_dir);
+    // `tailscale` on the machine is a stub that notes its arguments in the
+    // fake's folder: the real one would log the test's own Mac out.
+    let stub = dir.join("tailscale");
+    let calls = dir.parent().unwrap_or(&dir).join("tailscale-calls");
+    let _ = std::fs::write(&stub, format!("#!/bin/sh\necho \"$*\" >> '{}'\n", calls.display()));
+    let _ = std::fs::set_permissions(&stub, std::os::unix::fs::PermissionsExt::from_mode(0o755));
     // With a long home the daemon's own socket directory is elsewhere, so
     // this one must exist, private, before it binds.
     let _ = moonlet_core::paths::ensure_private_dir(socket.parent().unwrap_or(&home));
@@ -85,6 +91,7 @@ async fn boot(dir: PathBuf, user_data: String, join: bool) {
         .env("SHELL", "/bin/sh")
         .env("MOONLET_MOBILE_ADDRS", "127.0.0.2")
         .env("MOONLET_MACHINE_SETUP_DIR", &setup_dir)
+        .env("MOONLET_TAILSCALE", &stub)
         // A fresh machine: idle, whatever the central host's test load.
         .env("MOONLET_TEST_LOAD", "0.5")
         .env_remove("MOONLET_CLOUD_FAKE")
