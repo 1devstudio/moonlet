@@ -289,6 +289,11 @@ fn exec_here(command: &[String]) -> ! {
 }
 
 async fn hook(socket: &std::path::Path, agent: HookAgent, payload: Option<String>) -> Result<()> {
+    // Outside a moonlet session there is nothing to route or report, so
+    // the payload is never read.
+    if std::env::var_os("MOONLET_SESSION").is_none() && terminal_from_env().is_none() {
+        return Ok(());
+    }
     let raw = match payload {
         Some(p) => p,
         None => {

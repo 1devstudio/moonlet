@@ -149,6 +149,33 @@ fn hook(socket: &Path, session: &str, stdin: &str) -> Output {
     child.wait_with_output().unwrap()
 }
 
+#[test]
+fn the_hook_outside_moonlet_returns_with_stdin_open() {
+    // An agent hook outside any moonlet session never waits for its payload.
+    let mut child = Command::new(env!("CARGO_BIN_EXE_moonlet"))
+        .args(["hook", "claude"])
+        .env_remove("MOONLET_SESSION")
+        .env_remove("MOONLET_TERMINAL_ID")
+        .env_remove("JAUNT_TERMINAL_ID")
+        .env_remove("JAUNT_SESSION_ID")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let _stdin = child.stdin.take();
+    let started = Instant::now();
+    while started.elapsed() < Duration::from_secs(3) {
+        if let Some(status) = child.try_wait().unwrap() {
+            assert!(status.success());
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let _ = child.kill();
+    panic!("the hook waited on its stdin");
+}
+
 #[tokio::test]
 async fn the_hook_prints_nothing_when_the_daemon_says_no() {
     let s = shop().await;
