@@ -317,7 +317,7 @@ export function ToolRow({ id, tool, cwd }: { id: string; tool: ToolCall; cwd: st
   const command = raw && shownCommand(raw);
   const where = useContext(FileLinks);
   const job = useToolJob(where?.host ?? "", where?.wsId ?? "", id, !!raw);
-  const chip = raw ? bashChip(job, tool.output) : null;
+  const chip = raw ? bashChip(job, raw, tool.output) : null;
   const plan = planOf({ tool: tool.name, input: tool.input });
   const expandable = !!(tool.diff || tool.output || command || plan);
   const view = useMemo(() => (open ? toolOutputView(tool) : null), [open, tool]);
