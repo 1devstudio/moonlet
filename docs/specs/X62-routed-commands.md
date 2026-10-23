@@ -63,7 +63,7 @@ This is ADR 0009's routing slice. It adds two things the ADR did not decide: an 
 
   A command is not routed when it has, outside single quotes, any of `;` `&` `|` `<` `>` `(` `)` `$` `` ` `` `*` `?` `[` `{` `~` `#`, or a newline, or when it starts with an assignment.
 - [ ] Only Bash calls of Claude Code agents in sessions on the central host are routed: calls with `MOONLET_SESSION` set, whose working directory is inside the session's worktree. A call with `run_in_background` is not routed. Codex is not routed yet.
-- [ ] A command is routed only when its entry is approved for the project on this central host. Approval holds for the exact list of entries. An entry that is added or changed is not routed until it is approved, and the project page shows it as not approved. Removing an entry needs no approval.
+- [ ] A command is routed only when its entry is approved for the project on this central host. Approval holds for the exact list of entries and the exact list of `env` names. An entry that is added or changed is not routed until it is approved, and the project page shows it as not approved. A name added to `env` stops routing for the project until the list is approved again, because approving is the user's consent to send those variables to every worker, cloud machines included. Removing an entry or a name needs no approval.
 - [ ] Only the Mac's app and paired desktops approve. `heavy.approve` from the `moonlet` CLI or a phone is refused with `forbidden`, so an agent cannot approve the commands it adds.
 - [ ] Each linked worker keeps its own approval, for the machine it runs on. **Approve** on the project page approves the list on the central host and on every linked worker the app reaches: this Mac, and remote hosts through their tailnet connection (X61). A worker linked later, or one the app could not reach, shows "not approved for shop" on the Workers screen, with **Approve**. `heavy.approve` on a worker follows X61's rule for `link.set`: the worker's own app or a paired Mac, never a phone or the CLI.
 - [ ] A command is not routed when the user's Claude Code settings that apply to the session (user, project, local and the X33 profile's) have a `deny` or `ask` rule for `Bash` that matches it. Prefix rules (`Bash(pnpm build:*)`, `Bash(pnpm build)`) are matched as prefixes. A rule that moonlet cannot read as a prefix stops routing for every command that starts with the rule's first word.
@@ -147,7 +147,12 @@ This is ADR 0009's routing slice. It adds two things the ADR did not decide: an 
 - [ ] **During:** the routing copy takes no updates, and edits on the central host during the run stay.
 - [ ] **After:** when the command exits, the worker snapshots the copy and offers it against the fence's tree, with the objects of any commit the run made. The central host applies it. `moonlet exec` returns the exit status only after the central host has applied it. A test: a command that writes `out.txt` and exits 0, then `cat out.txt` in the next Bash call on the central host, prints its contents.
 - [ ] A file that both the run and the central host changed during the run keeps the central host's version. The run's version is saved to `$MOONLET_HOME/sync-leftovers/<session>-run-<YYYYMMDD-HHMMSS>/` on the central host. The last output line reads "moonlet: src/cart.ts changed on studio-mini during the run; the run's version is in ~/.moonlet/sync-leftovers/fix-cart-run-20261022-104200".
-- [ ] Ignored files a run makes stay on the worker, as git's rules decide (X60), except the paths in `[heavy] outputs`. Those replace the same paths on the central host after the run. A path outside the worktree, or one with `..`, is refused when the config is read. More than 1 GiB of outputs is not brought back, and the output says so.
+- [ ] Ignored files a run makes stay on the worker, as git's rules decide (X60), except the paths in `[heavy] outputs`. Those replace the same paths on the central host after the run. A path outside the worktree, or one with `..`, is refused when the config is read. Symbolic links are never followed:
+  - an `outputs` path that is itself a symbolic link is skipped with "moonlet: coverage is a symbolic link; not brought back";
+  - a link inside an `outputs` path comes back as a link, with its target text unchanged, and is never resolved on either side;
+  - on the central host, a path is replaced only when none of its parent folders inside the worktree is a symbolic link. Otherwise it is skipped with the same kind of line.
+
+  More than 1 GiB of outputs is not brought back, and the last output line reads "moonlet: outputs are 1.4 GiB, over the 1 GiB limit; not brought back".
 
 ### Output, exit status, cancelling
 
@@ -174,7 +179,7 @@ This is ADR 0009's routing slice. It adds two things the ADR did not decide: an 
 
 - [ ] Every routed command is a **job** of its session. So is every command `exec.route` routed that ran on the central host because no worker was free. The central host keeps each session's last 50 jobs, with their output, until the session is archived, and through daemon restarts.
 - [ ] A job's state is one of:
-  - `waiting {for}`: for a slot, for setup approval, or for a cloud machine (X63);
+  - `waiting {for}`: for setup approval, or for a cloud machine (X63). A command never waits for a slot;
   - `running {worker}`;
   - `bringing_back`;
   - `done {exit}`;
@@ -251,7 +256,7 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
   - **Commands:** one editable row per entry, with a state pill (**Approved**, or **Not approved** in the attention colour) and **×** to remove it, plus **Add command**. The help text is "A Bash call that starts with one of these goes to the free worker with the lowest load. Chained, piped or redirected calls run where the agent is.";
   - **Runs on:** a segmented control, **Any**, **macOS** or **Linux** (`os`), with "Workers on another system are skipped.";
   - **Bring back after a run:** `outputs`, with "Ignored paths that replace the same paths on studio-mini when a run ends. Up to 1 GiB.";
-  - **Pass to the worker:** `env`. A name that looks like a secret gets the warning "NPM_TOKEN looks like a secret. It reaches every machine that runs these commands, cloud machines too.";
+  - **Pass to the worker:** `env`. A name that looks like a secret gets the warning "NPM_TOKEN looks like a secret. It reaches every machine that runs these commands, cloud machines too." Approving the list approves these names too;
   - while the list differs from the approved one, a banner names what changed ("pnpm build was added since you approved the list"), the machines the approval covers, and the code-execution warning, with **Approve**;
   - the footnote "Changing an entry needs approving again. Removing one doesn't. Only this app and paired desktops can approve, never an agent or a phone."
 
@@ -342,7 +347,8 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
 - **Routing never skips a prompt the user would have seen.** The hook answers `allow` only for entries the user approved in moonlet's UI, which says that they run without asking. A prompt-injected agent can add `rm -rf ~` to `[heavy] commands`, but it is not approved, so it is not routed and not allowed. Deny and ask rules in the user's Claude Code settings still apply. Claude Code checks the rewritten command, and moonlet does not route commands that match the user's rules for the original.
 - **An approved prefix allows any arguments.** `pnpm test --config evil.js` runs code the agent chose, as `pnpm test` already runs scripts the agent can edit. On a Mac, that code runs as the user. ADR 0009 accepts this for one user's own machines. The approval text names it: "Approved commands can run code from the project, including code the agent wrote, on this Mac."
 - **The worker checks again.** It runs a command only when the command matches its own approved list for that project and central host. It runs an argument list, never `sh -c`, and only with a working directory inside the routing copy. Paths and folder names from the central host follow X60's rules.
-- **Environment.** Only `[heavy] env` crosses machines. A project that names a secret there sends it to the worker, and the project page warns when a name looks like a secret (`*_TOKEN`, `*_KEY`, `*_SECRET`).
+- **Environment.** Only `[heavy] env` crosses machines, and only once the user has approved its exact names, so an agent cannot add a name and have its value sent. The approval banner names secret-looking ones (`*_TOKEN`, `*_KEY`, `*_SECRET`, `*_PASSWORD`) and says they reach every machine, cloud machines included.
+- **Outputs.** Bringing back `outputs` never follows a symbolic link on either machine, so a run cannot make the central host read or write outside the worktree through one.
 - **Files.** A routing copy gets what a live copy gets (X60). An ignored `.env` stays where it is, so a command that needs it on the worker needs it there already.
 
 ## Out of scope
@@ -354,44 +360,70 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
 
 ## Test plan
 
-- **Unit, `moonlet-core`:**
-  - the matcher, against every row of the worked-example table;
-  - the rule check, with captured `settings.json` files that have `deny` and `ask` rules in each form;
-  - the picker, against every row of the order table;
-  - path replacement, with the copy's path split across two chunks;
-  - the output summary, against every row of its table, and against whole outputs captured from real runs of vitest, jest, `cargo test` (a workspace with two crates), pytest, `tsc` (plain and `--pretty`) and `cargo build` with a type error, kept as fixtures with paths made fictional;
-  - load parsing from captured `sysctl -n vm.loadavg` (macOS) and `/proc/loadavg` (Linux) output.
-- **Unit, `moonlet-cli`:** the hook's output for a captured Claude Code `PreToolUse` payload (Bash with `description` and `timeout`) equals the literal JSON above. An unroutable payload prints nothing.
-- **Daemon end-to-end, `crates/moonletd/tests/exec.rs`:** a central host and one or two worker `TestDaemon`s, linked as in `tests/link.rs`:
-  - a routed command's output and exit status (3) come back;
-  - a file the command writes is on the central host when `exec.exited` arrives;
-  - a commit made by the run moves the session's branch;
-  - an unapproved entry gets `route: false`;
-  - a worker that has not approved the list refuses with `not_approved`, and the command runs on the next candidate;
-  - a missing tool gets `missing_tool` and the next candidate;
-  - a busy worker (load injected through a test-only setting) is skipped;
-  - a worker stopped with SIGSTOP mid-run makes the command run again on the central host, the output has the rerun line, and the abandoned run's file never reaches the session;
-  - cancelling sends SIGTERM and the exit is 143;
-  - a file edited on the central host during the run keeps its version, and the run's is under `sync-leftovers`;
-  - `outputs` brings back an ignored `coverage/`;
-  - a stopped central daemon gives exit 125;
-  - `job.list` after a daemon restart still has the session's jobs, and their output replays;
-  - output over 10 MiB keeps its start and end, with the dropped line;
-  - `job.stop` gives exit 143 and the line, and the job's changes come back;
-  - `job.run_here` on a job waiting for a cloud machine (X63's fake provider) runs it on the central host.
-- **Vitest, `apps/desktop/src/lib/`:**
-  - the chip text from a result's first `moonlet:` line;
-  - the heavy-commands section's states (a new entry, a changed entry, all approved);
-  - the Workers screen rows and skip reasons, and the summary line;
-  - the Jobs summary and the row second lines, against every row of their tables;
-  - the phase checklist and the rerun timeline from literal jobs;
-  - the chat chip from a job, and the fallback from a result's first line;
-  - the secret-looking env warning.
-- **e2e, `apps/desktop/e2e/specs/routing.e2e.ts`:** a scratch central host and the app's daemon linked as a worker:
-  - approving heavy commands on the project page saves them (saving settings is crucial, X12);
-  - a session terminal on the central host running `moonlet exec -- <fixture command>` shows "moonlet: running on" with the worker's name;
-  - the Workers screen lists the run;
-  - the session's Jobs tab lists the job, opens its output, and **Stop** ends a running one.
+Every acceptance criterion maps to at least one test below. The names are the ones the implementing pull requests use, word for word. A pull request that renames a test updates this table. Expected values are literals from this spec or from captured real output.
+
+Where the tests live:
+
+- **Rust unit tests:** `crates/moonlet-core/src/heavy.rs` (matching, Claude Code rules, picking, load, paths), `crates/moonlet-core/src/job_summary.rs` and `crates/moonlet-cli/src/hook.rs`, each in its `#[cfg(test)] mod tests`.
+- **Daemon end-to-end:** `crates/moonletd/tests/exec.rs`. It runs a central host and one or two worker `TestDaemon`s, linked as in `tests/link.rs`, with a test-only setting for load and size limits.
+- **CLI end-to-end:** `crates/moonlet-cli/tests/exec.rs`.
+- **Vitest:** `apps/desktop/src/lib/heavyCommands.test.ts`, `workers.test.ts`, `jobs.test.ts` and `routedChip.test.ts`.
+- **e2e:** `apps/desktop/e2e/specs/routing.e2e.ts`.
+
+| Criterion | Tests |
+|---|---|
+| `[heavy]` keys | `heavy_table_reads_commands_os_env_and_outputs` |
+| Which commands are routed (worked examples) | `routes_exactly_the_worked_examples` |
+| Only Claude Code Bash calls in a session's worktree, not background | `a_background_bash_call_is_not_routed`, `a_terminal_outside_a_session_is_not_routed`, `a_call_outside_the_sessions_worktree_is_not_routed` |
+| Approval of the exact entries and `env` names | `an_unapproved_entry_is_not_routed`, `a_changed_entry_needs_approving_again`, `a_new_env_name_stops_routing_until_approved`, `removing_an_entry_needs_no_approval` |
+| Who approves | `only_the_app_or_a_paired_mac_approves_heavy_commands` |
+| Each linked worker's own approval | `a_worker_that_has_not_approved_refuses_and_the_next_one_runs_it`; Vitest "the approval toast names every machine it covers", "a worker that was not reachable is named in the toast" |
+| The user's Claude Code deny and ask rules | `deny_and_ask_rules_stop_routing_in_each_form`, `a_rule_moonlet_cannot_read_stops_routing_for_its_first_word` |
+| The hook stays silent | `the_hook_prints_nothing_when_the_daemon_says_no`, `the_hook_prints_nothing_when_the_daemon_is_gone` |
+| The hook's rewrite | `the_hook_rewrites_a_captured_bash_call_to_moonlet_exec` |
+| `moonlet exec` without routing | `moonlet_exec_without_routing_runs_the_command_here` |
+| Candidates and `os` | `a_worker_on_another_os_is_skipped` |
+| Slots | `slots_default_to_two_and_link_set_changes_them`, `a_worker_with_no_free_slot_is_skipped`; Vitest "the run-at-most row" |
+| Busy | `reads_the_load_from_captured_macos_and_linux_output`, `a_worker_at_seven_tenths_of_its_cores_is_busy` |
+| Order (worked examples) | `picks_as_in_the_order_table` |
+| Never waits for a slot | `a_command_with_no_free_worker_runs_on_the_central_host` |
+| Refusals | `a_missing_tool_sends_the_command_to_the_next_worker`, `a_worker_waiting_for_setup_approval_is_skipped`, `a_copy_that_cannot_match_in_time_refuses_not_fenced` |
+| Routing copies, apart from live copies | `a_routing_copy_lives_under_runs_and_not_in_sync_list` |
+| Syncs only at fences | `a_routing_copy_takes_no_update_between_runs` |
+| Setup in a routing copy on a Mac | `a_routing_copy_on_a_mac_waits_for_setup_approval` |
+| Session paths in output | `replaces_the_copys_path_split_across_two_chunks` |
+| Removing routing copies | `archiving_the_session_removes_its_routing_copies`, `turning_heavy_commands_off_removes_the_routing_copies`, `a_routing_copy_unused_for_seven_days_is_removed` |
+| Fence before | `a_command_starts_only_once_the_copy_matches_the_session` |
+| Fence during | `an_edit_on_the_central_host_during_a_run_stays` |
+| Fence after | `a_file_written_by_the_run_is_on_the_central_host_before_the_exit_status`, `a_commit_made_by_the_run_moves_the_sessions_branch` |
+| Leftovers | `a_file_changed_on_both_sides_during_a_run_keeps_the_central_version_and_saves_the_runs` |
+| `outputs` | `outputs_bring_back_an_ignored_coverage_folder`, `an_outputs_path_outside_the_worktree_is_refused`, `a_symbolic_link_in_outputs_is_never_followed`, `an_outputs_path_that_is_a_symbolic_link_is_skipped`, `outputs_over_one_gib_stay_on_the_worker_and_say_so` |
+| First line and output streams | `a_routed_commands_output_and_exit_status_come_back` |
+| Exit status and signals | `a_routed_commands_output_and_exit_status_come_back`, `a_command_killed_by_a_signal_exits_with_128_plus_it` |
+| stdin | `a_routed_command_reads_an_empty_stdin` |
+| Environment | `only_approved_env_names_reach_the_worker` |
+| No shell, same folder | `a_routed_command_runs_without_a_shell_from_the_same_folder` |
+| Cancelling | `cancelling_stops_the_command_and_brings_its_changes_back` |
+| A worker goes away | `a_worker_that_goes_away_mid_run_makes_the_command_run_again_on_the_central_host` |
+| Abandoned changes | `an_abandoned_runs_changes_never_reach_the_session` |
+| The central daemon stops | `a_stopped_central_daemon_ends_moonlet_exec_with_125` |
+| Workers screen | Vitest "a worker's row from worker.list and job.list"; e2e "the Workers page lists the running command" |
+| Skip reasons | Vitest "skip reasons for a project" |
+| Workers summary line | Vitest "the summary line counts running jobs and slots" |
+| Jobs history | `jobs_outlive_a_daemon_restart_and_keep_the_last_fifty`, `archiving_the_session_removes_its_jobs` |
+| Job states | Vitest "the state line for each state" |
+| Phases and timeline | `a_jobs_phases_and_timeline_after_a_rerun`; Vitest "the phase checklist", "the rerun timeline" |
+| What came back | `a_job_lists_what_came_back_and_the_env_names_only` |
+| Stored output | `output_over_ten_mib_keeps_its_start_and_end`, `a_rerun_keeps_both_runs_output_with_a_separator` |
+| Output summary | `summarises_as_in_the_worked_examples`, `summarises_captured_runs_of_each_tool` (captured vitest, jest, `cargo test` over two crates, pytest, `tsc` plain and `--pretty`, `cargo build` with a type error) |
+| Stop and Stop all | `stopping_a_job_gives_exit_143_and_brings_its_changes_back`, `stop_all_stops_every_running_and_waiting_job`; e2e "Stop ends a running job" |
+| Run on the central host now | `run_here_runs_a_job_waiting_for_a_cloud_machine_on_the_central_host` |
+| Jobs tab count | Vitest "the tab counts every job" |
+| Jobs summary (worked examples) | Vitest "the summary line, as in the worked examples" |
+| Row second line (worked examples) | Vitest "a row's second line, as in the worked examples" |
+| Chat chip (UI) | Vitest "the chip from a job", "the chip from a result's first line", "a rewritten command shows without moonlet exec" |
+| Project page (UI) | Vitest "a new entry, a changed entry, all approved", "the secret-looking env warning"; e2e "approving heavy commands saves them" |
+| Jobs tab (UI) | e2e "the Jobs tab lists the job and opens its output" |
 
 ## Open questions
 
