@@ -100,19 +100,32 @@ impl Store {
         now: u64,
     ) -> Result<String> {
         let systems = self.workspace(workspace)?.join("systems");
+        std::fs::create_dir_all(&systems)
+            .with_context(|| format!("cannot create {}", systems.display()))?;
         let name = name.trim();
         if name.is_empty() {
             bail!("a design system needs a name");
         }
-        let (mut name_n, mut n) = (name.to_string(), 1);
-        while systems.join(slug(&name_n)).exists() {
-            n += 1;
-            name_n = format!("{name} {n}");
-        }
-        let slug = slug(&name_n);
-        let dir = systems.join(&slug);
-        std::fs::create_dir_all(&dir)
-            .with_context(|| format!("cannot create {}", dir.display()))?;
+        // `create_dir` fails when the folder exists, even when another request
+        // made it a moment ago, so two creations never share a slug.
+        let mut n = 1;
+        let (name_n, slug) = loop {
+            let name_n = if n == 1 {
+                name.to_string()
+            } else {
+                format!("{name} {n}")
+            };
+            let slug = slug(&name_n);
+            match std::fs::create_dir(systems.join(&slug)) {
+                Ok(()) => break (name_n, slug),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => n += 1,
+                Err(e) => {
+                    return Err(e).with_context(|| {
+                        format!("cannot create {}", systems.join(&slug).display())
+                    });
+                }
+            }
+        };
         let config = SystemConfig {
             name: name_n,
             created_at: now,
@@ -120,7 +133,7 @@ impl Store {
             sources,
             cards: BTreeMap::new(),
         };
-        std::fs::write(dir.join(CONFIG), toml::to_string(&config)?)?;
+        std::fs::write(systems.join(&slug).join(CONFIG), toml::to_string(&config)?)?;
         Ok(slug)
     }
 
@@ -135,46 +148,26 @@ impl Store {
             let Ok(config) = read_config(&dir) else {
                 continue;
             };
-            let progress: Option<Progress> = std::fs::read_to_string(dir.join(PROGRESS))
-                .ok()
-                .and_then(|t| toml::from_str(&t).ok());
-            let cards = manifest::build(&dir)?.cards;
-            let roots: Vec<PathBuf> = config
-                .sources
-                .iter()
-                .map(|s| PathBuf::from(&s.path))
-                .collect();
-            let status = anchor::status(&dir, &roots, &config.exceptions())?;
-            let mut changed: Vec<String> = status
-                .iter()
-                .flat_map(|s| s.changed_sources.clone())
-                .collect();
-            changed.sort();
-            changed.dedup();
-            let proposed = html_files(&dir)
-                .iter()
-                .filter(|p| p.to_string_lossy().ends_with(".proposed.html"))
-                .count();
-            out.push(SystemSummary {
-                slug: e.file_name().to_string_lossy().into_owned(),
-                name: config.name,
-                sources: config.sources.iter().map(|s| s.path.clone()).collect(),
-                synced_at: config.synced_at,
-                synced_commit: config.sources.first().and_then(|s| s.commit.clone()),
-                cards: cards
-                    .iter()
-                    .filter(|c| c.path.starts_with("components/"))
-                    .count(),
-                layouts: cards
-                    .iter()
-                    .filter(|c| c.path.starts_with("ui_kits/"))
-                    .count(),
-                changed_sources: changed,
-                check_problems: check::check(&dir)?.len(),
-                to_settle: proposed + status.iter().filter(|s| s.orphaned).count(),
-                step: progress.as_ref().map(|p| p.step.clone()),
-                step_summary: progress.and_then(|p| p.summary),
-            });
+            let slug = e.file_name().to_string_lossy().into_owned();
+            // A system that cannot be read still lists, with its error, so
+            // one broken folder never hides the others.
+            out.push(
+                summary(&dir, slug.clone(), &config).unwrap_or_else(|err| SystemSummary {
+                    slug,
+                    name: config.name.clone(),
+                    sources: config.sources.iter().map(|s| s.path.clone()).collect(),
+                    synced_at: config.synced_at,
+                    synced_commit: config.sources.first().and_then(|s| s.commit.clone()),
+                    cards: 0,
+                    layouts: 0,
+                    changed_sources: Vec::new(),
+                    check_problems: 0,
+                    to_settle: 0,
+                    step: None,
+                    step_summary: None,
+                    error: Some(format!("{err:#}")),
+                }),
+            );
         }
         out.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(out)
@@ -233,25 +226,24 @@ impl Store {
         &self,
         workspace: &str,
         slug: &str,
-        commits: &[(String, String)],
+        commits: &[(String, Option<String>)],
         now: u64,
     ) -> Result<()> {
         let dir = self.system_dir(workspace, slug)?;
         let mut config = read_config(&dir)?;
+        // The anchor first: until it is written the sync is not done, and
+        // config.toml and the progress still say so.
+        anchor::write(&dir, &source_roots(&config), &config.exceptions())?;
         for s in &mut config.sources {
             if let Some((_, c)) = commits.iter().find(|(p, _)| *p == s.project) {
-                s.commit = Some(c.clone());
+                // A HEAD that could not be read leaves no commit, not a stale one.
+                s.commit = c.clone();
             }
         }
         config.synced_at = Some(now);
         std::fs::write(dir.join(CONFIG), toml::to_string(&config)?)?;
-        let roots: Vec<PathBuf> = config
-            .sources
-            .iter()
-            .map(|s| PathBuf::from(&s.path))
-            .collect();
         let _ = std::fs::remove_file(dir.join(PROGRESS));
-        anchor::write(&dir, &roots, &config.exceptions())
+        Ok(())
     }
 
     /// A file under the workspace's design folder (`design.file`): never one
@@ -261,8 +253,10 @@ impl Store {
         let Some(path) = inside_dir(&base, rel) else {
             bail!("{rel} is outside the design folder");
         };
-        let (real, real_base) = (std::fs::canonicalize(&path)?, std::fs::canonicalize(&base)?);
-        if !real.starts_with(&real_base) {
+        // Against the design folder itself, so a linked workspace folder does
+        // not move the bounds with it.
+        let real_root = std::fs::canonicalize(&self.root)?;
+        if !std::fs::canonicalize(&path)?.starts_with(real_root.join(workspace)) {
             bail!("{rel} is outside the design folder");
         }
         Ok(path)
@@ -284,19 +278,33 @@ impl Store {
     /// Settles a card the user is asked about after a sync (X64).
     pub fn settle(&self, workspace: &str, slug: &str, card: &str, choice: Settle) -> Result<()> {
         let dir = self.system_dir(workspace, slug)?;
-        let is_card = (card.starts_with("components/") || card.starts_with("ui_kits/"))
-            && card.ends_with(".html")
-            && !card.ends_with(".proposed.html");
-        let Some(path) = inside_dir(&dir, card).filter(|_| is_card) else {
-            bail!("{card} is not a card of {slug}");
+        // A card is `components/<group>/<name>/<name>.html` or
+        // `ui_kits/<kit>/<screen>.html`, named with no `.` or `..`, and
+        // reached through no symlink.
+        let parts: Vec<&str> = card.split('/').collect();
+        let shape = match parts.first() {
+            Some(&"components") => parts.len() == 4,
+            Some(&"ui_kits") => parts.len() == 3,
+            _ => false,
         };
+        let plain = parts
+            .iter()
+            .all(|p| !p.is_empty() && *p != "." && *p != "..");
+        let html = card.ends_with(".html") && !card.ends_with(".proposed.html");
+        if !(shape && plain && html) {
+            bail!("{card} is not a card of {slug}");
+        }
+        let path = dir.join(card);
+        let folder = path.parent().unwrap_or(&dir).to_path_buf();
+        let real_dir = std::fs::canonicalize(&dir)?;
+        if std::fs::canonicalize(&folder).map_or(true, |f| !f.starts_with(&real_dir)) {
+            bail!("{card} is not a card of {slug}");
+        }
         let proposed = path.with_extension("proposed.html");
         match choice {
             Settle::Mine => std::fs::remove_file(&proposed)?,
             Settle::Synced => std::fs::rename(&proposed, &path)?,
-            Settle::Remove if card.starts_with("components/") => {
-                std::fs::remove_dir_all(path.parent().unwrap_or(&dir))?
-            }
+            Settle::Remove if parts[0] == "components" => std::fs::remove_dir_all(&folder)?,
             Settle::Remove => {
                 std::fs::remove_file(&path)?;
                 let _ = std::fs::remove_file(&proposed);
@@ -337,6 +345,61 @@ pub struct SystemSummary {
     /// The step a running sync reported last: `inventory`, `tokens`, `cards` or `layouts`.
     pub step: Option<String>,
     pub step_summary: Option<String>,
+    /// Why the system could not be read, when it could not.
+    pub error: Option<String>,
+}
+
+/// Each source's folder: the repository, or its sub-folder when it names one.
+/// Card sources are relative to it.
+fn source_roots(config: &SystemConfig) -> Vec<PathBuf> {
+    config
+        .sources
+        .iter()
+        .map(|s| match &s.subdir {
+            Some(sub) => Path::new(&s.path).join(sub),
+            None => PathBuf::from(&s.path),
+        })
+        .collect()
+}
+
+/// What the list shows of one design system.
+fn summary(dir: &Path, slug: String, config: &SystemConfig) -> Result<SystemSummary> {
+    let progress: Option<Progress> = std::fs::read_to_string(dir.join(PROGRESS))
+        .ok()
+        .and_then(|t| toml::from_str(&t).ok());
+    let cards = manifest::build(dir)?.cards;
+    let status = anchor::status(dir, &source_roots(config), &config.exceptions())?;
+    let mut changed: Vec<String> = status
+        .iter()
+        .flat_map(|s| s.changed_sources.clone())
+        .collect();
+    changed.sort();
+    changed.dedup();
+    let proposed = html_files(dir)
+        .iter()
+        .filter(|p| p.to_string_lossy().ends_with(".proposed.html"))
+        .count();
+    Ok(SystemSummary {
+        slug,
+        name: config.name.clone(),
+        sources: config.sources.iter().map(|s| s.path.clone()).collect(),
+        synced_at: config.synced_at,
+        synced_commit: config.sources.first().and_then(|s| s.commit.clone()),
+        cards: cards
+            .iter()
+            .filter(|c| c.path.starts_with("components/"))
+            .count(),
+        layouts: cards
+            .iter()
+            .filter(|c| c.path.starts_with("ui_kits/"))
+            .count(),
+        changed_sources: changed,
+        check_problems: check::check(dir)?.len(),
+        to_settle: proposed + status.iter().filter(|s| s.orphaned).count(),
+        step: progress.as_ref().map(|p| p.step.clone()),
+        step_summary: progress.and_then(|p| p.summary),
+        error: None,
+    })
 }
 
 /// What the user picks for a card under Needs you (X64).
@@ -543,7 +606,12 @@ root = \"9c1e0a2\"
             ],
         );
         store
-            .synced("w1", &slug, &[("p-moonlet".into(), "4db5585".into())], 9)
+            .synced(
+                "w1",
+                &slug,
+                &[("p-moonlet".into(), Some("4db5585".into()))],
+                9,
+            )
             .unwrap();
         // After the sync: a source changes and a card waits to be settled.
         put(project.path(), &[("src/ui.tsx", "button with loading\n")]);
@@ -570,6 +638,7 @@ root = \"9c1e0a2\"
                 to_settle: 1,
                 step: None,
                 step_summary: None,
+                error: None,
             }]
         );
         assert_eq!(store.systems("w-none").unwrap(), vec![]);
@@ -735,5 +804,171 @@ root = \"9c1e0a2\"
             content_type(Path::new("README")),
             "application/octet-stream"
         );
+    }
+    // Review fixes (#343).
+
+    #[test]
+    fn settling_never_touches_files_outside_the_system_through_a_link_or_dots() {
+        let home = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        put(
+            outside.path(),
+            &[
+                ("row/row.html", "theirs"),
+                ("row/row.proposed.html", "proposal"),
+            ],
+        );
+        let store = Store::new(home.path());
+        let slug = store.create_system("w1", "storefront", vec![], 1).unwrap();
+        let dir = home.path().join("design/w1/systems").join(&slug);
+        put(
+            &dir,
+            &[(
+                "components/buttons/button/button.html",
+                "<!-- @dsCard group=\"Buttons\" -->\n",
+            )],
+        );
+        std::os::unix::fs::symlink(outside.path(), dir.join("components/custom")).unwrap();
+        for choice in [Settle::Mine, Settle::Synced, Settle::Remove] {
+            assert!(
+                store
+                    .settle("w1", &slug, "components/custom/row/row.html", choice)
+                    .is_err(),
+                "{choice:?} went through the link"
+            );
+        }
+        assert!(
+            outside.path().join("row/row.proposed.html").is_file()
+                && outside.path().join("row/row.html").is_file()
+        );
+        for card in [
+            "components/../x.html",
+            "components/buttons.html",
+            "components/buttons/button/../../../config.toml",
+        ] {
+            assert!(
+                store.settle("w1", &slug, card, Settle::Remove).is_err(),
+                "{card} was removed"
+            );
+        }
+        assert!(
+            dir.join(CONFIG).is_file()
+                && dir.join("components/buttons/button/button.html").is_file()
+        );
+    }
+
+    #[test]
+    fn a_linked_workspace_folder_does_not_widen_what_files_resolve() {
+        let home = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        put(outside.path(), &[("systems/x/styles.css", "")]);
+        std::fs::create_dir_all(home.path().join("design")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), home.path().join("design/w1")).unwrap();
+        assert!(
+            Store::new(home.path())
+                .resolve("w1", "systems/x/styles.css")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn a_source_with_a_subfolder_reads_card_sources_inside_it() {
+        let home = tempfile::tempdir().unwrap();
+        let repo = tempfile::tempdir().unwrap();
+        put(repo.path(), &[("apps/mobile/src/Button.tsx", "one\n")]);
+        let store = Store::new(home.path());
+        let mut src = source();
+        src.path = repo.path().display().to_string();
+        src.subdir = Some("apps/mobile".into());
+        let slug = store
+            .create_system("w1", "moonlet mobile", vec![src], 1)
+            .unwrap();
+        let dir = home.path().join("design/w1/systems").join(&slug);
+        put(
+            &dir,
+            &[
+                ("styles.css", ""),
+                (
+                    "components/buttons/button/button.html",
+                    "<!-- @dsCard group=\"Buttons\" source=\"src/Button.tsx\" -->\n<button></button>\n",
+                ),
+            ],
+        );
+        store
+            .synced(
+                "w1",
+                &slug,
+                &[("p-moonlet".into(), Some("abc1234".into()))],
+                2,
+            )
+            .unwrap();
+        put(repo.path(), &[("apps/mobile/src/Button.tsx", "two\n")]);
+        assert_eq!(
+            store.systems("w1").unwrap()[0].changed_sources,
+            vec!["src/Button.tsx".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_sync_whose_anchor_cannot_be_written_stays_unfinished_and_a_lost_head_is_cleared() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::new(home.path());
+        let mut src = source();
+        src.commit = Some("old1234".into());
+        let slug = store
+            .create_system("w1", "storefront", vec![src], 1)
+            .unwrap();
+        let dir = home.path().join("design/w1/systems").join(&slug);
+        put(
+            &dir,
+            &[(
+                "components/buttons/button/button.html",
+                "<!-- @dsCard group=\"Buttons\" -->\n",
+            )],
+        );
+        store.progress("w1", &slug, "layouts", None).unwrap();
+        let card = dir.join("components/buttons/button/button.html");
+        std::fs::set_permissions(&card, std::fs::Permissions::from_mode(0o000)).unwrap();
+        assert!(
+            store
+                .synced(
+                    "w1",
+                    &slug,
+                    &[("p-moonlet".into(), Some("new5678".into()))],
+                    9
+                )
+                .is_err()
+        );
+        std::fs::set_permissions(&card, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let s = &store.systems("w1").unwrap()[0];
+        assert_eq!(
+            (s.synced_at, s.synced_commit.as_deref(), s.step.as_deref()),
+            (None, Some("old1234"), Some("layouts"))
+        );
+        // A source whose HEAD could not be read has no commit, not a stale one.
+        store
+            .synced("w1", &slug, &[("p-moonlet".into(), None)], 10)
+            .unwrap();
+        assert_eq!(store.systems("w1").unwrap()[0].synced_commit, None);
+    }
+
+    #[test]
+    fn one_broken_system_still_lists_with_its_error_beside_the_others() {
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::new(home.path());
+        let a = store.create_system("w1", "alpha", vec![], 1).unwrap();
+        store.create_system("w1", "beta", vec![], 1).unwrap();
+        put(
+            &home.path().join("design/w1/systems").join(&a),
+            &[("_ds_sync.json", "{ not json")],
+        );
+        let got: Vec<(String, bool)> = store
+            .systems("w1")
+            .unwrap()
+            .into_iter()
+            .map(|s| (s.name, s.error.is_some()))
+            .collect();
+        assert_eq!(got, vec![("alpha".into(), true), ("beta".into(), false)]);
     }
 }
