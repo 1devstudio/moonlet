@@ -186,10 +186,15 @@ impl Machines {
         emit: impl Fn(Message) + Send + Sync + 'static,
     ) -> Arc<Machines> {
         let dir = home.join("cloud");
-        let records: Vec<Record> = std::fs::read(dir.join("machines.json"))
+        let mut records: Vec<Record> = std::fs::read(dir.join("machines.json"))
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or_default();
+        // A create call does not outlive the daemon: the sweep finds what
+        // it made.
+        for r in &mut records {
+            r.call_started = None;
+        }
         let usage = std::fs::read(dir.join("usage.json"))
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok())
