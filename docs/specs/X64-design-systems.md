@@ -183,7 +183,7 @@ A design system belongs to a moonlet workspace, so every project and design in t
 
   It exits non-zero on any error.
 - [ ] The check rewrites the generated files: `_ds_manifest.json` (from the markers, sorted by group and name), the foundation cards, and the README index.
-- [ ] With `--render`, the check asks the moonlet app to load each card in its sandboxed canvas (the app's own WebKit, in a window placed off screen), measures it in the page, and writes `.cache/render-check.json` with design-sync's rubric:
+- [ ] With `--render`, the check asks the moonlet app to load each card in its sandboxed canvas (the app's own WebKit, in a hidden window that is never shown), measures it in the page, and writes `.cache/render-check.json` with design-sync's rubric:
   - `rootEmpty`: a mount is empty
   - `errs`: page errors
   - `nameOnly`: the only text is the card's name repeated
@@ -335,4 +335,4 @@ X64 ships in entries 2–6 of the stack in [X65's delivery plan](X65-design-mode
 
 ## Open questions
 
-- Snapshotting a WKWebView in a window placed off screen from Tauri (`with_webview`, `takeSnapshot`) needs a spike before entry 6 of the delivery plan. If an off-screen window renders blank, the fallback is a window on screen behind the main window, at zero opacity.
+- None. The snapshot spike settled how cards are rendered and snapped (ADR 0013, Consequences).
