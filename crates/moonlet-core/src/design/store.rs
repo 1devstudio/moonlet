@@ -166,6 +166,7 @@ impl Store {
                     step: None,
                     step_summary: None,
                     error: Some(format!("{err:#}")),
+                    agent: read_agent(&dir),
                 }),
             );
         }
@@ -194,6 +195,19 @@ impl Store {
     pub fn remove_system(&self, workspace: &str, slug: &str) -> Result<()> {
         let dir = self.system_dir(workspace, slug)?;
         std::fs::remove_dir_all(&dir).with_context(|| format!("cannot remove {}", dir.display()))
+    }
+
+    /// The chat of the system's sync agent, kept for the app's Open agent
+    /// and across daemon restarts (chats restore themselves).
+    pub fn set_agent(&self, workspace: &str, slug: &str, terminal: u32) -> Result<()> {
+        let dir = self.system_dir(workspace, slug)?;
+        std::fs::create_dir_all(dir.join(".cache"))?;
+        std::fs::write(dir.join(AGENT), format!("terminal = {terminal}\n"))?;
+        Ok(())
+    }
+
+    pub fn agent(&self, workspace: &str, slug: &str) -> Result<Option<u32>> {
+        Ok(read_agent(&self.system_dir(workspace, slug)?))
     }
 
     /// What a running sync reports as it goes (`design.system.progress`).
@@ -347,6 +361,8 @@ pub struct SystemSummary {
     pub step_summary: Option<String>,
     /// Why the system could not be read, when it could not.
     pub error: Option<String>,
+    /// The chat of its sync agent, once one was started.
+    pub agent: Option<u32>,
 }
 
 /// Each source's folder: the repository, or its sub-folder when it names one.
@@ -399,6 +415,7 @@ fn summary(dir: &Path, slug: String, config: &SystemConfig) -> Result<SystemSumm
         step: progress.as_ref().map(|p| p.step.clone()),
         step_summary: progress.and_then(|p| p.summary),
         error: None,
+        agent: read_agent(dir),
     })
 }
 
@@ -450,6 +467,16 @@ fn read_config(dir: &Path) -> Result<SystemConfig> {
 /// The sync's steps, in order (X64).
 pub const STEPS: [&str; 4] = ["inventory", "tokens", "cards", "layouts"];
 const PROGRESS: &str = ".cache/progress.toml";
+const AGENT: &str = ".cache/agent.toml";
+
+fn read_agent(dir: &Path) -> Option<u32> {
+    #[derive(Deserialize)]
+    struct Agent {
+        terminal: u32,
+    }
+    let text = std::fs::read_to_string(dir.join(AGENT)).ok()?;
+    toml::from_str::<Agent>(&text).ok().map(|a| a.terminal)
+}
 
 #[derive(Serialize, Deserialize)]
 struct Progress {
@@ -639,6 +666,7 @@ root = \"9c1e0a2\"
                 step: None,
                 step_summary: None,
                 error: None,
+                agent: None,
             }]
         );
         assert_eq!(store.systems("w-none").unwrap(), vec![]);
@@ -970,5 +998,16 @@ root = \"9c1e0a2\"
             .map(|s| (s.name, s.error.is_some()))
             .collect();
         assert_eq!(got, vec![("alpha".into(), true), ("beta".into(), false)]);
+    }
+
+    #[test]
+    fn a_system_remembers_its_agents_chat() {
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::new(home.path());
+        let slug = store.create_system("w1", "storefront", vec![], 1).unwrap();
+        assert_eq!(store.agent("w1", &slug).unwrap(), None);
+        store.set_agent("w1", &slug, 42).unwrap();
+        assert_eq!(store.agent("w1", &slug).unwrap(), Some(42));
+        assert_eq!(store.systems("w1").unwrap()[0].agent, Some(42));
     }
 }
