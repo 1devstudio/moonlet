@@ -228,6 +228,7 @@ impl Daemon {
             sessions.clone(),
             move |m| emitter.emit(m),
         );
+        runs.set_machines(Arc::downgrade(&machines));
         link.set_runs(Arc::downgrade(&runs));
         Arc::new(Self {
             heavy,
@@ -653,10 +654,13 @@ impl Daemon {
                 env.insert("MOONLET_ROUTED".into(), "1".into());
                 env.insert("MOONLET_SESSION".into(), r.session.clone());
                 let me = self.link.info().worker;
+                let session = self.sessions.session(&r.session).ok();
                 let plan = crate::exec::Plan {
                     session: r.session,
                     worktree: checked.worktree.display().to_string(),
                     project: checked.project.clone(),
+                    project_id: session.as_ref().map(|s| s.project_id.clone()).unwrap_or_default(),
+                    cloud: session.as_ref().is_some_and(|s| s.cloud),
                     tool_use_id: r.tool_use_id.clone(),
                     argv: r.argv.clone(),
                     cwd_rel: checked.cwd_rel,

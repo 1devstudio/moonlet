@@ -796,7 +796,7 @@ impl Requests for WorkerRequests {
                     let sync = link.sync().ok_or_else(|| RpcError::new("gone", "no copies"))?;
                     let runs = link.runs().ok_or_else(|| RpcError::new("gone", "no runs"))?;
                     let host = link.host().ok_or_else(|| RpcError::new("gone", "the link closed"))?;
-                    Ok(serde_json::json!(runs.start_here(req, sync, host, info.worker.slots).await?))
+                    Ok(serde_json::json!(runs.start_here(req, sync, host, info.worker.slots, info.worker.cloud).await?))
                 }
                 m::EXEC_CANCEL => {
                     let req: m::ExecCancel = serde_json::from_value(params)
