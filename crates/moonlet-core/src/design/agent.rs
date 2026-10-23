@@ -138,9 +138,15 @@ pub struct NeedsYou {
 pub fn needs_you(pending: &[moonlet_proto::types::PermissionAsk]) -> Option<NeedsYou> {
     let ask = pending.first()?;
     Some(if ask.tool == "AskUserQuestion" {
-        NeedsYou { kind: "question".into(), text: ask.summary.clone() }
+        NeedsYou {
+            kind: "question".into(),
+            text: ask.summary.clone(),
+        }
     } else {
-        NeedsYou { kind: "approval".into(), text: format!("{}: {}", ask.tool, ask.summary) }
+        NeedsYou {
+            kind: "approval".into(),
+            text: format!("{}: {}", ask.tool, ask.summary),
+        }
     })
 }
 
@@ -302,12 +308,21 @@ Follow the moonlet-design skill's sync: rewrite only these cards, and leave a ca
         };
         assert_eq!(needs_you(&[]), None);
         assert_eq!(
-            needs_you(&[ask("AskUserQuestion", "Which button set is current?"), ask("Bash", "ls")]),
-            Some(NeedsYou { kind: "question".into(), text: "Which button set is current?".into() })
+            needs_you(&[
+                ask("AskUserQuestion", "Which button set is current?"),
+                ask("Bash", "ls")
+            ]),
+            Some(NeedsYou {
+                kind: "question".into(),
+                text: "Which button set is current?".into()
+            })
         );
         assert_eq!(
             needs_you(&[ask("Bash", "find src -name '*.tsx'")]),
-            Some(NeedsYou { kind: "approval".into(), text: "Bash: find src -name '*.tsx'".into() })
+            Some(NeedsYou {
+                kind: "approval".into(),
+                text: "Bash: find src -name '*.tsx'".into()
+            })
         );
     }
 }

@@ -1087,6 +1087,10 @@ impl Daemon {
                 let path = blocking(move || store.resolve(&r.workspace, &r.path)).await?;
                 ok(serde_json::json!({"path": path, "content_type": store::content_type(&path)}))
             }
+            m::DESIGN_DETECT => {
+                let r: m::DesignDetect = params(p)?;
+                ok(blocking(move || Ok(moonlet_core::design::stack::detect(&path(&r.path)))).await?)
+            }
             m::DESIGN_SETTLE => {
                 let r: m::DesignSettle = params(p)?;
                 let choice: Settle = serde_json::from_value(Value::String(r.choice.clone()))
