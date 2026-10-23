@@ -410,7 +410,6 @@ export interface JobChunk {
   text: string;
 }
 
-/** A routing copy's setup waiting for the user's approval (X62), from `exec.setups` and `exec.setup`. */
 /** A settings field of a cloud provider (X63). */
 export interface CloudField {
   name: string;
@@ -501,6 +500,7 @@ export interface MachineType {
   arch: string;
 }
 
+/** A routing copy's setup waiting for the user's approval (X62), from `exec.setups` and `exec.setup`. */
 export interface ExecSetup {
   copy: string;
   /** The central host's name. */
