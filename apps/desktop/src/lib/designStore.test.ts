@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DesignSystem } from "./protocol";
-import { createSystem, detectStack, loadSystems, startDesign, systemsOf, useDesign } from "./designStore";
+import { createSystem, detectStack, loadSystems, shownSystem, showSystem, startDesign, systemsOf, useDesign } from "./designStore";
 
 const calls = vi.hoisted(() => [] as { host: string; method: string; params: unknown }[]);
 /** What the daemon answers, by method. */
@@ -91,6 +91,21 @@ describe("a workspace's design systems (X64, X65)", () => {
     hostStatus.emit({ id: "local", status: "connected" });
     await settle();
     expect(listed()).toHaveLength(2);
+  });
+});
+
+describe("the open design system (X65)", () => {
+  it("is the one picked, else the first, so the main area is never blank", async () => {
+    answers["design.systems"] = () => [system(), system({ slug: "storefront", name: "storefront" })];
+    expect(shownSystem(useDesign.getState(), "local", "w-1devstudio")).toBeNull();
+    await loadSystems("local", "w-1devstudio");
+    expect(shownSystem(useDesign.getState(), "local", "w-1devstudio")?.slug).toBe("moonlet-desktop");
+    showSystem("local", "w-1devstudio", "storefront");
+    expect(shownSystem(useDesign.getState(), "local", "w-1devstudio")?.slug).toBe("storefront");
+    // The picked one was removed.
+    answers["design.systems"] = () => [system()];
+    await loadSystems("local", "w-1devstudio");
+    expect(shownSystem(useDesign.getState(), "local", "w-1devstudio")?.slug).toBe("moonlet-desktop");
   });
 });
 
