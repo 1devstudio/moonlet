@@ -12,7 +12,7 @@ use moonlet_proto::types::ProjectIdentity;
 use serde::{Deserialize, Serialize};
 
 use super::check::{self, html_files};
-use super::{anchor, foundations, manifest, readme};
+use super::{anchor, foundations, fsx, manifest, readme};
 
 /// One project a design system is built from.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -87,6 +87,10 @@ pub struct Record {
     /// The chat of its sync agent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<u32>,
+    /// What that chat was started with (its folders and settings): it is
+    /// reused only while a new start would be the same.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_launch: Option<String>,
 }
 
 /// The design folders of one moonlet home.
@@ -168,26 +172,30 @@ impl Store {
                 continue;
             };
             let slug = e.file_name().to_string_lossy().into_owned();
-            let record = self.record(workspace, &slug).unwrap_or_default();
             // A system that cannot be read still lists, with its error, so
             // one broken folder never hides the others.
+            let (record, read) = match self.record(workspace, &slug) {
+                Ok(r) => (r, Ok(())),
+                Err(e) => (Record::default(), Err(e.context("cannot read its record"))),
+            };
             out.push(
-                summary(&dir, slug.clone(), &config, &record).unwrap_or_else(|err| SystemSummary {
-                    slug,
-                    name: config.name.clone(),
-                    sources: record.sources.iter().map(|s| s.path.clone()).collect(),
-                    synced_at: record.synced_at,
-                    synced_commit: record.sources.first().and_then(|s| s.commit.clone()),
-                    cards: 0,
-                    layouts: 0,
-                    changed_sources: Vec::new(),
-                    check_problems: 0,
-                    to_settle: 0,
-                    step: None,
-                    step_summary: None,
-                    error: Some(format!("{err:#}")),
-                    agent: record.agent,
-                }),
+                read.and_then(|()| summary(&dir, slug.clone(), &config, &record))
+                    .unwrap_or_else(|err| SystemSummary {
+                        slug,
+                        name: config.name.clone(),
+                        sources: record.sources.iter().map(|s| s.path.clone()).collect(),
+                        synced_at: record.synced_at,
+                        synced_commit: record.sources.first().and_then(|s| s.commit.clone()),
+                        cards: 0,
+                        layouts: 0,
+                        changed_sources: Vec::new(),
+                        check_problems: 0,
+                        to_settle: 0,
+                        step: None,
+                        step_summary: None,
+                        error: Some(format!("{err:#}")),
+                        agent: record.agent,
+                    }),
             );
         }
         out.sort_by(|a, b| a.name.cmp(&b.name));
@@ -249,15 +257,30 @@ impl Store {
 
     /// The chat of the system's sync agent, kept for the app's Open agent
     /// and across daemon restarts (chats restore themselves).
-    pub fn set_agent(&self, workspace: &str, slug: &str, terminal: u32) -> Result<()> {
+    pub fn set_agent(
+        &self,
+        workspace: &str,
+        slug: &str,
+        terminal: u32,
+        launch: &str,
+    ) -> Result<()> {
         self.system_dir(workspace, slug)?;
         let mut record = self.record(workspace, slug)?;
         record.agent = Some(terminal);
+        record.agent_launch = Some(launch.to_string());
         self.write_record(workspace, slug, &record)
     }
 
     pub fn agent(&self, workspace: &str, slug: &str) -> Result<Option<u32>> {
         Ok(self.record(workspace, slug)?.agent)
+    }
+
+    /// The recorded agent, when it was started with `launch`.
+    pub fn agent_for(&self, workspace: &str, slug: &str, launch: &str) -> Result<Option<u32>> {
+        let record = self.record(workspace, slug)?;
+        Ok(record
+            .agent
+            .filter(|_| record.agent_launch.as_deref() == Some(launch)))
     }
 
     /// What a running sync reports as it goes (`design.system.progress`).
@@ -275,12 +298,12 @@ impl Store {
             );
         }
         let dir = self.system_dir(workspace, slug)?;
-        std::fs::create_dir_all(dir.join(".cache"))?;
+
         let p = Progress {
             step: step.into(),
             summary: summary.map(String::from),
         };
-        std::fs::write(dir.join(PROGRESS), toml::to_string(&p)?)?;
+        fsx::write_inside(&dir, &dir.join(PROGRESS), toml::to_string(&p)?.as_bytes())?;
         Ok(())
     }
 
@@ -1058,7 +1081,7 @@ root = \"9c1e0a2\"
         let store = Store::new(home.path());
         let slug = store.create_system("w1", "storefront", vec![], 1).unwrap();
         assert_eq!(store.agent("w1", &slug).unwrap(), None);
-        store.set_agent("w1", &slug, 42).unwrap();
+        store.set_agent("w1", &slug, 42, "l").unwrap();
         assert_eq!(store.agent("w1", &slug).unwrap(), Some(42));
         assert_eq!(store.systems("w1").unwrap()[0].agent, Some(42));
     }
@@ -1070,7 +1093,7 @@ root = \"9c1e0a2\"
         let slug = store
             .create_system("w1", "storefront", vec![source()], 1)
             .unwrap();
-        store.set_agent("w1", &slug, 7).unwrap();
+        store.set_agent("w1", &slug, 7, "l").unwrap();
         let dir = home.path().join("design/w1/systems").join(&slug);
         // The agent works in `dir` and may write anything there.
         put(
@@ -1088,5 +1111,79 @@ root = \"9c1e0a2\"
         assert_eq!(record.sources, vec![source()]);
         assert_eq!(record.agent, Some(7));
         assert!(!store.record_path("w1", &slug).unwrap().starts_with(&dir));
+    }
+
+    // Review fixes (#347).
+
+    #[test]
+    fn writing_generated_files_never_follows_a_link_the_agent_left() {
+        let home = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        put(
+            outside.path(),
+            &[("record.toml", "trusted\n"), ("dir/keep.txt", "keep\n")],
+        );
+        let store = Store::new(home.path());
+        let slug = store.create_system("w1", "storefront", vec![], 1).unwrap();
+        let dir = home.path().join("design/w1/systems").join(&slug);
+        put(
+            &dir,
+            &[
+                ("styles.css", "@import \"tokens/c.css\";\n"),
+                ("tokens/c.css", ":root { --color-bg: #fff; }\n"),
+            ],
+        );
+        for (link, to) in [
+            ("README.md", outside.path().join("record.toml")),
+            ("_ds_manifest.json", outside.path().join("record.toml")),
+            ("foundations", outside.path().join("dir")),
+            (".cache", outside.path().join("dir")),
+        ] {
+            std::os::unix::fs::symlink(&to, dir.join(link)).unwrap();
+        }
+        let _ = store.check_system("w1", &slug);
+        let _ = store.progress("w1", &slug, "cards", None);
+        assert_eq!(
+            std::fs::read_to_string(outside.path().join("record.toml")).unwrap(),
+            "trusted\n"
+        );
+        let left: Vec<String> = std::fs::read_dir(outside.path().join("dir"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(left, vec!["keep.txt".to_string()]);
+    }
+
+    #[test]
+    fn a_record_that_cannot_be_read_lists_the_system_with_its_error() {
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::new(home.path());
+        let slug = store
+            .create_system("w1", "storefront", vec![source()], 1)
+            .unwrap();
+        std::fs::write(
+            home.path()
+                .join("design/w1/.records")
+                .join(format!("{slug}.toml")),
+            "sources = 3 = 4\n",
+        )
+        .unwrap();
+        let s = &store.systems("w1").unwrap()[0];
+        assert!(
+            s.error.as_deref().is_some_and(|e| e.contains("record")),
+            "{:?}",
+            s.error
+        );
+    }
+
+    #[test]
+    fn a_recorded_agent_is_reused_only_with_the_launch_it_was_started_with() {
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::new(home.path());
+        let slug = store.create_system("w1", "storefront", vec![], 1).unwrap();
+        store.set_agent("w1", &slug, 7, "settings A").unwrap();
+        assert_eq!(store.agent_for("w1", &slug, "settings A").unwrap(), Some(7));
+        assert_eq!(store.agent_for("w1", &slug, "settings B").unwrap(), None);
+        assert_eq!(store.agent("w1", &slug).unwrap(), Some(7));
     }
 }

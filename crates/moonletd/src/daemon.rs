@@ -29,6 +29,8 @@ pub struct Daemon {
     pub sessions: Arc<SessionManager>,
     /// Design systems and designs under `~/.moonlet/design` (X64, X65).
     design: moonlet_core::design::store::Store,
+    /// One sync agent start at a time per design system (X64).
+    design_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     reads: TerminalReads,
     watchers: Arc<Watchers>,
     started_at: u64,
@@ -189,6 +191,7 @@ impl Daemon {
             chats,
             sessions,
             design: moonlet_core::design::store::Store::new(&moonlet_core::paths::home()),
+            design_locks: Mutex::new(HashMap::new()),
             reads,
             watchers,
             started_at: now_ms(),
@@ -722,6 +725,7 @@ impl Daemon {
             }
             m::DESIGN_SYSTEM_REMOVE => {
                 let r: m::DesignSystemRef = params(p)?;
+                self.stop_sync_agent(&r.workspace, &r.slug);
                 blocking(move || store.remove_system(&r.workspace, &r.slug)).await?;
                 ok(true)
             }
@@ -767,32 +771,43 @@ impl Daemon {
     /// the workspace's Claude profile, with the sources read only.
     async fn start_sync_agent(&self, workspace: &str, slug: &str) -> anyhow::Result<u32> {
         use moonlet_core::design::{agent, anchor, store};
-        let dir = self.design.system_dir(workspace, slug)?.canonicalize()?;
-        let config = self.design.config(workspace, slug)?;
+        // One start or sync at a time per system, so two never make two agents.
+        let lock = self.design_locks.lock().unwrap().entry(format!("{workspace}/{slug}")).or_default().clone();
+        let _held = lock.lock().await;
         // The folders and the chat come from the record moonlet keeps outside
-        // the system's folder, never from files the agent can edit.
-        let record = self.design.record(workspace, slug)?;
-        let mut sources = Vec::new();
-        for root in store::source_roots(&record) {
-            let real = root.canonicalize().map_err(|e| anyhow::anyhow!("{}: {e}", root.display()))?;
-            sources.push(real.display().to_string());
-        }
-        let bin = moonlet_cli_path()?;
-        let synced = dir.join(anchor::FILE).is_file();
-        let status = if synced { anchor::status(&dir, &store::source_roots(&record), &config.exceptions())? } else { Vec::new() };
-        let task = if synced { agent::Task::Resync(&status) } else { agent::Task::Build };
-        let launch = agent::sync_launch(&dir, &config, &sources, &bin, task)?;
-        // Reused only while it is still this system's agent: a chat that is
-        // gone, or now another (the ids of a restarted daemon), gets none of
-        // its prompts.
+        // the system's folder, never from files the agent can edit. Reading and
+        // hashing the sources runs off the async workers.
+        let (store, ws, sl) = (self.design.clone(), workspace.to_string(), slug.to_string());
+        let (dir, record, launch) = blocking(move || {
+            let dir = store.system_dir(&ws, &sl)?.canonicalize()?;
+            let config = store.config(&ws, &sl)?;
+            let record = store.record(&ws, &sl)?;
+            let mut sources = Vec::new();
+            for root in store::source_roots(&record) {
+                let real = root.canonicalize().map_err(|e| anyhow::anyhow!("{}: {e}", root.display()))?;
+                sources.push(real.display().to_string());
+            }
+            let bin = moonlet_cli_path()?;
+            let synced = dir.join(anchor::FILE).is_file();
+            let status = if synced { anchor::status(&dir, &store::source_roots(&record), &config.exceptions())? } else { Vec::new() };
+            let task = if synced { agent::Task::Resync(&status) } else { agent::Task::Build };
+            let launch = agent::sync_launch(&dir, &config, &sources, &bin, task)?;
+            Ok((dir, record, launch))
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e.message))?;
+        // What the chat starts with: a chat started with other folders or
+        // rules (a source moved) is replaced, not reused.
+        let fingerprint = format!("{}\n{}", launch.settings, launch.add_dirs.join("\n"));
         let ours = |id: u32| {
             self.terminals.list().into_iter().any(|t| t.id == id && t.chat && t.session_id.is_none() && t.title == launch.title && Path::new(&t.cwd) == dir)
         };
-        if let Some(id) = record.agent
-            && ours(id)
-        {
-            self.chats.send(id, &launch.prompt, &[])?;
-            return Ok(id);
+        if let Some(id) = record.agent.filter(|id| ours(*id)) {
+            if record.agent_launch.as_deref() == Some(fingerprint.as_str()) {
+                self.chats.send(id, &launch.prompt, &[])?;
+                return Ok(id);
+            }
+            let _ = self.terminals.kill(id, true);
         }
         let info = self.chats.create(ChatCreate {
             cwd: launch.cwd,
@@ -801,16 +816,32 @@ impl Daemon {
             effort: None,
             mode: Some(launch.mode),
             name: launch.title.clone(),
-            title: Some(launch.title),
+            title: Some(launch.title.clone()),
             session_id: None,
             env: Default::default(),
             add_dirs: launch.add_dirs,
             settings: Some(launch.settings),
             workspace: Some(workspace.to_string()),
         })?;
-        self.design.set_agent(workspace, slug, info.id)?;
+        self.design.set_agent(workspace, slug, info.id, &fingerprint)?;
         self.chats.send(info.id, &launch.prompt, &[])?;
         Ok(info.id)
+    }
+
+    /// Stops a design system's sync agent, when it still is that system's.
+    fn stop_sync_agent(&self, workspace: &str, slug: &str) {
+        let (Ok(record), Ok(dir), Ok(config)) =
+            (self.design.record(workspace, slug), self.design.system_dir(workspace, slug), self.design.config(workspace, slug))
+        else {
+            return;
+        };
+        let dir = dir.canonicalize().unwrap_or(dir);
+        let title = format!("Design · {}", config.name);
+        if let Some(id) = record.agent
+            && self.terminals.list().into_iter().any(|t| t.id == id && t.chat && t.session_id.is_none() && t.title == title && Path::new(&t.cwd) == dir)
+        {
+            let _ = self.terminals.kill(id, true);
+        }
     }
 
     /// Workspaces, projects, sessions, git and files.

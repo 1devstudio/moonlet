@@ -88,17 +88,8 @@ pub fn write(root: &Path) -> Result<()> {
     for slug in SLUGS {
         let path = format!("foundations/{slug}/{slug}.html");
         match cards.iter().find(|(p, _)| *p == path) {
-            Some((_, html)) => {
-                let file = root.join(&path);
-                std::fs::create_dir_all(file.parent().unwrap_or(root))?;
-                std::fs::write(file, html)?;
-            }
-            None => {
-                let dir = root.join("foundations").join(slug);
-                if dir.is_dir() {
-                    std::fs::remove_dir_all(dir)?;
-                }
-            }
+            Some((_, html)) => super::fsx::write_inside(root, &root.join(&path), html.as_bytes())?,
+            None => super::fsx::remove_dir_inside(root, &root.join("foundations").join(slug))?,
         }
     }
     Ok(())
