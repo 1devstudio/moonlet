@@ -1976,6 +1976,27 @@ async fn an_agents_cli_neither_reads_nor_stops_jobs() {
 }
 
 #[tokio::test]
+async fn approving_on_a_worker_clears_its_not_approved_line() {
+    let (c, mac) = linked_with(RUN_CONFIG, &[], false).await;
+    assert_eq!(ran_on(&c.run(&["sh", "run.sh"]).await), "studio-mini");
+    let status: Value = c.daemon.call("exec.status", json!({})).await;
+    assert_eq!(
+        status["skips"][0]["reason"],
+        json!("not_approved"),
+        "{status}"
+    );
+    approve_on(&c, &mac).await;
+    for _ in 0..100 {
+        let status: Value = c.daemon.call("exec.status", json!({})).await;
+        if status["skips"] == json!([]) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("the central host still says the Mac has not approved");
+}
+
+#[tokio::test]
 async fn exec_status_lists_the_central_host_its_runs_and_why_workers_were_skipped() {
     let (c, _mac) = linked_with(RUN_CONFIG, &[], false).await;
     // Not approved on the Mac: it is skipped, and the command runs here.
@@ -2024,10 +2045,15 @@ async fn exec_status_lists_the_central_host_its_runs_and_why_workers_were_skippe
     let status: Value = c.daemon.call("exec.status", json!({})).await;
     assert_eq!(status["running"], json!([]));
     // Other sessions' commands are not for an agent's CLI.
-    let mut cli = Client::connect(&c.daemon.socket, "moonlet-cli").await.unwrap();
+    let mut cli = Client::connect(&c.daemon.socket, "moonlet-cli")
+        .await
+        .unwrap();
     let e = cli
         .request::<_, Value>("exec.status", json!({}))
         .await
         .unwrap_err();
-    assert_eq!(e.to_string(), "forbidden: only the moonlet app manages jobs");
+    assert_eq!(
+        e.to_string(),
+        "forbidden: only the moonlet app manages jobs"
+    );
 }

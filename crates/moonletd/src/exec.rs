@@ -667,6 +667,15 @@ impl Runs {
         }
     }
 
+    /// Forgets that worker `worker` had not approved a project's heavy
+    /// commands, once it registers again.
+    pub fn forget_not_approved(&self, worker: &str) {
+        self.skips
+            .lock()
+            .unwrap()
+            .retain(|(w, _), (reason, _, _)| !(w == worker && reason == "not_approved"));
+    }
+
     /// `exec.cancel` from connection `conn`: stops its run `run`.
     pub async fn cancel(&self, conn: ClientId, run: u32) -> bool {
         if self.owners.lock().unwrap().get(&run) != Some(&conn) {
