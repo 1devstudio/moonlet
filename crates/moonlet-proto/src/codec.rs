@@ -1,4 +1,4 @@
-use crate::{Frame, KIND_INPUT, KIND_JSON, KIND_OUTPUT, KIND_PACK, MAX_FRAME_LEN, Message};
+use crate::{Frame, KIND_INPUT, KIND_JSON, KIND_OUTPUT, KIND_PACK, KIND_RUN_OUTPUT, MAX_FRAME_LEN, Message};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProtoError {
@@ -54,6 +54,13 @@ pub(crate) fn encode_into(frame: &Frame, out: &mut Vec<u8>) -> Result<(), ProtoE
             out.extend_from_slice(&transfer.to_be_bytes());
             out.extend_from_slice(data);
         }
+        Frame::RunOutput { run, stream, data } => {
+            out.extend_from_slice(&check(data.len() + 6)?.to_be_bytes());
+            out.push(KIND_RUN_OUTPUT);
+            out.extend_from_slice(&run.to_be_bytes());
+            out.push(*stream);
+            out.extend_from_slice(data);
+        }
     }
     Ok(())
 }
@@ -80,6 +87,16 @@ fn decode_body(kind: u8, body: &[u8]) -> Result<Frame, ProtoError> {
             Ok(Frame::Pack {
                 transfer: u32::from_be_bytes(body[..4].try_into().unwrap()),
                 data: body[4..].to_vec(),
+            })
+        }
+        KIND_RUN_OUTPUT => {
+            if body.len() < 5 {
+                return Err(ProtoError::Truncated);
+            }
+            Ok(Frame::RunOutput {
+                run: u32::from_be_bytes(body[..4].try_into().unwrap()),
+                stream: body[4],
+                data: body[5..].to_vec(),
             })
         }
         other => Err(ProtoError::UnknownKind(other)),

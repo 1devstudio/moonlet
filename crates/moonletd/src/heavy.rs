@@ -119,6 +119,45 @@ impl Heavy {
         }
     }
 
+    /// `exec.run`'s check: the words `moonlet exec` got, as the hook would
+    /// have judged them, since an agent can call `moonlet exec` itself. The
+    /// command runs from the canonical folder, with only the approved
+    /// variables of `env`.
+    pub fn check_run(
+        &self,
+        session: &str,
+        argv: &[String],
+        cwd: &str,
+        env: &BTreeMap<String, String>,
+    ) -> Result<(PathBuf, BTreeMap<String, String>), &'static str> {
+        if argv.is_empty() {
+            return Err("not_heavy");
+        }
+        let command = argv.iter().map(|w| quote(w)).collect::<Vec<_>>().join(" ");
+        let ask = ExecRoute {
+            session: session.to_string(),
+            command,
+            cwd: cwd.to_string(),
+            tool_use_id: None,
+        };
+        self.why_not(&ask)?;
+        let worktree = self
+            .sessions
+            .session(session)
+            .ok()
+            .and_then(|s| std::fs::canonicalize(s.path).ok())
+            .ok_or("no_session")?;
+        let config = project_config::load(&worktree, String::new());
+        let names = config.config.heavy.env;
+        let passed = env
+            .iter()
+            .filter(|(k, _)| names.contains(k))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let cwd = std::fs::canonicalize(cwd).map_err(|_| "outside_worktree")?;
+        Ok((cwd, passed))
+    }
+
     fn why_not(&self, r: &ExecRoute) -> Result<(), &'static str> {
         let session = self
             .sessions
@@ -218,6 +257,19 @@ fn key(id: &ProjectIdentity) -> Option<String> {
         return None;
     }
     Some(format!("{origin} {root}"))
+}
+
+/// `w` as one word for a POSIX shell: as it is when it holds nothing a
+/// shell reads, in single quotes otherwise.
+fn quote(w: &str) -> String {
+    let plain = !w.is_empty()
+        && w.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_./=:,+@%".contains(c));
+    if plain {
+        w.to_string()
+    } else {
+        format!("'{}'", w.replace('\'', "'\\''"))
+    }
 }
 
 fn sorted(v: &[String]) -> Vec<String> {

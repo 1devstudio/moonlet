@@ -284,6 +284,14 @@ pub const HEAVY_APPROVE: &str = "heavy.approve";
 /// [`ExecRoute`] → [`ExecRouted`]: whether an agent's Bash call may run on
 /// another machine (X62).
 pub const EXEC_ROUTE: &str = "exec.route";
+/// [`ExecRun`] → [`ExecRunStarted`]: runs a heavy command for `moonlet
+/// exec` (X62). Its output follows as [`crate::Frame::RunOutput`] frames,
+/// then [`EV_EXEC_EXITED`], on the same connection.
+pub const EXEC_RUN: &str = "exec.run";
+/// [`ExecCancel`] → `true`: stops a run this connection started.
+pub const EXEC_CANCEL: &str = "exec.cancel";
+/// [`ExecExited`]: a run of this connection ended.
+pub const EV_EXEC_EXITED: &str = "exec.exited";
 /// A [`CopyChanged`], on every change of a copy's state.
 pub const EV_SYNC_CHANGED: &str = "sync.changed";
 
@@ -1693,4 +1701,41 @@ pub struct ExecRoute {
 pub struct ExecRouted {
     pub route: bool,
     pub reason: Option<String>,
+}
+
+/// `exec.run` params, from `moonlet exec`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExecRun {
+    pub session: String,
+    /// The words the shell gave `moonlet exec`.
+    pub argv: Vec<String>,
+    pub cwd: String,
+    /// `moonlet exec`'s environment. Only the project's approved `env`
+    /// names are taken from it.
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+    #[serde(default)]
+    pub tool_use_id: Option<String>,
+}
+
+/// `exec.run`'s answer.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExecRunStarted {
+    pub run: u32,
+    /// The machine the command runs on.
+    pub host: String,
+}
+
+/// `exec.cancel` params.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExecCancel {
+    pub run: u32,
+}
+
+/// `exec.exited` data. `status` is the command's exit status, 128 + N for
+/// one ended by signal N.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExecExited {
+    pub run: u32,
+    pub status: i32,
 }
