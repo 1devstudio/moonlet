@@ -173,6 +173,7 @@ This is ADR 0009's routing slice. It adds two things the ADR did not decide: an 
 ### Workers screen
 
 - [ ] Settings › Machines › Workers on the central host lists each worker: name, OS, cores, load, slots in use of total, round trip, and its running commands (session, command, running for). It follows `workers.changed` and `job.changed`.
+- [ ] **Approve** on a worker's line first shows the project's exact commands and variable names in the confirm modal (X23), as its page has them now, so nothing is approved unseen.
 - [ ] A worker's line says why the project's commands skip it: "Not approved for shop" (with **Approve**), "skipped for shop: missing pnpm", or, for the central host when no other worker is free, "busy, takes commands no one else can".
 - [ ] The summary line reads "5 commands running · 5 of 13 slots in use": the jobs running now, and used slots of all slots of every linked worker, the central host and ready cloud machines.
 
@@ -270,9 +271,9 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
   - the footnote "studio-mini's own slots are on its This Mac page. See what each worker runs in Workers.";
   - the help text "Commands are not routed yet" from X41 and X61 goes away.
 - **Workers page** ([workers-page.png](design/x62-x63/workers-page.png)): the title with a "studio-mini · Central host" badge; "Machines that run heavy commands for studio-mini's sessions. A command goes to the free worker with the lowest load, and runs on studio-mini when none is free."; the summary line; then:
-  - a **Macs and hosts** table, with columns Worker, Load (a bar and "1.2 / 10"), Slots ("1 of 2") and Round trip. Badges are "This Mac", "Tailnet" and "Central host", and the skip reasons sit under the name, in the attention colour. Each running job sits under its worker: spinner, session, command, elapsed time. A busy load bar uses the attention colour;
+  - a **Macs and hosts** table, with columns Worker, Load (a bar and "1.2 / 10"), Slots ("1 of 2") and Round trip. Badges are "This Mac" and "Central host", and the skip reasons sit under the name, in the attention colour. The page reads `worker.list` and `exec.status` from the central host every two seconds while it is open, and on `workers.changed` and `job.changed`. Each running job sits under its worker: spinner, session, command, elapsed time. A busy load bar uses the attention colour;
   - **Cloud machines** (X63).
-- **Workers, empty** ([workers-empty.png](design/x62-x63/workers-empty.png)): "Only studio-mini runs heavy commands", "No machine runs heavy commands for studio-mini yet. Turn on Use this Mac for heavy commands, or Use for heavy commands on a remote host.", **Open Hosts** and **Set up cloud workers**.
+- **Workers, empty** ([workers-empty.png](design/x62-x63/workers-empty.png)): "Only studio-mini runs heavy commands", "No machine runs heavy commands for studio-mini yet. Turn on Use this Mac for heavy commands, or Use for heavy commands on a remote host." and **Open Hosts**. **Set up cloud workers** comes with X63.
 - **Chat (X6)** ([chat-routed-rows.png](design/x62-x63/chat-routed-rows.png)):
   - a routed Bash row shows the agent's command, never `moonlet exec -- `;
   - a chip shows where it ran, "on Alex's MacBook Pro", with a laptop icon for a Mac, a server icon for a host and a cloud icon for a cloud machine;
@@ -308,6 +309,7 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
   - frames of kind 5, `Output`, with payload `[u32 BE run][u8 stream: 1 stdout, 2 stderr][bytes]`;
   - the event `exec.exited {run, status, worker, rerun, leftovers}`.
 - `exec.cancel {run}`.
+- `exec.status` → `{host: {name, os, cores, load, slots, used}, running: [{job, session, command, worker, started_at}], skips: [{worker, project, reason, detail}], routed}`: this machine, the routed commands going on wherever they run, why workers were skipped in the last hour, and how many commands this machine runs for its own central host. The Workers page and the Hosts page's `· 1 running` read it.
 - `job.list {session}` returns the session's jobs, newest first, with state, phases, timeline, worker, what came back, env names and `summary`.
 - `job.output {job, from}` → `{chunks: [{stream, text}], next, more}`: the stored output from byte `from` of its file, up to 1 MiB at a time. A running job's new output also comes as the event `job.output {job, session, chunks}`, so the app needs no frames to follow it.
 - `job.stop {job}` → `true`/`false`, `job.stop_all {session}` → how many it stopped, and `job.run_here {job}` (a job waiting for a cloud machine; until X63, every job answers `not_waiting`).
@@ -387,7 +389,7 @@ Where the tests live:
 | `moonlet exec` without routing | `moonlet_exec_without_routing_runs_the_command_here` |
 | `moonlet exec` in a session, and `exec.run`'s own check | `moonlet_exec_in_a_session_runs_through_its_daemon`, `an_unapproved_moonlet_exec_is_refused` |
 | Candidates and `os` | `a_worker_on_another_os_is_skipped` |
-| Slots | `slots_default_to_two_and_link_set_changes_them`, `a_worker_with_no_free_slot_is_skipped`; Vitest "the run-at-most row" |
+| Slots | `slots_default_to_two_and_link_set_changes_them`, `a_worker_with_no_free_slot_is_skipped`; Vitest "says how many commands run here, and keeps slots from 1 to 64" |
 | Busy | `a_worker_reports_its_load_with_each_ping`, `a_worker_at_seven_tenths_of_its_cores_is_busy` |
 | Order (worked examples) | `picks_as_in_the_order_table` |
 | Never waits for a slot | `a_command_with_no_free_worker_runs_on_the_central_host` |
@@ -411,8 +413,9 @@ Where the tests live:
 | A worker goes away | `a_worker_that_goes_away_mid_run_makes_the_command_run_again_on_the_central_host` |
 | Abandoned changes | `an_abandoned_runs_changes_never_reach_the_session` |
 | The central daemon stops | `a_stopped_central_daemon_ends_moonlet_exec_with_125` |
-| Workers screen | Vitest "a worker's row from worker.list and job.list"; e2e "the Workers page lists the running command" |
+| Workers screen | `exec_status_lists_the_central_host_its_runs_and_why_workers_were_skipped`; Vitest "a worker's row from worker.list and job.list"; e2e "the Workers page says when no other machine runs heavy commands" |
 | Skip reasons | Vitest "skip reasons for a project" |
+| Approving on a worker | Vitest "shows the exact commands and variable names first" |
 | Workers summary line | Vitest "the summary line counts running jobs and slots" |
 | Who reads and stops jobs | `an_agents_cli_neither_reads_nor_stops_jobs` |
 | Jobs history | `jobs_outlive_a_daemon_restart_and_keep_the_last_fifty`, `archiving_the_session_removes_its_jobs`, `a_job_going_on_when_the_daemon_stops_is_lost`, `a_job_knows_its_tool_call` |
@@ -428,7 +431,7 @@ Where the tests live:
 | Row second line (worked examples) | Vitest "a row's second line, as in the worked examples" |
 | Chat chip (UI) | Vitest "the chip from a job", "the chip from a result's first line", "a rewritten command shows without moonlet exec" |
 | `heavy.set` writes `[heavy]` and never approves | `heavy_set_writes_the_heavy_table_and_keeps_the_rest`, `heavy_set_writes_the_projects_config_and_never_approves` |
-| Project page (UI) | Vitest "a new entry, a changed entry, all approved", "the secret-looking env warning"; e2e "approving heavy commands saves them" |
+| Project page (UI) | Vitest "a new entry, a changed entry, all approved", "the secret-looking env warning", "turns the table into a form and back, trimming and dropping blank entries"; e2e "approving heavy commands saves them" |
 | Jobs tab (UI) | e2e "the Jobs tab lists the job and opens its output" |
 
 ## Open questions
