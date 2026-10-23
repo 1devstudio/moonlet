@@ -991,7 +991,22 @@ impl Daemon {
         match method {
             m::DESIGN_SYSTEMS => {
                 let r: m::DesignWorkspace = params(p)?;
-                ok(blocking(move || store.systems(&r.workspace)).await?)
+                let ws = r.workspace.clone();
+                let systems = blocking(move || store.systems(&r.workspace)).await?;
+                // What each system's agent waits for, from its chat (X64).
+                let list: Vec<Value> = systems
+                    .into_iter()
+                    .map(|sys| {
+                        let waiting = self
+                            .agent_of(&ws, &sys.slug)
+                            .and_then(|id| self.chats.state(id).ok())
+                            .and_then(|st| moonlet_core::design::agent::needs_you(&st.pending));
+                        let mut v = serde_json::to_value(&sys).unwrap_or_default();
+                        v["needs_you"] = serde_json::to_value(waiting).unwrap_or_default();
+                        v
+                    })
+                    .collect();
+                ok(list)
             }
             m::DESIGN_SYSTEM_CREATE => {
                 let r: m::DesignSystemCreate = params(p)?;
@@ -1097,7 +1112,7 @@ impl Daemon {
         // the system's folder, never from files the agent can edit. Reading and
         // hashing the sources runs off the async workers.
         let (store, ws, sl) = (self.design.clone(), workspace.to_string(), slug.to_string());
-        let (dir, record, launch) = blocking(move || {
+        let (record, launch) = blocking(move || {
             let dir = store.system_dir(&ws, &sl)?.canonicalize()?;
             let config = store.config(&ws, &sl)?;
             let record = store.record(&ws, &sl)?;
@@ -1111,14 +1126,14 @@ impl Daemon {
             let status = if synced { anchor::status(&dir, &store::source_roots(&record), &config.exceptions())? } else { Vec::new() };
             let task = if synced { agent::Task::Resync(&status) } else { agent::Task::Build };
             let launch = agent::sync_launch(&dir, &config, &sources, &bin, task)?;
-            Ok((dir, record, launch))
+            Ok((record, launch))
         })
         .await
         .map_err(|e| anyhow::anyhow!("{}", e.message))?;
         // What the chat starts with: a chat started with other folders or
         // rules (a source moved) is replaced, not reused.
         let fingerprint = format!("{}\n{}", launch.settings, launch.add_dirs.join("\n"));
-        if let Some(id) = self.system_agent(&record, &dir) {
+        if let Some(id) = self.agent_of(workspace, slug) {
             if record.agent_launch.as_deref() == Some(fingerprint.as_str()) {
                 self.chats.send(id, &launch.prompt, &[])?;
                 return Ok(id);
@@ -1147,6 +1162,15 @@ impl Daemon {
     /// The lock of one design system (see `design_locks`).
     fn design_lock(&self, workspace: &str, slug: &str) -> Arc<tokio::sync::Mutex<()>> {
         self.design_locks.lock().unwrap().entry(format!("{workspace}/{slug}")).or_default().clone()
+    }
+
+    /// The chat of a design system's sync agent, while it still is that
+    /// system's (see `system_agent`).
+    fn agent_of(&self, workspace: &str, slug: &str) -> Option<u32> {
+        let record = self.design.record(workspace, slug).ok()?;
+        let dir = self.design.system_dir(workspace, slug).ok()?;
+        let dir = dir.canonicalize().unwrap_or(dir);
+        self.system_agent(&record, &dir)
     }
 
     /// Stops a design system's sync agent, when it still is that system's.

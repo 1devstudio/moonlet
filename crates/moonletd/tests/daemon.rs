@@ -2241,3 +2241,43 @@ async fn a_sync_recorded_while_its_agent_starts_keeps_both() {
     assert_eq!(list[0]["agent"].as_u64(), Some(agent), "{list}");
     assert!(list[0]["synced_at"].is_u64(), "{list}");
 }
+
+/// X64: while a design system's agent waits on a question, design.systems
+/// says so, so the sidebar and the step bar can show Needs you.
+#[tokio::test]
+async fn a_waiting_sync_agent_shows_in_the_design_system_list() {
+    use moonlet_proto::types::{Project, Workspace};
+    let d = fake_claude_daemon(
+        r#"#!/bin/sh
+while IFS= read -r line; do
+  case "$line" in
+    *'"subtype":"initialize"'*) echo '{"type":"system","subtype":"init","session_id":"s1","model":"fake"}' ;;
+    *'"type":"user"'*) echo '{"type":"control_request","request_id":"q1","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","tool_use_id":"t1","input":{"questions":[{"question":"Which button set is current?","header":"Buttons","multiSelect":false,"options":[{"label":"ui.tsx","description":"the new one"},{"label":"legacy","description":"the old one"}]}]}}}' ;;
+  esac
+done
+"#,
+    )
+    .await;
+    let repo = d.home.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    for args in [vec!["init", "-q", "-b", "main"], vec!["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"]] {
+        assert!(Command::new("git").args(&args).current_dir(&repo).output().unwrap().status.success());
+    }
+    let mut c = d.client().await;
+    let ws: Workspace = c.request(methods::WORKSPACE_CREATE, serde_json::json!({"name": "1devstudio", "color": "clay"})).await.unwrap();
+    let project: Project = c.request(methods::PROJECT_ADD, serde_json::json!({"path": repo})).await.unwrap();
+    let created: serde_json::Value = c
+        .request(methods::DESIGN_SYSTEM_CREATE, serde_json::json!({"workspace": ws.id, "name": "storefront", "sources": [{"project": project.id}]}))
+        .await
+        .unwrap();
+    assert!(created["agent"].is_u64(), "{created}");
+    let mut list = serde_json::Value::Null;
+    for _ in 0..100 {
+        list = c.request(methods::DESIGN_SYSTEMS, serde_json::json!({"workspace": ws.id})).await.unwrap();
+        if !list[0]["needs_you"].is_null() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(list[0]["needs_you"], serde_json::json!({"kind": "question", "text": "Which button set is current?"}));
+}
