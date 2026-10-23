@@ -1241,3 +1241,61 @@ async fn a_pairing_that_cannot_be_saved_says_how_to_undo_it() {
     let info: Value = remote.call("link.get", json!({})).await;
     assert_eq!(info["central"], Value::Null, "{info}");
 }
+
+/// X62: a worker's slots, how many routed commands it runs at once.
+#[tokio::test]
+async fn slots_default_to_two_and_link_set_changes_them() {
+    let (central, addr) = central().await;
+    let worker = worker(WORKER_ID, "Alex's MacBook Pro").await;
+    let got: Value = worker.call("link.get", json!({})).await;
+    assert_eq!(got["worker"]["slots"], json!(2), "{got}");
+    let token = pair(&central, &addr, "Alex's MacBook Pro").await;
+    link(&worker, &addr, &token).await;
+    eventually("the worker is listed with 2 slots", || async {
+        workers(&central).await.first().is_some_and(|w| w.worker.slots == 2)
+    })
+    .await;
+
+    let set: Value = worker
+        .call("link.set", json!({ "worker": { "slots": 1 } }))
+        .await;
+    assert_eq!(set["worker"]["slots"], json!(1));
+    // The central host learns it while linked.
+    eventually("the central host sees 1 slot", || async {
+        workers(&central).await.first().is_some_and(|w| w.worker.slots == 1)
+    })
+    .await;
+    for bad in [0, 65] {
+        let e = worker
+            .app()
+            .await
+            .request::<_, Value>("link.set", json!({ "worker": { "slots": bad } }))
+            .await
+            .unwrap_err();
+        assert_eq!(e.to_string(), "invalid_params: slots must be from 1 to 64", "{bad}");
+    }
+}
+
+/// X62: the central host knows each worker's load from its pings.
+#[tokio::test]
+async fn a_worker_reports_its_load_with_each_ping() {
+    let (central, addr) = central().await;
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(
+        home.path().join("link.json"),
+        json!({ "central": null, "worker": { "id": WORKER_ID, "name": "Alex's MacBook Pro", "enabled": false } })
+            .to_string(),
+    )
+    .unwrap();
+    let worker = Daemon::start(
+        home,
+        &[("MOONLET_MOBILE_ADDRS", "127.0.0.2"), ("MOONLET_TEST_LOAD", "7.2")],
+    )
+    .await;
+    let token = pair(&central, &addr, "Alex's MacBook Pro").await;
+    link(&worker, &addr, &token).await;
+    eventually("the worker is listed with its load", || async {
+        workers(&central).await.first().is_some_and(|w| w.load == Some(7.2))
+    })
+    .await;
+}

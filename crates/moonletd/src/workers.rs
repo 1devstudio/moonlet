@@ -112,6 +112,7 @@ impl Workers {
                     worker,
                     connected_since: now_ms(),
                     rtt_ms: None,
+                    load: None,
                 },
                 conn: conn.clone(),
             },
@@ -184,7 +185,7 @@ async fn ping_loop(workers: std::sync::Weak<Workers>, id: String, conn: Arc<Conn
             .request(m::WORKER_PING, serde_json::json!({}), every)
             .await
         {
-            Ok(_) => {
+            Ok(answer) => {
                 missed = 0;
                 let rtt = sent.elapsed().as_millis() as u64;
                 if let Some(w) = workers.upgrade()
@@ -192,6 +193,7 @@ async fn ping_loop(workers: std::sync::Weak<Workers>, id: String, conn: Arc<Conn
                     && e.conn.id == conn.id
                 {
                     e.info.rtt_ms = Some(rtt);
+                    e.info.load = answer["load"].as_f64();
                 }
             }
             Err(e) => {

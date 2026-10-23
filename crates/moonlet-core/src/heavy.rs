@@ -4,7 +4,7 @@
 //! approved entry's words and nothing in it would make a shell expand,
 //! chain or redirect.
 
-use moonlet_proto::types::HeavyConfig;
+use moonlet_proto::types::{HeavyConfig, HeavyOs};
 
 /// Characters that make a shell expand, chain, redirect or glob. A command
 /// with any of them outside single quotes is never routed.
@@ -293,9 +293,77 @@ pub fn check(heavy: &HeavyConfig) -> Result<(), String> {
     Ok(())
 }
 
+/// Where a candidate worker runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// A Mac or remote host linked to the central host (X41, X61).
+    Linked,
+    /// The central host itself.
+    Central,
+    /// A cloud machine of the project (X63).
+    Cloud,
+}
+
+/// A machine that might run a heavy command.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Candidate {
+    pub id: String,
+    pub kind: Kind,
+    /// `macos` or `linux`.
+    pub os: String,
+    pub cores: u32,
+    /// The 1-minute load average.
+    pub load: f64,
+    /// How many routed commands it runs at once.
+    pub slots: u32,
+    /// How many it runs now.
+    pub used: u32,
+    pub rtt_ms: Option<u64>,
+}
+
+impl Candidate {
+    /// At least 0.7 × its cores busy.
+    pub fn busy(&self) -> bool {
+        self.load >= 0.7 * f64::from(self.cores.max(1))
+    }
+
+    fn per_core(&self) -> f64 {
+        self.load / f64::from(self.cores.max(1))
+    }
+
+    fn fits(&self, os: HeavyOs) -> bool {
+        let os_ok = match os {
+            HeavyOs::Any => true,
+            HeavyOs::Macos => self.os == "macos",
+            HeavyOs::Linux => self.os == "linux",
+        };
+        os_ok && self.used < self.slots && !self.busy()
+    }
+}
+
+/// The free candidate a heavy command goes to, or `None` when none is free
+/// and it runs on the central host anyway. Linked machines come first by
+/// lowest load per core, then the shortest round trip, then id; then the
+/// central host; then cloud machines by lowest load per core. A session
+/// that asked for the cloud tries cloud machines first.
+pub fn pick(candidates: &[Candidate], os: HeavyOs, cloud_first: bool) -> Option<&Candidate> {
+    let rank = |c: &Candidate| match (c.kind, cloud_first) {
+        (Kind::Cloud, true) => 0,
+        (Kind::Linked, _) => 1,
+        (Kind::Central, _) => 2,
+        (Kind::Cloud, false) => 3,
+    };
+    candidates.iter().filter(|c| c.fits(os)).min_by(|a, b| {
+        rank(a)
+            .cmp(&rank(b))
+            .then(a.per_core().total_cmp(&b.per_core()))
+            .then(a.rtt_ms.unwrap_or(0).cmp(&b.rtt_ms.unwrap_or(0)))
+            .then(a.id.cmp(&b.id))
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use moonlet_proto::types::HeavyOs;
 
     use super::*;
     use crate::project_config;
@@ -544,5 +612,114 @@ mod tests {
                 "{root:?}"
             );
         }
+    }
+
+    fn mac(id: &str, load: f64, cores: u32, used: u32) -> Candidate {
+        Candidate {
+            id: id.into(),
+            kind: Kind::Linked,
+            os: "macos".into(),
+            cores,
+            load,
+            slots: 2,
+            used,
+            rtt_ms: Some(6),
+        }
+    }
+
+    fn central(load: f64, cores: u32, used: u32) -> Candidate {
+        Candidate {
+            kind: Kind::Central,
+            rtt_ms: None,
+            ..mac("studio-mini", load, cores, used)
+        }
+    }
+
+    fn cloud(id: &str, load: f64, cores: u32, used: u32) -> Candidate {
+        Candidate {
+            kind: Kind::Cloud,
+            os: "linux".into(),
+            ..mac(id, load, cores, used)
+        }
+    }
+
+    /// X62's order table: load / cores, slots used of 2.
+    #[test]
+    fn picks_as_in_the_order_table() {
+        let any = HeavyOs::Any;
+        let rows: [(Vec<Candidate>, Option<&str>); 6] = [
+            (
+                vec![mac("macbook", 1.0, 10, 0), central(0.5, 10, 0)],
+                Some("macbook"),
+            ),
+            (
+                vec![mac("macbook", 7.2, 10, 0), central(4.3, 10, 1)],
+                Some("studio-mini"),
+            ),
+            (
+                vec![mac("macbook", 1.0, 10, 2), central(1.0, 10, 0)],
+                Some("studio-mini"),
+            ),
+            (
+                vec![
+                    mac("a", 3.0, 10, 0),
+                    mac("b", 1.0, 8, 0),
+                    central(0.1, 10, 0),
+                ],
+                Some("b"),
+            ),
+            (
+                vec![central(9.0, 10, 2), cloud("moonlet-shop-7k2q", 0.1, 8, 0)],
+                Some("moonlet-shop-7k2q"),
+            ),
+            (vec![central(9.0, 10, 2)], None),
+        ];
+        for (i, (candidates, want)) in rows.into_iter().enumerate() {
+            assert_eq!(
+                pick(&candidates, any, false).map(|c| c.id.as_str()),
+                want,
+                "row {}",
+                i + 1
+            );
+        }
+        // Ties go to the shorter round trip, then the id.
+        let mut far = mac("a", 1.0, 10, 0);
+        far.rtt_ms = Some(40);
+        let near = mac("z", 1.0, 10, 0);
+        assert_eq!(pick(&[far.clone(), near], any, false).unwrap().id, "z");
+        assert_eq!(
+            pick(&[far, mac("b", 1.0, 10, 0)], any, false).unwrap().id,
+            "b"
+        );
+        // A session that asked for the cloud tries cloud machines first.
+        let both = [
+            mac("macbook", 0.1, 10, 0),
+            cloud("moonlet-shop-7k2q", 2.0, 8, 0),
+        ];
+        assert_eq!(pick(&both, any, true).unwrap().id, "moonlet-shop-7k2q");
+    }
+
+    #[test]
+    fn a_worker_on_another_os_is_skipped() {
+        let both = [
+            mac("macbook", 0.1, 10, 0),
+            cloud("moonlet-shop-7k2q", 0.1, 8, 0),
+        ];
+        assert_eq!(
+            pick(&both, HeavyOs::Linux, false).unwrap().id,
+            "moonlet-shop-7k2q"
+        );
+        assert_eq!(pick(&both, HeavyOs::Macos, true).unwrap().id, "macbook");
+    }
+
+    #[test]
+    fn a_worker_at_seven_tenths_of_its_cores_is_busy() {
+        assert_eq!(
+            pick(&[mac("macbook", 6.9, 10, 0)], HeavyOs::Any, false)
+                .unwrap()
+                .id,
+            "macbook"
+        );
+        assert!(pick(&[mac("macbook", 7.0, 10, 0)], HeavyOs::Any, false).is_none());
     }
 }

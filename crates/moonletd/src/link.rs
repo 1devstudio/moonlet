@@ -60,6 +60,7 @@ impl LinkStore {
                         id: uuid::Uuid::new_v4().to_string(),
                         name: computer_name.to_string(),
                         enabled: false,
+                        slots: m::default_slots(),
                     },
                 };
                 return LinkStore { path, data, revision: 0 };
@@ -85,6 +86,7 @@ impl LinkStore {
                         id: uuid::Uuid::new_v4().to_string(),
                         name: computer_name.to_string(),
                         enabled: false,
+                        slots: m::default_slots(),
                     },
                 };
                 if let Err(e) = save(&path, &d) {
@@ -146,6 +148,12 @@ impl LinkStore {
                 check_name(&name)?;
                 next.worker.name = name.trim().to_string();
             }
+            if let Some(slots) = w.slots {
+                if !(1..=64).contains(&slots) {
+                    return Err(RpcError::new("invalid_params", "slots must be from 1 to 64"));
+                }
+                next.worker.slots = slots;
+            }
         }
         save(&self.path, &next)
             .map_err(|e| RpcError::new("internal", format!("cannot write {}: {e:#}", self.path.display())))?;
@@ -155,6 +163,18 @@ impl LinkStore {
         }
         Ok(())
     }
+}
+
+/// This machine's 1-minute load average (X62). `MOONLET_TEST_LOAD`
+/// stands in for it in tests.
+pub fn load() -> Option<f64> {
+    if let Some(v) = std::env::var("MOONLET_TEST_LOAD").ok().and_then(|v| v.parse().ok()) {
+        return Some(v);
+    }
+    let mut avg = [0f64; 3];
+    // SAFETY: getloadavg writes at most the number of samples asked for.
+    let n = unsafe { libc::getloadavg(avg.as_mut_ptr(), 1) };
+    (n >= 1).then_some(avg[0])
 }
 
 fn invalid(message: impl Into<String>) -> RpcError {
@@ -290,7 +310,7 @@ impl WorkerLink {
     /// [`WorkerLink::set`], only while `central` is still at `revision`.
     fn set_at(self: &Arc<Self>, req: LinkSet, own: &[IpAddr], revision: Option<u64>) -> Result<LinkInfo, RpcError> {
         let moved = req.central.is_some();
-        let renamed = req.worker.as_ref().is_some_and(|w| w.name.is_some());
+        let renamed = req.worker.as_ref().is_some_and(|w| w.name.is_some() || w.slots.is_some());
         self.store.lock().unwrap().set_at(req, own, revision)?;
         // One link.changed for the whole change, at the end.
         self.quiet.store(true, Ordering::SeqCst);
@@ -303,7 +323,8 @@ impl WorkerLink {
         if !moved && self.waiting() {
             self.retry();
         }
-        // The central host learns a new name now, not at the next link.
+        // The central host learns a new name or slots now, not at the next
+        // link.
         if renamed
             && !moved
             && matches!(*self.state.lock().unwrap(), LinkState::Connected { .. })
@@ -477,6 +498,7 @@ impl WorkerLink {
             cores: std::thread::available_parallelism().map_or(1, |n| n.get() as u32),
             version: env!("CARGO_PKG_VERSION").into(),
             projects,
+            slots: worker.slots,
         };
         let params = serde_json::to_value(reg).unwrap();
         match host.request(m::WORKER_REGISTER, params).await {
@@ -588,7 +610,7 @@ impl Requests for WorkerRequests {
         let link = self.0.upgrade();
         Box::pin(async move {
             match method.as_str() {
-                m::WORKER_PING => Ok(serde_json::json!({})),
+                m::WORKER_PING => Ok(serde_json::json!({ "load": load() })),
                 m::SYNC_UPDATE => {
                     let req: m::SyncUpdate = serde_json::from_value(params)
                         .map_err(|e| RpcError::new("invalid_params", e.to_string()))?;
