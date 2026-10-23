@@ -310,6 +310,7 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
   - the event `exec.exited {run, status, worker, rerun, leftovers}`.
 - `exec.cancel {run}`.
 - `exec.status` → `{host: {name, os, cores, load, slots, used}, running: [{job, session, command, worker, started_at}], skips: [{worker, project, reason, detail}], routed}`: this machine, the routed commands going on wherever they run, why workers were skipped in the last hour, and how many commands this machine runs for its own central host. The Workers page and the Hosts page's `· 1 running` read it.
+- `exec.setups` → `[{copy, host, project, command}]` on a Mac: its routing copies whose setup waits for the user's approval, and the event `exec.setup {copy, host, project, command}` when one starts to wait. The app asks with X60's setup modal and answers with `sync.run_setup` or `sync.skip_setup`.
 - `job.list {session}` returns the session's jobs, newest first, with state, phases, timeline, worker, what came back, env names and `summary`.
 - `job.output {job, from}` → `{chunks: [{stream, text}], next, more}`: the stored output from byte `from` of its file, up to 1 MiB at a time. A running job's new output also comes as the event `job.output {job, session, chunks}`, so the app needs no frames to follow it.
 - `job.stop {job}` → `true`/`false`, `job.stop_all {session}` → how many it stopped, and `job.run_here {job}` (a job waiting for a cloud machine; until X63, every job answers `not_waiting`).
@@ -372,7 +373,7 @@ Where the tests live:
 - **Rust unit tests:** `crates/moonlet-core/src/heavy.rs` (matching, Claude Code rules, picking, paths), `crates/moonlet-core/src/job_summary.rs` and `crates/moonlet-cli/src/hook.rs`, each in its `#[cfg(test)] mod tests`.
 - **Daemon end-to-end:** `crates/moonletd/tests/exec.rs`. It runs a central host and one or two worker `TestDaemon`s, linked as in `tests/link.rs`, with a test-only setting for load and size limits. Slots and load over the link are in `crates/moonletd/tests/link.rs`.
 - **CLI end-to-end:** `crates/moonlet-cli/tests/exec.rs`.
-- **Vitest:** `apps/desktop/src/lib/heavyCommands.test.ts`, `workers.test.ts`, `jobs.test.ts`, `layout.test.ts`, `toolOutput.test.ts` and `jobsStore.test.ts`.
+- **Vitest:** `apps/desktop/src/lib/heavyCommands.test.ts`, `heavyApproval.test.ts`, `workers.test.ts`, `jobs.test.ts`, `layout.test.ts`, `toolOutput.test.ts`, `jobsStore.test.ts` and `syncStore.test.ts`.
 - **e2e:** `apps/desktop/e2e/specs/routing.e2e.ts` and `jobs.e2e.ts`.
 
 | Criterion | Tests |
@@ -395,12 +396,12 @@ Where the tests live:
 | Never waits for a slot | `a_command_with_no_free_worker_runs_on_the_central_host` |
 | Refusals | `a_missing_tool_sends_the_command_to_the_next_worker`, `a_worker_waiting_for_setup_approval_is_skipped`, `a_copy_that_cannot_match_in_time_refuses_not_fenced` |
 | Routing copies, apart from live copies | `a_routing_copy_lives_under_runs_and_not_in_sync_list` |
-| Syncs only at fences | `a_routing_copy_takes_no_update_between_runs` |
-| Setup in a routing copy on a Mac | `a_routing_copy_on_a_mac_waits_for_setup_approval` |
+| Syncs only at fences | `a_command_starts_only_once_the_copy_matches_the_session` (an edit on the central host between runs waits for the next run) |
+| Setup in a routing copy on a Mac | `a_routing_copy_on_a_mac_waits_for_setup_approval`, `a_worker_waiting_for_setup_approval_is_skipped`; Vitest "asks about a routing copy's setup (X62), and Skip skips it", "asks about a routing copy's setup that waited before the app started (X62)" |
 | Session paths in output | `replaces_the_copys_path_split_across_two_chunks`, `the_copys_path_reads_as_the_sessions_in_output` |
 | Removing routing copies | `archiving_the_session_removes_its_routing_copies`, `turning_heavy_commands_off_removes_the_routing_copies`, `a_routing_copy_unused_for_seven_days_is_removed` |
 | Fence before | `a_command_starts_only_once_the_copy_matches_the_session` |
-| Fence during | `an_edit_on_the_central_host_during_a_run_stays` |
+| Fence during | `a_file_changed_on_both_sides_during_a_run_keeps_the_central_version_and_saves_the_runs` |
 | Fence after | `a_file_written_by_the_run_is_on_the_central_host_before_the_exit_status`, `a_commit_made_by_the_run_moves_the_sessions_branch` |
 | Leftovers | `a_file_changed_on_both_sides_during_a_run_keeps_the_central_version_and_saves_the_runs` |
 | `outputs` | `outputs_bring_back_an_ignored_coverage_folder`, `an_outputs_path_outside_the_worktree_is_refused`, `the_worktree_root_is_refused_as_an_outputs_path`, `git_and_moonlet_folders_are_refused_as_outputs_paths`, `a_symbolic_link_in_outputs_is_never_followed`, `an_outputs_path_that_is_a_symbolic_link_is_skipped`, `outputs_over_one_gib_stay_on_the_worker_and_say_so`, `a_tree_of_outputs_never_writes_through_its_own_links` |
@@ -422,7 +423,7 @@ Where the tests live:
 | Job states | Vitest "the state line for each state" |
 | Phases and timeline | `a_jobs_phases_and_timeline_after_a_rerun`; Vitest "the phase checklist", "the rerun timeline" |
 | What came back | `a_job_lists_what_came_back_and_the_env_names_only` |
-| Stored output | `output_over_ten_mib_keeps_its_start_and_end`, `a_rerun_keeps_both_runs_output_with_a_separator` |
+| Stored output | `output_over_ten_mib_keeps_its_start_and_end`, `a_jobs_phases_and_timeline_after_a_rerun` (the separator line) |
 | Output summary | `summarises_as_in_the_worked_examples`, `summarises_captured_runs_of_each_tool` (captured vitest, jest, `cargo test` over two crates, pytest, `tsc` plain and `--pretty`, `cargo build` with a type error) |
 | Stop and Stop all | `stopping_a_job_gives_exit_143_and_brings_its_changes_back`, `stop_all_stops_every_running_and_waiting_job`; e2e "Stop ends a running job" |
 | Run on the central host now | `job_run_here_needs_a_waiting_job`; `run_here_runs_a_job_waiting_for_a_cloud_machine_on_the_central_host` comes with X63, which makes jobs that wait |
