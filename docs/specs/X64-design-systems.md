@@ -144,7 +144,7 @@ A design system belongs to a moonlet workspace, so every project and design in t
 
 - [ ] moonlet writes the foundation cards from the tokens, with no agent involved, each time the tokens change:
   - **Colours**: a swatch per colour token
-  - **Type**: a sample per size, and the font families
+  - **Type**: a sample per size, weight, line height and letter spacing, and the font families (`design/foundations.rs` a_font_weight_token_shows_as_a_weight)
   - **Spacing**
   - **Radius and shadow**
 
@@ -168,7 +168,7 @@ A design system belongs to a moonlet workspace, so every project and design in t
   - one idiomatic snippet
   - what to use instead of raw elements
 
-  Every class and token it names must exist in `components.css` or `tokens/`, and the check reports any that do not. Later syncs check it again but never rewrite it. (The name check: `design/readme.rs` writing_the_readme_reports_conventions_that_name_nothing_and_a_readme_over_budget.)
+  Every class and token it names must exist in `components.css` or `tokens/`, and the check reports any that do not. A class counts only when a selector defines it, not when a comment, a string or a file name mentions it (`design/readme.rs` a_class_only_named_in_a_comment_string_or_import_does_not_count). Later syncs check it again but never rewrite it. (The name check: `design/readme.rs` writing_the_readme_reports_conventions_that_name_nothing_and_a_readme_over_budget.)
 
 ### Check (`moonlet design check`)
 
@@ -220,7 +220,7 @@ A design system belongs to a moonlet workspace, so every project and design in t
   - `render_hash`: a hash of the card's HTML without its first line
 
   It also holds `style_sha` (`styles.css`, `components.css`, `tokens/`, `fonts/`), `aux_sha` (README, guidelines) and a hash per file, `.cache/` and the anchor itself left out. Hashes are the first 16 hex digits of SHA-256, as design-sync's. (`design/anchor.rs` the_anchor_records_each_cards_sources_and_body_hashes, the_anchor_hashes_styles_docs_and_files_and_a_style_change_keeps_the_cards)
-- [ ] **Sources changed.** A card with a source file whose hash now differs from the anchor's, or that is gone, is out of date, and that file is one of its changed sources. A card the anchor does not know is new. (`design/anchor.rs` a_later_look_tells_out_of_date_edited_orphaned_and_new_cards_apart) The header says `<n> sources changed since sync` and names the files, and **Show cards** filters the view to those cards. moonlet checks when Design mode opens and when the design system is opened.
+- [ ] **Sources changed.** A card with a source file whose hash now differs from the anchor's, or that is gone, is out of date, and that file is one of its changed sources. A card the anchor does not know is new. (`design/anchor.rs` a_later_look_tells_out_of_date_edited_orphaned_and_new_cards_apart) A source the card no longer names counts as changed, and a card whose marker broke keeps its place with the sources it had (`design/anchor.rs` a_dropped_source_or_a_broken_marker_still_shows_and_symlinked_folders_are_not_followed). The header says `<n> sources changed since sync` and names the files, and **Show cards** filters the view to those cards. moonlet checks when Design mode opens and when the design system is opened.
 - [ ] A later sync covers only the out-of-date cards, components that are new in the source, and orphaned cards. A change to styles or docs alone keeps every grade: no card is out of date for it (`design/anchor.rs` the_anchor_hashes_styles_docs_and_files_and_a_style_change_keeps_the_cards).
 - [ ] **Edited by hand.** A card whose `render_hash` on disk differs from the anchor was changed since the sync by something other than the sync agent; a change to its marker line alone (a regroup) is not an edit (`design/anchor.rs` a_later_look_tells_out_of_date_edited_orphaned_and_new_cards_apart). The sync writes its version beside it as `<Name>.proposed.html` and lists it under **Needs you**:
   - **Keep mine**: deletes the proposal and anchors the user's version
