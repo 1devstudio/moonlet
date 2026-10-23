@@ -293,6 +293,8 @@ where
         .as_deref()
         .is_some_and(|d| daemon.machines.machine_of(d).is_some());
     conn.cloud.store(cloud, Ordering::Relaxed);
+    // Design systems stay on the Mac (X64): a paired device hears nothing of them.
+    let is_device = conn.phone.is_some();
     let event_task = tokio::spawn(async move {
         loop {
             match events.recv().await {
@@ -306,6 +308,7 @@ where
                 // Setup questions go where they are answered: the app (X62).
                 Ok(Message::Event { name, .. })
                     if (no_jobs || phone) && name == moonlet_proto::methods::EV_EXEC_SETUP => {}
+                Ok(Message::Event { name, .. }) if is_device && name == moonlet_proto::methods::EV_DESIGN_CHANGED => {}
                 Ok(m) => {
                     if !ev_tx.send(Frame::Json(m)) {
                         break;

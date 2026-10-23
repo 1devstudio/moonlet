@@ -108,6 +108,10 @@ pub struct Record {
     /// The cards the last sync changed, for "Changed by this sync".
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub last_sync: Vec<SyncChange>,
+    /// The changes of a sync being recorded, kept until it is done, so a
+    /// retry after it stopped midway still knows them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_sync: Option<Vec<SyncChange>>,
 }
 
 /// One card a sync changed.
@@ -387,8 +391,13 @@ impl Store {
         // what usually fails, and then nothing is written.
         let anchor = anchor::compute(&dir, &source_roots(&old), &config.exceptions())?;
         let mut record = old.clone();
-        // What the sync changed, against the last anchor.
-        record.last_sync = sync_changes(anchor::read(&dir).as_ref(), Some(&anchor));
+        // What the sync changed, against the last anchor; when nothing differs
+        // but an earlier attempt's changes are pending (`begin_sync`), those.
+        let changes = sync_changes(anchor::read(&dir).as_ref(), Some(&anchor));
+        record.last_sync = match record.pending_sync.take() {
+            Some(earlier) if changes.is_empty() => earlier,
+            _ => changes,
+        };
         for s in &mut record.sources {
             if let Some((_, c)) = commits.iter().find(|(p, _)| *p == s.project) {
                 // A HEAD that could not be read leaves no commit, not a stale one.
@@ -405,6 +414,24 @@ impl Store {
         }
         let _ = fsx::remove_file_inside(&dir, &dir.join(PROGRESS));
         Ok(())
+    }
+
+    /// Works out what a sync changes against the last anchor and keeps it in
+    /// the record as pending. When nothing differs but an earlier attempt's
+    /// changes are pending (it stopped after moving the anchor), those stay.
+    pub fn begin_sync(&self, workspace: &str, slug: &str) -> Result<Vec<SyncChange>> {
+        let dir = self.system_dir(workspace, slug)?;
+        let config = read_config(&dir)?;
+        let mut record = self.record(workspace, slug)?;
+        let now = anchor::compute(&dir, &source_roots(&record), &config.exceptions())?;
+        let changes = sync_changes(anchor::read(&dir).as_ref(), Some(&now));
+        let changes = match record.pending_sync.take() {
+            Some(earlier) if changes.is_empty() => earlier,
+            _ => changes,
+        };
+        record.pending_sync = Some(changes.clone());
+        self.write_record(workspace, slug, &record)?;
+        Ok(changes)
     }
 
     /// A file under the workspace's design folder (`design.file`): never one
@@ -2096,5 +2123,38 @@ root = \"9c1e0a2\"
             ]
         );
         assert_eq!(store.systems("w1").unwrap()[0].last_sync, second);
+    }
+
+    #[test]
+    fn a_sync_retried_after_it_stopped_midway_keeps_its_change_list() {
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::new(home.path());
+        let slug = store
+            .create_system("w1", "storefront", vec![], Cover::Core, 1)
+            .unwrap();
+        let dir = home.path().join("design/w1/systems").join(&slug);
+        put(
+            &dir,
+            &[(
+                "components/buttons/button/button.html",
+                "<!-- @dsCard group=\"Buttons\" -->\n<button>Run</button>\n",
+            )],
+        );
+        // As if a sync stopped after writing the anchor, before finishing its record.
+        let pending = store.begin_sync("w1", &slug).unwrap();
+        assert_eq!(
+            pending
+                .iter()
+                .map(|c| c.change.as_str())
+                .collect::<Vec<_>>(),
+            ["new"]
+        );
+        anchor::write(&dir, &[], &BTreeMap::new()).unwrap();
+        // The retry finds nothing new against the anchor, and keeps the list.
+        store.synced("w1", &slug, &[], 2).unwrap();
+        assert_eq!(store.record("w1", &slug).unwrap().last_sync, pending);
+        // A later sync with no change says so.
+        store.synced("w1", &slug, &[], 3).unwrap();
+        assert_eq!(store.record("w1", &slug).unwrap().last_sync, vec![]);
     }
 }
