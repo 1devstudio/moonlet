@@ -656,6 +656,9 @@ pub struct SessionCreate {
     /// (Claude Code and Codex default to the structured view, X6).
     #[serde(default)]
     pub tui: bool,
+    /// Send its heavy commands to the project's cloud machine first (X63).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cloud: bool,
     /// The terminal of the agent asking for this session (X22). The new
     /// session records that terminal's session as its parent and starts in a
     /// permission mode no more permissive than the parent's.
@@ -697,6 +700,7 @@ impl SessionCreate {
             mode: None,
             pr: None,
             tui: false,
+            cloud: false,
             spawned_by: None,
             add_dirs: Vec::new(),
             workspace_id: None,

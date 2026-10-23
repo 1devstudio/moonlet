@@ -342,6 +342,9 @@ pub struct Session {
     /// from its branch name or PR either (X46).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub task_unlinked: bool,
+    /// Its heavy commands go to the project's cloud machine first (X63).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cloud: bool,
     #[serde(default, alias = "sessions")]
     pub terminals: Vec<TerminalId>,
     /// Opaque UI layout (tabs, splits), owned by the client.
