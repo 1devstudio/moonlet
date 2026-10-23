@@ -24,6 +24,12 @@ pub enum Kind {
     ExternalUrl,
     /// A `<script>` or an `on*` attribute in a card.
     Script,
+    /// A font family used first in a stack that has no `@font-face`.
+    FontMissing,
+    /// A second card in one folder: the Design System pane keeps only the first.
+    DuplicateCard,
+    /// A snippet id another card already uses.
+    DuplicateSnippet,
 }
 
 /// The folders whose `.html` files are cards: components, foundations and layouts.
@@ -43,6 +49,15 @@ static IMPORT: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"@import\s+(?:url\(\s*)?["']?([^"')\s;]+)"#).unwrap());
 static DEFINITION: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(--[A-Za-z0-9_-]+)\s*:").unwrap());
 static VAR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"var\(\s*(--[A-Za-z0-9_-]+)").unwrap());
+static FONT_FACE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"@font-face\s*\{[^}]*?font-family:\s*["']?([^"';}]+)"#).unwrap());
+static FONT_FAMILY: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"font-family:\s*([^;}]+)").unwrap());
+/// Families every Mac has, or that name no font.
+const SYSTEM_FONTS: [&str; 18] = [
+    "serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui", "ui-serif", "ui-sans-serif",
+    "ui-monospace", "ui-rounded", "emoji", "math", "-apple-system", "blinkmacsystemfont", "inherit", "initial",
+    "unset", "revert",
+];
 static URL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"url\(\s*["']?([^"')\s]+)"#).unwrap());
 
 /// Checks the design system in `root`.
@@ -52,16 +67,39 @@ pub fn check(root: &Path) -> Result<Vec<Problem>> {
     let texts: Vec<(PathBuf, String)> =
         closure.iter().filter_map(|p| Some((p.clone(), std::fs::read_to_string(p).ok()?))).collect();
     let defined: BTreeSet<String> = texts.iter().flat_map(|(_, t)| definitions(t)).collect();
+    let faces: BTreeSet<String> =
+        texts.iter().flat_map(|(_, t)| FONT_FACE.captures_iter(t).map(|c| c[1].trim().to_lowercase())).collect();
     for (path, text) in &texts {
         let path_rel = rel(root, path);
         imports(&path_rel, path, text, &mut problems);
         unknown_tokens(&path_rel, text, &defined, &mut problems);
+        fonts(&path_rel, text, &faces, &mut problems);
     }
+    // The first card of each component folder, and where each snippet id first shows.
+    let mut first_card: std::collections::BTreeMap<PathBuf, String> = Default::default();
+    let mut snippets: std::collections::HashMap<String, String> = Default::default();
     for path in html_files(root) {
         let Ok(text) = std::fs::read_to_string(&path) else { continue };
         let path_rel = rel(root, &path);
         if !CARD_DIRS.iter().any(|d| path_rel.starts_with(&format!("{d}/"))) {
             continue;
+        }
+        let proposed = path_rel.ends_with(".proposed.html");
+        let one_card_per_folder = path_rel.starts_with("components/") || path_rel.starts_with("foundations/");
+        if one_card_per_folder && !proposed {
+            let folder = path.parent().unwrap_or(root).to_path_buf();
+            let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+            match first_card.get(&folder) {
+                Some(first) => problems.push(Problem {
+                    path: path_rel.clone(),
+                    line: 1,
+                    kind: Kind::DuplicateCard,
+                    message: format!("{} holds two cards: {first} and {name}", rel(root, &folder)),
+                }),
+                None => {
+                    first_card.insert(folder, name);
+                }
+            }
         }
         if let Err(e) = card::parse_marker(&text) {
             let message = match e {
@@ -75,7 +113,23 @@ pub fn check(root: &Path) -> Result<Vec<Problem>> {
         known.extend(definitions(&text));
         unknown_tokens(&path_rel, &text, &known, &mut problems);
         css_urls(&path_rel, &text, &mut problems);
-        elements(&path_rel, &path, &text, &mut problems);
+        fonts(&path_rel, &text, &faces, &mut problems);
+        for (line, id) in elements(&path_rel, &path, &text, &mut problems) {
+            if proposed {
+                continue;
+            }
+            match snippets.get(&id) {
+                Some(first) => problems.push(Problem {
+                    path: path_rel.clone(),
+                    line,
+                    kind: Kind::DuplicateSnippet,
+                    message: format!("snippet {id} is also in {first}"),
+                }),
+                None => {
+                    snippets.insert(id, path_rel.clone());
+                }
+            }
+        }
     }
     problems.sort_by(|a, b| (&a.path, a.line).cmp(&(&b.path, b.line)));
     Ok(problems)
@@ -160,15 +214,42 @@ fn css_urls_in_line(path_rel: &str, line: usize, text: &str, problems: &mut Vec<
     }
 }
 
-/// Scripts, `on*` attributes, and `href`/`src` that leave the system or name no file.
-fn elements(path_rel: &str, path: &Path, text: &str, problems: &mut Vec<Problem>) {
+/// Font families used first in a stack, without a face.
+fn fonts(path_rel: &str, text: &str, faces: &BTreeSet<String>, problems: &mut Vec<Problem>) {
+    for (i, line) in text.lines().enumerate() {
+        if line.contains("@font-face") {
+            continue;
+        }
+        for c in FONT_FAMILY.captures_iter(line) {
+            let first = c[1].split(',').next().unwrap_or("").trim().trim_matches(['"', '\'']).to_string();
+            let key = first.to_lowercase();
+            if first.is_empty() || first.starts_with("var(") || SYSTEM_FONTS.contains(&key.as_str()) || faces.contains(&key) {
+                continue;
+            }
+            problems.push(Problem {
+                path: path_rel.to_string(),
+                line: i + 1,
+                kind: Kind::FontMissing,
+                message: format!("font \"{first}\" has no @font-face in styles.css or the files it imports"),
+            });
+        }
+    }
+}
+
+/// Scripts, `on*` attributes, and `href`/`src` that leave the system or name
+/// no file. Returns the snippet ids (`data-snippet`) with their lines.
+fn elements(path_rel: &str, path: &Path, text: &str, problems: &mut Vec<Problem>) -> Vec<(usize, String)> {
     let dir = path.parent().unwrap_or(Path::new("."));
     let found = std::cell::RefCell::new(Vec::new());
+    let snippet_ids = std::cell::RefCell::new(Vec::new());
     let line_of = |byte: usize| text[..byte.min(text.len())].matches('\n').count() + 1;
     let settings = lol_html::Settings::new().append_element_content_handler(lol_html::element!("*", |el| {
             let line = line_of(el.source_location().bytes().start);
             let tag = el.tag_name();
             let mut found = found.borrow_mut();
+            if let Some(id) = el.get_attribute("data-snippet") {
+                snippet_ids.borrow_mut().push((line, id));
+            }
             if tag == "script" {
                 found.push((line, Kind::Script, "<script> is not allowed in a card".to_string()));
             }
@@ -188,11 +269,12 @@ fn elements(path_rel: &str, path: &Path, text: &str, problems: &mut Vec<Problem>
             Ok(())
         }));
     if lol_html::rewrite_str(text, settings).is_err() {
-        return;
+        return Vec::new();
     }
     for (line, kind, message) in found.into_inner() {
         problems.push(Problem { path: path_rel.to_string(), line, kind, message });
     }
+    snippet_ids.into_inner()
 }
 
 /// A URL that leaves the design system.
@@ -330,6 +412,62 @@ mod tests {
                 (card, 8, Kind::Script, "<script> is not allowed in a card".into()),
                 ("styles.css".into(), 2, Kind::Unresolved, "@import \"tokens/missing.css\" does not resolve".into()),
                 ("styles.css".into(), 3, Kind::ExternalUrl, "https://fonts.example.com/inter.css leaves the design system".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_font_used_first_in_a_stack_without_a_font_face_is_reported() {
+        let styles = "@import \"tokens/colors.css\";\n@import \"fonts/fonts.css\";\n@import \"components.css\";\n";
+        let fonts = "@font-face {\n  font-family: \"Inter\";\n  src: url(./Inter.woff2);\n}\n";
+        let components = ".btn { font-family: Inter, system-ui, sans-serif; }\n.kbd { font-family: \"JetBrains Mono\", ui-monospace, monospace; }\n.hint { font-family: -apple-system, sans-serif; }\n";
+        let dir = system(&[
+            ("styles.css", styles),
+            ("tokens/colors.css", COLORS),
+            ("fonts/fonts.css", fonts),
+            ("fonts/Inter.woff2", "woff2"),
+            ("components.css", components),
+        ]);
+        assert_eq!(
+            check(dir.path()).unwrap(),
+            vec![Problem {
+                path: "components.css".into(),
+                line: 2,
+                kind: Kind::FontMissing,
+                message: "font \"JetBrains Mono\" has no @font-face in styles.css or the files it imports".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn two_cards_in_one_folder_and_a_snippet_id_used_twice_are_reported() {
+        let card = |snippet: &str| {
+            format!("<!-- @dsCard group=\"Buttons\" -->\n<!doctype html>\n<section class=\"ds-cell\" data-snippet=\"{snippet}\"><h4>primary</h4></section>\n")
+        };
+        let dir = system(&[
+            ("styles.css", STYLES),
+            ("tokens/colors.css", COLORS),
+            ("components.css", COMPONENTS),
+            ("components/buttons/button/button.html", &card("buttons/button/primary")),
+            ("components/buttons/button/button-old.html", &card("buttons/button/old")),
+            ("components/buttons/button/button.proposed.html", &card("buttons/button/primary")),
+            ("components/buttons/icon-button/icon-button.html", &card("buttons/button/primary")),
+        ]);
+        assert_eq!(
+            check(dir.path()).unwrap(),
+            vec![
+                Problem {
+                    path: "components/buttons/button/button.html".into(),
+                    line: 1,
+                    kind: Kind::DuplicateCard,
+                    message: "components/buttons/button holds two cards: button-old.html and button.html".into(),
+                },
+                Problem {
+                    path: "components/buttons/icon-button/icon-button.html".into(),
+                    line: 3,
+                    kind: Kind::DuplicateSnippet,
+                    message: "snippet buttons/button/primary is also in components/buttons/button/button.html".into(),
+                },
             ]
         );
     }
