@@ -595,6 +595,8 @@ impl Daemon {
                             env: crate::heavy::sorted(&r.env),
                         };
                         self.sync.approve_heavy(identity, approval)?;
+                        // Its central host no longer says it has not approved.
+                        self.link.register_again();
                         ok(true)
                     }
                     (None, None) => Err(RpcError::new("invalid_params", "give project or identity")),
@@ -725,6 +727,8 @@ impl Daemon {
                 let id = r.id.clone();
                 self.workers.register(conn.clone(), device, r)?;
                 self.sync.worker_linked(&id);
+                // It may have approved meanwhile: the next run asks again.
+                self.runs.forget_not_approved(&id);
                 ok(true)
             }
             // A copy clones and writes on this Mac: only its app starts one
