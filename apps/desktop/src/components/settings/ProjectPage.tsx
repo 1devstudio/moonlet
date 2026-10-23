@@ -140,7 +140,11 @@ export function ProjectPage({ host, id, focus }: { host: string; id: string; foc
     // Mac's choice changes, and a failure names the part that failed.
     try {
       if (configDirty) show(await rpc<ProjectConfigFile>(host, M.projectSetConfig, { id, version: file.version, config: fromForm(form) }));
-      if (heavyDirty) await heavy.save();
+      if (heavyDirty) {
+        await heavy.save();
+        // It wrote the file: the next save starts from this version.
+        show(await rpc<ProjectConfigFile>(host, M.projectConfigFile, { id }));
+      }
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       const stale = message.includes("config changed on disk");

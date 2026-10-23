@@ -186,7 +186,8 @@ function AppPageBody({ route, mobile }: { route: { page: AppPage }; mobile: Retu
 
 function Page({ route, mobile }: { route: SettingsRoute; mobile: ReturnType<typeof useMobileStatus> }) {
   if (route.page === "workspace") return <WorkspacePage host={route.host} id={route.id} />;
-  if (route.page === "project") return <ProjectPage host={route.host} id={route.id} focus={route.focus} />;
+  // A page per project, so one project's late answers never fill another's.
+  if (route.page === "project") return <ProjectPage key={`${route.host}/${route.id}`} host={route.host} id={route.id} focus={route.focus} />;
   return (
     <PageBody>
       <AppPageBody route={route} mobile={mobile} />

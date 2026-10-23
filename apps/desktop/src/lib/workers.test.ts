@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { workersPage } from "./workers";
-import type { ExecStatus, WorkerInfo } from "./protocol";
+import { workerHost, workersPage } from "./workers";
+import type { ExecStatus, LinkInfo, WorkerInfo } from "./protocol";
 
 const worker = (id: string, name: string, extra: Partial<WorkerInfo> = {}): WorkerInfo => ({
   id,
@@ -85,5 +85,16 @@ describe("the Workers page (X62)", () => {
     expect(workersPage({ workers: [], status: status({ running: [run("studio-mini", 1)] }), me: null, sessions }).summary).toBe("1 command running · 1 of 2 slots in use");
     // No worker but the central host: the empty page.
     expect(workersPage({ workers: [], status: status(), me: null, sessions }).empty).toBe(true);
+  });
+});
+
+describe("which host Approve on a worker's row goes to (X62)", () => {
+  const link = (id: string) => ({ central: null, worker: { id, name: "devbox", enabled: true, slots: 2 }, state: { kind: "off" } }) as unknown as LinkInfo;
+
+  it("the host whose own link names the worker, whatever the hosts are called", () => {
+    const links = { local: link("mac-1"), "devbox-a": link("w1"), "devbox-b": link("w2") };
+    expect(workerHost("w2", links)).toBe("devbox-b");
+    expect(workerHost("mac-1", links)).toBe("local");
+    expect(workerHost("w9", links)).toBeNull();
   });
 });

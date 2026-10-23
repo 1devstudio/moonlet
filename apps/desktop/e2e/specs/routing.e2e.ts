@@ -44,6 +44,14 @@ describe("routed commands", () => {
     await expect($(`${heavy}//*[normalize-space()="Approved"]`)).toBeDisplayed();
     const info = rpc<{ approved: { commands: string[]; env: string[] } | null }>(w, "heavy.get", { project: projectId(w) });
     expect(info.approved).toEqual({ commands: ["echo heavy"], env: [] });
+    // Saving the page again after its heavy commands were saved finds the
+    // file as they left it.
+    await fill(sel.settingsField("Run"), "echo after-heavy");
+    await $(sel.settingsButton("Save")).click();
+    await browser.waitUntil(() => readConfig(w).includes('run = "echo after-heavy"'), {
+      timeoutMsg: `the second save never reached the config: ${readConfig(w)}`,
+    });
+    await expect($(sel.text("The file changed on disk. Reload to see the new version."))).not.toBeExisting();
   });
 
   it("the Workers page says when no other machine runs heavy commands", async () => {
