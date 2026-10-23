@@ -1,11 +1,13 @@
 // A task's comments (X66), at the end of the Task detail and the Task tab.
 
 import { ExternalLink } from "lucide-react";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { commentsView, ensureComments, loadComments, useComments, type Where } from "../../lib/taskComments";
 import type { Task } from "../../lib/tasks";
 import { taskId } from "../../lib/tasks";
-import { repoPath } from "../../lib/tasksStore";
+import { useStore } from "../../lib/store";
+import { repoPath, useTasks } from "../../lib/tasksStore";
+import { wsKey } from "../../lib/workspaces";
 import { useNow } from "../../lib/useNow";
 import { Markdown } from "../AgentView";
 import { Button } from "../ui";
@@ -13,11 +15,17 @@ import { Button } from "../ui";
 export function TaskComments({ host, workspaceId, task }: { host: string; workspaceId: string | null; task: Task }) {
   const entry = useComments((s) => s.byTask[taskId(task)]);
   const now = useNow(true);
-  const where = (): Where => ({ host, path: task.github && workspaceId ? repoPath(host, workspaceId, task.github.repo) : null });
+  // A GitHub issue's gh runs in the project whose origin is its repository,
+  // which may be known only after the task shows.
+  const repos = useTasks((t) => (workspaceId ? t.data[wsKey(host, workspaceId)]?.repos : undefined));
+  const projects = useStore((s) => s.projects[host]);
+  const repo = task.github?.repo;
+  const path = useMemo(() => (repo && workspaceId ? repoPath(host, workspaceId, repo) : null), [host, workspaceId, repo, repos, projects]); // eslint-disable-line react-hooks/exhaustive-deps
+  const where = (): Where => ({ host, path });
   useEffect(() => {
     void ensureComments(task, where());
-    // Loaded again when the task changes in its tracker (its updated time).
-  }, [host, workspaceId, task.connection, task.key, task.updatedMs]); // eslint-disable-line react-hooks/exhaustive-deps
+    // Loaded again when the task changes in its tracker (its updated time) or its project shows up.
+  }, [host, path, task.connection, task.key, task.updatedMs]); // eslint-disable-line react-hooks/exhaustive-deps
   const view = commentsView(entry, task, now);
   return (
     <section aria-label="Comments">
