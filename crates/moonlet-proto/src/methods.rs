@@ -292,6 +292,16 @@ pub const EXEC_RUN: &str = "exec.run";
 pub const EXEC_CANCEL: &str = "exec.cancel";
 /// [`ExecExited`]: a run of this connection ended.
 pub const EV_EXEC_EXITED: &str = "exec.exited";
+/// Central host to worker, [`ExecPrepare`] → [`ExecPrepared`]: the
+/// worker's routing copy of a session, made if it has none (X62).
+pub const EXEC_PREPARE: &str = "exec.prepare";
+/// Central host to worker, [`ExecStart`] → `true`: runs a command in a
+/// routing copy that is at the fence's tree and commit. Its output comes
+/// back as `RunOutput` frames, then [`EXEC_DONE`].
+pub const EXEC_START: &str = "exec.start";
+/// Worker to central host, [`ExecDone`] → [`ExecBrought`]: a run ended;
+/// its changes travel in a pack.
+pub const EXEC_DONE: &str = "exec.done";
 /// A [`CopyChanged`], on every change of a copy's state.
 pub const EV_SYNC_CHANGED: &str = "sync.changed";
 
@@ -1374,6 +1384,10 @@ pub struct WorkerRegister {
     /// How many routed commands it runs at once (X62).
     #[serde(default = "default_slots")]
     pub slots: u32,
+    /// It takes heavy commands: **Use this Mac for heavy commands** is on.
+    /// A worker linked only for live copies does not (X62).
+    #[serde(default)]
+    pub heavy: bool,
 }
 
 /// A linked worker in `worker.list`.
@@ -1498,6 +1512,19 @@ pub struct Copy {
 pub struct SyncOpen {
     pub copy: String,
     pub session: String,
+    /// A routing copy (X62) syncs only at a run's fences.
+    #[serde(default)]
+    pub kind: CopyKind,
+}
+
+/// A live copy the user keeps (X60), or a routing copy a worker runs heavy
+/// commands in (X62).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CopyKind {
+    #[default]
+    Live,
+    Run,
 }
 
 /// What a worker needs to make a copy.
@@ -1678,7 +1705,12 @@ pub struct HeavySet {
 /// user saw them.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HeavyApprove {
-    pub project: String,
+    /// A project on this machine, the central host.
+    #[serde(default)]
+    pub project: Option<String>,
+    /// A project of this machine's central host, approved for this worker.
+    #[serde(default)]
+    pub identity: Option<crate::types::ProjectIdentity>,
     pub commands: Vec<String>,
     pub env: Vec<String>,
 }
@@ -1755,4 +1787,67 @@ pub struct ExecCancel {
 pub struct ExecExited {
     pub run: u32,
     pub status: i32,
+}
+
+/// `exec.prepare` params.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExecPrepare {
+    pub session: String,
+}
+
+/// The worker's routing copy of a session, and whether it can run.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExecPrepared {
+    pub copy: String,
+    /// `ready`, `making`, `setup_pending` or `failed`.
+    pub state: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// `exec.start` params.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExecStart {
+    pub run: u32,
+    pub copy: String,
+    pub argv: Vec<String>,
+    /// The working directory, relative to the worktree.
+    pub cwd: String,
+    pub env: BTreeMap<String, String>,
+    /// The fence: the session's files and commit the copy must hold.
+    pub tree: String,
+    pub head: String,
+    /// The session's worktree on the central host, which the copy's path
+    /// is replaced with in output.
+    pub session_path: String,
+    /// Ignored paths brought back after the run.
+    #[serde(default)]
+    pub outputs: Vec<String>,
+}
+
+/// `exec.done` params: `tree` and `head` are the copy's after the run.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExecDone {
+    pub run: u32,
+    pub copy: String,
+    pub status: i32,
+    pub tree: String,
+    pub head: String,
+    pub pack: Option<u32>,
+    /// A tree of the run's `outputs`, in the same pack.
+    #[serde(default)]
+    pub outputs: Option<String>,
+}
+
+/// What the central host took from a run.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ExecBrought {
+    /// Files that changed on the central host during the run as well; the
+    /// run's versions are saved in `folder`.
+    pub leftovers: Vec<String>,
+    pub folder: Option<String>,
+    /// Lines for the run's output, such as an `outputs` path not brought
+    /// back.
+    #[serde(default)]
+    pub notes: Vec<String>,
 }

@@ -1031,6 +1031,31 @@ pub async fn reset_branch(worktree: &Path, from: &str, to: &str) -> Result<()> {
     Ok(())
 }
 
+/// Makes an empty repository at `dir`, unless one is there: a routing
+/// copy's (X62), filled only with what the central host sends.
+pub async fn init_repo(dir: &Path) -> Result<()> {
+    if dir.join(".git").exists() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(dir)?;
+    git_env(dir, &[], &["init", "-q"], None).await?;
+    Ok(())
+}
+
+/// Stores `bytes` as a blob in `repo` and gives its id.
+pub async fn hash_bytes(repo: &Path, bytes: &[u8]) -> Result<String> {
+    let out = git_env(repo, &[], &["hash-object", "-w", "--stdin"], Some(bytes)).await?;
+    Ok(String::from_utf8_lossy(&out).trim().to_string())
+}
+
+/// The bytes of blob `oid` in `repo`.
+pub async fn blob(repo: &Path, oid: &str) -> Result<Vec<u8>> {
+    if !is_object_id(oid) {
+        anyhow::bail!("not an object id: {oid}");
+    }
+    git_env(repo, &[], &["cat-file", "blob", oid], None).await
+}
+
 /// Makes branch `name` at commit `at`; fails if it exists.
 pub async fn create_branch(repo: &Path, name: &str, at: &str) -> Result<()> {
     commit_id(at)?;

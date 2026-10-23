@@ -129,15 +129,15 @@ This is ADR 0009's routing slice. It adds two things the ADR did not decide: an 
 
 ### Routing copies
 
-- [ ] A worker runs routed commands in a **routing copy** of the session, at `$MOONLET_HOME/runs/<host>/<project>/<session>/`. It is made with X60's `sync.open` and `sync.fetch`. A copy the user keeps in sync (X60) is never used for routing, and a routing copy never shows in `sync.list` or the sidebar.
-- [ ] A routing copy syncs only at fences. Between runs it holds what the last fence left.
+- [ ] A worker runs routed commands in a **routing copy** of the session, at `$MOONLET_HOME/runs/<host>/<project>/<session>/`. It is made with X60's `sync.open` and `sync.fetch`, in a repository of its own under `runs/repos/`, filled only with what the central host sends: the user's own repositories, branches and credentials are never used, so a routing copy and a live copy of the same session never stand in each other's way. A copy the user keeps in sync (X60) is never used for routing, and a routing copy never shows in `sync.list`, its events or the sidebar.
+- [ ] A routing copy syncs only at fences. After each run, once the central host has its changes, it returns to that run's fence, so between runs it holds exactly what the last fence left.
 - [ ] Setup in a routing copy on a Mac follows X60: the user approves the exact command once per project and central host, and the approval is shared with live copies. Until setup has finished, the Mac refuses with `setup_pending`, and the app shows X60's setup modal. Cloud machines run setup without asking (X63).
 - [ ] Paths in output are the session's paths. The worker replaces the routing copy's absolute path with the session's path in every output byte stream, including across chunk boundaries. Example: `/Users/alex/.moonlet/runs/studio-mini/shop/fix-cart/src/cart.ts:12` reads `/Users/alex/.moonlet/worktrees/shop/fix-cart/src/cart.ts:12`.
 - [ ] A routing copy is removed:
   - when the session is archived;
   - when the worker turns off heavy commands;
   - when the worker's central host changes;
-  - after 7 days unused.
+  - after 7 days unused. A copy a run has prepared counts as in use until that run ends, for at most 10 minutes.
 
   Nothing is saved first: a routing copy holds nothing the user made.
 
@@ -147,7 +147,7 @@ This is ADR 0009's routing slice. It adds two things the ADR did not decide: an 
 - [ ] **During:** the routing copy takes no updates, and edits on the central host during the run stay.
 - [ ] **After:** when the command exits, the worker snapshots the copy and offers it against the fence's tree, with the objects of any commit the run made. The central host applies it. `moonlet exec` returns the exit status only after the central host has applied it. A test: a command that writes `out.txt` and exits 0, then `cat out.txt` in the next Bash call on the central host, prints its contents.
 - [ ] A file that both the run and the central host changed during the run keeps the central host's version. The run's version is saved to `$MOONLET_HOME/sync-leftovers/<session>-run-<YYYYMMDD-HHMMSS>/` on the central host. The last output line reads "moonlet: src/cart.ts changed on studio-mini during the run; the run's version is in ~/.moonlet/sync-leftovers/fix-cart-run-20261022-104200".
-- [ ] Ignored files a run makes stay on the worker, as git's rules decide (X60), except the paths in `[heavy] outputs`. Those replace the same paths on the central host after the run. Each `outputs` path must be a non-empty relative path below the worktree root. The root itself (`.`, `./` or an empty string), a path outside the worktree, one with `..`, and one through a `.git` or `.moonlet` folder are refused when the config is read. Symbolic links are never followed:
+- [ ] The `outputs` that count are the ones checked when the run started: a run that edits the config cannot widen them. Ignored files a run makes stay on the worker, as git's rules decide (X60), except the paths in `[heavy] outputs`. Those replace the same paths on the central host after the run. Each `outputs` path must be a non-empty relative path below the worktree root. The root itself (`.`, `./` or an empty string), a path outside the worktree, one with `..`, and one through a `.git` or `.moonlet` folder are refused when the config is read. Symbolic links are never followed:
   - an `outputs` path that is itself a symbolic link is skipped with "moonlet: coverage is a symbolic link; not brought back";
   - a link inside an `outputs` path comes back as a link, with its target text unchanged, and is never resolved on either side;
   - on the central host, a path is replaced only when none of its parent folders inside the worktree is a symbolic link. Otherwise it is skipped with the same kind of line.
@@ -318,14 +318,14 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
 
 **Central host to worker:**
 
-- `exec.prepare {session}` returns `ready`, `setup_pending`, `not_approved` or `making`. The worker makes the routing copy, through X60's `sync.open` and `sync.fetch`, if it has none.
-- `exec.start {run, copy, argv, cwd, env, tree, head}` returns `{started: true}` or a refusal.
+- `exec.prepare {session}` returns `{copy, state, reason}`, `state` being `ready`, `making`, `setup_pending` or `failed`. The worker makes the routing copy, through X60's `sync.open {kind: "run"}` and `sync.fetch`, if it has none. A worker with heavy commands off answers `not_approved`.
+- `exec.start {run, copy, argv, cwd, env, tree, head, session_path, outputs}` returns `true`, or a refusal: `not_approved` (this machine's own approval), `busy` (slots or load), `not_fenced`, `missing_tool` or `invalid_params` (a folder or `outputs` path outside the copy).
 - `exec.cancel {run}`.
 
 **Worker to central host:**
 
 - `Output` frames with the run's id;
-- `exec.done {run, status, base, tree, head, pack, outputs_pack}`.
+- `exec.done {run, copy, status, tree, head, pack, outputs}` → `{leftovers, folder, notes}`, only from the worker that runs `run` in `copy`. `outputs` is a tree of the run's `outputs` in the same pack.
 
 **Changed:**
 
@@ -394,13 +394,13 @@ Where the tests live:
 | Routing copies, apart from live copies | `a_routing_copy_lives_under_runs_and_not_in_sync_list` |
 | Syncs only at fences | `a_routing_copy_takes_no_update_between_runs` |
 | Setup in a routing copy on a Mac | `a_routing_copy_on_a_mac_waits_for_setup_approval` |
-| Session paths in output | `replaces_the_copys_path_split_across_two_chunks` |
+| Session paths in output | `replaces_the_copys_path_split_across_two_chunks`, `the_copys_path_reads_as_the_sessions_in_output` |
 | Removing routing copies | `archiving_the_session_removes_its_routing_copies`, `turning_heavy_commands_off_removes_the_routing_copies`, `a_routing_copy_unused_for_seven_days_is_removed` |
 | Fence before | `a_command_starts_only_once_the_copy_matches_the_session` |
 | Fence during | `an_edit_on_the_central_host_during_a_run_stays` |
 | Fence after | `a_file_written_by_the_run_is_on_the_central_host_before_the_exit_status`, `a_commit_made_by_the_run_moves_the_sessions_branch` |
 | Leftovers | `a_file_changed_on_both_sides_during_a_run_keeps_the_central_version_and_saves_the_runs` |
-| `outputs` | `outputs_bring_back_an_ignored_coverage_folder`, `an_outputs_path_outside_the_worktree_is_refused`, `the_worktree_root_is_refused_as_an_outputs_path`, `git_and_moonlet_folders_are_refused_as_outputs_paths`, `a_symbolic_link_in_outputs_is_never_followed`, `an_outputs_path_that_is_a_symbolic_link_is_skipped`, `outputs_over_one_gib_stay_on_the_worker_and_say_so` |
+| `outputs` | `outputs_bring_back_an_ignored_coverage_folder`, `an_outputs_path_outside_the_worktree_is_refused`, `the_worktree_root_is_refused_as_an_outputs_path`, `git_and_moonlet_folders_are_refused_as_outputs_paths`, `a_symbolic_link_in_outputs_is_never_followed`, `an_outputs_path_that_is_a_symbolic_link_is_skipped`, `outputs_over_one_gib_stay_on_the_worker_and_say_so`, `a_tree_of_outputs_never_writes_through_its_own_links` |
 | First line and output streams | `a_routed_commands_output_and_exit_status_come_back` |
 | Exit status and signals | `a_routed_commands_output_and_exit_status_come_back`, `a_command_killed_by_a_signal_exits_with_128_plus_it` |
 | stdin | `a_routed_command_reads_an_empty_stdin` |
