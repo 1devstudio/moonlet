@@ -110,7 +110,7 @@ Titles, descriptions and labels from trackers are untrusted. Titles and labels a
 - ⌘K searching tasks: ⌘K stays the Run action palette; "Find a task" in the Tasks sidebar filters the board, and the link dialog (X46) takes pasted keys and URLs.
 - A connect popover on the Tasks button; a `Connect…` row and key prefixes in the Trackers list; the tracker's mark and a "more" menu in the detail header.
 - Creating tasks ("New task in this column", now [X52](X52-new-issue-from-a-column.md)) and drag and drop between columns (now [X53](X53-drag-tasks-between-columns.md)).
-- Activity from the tracker's own history and comments.
+- Activity from the tracker's own history. The tracker's comments are [X66](X66-task-comments.md).
 - Grouping by assignee or label.
 
 ## Test plan
