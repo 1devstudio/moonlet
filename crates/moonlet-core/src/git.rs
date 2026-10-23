@@ -611,6 +611,12 @@ pub async fn commit(path: &Path, message: &str, all: bool) -> Result<String> {
     git_text(&root, &["rev-parse", "HEAD"]).await
 }
 
+/// The repository's `HEAD`, short, as a design system's sync records it (X64).
+pub async fn head(path: &Path) -> Result<String> {
+    let root = toplevel(path).await?;
+    git_text(&root, &["rev-parse", "--short", "HEAD"]).await
+}
+
 pub async fn log(path: &Path, base: Option<&str>) -> Result<Vec<Commit>> {
     let root = toplevel(path).await?;
     if !has_head(&root).await {
@@ -1612,6 +1618,14 @@ pub(crate) mod tests {
         git(p, &["add", "-A"]).await.unwrap();
         git(p, &["commit", "-q", "-m", "init"]).await.unwrap();
         dir
+    }
+
+    #[tokio::test]
+    async fn head_is_the_short_commit_git_names() {
+        let dir = repo().await;
+        let out = std::process::Command::new("git").args(["rev-parse", "--short", "HEAD"]).current_dir(dir.path()).output().unwrap();
+        let want = String::from_utf8(out.stdout).unwrap().trim().to_string();
+        assert_eq!(head(&dir.path().join("a.txt").with_file_name("")).await.unwrap(), want);
     }
 
     #[tokio::test]
