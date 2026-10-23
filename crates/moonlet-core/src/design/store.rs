@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use moonlet_proto::types::ProjectIdentity;
 use serde::{Deserialize, Serialize};
 
 use super::check::{self, html_files};
@@ -18,14 +19,18 @@ pub struct Source {
     /// Its folder on this Mac.
     pub path: String,
     /// What makes it the same project elsewhere (X41), when known.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub identity: Option<String>,
+    #[serde(default, skip_serializing_if = "is_unknown")]
+    pub identity: ProjectIdentity,
     /// A folder of the repository the system covers, such as `apps/mobile`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subdir: Option<String>,
     /// `HEAD` at the last sync.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub commit: Option<String>,
+}
+
+fn is_unknown(i: &ProjectIdentity) -> bool {
+    i.origin.is_none() && i.root.is_none()
 }
 
 /// `config.toml`.
@@ -433,7 +438,10 @@ mod tests {
         Source {
             project: "p-moonlet".into(),
             path: "/Users/alex/Workspace/1devstudio/moonlet".into(),
-            identity: Some("github.com/1devstudio/moonlet".into()),
+            identity: ProjectIdentity {
+                origin: Some("github.com/1devstudio/moonlet".into()),
+                root: Some("9c1e0a2".into()),
+            },
             subdir: None,
             commit: None,
         }
@@ -466,7 +474,10 @@ created_at = 1761200000000
 [[sources]]
 project = \"p-moonlet\"
 path = \"/Users/alex/Workspace/1devstudio/moonlet\"
-identity = \"github.com/1devstudio/moonlet\"
+
+[sources.identity]
+origin = \"github.com/1devstudio/moonlet\"
+root = \"9c1e0a2\"
 "
         );
         assert_eq!(
