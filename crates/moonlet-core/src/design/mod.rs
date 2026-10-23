@@ -6,4 +6,5 @@ pub mod check;
 pub mod foundations;
 pub mod manifest;
 pub mod mid;
+pub mod readme;
 pub mod tokens;
