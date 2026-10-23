@@ -100,7 +100,7 @@ function Toasts() {
             t.kind === "error" ? "border-[#5a2a2e] bg-[#2a1416] text-[#ffb3b8]" : "border-border-strong bg-panel-2 text-fg",
           )}
         >
-          <span className="min-w-0 py-0.5">{t.text}</span>
+          <span className="min-w-0 break-words py-0.5">{t.text}</span>
           {t.action && (
             <button
               className="shrink-0 rounded px-1.5 py-0.5 font-medium text-accent hover:bg-hover"
