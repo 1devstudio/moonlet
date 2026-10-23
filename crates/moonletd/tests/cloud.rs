@@ -684,6 +684,14 @@ async fn a_ready_machine_names_its_worker() {
 }
 
 #[tokio::test]
+async fn a_slow_create_call_still_comes_up() {
+    let c = cloud().await;
+    c.steer("slow-create", "1000");
+    let m = c.ready().await;
+    assert_eq!(m["steps"][0]["state"], json!("done"), "{m}");
+}
+
+#[tokio::test]
 async fn remove_now_removes_an_idle_machine_at_once() {
     let c = cloud().await;
     let m = c.ready().await;
@@ -1318,6 +1326,34 @@ async fn run_here_runs_a_job_waiting_for_a_cloud_machine_on_the_central_host() {
     // The machine keeps starting, for the next command.
     let m = &c.machines().await["machines"][0];
     assert_eq!(m["state"], json!("creating"));
+}
+
+#[tokio::test]
+async fn stop_ends_a_job_waiting_for_a_cloud_machine() {
+    let c = routing(&[]).await;
+    c.steer("slow-create", "60000");
+    let s = c.session("big-refactor", true).await;
+    let (client, run) = c.start(&s, &["sh", "run.sh"]).await;
+    let mut job = Value::Null;
+    for _ in 0..100 {
+        job = c.jobs(&s).await[0].clone();
+        if job["state"]["kind"] == "waiting" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(job["state"]["kind"], json!("waiting"), "{job}");
+    let stopped: Value = c.d.call("job.stop", json!({ "job": job["id"] })).await;
+    assert_eq!(stopped, json!(true));
+    let ran = tokio::time::timeout(Duration::from_secs(5), collect(client, run))
+        .await
+        .expect("the waiting command never ended");
+    assert!(
+        ran.stderr.ends_with("moonlet: stopped from the Jobs panel\n"),
+        "{ran:?}"
+    );
+    assert_eq!(ran.stdout, "");
+    assert_ne!(ran.status, 0);
 }
 
 /// The routing copies on the first fake machine.
