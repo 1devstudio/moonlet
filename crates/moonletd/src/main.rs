@@ -8,12 +8,14 @@
 
 mod clones;
 mod cloud;
+mod cloud_fake;
 mod daemon;
 mod exec;
 mod heavy;
 mod jobs;
 mod launch;
 mod link;
+mod machines;
 mod mobile;
 mod notify;
 mod server;
@@ -86,6 +88,17 @@ enum Cmd {
         #[command(subcommand)]
         action: TailnetAction,
     },
+    /// Pair this cloud machine with its central host and take heavy
+    /// commands (X63); run by the machine's first-boot script.
+    Join {
+        /// The central host's tailnet addresses, comma-separated.
+        addrs: String,
+        /// The join code the central host made for this machine.
+        code: String,
+        /// This machine's name.
+        #[arg(long)]
+        name: String,
+    },
     /// Show a one-time code that pairs a Mac or a phone with this host.
     Pair {
         /// The name to type on the other Mac, such as the host's MagicDNS
@@ -131,6 +144,16 @@ fn main() -> Result<()> {
                 TailnetAction::Status => None,
             },
         )),
+        Cmd::Join { addrs, code, name } => rt.block_on(async {
+            let mut c = Client::connect(&socket, "moonletd-join").await?;
+            let join = methods::LinkJoin {
+                addrs: addrs.split(',').map(|a| a.trim().to_string()).filter(|a| !a.is_empty()).collect(),
+                code,
+                name,
+            };
+            let _: serde_json::Value = c.request(methods::LINK_JOIN, join).await?;
+            Ok(())
+        }),
         Cmd::Pair { name } => {
             let code = rt.block_on(tailnet_cli::pair(&socket, name))?;
             std::process::exit(code)
@@ -264,6 +287,8 @@ fn run_daemon(
         });
         // Phones over Tailscale, when the user allows them (X39).
         mobile::spawn(daemon.clone());
+        // Cloud machines: the sweep and the startup deadlines (X63).
+        daemon.machines.start();
         // Live copies, before the link they may open (X60).
         sync::spawn(daemon.clone());
         // This Mac's link to its central host, when one is set (X41).

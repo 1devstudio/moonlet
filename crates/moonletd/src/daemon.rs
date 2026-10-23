@@ -50,8 +50,9 @@ pub struct Daemon {
     pub sync: Arc<crate::sync::LiveCopies>,
     /// Approved heavy commands and routing decisions (X62).
     heavy: Arc<crate::heavy::Heavy>,
-    /// Cloud workers' settings (X63).
-    cloud: crate::cloud::CloudSettings,
+    /// Cloud workers' settings and machines (X63).
+    cloud: Arc<crate::cloud::CloudSettings>,
+    pub machines: Arc<crate::machines::Machines>,
     /// Heavy commands running on this machine or routed to its workers (X62).
     pub runs: Arc<crate::exec::Runs>,
     /// Every session's routed commands, with their output (X62).
@@ -92,6 +93,17 @@ pub(crate) fn app_only(conn: &Conn, what: &str) -> Result<(), RpcError> {
     }
     Ok(())
 }
+
+/// What a cloud machine may call on its central host (X63).
+const CLOUD_METHODS: &[&str] = &[
+    m::WORKER_REGISTER,
+    m::WORKER_STEP,
+    m::SYNC_OPEN,
+    m::SYNC_FETCH,
+    m::SYNC_OFFER,
+    m::SYNC_CLOSE,
+    m::EXEC_DONE,
+];
 
 /// Jobs hold commands' output: the app and paired devices read and stop
 /// them, never an agent's CLI nor a worker (X62).
@@ -205,10 +217,22 @@ impl Daemon {
             move |m| emitter.emit(m),
         ));
         let runs = crate::exec::Runs::new(terminals.base_env().clone(), jobs.clone());
+        let cloud = Arc::new(crate::cloud::CloudSettings::load(&moonlet_core::paths::home()));
+        let emitter = terminals.clone();
+        let machines = crate::machines::Machines::new(
+            &moonlet_core::paths::home(),
+            cloud.clone(),
+            mobile.clone(),
+            link.clone(),
+            workers.clone(),
+            sessions.clone(),
+            move |m| emitter.emit(m),
+        );
         link.set_runs(Arc::downgrade(&runs));
         Arc::new(Self {
             heavy,
-            cloud: crate::cloud::CloudSettings::load(&moonlet_core::paths::home()),
+            cloud,
+            machines,
             runs,
             jobs,
             clones,
@@ -329,6 +353,13 @@ impl Daemon {
     }
 
     pub async fn handle(self: &Arc<Self>, conn: &Arc<Conn>, method: &str, p: Value) -> HandlerResult {
+        // A cloud machine reaches only what a worker needs (X63).
+        if let Some(device) = conn.phone.as_deref()
+            && self.machines.machine_of(device).is_some()
+            && !CLOUD_METHODS.contains(&method)
+        {
+            return Err(RpcError::new("forbidden", "a cloud machine only runs heavy commands"));
+        }
         let s = &self.terminals;
         match method {
             m::DAEMON_INFO => ok(self.info()),
@@ -572,6 +603,12 @@ impl Daemon {
                 self.link.retry();
                 ok(self.link.info())
             }
+            m::LINK_JOIN => {
+                // `moonletd join` on a fresh cloud machine (X63).
+                app_only(conn, "the link")?;
+                let r: m::LinkJoin = params(p)?;
+                ok(self.link.join(r, &crate::mobile::tailscale_addresses()).await?)
+            }
             m::LINK_PAIR => {
                 self.link_managers_only(conn, false)?;
                 let r: m::LinkPair = params(p)?;
@@ -632,12 +669,35 @@ impl Daemon {
                 };
                 ok(self.runs.start(conn.clone(), plan, self.workers.clone(), self.sync.clone()))
             }
-            m::CLOUD_GET => ok(self.cloud.info()),
+            m::CLOUD_GET => ok(self.cloud.info(self.machines.provider_infos())),
+            m::CLOUD_TYPES => {
+                let r: m::CloudTypes = params(p)?;
+                ok(self.machines.types(&r.provider, &r.location).await?)
+            }
+            m::CLOUD_MACHINES => ok(self.machines.list()),
+            // Agents may start and remove machines: the limits bound them.
+            m::CLOUD_UP => {
+                let r: m::CloudUp = params(p)?;
+                ok(self.machines.up(&r.project, r.session)?)
+            }
+            m::CLOUD_DOWN => {
+                let r: m::CloudDown = params(p)?;
+                ok(self.machines.down(&r.machine)?)
+            }
+            m::WORKER_STEP => {
+                let machine = conn.phone.as_deref().and_then(|d| self.machines.machine_of(d));
+                let Some(machine) = machine else {
+                    return Err(RpcError::new("forbidden", "only a cloud machine reports its steps"));
+                };
+                let r: m::WorkerStep = params(p)?;
+                self.machines.step(&machine, r);
+                ok(true)
+            }
             m::CLOUD_SET => {
                 // Tokens and limits: never an agent's CLI nor a phone.
                 self.app_or_paired_mac(conn, "cloud workers")?;
                 let r: m::CloudSet = params(p)?;
-                ok(self.cloud.set(r)?)
+                ok(self.cloud.set(r, self.machines.provider_infos())?)
             }
             m::EXEC_SETUPS => {
                 app_only(conn, "setup")?;
@@ -741,6 +801,9 @@ impl Daemon {
                 let id = r.id.clone();
                 self.workers.register(conn.clone(), device, r)?;
                 self.sync.worker_linked(&id);
+                if let Some(machine) = self.machines.machine_of(device) {
+                    self.machines.registered(&machine, &id);
+                }
                 // It may have approved meanwhile: the next run asks again.
                 self.runs.forget_not_approved(&id);
                 ok(true)

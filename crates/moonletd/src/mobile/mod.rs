@@ -174,6 +174,9 @@ struct StoredDevice {
     last_seen: Option<u64>,
     #[serde(default)]
     kind: DeviceKind,
+    /// The cloud machine a `cloud` device is (X63).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    machine: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -348,6 +351,10 @@ pub struct Mobile {
     /// Wakes the listener loop after a settings change.
     kick: Notify,
     emit: Box<dyn Fn(Message) + Send + Sync>,
+    /// Codes the central host made for its cloud machines (X63).
+    joins: Mutex<JoinCodes>,
+    /// Told `(machine, device)` when a cloud machine joins.
+    on_join: Mutex<Option<Box<dyn Fn(&str, &str) + Send + Sync>>>,
 }
 
 impl Mobile {
@@ -365,7 +372,36 @@ impl Mobile {
             listening: Mutex::new(Listening::default()),
             kick: Notify::new(),
             emit: Box::new(emit),
+            joins: Mutex::default(),
+            on_join: Mutex::new(None),
         }
+    }
+
+    /// A one-use code that pairs cloud machine `machine`, named `name`.
+    /// Only the central host makes them, for machines it creates.
+    pub fn join_code(&self, machine: &str, name: &str) -> String {
+        self.joins.lock().unwrap().mint(machine, name, now_ms())
+    }
+
+    /// Calls `f(machine, device)` when a cloud machine joins.
+    pub fn on_join(&self, f: impl Fn(&str, &str) + Send + Sync + 'static) {
+        *self.on_join.lock().unwrap() = Some(Box::new(f));
+    }
+
+    /// The cloud machine device `id` is, when it is one.
+    pub fn cloud_machine(&self, id: &str) -> Option<String> {
+        self.data
+            .lock()
+            .unwrap()
+            .devices
+            .iter()
+            .find(|d| d.id == id && d.kind == DeviceKind::Cloud)
+            .and_then(|d| d.machine.clone())
+    }
+
+    /// This host's tailnet addresses it listens on, `ip:port`.
+    pub fn listening(&self) -> Vec<String> {
+        self.listening.lock().unwrap().addrs.iter().map(|a| addr_text(*a)).collect()
     }
 
     pub fn default_file() -> PathBuf {
@@ -409,9 +445,11 @@ impl Mobile {
                 .map(|a| addr_text(*a))
                 .collect(),
             host: host_label(),
+            // A cloud machine's device shows under its machine (X63).
             devices: data
                 .devices
                 .iter()
+                .filter(|d| d.kind != DeviceKind::Cloud)
                 .map(|d| MobileDevice {
                     id: d.id.clone(),
                     name: d.name.clone(),
@@ -608,6 +646,35 @@ impl Mobile {
                     route,
                 })
             }
+            (None, Some(code)) if route.is_none() && self.joins.lock().unwrap().knows(code) => {
+                let name = device.unwrap_or_default();
+                let machine = self.joins.lock().unwrap().redeem(code, name, now_ms())?;
+                let token = random_hex(32);
+                let now = now_ms();
+                let dev = StoredDevice {
+                    id: random_hex(8),
+                    name: name.to_string(),
+                    token_sha256: sha256_hex(token.as_bytes()),
+                    created_at: now,
+                    last_seen: Some(now),
+                    kind: DeviceKind::Cloud,
+                    machine: Some(machine.clone()),
+                };
+                let device_id = dev.id.clone();
+                {
+                    let mut data = self.data.lock().unwrap();
+                    data.devices.push(dev);
+                    self.save(&data);
+                }
+                if let Some(f) = self.on_join.lock().unwrap().as_ref() {
+                    f(&machine, &device_id);
+                }
+                Some(Authed {
+                    device_id,
+                    token: Some(token),
+                    route: None,
+                })
+            }
             (None, Some(code)) if route.is_none() => {
                 let check = claim(&mut self.pairing.lock().unwrap(), code, now_ms())?;
                 match check {
@@ -620,7 +687,9 @@ impl Mobile {
                             token_sha256: sha256_hex(token.as_bytes()),
                             created_at: now,
                             last_seen: Some(now),
-                            kind: kind.unwrap_or_default(),
+                            // A cloud device pairs only with a join code.
+                            kind: kind.filter(|k| *k != DeviceKind::Cloud).unwrap_or_default(),
+                            machine: None,
                         };
                         let device_id = dev.id.clone();
                         {

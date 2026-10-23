@@ -84,6 +84,8 @@ pub struct ProviderInfo {
     pub fields: Vec<Field>,
     /// The longest machine name it takes.
     pub max_name: usize,
+    /// Its machines join the tailnet with a one-off Tailscale key.
+    pub tailnet_key: bool,
 }
 
 /// Every provider, for the app's **Add provider**.

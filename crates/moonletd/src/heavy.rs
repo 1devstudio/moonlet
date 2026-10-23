@@ -286,7 +286,7 @@ fn managed_settings() -> PathBuf {
 
 /// A project's key in `heavy.json`: its origin and root commit. A project
 /// with no root commit has none, so nothing is approved for it.
-fn key(id: &ProjectIdentity) -> Option<String> {
+pub(crate) fn key(id: &ProjectIdentity) -> Option<String> {
     let root = id.root.as_deref()?;
     if !matches!(root.len(), 40 | 64) || !root.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;
