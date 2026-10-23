@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 pub mod cloud_init;
 pub mod hetzner;
 pub mod machine;
+pub mod tailscale;
 
 /// What a provider's machine is doing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -116,7 +117,15 @@ pub struct Request {
     pub method: &'static str,
     pub url: String,
     pub headers: Vec<(String, String)>,
-    pub body: Option<serde_json::Value>,
+    pub body: Option<Body>,
+}
+
+/// A request's body.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Body {
+    Json(serde_json::Value),
+    /// `application/x-www-form-urlencoded`.
+    Form(Vec<(String, String)>),
 }
 
 /// The provider's answer.

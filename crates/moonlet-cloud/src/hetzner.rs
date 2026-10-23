@@ -7,7 +7,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use crate::{
-    CloudError, Field, Listed, MachineInfo, MachineState, MachineType, NewMachine, Provider,
+    Body, CloudError, Field, Listed, MachineInfo, MachineState, MachineType, NewMachine, Provider,
     ProviderInfo, Request, Transport,
 };
 
@@ -56,7 +56,7 @@ impl Hetzner {
                 method,
                 url: format!("{API}{path}"),
                 headers: vec![("Authorization".into(), format!("Bearer {}", self.token))],
-                body: body.clone(),
+                body: body.clone().map(Body::Json),
             };
             let r = self
                 .transport
@@ -344,7 +344,7 @@ mod tests {
                 method: "POST",
                 url: "https://api.hetzner.cloud/v1/servers".into(),
                 headers: vec![("Authorization".into(), "Bearer hc-token".into())],
-                body: Some(serde_json::json!({
+                body: Some(Body::Json(serde_json::json!({
                     "name": "moonlet-shop-7k2q",
                     "server_type": "cpx41",
                     "image": "ubuntu-24.04",
@@ -356,7 +356,7 @@ mod tests {
                         "moonlet-project": "9f86d081884c"
                     },
                     "start_after_create": true
-                })),
+                }))),
             }
         );
     }
