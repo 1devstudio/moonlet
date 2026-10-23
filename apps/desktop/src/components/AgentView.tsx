@@ -69,7 +69,10 @@ import {
 import { diffRows } from "../lib/codeHighlight";
 import { type OutputView, type Tone, toolOutputView } from "../lib/toolOutput";
 import { fileToOpen, linkToOpen, linkToolbarPosition, openableUrl, renderChatMarkdown, renderTaskMarkdown } from "../lib/markdown";
-import { openAgents, openChanges, openFileTab } from "../lib/actions";
+import { openAgents, openChanges, openFileTab, openJobs } from "../lib/actions";
+import { bashChip, shownCommand } from "../lib/jobs";
+import { useToolJob } from "../lib/jobsStore";
+import { WorkerIcon } from "./JobsPanel";
 import { type AsideAnswer, type ChatItem, type ChatState, M, type PermissionAsk, type QueuedMessage, type TerminalInfo, type ToolCall, type TurnTime } from "../lib/protocol";
 import { type Aside, type Line, type Running, asideFooter, asideSettled, canAskAside, composerPlaceholder, interruptedLine, queuedCount, queuedHeader, sendNowLabel, sendNowParams, sendNowWarning, unqueued, waitingOn } from "../lib/queued";
 import { firstWord, suggest } from "../lib/suggest";
@@ -272,7 +275,7 @@ export function DiffBlock({ diff }: { diff: string }) {
   );
 }
 
-const TONE: Record<Tone, string> = { add: "text-add", del: "text-del", dim: "text-faint", error: "text-error", warn: "text-blocked", ok: "text-add" };
+const TONE: Record<Tone, string> = { add: "text-add", del: "text-del", dim: "text-faint", error: "text-error", warn: "text-blocked", ok: "text-add", accent: "text-accent" };
 
 /** A shell or Grep call's output, coloured by its shape (X18). */
 function CommandOutput({ output, view }: { output: string; view: OutputView }) {
@@ -305,11 +308,16 @@ function ReadBlock({ rows }: { rows: { n: number; html: string }[] }) {
   );
 }
 
-export function ToolRow({ tool, cwd }: { tool: ToolCall; cwd: string }) {
+export function ToolRow({ id, tool, cwd }: { id: string; tool: ToolCall; cwd: string }) {
   const [open, setOpen] = useState(false);
   const Icon = toolIcon(tool.name);
   const stat = tool.diff ? diffStat(tool.diff) : null;
-  const command = toolCommand(tool);
+  const raw = toolCommand(tool);
+  // A routed command (X62) shows as the agent wrote it, with where it ran.
+  const command = raw && shownCommand(raw);
+  const where = useContext(FileLinks);
+  const job = useToolJob(where?.host ?? "", where?.wsId ?? "", id, !!raw);
+  const chip = raw ? bashChip(job, tool.output) : null;
   const plan = planOf({ tool: tool.name, input: tool.input });
   const expandable = !!(tool.diff || tool.output || command || plan);
   const view = useMemo(() => (open ? toolOutputView(tool) : null), [open, tool]);
@@ -321,7 +329,22 @@ export function ToolRow({ tool, cwd }: { tool: ToolCall; cwd: string }) {
       >
         <Icon size={14} className="shrink-0 text-muted" />
         <span className="shrink-0 font-medium text-fg">{tool.name}</span>
-        <span className={cx("min-w-0 truncate font-mono ui-text-12.5", tool.status === "denied" ? "text-faint line-through" : "text-muted")}>{rel(tool.summary, cwd)}</span>
+        <span className={cx("min-w-0 truncate font-mono ui-text-12.5", tool.status === "denied" ? "text-faint line-through" : "text-muted")}>{rel(raw ? shownCommand(tool.summary) : tool.summary, cwd)}</span>
+        {chip && (
+          <span
+            role={job ? "link" : undefined}
+            title={job ? "Show in Jobs" : undefined}
+            onClick={(e) => {
+              if (!job) return;
+              e.stopPropagation();
+              openJobs(job.id);
+            }}
+            className={cx("flex shrink-0 items-center gap-1 rounded bg-raised px-1.5 py-px ui-text-12", chip.rerun ? "text-blocked" : "text-muted", job && "hover:text-fg")}
+          >
+            <WorkerIcon icon={chip.icon} />
+            {chip.text}
+          </span>
+        )}
         {stat && (stat.add > 0 || stat.del > 0) && (
           <span className="shrink-0 font-mono ui-text-12">
             <span className="text-add">+{stat.add}</span> <span className="text-del">−{stat.del}</span>
@@ -407,7 +430,7 @@ export function ToolGroup({ tools, cwd }: { tools: ChatItem[]; cwd: string }) {
       </button>
       {open && (
         <div className="ml-2">
-          {tools.map((t) => t.tool && <ToolRow key={t.id} tool={t.tool} cwd={cwd} />)}
+          {tools.map((t) => t.tool && <ToolRow key={t.id} id={t.id} tool={t.tool} cwd={cwd} />)}
         </div>
       )}
     </div>
@@ -470,7 +493,7 @@ export const ChatItemView = memo(function Item({ item, cwd }: { item: ChatItem; 
     case "thinking":
       return <Thinking item={item} />;
     case "tool":
-      return item.tool ? <ToolRow tool={item.tool} cwd={cwd} /> : null;
+      return item.tool ? <ToolRow id={item.id} tool={item.tool} cwd={cwd} /> : null;
     case "error":
       return <ErrorItem item={item} />;
     default:

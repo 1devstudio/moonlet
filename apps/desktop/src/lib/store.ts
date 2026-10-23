@@ -54,7 +54,7 @@ import { readStored, writeStored } from "./storage";
 import { disposeEntry, findEntry, reattachHost, setTermSettings, type TermSettings, defaultTermSettings } from "./terminals";
 
 /** Right panel tabs, in order (X24 added Plan, X42 Agents, X46 Task for a linked session). */
-export const RIGHT_TABS = ["task", "plan", "agents", "files", "changes", "review"] as const;
+export const RIGHT_TABS = ["task", "plan", "agents", "jobs", "files", "changes", "review"] as const;
 export type RightTab = (typeof RIGHT_TABS)[number];
 
 export interface Selection {
@@ -243,7 +243,9 @@ interface State extends UiPersist {
     | { kind: "palette" }
     | { kind: "commit" }
     /** A file that differs between the central host and this Mac, side by side (X60). */
-    | { kind: "sync-compare"; host: string; session: string; path: string };
+    | { kind: "sync-compare"; host: string; session: string; path: string }
+    /** A routed command's leftover against the session's version (X62). */
+    | { kind: "job-compare"; host: string; session: string; path: string; folder: string };
   /** The open confirm modal, above any dialog (X23). */
   confirm: PendingConfirm | null;
   /** The settings page over the window, when open (X43). */
@@ -274,6 +276,8 @@ interface State extends UiPersist {
   card: AgentCard | null;
   /** The subagent the Agents tab shows in detail, `agentKey` (X42). */
   agentDetail: string | null;
+  /** The job the Jobs tab shows in detail (X62). */
+  jobDetail: string | null;
   /** Per chat (`termKey`): the latest agent start when × hid the strip (X42). */
   stripDismissed: Record<string, number>;
   /** File shown in the Changes diff (set from the Files list). */
@@ -326,6 +330,7 @@ function makeStore() {
   workingSince: {},
   card: null,
   agentDetail: null,
+  jobDetail: null,
   stripDismissed: {},
   diffFile: null,
   archiving: {},

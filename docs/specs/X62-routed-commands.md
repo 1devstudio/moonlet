@@ -286,7 +286,7 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
   - the command, the elapsed or total time, and the second line;
   - under the list, "Heavy commands this session's agents ran through moonlet. Click one for its output."
 
-  The tab is hidden while the session's project has no heavy commands and no jobs.
+  The tab shows once the session has a job.
 - **Job detail in the panel** ([job-running.png](design/x62-x63/job-running.png), [job-waiting-for-cloud.png](design/x62-x63/job-waiting-for-cloud.png), [job-done-after-rerun.png](design/x62-x63/job-done-after-rerun.png)): **‹ Jobs**, the command, the state line ("Running · 0:42 · Claude in fix-cart"), and **↗** to open it as a tab. Then:
   - the phases as a checklist with durations, or the timeline after a rerun;
   - the worker card ("load 1.2 / 10 · slot 1 of 2 · 6 ms");
@@ -295,7 +295,7 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
   - a footer with **Stop** ("Changes made so far still come back.") or **Run on studio-mini now**.
 - **Job tab** ([job-tab.png](design/x62-x63/job-tab.png)): a session tab (T2) with the worker's icon and the job's state. Its header has the command, the worker chip, and a state line ("Done · exit 0 · 1m 12s · 10:40:46 – 10:41:58 · run by Claude in fix-cart"). Under it, a bar with the phases at their real lengths, labelled with durations, then **Copy output** and a **⋯** menu. Then:
   - the output, with **All / stdout / stderr** (stderr with a count), **Find in output**, the line count, **Follow**, line numbers, and stderr lines in the attention colour;
-  - a side column with **Worker** (load at start, slot, round trip, copy path), **Brought back** (files with +/− counts, `outputs` with sizes), a leftover card with **Compare** and **Reveal**, and **Passed to the worker** (names only, "Values are never shown here.").
+  - a side column with **Worker** (load at start, slot, round trip, copy path), **Brought back** (files with +/− counts, `outputs` with sizes), a leftover card with **Compare** (the session's version against the run's) and, when the central host is this Mac, **Reveal**, and **Passed to the worker** (names only, "Values are never shown here.").
 
   The tab closes when the job is dropped from the history.
 - **Toasts** ([toasts.png](design/x62-x63/toasts.png)): after **Approve**, "Approved pnpm test and pnpm build for shop on studio-mini, this Mac and devbox". When a worker could not be reached to approve: "Approved for shop on studio-mini and this Mac. devbox was not reachable; approve it from Workers."
@@ -372,8 +372,8 @@ Where the tests live:
 - **Rust unit tests:** `crates/moonlet-core/src/heavy.rs` (matching, Claude Code rules, picking, paths), `crates/moonlet-core/src/job_summary.rs` and `crates/moonlet-cli/src/hook.rs`, each in its `#[cfg(test)] mod tests`.
 - **Daemon end-to-end:** `crates/moonletd/tests/exec.rs`. It runs a central host and one or two worker `TestDaemon`s, linked as in `tests/link.rs`, with a test-only setting for load and size limits. Slots and load over the link are in `crates/moonletd/tests/link.rs`.
 - **CLI end-to-end:** `crates/moonlet-cli/tests/exec.rs`.
-- **Vitest:** `apps/desktop/src/lib/heavyCommands.test.ts`, `workers.test.ts`, `jobs.test.ts` and `routedChip.test.ts`.
-- **e2e:** `apps/desktop/e2e/specs/routing.e2e.ts`.
+- **Vitest:** `apps/desktop/src/lib/heavyCommands.test.ts`, `workers.test.ts`, `jobs.test.ts`, `layout.test.ts` and `toolOutput.test.ts`.
+- **e2e:** `apps/desktop/e2e/specs/routing.e2e.ts` and `jobs.e2e.ts`.
 
 | Criterion | Tests |
 |---|---|
@@ -429,10 +429,11 @@ Where the tests live:
 | Jobs tab count | Vitest "the tab counts every job" |
 | Jobs summary (worked examples) | Vitest "the summary line, as in the worked examples" |
 | Row second line (worked examples) | Vitest "a row's second line, as in the worked examples" |
-| Chat chip (UI) | Vitest "the chip from a job", "the chip from a result's first line", "a rewritten command shows without moonlet exec" |
+| Chat chip (UI) | Vitest "the chip from a job", "the chip from a result's first line", "the chip comes from the row's job, and falls back to the result's first line", "a rewritten command shows without moonlet exec", "colours moonlet's own lines, and a worker going away in the attention colour" |
 | `heavy.set` writes `[heavy]` and never approves | `heavy_set_writes_the_heavy_table_and_keeps_the_rest`, `heavy_set_writes_the_projects_config_and_never_approves` |
 | Project page (UI) | Vitest "a new entry, a changed entry, all approved", "the secret-looking env warning", "turns the table into a form and back, trimming and dropping blank entries"; e2e "approving heavy commands saves them" |
-| Jobs tab (UI) | e2e "the Jobs tab lists the job and opens its output" |
+| Jobs tab (UI) | e2e "the Jobs tab lists the job and opens its output"; Vitest "the panel's worker card line, as in job-running.png" |
+| Job tab (UI) | Vitest "opens a job as a new active tab, and switches to it when open", "keeps job tabs when the terminals are synced, and reads them back", "closes a job tab and activates its neighbour", "lays the phases out at their lengths, as in job-tab.png", "ends with the run going on while a job runs", "adds when it ran, and who ran it, as in job-tab.png", "reads chunks as numbered lines, stdout and stderr apart, without colours", "filters by stream and by what was typed in Find, keeping line numbers", "the job tab's Worker facts, as in job-tab.png" |
 
 ## Open questions
 

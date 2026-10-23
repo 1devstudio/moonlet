@@ -5,6 +5,8 @@ export type PaneNode =
   | { type: "leaf"; session: number }
   /** A file open in the editor (X26); `line` is where it opened last. */
   | { type: "file"; path: string; line?: number }
+  /** A routed command's output (X62), by job id. */
+  | { type: "job"; job: string }
   | { type: "split"; dir: "row" | "col"; children: PaneNode[]; sizes: number[] };
 
 export interface Tab {
@@ -23,9 +25,9 @@ export const emptyLayout = (): Layout => ({ tabs: [], active: null, focused: nul
 let counter = 0;
 export const newTabId = () => `t${Date.now().toString(36)}${(counter++).toString(36)}`;
 
-/** The terminals shown in a pane tree; file panes hold none. */
+/** The terminals shown in a pane tree; file and job panes hold none. */
 export function leaves(node: PaneNode): number[] {
-  if (node.type === "file") return [];
+  if (node.type === "file" || node.type === "job") return [];
   return node.type === "leaf" ? [node.session] : node.children.flatMap(leaves);
 }
 
@@ -39,7 +41,7 @@ export function tabOf(layout: Layout, session: number): Tab | undefined {
 
 /** Splits the pane showing `target`, putting `session` after it. */
 export function splitLeaf(node: PaneNode, target: number, session: number, dir: "row" | "col"): PaneNode {
-  if (node.type === "file") return node;
+  if (node.type === "file" || node.type === "job") return node;
   if (node.type === "leaf") {
     if (node.session !== target) return node;
     return { type: "split", dir, children: [node, { type: "leaf", session }], sizes: [50, 50] };
@@ -56,7 +58,7 @@ export function splitLeaf(node: PaneNode, target: number, session: number, dir: 
 
 /** Removes a pane; collapses splits left with one child. */
 export function removeLeaf(node: PaneNode, session: number): PaneNode | null {
-  if (node.type === "file") return node;
+  if (node.type === "file" || node.type === "job") return node;
   if (node.type === "leaf") return node.session === session ? null : node;
   const kept: { child: PaneNode; size: number }[] = [];
   node.children.forEach((c, i) => {
@@ -124,6 +126,21 @@ export function closeFile(layout: Layout, path: string): Layout {
   return withTabs(layout, layout.tabs.filter((t) => !isFile(t, path)), null);
 }
 
+const isJob = (t: Tab, job: string) => t.root.type === "job" && t.root.job === job;
+
+/** Opens a job's tab (X62), or switches to it when it is open. */
+export function openJob(layout: Layout, job: string): Layout {
+  const open = layout.tabs.find((t) => isJob(t, job));
+  if (open) return { ...layout, active: open.id, focused: null };
+  const tab = { id: newTabId(), root: { type: "job", job } as PaneNode };
+  return { tabs: [...layout.tabs, tab], active: tab.id, focused: null };
+}
+
+/** Closes a job's tab (X62). */
+export function closeJob(layout: Layout, job: string): Layout {
+  return withTabs(layout, layout.tabs.filter((t) => !isJob(t, job)), null);
+}
+
 /**
  * Makes the layout match the workspace's live sessions: drops panes whose
  * session is gone and opens a tab for every session not shown anywhere.
@@ -155,6 +172,7 @@ function isNode(v: unknown): v is PaneNode {
   const n = v as Record<string, unknown>;
   if (n.type === "leaf") return typeof n.session === "number";
   if (n.type === "file") return typeof n.path === "string" && (n.line === undefined || typeof n.line === "number");
+  if (n.type === "job") return typeof n.job === "string";
   return (
     n.type === "split" &&
     (n.dir === "row" || n.dir === "col") &&
