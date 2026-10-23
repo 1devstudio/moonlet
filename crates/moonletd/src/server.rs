@@ -283,9 +283,16 @@ where
     // (X62): neither an agent's CLI nor a worker hears it.
     let no_jobs = is_cli || conn.client == crate::link::WORKER_CLIENT;
     let phone = conn.phone.is_some();
+    // A cloud machine (X63) reaches only what a worker needs: no terminal,
+    // and none of the central host's events.
+    let cloud = conn
+        .phone
+        .as_deref()
+        .is_some_and(|d| daemon.machines.machine_of(d).is_some());
     let event_task = tokio::spawn(async move {
         loop {
             match events.recv().await {
+                Ok(_) if cloud => {}
                 Ok(Message::Event { name, .. })
                     if is_cli && name == moonlet_proto::methods::EV_TERMINAL_READ_REQUEST => {}
                 Ok(Message::Event { name, .. })
@@ -320,7 +327,9 @@ where
             };
             match frame {
                 Frame::Input { terminal, data } => {
-                    let _ = daemon.terminals.write(terminal, data);
+                    if !cloud {
+                        let _ = daemon.terminals.write(terminal, data);
+                    }
                 }
                 // A worker's routed command's output, for `moonlet exec`
                 // (X62); from anyone else, nothing.
@@ -343,6 +352,12 @@ where
                         let _ = conn.tx.send(Frame::Json(Message::err(0, e)));
                         break;
                     }
+                }
+                Frame::Json(Message::Request { id, method, .. })
+                    if cloud && method == moonlet_proto::methods::TERMINAL_ATTACH =>
+                {
+                    let e = RpcError::new("forbidden", "a cloud machine only runs heavy commands");
+                    let _ = conn.tx.send(Frame::Json(Message::err(id, e)));
                 }
                 Frame::Json(Message::Request { id, method, params })
                     if method == moonlet_proto::methods::TERMINAL_ATTACH =>

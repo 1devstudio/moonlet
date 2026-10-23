@@ -174,17 +174,18 @@ impl Provider for Fake {
     }
 
     async fn create(&self, m: &NewMachine) -> Result<String, CloudError> {
+        let id = format!("f{}", self.next.fetch_add(1, Ordering::SeqCst) + 1);
+        let dir = self.machine(&id);
+        std::fs::create_dir_all(&dir).map_err(|e| CloudError::Provider(format!("500 {e}")))?;
+        let meta = json!({ "name": m.name, "labels": m.labels, "created_at": now_ms() });
+        let _ = std::fs::write(dir.join("meta.json"), meta.to_string());
+        // Made, but slow to answer: what a crash in between leaves.
         if let Some(ms) = self
             .steer("slow-create")
             .and_then(|v| v.parse::<u64>().ok())
         {
             tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
         }
-        let id = format!("f{}", self.next.fetch_add(1, Ordering::SeqCst) + 1);
-        let dir = self.machine(&id);
-        std::fs::create_dir_all(&dir).map_err(|e| CloudError::Provider(format!("500 {e}")))?;
-        let meta = json!({ "name": m.name, "labels": m.labels, "created_at": now_ms() });
-        let _ = std::fs::write(dir.join("meta.json"), meta.to_string());
         let join = self.steer("no-join").is_none();
         tokio::spawn(boot(dir, m.user_data.clone(), join));
         Ok(id)
