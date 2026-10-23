@@ -2701,6 +2701,7 @@ dependencies = [
  "clap",
  "dirs 6.0.0",
  "libc",
+ "moonlet-cloud",
  "moonlet-core",
  "moonlet-link",
  "moonlet-proto",
