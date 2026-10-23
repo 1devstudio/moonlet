@@ -123,13 +123,21 @@ fn skill_files(path: &Path) -> Vec<(PathBuf, &'static str)> {
     files
 }
 
+/// A file at a skill path that moonlet does not own: the user's, kept.
+fn users_own(path: &Path) -> bool {
+    std::fs::read_to_string(path).is_ok_and(|s| !s.contains(SKILL_MARKER))
+}
+
+/// Every file of moonlet's skills is current, or the user's own.
 fn skill_installed(path: &Path) -> bool {
-    skill_files(path).iter().all(|(p, text)| std::fs::read_to_string(p).is_ok_and(|s| s == *text))
+    skill_files(path).iter().all(|(p, text)| std::fs::read_to_string(p).is_ok_and(|s| s == *text) || users_own(p))
 }
 
 fn write_skill(path: &Path) -> Result<()> {
     for (p, text) in skill_files(path) {
-        if !std::fs::read_to_string(&p).is_ok_and(|s| s == text) {
+        let current = std::fs::read_to_string(&p).is_ok_and(|s| s == text);
+        // A file of the same name that is the user's own stays as it is.
+        if !current && (p == path || !users_own(&p)) {
             write_atomic(&p, text).with_context(|| format!("cannot write {}", p.display()))?;
         }
     }
@@ -575,6 +583,24 @@ mod tests {
         uninstall(&p).unwrap();
         assert!(!dir.path().join("claude/skills/moonlet-design").exists());
         assert!(!dir.path().join("codex/skills/moonlet-design").exists());
+    }
+
+    /// X64: a skill of the user's own that shares a name with moonlet's is
+    /// never overwritten, refreshed or removed, and does not keep moonlet's
+    /// skills from counting as installed.
+    #[test]
+    fn a_users_own_moonlet_design_skill_is_left_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = paths(dir.path());
+        let theirs = dir.path().join("claude/skills/moonlet-design/SKILL.md");
+        std::fs::create_dir_all(theirs.parent().unwrap()).unwrap();
+        std::fs::write(&theirs, "---\nname: moonlet-design\n---\nmy own\n").unwrap();
+        let st = install(&p, Path::new("/bin/moonlet"), true, false).unwrap();
+        assert!(st.claude_skill, "{st:?}");
+        assert_eq!(std::fs::read_to_string(&theirs).unwrap(), "---\nname: moonlet-design\n---\nmy own\n");
+        refresh_skills(&p).unwrap();
+        uninstall(&p).unwrap();
+        assert_eq!(std::fs::read_to_string(&theirs).unwrap(), "---\nname: moonlet-design\n---\nmy own\n");
     }
 
     /// X64: a moonlet that ships a new skill adds it on start wherever its
