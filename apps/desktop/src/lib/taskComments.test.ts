@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Task } from "./tasks";
-import { commentsView, ensureComments, loadComments, useComments } from "./taskComments";
+import { canPost, commentsView, ensureComments, loadComments, postComment, useComments } from "./taskComments";
+import { activityOf } from "./tasksStore";
 
 /** The commands' answers per call, and what was asked. */
-const tracker = vi.hoisted(() => ({ comments: [] as (() => Promise<unknown>)[], asked: [] as string[] }));
+const tracker = vi.hoisted(() => ({ comments: [] as (() => Promise<unknown>)[], asked: [] as string[], posted: [] as string[], refusals: [] as unknown[] }));
 const answers = vi.hoisted(() => ({} as Record<string, (p: object) => unknown>));
 vi.mock("./daemon", () => ({
   rpc: vi.fn((_host: string, method: string, params: object) => {
@@ -11,6 +12,11 @@ vi.mock("./daemon", () => ({
     return answer ? Promise.resolve().then(() => answer(params)) : Promise.reject(new Error(`no ${method}`));
   }),
   hostsApi: {
+    trackerComment: (id: string, task: string, text: string) => {
+      tracker.posted.push(`${id} ${task} ${text}`);
+      const refusal = tracker.refusals.shift();
+      return refusal ? Promise.reject(refusal) : Promise.resolve();
+    },
     trackerComments: (id: string, task: string) => {
       tracker.asked.push(`${id} ${task}`);
       const next = tracker.comments.shift();
@@ -53,6 +59,8 @@ beforeEach(() => {
   useComments.setState({ byTask: {} });
   tracker.comments.length = 0;
   tracker.asked.length = 0;
+  tracker.posted.length = 0;
+  tracker.refusals.length = 0;
   for (const k of Object.keys(answers)) delete answers[k];
 });
 
@@ -165,5 +173,36 @@ describe("a task's comments (X66)", () => {
     await ensureComments(issue, { host: "local", path: "/Users/sam/web" });
     const e = useComments.getState().byTask["github:github.com acme/web#12"];
     expect([e.error, e.comments?.length]).toEqual([null, 1]);
+  });
+
+  it("posts the user's comment to the tracker, lists it, and records it in Activity", async () => {
+    const posted = { comments: [{ id: "c9", author: "Sam Rivera", body: "Picked this up", markdown: true, createdMs: NOW }], more: false };
+    tracker.comments.push(() => Promise.resolve(posted));
+    expect(await postComment(linear, { host: "local", path: null }, "Picked this up", NOW)).toBe(true);
+    expect(tracker.posted).toEqual(["linear:acme 9cfb482a-81e3-4154-b5b9-2c805e70a02d Picked this up"]);
+    expect(useComments.getState().byTask["linear:acme ENG-124"]).toMatchObject({ posting: false, postError: null });
+    expect(commentsView(useComments.getState().byTask["linear:acme ENG-124"], linear, NOW).rows.map((r) => r.body)).toEqual(["Picked this up"]);
+    expect(activityOf(linear)[0]).toMatchObject({ at: NOW, text: "You commented" });
+  });
+
+  it("posts a GitHub issue's comment through gh in its repository's project", async () => {
+    const asked: object[] = [];
+    answers["gh.issue_comment"] = (p) => (asked.push(p), true);
+    answers["gh.issue_comments"] = () => ({ comments: [], more: false });
+    expect(await postComment(issue, { host: "local", path: "/Users/sam/web" }, "Done in #13.", NOW)).toBe(true);
+    expect(asked).toEqual([{ path: "/Users/sam/web", number: 12, body: "Done in #13." }]);
+  });
+
+  it("keeps a refused comment's error, posts nothing again by itself, and allows no blank comment", async () => {
+    // As the app's command fails: an object, not an Error.
+    tracker.refusals.push({ auth: false, message: "Linear did not save the change" });
+    expect(await postComment(linear, { host: "local", path: null }, "Picked this up", NOW)).toBe(false);
+    expect(useComments.getState().byTask["linear:acme ENG-124"]).toMatchObject({ posting: false, postError: "Linear did not save the change" });
+    expect(tracker.posted).toHaveLength(1);
+    expect(tracker.asked).toHaveLength(0);
+    expect(canPost("  \n ")).toBe(false);
+    expect(canPost("Hi")).toBe(true);
+    expect(await postComment(linear, { host: "local", path: null }, " ", NOW)).toBe(false);
+    expect(tracker.posted).toHaveLength(1);
   });
 });
