@@ -117,10 +117,10 @@ fn all_files(root: &Path) -> BTreeMap<String, Vec<u8>> {
                 continue;
             }
             let r = rel(root, &p);
-            if r != FILE {
-                if let Ok(b) = std::fs::read(&p) {
-                    out.insert(r, b);
-                }
+            if r != FILE
+                && let Ok(b) = std::fs::read(&p)
+            {
+                out.insert(r, b);
             }
         }
     }
