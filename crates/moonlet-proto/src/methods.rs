@@ -189,8 +189,12 @@ pub const FS_UNWATCH: &str = "fs.unwatch";
 // Design systems (X64)
 /// `{workspace}` → the workspace's design systems.
 pub const DESIGN_SYSTEMS: &str = "design.systems";
-/// [`DesignSystemCreate`] → the new system's slug.
+/// [`DesignSystemCreate`] → `{slug, agent, agent_error}`: the new system,
+/// and the chat of the sync agent it starts (or why it could not start).
 pub const DESIGN_SYSTEM_CREATE: &str = "design.system.create";
+/// [`DesignSystemRef`] → `{agent}`: asks the system's sync agent to sync it
+/// again, starting one when it has none.
+pub const DESIGN_SYSTEM_SYNC: &str = "design.system.sync";
 /// [`DesignSystemRef`]: deletes a design system.
 pub const DESIGN_SYSTEM_REMOVE: &str = "design.system.remove";
 /// [`DesignProgress`]: what the sync agent reports as it goes.
@@ -1156,6 +1160,13 @@ pub struct DesignSystemCreate {
     pub workspace: String,
     pub name: String,
     pub sources: Vec<DesignSourcePick>,
+    /// Start the sync agent (the default).
+    #[serde(default = "start_agent")]
+    pub agent: bool,
+}
+
+fn start_agent() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
