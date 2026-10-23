@@ -1184,3 +1184,99 @@ async fn overflow_starts_no_second_machine_while_one_is_starting() {
     c.run(&s, &["sh", "run.sh"]).await;
     assert_eq!(c.machines().await["machines"].as_array().unwrap().len(), 1);
 }
+
+impl Cloud {
+    async fn jobs(&self, session: &Value) -> Vec<Value> {
+        self.d
+            .call("job.list", json!({ "session": session["id"] }))
+            .await
+    }
+}
+
+#[tokio::test]
+async fn a_cloud_session_waits_for_its_machine_and_runs_there() {
+    let c = routing(&[]).await;
+    let s = c.session("big-refactor", true).await;
+    let ran = c.run(&s, &["sh", "run.sh"]).await;
+    let m = c.machines().await["machines"][0].clone();
+    let name = m["name"].as_str().unwrap();
+    assert!(
+        ran.stderr
+            .starts_with(&format!("moonlet: waiting for {name} to start (0:00)\n")),
+        "{ran:?}"
+    );
+    assert_eq!(ran_on(&ran), name, "{ran:?}");
+    assert_eq!((ran.stdout.as_str(), ran.status), ("out\n", 0));
+    assert_eq!(m["for_session"], s["id"]);
+}
+
+#[tokio::test]
+async fn a_cloud_session_runs_on_the_central_host_when_no_machine_can_start() {
+    let c = routing(&[("MOONLET_TEST_CLOUD_DEADLINE_MS", "1500")]).await;
+    c.steer("no-join", "");
+    let s = c.session("big-refactor", true).await;
+    let ran = c.run(&s, &["sh", "run.sh"]).await;
+    let line = ran
+        .stderr
+        .lines()
+        .find(|l| l.starts_with("moonlet: no cloud machine ("))
+        .unwrap_or_default()
+        .to_string();
+    assert!(line.ends_with(". Running on studio-mini."), "{ran:?}");
+    assert!(line.contains("did not come up in "), "{line}");
+    assert_eq!(ran_on(&ran), "studio-mini");
+    assert_eq!(ran.status, 0);
+    // At a limit, at once.
+    let month = String::from_utf8(
+        Command::new("date")
+            .args(["-u", "+%Y-%m"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    std::fs::write(
+        c.d.home.path().join("cloud/usage.json"),
+        json!({ month.trim(): 40 * 3600 }).to_string(),
+    )
+    .unwrap();
+    let mut c = c;
+    c.d.restart().await;
+    let ran = c.run(&s, &["sh", "run.sh"]).await;
+    assert!(
+        ran.stderr.starts_with(
+            "moonlet: no cloud machine (Cloud limit reached: 40 of 40 machine-hours this month). Running on studio-mini.\n"
+        ),
+        "{ran:?}"
+    );
+    assert_eq!(ran.status, 0);
+}
+
+#[tokio::test]
+async fn run_here_runs_a_job_waiting_for_a_cloud_machine_on_the_central_host() {
+    let c = routing(&[]).await;
+    c.steer("slow-create", "60000");
+    let s = c.session("big-refactor", true).await;
+    let (client, run) = c.start(&s, &["sh", "run.sh"]).await;
+    let mut job = Value::Null;
+    for _ in 0..100 {
+        job = c.jobs(&s).await[0].clone();
+        if job["state"]["kind"] == "waiting" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(job["state"]["kind"], json!("waiting"), "{job}");
+    let here: Value = c.d.call("job.run_here", json!({ "job": job["id"] })).await;
+    assert_eq!(here, json!(true));
+    let ran = collect(client, run).await;
+    assert!(
+        ran.stderr
+            .contains("moonlet: running on studio-mini instead, as asked from the Jobs panel\n"),
+        "{ran:?}"
+    );
+    assert_eq!((ran.stdout.as_str(), ran.status), ("out\n", 0));
+    // The machine keeps starting, for the next command.
+    let m = &c.machines().await["machines"][0];
+    assert_eq!(m["state"], json!("creating"));
+}
