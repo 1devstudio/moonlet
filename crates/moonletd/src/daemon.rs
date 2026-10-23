@@ -497,7 +497,7 @@ impl Daemon {
                 None => Err(RpcError::new("invalid_params", "not a paired device")),
             },
             method if method.starts_with("mobile.") => self.handle_mobile(conn, method, p),
-            method if method.starts_with("design.") => self.handle_design(method, p).await,
+            method if method.starts_with("design.") => self.handle_design(conn, method, p).await,
             m::REPO_GH_STATUS => ok(moonlet_core::repo_clone::gh_status().await),
             m::REPO_LOOKUP => {
                 let r: m::RepoRef = params(p)?;
@@ -668,7 +668,11 @@ impl Daemon {
     }
 
     /// Design systems (X64).
-    async fn handle_design(&self, method: &str, p: Value) -> HandlerResult {
+    async fn handle_design(&self, conn: &Conn, method: &str, p: Value) -> HandlerResult {
+        // The app and the agents' CLI on this Mac, never a paired device.
+        if conn.phone.is_some() {
+            return Err(RpcError::new("forbidden", "manage design systems from the Mac"));
+        }
         use moonlet_core::design::store::{self, Settle, Source};
         let store = self.design.clone();
         // Design folders belong to a moonlet workspace (ADR 0013).
@@ -712,11 +716,11 @@ impl Daemon {
             m::DESIGN_SYSTEM_SYNCED => {
                 let r: m::DesignSystemRef = params(p)?;
                 let config = self.design.config(&r.workspace, &r.slug).map_err(internal)?;
+                // Every source gets an entry: one whose HEAD cannot be read
+                // gets none, so no stale commit stays recorded.
                 let mut commits = Vec::new();
                 for s in &config.sources {
-                    if let Ok(head) = git::head(Path::new(&s.path)).await {
-                        commits.push((s.project.clone(), head));
-                    }
+                    commits.push((s.project.clone(), git::head(Path::new(&s.path)).await.ok()));
                 }
                 blocking(move || store.synced(&r.workspace, &r.slug, &commits, now_ms())).await?;
                 ok(true)

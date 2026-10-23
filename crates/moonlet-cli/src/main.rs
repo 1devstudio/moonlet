@@ -692,9 +692,6 @@ async fn chat_state(c: &mut Client, id: TerminalId) -> Result<ChatState> {
     c.request(methods::CHAT_STATE, TerminalRef { id }).await
 }
 
-/// The terminal this command runs in. Terminals jaunt opened carry
-/// `JAUNT_TERMINAL_ID` (X27), and those from before ADR 0005
-/// `JAUNT_SESSION_ID`.
 /// The workspace (and design system) a `moonlet design` command means: the
 /// flags, else the folder it runs in, else the session of the agent running it.
 async fn design_target(c: &mut Client, workspace: Option<String>, system: Option<String>) -> Result<(String, Option<String>)> {
@@ -774,6 +771,9 @@ async fn design_cmd(socket: &std::path::Path, action: DesignAction) -> Result<()
     Ok(())
 }
 
+/// The terminal this command runs in. Terminals jaunt opened carry
+/// `JAUNT_TERMINAL_ID` (X27), and those from before ADR 0005
+/// `JAUNT_SESSION_ID`.
 fn terminal_from_env() -> Option<TerminalId> {
     ["MOONLET_TERMINAL_ID", "JAUNT_TERMINAL_ID", "JAUNT_SESSION_ID"]
         .iter()

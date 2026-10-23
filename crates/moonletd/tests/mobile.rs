@@ -748,3 +748,20 @@ async fn a_phone_reaches_an_ssh_host_through_the_mac() {
         .unwrap();
     let _: Value = remote.request("daemon.shutdown", json!({})).await.unwrap();
 }
+
+/// Design systems are the Mac's (X64): a paired phone may not list, change or
+/// remove them.
+#[tokio::test]
+async fn phones_cannot_reach_design_systems() {
+    let mac = Mac::start(None).await;
+    let addr = mac.allow_phones().await;
+    let token = mac.pair(&addr).await;
+    let (mut phone, _) = auth(&addr, json!({ "token": token })).await;
+    hello(&mut phone, "moonlet-mobile").await;
+    for (id, method) in [(1, "design.systems"), (2, "design.system.remove"), (3, "design.settle")] {
+        let Message::Response { error: Some(e), .. } = call(&mut phone, id, method).await else {
+            panic!("{method} worked from a phone")
+        };
+        assert_eq!((e.code.as_str(), e.message.as_str()), ("forbidden", "manage design systems from the Mac"), "{method}");
+    }
+}
