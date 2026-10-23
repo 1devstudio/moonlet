@@ -310,3 +310,209 @@ async fn a_session_asks_for_the_cloud_when_it_is_made() {
     assert_eq!(cloud_of(&cloudy["id"]), json!(true));
     assert_eq!(cloud_of(&plain["id"]), Value::Null);
 }
+
+/// A central host `studio-mini` listening on the loopback, with the fake
+/// provider making its machines in `fake`.
+struct Cloud {
+    d: Daemon,
+    addr: String,
+    fake: tempfile::TempDir,
+    project: String,
+    key: String,
+}
+
+const SHOP_CONFIG: &str = "[heavy]\ncommands = [\"sh run.sh\"]\nmachine_setup = \"ci.sh\"\n";
+
+impl Drop for Cloud {
+    /// The fake machines' daemons go with the test.
+    fn drop(&mut self) {
+        for e in std::fs::read_dir(self.fake.path())
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            if let Some(pid) = std::fs::read_to_string(e.path().join("pid"))
+                .ok()
+                .and_then(|p| p.trim().parse::<i32>().ok())
+            {
+                let _ = nix::sys::signal::kill(
+                    nix::unistd::Pid::from_raw(pid),
+                    nix::sys::signal::Signal::SIGKILL,
+                );
+            }
+        }
+    }
+}
+
+async fn cloud_with(config: &str, env: &[(&str, &str)]) -> Cloud {
+    let home = tempfile::tempdir().unwrap();
+    let fake = tempfile::tempdir().unwrap();
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    std::fs::write(
+        home.path().join("mobile.json"),
+        format!(r#"{{ "enabled": true, "port": {port} }}"#),
+    )
+    .unwrap();
+    std::fs::write(
+        home.path().join("link.json"),
+        r#"{ "central": null, "worker": { "id": "c0ffee00-0000-4000-8000-000000000001", "name": "studio-mini", "enabled": false } }"#,
+    )
+    .unwrap();
+    let fake_dir = fake.path().to_str().unwrap().to_string();
+    let mut all = vec![
+        ("MOONLET_MOBILE_ADDRS", "127.0.0.1"),
+        ("MOONLET_CLOUD_FAKE", fake_dir.as_str()),
+        ("MOONLET_TEST_LOAD", "0.5"),
+        ("SHELL", "/bin/sh"),
+    ];
+    all.extend_from_slice(env);
+    let d = Daemon::start(home, &all).await;
+    let addr = format!("127.0.0.1:{port}");
+    for _ in 0..100 {
+        let st: Value = d.call("mobile.status", json!({})).await;
+        if st["listening"]
+            .as_array()
+            .is_some_and(|l| l.contains(&json!(addr)))
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let repo = d.home.path().join("src/shop");
+    std::fs::create_dir_all(repo.join(".moonlet")).unwrap();
+    git(&repo, &["init", "-q", "-b", "main"]);
+    std::fs::write(repo.join(".moonlet/config.toml"), config).unwrap();
+    std::fs::write(repo.join("ci.sh"), "echo deps installed\n").unwrap();
+    std::fs::write(repo.join("run.sh"), "echo out\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-q", "-m", "shop"]);
+    let project: Value = d.call("project.add", json!({ "path": repo })).await;
+    let root = project["identity"]["root"].as_str().unwrap();
+    let key = format!(" {root}");
+    let _: Value = d
+        .call(
+            "cloud.set",
+            json!({
+                "providers": { "fake": {} },
+                "projects": { key.clone(): { "overflow": false, "provider": "fake", "type": "small", "location": "here", "image": "none" } }
+            }),
+        )
+        .await;
+    Cloud {
+        d,
+        addr,
+        fake,
+        project: project["id"].as_str().unwrap().to_string(),
+        key,
+    }
+}
+
+async fn cloud() -> Cloud {
+    cloud_with(SHOP_CONFIG, &[]).await
+}
+
+impl Cloud {
+    async fn machines(&self) -> Value {
+        self.d.call("cloud.machines", json!({})).await
+    }
+
+    /// Waits until machine `id` is in `state`; gives it.
+    async fn until(&self, id: &str, state: &str) -> Value {
+        for _ in 0..600 {
+            let all = self.machines().await;
+            let found = all["machines"]
+                .as_array()
+                .into_iter()
+                .chain(all["removed"].as_array())
+                .flatten()
+                .find(|m| m["id"] == id)
+                .cloned();
+            if let Some(m) = found
+                && m["state"] == state
+            {
+                return m;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        panic!("machine {id} never {state}: {}", self.machines().await);
+    }
+
+    async fn up(&self) -> Value {
+        self.d
+            .call("cloud.up", json!({ "project": self.project }))
+            .await
+    }
+}
+
+#[tokio::test]
+async fn the_fake_provider_is_off_without_its_setting() {
+    let d = Daemon::start(tempfile::tempdir().unwrap(), &[]).await;
+    let got: Value = d.call("cloud.get", json!({})).await;
+    let ids: Vec<&str> = got["kinds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|k| k["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["hetzner"]);
+    let c = cloud().await;
+    let got: Value = c.d.call("cloud.get", json!({})).await;
+    let ids: Vec<&str> = got["kinds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|k| k["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["hetzner", "fake"]);
+}
+
+#[tokio::test]
+async fn startup_steps_arrive_in_order_with_durations() {
+    let c = cloud().await;
+    let m = c.up().await;
+    assert_eq!(m["state"], json!("creating"));
+    assert!(
+        m["name"].as_str().unwrap().starts_with("moonlet-shop-"),
+        "{m}"
+    );
+    let ready = c.until(m["id"].as_str().unwrap(), "ready").await;
+    let steps: Vec<(String, String)> = ready["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| {
+            (
+                s["label"].as_str().unwrap().to_string(),
+                s["state"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    let version = env!("CARGO_PKG_VERSION");
+    assert_eq!(
+        steps,
+        [
+            ("Created at Fake cloud".to_string(), "done".to_string()),
+            ("Joined your tailnet".into(), "done".into()),
+            (format!("Installed moonlet {version}"), "done".into()),
+            ("Paired with studio-mini".into(), "done".into()),
+            ("Machine setup ci.sh".into(), "done".into()),
+        ]
+    );
+    assert!(
+        ready["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|s| s["took_ms"].is_u64()),
+        "{ready}"
+    );
+    // It is a worker of the central host, taking heavy commands.
+    let workers: Vec<Value> = c.d.call("worker.list", json!({})).await;
+    assert_eq!(workers.len(), 1, "{workers:?}");
+    assert_eq!(workers[0]["name"], ready["name"]);
+    assert_eq!(workers[0]["heavy"], json!(true));
+}
