@@ -1,0 +1,227 @@
+//! X62 from the agent's side: `moonlet hook claude` rewrites an approved
+//! heavy command to `moonlet exec`, and stays silent otherwise.
+//! Needs `moonletd` built next to this test binary (`cargo test --workspace`).
+
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
+
+use moonlet_core::client::{Client, wait_for_socket};
+use serde_json::{Value, json};
+
+fn target_bin(name: &str) -> PathBuf {
+    let exe = std::env::current_exe().unwrap();
+    let dir = exe.parent().unwrap().parent().unwrap();
+    let p = dir.join(name);
+    assert!(
+        p.exists(),
+        "{} missing: run `cargo test --workspace`",
+        p.display()
+    );
+    p
+}
+
+struct KillOnDrop(std::process::Child);
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+fn git(dir: &Path, args: &[&str]) {
+    let out = Command::new("git")
+        .args([
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "commit.gpgsign=false",
+        ])
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "git {args:?}");
+}
+
+/// A daemon with project `shop`, whose heavy command is `pnpm test`, and
+/// its session `Fix cart`.
+struct Shop {
+    _daemon: KillOnDrop,
+    home: tempfile::TempDir,
+    socket: PathBuf,
+    project: String,
+    session: String,
+    worktree: String,
+}
+
+async fn shop() -> Shop {
+    let home = tempfile::tempdir().unwrap();
+    let socket = home.path().join("run/d.sock");
+    let daemon = KillOnDrop(
+        Command::new(target_bin("moonletd"))
+            .arg("daemon")
+            .env("MOONLET_HOME", home.path())
+            .env("MOONLET_SOCK", &socket)
+            .env("CLAUDE_CONFIG_DIR", home.path().join("claude"))
+            .env(
+                "MOONLET_CLAUDE_MANAGED_SETTINGS",
+                home.path().join("managed.json"),
+            )
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    wait_for_socket(&socket, Duration::from_secs(15))
+        .await
+        .unwrap();
+    let repo = home.path().join("src/shop");
+    std::fs::create_dir_all(repo.join(".moonlet")).unwrap();
+    git(&repo, &["init", "-q", "-b", "main"]);
+    std::fs::write(
+        repo.join(".moonlet/config.toml"),
+        "[heavy]\ncommands = [\"pnpm test\"]\n",
+    )
+    .unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-q", "-m", "shop"]);
+    let mut app = Client::connect(&socket, "moonlet-app").await.unwrap();
+    let project: Value = app
+        .request("project.add", json!({ "path": repo }))
+        .await
+        .unwrap();
+    let session: Value = app
+        .request(
+            "session.create",
+            json!({ "project_id": project["id"], "name": "Fix cart" }),
+        )
+        .await
+        .unwrap();
+    Shop {
+        _daemon: daemon,
+        home,
+        socket,
+        project: project["id"].as_str().unwrap().into(),
+        session: session["id"].as_str().unwrap().into(),
+        worktree: session["path"].as_str().unwrap().into(),
+    }
+}
+
+/// Claude Code's `PreToolUse` payload for `command`, as captured in
+/// `src/fixtures/pre_tool_use_bash.json`, run in `cwd`.
+fn payload(command: &str, cwd: &str) -> String {
+    json!({
+        "session_id": "8de3b575-7c1c-4fc1-a497-429c518725f6",
+        "cwd": cwd,
+        "permission_mode": "default",
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": { "command": command, "timeout": 600000, "description": "Run the tests" },
+        "tool_use_id": "toolu_012ftuDv3XBoqpcogRjeHhqb",
+    })
+    .to_string()
+}
+
+fn hook(socket: &Path, session: &str, stdin: &str) -> Output {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_moonlet"))
+        .args(["hook", "claude"])
+        .env("MOONLET_SOCK", socket)
+        .env("MOONLET_SESSION", session)
+        .env_remove("MOONLET_TERMINAL_ID")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(stdin.as_bytes())
+        .unwrap();
+    child.wait_with_output().unwrap()
+}
+
+#[tokio::test]
+async fn the_hook_prints_nothing_when_the_daemon_says_no() {
+    let s = shop().await;
+    // Not approved yet.
+    let out = hook(&s.socket, &s.session, &payload("pnpm test", &s.worktree));
+    assert!(out.status.success());
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "");
+
+    let mut app = Client::connect(&s.socket, "moonlet-app").await.unwrap();
+    let _: Value = app
+        .request(
+            "heavy.approve",
+            json!({ "project": s.project, "commands": ["pnpm test"], "env": [] }),
+        )
+        .await
+        .unwrap();
+    // Not a heavy command.
+    let out = hook(&s.socket, &s.session, &payload("pnpm lint", &s.worktree));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "");
+
+    // Approved: the call goes through `moonlet exec`.
+    let out = hook(&s.socket, &s.session, &payload("pnpm test", &s.worktree));
+    let answer: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        answer["hookSpecificOutput"]["updatedInput"],
+        json!({
+            "command": format!("'{}' exec -- pnpm test", env!("CARGO_BIN_EXE_moonlet")),
+            "timeout": 600000,
+            "description": "Run the tests",
+        })
+    );
+    assert_eq!(
+        answer["hookSpecificOutput"]["permissionDecision"],
+        json!("allow")
+    );
+    drop(s.home);
+}
+
+#[tokio::test]
+async fn the_hook_prints_nothing_when_the_daemon_is_gone() {
+    let dir = tempfile::tempdir().unwrap();
+    let started = Instant::now();
+    let out = hook(
+        &dir.path().join("no.sock"),
+        "s1",
+        &payload("pnpm test", dir.path().to_str().unwrap()),
+    );
+    assert!(out.status.success());
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "");
+    assert!(started.elapsed() < Duration::from_secs(3));
+}
+
+#[test]
+fn moonlet_exec_without_routing_runs_the_command_here() {
+    let out = Command::new(env!("CARGO_BIN_EXE_moonlet"))
+        .args(["exec", "--", "sh", "-c", "echo hi; echo oops >&2; exit 3"])
+        .env_remove("MOONLET_SESSION")
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "hi\n");
+    assert_eq!(String::from_utf8_lossy(&out.stderr), "oops\n");
+    assert_eq!(out.status.code(), Some(3));
+
+    let out = Command::new(env!("CARGO_BIN_EXE_moonlet"))
+        .args(["exec", "--", "no-such-command-x62"])
+        .env_remove("MOONLET_SESSION")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(127));
+    assert!(
+        String::from_utf8_lossy(&out.stderr)
+            .starts_with("moonlet: cannot run no-such-command-x62: "),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
