@@ -374,6 +374,7 @@ impl Machines {
                     let until = idle_until(&r, f.idle_minutes);
                     let mut shown = r.shown;
                     shown.idle_until = until;
+                    shown.worker = r.worker;
                     shown
                 })
                 .collect(),
@@ -500,6 +501,7 @@ impl Machines {
                 error_since: None,
                 error_at: None,
                 reason: None,
+                worker: None,
             },
             image: setting.image.clone(),
             provider_id: None,
