@@ -17,7 +17,10 @@ import { terminalSearch } from "./lib/actions";
 import { uiScale } from "./lib/uiScale";
 import { SettingsPage } from "./components/settings/SettingsPage";
 import { TasksMode } from "./components/tasks/TasksMode";
-import { isTasksMode, loadTrackersConfig } from "./lib/tasksStore";
+import { loadTrackersConfig } from "./lib/tasksStore";
+import { modeOf } from "./lib/mode";
+import { startDesign } from "./lib/designStore";
+import { DesignMain } from "./components/design/DesignMode";
 
 function FindBar({ onClose }: { onClose: () => void }) {
   const [q, setQ] = useState("");
@@ -127,11 +130,13 @@ export default function App() {
   const host = s.selected?.host;
   const [finding, setFinding] = useState(false);
   const scale = uiScale(s.settings.term.fontSize);
-  const tasks = isTasksMode(s);
+  const mode = modeOf(s);
+  const sessions = mode === "sessions";
 
   useEffect(() => {
     void startStore();
     void startSync();
+    void startDesign();
     void loadTrackersConfig();
     const off = installShortcuts();
     const onFind = () => setFinding(true);
@@ -161,10 +166,10 @@ export default function App() {
         </>
       )}
       <main className="relative min-w-0 flex-1" inert={!!s.settingsPage}>
-        {tasks ? <TasksMode /> : ws && host && !ws.archived ? <SessionView key={host + ws.id} host={host} ws={ws} /> : <Home />}
-        {finding && ws && !tasks && <FindBar onClose={() => setFinding(false)} />}
+        {mode === "tasks" ? <TasksMode /> : mode === "design" ? <DesignMain /> : ws && host && !ws.archived ? <SessionView key={host + ws.id} host={host} ws={ws} /> : <Home />}
+        {finding && ws && sessions && <FindBar onClose={() => setFinding(false)} />}
       </main>
-      {s.rightOpen && !tasks && ws && host && !ws.archived && (
+      {s.rightOpen && sessions && ws && host && !ws.archived && (
         <>
           <Splitter dir="row" onDrag={(d) => useStore.setState((st) => ({ rightWidth: clampRight(st.rightWidth - d) }))} />
           <div style={{ width: s.rightWidth }} className="shrink-0" inert={!!s.settingsPage}>

@@ -1,0 +1,114 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { DesignSystem } from "./protocol";
+import { createSystem, detectStack, loadSystems, startDesign, systemsOf, useDesign } from "./designStore";
+
+const calls = vi.hoisted(() => [] as { host: string; method: string; params: unknown }[]);
+/** What the daemon answers, by method. */
+const answers = vi.hoisted(() => ({}) as Record<string, (params: unknown) => unknown>);
+const events = vi.hoisted(() => ({ emit: (_e: { host: string; name: string; data: unknown }) => {} }));
+const hostStatus = vi.hoisted(() => ({ emit: (_h: { id: string; status: string }) => {} }));
+
+vi.mock("./daemon", () => ({
+  rpc: vi.fn((host: string, method: string, params: unknown) => {
+    calls.push({ host, method, params });
+    const answer = answers[method];
+    return answer ? Promise.resolve().then(() => answer(params)) : Promise.reject(new Error(`no ${method}`));
+  }),
+  onDaemonEvent: (cb: (e: { host: string; name: string; data: unknown }) => void) => ((events.emit = cb), Promise.resolve(() => {})),
+  onHostStatus: (cb: (h: { id: string; status: string }) => void) => ((hostStatus.emit = cb), Promise.resolve(() => {})),
+}));
+
+const system = (over: Partial<DesignSystem> = {}): DesignSystem => ({
+  slug: "moonlet-desktop",
+  name: "moonlet desktop",
+  sources: ["/Users/alex/Workspace/moonlet"],
+  synced_at: null,
+  synced_commit: null,
+  cards: 0,
+  layouts: 0,
+  changed_sources: [],
+  check_problems: 0,
+  to_settle: 0,
+  step: null,
+  step_summary: null,
+  error: null,
+  agent: 7,
+  last_sync: [],
+  needs_you: null,
+  ...over,
+});
+
+const settle = () => new Promise((r) => setTimeout(r, 0));
+const listed = () => calls.filter((c) => c.method === "design.systems");
+
+beforeEach(async () => {
+  calls.length = 0;
+  for (const k of Object.keys(answers)) delete answers[k];
+  useDesign.setState({ systems: {}, shown: {} });
+  await startDesign();
+});
+
+describe("a workspace's design systems (X64, X65)", () => {
+  it("are listed from the daemon", async () => {
+    answers["design.systems"] = () => [system()];
+    await loadSystems("local", "w-1devstudio");
+    expect(listed().map((c) => c.params)).toEqual([{ workspace: "w-1devstudio" }]);
+    expect(systemsOf(useDesign.getState(), "local", "w-1devstudio")?.map((s) => s.name)).toEqual(["moonlet desktop"]);
+    expect(systemsOf(useDesign.getState(), "local", "w-acme")).toBeUndefined();
+  });
+
+  it("are listed again when a file in that workspace's design folder changes", async () => {
+    answers["design.systems"] = () => [system()];
+    await loadSystems("local", "w-1devstudio");
+    answers["design.systems"] = () => [system({ step: "tokens" })];
+    events.emit({ host: "local", name: "design.changed", data: { workspace: "w-1devstudio", system: "moonlet-desktop", paths: [".cache/progress.toml"] } });
+    await settle();
+    expect(systemsOf(useDesign.getState(), "local", "w-1devstudio")?.[0].step).toBe("tokens");
+    // Another workspace's change, or one never shown, is not asked for.
+    events.emit({ host: "local", name: "design.changed", data: { workspace: "w-acme", system: null, paths: ["x"] } });
+    await settle();
+    expect(listed()).toHaveLength(2);
+  });
+
+  it("are listed again when a sync agent asks something, so its row says needs you", async () => {
+    answers["design.systems"] = () => [system()];
+    await loadSystems("local", "w-1devstudio");
+    const ask = { id: "a1", tool: "AskUserQuestion", summary: "Which button set is current?", input: null, reason: null, can_always: false };
+    answers["design.systems"] = () => [system({ needs_you: { kind: "question", text: "Which button set is current?" } })];
+    events.emit({ host: "local", name: "chat.state", data: { id: 7, state: { pending: [ask], status: "waiting" } } });
+    await settle();
+    expect(systemsOf(useDesign.getState(), "local", "w-1devstudio")?.[0].needs_you).toEqual({ kind: "question", text: "Which button set is current?" });
+    // The same ask again, or another chat's, changes nothing.
+    events.emit({ host: "local", name: "chat.state", data: { id: 7, state: { pending: [ask], status: "waiting" } } });
+    events.emit({ host: "local", name: "chat.state", data: { id: 9, state: { pending: [ask], status: "waiting" } } });
+    await settle();
+    expect(listed()).toHaveLength(2);
+  });
+
+  it("are listed again when the host comes back", async () => {
+    answers["design.systems"] = () => [system()];
+    await loadSystems("local", "w-1devstudio");
+    hostStatus.emit({ id: "local", status: "connected" });
+    await settle();
+    expect(listed()).toHaveLength(2);
+  });
+});
+
+describe("the New design system dialog (X64)", () => {
+  it("builds a system from the picked projects with what to cover, and lists it", async () => {
+    answers["design.system.create"] = () => ({ slug: "moonlet-desktop", agent: 7, agent_error: null });
+    answers["design.systems"] = () => [system()];
+    const created = await createSystem("local", "w-1devstudio", { name: "moonlet desktop", projects: ["p-moonlet"], cover: "all" });
+    expect(created).toEqual({ slug: "moonlet-desktop", agent: 7, agent_error: null });
+    expect(calls.find((c) => c.method === "design.system.create")?.params).toEqual({ workspace: "w-1devstudio", name: "moonlet desktop", sources: [{ project: "p-moonlet" }], cover: "all" });
+    expect(systemsOf(useDesign.getState(), "local", "w-1devstudio")?.map((s) => s.slug)).toEqual(["moonlet-desktop"]);
+  });
+
+  it("names each project's stack, or nothing when it cannot tell", async () => {
+    answers["design.detect"] = (p) => ((p as { path: string }).path === "/r/web" ? ["React", "Tailwind"] : []);
+    expect(await detectStack("local", "w-1devstudio", "/r/web")).toBe("React · Tailwind");
+    expect(await detectStack("local", "w-1devstudio", "/r/notes")).toBe("");
+    delete answers["design.detect"];
+    expect(await detectStack("local", "w-1devstudio", "/r/api")).toBe("");
+  });
+});

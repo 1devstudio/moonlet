@@ -117,6 +117,12 @@ function loadJson<T>(key: string, fallback: T): T {
     // Defaults from older versions (wider review panel).
     if (v && typeof v === "object" && (v as { rightWidth?: number }).rightWidth === 520) (v as { rightWidth: number }).rightWidth = 380;
     if (v && typeof v === "object" && (v as { sidebarWidth?: number }).sidebarWidth === 264) (v as { sidebarWidth: number }).sidebarWidth = 280;
+    // Tasks mode from older versions, a flag per workspace (X45).
+    if (v && typeof v === "object" && "tasksMode" in v) {
+      const old = v as { tasksMode?: Record<string, boolean>; mode?: Record<string, string> };
+      if (!Object.keys(old.mode ?? {}).length) old.mode = Object.fromEntries(Object.entries(old.tasksMode ?? {}).flatMap(([k, on]) => (on ? [[k, "tasks"]] : [])));
+      delete old.tasksMode;
+    }
     // Tabs from older versions.
     if (v && typeof v === "object" && "rightTab" in v && !(RIGHT_TABS as readonly string[]).includes((v as { rightTab: string }).rightTab)) {
       (v as { rightTab: string }).rightTab = "files";
@@ -149,9 +155,11 @@ interface UiPersist {
   workspace: WorkspaceRef | null;
   /** The session last open in each workspace (`host/workspaceId`). */
   lastSession: Record<string, string>;
-  /** Workspaces (`host/workspaceId`) showing Tasks mode instead of Sessions (X45). */
-  tasksMode: Record<string, boolean>;
+  /** Each workspace's (`host/workspaceId`) sidebar mode; Sessions when absent (X45, X65). */
+  mode: Record<string, AppMode>;
 }
+
+export type AppMode = "sessions" | "tasks" | "design";
 
 const uiDefaults: UiPersist = {
   selected: null,
@@ -164,7 +172,7 @@ const uiDefaults: UiPersist = {
   changesView: "tree",
   workspace: null,
   lastSession: {},
-  tasksMode: {},
+  mode: {},
 };
 
 /** In-app card when an agent in the open workspace finishes or needs input. */
@@ -235,6 +243,8 @@ interface State extends UiPersist {
     | { kind: "add-project"; host?: string; section?: string; clone?: string }
     | { kind: "new-section" }
     | { kind: "new-workspace" }
+    /** New design system (X64), in a workspace. */
+    | { kind: "new-design-system"; host: string; workspace: string }
     | { kind: "create-pr" }
     /** Link a session to a task (X46). */
     | { kind: "link-task"; host: string; session: string }
@@ -349,10 +359,10 @@ useStore.subscribe((s, prev) => {
     s.changesView !== prev.changesView ||
     s.workspace !== prev.workspace ||
     s.lastSession !== prev.lastSession ||
-    s.tasksMode !== prev.tasksMode
+    s.mode !== prev.mode
   ) {
-    const { selected, sidebarWidth, rightWidth, rightOpen, sidebarOpen, rightTab, collapsed, changesView, workspace, lastSession, tasksMode } = s;
-    saveJson(UI_KEY, { selected, sidebarWidth, rightWidth, rightOpen, sidebarOpen, rightTab, collapsed, changesView, workspace, lastSession, tasksMode });
+    const { selected, sidebarWidth, rightWidth, rightOpen, sidebarOpen, rightTab, collapsed, changesView, workspace, lastSession, mode } = s;
+    saveJson(UI_KEY, { selected, sidebarWidth, rightWidth, rightOpen, sidebarOpen, rightTab, collapsed, changesView, workspace, lastSession, mode });
   }
   if (s.settings !== prev.settings) {
     saveJson(SETTINGS_KEY, s.settings);
