@@ -61,7 +61,7 @@ This is ADR 0009's routing slice. It adds two things the ADR did not decide: an 
   | `pnpm test src/*.ts` | no: a glob |
   | `pnpm test # all` | no: a comment |
 
-  A command is not routed when it has, outside single quotes, any of `;` `&` `|` `<` `>` `(` `)` `$` `` ` `` `*` `?` `[` `{` `~` `#`, or a newline, or when it starts with an assignment.
+  A command is not routed when it has, outside single quotes, any of `;` `&` `|` `<` `>` `(` `)` `$` `` ` `` `*` `?` `[` `{` `~` `#`, or a newline, or when it starts with an assignment. Nor is one whose first word is a Bash keyword (`time`, `!`, `if`…) or a builtin with no program of its own (`cd`, `export`, `source`…), approved or not: Bash runs those itself, and a worker runs a command without a shell.
 - [ ] Only Bash calls of Claude Code agents in sessions on the central host are routed: calls with `MOONLET_SESSION` set, whose working directory is inside the session's worktree. A call with `run_in_background` is not routed. Codex is not routed yet.
 - [ ] A command is routed only when its entry is approved for the project on this central host. Approval holds for the exact list of entries and the exact list of `env` names. An entry that is added or changed is not routed until it is approved, and the project page shows it as not approved. A name added to `env` stops routing for the project until the list is approved again, because approving is the user's consent to send those variables to every worker, cloud machines included. Removing an entry or a name needs no approval.
 - [ ] Only the Mac's app and paired desktops approve. `heavy.approve` from the `moonlet` CLI or a phone is refused with `forbidden`, so an agent cannot approve the commands it adds.
@@ -373,7 +373,7 @@ Where the tests live:
 | Criterion | Tests |
 |---|---|
 | `[heavy]` keys | `heavy_table_reads_commands_os_env_and_outputs` |
-| Which commands are routed (worked examples) | `routes_exactly_the_worked_examples` |
+| Which commands are routed (worked examples) | `routes_exactly_the_worked_examples`, `shell_keywords_and_builtins_are_never_routed` |
 | Only Claude Code Bash calls in a session's worktree, not background | `a_background_bash_call_is_not_routed`, `a_terminal_outside_a_session_is_not_routed`, `a_call_outside_the_sessions_worktree_is_not_routed` |
 | Approval of the exact entries and `env` names | `an_unapproved_entry_is_not_routed`, `a_changed_entry_needs_approving_again`, `a_new_env_name_stops_routing_until_approved`, `removing_an_entry_needs_no_approval`, `approving_records_the_commands_and_env_names_together`, `approving_a_list_that_changed_meanwhile_fails` |
 | Who approves | `only_the_app_or_a_paired_mac_approves_heavy_commands` |

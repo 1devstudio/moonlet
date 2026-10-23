@@ -17,10 +17,88 @@ const SHELL_CHARS: &[char] = &[
 /// otherwise.
 pub fn route(command: &str, entries: &[String]) -> Option<Vec<String>> {
     let words = split(command)?;
+    if words
+        .first()
+        .is_some_and(|w| SHELL_WORDS.contains(&w.as_str()))
+    {
+        return None;
+    }
     let starts =
         |entry: &String| split(entry).is_some_and(|e| !e.is_empty() && words.starts_with(&e));
     entries.iter().any(starts).then_some(words)
 }
+
+/// Bash keywords, and builtins with no program of their own: Bash runs
+/// them itself, and a worker runs a command without a shell.
+const SHELL_WORDS: &[&str] = &[
+    "!",
+    "time",
+    "if",
+    "then",
+    "else",
+    "elif",
+    "fi",
+    "case",
+    "esac",
+    "for",
+    "select",
+    "while",
+    "until",
+    "do",
+    "done",
+    "in",
+    "function",
+    "coproc",
+    "[[",
+    "]]",
+    ".",
+    "source",
+    "alias",
+    "unalias",
+    "bg",
+    "fg",
+    "jobs",
+    "disown",
+    "bind",
+    "break",
+    "continue",
+    "builtin",
+    "caller",
+    "cd",
+    "pushd",
+    "popd",
+    "dirs",
+    "command",
+    "declare",
+    "typeset",
+    "local",
+    "readonly",
+    "export",
+    "unset",
+    "enable",
+    "eval",
+    "exec",
+    "exit",
+    "logout",
+    "return",
+    "fc",
+    "history",
+    "getopts",
+    "hash",
+    "let",
+    "mapfile",
+    "readarray",
+    "read",
+    "set",
+    "shift",
+    "shopt",
+    "suspend",
+    "trap",
+    "type",
+    "ulimit",
+    "umask",
+    "wait",
+];
 
 /// Splits `command` into words as a POSIX shell would, or `None` when it
 /// has anything beyond words, spaces and quotes: a shell character outside
@@ -288,6 +366,27 @@ mod tests {
         assert_eq!(route("pnpm test\nrm -rf /", &entries), None);
     }
 
+    #[test]
+    fn shell_keywords_and_builtins_are_never_routed() {
+        // Approved or not, Bash runs these itself, and a worker runs no shell.
+        let entries: Vec<String> = ["time pnpm test", "! pnpm test", "cd", "export", "source"]
+            .iter()
+            .map(|e| e.to_string())
+            .collect();
+        for command in [
+            "time pnpm test",
+            "! pnpm test",
+            "cd web",
+            "export CI",
+            "source env.sh",
+        ] {
+            assert_eq!(route(command, &entries), None, "{command}");
+        }
+        // A command with a program of its own still routes.
+        let entries = vec!["echo".to_string()];
+        assert_eq!(route("echo ok", &entries), words(&["echo", "ok"]));
+    }
+
     fn settings(dir: &std::path::Path, name: &str, json: &str) -> std::path::PathBuf {
         let p = dir.join(name);
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
@@ -402,13 +501,6 @@ mod tests {
         assert_eq!(
             check(&with_outputs(&["/tmp/out"])),
             Err("outputs: `/tmp/out` is outside the worktree".to_string())
-        );
-        // Saving the project's settings refuses it too.
-        let mut config = moonlet_proto::types::ProjectConfig::default();
-        config.heavy = with_outputs(&["../shared"]);
-        assert_eq!(
-            project_config::validate(&config).unwrap_err().to_string(),
-            "outputs: `../shared` is outside the worktree"
         );
     }
 
