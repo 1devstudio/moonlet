@@ -129,6 +129,9 @@ impl Store {
             let Ok(config) = read_config(&dir) else {
                 continue;
             };
+            let progress: Option<Progress> = std::fs::read_to_string(dir.join(PROGRESS))
+                .ok()
+                .and_then(|t| toml::from_str(&t).ok());
             let cards = manifest::build(&dir)?.cards;
             let roots: Vec<PathBuf> = config
                 .sources
@@ -163,6 +166,8 @@ impl Store {
                 changed_sources: changed,
                 check_problems: check::check(&dir)?.len(),
                 to_settle: proposed + status.iter().filter(|s| s.orphaned).count(),
+                step: progress.as_ref().map(|p| p.step.clone()),
+                step_summary: progress.and_then(|p| p.summary),
             });
         }
         out.sort_by(|a, b| a.name.cmp(&b.name));
@@ -185,6 +190,30 @@ impl Store {
     pub fn remove_system(&self, workspace: &str, slug: &str) -> Result<()> {
         let dir = self.system_dir(workspace, slug)?;
         std::fs::remove_dir_all(&dir).with_context(|| format!("cannot remove {}", dir.display()))
+    }
+
+    /// What a running sync reports as it goes (`design.system.progress`).
+    pub fn progress(
+        &self,
+        workspace: &str,
+        slug: &str,
+        step: &str,
+        summary: Option<&str>,
+    ) -> Result<()> {
+        if !STEPS.contains(&step) {
+            bail!(
+                "unknown step \"{step}\"; the steps are {}",
+                STEPS.join(", ")
+            );
+        }
+        let dir = self.system_dir(workspace, slug)?;
+        std::fs::create_dir_all(dir.join(".cache"))?;
+        let p = Progress {
+            step: step.into(),
+            summary: summary.map(String::from),
+        };
+        std::fs::write(dir.join(PROGRESS), toml::to_string(&p)?)?;
+        Ok(())
     }
 
     /// Records a finished sync: each source's commit, the time, and the anchor
@@ -210,6 +239,7 @@ impl Store {
             .iter()
             .map(|s| PathBuf::from(&s.path))
             .collect();
+        let _ = std::fs::remove_file(dir.join(PROGRESS));
         anchor::write(&dir, &roots, &config.exceptions())
     }
 
@@ -293,6 +323,9 @@ pub struct SystemSummary {
     pub check_problems: usize,
     /// Proposed changes and orphaned cards waiting for the user.
     pub to_settle: usize,
+    /// The step a running sync reported last: `inventory`, `tokens`, `cards` or `layouts`.
+    pub step: Option<String>,
+    pub step_summary: Option<String>,
 }
 
 /// What the user picks for a card under Needs you (X64).
@@ -338,6 +371,37 @@ fn inside_dir(base: &Path, rel: &str) -> Option<PathBuf> {
 
 fn read_config(dir: &Path) -> Result<SystemConfig> {
     Ok(toml::from_str(&std::fs::read_to_string(dir.join(CONFIG))?)?)
+}
+
+/// The sync's steps, in order (X64).
+pub const STEPS: [&str; 4] = ["inventory", "tokens", "cards", "layouts"];
+const PROGRESS: &str = ".cache/progress.toml";
+
+#[derive(Serialize, Deserialize)]
+struct Progress {
+    step: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    summary: Option<String>,
+}
+
+/// The content type the app serves a design file with.
+pub fn content_type(path: &Path) -> &'static str {
+    match path.extension().and_then(|e| e.to_str()).unwrap_or("") {
+        "html" => "text/html; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "js" => "text/javascript; charset=utf-8",
+        "json" => "application/json",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "woff2" => "font/woff2",
+        "woff" => "font/woff",
+        "ttf" => "font/ttf",
+        "otf" => "font/otf",
+        _ => "application/octet-stream",
+    }
 }
 
 /// A design system's settings file.
@@ -487,6 +551,8 @@ identity = \"github.com/1devstudio/moonlet\"
                 changed_sources: vec!["src/ui.tsx".into()],
                 check_problems: 1,
                 to_settle: 1,
+                step: None,
+                step_summary: None,
             }]
         );
         assert_eq!(store.systems("w-none").unwrap(), vec![]);
@@ -614,6 +680,43 @@ identity = \"github.com/1devstudio/moonlet\"
             store
                 .settle("w1", &slug, "components/../../config.toml", Settle::Remove)
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn sync_progress_shows_in_the_list_until_the_sync_is_recorded() {
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::new(home.path());
+        let slug = store.create_system("w1", "storefront", vec![], 1).unwrap();
+        store
+            .progress("w1", &slug, "cards", Some("1 of 3"))
+            .unwrap();
+        let s = &store.systems("w1").unwrap()[0];
+        assert_eq!(
+            (s.step.as_deref(), s.step_summary.as_deref()),
+            (Some("cards"), Some("1 of 3"))
+        );
+        assert!(store.progress("w1", &slug, "painting", None).is_err());
+        store.synced("w1", &slug, &[], 2).unwrap();
+        assert_eq!(store.systems("w1").unwrap()[0].step, None);
+    }
+
+    #[test]
+    fn a_file_has_a_content_type_from_its_extension() {
+        assert_eq!(
+            content_type(Path::new("a/b/card.html")),
+            "text/html; charset=utf-8"
+        );
+        assert_eq!(
+            content_type(Path::new("styles.css")),
+            "text/css; charset=utf-8"
+        );
+        assert_eq!(content_type(Path::new("fonts/Inter.woff2")), "font/woff2");
+        assert_eq!(content_type(Path::new("assets/logo.svg")), "image/svg+xml");
+        assert_eq!(content_type(Path::new("assets/x.png")), "image/png");
+        assert_eq!(
+            content_type(Path::new("README")),
+            "application/octet-stream"
         );
     }
 }
