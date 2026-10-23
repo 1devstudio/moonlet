@@ -20,7 +20,8 @@ import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 import { ModeSwitch, TaskGlyph, TasksSidebar, useWorkspaceBoard } from "./tasks/TasksMode";
 import { sessionTaskLines, type SessionTaskLine } from "../lib/tasksView";
 import { numberColumn, rowStyle, taskGroups, type RowStyle, type TaskGroup } from "../lib/sessionRows";
-import { isTasksMode } from "../lib/tasksStore";
+import { modeOf } from "../lib/mode";
+import { DesignSidebar } from "./design/DesignMode";
 import { isShown } from "../lib/workspaces";
 import { ProfileFooter } from "./Profiles";
 import { movingSessions, runningClaudeAgents, switchConfirm } from "../lib/profiles";
@@ -48,7 +49,7 @@ async function moveSection(host: string, from: Workspace, sectionId: string, to:
 const activeAt = (host: string, s: Session) => lastActive(useStore.getState().terminals[host] ?? {}, s);
 
 /** Project mark: the GitHub owner's avatar (X15), else a dotted glyph like Conductor's. */
-function ProjectMark({ host, projectId }: { host: string; projectId: string }) {
+export function ProjectMark({ host, projectId }: { host: string; projectId: string }) {
   const src = useStore((s) => s.avatars[projKey(host, projectId)]);
   const [failed, setFailed] = useState<string | null>(null);
   if (src && failed !== src) {
@@ -855,7 +856,7 @@ export function Sidebar() {
   const sections = useStore((s) => s.sections);
   const shown = useStore((s) => shownWorkspace(s));
   const showHistory = useStore((s) => s.showHistory);
-  const tasksMode = useStore((s) => isTasksMode(s));
+  const mode = useStore((s) => modeOf(s));
   const [rowMenu, setRowMenu] = useState<RowMenuState | null>(null);
   const [creating, setCreating] = useState(false);
   const ordered = useMemo(() => Object.values(hosts).sort((a, b) => Number(a.remote) - Number(b.remote) || a.id.localeCompare(b.id)), [hosts]);
@@ -864,12 +865,14 @@ export function Sidebar() {
     <TaskLines.Provider value={taskLines}>
     <aside className="flex h-full flex-col bg-panel">
       {/* The traffic lights sit on the left of the title bar (X32), 16px before the switcher. */}
-      <div data-tauri-drag-region className="drag flex h-[52px] shrink-0 items-center pl-[86px] pr-2.5">
+      <div data-tauri-drag-region className="drag flex h-[52px] shrink-0 items-center gap-2 pl-[86px] pr-2.5">
         <WorkspaceSwitcher />
         <ModeSwitch />
       </div>
-      {tasksMode ? (
+      {mode === "tasks" ? (
         <TasksSidebar />
+      ) : mode === "design" ? (
+        <DesignSidebar />
       ) : (
       <>
       <nav className="px-2 pb-3">
@@ -930,6 +933,7 @@ export function Sidebar() {
         <MuteButton />
         <ProfileFooter />
         <UpdateButton />
+        {mode === "design" && <span className="ml-auto shrink-0 font-mono ui-text-11.5 text-faint">~/.moonlet/design</span>}
       </div>
       {rowMenu && <RowContextMenu m={rowMenu} onClose={() => setRowMenu(null)} />}
     </aside>

@@ -121,7 +121,7 @@ beforeEach(async () => {
     workspaces: { local: [ws("personal", ["a"]), ws("acme", ["b"])] },
     sections: { local: [sec("a", ["web", "notes"]), sec("b", [])] },
     workspace: { host: "local", id: "personal" },
-    tasksMode: {},
+    mode: {},
   });
 });
 
@@ -707,10 +707,10 @@ describe("boards (X50 Sync)", () => {
   });
 
   it("opens a board of another workspace there, in Tasks mode", () => {
-    useStore.setState({ workspace: { host: "local", id: "personal" }, tasksMode: { "local/personal": true } });
+    useStore.setState({ workspace: { host: "local", id: "personal" }, mode: { "local/personal": "tasks" } });
     openBoard("local", "acme", "acme-board");
     expect(useStore.getState().workspace).toEqual({ host: "local", id: "acme" });
-    expect(useStore.getState().tasksMode["local/acme"]).toBe(true);
+    expect(useStore.getState().mode["local/acme"]).toBe("tasks");
     expect(useTasks.getState().shownBoard["local/acme"]).toBe("acme-board");
     useTasks.setState({ shownBoard: {} });
   });
@@ -1306,7 +1306,7 @@ describe("the out-of-sync dot's poll and the remembered mode (X45)", () => {
   });
 
   it("remembers Tasks mode per workspace across restarts", async () => {
-    useStore.setState({ tasksMode: {} });
+    useStore.setState({ mode: {} });
     toggleTasksMode();
     vi.resetModules();
     const store = await import("./store");

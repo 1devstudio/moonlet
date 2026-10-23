@@ -1,0 +1,77 @@
+import { describe, expect, it } from "vitest";
+import type { DesignSystem } from "./protocol";
+import { designSlug, systemFolder, systemLabel } from "./design";
+
+const NOW = 1_761_200_000_000;
+const DAY = 86_400_000;
+
+const system = (over: Partial<DesignSystem>): DesignSystem => ({
+  slug: "moonlet-desktop",
+  name: "moonlet desktop",
+  sources: ["/Users/alex/Workspace/moonlet"],
+  synced_at: NOW - 3 * DAY,
+  synced_commit: "9c1e0a2",
+  cards: 45,
+  layouts: 4,
+  changed_sources: [],
+  check_problems: 0,
+  to_settle: 0,
+  step: null,
+  step_summary: null,
+  error: null,
+  agent: 7,
+  last_sync: [],
+  needs_you: null,
+  ...over,
+});
+
+describe("a design system's sidebar row (X65)", () => {
+  it("shows its age once synced", () => {
+    expect(systemLabel(system({}), NOW)).toEqual({ text: "3d", tone: "muted" });
+    expect(systemLabel(system({ synced_at: NOW - 16 * DAY }), NOW)).toEqual({ text: "2w", tone: "muted" });
+    expect(systemLabel(system({ synced_at: NOW - 5 * 3_600_000 }), NOW)).toEqual({ text: "5h", tone: "muted" });
+    expect(systemLabel(system({ synced_at: NOW - 12 * 60_000 }), NOW)).toEqual({ text: "12m", tone: "muted" });
+    expect(systemLabel(system({ synced_at: NOW - 20_000 }), NOW)).toEqual({ text: "now", tone: "muted" });
+  });
+
+  it("counts the source files changed since the sync", () => {
+    expect(systemLabel(system({ changed_sources: ["src/ui.tsx", "src/Sidebar.tsx", "src/Toolbar.tsx"] }), NOW)).toEqual({ text: "3 changed", tone: "changed" });
+  });
+
+  it("counts what waits to be settled, before what changed", () => {
+    expect(systemLabel(system({ to_settle: 2, changed_sources: ["src/ui.tsx"] }), NOW)).toEqual({ text: "2 to settle", tone: "changed" });
+  });
+
+  it("says syncing while a sync reports its steps, and before the first sync is done", () => {
+    expect(systemLabel(system({ step: "cards", to_settle: 2 }), NOW)).toEqual({ text: "syncing", tone: "muted" });
+    expect(systemLabel(system({ synced_at: null, cards: 0, layouts: 0 }), NOW)).toEqual({ text: "syncing", tone: "muted" });
+  });
+
+  it("says needs you over everything while its agent waits for an answer or an approval", () => {
+    expect(systemLabel(system({ step: "inventory", needs_you: { kind: "question", text: "Which button set is current?" } }), NOW)).toEqual({ text: "needs you", tone: "attention" });
+  });
+
+  it("says not built when it never synced and has no agent", () => {
+    expect(systemLabel(system({ synced_at: null, agent: null }), NOW)).toEqual({ text: "not built", tone: "muted" });
+  });
+
+  it("says unreadable when its folder could not be read", () => {
+    expect(systemLabel(system({ error: "cannot read config.toml" }), NOW)).toEqual({ text: "unreadable", tone: "error" });
+  });
+});
+
+describe("the New design system dialog's folder (X64)", () => {
+  // The same cases as moonlet-core's design/store.rs a_slug_is_lowercase_letters_and_digits_joined_by_dashes.
+  it("names the folder as the daemon will", () => {
+    expect(designSlug("moonlet desktop")).toBe("moonlet-desktop");
+    expect(designSlug("  Moonlet Desktop! ")).toBe("moonlet-desktop");
+    expect(designSlug("Café UI")).toBe("caf-ui");
+    expect(designSlug("App 2.0")).toBe("app-2-0");
+    expect(designSlug("---")).toBe("design-system");
+  });
+
+  it("shows where it will be, numbered as the daemon numbers a used name", () => {
+    expect(systemFolder("w-1devstudio", "moonlet desktop", [])).toBe("~/.moonlet/design/w-1devstudio/systems/moonlet-desktop");
+    expect(systemFolder("w-1devstudio", "moonlet desktop", ["moonlet-desktop", "moonlet-desktop-2"])).toBe("~/.moonlet/design/w-1devstudio/systems/moonlet-desktop-3");
+  });
+});

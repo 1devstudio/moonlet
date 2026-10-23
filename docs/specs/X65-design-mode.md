@@ -67,14 +67,14 @@ A design lives in one of three places:
 
 ### Mode switch and sidebar
 
-- [ ] The sidebar mode switch has three icon buttons: Sessions, Tasks and Design (a pen). ⌃⌘D opens Design and is a Run action (X19) that can be rebound. The mode is remembered per workspace (as X45).
+- [ ] The sidebar mode switch has three icon buttons: Sessions, Tasks and Design (a pen). ⌃⌘D opens Design and is a Run action (X19) that can be rebound. The mode is remembered per workspace (as X45). (`lib/mode.test.ts`; `lib/runActions.test.ts` resolves defaults, custom keys and removed keys; `lib/tasksView.test.ts` modeSwitch; `e2e/specs/design-mode.e2e.ts`)
 - [ ] In Design mode the sidebar shows, from the top:
   - **New design** ⇧⌘N
   - **Run action** ⌘K
   - **Design systems**, with a `+` to add one
   - **Designs**
   - a footer with settings and the folder path `~/.moonlet/design`
-- [ ] A design system row shows its age, or `<n> changed`, `syncing` or `<n> to settle` (X64).
+- [ ] A design system row shows its age, or `<n> changed`, `syncing` or `<n> to settle` (X64). (`lib/design.test.ts` a design system's sidebar row; `lib/designStore.test.ts` a workspace's design systems)
 - [ ] A design row shows:
   - its agent's state dot
   - its open comments count, or its age
