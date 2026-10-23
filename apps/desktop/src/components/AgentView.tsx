@@ -96,7 +96,8 @@ import { ContextMeter } from "./ContextMeter";
 import { Menu, type MenuItem } from "./Menu";
 import { ModeMenu, useModeMenu } from "./ModeMenu";
 import { PlusMenu } from "./PlusMenu";
-import { AgentIcon, Button, IconButton, Kbd, StateGlyph, cx, inputCls } from "./ui";
+import { AgentIcon, Button, Dialog, IconButton, Kbd, StateGlyph, cx, inputCls } from "./ui";
+import { PlanPanel } from "./PlanPanel";
 import { ClaudeAuthDialog } from "./Profiles";
 
 // ------------------------------------------------------------ messages
@@ -644,7 +645,7 @@ export function PlanCard({
         )}
       </div>
       {waiting && view.askId && (
-        <div className="flex items-center gap-1.5 border-t border-border pt-2.5">
+        <div className="flex flex-wrap items-center gap-1.5 border-t border-border pt-2.5">
           <Button size="sm" variant="primary" onClick={() => onChoose("approve")}>
             {planApproveLabel(approveMode)}
           </Button>
@@ -1349,16 +1350,18 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
   const call = (method: string, params: object) => rpc(host, method, { id, ...params }).catch(errorToast);
 
   // The latest plan (X24): its card follows its transcript row, and its text
-  // is in the Plan tab, which opens when a plan arrives on screen.
+  // is in the Plan tab, which opens when a plan arrives on screen. A chat with
+  // no session has no Plan tab: its plan opens in a dialog.
   const plan = useMemo(() => (st ? planView(st) : null), [st]);
   const approveMode = useStore((s) => resolvePlanMode(s.settings.planApproveMode));
-  const planShown = useStore((s) => s.rightOpen && s.rightTab === "plan");
+  const planShown = useStore((s) => !!wsId && s.rightOpen && s.rightTab === "plan");
+  const [planDialog, setPlanDialog] = useState(false);
   const opened = useRef<string | null>(null);
   useEffect(() => {
-    if (!plan?.askId || !visible || opened.current === plan.askId) return;
+    if (!wsId || !plan?.askId || !visible || opened.current === plan.askId) return;
     opened.current = plan.askId;
     useStore.setState({ rightOpen: true, rightTab: "plan" });
-  }, [plan?.askId, visible]);
+  }, [wsId, plan?.askId, visible]);
   // Keep planning: the composer's next message is the feedback on this ask.
   const [revise, setRevise] = useState<string | null>(null);
   const [focusSignal, setFocusSignal] = useState(0);
@@ -1379,7 +1382,7 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
       view={plan}
       approveMode={approveMode}
       showOpen={!planShown}
-      onOpen={() => useStore.setState({ rightOpen: true, rightTab: "plan" })}
+      onOpen={() => (wsId ? useStore.setState({ rightOpen: true, rightTab: "plan" }) : setPlanDialog(true))}
       onChoose={choosePlan}
     />
   );
@@ -1584,6 +1587,11 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
         if (l.focused !== id) setLayout(host, wsId, { ...l, focused: id });
       }}
     >
+      {planDialog && plan && (
+        <Dialog title="Plan" width={720} onClose={() => setPlanDialog(false)}>
+          <PlanPanel view={plan} />
+        </Dialog>
+      )}
       <div
         ref={scroller}
         className="min-h-0 flex-1 overflow-y-auto"
