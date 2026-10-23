@@ -364,7 +364,11 @@ let toastId = 0;
 export function toast(text: string, kind: Toast["kind"] = "info", action?: Toast["action"]) {
   const id = ++toastId;
   set((s) => ({ toasts: [...s.toasts, { id, kind, text, action }] }));
-  setTimeout(() => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })), action ? 10_000 : kind === "error" ? 7000 : 3500);
+  setTimeout(() => dismissToast(id), action ? 10_000 : kind === "error" ? 7000 : 3500);
+}
+
+export function dismissToast(id: number) {
+  set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }));
 }
 
 export function errorToast(e: unknown) {
