@@ -4,6 +4,8 @@
 
 use std::path::Path;
 
+use anyhow::{Result, bail};
+
 use super::anchor::CardStatus;
 use super::store::SystemConfig;
 
@@ -40,12 +42,29 @@ pub fn sync_launch(
     sources: &[String],
     bin: &Path,
     task: Task,
-) -> Launch {
+) -> Result<Launch> {
+    // Claude reads a rule's path as a glob: a folder named with `*?[]{}`
+    // would deny something else than itself, so it is refused.
+    if let Some(bad) = sources
+        .iter()
+        .find(|s| s.contains(['*', '?', '[', ']', '{', '}']))
+    {
+        bail!(
+            "{bad} has a character Claude's permission rules read as a pattern; move or rename the folder"
+        );
+    }
     let bin = bin.display();
     // `Edit(//abs/**)`: an absolute path, as Claude's rules write one. It
     // covers every tool that edits files; `--add-dir` alone would not.
     let deny: Vec<String> = sources.iter().map(|s| format!("Edit(/{s}/**)")).collect();
-    let settings = serde_json::json!({ "permissions": { "allow": [format!("Bash({bin} design:*)")], "deny": deny } });
+    // Only what a sync needs: reporting a step (any summary), and the check
+    // and the sync record of this folder's system, with no other arguments.
+    let allow = [
+        format!("Bash({bin} design system progress:*)"),
+        format!("Bash({bin} design check)"),
+        format!("Bash({bin} design system synced)"),
+    ];
+    let settings = serde_json::json!({ "permissions": { "allow": allow, "deny": deny } });
     let listed: String = sources
         .iter()
         .map(|s| format!("- {s} (read only)\n"))
@@ -67,14 +86,14 @@ pub fn sync_launch(
 - to check your work: {bin} design check\n\
 - when every step is done: {bin} design system synced\n"
     ));
-    Launch {
+    Ok(Launch {
         cwd: dir.display().to_string(),
         add_dirs: sources.to_vec(),
         settings: settings.to_string(),
         title: format!("Design · {}", config.name),
         mode: "acceptEdits".into(),
         prompt,
-    }
+    })
 }
 
 /// The cards a re-sync covers, one line each.
@@ -128,13 +147,14 @@ mod tests {
             &["/Users/alex/Workspace/moonlet".to_string()],
             Path::new("/Applications/moonlet.app/Contents/MacOS/moonlet"),
             Task::Build,
-        );
+        )
+        .unwrap();
         assert_eq!(
             launch,
             Launch {
                 cwd: "/Users/alex/.moonlet/design/w1/systems/moonlet-desktop".into(),
                 add_dirs: vec!["/Users/alex/Workspace/moonlet".into()],
-                settings: r#"{"permissions":{"allow":["Bash(/Applications/moonlet.app/Contents/MacOS/moonlet design:*)"],"deny":["Edit(//Users/alex/Workspace/moonlet/**)"]}}"#.into(),
+                settings: r#"{"permissions":{"allow":["Bash(/Applications/moonlet.app/Contents/MacOS/moonlet design system progress:*)","Bash(/Applications/moonlet.app/Contents/MacOS/moonlet design check)","Bash(/Applications/moonlet.app/Contents/MacOS/moonlet design system synced)"],"deny":["Edit(//Users/alex/Workspace/moonlet/**)"]}}"#.into(),
                 title: "Design · moonlet desktop".into(),
                 mode: "acceptEdits".into(),
                 prompt: "Build the design system \"moonlet desktop\" in this folder from the code of:
@@ -186,7 +206,8 @@ Follow the moonlet-design skill: Inventory, Tokens, Cards, Layouts. Run moonlet'
             &["/src".to_string()],
             Path::new("/bin/moonlet"),
             Task::Resync(&cards),
-        );
+        )
+        .unwrap();
         assert_eq!(
             launch.prompt,
             "Sync the design system \"moonlet desktop\" in this folder with the code of:
@@ -203,5 +224,22 @@ Follow the moonlet-design skill's sync: rewrite only these cards, and write a ca
 - when every step is done: /bin/moonlet design system synced
 "
         );
+    }
+
+    #[test]
+    fn a_source_path_with_glob_characters_is_refused() {
+        for bad in ["/code/app[1]", "/code/*", "/code/a?b", "/code/{a,b}"] {
+            assert!(
+                sync_launch(
+                    Path::new("/d"),
+                    &config(),
+                    &[bad.to_string()],
+                    Path::new("/bin/moonlet"),
+                    Task::Build
+                )
+                .is_err(),
+                "{bad} was accepted"
+            );
+        }
     }
 }
