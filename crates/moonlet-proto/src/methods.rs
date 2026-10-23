@@ -1075,6 +1075,9 @@ pub struct DesignSystemCreate {
     pub workspace: String,
     pub name: String,
     pub sources: Vec<DesignSourcePick>,
+    /// What to cover: `core` (the default), `all` or `none`.
+    #[serde(default)]
+    pub cover: Option<String>,
     /// Start the sync agent (the default).
     #[serde(default = "start_agent")]
     pub agent: bool,
