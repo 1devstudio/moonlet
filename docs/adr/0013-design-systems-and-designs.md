@@ -47,7 +47,7 @@ The source projects stay read only. The sync agent works in the design system's 
 **Rendering is the app's own WebKit.**
 - Pages and cards render in a sandboxed iframe (`allow-scripts`, never `allow-same-origin`) on a `moonlet-design://` scheme whose CSP blocks the network.
 - The render check measures the page in that frame.
-- Screenshots for grading and for the PR's design-and-build view come from the app's WKWebView `takeSnapshot`, in a window placed off screen.
+- Screenshots for grading and for the PR's design-and-build view come from the app's WKWebView `takeSnapshot`, in a hidden window that is never shown, reached through Tauri's `with_webview`.
 - Rendering therefore needs the moonlet app open. The CLI says so when it is not.
 
 **Claude Code only, for now.** The sync relies on Claude Code's skills, subagents, `--add-dir` and its reading of screenshots.
@@ -63,6 +63,11 @@ The source projects stay read only. The sync agent works in the design system's 
 ## Consequences
 
 - The render check and snapshots need the app running. Syncs start from the app, or from a session that runs in it, so this is acceptable.
-- Taking a snapshot of an off-screen WKWebView from Tauri (through `with_webview`) needs a spike before X64's render work.
+- The spike (2026-10-23, branch `spike/design-snapshot`, `apps/desktop/src-tauri/examples/design_snapshot_spike.rs`) confirmed this approach. Four 900×700 windows each loaded a page with a sandboxed iframe under the no-network CSP, served on a `moonlet-design://` scheme: on screen, placed off screen, hidden (`visible: false`, never shown), and on screen at zero opacity.
+  - Every window took a correct snapshot about 0.8 s after the page finished loading: the iframe was painted and its script had run, `fetch` was blocked, and `parent` was unreachable (origin `null`).
+  - Every window took a correct snapshot again after navigating to another page, and again after 15 s idle.
+  - So a hidden window is enough: no off-screen placement, and nothing shows on the screen.
+  - The snapshot is at 1× (900×700 px for a 900×700 window), which matches design-sync's captures. A `WKSnapshotConfiguration` can ask for a larger width if grading needs it.
+  - The app's own CSP will need `moonlet-design:` in `frame-src` for the canvas.
 - A session design's pinned styles can fall behind the design system. The Design tab offers "Design system updated · Update", and the update is a commit like any other.
 - The layout stays close enough to Claude Design's that an upload could be added later.
