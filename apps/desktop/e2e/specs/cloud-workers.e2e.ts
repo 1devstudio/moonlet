@@ -5,7 +5,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { $, browser, expect } from "@wdio/globals";
-import { PROJECT, SESSION, choose, closeSettings, fill, openSettings, rpc, sel, world } from "../fixtures";
+import { PROJECT, SESSION, choose, closeSettings, daemonSock, fill, openSettings, rpc, sel, socketRpc, world } from "../fixtures";
 
 const w = world();
 const cloudJson = () => {
@@ -22,6 +22,14 @@ describe("cloud workers", () => {
   after(async () => {
     // Fake machines are scratch daemons: none outlives the spec.
     for (const m of rpc<{ machines: { id: string }[] }>(w, "cloud.machines", {}).machines) rpc(w, "cloud.down", { machine: m.id });
+    // The world is shared with the specs after this one: the settings go back to their defaults.
+    const keys = Object.keys(cloudJson()?.projects ?? {});
+    await socketRpc(daemonSock(w), w.env, "cloud.set", {
+      providers: { fake: null },
+      projects: Object.fromEntries(keys.map((k) => [k, null])),
+      tailscale: { client_id: "", tag: "tag:moonlet-worker" },
+      idle_minutes: 15,
+    });
     // Tailnet access is the daemon's setting, kept for the rest of the run: off again.
     if (await $(sel.settings).isExisting()) await closeSettings();
     await openSettings("Phones");
