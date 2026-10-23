@@ -2061,4 +2061,23 @@ done
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     assert!(user().contains("Sync the design system"), "{}", user());
+
+    // A record pointing at another chat, here another system's agent, never
+    // gets that chat this system's prompts: a new agent starts instead.
+    let other: serde_json::Value = c
+        .request(
+            methods::DESIGN_SYSTEM_CREATE,
+            serde_json::json!({"workspace": ws.id, "name": "storefront", "sources": [{"project": project.id}]}),
+        )
+        .await
+        .unwrap();
+    let other_agent = other["agent"].as_u64().expect("an agent");
+    let record = d.home.path().join(".moonlet/design").join(&ws.id).join(".records/moonlet-desktop.toml");
+    let text = std::fs::read_to_string(&record).unwrap();
+    let text = text.replace(&format!("agent = {agent}"), &format!("agent = {other_agent}"));
+    std::fs::write(&record, text).unwrap();
+    let third: serde_json::Value =
+        c.request(methods::DESIGN_SYSTEM_SYNC, serde_json::json!({"workspace": ws.id, "slug": "moonlet-desktop"})).await.unwrap();
+    let third = third["agent"].as_u64().unwrap();
+    assert!(third != other_agent && third != agent as u64, "reused chat {third}");
 }

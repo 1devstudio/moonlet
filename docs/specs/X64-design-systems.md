@@ -91,7 +91,7 @@ A design system belongs to a moonlet workspace, so every project and design in t
   components/<group>/<Name>/<Name>.prompt.md  how to use it
   ui_kits/<kit>/<Screen>.html        layouts: whole screens
   assets/                            icons and images copied from the source
-  config.toml                        sources, scope, exceptions
+  config.toml                        name, scope, per-card settings (the agent may edit it)
   NOTES.md                           gotchas, known render warnings, re-sync risks
   conventions.md                     the header prepended to README.md
   _ds_manifest.json                  the card index (generated)
@@ -99,11 +99,11 @@ A design system belongs to a moonlet workspace, so every project and design in t
   .cache/                            render-check results, grades, screenshots (not part of the system)
   ```
 
-- [ ] `config.toml` holds:
+- [ ] `config.toml` holds what the sync agent may edit:
   - the name
-  - the sources: each project by project identity (X41), its path on this Mac, an optional sub-folder, and the commit last synced
   - the scope: the components covered
   - per-card exceptions: `skip`, `mode` and `viewport`
+- [ ] What moonlet trusts is kept outside the system's folder, where the agent cannot write: `~/.moonlet/design/<workspace id>/.records/<slug>.toml` holds the sources (each project by its id and project identity (X41), its path on this Mac, an optional sub-folder, and the commit last synced), the time of the last sync, and the chat of the sync agent. The agent's `--add-dir` folders and deny rules come only from there, and Sync sends its prompt only to that chat, while it is still a sessionless chat titled `Design · <name>` in the system's folder. (`design/store.rs` what_the_agent_can_edit_never_changes_the_sources_or_its_chat; `moonletd/tests/daemon.rs` a_new_design_system_starts_its_sync_agent)
 
   A setting at its default is not written. Config describes conventions and exceptions, never lists of everything. A card's settings join its `source_key`, so changing them makes it out of date (`design/anchor.rs` a_changed_card_exception_makes_the_card_out_of_date).
 - [ ] A workspace lists its design systems in Design mode (`design/store.rs` a_workspace_lists_its_design_systems_with_their_cards_and_what_needs_the_user). Deleting one asks first and leaves the designs that use it (`design/store.rs` removing_a_system_deletes_its_folder_and_files_resolve_only_inside_the_workspace). Those designs show the grey "Design system removed" bar (X65).
