@@ -26,8 +26,10 @@ export interface CommentsEntry {
   loading: boolean;
   /** Why the last load failed. */
   error: string | null;
-  /** The task's updated time the comments were loaded for. */
-  loadedFor?: number;
+  /** What the comments were loaded for: the task's updated time and where gh runs. */
+  loadedFor?: string;
+  /** What the load under way is for. */
+  loadingFor?: string;
 }
 
 export const useComments = create<{ byTask: Record<string, CommentsEntry> }>(() => ({ byTask: {} }));
@@ -54,6 +56,9 @@ async function fetchComments(task: Task, at: Where): Promise<{ comments: TaskCom
   return hostsApi.trackerComments(task.connection, task.tracker.id);
 }
 
+/** A task as it is now, and where its comments are read: a change in either loads them again. */
+const version = (task: Task, at: Where) => `${task.updatedMs} ${at.host} ${at.path ?? ""}`;
+
 // The latest load per task: an older one's answer is dropped.
 const latest = new Map<string, number>();
 let loads = 0;
@@ -63,19 +68,24 @@ export async function loadComments(task: Task, at: Where) {
   const id = taskId(task);
   const n = ++loads;
   latest.set(id, n);
-  put(task, { loading: true });
+  const v = version(task, at);
+  put(task, { loading: true, loadingFor: v });
   try {
     const got = await fetchComments(task, at);
-    if (latest.get(id) === n) put(task, { comments: got.comments, more: got.more, loading: false, error: null, loadedFor: task.updatedMs });
+    if (latest.get(id) === n) put(task, { comments: got.comments, more: got.more, loading: false, error: null, loadedFor: v });
   } catch (e) {
     if (latest.get(id) === n) put(task, { loading: false, error: e instanceof Error ? e.message : String(e) });
   }
 }
 
-/** Loads a task's comments when they were never loaded, or the task changed since. */
+/**
+ * Loads a task's comments when they were never loaded, or the task (or where
+ * gh runs for it) changed since: also while an older load is under way.
+ */
 export function ensureComments(task: Task, at: Where): Promise<void> {
   const e = entry(task);
-  if (e && (e.loading || e.loadedFor === task.updatedMs)) return Promise.resolve();
+  const v = version(task, at);
+  if (e && (e.loading ? e.loadingFor === v : e.loadedFor === v)) return Promise.resolve();
   return loadComments(task, at);
 }
 

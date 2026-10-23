@@ -143,4 +143,27 @@ describe("a task's comments (X66)", () => {
     await older;
     expect(useComments.getState().byTask["linear:acme ENG-124"].comments?.map((c) => c.id)).toEqual(["new"]);
   });
+
+  it("loads again for a sync that changes the task while an older load runs", async () => {
+    let older = (_: object) => {};
+    tracker.comments.push(
+      () => new Promise((r) => (older = r)),
+      () => Promise.resolve({ comments: [{ id: "c2", author: "Ada Lovelace", body: "Newer", markdown: true, createdMs: NOW }], more: false }),
+    );
+    const first = ensureComments(linear, { host: "local", path: null });
+    await ensureComments({ ...linear, updatedMs: NOW }, { host: "local", path: null });
+    expect(tracker.asked).toHaveLength(2);
+    older({ comments: [], more: false });
+    await first;
+    expect(useComments.getState().byTask["linear:acme ENG-124"].comments?.map((c) => c.id)).toEqual(["c2"]);
+  });
+
+  it("loads a GitHub issue's comments once its project is known, with no Retry", async () => {
+    await ensureComments(issue, { host: "local", path: null });
+    expect(useComments.getState().byTask["github:github.com acme/web#12"].error).toBe("No project in this workspace has acme/web as its origin");
+    answers["gh.issue_comments"] = () => ({ comments: [{ id: "IC_e2e0001", author: "@sam-rivera", body: "Looks good.", created_ms: NOW }], more: false });
+    await ensureComments(issue, { host: "local", path: "/Users/sam/web" });
+    const e = useComments.getState().byTask["github:github.com acme/web#12"];
+    expect([e.error, e.comments?.length]).toEqual([null, 1]);
+  });
 });
