@@ -58,6 +58,11 @@ export const hostsApi = {
   trackerTask: (id: string, key: string) => invoke<import("./tasks").Task | null>("tracker_task", { id, key }),
   trackerUpdate: (req: { id: string; task: string; source: string; column?: string | null; status?: string | null; assign_me?: boolean; comment?: string | null }) =>
     invoke("tracker_update", { req }),
+  /** An issue's comments, oldest first, at most 100 (X66); `task` is its id in the tracker. */
+  trackerComments: (id: string, task: string) =>
+    invoke<{ comments: { id: string; author: string; body: string; markdown: boolean; createdMs: number }[]; more: boolean }>("tracker_comments", { id, task }),
+  /** Posts the user's Markdown as a comment on an issue (X66). */
+  trackerComment: (id: string, task: string, text: string) => invoke("tracker_comment", { id, task, text }),
   trackerOauthAvailable: () => invoke<boolean>("tracker_oauth_available"),
   trackerOauthLinear: () => invoke<{ connection: import("./tasksStore").Connection; sources: { key: string; name: string }[] }>("tracker_oauth_linear"),
   trackerStates: (id: string, source: string) => invoke<{ name: string; column: import("./tasks").Column }[]>("tracker_states", { id, source }),

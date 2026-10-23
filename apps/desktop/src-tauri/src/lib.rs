@@ -529,6 +529,8 @@ pub fn run() {
             trackers::tracker_sources,
             trackers::tracker_task,
             trackers::tracker_update,
+            trackers::tracker_comments,
+            trackers::tracker_comment,
             trackers::tracker_states,
             trackers::tracker_boards,
             trackers::tracker_board_setup,

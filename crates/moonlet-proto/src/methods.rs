@@ -167,6 +167,10 @@ pub const GH_TASK: &str = "gh.task";
 /// `{path, number, assign_me?, close?, reopen?}`: assigns a GitHub issue to
 /// the user, closes it as completed or reopens it (X46 Keep in step).
 pub const GH_TASK_UPDATE: &str = "gh.task_update";
+/// A GitHub issue's comments (X66).
+pub const GH_ISSUE_COMMENTS: &str = "gh.issue_comments";
+/// Posts the user's comment on a GitHub issue (X66).
+pub const GH_ISSUE_COMMENT: &str = "gh.issue_comment";
 /// `{}` → the GitHub login `gh` is signed in as on this host (X44 GitHub connection).
 pub const GH_WHOAMI: &str = "gh.whoami";
 pub const GH_PR_STATUS: &str = "gh.pr_status";
@@ -887,6 +891,22 @@ pub struct GhPrContext {
     /// Any directory inside the repository.
     pub path: String,
     pub number: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GhIssueComments {
+    /// Any directory inside the repository.
+    pub path: String,
+    pub number: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GhIssueComment {
+    /// Any directory inside the repository.
+    pub path: String,
+    pub number: u64,
+    /// Markdown; it reaches gh on stdin.
+    pub body: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

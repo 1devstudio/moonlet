@@ -342,6 +342,40 @@ pub fn comment_body(text: &str) -> Value {
     json!({ "comment_text": text, "notify_all": false })
 }
 
+/// A page of a task's comments (X66): the newest, or those older than `after`.
+pub fn comments_path(task: &str, after: Option<&crate::comment::TaskComment>) -> String {
+    match after {
+        None => format!("/task/{task}/comment"),
+        Some(c) => format!(
+            "/task/{task}/comment?start={}&start_id={}",
+            c.created_ms, c.id
+        ),
+    }
+}
+
+/// Whether a page of comments is full, so older ones may follow.
+pub fn full_comments_page(page: &[crate::comment::TaskComment]) -> bool {
+    page.len() >= 25
+}
+
+/// One page of [`comments_path`] as ClickUp sends it, newest first; the text
+/// is plain.
+pub fn parse_comments(raw: &[u8]) -> Result<Vec<crate::comment::TaskComment>, ApiError> {
+    let v = parse(raw)?;
+    Ok(v["comments"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|c| crate::comment::TaskComment {
+            id: str_of(&c["id"]),
+            author: str_of(&c["user"]["username"]),
+            body: str_of(&c["comment_text"]),
+            markdown: false,
+            created_ms: str_of(&c["date"]).parse().unwrap_or(0),
+        })
+        .collect())
+}
+
 /// What a failed request means; a rejected token asks for a new one (X44).
 pub fn parse_error(status: u16, raw: &[u8]) -> ApiError {
     let v = parse(raw).unwrap_or_default();
@@ -380,6 +414,40 @@ mod tests {
             env!("CARGO_MANIFEST_DIR")
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn a_tasks_comments_as_plain_text_a_page_at_a_time() {
+        use crate::comment::TaskComment;
+        let page = parse_comments(&fixture("clickup-comments.json")).unwrap();
+        assert_eq!(
+            page,
+            [
+                TaskComment {
+                    id: "459".into(),
+                    author: "".into(),
+                    body: "Second line\nof a reply".into(),
+                    markdown: false,
+                    created_ms: 1_568_123_364_079,
+                },
+                TaskComment {
+                    id: "458".into(),
+                    author: "John Doe".into(),
+                    body: "Task comment content".into(),
+                    markdown: false,
+                    created_ms: 1_568_036_964_079,
+                },
+            ]
+        );
+        assert_eq!(comments_path("869e2e001", None), "/task/869e2e001/comment");
+        // The next page starts after the oldest comment read.
+        assert_eq!(
+            comments_path("869e2e001", page.last()),
+            "/task/869e2e001/comment?start=1568036964079&start_id=458"
+        );
+        // ClickUp sends 25 at a time: a full page may have more after it.
+        assert!(!full_comments_page(&page));
+        assert!(full_comments_page(&vec![page[0].clone(); 25]));
     }
 
     #[test]

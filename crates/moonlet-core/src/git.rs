@@ -1501,7 +1501,7 @@ pub fn session_pr(list: &serde_json::Value, since_ms: u64, after: u64) -> Option
 }
 
 /// Milliseconds since the epoch for a `YYYY-MM-DDTHH:MM:SSZ` timestamp.
-fn utc_ms(s: &str) -> Option<u64> {
+pub(crate) fn utc_ms(s: &str) -> Option<u64> {
     let num = |r: std::ops::Range<usize>| s.get(r)?.parse::<i64>().ok();
     if s.len() != 20 || !s.ends_with('Z') {
         return None;

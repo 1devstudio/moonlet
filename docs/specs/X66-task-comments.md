@@ -59,9 +59,9 @@ States: loading ("Loading comments…"), empty ("No comments yet."), load failed
 
 ## Protocol and RPCs
 
-- Tauri `tracker_comments {id, task}` → `{comments: [{id, author, body, markdown, created_ms}], more}`: Linear `issue(id).comments(first: 100)`, Jira `GET /rest/api/3/issue/{key}/comment?orderBy=-created&maxResults=100`, ClickUp `GET /task/{id}/comment` (pages of 25 through `start`/`start_id`, up to 4). Sorted oldest first in Rust, whatever order the tracker answers in.
+- Tauri `tracker_comments {id, task}` (`task` is the issue's id in the tracker) → `{comments: [{id, author, body, markdown, createdMs}], more}`: Linear `issue(id).comments(first: 100)`, Jira `GET /rest/api/3/issue/{key}/comment?orderBy=-created&maxResults=100`, ClickUp `GET /task/{id}/comment` (pages of 25 through `start`/`start_id`, up to 4). Sorted oldest first in Rust, whatever order the tracker answers in.
 - Tauri `tracker_comment {id, task, text}` posts one comment: Linear `commentCreate`, Jira `POST /rest/api/3/issue/{key}/comment` with `adf::from_markdown`, ClickUp `POST /task/{id}/comment`.
-- Daemon `gh.issue_comments {path, number}` → the same shape, from `gh issue view <n> --json comments`; `gh.issue_comment {path, number, body}` runs `gh issue comment <n> --body-file -` with the body on stdin.
+- Daemon `gh.issue_comments {path, number}` → `{comments: [{id, author, body, created_ms}], more}`, from `gh issue view <n> --json comments`; `gh.issue_comment {path, number, body}` runs `gh issue comment <n> --body-file -` with the body on stdin.
 
 ## Data and config
 

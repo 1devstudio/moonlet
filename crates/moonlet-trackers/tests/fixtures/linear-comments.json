@@ -1,0 +1,32 @@
+{
+  "data": {
+    "issue": {
+      "comments": {
+        "nodes": [
+          {
+            "id": "c0ffee00-0000-4000-8000-000000000003",
+            "body": "Opened a pull request: https://github.com/acme/app/pull/57",
+            "createdAt": "2026-10-15T10:02:11.000Z",
+            "user": null,
+            "botActor": { "name": "GitHub" }
+          },
+          {
+            "id": "c0ffee00-0000-4000-8000-000000000001",
+            "body": "Can we **also** cover the settings page?\n\n- [ ] dark\n- [x] light",
+            "createdAt": "2026-10-14T09:12:44.512Z",
+            "user": { "name": "Ada Lovelace" },
+            "botActor": null
+          },
+          {
+            "id": "c0ffee00-0000-4000-8000-000000000002",
+            "body": "On it.",
+            "createdAt": "2026-10-14T11:00:00.000Z",
+            "user": null,
+            "botActor": null
+          }
+        ],
+        "pageInfo": { "hasNextPage": true }
+      }
+    }
+  }
+}
