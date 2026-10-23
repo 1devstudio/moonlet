@@ -84,6 +84,14 @@ static URL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"url\(\s*["']?([^"')
 /// Checks the design system in `root`.
 pub fn check(root: &Path) -> Result<Vec<Problem>> {
     let mut problems = Vec::new();
+    if !root.join("styles.css").is_file() {
+        problems.push(Problem {
+            path: "styles.css".into(),
+            line: 1,
+            kind: Kind::Unresolved,
+            message: "styles.css is missing".into(),
+        });
+    }
     let closure = styles_closure(root);
     let texts: Vec<(PathBuf, String)> = closure
         .iter()
@@ -100,7 +108,7 @@ pub fn check(root: &Path) -> Result<Vec<Problem>> {
         .collect();
     for (path, text) in &texts {
         let path_rel = rel(root, path);
-        imports(&path_rel, path, text, &mut problems);
+        imports(root, &path_rel, path, text, &mut problems);
         unknown_tokens(&path_rel, text, &defined, &mut problems);
         fonts(&path_rel, text, &faces, &mut problems);
     }
@@ -158,9 +166,9 @@ pub fn check(root: &Path) -> Result<Vec<Problem>> {
         let mut known = defined.clone();
         known.extend(definitions(&text));
         unknown_tokens(&path_rel, &text, &known, &mut problems);
-        css_urls(&path_rel, &text, &mut problems);
+        css_urls(root, &path, &path_rel, &text, &mut problems);
         fonts(&path_rel, &text, &faces, &mut problems);
-        for (line, id) in elements(&path_rel, &path, &text, &mut problems) {
+        for (line, id) in elements(root, &path_rel, &path, &text, &mut problems) {
             if proposed {
                 continue;
             }
@@ -183,24 +191,99 @@ pub fn check(root: &Path) -> Result<Vec<Problem>> {
 
 /// `styles.css` and every local file it imports, directly or not.
 fn styles_closure(root: &Path) -> Vec<PathBuf> {
-    let mut seen = Vec::new();
-    let mut todo = vec![root.join("styles.css")];
-    while let Some(file) = todo.pop() {
+    fn visit(file: PathBuf, root: &Path, seen: &mut Vec<PathBuf>) {
         if seen.contains(&file) {
-            continue;
+            return;
         }
         let Ok(text) = std::fs::read_to_string(&file) else {
-            continue;
+            return;
         };
         let dir = file.parent().unwrap_or(root).to_path_buf();
+        seen.push(file);
         for c in IMPORT.captures_iter(&text) {
-            if !is_external(&c[1]) {
-                todo.push(dir.join(&c[1]));
+            if let Target::Fine(Some(next)) = target(root, &dir, &c[1]) {
+                visit(next, root, seen);
             }
         }
-        seen.push(file);
     }
+    let mut seen = Vec::new();
+    visit(root.join("styles.css"), root, &mut seen);
     seen
+}
+
+/// Where a URL in a file of the design system points.
+enum Target {
+    /// Inside the system, and the file exists (`None` for a fragment, `data:`,
+    /// `mailto:` or `tel:`).
+    Fine(Option<PathBuf>),
+    /// Outside the system: another scheme, an absolute path, or `..` past its root.
+    Leaves,
+    /// Inside the system, but no file is there.
+    Missing,
+    /// A `javascript:` URL.
+    Script,
+}
+
+static SCHEME: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^([A-Za-z][A-Za-z0-9+.-]*):").unwrap());
+
+/// Resolves `url`, written in a file of `dir`, against the system in `root`.
+fn target(root: &Path, dir: &Path, url: &str) -> Target {
+    let url = url.trim();
+    if url.is_empty() || url.starts_with('#') {
+        return Target::Fine(None);
+    }
+    if let Some(c) = SCHEME.captures(url) {
+        return match c[1].to_lowercase().as_str() {
+            "data" | "mailto" | "tel" => Target::Fine(None),
+            "javascript" => Target::Script,
+            _ => Target::Leaves,
+        };
+    }
+    if url.starts_with('/') {
+        return Target::Leaves;
+    }
+    let path = url.split(['?', '#']).next().unwrap_or("");
+    let Some(resolved) = inside(root, dir, path) else {
+        return Target::Leaves;
+    };
+    if !resolved.exists() {
+        return Target::Missing;
+    }
+    // A symlink inside the system may still point out of it.
+    match (
+        std::fs::canonicalize(&resolved),
+        std::fs::canonicalize(root),
+    ) {
+        (Ok(file), Ok(root)) if file.starts_with(&root) => Target::Fine(Some(resolved)),
+        _ => Target::Leaves,
+    }
+}
+
+/// `dir/rel` with `.` and `..` worked out, or `None` when it climbs out of `root`.
+fn inside(root: &Path, dir: &Path, rel: &str) -> Option<PathBuf> {
+    use std::path::Component;
+    let mut parts: Vec<std::ffi::OsString> = dir
+        .strip_prefix(root)
+        .ok()?
+        .components()
+        .map(|c| c.as_os_str().to_owned())
+        .collect();
+    for c in Path::new(rel).components() {
+        match c {
+            Component::Normal(p) => parts.push(p.to_owned()),
+            Component::ParentDir => {
+                parts.pop()?;
+            }
+            Component::CurDir => {}
+            _ => return None,
+        }
+    }
+    Some(
+        parts
+            .iter()
+            .fold(root.to_path_buf(), |p, part| p.join(part)),
+    )
 }
 
 fn definitions(text: &str) -> impl Iterator<Item = String> + '_ {
@@ -225,100 +308,128 @@ fn unknown_tokens(path: &str, text: &str, known: &BTreeSet<String>, problems: &m
     }
 }
 
-/// `@import`s that leave the design system or name no file, and other
-/// `url()`s that leave it.
-fn imports(path_rel: &str, path: &Path, text: &str, problems: &mut Vec<Problem>) {
-    let dir = path.parent().unwrap_or(Path::new("."));
+/// Each `@import` that leaves the design system or names no file, and the
+/// other `url()`s of the file.
+fn imports(root: &Path, path_rel: &str, path: &Path, text: &str, problems: &mut Vec<Problem>) {
+    let dir = path.parent().unwrap_or(root);
     for (i, line) in text.lines().enumerate() {
-        let Some(c) = IMPORT.captures(line) else {
-            css_urls_in_line(path_rel, i + 1, line, problems);
+        let mut taken = Vec::new();
+        for c in IMPORT.captures_iter(line) {
+            taken.push(c.get(0).map_or(0..0, |m| m.range()));
+            let url = &c[1];
+            let (kind, message) = match target(root, dir, url) {
+                Target::Leaves => (Kind::ExternalUrl, format!("{url} leaves the design system")),
+                Target::Missing => (
+                    Kind::Unresolved,
+                    format!("@import \"{url}\" does not resolve"),
+                ),
+                Target::Script => (
+                    Kind::Script,
+                    "a javascript: URL is not allowed in a card".into(),
+                ),
+                Target::Fine(_) => continue,
+            };
+            problems.push(Problem {
+                path: path_rel.to_string(),
+                line: i + 1,
+                kind,
+                message,
+            });
+        }
+        css_urls_in_line(root, dir, path_rel, i + 1, line, &taken, problems);
+    }
+}
+
+fn css_urls(root: &Path, path: &Path, path_rel: &str, text: &str, problems: &mut Vec<Problem>) {
+    let dir = path.parent().unwrap_or(root);
+    for (i, line) in text.lines().enumerate() {
+        css_urls_in_line(root, dir, path_rel, i + 1, line, &[], problems);
+    }
+}
+
+/// The `url()`s of a line, but those inside the ranges an `@import` took.
+fn css_urls_in_line(
+    root: &Path,
+    dir: &Path,
+    path_rel: &str,
+    line: usize,
+    text: &str,
+    taken: &[std::ops::Range<usize>],
+    problems: &mut Vec<Problem>,
+) {
+    for c in URL.captures_iter(text) {
+        let at = c.get(0).map_or(0, |m| m.start());
+        if taken.iter().any(|r| r.contains(&at)) {
             continue;
-        };
-        let target = &c[1];
-        let (kind, message) = if is_external(target) {
-            (
-                Kind::ExternalUrl,
-                format!("{target} leaves the design system"),
-            )
-        } else if !dir.join(target).is_file() {
-            (
-                Kind::Unresolved,
-                format!("@import \"{target}\" does not resolve"),
-            )
-        } else {
-            continue;
+        }
+        let url = &c[1];
+        let (kind, message) = match target(root, dir, url) {
+            Target::Leaves => (Kind::ExternalUrl, format!("{url} leaves the design system")),
+            Target::Missing => (Kind::Unresolved, format!("url({url}) does not resolve")),
+            Target::Script => (
+                Kind::Script,
+                "a javascript: URL is not allowed in a card".into(),
+            ),
+            Target::Fine(_) => continue,
         };
         problems.push(Problem {
             path: path_rel.to_string(),
-            line: i + 1,
+            line,
             kind,
             message,
         });
     }
 }
 
-fn css_urls(path_rel: &str, text: &str, problems: &mut Vec<Problem>) {
-    for (i, line) in text.lines().enumerate() {
-        css_urls_in_line(path_rel, i + 1, line, problems);
-    }
-}
+static FONT_FACE_BLOCK: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"@font-face\s*\{[^}]*\}").unwrap());
 
-fn css_urls_in_line(path_rel: &str, line: usize, text: &str, problems: &mut Vec<Problem>) {
-    for c in URL.captures_iter(text) {
-        if is_external(&c[1]) {
-            problems.push(Problem {
-                path: path_rel.to_string(),
-                line,
-                kind: Kind::ExternalUrl,
-                message: format!("{} leaves the design system", &c[1]),
-            });
-        }
-    }
-}
-
-/// Font families used first in a stack, without a face.
+/// Font families used first in a stack, without a face. A declaration may
+/// span lines; it is reported on the line of `font-family:`.
 fn fonts(path_rel: &str, text: &str, faces: &BTreeSet<String>, problems: &mut Vec<Problem>) {
-    for (i, line) in text.lines().enumerate() {
-        if line.contains("@font-face") {
+    let face_blocks: Vec<std::ops::Range<usize>> =
+        FONT_FACE_BLOCK.find_iter(text).map(|m| m.range()).collect();
+    for c in FONT_FAMILY.captures_iter(text) {
+        let at = c.get(0).map_or(0, |m| m.start());
+        if face_blocks.iter().any(|r| r.contains(&at)) {
             continue;
         }
-        for c in FONT_FAMILY.captures_iter(line) {
-            let first = c[1]
-                .split(',')
-                .next()
-                .unwrap_or("")
-                .trim()
-                .trim_matches(['"', '\''])
-                .to_string();
-            let key = first.to_lowercase();
-            if first.is_empty()
-                || first.starts_with("var(")
-                || SYSTEM_FONTS.contains(&key.as_str())
-                || faces.contains(&key)
-            {
-                continue;
-            }
-            problems.push(Problem {
-                path: path_rel.to_string(),
-                line: i + 1,
-                kind: Kind::FontMissing,
-                message: format!(
-                    "font \"{first}\" has no @font-face in styles.css or the files it imports"
-                ),
-            });
+        let first = c[1]
+            .split(',')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .trim_matches(['"', '\''])
+            .to_string();
+        let key = first.to_lowercase();
+        if first.is_empty()
+            || first.starts_with("var(")
+            || SYSTEM_FONTS.contains(&key.as_str())
+            || faces.contains(&key)
+        {
+            continue;
         }
+        problems.push(Problem {
+            path: path_rel.to_string(),
+            line: text[..at].matches('\n').count() + 1,
+            kind: Kind::FontMissing,
+            message: format!(
+                "font \"{first}\" has no @font-face in styles.css or the files it imports"
+            ),
+        });
     }
 }
 
 /// Scripts, `on*` attributes, and `href`/`src` that leave the system or name
 /// no file. Returns the snippet ids (`data-snippet`) with their lines.
 fn elements(
+    root: &Path,
     path_rel: &str,
     path: &Path,
     text: &str,
     problems: &mut Vec<Problem>,
 ) -> Vec<(usize, String)> {
-    let dir = path.parent().unwrap_or(Path::new("."));
+    let dir = path.parent().unwrap_or(root);
     let found = std::cell::RefCell::new(Vec::new());
     let snippet_ids = std::cell::RefCell::new(Vec::new());
     let line_of = |byte: usize| text[..byte.min(text.len())].matches('\n').count() + 1;
@@ -346,22 +457,23 @@ fn elements(
                         format!("{name}=\"…\" is not allowed in a card"),
                     ));
                 } else if name == "href" || name == "src" {
-                    let target = value.split(['?', '#']).next().unwrap_or("");
-                    if is_external(&value) {
-                        found.push((
+                    match target(root, dir, &value) {
+                        Target::Leaves => found.push((
                             line,
                             Kind::ExternalUrl,
                             format!("{value} leaves the design system"),
-                        ));
-                    } else if !target.is_empty()
-                        && !value.contains(':')
-                        && !dir.join(target).exists()
-                    {
-                        found.push((
+                        )),
+                        Target::Missing => found.push((
                             line,
                             Kind::Unresolved,
                             format!("<{tag} {name}=\"{value}\"> does not resolve"),
-                        ));
+                        )),
+                        Target::Script => found.push((
+                            line,
+                            Kind::Script,
+                            "a javascript: URL is not allowed in a card".into(),
+                        )),
+                        Target::Fine(_) => {}
                     }
                 }
             }
@@ -381,14 +493,6 @@ fn elements(
     snippet_ids.into_inner()
 }
 
-/// A URL that leaves the design system.
-fn is_external(url: &str) -> bool {
-    url.starts_with("http:")
-        || url.starts_with("https:")
-        || url.starts_with("//")
-        || url.starts_with('/')
-}
-
 /// Every `.html` file, in a stable order, leaving out `.cache/`.
 pub(super) fn html_files(root: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
@@ -398,12 +502,15 @@ pub(super) fn html_files(root: &Path) -> Vec<PathBuf> {
             continue;
         };
         for e in entries.flatten() {
+            // `file_type` does not follow symlinks: a linked folder is never
+            // entered, so a link cannot loop or reach outside the system.
+            let Ok(kind) = e.file_type() else { continue };
             let p = e.path();
-            if p.is_dir() {
+            if kind.is_dir() {
                 if e.file_name() != ".cache" {
                     todo.push(p);
                 }
-            } else if p.extension().is_some_and(|x| x == "html") {
+            } else if kind.is_file() && p.extension().is_some_and(|x| x == "html") {
                 out.push(p);
             }
         }
@@ -641,6 +748,164 @@ mod tests {
                     message: "snippet buttons/button/primary is also in components/buttons/button/button.html".into(),
                 },
             ]
+        );
+    }
+
+    // Review fixes (#340).
+
+    #[test]
+    fn a_relative_link_or_import_that_climbs_out_of_the_system_leaves_it_even_when_the_file_exists()
+    {
+        let outer = tempfile::tempdir().unwrap();
+        std::fs::write(outer.path().join("outside.png"), "png").unwrap();
+        std::fs::write(outer.path().join("outside.css"), ":root { --x: 1; }\n").unwrap();
+        let root = outer.path().join("system");
+        for (path, text) in [
+            (
+                "styles.css",
+                "@import \"tokens/colors.css\";\n@import \"../outside.css\";\n",
+            ),
+            ("tokens/colors.css", COLORS),
+            (
+                "components/buttons/button/button.html",
+                "<!-- @dsCard group=\"Buttons\" -->\n<img src=\"../../../../outside.png\" alt=\"\">\n",
+            ),
+        ] {
+            std::fs::create_dir_all(root.join(path).parent().unwrap()).unwrap();
+            std::fs::write(root.join(path), text).unwrap();
+        }
+        let got: Vec<(String, usize, Kind, String)> = check(&root)
+            .unwrap()
+            .into_iter()
+            .map(|p| (p.path, p.line, p.kind, p.message))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (
+                    "components/buttons/button/button.html".into(),
+                    2,
+                    Kind::ExternalUrl,
+                    "../../../../outside.png leaves the design system".into()
+                ),
+                (
+                    "styles.css".into(),
+                    2,
+                    Kind::ExternalUrl,
+                    "../outside.css leaves the design system".into()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_local_url_that_names_no_file_and_every_import_on_a_line_are_checked() {
+        let dir = system(&[
+            (
+                "styles.css",
+                "@import \"tokens/colors.css\"; @import \"missing.css\";\n@import \"fonts/fonts.css\"; .x { background: url(https://cdn.example.com/bg.png) }\n",
+            ),
+            ("tokens/colors.css", COLORS),
+            (
+                "fonts/fonts.css",
+                "@font-face {\n  font-family: \"Inter\";\n  src: url(./Missing.woff2);\n}\n",
+            ),
+        ]);
+        let got: Vec<(String, usize, Kind, String)> = check(dir.path())
+            .unwrap()
+            .into_iter()
+            .map(|p| (p.path, p.line, p.kind, p.message))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (
+                    "fonts/fonts.css".into(),
+                    3,
+                    Kind::Unresolved,
+                    "url(./Missing.woff2) does not resolve".into()
+                ),
+                (
+                    "styles.css".into(),
+                    1,
+                    Kind::Unresolved,
+                    "@import \"missing.css\" does not resolve".into()
+                ),
+                (
+                    "styles.css".into(),
+                    2,
+                    Kind::ExternalUrl,
+                    "https://cdn.example.com/bg.png leaves the design system".into()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn any_scheme_but_data_mailto_and_tel_leaves_the_system_and_javascript_urls_are_scripts() {
+        let card = "<!-- @dsCard group=\"Buttons\" -->\n\
+<img src=\"ftp://host/x.png\" alt=\"\">\n\
+<img src=\"data:image/png;base64,AAAA\" alt=\"\">\n\
+<a href=\"mailto:team@example.com\">Mail</a> <a href=\"#top\">Top</a>\n\
+<a href=\"javascript:go()\">Go</a>\n";
+        let dir = system(&[
+            ("styles.css", STYLES),
+            ("tokens/colors.css", COLORS),
+            ("components.css", COMPONENTS),
+            ("components/buttons/button/button.html", card),
+        ]);
+        let got: Vec<(usize, Kind, String)> = check(dir.path())
+            .unwrap()
+            .into_iter()
+            .map(|p| (p.line, p.kind, p.message))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (
+                    2,
+                    Kind::ExternalUrl,
+                    "ftp://host/x.png leaves the design system".into()
+                ),
+                (
+                    5,
+                    Kind::Script,
+                    "a javascript: URL is not allowed in a card".into()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_font_family_declared_over_two_lines_is_checked() {
+        let components = ".kbd {\n  font-family:\n    \"JetBrains Mono\", monospace;\n}\n";
+        let dir = system(&[
+            ("styles.css", STYLES),
+            ("tokens/colors.css", COLORS),
+            ("components.css", components),
+        ]);
+        assert_eq!(
+            check(dir.path()).unwrap(),
+            vec![Problem {
+                path: "components.css".into(),
+                line: 2,
+                kind: Kind::FontMissing,
+                message: "font \"JetBrains Mono\" has no @font-face in styles.css or the files it imports".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn a_system_without_styles_css_is_reported() {
+        let dir = system(&[("tokens/colors.css", COLORS)]);
+        assert_eq!(
+            check(dir.path()).unwrap(),
+            vec![Problem {
+                path: "styles.css".into(),
+                line: 1,
+                kind: Kind::Unresolved,
+                message: "styles.css is missing".into()
+            }]
         );
     }
 }

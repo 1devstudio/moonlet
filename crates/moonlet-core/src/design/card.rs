@@ -28,18 +28,31 @@ pub enum MarkerError {
 pub const DEFAULT_VIEWPORT: (u32, u32) = (900, 700);
 
 static COMMENT: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^<!--\s*@dsCard\s+(.*?)\s*-->").unwrap());
+    LazyLock::new(|| Regex::new(r"^<!--\s*@dsCard\s+(.*?)\s*-->(.*)$").unwrap());
+/// Only `name="value"` pairs, separated by spaces.
+static ATTRS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"^[A-Za-z-]+="[^"]*"(\s+[A-Za-z-]+="[^"]*")*$"#).unwrap());
 static ATTR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"([A-Za-z-]+)="([^"]*)""#).unwrap());
 
 /// Reads the marker on the card's first line. As in design-sync, `group` comes
 /// first; the other attributes may follow in any order.
 pub fn parse_marker(html: &str) -> Result<Marker, MarkerError> {
     let first = html.lines().next().unwrap_or("");
-    let attrs = COMMENT
-        .captures(first)
-        .ok_or(MarkerError::Missing)?
-        .get(1)
-        .map_or("", |m| m.as_str());
+    let c = COMMENT.captures(first).ok_or(MarkerError::Missing)?;
+    if !c[2].trim().is_empty() {
+        return Err(MarkerError::Malformed(
+            "the marker must be the whole first line".into(),
+        ));
+    }
+    let attrs = c.get(1).map_or("", |m| m.as_str());
+    if !attrs.starts_with("group=\"") {
+        return Err(MarkerError::Malformed("group=\"…\" must come first".into()));
+    }
+    if !ATTRS.is_match(attrs) {
+        return Err(MarkerError::Malformed(
+            "attributes must be name=\"value\"".into(),
+        ));
+    }
     let mut pairs = ATTR
         .captures_iter(attrs)
         .map(|c| (c[1].to_string(), c[2].to_string()));
@@ -149,6 +162,26 @@ mod tests {
             parse_marker("<!-- @dsCard group=\"Buttons\" viewport=\"wide\" -->"),
             Err(MarkerError::Malformed(
                 "viewport \"wide\" is not WxH".into()
+            ))
+        );
+    }
+
+    #[test]
+    fn a_marker_with_stray_text_is_malformed() {
+        assert_eq!(
+            parse_marker("<!-- @dsCard junk group=\"Buttons\" -->\n"),
+            Err(MarkerError::Malformed("group=\"…\" must come first".into()))
+        );
+        assert_eq!(
+            parse_marker("<!-- @dsCard group=\"Buttons\" name=Button -->\n"),
+            Err(MarkerError::Malformed(
+                "attributes must be name=\"value\"".into()
+            ))
+        );
+        assert_eq!(
+            parse_marker("<!-- @dsCard group=\"Buttons\" --><p>after</p>\n"),
+            Err(MarkerError::Malformed(
+                "the marker must be the whole first line".into()
             ))
         );
     }
