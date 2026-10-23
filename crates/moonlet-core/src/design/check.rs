@@ -30,6 +30,10 @@ pub enum Kind {
     DuplicateCard,
     /// A snippet id another card already uses.
     DuplicateSnippet,
+    /// An element of a design page without a `data-mid` (X65).
+    MissingMid,
+    /// A `data-mid` an earlier element of the page already has (X65).
+    DuplicateMid,
 }
 
 /// The folders whose `.html` files are cards: components, foundations and layouts.
