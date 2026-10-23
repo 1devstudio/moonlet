@@ -11,8 +11,26 @@ use std::collections::HashSet;
 /// Elements that never carry an id: they draw nothing of their own, or are
 /// the inside of an `<svg>` (the `<svg>` itself carries one).
 const SKIPPED: [&str; 20] = [
-    "script", "style", "template", "noscript", "path", "g", "circle", "rect", "line", "polyline", "polygon",
-    "ellipse", "defs", "use", "symbol", "lineargradient", "radialgradient", "stop", "clippath", "mask",
+    "script",
+    "style",
+    "template",
+    "noscript",
+    "path",
+    "g",
+    "circle",
+    "rect",
+    "line",
+    "polyline",
+    "polygon",
+    "ellipse",
+    "defs",
+    "use",
+    "symbol",
+    "lineargradient",
+    "radialgradient",
+    "stop",
+    "clippath",
+    "mask",
 ];
 
 /// One element of the page's body that should carry a `data-mid`.
@@ -27,18 +45,25 @@ struct Seen {
 fn walk(html: &str, mut f: impl FnMut(&Seen) -> Option<String>) -> (String, Vec<Seen>) {
     let seen = RefCell::new(Vec::new());
     let line_of = |byte: usize| html[..byte.min(html.len())].matches('\n').count() + 1;
-    let settings = lol_html::Settings::new().append_element_content_handler(lol_html::element!("body *", |el| {
-        let tag = el.tag_name();
-        if SKIPPED.contains(&tag.as_str()) {
-            return Ok(());
+    let settings = lol_html::Settings::new().append_element_content_handler(lol_html::element!(
+        "body *",
+        |el| {
+            let tag = el.tag_name();
+            if SKIPPED.contains(&tag.as_str()) {
+                return Ok(());
+            }
+            let s = Seen {
+                line: line_of(el.source_location().bytes().start),
+                tag,
+                mid: el.get_attribute("data-mid"),
+            };
+            if let Some(id) = f(&s) {
+                el.set_attribute("data-mid", &id)?;
+            }
+            seen.borrow_mut().push(s);
+            Ok(())
         }
-        let s = Seen { line: line_of(el.source_location().bytes().start), tag, mid: el.get_attribute("data-mid") };
-        if let Some(id) = f(&s) {
-            el.set_attribute("data-mid", &id)?;
-        }
-        seen.borrow_mut().push(s);
-        Ok(())
-    }));
+    ));
     let out = lol_html::rewrite_str(html, settings).unwrap_or_else(|_| html.to_string());
     (out, seen.into_inner())
 }
@@ -47,7 +72,12 @@ fn walk(html: &str, mut f: impl FnMut(&Seen) -> Option<String>) -> (String, Vec<
 /// one, the next free `m<n>` in document order. Nothing else changes.
 pub fn fix_page(html: &str) -> String {
     let (_, seen) = walk(html, |_| None);
-    let mut next = seen.iter().filter_map(|s| number(s.mid.as_deref()?)).max().unwrap_or(0) + 1;
+    let mut next = seen
+        .iter()
+        .filter_map(|s| number(s.mid.as_deref()?))
+        .max()
+        .unwrap_or(0)
+        + 1;
     let mut ids = HashSet::new();
     walk(html, |s| match &s.mid {
         Some(id) if ids.insert(id.clone()) => None,
@@ -74,10 +104,18 @@ pub fn check_page(path_rel: &str, html: &str) -> Vec<Problem> {
     for s in seen {
         let (kind, message) = match &s.mid {
             None => (Kind::MissingMid, format!("<{}> has no data-mid", s.tag)),
-            Some(id) if !ids.insert(id.clone()) => (Kind::DuplicateMid, format!("<{}> repeats data-mid=\"{id}\"", s.tag)),
+            Some(id) if !ids.insert(id.clone()) => (
+                Kind::DuplicateMid,
+                format!("<{}> repeats data-mid=\"{id}\"", s.tag),
+            ),
             Some(_) => continue,
         };
-        problems.push(Problem { path: path_rel.to_string(), line: s.line, kind, message });
+        problems.push(Problem {
+            path: path_rel.to_string(),
+            line: s.line,
+            kind,
+            message,
+        });
     }
     problems
 }
@@ -99,12 +137,18 @@ mod tests {
 
     #[test]
     fn elements_in_the_body_without_an_id_or_with_a_repeated_one_are_reported() {
-        let got: Vec<(usize, Kind, String)> =
-            check_page("pages/index.html", PAGE).into_iter().map(|p| (p.line, p.kind, p.message)).collect();
+        let got: Vec<(usize, Kind, String)> = check_page("pages/index.html", PAGE)
+            .into_iter()
+            .map(|p| (p.line, p.kind, p.message))
+            .collect();
         assert_eq!(
             got,
             vec![
-                (6, Kind::DuplicateMid, "<section> repeats data-mid=\"m2\"".into()),
+                (
+                    6,
+                    Kind::DuplicateMid,
+                    "<section> repeats data-mid=\"m2\"".into()
+                ),
                 (6, Kind::MissingMid, "<p> has no data-mid".into()),
             ]
         );
