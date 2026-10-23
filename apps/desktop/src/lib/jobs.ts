@@ -105,6 +105,9 @@ const hms = (ms: number) => {
 
 /** A job's steps: its phases, or after a rerun what happened when. */
 export function phaseList(j: Job, now: number): PhaseRow[] {
+  // Waiting for a cloud machine (X63): what comes once it is ready.
+  if (j.state.kind === "waiting")
+    return ["Copy matches the session", "Running", "Bring changes back"].map((name) => ({ name, state: "pending", took: null, detail: null }));
   if (reran(j))
     return j.timeline.map((e) => ({ name: e.text, state: e.text.endsWith(" went away") ? "warn" : "done", took: hms(e.at), detail: e.detail ?? null }));
   const rows: PhaseRow[] = j.phases.map((p) => ({
