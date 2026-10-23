@@ -100,6 +100,26 @@ fn ok<T: Serialize>(v: T) -> HandlerResult {
     serde_json::to_value(v).map_err(|e| RpcError::new("internal", e.to_string()))
 }
 
+/// The chat of a design system's sync agent, while it still is that
+/// system's: the chat its record names, still a sessionless chat in its
+/// folder (X64). Never found through its title, which comes from the name the
+/// agent may change in `config.toml`.
+fn system_agent(
+    store: &moonlet_core::design::store::Store,
+    terminals: &[moonlet_proto::types::TerminalInfo],
+    workspace: &str,
+    slug: &str,
+) -> Option<u32> {
+    let record = store.record(workspace, slug).ok()?;
+    let dir = store.system_dir(workspace, slug).ok()?;
+    let dir = dir.canonicalize().unwrap_or(dir);
+    let id = record.agent?;
+    terminals
+        .iter()
+        .any(|t| t.id == id && t.chat && t.session_id.is_none() && Path::new(&t.cwd) == dir)
+        .then_some(id)
+}
+
 /// Runs synchronous filesystem work off the async workers, so a large
 /// directory walk does not stall other connections.
 async fn blocking<T: Send + 'static>(
@@ -708,16 +728,26 @@ impl Daemon {
         match method {
             m::DESIGN_SYSTEMS => {
                 let r: m::DesignWorkspace = params(p)?;
-                let ws = r.workspace.clone();
-                let systems = blocking(move || store.systems(&r.workspace)).await?;
-                // What each system's agent waits for, from its chat (X64).
+                // The store reads (the list, each system's record and config)
+                // run off the async workers; the chats give only their pending asks.
+                let terminals = self.terminals.list();
+                let systems = blocking(move || {
+                    let list = store.systems(&r.workspace)?;
+                    Ok(list
+                        .into_iter()
+                        .map(|sys| {
+                            let agent = system_agent(&store, &terminals, &r.workspace, &sys.slug);
+                            (sys, agent)
+                        })
+                        .collect::<Vec<_>>())
+                })
+                .await?;
                 let list: Vec<Value> = systems
                     .into_iter()
-                    .map(|sys| {
-                        let waiting = self
-                            .agent_of(&ws, &sys.slug)
-                            .and_then(|id| self.chats.state(id).ok())
-                            .and_then(|st| moonlet_core::design::agent::needs_you(&st.pending));
+                    .map(|(sys, agent)| {
+                        let waiting = agent
+                            .and_then(|id| self.chats.pending(id).ok())
+                            .and_then(|pending| moonlet_core::design::agent::needs_you(&pending));
                         let mut v = serde_json::to_value(&sys).unwrap_or_default();
                         v["needs_you"] = serde_json::to_value(waiting).unwrap_or_default();
                         v
@@ -885,32 +915,16 @@ impl Daemon {
         self.design_locks.lock().unwrap().entry(format!("{workspace}/{slug}")).or_default().clone()
     }
 
-    /// The chat of a design system's sync agent, while it still is that
-    /// system's (see `system_agent`).
+    /// The chat of a design system's sync agent, while it still is that system's.
     fn agent_of(&self, workspace: &str, slug: &str) -> Option<u32> {
-        let record = self.design.record(workspace, slug).ok()?;
-        let dir = self.design.system_dir(workspace, slug).ok()?;
-        let dir = dir.canonicalize().unwrap_or(dir);
-        self.system_agent(&record, &dir)
+        system_agent(&self.design, &self.terminals.list(), workspace, slug)
     }
 
     /// Stops a design system's sync agent, when it still is that system's.
     fn stop_sync_agent(&self, workspace: &str, slug: &str) {
-        let (Ok(record), Ok(dir)) = (self.design.record(workspace, slug), self.design.system_dir(workspace, slug)) else {
-            return;
-        };
-        let dir = dir.canonicalize().unwrap_or(dir);
-        if let Some(id) = self.system_agent(&record, &dir) {
+        if let Some(id) = self.agent_of(workspace, slug) {
             let _ = self.terminals.kill(id, true);
         }
-    }
-
-    /// The chat the record names, while it still is a sessionless chat in the
-    /// system's folder `dir`: never found through its title, which comes from
-    /// the name the agent may change in `config.toml`.
-    fn system_agent(&self, record: &moonlet_core::design::store::Record, dir: &Path) -> Option<u32> {
-        let id = record.agent?;
-        self.terminals.list().into_iter().any(|t| t.id == id && t.chat && t.session_id.is_none() && Path::new(&t.cwd) == dir).then_some(id)
     }
 
     /// Workspaces, projects, sessions, git and files.
