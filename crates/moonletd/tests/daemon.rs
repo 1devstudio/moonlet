@@ -1934,14 +1934,15 @@ async fn design_systems_over_rpc() {
         c.request(methods::WORKSPACE_CREATE, serde_json::json!({"name": "1devstudio", "color": "clay"})).await.unwrap();
     let w = ws.id.as_str();
     let project: Project = c.request(methods::PROJECT_ADD, serde_json::json!({"path": repo})).await.unwrap();
-    let slug: String = c
+    let created: serde_json::Value = c
         .request(
             methods::DESIGN_SYSTEM_CREATE,
-            serde_json::json!({"workspace": w, "name": "moonlet desktop", "sources": [{"project": project.id}]}),
+            serde_json::json!({"workspace": w, "name": "moonlet desktop", "sources": [{"project": project.id}], "agent": false}),
         )
         .await
         .unwrap();
-    assert_eq!(slug, "moonlet-desktop");
+    assert_eq!((created["slug"].as_str(), created["agent"].as_u64()), (Some("moonlet-desktop"), None));
+    let slug = "moonlet-desktop".to_string();
     let dir = d.home.path().join("design").join(w).join("systems/moonlet-desktop");
     for (path, text) in [
         ("styles.css", "@import \"components.css\";\n"),
@@ -1980,4 +1981,84 @@ async fn design_systems_over_rpc() {
 
     let _: bool = c.request(methods::DESIGN_SYSTEM_REMOVE, serde_json::json!({"workspace": w, "slug": slug})).await.unwrap();
     assert!(!dir.exists());
+}
+
+/// X64: a new design system starts its sync agent: Claude Code in the system's
+/// folder, the source added read only, allowed only its design commands, with
+/// a first message to build it. A sync later asks the same agent to sync again.
+#[tokio::test]
+async fn a_new_design_system_starts_its_sync_agent() {
+    use moonlet_proto::types::{Project, Workspace};
+    let d = fake_claude_daemon(
+        r#"#!/bin/sh
+echo "$@" >> claude-args
+while IFS= read -r line; do
+  case "$line" in
+    *'"subtype":"initialize"'*) echo '{"type":"system","subtype":"init","session_id":"s1","model":"fake"}' ;;
+    *'"type":"user"'*) echo "$line" >> claude-user
+      echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}' ;;
+  esac
+done
+"#,
+    )
+    .await;
+    let repo = d.home.path().join("repo");
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    std::fs::write(repo.join("src/ui.tsx"), "export const Button = () => null;\n").unwrap();
+    for args in [vec!["init", "-q", "-b", "main"], vec!["add", "-A"], vec!["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init"]] {
+        assert!(Command::new("git").args(&args).current_dir(&repo).output().unwrap().status.success());
+    }
+    let mut c = d.client().await;
+    let ws: Workspace = c.request(methods::WORKSPACE_CREATE, serde_json::json!({"name": "1devstudio", "color": "clay"})).await.unwrap();
+    let project: Project = c.request(methods::PROJECT_ADD, serde_json::json!({"path": repo})).await.unwrap();
+    let created: serde_json::Value = c
+        .request(
+            methods::DESIGN_SYSTEM_CREATE,
+            serde_json::json!({"workspace": ws.id, "name": "moonlet desktop", "sources": [{"project": project.id}]}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(created["slug"], "moonlet-desktop");
+    assert_eq!(created["agent_error"], serde_json::Value::Null);
+    let agent = created["agent"].as_u64().expect("an agent") as u32;
+
+    let dir = d.home.path().join(".moonlet/design").join(&ws.id).join("systems/moonlet-desktop");
+    let real_repo = repo.canonicalize().unwrap().display().to_string();
+    let terminals: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
+    let t = terminals.iter().find(|t| t.id == agent).expect("the agent's chat");
+    assert_eq!((t.title.as_str(), t.session_id.as_deref(), t.chat), ("Design · moonlet desktop", None, true));
+
+    let file = |name: &str| {
+        let p = dir.join(name);
+        move || std::fs::read_to_string(&p).unwrap_or_default()
+    };
+    let (args, user) = (file("claude-args"), file("claude-user"));
+    for _ in 0..100 {
+        if user().contains("Build the design system") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let args = args();
+    assert!(args.contains("--permission-mode acceptEdits"), "{args}");
+    assert!(args.contains(&format!("--add-dir {real_repo}")), "{args}");
+    assert!(args.contains(&format!("\"deny\":[\"Edit(/{real_repo}/**)\"]")), "{args}");
+    assert!(args.contains("design system progress:*)"), "{args}");
+    assert!(user().contains("Build the design system \\\"moonlet desktop\\\""), "{}", user());
+
+    let list: serde_json::Value = c.request(methods::DESIGN_SYSTEMS, serde_json::json!({"workspace": ws.id})).await.unwrap();
+    assert_eq!(list[0]["agent"].as_u64(), Some(agent as u64));
+
+    // Once a sync is recorded, Sync asks the same agent to sync again.
+    let _: bool = c.request(methods::DESIGN_SYSTEM_SYNCED, serde_json::json!({"workspace": ws.id, "slug": "moonlet-desktop"})).await.unwrap();
+    let again: serde_json::Value =
+        c.request(methods::DESIGN_SYSTEM_SYNC, serde_json::json!({"workspace": ws.id, "slug": "moonlet-desktop"})).await.unwrap();
+    assert_eq!(again["agent"].as_u64(), Some(agent as u64));
+    for _ in 0..100 {
+        if user().contains("Sync the design system") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(user().contains("Sync the design system"), "{}", user());
 }

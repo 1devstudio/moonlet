@@ -367,7 +367,7 @@ pub struct SystemSummary {
 
 /// Each source's folder: the repository, or its sub-folder when it names one.
 /// Card sources are relative to it.
-fn source_roots(config: &SystemConfig) -> Vec<PathBuf> {
+pub fn source_roots(config: &SystemConfig) -> Vec<PathBuf> {
     config
         .sources
         .iter()

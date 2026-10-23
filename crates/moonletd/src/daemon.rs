@@ -342,6 +342,8 @@ impl Daemon {
                             session_id: None,
                             env: req.env,
                             add_dirs: req.add_dirs,
+                            settings: None,
+                            workspace: None,
                         })
                         .map_err(internal)?),
                     None => ok(s.create(req).map_err(internal)?),
@@ -701,7 +703,22 @@ impl Daemon {
                         commit: None,
                     });
                 }
-                ok(blocking(move || store.create_system(&r.workspace, &r.name, sources, now_ms())).await?)
+                let (workspace, start) = (r.workspace.clone(), r.agent);
+                let slug = blocking(move || store.create_system(&r.workspace, &r.name, sources, now_ms())).await?;
+                let (agent, agent_error) = match start {
+                    // The system exists either way; the app shows why its agent did not start.
+                    true => match self.start_sync_agent(&workspace, &slug).await {
+                        Ok(id) => (Some(id), None),
+                        Err(e) => (None, Some(format!("{e:#}"))),
+                    },
+                    false => (None, None),
+                };
+                ok(serde_json::json!({"slug": slug, "agent": agent, "agent_error": agent_error}))
+            }
+            m::DESIGN_SYSTEM_SYNC => {
+                let r: m::DesignSystemRef = params(p)?;
+                let agent = self.start_sync_agent(&r.workspace, &r.slug).await.map_err(internal)?;
+                ok(serde_json::json!({"agent": agent}))
             }
             m::DESIGN_SYSTEM_REMOVE => {
                 let r: m::DesignSystemRef = params(p)?;
@@ -743,6 +760,48 @@ impl Daemon {
             }
             _ => Err(RpcError::new("unknown_method", format!("unknown method {method}"))),
         }
+    }
+
+    /// Asks a design system's sync agent to build it, or to sync it again
+    /// (X64). Its chat is reused while it exists; otherwise a new one starts in
+    /// the workspace's Claude profile, with the sources read only.
+    async fn start_sync_agent(&self, workspace: &str, slug: &str) -> anyhow::Result<u32> {
+        use moonlet_core::design::{agent, anchor, store};
+        let dir = self.design.system_dir(workspace, slug)?.canonicalize()?;
+        let config = self.design.config(workspace, slug)?;
+        let mut sources = Vec::new();
+        for root in store::source_roots(&config) {
+            let real = root.canonicalize().map_err(|e| anyhow::anyhow!("{}: {e}", root.display()))?;
+            sources.push(real.display().to_string());
+        }
+        let bin = moonlet_cli_path()?;
+        let synced = dir.join(anchor::FILE).is_file();
+        let status = if synced { anchor::status(&dir, &store::source_roots(&config), &config.exceptions())? } else { Vec::new() };
+        let task = if synced { agent::Task::Resync(&status) } else { agent::Task::Build };
+        let launch = agent::sync_launch(&dir, &config, &sources, &bin, task)?;
+        if let Some(id) = self.design.agent(workspace, slug)?
+            && self.chats.state(id).is_ok()
+        {
+            self.chats.send(id, &launch.prompt, &[])?;
+            return Ok(id);
+        }
+        let info = self.chats.create(ChatCreate {
+            cwd: launch.cwd,
+            agent: "claude".into(),
+            model: None,
+            effort: None,
+            mode: Some(launch.mode),
+            name: launch.title.clone(),
+            title: Some(launch.title),
+            session_id: None,
+            env: Default::default(),
+            add_dirs: launch.add_dirs,
+            settings: Some(launch.settings),
+            workspace: Some(workspace.to_string()),
+        })?;
+        self.design.set_agent(workspace, slug, info.id)?;
+        self.chats.send(info.id, &launch.prompt, &[])?;
+        Ok(info.id)
     }
 
     /// Workspaces, projects, sessions, git and files.
