@@ -7,24 +7,24 @@ import { useShallow } from "zustand/react/shallow";
 import { errorToast, shownWorkspace, toast, useStore } from "../../lib/store";
 import { type DesignCover, type DesignSystem } from "../../lib/protocol";
 import { systemFolder, systemLabel, type RowLabel } from "../../lib/design";
-import { createSystem, detectStack, loadSystems, showSystem, systemsOf, useDesign } from "../../lib/designStore";
+import { createSystem, detectStack, loadSystems, shownSystem, showSystem, systemsOf, useDesign } from "../../lib/designStore";
 import { workspaceProjects } from "../../lib/tasksStore";
 import { tildePath } from "../../lib/profiles";
-import { wsKey } from "../../lib/workspaces";
 import { useNow } from "../../lib/useNow";
 import { cx } from "../../lib/cx";
 import { AgentIcon, Button, Dialog, Field, IconButton, Kbd, inputCls } from "../ui";
 import { ProjectMark } from "../Sidebar";
+import { AgentView } from "../AgentView";
 
 /** The shown workspace and its design systems, listed when it is shown. */
 function useWorkspaceSystems() {
   const ws = useStore((s) => shownWorkspace(s));
   const systems = useDesign((d) => (ws ? systemsOf(d, ws.host, ws.id) : undefined));
-  const shown = useDesign((d) => (ws ? d.shown[wsKey(ws.host, ws.id)] : undefined));
+  const shown = useDesign((d) => (ws ? shownSystem(d, ws.host, ws.id) : null));
   useEffect(() => {
     if (ws) void loadSystems(ws.host, ws.id).catch(errorToast);
   }, [ws]);
-  return { ws, systems, shown: systems?.find((s) => s.slug === shown) ?? null };
+  return { ws, systems, shown };
 }
 
 const openNewSystem = (ws: { host: string; id: string } | null) => ws && useStore.setState({ dialog: { kind: "new-design-system", host: ws.host, workspace: ws.id } });
@@ -58,7 +58,6 @@ export function DesignSidebar() {
             <Plus size={15} strokeWidth={1.75} />
           </span>
           <span className="flex-1">New design</span>
-          <Kbd>⇧⌘N</Kbd>
         </button>
         <button className={cx(row, "no-drag text-muted hover:bg-panel-2 hover:text-fg")} onClick={() => useStore.setState({ dialog: { kind: "palette" } })}>
           <span className="flex w-4 justify-center">
@@ -107,8 +106,8 @@ export function DesignMain() {
   return (
     <div className="flex h-full flex-col bg-bg">
       <div data-tauri-drag-region className="drag h-[52px] shrink-0 border-b border-border bg-panel" style={{ paddingLeft: sidebarOpen ? 0 : 84 }} />
-      {shown ? (
-        <SystemSummary sys={shown} label={systemLabel(shown, now)} />
+      {shown && ws ? (
+        <SystemSummary key={shown.slug} host={ws.host} sys={shown} label={systemLabel(shown, now)} />
       ) : systems?.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
           <SwatchBook size={18} className="text-muted" />
@@ -140,15 +139,25 @@ const STARTS = [
   ["Build it", "A session in the project, with the pages attached."],
 ] as const;
 
-/** What a design system is, until the design system view (X64, entry 5c). */
-function SystemSummary({ sys, label }: { sys: DesignSystem; label: RowLabel }) {
-  const home = useStore((s) => s.hosts.local?.home ?? null);
+/** What a design system is, until the design system view (X64, entry 5c),
+ * with its sync agent's chat docked on the right: its questions and
+ * approvals are answered there. */
+function SystemSummary({ host, sys, label }: { host: string; sys: DesignSystem; label: RowLabel }) {
+  const home = useStore((s) => s.hosts[host]?.home ?? null);
+  const agent = useStore((s) => (sys.agent !== null && s.terminals[host]?.[sys.agent]?.chat ? sys.agent : null));
+  const [hidden, setHidden] = useState(false);
   return (
-    <div className="p-6">
+    <div className="flex min-h-0 flex-1">
+    <div className="min-w-0 flex-1 p-6">
       <div className="flex items-center gap-2.5">
         <SwatchBook size={16} className="text-muted" />
         <h1 className="ui-text-15 font-semibold text-fg">{sys.name}</h1>
         <span className={cx("ui-text-12", TONES[label.tone])}>{label.text}</span>
+        {agent !== null && hidden && (
+          <Button size="sm" variant="ghost" className="ml-auto" onClick={() => setHidden(false)}>
+            Show agent
+          </Button>
+        )}
       </div>
       <p className="mt-2 ui-text-12.5 text-muted">
         {sys.cards} cards · {sys.layouts} layouts · from {sys.sources.map((p) => tildePath(p, home)).join(", ")}
@@ -161,6 +170,21 @@ function SystemSummary({ sys, label }: { sys: DesignSystem; label: RowLabel }) {
         </p>
       )}
       {sys.error && <p className="mt-2 ui-text-12.5 text-error">{sys.error}</p>}
+    </div>
+      {agent !== null && !hidden && (
+        <section aria-label={`Design · ${sys.name}`} className="flex w-[440px] shrink-0 flex-col border-l border-border">
+          <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3 ui-text-12.5">
+            <AgentIcon agent="claude" size={13} />
+            <span className="min-w-0 flex-1 truncate text-muted">Writes only in systems/{sys.slug}</span>
+            <Button size="sm" variant="ghost" onClick={() => setHidden(true)}>
+              Hide agent
+            </Button>
+          </div>
+          <div className="min-h-0 flex-1">
+            <AgentView host={host} id={agent} wsId="" focused visible />
+          </div>
+        </section>
+      )}
     </div>
   );
 }
