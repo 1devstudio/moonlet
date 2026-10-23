@@ -496,8 +496,17 @@ async fn only_the_app_or_a_paired_mac_approves_heavy_commands() {
         .await;
     assert_eq!(info["approved"], Value::Null);
 
-    // A paired Mac.
+    // A paired Mac's daemon linked as a worker is not its app.
     let token = pair(&c, &addr, "Alex's MacBook Pro", DeviceKind::Desktop).await;
+    let mut worker = device(&addr, &token, "moonletd-worker").await;
+    assert_eq!(
+        refusal(&mut worker, 1, "heavy.approve", approve.clone())
+            .await
+            .as_deref(),
+        Some("forbidden")
+    );
+
+    // A paired Mac.
     let mut mac = device(&addr, &token, "moonlet-app").await;
     assert_eq!(refusal(&mut mac, 1, "heavy.approve", approve).await, None);
     assert_eq!(c.route("pnpm test").await["route"], json!(true));
