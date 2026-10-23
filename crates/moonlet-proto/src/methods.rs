@@ -205,6 +205,8 @@ pub const DESIGN_SYSTEM_SYNCED: &str = "design.system.synced";
 pub const DESIGN_CHECK: &str = "design.check";
 /// [`DesignFile`] → `{path, content_type}` of a file under the workspace's design folder.
 pub const DESIGN_FILE: &str = "design.file";
+/// [`DesignDetect`] → what a folder's UI is built with, such as `["React", "Tailwind"]`.
+pub const DESIGN_DETECT: &str = "design.detect";
 /// [`DesignSettle`]: the user's choice for a card after a sync.
 pub const DESIGN_SETTLE: &str = "design.settle";
 
@@ -1106,6 +1108,12 @@ pub struct DesignProgress {
 pub struct DesignFile {
     pub workspace: String,
     /// Relative to the workspace's design folder, such as `systems/<slug>/styles.css`.
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DesignDetect {
+    pub workspace: String,
     pub path: String,
 }
 

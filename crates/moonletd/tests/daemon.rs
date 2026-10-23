@@ -1978,6 +1978,10 @@ async fn design_systems_over_rpc() {
     assert_eq!(list[0]["cards"], 1);
     assert_eq!(list[0]["step"], serde_json::Value::Null);
 
+    std::fs::write(repo.join("package.json"), r#"{"dependencies": {"react": "19"}, "devDependencies": {"tailwindcss": "4"}}"#).unwrap();
+    let stack: Vec<String> = c.request(methods::DESIGN_DETECT, serde_json::json!({"workspace": w, "path": repo})).await.unwrap();
+    assert_eq!(stack, ["React", "Tailwind"]);
+
     let file: serde_json::Value = c
         .request(methods::DESIGN_FILE, serde_json::json!({"workspace": w, "path": "systems/moonlet-desktop/styles.css"}))
         .await
