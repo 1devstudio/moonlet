@@ -91,6 +91,8 @@ pub fn set_heavy(repo: &Path, heavy: &HeavyConfig) -> Result<()> {
         os: heavy.os,
         env: trim(&heavy.env),
         outputs: heavy.outputs.iter().map(|s| s.trim().to_string()).collect(),
+        // Not written here: the file's own stays.
+        machine_setup: None,
     };
     crate::heavy::check(&heavy).map_err(anyhow::Error::msg)?;
     let lock = lock_for(&repo.join(".moonlet/config.toml"));
@@ -393,7 +395,12 @@ fn set_trackers(doc: &mut DocumentMut, trackers: &[String]) {
 
 fn apply_heavy(doc: &mut DocumentMut, h: &HeavyConfig) {
     let empty = h.commands.is_empty() && h.env.is_empty() && h.outputs.is_empty() && h.os == HeavyOs::Any;
-    if empty {
+    // `machine_setup` (X63) is the file's own: it keeps the table.
+    let keeps = doc
+        .get("heavy")
+        .and_then(|i| i.as_table())
+        .is_some_and(|t| t.contains_key("machine_setup"));
+    if empty && !keeps {
         doc.remove("heavy");
         return;
     }
@@ -503,6 +510,7 @@ mod tests {
             os: HeavyOs::Linux,
             env: vec!["CI".into()],
             outputs: vec!["coverage".into()],
+            machine_setup: None,
         };
         set_heavy(dir.path(), &heavy).unwrap();
         assert_eq!(
@@ -529,6 +537,21 @@ mod tests {
         // An invalid table is refused and the file stays as it was.
         let bad = HeavyConfig { outputs: vec!["..".into()], ..HeavyConfig::default() };
         assert_eq!(set_heavy(dir.path(), &bad).unwrap_err().to_string(), "outputs: `..` is outside the worktree");
+    }
+
+    #[test]
+    fn heavy_set_keeps_the_machine_setup() {
+        use moonlet_proto::types::HeavyConfig;
+        // Read-only in the app (X63): heavy.set never writes nor drops it.
+        let dir = repo_with(Some("[heavy]\ncommands = [\"pnpm test\"]\nmachine_setup = \"scripts/ci-deps.sh\"\n"));
+        assert_eq!(
+            load(dir.path(), "main".into()).config.heavy.machine_setup.as_deref(),
+            Some("scripts/ci-deps.sh")
+        );
+        set_heavy(dir.path(), &HeavyConfig { commands: vec!["pnpm build".into()], ..HeavyConfig::default() }).unwrap();
+        assert_eq!(read(&dir), "[heavy]\ncommands = [\"pnpm build\"]\nmachine_setup = \"scripts/ci-deps.sh\"\n");
+        set_heavy(dir.path(), &HeavyConfig::default()).unwrap();
+        assert_eq!(read(&dir), "[heavy]\nmachine_setup = \"scripts/ci-deps.sh\"\n");
     }
 
     #[test]
