@@ -7,6 +7,7 @@ use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
 use moonlet_core::client::{Client, wait_for_socket};
+use moonlet_proto::methods::ExecRunStarted;
 use moonlet_proto::methods::{DeviceKind, MobilePairing};
 use moonlet_proto::{Frame, Message};
 use serde_json::{Value, json};
@@ -129,6 +130,11 @@ async fn central_with(config: &str, env: &[(&str, &str)]) -> Central {
 }
 
 async fn central_in(home: tempfile::TempDir, config: &str, env: &[(&str, &str)]) -> Central {
+    // This machine's name, as the first line of a run says it.
+    write(
+        &home.path().join("link.json"),
+        r#"{ "central": null, "worker": { "id": "0f6c2a9e-9d2b-4f5e-8f1a-2b3c4d5e6f70", "name": "studio-mini", "enabled": false } }"#,
+    );
     let repo = home.path().join("src").join("shop");
     std::fs::create_dir_all(&repo).unwrap();
     git(&repo, &["init", "-q", "-b", "main"]);
@@ -142,6 +148,12 @@ async fn central_in(home: tempfile::TempDir, config: &str, env: &[(&str, &str)])
         ],
     );
     write(&repo.join("package.json"), "{}\n");
+    // A command the run tests use: prints to both streams, then exits with
+    // its first argument.
+    write(
+        &repo.join("run.sh"),
+        "echo out\necho err >&2\nexit \"${1:-0}\"\n",
+    );
     write(&repo.join(".moonlet/config.toml"), config);
     git(&repo, &["add", "."]);
     git(&repo, &["commit", "-q", "-m", "shop"]);
@@ -571,4 +583,217 @@ async fn a_managed_deny_rule_keeps_the_command_here() {
         json!({ "route": false, "reason": "claude_rule" })
     );
     assert_eq!(c.route("pnpm build").await["route"], json!(true));
+}
+
+const RUN_CONFIG: &str = "[heavy]\ncommands = [\"sh run.sh\", \"sh -c\", \"cat\", \"env\", \"pwd\", \"printf\"]\nenv = [\"CI\"]\n";
+
+/// What a run sent back: its stdout, its stderr and its exit status.
+#[derive(Debug, PartialEq)]
+struct Ran {
+    stdout: String,
+    stderr: String,
+    status: i32,
+}
+
+impl Central {
+    async fn approve_runs(&self) {
+        let info: Value = self
+            .daemon
+            .call("heavy.get", json!({ "project": self.project }))
+            .await;
+        let _: Value = self
+            .daemon
+            .call(
+                "heavy.approve",
+                json!({ "project": self.project, "commands": info["config"]["commands"], "env": info["config"]["env"] }),
+            )
+            .await;
+    }
+
+    /// Starts `argv` with `exec.run` in `cwd` and returns the client that
+    /// gets its output.
+    async fn start(&self, argv: &[&str], cwd: &Path, env: Value) -> (Client, u32) {
+        let mut c = self.daemon.app().await;
+        let started: ExecRunStarted = c
+            .request(
+                "exec.run",
+                json!({ "session": self.session, "argv": argv, "cwd": cwd, "env": env }),
+            )
+            .await
+            .unwrap();
+        (c, started.run)
+    }
+
+    async fn run(&self, argv: &[&str]) -> Ran {
+        let (c, run) = self.start(argv, &self.worktree.clone(), json!({})).await;
+        collect(c, run).await
+    }
+}
+
+async fn collect(mut c: Client, run: u32) -> Ran {
+    let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+    loop {
+        let frame = tokio::time::timeout(Duration::from_secs(20), c.next_frame())
+            .await
+            .expect("the run never ended")
+            .unwrap()
+            .expect("the daemon closed the connection");
+        match frame {
+            Frame::RunOutput {
+                run: r,
+                stream,
+                data,
+            } if r == run => {
+                if stream == 1 {
+                    stdout.extend(data)
+                } else {
+                    stderr.extend(data)
+                }
+            }
+            Frame::Json(Message::Event { name, data })
+                if name == "exec.exited" && data["run"] == json!(run) =>
+            {
+                return Ran {
+                    stdout: String::from_utf8_lossy(&stdout).into(),
+                    stderr: String::from_utf8_lossy(&stderr).into(),
+                    status: data["status"].as_i64().unwrap() as i32,
+                };
+            }
+            _ => {}
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_routed_commands_output_and_exit_status_come_back() {
+    let c = central_with(RUN_CONFIG, &[]).await;
+    c.approve_runs().await;
+    assert_eq!(
+        c.run(&["sh", "run.sh", "3"]).await,
+        Ran {
+            stdout: "out\n".into(),
+            stderr: "moonlet: running on studio-mini\nerr\n".into(),
+            status: 3,
+        }
+    );
+    assert_eq!(c.run(&["sh", "run.sh"]).await.status, 0);
+}
+
+#[tokio::test]
+async fn a_command_killed_by_a_signal_exits_with_128_plus_it() {
+    let c = central_with(RUN_CONFIG, &[]).await;
+    c.approve_runs().await;
+    assert_eq!(c.run(&["sh", "-c", "kill -9 $$"]).await.status, 137);
+}
+
+#[tokio::test]
+async fn a_routed_command_reads_an_empty_stdin() {
+    let c = central_with(RUN_CONFIG, &[]).await;
+    c.approve_runs().await;
+    let ran = tokio::time::timeout(Duration::from_secs(5), c.run(&["cat"]))
+        .await
+        .expect("cat waited for input");
+    assert_eq!((ran.stdout.as_str(), ran.status), ("", 0));
+    // It is /dev/null, a character device, not a pipe left open.
+    let ran = c
+        .run(&["sh", "-c", "[ -c /dev/stdin ] && echo null || echo other"])
+        .await;
+    assert_eq!(ran.stdout, "null\n");
+}
+
+#[tokio::test]
+async fn only_approved_env_names_reach_the_worker() {
+    let c = central_with(RUN_CONFIG, &[]).await;
+    c.approve_runs().await;
+    let (client, run) = c
+        .start(
+            &["env"],
+            &c.worktree.clone(),
+            json!({ "CI": "1", "NPM_TOKEN": "secret", "HOME_GROWN": "x" }),
+        )
+        .await;
+    let ran = collect(client, run).await;
+    let lines: Vec<&str> = ran.stdout.lines().collect();
+    assert!(lines.contains(&"CI=1"), "{lines:?}");
+    assert!(lines.contains(&"MOONLET_ROUTED=1"), "{lines:?}");
+    assert!(
+        lines.contains(&format!("MOONLET_SESSION={}", c.session).as_str()),
+        "{lines:?}"
+    );
+    assert!(!ran.stdout.contains("secret"), "{lines:?}");
+    assert!(!ran.stdout.contains("HOME_GROWN"), "{lines:?}");
+}
+
+#[tokio::test]
+async fn a_routed_command_runs_without_a_shell_from_the_same_folder() {
+    let c = central_with(RUN_CONFIG, &[]).await;
+    c.approve_runs().await;
+    assert_eq!(
+        c.run(&["printf", "%s|", "a b", "$HOME", "*"]).await.stdout,
+        "a b|$HOME|*|"
+    );
+    let web = c.worktree.join("web");
+    std::fs::create_dir_all(&web).unwrap();
+    let (client, run) = c.start(&["pwd"], &web, json!({})).await;
+    let ran = collect(client, run).await;
+    assert_eq!(
+        ran.stdout.trim(),
+        std::fs::canonicalize(&web).unwrap().to_str().unwrap()
+    );
+}
+
+#[tokio::test]
+async fn cancelling_stops_the_command_and_brings_its_changes_back() {
+    let c = central_with(RUN_CONFIG, &[]).await;
+    c.approve_runs().await;
+    let (mut client, run) = c
+        .start(
+            &["sh", "-c", "echo x > done.txt; echo started; sleep 30"],
+            &c.worktree.clone(),
+            json!({}),
+        )
+        .await;
+    loop {
+        let f = client.next_frame().await.unwrap().unwrap();
+        if matches!(&f, Frame::RunOutput { stream: 1, data, .. } if data.starts_with(b"started")) {
+            break;
+        }
+    }
+    let started = std::time::Instant::now();
+    let _: bool = client
+        .request("exec.cancel", json!({ "run": run }))
+        .await
+        .unwrap();
+    let ran = collect(client, run).await;
+    assert_eq!(ran.status, 143);
+    assert!(started.elapsed() < Duration::from_secs(4));
+    assert_eq!(
+        std::fs::read_to_string(c.worktree.join("done.txt")).unwrap(),
+        "x\n"
+    );
+}
+
+#[tokio::test]
+async fn an_unapproved_moonlet_exec_is_refused() {
+    let c = central_with(RUN_CONFIG, &[]).await;
+    let refuse = |argv: Value| {
+        let c = &c;
+        async move {
+            c.daemon
+                .fails(
+                    "exec.run",
+                    json!({ "session": c.session, "argv": argv, "cwd": c.worktree }),
+                )
+                .await
+        }
+    };
+    assert_eq!(
+        refuse(json!(["sh", "run.sh"])).await,
+        "not_routable: not_approved"
+    );
+    c.approve_runs().await;
+    assert_eq!(
+        refuse(json!(["rm", "-rf", "."])).await,
+        "not_routable: not_heavy"
+    );
 }

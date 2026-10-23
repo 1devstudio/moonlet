@@ -73,7 +73,7 @@ pub fn dequeued(counter: &AtomicUsize, frame: &Frame) {
 /// messages are not counted.
 fn counted_len(frame: &Frame) -> usize {
     match frame {
-        Frame::Output { data, .. } | Frame::Pack { data, .. } => data.len(),
+        Frame::Output { data, .. } | Frame::Pack { data, .. } | Frame::RunOutput { data, .. } => data.len(),
         Frame::Json(Message::Response { result: Some(v), .. }) => {
             v.get("snapshot").and_then(|s| s.as_str()).map_or(0, str::len)
         }
