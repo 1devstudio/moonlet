@@ -3,13 +3,13 @@
 //! node id so a GitHub Project can add it.
 
 use anyhow::{Result, bail};
-use moonlet_proto::types::{GhCreateChoices, GhCreated};
+use moonlet_proto::types::{GhComment, GhComments, GhCreateChoices, GhCreated};
 use serde_json::{Value, json};
 
 use std::path::Path;
 use std::time::Duration;
 
-use crate::git::{check_repo, gh_whoami, parse_gh_tasks, run_raw};
+use crate::git::{check_repo, gh_whoami, parse_gh_tasks, run_raw, utc_ms};
 
 /// `gh api`'s arguments to create an issue in `repo` (`owner/name`):
 /// assigned to `assignee`, a login, when given; labels as GitHub names them.
@@ -121,6 +121,63 @@ async fn api(args: &[String]) -> Result<Vec<u8>> {
     Ok(out.stdout)
 }
 
+/// The most comments the Task detail lists (X66).
+const MAX_COMMENTS: usize = 100;
+
+/// `gh issue view <n> --json comments` as the Task detail lists them (X66):
+/// oldest first, the newest 100, without those hidden on GitHub.
+pub fn parse_issue_comments(raw: &[u8]) -> Result<GhComments> {
+    let v: Value = serde_json::from_slice(raw)?;
+    let mut comments: Vec<GhComment> = v["comments"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|c| c["isMinimized"].as_bool() != Some(true))
+        .map(|c| {
+            let login = c["author"]["login"].as_str().unwrap_or_default();
+            GhComment {
+                id: c["id"].as_str().unwrap_or_default().into(),
+                author: if login.is_empty() { String::new() } else { format!("@{login}") },
+                body: c["body"].as_str().unwrap_or_default().into(),
+                created_ms: c["createdAt"].as_str().and_then(utc_ms).unwrap_or(0),
+            }
+        })
+        .collect();
+    comments.sort_by_key(|c| c.created_ms);
+    let extra = comments.len().saturating_sub(MAX_COMMENTS);
+    comments.drain(..extra);
+    Ok(GhComments { comments, more: extra > 0 })
+}
+
+/// gh's arguments to comment on issue `number`, the body read from stdin.
+pub fn issue_comment_args(number: u64) -> Vec<String> {
+    vec!["issue".into(), "comment".into(), number.to_string(), "--body-file".into(), "-".into()]
+}
+
+/// The comments of issue `number` of the repository at `repo` (X66).
+pub async fn gh_issue_comments(repo: &Path, number: u64) -> Result<GhComments> {
+    let n = number.to_string();
+    let out = run_raw("gh", repo, &["issue", "view", &n, "--json", "comments"], None, Duration::from_secs(60)).await?;
+    if out.status != 0 {
+        bail!("{}", out.stderr.trim());
+    }
+    parse_issue_comments(&out.stdout)
+}
+
+/// Posts the user's comment on issue `number` of the repository at `repo` (X66).
+pub async fn gh_issue_comment(repo: &Path, number: u64, body: &str) -> Result<()> {
+    if body.trim().is_empty() {
+        bail!("The comment is empty");
+    }
+    let args = issue_comment_args(number);
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let out = run_raw("gh", repo, &refs, Some(body.as_bytes()), Duration::from_secs(60)).await?;
+    if out.status != 0 {
+        bail!("{}", out.stderr.trim());
+    }
+    Ok(())
+}
+
 /// The new-issue form's lists for `repo` (X52). Who the user is is needed;
 /// people, labels or access GitHub won't give leave the user's own choice.
 pub async fn gh_create_options(repo: &str) -> Result<GhCreateChoices> {
@@ -176,6 +233,36 @@ mod tests {
             env!("CARGO_MANIFEST_DIR")
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn an_issues_comments_by_login_oldest_first_without_hidden_ones() {
+        use moonlet_proto::types::{GhComment, GhComments};
+        assert_eq!(
+            parse_issue_comments(&fixture("gh-issue-comments.json")).unwrap(),
+            GhComments {
+                comments: vec![
+                    GhComment {
+                        id: "IC_e2e0001".into(),
+                        author: "@sam-rivera".into(),
+                        body: "Looks good. Can we **also** cover `ClickUp`?\n\n- [ ] one\n- [x] two\n".into(),
+                        created_ms: 1_792_767_974_000,
+                    },
+                    GhComment {
+                        id: "IC_e2e0003".into(),
+                        author: "@lee-moreno".into(),
+                        body: "Done in #13.".into(),
+                        created_ms: 1_792_771_200_000,
+                    },
+                ],
+                more: false,
+            }
+        );
+    }
+
+    #[test]
+    fn a_comment_goes_to_gh_on_stdin() {
+        assert_eq!(issue_comment_args(12), ["issue", "comment", "12", "--body-file", "-"]);
     }
 
     #[test]

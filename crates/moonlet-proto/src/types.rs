@@ -562,6 +562,26 @@ pub struct GhTask {
     pub closing_prs: Vec<u64>,
 }
 
+/// A GitHub issue's comment (X66).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GhComment {
+    pub id: String,
+    /// `@login`; empty when GitHub gives none.
+    pub author: String,
+    /// Markdown.
+    pub body: String,
+    pub created_ms: u64,
+}
+
+/// An issue's comments (X66): oldest first, at most the newest 100, and
+/// whether it has more.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct GhComments {
+    pub comments: Vec<GhComment>,
+    #[serde(default)]
+    pub more: bool,
+}
+
 /// An open GitHub Project (X50 Add a board): its Status field's options are
 /// the board's columns.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

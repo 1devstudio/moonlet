@@ -21,3 +21,4 @@ Each file is the real output of gh (or of git, for the `git-*` files), captured 
 | `gh-auth-status-signed-out.txt` (X59) | `gh auth status --hostname github.com` with an empty `GH_CONFIG_DIR` | Captured 2026-10-21, unchanged (gh 2.102.0 prints it to stderr, exit 1) |
 | `git-ls-remote-symref.txt` (X59) | `git ls-remote --symref https://github.com/<public repo>.git HEAD` | Captured 2026-10-21, unchanged |
 | `git-clone-progress.txt` (X59) | The stderr of `gh repo clone <public repo> <dir> -- --progress`, `\r`s kept | Captured 2026-10-21 (gh 2.102.0, git over https); the folder name in "Cloning into" replaced with `storefront` |
+| `gh-issue-comments.json` (X66) | `gh issue view <n> --json comments` on a sandbox repository | Captured 2026-10-23, sanitised: login `sam-rivera`, repo `acme/web`, node ids `IC_e2eNNNN`, comment URLs. Added in the captured shape: a minimized (OFF_TOPIC) comment by `jo-park` and a later one by `lee-moreno` |

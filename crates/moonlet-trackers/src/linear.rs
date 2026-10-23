@@ -294,6 +294,48 @@ pub const ISSUE_UPDATE: &str = "mutation Move($id: String!, $input: IssueUpdateI
 pub const COMMENT: &str =
     "mutation Comment($input: CommentCreateInput!) { commentCreate(input: $input) { success } }";
 
+/// An issue's comments (X66), by its id or key.
+pub const COMMENTS: &str = "query Comments($id: String!) { issue(id: $id) { comments(first: 100) { \
+     nodes { id body createdAt user { name } botActor { name } } pageInfo { hasNextPage } } } }";
+
+/// The comments of [`COMMENTS`], oldest first; an integration's comment is
+/// named after its bot.
+pub fn parse_comments(raw: &[u8]) -> Result<crate::comment::Comments, ApiError> {
+    let d = data(raw)?;
+    let conn = &d["issue"]["comments"];
+    if conn.is_null() {
+        return Err(ApiError::new("Linear has no such issue"));
+    }
+    let comments = conn["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|c| crate::comment::TaskComment {
+            id: c["id"].as_str().unwrap_or_default().into(),
+            author: c["user"]["name"]
+                .as_str()
+                .or(c["botActor"]["name"].as_str())
+                .unwrap_or_default()
+                .into(),
+            body: c["body"].as_str().unwrap_or_default().into(),
+            markdown: true,
+            created_ms: c["createdAt"]
+                .as_str()
+                .and_then(crate::time::timestamp_ms)
+                .unwrap_or(0),
+        })
+        .collect();
+    Ok(crate::comment::Comments::new(
+        comments,
+        conn["pageInfo"]["hasNextPage"].as_bool() == Some(true),
+    ))
+}
+
+/// [`COMMENT`]'s variables for the user's Markdown on issue `id` (X66).
+pub fn comment_variables(id: &str, body: &str) -> Value {
+    serde_json::json!({ "input": { "issueId": id, "body": body } })
+}
+
 /// Whether mutation `field` (`issueUpdate`, `commentCreate`) succeeded.
 pub fn parse_success(raw: &[u8], field: &str) -> Result<(), ApiError> {
     if data(raw)?[field]["success"].as_bool() == Some(true) {
@@ -438,6 +480,51 @@ mod tests {
             env!("CARGO_MANIFEST_DIR")
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn an_issues_comments_oldest_first_with_bots_named_and_more_flagged() {
+        use crate::comment::{Comments, TaskComment};
+        assert_eq!(
+            parse_comments(&fixture("linear-comments.json")).unwrap(),
+            Comments {
+                comments: vec![
+                    TaskComment {
+                        id: "c0ffee00-0000-4000-8000-000000000001".into(),
+                        author: "Ada Lovelace".into(),
+                        body: "Can we **also** cover the settings page?\n\n- [ ] dark\n- [x] light"
+                            .into(),
+                        markdown: true,
+                        created_ms: 1_791_969_164_512,
+                    },
+                    TaskComment {
+                        id: "c0ffee00-0000-4000-8000-000000000002".into(),
+                        author: "".into(),
+                        body: "On it.".into(),
+                        markdown: true,
+                        created_ms: 1_791_975_600_000,
+                    },
+                    TaskComment {
+                        id: "c0ffee00-0000-4000-8000-000000000003".into(),
+                        author: "GitHub".into(),
+                        body: "Opened a pull request: https://github.com/acme/app/pull/57".into(),
+                        markdown: true,
+                        created_ms: 1_792_058_531_000,
+                    },
+                ],
+                more: true,
+            }
+        );
+        // An unknown issue is an error, not an empty list.
+        assert!(parse_comments(br#"{"data":{"issue":null},"errors":[{"message":"Entity not found: Issue"}]}"#).is_err());
+    }
+
+    #[test]
+    fn a_new_comment_is_the_users_markdown_on_the_issue() {
+        assert_eq!(
+            comment_variables("9cfb482a", "Can we **also**?"),
+            serde_json::json!({ "input": { "issueId": "9cfb482a", "body": "Can we **also**?" } })
+        );
     }
 
     #[test]

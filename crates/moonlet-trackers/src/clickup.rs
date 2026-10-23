@@ -342,6 +342,50 @@ pub fn comment_body(text: &str) -> Value {
     json!({ "comment_text": text, "notify_all": false })
 }
 
+/// A page of a task's comments (X66): the newest, or those older than `after`.
+pub fn comments_path(task: &str, after: Option<&crate::comment::TaskComment>) -> String {
+    match after {
+        None => format!("/task/{task}/comment"),
+        Some(c) => format!(
+            "/task/{task}/comment?start={}&start_id={}",
+            c.created_ms, c.id
+        ),
+    }
+}
+
+/// Whether a page of comments is full, so older ones may follow.
+pub fn full_comments_page(page: &[crate::comment::TaskComment]) -> bool {
+    page.len() >= 25
+}
+
+/// The most pages of comments read: one past [`crate::comment::MAX`], so a
+/// full last page shows whether more follow.
+pub const COMMENT_PAGES: usize = crate::comment::MAX / 25 + 1;
+
+/// The comments of the pages read, oldest first: more only when past
+/// [`crate::comment::MAX`].
+pub fn comments_from_pages(pages: Vec<Vec<crate::comment::TaskComment>>) -> crate::comment::Comments {
+    crate::comment::Comments::new(pages.into_iter().flatten().collect(), false)
+}
+
+/// One page of [`comments_path`] as ClickUp sends it, newest first; the text
+/// is plain.
+pub fn parse_comments(raw: &[u8]) -> Result<Vec<crate::comment::TaskComment>, ApiError> {
+    let v = parse(raw)?;
+    Ok(v["comments"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|c| crate::comment::TaskComment {
+            id: str_of(&c["id"]),
+            author: str_of(&c["user"]["username"]),
+            body: str_of(&c["comment_text"]),
+            markdown: false,
+            created_ms: str_of(&c["date"]).parse().unwrap_or(0),
+        })
+        .collect())
+}
+
 /// What a failed request means; a rejected token asks for a new one (X44).
 pub fn parse_error(status: u16, raw: &[u8]) -> ApiError {
     let v = parse(raw).unwrap_or_default();
@@ -380,6 +424,68 @@ mod tests {
             env!("CARGO_MANIFEST_DIR")
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn a_hundred_comments_and_nothing_after_them_have_no_more() {
+        use crate::comment::TaskComment;
+        // Pages as ClickUp sends them, newest first: 25 each, ids by age.
+        let page = |from: u64, n: u64| -> Vec<TaskComment> {
+            (0..n)
+                .map(|i| TaskComment {
+                    id: (from - i).to_string(),
+                    author: "John Doe".into(),
+                    body: "Task comment content".into(),
+                    markdown: false,
+                    created_ms: from - i,
+                })
+                .collect()
+        };
+        let hundred = vec![page(101, 25), page(76, 25), page(51, 25), page(26, 25)];
+        // Exactly 100: a full fourth page, then an empty one.
+        let c = comments_from_pages([hundred.clone(), vec![page(1, 0)]].concat());
+        assert_eq!((c.comments.len(), c.more), (100, false));
+        // A 101st after them: the oldest is left out, and there are more.
+        let c = comments_from_pages([hundred, vec![page(1, 1)]].concat());
+        assert_eq!((c.comments.len(), c.more), (100, true));
+        assert_eq!(c.comments[0].id, "2");
+        // Exactly 25: a full page, then an empty one.
+        let c = comments_from_pages(vec![page(25, 25), page(0, 0)]);
+        assert_eq!((c.comments.len(), c.more), (25, false));
+    }
+
+    #[test]
+    fn a_tasks_comments_as_plain_text_a_page_at_a_time() {
+        use crate::comment::TaskComment;
+        let page = parse_comments(&fixture("clickup-comments.json")).unwrap();
+        assert_eq!(
+            page,
+            [
+                TaskComment {
+                    id: "459".into(),
+                    author: "".into(),
+                    body: "Second line\nof a reply".into(),
+                    markdown: false,
+                    created_ms: 1_568_123_364_079,
+                },
+                TaskComment {
+                    id: "458".into(),
+                    author: "John Doe".into(),
+                    body: "Task comment content".into(),
+                    markdown: false,
+                    created_ms: 1_568_036_964_079,
+                },
+            ]
+        );
+        assert_eq!(comments_path("869e2e001", None), "/task/869e2e001/comment");
+        // The next page starts after the oldest comment read.
+        assert_eq!(
+            comments_path("869e2e001", page.last()),
+            "/task/869e2e001/comment?start=1568036964079&start_id=458"
+        );
+        // ClickUp sends 25 at a time: a full page may have more after it.
+        assert!(!full_comments_page(&page));
+        assert!(full_comments_page(&vec![page[0].clone(); 25]));
     }
 
     #[test]
