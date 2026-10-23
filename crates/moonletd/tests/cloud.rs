@@ -675,6 +675,15 @@ async fn removing_revokes_the_device_retires_and_destroys() {
 }
 
 #[tokio::test]
+async fn a_ready_machine_names_its_worker() {
+    let c = cloud().await;
+    let m = c.ready().await;
+    let workers: Vec<Value> = c.d.call("worker.list", json!({})).await;
+    assert_eq!(workers.len(), 1, "{workers:?}");
+    assert_eq!(m["worker"], workers[0]["id"]);
+}
+
+#[tokio::test]
 async fn remove_now_removes_an_idle_machine_at_once() {
     let c = cloud().await;
     let m = c.ready().await;

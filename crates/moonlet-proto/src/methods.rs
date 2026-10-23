@@ -2289,6 +2289,10 @@ pub struct CloudMachine {
     /// Why it was removed: "removed after 15 min idle".
     #[serde(default)]
     pub reason: Option<String>,
+    /// Its worker's id in `worker.list`, once it has registered. Only in
+    /// `cloud.machines` and `cloud.changed`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker: Option<String>,
 }
 
 /// `cloud.machines` and `cloud.changed`.
