@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use super::check::{self, html_files};
-use super::{anchor, manifest};
+use super::{anchor, foundations, manifest, readme};
 
 /// One project a design system is built from.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -227,6 +227,44 @@ impl Store {
         Ok(path)
     }
 
+    /// Rewrites the generated files (foundation cards, `_ds_manifest.json`,
+    /// `README.md`) and returns every problem of the system, by file and line.
+    pub fn check_system(&self, workspace: &str, slug: &str) -> Result<Vec<check::Problem>> {
+        let dir = self.system_dir(workspace, slug)?;
+        let config = read_config(&dir)?;
+        foundations::write(&dir)?;
+        manifest::write(&dir)?;
+        let mut problems = readme::write(&dir, &config.name)?;
+        problems.extend(check::check(&dir)?);
+        problems.sort_by(|a, b| (&a.path, a.line).cmp(&(&b.path, b.line)));
+        Ok(problems)
+    }
+
+    /// Settles a card the user is asked about after a sync (X64).
+    pub fn settle(&self, workspace: &str, slug: &str, card: &str, choice: Settle) -> Result<()> {
+        let dir = self.system_dir(workspace, slug)?;
+        let is_card = (card.starts_with("components/") || card.starts_with("ui_kits/"))
+            && card.ends_with(".html")
+            && !card.ends_with(".proposed.html");
+        let Some(path) = inside_dir(&dir, card).filter(|_| is_card) else {
+            bail!("{card} is not a card of {slug}");
+        };
+        let proposed = path.with_extension("proposed.html");
+        match choice {
+            Settle::Mine => std::fs::remove_file(&proposed)?,
+            Settle::Synced => std::fs::rename(&proposed, &path)?,
+            Settle::Remove if card.starts_with("components/") => {
+                std::fs::remove_dir_all(path.parent().unwrap_or(&dir))?
+            }
+            Settle::Remove => {
+                std::fs::remove_file(&path)?;
+                let _ = std::fs::remove_file(&proposed);
+            }
+            Settle::Keep => {}
+        }
+        Ok(())
+    }
+
     /// `~/.moonlet/design/<workspace>`, refusing an id that is not one folder name.
     fn workspace(&self, workspace: &str) -> Result<PathBuf> {
         if !is_name(workspace) {
@@ -255,6 +293,20 @@ pub struct SystemSummary {
     pub check_problems: usize,
     /// Proposed changes and orphaned cards waiting for the user.
     pub to_settle: usize,
+}
+
+/// What the user picks for a card under Needs you (X64).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Settle {
+    /// Keep the card as edited by hand; drop the sync's proposal.
+    Mine,
+    /// Replace the card with the sync's proposal.
+    Synced,
+    /// Delete an orphaned card.
+    Remove,
+    /// Leave an orphaned card until the next sync.
+    Keep,
 }
 
 /// One folder name: not empty, not `.` or `..`, no separator.
@@ -471,5 +523,97 @@ identity = \"github.com/1devstudio/moonlet\"
         store.remove_system("w1", &slug).unwrap();
         assert!(!home.path().join("design/w1/systems/storefront").exists());
         assert!(store.remove_system("w1", "..").is_err());
+    }
+
+    #[test]
+    fn checking_a_system_writes_its_generated_files_and_returns_every_problem() {
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::new(home.path());
+        let slug = store.create_system("w1", "storefront", vec![], 1).unwrap();
+        let dir = home.path().join("design/w1/systems").join(&slug);
+        put(
+            &dir,
+            &[
+                (
+                    "styles.css",
+                    "@import \"tokens/colors.css\";\n@import \"components.css\";\n",
+                ),
+                ("tokens/colors.css", ":root { --color-bg: #fff; }\n"),
+                ("components.css", ".btn { background: var(--color-bg); }\n"),
+                ("conventions.md", "Use `.btn` and `.chip`.\n"),
+                (
+                    "components/buttons/button/button.html",
+                    "<!-- @dsCard group=\"Buttons\" -->\n<button class=\"btn\" style=\"color: var(--color-fg)\">Pay</button>\n",
+                ),
+            ],
+        );
+        let got: Vec<(String, usize, check::Kind)> = store
+            .check_system("w1", &slug)
+            .unwrap()
+            .into_iter()
+            .map(|p| (p.path, p.line, p.kind))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (
+                    "components/buttons/button/button.html".into(),
+                    2,
+                    check::Kind::UnknownToken
+                ),
+                ("conventions.md".into(), 1, check::Kind::UnknownName),
+            ]
+        );
+        for generated in [
+            "README.md",
+            "_ds_manifest.json",
+            "foundations/colours/colours.html",
+        ] {
+            assert!(dir.join(generated).is_file(), "{generated} not written");
+        }
+        assert!(
+            std::fs::read_to_string(dir.join("README.md"))
+                .unwrap()
+                .contains("# storefront\n")
+        );
+    }
+
+    #[test]
+    fn settling_a_card_keeps_mine_uses_the_synced_one_or_removes_it() {
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::new(home.path());
+        let slug = store.create_system("w1", "storefront", vec![], 1).unwrap();
+        let dir = home.path().join("design/w1/systems").join(&slug);
+        let mine = "<!-- @dsCard group=\"Custom\" -->\n<div>mine</div>\n";
+        let synced = "<!-- @dsCard group=\"Custom\" -->\n<div>synced</div>\n";
+        let row = "components/custom/row/row.html";
+        put(
+            &dir,
+            &[
+                (row, mine),
+                ("components/custom/row/row.proposed.html", synced),
+            ],
+        );
+        store.settle("w1", &slug, row, Settle::Mine).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join(row)).unwrap(), mine);
+        assert!(!dir.join("components/custom/row/row.proposed.html").exists());
+
+        put(&dir, &[("components/custom/row/row.proposed.html", synced)]);
+        store.settle("w1", &slug, row, Settle::Synced).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join(row)).unwrap(), synced);
+        assert!(!dir.join("components/custom/row/row.proposed.html").exists());
+
+        store.settle("w1", &slug, row, Settle::Remove).unwrap();
+        assert!(!dir.join("components/custom/row").exists());
+        assert!(
+            store
+                .settle("w1", &slug, "styles.css", Settle::Remove)
+                .is_err()
+        );
+        assert!(
+            store
+                .settle("w1", &slug, "components/../../config.toml", Settle::Remove)
+                .is_err()
+        );
     }
 }
