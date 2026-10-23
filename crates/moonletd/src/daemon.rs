@@ -221,6 +221,10 @@ impl Daemon {
     /// Refuses all but the Mac's app and a paired Mac over the tailnet
     /// (X61): never a phone, nor an agent's CLI.
     fn app_or_paired_mac(&self, conn: &Conn, what: &str) -> Result<(), RpcError> {
+        // A paired Mac's daemon linked as a worker is not its app.
+        if conn.client == crate::link::WORKER_CLIENT {
+            return Err(RpcError::new("forbidden", format!("only the moonlet app manages {what}")));
+        }
         let Some(device) = conn.phone.as_deref() else {
             return app_only(conn, what);
         };
