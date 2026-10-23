@@ -122,9 +122,22 @@ pub fn write(root: &Path, name: &str) -> Result<Vec<Problem>> {
         .filter_map(|p| std::fs::read_to_string(p).ok())
         .collect();
     let tokens: BTreeSet<String> = css.iter().flat_map(|t| definitions(t)).collect();
+    // Classes from selectors only: not from comments, strings or file names.
     let classes: BTreeSet<String> = css
         .iter()
-        .flat_map(|t| CLASS.captures_iter(t).map(|c| c[1].to_string()))
+        .flat_map(|t| {
+            let t = COMMENT.replace_all(t, "").into_owned();
+            SELECTOR
+                .captures_iter(&t)
+                .filter(|c| !c[1].trim_start().starts_with('@'))
+                .flat_map(|c| {
+                    CLASS
+                        .captures_iter(&c[1])
+                        .map(|m| m[1].to_string())
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+        })
         .collect();
     for (i, line) in conventions.lines().enumerate() {
         for code in CODE.captures_iter(line) {
@@ -163,6 +176,9 @@ static CODE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"`([^`]+)`").unwrap(
 static NAME: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?:^|[^A-Za-z0-9_-])(\.[A-Za-z_][A-Za-z0-9_-]*|--[A-Za-z0-9_-]+)").unwrap()
 });
+/// The prelude of each rule: the text before a `{` since the last `}` or `;`.
+static SELECTOR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"([^{};]+)\{").unwrap());
+static COMMENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)/\*.*?\*/").unwrap());
 static CLASS: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\.([A-Za-z_][A-Za-z0-9_-]*)").unwrap());
 
@@ -340,6 +356,41 @@ Style with classes: `.btn` and `.btn--primary`, colours from `--color-accent`.
                     "`--color-selected` is not a token in styles.css or the files it imports"
                         .into()
                 ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_class_only_named_in_a_comment_string_or_import_does_not_count() {
+        let dir = system(&[
+            (
+                "conventions.md",
+                "Use `.btn`, `.ghost`, `.woff2` and `.tooltip`.\n",
+            ),
+            (
+                "styles.css",
+                "@import \"tokens/colors.css\";\n@import \"components.css\";\n",
+            ),
+            ("tokens/colors.css", ":root { --color-bg: #fff; }\n"),
+            (
+                "components.css",
+                "/* .ghost was removed */\n.btn { content: \".tooltip\"; background: url(./font.woff2); }\n",
+            ),
+        ]);
+        let messages: Vec<String> = write(dir.path(), "x")
+            .unwrap()
+            .into_iter()
+            .map(|p| p.message)
+            .collect();
+        assert_eq!(
+            messages,
+            vec![
+                "`.ghost` is not a class in components.css or the files styles.css imports"
+                    .to_string(),
+                "`.woff2` is not a class in components.css or the files styles.css imports"
+                    .to_string(),
+                "`.tooltip` is not a class in components.css or the files styles.css imports"
+                    .to_string(),
             ]
         );
     }
