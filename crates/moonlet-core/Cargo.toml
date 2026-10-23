@@ -29,6 +29,7 @@ lol_html = "3"
 # Where a stylesheet's comments are, read as a browser reads them; the
 # version lol_html already builds.
 cssparser = "0.36"
+sha2 = "0.10"
 
 [dev-dependencies]
 tempfile.workspace = true
