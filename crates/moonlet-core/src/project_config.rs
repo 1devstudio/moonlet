@@ -187,6 +187,7 @@ pub fn validate(config: &ProjectConfig) -> Result<()> {
             bail!("tracker `{t}`: write it as connection/key, such as jira:acme.atlassian.net/ABC");
         }
     }
+    crate::heavy::check(&config.heavy).map_err(anyhow::Error::msg)?;
     Ok(())
 }
 
@@ -224,6 +225,7 @@ fn normalize(c: &ProjectConfig) -> ProjectConfig {
                 seen
             },
         ),
+        heavy: c.heavy.clone(),
     }
 }
 

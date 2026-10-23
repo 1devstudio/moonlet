@@ -637,7 +637,7 @@ pub fn unsafe_path(files: &Files) -> Option<String> {
 /// on Windows: case aside, macOS ignores some invisible characters, and
 /// Windows ignores trailing dots and spaces and knows the short name
 /// `git~1` (`gitmod~1`).
-fn reads_as(part: &str, dotname: &str) -> bool {
+pub(crate) fn reads_as(part: &str, dotname: &str) -> bool {
     // The code points HFS+ ignores in names, as git's `is_hfs_dot_generic`.
     let ignored = |c: &char| matches!(*c as u32, 0x200c..=0x200f | 0x202a..=0x202e | 0x206a..=0x206f | 0xfeff);
     let name: String = part
@@ -648,6 +648,7 @@ fn reads_as(part: &str, dotname: &str) -> bool {
     let name = name.trim_end_matches(['.', ' ']);
     let short = match dotname {
         ".git" => "git~1",
+        ".moonlet" => "moonle~1",
         _ => "gitmod~1",
     };
     name == dotname || name == short
