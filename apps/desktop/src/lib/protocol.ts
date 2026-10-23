@@ -342,6 +342,8 @@ export interface HeavyConfig {
   os: HeavyOs;
   env: string[];
   outputs: string[];
+  /** A script run as root on each new cloud machine (X63); kept when the page saves the rest. */
+  machine_setup?: string | null;
 }
 
 /** What the user approved of a project's heavy commands: both lists, together. */
