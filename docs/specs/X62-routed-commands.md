@@ -10,6 +10,10 @@
 
 An agent on the central host, such as the Mac mini `studio-mini`, runs `pnpm test`. When the project lists `pnpm test` as a **heavy command** and the user has approved it, moonlet runs it on the free worker with the lowest load: a linked Mac or remote host (X41, X61), the central host itself, or a cloud machine ([X63](X63-cloud-workers.md)). The worker runs it in a **routing copy** of the session's files. Before the command starts, a **fence** makes the copy hold exactly the session's files. Output streams back as it comes. After the command ends, every change it made is back in the session before the agent sees the exit status. If the worker goes away mid-run, the command runs again on the central host.
 
+Every routed command is a **job** of its session. The session's **Jobs** tab lists its jobs, and each one opens to show its phases, its output, what came back and where it ran, the way X42's Agents tab shows subagents.
+
+The screens are in [`design/x62-x63/`](design/x62-x63/), from the design review of PR #339.
+
 This is ADR 0009's routing slice. It adds two things the ADR did not decide: an approval step, so that routing never skips a permission prompt the user would have seen, and routing copies kept apart from the copies a user keeps in sync.
 
 ## User journey
@@ -22,12 +26,13 @@ This is ADR 0009's routing slice. It adds two things the ADR did not decide: an 
    outputs = ["coverage"]
    ```
 
-2. In Settings › Projects › shop (studio-mini), a **Heavy commands** section reads "pnpm test, pnpm build: not approved". It says: "Approved commands run without asking, on whichever machine is free." The user clicks **Approve**.
+2. In Settings › Projects › shop (studio-mini), the **Heavy commands** section lists `pnpm test` and `pnpm build`, each marked **Not approved**, with a banner: "Approving the list lets agents run it without asking, on studio-mini, this Mac and devbox." The user clicks **Approve**. A toast reads "Approved pnpm test and pnpm build for shop on studio-mini, this Mac and devbox".
 3. On the MacBook, Settings › Machines › Hosts › This Mac has **Use this Mac for heavy commands** on (X41). The user approved from this Mac, so this Mac may run them too.
 4. In session `fix-cart`, the agent runs `pnpm test`. The Bash row in the chat shows a chip, **on Alex's MacBook Pro**. This Mac has no routing copy of `fix-cart` yet, so moonlet makes one and asks once: "Run shop's setup in the copy on this Mac? `pnpm install`". The user clicks **Run setup**.
 5. 457 tests pass. A snapshot file that a test updated is in the session on `studio-mini` before the agent reads the result, and so is `coverage/`.
 6. The agent runs `pnpm test` again, and the user closes the lid mid-run. The output gets the line "moonlet: Alex's MacBook Pro went away. Running again on studio-mini.", the suite runs on `studio-mini`, and the agent gets that run's exit status.
-7. Settings › Machines › Workers, on `studio-mini`, lists each worker: load, slots in use, round trip, and the commands running there.
+7. The session's **Jobs** tab lists both runs. The second reads "Ran again on studio-mini · exit 0". Opening it shows the timeline: started on Alex's MacBook Pro, which went away ("It missed 3 pings. That run's changes were dropped."), then ran again on studio-mini from the same files and exited 0. **↗** opens the job as a session tab with its full output.
+8. Settings › Machines › Workers, on `studio-mini`, lists each worker: load, slots in use, round trip, and the commands running there.
 
 ## Behaviour and acceptance criteria
 
@@ -161,14 +166,100 @@ This is ADR 0009's routing slice. It adds two things the ADR did not decide: an 
 
 ### Workers screen
 
-- [ ] Settings › Machines › Workers on the central host lists each worker: name, OS, cores, load, slots in use of total, round trip, and its running commands (session, command, running for). It follows `workers.changed` and `exec.changed`.
+- [ ] Settings › Machines › Workers on the central host lists each worker: name, OS, cores, load, slots in use of total, round trip, and its running commands (session, command, running for). It follows `workers.changed` and `job.changed`.
+- [ ] A worker's line says why the project's commands skip it: "Not approved for shop" (with **Approve**), "skipped for shop: missing pnpm", or, for the central host when no other worker is free, "busy, takes commands no one else can".
+- [ ] The summary line reads "5 commands running · 5 of 13 slots in use": the jobs running now, and used slots of all slots of every linked worker, the central host and ready cloud machines.
+
+### Jobs
+
+- [ ] Every routed command is a **job** of its session. So is every command `exec.route` routed that ran on the central host because no worker was free. The central host keeps each session's last 50 jobs, with their output, until the session is archived, and through daemon restarts.
+- [ ] A job's state is one of:
+  - `waiting {for}`: for a slot, for setup approval, or for a cloud machine (X63);
+  - `running {worker}`;
+  - `bringing_back`;
+  - `done {exit}`;
+  - `stopped`;
+  - `lost` (the central daemon stopped, exit 125).
+- [ ] A job records its **phases** with their durations: "Copy matched the session", "Ran on <worker>", "Brought back", "Exit status to Claude". It also records its **timeline**:
+  - started on <worker>;
+  - <worker> went away, with why ("It missed 3 pings." or "Its link closed.") and "That run's changes were dropped.";
+  - ran again on <host>, from the same files;
+  - exited N, and the status went to the agent.
+- [ ] A job records what came back: each changed file with its added and removed line counts, each `outputs` path with its size, and each leftover from the fence (a file that changed on the central host during the run). It also records the worker as it was at the start: load, the slot it took ("1 of 2"), round trip and the routing copy's path. Of the environment, it records only the names passed to the worker, never the values.
+- [ ] A job's output is kept as it streamed, stdout and stderr apart, up to 10 MiB per job. Past that, the middle is dropped and replaced by one line, "moonlet: 3.2 MB of output dropped here". After a rerun, the output of each run stays, with a separator line "──── run 2 · studio-mini ────" between them.
+- [ ] **Stop** on a running or waiting job cancels it as `exec.cancel` does (SIGTERM, then SIGKILL after 5 s). The agent gets exit 143 and the line "moonlet: stopped from the Jobs panel". Changes the job made so far still come back. **Stop all** stops every running and waiting job of the session.
+- [ ] **Run on studio-mini now**, on a job waiting for a cloud machine, runs it on the central host at once, with the line "moonlet: running on studio-mini instead, as asked from the Jobs panel". The machine keeps starting, and takes the next command.
+- [ ] The Jobs tab's summary reads "1 waiting · 3 done · 4m 38s on workers": counts by state, and the total running time of the session's jobs. Worked examples:
+
+  | Jobs | Summary |
+  |---|---|
+  | none | (no summary; the empty text) |
+  | 1 running 0:42 | 1 running · 42s on workers |
+  | 1 waiting, 3 done (38 s, 1m 12s, 2m 03s), 1:10 waiting | 1 waiting · 3 done · 3m 53s on workers |
+  | 2 done (59 s, 1 s) | 2 done · 1m 00s on workers |
+
+  Waiting time does not count as time on workers.
+- [ ] A job row's second line, worked examples:
+
+  | Job | Second line |
+  |---|---|
+  | done on a Mac, exit 0, 1 leftover | Alex's MacBook Pro · exit 0 · 1 leftover |
+  | done after a rerun, exit 0 | Ran again on studio-mini · exit 0 |
+  | done on the central host, exit 1 | studio-mini · exit 1 |
+  | waiting for a cloud machine at setup step 4 of 6 | Waiting for moonlet-shop-m3x9 · setup 4 of 6 |
+  | running on a cloud machine | Running on moonlet-shop-7k2q · 0:31 |
+  | stopped | Stopped · Alex's MacBook Pro |
 
 ## UI
 
-- **Project page (X43), Heavy commands section:** each entry with its state (approved / not approved), an **Approve** button for the list as it is now, the `os` and `outputs` as read from the config, and the line "Approved commands run without asking, on whichever machine is free." Editing the list happens in `.moonlet/config.toml`; X8's dialog gets the `[heavy]` keys.
-- **This Mac page and each remote host's row (X61):** under the heavy-commands switch, "Run at most [2] at once". The help text "Commands are not routed yet" from X41 and X61 goes away.
-- **Chat (X6):** a routed Bash row shows a chip "on Alex's MacBook Pro", read from the result's first `moonlet:` line, and "ran again on studio-mini" after a rerun.
-- **Workers screen:** as above. With no workers: "No machine runs heavy commands for studio-mini yet. Turn on Use this Mac for heavy commands, or Use for heavy commands on a remote host."
+The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and a screen differ, this section wins and the difference is listed under Open questions.
+
+- **Settings nav (X43), Machines group** ([settings-nav.png](design/x62-x63/settings-nav.png)): **Hosts**, then **Workers**, then **Cloud workers** (X63), then **Phones**. Workers and Cloud workers carry the central host's name, as project rows carry their host's.
+- **Project page, Heavy commands** ([project-page.png](design/x62-x63/project-page.png)):
+  - under the heading, "Approved commands run without asking, on whichever machine is free.";
+  - **Commands:** one editable row per entry, with a state pill (**Approved**, or **Not approved** in the attention colour) and **×** to remove it, plus **Add command**. The help text is "A Bash call that starts with one of these goes to the free worker with the lowest load. Chained, piped or redirected calls run where the agent is.";
+  - **Runs on:** a segmented control, **Any**, **macOS** or **Linux** (`os`), with "Workers on another system are skipped.";
+  - **Bring back after a run:** `outputs`, with "Ignored paths that replace the same paths on studio-mini when a run ends. Up to 1 GiB.";
+  - **Pass to the worker:** `env`. A name that looks like a secret gets the warning "NPM_TOKEN looks like a secret. It reaches every machine that runs these commands, cloud machines too.";
+  - while the list differs from the approved one, a banner names what changed ("pnpm build was added since you approved the list"), the machines the approval covers, and the code-execution warning, with **Approve**;
+  - the footnote "Changing an entry needs approving again. Removing one doesn't. Only this app and paired desktops can approve, never an agent or a phone."
+
+  The page edits `[heavy]` in `.moonlet/config.toml` on the project's host, as X8 edits the other keys. Editing never approves.
+- **Hosts page** ([hosts-slots.png](design/x62-x63/hosts-slots.png)):
+  - under **Use this Mac for heavy commands**, the status line adds the running count: "Linked to studio-mini since 09:02 · 1 running";
+  - a **Run at most [− 2 +] at once** row, with "Routed commands side by side. 1 suits a laptop on battery.";
+  - the same row under each remote host's **Use for heavy commands** switch, with "Saved on devbox.";
+  - the footnote "studio-mini's own slots are on its This Mac page. See what each worker runs in Workers.";
+  - the help text "Commands are not routed yet" from X41 and X61 goes away.
+- **Workers page** ([workers-page.png](design/x62-x63/workers-page.png)): the title with a "studio-mini · Central host" badge; "Machines that run heavy commands for studio-mini's sessions. A command goes to the free worker with the lowest load, and runs on studio-mini when none is free."; the summary line; then:
+  - a **Macs and hosts** table, with columns Worker, Load (a bar and "1.2 / 10"), Slots ("1 of 2") and Round trip. Badges are "This Mac", "Tailnet" and "Central host", and the skip reasons sit under the name, in the attention colour. Each running job sits under its worker: spinner, session, command, elapsed time. A busy load bar uses the attention colour;
+  - **Cloud machines** (X63).
+- **Workers, empty** ([workers-empty.png](design/x62-x63/workers-empty.png)): "Only studio-mini runs heavy commands", "No machine runs heavy commands for studio-mini yet. Turn on Use this Mac for heavy commands, or Use for heavy commands on a remote host.", **Open Hosts** and **Set up cloud workers**.
+- **Chat (X6)** ([chat-routed-rows.png](design/x62-x63/chat-routed-rows.png)):
+  - a routed Bash row shows the agent's command, never `moonlet exec -- `;
+  - a chip shows where it ran, "on Alex's MacBook Pro", with a laptop icon for a Mac, a server icon for a host and a cloud icon for a cloud machine;
+  - after a rerun, the chip reads "ran again on studio-mini", in the attention colour;
+  - `moonlet:` lines in the output use the accent colour, and a went-away line uses the attention colour.
+
+  The chip comes from the job, matched by the tool call's id, and falls back to the result's first `moonlet:` line.
+- **Session right panel, Jobs tab** ([jobs-list.png](design/x62-x63/jobs-list.png), [session-jobs-panel.png](design/x62-x63/session-jobs-panel.png)): a tab after **Agents** with a count of the session's jobs. It shows the summary line with **Stop all**, then one row per job, newest first:
+  - a state dot: accent dots for waiting or running, green for exit 0, red for any other exit;
+  - the command, the elapsed or total time, and the second line;
+  - under the list, "Heavy commands this session's agents ran through moonlet. Click one for its output."
+
+  The tab is hidden while the session's project has no heavy commands and no jobs.
+- **Job detail in the panel** ([job-running.png](design/x62-x63/job-running.png), [job-waiting-for-cloud.png](design/x62-x63/job-waiting-for-cloud.png), [job-done-after-rerun.png](design/x62-x63/job-done-after-rerun.png)): **‹ Jobs**, the command, the state line ("Running · 0:42 · Claude in fix-cart"), and **↗** to open it as a tab. Then:
+  - the phases as a checklist with durations, or the timeline after a rerun;
+  - the worker card ("load 1.2 / 10 · slot 1 of 2 · 6 ms");
+  - for a cloud wait, X63's startup checklist;
+  - **Output** with its line count, **Follow** and copy;
+  - a footer with **Stop** ("Changes made so far still come back.") or **Run on studio-mini now**.
+- **Job tab** ([job-tab.png](design/x62-x63/job-tab.png)): a session tab (T2) with the worker's icon and the job's state. Its header has the command, the worker chip, and a state line ("Done · exit 0 · 1m 12s · 10:40:46 – 10:41:58 · run by Claude in fix-cart"). Under it, a bar with the phases at their real lengths, labelled with durations, then **Copy output** and a **⋯** menu. Then:
+  - the output, with **All / stdout / stderr** (stderr with a count), **Find in output**, the line count, **Follow**, line numbers, and stderr lines in the attention colour;
+  - a side column with **Worker** (load at start, slot, round trip, copy path), **Brought back** (files with +/− counts, `outputs` with sizes), a leftover card with **Compare** and **Reveal**, and **Passed to the worker** (names only, "Values are never shown here.").
+
+  The tab closes when the job is dropped from the history.
+- **Toasts** ([toasts.png](design/x62-x63/toasts.png)): after **Approve**, "Approved pnpm test and pnpm build for shop on studio-mini, this Mac and devbox". When a worker could not be reached to approve: "Approved for shop on studio-mini and this Mac. devbox was not reachable; approve it from Workers."
 
 ## Protocol and RPCs
 
@@ -179,9 +270,13 @@ This is ADR 0009's routing slice. It adds two things the ADR did not decide: an 
   - frames of kind 5, `Output`, with payload `[u32 BE run][u8 stream: 1 stdout, 2 stderr][bytes]`;
   - the event `exec.exited {run, status, worker, rerun, leftovers}`.
 - `exec.cancel {run}`.
-- `exec.list` returns running runs.
-- The event `exec.changed`.
-- `heavy.get {project}` returns `{entries: [{command, approved}], os, env, outputs}`.
+- `job.list {session}` returns the session's jobs, newest first, with state, phases, timeline, worker, what came back and env names.
+- `job.output {job, from}` replays the stored output as `Output` frames from byte `from`, then follows the live stream when the job is running.
+- `job.stop {job}`, `job.stop_all {session}`, and `job.run_here {job}` (a job waiting for a cloud machine).
+- The event `job.changed {job}`.
+- `exec.route` and `exec.run` take the tool call's id (`tool_use_id` from the hook payload), so the chat can match its row to the job.
+- `heavy.get {project}` returns `{entries: [{command, approved}], os, env, outputs, approved_on: [worker]}`.
+- `heavy.set {project, commands, os, env, outputs}` writes `[heavy]` in `.moonlet/config.toml` as X8 writes the other keys. It never approves.
 - `heavy.approve {project, commands}` approves exactly that list. It needs the app or a paired desktop.
 
 **Central host to worker:**
@@ -209,6 +304,7 @@ This is ADR 0009's routing slice. It adds two things the ADR did not decide: an 
 - **Each linked worker, `$MOONLET_HOME/sync/projects.json`:** each project gains `approved_heavy`, the list approved for that worker, under X60's `<host> <origin> <root>` key.
 - **`link.json`:** `worker` gains `slots`. The central host keeps its own slots in `heavy.json`.
 - **Routing copies:** `$MOONLET_HOME/runs/`, listed in `sync/copies.json` with `kind: "run"`.
+- **Jobs, on the central host:** `$MOONLET_HOME/jobs/<session>/jobs.json` (the last 50 jobs) and `<job>.out`, the output as tagged stdout and stderr chunks. They are removed with the session.
 
 ## Security considerations
 
@@ -246,18 +342,29 @@ This is ADR 0009's routing slice. It adds two things the ADR did not decide: an 
   - cancelling sends SIGTERM and the exit is 143;
   - a file edited on the central host during the run keeps its version, and the run's is under `sync-leftovers`;
   - `outputs` brings back an ignored `coverage/`;
-  - a stopped central daemon gives exit 125.
+  - a stopped central daemon gives exit 125;
+  - `job.list` after a daemon restart still has the session's jobs, and their output replays;
+  - output over 10 MiB keeps its start and end, with the dropped line;
+  - `job.stop` gives exit 143 and the line, and the job's changes come back;
+  - `job.run_here` on a job waiting for a cloud machine (X63's fake provider) runs it on the central host.
 - **Vitest, `apps/desktop/src/lib/`:**
   - the chip text from a result's first `moonlet:` line;
   - the heavy-commands section's states (a new entry, a changed entry, all approved);
-  - the Workers screen rows;
+  - the Workers screen rows and skip reasons, and the summary line;
+  - the Jobs summary and the row second lines, against every row of their tables;
+  - the phase checklist and the rerun timeline from literal jobs;
+  - the chat chip from a job, and the fallback from a result's first line;
   - the secret-looking env warning.
 - **e2e, `apps/desktop/e2e/specs/routing.e2e.ts`:** a scratch central host and the app's daemon linked as a worker:
   - approving heavy commands on the project page saves them (saving settings is crucial, X12);
   - a session terminal on the central host running `moonlet exec -- <fixture command>` shows "moonlet: running on" with the worker's name;
-  - the Workers screen lists the run.
+  - the Workers screen lists the run;
+  - the session's Jobs tab lists the job, opens its output, and **Stop** ends a running one.
 
 ## Open questions
+
+- **Output summaries in the design.** The job tab's state line ends with "457 tests passed", and a failed row reads "Type error in src/cart.ts:41". Both need to recognise each test runner's and compiler's output. This spec leaves them out. A later spec could add parsers for vitest, jest and cargo test.
+- **The Jobs tab count** shows all the session's jobs. Counting only running and waiting jobs would make the tab say "something is happening". The design shows both values in different boards.
 
 - **Default slots:** 2 per worker. The ADR 0009 trial ran one suite per machine, and a laptop may want 1.
 - **`updatedInput` without `permissionDecision`.** Claude Code's docs don't say what that does. This spec always sends `allow`, so the question doesn't arise as long as approval stays required.
