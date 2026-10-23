@@ -8,6 +8,7 @@ pub mod adf;
 pub mod board;
 pub mod branch;
 pub mod clickup;
+pub mod comment;
 pub mod config;
 pub mod jira;
 pub mod jira_board;

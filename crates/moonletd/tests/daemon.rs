@@ -1518,6 +1518,39 @@ async fn a_pr_context_holds_its_reviews_and_comments() {
 }
 
 #[tokio::test]
+async fn an_issues_comments_are_read_and_a_new_one_posted_through_gh() {
+    // A fake gh that prints the captured comments for `issue view`, and
+    // keeps what `issue comment` reads on stdin.
+    let fixture = format!("{}/../moonlet-core/tests/fixtures/gh-issue-comments.json", env!("CARGO_MANIFEST_DIR"));
+    let (d, dirs) = fake_gh_daemon(&format!(
+        "#!/bin/sh\necho \"$@\" >> \"$GH_LOG\"\n\
+         case \"$1 $2\" in\n\
+         \"issue view\") cat '{fixture}';;\n\
+         \"issue comment\") cat > \"$GH_LOG.body\";;\n\
+         esac\n"
+    ))
+    .await;
+    let log = dirs[0].path().join("gh.log");
+    let mut c = d.client().await;
+    let (repo, _) = project_with_repo(&d, &mut c).await;
+
+    let got: serde_json::Value = c.request(methods::GH_ISSUE_COMMENTS, serde_json::json!({"path": repo, "number": 12})).await.unwrap();
+    assert_eq!(
+        got,
+        serde_json::json!({"comments": [
+            {"id": "IC_e2e0001", "author": "@sam-rivera", "body": "Looks good. Can we **also** cover `ClickUp`?\n\n- [ ] one\n- [x] two\n", "created_ms": 1_792_767_974_000u64},
+            {"id": "IC_e2e0003", "author": "@lee-moreno", "body": "Done in #13.", "created_ms": 1_792_771_200_000u64}
+        ], "more": false})
+    );
+    let _: bool = c
+        .request(methods::GH_ISSUE_COMMENT, serde_json::json!({"path": repo, "number": 12, "body": "--help; picked this up"}))
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read_to_string(&log).unwrap(), "issue view 12 --json comments\nissue comment 12 --body-file -\n");
+    assert_eq!(std::fs::read_to_string(dirs[0].path().join("gh.log.body")).unwrap(), "--help; picked this up");
+}
+
+#[tokio::test]
 async fn task_updates_reach_github_through_gh() {
     // A fake gh that records what it was asked to do.
     let (d, dirs) = fake_gh_daemon("#!/bin/sh\necho \"$@\" >> \"$GH_LOG\"\n").await;

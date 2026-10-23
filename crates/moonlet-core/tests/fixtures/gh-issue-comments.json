@@ -1,0 +1,49 @@
+{
+  "comments": [
+    {
+      "id": "IC_e2e0001",
+      "author": {
+        "login": "sam-rivera"
+      },
+      "authorAssociation": "OWNER",
+      "body": "Looks good. Can we **also** cover `ClickUp`?\n\n- [ ] one\n- [x] two\n",
+      "createdAt": "2026-10-23T15:06:14Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/acme/web/issues/12#issuecomment-1000000001",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_e2e0002",
+      "author": {
+        "login": "jo-park"
+      },
+      "authorAssociation": "NONE",
+      "body": "Off topic.",
+      "createdAt": "2026-10-23T15:20:02Z",
+      "includesCreatedEdit": false,
+      "isMinimized": true,
+      "minimizedReason": "OFF_TOPIC",
+      "reactionGroups": [],
+      "url": "https://github.com/acme/web/issues/12#issuecomment-1000000002",
+      "viewerDidAuthor": false
+    },
+    {
+      "id": "IC_e2e0003",
+      "author": {
+        "login": "lee-moreno"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "Done in #13.",
+      "createdAt": "2026-10-23T16:00:00Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/acme/web/issues/12#issuecomment-1000000003",
+      "viewerDidAuthor": false
+    }
+  ]
+}
