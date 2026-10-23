@@ -186,6 +186,24 @@ pub const FS_WRITE_INSIDE: &str = "fs.write_inside";
 pub const FS_WATCH: &str = "fs.watch";
 pub const FS_UNWATCH: &str = "fs.unwatch";
 
+// Design systems (X64)
+/// `{workspace}` → the workspace's design systems.
+pub const DESIGN_SYSTEMS: &str = "design.systems";
+/// [`DesignSystemCreate`] → the new system's slug.
+pub const DESIGN_SYSTEM_CREATE: &str = "design.system.create";
+/// [`DesignSystemRef`]: deletes a design system.
+pub const DESIGN_SYSTEM_REMOVE: &str = "design.system.remove";
+/// [`DesignProgress`]: what the sync agent reports as it goes.
+pub const DESIGN_SYSTEM_PROGRESS: &str = "design.system.progress";
+/// [`DesignSystemRef`]: the sync is done; records each source's `HEAD` and writes the anchor.
+pub const DESIGN_SYSTEM_SYNCED: &str = "design.system.synced";
+/// [`DesignSystemRef`] → every problem, after rewriting the generated files.
+pub const DESIGN_CHECK: &str = "design.check";
+/// [`DesignFile`] → `{path, content_type}` of a file under the workspace's design folder.
+pub const DESIGN_FILE: &str = "design.file";
+/// [`DesignSettle`]: the user's choice for a card after a sync.
+pub const DESIGN_SETTLE: &str = "design.settle";
+
 // Phones (X39)
 /// Phone access, the Tailscale addresses and the paired phones: [`MobileStatus`].
 pub const MOBILE_STATUS: &str = "mobile.status";
@@ -1033,6 +1051,58 @@ pub struct FsRead {
     pub path: String,
     #[serde(default)]
     pub max_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DesignWorkspace {
+    pub workspace: String,
+}
+
+/// One project a design system is built from, and the folder of it it covers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DesignSourcePick {
+    pub project: String,
+    #[serde(default)]
+    pub subdir: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DesignSystemCreate {
+    pub workspace: String,
+    pub name: String,
+    pub sources: Vec<DesignSourcePick>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DesignSystemRef {
+    pub workspace: String,
+    pub slug: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DesignProgress {
+    pub workspace: String,
+    pub slug: String,
+    pub step: String,
+    #[serde(default)]
+    pub summary: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DesignFile {
+    pub workspace: String,
+    /// Relative to the workspace's design folder, such as `systems/<slug>/styles.css`.
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DesignSettle {
+    pub workspace: String,
+    pub slug: String,
+    /// The card's path in the system.
+    pub card: String,
+    /// `mine`, `synced`, `remove` or `keep`.
+    pub choice: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

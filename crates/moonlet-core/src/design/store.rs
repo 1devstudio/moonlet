@@ -77,6 +77,7 @@ impl SystemConfig {
 }
 
 /// The design folders of one moonlet home.
+#[derive(Clone)]
 pub struct Store {
     root: PathBuf,
 }
@@ -189,6 +190,11 @@ impl Store {
             bail!("no design system \"{slug}\"");
         }
         Ok(dir)
+    }
+
+    /// A design system's `config.toml`.
+    pub fn config(&self, workspace: &str, slug: &str) -> Result<SystemConfig> {
+        read_config(&self.system_dir(workspace, slug)?)
     }
 
     /// Deletes a design system. Designs that use it keep their pages.
