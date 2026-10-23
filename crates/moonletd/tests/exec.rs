@@ -1000,6 +1000,91 @@ async fn a_commit_made_by_the_run_moves_the_sessions_branch() {
 }
 
 #[tokio::test]
+async fn a_run_whose_changes_cannot_come_back_still_ends() {
+    let (c, _mac) = linked().await;
+    // The central host cannot write the run's file: its folder is read-only.
+    write(&c.worktree.join("locked/keep.txt"), "kept\n");
+    git(&c.worktree, &["add", "locked"]);
+    git(
+        &c.worktree,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-qm",
+            "locked",
+        ],
+    );
+    let locked = c.worktree.join("locked");
+    let mode = |m: u32| {
+        std::fs::set_permissions(&locked, std::os::unix::fs::PermissionsExt::from_mode(m)).unwrap()
+    };
+    mode(0o555);
+    let ran = c.run(&["sh", "-c", "echo hi > locked/out.txt"]).await;
+    mode(0o755);
+    assert_eq!(ran_on(&ran), "Alex's MacBook Pro");
+    assert!(
+        ran.stderr
+            .contains("moonlet: cannot bring back the run's changes"),
+        "{ran:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_command_on_a_worker_knows_its_session() {
+    let (c, _mac) = linked().await;
+    let ran = c.run(&["env"]).await;
+    assert_eq!(ran_on(&ran), "Alex's MacBook Pro");
+    let lines: Vec<&str> = ran.stdout.lines().collect();
+    assert!(
+        lines.contains(&format!("MOONLET_SESSION={}", c.session).as_str()),
+        "{ran:?}"
+    );
+    assert!(lines.contains(&"MOONLET_ROUTED=1"), "{ran:?}");
+}
+
+#[tokio::test]
+async fn two_commands_of_one_session_never_share_a_routing_copy() {
+    let (c, _mac) = linked().await;
+    // The copy exists already, so both would be ready at once.
+    c.run(&["sh", "run.sh"]).await;
+    // The Mac has two slots, but one copy of the session: one of them
+    // runs there, the others here.
+    let (a, b, d) = tokio::join!(
+        c.run(&["sh", "-c", "sleep 1"]),
+        c.run(&["sh", "-c", "echo b > b.txt; sleep 1.5; cat b.txt"]),
+        c.run(&["sh", "-c", "sleep 1"])
+    );
+    assert_eq!((b.stdout.as_str(), b.status), ("b\n", 0), "{b:?}");
+    let on_mac = [&a, &b, &d]
+        .iter()
+        .filter(|r| ran_on(r) == "Alex's MacBook Pro")
+        .count();
+    assert_eq!(on_mac, 1, "{a:?} {b:?} {d:?}");
+}
+
+#[tokio::test]
+async fn cancelling_while_the_worker_prepares_never_runs_the_command() {
+    let (c, _mac) = linked().await;
+    let worktree = c.worktree.clone();
+    // The first run makes the routing copy: cancelled meanwhile.
+    let (mut client, run) = c
+        .start(&["sh", "-c", "echo ran > ran.txt"], &worktree, json!({}))
+        .await;
+    let _: Value = client
+        .request("exec.cancel", json!({ "run": run }))
+        .await
+        .unwrap();
+    let ran = collect(client, run).await;
+    assert_eq!(ran.status, 130, "{ran:?}");
+    assert!(!worktree.join("ran.txt").exists());
+}
+
+#[tokio::test]
 async fn a_command_starts_only_once_the_copy_matches_the_session() {
     let (c, mac) = linked().await;
     assert_eq!(c.run(&["cat", "package.json"]).await.stdout, "{}\n");
