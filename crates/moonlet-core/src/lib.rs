@@ -6,6 +6,7 @@ pub mod chat;
 pub mod claude_update;
 pub mod client;
 pub mod commands;
+pub mod design;
 pub mod fs;
 pub mod gh_issues;
 pub mod gh_projects;
