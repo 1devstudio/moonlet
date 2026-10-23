@@ -16,6 +16,12 @@ interface DesignState {
 
 export const useDesign = create<DesignState>(() => ({ systems: {}, shown: {} }));
 
+/** The design system open in a workspace: the one picked, else the first. */
+export function shownSystem(s: DesignState, host: string, workspace: string): DesignSystem | null {
+  const list = systemsOf(s, host, workspace) ?? [];
+  return list.find((x) => x.slug === s.shown[wsKey(host, workspace)]) ?? list[0] ?? null;
+}
+
 /** Opens a design system in Design mode's main area. */
 export function showSystem(host: string, workspace: string, slug: string) {
   useDesign.setState((s) => ({ shown: { ...s.shown, [wsKey(host, workspace)]: slug } }));

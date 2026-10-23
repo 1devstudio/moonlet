@@ -1290,6 +1290,9 @@ async function openInTerminal(host: string, info: TerminalInfo, st: ChatState) {
   }
 }
 
+/** A structured agent's chat. `wsId` is its session; "" for a chat with no
+ * session, such as a design system's sync agent (X64), which has no pane
+ * layout or file tabs to open. */
 export function AgentView({ host, id, wsId, focused, visible }: { host: string; id: number; wsId: string; focused: boolean; visible: boolean }) {
   const info = useStore((s) => s.terminals[host]?.[id]);
   const st = useChat((s) => s.chats[chatKey(host, id)]);
@@ -1306,7 +1309,7 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
 
   const working = turnRunning(st?.status);
   const exists = useProjectFiles(host, cwd, working);
-  const fileLinks = useMemo(() => ({ host, wsId, cwd, exists }), [host, wsId, cwd, exists]);
+  const fileLinks = useMemo(() => (wsId ? { host, wsId, cwd, exists } : null), [host, wsId, cwd, exists]);
   const now = useNow(working && visible);
   // Subagents (X42): their launch cards, notes and asks.
   const agentsRunning = (st?.subagents ?? []).some((a) => a.status === "running");
@@ -1553,6 +1556,7 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
     <div
       className="flex h-full w-full flex-col overflow-hidden bg-bg ui-text-13.5"
       onMouseDown={() => {
+        if (!wsId) return;
         const l = getLayout(host, wsId);
         if (l.focused !== id) setLayout(host, wsId, { ...l, focused: id });
       }}

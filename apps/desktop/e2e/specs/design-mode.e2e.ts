@@ -49,4 +49,13 @@ describe("Design mode", () => {
     expect(existsSync(config)).toBe(true);
     expect(readFileSync(config, "utf8")).toContain('cover = "all"');
   });
+
+  it("opens the new system with its sync agent's chat docked, where its questions are answered", async () => {
+    const agent = () => $('//section[@aria-label="Design · Storefront UI"]');
+    await expect(agent()).toBeDisplayed();
+    await agent().$(sel.button("Hide agent")).click();
+    await expect(agent()).not.toBeExisting();
+    await $(sel.button("Show agent")).click();
+    await expect(agent()).toBeDisplayed();
+  });
 });
