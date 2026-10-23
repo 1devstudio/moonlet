@@ -10,6 +10,9 @@ import { M, type IssueRef, type Project, type ProjectConfig, type Session } from
 import { errorToast, selectSession, shownWorkspace, useStore } from "../lib/store";
 import { composerSync, syncOffered } from "../lib/sync";
 import { declineSync, keepInSync, projectKeepsNew, useSync } from "../lib/syncStore";
+import { cloudOffered } from "../lib/cloudMachines";
+import { useCloud } from "../lib/cloudStore";
+import type { CloudInfo } from "../lib/protocol";
 import { Menu, type MenuItem } from "./Menu";
 import { AgentIcon, BoardTile, IconButton, cx } from "./ui";
 import { CLAUDE_MODELS, EFFORTS, resolveMode } from "../lib/agents";
@@ -333,6 +336,24 @@ export function Composer({
       live = false;
     };
   }, [current?.host, current?.project.id, syncShown]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Run heavy commands in the cloud (X63): for a project with a cloud setting on its central host.
+  const cloudHost = useCloud((s) => s.host);
+  const [cloudProjects, setCloudProjects] = useState<CloudInfo["projects"] | null>(null);
+  const [cloud, setCloud] = useState(false);
+  useEffect(() => {
+    setCloudProjects(null);
+    setCloud(false);
+    if (!current || current.host !== cloudHost) return;
+    let live = true;
+    void rpc<CloudInfo>(current.host, M.cloudGet).then(
+      (i) => live && setCloudProjects(i.projects),
+      () => {},
+    );
+    return () => {
+      live = false;
+    };
+  }, [current?.host, current?.project.id, cloudHost]); // eslint-disable-line react-hooks/exhaustive-deps
+  const cloudShown = !!current && current.host === cloudHost && cloudOffered(cloudProjects, current.project.identity);
   const [taskBranch, setTaskBranch] = useState<string | null>(null);
   // Starts at the Settings default every time; not remembered per project (X7).
   const [mode, setMode] = useState(() => resolveMode(useStore.getState().settings.defaultMode));
@@ -476,6 +497,7 @@ export function Composer({
         branch: from?.existing ? from.ref : named,
         pr: pr?.number ?? null,
         add_dirs: choice.agent === "none" ? [] : addDirs,
+        cloud: cloudShown && cloud,
         workspace_id: workspaceFor(current.host),
         cols: 120,
         rows: 32,
@@ -721,6 +743,12 @@ export function Composer({
                 }}
               />
               Keep in sync with this Mac
+            </label>
+          )}
+          {cloudShown && (
+            <label className="flex shrink-0 items-center gap-1.5" title={`Routed commands go to ${current.project.name}'s cloud machine first. When none is ready, a command starts one and waits for it.`}>
+              <input type="checkbox" aria-label="Run heavy commands in the cloud" className="m-0 accent-accent" checked={cloud} onChange={(e) => setCloud(e.target.checked)} />
+              Run heavy commands in the cloud
             </label>
           )}
           {task?.assign && (
