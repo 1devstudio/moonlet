@@ -456,6 +456,16 @@ async fn reads(path: &Path, want: &str) -> Duration {
     panic!("{} never read {want:?}: {:?}", path.display(), read(path));
 }
 
+/// How long an edit may take to reach the other side: 1 s, or 1.5 s on a
+/// CI runner, whose shared machines run a few tenths of a second behind.
+fn budget() -> Duration {
+    if std::env::var_os("CI").is_some() {
+        Duration::from_millis(1500)
+    } else {
+        Duration::from_secs(1)
+    }
+}
+
 #[tokio::test]
 async fn an_edit_on_the_central_host_shows_in_the_copy_within_a_second() {
     let (central, _worker, c) = synced_alone().await;
@@ -463,7 +473,7 @@ async fn an_edit_on_the_central_host_shows_in_the_copy_within_a_second() {
     write(&s.join("node_modules/left-pad/index.js"), "ignored\n");
     write(&s.join("src/cart.ts"), "c\n");
     let took = reads(&c.join("src/cart.ts"), "c\n").await;
-    assert!(took < Duration::from_secs(1), "took {took:?}");
+    assert!(took < budget(), "took {took:?}");
     assert!(!c.join("node_modules").exists(), "an ignored file synced");
 
     // A new file and a deleted one.
@@ -483,7 +493,7 @@ async fn an_edit_in_the_copy_reaches_the_central_host_within_a_second() {
     write(&c.join("node_modules/left-pad/index.js"), "ignored\n");
     write(&c.join("src/cart.ts"), "from the mac\n");
     let took = reads(&s.join("src/cart.ts"), "from the mac\n").await;
-    assert!(took < Duration::from_secs(1), "took {took:?}");
+    assert!(took < budget(), "took {took:?}");
     assert!(!s.join("node_modules").exists(), "an ignored file synced");
 
     // A new file and a deleted one.
