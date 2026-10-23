@@ -49,6 +49,7 @@ import { removeWorktreeAsk, withoutPutOffCard, withRules } from "../../lib/keepI
 import { effectiveKeys, keyLabel } from "../../lib/runActions";
 import { keepCard, modeSwitch } from "../../lib/tasksView";
 import { useNow } from "../../lib/useNow";
+import { TaskComments } from "./TaskComments";
 import { parseWsKey, wsKey } from "../../lib/workspaces";
 import { assigneeOf, type BoardColumn, type BoardConfig, type Category, CATEGORY_BAR, CATEGORY_LABEL, type CardField, cardFields, footerTracker, NO_STATUS, projectMoveLock, syncedColumns, workspaceBoards } from "../../lib/boards";
 import { type ColumnView, switcherGroups } from "../../lib/boardColumns";
@@ -439,6 +440,9 @@ function TaskDetail({ host, workspaceId, card }: { host: string; workspaceId: st
           </div>
         ))}
         <Activity task={card.task} />
+        <div className="mt-4">
+          <TaskComments host={host} workspaceId={workspaceId} task={card.task} />
+        </div>
       </div>
     </aside>
   );
