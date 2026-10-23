@@ -427,6 +427,12 @@ export interface GhTask {
   closing_prs: number[];
 }
 
+/** A GitHub issue's comments (X66): oldest first, the newest 100, and whether it has more. */
+export interface GhComments {
+  comments: { id: string; /** `@login`; empty when GitHub gives none. */ author: string; /** Markdown. */ body: string; created_ms: number }[];
+  more: boolean;
+}
+
 /** A linked git work tree of a project (X45). */
 export interface Worktree {
   path: string;
@@ -822,6 +828,8 @@ export const M = {
   ghScopes: "gh.scopes",
   ghTask: "gh.task",
   ghTaskUpdate: "gh.task_update",
+  ghIssueComments: "gh.issue_comments",
+  ghIssueComment: "gh.issue_comment",
   ghWhoami: "gh.whoami",
   workspaceList: "workspace.list",
   workspaceCreate: "workspace.create",

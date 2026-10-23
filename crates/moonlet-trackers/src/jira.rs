@@ -217,6 +217,46 @@ pub fn comment_body(text: &str) -> Value {
     json!({ "body": { "type": "doc", "version": 1, "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": text }] }] } })
 }
 
+/// A comment the user wrote in Markdown, as rich text (X66).
+pub fn markdown_comment_body(markdown: &str) -> Value {
+    json!({ "body": crate::adf::from_markdown(markdown) })
+}
+
+/// An issue's newest comments (X66). `key` must already be checked as a plain id.
+pub fn comments_path(key: &str) -> String {
+    format!(
+        "/rest/api/3/issue/{key}/comment?orderBy=-created&maxResults={}",
+        crate::comment::MAX
+    )
+}
+
+/// The comments of [`comments_path`], oldest first, as Markdown.
+pub fn parse_comments(raw: &[u8]) -> Result<crate::comment::Comments, ApiError> {
+    let v = parse(raw)?;
+    let list = v["comments"].as_array().cloned().unwrap_or_default();
+    let read = v["startAt"].as_u64().unwrap_or(0) + list.len() as u64;
+    let comments = list
+        .iter()
+        .map(|c| crate::comment::TaskComment {
+            id: c["id"].as_str().unwrap_or_default().into(),
+            author: c["author"]["displayName"]
+                .as_str()
+                .unwrap_or_default()
+                .into(),
+            body: crate::adf::to_markdown(&c["body"]),
+            markdown: true,
+            created_ms: c["created"]
+                .as_str()
+                .and_then(crate::time::timestamp_ms)
+                .unwrap_or(0),
+        })
+        .collect();
+    Ok(crate::comment::Comments::new(
+        comments,
+        v["total"].as_u64().is_some_and(|t| t > read),
+    ))
+}
+
 /// What a failed request means; a 401 asks to reconnect (X44).
 pub fn parse_error(status: u16, raw: &[u8], site: &str) -> ApiError {
     if status == 401 {
@@ -248,6 +288,52 @@ mod tests {
             env!("CARGO_MANIFEST_DIR")
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn an_issues_comments_oldest_first_as_markdown_with_more_flagged() {
+        use crate::comment::{Comments, TaskComment};
+        assert_eq!(
+            comments_path("OPS-12"),
+            "/rest/api/3/issue/OPS-12/comment?orderBy=-created&maxResults=100"
+        );
+        assert_eq!(
+            parse_comments(&fixture("jira-comments.json")).unwrap(),
+            Comments {
+                comments: vec![
+                    TaskComment {
+                        id: "10000".into(),
+                        author: "Mia Krystof".into(),
+                        body: "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Pellentesque eget venenatis elit. Duis eu justo eget augue iaculis fermentum. Sed semper quam laoreet nisi egestas at posuere augue semper.".into(),
+                        markdown: true,
+                        created_ms: 1_610_886_840_000,
+                    },
+                    TaskComment {
+                        id: "10001".into(),
+                        author: "Sam Rivera".into(),
+                        body: "Fixed in `main`".into(),
+                        markdown: true,
+                        created_ms: 1_610_956_800_000,
+                    },
+                ],
+                // 3 in all, 2 read.
+                more: true,
+            }
+        );
+    }
+
+    #[test]
+    fn a_new_comment_is_the_users_markdown_as_rich_text() {
+        assert_eq!(
+            markdown_comment_body("Then `requeue`."),
+            json!({ "body": { "type": "doc", "version": 1, "content": [
+                { "type": "paragraph", "content": [
+                    { "type": "text", "text": "Then " },
+                    { "type": "text", "text": "requeue", "marks": [{ "type": "code" }] },
+                    { "type": "text", "text": "." }
+                ] }
+            ] } })
+        );
     }
 
     #[test]

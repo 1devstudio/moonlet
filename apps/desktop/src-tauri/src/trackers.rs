@@ -5,6 +5,7 @@
 use moonlet_trackers::config::{Connection, TrackersConfig, connection_id};
 use moonlet_trackers::states::Column;
 use moonlet_trackers::task::TrackerTask;
+use moonlet_trackers::comment::{self, Comments, TaskComment};
 use moonlet_trackers::config::{BoardColumn, Finished, Origin};
 use moonlet_trackers::board::{BoardIssue, Sprint};
 use moonlet_trackers::jira_board::{self, BoardSetup, JiraBoard, SearchFields};
@@ -1050,6 +1051,60 @@ pub async fn tracker_update(req: MoveRequest) -> Res<()> {
                 let path = format!("/task/{}/comment", req.task);
                 s.clickup_send(s.clickup(reqwest::Method::POST, &path)?.json(&clickup::comment_body(&text))).await?;
             }
+        }
+        TrackerKind::Github => return Err(fail("GitHub goes through gh")),
+    }
+    Ok(())
+}
+
+/// An issue's comments, oldest first, at most 100 (X66). `task` is the
+/// issue's id in the tracker (`TrackerRef.id`).
+#[tauri::command]
+pub async fn tracker_comments(id: String, task: String) -> Res<Comments> {
+    let s = Session::load(&id).await?;
+    safe_id(&task)?;
+    match s.conn.kind {
+        TrackerKind::Linear => s.linear_ok(linear::parse_comments(&s.linear(linear::COMMENTS, json!({ "id": task })).await?)),
+        TrackerKind::Jira => Ok(jira::parse_comments(&s.jira_send(s.jira(reqwest::Method::GET, &jira::comments_path(&task))?).await?)?),
+        TrackerKind::Clickup => {
+            // ClickUp sends 25 at a time, newest first.
+            let mut all: Vec<TaskComment> = Vec::new();
+            let mut more = false;
+            for _ in 0..comment::MAX / 25 {
+                let raw = s.clickup_send(s.clickup(reqwest::Method::GET, &clickup::comments_path(&task, all.last()))?).await?;
+                let page = clickup::parse_comments(&raw)?;
+                more = clickup::full_comments_page(&page);
+                all.extend(page);
+                if !more {
+                    break;
+                }
+            }
+            Ok(Comments::new(all, more))
+        }
+        TrackerKind::Github => Err(fail("GitHub goes through gh")),
+    }
+}
+
+/// Posts the user's comment, written in Markdown, on an issue (X66).
+#[tauri::command]
+pub async fn tracker_comment(id: String, task: String, text: String) -> Res<()> {
+    let s = Session::load(&id).await?;
+    safe_id(&task)?;
+    if text.trim().is_empty() {
+        return Err(fail("The comment is empty"));
+    }
+    match s.conn.kind {
+        TrackerKind::Linear => {
+            let raw = s.linear(linear::COMMENT, linear::comment_variables(&task, &text)).await?;
+            s.linear_ok(linear::parse_success(&raw, "commentCreate"))?;
+        }
+        TrackerKind::Jira => {
+            let path = format!("/rest/api/3/issue/{task}/comment");
+            s.jira_send(s.jira(reqwest::Method::POST, &path)?.json(&jira::markdown_comment_body(&text))).await?;
+        }
+        TrackerKind::Clickup => {
+            let path = format!("/task/{task}/comment");
+            s.clickup_send(s.clickup(reqwest::Method::POST, &path)?.json(&clickup::comment_body(&text))).await?;
         }
         TrackerKind::Github => return Err(fail("GitHub goes through gh")),
     }

@@ -795,6 +795,15 @@ impl Daemon {
                 git::gh_task_update(&path(&r.path), r.number, r.assign_me, r.close, r.reopen).await.map_err(internal)?;
                 ok(true)
             }
+            m::GH_ISSUE_COMMENTS => {
+                let r: m::GhIssueComments = params(p)?;
+                ok(moonlet_core::gh_issues::gh_issue_comments(&path(&r.path), r.number).await.map_err(internal)?)
+            }
+            m::GH_ISSUE_COMMENT => {
+                let r: m::GhIssueComment = params(p)?;
+                moonlet_core::gh_issues::gh_issue_comment(&path(&r.path), r.number, &r.body).await.map_err(internal)?;
+                ok(true)
+            }
             m::GH_TASK => {
                 let r: m::GhTaskGet = params(p)?;
                 ok(git::gh_task(&path(&r.path), &r.repo, r.number).await.map_err(internal)?)
