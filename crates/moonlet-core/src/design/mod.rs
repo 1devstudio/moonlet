@@ -2,3 +2,4 @@
 //! out like Claude Code's design-sync output, in static HTML and CSS (ADR 0013).
 
 pub mod card;
+pub mod check;
