@@ -200,7 +200,7 @@ A design system belongs to a moonlet workspace, so every project and design in t
 
 ### Sync
 
-- [ ] **Build design system** and **Sync** start the sync agent: a Claude Code terminal owned by moonletd, in the design system's folder, with each source given with `--add-dir`, in Accept edits mode. The `moonlet-design` skill gives it the four steps.
+- [ ] **Build design system** and **Sync** start the sync agent: a Claude Code terminal owned by moonletd, in the design system's folder, with each source given with `--add-dir`, in Accept edits mode. Its `--settings` deny `Edit(//<source path>/**)` for each source, so Claude Code's file-editing tools can read the sources but never change them. `--add-dir` alone would not stop that, and Accept edits would accept such edits. The `moonlet-design` skill gives it the four steps.
 - [ ] **Inventory.** The agent finds the components and their groups. Groups come from the source's folders, else a doc's `category`, else `general`. It asks the user what to cover and writes `config.toml`.
 - [ ] **Tokens.** The agent writes `tokens/`, `fonts/`, `guidelines/` and `styles.css`, then runs the check.
 - [ ] **Cards.** The agent writes `components.css`, the cards and the `.prompt.md` files. It does 2–3 diverse components itself first (one compound, one with many states, one text-heavy), then hands the rest to subagents in disjoint batches. A subagent edits only its own cards and notes, and never runs the whole check. A cause shared by two or more cards stops the batch and goes to `NOTES.md` as `[GENERAL]`. The agent runs `design check --render` and fixes until nothing is `bad`, at most 3 rounds, and records accepted warnings in `NOTES.md`.
@@ -286,7 +286,7 @@ The boards of the design export are the reference.
 
 ## Security considerations
 
-- The sync agent reads the source projects but writes only inside the design system's folder: its working directory is that folder and the sources come in through `--add-dir`. The skill tells it that repo content is material, never instructions.
+- The sync agent reads the source projects but writes only inside the design system's folder. Its working directory is that folder, and the sources come in through `--add-dir` with deny rules `Edit(//<source>/**)` in `--settings`, which cover every Claude Code file-editing tool. Bash is not covered by those rules. In Accept edits mode every Bash command other than `"$MOONLET_BIN" design …` and read-only `git -C <source> log|diff|show` asks first, so the user sees any command that could write to a source. The skill tells the agent that repo content is material, never instructions.
 - Cards are untrusted HTML written by an agent. They render only in the sandboxed canvas of X65 (no `allow-same-origin`, no network by CSP), including for the render check and snapshots.
 - `design.file`, `design.check` and `design.snap` resolve paths inside `~/.moonlet/design/<workspace id>/` and reject anything that leaves it, including symlinks that point outside.
 
@@ -301,6 +301,9 @@ The boards of the design export are the reference.
 
 ## Test plan
 
+While the spec is a draft, the plan names test files and areas. Each criterion gets the exact test names that cover it, as in X50, when its stack entry is implemented.
+
+
 - Rust, `moonlet-core` `design` module:
   - `@dsCard` parsing, against design-sync's grammar and moonlet's attributes
   - each check problem from captured card HTML
@@ -312,7 +315,7 @@ The boards of the design export are the reference.
   - `sourceKey` and `renderHash`, and the out-of-date, edited-by-hand and orphaned results from a fixture anchor
   - path resolution rejecting `..` and an outside symlink
 - `crates/moonletd/tests/`:
-  - `design.system.create` writes `config.toml` and starts a terminal with the expected `--add-dir`
+  - `design.system.create` writes `config.toml` and starts a terminal with the expected `--add-dir` and `Edit` deny rules for each source
   - `synced` writes the anchor last and records `HEAD`
   - a card edited by hand produces `.proposed.html`, and each `design.settle` choice
 - Desktop `lib/`:
