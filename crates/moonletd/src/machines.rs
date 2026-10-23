@@ -165,6 +165,8 @@ pub struct Machines {
     making: Mutex<()>,
     fake: Option<Arc<crate::cloud_fake::Fake>>,
     net: Arc<dyn Transport>,
+    /// When `tailscale status` was last asked.
+    tailnet_asked: Mutex<u64>,
     emit: Box<dyn Fn(Message) + Send + Sync>,
     me: Mutex<Weak<Machines>>,
 }
@@ -218,6 +220,7 @@ impl Machines {
             making: Mutex::new(()),
             fake: crate::cloud_fake::from_env().map(Arc::new),
             net,
+            tailnet_asked: Mutex::new(0),
             emit: Box::new(emit),
             me: Mutex::new(Weak::new()),
         });
@@ -659,6 +662,7 @@ impl Machines {
     /// Every 250 ms: startup deadlines and links down too long.
     fn watch(&self) {
         let now = now_ms();
+        self.watch_tailnet();
         let workers: Vec<String> = self
             .workers
             .list()
@@ -705,6 +709,60 @@ impl Machines {
                 _ => {}
             }
         }
+    }
+
+    /// Starting machines that `tailscale status` now lists have joined the
+    /// tailnet; asked at most every 2 s.
+    fn watch_tailnet(&self) {
+        let waiting: Vec<(String, String, u64)> = self
+            .records
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.shown.state == "starting")
+            .filter(|r| {
+                r.shown
+                    .steps
+                    .iter()
+                    .any(|s| s.step == "tailnet" && s.state == "pending")
+            })
+            .map(|r| (r.shown.id.clone(), r.shown.name.clone(), r.created_at))
+            .collect();
+        if waiting.is_empty() || !which("tailscale") {
+            return;
+        }
+        {
+            let mut last = self.tailnet_asked.lock().unwrap();
+            if now_ms().saturating_sub(*last) < 2_000 {
+                return;
+            }
+            *last = now_ms();
+        }
+        let Some(me) = self.me.lock().unwrap().upgrade() else {
+            return;
+        };
+        tokio::spawn(async move {
+            let out = tokio::process::Command::new("tailscale")
+                .args(["status", "--json"])
+                .output()
+                .await;
+            let Ok(out) = out else { return };
+            let Ok(status) = serde_json::from_slice::<serde_json::Value>(&out.stdout) else {
+                return;
+            };
+            for (id, name, created_at) in waiting {
+                if tailnet_has(&status, &name) {
+                    me.update(&id, |r| {
+                        r.step(
+                            "tailnet",
+                            "done",
+                            Some(now_ms().saturating_sub(created_at)),
+                            None,
+                        )
+                    });
+                }
+            }
+        });
     }
 
     /// `cloud.down`: removes machine `machine` (id or name).
@@ -879,4 +937,40 @@ fn destroy_error(e: &CloudError) -> String {
 fn which(program: &str) -> bool {
     std::env::var_os("PATH")
         .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(program).is_file()))
+}
+
+/// Whether `tailscale status --json` lists a peer named `name`.
+fn tailnet_has(status: &serde_json::Value, name: &str) -> bool {
+    status["Peer"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .any(|(_, p)| {
+            p["HostName"]
+                .as_str()
+                .is_some_and(|h| h.eq_ignore_ascii_case(name))
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_machine_has_joined_once_tailscale_lists_its_peer() {
+        // The shape of `tailscale status --json`, cut down.
+        let status = serde_json::json!({
+            "Self": { "HostName": "studio-mini", "DNSName": "studio-mini.tail1234.ts.net." },
+            "Peer": {
+                "nodekey:abc": { "HostName": "moonlet-shop-7k2q", "DNSName": "moonlet-shop-7k2q.tail1234.ts.net.", "Online": true },
+                "nodekey:def": { "HostName": "Alex's MacBook Pro", "Online": false }
+            }
+        });
+        assert!(tailnet_has(&status, "moonlet-shop-7k2q"));
+        assert!(!tailnet_has(&status, "moonlet-shop-m3x9"));
+        assert!(!tailnet_has(
+            &serde_json::json!({ "Self": {} }),
+            "moonlet-shop-7k2q"
+        ));
+    }
 }
