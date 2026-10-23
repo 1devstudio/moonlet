@@ -1,6 +1,7 @@
 //! Where design systems live (X64, ADR 0013): `~/.moonlet/design/<workspace
 //! id>/systems/<slug>/`, each with a `config.toml` naming its sources.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -36,6 +37,38 @@ pub struct SystemConfig {
     pub synced_at: Option<u64>,
     #[serde(default)]
     pub sources: Vec<Source>,
+    /// Per-card settings, by card path.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub cards: BTreeMap<String, CardSettings>,
+}
+
+/// A card's exceptions to the defaults (X64).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CardSettings {
+    /// Leave the component out of the design system.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub skip: bool,
+    /// `column` or `single` instead of the grid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    /// `WxH` instead of the marker's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub viewport: Option<String>,
+}
+
+impl SystemConfig {
+    /// Each card's settings as the text that joins its `source_key`.
+    pub fn exceptions(&self) -> BTreeMap<String, String> {
+        self.cards
+            .iter()
+            .map(|(p, c)| {
+                (
+                    p.clone(),
+                    toml::to_string(c).unwrap_or_default().trim().to_string(),
+                )
+            })
+            .collect()
+    }
 }
 
 /// The design folders of one moonlet home.
@@ -79,6 +112,7 @@ impl Store {
             created_at: now,
             synced_at: None,
             sources,
+            cards: BTreeMap::new(),
         };
         std::fs::write(dir.join(CONFIG), toml::to_string(&config)?)?;
         Ok(slug)
@@ -101,7 +135,7 @@ impl Store {
                 .iter()
                 .map(|s| PathBuf::from(&s.path))
                 .collect();
-            let status = anchor::status(&dir, &roots)?;
+            let status = anchor::status(&dir, &roots, &config.exceptions())?;
             let mut changed: Vec<String> = status
                 .iter()
                 .flat_map(|s| s.changed_sources.clone())
@@ -176,7 +210,7 @@ impl Store {
             .iter()
             .map(|s| PathBuf::from(&s.path))
             .collect();
-        anchor::write(&dir, &roots)
+        anchor::write(&dir, &roots, &config.exceptions())
     }
 
     /// A file under the workspace's design folder (`design.file`): never one
