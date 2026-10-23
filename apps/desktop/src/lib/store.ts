@@ -638,11 +638,15 @@ export function getLayout(host: string, id: string): Layout {
 }
 
 /** Opening a session, from the sidebar, a notification, the inbox or the
- * palette, shows its workspace and makes it that workspace's last session (X32). */
-function showSessionWorkspace(s: State, host: string, id: string): Partial<State> {
+ * palette, shows its workspace in Sessions mode and makes it that
+ * workspace's last session (X32, X65). Restoring one on a workspace switch
+ * (`keepMode`) leaves the workspace in the mode it was left in. */
+function showSessionWorkspace(s: State, host: string, id: string, keepMode = false): Partial<State> {
   const wsId = s.sessions[host]?.find((x) => x.id === id)?.workspace_id;
   if (!wsId) return {};
-  return { workspace: isShown(s.workspace, host, wsId) ? s.workspace : { host, id: wsId }, lastSession: { ...s.lastSession, [wsKey(host, wsId)]: id } };
+  const key = wsKey(host, wsId);
+  const toSessions = !keepMode && s.mode[key] && s.mode[key] !== "sessions";
+  return { workspace: isShown(s.workspace, host, wsId) ? s.workspace : { host, id: wsId }, lastSession: { ...s.lastSession, [key]: id }, ...(toSessions && { mode: { ...s.mode, [key]: "sessions" as const } }) };
 }
 
 /** A session needs you while one of its agents is blocked or a terminal of
@@ -667,8 +671,8 @@ export function focusTerminal(host: string, session: number) {
   updateBadge();
 }
 
-export function selectSession(host: string, id: string) {
-  set((s) => ({ selected: { host, session: id }, diffFile: null, ...showSessionWorkspace(s, host, id) }));
+export function selectSession(host: string, id: string, keepMode = false) {
+  set((s) => ({ selected: { host, session: id }, diffFile: null, ...showSessionWorkspace(s, host, id, keepMode) }));
   const layout = getLayout(host, id);
   if (layout.focused !== null) {
     set((s) => {
@@ -719,7 +723,7 @@ export function switchWorkspace(ref: WorkspaceRef) {
   const lastSession = from && s.selected ? { ...s.lastSession, [wsKey(from.host, from.id)]: s.selected.session } : s.lastSession;
   const restore = sessionToRestore(lastSession[wsKey(ref.host, ref.id)], s.sessions[ref.host] ?? [], ref.id);
   set({ workspace: ref, lastSession, showHistory: false });
-  if (restore) selectSession(ref.host, restore);
+  if (restore) selectSession(ref.host, restore, true);
   else set({ selected: null });
 }
 
