@@ -211,8 +211,9 @@ pub fn check(root: &Path) -> Result<Vec<Problem>> {
     Ok(problems)
 }
 
-/// `styles.css` and every local file it imports, directly or not.
-fn styles_closure(root: &Path) -> Vec<PathBuf> {
+/// `styles.css` and every local file it imports, directly or not, in import
+/// order (each file once).
+pub(super) fn styles_closure(root: &Path) -> Vec<PathBuf> {
     fn visit(file: PathBuf, root: &Path, seen: &mut Vec<PathBuf>) {
         if seen.contains(&file) {
             return;
