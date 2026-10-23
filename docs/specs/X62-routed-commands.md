@@ -187,8 +187,38 @@ This is ADR 0009's routing slice. It adds two things the ADR did not decide: an 
   - exited N, and the status went to the agent.
 - [ ] A job records what came back: each changed file with its added and removed line counts, each `outputs` path with its size, and each leftover from the fence (a file that changed on the central host during the run). It also records the worker as it was at the start: load, the slot it took ("1 of 2"), round trip and the routing copy's path. Of the environment, it records only the names passed to the worker, never the values.
 - [ ] A job's output is kept as it streamed, stdout and stderr apart, up to 10 MiB per job. Past that, the middle is dropped and replaced by one line, "moonlet: 3.2 MB of output dropped here". After a rerun, the output of each run stays, with a separator line "──── run 2 · studio-mini ────" between them.
+- [ ] **Output summary.** When a job ends, the central host reads its output (ANSI escapes removed, the last run only after a rerun) and keeps one summary line. The first rule that matches wins:
+  1. **Test results.** Formats read:
+     - vitest's `Tests  … (N)` line;
+     - jest's `Tests: …, N total`;
+     - `cargo test`'s `test result:` lines, summed over every crate and binary;
+     - pytest's closing `== … in …s ==` line.
+
+     All passed gives "457 tests passed". Some failed gives "2 of 457 tests failed".
+  2. **The first compiler error.** Formats read:
+     - TypeScript (`tsc`, in both its plain and `--pretty` forms) gives "Type error in src/cart.ts:41";
+     - rustc and cargo (`error[E…]: <message>` followed by ` --> <file>:<line>:<col>`) give "<message> in src/lib.rs:41", the message cut to 60 characters.
+  3. Otherwise, no summary.
+
+  Paths are relative to the worktree. Worked examples:
+
+  | Output (the lines that matter) | Exit | Summary |
+  |---|---|---|
+  | `      Tests  457 passed (457)` | 0 | 457 tests passed |
+  | `      Tests  2 failed \| 455 passed (457)` | 1 | 2 of 457 tests failed |
+  | `Tests:       2 failed, 455 passed, 457 total` | 1 | 2 of 457 tests failed |
+  | `test result: ok. 38 passed; 0 failed; …` and `test result: ok. 12 passed; 0 failed; …` | 0 | 50 tests passed |
+  | `test result: FAILED. 36 passed; 2 failed; …` | 101 | 2 of 38 tests failed |
+  | `==== 457 passed in 3.21s ====` | 0 | 457 tests passed |
+  | `src/cart.ts(41,7): error TS2322: Type 'string' is not assignable to type 'number'.` | 2 | Type error in src/cart.ts:41 |
+  | `src/cart.ts:41:7 - error TS2322: …` | 2 | Type error in src/cart.ts:41 |
+  | `error[E0308]: mismatched types` then `  --> src/lib.rs:41:5` | 101 | mismatched types in src/lib.rs:41 |
+  | `Done in 2.1s` | 0 | (none) |
+
+  The summary ends the job tab's state line ("… · run by Claude in fix-cart · 457 tests passed"). A row's second line adds it only for a job that did not exit 0 ("studio-mini · exit 1 · Type error in src/cart.ts:41").
 - [ ] **Stop** on a running or waiting job cancels it as `exec.cancel` does (SIGTERM, then SIGKILL after 5 s). The agent gets exit 143 and the line "moonlet: stopped from the Jobs panel". Changes the job made so far still come back. **Stop all** stops every running and waiting job of the session.
 - [ ] **Run on studio-mini now**, on a job waiting for a cloud machine, runs it on the central host at once, with the line "moonlet: running on studio-mini instead, as asked from the Jobs panel". The machine keeps starting, and takes the next command.
+- [ ] The Jobs tab's count is the number of the session's jobs in the history, whatever their state.
 - [ ] The Jobs tab's summary reads "1 waiting · 3 done · 4m 38s on workers": counts by state, and the total running time of the session's jobs. Worked examples:
 
   | Jobs | Summary |
@@ -205,7 +235,8 @@ This is ADR 0009's routing slice. It adds two things the ADR did not decide: an 
   |---|---|
   | done on a Mac, exit 0, 1 leftover | Alex's MacBook Pro · exit 0 · 1 leftover |
   | done after a rerun, exit 0 | Ran again on studio-mini · exit 0 |
-  | done on the central host, exit 1 | studio-mini · exit 1 |
+  | done on the central host, exit 1, no summary | studio-mini · exit 1 |
+  | done on the central host, exit 1, a type error | studio-mini · exit 1 · Type error in src/cart.ts:41 |
   | waiting for a cloud machine at setup step 4 of 6 | Waiting for moonlet-shop-m3x9 · setup 4 of 6 |
   | running on a cloud machine | Running on moonlet-shop-7k2q · 0:31 |
   | stopped | Stopped · Alex's MacBook Pro |
@@ -270,7 +301,7 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
   - frames of kind 5, `Output`, with payload `[u32 BE run][u8 stream: 1 stdout, 2 stderr][bytes]`;
   - the event `exec.exited {run, status, worker, rerun, leftovers}`.
 - `exec.cancel {run}`.
-- `job.list {session}` returns the session's jobs, newest first, with state, phases, timeline, worker, what came back and env names.
+- `job.list {session}` returns the session's jobs, newest first, with state, phases, timeline, worker, what came back, env names and `summary`.
 - `job.output {job, from}` replays the stored output as `Output` frames from byte `from`, then follows the live stream when the job is running.
 - `job.stop {job}`, `job.stop_all {session}`, and `job.run_here {job}` (a job waiting for a cloud machine).
 - The event `job.changed {job}`.
@@ -328,6 +359,7 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
   - the rule check, with captured `settings.json` files that have `deny` and `ask` rules in each form;
   - the picker, against every row of the order table;
   - path replacement, with the copy's path split across two chunks;
+  - the output summary, against every row of its table, and against whole outputs captured from real runs of vitest, jest, `cargo test` (a workspace with two crates), pytest, `tsc` (plain and `--pretty`) and `cargo build` with a type error, kept as fixtures with paths made fictional;
   - load parsing from captured `sysctl -n vm.loadavg` (macOS) and `/proc/loadavg` (Linux) output.
 - **Unit, `moonlet-cli`:** the hook's output for a captured Claude Code `PreToolUse` payload (Bash with `description` and `timeout`) equals the literal JSON above. An unroutable payload prints nothing.
 - **Daemon end-to-end, `crates/moonletd/tests/exec.rs`:** a central host and one or two worker `TestDaemon`s, linked as in `tests/link.rs`:
@@ -363,12 +395,15 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
 
 ## Open questions
 
-- **Output summaries in the design.** The job tab's state line ends with "457 tests passed", and a failed row reads "Type error in src/cart.ts:41". Both need to recognise each test runner's and compiler's output. This spec leaves them out. A later spec could add parsers for vitest, jest and cargo test.
-- **The Jobs tab count** shows all the session's jobs. Counting only running and waiting jobs would make the tab say "something is happening". The design shows both values in different boards.
 
 - **Default slots:** 2 per worker. The ADR 0009 trial ran one suite per machine, and a laptop may want 1.
 - **`updatedInput` without `permissionDecision`.** Claude Code's docs don't say what that does. This spec always sends `allow`, so the question doesn't arise as long as approval stays required.
 - **Codex** has no equivalent of `updatedInput` in its hooks today. Its routing waits for one.
+
+Decided by the user on 2026-10-23:
+
+- **The Jobs tab counts all the session's jobs**, not only the running and waiting ones.
+- **Output summaries ship with this spec**, for the runners and compilers listed under Jobs. Others, such as `go test`, mocha or `swift build`, get no summary until they are added.
 
 Decided while writing this spec, on 2026-10-22:
 
