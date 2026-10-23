@@ -1591,6 +1591,34 @@ async fn archiving_the_session_removes_its_jobs() {
 }
 
 #[tokio::test]
+async fn a_character_split_across_two_writes_reads_whole() {
+    let c = central_with(RUN_CONFIG, &[]).await;
+    c.approve_runs().await;
+    // "é" is two bytes, written apart.
+    let mut events = c.daemon.app().await;
+    c.run(&["sh", "-c", "printf '\\303'; sleep 0.3; printf '\\251\\n'"])
+        .await;
+    let id = jobs(&c).await[0]["id"].as_str().unwrap().to_string();
+    assert_eq!(stored(&c, &id).await.0, "é\n");
+    // As it came, too.
+    let mut heard = String::new();
+    while let Ok(Ok(Some(frame))) =
+        tokio::time::timeout(Duration::from_millis(300), events.next_frame()).await
+    {
+        if let Frame::Json(Message::Event { name, data }) = frame
+            && name == "job.output"
+        {
+            for chunk in data["chunks"].as_array().unwrap() {
+                if chunk["stream"] == json!(1) {
+                    heard.push_str(chunk["text"].as_str().unwrap());
+                }
+            }
+        }
+    }
+    assert_eq!(heard, "é\n");
+}
+
+#[tokio::test]
 async fn a_job_lists_what_came_back_and_the_env_names_only() {
     let (c, _mac) = linked().await;
     let (client, run) = c
@@ -1822,6 +1850,31 @@ async fn a_job_going_on_when_the_daemon_stops_is_lost() {
     }
     c.daemon.restart().await;
     assert_eq!(jobs(&c).await[0]["state"], json!({ "kind": "lost" }));
+    // It ended when the daemon stopped, whatever later restarts say.
+    let ended = jobs(&c).await[0]["ended_at"].clone();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    c.daemon.restart().await;
+    assert_eq!(jobs(&c).await[0]["ended_at"], ended);
+}
+
+#[tokio::test]
+async fn a_job_still_going_on_is_kept_past_the_limit() {
+    let c = central_with(RUN_CONFIG, &[("MOONLET_TEST_JOBS_KEPT", "1")]).await;
+    c.approve_runs().await;
+    let (client, run) = c
+        .start(&["sh", "-c", "sleep 2"], &c.worktree.clone(), json!({}))
+        .await;
+    c.run(&["sh", "run.sh"]).await;
+    let commands = |list: Vec<Value>| -> Vec<String> {
+        list.iter()
+            .map(|j| j["command"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(commands(jobs(&c).await), ["sh run.sh", "sh -c 'sleep 2'"]);
+    assert_eq!(collect(client, run).await.status, 0);
+    // Once it has ended, the next job drops it.
+    c.run(&["sh", "run.sh"]).await;
+    assert_eq!(commands(jobs(&c).await), ["sh run.sh"]);
 }
 
 #[tokio::test]
