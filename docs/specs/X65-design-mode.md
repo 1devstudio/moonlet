@@ -3,7 +3,7 @@
 - **Status:** draft
 - **Priority / phase:** P1 · phase 4
 - **PRD refs:** X64 (design systems), X45 (Tasks mode, the mode switch), X6 (structured agent view), X49 (queued messages), D1 (Changes panel), X2 (pull requests), D3 (comments to the agent), X54 (new session composer), X22 (agent opens a session)
-- **Related ADRs:** none yet
+- **Related ADRs:** [0013](../adr/0013-design-systems-and-designs.md)
 - **Design:** "PR 338 · Design mode screens" (Claude Design bundle, 2026-10-23). It has 27 boards:
   - screens 1–5, the design screen
   - the design system view, one card, a sync running and the sync's result
@@ -56,7 +56,7 @@ A design lives in one of three places:
 
 1. In a session, the user and the agent agree on requirements in the chat.
 2. The user types `/moonlet-design Prototype the page from the agreed requirements`. The chat input's slash menu explains the three forms: `/moonlet-design` (here, in this session), `new` (a separate workspace design) and `sync`. It also names the design system it will use.
-3. The agent runs `"$MOONLET_BIN" design new --here …`. moonlet creates `docs/design/settings-page/` in the worktree, gives the agent read access to the design system, and opens the session's **Design** tab. The agent writes the pages there.
+3. The agent runs `"$MOONLET_BIN" design new --here …`. moonlet creates `docs/design/settings-page/` in the worktree with a pinned copy of the design system's styles, copies the whole design system into the session's `.moonlet/` for the agent to read, and opens the session's **Design** tab. The agent writes the pages there.
 4. Comments and edits by hand on the Design tab go into the same session chat, as in journey A.
 5. "Write the spec from the design" makes the agent write `docs/specs/X66-settings-page.md`. The spec has a `Design:` line, and its criteria name the elements they describe (`index.html` m24). Rejected variants are listed with the reason. The chat offers **Implement it** and **Back to the design**.
 6. The Changes panel groups the files as Design, Spec and Code. Comments and snapshots stay in `.moonlet/` and are not committed.
@@ -98,8 +98,11 @@ A design lives in one of three places:
   - `assets/`
   - `comments.json`
   - `history/`
-- [ ] A session design keeps `design.toml`, `pages/` and `assets/` in the worktree under the project's design folder, `docs/design/<slug>/` unless `.moonlet/config.toml` sets `[design] dir`. Its `comments.json` and `history/` live in `<worktree>/.moonlet/design/<slug>/`. moonlet writes a `.gitignore` of `*` into that folder, so they are never committed.
-- [ ] A page links its design system's `styles.css` (X64), and nothing else from it, through `moonlet-design://<workspace>/systems/<slug>/…`. It may have its own `<style>` and inline scripts, such as menus that open or tabs that switch.
+- [ ] A session design keeps `design.toml`, `pages/`, `assets/` and `system/` in the worktree under the project's design folder, `docs/design/<slug>/` unless `.moonlet/config.toml` sets `[design] dir`. All of it is committed.
+- [ ] A session design's `system/` is a pinned copy of the design system's styles: `styles.css`, `tokens/`, `fonts/` and `components.css`. `design.toml` records the design system's slug and the sync anchor the copy came from. The design therefore renders without `~/.moonlet`: in the PR, after the merge as a project design, and on another machine.
+- [ ] A session design's `comments.json`, `history/` and built screenshots live in `<worktree>/.moonlet/design/<slug>/`, with the full design system copied to `system/` there for the agent to read (README, cards, `.prompt.md` files, layouts). moonlet writes a `.gitignore` of `*` into that folder, so none of it is committed.
+- [ ] When the design system is synced after a session design pinned it, the Design tab shows "Design system updated" with **Update**. Update replaces both copies, records the new anchor, and lists the changed cards in the chat for the agent.
+- [ ] A page links only its design system's `styles.css` (X64). For a workspace design the link is `moonlet-design://<workspace>/systems/<slug>/styles.css`, the live design system. For a session or project design it is the relative `../system/styles.css`. A page may have its own `<style>` and inline scripts, such as menus that open or tabs that switch.
 - [ ] Every element of a page has a `data-mid` attribute unique in the page (`m1`, `m2`, …). `moonlet design check <design>` reports missing or duplicate ids. With `--fix` it adds the missing ones and renumbers the duplicates.
 
 ### The agent
@@ -109,7 +112,7 @@ A design lives in one of three places:
   - owned by moonletd and restored after a restart (S4)
   - started in the design's folder with the design system's folder given with `--add-dir`
   - in Accept edits mode
-- [ ] A session design uses the session's agent. When the design is created, moonlet gives that agent read access to the design system's folder, as `/add-dir` does. The chat shows a note saying so.
+- [ ] A session design uses the session's agent. It reads the design system from the copy in `.moonlet/design/<slug>/system/` inside the worktree, so it needs no extra directory access. The chat shows a note: "Design view opened. The design system is copied into the session for Claude to read".
 - [ ] The first prompt is the brief. The chat shows a note that the brief went with the design system's `README.md` and the design rules. (The design export's boards say `GUIDE.md`; X64 follows design-sync and names it `README.md`.) The rules:
   - link only the design system's `styles.css`
   - start from its layouts (`ui_kits/`), the snippets in its cards, and its tokens
@@ -118,6 +121,9 @@ A design lives in one of three places:
   - write one page per variant and label it in `design.toml`
   - run the check after each change
 - [ ] Messages sent while the agent is busy queue as in X49 ("Queue a message for Claude").
+- [ ] A workspace design's agent notifies like a session's (X47): one "done" per turn, and when it needs you. The notification is labelled `Design · <name>`, and clicking it opens the design. Its approvals go to the approval inbox (A5) with the same label. Design agents show only in the Design sidebar, never in the Sessions list.
+- [ ] The sync agent (X64) does not notify per turn. It notifies when it asks a question (the scope in Inventory), when it needs an approval, and when it finishes (`<name> synced · <n> to settle`).
+- [ ] Design and sync agents start with `Bash("$MOONLET_BIN" design *)` allowed, so the skill's own commands never ask. Edits inside their folder are covered by Accept edits.
 - [ ] A comment sent from the canvas shows in the chat as a **Comment from the canvas** card (**Comment from the Design view** in a session), numbered like its pin.
 - [ ] Edits by hand show as an **Edits by hand since your last turn** block at the top of the user's next message.
 
@@ -271,7 +277,7 @@ The boards of the design export are the reference. Layout of the design screen:
 ## Data and config
 
 - Workspace designs: `~/.moonlet/design/<workspace id>/designs/<slug>/`.
-- Session designs: `<worktree>/<design dir>/<slug>/`, committed. Their comments, history and built screenshots are in `<worktree>/.moonlet/design/<slug>/`, which is not committed.
+- Session designs: `<worktree>/<design dir>/<slug>/` with `design.toml`, `pages/`, `assets/` and the pinned `system/` styles, all committed. Their comments, history, built screenshots and the agent's full copy of the design system are in `<worktree>/.moonlet/design/<slug>/`, which is not committed.
 - `.moonlet/config.toml`: `[design] dir = "docs/design"` (default).
 - `~/.moonlet/settings.toml`: `[design] snapshot_keep = 50`, and `viewports` for the user's custom sizes.
 
@@ -287,7 +293,9 @@ The boards of the design export are the reference. Layout of the design screen:
 
 - Designs on remote hosts, and sharing designs between workspaces or people.
 - Exporting to Figma or to Claude Design.
-- Free drawing (vectors, pen tool), image editing, and multi-select editing (except copy and paste).
+- Free drawing (vectors, pen tool) and image editing.
+- Multi-select editing and alignment tools (a follow-up). Single selection plus copy and paste covers the first version.
+- Agents other than Claude Code (ADR 0013).
 - Using real components or real data: pages are static HTML with the design system's styles.
 - Turning the off-system inline styles into classes. The user asks the agent for that.
 - Comparing design and build pixel by pixel. The PR panel shows them side by side only.
@@ -309,6 +317,7 @@ The boards of the design export are the reference. Layout of the design screen:
   - snapshot rotation keeping 50, and snapshot summaries
   - path rejection for workspace and session designs
   - the `.gitignore` written into `.moonlet/design/`
+  - a session design's pinned `system/` copy and its anchor in `design.toml`, and Update replacing both copies
   - finding project designs on a base branch from a captured `git ls-tree` output
 - `crates/moonletd/tests/`:
   - `design.create` with `spawned_by` sends the `design.open` toast event
@@ -334,21 +343,19 @@ X64 and X65 ship as one `gh stack` on `main`. Each entry carries its criteria's 
 |---|---|---|---|
 | 1 | `docs` | X64, X65, `CONTEXT.md` (this PR) | all |
 | 2 | `core: design folder` | `moonlet-core::design`: `@dsCard` parsing, the static check, the `styles.css` closure, the manifest, foundation cards, the README index, `conventions.md` validation, `sourceKey` / `renderHash` / `_ds_sync.json`, the `data-mid` check and `--fix`; `moonlet design check` | — |
-| 3 | `daemon: design store` | `~/.moonlet/design/` per workspace, the `design.*` RPCs, `design.changed`, `design.file`, stale-write refusal, snapshots, sync and design agent terminals with `--add-dir`, restore after restart; the CLI | — |
+| 3 | `daemon: design store` | `~/.moonlet/design/` per workspace, the `design.*` RPCs, `design.changed`, `design.file`, stale-write refusal, snapshots, sync and design agent terminals with `--add-dir`, their notifications and approvals, restore after restart; the CLI | — |
 | 4 | `skill: moonlet-design` | The skill (four sync steps, grading, conventions header, design rules, session flow), installed and refreshed beside `moonlet` | — |
 | 5 | `app: Design mode and design systems` | Mode switch (⌃⌘D), Design sidebar, New design system dialog, design system view, card page, sync step bar and docked agent, after-sync Needs you; e2e | 1, 2, DS view, one card, sync running, after the sync, both sidebars, DS cards |
-| 6 | `app: render check and snap` | The `moonlet-design://` scheme with CSP, offscreen render for `--render` and `design snap`, the render rubric | one card |
+| 6 | `app: render check and snap` | Spike first: WKWebView `takeSnapshot` in a window placed off screen. Then the `moonlet-design://` scheme with CSP, the render rubric measured in the page, and `design snap` | one card |
 | 7 | `app: design screen and canvas` | New design dialog, the design's agent chat, canvas, viewports, zoom, page tabs, Overview, bars, live reload; e2e | 3, 4, 5, Overview, canvas bars, prototype page |
 | 8 | `app: comments` | Comment mode, pins, Keep and Send, Comments tab, Send all, orphaned, chat cards; e2e | comment mode on Phone, right rail |
 | 9 | `app: visual editor, structure` | Select, Layers, breadcrumb, text editing, delete, duplicate, wrap, copy and paste, undo, save and the bridge, "Edits by hand" | edit mode |
 | 10 | `app: visual editor, styling` | Drag to move, resize, Inspector, token popover, off-system, Palette; e2e | edit mode, right rail |
 | 11 | `app: history and Build it` | Snapshots, History tab and preview, restore; Build it into the composer, "Building in"; e2e | History, Build it |
-| 12 | `app: session designs` | `design new --here`, the session Design tab, read access for the session's agent, the slash menu, `/moonlet-design new` toast, Changes grouping, spec-from-design replies, the PR's Design and build, the Designs index with project designs; e2e | `/moonlet-design new`, A–F |
+| 12 | `app: session designs` | `design new --here`, the session Design tab, the pinned `system/` copy and Update, the slash menu, `/moonlet-design new` toast, Changes grouping, spec-from-design replies, the PR's Design and build, the Designs index with project designs; e2e | `/moonlet-design new`, A–F |
 
 Entries 2–4 come first because everything in the app needs the folder format and the RPCs. 5 and 6 make the design system usable on its own, and moonlet's own desktop app is the first design system to build with it. 7–11 make workspace designs complete, and 12 brings designs into sessions.
 
 ## Open questions
 
-- How does a running session's agent get read access to the design system (journey B, step 3)? Sending `/add-dir <path>` through the structured chat's input needs trying with Claude Code. If that fails, moonlet can copy the design system's `tokens.css`, `styles.css` and snippets into `.moonlet/design/<slug>/system/` in the worktree.
-- Should a design's agent and the sync agent count as sessions anywhere, for example in notifications (X47) and the approval inbox (A5)? The proposal: yes, labelled with the design's name.
-- Multi-select editing and alignment tools are left for a follow-up. Is that acceptable for the first version?
+- None. The answers are in ADR 0013 and above: the session agent reads a copy of the design system, design agents notify and ask for approval like sessions, and multi-select is a follow-up.
