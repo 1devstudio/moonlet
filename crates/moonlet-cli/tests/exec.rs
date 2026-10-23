@@ -63,6 +63,13 @@ struct Shop {
 async fn shop() -> Shop {
     let home = tempfile::tempdir().unwrap();
     let socket = home.path().join("run/d.sock");
+    // This machine's name, as the first line of a run says it; read when
+    // the daemon starts.
+    std::fs::write(
+        home.path().join("link.json"),
+        r#"{ "central": null, "worker": { "id": "0f6c2a9e-9d2b-4f5e-8f1a-2b3c4d5e6f70", "name": "studio-mini", "enabled": false } }"#,
+    )
+    .unwrap();
     let daemon = KillOnDrop(
         Command::new(target_bin("moonletd"))
             .arg("daemon")
@@ -82,12 +89,6 @@ async fn shop() -> Shop {
     wait_for_socket(&socket, Duration::from_secs(15))
         .await
         .unwrap();
-    // This machine's name, as the first line of a run says it.
-    std::fs::write(
-        home.path().join("link.json"),
-        r#"{ "central": null, "worker": { "id": "0f6c2a9e-9d2b-4f5e-8f1a-2b3c4d5e6f70", "name": "studio-mini", "enabled": false } }"#,
-    )
-    .unwrap();
     let repo = home.path().join("src/shop");
     std::fs::create_dir_all(repo.join(".moonlet")).unwrap();
     git(&repo, &["init", "-q", "-b", "main"]);
@@ -336,6 +337,47 @@ async fn moonlet_exec_stops_the_command_when_it_is_stopped() {
     let status = child.wait().unwrap();
     assert_eq!(status.code(), Some(143));
     assert!(started.elapsed() < Duration::from_secs(4));
+}
+
+#[tokio::test]
+async fn ctrl_c_ends_moonlet_exec_with_130() {
+    let s = approved_shop().await;
+    let (mut child, _out) = start_long(&s);
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(child.id() as i32),
+        nix::sys::signal::Signal::SIGINT,
+    )
+    .unwrap();
+    assert_eq!(child.wait().unwrap().code(), Some(130));
+}
+
+#[tokio::test]
+async fn a_stopped_moonlet_exec_exits_143_whatever_the_command_does() {
+    use std::io::BufRead;
+    let s = approved_shop().await;
+    // The command exits 0 on SIGTERM; moonlet exec still says it was stopped.
+    let mut child = exec_in(
+        &s,
+        &[
+            "sh",
+            "-c",
+            "trap 'exit 0' TERM; echo started; sleep 30 & wait",
+        ],
+    )
+    .stdout(Stdio::piped())
+    .stderr(Stdio::null())
+    .spawn()
+    .unwrap();
+    let mut out = std::io::BufReader::new(child.stdout.take().unwrap());
+    let mut line = String::new();
+    out.read_line(&mut line).unwrap();
+    assert_eq!(line, "started\n");
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(child.id() as i32),
+        nix::sys::signal::Signal::SIGTERM,
+    )
+    .unwrap();
+    assert_eq!(child.wait().unwrap().code(), Some(143));
 }
 
 #[tokio::test]

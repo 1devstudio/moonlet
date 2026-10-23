@@ -13,6 +13,9 @@ use tokio::signal::unix::{SignalKind, signal};
 /// or `None` when the daemon cannot be reached or will not run it.
 pub async fn routed(socket: &Path, session: &str, argv: &[String]) -> Option<i32> {
     let mut c = Client::connect(socket, "moonlet-cli").await.ok()?;
+    // Before the command starts, so it never runs here as well.
+    let mut int = signal(SignalKind::interrupt()).ok()?;
+    let mut term = signal(SignalKind::terminate()).ok()?;
     let run = ExecRun {
         session: session.to_string(),
         argv: argv.to_vec(),
@@ -38,14 +41,13 @@ pub async fn routed(socket: &Path, session: &str, argv: &[String]) -> Option<i32
             }
         }
     });
-    let mut int = signal(SignalKind::interrupt()).ok()?;
-    let mut term = signal(SignalKind::terminate()).ok()?;
-    let mut cancelled = false;
+    // Stopped, it exits as the signal says, whatever the command did.
+    let mut cancelled: Option<i32> = None;
     loop {
         let frame = tokio::select! {
             f = frames.recv() => f.flatten(),
-            _ = int.recv(), if !cancelled => { cancelled = true; cancel(&mut writer, started.run).await; continue; }
-            _ = term.recv(), if !cancelled => { cancelled = true; cancel(&mut writer, started.run).await; continue; }
+            _ = int.recv(), if cancelled.is_none() => { cancelled = Some(130); cancel(&mut writer, started.run).await; continue; }
+            _ = term.recv(), if cancelled.is_none() => { cancelled = Some(143); cancel(&mut writer, started.run).await; continue; }
         };
         match frame {
             Some(Frame::RunOutput { run, stream, data }) if run == started.run => {
@@ -61,7 +63,7 @@ pub async fn routed(socket: &Path, session: &str, argv: &[String]) -> Option<i32
                 if let Ok(e) = serde_json::from_value::<ExecExited>(data)
                     && e.run == started.run
                 {
-                    return Some(e.status);
+                    return Some(cancelled.unwrap_or(e.status));
                 }
             }
             Some(_) => {}
