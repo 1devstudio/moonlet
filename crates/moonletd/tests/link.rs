@@ -1298,4 +1298,33 @@ async fn a_worker_reports_its_load_with_each_ping() {
         workers(&central).await.first().is_some_and(|w| w.load == Some(7.2))
     })
     .await;
+    // A change of slots keeps what the pings measured.
+    let _: Value = worker
+        .call("link.set", json!({ "worker": { "slots": 3 } }))
+        .await;
+    eventually("the central host sees 3 slots", || async {
+        workers(&central)
+            .await
+            .first()
+            .is_some_and(|w| w.worker.slots == 3)
+    })
+    .await;
+    assert_eq!(workers(&central).await[0].load, Some(7.2));
+}
+
+/// X62: slots that `link.json` gives outside 1 to 64 read as the default.
+#[tokio::test]
+async fn slots_out_of_range_in_link_json_read_as_two() {
+    for bad in [0, 1000] {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::write(
+            home.path().join("link.json"),
+            json!({ "central": null, "worker": { "id": WORKER_ID, "name": "Alex's MacBook Pro", "enabled": false, "slots": bad } })
+                .to_string(),
+        )
+        .unwrap();
+        let worker = Daemon::start(home, &[("MOONLET_MOBILE_ADDRS", "127.0.0.2")]).await;
+        let got: Value = worker.call("link.get", json!({})).await;
+        assert_eq!(got["worker"]["slots"], json!(2), "{bad}: {got}");
+    }
 }

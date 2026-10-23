@@ -105,18 +105,28 @@ impl Workers {
                 return Err(RpcError::new("forbidden", "another Mac links with this worker id"));
             }
         }
-        let old = self.list.lock().unwrap().insert(
-            id.clone(),
-            Entry {
-                info: WorkerInfo {
-                    worker,
-                    connected_since: now_ms(),
-                    rtt_ms: None,
-                    load: None,
+        let old = {
+            let mut list = self.list.lock().unwrap();
+            // Registering again on the same connection keeps what its pings
+            // measured; a new connection starts afresh.
+            let kept = list
+                .get(&id)
+                .filter(|o| o.conn.id == conn.id)
+                .map(|o| (o.info.connected_since, o.info.rtt_ms, o.info.load));
+            let (connected_since, rtt_ms, load) = kept.unwrap_or((now_ms(), None, None));
+            list.insert(
+                id.clone(),
+                Entry {
+                    info: WorkerInfo {
+                        worker,
+                        connected_since,
+                        rtt_ms,
+                        load,
+                    },
+                    conn: conn.clone(),
                 },
-                conn: conn.clone(),
-            },
-        );
+            )
+        };
         let again = old.as_ref().is_some_and(|o| o.conn.id == conn.id);
         if let Some(old) = old
             && !again
