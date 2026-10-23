@@ -4,7 +4,7 @@
 
 import { useEffect } from "react";
 import { create } from "zustand";
-import { onDaemonEvent, rpc } from "./daemon";
+import { DaemonError, onDaemonEvent, onHostStatus, rpc } from "./daemon";
 import { EV, M, type Job, type JobChunk } from "./protocol";
 
 interface JobsState {
@@ -18,20 +18,48 @@ export const useJobs = create<JobsState>(() => ({ jobs: {}, output: {} }));
 
 const key = (host: string, session: string) => `${host}/${session}`;
 const loading = new Set<string>();
+/** Jobs that changed while their session's list was being read, by key. */
+const early: Record<string, Job[]> = {};
 /** The central host keeps a session's last 50 jobs; a job past them leaves. */
 const KEPT = 50;
 /** Output that came while a job's stored output was being read. */
 const pending: Record<string, JobChunk[]> = {};
 
-/** Reads a session's jobs once; later ones come as `job.changed`. */
-export function loadJobs(host: string, session: string) {
+/** `list` with `job` in it, new or changed, keeping the newest `KEPT`. */
+function upsert(list: Job[], job: Job): Job[] {
+  const i = list.findIndex((j) => j.id === job.id);
+  return i < 0 ? [job, ...list].slice(0, KEPT) : list.map((j) => (j.id === job.id ? job : j));
+}
+
+/** Reads a session's jobs once; later ones come as `job.changed`, and the
+ * list is read again when its host reconnects. */
+export function loadJobs(host: string, session: string, again = false) {
   const k = key(host, session);
-  if (loading.has(k)) return;
+  if (loading.has(k) && !again) return;
   loading.add(k);
+  early[k] = [];
   void rpc<Job[]>(host, M.jobList, { session }).then(
-    (list) => useJobs.setState((s) => ({ jobs: { ...s.jobs, [k]: list } })),
-    () => loading.delete(k),
+    (list) => {
+      // What changed while it was read wins over the list.
+      const changed = early[k] ?? [];
+      delete early[k];
+      setJobs(k, changed.reduceRight(upsert, list));
+    },
+    () => {
+      delete early[k];
+      loading.delete(k);
+    },
   );
+}
+
+/** Sets session `k`'s jobs, forgetting the output of jobs no longer kept. */
+function setJobs(k: string, list: Job[]) {
+  useJobs.setState((s) => {
+    const kept = new Set(list.map((j) => j.id));
+    const gone = (s.jobs[k] ?? []).filter((j) => !kept.has(j.id)).map((j) => j.id);
+    const output = gone.some((id) => s.output[id]) ? Object.fromEntries(Object.entries(s.output).filter(([id]) => !gone.includes(id))) : s.output;
+    return { jobs: { ...s.jobs, [k]: list }, output };
+  });
 }
 
 /** A session's jobs, newest first, read when first asked for. */
@@ -77,6 +105,9 @@ export async function loadOutput(host: string, job: string) {
       if (!r.more) break;
     }
     useJobs.setState((s) => ({ output: { ...s.output, [job]: [...chunks, ...pending[job]] } }));
+  } catch (e) {
+    // A job dropped from the history has no output to show.
+    if (!(e instanceof DaemonError && e.code === "not_found")) throw e;
   } finally {
     delete pending[job];
   }
@@ -92,18 +123,22 @@ export function startJobs() {
     if (e.name === EV.jobChanged) {
       const job = e.data as Job;
       const k = key(e.host, job.session);
-      useJobs.setState((s) => {
-        const list = s.jobs[k];
-        if (!list) return s;
-        const i = list.findIndex((j) => j.id === job.id);
-        const next = i < 0 ? [job, ...list].slice(0, KEPT) : list.map((j) => (j.id === job.id ? job : j));
-        return { jobs: { ...s.jobs, [k]: next } };
-      });
+      const list = useJobs.getState().jobs[k];
+      if (early[k]) early[k].push(job);
+      else if (list) setJobs(k, upsert(list, job));
       if (job.ended_at != null && useJobs.getState().output[job.id]) void loadOutput(e.host, job.id).catch(() => {});
     } else if (e.name === EV.jobOutput) {
       const ev = e.data as { job: string; chunks: JobChunk[] };
       if (pending[ev.job]) pending[ev.job].push(...ev.chunks);
       else useJobs.setState((s) => (s.output[ev.job] ? { output: { ...s.output, [ev.job]: [...s.output[ev.job], ...ev.chunks] } } : s));
+    }
+  });
+  // A host that comes back may have ended or lost jobs meanwhile.
+  void onHostStatus((h) => {
+    if (h.status !== "connected") return;
+    for (const k of Object.keys(useJobs.getState().jobs)) {
+      const [host, ...rest] = k.split("/");
+      if (host === h.id) loadJobs(host, rest.join("/"), true);
     }
   });
 }

@@ -183,8 +183,12 @@ export function chipFromOutput(output: string): { icon: JobIcon; text: string; r
   return first ? { icon: "worker", text: `on ${first[1]}`, rerun: false } : null;
 }
 
-/** A routed Bash row's chip: from its job when known, else from its result. */
-export const bashChip = (job: Job | undefined, output: string | null | undefined) => (job ? chipFromJob(job) : chipFromOutput(output ?? ""));
+/** A routed Bash row's chip: from its job when known, else from its result,
+ * only for a command the hook rewrote. */
+export function bashChip(job: Job | undefined, command: string, output: string | null | undefined) {
+  if (job) return chipFromJob(job);
+  return shownCommand(command) !== command ? chipFromOutput(output ?? "") : null;
+}
 
 /** The command as the agent wrote it, without the hook's `moonlet exec` in front. */
 export function shownCommand(command: string): string {
@@ -217,7 +221,15 @@ export function outputLines(chunks: JobChunk[]): OutputLine[] {
     stream = null;
     text = "";
   };
+  // Chunks of one stream in a row are joined first: a colour code or a
+  // character can be cut between them.
+  const joined: JobChunk[] = [];
   for (const c of chunks) {
+    const last = joined[joined.length - 1];
+    if (last?.stream === c.stream) last.text += c.text;
+    else joined.push({ ...c });
+  }
+  for (const c of joined) {
     if (stream && stream !== c.stream) end();
     const parts = c.text.replace(ANSI, "").split("\n");
     for (let i = 0; i < parts.length; i++) {

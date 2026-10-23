@@ -128,9 +128,12 @@ describe("routed Bash rows in the chat (X62)", () => {
   });
 
   it("the chip comes from the row's job, and falls back to the result's first line", () => {
-    expect(bashChip(job(), "moonlet: running on studio-mini\nok")).toEqual({ icon: "mac", text: "on Alex's MacBook Pro", rerun: false });
-    expect(bashChip(undefined, "moonlet: running on studio-mini\nok")).toEqual({ icon: "worker", text: "on studio-mini", rerun: false });
-    expect(bashChip(undefined, "ok")).toBeNull();
+    const routed = "'/Applications/moonlet.app/Contents/MacOS/moonlet' exec --tool-use toolu_1 -- pnpm test";
+    expect(bashChip(job(), routed, "moonlet: running on studio-mini\nok")).toEqual({ icon: "mac", text: "on Alex's MacBook Pro", rerun: false });
+    expect(bashChip(undefined, routed, "moonlet: running on studio-mini\nok")).toEqual({ icon: "worker", text: "on studio-mini", rerun: false });
+    expect(bashChip(undefined, routed, "ok")).toBeNull();
+    // A command moonlet did not route that prints such a line has no chip.
+    expect(bashChip(undefined, "echo 'moonlet: running on fake'", "moonlet: running on fake\n")).toBeNull();
   });
 
   it("a rewritten command shows without moonlet exec", () => {
@@ -156,6 +159,10 @@ describe("a job's output (X62)", () => {
       { n: 4, stream: 2, text: "(node:4211) DeprecationWarning: fs.rmdir", tone: "stderr" },
       { n: 5, stream: 1, text: "moonlet: Alex's MacBook Pro went away. Running again on studio-mini.", tone: "warn" },
     ]);
+  });
+
+  it("reads a colour code cut between two chunks as a colour, not as text", () => {
+    expect(outputLines([{ stream: 1, text: "\u001b[3" }, { stream: 1, text: "2mok\u001b[0m\n" }])).toEqual([{ n: 1, stream: 1, text: "ok", tone: null }]);
   });
 
   it("filters by stream and by what was typed in Find, keeping line numbers", () => {

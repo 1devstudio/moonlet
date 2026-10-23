@@ -280,7 +280,7 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
   - after a rerun, the chip reads "ran again on studio-mini", in the attention colour;
   - `moonlet:` lines in the output use the accent colour, and a went-away line uses the attention colour.
 
-  The chip comes from the job, matched by the tool call's id, and falls back to the result's first `moonlet:` line.
+  The chip comes from the job, matched by the tool call's id, and falls back to the result's first `moonlet:` line when the row's command is the hook's rewrite, so a command moonlet did not route never gets one.
 - **Session right panel, Jobs tab** ([jobs-list.png](design/x62-x63/jobs-list.png), [session-jobs-panel.png](design/x62-x63/session-jobs-panel.png)): a tab after **Agents** with a count of the session's jobs. It shows the summary line with **Stop all**, then one row per job, newest first:
   - a state dot: accent dots for waiting or running, green for exit 0, red for any other exit;
   - the command, the elapsed or total time, and the second line;
@@ -372,7 +372,7 @@ Where the tests live:
 - **Rust unit tests:** `crates/moonlet-core/src/heavy.rs` (matching, Claude Code rules, picking, paths), `crates/moonlet-core/src/job_summary.rs` and `crates/moonlet-cli/src/hook.rs`, each in its `#[cfg(test)] mod tests`.
 - **Daemon end-to-end:** `crates/moonletd/tests/exec.rs`. It runs a central host and one or two worker `TestDaemon`s, linked as in `tests/link.rs`, with a test-only setting for load and size limits. Slots and load over the link are in `crates/moonletd/tests/link.rs`.
 - **CLI end-to-end:** `crates/moonlet-cli/tests/exec.rs`.
-- **Vitest:** `apps/desktop/src/lib/heavyCommands.test.ts`, `workers.test.ts`, `jobs.test.ts`, `layout.test.ts` and `toolOutput.test.ts`.
+- **Vitest:** `apps/desktop/src/lib/heavyCommands.test.ts`, `workers.test.ts`, `jobs.test.ts`, `layout.test.ts`, `toolOutput.test.ts` and `jobsStore.test.ts`.
 - **e2e:** `apps/desktop/e2e/specs/routing.e2e.ts` and `jobs.e2e.ts`.
 
 | Criterion | Tests |
