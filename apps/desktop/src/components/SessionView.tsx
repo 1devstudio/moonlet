@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ChevronDown, GitPullRequest, Plus, X } from "lucide-react";
+import { Check, ChevronDown, GitPullRequest, LoaderCircle, Plus, X } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { leaves } from "../lib/layout";
 import { M, type ProjectConfig, type Session } from "../lib/protocol";
 import { focusTerminal, getLayout, projectOf, termKey, setLayout, useStore, sesKey } from "../lib/store";
-import { closeFileTab, closeTab, newAgentTab, newSessionAgentTab, newTab, sendToAgent, split } from "../lib/actions";
+import { closeFileTab, closeJobTab, closeTab, newAgentTab, newSessionAgentTab, newTab, sendToAgent, split } from "../lib/actions";
 import { FileIcon } from "./FileIcon";
+import { WorkerIcon, going } from "./JobsPanel";
+import { chipFromJob } from "../lib/jobs";
+import { useSessionJob } from "../lib/jobsStore";
 import { PaneTree } from "./PaneTree";
 import { AgentIcon, Kbd, cx } from "./ui";
 import { agentLabel } from "../lib/agents";
@@ -138,6 +141,43 @@ function FileTab({ host, ws, id, path, active }: { host: string; ws: Session; id
   );
 }
 
+/** A job's tab (X62): where it runs, its command and how it is going. */
+function JobTab({ host, ws, id, job, active }: { host: string; ws: Session; id: string; job: string; active: boolean }) {
+  const j = useSessionJob(host, ws.id, job);
+  const s = j?.state;
+  return (
+    <div
+      aria-current={active || undefined}
+      title={j?.command}
+      className={cx(
+        "no-drag group relative flex h-full w-[172px] shrink-0 cursor-default items-center gap-2.5 px-4 ui-text-14",
+        active ? "bg-raised text-fg" : "text-muted hover:text-fg",
+      )}
+      onMouseDown={() => setLayout(host, ws.id, { ...getLayout(host, ws.id), active: id, focused: null })}
+    >
+      {j && <WorkerIcon icon={chipFromJob(j).icon} size={14} />}
+      <span className="truncate font-mono ui-text-13">{j?.command ?? "Job"}</span>
+      <span className="ml-auto flex shrink-0 items-center group-hover:hidden">
+        {j && going(j) ? (
+          <LoaderCircle aria-label="running" size={12} className="animate-spin text-accent" />
+        ) : s?.kind === "done" && s.exit === 0 ? (
+          <Check aria-label="done" size={13} className="text-done" />
+        ) : s ? (
+          <X aria-label="failed" size={13} className="text-error" />
+        ) : null}
+      </span>
+      <button
+        className="ml-auto hidden rounded p-0.5 text-faint hover:bg-hover hover:text-fg focus-visible:flex group-hover:flex"
+        title="Close tab"
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={() => closeJobTab(host, ws.id, job)}
+      >
+        <X size={12} />
+      </button>
+    </div>
+  );
+}
+
 function TabStrip({ host, ws }: { host: string; ws: Session }) {
   const layout = useStore((s) => s.layouts[sesKey(host, ws.id)]);
   const sidebarOpen = useStore((s) => s.sidebarOpen);
@@ -147,6 +187,8 @@ function TabStrip({ host, ws }: { host: string; ws: Session }) {
         {layout?.tabs.map((t) =>
           t.root.type === "file" ? (
             <FileTab key={t.id} host={host} ws={ws} id={t.id} path={t.root.path} active={t.id === layout.active} />
+          ) : t.root.type === "job" ? (
+            <JobTab key={t.id} host={host} ws={ws} id={t.id} job={t.root.job} active={t.id === layout.active} />
           ) : (
             <Tab key={t.id} host={host} ws={ws} id={t.id} ids={leaves(t.root)} active={t.id === layout.active} />
           ),

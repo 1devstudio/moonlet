@@ -12,6 +12,7 @@ import { CommandPalette } from "./components/CommandPalette";
 import { Button, IconButton, Kbd, cx } from "./components/ui";
 import { dismissToast, selectedSession, startStore, useStore } from "./lib/store";
 import { startSync } from "./lib/syncStore";
+import { startJobs } from "./lib/jobsStore";
 import { installShortcuts } from "./lib/keys";
 import { terminalSearch } from "./lib/actions";
 import { uiScale } from "./lib/uiScale";
@@ -132,6 +133,7 @@ export default function App() {
   useEffect(() => {
     void startStore();
     void startSync();
+    startJobs();
     void loadTrackersConfig();
     const off = installShortcuts();
     const onFind = () => setFinding(true);

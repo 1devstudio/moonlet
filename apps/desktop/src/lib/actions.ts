@@ -2,7 +2,7 @@
 // keyboard shortcuts.
 
 import { rpc, sendInput } from "./daemon";
-import { addTab, closeFile, cycleFocus, openFile, splitLeaf, tabOf } from "./layout";
+import { addTab, closeFile, closeJob, cycleFocus, openFile, openJob, splitLeaf, tabOf } from "./layout";
 import { M, type ProjectConfig, type TerminalInfo, type Session, type SessionArchived, type UnpushedWork } from "./protocol";
 import { checkForUpdates, errorToast, focusTerminal, getLayout, selectedSession, sesKey, sessionState, setLayout, termKey, toast, useStore, sessionTerminals, shownWorkspace } from "./store";
 import { arrange, hostSections, lastActive } from "./sidebar";
@@ -96,6 +96,7 @@ export async function closeFocused() {
   const layout = getLayout(c.host, c.ws.id);
   const root = layout.tabs.find((t) => t.id === layout.active)?.root;
   if (root?.type === "file") return closeFileTab(c.host, c.ws.id, root.path);
+  if (root?.type === "job") return closeJobTab(c.host, c.ws.id, root.job);
   const focused = layout.focused;
   if (focused === null) return;
   const info = useStore.getState().terminals[c.host]?.[focused];
@@ -434,6 +435,26 @@ export function runAction(id: string) {
 
 /** Opens the Agents tab on its list, or on one agent (`agentKey`) (X42). */
 export const openAgents = (agentDetail: string | null = null) => useStore.setState({ rightOpen: true, rightTab: "agents", agentDetail });
+
+/** Opens the Jobs tab on its list, or on one job (X62). */
+export const openJobs = (jobDetail: string | null = null) => useStore.setState({ rightOpen: true, rightTab: "jobs", jobDetail });
+
+/** Opens a job's output as a tab of the session (X62). */
+export function openJobTab(host: string, wsId: string, job: string) {
+  setLayout(host, wsId, openJob(getLayout(host, wsId), job));
+}
+
+export function closeJobTab(host: string, wsId: string, job: string) {
+  setLayout(host, wsId, closeJob(getLayout(host, wsId), job));
+}
+
+/** Stops a job (X62); its changes so far still come back. */
+export const stopJob = (host: string, job: string) => void rpc(host, M.jobStop, { job }).catch(errorToast);
+
+/** Copies a job's stored output (X62). */
+export function copyJobOutput(text: string) {
+  void navigator.clipboard.writeText(text).then(() => toast("Copied output"), errorToast);
+}
 
 /** Opens the Changes tab, to review what the agents changed (X42). */
 export const openChanges = () => useStore.setState({ rightOpen: true, rightTab: "changes" });

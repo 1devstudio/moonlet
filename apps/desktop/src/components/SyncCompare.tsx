@@ -87,3 +87,55 @@ export function SyncCompare({ host, session, path }: { host: string; session: st
     </Dialog>
   );
 }
+
+/**
+ * A leftover of a routed command (X62): the session's version of `path` on
+ * the central host, and the run's, kept in `folder`. The session kept its own.
+ */
+export function JobLeftoverCompare({ host, session, path, folder }: { host: string; session: string; path: string; folder: string }) {
+  const sessionPath = useStore((s) => s.sessions[host]?.find((w) => w.id === session)?.path);
+  const fontSize = useStore((s) => s.settings.term.fontSize);
+  const language = useEditorLanguage(path);
+  const [sides, setSides] = useState<{ kept: Side; run: Side } | null>(null);
+  const close = () => useStore.setState({ dialog: null });
+  useEffect(() => {
+    if (!sessionPath) return;
+    let live = true;
+    void Promise.all([read(host, `${sessionPath}/${path}`), read(host, `${folder}/${path}`)]).then(([kept, run]) => live && setSides({ kept, run }));
+    return () => {
+      live = false;
+    };
+  }, [host, path, folder, sessionPath]);
+  return (
+    <Dialog
+      title={path}
+      onClose={close}
+      width={1000}
+      footer={
+        <Button variant="ghost" onClick={close}>
+          Close
+        </Button>
+      }
+    >
+      <div className="mb-2 flex ui-text-12 text-muted">
+        <span className="flex-1">The session's{sides && compareLabel(sides.kept)}</span>
+        <span className="flex-1">The run's{sides && compareLabel(sides.run)}</span>
+      </div>
+      <div className="h-[60vh] overflow-hidden rounded-lg border border-border">
+        {!sides ? null : sides.kept.binary || sides.run.binary ? (
+          <Empty title="Binary file">No text diff available.</Empty>
+        ) : (
+          language && (
+            <DiffEditor
+              theme="moonlet"
+              language={language}
+              original={sides.kept.text ?? ""}
+              modified={sides.run.text ?? ""}
+              options={{ ...editorOptions, ...editorFont(fontSize), readOnly: true, originalEditable: false, renderSideBySide: true, renderOverviewRuler: false }}
+            />
+          )
+        )}
+      </div>
+    </Dialog>
+  );
+}
