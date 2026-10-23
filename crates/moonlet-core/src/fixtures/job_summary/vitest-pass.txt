@@ -1,0 +1,9 @@
+
+ RUN  v4.1.11 /Users/alex/src/shop
+
+
+ Test Files  2 passed (2)
+      Tests  3 passed (3)
+   Start at  18:00:35
+   Duration  89ms (transform 23ms, setup 0ms, import 34ms, tests 3ms, environment 0ms)
+

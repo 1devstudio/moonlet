@@ -18,6 +18,8 @@ use crate::daemon::internal;
 
 /// A command `exec.run` may run, as checked.
 pub struct Checked {
+    /// The session's worktree.
+    pub worktree: PathBuf,
     pub cwd: PathBuf,
     /// `cwd` relative to the session's worktree, for a routing copy.
     pub cwd_rel: String,
@@ -176,6 +178,7 @@ impl Heavy {
             .display()
             .to_string();
         Ok(Checked {
+            worktree: worktree.clone(),
             cwd,
             cwd_rel,
             env: passed,

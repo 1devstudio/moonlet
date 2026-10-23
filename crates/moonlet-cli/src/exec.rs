@@ -11,7 +11,12 @@ use tokio::signal::unix::{SignalKind, signal};
 
 /// Runs `argv` through the daemon at `socket` and returns its exit status,
 /// or `None` when the daemon cannot be reached or will not run it.
-pub async fn routed(socket: &Path, session: &str, argv: &[String]) -> Option<i32> {
+pub async fn routed(
+    socket: &Path,
+    session: &str,
+    argv: &[String],
+    tool_use_id: Option<String>,
+) -> Option<i32> {
     let mut c = Client::connect(socket, "moonlet-cli").await.ok()?;
     // Before the command starts, so it never runs here as well.
     let mut int = signal(SignalKind::interrupt()).ok()?;
@@ -21,7 +26,7 @@ pub async fn routed(socket: &Path, session: &str, argv: &[String]) -> Option<i32
         argv: argv.to_vec(),
         cwd: std::env::current_dir().ok()?.display().to_string(),
         env: std::env::vars().collect(),
-        tool_use_id: None,
+        tool_use_id,
     };
     let started: ExecRunStarted = c.request(methods::EXEC_RUN, run).await.ok()?;
     let early = std::mem::take(&mut c.backlog);

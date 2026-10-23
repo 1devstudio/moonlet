@@ -302,6 +302,21 @@ pub const EXEC_START: &str = "exec.start";
 /// Worker to central host, [`ExecDone`] → [`ExecBrought`]: a run ended;
 /// its changes travel in a pack.
 pub const EXEC_DONE: &str = "exec.done";
+/// [`JobList`] → `[Job]`: a session's jobs, newest first (X62).
+pub const JOB_LIST: &str = "job.list";
+/// [`JobOutputGet`] → [`JobOutput`]: a job's stored output from a byte.
+pub const JOB_OUTPUT: &str = "job.output";
+/// [`JobRef`] → `true`: stops a running job; the agent gets exit 143.
+pub const JOB_STOP: &str = "job.stop";
+/// [`JobList`] → the number stopped: every running job of a session.
+pub const JOB_STOP_ALL: &str = "job.stop_all";
+/// [`JobRef`] → `true`: a job waiting for a cloud machine runs on the
+/// central host now (X63); `not_waiting` otherwise.
+pub const JOB_RUN_HERE: &str = "job.run_here";
+/// [`Job`]: a job changed.
+pub const EV_JOB_CHANGED: &str = "job.changed";
+/// [`JobOutputEvent`]: a running job's new output.
+pub const EV_JOB_OUTPUT: &str = "job.output";
 /// A [`CopyChanged`], on every change of a copy's state.
 pub const EV_SYNC_CHANGED: &str = "sync.changed";
 
@@ -1803,6 +1818,9 @@ pub struct ExecPrepared {
     pub state: String,
     #[serde(default)]
     pub reason: Option<String>,
+    /// The routing copy's folder.
+    #[serde(default)]
+    pub path: Option<String>,
 }
 
 /// `exec.start` params.
@@ -1850,4 +1868,159 @@ pub struct ExecBrought {
     /// back.
     #[serde(default)]
     pub notes: Vec<String>,
+    /// The files the run changed in the session.
+    #[serde(default)]
+    pub files: Vec<JobFile>,
+    /// The `outputs` paths brought back.
+    #[serde(default)]
+    pub outputs: Vec<JobBytes>,
+}
+
+/// `job.list` and `job.stop_all` params.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JobList {
+    pub session: String,
+}
+
+/// A job by id.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JobRef {
+    pub job: String,
+}
+
+/// `job.output` params: the output from byte `from` of the stored file.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JobOutputGet {
+    pub job: String,
+    #[serde(default)]
+    pub from: u64,
+}
+
+/// Part of a job's output: `stream` 1 is stdout, 2 stderr.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JobChunk {
+    pub stream: u8,
+    pub text: String,
+}
+
+/// `job.output`'s answer: `next` is where to ask from next; `more` says
+/// the stored output goes on past it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JobOutput {
+    pub chunks: Vec<JobChunk>,
+    pub next: u64,
+    pub more: bool,
+}
+
+/// `job.output` event data.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JobOutputEvent {
+    pub job: String,
+    pub session: String,
+    pub chunks: Vec<JobChunk>,
+}
+
+/// A routed command of a session (X62).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Job {
+    pub id: String,
+    pub session: String,
+    /// The command as the agent wrote it.
+    pub command: String,
+    /// The Bash tool call it came from, so the chat can find its row.
+    #[serde(default)]
+    pub tool_use_id: Option<String>,
+    pub state: JobState,
+    pub started_at: u64,
+    #[serde(default)]
+    pub ended_at: Option<u64>,
+    #[serde(default)]
+    pub phases: Vec<JobPhase>,
+    #[serde(default)]
+    pub timeline: Vec<JobEvent>,
+    /// Where it runs or ran, as the machine was at the start.
+    #[serde(default)]
+    pub worker: Option<JobWorker>,
+    /// Files the run changed in the session, with lines added and removed.
+    #[serde(default)]
+    pub brought: Vec<JobFile>,
+    /// `outputs` paths brought back, with their sizes.
+    #[serde(default)]
+    pub outputs: Vec<JobBytes>,
+    /// Files that changed on the central host during the run as well.
+    #[serde(default)]
+    pub leftovers: Vec<String>,
+    #[serde(default)]
+    pub leftovers_folder: Option<String>,
+    /// Names of the variables passed to the worker; never their values.
+    #[serde(default)]
+    pub env: Vec<String>,
+    /// Test results or the first compiler error of the last run.
+    #[serde(default)]
+    pub summary: Option<String>,
+    /// Bytes of output kept.
+    #[serde(default)]
+    pub output_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum JobState {
+    /// For a cloud machine to start (X63).
+    Waiting { r#for: String },
+    Running { worker: String },
+    BringingBack,
+    Done { exit: i32 },
+    /// Stopped from the Jobs panel or `moonlet exec`'s signal.
+    Stopped { exit: i32 },
+    /// The central host's daemon stopped during it.
+    Lost,
+}
+
+/// One step of a job, with how long it took once it is over.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JobPhase {
+    pub name: String,
+    #[serde(default)]
+    pub took_ms: Option<u64>,
+}
+
+/// Something that happened to a job.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JobEvent {
+    pub at: u64,
+    pub text: String,
+    #[serde(default)]
+    pub detail: Option<String>,
+}
+
+/// The machine a job runs on: `kind` is `mac`, `host`, `central` or
+/// `cloud`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JobWorker {
+    pub name: String,
+    pub kind: String,
+    pub load: f64,
+    pub cores: u32,
+    /// The slot it took, from 1, of `slots`.
+    pub slot: u32,
+    pub slots: u32,
+    #[serde(default)]
+    pub rtt_ms: Option<u64>,
+    /// The routing copy's folder on that machine.
+    #[serde(default)]
+    pub copy: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JobFile {
+    pub path: String,
+    pub added: u64,
+    pub removed: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JobBytes {
+    pub path: String,
+    pub bytes: u64,
 }
