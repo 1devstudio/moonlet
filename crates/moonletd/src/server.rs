@@ -311,9 +311,6 @@ where
                 Frame::Input { terminal, data } => {
                     let _ = daemon.terminals.write(terminal, data);
                 }
-                // Before the request that names it is read (X60). Only a
-                // worker's daemon sends packs; from anyone else, or over the
-                // limits, they end the connection.
                 // A worker's routed command's output, for `moonlet exec`
                 // (X62); from anyone else, nothing.
                 Frame::RunOutput { run, stream, data } => {
@@ -321,6 +318,9 @@ where
                         daemon.runs.forward(conn.id, run, stream, data);
                     }
                 }
+                // Before the request that names it is read (X60). Only a
+                // worker's daemon sends packs; from anyone else, or over the
+                // limits, they end the connection.
                 Frame::Pack { transfer, data } => {
                     let refused = if conn.client != crate::link::WORKER_CLIENT {
                         Some(RpcError::new("forbidden", "only a worker sends packs"))

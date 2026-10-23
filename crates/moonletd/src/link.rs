@@ -325,7 +325,12 @@ impl WorkerLink {
     /// [`WorkerLink::set`], only while `central` is still at `revision`.
     fn set_at(self: &Arc<Self>, req: LinkSet, own: &[IpAddr], revision: Option<u64>) -> Result<LinkInfo, RpcError> {
         let moved = req.central.is_some();
-        let renamed = req.worker.as_ref().is_some_and(|w| w.name.is_some() || w.slots.is_some());
+        // What the central host lists of this worker: its name, slots and
+        // whether it takes heavy commands (X62).
+        let renamed = req
+            .worker
+            .as_ref()
+            .is_some_and(|w| w.name.is_some() || w.slots.is_some() || w.enabled.is_some());
         self.store.lock().unwrap().set_at(req, own, revision)?;
         // Routing copies go with heavy commands, and with the central host
         // they were made for (X62).
@@ -348,8 +353,8 @@ impl WorkerLink {
         if !moved && self.waiting() {
             self.retry();
         }
-        // The central host learns a new name or slots now, not at the next
-        // link.
+        // The central host learns a new name, slots or heavy commands now,
+        // not at the next link.
         if renamed
             && !moved
             && matches!(*self.state.lock().unwrap(), LinkState::Connected { .. })

@@ -456,6 +456,25 @@ async fn reads(path: &Path, want: &str) -> Duration {
     panic!("{} never read {want:?}: {:?}", path.display(), read(path));
 }
 
+/// X62: a Mac linked for a live copy that turns on heavy commands is told
+/// to the central host at once, not at its next link.
+#[tokio::test]
+async fn turning_on_heavy_commands_while_linked_for_a_copy_tells_the_central_host() {
+    let (central, worker, _) = synced().await;
+    let heavy = || async {
+        let list: Value = central.daemon.call("worker.list", json!({})).await;
+        list[0]["heavy"].clone()
+    };
+    assert_eq!(heavy().await, json!(false));
+    let _: Value = worker
+        .call("link.set", json!({ "worker": { "enabled": true } }))
+        .await;
+    eventually("the central host sees heavy commands on", || async {
+        heavy().await == json!(true)
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn an_edit_on_the_central_host_shows_in_the_copy_within_a_second() {
     let (central, _worker, c) = synced_alone().await;
