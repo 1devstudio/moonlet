@@ -675,6 +675,17 @@ async fn removing_revokes_the_device_retires_and_destroys() {
 }
 
 #[tokio::test]
+async fn removing_logs_the_machine_out_of_the_tailnet() {
+    let c = cloud().await;
+    let m = c.ready().await;
+    let _: Value = c.d.call("cloud.down", json!({ "machine": m["id"] })).await;
+    c.until(m["id"].as_str().unwrap(), "removed").await;
+    // The fake machine's `tailscale` notes its arguments here.
+    let calls = std::fs::read_to_string(c.fake.path().join("tailscale-calls")).unwrap_or_default();
+    assert_eq!(calls, "logout\n");
+}
+
+#[tokio::test]
 async fn a_ready_machine_names_its_worker() {
     let c = cloud().await;
     let m = c.ready().await;

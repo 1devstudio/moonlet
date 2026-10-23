@@ -560,6 +560,14 @@ impl Mobile {
         Ok(())
     }
 
+    /// A cloud machine being removed (X63): its token stops working at once,
+    /// and its open connection stays for `worker.retire`; `close_device` ends it.
+    pub fn forget_device(&self, id: &str) -> Result<(), RpcError> {
+        self.forget(id)?;
+        self.changed();
+        Ok(())
+    }
+
     /// A paired device removes itself (X57). Its token stops working at once;
     /// its connections close a moment later, once the reply has gone out.
     pub fn unpair(self: &Arc<Self>, id: &str) -> Result<(), RpcError> {
@@ -593,7 +601,7 @@ impl Mobile {
         Ok(())
     }
 
-    fn close_device(&self, id: &str) {
+    pub fn close_device(&self, id: &str) {
         for c in self.conns.lock().unwrap().values() {
             if c.device_id == id {
                 let _ = c.close.send(true);
