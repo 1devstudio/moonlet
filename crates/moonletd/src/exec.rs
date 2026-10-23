@@ -96,6 +96,9 @@ pub struct Runs {
     copies_in_use: Mutex<HashSet<String>>,
     /// This central host's runs going on, wherever they run, by run.
     going: Mutex<HashMap<u32, Going>>,
+    /// Why a worker was last skipped for a project, by worker and project,
+    /// and when.
+    skips: Mutex<HashMap<(String, String), (String, String, u64)>>,
     /// The daemon's own environment, which commands start from.
     base_env: BTreeMap<String, String>,
     jobs: Arc<Jobs>,
@@ -119,11 +122,14 @@ pub struct Plan {
     pub host: String,
     pub slots: u32,
     pub tool_use_id: Option<String>,
+    /// The project's name, for the Workers page's skip reasons.
+    pub project: String,
 }
 
 enum Fail {
-    /// The worker would not run it: the next one is tried.
-    Refused(String),
+    /// The worker would not run it, with its code and why: the next one is
+    /// tried.
+    Refused(String, String),
     /// The worker went away mid-run: why.
     Gone(&'static str),
     /// Stopped before the command started, ending with this status.
@@ -142,6 +148,7 @@ impl Runs {
             stops: Mutex::default(),
             copies_in_use: Mutex::default(),
             going: Mutex::default(),
+            skips: Mutex::default(),
             base_env,
             jobs,
         })
@@ -286,6 +293,10 @@ impl Runs {
             self.claims.lock().unwrap().remove(&run);
             match ran {
                 Ok((status, brought, back_ms)) => {
+                    self.skips
+                        .lock()
+                        .unwrap()
+                        .remove(&(chosen.id.clone(), plan.project.clone()));
                     for note in &brought.notes {
                         say(note.clone());
                     }
@@ -309,8 +320,12 @@ impl Runs {
                     });
                     return status;
                 }
-                Err(Fail::Refused(why)) => {
-                    tracing::debug!(worker = %name, "a worker refused a routed command: {why}");
+                Err(Fail::Refused(why, detail)) => {
+                    tracing::debug!(worker = %name, "a worker refused a routed command: {why}: {detail}");
+                    self.skips.lock().unwrap().insert(
+                        (chosen.id.clone(), plan.project.clone()),
+                        (why, detail, moonlet_core::paths::now_ms()),
+                    );
                     skipped.insert(chosen.id);
                 }
                 Err(Fail::Gone(why)) => {
@@ -437,7 +452,7 @@ impl Runs {
         let worker = chosen.id.as_str();
         let conn = workers
             .conn(worker)
-            .ok_or_else(|| Fail::Refused("gone".into()))?;
+            .ok_or_else(|| Fail::Refused("gone".into(), "it went away".into()))?;
         let prepare = m::ExecPrepare {
             session: plan.session.clone(),
         };
@@ -454,9 +469,17 @@ impl Runs {
             .await?
             .ok()
             .and_then(|v| serde_json::from_value(v).ok())
-            .ok_or_else(|| Fail::Refused("cannot prepare".into()))?;
+            .ok_or_else(|| Fail::Refused("failed".into(), "it could not make its copy".into()))?;
         if prepared.state != "ready" {
-            return Err(Fail::Refused(prepared.state));
+            let why = prepared
+                .reason
+                .clone()
+                .unwrap_or_else(|| match prepared.state.as_str() {
+                    "setup_pending" => "waiting for setup approval".into(),
+                    "making" => "making its copy".into(),
+                    other => other.into(),
+                });
+            return Err(Fail::Refused(prepared.state, why));
         }
         let fencing = std::time::Instant::now();
         let (tree, head, session_path) = self
@@ -466,7 +489,7 @@ impl Runs {
                 sync.fence(&prepared.copy, worker, &plan.session),
             )
             .await?
-            .map_err(|e| Fail::Refused(e.code))?;
+            .map_err(|e| Fail::Refused(e.code, e.message))?;
         let fenced_ms = fencing.elapsed().as_millis() as u64;
         if let Some(status) = self.stopped(run, client) {
             return Err(Fail::Stopped(status));
@@ -503,7 +526,7 @@ impl Runs {
             .await;
         if let Err(e) = started {
             self.remote.lock().unwrap().remove(&run);
-            return Err(Fail::Refused(e.code));
+            return Err(Fail::Refused(e.code, e.message));
         }
         let kind = if chosen.os == "macos" { "mac" } else { "host" };
         self.jobs.update(job, |j| {
@@ -694,6 +717,52 @@ impl Runs {
             }
         }
         n
+    }
+
+    /// `exec.status`: `host`, this machine; the routed commands going on;
+    /// why workers were skipped in the last hour.
+    pub fn status(&self, host: m::ExecHost) -> m::ExecStatus {
+        let running = self
+            .going
+            .lock()
+            .unwrap()
+            .values()
+            .filter_map(|g| self.jobs.get(&g.job))
+            .filter_map(|j| match &j.state {
+                JobState::Running { worker } => Some(m::ExecRunning {
+                    job: j.id.clone(),
+                    session: j.session.clone(),
+                    command: j.command.clone(),
+                    worker: worker.clone(),
+                    started_at: j.started_at,
+                }),
+                _ => None,
+            })
+            .collect();
+        let hour_ago = moonlet_core::paths::now_ms().saturating_sub(3_600_000);
+        let mut skips: Vec<m::ExecSkip> = self
+            .skips
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, (_, _, at))| *at > hour_ago)
+            .map(|((worker, project), (reason, detail, _))| m::ExecSkip {
+                worker: worker.clone(),
+                project: project.clone(),
+                reason: reason.clone(),
+                detail: Some(detail.clone()),
+            })
+            .collect();
+        skips.sort_by(|a, b| (&a.worker, &a.project).cmp(&(&b.worker, &b.project)));
+        m::ExecStatus {
+            host: m::ExecHost {
+                used: self.running.lock().unwrap().len() as u32,
+                ..host
+            },
+            running,
+            skips,
+            routed: self.routed.lock().unwrap().len() as u32,
+        }
     }
 
     /// Output of a remote run, from the worker on connection `from`.

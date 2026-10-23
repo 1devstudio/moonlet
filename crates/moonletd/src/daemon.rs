@@ -614,6 +614,7 @@ impl Daemon {
                 let plan = crate::exec::Plan {
                     session: r.session,
                     worktree: checked.worktree.display().to_string(),
+                    project: checked.project.clone(),
                     tool_use_id: r.tool_use_id.clone(),
                     argv: r.argv.clone(),
                     cwd_rel: checked.cwd_rel,
@@ -625,6 +626,19 @@ impl Daemon {
                     slots: me.slots,
                 };
                 ok(self.runs.start(conn.clone(), plan, self.workers.clone(), self.sync.clone()))
+            }
+            m::EXEC_STATUS => {
+                jobs_reader(conn)?;
+                let me = self.link.info().worker;
+                let host = m::ExecHost {
+                    name: me.name,
+                    os: crate::link::os().into(),
+                    cores: std::thread::available_parallelism().map_or(1, |n| n.get() as u32),
+                    load: crate::link::load(),
+                    slots: me.slots,
+                    used: 0,
+                };
+                ok(self.runs.status(host))
             }
             m::EXEC_CANCEL => {
                 let r: m::ExecCancel = params(p)?;

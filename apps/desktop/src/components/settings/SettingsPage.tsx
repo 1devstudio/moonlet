@@ -3,7 +3,7 @@
 // underneath, so terminals and agents keep running.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, Bell, Bot, ChevronRight, Folder, GitBranch, Keyboard, Link2, Palette, Search, Server, Settings, Smartphone, SquareTerminal, User, X, ListChecks } from "lucide-react";
+import { ArrowLeft, Bell, Bot, ChevronRight, Cpu, Folder, GitBranch, Keyboard, Link2, Palette, Search, Server, Settings, Smartphone, SquareTerminal, User, X, ListChecks } from "lucide-react";
 import { escapeAction, hostOrder, profilesNeedSignIn, routeFocus, routeKey, settingsCrumbs, settingsNav, type AppPage, type NavEntry, type SettingsRoute } from "../../lib/settingsPage";
 import { goSettings } from "../../lib/settingsNavigation";
 import { moveSelection, searchSettings, type SearchResult } from "../../lib/settingsSearch";
@@ -22,6 +22,8 @@ import { TrackersPage } from "./TrackersPage";
 import { GitPage } from "./GitPage";
 import { HooksPage, ProfilesPage } from "./ClaudePages";
 import { HostsPage, PhonesPage, useMobileStatus } from "./MachinePages";
+import { WorkersPage } from "./WorkersPage";
+import { useSync } from "../../lib/syncStore";
 import { devicesOfKind } from "../../lib/mobile";
 
 const ICONS: Record<AppPage, typeof Settings> = {
@@ -36,6 +38,7 @@ const ICONS: Record<AppPage, typeof Settings> = {
   profiles: User,
   hooks: Link2,
   hosts: Server,
+  workers: Cpu,
   phones: Smartphone,
 };
 
@@ -69,6 +72,7 @@ function Nav({ route, phones, search }: { route: SettingsRoute; phones: number; 
   const version = useStore((s) => s.appVersion);
   const attention = useTasks((t) => Object.keys(t.attention).length);
   const status = useStore((s) => updateStatus(s.update, s.updateChecking, s.updateError));
+  const central = useSync((s) => s.central);
   const groups = useMemo(
     () =>
       settingsNav({
@@ -80,8 +84,9 @@ function Nav({ route, phones, search }: { route: SettingsRoute; phones: number; 
           (allWorkspaces[h] ?? []).map((w) => ({ host: h, id: w.id, name: w.name, color: w.color, remote: hosts[h]?.remote ? (hosts[h]?.label ?? h) : null })),
         ),
         projects: hostOrder(Object.keys(allProjects)).flatMap((h) => (allProjects[h] ?? []).map((p) => ({ host: h, id: p.id, name: p.name, remote: hosts[h]?.remote ? (hosts[h]?.label ?? h) : null }))),
+        central,
       }),
-    [hosts, phones, workspaces, profiles, defaultAccount, allWorkspaces, allProjects, attention],
+    [hosts, phones, workspaces, profiles, defaultAccount, allWorkspaces, allProjects, attention, central],
   );
   return (
     <nav aria-label="Settings" className="flex h-full w-[248px] shrink-0 flex-col border-r border-border bg-panel">
@@ -172,6 +177,8 @@ function AppPageBody({ route, mobile }: { route: { page: AppPage }; mobile: Retu
       return <HooksPage />;
     case "hosts":
       return <HostsPage status={mobile} />;
+    case "workers":
+      return <WorkersPage />;
     case "phones":
       return <PhonesPage status={mobile} />;
   }

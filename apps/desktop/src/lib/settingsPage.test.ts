@@ -13,14 +13,19 @@ describe("settings nav (X43)", () => {
         entries: [app("general", "General"), app("appearance", "Appearance"), app("terminal", "Terminal"), app("agents", "Agents"), app("git", "Git"), app("notifications", "Notifications"), app("trackers", "Task trackers"), app("shortcuts", "Keyboard shortcuts")],
       },
       { title: "Claude Code", entries: [app("profiles", "Profiles", { dot: "a profile is not signed in" }), app("hooks", "Hooks")] },
-      { title: "Machines", entries: [app("hosts", "Hosts", { count: 2 }), app("phones", "Phones", { count: 1 })] },
+      { title: "Machines", entries: [app("hosts", "Hosts", { count: 2 }), app("workers", "Workers"), app("phones", "Phones", { count: 1 })] },
     ]);
+  });
+
+  it("names the central host whose workers the Workers page shows (X62)", () => {
+    const [, , machines] = settingsNav({ ...none, central: "studio-mini" });
+    expect(machines.entries[1]).toEqual(app("workers", "Workers", { host: "studio-mini" }));
   });
 
   it("shows no count of zero and no dot when every profile in use is signed in", () => {
     const [, claude, machines] = settingsNav(none);
     expect(claude.entries[0]).toEqual(app("profiles", "Profiles"));
-    expect(machines.entries).toEqual([app("hosts", "Hosts"), app("phones", "Phones")]);
+    expect(machines.entries).toEqual([app("hosts", "Hosts"), app("workers", "Workers"), app("phones", "Phones")]);
   });
 
   it("lists every workspace and project, naming the host of remote ones", () => {
@@ -348,6 +353,7 @@ describe("the settings header's breadcrumb (X43)", () => {
     expect(settingsCrumbs({ page: "profiles" })).toEqual(["Settings", "Claude Code", "Profiles"]);
     expect(settingsCrumbs({ page: "hooks" })).toEqual(["Settings", "Claude Code", "Hooks"]);
     expect(settingsCrumbs({ page: "phones" })).toEqual(["Settings", "Machines", "Phones"]);
+    expect(settingsCrumbs({ page: "workers" })).toEqual(["Settings", "Machines", "Workers"]);
   });
 
   it("names the workspace or project of its page", () => {

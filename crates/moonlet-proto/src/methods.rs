@@ -302,6 +302,9 @@ pub const EXEC_START: &str = "exec.start";
 /// Worker to central host, [`ExecDone`] → [`ExecBrought`]: a run ended;
 /// its changes travel in a pack.
 pub const EXEC_DONE: &str = "exec.done";
+/// `{}` → [`ExecStatus`]: this machine as a worker, the routed commands
+/// going on and why workers were skipped, for the Workers page (X62).
+pub const EXEC_STATUS: &str = "exec.status";
 /// [`JobList`] → `[Job]`: a session's jobs, newest first (X62).
 pub const JOB_LIST: &str = "job.list";
 /// [`JobOutputGet`] → [`JobOutput`]: a job's stored output from a byte.
@@ -2023,4 +2026,51 @@ pub struct JobFile {
 pub struct JobBytes {
     pub path: String,
     pub bytes: u64,
+}
+
+/// `exec.status`'s answer.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExecStatus {
+    /// This machine.
+    pub host: ExecHost,
+    /// Routed commands going on, wherever they run.
+    pub running: Vec<ExecRunning>,
+    /// Workers skipped for a project's commands in the last hour, and why.
+    pub skips: Vec<ExecSkip>,
+    /// Commands this machine runs for its central host.
+    pub routed: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExecHost {
+    pub name: String,
+    pub os: String,
+    pub cores: u32,
+    pub load: Option<f64>,
+    pub slots: u32,
+    /// Its own slots in use.
+    pub used: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExecRunning {
+    pub job: String,
+    pub session: String,
+    pub command: String,
+    /// The machine's name.
+    pub worker: String,
+    pub started_at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExecSkip {
+    /// The worker's id.
+    pub worker: String,
+    /// The project's name.
+    pub project: String,
+    /// `not_approved`, `missing_tool`, `setup_pending`, `busy`, `not_fenced`
+    /// or another refusal.
+    pub reason: String,    /// The worker's words, such as `missing pnpm`.
+    #[serde(default)]
+    pub detail: Option<String>,
 }
