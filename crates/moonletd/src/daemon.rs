@@ -686,6 +686,7 @@ impl Daemon {
             }
             // A job waits for a machine only once cloud workers come (X63).
             m::JOB_RUN_HERE => {
+                jobs_reader(conn)?;
                 let r: m::JobRef = params(p)?;
                 match self.jobs.get(&r.job).map(|j| j.state) {
                     None => Err(RpcError::new("not_found", "no such job")),
