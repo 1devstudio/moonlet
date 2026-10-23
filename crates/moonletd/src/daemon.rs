@@ -782,10 +782,7 @@ impl Daemon {
             m::JOB_RUN_HERE => {
                 jobs_reader(conn)?;
                 let r: m::JobRef = params(p)?;
-                match self.jobs.get(&r.job).map(|j| j.state) {
-                    None => Err(RpcError::new("not_found", "no such job")),
-                    Some(_) => Err(RpcError::new("not_waiting", "the job is not waiting for a machine")),
-                }
+                ok(self.runs.run_here(&r.job)?)
             }
             m::EXEC_ROUTE => {
                 let r: m::ExecRoute = params(p)?;

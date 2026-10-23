@@ -89,6 +89,9 @@ struct Record {
     /// When its last routed command ended.
     #[serde(default)]
     last_end: Option<u64>,
+    /// Commands waiting for it to be ready.
+    #[serde(default)]
+    waiting: u32,
 }
 
 impl Record {
@@ -476,6 +479,7 @@ impl Machines {
             down_since: None,
             setup: setup.is_some(),
             last_end: None,
+            waiting: 0,
         };
         {
             // The limits and the record in one step, so two calls at once
@@ -832,6 +836,44 @@ impl Machines {
             .iter()
             .find(|r| r.worker.as_deref() == Some(worker))
             .map(|r| r.shown.id.clone())
+    }
+
+    /// The machine a cloud session's command waits for: the project's
+    /// machine on its way, or a new one made for the session.
+    pub fn for_session(&self, project: &str, session: &str) -> Result<(String, String), RpcError> {
+        let key = self
+            .project_key(project)
+            .ok_or_else(|| RpcError::new("no_identity", "the project has no first commit"))?;
+        let coming = self
+            .records
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|r| {
+                r.shown.project_key == key
+                    && matches!(r.shown.state.as_str(), "creating" | "starting" | "ready")
+            })
+            .map(|r| (r.shown.id.clone(), r.shown.name.clone()));
+        match coming {
+            Some(found) => Ok(found),
+            None => self
+                .up(project, Some(session.to_string()))
+                .map(|m| (m.id, m.name)),
+        }
+    }
+
+    /// Machine `id`'s state, and why it was removed.
+    pub fn state_of(&self, id: &str) -> Option<(String, Option<String>)> {
+        self.get(id).map(|r| (r.shown.state, r.shown.reason))
+    }
+
+    /// A command starts or stops waiting for machine `id`.
+    pub fn wait_begin(&self, id: &str) {
+        self.update(id, |r| r.waiting += 1);
+    }
+
+    pub fn wait_end(&self, id: &str) {
+        self.update(id, |r| r.waiting = r.waiting.saturating_sub(1));
     }
 
     /// A routed command started on cloud machine `worker`.
