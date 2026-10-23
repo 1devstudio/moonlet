@@ -12,7 +12,7 @@ The central host can rent machines from a cloud provider to run heavy commands. 
 
 The screens are in [`design/x62-x63/`](design/x62-x63/), from the design review of PR #339.
 
-A cloud machine is a worker like any other in X62. It runs routed commands in a routing copy, and the agent stays on the central host. It comes up on its own: it joins the tailnet, installs moonlet and pairs with the central host. It holds none of the user's secrets.
+A cloud machine is a worker like any other in X62. It runs routed commands in a routing copy, and the agent stays on the central host. It comes up on its own: it joins the tailnet, installs moonlet and pairs with the central host. It never gets the user's git credentials, provider token or Tailscale secret. It does get the project's files, including untracked files that are not ignored, and the variables the user approved in `[heavy] env` (see Security considerations).
 
 ## User journey
 
@@ -56,7 +56,7 @@ A cloud machine is a worker like any other in X62. It runs routed commands in a 
 ### Making a machine
 
 - [ ] A machine is made for one project, with the project's provider, type, location and image. Its name is `moonlet-<project>-<4 random lowercase letters and digits>`, cut to the provider's length limit. Its labels are `moonlet-host=<host id>`, `moonlet-machine=<machine id>` and `moonlet-project=<first 12 hex of sha256 of the identity>`. `host id` is a random id that the central host makes once and keeps in `cloud.json`, so two central hosts sharing a provider project never touch each other's machines.
-- [ ] The machine is recorded in `$MOONLET_HOME/cloud/machines.json` as `creating` before the create call, so a crash between the two is caught by the sweep.
+- [ ] The machine is recorded in `$MOONLET_HOME/cloud/machines.json` as `creating` before the create call, so a crash between the two is caught by the sweep. The limit check and the `creating` record are one step under one lock, so two `cloud.up` calls at once never pass the machine limit. Worked example: limit 2, one machine ready, two `cloud.up` calls at once → one machine is made, and the other call fails with "Cloud limit reached: 2 of 2 machines".
 - [ ] Its `user_data` is a cloud-init script that:
   1. makes the user `moonlet`;
   2. installs Tailscale and runs `tailscale up --auth-key=<key> --hostname=<name>`;
@@ -68,12 +68,12 @@ A cloud machine is a worker like any other in X62. It runs routed commands in a 
 
   The rendered script for a fixed input equals a literal in the test.
 - [ ] The Tailscale key is minted for each machine with the user's OAuth client: one-off, ephemeral, preauthorized, tagged with the configured tag, expiring in 1 hour. The OAuth secret never leaves the central host.
-- [ ] `machine_setup` is a path in the repository, read from the session's worktree when the machine is made and embedded in `user_data`. A script over 16 KiB, or a path outside the worktree, fails with that reason, and no machine is made.
+- [ ] `machine_setup` is a path in the repository. It is read when the machine is made, and embedded in `user_data`. It is read from the worktree of the session the machine is made for, or, for a machine made without a session (`moonlet worker up` without `--session`, **Start a machine**), from the project's own folder on the central host. A script over 16 KiB, a path outside that folder (including through a symbolic link), or a missing file fails with that reason, and no machine is made.
 - [ ] **Joining:**
   - The central host makes a **join code** for the machine: one use, valid 30 minutes, bound to the machine id, device kind `cloud`.
   - `moonletd join` does what X61's `link.pair` does, with device kind `cloud`, then turns the link on (`enabled: true`). The token stays on the machine.
   - A join code used twice, after 30 minutes, or for another machine id is refused.
-- [ ] A machine is **ready** once its worker has registered, its routing copy of the triggering session is made, and the project's `setup` has finished. A cloud machine runs `setup` without asking for approval. It holds none of the user's secrets.
+- [ ] A machine is **ready** once its worker has registered and its machine setup has finished. A machine made for a session (overflow from it, or a session that asked for the cloud) also makes that session's routing copy and runs the project's `setup` before it is ready. A machine made without a session makes a session's routing copy when that session first routes a command to it, and the job waits with "Copying fix-cart to moonlet-shop-7k2q…". A cloud machine runs `setup` without asking for approval: the machine holds no git credentials or user tokens to protect.
 - [ ] A cloud machine gets the project from the central host (X60's `sync.fetch`, with nothing in `have`), never from origin.
 - [ ] **Startup steps.** A starting machine reports these steps, each `pending`, `running`, `done {took}` or `failed {error}`:
 
@@ -84,7 +84,7 @@ A cloud machine is a worker like any other in X62. It runs routed commands in a 
   | Installed moonlet 0.1.29 | the join |
   | Paired with studio-mini | the join |
   | Machine setup `scripts/ci-deps.sh` | the worker, from `machine-setup.json` |
-  | Copied fix-cart and ran `pnpm install` | the worker's routing copy and setup (X62) |
+  | Copied fix-cart and ran `pnpm install` | the worker's routing copy and setup (X62); only for a machine made for a session |
 
   A machine without `machine_setup` skips that step. A failed step fails the machine: it is removed, and the error stays on the Workers screen.
 - [ ] A machine not ready 15 minutes after the create call is removed, with "moonlet-shop-7k2q did not come up in 15 minutes", plus the last state the provider or the worker reported.
@@ -117,13 +117,21 @@ A cloud machine is a worker like any other in X62. It runs routed commands in a 
   After 3 failed attempts, the app shows a toast and a system notification: "Could not remove moonlet-shop-x81c at Hetzner: 503 Service Unavailable. It is billed until removed." Both have **Retry**. The machine's row and the provider's card show the error with "Last error at 10:14 · retrying since 10:09", and the Cloud workers entry in the settings nav gets a dot until the machine is gone.
 - [ ] **Remove now**, on an idle machine, removes it at once. On a machine with running commands, `cloud.down` waits for them to end, as `moonlet worker down` does.
 - [ ] A machine whose link has been down for 10 minutes is removed.
-- [ ] **The sweep.** At start, and every 10 minutes, the central host lists the provider's machines labelled with its host id. It destroys every machine with no record, or with a record that says `removing` or `removed`, and it drops records of machines the provider says are gone. Worked example: records {A ready, B removing}, provider {A, B, C} → destroy B and C, keep A.
+- [ ] **The sweep.** At start, and every 10 minutes, the central host lists the provider's machines labelled with its host id. It destroys every machine with no record, or with a record that says `removing` or `removed`, and it drops records of machines the provider says are gone. A record still `creating` with no create call in progress (the daemon restarted during it, or the call has run for more than 5 minutes) is reconciled: its machine, found by its `moonlet-machine` label, is destroyed, and the record is dropped once the provider has none. Worked examples:
+
+  | Records | Provider lists | Outcome |
+  |---|---|---|
+  | A ready, B removing | A, B, C | destroy B and C, keep A |
+  | D creating (no call in progress) | D | destroy D, then drop its record |
+  | D creating (no call in progress) | nothing | drop D's record |
+  | E creating (call in progress, 40 s) | E | keep E |
+  | F ready | nothing | drop F's record |
 - [ ] Turning off a project's cloud setting removes its machines once their running commands end. Removing a provider removes all its machines first, and the setting stays until they are gone.
 - [ ] Archiving a session removes no machine by itself. The idle time applies.
 
 ### Limits
 
-- [ ] **At most [N] machines** (default 2) counts machines that are starting, ready or removing. **[H] machine-hours a month** (default 40) counts, for each machine, the time from the create call to the confirmed removal, in the current calendar month (UTC). The Cloud workers page shows "12.5 of 40 machine-hours this month".
+- [ ] **At most [N] machines** (default 2) counts machines that are creating, starting, ready or removing. **[H] machine-hours a month** (default 40) counts, for each machine, the time from the create call to the confirmed removal, in the current calendar month (UTC). The Cloud workers page shows "12.5 of 40 machine-hours this month".
 - [ ] At a limit, no machine is made. Overflow is skipped, and a requested machine fails with "Cloud limit reached: 40 of 40 machine-hours this month". Running machines keep their idle time.
 - [ ] Tokens, the OAuth client and the limits change only from the Mac's app or a paired desktop. `cloud.set` from the `moonlet` CLI or a phone is refused with `forbidden`. The `moonlet` CLI may call `cloud.up`, `cloud.down` and `cloud.machines`.
 
@@ -147,7 +155,7 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
     ]
     ```
 
-  - **Idle time and limits:** "Agents can start machines with moonlet worker up, but only you can change these." The rows are "Remove a machine after [15] minutes idle" ("With 0, a machine goes as soon as its command ends."), "At most [2] machines" ("Counts machines that are starting, ready or being removed.") and "Monthly limit [40] machine-hours" ("From each create call to its confirmed removal, per calendar month (UTC)."), with a usage bar and "12.5 of 40 machine-hours this month".
+  - **Idle time and limits:** "Agents can start machines with moonlet worker up, but only you can change these." The rows are "Remove a machine after [15] minutes idle" ("With 0, a machine goes as soon as its command ends."), "At most [2] machines" ("Counts machines that are being created, starting, ready or being removed.") and "Monthly limit [40] machine-hours" ("From each create call to its confirmed removal, per calendar month (UTC)."), with a usage bar and "12.5 of 40 machine-hours this month".
   - A save bar: "~/.moonlet/cloud.json on studio-mini", "Unsaved changes", **Discard** and **Save** (⌘↵).
 - **Project page, Cloud workers** ([project-page.png](design/x62-x63/project-page.png)): "Machines studio-mini rents to run shop's heavy commands. Tokens and limits are in Settings › Machines › Cloud workers." Then:
   - **Use cloud machines when every worker is busy** ("The command still runs on studio-mini. A machine starts and takes the next one.");
@@ -216,7 +224,7 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
 - **The provider token** can create and delete anything in its provider project. It is stored only in `cloud.json` (mode 0600) on the central host, never returned by `cloud.get`, and never written to logs or `user_data`. The UI recommends a dedicated provider project.
 - **The Tailscale OAuth secret** stays on the central host. A machine gets a one-off key that expires within an hour and is tagged. An untagged or unrestricted tag would let a machine reach the whole tailnet, so the help text gives an ACL that limits the tag to the central host's listener.
 - **`user_data` is readable** through the provider's API and from inside the machine. It holds the one-off Tailscale key and the join code: each is usable once, expires within an hour, and the join code is bound to its machine.
-- **What a machine holds:** the project's files and history from the central host, including untracked files that are not ignored. It never gets `.env` or the other never-synced files (X60), git credentials, or the user's tokens. Variables in `[heavy] env` do reach it (X62), and the project page warns about secret-looking ones.
+- **What a machine holds:** the project's files and history from the central host, including untracked files that are not ignored, and the variables named in `[heavy] env`. Those reach a cloud machine only after the user has approved the exact names (X62), and the approval banner names secret-looking ones. A machine never gets `.env` or the other never-synced files (X60), git credentials, the provider token or the Tailscale secret. A project that must keep a file away from cloud machines ignores it in git.
 - **`machine_setup` runs as root** with content the agent can edit, but only on a fresh, disposable machine with no user secrets.
 - **A compromised machine** holds a `cloud` device token that reaches only worker methods for its own routing copies. Removing the machine revokes it.
 - **Join codes are minted by the central host for machines it creates, and nothing else.** No RPC makes one on request, so X61's rule stands: a paired Mac cannot add devices to the central host.
@@ -232,36 +240,53 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
 
 ## Test plan
 
-- **Unit, `crates/moonlet-cloud`:**
-  - the Hetzner adapter against captured `POST /servers`, `GET /servers/{id}`, `GET /servers?label_selector=…`, `DELETE`, `GET /server_types`, 401 and 429 responses (captured once with a sandbox token, sanitised);
-  - the cloud-init rendering against a literal;
-  - machine names (characters, length limit);
-  - the idle timer against every row of its table;
-  - the sweep decision against its worked example and against a record of a machine the provider says is gone;
-  - the limits: a fourth machine with `max_machines` 3, hours crossing a month boundary.
-- **Daemon end-to-end, `crates/moonletd/tests/cloud.rs`,** with the fake provider:
-  - overflow starts a machine while the command runs on the central host, and the next command runs on the machine;
-  - a session with `cloud: true` waits for the machine and runs there;
-  - idle removal with a shortened minute (test-only setting), and idle 0;
-  - a machine that never joins is removed at the deadline;
-  - a recorded machine missing from records after a restart is swept;
-  - a dropped link removes the machine after the (shortened) 10 minutes;
-  - a limit refuses `cloud.up` with the message;
-  - a `cloud` device calling `session.list` gets `forbidden`;
-  - a reused join code is refused;
-  - `cloud.set` from the CLI is `forbidden`, and `cloud.get` has no secrets;
-  - the startup steps arrive in order with durations, and a failing `machine_setup` fails the machine and removes it;
-  - `cloud.down` on an idle machine removes it at once.
-- **Vitest, `apps/desktop/src/lib/`:**
-  - the settings form built from an adapter description;
-  - the machine state lines and the startup checklist, from literal `cloud.machines` answers;
-  - the policy snippet, filled in with a literal tag and address;
-  - the usage line;
-  - the composer checkbox's visibility.
-- **e2e, `apps/desktop/e2e/specs/cloud-workers.e2e.ts`,** with the fake provider:
-  - saving the Cloud workers settings (crucial: saving settings, X12);
-  - **Start a machine** shows "Starting", then "Ready", on the Workers screen.
-- **Manual, once before release:** a real Hetzner machine runs `pnpm test` for `shop` and is removed after the idle time, and the Hetzner console shows no machine left.
+Every acceptance criterion maps to at least one test below. The names are the ones the implementing pull requests use, word for word. A pull request that renames a test updates this table. Expected values are literals from this spec or from captured real responses.
+
+Where the tests live:
+
+- **Rust unit tests:** in the new crate `crates/moonlet-cloud`, in `hetzner.rs`, `tailscale.rs`, `cloud_init.rs`, `machine.rs`, `idle.rs`, `sweep.rs` and `usage.rs`, each in its `#[cfg(test)] mod tests`. Hetzner and Tailscale responses are captured once with a sandbox token and sanitised.
+- **Daemon end-to-end:** `crates/moonletd/tests/cloud.rs`, with the fake provider and test-only settings for minutes and deadlines.
+- **CLI end-to-end:** `crates/moonlet-cli/tests/worker.rs`.
+- **Vitest:** `apps/desktop/src/lib/cloudSettings.test.ts` and `cloudMachines.test.ts`.
+- **e2e:** `apps/desktop/e2e/specs/cloud-workers.e2e.ts`, with the fake provider.
+
+| Criterion | Tests |
+|---|---|
+| The adapter and its settings description | Vitest "the form from an adapter's description" |
+| Hetzner calls | `creates_a_server_as_in_the_captured_request`, `reads_a_captured_server`, `lists_servers_by_label`, `a_404_means_gone`, `reads_captured_server_types` |
+| Provider errors | `a_401_says_the_token_was_refused`, `a_429_waits_for_the_reset_time`; Vitest "the last provider error with its time" |
+| The fake provider | `the_fake_provider_is_off_without_its_setting` |
+| Name and labels | `names_fit_the_providers_limit_and_characters`, `labels_carry_the_host_machine_and_project` |
+| Recorded before creating, limit under a lock | `a_machine_is_recorded_before_the_create_call`, `two_cloud_up_calls_at_once_never_pass_the_limit` |
+| `user_data` | `renders_the_worked_cloud_init_script` |
+| The Tailscale key | `asks_for_a_one_off_ephemeral_tagged_key_as_captured` |
+| `machine_setup` | `machine_setup_comes_from_the_sessions_worktree`, `machine_setup_without_a_session_comes_from_the_projects_folder`, `a_machine_setup_over_16_kib_makes_no_machine`, `a_machine_setup_outside_the_folder_makes_no_machine`, `a_missing_machine_setup_makes_no_machine` |
+| Joining | `a_join_code_works_once`, `an_expired_join_code_is_refused`, `a_join_code_for_another_machine_is_refused` |
+| Ready | `a_machine_made_for_a_session_is_ready_with_its_copy_and_setup`, `a_machine_made_without_a_session_copies_on_its_first_command` |
+| The project comes from the central host | `a_cloud_machine_never_contacts_origin` |
+| Startup steps | `startup_steps_arrive_in_order_with_durations`, `a_failing_machine_setup_fails_and_removes_the_machine`; Vitest "the startup checklist" |
+| Startup deadline | `a_machine_that_never_joins_is_removed_at_the_deadline` |
+| Overflow | `overflow_starts_a_machine_and_the_next_command_runs_there` |
+| A session that asked for the cloud | `a_cloud_session_waits_for_its_machine_and_runs_there`, `a_cloud_session_runs_on_the_central_host_when_no_machine_can_start` |
+| `moonlet worker up`, `ls`, `down` | `worker_up_ls_and_down` |
+| Start a machine | e2e "Start a machine shows Starting, then Ready" |
+| Idle time (worked examples) | `removes_at_the_times_in_the_worked_examples`, `an_idle_machine_is_removed_after_the_idle_time`, `with_idle_zero_a_machine_goes_when_its_command_ends` |
+| Removing | `removing_revokes_the_device_retires_and_destroys`, `a_failing_destroy_is_retried_and_reported_after_three_tries`; Vitest "the removal toast" |
+| Remove now | `remove_now_removes_an_idle_machine_at_once`, `cloud_down_waits_for_running_commands` |
+| A link down for 10 minutes | `a_machine_whose_link_stays_down_is_removed` |
+| The sweep (worked examples) | `sweeps_as_in_the_worked_examples`, `a_machine_left_creating_by_a_restart_is_destroyed` |
+| Turning off, removing a provider | `turning_a_projects_cloud_off_removes_its_machines_after_their_commands`, `removing_a_provider_removes_its_machines_first` |
+| Archiving | `archiving_a_session_leaves_its_machine_to_the_idle_time` |
+| What the limits count | `a_creating_machine_counts_against_the_limit`, `counts_machine_hours_across_a_month_boundary` |
+| At a limit | `a_limit_refuses_cloud_up_with_the_message` |
+| Who changes the settings | `cloud_set_from_the_cli_or_a_phone_is_forbidden`, `cloud_get_returns_no_secrets` |
+| A cloud device's methods | `a_cloud_device_may_call_only_worker_methods` |
+| Cloud devices in the device list | `a_cloud_device_goes_away_with_its_machine` |
+| Cloud workers page (UI) | Vitest "the policy snippet with the tag and address", "the usage line"; e2e "saving the Cloud workers settings" |
+| Workers page, cloud machines (UI) | Vitest "the machine state lines" |
+| Composer (UI) | Vitest "the cloud checkbox shows only with a cloud setting" |
+
+**Manual, once before release:** a real Hetzner machine runs `pnpm test` for `shop` and is removed after the idle time, and the Hetzner console shows no machine left.
 
 ## Open questions
 
