@@ -27,34 +27,75 @@ pub enum MarkerError {
 /// The viewport of a card whose marker names none, as design-sync captures.
 pub const DEFAULT_VIEWPORT: (u32, u32) = (900, 700);
 
-static COMMENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^<!--\s*@dsCard\s+(.*?)\s*-->").unwrap());
+static COMMENT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^<!--\s*@dsCard\s+(.*?)\s*-->").unwrap());
 static ATTR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"([A-Za-z-]+)="([^"]*)""#).unwrap());
 
 /// Reads the marker on the card's first line. As in design-sync, `group` comes
 /// first; the other attributes may follow in any order.
 pub fn parse_marker(html: &str) -> Result<Marker, MarkerError> {
     let first = html.lines().next().unwrap_or("");
-    let attrs = COMMENT.captures(first).ok_or(MarkerError::Missing)?.get(1).map_or("", |m| m.as_str());
-    let mut pairs = ATTR.captures_iter(attrs).map(|c| (c[1].to_string(), c[2].to_string()));
+    let attrs = COMMENT
+        .captures(first)
+        .ok_or(MarkerError::Missing)?
+        .get(1)
+        .map_or("", |m| m.as_str());
+    let mut pairs = ATTR
+        .captures_iter(attrs)
+        .map(|c| (c[1].to_string(), c[2].to_string()));
     let group = match pairs.next() {
         Some((k, v)) if k == "group" && !v.trim().is_empty() => v,
         _ => return Err(MarkerError::Malformed("group=\"…\" must come first".into())),
     };
-    let mut marker = Marker { group, name: None, source: Vec::new(), viewport: DEFAULT_VIEWPORT };
+    let mut marker = Marker {
+        group,
+        name: None,
+        source: Vec::new(),
+        viewport: DEFAULT_VIEWPORT,
+    };
     for (k, v) in pairs {
         match k.as_str() {
             "name" => marker.name = Some(v),
-            "source" => marker.source = v.split(',').map(str::trim).filter(|s| !s.is_empty()).map(String::from).collect(),
-            "viewport" => marker.viewport = parse_viewport(&v).ok_or_else(|| MarkerError::Malformed(format!("viewport \"{v}\" is not WxH")))?,
+            "source" => {
+                marker.source = v
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(String::from)
+                    .collect()
+            }
+            "viewport" => {
+                marker.viewport = parse_viewport(&v)
+                    .ok_or_else(|| MarkerError::Malformed(format!("viewport \"{v}\" is not WxH")))?
+            }
             _ => {}
         }
     }
     Ok(marker)
 }
 
+/// The card's snippet ids (`data-snippet`), in document order.
+pub fn snippets(html: &str) -> Vec<String> {
+    let ids = std::cell::RefCell::new(Vec::new());
+    let settings = lol_html::Settings::new().append_element_content_handler(lol_html::element!(
+        "[data-snippet]",
+        |el| {
+            if let Some(id) = el.get_attribute("data-snippet") {
+                ids.borrow_mut().push(id);
+            }
+            Ok(())
+        }
+    ));
+    let _ = lol_html::rewrite_str(html, settings);
+    ids.into_inner()
+}
+
 fn parse_viewport(v: &str) -> Option<(u32, u32)> {
     let (w, h) = v.split_once('x')?;
-    Some((w.parse().ok().filter(|w| *w > 0)?, h.parse().ok().filter(|h| *h > 0)?))
+    Some((
+        w.parse().ok().filter(|w| *w > 0)?,
+        h.parse().ok().filter(|h| *h > 0)?,
+    ))
 }
 
 #[cfg(test)]
@@ -79,24 +120,36 @@ mod tests {
     fn a_design_sync_marker_with_only_a_group_takes_the_default_viewport() {
         assert_eq!(
             parse_marker("<!-- @dsCard group=\"actions\" -->\n<!doctype html>"),
-            Ok(Marker { group: "actions".into(), name: None, source: vec![], viewport: (900, 700) })
+            Ok(Marker {
+                group: "actions".into(),
+                name: None,
+                source: vec![],
+                viewport: (900, 700)
+            })
         );
         assert_eq!(
-            parse_marker("<!-- @dsCard group=\"Buttons\" source=\"src/ui.tsx, src/icon.tsx\" -->").unwrap().source,
+            parse_marker("<!-- @dsCard group=\"Buttons\" source=\"src/ui.tsx, src/icon.tsx\" -->")
+                .unwrap()
+                .source,
             vec!["src/ui.tsx".to_string(), "src/icon.tsx".to_string()]
         );
     }
 
     #[test]
     fn a_marker_not_on_the_first_line_or_without_a_leading_group_is_rejected() {
-        assert_eq!(parse_marker("<!doctype html>\n<!-- @dsCard group=\"x\" -->"), Err(MarkerError::Missing));
+        assert_eq!(
+            parse_marker("<!doctype html>\n<!-- @dsCard group=\"x\" -->"),
+            Err(MarkerError::Missing)
+        );
         assert_eq!(
             parse_marker("<!-- @dsCard name=\"Button\" group=\"Buttons\" -->"),
             Err(MarkerError::Malformed("group=\"…\" must come first".into()))
         );
         assert_eq!(
             parse_marker("<!-- @dsCard group=\"Buttons\" viewport=\"wide\" -->"),
-            Err(MarkerError::Malformed("viewport \"wide\" is not WxH".into()))
+            Err(MarkerError::Malformed(
+                "viewport \"wide\" is not WxH".into()
+            ))
         );
     }
 }
