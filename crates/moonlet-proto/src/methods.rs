@@ -305,6 +305,11 @@ pub const EXEC_DONE: &str = "exec.done";
 /// `{}` → [`ExecStatus`]: this machine as a worker, the routed commands
 /// going on and why workers were skipped, for the Workers page (X62).
 pub const EXEC_STATUS: &str = "exec.status";
+/// `{}` → `[ExecSetup]`: this Mac's routing copies whose setup waits for
+/// the user's approval, for an app that starts after it was asked (X62).
+pub const EXEC_SETUPS: &str = "exec.setups";
+/// [`ExecSetup`]: a routing copy's setup waits for the user's approval.
+pub const EV_EXEC_SETUP: &str = "exec.setup";
 /// [`JobList`] → `[Job]`: a session's jobs, newest first (X62).
 pub const JOB_LIST: &str = "job.list";
 /// [`JobOutputGet`] → [`JobOutput`]: a job's stored output from a byte.
@@ -1813,6 +1818,17 @@ pub struct ExecPrepare {
     pub session: String,
 }
 
+/// A routing copy's setup the user is asked to approve, as for a live
+/// copy (X60): `sync.run_setup` or `sync.skip_setup` answers it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExecSetup {
+    pub copy: String,
+    /// The central host's name.
+    pub host: String,
+    pub project: String,
+    pub command: String,
+}
+
 /// The worker's routing copy of a session, and whether it can run.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExecPrepared {
@@ -2070,7 +2086,8 @@ pub struct ExecSkip {
     pub project: String,
     /// `not_approved`, `missing_tool`, `setup_pending`, `busy`, `not_fenced`
     /// or another refusal.
-    pub reason: String,    /// The worker's words, such as `missing pnpm`.
+    pub reason: String,
+    /// The worker's words, such as `missing pnpm`.
     #[serde(default)]
     pub detail: Option<String>,
 }
