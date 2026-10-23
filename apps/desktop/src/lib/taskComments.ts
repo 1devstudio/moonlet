@@ -36,6 +36,8 @@ export interface CommentsEntry {
   posting?: boolean;
   /** Why the last comment was refused; it stays in the box. */
   postError?: string | null;
+  /** What the user is writing in the box, kept per task. */
+  draft?: string;
 }
 
 export const useComments = create<{ byTask: Record<string, CommentsEntry> }>(() => ({ byTask: {} }));
@@ -98,11 +100,19 @@ export function ensureComments(task: Task, at: Where): Promise<void> {
 /** Whether the box holds something to post. */
 export const canPost = (text: string) => text.trim() !== "";
 
+/** What the user typed in a task's box. */
+export function setDraft(task: Task, text: string) {
+  put(task, { draft: text });
+}
+
 /**
- * Posts the user's comment, written in Markdown, then lists it (X66). Only
- * ever on the user's press: a refused comment is not sent again by itself.
+ * Posts the task's draft, written in Markdown, then lists it (X66). Only ever
+ * on the user's press: a refused comment is not sent again by itself. It stays
+ * posting until the comments show it, and clears the draft only if it is
+ * still the text that was sent.
  */
-export async function postComment(task: Task, at: Where, text: string, now = Date.now()): Promise<boolean> {
+export async function postComment(task: Task, at: Where, now = Date.now()): Promise<boolean> {
+  const text = entry(task)?.draft ?? "";
   if (!canPost(text) || entry(task)?.posting) return false;
   put(task, { posting: true, postError: null });
   try {
@@ -118,9 +128,9 @@ export async function postComment(task: Task, at: Where, text: string, now = Dat
     put(task, { posting: false, postError: errorMessage(e) });
     return false;
   }
-  put(task, { posting: false });
   recordActivity(task, "You commented", now);
   await loadComments(task, at);
+  put(task, { posting: false, draft: entry(task)?.draft === text ? "" : entry(task)?.draft });
   return true;
 }
 
