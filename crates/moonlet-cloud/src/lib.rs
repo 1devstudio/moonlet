@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+pub mod cloud_init;
 pub mod hetzner;
 pub mod machine;
 

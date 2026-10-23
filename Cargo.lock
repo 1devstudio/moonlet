@@ -2607,6 +2607,7 @@ name = "moonlet-cloud"
 version = "0.1.29"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "chrono",
  "serde",
  "serde_json",
