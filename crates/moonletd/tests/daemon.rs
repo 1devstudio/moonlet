@@ -2285,3 +2285,32 @@ done
     }
     assert_eq!(list[0]["needs_you"], serde_json::json!({"kind": "question", "text": "Which button set is current?"}));
 }
+
+/// X64: a file written in a design system reaches every client as
+/// design.changed, so Design mode updates while the agent works.
+#[tokio::test]
+async fn a_file_written_in_a_design_system_is_announced() {
+    use moonlet_proto::types::Workspace;
+    let d = TestDaemon::start().await;
+    let mut c = d.client().await;
+    let ws: Workspace = c.request(methods::WORKSPACE_CREATE, serde_json::json!({"name": "1devstudio", "color": "clay"})).await.unwrap();
+    let _: serde_json::Value = c
+        .request(methods::DESIGN_SYSTEM_CREATE, serde_json::json!({"workspace": ws.id, "name": "storefront", "sources": [], "agent": false}))
+        .await
+        .unwrap();
+    let mut listener = d.client().await;
+    let card = d.home.path().join("design").join(&ws.id).join("systems/storefront/components/buttons/button/button.html");
+    std::fs::create_dir_all(card.parent().unwrap()).unwrap();
+    std::fs::write(&card, "<!-- @dsCard group=\"Buttons\" -->\n").unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let f = tokio::time::timeout_at(deadline, listener.next_frame()).await.expect("no design.changed").unwrap().unwrap();
+        if let Frame::Json(Message::Event { name, data }) = f
+            && name == methods::EV_DESIGN_CHANGED
+            && data["paths"].as_array().is_some_and(|p| p.iter().any(|x| x == "components/buttons/button/button.html"))
+        {
+            assert_eq!((data["workspace"].as_str(), data["system"].as_str()), (Some(ws.id.as_str()), Some("storefront")));
+            break;
+        }
+    }
+}
