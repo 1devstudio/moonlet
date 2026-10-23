@@ -314,6 +314,15 @@ impl Runs {
                     skipped.insert(chosen.id);
                 }
                 Err(Fail::Gone(why)) => {
+                    // A stopped run is not run again.
+                    let stopped = self.stops.lock().unwrap().get(&run).copied();
+                    if let Some(status) = stopped {
+                        say(format!("{name} went away."));
+                        self.jobs.update(job, |j| {
+                            event(j, format!("{name} went away"), Some(why.to_string()))
+                        });
+                        return status;
+                    }
                     say(format!("{name} went away. Running again on {}.", plan.host));
                     self.jobs.update(job, |j| {
                         event(

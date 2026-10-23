@@ -1825,6 +1825,67 @@ async fn a_job_going_on_when_the_daemon_stops_is_lost() {
 }
 
 #[tokio::test]
+async fn a_stopped_job_whose_worker_goes_away_does_not_run_again() {
+    let (c, mac) = linked().await;
+    let (mut client, run) = c
+        .start(
+            &["sh", "-c", "echo started; sleep 3; echo finished"],
+            &c.worktree.clone(),
+            json!({}),
+        )
+        .await;
+    loop {
+        if let Frame::RunOutput {
+            stream: 1, data, ..
+        } = client.next_frame().await.unwrap().unwrap()
+            && data.starts_with(b"started")
+        {
+            break;
+        }
+    }
+    let id = jobs(&c).await[0]["id"].as_str().unwrap().to_string();
+    let pid = nix::unistd::Pid::from_raw(mac.child.id() as i32);
+    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGSTOP).unwrap();
+    let app = c.daemon.app().await;
+    let stop = tokio::spawn(async move {
+        let mut app = app;
+        app.request::<_, Value>("job.stop", json!({ "job": id }))
+            .await
+    });
+    let ran = collect(client, run).await;
+    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGCONT).unwrap();
+    assert_eq!(stop.await.unwrap().unwrap(), json!(true));
+    assert_eq!(ran.status, 143, "{ran:?}");
+    // It never ran again: no second "started", nor "finished".
+    assert_eq!(ran.stdout, "");
+    assert!(!ran.stderr.contains("Running again"), "{ran:?}");
+    assert_eq!(
+        jobs(&c).await[0]["state"],
+        json!({ "kind": "stopped", "exit": 143 })
+    );
+}
+
+#[tokio::test]
+async fn stopping_a_job_while_its_worker_prepares_never_runs_it() {
+    let (c, _mac) = linked().await;
+    let worktree = c.worktree.clone();
+    // The first run makes the routing copy: stopped meanwhile.
+    let (client, run) = c
+        .start(&["sh", "-c", "echo ran > ran.txt"], &worktree, json!({}))
+        .await;
+    let id = jobs(&c).await[0]["id"].as_str().unwrap().to_string();
+    let stopped: Value = c.daemon.call("job.stop", json!({ "job": id })).await;
+    assert_eq!(stopped, json!(true));
+    let ran = collect(client, run).await;
+    assert_eq!(ran.status, 143, "{ran:?}");
+    assert!(!worktree.join("ran.txt").exists());
+    assert_eq!(
+        jobs(&c).await[0]["state"],
+        json!({ "kind": "stopped", "exit": 143 })
+    );
+}
+
+#[tokio::test]
 async fn an_agents_cli_neither_reads_nor_stops_jobs() {
     let c = central_with(RUN_CONFIG, &[]).await;
     c.approve_runs().await;
@@ -1838,6 +1899,7 @@ async fn an_agents_cli_neither_reads_nor_stops_jobs() {
         ("job.output", json!({ "job": id })),
         ("job.stop", json!({ "job": id })),
         ("job.stop_all", json!({ "session": c.session })),
+        ("job.run_here", json!({ "job": id })),
     ] {
         let e = cli.request::<_, Value>(method, params).await.unwrap_err();
         assert_eq!(
@@ -1847,7 +1909,9 @@ async fn an_agents_cli_neither_reads_nor_stops_jobs() {
         );
     }
     // Nor does it hear a job's output as it comes.
-    let mut listening = Client::connect(&c.daemon.socket, "moonlet-cli").await.unwrap();
+    let mut listening = Client::connect(&c.daemon.socket, "moonlet-cli")
+        .await
+        .unwrap();
     c.run(&["sh", "run.sh"]).await;
     while let Ok(Ok(Some(frame))) =
         tokio::time::timeout(Duration::from_millis(500), listening.next_frame()).await
