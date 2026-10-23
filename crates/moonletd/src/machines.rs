@@ -1124,8 +1124,9 @@ impl Machines {
 
     async fn removing(self: Arc<Self>, id: String) {
         let Some(r) = self.get(&id) else { return };
+        // The token stops working now; the connection stays for the retire.
         if let Some(device) = &r.device {
-            let _ = self.mobile.revoke(device);
+            let _ = self.mobile.forget_device(device);
         }
         if let Some(conn) = r.worker.as_ref().and_then(|w| self.workers.conn(w)) {
             let _ = conn
@@ -1135,6 +1136,9 @@ impl Machines {
                     Duration::from_secs(10),
                 )
                 .await;
+        }
+        if let Some(device) = &r.device {
+            self.mobile.close_device(device);
         }
         if let Some(provider_id) = r.provider_id.clone() {
             let Ok(provider) = self.provider(&r.shown.provider) else {
