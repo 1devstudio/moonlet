@@ -131,6 +131,7 @@ pub struct Plan {
     pub project: String,
     /// The project's id.
     pub project_id: String,
+    pub session_name: String,
     /// The session asked for the cloud (X63).
     pub cloud: bool,
 }
@@ -343,12 +344,19 @@ impl Runs {
                     .flatten();
                 if let Some(m) = &machines {
                     m.run_started(&chosen.id);
+                    // Its first command of the session copies the session there.
+                    if !m.has_copy(&chosen.id, &plan.session) {
+                        say(format!("Copying {} to {name}…", plan.session_name));
+                    }
                 }
                 let ran = self
                     .remote(run, job, client, plan, &chosen, &name, workers, sync)
                     .await;
                 if let Some(m) = &machines {
                     m.run_ended(&chosen.id);
+                    if ran.is_ok() {
+                        m.copied(&chosen.id, &plan.session);
+                    }
                 }
                 self.claims.lock().unwrap().remove(&run);
                 match ran {

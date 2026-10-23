@@ -1280,3 +1280,184 @@ async fn run_here_runs_a_job_waiting_for_a_cloud_machine_on_the_central_host() {
     let m = &c.machines().await["machines"][0];
     assert_eq!(m["state"], json!("creating"));
 }
+
+/// The routing copies on the first fake machine.
+fn copies_on(c: &Cloud) -> Vec<PathBuf> {
+    let runs = c.fake_dirs()[0].join("home/runs");
+    let mut out = Vec::new();
+    for host in std::fs::read_dir(&runs).into_iter().flatten().flatten() {
+        // `repos` holds the routing copies' repositories, not copies.
+        if host.file_name() == "repos" {
+            continue;
+        }
+        for project in std::fs::read_dir(host.path())
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            for copy in std::fs::read_dir(project.path())
+                .into_iter()
+                .flatten()
+                .flatten()
+            {
+                out.push(copy.path());
+            }
+        }
+    }
+    out
+}
+
+#[tokio::test]
+async fn a_machine_made_for_a_session_is_ready_with_its_copy_and_setup() {
+    let config = format!("setup = \"echo set > setup-ran\"\n\n{ROUTE_CONFIG}");
+    let c = cloud_with(&config, &[]).await;
+    c.approve().await;
+    let s = c.session("big-refactor", false).await;
+    let m: Value =
+        c.d.call(
+            "cloud.up",
+            json!({ "project": c.project, "session": s["id"] }),
+        )
+        .await;
+    let ready = c.until(m["id"].as_str().unwrap(), "ready").await;
+    let last = ready["steps"].as_array().unwrap().last().cloned().unwrap();
+    assert_eq!(
+        last["label"],
+        json!("Copied big-refactor and ran echo set > setup-ran")
+    );
+    assert_eq!(last["state"], json!("done"));
+    let copies = copies_on(&c);
+    assert_eq!(copies.len(), 1, "{copies:?}");
+    assert!(
+        copies[0].join("setup-ran").exists(),
+        "setup did not run in {copies:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_machine_made_without_a_session_copies_on_its_first_command() {
+    let c = routing(&[]).await;
+    c.ready().await;
+    assert!(copies_on(&c).is_empty());
+    let s = c.session("fix-cart", true).await;
+    let ran = c.run(&s, &["sh", "run.sh"]).await;
+    let name = c.machines().await["machines"][0]["name"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        ran.stderr
+            .starts_with(&format!("moonlet: Copying fix-cart to {name}…\n")),
+        "{ran:?}"
+    );
+    assert_eq!(ran_on(&ran), name);
+    assert_eq!(copies_on(&c).len(), 1);
+}
+
+#[tokio::test]
+async fn an_idle_machine_is_removed_after_the_idle_time() {
+    // A minute lasts 200 ms here.
+    let c = routing(&[("MOONLET_TEST_CLOUD_MINUTE_MS", "200")]).await;
+    let _: Value = c.d.call("cloud.set", json!({ "idle_minutes": 5 })).await;
+    let s = c.session("fix-cart", true).await;
+    let ran = c.run(&s, &["sh", "-c", "sleep 1.5; echo done"]).await;
+    let m = c.machines().await["machines"][0].clone();
+    assert_eq!(ran_on(&ran), m["name"].as_str().unwrap());
+    // Idle from the command's end: removed 1 s later, not before.
+    assert!(m["idle_until"].is_u64(), "{m}");
+    let removed = c.until(m["id"].as_str().unwrap(), "removed").await;
+    assert_eq!(removed["reason"], json!("removed after 5 min idle"));
+}
+
+#[tokio::test]
+async fn with_idle_zero_a_machine_goes_when_its_command_ends() {
+    let c = routing(&[]).await;
+    let _: Value = c.d.call("cloud.set", json!({ "idle_minutes": 0 })).await;
+    let s = c.session("fix-cart", true).await;
+    let (client, run) = c.start(&s, &["sh", "-c", "sleep 1; echo done"]).await;
+    // While it runs, it stays.
+    let mut m = Value::Null;
+    for _ in 0..100 {
+        m = c.machines().await["machines"][0].clone();
+        if m["running"] == json!(1) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(m["state"], json!("ready"), "{m}");
+    collect(client, run).await;
+    let removed = c.until(m["id"].as_str().unwrap(), "removed").await;
+    assert_eq!(removed["reason"], json!("removed after 0 min idle"));
+}
+
+#[tokio::test]
+async fn cloud_down_waits_for_running_commands() {
+    let c = routing(&[]).await;
+    let s = c.session("fix-cart", true).await;
+    let (client, run) = c.start(&s, &["sh", "-c", "sleep 1.5; echo done"]).await;
+    let mut m = Value::Null;
+    for _ in 0..100 {
+        m = c.machines().await["machines"][0].clone();
+        if m["running"] == json!(1) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let _: Value =
+        c.d.call("cloud.down", json!({ "machine": m["name"] }))
+            .await;
+    let ran = collect(client, run).await;
+    assert_eq!((ran.stdout.as_str(), ran.status), ("done\n", 0), "{ran:?}");
+    // It ran to its end there, not again here.
+    assert_eq!(ran_on(&ran), m["name"].as_str().unwrap(), "{ran:?}");
+    let removed = c.until(m["id"].as_str().unwrap(), "removed").await;
+    assert_eq!(removed["reason"], json!("removed on request"));
+}
+
+#[tokio::test]
+async fn turning_a_projects_cloud_off_removes_its_machines_after_their_commands() {
+    let c = routing(&[]).await;
+    let m = c.ready().await;
+    let _: Value =
+        c.d.call("cloud.set", json!({ "projects": { c.key.clone(): null } }))
+            .await;
+    let removed = c.until(m["id"].as_str().unwrap(), "removed").await;
+    assert_eq!(
+        removed["reason"],
+        json!("shop no longer uses cloud machines")
+    );
+}
+
+#[tokio::test]
+async fn removing_a_provider_removes_its_machines_first() {
+    let c = routing(&[("MOONLET_TEST_CLOUD_BACKOFF_MS", "300")]).await;
+    let m = c.ready().await;
+    c.steer("fail-destroy", "2");
+    let info: Value =
+        c.d.call("cloud.set", json!({ "providers": { "fake": null } }))
+            .await;
+    // The setting stays until its machines are gone.
+    assert_eq!(info["providers"]["fake"], json!({}));
+    let removed = c.until(m["id"].as_str().unwrap(), "removed").await;
+    assert_eq!(removed["reason"], json!("its provider was removed"));
+    for _ in 0..50 {
+        let info: Value = c.d.call("cloud.get", json!({})).await;
+        if info["providers"].get("fake").is_none() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("the provider stayed");
+}
+
+#[tokio::test]
+async fn archiving_a_session_leaves_its_machine_to_the_idle_time() {
+    let c = routing(&[]).await;
+    let s = c.session("big-refactor", true).await;
+    c.run(&s, &["sh", "run.sh"]).await;
+    let _: Value =
+        c.d.call("session.archive", json!({ "id": s["id"], "force": true }))
+            .await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(c.machines().await["machines"][0]["state"], json!("ready"));
+}
