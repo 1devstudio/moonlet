@@ -107,27 +107,56 @@ const SKILL_MARKER: &str = "Installed by moonlet";
 /// The same mark in the `jaunt` skill, installed before the rename (X27).
 const JAUNT_SKILL_MARKER: &str = "Installed by jaunt";
 
+/// The moonlet-design skill (X64): its steps, and the card formats it reads
+/// in its Cards step.
+pub const DESIGN_SKILL_FILES: [(&str, &str); 2] = [
+    ("SKILL.md", include_str!("skill/moonlet-design/SKILL.md")),
+    ("cards.md", include_str!("skill/moonlet-design/cards.md")),
+];
+
+/// Every file of moonlet's skills for one agent, given the `moonlet` skill's
+/// path (`<agent>/skills/moonlet/SKILL.md`), with what it should hold.
+fn skill_files(path: &Path) -> Vec<(PathBuf, &'static str)> {
+    let skills = path.parent().and_then(Path::parent).unwrap_or(Path::new(""));
+    let mut files = vec![(path.to_path_buf(), SKILL)];
+    files.extend(DESIGN_SKILL_FILES.iter().map(|(name, text)| (skills.join("moonlet-design").join(name), *text)));
+    files
+}
+
 fn skill_installed(path: &Path) -> bool {
-    std::fs::read_to_string(path).is_ok_and(|s| s == SKILL)
+    skill_files(path).iter().all(|(p, text)| std::fs::read_to_string(p).is_ok_and(|s| s == *text))
 }
 
 fn write_skill(path: &Path) -> Result<()> {
-    if !skill_installed(path) {
-        write_atomic(path, SKILL).with_context(|| format!("cannot write {}", path.display()))?;
+    for (p, text) in skill_files(path) {
+        if !std::fs::read_to_string(&p).is_ok_and(|s| s == text) {
+            write_atomic(&p, text).with_context(|| format!("cannot write {}", p.display()))?;
+        }
     }
     remove_skill(&jaunt_skill(path), JAUNT_SKILL_MARKER)
 }
 
-/// Rewrites each installed moonlet skill that differs from this version's
-/// (X31), so a new moonlet teaches agents its new commands. A missing file,
-/// or one without our marker, is left alone. Returns the files rewritten.
+/// Brings moonlet's skills up to date wherever its `moonlet` skill is
+/// installed (X31): a file that differs from this version's is rewritten, and
+/// a skill this version adds is written (X64), so a new moonlet teaches
+/// agents its new commands. A file without our marker is the user's and is
+/// left alone, and so is an agent whose `moonlet` skill is not ours.
+/// Returns the files written.
 pub fn refresh_skills(paths: &HookPaths) -> Result<Vec<PathBuf>> {
     let mut rewritten = Vec::new();
     for path in [&paths.claude_skill, &paths.codex_skill] {
-        let Ok(text) = std::fs::read_to_string(path) else { continue };
-        if text != SKILL && text.contains(SKILL_MARKER) {
-            write_atomic(path, SKILL).with_context(|| format!("cannot write {}", path.display()))?;
-            rewritten.push(path.clone());
+        if !std::fs::read_to_string(path).is_ok_and(|t| t.contains(SKILL_MARKER)) {
+            continue;
+        }
+        for (p, text) in skill_files(path) {
+            let ours = match std::fs::read_to_string(&p) {
+                Ok(t) => t != text && t.contains(SKILL_MARKER),
+                Err(_) => true,
+            };
+            if ours {
+                write_atomic(&p, text).with_context(|| format!("cannot write {}", p.display()))?;
+                rewritten.push(p);
+            }
         }
     }
     Ok(rewritten)
@@ -471,7 +500,9 @@ pub fn uninstall(paths: &HookPaths) -> Result<HookStatus> {
         write_atomic(&paths.codex_config, &doc.to_string())?;
     }
     for skill in [&paths.claude_skill, &paths.codex_skill] {
-        remove_skill(skill, SKILL_MARKER)?;
+        for (p, _) in skill_files(skill) {
+            remove_skill(&p, SKILL_MARKER)?;
+        }
         remove_skill(&jaunt_skill(skill), JAUNT_SKILL_MARKER)?;
     }
     status(paths)
@@ -523,6 +554,61 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&mine).unwrap(), "---\nname: mine\n---\n", "other skills kept");
     }
 
+    /// X64: the moonlet-design skill and its card formats install, report and
+    /// uninstall with the moonlet skill.
+    #[test]
+    fn install_writes_the_moonlet_design_skill_beside_the_moonlet_skill() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = paths(dir.path());
+        let bin = Path::new("/Applications/moonlet.app/Contents/MacOS/moonlet");
+        install(&p, bin, true, true).unwrap();
+        for agent in ["claude", "codex"] {
+            let skill = std::fs::read_to_string(dir.path().join(agent).join("skills/moonlet-design/SKILL.md")).unwrap();
+            assert!(skill.starts_with("---\nname: moonlet-design\n"), "{skill}");
+            let cards = std::fs::read_to_string(dir.path().join(agent).join("skills/moonlet-design/cards.md")).unwrap();
+            assert!(cards.contains("# Cards, snippets and `.prompt.md`"), "{cards}");
+        }
+        // Without it, the skills are not current and an install is due.
+        std::fs::remove_file(dir.path().join("claude/skills/moonlet-design/cards.md")).unwrap();
+        let st = status(&p).unwrap();
+        assert!(!st.claude_skill && st.codex_skill, "{st:?}");
+        uninstall(&p).unwrap();
+        assert!(!dir.path().join("claude/skills/moonlet-design").exists());
+        assert!(!dir.path().join("codex/skills/moonlet-design").exists());
+    }
+
+    /// X64: a moonlet that ships a new skill adds it on start wherever its
+    /// older skills are installed.
+    #[test]
+    fn refresh_adds_the_moonlet_design_skill_where_the_moonlet_skill_is() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = paths(dir.path());
+        std::fs::create_dir_all(p.claude_skill.parent().unwrap()).unwrap();
+        std::fs::write(&p.claude_skill, SKILL).unwrap();
+        let rewritten = refresh_skills(&p).unwrap();
+        assert_eq!(
+            rewritten,
+            vec![dir.path().join("claude/skills/moonlet-design/SKILL.md"), dir.path().join("claude/skills/moonlet-design/cards.md")]
+        );
+        assert!(!dir.path().join("codex/skills/moonlet-design").exists(), "no moonlet skill there, nothing added");
+        assert!(status(&p).unwrap().claude_skill);
+    }
+
+    /// X64: the card the skill shows as its example passes moonlet's check,
+    /// so the skill never teaches a format the check refuses.
+    #[test]
+    fn the_skills_example_card_passes_the_design_check() {
+        let cards = DESIGN_SKILL_FILES.iter().find(|(f, _)| *f == "cards.md").unwrap().1;
+        let html = cards.split("```html\n").nth(1).and_then(|r| r.split("\n```").next()).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let card = dir.path().join("components/buttons/button/button.html");
+        std::fs::create_dir_all(card.parent().unwrap()).unwrap();
+        std::fs::write(&card, format!("{html}\n")).unwrap();
+        std::fs::write(dir.path().join("styles.css"), "@import \"components.css\";\n").unwrap();
+        std::fs::write(dir.path().join("components.css"), ".btn {}\n.btn--primary {}\n").unwrap();
+        assert_eq!(crate::design::check::check(dir.path()).unwrap(), vec![]);
+    }
+
     /// X31: an installed skill from an older moonlet is brought up to date
     /// when the daemon starts; nothing else is written.
     #[test]
@@ -533,7 +619,8 @@ mod tests {
         std::fs::create_dir_all(p.claude_skill.parent().unwrap()).unwrap();
         std::fs::write(&p.claude_skill, old).unwrap();
 
-        assert_eq!(refresh_skills(&p).unwrap(), vec![p.claude_skill.clone()]);
+        let design = dir.path().join("claude/skills/moonlet-design");
+        assert_eq!(refresh_skills(&p).unwrap(), vec![p.claude_skill.clone(), design.join("SKILL.md"), design.join("cards.md")]);
         let text = std::fs::read_to_string(&p.claude_skill).unwrap();
         assert!(text.contains(r#""$MOONLET_BIN" term read <id>"#), "{text}");
         assert!(!p.codex_skill.exists(), "a skill never installed stays absent");
