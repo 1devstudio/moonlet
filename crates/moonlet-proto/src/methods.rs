@@ -298,6 +298,9 @@ pub const SYNC_PROJECT_SET: &str = "sync.project_set";
 pub const SYNC_DECLINE: &str = "sync.decline";
 /// A [`CopyChanged`], on every change of a copy's state.
 pub const EV_SYNC_CHANGED: &str = "sync.changed";
+/// `{workspace, system, paths}`: files changed in a design system, or in a
+/// workspace's other design files (`system: null`) (X64).
+pub const EV_DESIGN_CHANGED: &str = "design.changed";
 
 // Events
 pub const EV_TERMINAL_CREATED: &str = "terminal.created";

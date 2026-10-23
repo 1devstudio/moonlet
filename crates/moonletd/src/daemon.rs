@@ -32,6 +32,8 @@ pub struct Daemon {
     /// Per design system (X64): one start of its agent, or one change of its
     /// record or folder, at a time.
     design_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// Announces changes under `~/.moonlet/design` as `design.changed` (X64).
+    _design_watch: Option<moonlet_core::design::watch::Watching>,
     reads: TerminalReads,
     watchers: Arc<Watchers>,
     started_at: u64,
@@ -186,6 +188,22 @@ impl Daemon {
             move |m| emitter.emit(m),
         );
         link.set_sync(Arc::downgrade(&sync));
+        // Announces changes under `~/.moonlet/design` as `design.changed` (X64).
+        let design_watch = {
+            let store = moonlet_core::design::store::Store::new(&moonlet_core::paths::home());
+            let terms = terminals.clone();
+            store
+                .root()
+                .and_then(|root| {
+                    moonlet_core::design::watch::start(root, move |changes| {
+                        for change in changes {
+                            terms.emit(Message::event(m::EV_DESIGN_CHANGED, change));
+                        }
+                    })
+                })
+                .inspect_err(|e| tracing::warn!("cannot watch the design folder: {e:#}"))
+                .ok()
+        };
         Arc::new(Self {
             clones,
             terminals,
@@ -193,6 +211,7 @@ impl Daemon {
             sessions,
             design: moonlet_core::design::store::Store::new(&moonlet_core::paths::home()),
             design_locks: Mutex::new(HashMap::new()),
+            _design_watch: design_watch,
             reads,
             watchers,
             started_at: now_ms(),

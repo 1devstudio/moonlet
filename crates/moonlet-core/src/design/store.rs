@@ -134,6 +134,12 @@ impl Store {
         }
     }
 
+    /// `~/.moonlet/design`, created when missing.
+    pub fn root(&self) -> Result<&Path> {
+        crate::paths::ensure_private_dir(&self.root)?;
+        Ok(&self.root)
+    }
+
     /// Creates a design system and returns its slug. A name already used in
     /// the workspace gets a ` 2` (` 3`, …) suffix.
     pub fn create_system(
