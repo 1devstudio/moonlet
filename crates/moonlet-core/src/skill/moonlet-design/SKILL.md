@@ -39,6 +39,7 @@ Done when every component in scope has a name and a group. Then `moonlet design 
 
 - Copy the CSS custom-property files the source has into `tokens/`, unchanged, under their own file names.
 - Tokens defined in code (a Tailwind theme, a TS object) go to `tokens/tokens.css` under the source's names (`colors.accent` becomes `--color-accent`); note in `NOTES.md` where each came from.
+- A value the code uses without a name (a hex in a class list) gets a name for its role, such as `--color-menu-bg` or `--color-row-text`, never one spelling its value; note in `NOTES.md` which code uses it.
 - Copy the fonts the source loads into `fonts/`, each with an `@font-face` in `fonts/fonts.css`.
 - Copy the project's design docs into `guidelines/`, with `guidelines/index.md` listing them.
 - Write `styles.css` with only `@import` lines: each `tokens/` file, then `fonts/fonts.css`, then `components.css`.
@@ -52,7 +53,7 @@ Read [cards.md](cards.md) now: the card, snippet and `.prompt.md` formats.
 For each component in scope write three files in `components/<group>/<name>/`: `<name>.css` (its classes, named after the component and its variants, with values only from tokens), `<name>.html` (the card) and `<name>.prompt.md`. Add `@import "components/<group>/<name>/<name>.css";` to `components.css` for each.
 
 1. **Solo first**: write 2 or 3 diverse components yourself: one compound, one with many states, one text-heavy. Fix what `moonlet design check` finds.
-2. **Then fan out**: hand the rest to subagents in batches of 5 to 8, each batch a disjoint set of components. A subagent writes only its own components' files and a `NOTES.md` line per gotcha, and runs `moonlet design check`. When two components hit the same cause, fix it once, for all, before the next batch.
+2. **Then fan out**: hand the rest to subagents in batches of 5 to 8, each batch a disjoint set of components, started with the `sonnet` model; inventory, conventions and the review of their work stay with you. Give each subagent, in its brief, the path of `moonlet`, the [Ground rules](#ground-rules), the tool rule (file tools for files, Bash only for `moonlet`) and the formats in [cards.md](cards.md). A subagent writes only its own components' files and a `NOTES.md` line per gotcha, and runs `moonlet design check`. When two components hit the same cause, fix it once, for all, before the next batch.
 3. After each batch, `moonlet design system progress cards "<done> of <total>"`.
 
 Read each card beside its source as you finish it: same states, same content shape, same tokens. Screenshots for grading arrive with a later moonlet; until then write in `NOTES.md` that cards are checked by reading, not by eye.
@@ -61,7 +62,7 @@ Done when every component in scope has a card (or an honest floor card) and `moo
 
 ## 4. Layouts and conventions
 
-Write 2 to 5 whole screens in `ui_kits/<kit>/<screen>.html`, copied from the source's main screens: only the cards' snippets plus layout glue that uses tokens, with realistic data. Their marker names `group="Layouts"` and the screen's viewport.
+Write 2 to 5 whole screens in `ui_kits/<kit>/<screen>.html`, copied from the source's main screens: only the cards' snippets plus layout glue that uses tokens, with realistic data. Show each screen in its steady state, its content loaded, with no loading or startup message, unless that state is the screen's point. Their marker names `group="Layouts"` and the screen's viewport.
 
 Write `conventions.md` (2,000 to 4,000 characters) for the design agent: the styling idiom with its real class and token names, where the truth lives (which files to read), one idiomatic snippet, and the classes to use instead of raw elements (`<button>` becomes `<button class="btn">`). Name only classes and tokens that exist: the check reports any that do not.
 
