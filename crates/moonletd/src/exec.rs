@@ -1,23 +1,32 @@
-//! Routed commands running on this machine (X62). `exec.run` starts one for
-//! a `moonlet exec` connection, streams its output back as `RunOutput`
-//! frames, and ends with `exec.exited`.
+//! Routed commands (X62). On the central host, `exec.run` picks the free
+//! worker with the lowest load, fences its routing copy to the session,
+//! starts the command there and forwards its output to `moonlet exec`; with
+//! no free worker, or when the worker goes away mid-run, the command runs
+//! here. On a worker, `exec.start` runs a command in its routing copy and
+//! sends the run's changes back with `exec.done`.
 
-use std::collections::{BTreeMap, HashMap};
-use std::path::PathBuf;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use moonlet_core::heavy::{self, Candidate, Kind};
 use moonlet_core::terminal::ClientId;
-use moonlet_proto::methods::{self as m, ExecExited, ExecRunStarted};
+use moonlet_proto::methods::{
+    self as m, ExecBrought, ExecDone, ExecExited, ExecPrepared, ExecRunStarted, ExecStart,
+};
+use moonlet_proto::types::HeavyOs;
 use moonlet_proto::{Frame, Message, RpcError};
 use nix::sys::signal::Signal;
 use nix::unistd::Pid;
 use tokio::io::AsyncReadExt;
-use tokio::sync::Notify;
+use tokio::sync::{Notify, oneshot};
 
 use crate::server::Conn;
+use crate::sync::LiveCopies;
+use crate::workers::Workers;
 
 /// How long a cancelled command has between SIGTERM and SIGKILL.
 const GRACE: Duration = Duration::from_secs(5);
@@ -27,13 +36,8 @@ const DRAIN: Duration = Duration::from_secs(1);
 /// Output queued for a client that is not reading, before the command is
 /// held back until it reads.
 const MAX_QUEUED: usize = 4 * 1024 * 1024;
-
-#[derive(Default)]
-pub struct Runs {
-    next: AtomicU32,
-    /// Cancel signals of the runs going on, by connection and run.
-    running: Mutex<HashMap<(ClientId, u32), Arc<Notify>>>,
-}
+/// How long a worker has to make its routing copy.
+const PREPARE_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// What to run, already checked.
 pub struct Command {
@@ -42,36 +46,533 @@ pub struct Command {
     pub env: BTreeMap<String, String>,
 }
 
+/// A routed command one of this central host's workers runs.
+struct Remote {
+    /// The `moonlet exec` connection the output goes to.
+    client: Arc<Conn>,
+    worker: String,
+    /// The routing copy the run was fenced on.
+    copy: String,
+    /// The `outputs` checked when the run started: the session's config
+    /// may say otherwise by the time the run ends.
+    outputs: Vec<String>,
+    /// The worker's connection.
+    conn: Arc<Conn>,
+    done: Option<oneshot::Sender<(i32, ExecBrought)>>,
+}
+
+pub struct Runs {
+    next: AtomicU32,
+    /// Cancel signals of this machine's own runs going on here, by run.
+    running: Mutex<HashMap<u32, Arc<Notify>>>,
+    /// Cancel signals of runs this machine does for its central host, by
+    /// the central host's run id: a namespace of their own.
+    routed: Mutex<HashMap<u32, Arc<Notify>>>,
+    /// Which connection started each of this central host's runs, so only
+    /// it cancels one.
+    owners: Mutex<HashMap<u32, ClientId>>,
+    /// Runs this central host routed to a worker.
+    remote: Mutex<HashMap<u32, Remote>>,
+    /// The daemon's own environment, which commands start from.
+    base_env: BTreeMap<String, String>,
+}
+
+/// Everything a run on the central host needs to know.
+pub struct Plan {
+    pub session: String,
+    pub argv: Vec<String>,
+    /// The working directory, relative to the session's worktree.
+    pub cwd_rel: String,
+    /// The approved variables of `moonlet exec`'s environment.
+    pub env: BTreeMap<String, String>,
+    pub local: Command,
+    pub os: HeavyOs,
+    /// Ignored paths brought back after a run.
+    pub outputs: Vec<String>,
+    /// This machine's name.
+    pub host: String,
+    pub slots: u32,
+}
+
+enum Fail {
+    /// The worker would not run it: the next one is tried.
+    Refused(String),
+    /// The worker went away mid-run.
+    Gone,
+}
+
 impl Runs {
-    /// Starts `cmd` for `conn`, as `host`.
-    pub fn start(self: &Arc<Self>, conn: Arc<Conn>, host: String, cmd: Command) -> ExecRunStarted {
+    pub fn new(base_env: BTreeMap<String, String>) -> Arc<Self> {
+        Arc::new(Self {
+            next: AtomicU32::new(0),
+            running: Mutex::default(),
+            routed: Mutex::default(),
+            owners: Mutex::default(),
+            remote: Mutex::default(),
+            base_env,
+        })
+    }
+
+    /// `exec.run` on the central host: starts `plan` for `client`.
+    pub fn start(
+        self: &Arc<Self>,
+        client: Arc<Conn>,
+        plan: Plan,
+        workers: Arc<Workers>,
+        sync: Arc<LiveCopies>,
+    ) -> ExecRunStarted {
         let run = self.next.fetch_add(1, Ordering::Relaxed) + 1;
-        let cancel = Arc::new(Notify::new());
-        self.running
-            .lock()
-            .unwrap()
-            .insert((conn.id, run), cancel.clone());
-        let runs = self.clone();
+        self.owners.lock().unwrap().insert(run, client.id);
         let started = ExecRunStarted {
             run,
-            host: host.clone(),
+            host: plan.host.clone(),
         };
+        let runs = self.clone();
         tokio::spawn(async move {
-            let send =
-                |stream: u8, data: Vec<u8>| conn.tx.send(Frame::RunOutput { run, stream, data });
-            send(2, format!("moonlet: running on {host}\n").into_bytes());
-            let status = execute(&cmd, &conn, &cancel, &send).await;
-            runs.running.lock().unwrap().remove(&(conn.id, run));
+            let status = runs.route(run, &client, &plan, &workers, &sync).await;
+            runs.owners.lock().unwrap().remove(&run);
             let exited = ExecExited { run, status };
-            conn.tx
+            client
+                .tx
                 .send(Frame::Json(Message::event(m::EV_EXEC_EXITED, exited)));
         });
         started
     }
 
-    /// Stops `run` of connection `conn`; false when there is no such run.
-    pub fn cancel(&self, conn: ClientId, run: u32) -> bool {
-        match self.running.lock().unwrap().get(&(conn, run)) {
+    /// Runs `plan` on the freest worker, or here, and gives its status.
+    async fn route(
+        self: &Arc<Self>,
+        run: u32,
+        client: &Arc<Conn>,
+        plan: &Plan,
+        workers: &Workers,
+        sync: &Arc<LiveCopies>,
+    ) -> i32 {
+        let say = |text: String| {
+            client.tx.send(Frame::RunOutput {
+                run,
+                stream: 2,
+                data: format!("moonlet: {text}\n").into_bytes(),
+            })
+        };
+        let mut skipped = HashSet::new();
+        loop {
+            let candidates = self.candidates(plan, workers, &skipped);
+            let Some(chosen) = heavy::pick(&candidates, plan.os, false).cloned() else {
+                break;
+            };
+            if chosen.kind != Kind::Linked {
+                break;
+            }
+            let name = workers
+                .list()
+                .into_iter()
+                .find(|w| w.worker.id == chosen.id)
+                .map(|w| w.worker.name)
+                .unwrap_or_else(|| chosen.id.clone());
+            match self
+                .remote(run, client, plan, &chosen.id, &name, workers, sync)
+                .await
+            {
+                Ok((status, brought)) => {
+                    for note in &brought.notes {
+                        say(note.clone());
+                    }
+                    if !brought.leftovers.is_empty() {
+                        say(format!(
+                            "{} changed on {} during the run; the run's version is in {}",
+                            brought.leftovers.join(", "),
+                            plan.host,
+                            tilde(brought.folder.as_deref().unwrap_or_default())
+                        ));
+                    }
+                    return status;
+                }
+                Err(Fail::Refused(why)) => {
+                    tracing::debug!(worker = %name, "a worker refused a routed command: {why}");
+                    skipped.insert(chosen.id);
+                }
+                Err(Fail::Gone) => {
+                    say(format!("{name} went away. Running again on {}.", plan.host));
+                    break;
+                }
+            }
+        }
+        say(format!("running on {}", plan.host));
+        self.here(run, client, &plan.local).await
+    }
+
+    /// The machines that might run a command of `plan`: linked workers
+    /// that take heavy commands, and this central host.
+    fn candidates(
+        &self,
+        plan: &Plan,
+        workers: &Workers,
+        skipped: &HashSet<String>,
+    ) -> Vec<Candidate> {
+        let busy: Vec<String> = self
+            .remote
+            .lock()
+            .unwrap()
+            .values()
+            .map(|r| r.worker.clone())
+            .collect();
+        let mut out: Vec<Candidate> = workers
+            .list()
+            .into_iter()
+            .filter(|w| w.worker.heavy && !skipped.contains(&w.worker.id))
+            .map(|w| Candidate {
+                used: busy.iter().filter(|b| **b == w.worker.id).count() as u32,
+                id: w.worker.id,
+                kind: Kind::Linked,
+                os: w.worker.os,
+                cores: w.worker.cores,
+                load: w.load.unwrap_or(0.0),
+                slots: w.worker.slots,
+                rtt_ms: w.rtt_ms,
+            })
+            .collect();
+        out.push(Candidate {
+            id: plan.host.clone(),
+            kind: Kind::Central,
+            os: crate::link::os().into(),
+            cores: std::thread::available_parallelism().map_or(1, |n| n.get() as u32),
+            load: crate::link::load().unwrap_or(0.0),
+            slots: plan.slots,
+            used: self.running.lock().unwrap().len() as u32,
+            rtt_ms: None,
+        });
+        out
+    }
+
+    /// Runs `plan` on worker `worker`: prepares and fences its routing
+    /// copy, starts the command and waits for `exec.done`.
+    #[allow(clippy::too_many_arguments)]
+    async fn remote(
+        self: &Arc<Self>,
+        run: u32,
+        client: &Arc<Conn>,
+        plan: &Plan,
+        worker: &str,
+        name: &str,
+        workers: &Workers,
+        sync: &Arc<LiveCopies>,
+    ) -> Result<(i32, ExecBrought), Fail> {
+        let conn = workers
+            .conn(worker)
+            .ok_or_else(|| Fail::Refused("gone".into()))?;
+        let prepare = m::ExecPrepare {
+            session: plan.session.clone(),
+        };
+        let prepared: ExecPrepared = conn
+            .request(
+                m::EXEC_PREPARE,
+                serde_json::to_value(prepare).unwrap(),
+                PREPARE_TIMEOUT,
+            )
+            .await
+            .ok()
+            .and_then(|v| serde_json::from_value(v).ok())
+            .ok_or_else(|| Fail::Refused("cannot prepare".into()))?;
+        if prepared.state != "ready" {
+            return Err(Fail::Refused(prepared.state));
+        }
+        let (tree, head, session_path) = sync
+            .fence(&prepared.copy, worker, &plan.session)
+            .await
+            .map_err(|e| Fail::Refused(e.code))?;
+        let (tx, mut rx) = oneshot::channel();
+        self.remote.lock().unwrap().insert(
+            run,
+            Remote {
+                client: client.clone(),
+                worker: worker.to_string(),
+                copy: prepared.copy.clone(),
+                outputs: plan.outputs.clone(),
+                conn: conn.clone(),
+                done: Some(tx),
+            },
+        );
+        let start = ExecStart {
+            run,
+            copy: prepared.copy,
+            argv: plan.argv.clone(),
+            cwd: plan.cwd_rel.clone(),
+            env: plan.env.clone(),
+            tree,
+            head,
+            session_path,
+            outputs: plan.outputs.clone(),
+        };
+        let started = conn
+            .request(
+                m::EXEC_START,
+                serde_json::to_value(start).unwrap(),
+                Duration::from_secs(30),
+            )
+            .await;
+        if let Err(e) = started {
+            self.remote.lock().unwrap().remove(&run);
+            return Err(Fail::Refused(e.code));
+        }
+        client.tx.send(Frame::RunOutput {
+            run,
+            stream: 2,
+            data: format!("moonlet: running on {name}\n").into_bytes(),
+        });
+        let mut tick = tokio::time::interval(Duration::from_millis(250));
+        let mut cancelled = false;
+        loop {
+            tokio::select! {
+                done = &mut rx => return done.map_err(|_| Fail::Gone),
+                _ = tick.tick() => {
+                    let gone = conn.is_gone()
+                        || workers.conn(worker).is_none_or(|c| c.id != conn.id);
+                    if gone {
+                        self.remote.lock().unwrap().remove(&run);
+                        return Err(Fail::Gone);
+                    }
+                    if client.is_gone() && !cancelled {
+                        cancelled = true;
+                        self.cancel_remote(run).await;
+                    }
+                }
+            }
+        }
+    }
+
+    async fn cancel_remote(&self, run: u32) {
+        let conn = self
+            .remote
+            .lock()
+            .unwrap()
+            .get(&run)
+            .map(|r| r.conn.clone());
+        if let Some(conn) = conn {
+            let _ = conn
+                .request(
+                    m::EXEC_CANCEL,
+                    serde_json::json!({ "run": run }),
+                    Duration::from_secs(10),
+                )
+                .await;
+        }
+    }
+
+    /// Runs `cmd` here for `client` and gives its status.
+    async fn here(self: &Arc<Self>, run: u32, client: &Arc<Conn>, cmd: &Command) -> i32 {
+        let cancel = Arc::new(Notify::new());
+        self.running.lock().unwrap().insert(run, cancel.clone());
+        let send =
+            |stream: u8, data: Vec<u8>| client.tx.send(Frame::RunOutput { run, stream, data });
+        let full = || client.tx.queued() > MAX_QUEUED && !client.is_gone();
+        let status = execute(cmd, &|| client.is_gone(), &full, &cancel, &send).await;
+        self.running.lock().unwrap().remove(&run);
+        status
+    }
+
+    /// `exec.cancel` from connection `conn`: stops its run `run`, here or
+    /// on a worker.
+    pub async fn cancel(&self, conn: ClientId, run: u32) -> bool {
+        if self.owners.lock().unwrap().get(&run) != Some(&conn) {
+            return false;
+        }
+        let here = self.running.lock().unwrap().get(&run).cloned();
+        if let Some(n) = here {
+            n.notify_one();
+            return true;
+        }
+        let remote = self.remote.lock().unwrap().contains_key(&run);
+        if remote {
+            self.cancel_remote(run).await;
+        }
+        remote
+    }
+
+    /// Output of a remote run, from the worker on connection `from`.
+    pub fn forward(&self, from: ClientId, run: u32, stream: u8, data: Vec<u8>) {
+        let remote = self.remote.lock().unwrap();
+        if let Some(r) = remote.get(&run)
+            && r.conn.id == from
+        {
+            r.client.tx.send(Frame::RunOutput { run, stream, data });
+        }
+    }
+
+    /// The `outputs` of `run`, when the worker on connection `from` runs
+    /// it in `copy`.
+    pub fn runs_on(&self, from: ClientId, run: u32, copy: &str) -> Option<Vec<String>> {
+        self.remote
+            .lock()
+            .unwrap()
+            .get(&run)
+            .filter(|r| r.conn.id == from && r.copy == copy)
+            .map(|r| r.outputs.clone())
+    }
+
+    /// `exec.done` from a worker: its changes are in; the run is over.
+    pub fn done(&self, from: ClientId, run: u32, status: i32, brought: ExecBrought) {
+        let mut remote = self.remote.lock().unwrap();
+        if remote.get(&run).is_some_and(|r| r.conn.id == from)
+            && let Some(mut r) = remote.remove(&run)
+            && let Some(tx) = r.done.take()
+        {
+            let _ = tx.send((status, brought));
+        }
+    }
+
+    /// `exec.start` on a worker: checks the command against this machine's
+    /// own approval, slots, load and the fence, then runs it in the routing
+    /// copy and sends its changes back with `exec.done`.
+    pub async fn start_here(
+        self: &Arc<Self>,
+        req: ExecStart,
+        sync: Arc<LiveCopies>,
+        host: Arc<moonlet_link::Host>,
+        slots: u32,
+    ) -> Result<bool, RpcError> {
+        let approved = sync.heavy_approval(&req.copy).ok_or_else(|| {
+            RpcError::new(
+                "not_approved",
+                "this machine has not approved the project's heavy commands",
+            )
+        })?;
+        let command = req
+            .argv
+            .iter()
+            .map(|w| crate::heavy::quote(w))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let words_ok = !req.argv.is_empty() && heavy::route(&command, &approved.commands).is_some();
+        if !words_ok || !req.env.keys().all(|k| approved.env.contains(k)) {
+            return Err(RpcError::new(
+                "not_approved",
+                "not an approved heavy command here",
+            ));
+        }
+        let cores = std::thread::available_parallelism().map_or(1, |n| n.get() as u32);
+        let load = crate::link::load().unwrap_or(0.0);
+        let used = self.routed.lock().unwrap().len() as u32;
+        if used >= slots || load >= 0.7 * f64::from(cores) {
+            return Err(RpcError::new("busy", "no free slot"));
+        }
+        let copy = sync.run_copy_at(&req.copy, &req.tree, &req.head).await?;
+        let rel = Path::new(&req.cwd);
+        if rel.is_absolute()
+            || rel
+                .components()
+                .any(|c| c == std::path::Component::ParentDir)
+        {
+            return Err(RpcError::new(
+                "invalid_params",
+                "the folder is outside the copy",
+            ));
+        }
+        // Canonical, so a link inside the copy cannot lead out of it.
+        let (Ok(root), Ok(cwd)) = (copy.canonicalize(), copy.join(rel).canonicalize()) else {
+            return Err(RpcError::new(
+                "invalid_params",
+                "no such folder in the copy",
+            ));
+        };
+        if !cwd.starts_with(&root) || !cwd.is_dir() {
+            return Err(RpcError::new(
+                "invalid_params",
+                "the folder is outside the copy",
+            ));
+        }
+        // The central host names the outputs: checked here as well.
+        let outputs = moonlet_proto::types::HeavyConfig {
+            outputs: req.outputs.clone(),
+            ..Default::default()
+        };
+        heavy::check(&outputs).map_err(|e| RpcError::new("invalid_params", e))?;
+        let mut env = self.base_env.clone();
+        env.extend(req.env.clone());
+        env.insert("MOONLET_ROUTED".into(), "1".into());
+        if !found(&req.argv[0], &cwd, env.get("PATH").map(String::as_str)) {
+            return Err(RpcError::new(
+                "missing_tool",
+                format!("missing {}", req.argv[0]),
+            ));
+        }
+        let cancel = Arc::new(Notify::new());
+        {
+            let mut routed = self.routed.lock().unwrap();
+            if routed.contains_key(&req.run) {
+                return Err(RpcError::new("busy", "that run is going on"));
+            }
+            routed.insert(req.run, cancel.clone());
+        }
+        let runs = self.clone();
+        tokio::spawn(async move {
+            let run = req.run;
+            let cmd = Command {
+                argv: req.argv.clone(),
+                cwd,
+                env,
+            };
+            // The copy's path, as given and canonical, reads as the
+            // session's in the output.
+            let copy_path = sync.run_copy_path(&req.copy).unwrap_or_default();
+            let canonical = copy_path
+                .canonicalize()
+                .unwrap_or_else(|_| copy_path.clone());
+            let (plain, canon) = (
+                copy_path.display().to_string(),
+                canonical.display().to_string(),
+            );
+            let pairs = [
+                (plain.as_str(), req.session_path.as_str()),
+                (canon.as_str(), req.session_path.as_str()),
+            ];
+            let rewriters = [
+                Mutex::new(heavy::Rewriter::new(&pairs)),
+                Mutex::new(heavy::Rewriter::new(&pairs)),
+            ];
+            let raw = |stream: u8, data: Vec<u8>| host.send_run_output(run, stream, data).is_ok();
+            let send = |stream: u8, data: Vec<u8>| {
+                let out = rewriters[usize::from(stream == 2)]
+                    .lock()
+                    .unwrap()
+                    .push(&data);
+                out.is_empty() || raw(stream, out)
+            };
+            let connected = || matches!(host.info().status, moonlet_link::HostStatus::Connected);
+            // The link has no queue to read yet: a worker does not hold back.
+            let status = execute(&cmd, &|| !connected(), &|| false, &cancel, &send).await;
+            for (i, r) in rewriters.iter().enumerate() {
+                let rest = r.lock().unwrap().finish();
+                if !rest.is_empty() {
+                    raw(if i == 0 { 1 } else { 2 }, rest);
+                }
+            }
+            runs.routed.lock().unwrap().remove(&run);
+            let lock = sync.run_lock(&req.copy);
+            let _one = lock.lock().await;
+            if connected() {
+                let say = |text: String| send(2, format!("moonlet: {text}\n").into_bytes());
+                let copy = sync.run_copy_path(&req.copy).unwrap_or_default();
+                let outputs =
+                    match collect_outputs(&copy, &req.outputs, outputs_limit(), &say).await {
+                        Ok(t) => t,
+                        Err(e) => {
+                            say(format!("cannot bring back outputs: {e:#}"));
+                            None
+                        }
+                    };
+                send_back(&sync, &host, run, &req.copy, status, outputs).await;
+            }
+            // Its changes went back, or the run was abandoned: the copy
+            // returns to its fence either way.
+            sync.reset_run(&req.copy).await;
+        });
+        Ok(true)
+    }
+
+    /// `exec.cancel` from the central host, on a worker.
+    pub fn cancel_here(&self, run: u32) -> bool {
+        match self.routed.lock().unwrap().get(&run) {
             Some(n) => {
                 n.notify_one();
                 true
@@ -81,11 +582,228 @@ impl Runs {
     }
 }
 
+/// Sends the central host routing copy `copy`'s changes after run `run`.
+async fn send_back(
+    sync: &LiveCopies,
+    host: &moonlet_link::Host,
+    run: u32,
+    copy: &str,
+    status: i32,
+    outputs: Option<String>,
+) {
+    let (tree, head, pack) = match sync.run_changes(copy, outputs.as_deref()).await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(run, "cannot read the run's changes: {e:#}");
+            return;
+        }
+    };
+    let pack = if pack.is_empty() {
+        None
+    } else {
+        match host.send_pack(&pack) {
+            Ok(t) => Some(t),
+            Err(e) => {
+                tracing::warn!(run, "cannot send the run's changes: {}", e.message);
+                return;
+            }
+        }
+    };
+    let done = ExecDone {
+        run,
+        copy: copy.to_string(),
+        status,
+        tree,
+        head,
+        pack,
+        outputs,
+    };
+    if let Err(e) = host
+        .request(m::EXEC_DONE, serde_json::to_value(done).unwrap())
+        .await
+    {
+        tracing::warn!(
+            run,
+            "the central host did not take the run's changes: {}",
+            e.message
+        );
+    }
+}
+
+/// The most bytes of `outputs` brought back after a run: 1 GiB, or
+/// `MOONLET_TEST_OUTPUTS_LIMIT` in tests.
+fn outputs_limit() -> u64 {
+    std::env::var("MOONLET_TEST_OUTPUTS_LIMIT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1 << 30)
+}
+
+/// One file of a run's outputs, found before anything is stored.
+enum Found {
+    File {
+        rel: String,
+        abs: PathBuf,
+        exec: bool,
+    },
+    Link {
+        rel: String,
+        target: Vec<u8>,
+    },
+}
+
+/// The run's `outputs` in routing copy `copy`, stored as a tree in its
+/// repository: plain files as they are, links as links, never followed.
+/// An `outputs` path that is itself a link, or outputs over `limit`, stay
+/// on the worker, and `say` says so.
+async fn collect_outputs(
+    copy: &Path,
+    outputs: &[String],
+    limit: u64,
+    say: &(impl Fn(String) -> bool + Sync),
+) -> anyhow::Result<Option<String>> {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::PermissionsExt;
+    let mut found = Vec::new();
+    let mut total: u64 = 0;
+    for out in outputs {
+        let out = out.trim_end_matches('/');
+        let root = copy.join(out);
+        if std::fs::symlink_metadata(&root).is_err() {
+            continue;
+        }
+        // A link anywhere on the way, the path itself included, could lead
+        // out of the copy.
+        if through_link(copy, out) {
+            say(format!("{out} is a symbolic link; not brought back"));
+            continue;
+        }
+        let mut stack = vec![(root, out.trim_end_matches('/').to_string())];
+        while let Some((abs, rel)) = stack.pop() {
+            let meta = std::fs::symlink_metadata(&abs)?;
+            let kind = meta.file_type();
+            if kind.is_symlink() {
+                let target = std::fs::read_link(&abs)?;
+                found.push(Found::Link {
+                    rel,
+                    target: target.as_os_str().as_bytes().to_vec(),
+                });
+            } else if kind.is_dir() {
+                for entry in std::fs::read_dir(&abs)? {
+                    let entry = entry?;
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    stack.push((entry.path(), format!("{rel}/{name}")));
+                }
+            } else if kind.is_file() {
+                total += meta.len();
+                found.push(Found::File {
+                    rel,
+                    abs,
+                    exec: meta.permissions().mode() & 0o111 != 0,
+                });
+            }
+        }
+    }
+    if total > limit {
+        say(format!(
+            "outputs are {}, over the {} limit; not brought back",
+            size(total),
+            size(limit)
+        ));
+        return Ok(None);
+    }
+    if found.is_empty() {
+        return Ok(None);
+    }
+    let mut files = moonlet_core::sync::Files::new();
+    for f in found {
+        let (rel, entry) = match f {
+            Found::File { rel, abs, exec } => {
+                let bytes = std::fs::read(&abs)?;
+                let oid = moonlet_core::sync::hash_bytes(copy, &bytes).await?;
+                let mode = if exec { "100755" } else { "100644" };
+                (
+                    rel,
+                    moonlet_core::sync::Entry {
+                        mode: mode.into(),
+                        oid,
+                    },
+                )
+            }
+            Found::Link { rel, target } => {
+                let oid = moonlet_core::sync::hash_bytes(copy, &target).await?;
+                (
+                    rel,
+                    moonlet_core::sync::Entry {
+                        mode: "120000".into(),
+                        oid,
+                    },
+                )
+            }
+        };
+        files.insert(rel, entry);
+    }
+    Ok(Some(moonlet_core::sync::write_files(copy, &files).await?))
+}
+
+/// Whether a component of `rel` below `root`, `rel` itself included, is a
+/// symbolic link.
+pub fn through_link(root: &Path, rel: &str) -> bool {
+    let mut at = root.to_path_buf();
+    Path::new(rel).components().any(|part| {
+        at = at.join(part);
+        std::fs::symlink_metadata(&at).is_ok_and(|m| m.file_type().is_symlink())
+    })
+}
+
+/// `n` bytes for a person: `20 B`, `1.2 MiB`, `1 GiB`.
+fn size(n: u64) -> String {
+    const UNITS: [&str; 4] = ["KiB", "MiB", "GiB", "TiB"];
+    if n < 1024 {
+        return format!("{n} B");
+    }
+    let mut v = n as f64 / 1024.0;
+    let mut unit = 0;
+    while v >= 1024.0 && unit < UNITS.len() - 1 {
+        v /= 1024.0;
+        unit += 1;
+    }
+    let text = format!("{v:.1}");
+    format!("{} {}", text.trim_end_matches(".0"), UNITS[unit])
+}
+
+/// Whether `program` can be started from `cwd` with `path`.
+fn found(program: &str, cwd: &Path, path: Option<&str>) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    let runnable = |p: &Path| {
+        p.metadata()
+            .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    };
+    if program.contains('/') {
+        return runnable(&cwd.join(program));
+    }
+    path.unwrap_or("/usr/bin:/bin")
+        .split(':')
+        .filter(|d| !d.is_empty())
+        .any(|d| runnable(&Path::new(d).join(program)))
+}
+
+/// `path` with the home folder as `~`.
+fn tilde(path: &str) -> String {
+    match dirs::home_dir().and_then(|h| Path::new(path).strip_prefix(h).ok().map(Path::to_path_buf))
+    {
+        Some(rest) => format!("~/{}", rest.display()),
+        None => path.to_string(),
+    }
+}
+
 /// Runs `cmd` to its end and returns its exit status. It stops the command
-/// when the run is cancelled or `conn` goes away.
+/// when `cancel` is notified or `gone` says the run's listener went away,
+/// and holds it back while `full` says its listener is not reading.
 async fn execute(
     cmd: &Command,
-    conn: &Conn,
+    gone: &(impl Fn() -> bool + Sync),
+    full: &(impl Fn() -> bool + Sync),
     cancel: &Notify,
     send: &(impl Fn(u8, Vec<u8>) -> bool + Sync),
 ) -> i32 {
@@ -112,24 +830,23 @@ async fn execute(
         }
     };
     let group = child.id().map(|id| Pid::from_raw(id as i32));
-    let full = || conn.tx.queued() > MAX_QUEUED && !conn.is_gone();
     let (out, err) = (child.stdout.take(), child.stderr.take());
-    let pumps = async { tokio::join!(pump(out, 1, send, &full), pump(err, 2, send, &full)) };
+    let pumps = async { tokio::join!(pump(out, 1, send, full), pump(err, 2, send, full)) };
     tokio::pin!(pumps);
     let mut pumped = false;
-    let status = {
+    let (status, stopped) = {
         let mut stopping: Option<tokio::time::Instant> = None;
         let mut tick = tokio::time::interval(Duration::from_millis(250));
         loop {
             tokio::select! {
-                status = child.wait() => break status,
+                status = child.wait() => break (status, stopping.is_some()),
                 _ = &mut pumps, if !pumped => pumped = true,
                 _ = cancel.notified(), if stopping.is_none() => {
                     signal(group, Signal::SIGTERM);
                     stopping = Some(tokio::time::Instant::now());
                 }
                 _ = tick.tick() => {
-                    if stopping.is_none() && conn.is_gone() {
+                    if stopping.is_none() && gone() {
                         signal(group, Signal::SIGTERM);
                         stopping = Some(tokio::time::Instant::now());
                     }
@@ -140,6 +857,11 @@ async fn execute(
             }
         }
     };
+    // A process it forked just as the group was stopped may have missed
+    // the signal, and would hold the output open: none outlives a stop.
+    if stopped {
+        signal(group, Signal::SIGKILL);
+    }
     // What it left running in the background ends with it.
     if !pumped && tokio::time::timeout(DRAIN, &mut pumps).await.is_err() {
         signal(group, Signal::SIGKILL);
