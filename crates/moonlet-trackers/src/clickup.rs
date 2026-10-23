@@ -358,6 +358,16 @@ pub fn full_comments_page(page: &[crate::comment::TaskComment]) -> bool {
     page.len() >= 25
 }
 
+/// The most pages of comments read: one past [`crate::comment::MAX`], so a
+/// full last page shows whether more follow.
+pub const COMMENT_PAGES: usize = crate::comment::MAX / 25 + 1;
+
+/// The comments of the pages read, oldest first: more only when past
+/// [`crate::comment::MAX`].
+pub fn comments_from_pages(pages: Vec<Vec<crate::comment::TaskComment>>) -> crate::comment::Comments {
+    crate::comment::Comments::new(pages.into_iter().flatten().collect(), false)
+}
+
 /// One page of [`comments_path`] as ClickUp sends it, newest first; the text
 /// is plain.
 pub fn parse_comments(raw: &[u8]) -> Result<Vec<crate::comment::TaskComment>, ApiError> {
@@ -414,6 +424,34 @@ mod tests {
             env!("CARGO_MANIFEST_DIR")
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn a_hundred_comments_and_nothing_after_them_have_no_more() {
+        use crate::comment::TaskComment;
+        // Pages as ClickUp sends them, newest first: 25 each, ids by age.
+        let page = |from: u64, n: u64| -> Vec<TaskComment> {
+            (0..n)
+                .map(|i| TaskComment {
+                    id: (from - i).to_string(),
+                    author: "John Doe".into(),
+                    body: "Task comment content".into(),
+                    markdown: false,
+                    created_ms: from - i,
+                })
+                .collect()
+        };
+        let hundred = vec![page(101, 25), page(76, 25), page(51, 25), page(26, 25)];
+        // Exactly 100: a full fourth page, then an empty one.
+        let c = comments_from_pages([hundred.clone(), vec![page(1, 0)]].concat());
+        assert_eq!((c.comments.len(), c.more), (100, false));
+        // A 101st after them: the oldest is left out, and there are more.
+        let c = comments_from_pages([hundred, vec![page(1, 1)]].concat());
+        assert_eq!((c.comments.len(), c.more), (100, true));
+        assert_eq!(c.comments[0].id, "2");
+        // Exactly 25: a full page, then an empty one.
+        let c = comments_from_pages(vec![page(25, 25), page(0, 0)]);
+        assert_eq!((c.comments.len(), c.more), (25, false));
     }
 
     #[test]

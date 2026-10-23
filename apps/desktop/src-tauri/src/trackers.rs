@@ -5,7 +5,7 @@
 use moonlet_trackers::config::{Connection, TrackersConfig, connection_id};
 use moonlet_trackers::states::Column;
 use moonlet_trackers::task::TrackerTask;
-use moonlet_trackers::comment::{self, Comments, TaskComment};
+use moonlet_trackers::comment::{Comments, TaskComment};
 use moonlet_trackers::config::{BoardColumn, Finished, Origin};
 use moonlet_trackers::board::{BoardIssue, Sprint};
 use moonlet_trackers::jira_board::{self, BoardSetup, JiraBoard, SearchFields};
@@ -1067,19 +1067,19 @@ pub async fn tracker_comments(id: String, task: String) -> Res<Comments> {
         TrackerKind::Linear => s.linear_ok(linear::parse_comments(&s.linear(linear::COMMENTS, json!({ "id": task })).await?)),
         TrackerKind::Jira => Ok(jira::parse_comments(&s.jira_send(s.jira(reqwest::Method::GET, &jira::comments_path(&task))?).await?)?),
         TrackerKind::Clickup => {
-            // ClickUp sends 25 at a time, newest first.
-            let mut all: Vec<TaskComment> = Vec::new();
-            let mut more = false;
-            for _ in 0..comment::MAX / 25 {
-                let raw = s.clickup_send(s.clickup(reqwest::Method::GET, &clickup::comments_path(&task, all.last()))?).await?;
+            // ClickUp sends 25 at a time, newest first, until a page is not full.
+            let mut pages: Vec<Vec<TaskComment>> = Vec::new();
+            for _ in 0..clickup::COMMENT_PAGES {
+                let after = pages.last().and_then(|p| p.last());
+                let raw = s.clickup_send(s.clickup(reqwest::Method::GET, &clickup::comments_path(&task, after))?).await?;
                 let page = clickup::parse_comments(&raw)?;
-                more = clickup::full_comments_page(&page);
-                all.extend(page);
-                if !more {
+                let full = clickup::full_comments_page(&page);
+                pages.push(page);
+                if !full {
                     break;
                 }
             }
-            Ok(Comments::new(all, more))
+            Ok(clickup::comments_from_pages(pages))
         }
         TrackerKind::Github => Err(fail("GitHub goes through gh")),
     }
