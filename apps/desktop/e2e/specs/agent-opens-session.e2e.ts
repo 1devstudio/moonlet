@@ -35,4 +35,20 @@ describe("an agent opens a session", () => {
     await toast.$('button').click();
     await expect(row).toHaveAttribute("aria-current", "true");
   });
+
+  it("dismisses the toast without leaving the current session", async () => {
+    const parent = rpc<Session[]>(w, "session.list", {}).find((s) => s.name === SESSION)!;
+    await $(sel.sessionRow(SESSION)).click();
+
+    execFileSync(join(BIN_DIR, "moonlet"), ["session", "new", PROJECT, "--agent", "none", "Add a share link"], {
+      env: { ...w.env, MOONLET_TERMINAL_ID: String(parent.terminals[0]) },
+      stdio: "pipe",
+    });
+
+    const toast = $(`//div[button[normalize-space()="Go to"]][contains(normalize-space(), "${SESSION} started Add a share link in ${PROJECT}")]`);
+    await expect(toast).toBeDisplayed({ wait: 15_000 });
+    await toast.$('button[aria-label="Dismiss"]').click();
+    await expect(toast).not.toBeExisting();
+    await expect($(sel.sessionRow(SESSION))).toHaveAttribute("aria-current", "true");
+  });
 });

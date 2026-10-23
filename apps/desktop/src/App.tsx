@@ -10,7 +10,7 @@ import { SyncPopoverHost } from "./components/SyncPopover";
 import { ReadHost } from "./components/ReadHost";
 import { CommandPalette } from "./components/CommandPalette";
 import { Button, IconButton, Kbd, cx } from "./components/ui";
-import { selectedSession, startStore, useStore } from "./lib/store";
+import { dismissToast, selectedSession, startStore, useStore } from "./lib/store";
 import { startSync } from "./lib/syncStore";
 import { installShortcuts } from "./lib/keys";
 import { terminalSearch } from "./lib/actions";
@@ -96,22 +96,25 @@ function Toasts() {
         <div
           key={t.id}
           className={cx(
-            "selectable pointer-events-auto max-w-[560px] rounded-lg border px-3 py-2 ui-text-12.5 shadow-xl",
+            "selectable pointer-events-auto flex max-w-[560px] items-start gap-2 rounded-lg border py-2 pl-3 pr-1.5 ui-text-12.5 shadow-xl",
             t.kind === "error" ? "border-[#5a2a2e] bg-[#2a1416] text-[#ffb3b8]" : "border-border-strong bg-panel-2 text-fg",
           )}
         >
-          {t.text}
+          <span className="min-w-0 py-0.5">{t.text}</span>
           {t.action && (
             <button
-              className="ml-3 rounded px-1.5 py-0.5 font-medium text-accent hover:bg-hover"
+              className="shrink-0 rounded px-1.5 py-0.5 font-medium text-accent hover:bg-hover"
               onClick={() => {
                 t.action?.run();
-                useStore.setState((s) => ({ toasts: s.toasts.filter((x) => x.id !== t.id) }));
+                dismissToast(t.id);
               }}
             >
               {t.action.label}
             </button>
           )}
+          <IconButton title="Dismiss" className="shrink-0" onClick={() => dismissToast(t.id)}>
+            <X size={14} />
+          </IconButton>
         </div>
       ))}
     </div>
