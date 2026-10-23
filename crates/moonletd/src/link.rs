@@ -78,7 +78,19 @@ impl LinkStore {
             }
         }
         let data = match read {
-            Some(d) if !d.worker.id.is_empty() => d,
+            Some(mut d) if !d.worker.id.is_empty() => {
+                // A hand edit outside what `link.set` allows reads as the default.
+                if !(1..=64).contains(&d.worker.slots) {
+                    tracing::warn!(
+                        "{}: slots {} is not from 1 to 64; using {}",
+                        path.display(),
+                        d.worker.slots,
+                        m::default_slots()
+                    );
+                    d.worker.slots = m::default_slots();
+                }
+                d
+            }
             other => {
                 let d = LinkFile {
                     central: other.and_then(|d| d.central),

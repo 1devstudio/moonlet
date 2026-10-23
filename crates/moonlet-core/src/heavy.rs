@@ -357,7 +357,12 @@ pub fn pick(candidates: &[Candidate], os: HeavyOs, cloud_first: bool) -> Option<
         rank(a)
             .cmp(&rank(b))
             .then(a.per_core().total_cmp(&b.per_core()))
-            .then(a.rtt_ms.unwrap_or(0).cmp(&b.rtt_ms.unwrap_or(0)))
+            // A round trip not measured yet counts as the longest.
+            .then(
+                a.rtt_ms
+                    .unwrap_or(u64::MAX)
+                    .cmp(&b.rtt_ms.unwrap_or(u64::MAX)),
+            )
             .then(a.id.cmp(&b.id))
     })
 }
@@ -697,6 +702,19 @@ mod tests {
             cloud("moonlet-shop-7k2q", 2.0, 8, 0),
         ];
         assert_eq!(pick(&both, any, true).unwrap().id, "moonlet-shop-7k2q");
+    }
+
+    #[test]
+    fn a_worker_with_no_round_trip_yet_ranks_after_a_measured_one() {
+        let unmeasured = Candidate {
+            rtt_ms: None,
+            ..mac("a", 1.0, 10, 0)
+        };
+        let measured = mac("b", 1.0, 10, 0);
+        assert_eq!(
+            pick(&[unmeasured, measured], HeavyOs::Any, false).map(|c| c.id.as_str()),
+            Some("b")
+        );
     }
 
     #[test]
