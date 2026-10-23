@@ -3,7 +3,7 @@
 - **Status:** draft
 - **Priority / phase:** P1 · phase 4
 - **PRD refs:** X65 (Design mode), X22 (the `moonlet` skill), X32 (workspaces), X54 (new session composer)
-- **Related ADRs:** none yet (see Open questions)
+- **Related ADRs:** [0013](../adr/0013-design-systems-and-designs.md)
 - **Design:** "PR 338 · Design mode screens" (Claude Design bundle, 2026-10-23). The relevant boards:
   - 1 and 2: Design mode with no design system, and the New design system dialog
   - the design system view and one card
@@ -183,7 +183,7 @@ A design system belongs to a moonlet workspace, so every project and design in t
 
   It exits non-zero on any error.
 - [ ] The check rewrites the generated files: `_ds_manifest.json` (from the markers, sorted by group and name), the foundation cards, and the README index.
-- [ ] With `--render`, the check loads each card in the app's sandboxed canvas, offscreen, and writes `.cache/render-check.json` with design-sync's rubric:
+- [ ] With `--render`, the check asks the moonlet app to load each card in its sandboxed canvas (the app's own WebKit, in a window placed off screen), measures it in the page, and writes `.cache/render-check.json` with design-sync's rubric:
   - `rootEmpty`: a mount is empty
   - `errs`: page errors
   - `nameOnly`: the only text is the card's name repeated
@@ -194,7 +194,9 @@ A design system belongs to a moonlet workspace, so every project and design in t
   - `thin`: `nameOnly`, `allHollow` or `collapsed`, never on a floor card
   - `bad`: `rootEmpty`, or `errs` on a non-floor card
 
-  The CLI prints the counts of total, bad, thin and variantsIdentical.
+  The CLI prints the counts of total, bad, thin and variantsIdentical. The `blank` flag (a screenshot under 5 KB) comes from the snapshot.
+- [ ] `"$MOONLET_BIN" design snap <card> [--variant <v>] [--viewport <w>x<h>]` saves a PNG of the card, taken by the app with WKWebView's `takeSnapshot`, to `.cache/screenshots/` and prints its path.
+- [ ] Without the app running, `--render` and `snap` fail with "Open moonlet to render cards". The rest of the check still runs.
 
 ### Sync
 
@@ -203,7 +205,7 @@ A design system belongs to a moonlet workspace, so every project and design in t
 - [ ] **Tokens.** The agent writes `tokens/`, `fonts/`, `guidelines/` and `styles.css`, then runs the check.
 - [ ] **Cards.** The agent writes `components.css`, the cards and the `.prompt.md` files. It does 2–3 diverse components itself first (one compound, one with many states, one text-heavy), then hands the rest to subagents in disjoint batches. A subagent edits only its own cards and notes, and never runs the whole check. A cause shared by two or more cards stops the batch and goes to `NOTES.md` as `[GENERAL]`. The agent runs `design check --render` and fixes until nothing is `bad`, at most 3 rounds, and records accepted warnings in `NOTES.md`.
 - [ ] **Grading.** The agent grades each card from `"$MOONLET_BIN" design snap <card>` screenshots (`.cache/screenshots/`):
-  - **Against the real component:** when the project has a running reference (a Storybook, or a dev server URL in `config.toml`), side by side, as `match`, `close` or `mismatch`. `close` is still something to fix.
+  - **Against the real component:** in Inventory, when the agent finds a Storybook or a dev server in a source project, it offers to use it as the reference. It does not require one. moonlet starts it with the project's run script (X1), and `design snap --url <url>` screenshots the real component the same way. The two are graded side by side as `match`, `close` or `mismatch`, and `close` is still something to fix. For moonlet itself the reference is the real components rendered with demo data in `apps/desktop/src/ds`.
   - **Otherwise:** each cell as Styled, Complete and Plausible, giving `good` or `needs-work`.
 
   Grades go to `.cache/grades/<Name>.json`. The step is done when nothing is `bad` and every card in scope is `good` or `match`.
@@ -252,7 +254,7 @@ A design system belongs to a moonlet workspace, so every project and design in t
 - [ ] CLI, each printing JSON like the other `moonlet` commands (A6):
   - `moonlet design system ls|new|sync|progress|synced|rm`
   - `moonlet design check [--render]`
-  - `moonlet design snap <card>`
+  - `moonlet design snap <card> | --url <url>`
 
 ## UI
 
@@ -293,6 +295,8 @@ The boards of the design export are the reference.
 - Compiling a project's real components into the design system: cards are always static HTML.
 - Uploading to Claude Design. The folder follows its layout, but moonlet offers no upload.
 - Design systems on remote hosts. Sources must be on this Mac.
+- Agents other than Claude Code. The sync relies on Claude Code's skills, subagents, `--add-dir` and its reading of screenshots (ADR 0013).
+- Screenshots from outside the app (headless Chrome, Playwright).
 - Sharing a design system between workspaces. Copying the folder works, but moonlet offers no UI for it.
 
 ## Test plan
@@ -328,7 +332,4 @@ X64 ships in entries 2–6 of the stack in [X65's delivery plan](X65-design-mode
 
 ## Open questions
 
-- An ADR for "designs and design systems are daemon-owned files under `~/.moonlet/design/`, per workspace, laid out like Claude Design's design systems"?
-- Snapshots for `design snap` and `--render`: can Tauri reach WKWebView's `takeSnapshot` from Rust, for an offscreen webview? If not, the skill falls back to Playwright as design-sync does, asking before the roughly 200 MB install.
-- Should the sync also run on Codex, or only Claude Code (`--add-dir`, subagents and skills differ)?
-- design-sync never writes a lookalike: its cards render the real compiled components. Static cards are lookalikes by design, so grading against the real render matters more here. Should moonlet offer to run the project's Storybook or dev server for the sync when the project has one?
+- Snapshotting a WKWebView in a window placed off screen from Tauri (`with_webview`, `takeSnapshot`) needs a spike before entry 6 of the delivery plan. If an off-screen window renders blank, the fallback is a window on screen behind the main window, at zero opacity.
