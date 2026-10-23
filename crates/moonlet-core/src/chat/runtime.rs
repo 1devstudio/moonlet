@@ -33,6 +33,8 @@ pub struct ChatCreate {
     pub env: BTreeMap<String, String>,
     /// Extra directories the agent may work in from the start (X29).
     pub add_dirs: Vec<String>,
+    /// Claude settings for this chat alone (X64), as JSON.
+    pub settings: Option<String>,
 }
 
 /// What is persisted per chat.
@@ -169,7 +171,7 @@ impl ChatManager {
         // Only Claude has a permission mode.
         let mode = req.mode.filter(|_| req.agent == "claude");
         let add_dirs = req.add_dirs.iter().map(|d| check_dir(d)).collect::<Result<Vec<_>>>()?;
-        let cfg = ChatConfig { agent: req.agent.clone(), model: req.model, effort: req.effort, mode, resume: None, name: req.name, cwd: cwd.display().to_string(), add_dirs: add_dirs.clone(), config_dir: None };
+        let cfg = ChatConfig { agent: req.agent.clone(), model: req.model, effort: req.effort, mode, resume: None, name: req.name, cwd: cwd.display().to_string(), add_dirs: add_dirs.clone(), settings: req.settings, config_dir: None };
         let (program, args) = adapter.command(&cfg);
         let mut command = vec![program];
         command.extend(args);

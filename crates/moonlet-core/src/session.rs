@@ -1093,6 +1093,7 @@ impl SessionManager {
                 // The profile is looked up at each start instead (X33).
                 env: req.env.iter().filter(|(k, _)| *k != crate::profiles::CONFIG_DIR_VAR).map(|(k, v)| (k.clone(), v.clone())).collect(),
                 add_dirs: req.add_dirs.clone(),
+                settings: None,
             })?,
             None => self.terminals.create(req.clone())?,
         };

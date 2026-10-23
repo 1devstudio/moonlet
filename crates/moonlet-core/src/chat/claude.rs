@@ -312,6 +312,9 @@ impl Adapter for Claude {
         for d in &cfg.add_dirs {
             args.extend(["--add-dir".into(), d.clone()]);
         }
+        if let Some(s) = &cfg.settings {
+            args.extend(["--settings".into(), s.clone()]);
+        }
         ("claude".into(), args)
     }
 
@@ -784,6 +787,18 @@ mod tests {
         let cfg = ChatConfig { agent: "claude".into(), add_dirs: vec!["/work/shared".into(), "/tmp/notes".into()], cwd: "/r".into(), ..Default::default() };
         let (_, args) = a.command(&cfg);
         assert!(args.join(" ").contains("--add-dir /work/shared --add-dir /tmp/notes"), "{args:?}");
+    }
+
+    #[test]
+    fn chat_settings_become_a_settings_flag() {
+        let a = Claude::default();
+        let settings = r#"{"permissions":{"deny":["Edit(//src/**)"]}}"#;
+        let cfg = ChatConfig { agent: "claude".into(), cwd: "/r".into(), settings: Some(settings.into()), ..Default::default() };
+        let (_, args) = a.command(&cfg);
+        let at = args.iter().position(|a| a == "--settings").expect("--settings");
+        assert_eq!(args[at + 1], settings);
+        let (_, plain) = a.command(&ChatConfig { agent: "claude".into(), cwd: "/r".into(), ..Default::default() });
+        assert!(!plain.contains(&"--settings".to_string()));
     }
 
     #[test]
