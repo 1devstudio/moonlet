@@ -133,6 +133,11 @@ pub fn forget(root: &Path, card: &str) -> Result<()> {
     save(root, &anchor)
 }
 
+/// The anchor written by the last sync, if there is one that reads.
+pub fn read(root: &Path) -> Option<Anchor> {
+    load(root).ok().flatten()
+}
+
 /// The anchor as it would be written now.
 /// `exceptions` holds each card's settings in `config.toml`, by card path:
 /// a change to them changes the card's `source_key`.
