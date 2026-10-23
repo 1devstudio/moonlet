@@ -33,11 +33,43 @@ const SKIPPED: [&str; 20] = [
     "mask",
 ];
 
-/// One element of the page's body that should carry a `data-mid`.
+/// One element of the page's body (the body included) that should carry a `data-mid`.
 struct Seen {
     line: usize,
     tag: String,
     mid: Option<String>,
+}
+
+/// Every `data-mid` in the page, and those held by elements the walk skips
+/// (the inside of an `<svg>`, or outside the body), which no other element
+/// may take.
+fn all_ids(html: &str) -> (Vec<String>, HashSet<String>) {
+    let ids = RefCell::new(Vec::new());
+    let walked = RefCell::new(HashSet::new());
+    let settings = lol_html::Settings::new()
+        .append_element_content_handler(lol_html::element!("[data-mid]", |el| {
+            if let Some(id) = el.get_attribute("data-mid") {
+                ids.borrow_mut()
+                    .push((el.source_location().bytes().start, id));
+            }
+            Ok(())
+        }))
+        .append_element_content_handler(lol_html::element!("body, body *", |el| {
+            if !SKIPPED.contains(&el.tag_name().as_str()) {
+                walked
+                    .borrow_mut()
+                    .insert(el.source_location().bytes().start);
+            }
+            Ok(())
+        }));
+    let _ = lol_html::rewrite_str(html, settings);
+    let (ids, walked) = (ids.into_inner(), walked.into_inner());
+    let reserved = ids
+        .iter()
+        .filter(|(at, _)| !walked.contains(at))
+        .map(|(_, id)| id.clone())
+        .collect();
+    (ids.into_iter().map(|(_, id)| id).collect(), reserved)
 }
 
 /// Visits every element of the body that should carry an id, in document
@@ -46,7 +78,7 @@ fn walk(html: &str, mut f: impl FnMut(&Seen) -> Option<String>) -> (String, Vec<
     let seen = RefCell::new(Vec::new());
     let line_of = |byte: usize| html[..byte.min(html.len())].matches('\n').count() + 1;
     let settings = lol_html::Settings::new().append_element_content_handler(lol_html::element!(
-        "body *",
+        "body, body *",
         |el| {
             let tag = el.tag_name();
             if SKIPPED.contains(&tag.as_str()) {
@@ -71,14 +103,9 @@ fn walk(html: &str, mut f: impl FnMut(&Seen) -> Option<String>) -> (String, Vec<
 /// Gives every element of the body that lacks an id, or repeats an earlier
 /// one, the next free `m<n>` in document order. Nothing else changes.
 pub fn fix_page(html: &str) -> String {
-    let (_, seen) = walk(html, |_| None);
-    let mut next = seen
-        .iter()
-        .filter_map(|s| number(s.mid.as_deref()?))
-        .max()
-        .unwrap_or(0)
-        + 1;
-    let mut ids = HashSet::new();
+    let (every, reserved) = all_ids(html);
+    let mut next = every.iter().filter_map(|id| number(id)).max().unwrap_or(0) + 1;
+    let mut ids = reserved;
     walk(html, |s| match &s.mid {
         Some(id) if ids.insert(id.clone()) => None,
         _ => {
@@ -98,7 +125,7 @@ fn number(id: &str) -> Option<u64> {
 
 /// Missing and repeated `data-mid`s in a design page.
 pub fn check_page(path_rel: &str, html: &str) -> Vec<Problem> {
-    let mut ids = HashSet::new();
+    let mut ids = all_ids(html).1;
     let (_, seen) = walk(html, |_| None);
     let mut problems = Vec::new();
     for s in seen {
@@ -144,6 +171,7 @@ mod tests {
         assert_eq!(
             got,
             vec![
+                (3, Kind::MissingMid, "<body> has no data-mid".into()),
                 (
                     6,
                     Kind::DuplicateMid,
@@ -161,15 +189,35 @@ mod tests {
             fixed,
             "<!doctype html>
 <html><head><title>Settings</title><style>body { margin: 0 }</style></head>
-<body>
+<body data-mid=\"m5\">
 <main data-mid=\"m1\">
   <h1 data-mid=\"m2\">Settings</h1>
-  <section data-mid=\"m5\"><p data-mid=\"m6\">Git</p></section>
+  <section data-mid=\"m6\"><p data-mid=\"m7\">Git</p></section>
   <svg data-mid=\"m4\" viewBox=\"0 0 8 8\"><path d=\"M0 0h8\"/></svg>
 </main>
 </body></html>
 "
         );
         assert_eq!(check_page("pages/index.html", &fixed), vec![]);
+    }
+
+    #[test]
+    fn the_body_needs_an_id_too_and_fix_never_reuses_an_id_an_svg_part_holds() {
+        let page = "<!doctype html>\n<body>\n<main data-mid=\"m1\"><svg data-mid=\"m3\"><path data-mid=\"m2\" d=\"M0 0\"/></svg><p>Git</p></main>\n</body>\n";
+        let got: Vec<(usize, String)> = check_page("pages/index.html", page)
+            .into_iter()
+            .map(|p| (p.line, p.message))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (2, "<body> has no data-mid".to_string()),
+                (3, "<p> has no data-mid".to_string())
+            ]
+        );
+        assert_eq!(
+            fix_page(page),
+            "<!doctype html>\n<body data-mid=\"m4\">\n<main data-mid=\"m1\"><svg data-mid=\"m3\"><path data-mid=\"m2\" d=\"M0 0\"/></svg><p data-mid=\"m5\">Git</p></main>\n</body>\n"
+        );
     }
 }
