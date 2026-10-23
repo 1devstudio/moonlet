@@ -262,6 +262,15 @@ pub fn check(heavy: &HeavyConfig) -> Result<(), String> {
             return Err(format!("env: `{name}` is not a variable name"));
         }
     }
+    if let Some(script) = &heavy.machine_setup {
+        let path = std::path::Path::new(script.trim());
+        let inside = !path.is_absolute()
+            && path.components().all(|c| matches!(c, std::path::Component::Normal(_) | std::path::Component::CurDir))
+            && path.components().any(|c| matches!(c, std::path::Component::Normal(_)));
+        if !inside {
+            return Err(format!("machine_setup: `{script}` is not a file in the repository"));
+        }
+    }
     for out in &heavy.outputs {
         let path = std::path::Path::new(out.trim());
         let escapes = path.is_absolute()
@@ -459,6 +468,7 @@ mod tests {
                 os: HeavyOs::Linux,
                 env: vec!["CI".into(), "NPM_TOKEN".into()],
                 outputs: vec!["coverage".into()],
+                machine_setup: None,
             }
         );
         // No table reads as no heavy commands, on any system.
@@ -625,6 +635,22 @@ mod tests {
             commands: vec!["pnpm test".into()],
             outputs: outputs.iter().map(|s| s.to_string()).collect(),
             ..HeavyConfig::default()
+        }
+    }
+
+    #[test]
+    fn machine_setup_is_a_path_in_the_repository() {
+        let with = |p: &str| HeavyConfig {
+            machine_setup: Some(p.into()),
+            ..HeavyConfig::default()
+        };
+        assert_eq!(check(&with("scripts/ci-deps.sh")), Ok(()));
+        for bad in ["../ci.sh", "/etc/ci.sh", "scripts/../../ci.sh", ""] {
+            assert_eq!(
+                check(&with(bad)),
+                Err(format!("machine_setup: `{bad}` is not a file in the repository")),
+                "{bad}"
+            );
         }
     }
 

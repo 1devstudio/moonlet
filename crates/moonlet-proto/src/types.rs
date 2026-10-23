@@ -269,6 +269,10 @@ pub struct HeavyConfig {
     /// Ignored paths brought back after a run.
     #[serde(default)]
     pub outputs: Vec<String>,
+    /// A script in the repository each new cloud machine runs as root
+    /// (X63). Read-only in the app: `heavy.set` keeps it as it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine_setup: Option<String>,
 }
 
 /// Which workers may take a project's heavy commands (X62).
