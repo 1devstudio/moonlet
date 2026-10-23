@@ -1906,3 +1906,78 @@ async fn a_projects_origin_is_read_again_on_start() {
         ]
     );
 }
+
+/// Design systems over RPC (X64): create one from a project, check it, record
+/// a sync and list it.
+#[tokio::test]
+async fn design_systems_over_rpc() {
+    use moonlet_proto::types::Project;
+    let d = TestDaemon::start().await;
+    let repo = d.home.path().join("repo");
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    std::fs::write(repo.join("src/ui.tsx"), "export const Button = () => null;\n").unwrap();
+    let git = |args: &[&str]| {
+        assert!(Command::new("git").args(args).current_dir(&repo).output().unwrap().status.success(), "git {args:?}");
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["add", "-A"]);
+    git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init"]);
+    let head = String::from_utf8(Command::new("git").args(["rev-parse", "--short", "HEAD"]).current_dir(&repo).output().unwrap().stdout).unwrap();
+
+    let mut c = d.client().await;
+    // A workspace that does not exist has no design folder.
+    let none = c
+        .request::<_, serde_json::Value>(methods::DESIGN_SYSTEMS, serde_json::json!({"workspace": "w-none"}))
+        .await;
+    assert!(none.is_err());
+    let ws: moonlet_proto::types::Workspace =
+        c.request(methods::WORKSPACE_CREATE, serde_json::json!({"name": "1devstudio", "color": "clay"})).await.unwrap();
+    let w = ws.id.as_str();
+    let project: Project = c.request(methods::PROJECT_ADD, serde_json::json!({"path": repo})).await.unwrap();
+    let slug: String = c
+        .request(
+            methods::DESIGN_SYSTEM_CREATE,
+            serde_json::json!({"workspace": w, "name": "moonlet desktop", "sources": [{"project": project.id}]}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(slug, "moonlet-desktop");
+    let dir = d.home.path().join("design").join(w).join("systems/moonlet-desktop");
+    for (path, text) in [
+        ("styles.css", "@import \"components.css\";\n"),
+        ("components.css", ".btn { color: var(--color-fg); }\n"),
+        ("components/buttons/button/button.html", "<!-- @dsCard group=\"Buttons\" source=\"src/ui.tsx\" -->\n<button class=\"btn\">Run</button>\n"),
+    ] {
+        std::fs::create_dir_all(dir.join(path).parent().unwrap()).unwrap();
+        std::fs::write(dir.join(path), text).unwrap();
+    }
+    let problems: serde_json::Value =
+        c.request(methods::DESIGN_CHECK, serde_json::json!({"workspace": w, "slug": slug})).await.unwrap();
+    assert_eq!(problems[0]["path"], "components.css");
+    assert_eq!(problems[0]["kind"], "unknown_token");
+    assert!(dir.join("README.md").is_file());
+
+    let _: bool = c
+        .request(methods::DESIGN_SYSTEM_PROGRESS, serde_json::json!({"workspace": w, "slug": slug, "step": "cards", "summary": "1 of 1"}))
+        .await
+        .unwrap();
+    let _: bool = c.request(methods::DESIGN_SYSTEM_SYNCED, serde_json::json!({"workspace": w, "slug": slug})).await.unwrap();
+    let list: serde_json::Value = c.request(methods::DESIGN_SYSTEMS, serde_json::json!({"workspace": w})).await.unwrap();
+    assert_eq!(list[0]["name"], "moonlet desktop");
+    assert_eq!(list[0]["synced_commit"], head.trim());
+    assert_eq!(list[0]["cards"], 1);
+    assert_eq!(list[0]["step"], serde_json::Value::Null);
+
+    let file: serde_json::Value = c
+        .request(methods::DESIGN_FILE, serde_json::json!({"workspace": w, "path": "systems/moonlet-desktop/styles.css"}))
+        .await
+        .unwrap();
+    assert_eq!(file["content_type"], "text/css; charset=utf-8");
+    let refused = c
+        .request::<_, serde_json::Value>(methods::DESIGN_FILE, serde_json::json!({"workspace": w, "path": "../../git.toml"}))
+        .await;
+    assert!(refused.is_err());
+
+    let _: bool = c.request(methods::DESIGN_SYSTEM_REMOVE, serde_json::json!({"workspace": w, "slug": slug})).await.unwrap();
+    assert!(!dir.exists());
+}
