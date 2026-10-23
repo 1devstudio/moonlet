@@ -378,14 +378,14 @@ impl Machines {
         // Through links, too: the file must be in the folder.
         let file = match root.join(&path).canonicalize() {
             Ok(f) => f,
-            Err(_) => return refuse(format!("machine_setup: {path} is missing")),
+            Err(_) => return refuse(format!("{path} is missing")),
         };
         if !file.starts_with(&root) || !file.is_file() {
-            return refuse(format!("machine_setup: {path} is outside the repository"));
+            return refuse(format!("{path} is outside the repository"));
         }
         let size = file.metadata().map_or(0, |m| m.len());
         if size > SETUP_MAX {
-            return refuse(format!("machine_setup: {path} is over 16 KiB"));
+            return refuse(format!("{path} is over 16 KiB"));
         }
         let content = std::fs::read_to_string(&file)
             .map_err(|e| RpcError::new("machine_setup", e.to_string()))?;
