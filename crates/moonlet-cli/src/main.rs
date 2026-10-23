@@ -4,6 +4,7 @@
 //! `moonlet ls`, `moonlet pane run` and `moonlet agent start`; agents open sessions
 //! in other projects with `moonlet session new` (X22).
 
+mod hook;
 mod session;
 mod term;
 
@@ -55,6 +56,14 @@ enum Cmd {
         agent: HookAgent,
         /// Payload passed as an argument (Codex); Claude Code uses stdin.
         payload: Option<String>,
+    },
+    /// Run a heavy command (X62). The `PreToolUse` hook rewrites an agent's
+    /// approved heavy commands to this; with no central host to route it,
+    /// the command runs here.
+    Exec {
+        /// The command and its arguments, after `--`.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
+        command: Vec<String>,
     },
     /// Install, inspect or remove agent hooks.
     Hooks {
@@ -249,6 +258,9 @@ fn main() {
         .enable_all()
         .build()
         .expect("runtime");
+    if let Cmd::Exec { command } = &cli.cmd {
+        exec_here(command);
+    }
     if let Cmd::Hook { agent, payload } = cli.cmd {
         // Hooks run inside every agent session, moonlet or not: stay silent and fast.
         let _ = rt.block_on(async {
@@ -268,10 +280,15 @@ async fn connect(socket: &std::path::Path) -> Result<Client> {
         .context("is the moonlet daemon running? (moonletd start)")
 }
 
+/// Runs `command` in place of this process, as the shell would have.
+fn exec_here(command: &[String]) -> ! {
+    use std::os::unix::process::CommandExt;
+    let e = std::process::Command::new(&command[0]).args(&command[1..]).exec();
+    eprintln!("moonlet: cannot run {}: {e}", command[0]);
+    std::process::exit(127);
+}
+
 async fn hook(socket: &std::path::Path, agent: HookAgent, payload: Option<String>) -> Result<()> {
-    let Some(session) = terminal_from_env() else {
-        return Ok(());
-    };
     let raw = match payload {
         Some(p) => p,
         None => {
@@ -281,6 +298,13 @@ async fn hook(socket: &std::path::Path, agent: HookAgent, payload: Option<String
         }
     };
     let value: serde_json::Value = serde_json::from_str(&raw).unwrap_or_default();
+    // Routing comes first: Claude Code waits for this answer (X62).
+    if matches!(agent, HookAgent::Claude) {
+        let _ = route(socket, &value).await;
+    }
+    let Some(session) = terminal_from_env() else {
+        return Ok(());
+    };
     let (mapped, name) = match agent {
         HookAgent::Claude => (hooks::map_claude_event(&value), "claude"),
         HookAgent::Codex => (hooks::map_codex_event(&value), "codex"),
@@ -304,9 +328,37 @@ async fn hook(socket: &std::path::Path, agent: HookAgent, payload: Option<String
     Ok(())
 }
 
+/// Prints the answer that sends an approved heavy command of an agent in a
+/// session through `moonlet exec`; prints nothing otherwise.
+async fn route(socket: &std::path::Path, payload: &serde_json::Value) -> Result<()> {
+    let Ok(session) = std::env::var("MOONLET_SESSION") else {
+        return Ok(());
+    };
+    let Some(ask) = hook::asks(payload) else {
+        return Ok(());
+    };
+    let mut c = connect(socket).await?;
+    let routed: methods::ExecRouted = c
+        .request(
+            methods::EXEC_ROUTE,
+            methods::ExecRoute {
+                session,
+                command: ask.command,
+                cwd: ask.cwd,
+                tool_use_id: ask.tool_use_id,
+            },
+        )
+        .await?;
+    if routed.route {
+        let moonlet = std::env::current_exe()?;
+        println!("{}", hook::rewrite(payload, &moonlet.display().to_string()));
+    }
+    Ok(())
+}
+
 async fn run(cmd: Cmd, socket: PathBuf) -> Result<()> {
     match cmd {
-        Cmd::Hook { .. } => unreachable!(),
+        Cmd::Hook { .. } | Cmd::Exec { .. } => unreachable!(),
         Cmd::Notify {
             state,
             message,
