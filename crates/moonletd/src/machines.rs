@@ -180,6 +180,8 @@ pub struct Machines {
     usage: Mutex<moonlet_cloud::usage::Usage>,
     /// Held while a machine is checked against the limits and recorded.
     making: Mutex<()>,
+    /// Wakes the removals waiting between destroy attempts: **Retry**.
+    retry: tokio::sync::Notify,
     fake: Option<Arc<crate::cloud_fake::Fake>>,
     net: Arc<dyn Transport>,
     /// When `tailscale status` was last asked.
@@ -234,6 +236,7 @@ impl Machines {
             sessions,
             records: Mutex::new(records),
             usage: Mutex::new(usage),
+            retry: tokio::sync::Notify::new(),
             making: Mutex::new(()),
             fake: crate::cloud_fake::from_env().map(Arc::new),
             net,
@@ -1030,7 +1033,8 @@ impl Machines {
         }
     }
 
-    /// `cloud.down`: removes machine `machine` (id or name).
+    /// `cloud.down`: removes machine `machine` (id or name). On a machine
+    /// already being removed, the next destroy attempt is now.
     pub fn down(&self, machine: &str) -> Result<bool, RpcError> {
         let r = self
             .records
@@ -1040,6 +1044,10 @@ impl Machines {
             .find(|r| (r.shown.id == machine || r.shown.name == machine) && r.active())
             .cloned()
             .ok_or_else(|| RpcError::new("not_found", format!("no machine {machine}")))?;
+        if r.shown.state == "removing" {
+            self.retry.notify_waiters();
+            return Ok(true);
+        }
         self.retire(&r.shown.id, "removed on request".into());
         Ok(true)
     }
@@ -1156,8 +1164,10 @@ impl Machines {
                         }
                     }
                 }
-                tokio::time::sleep(wait).await;
-                wait = (wait * 2).min(Duration::from_secs(300));
+                tokio::select! {
+                    _ = tokio::time::sleep(wait) => wait = (wait * 2).min(Duration::from_secs(300)),
+                    _ = self.retry.notified() => wait = destroy_backoff(),
+                }
             }
         }
         let now = now_ms();
