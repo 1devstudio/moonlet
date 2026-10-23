@@ -42,32 +42,41 @@ fn count(re: &Regex, text: &str) -> u64 {
 }
 
 fn tests(text: &str) -> Option<String> {
-    let (failed, total) = if let Some(c) = VITEST.captures_iter(text).last() {
-        (count(&FAILED, &c[1]), c[2].parse().ok()?)
+    // Skipped tests count in a total, but never as passed.
+    let (failed, passed, total) = if let Some(c) = VITEST.captures_iter(text).last() {
+        (
+            count(&FAILED, &c[1]),
+            count(&PASSED, &c[1]),
+            c[2].parse().ok()?,
+        )
     } else if let Some(c) = JEST.captures_iter(text).last() {
-        (count(&FAILED, &c[1]), c[2].parse().ok()?)
+        (
+            count(&FAILED, &c[1]),
+            count(&PASSED, &c[1]),
+            c[2].parse().ok()?,
+        )
     } else if CARGO.is_match(text) {
         let (mut passed, mut failed) = (0u64, 0u64);
         for c in CARGO.captures_iter(text) {
             passed += c[1].parse::<u64>().ok()?;
             failed += c[2].parse::<u64>().ok()?;
         }
-        (failed, passed + failed)
+        (failed, passed, passed + failed)
     } else if let Some(c) = PYTEST
         .captures_iter(text)
         .filter(|c| PASSED.is_match(&c[1]) || FAILED.is_match(&c[1]))
         .last()
     {
-        let failed = count(&FAILED, &c[1]);
-        (failed, failed + count(&PASSED, &c[1]))
+        let (failed, passed) = (count(&FAILED, &c[1]), count(&PASSED, &c[1]));
+        (failed, passed, failed + passed)
     } else {
         return None;
     };
-    let noun = if total == 1 { "test" } else { "tests" };
+    let noun = |n: u64| if n == 1 { "test" } else { "tests" };
     Some(if failed > 0 {
-        format!("{failed} of {total} {noun} failed")
+        format!("{failed} of {total} {} failed", noun(total))
     } else {
-        format!("{total} {noun} passed")
+        format!("{passed} {} passed", noun(passed))
     })
 }
 
@@ -110,6 +119,23 @@ mod tests {
     use super::*;
 
     /// X62's worked examples.
+    #[test]
+    fn skipped_tests_are_not_counted_as_passed() {
+        assert_eq!(
+            summarise("      Tests  1 passed | 2 skipped (3)", None).as_deref(),
+            Some("1 test passed")
+        );
+        assert_eq!(
+            summarise("Tests:       2 skipped, 1 passed, 3 total", None).as_deref(),
+            Some("1 test passed")
+        );
+        // A failure still counts against every test that ran or not.
+        assert_eq!(
+            summarise("      Tests  1 failed | 1 passed | 2 skipped (4)", None).as_deref(),
+            Some("1 of 4 tests failed")
+        );
+    }
+
     #[test]
     fn summarises_as_in_the_worked_examples() {
         let rows: [(&str, Option<&str>); 10] = [
