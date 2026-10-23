@@ -21,6 +21,12 @@ use crate::server::Conn;
 
 /// How long a cancelled command has between SIGTERM and SIGKILL.
 const GRACE: Duration = Duration::from_secs(5);
+/// How long output may still come once the command has exited: a process
+/// it left in the background that keeps the pipes open is then stopped.
+const DRAIN: Duration = Duration::from_secs(1);
+/// Output queued for a client that is not reading, before the command is
+/// held back until it reads.
+const MAX_QUEUED: usize = 4 * 1024 * 1024;
 
 #[derive(Default)]
 pub struct Runs {
@@ -106,14 +112,18 @@ async fn execute(
         }
     };
     let group = child.id().map(|id| Pid::from_raw(id as i32));
-    let stdout = pump(child.stdout.take(), 1, send);
-    let stderr = pump(child.stderr.take(), 2, send);
-    let wait = async {
+    let full = || conn.tx.queued() > MAX_QUEUED && !conn.is_gone();
+    let (out, err) = (child.stdout.take(), child.stderr.take());
+    let pumps = async { tokio::join!(pump(out, 1, send, &full), pump(err, 2, send, &full)) };
+    tokio::pin!(pumps);
+    let mut pumped = false;
+    let status = {
         let mut stopping: Option<tokio::time::Instant> = None;
         let mut tick = tokio::time::interval(Duration::from_millis(250));
         loop {
             tokio::select! {
-                status = child.wait() => return status,
+                status = child.wait() => break status,
+                _ = &mut pumps, if !pumped => pumped = true,
                 _ = cancel.notified(), if stopping.is_none() => {
                     signal(group, Signal::SIGTERM);
                     stopping = Some(tokio::time::Instant::now());
@@ -130,7 +140,11 @@ async fn execute(
             }
         }
     };
-    let (status, (), ()) = tokio::join!(wait, stdout, stderr);
+    // What it left running in the background ends with it.
+    if !pumped && tokio::time::timeout(DRAIN, &mut pumps).await.is_err() {
+        signal(group, Signal::SIGKILL);
+        let _ = tokio::time::timeout(DRAIN, &mut pumps).await;
+    }
     match status {
         Ok(s) => {
             use std::os::unix::process::ExitStatusExt;
@@ -149,15 +163,20 @@ fn signal(group: Option<Pid>, sig: Signal) {
     }
 }
 
-/// Sends what `from` writes as `stream` until it closes.
+/// Sends what `from` writes as `stream` until it closes. While `full`, it
+/// reads no more, so the command waits for a client that is not reading.
 async fn pump(
     from: Option<impl tokio::io::AsyncRead + Unpin>,
     stream: u8,
     send: &(impl Fn(u8, Vec<u8>) -> bool + Sync),
+    full: &(impl Fn() -> bool + Sync),
 ) {
     let Some(mut from) = from else { return };
     let mut buf = vec![0u8; 64 * 1024];
     loop {
+        while full() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
         match from.read(&mut buf).await {
             Ok(0) | Err(_) => return,
             Ok(n) => {

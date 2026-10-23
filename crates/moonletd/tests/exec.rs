@@ -687,6 +687,43 @@ async fn a_command_killed_by_a_signal_exits_with_128_plus_it() {
 }
 
 #[tokio::test]
+async fn a_command_that_leaves_a_background_process_still_ends() {
+    let c = central_with(RUN_CONFIG, &[]).await;
+    c.approve_runs().await;
+    let started = std::time::Instant::now();
+    let ran = tokio::time::timeout(
+        Duration::from_secs(10),
+        c.run(&["sh", "-c", "sleep 30 & echo hi"]),
+    )
+    .await
+    .expect("the run waited for the background process");
+    assert_eq!((ran.stdout.as_str(), ran.status), ("hi\n", 0));
+    assert!(started.elapsed() < Duration::from_secs(5));
+}
+
+#[tokio::test]
+async fn a_client_that_stops_reading_holds_the_command_back() {
+    let c = central_with(RUN_CONFIG, &[]).await;
+    c.approve_runs().await;
+    let worktree = c.worktree.clone();
+    // 100 MB of output the client never reads: the command waits for it,
+    // rather than the daemon keeping it all.
+    let (client, _run) = c
+        .start(
+            &["sh", "-c", "head -c 100000000 /dev/zero; touch done"],
+            &worktree,
+            json!({}),
+        )
+        .await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert!(
+        !worktree.join("done").exists(),
+        "the command ran ahead of its reader"
+    );
+    drop(client);
+}
+
+#[tokio::test]
 async fn a_routed_command_reads_an_empty_stdin() {
     let c = central_with(RUN_CONFIG, &[]).await;
     c.approve_runs().await;
