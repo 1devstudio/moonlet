@@ -1,0 +1,23 @@
+{
+  "server_types": [
+    {
+      "id": 5, "name": "cpx41", "description": "CPX 41", "cores": 8, "memory": 16.0, "disk": 240, "deprecated": false, "deprecation": null,
+      "storage_type": "local", "cpu_type": "shared", "architecture": "x86",
+      "prices": [
+        { "location": "fsn1", "price_hourly": { "net": "0.0408", "gross": "0.0486" }, "price_monthly": { "net": "25.4900", "gross": "30.3331" } },
+        { "location": "nbg1", "price_hourly": { "net": "0.0408", "gross": "0.0486" }, "price_monthly": { "net": "25.4900", "gross": "30.3331" } }
+      ]
+    },
+    {
+      "id": 45, "name": "cax21", "description": "CAX21", "cores": 4, "memory": 8.0, "disk": 80, "deprecated": false, "deprecation": null,
+      "storage_type": "local", "cpu_type": "shared", "architecture": "arm",
+      "prices": [{ "location": "fsn1", "price_hourly": { "net": "0.0104", "gross": "0.0124" }, "price_monthly": { "net": "6.4900", "gross": "7.7231" } }]
+    },
+    {
+      "id": 96, "name": "ccx13", "description": "CCX13", "cores": 2, "memory": 8.0, "disk": 80, "deprecated": false, "deprecation": null,
+      "storage_type": "local", "cpu_type": "dedicated", "architecture": "x86",
+      "prices": [{ "location": "ash", "price_hourly": { "net": "0.0224", "gross": "0.0267" }, "price_monthly": { "net": "13.9900", "gross": "16.6481" } }]
+    }
+  ],
+  "meta": { "pagination": { "page": 1, "per_page": 50, "previous_page": null, "next_page": null, "last_page": 1, "total_entries": 3 } }
+}
