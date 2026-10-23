@@ -1,11 +1,13 @@
 // A task's comments (X66): read from its tracker (or gh for a GitHub issue),
-// listed at the end of the Task detail and the Task tab, and posted from there.
+// listed in the Task detail and the Task tab, and posted from there.
 
 import { create } from "zustand";
 import { hostsApi, rpc } from "./daemon";
 import { ago } from "./mobile";
 import { type GhComments, M } from "./protocol";
 import { type Task, taskId, trackerName } from "./tasks";
+import { errorMessage } from "./store";
+import { recordActivity } from "./tasksStore";
 
 export interface TaskComment {
   id: string;
@@ -30,6 +32,12 @@ export interface CommentsEntry {
   loadedFor?: string;
   /** What the load under way is for. */
   loadingFor?: string;
+  /** A comment is being posted. */
+  posting?: boolean;
+  /** Why the last comment was refused; it stays in the box. */
+  postError?: string | null;
+  /** What the user is writing in the box, kept per task. */
+  draft?: string;
 }
 
 export const useComments = create<{ byTask: Record<string, CommentsEntry> }>(() => ({ byTask: {} }));
@@ -74,7 +82,7 @@ export async function loadComments(task: Task, at: Where) {
     const got = await fetchComments(task, at);
     if (latest.get(id) === n) put(task, { comments: got.comments, more: got.more, loading: false, error: null, loadedFor: v });
   } catch (e) {
-    if (latest.get(id) === n) put(task, { loading: false, error: e instanceof Error ? e.message : String(e) });
+    if (latest.get(id) === n) put(task, { loading: false, error: errorMessage(e) });
   }
 }
 
@@ -87,6 +95,43 @@ export function ensureComments(task: Task, at: Where): Promise<void> {
   const v = version(task, at);
   if (e && (e.loading ? e.loadingFor === v : e.loadedFor === v)) return Promise.resolve();
   return loadComments(task, at);
+}
+
+/** Whether the box holds something to post. */
+export const canPost = (text: string) => text.trim() !== "";
+
+/** What the user typed in a task's box. */
+export function setDraft(task: Task, text: string) {
+  put(task, { draft: text });
+}
+
+/**
+ * Posts the task's draft, written in Markdown, then lists it (X66). Only ever
+ * on the user's press: a refused comment is not sent again by itself. It stays
+ * posting until the comments show it, and clears the draft only if it is
+ * still the text that was sent.
+ */
+export async function postComment(task: Task, at: Where, now = Date.now()): Promise<boolean> {
+  const text = entry(task)?.draft ?? "";
+  if (!canPost(text) || entry(task)?.posting) return false;
+  put(task, { posting: true, postError: null });
+  try {
+    if (task.github) {
+      if (!at.path) throw new Error(`No project in this workspace has ${task.github.repo} as its origin`);
+      await rpc(at.host, M.ghIssueComment, { path: at.path, number: task.github.number, body: text });
+    } else if (task.tracker) {
+      await hostsApi.trackerComment(task.connection, task.tracker.id, text);
+    } else {
+      throw new Error(`${task.key} takes no comments from moonlet`);
+    }
+  } catch (e) {
+    put(task, { posting: false, postError: errorMessage(e) });
+    return false;
+  }
+  recordActivity(task, "You commented", now);
+  await loadComments(task, at);
+  put(task, { posting: false, draft: entry(task)?.draft === text ? "" : entry(task)?.draft });
+  return true;
 }
 
 export interface CommentsView {

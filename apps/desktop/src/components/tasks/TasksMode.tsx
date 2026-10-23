@@ -439,10 +439,10 @@ function TaskDetail({ host, workspaceId, card }: { host: string; workspaceId: st
             </IconButton>
           </div>
         ))}
-        <Activity task={card.task} />
         <div className="mt-4">
           <TaskComments host={host} workspaceId={workspaceId} task={card.task} />
         </div>
+        <Activity task={card.task} />
       </div>
     </aside>
   );
