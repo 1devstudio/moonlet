@@ -163,7 +163,7 @@ export function CloudSection({ host, project, cloud, machineSetup }: { host: str
           </>
         )}
         <div className="flex items-center gap-3 px-4 py-3">
-          <Status line={{ tone: all.some((m) => m.project === project.name) ? "done" : "muted", text: projectCloudFooter(all, project.name) }} className="flex-1" />
+          <Status line={{ tone: all.some((m) => m.project_key === cloud.key) ? "done" : "muted", text: projectCloudFooter(all, cloud.key ?? "", project.name) }} className="flex-1" />
           <button type="button" className="ui-text-12 text-accent hover:underline" onClick={() => void goSettings({ page: "workers" })}>
             Workers
           </button>
