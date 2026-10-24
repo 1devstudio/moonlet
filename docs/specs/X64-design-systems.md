@@ -122,6 +122,8 @@ A design system belongs to a moonlet workspace, so every project and design in t
   - `source` lists the source files, relative to the source project, that the card was made from.
   - `viewport` defaults to 900x700.
   - The folder name is the group's slug.
+
+  Parsing is in `design/card.rs` (a_moonlet_card_marker_names_its_group_name_sources_and_viewport, a_design_sync_marker_with_only_a_group_takes_the_default_viewport, a_marker_not_on_the_first_line_or_without_a_leading_group_is_rejected).
 - [ ] A card links only `../../../styles.css`. It has no script and no URL outside the design system.
 - [ ] A card shows its variants as a labelled grid (`repeat(auto-fit, minmax(320px, 1fr))`, bordered cells clipping overflow). Each variant is a cell `<section class="ds-cell" data-snippet="<group>/<name>/<variant>"><h4>variant</h4><div class="ds-mount">…</div></section>`.
   - A wide component uses `mode: column` (one cell per row).
@@ -171,18 +173,19 @@ A design system belongs to a moonlet workspace, so every project and design in t
 ### Check (`moonlet design check`)
 
 - [ ] `"$MOONLET_BIN" design check <system>` reports, per file:
-  - a missing or malformed `@dsCard` line
+  - a missing `styles.css`
+  - a missing or malformed `@dsCard` line: it must be the whole first line, `group="…"` first, then only `name="value"` pairs
   - a `var(--x)` that no file in the `styles.css` closure defines
-  - an `@import` or `<link>` that does not resolve
-  - a font family with no `@font-face`
-  - a URL outside the design system
-  - a `<script>` or `on*` attribute
+  - an `@import`, `<link>`, `src` or CSS `url()` (fonts included) that names no file; every `@import` and `url()` of a line is checked
+  - a font family used first in a stack with no `@font-face`, also when the declaration spans lines
+  - a URL outside the design system: any scheme but `data:`, `mailto:` and `tel:`, an absolute path, a relative path whose `..` climbs out of the folder (even when the file exists), or a symlink that points out of it. Folders that are symlinks are never entered.
+  - a `<script>`, an `on*` attribute or a `javascript:` URL
   - two cards in one folder, or two snippets with the same id
   - a name in `conventions.md` that does not exist
   - a README over budget
 
-  It exits non-zero on any error.
-- [ ] The check rewrites the generated files: `_ds_manifest.json` (from the markers, sorted by group and name), the foundation cards, and the README index.
+  It exits non-zero on any error. The check itself is in `design/check.rs`: a_token_no_file_in_the_styles_closure_defines_is_reported_at_its_line, a_card_without_a_marker_or_with_a_bad_one_is_reported_on_its_first_line, links_that_do_not_resolve_urls_outside_the_system_and_scripts_are_reported, a_font_used_first_in_a_stack_without_a_font_face_is_reported, two_cards_in_one_folder_and_a_snippet_id_used_twice_are_reported, a_relative_link_or_import_that_climbs_out_of_the_system_leaves_it_even_when_the_file_exists, a_local_url_that_names_no_file_and_every_import_on_a_line_are_checked, any_scheme_but_data_mailto_and_tel_leaves_the_system_and_javascript_urls_are_scripts, a_font_family_declared_over_two_lines_is_checked, a_system_without_styles_css_is_reported; `design/card.rs` a_marker_with_stray_text_is_malformed. The `conventions.md` and README checks come with entry 2b, and the command with entry 3.
+- [ ] The check rewrites the generated files: `_ds_manifest.json` (from the markers, sorted by group and name), the foundation cards, and the README index. (`design/manifest.rs` the_manifest_lists_every_card_by_group_then_name_with_its_snippets; the foundation cards and README come with entry 2b.)
 - [ ] With `--render`, the check asks the moonlet app to load each card in its sandboxed canvas (the app's own WebKit, in a hidden window that is never shown), measures it in the page, and writes `.cache/render-check.json` with design-sync's rubric:
   - `rootEmpty`: a mount is empty
   - `errs`: page errors
@@ -331,7 +334,7 @@ While the spec is a draft, the plan names test files and areas. Each criterion g
 
 ## Delivery
 
-X64 ships in entries 2–6 of the stack in [X65's delivery plan](X65-design-mode.md#delivery-plan).
+X64 ships in entries 2a–6 of the stack in [X65's delivery plan](X65-design-mode.md#delivery-plan).
 
 ## Open questions
 
