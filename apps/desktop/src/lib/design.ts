@@ -8,11 +8,13 @@ export interface RowLabel {
   tone: "attention" | "changed" | "error" | "muted";
 }
 
-/** The right side of a design system's sidebar row: what most needs the user first. */
-export function systemLabel(sys: DesignSystem, now: number): RowLabel {
+/** The right side of a design system's sidebar row: what most needs the user
+ * first. `working`: its sync agent is at work now, so a sync it stopped
+ * without recording is not shown as running. */
+export function systemLabel(sys: DesignSystem, now: number, working: boolean): RowLabel {
   if (sys.error) return { text: "unreadable", tone: "error" };
   if (sys.needs_you) return { text: "needs you", tone: "attention" };
-  if (sys.step || (sys.synced_at === null && sys.agent !== null)) return { text: "syncing", tone: "muted" };
+  if (working) return { text: "syncing", tone: "muted" };
   if (sys.synced_at === null) return { text: "not built", tone: "muted" };
   if (sys.to_settle) return { text: `${sys.to_settle} to settle`, tone: "changed" };
   if (sys.changed_sources.length) return { text: `${sys.changed_sources.length} changed`, tone: "changed" };
@@ -40,10 +42,17 @@ export function designSlug(name: string): string {
 }
 
 /** Where `design.system.create` will put a system named `name`: a used
- * folder makes it `<name> 2`, `<name> 3`, as the daemon does. */
-export function systemFolder(workspace: string, name: string, taken: string[]): string {
+ * folder makes it `<name> 2`, `<name> 3`, as the daemon does. Unknown (null)
+ * until the workspace's systems are listed. */
+export function systemFolder(workspace: string, name: string, taken: string[] | undefined): string | null {
+  if (!taken) return null;
   let n = 1;
   let slug = designSlug(name);
   while (taken.includes(slug)) slug = designSlug(`${name} ${++n}`);
   return `~/.moonlet/design/${workspace}/systems/${slug}`;
+}
+
+/** The picked projects still in the workspace, in the order they were picked. */
+export function picksInWorkspace(picked: string[], projects: string[]): string[] {
+  return picked.filter((id) => projects.includes(id));
 }

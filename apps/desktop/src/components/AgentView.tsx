@@ -1570,7 +1570,8 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
   ];
   const modeMenu = useModeMenu(st?.mode ?? DEFAULT_MODE, (m) => void call(M.chatSettings, { mode: m }));
   const more: MenuItem[] = [
-    { label: "Open in terminal", icon: <SquareTerminal size={14} />, onSelect: () => info && st && void openInTerminal(host, info, st) },
+    // A chat with no session has no pane to open a terminal in.
+    ...(wsId ? [{ label: "Open in terminal", icon: <SquareTerminal size={14} />, onSelect: () => info && st && void openInTerminal(host, info, st) }] : []),
     {
       label: "Copy transcript",
       icon: <Copy size={14} />,

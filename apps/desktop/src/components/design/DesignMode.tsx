@@ -6,7 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { errorToast, shownWorkspace, toast, useStore } from "../../lib/store";
 import { type DesignCover, type DesignSystem } from "../../lib/protocol";
-import { systemFolder, systemLabel, type RowLabel } from "../../lib/design";
+import { picksInWorkspace, systemFolder, systemLabel, type RowLabel } from "../../lib/design";
 import { createSystem, detectStack, loadSystems, shownSystem, showSystem, systemsOf, useDesign } from "../../lib/designStore";
 import { workspaceProjects } from "../../lib/tasksStore";
 import { tildePath } from "../../lib/profiles";
@@ -16,15 +16,22 @@ import { AgentIcon, Button, Dialog, Field, IconButton, Kbd, inputCls } from "../
 import { ProjectMark } from "../Sidebar";
 import { AgentView } from "../AgentView";
 
-/** The shown workspace and its design systems, listed when it is shown. */
-function useWorkspaceSystems() {
+/** The shown workspace and its design systems; `load` lists them when the
+ * workspace is shown (the sidebar does, so a failure shows once). */
+function useWorkspaceSystems(load = false) {
   const ws = useStore((s) => shownWorkspace(s));
   const systems = useDesign((d) => (ws ? systemsOf(d, ws.host, ws.id) : undefined));
   const shown = useDesign((d) => (ws ? shownSystem(d, ws.host, ws.id) : null));
   useEffect(() => {
-    if (ws) void loadSystems(ws.host, ws.id).catch(errorToast);
-  }, [ws]);
+    if (ws && load) void loadSystems(ws.host, ws.id).catch(errorToast);
+  }, [ws, load]);
   return { ws, systems, shown };
+}
+
+/** Whether a sync agent's chat is at work now, so its system is syncing. */
+function agentWorking(s: ReturnType<typeof useStore.getState>, host: string, id: number | null): boolean {
+  const t = id === null ? undefined : s.terminals[host]?.[id];
+  return !!t && !t.exit && (t.agent_state === "working" || t.agent_state === "blocked");
 }
 
 const openNewSystem = (ws: { host: string; id: string } | null) => ws && useStore.setState({ dialog: { kind: "new-design-system", host: ws.host, workspace: ws.id } });
@@ -46,7 +53,8 @@ function Heading({ label, add }: { label: string; add?: { title: string; run: ()
 
 /** The sidebar body in Design mode. */
 export function DesignSidebar() {
-  const { ws, systems, shown } = useWorkspaceSystems();
+  const { ws, systems, shown } = useWorkspaceSystems(true);
+  const working = useStore(useShallow((s) => (ws ? (systems ?? []).map((sys) => agentWorking(s, ws.host, sys.agent)) : [])));
   const now = useNow(true);
   const row = "flex h-[34px] w-full items-center gap-3 rounded-md px-3 text-left ui-text-14";
   return (
@@ -71,8 +79,8 @@ export function DesignSidebar() {
         <Heading label="Design systems" add={{ title: "New design system", run: () => openNewSystem(ws) }} />
         <nav aria-label="Design systems" className="px-2">
           {systems?.length === 0 && <p className="px-2 py-1 ui-text-12.5 text-faint">None yet. Build one from a project's code.</p>}
-          {systems?.map((sys) => {
-            const label = systemLabel(sys, now);
+          {systems?.map((sys, i) => {
+            const label = systemLabel(sys, now, !!working[i]);
             const current = sys.slug === shown?.slug;
             return (
               <button
@@ -101,13 +109,14 @@ export function DesignSidebar() {
 /** The main area in Design mode: the open design system, or how to start. */
 export function DesignMain() {
   const { ws, systems, shown } = useWorkspaceSystems();
+  const working = useStore((s) => !!ws && !!shown && agentWorking(s, ws.host, shown.agent));
   const sidebarOpen = useStore((s) => s.sidebarOpen);
   const now = useNow(true);
   return (
     <div className="flex h-full flex-col bg-bg">
       <div data-tauri-drag-region className="drag h-[52px] shrink-0 border-b border-border bg-panel" style={{ paddingLeft: sidebarOpen ? 0 : 84 }} />
       {shown && ws ? (
-        <SystemSummary key={shown.slug} host={ws.host} sys={shown} label={systemLabel(shown, now)} />
+        <SystemSummary key={shown.slug} host={ws.host} sys={shown} label={systemLabel(shown, now, working)} />
       ) : systems?.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
           <SwatchBook size={18} className="text-muted" />
@@ -223,12 +232,14 @@ export function NewDesignSystemDialog({ host, workspace }: { host: string; works
     };
   }, [host, workspace, paths]);
 
-  const ready = !!name.trim() && picked.length > 0 && !building;
+  // A project moved out of the workspace while the dialog is open is dropped.
+  const picks = picksInWorkspace(picked, projects.map((p) => p.id));
+  const ready = !!name.trim() && picks.length > 0 && !building;
   const build = async () => {
     if (!ready) return;
     setBuilding(true);
     try {
-      const made = await createSystem(host, workspace, { name: name.trim(), projects: picked, cover });
+      const made = await createSystem(host, workspace, { name: name.trim(), projects: picks, cover });
       showSystem(host, workspace, made.slug);
       close();
       if (made.agent_error) toast(`${name.trim()} was made, but its agent did not start: ${made.agent_error}`, "error");
@@ -255,7 +266,7 @@ export function NewDesignSystemDialog({ host, workspace }: { host: string; works
         </>
       }
     >
-      <Field label="Name" hint={<span className="font-mono">{systemFolder(workspace, name, taken ?? [])}</span>}>
+      <Field label="Name" hint={<span className="font-mono">{systemFolder(workspace, name, taken) ?? "\u00a0"}</span>}>
         <input autoFocus className={inputCls} value={name} placeholder="moonlet desktop" onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && void build()} />
       </Field>
       <div className="mb-1 ui-text-11.5 font-medium text-muted">Built from the code of</div>
