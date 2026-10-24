@@ -5,6 +5,8 @@ import { ago } from "./mobile";
 import type { DesignCard, DesignSystem } from "./protocol";
 
 export interface CardGroup {
+  /** "" for all the cards; else the group's name. */
+  key: string;
   name: string;
   count: number;
   /** A card in it has a check problem. */
@@ -15,8 +17,27 @@ export interface CardGroup {
 export function cardGroups(cards: DesignCard[]): CardGroup[] {
   const rank = (g: string) => (g === "Foundations" ? 0 : g === "Custom" ? 2 : g === "Layouts" ? 3 : 1);
   const names = [...new Set(cards.map((c) => c.group))].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
-  const group = (name: string, of: DesignCard[]) => ({ name, count: of.length, problem: of.some((c) => c.problems.length > 0) });
-  return [group("All", cards), ...names.map((n) => group(n, cards.filter((c) => c.group === n)))];
+  const group = (key: string, name: string, of: DesignCard[]) => ({ key, name, count: of.length, problem: of.some((c) => c.problems.length > 0) });
+  return [group("", "All", cards), ...names.map((n) => group(n, n, cards.filter((c) => c.group === n)))];
+}
+
+export interface CardFilters {
+  /** A group's key ("" for all). */
+  group: string;
+  onlyProblems: boolean;
+  onlyChanged: boolean;
+}
+
+/** The cards the view shows, and the filters in force: a filter lets go
+ *  once no card matches it, so the grid never goes blank with no way back. */
+export function visibleCards(cards: DesignCard[], f: CardFilters): { cards: DesignCard[]; onlyProblems: boolean; onlyChanged: boolean } {
+  const onlyProblems = f.onlyProblems && cards.some((c) => c.problems.length > 0);
+  const onlyChanged = f.onlyChanged && cards.some((c) => c.changed_sources.length > 0);
+  return {
+    cards: cards.filter((c) => (f.group === "" || c.group === f.group) && (!onlyProblems || c.problems.length > 0) && (!onlyChanged || c.changed_sources.length > 0)),
+    onlyProblems,
+    onlyChanged,
+  };
 }
 
 const base = (path: string) => path.split("/").filter(Boolean).pop() ?? path;
@@ -38,9 +59,11 @@ export function changedBanner(sys: DesignSystem, cards: DesignCard[]): string | 
   return `${plural(n, "source")} changed since sync · ${sys.changed_sources.map(base).join(", ")}. A sync rewrites only ${rewrites}.`;
 }
 
-/** A card's URL on the `moonlet-design://` scheme. */
-export function cardUrl(workspace: string, slug: string, path: string): string {
-  return `moonlet-design://${encodeURIComponent(workspace)}/systems/${encodeURIComponent(slug)}/${path.split("/").map(encodeURIComponent).join("/")}`;
+/** A card's URL on the `moonlet-design://` scheme; `rev`, the system's
+ *  changes so far, makes a frame load it again after one. */
+export function cardUrl(workspace: string, slug: string, path: string, rev = 0): string {
+  const url = `moonlet-design://${encodeURIComponent(workspace)}/systems/${encodeURIComponent(slug)}/${path.split("/").map(encodeURIComponent).join("/")}`;
+  return rev ? `${url}?v=${rev}` : url;
 }
 
 /** "7 variants", from its snippets; "" for a card with none. */
