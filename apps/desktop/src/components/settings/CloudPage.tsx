@@ -83,9 +83,20 @@ export function CloudPage() {
   useEffect(() => {
     setInfo(null);
     setFailed(null);
-    void rpc<CloudInfo>(host, M.cloudGet).then(show, (e) => setFailed(e instanceof Error ? e.message : String(e)));
-    void rpc<MobileStatus>(host, M.mobileStatus).then(setStatus, () => setStatus(null));
+    // A late answer for a host no longer shown is dropped: Save goes to `host`.
+    let live = true;
+    void rpc<CloudInfo>(host, M.cloudGet).then(
+      (i) => live && show(i),
+      (e) => live && setFailed(e instanceof Error ? e.message : String(e)),
+    );
+    void rpc<MobileStatus>(host, M.mobileStatus).then(
+      (st) => live && setStatus(st),
+      () => live && setStatus(null),
+    );
     loadCloud();
+    return () => {
+      live = false;
+    };
   }, [host]);
 
   const name = status?.host || hostLabel || host;

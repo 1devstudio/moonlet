@@ -20,6 +20,7 @@ export function useProjectCloud(host: string, identity: ProjectIdentity | null |
   const key = identity ? projectCloudKey(identity) : null;
   const [info, setInfo] = useState<CloudInfo | null>(null);
   const [draft, setDraft] = useState<ProjectCloudDraft | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
   const show = useCallback(
     (i: CloudInfo) => {
       setInfo(i);
@@ -30,9 +31,14 @@ export function useProjectCloud(host: string, identity: ProjectIdentity | null |
   useEffect(() => {
     if (!central || !key) return;
     let live = true;
+    setFailed(null);
     void rpc<CloudInfo>(host, M.cloudGet).then(
       (i) => live && show(i),
-      () => live && setInfo(null),
+      (e) => {
+        if (!live) return;
+        setInfo(null);
+        setFailed(e instanceof Error ? e.message : String(e));
+      },
     );
     return () => {
       live = false;
@@ -46,6 +52,8 @@ export function useProjectCloud(host: string, identity: ProjectIdentity | null |
   };
   return {
     shown,
+    /** Why the central host's cloud settings could not be read, on its own project. */
+    failed: central && key ? failed : null,
     key,
     info,
     draft,
@@ -82,6 +90,16 @@ export function CloudSection({ host, project, cloud, machineSetup }: { host: str
       clearTimeout(t);
     };
   }, [host, provider, location]);
+  if (cloud.failed)
+    return (
+      <Section title="Cloud workers">
+        <Card>
+          <div className="px-4 py-3.5">
+            <Status line={{ tone: "error", text: `Could not read the cloud settings: ${cloud.failed}` }} />
+          </div>
+        </Card>
+      </Section>
+    );
   if (!cloud.shown || !info || !draft) return null;
   const errors = projectCloudErrors(draft);
   const set = (patch: Partial<ProjectCloudDraft>) => setDraft({ ...draft, ...patch });
