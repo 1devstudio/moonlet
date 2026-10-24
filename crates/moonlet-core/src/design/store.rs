@@ -147,19 +147,30 @@ impl Store {
             cards: BTreeMap::new(),
         };
         let dir = systems.join(&slug);
-        fsx::write_inside(
+        let written = fsx::write_inside(
             &dir,
             &dir.join(CONFIG),
             toml::to_string(&config)?.as_bytes(),
-        )?;
-        self.write_record(
-            workspace,
-            &slug,
-            &Record {
-                sources,
-                ..Record::default()
-            },
-        )?;
+        )
+        .and_then(|()| {
+            self.write_record(
+                workspace,
+                &slug,
+                &Record {
+                    sources,
+                    ..Record::default()
+                },
+            )
+        });
+        // A creation that fails leaves nothing behind, so its name is free
+        // again and no hidden half-made folder stays.
+        if let Err(e) = written {
+            let _ = fsx::remove_dir_inside(&systems, &dir);
+            if let Ok(record) = self.record_path(workspace, &slug) {
+                let _ = std::fs::remove_file(record);
+            }
+            return Err(e);
+        }
         Ok(slug)
     }
 
@@ -1312,6 +1323,30 @@ root = \"9c1e0a2\"
                 .map(|s| s.name.as_str())
                 .collect::<Vec<_>>(),
             vec!["beta"]
+        );
+    }
+
+    #[test]
+    fn a_creation_that_fails_leaves_no_folder_and_its_name_free() {
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::new(home.path());
+        store.create_system("w1", "alpha", vec![], 1).unwrap();
+        // The record cannot be written: `.records` is a file.
+        let records = home.path().join("design/w1/.records");
+        std::fs::remove_dir_all(&records).unwrap();
+        std::fs::write(&records, "").unwrap();
+        assert!(
+            store
+                .create_system("w1", "storefront", vec![source()], 1)
+                .is_err()
+        );
+        assert!(!home.path().join("design/w1/systems/storefront").exists());
+        std::fs::remove_file(&records).unwrap();
+        assert_eq!(
+            store
+                .create_system("w1", "storefront", vec![source()], 1)
+                .unwrap(),
+            "storefront"
         );
     }
 
