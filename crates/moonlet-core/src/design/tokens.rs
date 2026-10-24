@@ -55,15 +55,44 @@ pub fn read(root: &Path) -> Vec<Token> {
             }
         }
     }
+    let families: Vec<Family> = (0..tokens.len())
+        .map(|i| resolved(&tokens, i, &mut Vec::new()))
+        .collect();
+    for (t, f) in tokens.iter_mut().zip(families) {
+        t.family = f;
+    }
     tokens
 }
 
 static TOKEN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(--[A-Za-z0-9_-]+)\s*:\s*([^;}]+)").unwrap());
 static COMMENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)/\*.*?\*/").unwrap());
+static ALIAS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^var\(\s*(--[A-Za-z0-9_-]+)\s*\)$").unwrap());
 static COLOUR_VALUE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(#[0-9a-fA-F]{3,8}\b|(rgba?|hsla?|oklch|oklab|lab|lch|color)\()").unwrap()
 });
+
+/// A token that is just `var(--other)` takes the family of the token it
+/// names, along the chain, unless that one says nothing (other), is not a
+/// token, or the chain loops back: then its own name and value count.
+fn resolved(tokens: &[Token], i: usize, seen: &mut Vec<usize>) -> Family {
+    let own = tokens[i].family;
+    let Some(c) = ALIAS.captures(&tokens[i].value) else {
+        return own;
+    };
+    let Some(j) = tokens.iter().position(|t| t.name == c[1]) else {
+        return own;
+    };
+    seen.push(i);
+    if seen.contains(&j) {
+        return own;
+    }
+    match resolved(tokens, j, seen) {
+        Family::Other => own,
+        f => f,
+    }
+}
 
 /// By the name first, then by what the value looks like.
 fn family(name: &str, value: &str) -> Family {
@@ -175,6 +204,37 @@ mod tests {
             vec![
                 ("--color-bg".to_string(), "#0b0c0e".to_string()),
                 ("--color-fg".to_string(), "#111".to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn a_token_that_is_just_another_tokens_var_takes_that_tokens_family() {
+        let dir = system(&[
+            ("styles.css", "@import \"tokens/colors.css\";\n"),
+            (
+                "tokens/colors.css",
+                ":root {\n  --color-accent: #e8774f;\n  --accent: var(--color-accent);\n  --brand: var( --accent );\n  --text-muted: var(--color-accent);\n  --z-menu: 40;\n  --color-layer: var(--z-menu);\n  --ring: var(--nowhere);\n  --loop-a: var(--loop-b);\n  --loop-b: var(--loop-a);\n}\n",
+            ),
+        ]);
+        let got: Vec<(String, Family)> = read(dir.path())
+            .into_iter()
+            .map(|t| (t.name, t.family))
+            .collect();
+        let t = |n: &str, f| (n.to_string(), f);
+        assert_eq!(
+            got,
+            vec![
+                t("--color-accent", Family::Color),
+                t("--accent", Family::Color),
+                t("--brand", Family::Color),
+                t("--text-muted", Family::Color),
+                t("--z-menu", Family::Other),
+                // What it names says nothing, so its own name counts.
+                t("--color-layer", Family::Color),
+                t("--ring", Family::Other),
+                t("--loop-a", Family::Other),
+                t("--loop-b", Family::Other),
             ]
         );
     }

@@ -278,4 +278,25 @@ mod tests {
             "<section class=\"ds-cell\"><div style=\"font-weight: var(--font-weight-bold)\">Add search to the product list</div><h4>--font-weight-bold</h4><p>700</p></section>\n"
         ));
     }
+
+    #[test]
+    fn a_colour_alias_gets_a_swatch_on_the_written_colours_card() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        for (path, text) in [
+            ("styles.css", "@import \"tokens/colors.css\";\n"),
+            (
+                "tokens/colors.css",
+                ":root {\n  --color-accent: #e8774f;\n  --accent: var(--color-accent);\n}\n",
+            ),
+        ] {
+            std::fs::create_dir_all(root.join(path).parent().unwrap()).unwrap();
+            std::fs::write(root.join(path), text).unwrap();
+        }
+        write(root).unwrap();
+        let html = std::fs::read_to_string(root.join("foundations/colours/colours.html")).unwrap();
+        assert!(html.contains(
+            "<section class=\"ds-cell\"><div class=\"ds-swatch\" style=\"background: var(--accent)\"></div><h4>--accent</h4><p>var(--color-accent)</p></section>\n"
+        ));
+    }
 }
