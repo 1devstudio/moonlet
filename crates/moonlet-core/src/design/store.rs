@@ -1329,13 +1329,23 @@ root = \"9c1e0a2\"
         assert!(store.remove_system("w1", "storefront").is_err());
         assert!(store.config("w1", "storefront").is_err());
         assert!(store.check_system("w1", "storefront").is_err());
-        assert!(store.create_system("w1", "pricing", vec![], 1).is_err());
+        assert!(
+            store
+                .create_system("w1", "pricing", vec![], Cover::Core, 1)
+                .is_err()
+        );
         assert!(store.systems("w1").is_err());
         // `design/w2` links out.
         std::os::unix::fs::symlink(outside.path(), home.path().join("design/w2")).unwrap();
-        assert!(store.create_system("w2", "pricing", vec![], 1).is_err());
+        assert!(
+            store
+                .create_system("w2", "pricing", vec![], Cover::Core, 1)
+                .is_err()
+        );
         // A system folder that is a link.
-        store.create_system("w3", "alpha", vec![], 1).unwrap();
+        store
+            .create_system("w3", "alpha", vec![], Cover::Core, 1)
+            .unwrap();
         std::os::unix::fs::symlink(
             outside.path().join("storefront"),
             home.path().join("design/w3/systems/storefront"),
@@ -1367,8 +1377,12 @@ root = \"9c1e0a2\"
             ],
         );
         let store = Store::new(home.path());
-        let a = store.create_system("w1", "alpha", vec![], 1).unwrap();
-        let b = store.create_system("w1", "beta", vec![], 1).unwrap();
+        let a = store
+            .create_system("w1", "alpha", vec![], Cover::Core, 1)
+            .unwrap();
+        let b = store
+            .create_system("w1", "beta", vec![], Cover::Core, 1)
+            .unwrap();
         let systems = home.path().join("design/w1/systems");
         // alpha's config.toml links out: alpha is not read, nor written.
         std::fs::remove_file(systems.join(&a).join(CONFIG)).unwrap();
@@ -1408,21 +1422,23 @@ root = \"9c1e0a2\"
     fn a_creation_that_fails_leaves_no_folder_and_its_name_free() {
         let home = tempfile::tempdir().unwrap();
         let store = Store::new(home.path());
-        store.create_system("w1", "alpha", vec![], 1).unwrap();
+        store
+            .create_system("w1", "alpha", vec![], Cover::Core, 1)
+            .unwrap();
         // The record cannot be written: `.records` is a file.
         let records = home.path().join("design/w1/.records");
         std::fs::remove_dir_all(&records).unwrap();
         std::fs::write(&records, "").unwrap();
         assert!(
             store
-                .create_system("w1", "storefront", vec![source()], 1)
+                .create_system("w1", "storefront", vec![source()], Cover::Core, 1)
                 .is_err()
         );
         assert!(!home.path().join("design/w1/systems/storefront").exists());
         std::fs::remove_file(&records).unwrap();
         assert_eq!(
             store
-                .create_system("w1", "storefront", vec![source()], 1)
+                .create_system("w1", "storefront", vec![source()], Cover::Core, 1)
                 .unwrap(),
             "storefront"
         );
@@ -1434,7 +1450,7 @@ root = \"9c1e0a2\"
         let home = tempfile::tempdir().unwrap();
         let store = Store::new(home.path());
         let slug = store
-            .create_system("w1", "storefront", vec![source()], 1)
+            .create_system("w1", "storefront", vec![source()], Cover::Core, 1)
             .unwrap();
         let records = home.path().join("design/w1/.records");
         // Opened before the write, as by a read that the write interrupts.
@@ -1472,7 +1488,7 @@ root = \"9c1e0a2\"
         let mut src = source();
         src.commit = Some("old1234".into());
         let slug = store
-            .create_system("w1", "storefront", vec![src], 1)
+            .create_system("w1", "storefront", vec![src], Cover::Core, 1)
             .unwrap();
         let dir = home.path().join("design/w1/systems").join(&slug);
         put(
@@ -1571,7 +1587,9 @@ root = \"9c1e0a2\"
             ],
         );
         let store = Store::new(home.path());
-        let slug = store.create_system("w1", "storefront", vec![], 1).unwrap();
+        let slug = store
+            .create_system("w1", "storefront", vec![], Cover::Core, 1)
+            .unwrap();
         let dir = home.path().join("design/w1/systems").join(&slug);
         put(
             &dir,
