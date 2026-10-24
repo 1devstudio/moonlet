@@ -115,11 +115,16 @@ pub const DESIGN_SKILL_FILES: [(&str, &str); 2] = [
 ];
 
 /// Every file of moonlet's skills for one agent, given the `moonlet` skill's
-/// path (`<agent>/skills/moonlet/SKILL.md`), with what it should hold.
+/// path (`<agent>/skills/moonlet/SKILL.md`), with what it should hold. A
+/// `moonlet-design` folder whose `SKILL.md` is the user's own is theirs
+/// whole: none of its files is listed, so none is written or removed.
 fn skill_files(path: &Path) -> Vec<(PathBuf, &'static str)> {
     let skills = path.parent().and_then(Path::parent).unwrap_or(Path::new(""));
+    let design = skills.join("moonlet-design");
     let mut files = vec![(path.to_path_buf(), SKILL)];
-    files.extend(DESIGN_SKILL_FILES.iter().map(|(name, text)| (skills.join("moonlet-design").join(name), *text)));
+    if !users_own(&design.join("SKILL.md")) {
+        files.extend(DESIGN_SKILL_FILES.iter().map(|(name, text)| (design.join(name), *text)));
+    }
     files
 }
 
@@ -604,6 +609,26 @@ mod tests {
         refresh_skills(&p).unwrap();
         uninstall(&p).unwrap();
         assert_eq!(std::fs::read_to_string(&theirs).unwrap(), "---\nname: moonlet-design\n---\nmy own\n");
+    }
+
+    /// X64: a skill folder whose `SKILL.md` is the user's own gains no file
+    /// of moonlet's on install or refresh, and loses none on uninstall.
+    #[test]
+    fn a_users_own_moonlet_design_skill_gains_or_loses_no_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = paths(dir.path());
+        let theirs = dir.path().join("claude/skills/moonlet-design");
+        std::fs::create_dir_all(&theirs).unwrap();
+        std::fs::write(theirs.join("SKILL.md"), "---\nname: moonlet-design\n---\nmy own\n").unwrap();
+        install(&p, Path::new("/bin/moonlet"), true, false).unwrap();
+        assert!(!theirs.join("cards.md").exists(), "install wrote into the user's skill");
+        assert_eq!(refresh_skills(&p).unwrap(), Vec::<PathBuf>::new());
+        assert!(!theirs.join("cards.md").exists(), "refresh wrote into the user's skill");
+
+        let marked = "<!-- Installed by moonlet (`moonlet hooks install`); reinstalling overwrites this file. -->\nmy notes\n";
+        std::fs::write(theirs.join("cards.md"), marked).unwrap();
+        uninstall(&p).unwrap();
+        assert_eq!(std::fs::read_to_string(theirs.join("cards.md")).unwrap(), marked);
     }
 
     /// X22: a `moonlet` skill the user wrote is not moonlet's, so an install
