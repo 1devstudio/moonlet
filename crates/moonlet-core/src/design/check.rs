@@ -423,8 +423,9 @@ fn fonts(path_rel: &str, text: &str, faces: &BTreeSet<String>, problems: &mut Ve
     }
 }
 
-/// Scripts, `on*` attributes, and `href`/`src` that leave the system or name
-/// no file. Returns the snippet ids (`data-snippet`) with their lines.
+/// Scripts, `on*` attributes, and `href`/`src`/`srcset` URLs that leave the
+/// system or name no file. Returns the snippet ids (`data-snippet`) with
+/// their lines.
 fn elements(
     root: &Path,
     path_rel: &str,
@@ -459,17 +460,24 @@ fn elements(
                         Kind::Script,
                         format!("{name}=\"…\" is not allowed in a card"),
                     ));
-                } else if name == "href" || name == "src" {
-                    match target(root, dir, &value) {
+                    continue;
+                }
+                let urls = match name.as_str() {
+                    "href" | "src" => vec![value.as_str()],
+                    "srcset" | "imagesrcset" => srcset_urls(&value),
+                    _ => continue,
+                };
+                for url in urls {
+                    match target(root, dir, url) {
                         Target::Leaves => found.push((
                             line,
                             Kind::ExternalUrl,
-                            format!("{value} leaves the design system"),
+                            format!("{url} leaves the design system"),
                         )),
                         Target::Missing => found.push((
                             line,
                             Kind::Unresolved,
-                            format!("<{tag} {name}=\"{value}\"> does not resolve"),
+                            format!("<{tag} {name}=\"{url}\"> does not resolve"),
                         )),
                         Target::Script => found.push((
                             line,
@@ -494,6 +502,32 @@ fn elements(
         });
     }
     snippet_ids.into_inner()
+}
+
+/// The URLs of a `srcset`: candidates split by commas, each a URL and
+/// optional descriptors (`2x`, `480w`). A URL may hold commas (`data:`), so
+/// it runs to the next space, as the HTML spec parses it.
+fn srcset_urls(value: &str) -> Vec<&str> {
+    let mut urls = Vec::new();
+    let mut rest = value;
+    loop {
+        rest = rest.trim_start_matches(|c: char| c.is_ascii_whitespace() || c == ',');
+        if rest.is_empty() {
+            return urls;
+        }
+        let end = rest
+            .find(|c: char| c.is_ascii_whitespace())
+            .unwrap_or(rest.len());
+        let (url, after) = rest.split_at(end);
+        let bare = url.trim_end_matches(',');
+        urls.push(bare);
+        // A URL ending in a comma has no descriptors; otherwise skip them.
+        rest = if bare.len() < url.len() {
+            after
+        } else {
+            after.find(',').map_or("", |i| &after[i + 1..])
+        };
+    }
 }
 
 /// Every `.html` file, in a stable order, leaving out `.cache/`.
@@ -986,6 +1020,46 @@ mod tests {
                     6,
                     Kind::Unresolved,
                     "@import \"button-extra.css\" does not resolve".into()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn each_url_of_a_srcset_is_checked_like_a_src() {
+        let card = "<!-- @dsCard group=\"Media\" -->\n\
+<img src=\"img/logo.png\" srcset=\"img/logo.png 1x, https://cdn.example.com/logo@2x.png 2x\" alt=\"\">\n\
+<picture><source srcset=\"img/missing.webp 480w,img/logo.png 960w\"></picture>\n\
+<link rel=\"preload\" as=\"image\" imagesrcset=\"//cdn.example.com/hero.png 1x\">\n";
+        let dir = system(&[
+            ("styles.css", STYLES),
+            ("tokens/colors.css", COLORS),
+            ("components.css", COMPONENTS),
+            ("components/media/logo/logo.html", card),
+            ("components/media/logo/img/logo.png", "png"),
+        ]);
+        let got: Vec<(usize, Kind, String)> = check(dir.path())
+            .unwrap()
+            .into_iter()
+            .map(|p| (p.line, p.kind, p.message))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (
+                    2,
+                    Kind::ExternalUrl,
+                    "https://cdn.example.com/logo@2x.png leaves the design system".into()
+                ),
+                (
+                    3,
+                    Kind::Unresolved,
+                    "<source srcset=\"img/missing.webp\"> does not resolve".into()
+                ),
+                (
+                    4,
+                    Kind::ExternalUrl,
+                    "//cdn.example.com/hero.png leaves the design system".into()
                 ),
             ]
         );
