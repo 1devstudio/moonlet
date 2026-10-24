@@ -242,12 +242,12 @@ impl ChatManager {
         Ok(self.get(id)?.inner.lock().unwrap().state.clone())
     }
 
-    /// Every chat's state without its items: what the phone's Inbox needs (X40).
     /// What the chat waits for from the user, without copying its items.
     pub fn pending(&self, id: TerminalId) -> Result<Vec<moonlet_proto::types::PermissionAsk>> {
         Ok(self.get(id)?.inner.lock().unwrap().state.pending.clone())
     }
 
+    /// Every chat's state without its items: what the phone's Inbox needs (X40).
     pub fn summaries(&self) -> Vec<(TerminalId, ChatState)> {
         let chats: Vec<(TerminalId, Arc<Chat>)> = self.chats.lock().unwrap().iter().map(|(id, c)| (*id, c.clone())).collect();
         chats
