@@ -75,7 +75,11 @@ pub async fn serve(app: &tauri::AppHandle, url: &str) -> tauri::http::Response<V
     else {
         return reply(404, "no such design file");
     };
-    let Ok(body) = tokio::fs::read(real).await else {
+    // Checked against the file actually opened, so a link put in its place
+    // after the daemon resolved it leads nowhere outside the design folder.
+    let root = moonlet_core::paths::home().join("design");
+    let real = std::path::PathBuf::from(real);
+    let Ok(Ok(body)) = tokio::task::spawn_blocking(move || read_inside(&root, &real)).await else {
         return reply(404, "no such design file");
     };
     let mut res = tauri::http::Response::builder().status(200);
@@ -83,6 +87,45 @@ pub async fn serve(app: &tauri::AppHandle, url: &str) -> tauri::http::Response<V
         res = res.header(name, value);
     }
     res.body(body).unwrap_or_default()
+}
+
+/// The bytes of `path`, opened first and then checked: the file opened must
+/// be inside `root` (links resolved), or nothing is read.
+pub fn read_inside(root: &std::path::Path, path: &std::path::Path) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    let root = std::fs::canonicalize(root)?;
+    let mut file = std::fs::File::open(path)?;
+    if !opened_path(&file)?.starts_with(&root) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "outside the design folder",
+        ));
+    }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+/// Where an open file is, as the system resolved it when opening it.
+#[cfg(target_os = "macos")]
+fn opened_path(file: &std::fs::File) -> std::io::Result<std::path::PathBuf> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::ffi::OsStrExt;
+    let mut buf = vec![0u8; libc::PATH_MAX as usize];
+    // SAFETY: `buf` holds PATH_MAX bytes, as F_GETPATH requires.
+    if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETPATH, buf.as_mut_ptr()) } == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    Ok(std::path::PathBuf::from(std::ffi::OsStr::from_bytes(
+        &buf[..len],
+    )))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn opened_path(file: &std::fs::File) -> std::io::Result<std::path::PathBuf> {
+    use std::os::fd::AsRawFd;
+    std::fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd()))
 }
 
 /// `%XX` escapes decoded, as UTF-8; `None` when they are not valid.
@@ -144,6 +187,26 @@ mod tests {
         ] {
             assert_eq!(target(bad), None, "{bad}");
         }
+    }
+
+    #[test]
+    fn only_a_file_that_is_inside_the_design_folder_when_opened_is_read() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("card.html"), "<p>card</p>").unwrap();
+        std::fs::write(outside.path().join("secret.txt"), "secret").unwrap();
+        std::os::unix::fs::symlink(
+            outside.path().join("secret.txt"),
+            root.path().join("link.html"),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.path().join("dir")).unwrap();
+        assert_eq!(
+            read_inside(root.path(), &root.path().join("card.html")).unwrap(),
+            b"<p>card</p>"
+        );
+        assert!(read_inside(root.path(), &root.path().join("link.html")).is_err());
+        assert!(read_inside(root.path(), &root.path().join("dir/secret.txt")).is_err());
     }
 
     #[test]
