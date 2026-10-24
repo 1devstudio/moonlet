@@ -55,6 +55,75 @@ pub fn save(root: &Path, anchor: &Anchor) -> Result<()> {
     super::fsx::write_inside(root, &root.join(FILE), (json + "\n").as_bytes())
 }
 
+/// The anchor of the design system in `root`, read without following a link
+/// out of it; `None` before the first sync.
+fn load(root: &Path) -> Result<Option<Anchor>> {
+    match super::fsx::read_inside(root, &root.join(FILE)) {
+        Ok(text) => Ok(Some(
+            serde_json::from_str(&text).with_context(|| format!("parsing {FILE}"))?,
+        )),
+        Err(e)
+            if e.downcast_ref::<std::io::Error>()
+                .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) =>
+        {
+            Ok(None)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Records that `card` now holds the sync's version, taken by the user (X64):
+/// its HTML is the anchored one, and each source its marker names keeps the
+/// hash the sync recorded (one the anchor did not know is hashed now). So
+/// the next look finds it up to date, unless a source changed since the
+/// sync. Every other card stays as it is; with no anchor, or no entry for
+/// the card, nothing changes.
+pub fn take(
+    root: &Path,
+    card: &str,
+    sources: &[PathBuf],
+    exceptions: &BTreeMap<String, String>,
+) -> Result<()> {
+    let Some(mut anchor) = load(root)? else {
+        return Ok(());
+    };
+    let Some(then) = anchor.cards.get(card) else {
+        return Ok(());
+    };
+    let text = super::fsx::read_inside(root, &root.join(card))?;
+    let files: BTreeMap<String, String> = card::parse_marker(&text)
+        .map(|m| m.source)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|s| {
+            let hash = match then.sources.get(&s) {
+                Some(h) => h.clone(),
+                None => source_hash(sources, &s).unwrap_or_default(),
+            };
+            (s, hash)
+        })
+        .collect();
+    let entry = CardAnchor {
+        source_key: source_key(&files, exceptions.get(card).map(String::as_str)),
+        render_hash: render_hash(&text),
+        sources: files,
+    };
+    anchor.cards.insert(card.to_string(), entry);
+    save(root, &anchor)
+}
+
+/// Forgets `card`, removed by the user (X64): a card written at its path
+/// later is new. Every other card stays as it is.
+pub fn forget(root: &Path, card: &str) -> Result<()> {
+    let Some(mut anchor) = load(root)? else {
+        return Ok(());
+    };
+    if anchor.cards.remove(card).is_none() {
+        return Ok(());
+    }
+    save(root, &anchor)
+}
+
 /// The anchor as it would be written now.
 /// `exceptions` holds each card's settings in `config.toml`, by card path:
 /// a change to them changes the card's `source_key`.
