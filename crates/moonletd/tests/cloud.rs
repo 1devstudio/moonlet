@@ -1770,6 +1770,18 @@ async fn an_idle_machine_is_removed_after_the_idle_time() {
 }
 
 #[tokio::test]
+async fn with_idle_zero_an_unused_machine_stays_five_minutes() {
+    // A "minute" here is 200 ms: five of them are a second.
+    let c = cloud_with(SHOP_CONFIG, &[("MOONLET_TEST_CLOUD_MINUTE_MS", "200")]).await;
+    let _: Value = c.d.call("cloud.set", json!({ "idle_minutes": 0 })).await;
+    let m = c.ready().await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(c.machines().await["machines"][0]["state"], json!("ready"));
+    let removed = c.until(m["id"].as_str().unwrap(), "removed").await;
+    assert_eq!(removed["reason"], json!("removed after 0 min idle"));
+}
+
+#[tokio::test]
 async fn with_idle_zero_a_machine_goes_when_its_command_ends() {
     let c = routing(&[]).await;
     let _: Value = c.d.call("cloud.set", json!({ "idle_minutes": 0 })).await;
