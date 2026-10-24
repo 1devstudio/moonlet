@@ -645,6 +645,12 @@ impl Mobile {
                     return None;
                 }
                 let d = data.devices.iter_mut().find(|d| d.token_sha256 == hash)?;
+                // A cloud machine (X63) reaches only this daemon's worker
+                // methods: a route would take it to a remote host's daemon.
+                if route.is_some() && d.kind == DeviceKind::Cloud {
+                    tracing::info!("a cloud machine asked for a route");
+                    return None;
+                }
                 d.last_seen = Some(now_ms());
                 let device_id = d.id.clone();
                 self.save(&data);
