@@ -22,7 +22,8 @@ fn quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
-/// `s` as a JSON string, inside a double-quoted `sh` word.
+/// `s` as a JSON string, inside a double-quoted `sh` word. It is written with
+/// `printf '%s'`, which, unlike dash's `echo`, decodes no backslashes.
 fn json_in_double_quotes(s: &str) -> String {
     serde_json::to_string(s)
         .unwrap_or_default()
@@ -73,10 +74,10 @@ as_moonlet {join}
         out.push_str(&format!(
             r#"echo '{b64}' | base64 -d > /var/lib/moonlet/machine-setup.sh
 started=$(date +%s)
-echo "{{\"path\":{path},\"started\":$started}}" > /var/lib/moonlet/machine-setup.json
+printf '%s\n' "{{\"path\":{path},\"started\":$started}}" > /var/lib/moonlet/machine-setup.json
 status=0
 sh /var/lib/moonlet/machine-setup.sh > /var/log/moonlet/machine-setup.log 2>&1 || status=$?
-echo "{{\"path\":{path},\"started\":$started,\"ended\":$(date +%s),\"exit\":$status}}" > /var/lib/moonlet/machine-setup.json
+printf '%s\n' "{{\"path\":{path},\"started\":$started,\"ended\":$(date +%s),\"exit\":$status}}" > /var/lib/moonlet/machine-setup.json
 "#
         ));
     }
@@ -117,10 +118,10 @@ as_moonlet 'curl -fsSL https://github.com/1devstudio/moonlet/releases/download/v
 as_moonlet '~/.moonlet/bin/moonletd join '\''100.101.102.103:47428'\'' '\''7KQ2MXW9PD'\'' --name '\''moonlet-shop-7k2q'\'''
 echo 'YXB0LWdldCBpbnN0YWxsIC15IG5vZGVqcwo=' | base64 -d > /var/lib/moonlet/machine-setup.sh
 started=$(date +%s)
-echo "{\"path\":\"scripts/ci-deps.sh\",\"started\":$started}" > /var/lib/moonlet/machine-setup.json
+printf '%s\n' "{\"path\":\"scripts/ci-deps.sh\",\"started\":$started}" > /var/lib/moonlet/machine-setup.json
 status=0
 sh /var/lib/moonlet/machine-setup.sh > /var/log/moonlet/machine-setup.log 2>&1 || status=$?
-echo "{\"path\":\"scripts/ci-deps.sh\",\"started\":$started,\"ended\":$(date +%s),\"exit\":$status}" > /var/lib/moonlet/machine-setup.json
+printf '%s\n' "{\"path\":\"scripts/ci-deps.sh\",\"started\":$started,\"ended\":$(date +%s),\"exit\":$status}" > /var/lib/moonlet/machine-setup.json
 "#
         );
     }
