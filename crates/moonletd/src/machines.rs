@@ -54,6 +54,11 @@ fn sweep_every() -> Duration {
     env_ms("MOONLET_TEST_CLOUD_SWEEP_MS", Duration::from_secs(10 * 60))
 }
 
+/// How long a minute of the idle time lasts: a minute, or less in tests.
+fn minute() -> u64 {
+    env_ms("MOONLET_TEST_CLOUD_MINUTE_MS", Duration::from_secs(60)).as_millis() as u64
+}
+
 /// The first wait between destroy attempts; it doubles, up to 5 minutes.
 fn destroy_backoff() -> Duration {
     env_ms("MOONLET_TEST_CLOUD_BACKOFF_MS", Duration::from_millis(300))
@@ -86,6 +91,18 @@ struct Record {
     /// Waits for its machine setup to end before it is ready.
     #[serde(default)]
     setup: bool,
+    /// When its last routed command ended.
+    #[serde(default)]
+    last_end: Option<u64>,
+    /// Commands waiting for it to be ready.
+    #[serde(default)]
+    waiting: u32,
+    /// Removed, for this reason, once its running commands end.
+    #[serde(default)]
+    down_after: Option<String>,
+    /// The sessions it has a routing copy of.
+    #[serde(default)]
+    copied: Vec<String>,
 }
 
 impl Record {
@@ -348,7 +365,15 @@ impl Machines {
             })
             .partition(|r| matches!(r.shown.state.as_str(), "removed" | "failed"));
         CloudMachines {
-            machines: machines.into_iter().map(|r| r.shown).collect(),
+            machines: machines
+                .into_iter()
+                .map(|r| {
+                    let until = idle_until(&r, f.idle_minutes);
+                    let mut shown = r.shown;
+                    shown.idle_until = until;
+                    shown
+                })
+                .collect(),
             removed: removed.into_iter().map(|r| r.shown).collect(),
             hours_this_month: moonlet_cloud::usage::hours(&self.usage.lock().unwrap(), now),
             max_hours_month: f.max_hours_month,
@@ -441,6 +466,16 @@ impl Machines {
         if let Some((path, _)) = &setup {
             steps.push(step("machine_setup", format!("Machine setup {path}")));
         }
+        // Made for a session: ready once it has the session's copy (X62).
+        if let Some(s) = &session {
+            let name = self.sessions.session(s).map(|s| s.name).unwrap_or_default();
+            let config = moonlet_core::project_config::load(&folder, String::new()).config;
+            let label = match config.setup {
+                Some(setup) => format!("Copied {name} and ran {setup}"),
+                None => format!("Copied {name}"),
+            };
+            steps.push(step("copy", label));
+        }
         let now = now_ms();
         let record = Record {
             shown: CloudMachine {
@@ -472,6 +507,10 @@ impl Machines {
             worker: None,
             down_since: None,
             setup: setup.is_some(),
+            last_end: None,
+            waiting: 0,
+            down_after: None,
+            copied: Vec::new(),
         };
         {
             // The limits and the record in one step, so two calls at once
@@ -602,7 +641,93 @@ impl Machines {
             r.worker = Some(worker.to_string());
             r.down_since = None;
         });
+        // Made for a session: the session's copy, before it is ready.
+        let copy = self.get(machine).filter(|r| {
+            r.shown
+                .steps
+                .iter()
+                .any(|s| s.step == "copy" && s.state == "pending")
+        });
+        if let Some(r) = copy
+            && let Some(session) = r.shown.for_session.clone()
+            && let Some(me) = self.me.lock().unwrap().upgrade()
+        {
+            let (machine, worker) = (machine.to_string(), worker.to_string());
+            tokio::spawn(async move { me.copy_session(machine, worker, session).await });
+        }
         self.ready_if_done(machine);
+    }
+
+    /// Makes `session`'s routing copy on machine `machine`, and runs the
+    /// project's setup there.
+    async fn copy_session(self: Arc<Self>, machine: String, worker: String, session: String) {
+        let started = now_ms();
+        self.update(&machine, |r| r.step("copy", "running", None, None));
+        loop {
+            let Some(conn) = self.workers.conn(&worker) else {
+                return;
+            };
+            let asked = conn
+                .request(
+                    m::EXEC_PREPARE,
+                    serde_json::json!({ "session": session }),
+                    Duration::from_secs(600),
+                )
+                .await;
+            match asked
+                .ok()
+                .and_then(|v| v["state"].as_str().map(String::from))
+                .as_deref()
+            {
+                Some("ready") => {
+                    self.update(&machine, |r| {
+                        r.step("copy", "done", Some(now_ms() - started), None);
+                        r.copied.push(session.clone());
+                    });
+                    self.ready_if_done(&machine);
+                    return;
+                }
+                Some("failed") | None => {
+                    self.update(&machine, |r| {
+                        r.step("copy", "failed", None, Some("the copy failed".into()))
+                    });
+                    let label = self
+                        .get(&machine)
+                        .and_then(|r| {
+                            r.shown
+                                .steps
+                                .iter()
+                                .find(|s| s.step == "copy")
+                                .map(|s| s.label.clone())
+                        })
+                        .unwrap_or_default();
+                    self.remove(&machine, format!("{label} failed"));
+                    return;
+                }
+                // Still making it, or its setup runs.
+                _ => tokio::time::sleep(Duration::from_millis(250)).await,
+            }
+        }
+    }
+
+    /// Whether machine `worker` has a routing copy of `session`.
+    pub fn has_copy(&self, worker: &str, session: &str) -> bool {
+        self.records
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|r| r.worker.as_deref() == Some(worker) && r.copied.iter().any(|s| s == session))
+    }
+
+    /// Machine `worker` now has a routing copy of `session`.
+    pub fn copied(&self, worker: &str, session: &str) {
+        if let Some(id) = self.by_worker(worker) {
+            self.update(&id, |r| {
+                if !r.copied.iter().any(|s| s == session) {
+                    r.copied.push(session.to_string());
+                }
+            });
+        }
     }
 
     /// `worker.step` from machine `machine`.
@@ -702,8 +827,20 @@ impl Machines {
                                 &r.shown.id,
                                 format!("its link was down for {mins} minutes"),
                             );
+                            continue;
                         }
                         _ => {}
+                    }
+                    if r.shown.running > 0 {
+                        continue;
+                    }
+                    if let Some(reason) = r.down_after.clone() {
+                        self.remove(&r.shown.id, reason);
+                        continue;
+                    }
+                    let idle = self.settings.file().idle_minutes;
+                    if idle_until(&r, idle).is_some_and(|until| now >= until) {
+                        self.remove(&r.shown.id, format!("removed after {idle} min idle"));
                     }
                 }
                 _ => {}
@@ -765,6 +902,129 @@ impl Machines {
         });
     }
 
+    /// The worker ids of every cloud machine.
+    pub fn cloud_workers(&self) -> Vec<String> {
+        self.records
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|r| r.worker.clone())
+            .collect()
+    }
+
+    /// The worker ids of project `project`'s ready cloud machines.
+    pub fn workers_for(&self, project: &str) -> Vec<String> {
+        let Some(key) = self.project_key(project) else {
+            return Vec::new();
+        };
+        self.records
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.shown.project_key == key && r.shown.state == "ready")
+            .filter_map(|r| r.worker.clone())
+            .collect()
+    }
+
+    fn project_key(&self, project: &str) -> Option<String> {
+        let p = self
+            .sessions
+            .list_projects()
+            .into_iter()
+            .find(|p| p.id == project)?;
+        crate::heavy::key(&p.identity)
+    }
+
+    /// No worker was free for a command of project `project`: a machine
+    /// starts when the project allows it and none is starting yet.
+    pub fn overflow(&self, project: &str) {
+        let Some(key) = self.project_key(project) else {
+            return;
+        };
+        if !self
+            .settings
+            .file()
+            .projects
+            .get(&key)
+            .is_some_and(|p| p.overflow)
+        {
+            return;
+        }
+        let starting = self.records.lock().unwrap().iter().any(|r| {
+            r.shown.project_key == key && matches!(r.shown.state.as_str(), "creating" | "starting")
+        });
+        if !starting && let Err(e) = self.up(project, None) {
+            tracing::info!("no overflow machine for {project}: {}", e.message);
+        }
+    }
+
+    fn by_worker(&self, worker: &str) -> Option<String> {
+        self.records
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|r| r.worker.as_deref() == Some(worker))
+            .map(|r| r.shown.id.clone())
+    }
+
+    /// The machine a cloud session's command waits for: the project's
+    /// machine on its way, or a new one made for the session.
+    pub fn for_session(&self, project: &str, session: &str) -> Result<(String, String), RpcError> {
+        let key = self
+            .project_key(project)
+            .ok_or_else(|| RpcError::new("no_identity", "the project has no first commit"))?;
+        let coming = self
+            .records
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|r| {
+                r.shown.project_key == key
+                    && matches!(r.shown.state.as_str(), "creating" | "starting" | "ready")
+            })
+            .map(|r| (r.shown.id.clone(), r.shown.name.clone()));
+        match coming {
+            Some(found) => Ok(found),
+            None => self
+                .up(project, Some(session.to_string()))
+                .map(|m| (m.id, m.name)),
+        }
+    }
+
+    /// Machine `id`'s state, and why it was removed.
+    pub fn state_of(&self, id: &str) -> Option<(String, Option<String>)> {
+        self.get(id).map(|r| (r.shown.state, r.shown.reason))
+    }
+
+    /// A command starts or stops waiting for machine `id`.
+    pub fn wait_begin(&self, id: &str) {
+        self.update(id, |r| r.waiting += 1);
+    }
+
+    pub fn wait_end(&self, id: &str) {
+        self.update(id, |r| r.waiting = r.waiting.saturating_sub(1));
+    }
+
+    /// A routed command started on cloud machine `worker`.
+    pub fn run_started(&self, worker: &str) {
+        if let Some(id) = self.by_worker(worker) {
+            self.update(&id, |r| {
+                r.shown.running += 1;
+                r.shown.idle_until = None;
+            });
+        }
+    }
+
+    /// A routed command ended on cloud machine `worker`.
+    pub fn run_ended(&self, worker: &str) {
+        if let Some(id) = self.by_worker(worker) {
+            self.update(&id, |r| {
+                r.shown.running = r.shown.running.saturating_sub(1);
+                r.last_end = Some(now_ms());
+            });
+        }
+    }
+
     /// `cloud.down`: removes machine `machine` (id or name).
     pub fn down(&self, machine: &str) -> Result<bool, RpcError> {
         let r = self
@@ -775,8 +1035,58 @@ impl Machines {
             .find(|r| (r.shown.id == machine || r.shown.name == machine) && r.active())
             .cloned()
             .ok_or_else(|| RpcError::new("not_found", format!("no machine {machine}")))?;
-        self.remove(&r.shown.id, "removed on request".into());
+        self.retire(&r.shown.id, "removed on request".into());
         Ok(true)
+    }
+
+    /// Removes machine `id` now, or once its running commands end.
+    fn retire(&self, id: &str, reason: String) {
+        let busy = self.get(id).is_some_and(|r| r.shown.running > 0);
+        if busy {
+            self.update(id, |r| r.down_after = Some(reason.clone()));
+        } else {
+            self.remove(id, reason);
+        }
+    }
+
+    /// Project `key` no longer uses cloud machines: they go once their
+    /// commands end.
+    pub fn project_off(&self, key: &str) {
+        let ids: Vec<(String, String)> = self
+            .records
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.shown.project_key == key && r.active())
+            .map(|r| (r.shown.id.clone(), r.shown.project.clone()))
+            .collect();
+        for (id, project) in ids {
+            self.retire(&id, format!("{project} no longer uses cloud machines"));
+        }
+    }
+
+    /// Whether provider `provider` has machines that are not gone yet.
+    pub fn has_machines(&self, provider: &str) -> bool {
+        self.records
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|r| r.shown.provider == provider && r.active())
+    }
+
+    /// Provider `provider` is being removed: its machines go first.
+    pub fn provider_off(&self, provider: &str) {
+        let ids: Vec<String> = self
+            .records
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.shown.provider == provider && r.active())
+            .map(|r| r.shown.id.clone())
+            .collect();
+        for id in ids {
+            self.retire(&id, "its provider was removed".into());
+        }
     }
 
     /// Removes machine `id`: it leaves the candidates, its device is
@@ -852,6 +1162,10 @@ impl Machines {
             r.shown.error = None;
             r.shown.error_since = None;
         });
+        // A provider being removed goes once its last machine has.
+        if !self.has_machines(&r.shown.provider) {
+            self.settings.drop_pending(&r.shown.provider);
+        }
     }
 
     /// The sweep: machines labelled with this central host that moonlet has
@@ -906,6 +1220,20 @@ impl Machines {
             }
         }
     }
+}
+
+/// When ready machine `r` is removed for its idleness: after `idle`
+/// minutes from ready or from its last command's end. None while it runs a
+/// command, or before it ran one a command waits on.
+fn idle_until(r: &Record, idle: u32) -> Option<u64> {
+    if r.shown.state != "ready" || r.shown.running > 0 || (r.waiting > 0 && r.last_end.is_none()) {
+        return None;
+    }
+    let since = r
+        .last_end
+        .unwrap_or(0)
+        .max(r.ready_at.unwrap_or(r.shown.since));
+    Some(since + u64::from(idle) * minute())
 }
 
 fn step(id: &str, label: String) -> CloudStep {

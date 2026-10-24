@@ -75,6 +75,8 @@ struct Going {
 
 pub struct Runs {
     next: AtomicU32,
+    /// The central host's cloud machines (X63).
+    machines: Mutex<std::sync::Weak<crate::machines::Machines>>,
     /// Cancel signals of this machine's own runs going on here, by run.
     running: Mutex<HashMap<u32, Arc<Notify>>>,
     /// Cancel signals of runs this machine does for its central host, by
@@ -92,6 +94,9 @@ pub struct Runs {
     /// Runs stopped before their command started, with the status they end
     /// with.
     stops: Mutex<HashMap<u32, i32>>,
+    /// Runs waiting for a cloud machine that the Jobs panel asked to run on
+    /// the central host now (X63).
+    here_now: Mutex<HashSet<u32>>,
     /// Routing copies a run is using on this worker.
     copies_in_use: Mutex<HashSet<String>>,
     /// This central host's runs going on, wherever they run, by run.
@@ -124,6 +129,24 @@ pub struct Plan {
     pub tool_use_id: Option<String>,
     /// The project's name, for the Workers page's skip reasons.
     pub project: String,
+    /// The project's id.
+    pub project_id: String,
+    pub session_name: String,
+    /// The session asked for the cloud (X63).
+    pub cloud: bool,
+}
+
+/// How waiting for a cloud machine ended.
+enum CloudWait {
+    Ready,
+    Stopped(i32),
+    /// Run on the central host, saying this first.
+    Here(String),
+}
+
+/// `m:ss`.
+fn clock(secs: u64) -> String {
+    format!("{}:{:02}", secs / 60, secs % 60)
 }
 
 enum Fail {
@@ -140,18 +163,29 @@ impl Runs {
     pub fn new(base_env: BTreeMap<String, String>, jobs: Arc<Jobs>) -> Arc<Self> {
         Arc::new(Self {
             next: AtomicU32::new(0),
+            machines: Mutex::new(std::sync::Weak::new()),
             running: Mutex::default(),
             routed: Mutex::default(),
             owners: Mutex::default(),
             remote: Mutex::default(),
             claims: Mutex::default(),
             stops: Mutex::default(),
+            here_now: Mutex::default(),
             copies_in_use: Mutex::default(),
             going: Mutex::default(),
             skips: Mutex::default(),
             base_env,
             jobs,
         })
+    }
+
+    /// The cloud machines, which routing starts and sends commands to (X63).
+    pub fn set_machines(&self, machines: std::sync::Weak<crate::machines::Machines>) {
+        *self.machines.lock().unwrap() = machines;
+    }
+
+    fn machines(&self) -> Option<Arc<crate::machines::Machines>> {
+        self.machines.lock().unwrap().upgrade()
     }
 
     /// `exec.run` on the central host: starts `plan` for `client`, as a
@@ -263,95 +297,130 @@ impl Runs {
         };
         let mut skipped = HashSet::new();
         let mut rerun = false;
-        loop {
-            if let Some(status) = self.stopped(run, client) {
-                return status;
+        // A session that asked for the cloud waits for its machine (X63).
+        let mut wait_note = None;
+        if plan.cloud
+            && let Some(m) = self.machines()
+            && m.workers_for(&plan.project_id).is_empty()
+        {
+            match self.wait_for_cloud(run, job, client, plan, &m).await {
+                CloudWait::Ready => {}
+                CloudWait::Stopped(status) => return status,
+                CloudWait::Here(note) => wait_note = Some(note),
             }
-            let chosen = {
-                // Picked and claimed at once, so two runs never both take
-                // a worker's last slot, nor its copy of the session.
-                let mut claims = self.claims.lock().unwrap();
-                let candidates = self.candidates(plan, workers, &skipped, &claims);
-                let Some(chosen) = heavy::pick(&candidates, plan.os, false).cloned() else {
-                    break;
-                };
-                if chosen.kind != Kind::Linked {
-                    break;
-                }
-                claims.insert(run, (chosen.id.clone(), plan.session.clone()));
-                chosen
-            };
-            let name = workers
-                .list()
-                .into_iter()
-                .find(|w| w.worker.id == chosen.id)
-                .map(|w| w.worker.name)
-                .unwrap_or_else(|| chosen.id.clone());
-            let ran = self
-                .remote(run, job, client, plan, &chosen, &name, workers, sync)
-                .await;
-            self.claims.lock().unwrap().remove(&run);
-            match ran {
-                Ok((status, brought, back_ms)) => {
-                    self.skips
-                        .lock()
-                        .unwrap()
-                        .remove(&(chosen.id.clone(), plan.project.clone()));
-                    for note in &brought.notes {
-                        say(note.clone());
-                    }
-                    if !brought.leftovers.is_empty() {
-                        say(format!(
-                            "{} changed on {} during the run; the run's version is in {}",
-                            brought.leftovers.join(", "),
-                            plan.host,
-                            tilde(brought.folder.as_deref().unwrap_or_default())
-                        ));
-                    }
-                    self.jobs.update(job, |j| {
-                        j.phases.push(JobPhase {
-                            name: "Brought back".into(),
-                            took_ms: Some(back_ms),
-                        });
-                        j.brought = brought.files.clone();
-                        j.outputs = brought.outputs.clone();
-                        j.leftovers = brought.leftovers.clone();
-                        j.leftovers_folder = brought.folder.clone();
-                    });
+        }
+        if let Some(note) = wait_note {
+            say(note);
+        } else {
+            loop {
+                if let Some(status) = self.stopped(run, client) {
                     return status;
                 }
-                Err(Fail::Refused(why, detail)) => {
-                    tracing::debug!(worker = %name, "a worker refused a routed command: {why}: {detail}");
-                    self.skips.lock().unwrap().insert(
-                        (chosen.id.clone(), plan.project.clone()),
-                        (why, detail, moonlet_core::paths::now_ms()),
-                    );
-                    skipped.insert(chosen.id);
+                let chosen = {
+                    // Picked and claimed at once, so two runs never both take
+                    // a worker's last slot, nor its copy of the session.
+                    let mut claims = self.claims.lock().unwrap();
+                    let candidates = self.candidates(plan, workers, &skipped, &claims);
+                    let chosen = heavy::pick(&candidates, plan.os, plan.cloud).cloned();
+                    let Some(chosen) = chosen.filter(|c| c.kind != Kind::Central) else {
+                        // No worker is free: a project that allows it gets a
+                        // cloud machine for the next command (X63).
+                        if let Some(m) = self.machines() {
+                            m.overflow(&plan.project_id);
+                        }
+                        break;
+                    };
+                    claims.insert(run, (chosen.id.clone(), plan.session.clone()));
+                    chosen
+                };
+                let name = workers
+                    .list()
+                    .into_iter()
+                    .find(|w| w.worker.id == chosen.id)
+                    .map(|w| w.worker.name)
+                    .unwrap_or_else(|| chosen.id.clone());
+                let machines = (chosen.kind == Kind::Cloud)
+                    .then(|| self.machines())
+                    .flatten();
+                if let Some(m) = &machines {
+                    m.run_started(&chosen.id);
+                    // Its first command of the session copies the session there.
+                    if !m.has_copy(&chosen.id, &plan.session) {
+                        say(format!("Copying {} to {name}…", plan.session_name));
+                    }
                 }
-                Err(Fail::Gone(why)) => {
-                    // A stopped run is not run again.
-                    let stopped = self.stops.lock().unwrap().get(&run).copied();
-                    if let Some(status) = stopped {
-                        say(format!("{name} went away."));
+                let ran = self
+                    .remote(run, job, client, plan, &chosen, &name, workers, sync)
+                    .await;
+                if let Some(m) = &machines {
+                    m.run_ended(&chosen.id);
+                    if ran.is_ok() {
+                        m.copied(&chosen.id, &plan.session);
+                    }
+                }
+                self.claims.lock().unwrap().remove(&run);
+                match ran {
+                    Ok((status, brought, back_ms)) => {
+                        self.skips
+                            .lock()
+                            .unwrap()
+                            .remove(&(chosen.id.clone(), plan.project.clone()));
+                        for note in &brought.notes {
+                            say(note.clone());
+                        }
+                        if !brought.leftovers.is_empty() {
+                            say(format!(
+                                "{} changed on {} during the run; the run's version is in {}",
+                                brought.leftovers.join(", "),
+                                plan.host,
+                                tilde(brought.folder.as_deref().unwrap_or_default())
+                            ));
+                        }
                         self.jobs.update(job, |j| {
-                            event(j, format!("{name} went away"), Some(why.to_string()))
+                            j.phases.push(JobPhase {
+                                name: "Brought back".into(),
+                                took_ms: Some(back_ms),
+                            });
+                            j.brought = brought.files.clone();
+                            j.outputs = brought.outputs.clone();
+                            j.leftovers = brought.leftovers.clone();
+                            j.leftovers_folder = brought.folder.clone();
                         });
                         return status;
                     }
-                    say(format!("{name} went away. Running again on {}.", plan.host));
-                    self.jobs.update(job, |j| {
-                        event(
-                            j,
-                            format!("{name} went away"),
-                            Some(format!("{why} That run's changes were dropped.")),
+                    Err(Fail::Refused(why, detail)) => {
+                        tracing::debug!(worker = %name, "a worker refused a routed command: {why}: {detail}");
+                        self.skips.lock().unwrap().insert(
+                            (chosen.id.clone(), plan.project.clone()),
+                            (why, detail, moonlet_core::paths::now_ms()),
                         );
-                    });
-                    self.jobs
-                        .mark(job, &format!("──── run 2 · {} ────\n", plan.host));
-                    rerun = true;
-                    break;
+                        skipped.insert(chosen.id);
+                    }
+                    Err(Fail::Gone(why)) => {
+                        // A stopped run is not run again.
+                        let stopped = self.stops.lock().unwrap().get(&run).copied();
+                        if let Some(status) = stopped {
+                            say(format!("{name} went away."));
+                            self.jobs.update(job, |j| {
+                                event(j, format!("{name} went away"), Some(why.to_string()))
+                            });
+                            return status;
+                        }
+                        say(format!("{name} went away. Running again on {}.", plan.host));
+                        self.jobs.update(job, |j| {
+                            event(
+                                j,
+                                format!("{name} went away"),
+                                Some(format!("{why} That run's changes were dropped.")),
+                            );
+                        });
+                        self.jobs
+                            .mark(job, &format!("──── run 2 · {} ────\n", plan.host));
+                        rerun = true;
+                        break;
+                    }
+                    Err(Fail::Stopped(status)) => return status,
                 }
-                Err(Fail::Stopped(status)) => return status,
             }
         }
         if let Some(status) = self.stopped(run, client) {
@@ -392,6 +461,101 @@ impl Runs {
         status
     }
 
+    /// Waits for the project's cloud machine, starting one if none is on
+    /// its way, and says so every 10 s.
+    async fn wait_for_cloud(
+        &self,
+        run: u32,
+        job: &str,
+        client: &Arc<Conn>,
+        plan: &Plan,
+        m: &Arc<crate::machines::Machines>,
+    ) -> CloudWait {
+        let say = |text: String| {
+            self.emit(
+                run,
+                job,
+                client,
+                2,
+                format!("moonlet: {text}\n").into_bytes(),
+            )
+        };
+        let no_machine = |why: String| {
+            CloudWait::Here(format!(
+                "no cloud machine ({why}). Running on {}.",
+                plan.host
+            ))
+        };
+        let (id, name) = match m.for_session(&plan.project_id, &plan.session) {
+            Ok(found) => found,
+            Err(e) => return no_machine(e.message),
+        };
+        self.jobs.update(job, |j| {
+            j.state = JobState::Waiting {
+                r#for: name.clone(),
+            }
+        });
+        m.wait_begin(&id);
+        let started = std::time::Instant::now();
+        let mut said = None;
+        let outcome = loop {
+            if let Some(status) = self.stopped(run, client) {
+                break CloudWait::Stopped(status);
+            }
+            if self.here_now.lock().unwrap().remove(&run) {
+                break CloudWait::Here(format!(
+                    "running on {} instead, as asked from the Jobs panel",
+                    plan.host
+                ));
+            }
+            let waited = started.elapsed().as_secs();
+            if said.is_none_or(|s: u64| waited >= s + 10) {
+                said = Some(waited - waited % 10);
+                say(format!("waiting for {name} to start ({})", clock(waited)));
+            }
+            match m.state_of(&id) {
+                Some((state, _)) if state == "ready" => break CloudWait::Ready,
+                Some((state, reason))
+                    if matches!(state.as_str(), "removing" | "removed" | "failed") =>
+                {
+                    break no_machine(reason.unwrap_or_else(|| format!("{name} is gone")));
+                }
+                None => break no_machine(format!("{name} is gone")),
+                _ => {}
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        };
+        m.wait_end(&id);
+        outcome
+    }
+
+    /// `job.run_here`: job `job`, waiting for a cloud machine, runs on the
+    /// central host now (X63).
+    pub fn run_here(&self, job: &str) -> Result<bool, RpcError> {
+        let waiting = self
+            .jobs
+            .get(job)
+            .is_some_and(|j| matches!(j.state, JobState::Waiting { .. }));
+        let run = self
+            .going
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(_, g)| g.job == job)
+            .map(|(run, _)| *run);
+        match (waiting, run) {
+            (true, Some(run)) => {
+                self.here_now.lock().unwrap().insert(run);
+                Ok(true)
+            }
+            _ if self.jobs.get(job).is_none() => Err(RpcError::new("not_found", "no such job")),
+            _ => Err(RpcError::new(
+                "not_waiting",
+                "the job is not waiting for a machine",
+            )),
+        }
+    }
+
     /// The machines that might run a command of `plan`: linked workers
     /// that take heavy commands, and this central host.
     fn candidates(
@@ -401,10 +565,16 @@ impl Runs {
         skipped: &HashSet<String>,
         claims: &HashMap<u32, (String, String)>,
     ) -> Vec<Candidate> {
+        // Cloud machines run only their own project's commands (X63).
+        let (cloud, mine) = match self.machines() {
+            Some(m) => (m.cloud_workers(), m.workers_for(&plan.project_id)),
+            None => (Vec::new(), Vec::new()),
+        };
         let mut out: Vec<Candidate> = workers
             .list()
             .into_iter()
             .filter(|w| w.worker.heavy && !skipped.contains(&w.worker.id))
+            .filter(|w| !cloud.contains(&w.worker.id) || mine.contains(&w.worker.id))
             .filter(|w| {
                 !claims
                     .values()
@@ -412,8 +582,12 @@ impl Runs {
             })
             .map(|w| Candidate {
                 used: claims.values().filter(|(id, _)| *id == w.worker.id).count() as u32,
+                kind: if mine.contains(&w.worker.id) {
+                    Kind::Cloud
+                } else {
+                    Kind::Linked
+                },
                 id: w.worker.id,
-                kind: Kind::Linked,
                 os: w.worker.os,
                 cores: w.worker.cores,
                 load: w.load.unwrap_or(0.0),
@@ -820,25 +994,31 @@ impl Runs {
         sync: Arc<LiveCopies>,
         host: Arc<moonlet_link::Host>,
         slots: u32,
+        cloud: bool,
     ) -> Result<bool, RpcError> {
-        let approved = sync.heavy_approval(&req.copy).ok_or_else(|| {
-            RpcError::new(
-                "not_approved",
-                "this machine has not approved the project's heavy commands",
-            )
-        })?;
-        let command = req
-            .argv
-            .iter()
-            .map(|w| crate::heavy::quote(w))
-            .collect::<Vec<_>>()
-            .join(" ");
-        let words_ok = !req.argv.is_empty() && heavy::route(&command, &approved.commands).is_some();
-        if !words_ok || !req.env.keys().all(|k| approved.env.contains(k)) {
-            return Err(RpcError::new(
-                "not_approved",
-                "not an approved heavy command here",
-            ));
+        // A cloud machine runs what the central host that made it approved
+        // (X63); any other worker keeps its own approval.
+        if !cloud {
+            let approved = sync.heavy_approval(&req.copy).ok_or_else(|| {
+                RpcError::new(
+                    "not_approved",
+                    "this machine has not approved the project's heavy commands",
+                )
+            })?;
+            let command = req
+                .argv
+                .iter()
+                .map(|w| crate::heavy::quote(w))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let words_ok =
+                !req.argv.is_empty() && heavy::route(&command, &approved.commands).is_some();
+            if !words_ok || !req.env.keys().all(|k| approved.env.contains(k)) {
+                return Err(RpcError::new(
+                    "not_approved",
+                    "not an approved heavy command here",
+                ));
+            }
         }
         let cores = std::thread::available_parallelism().map_or(1, |n| n.get() as u32);
         let load = crate::link::load().unwrap_or(0.0);
