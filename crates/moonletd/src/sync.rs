@@ -24,7 +24,7 @@ use moonlet_core::fs::Watchers;
 use moonlet_core::session::SessionManager;
 use moonlet_core::sync::{self as git_sync, ApplyError, Files, HeadMove, MAX_FILE, UnpackError};
 use moonlet_proto::methods::{
-    self as m, CloseReason, Copy, CopyChanged, CopyRemoved, CopySetup, CopyState, Diverged, Keep,
+    self as m, CloseReason, Copy, CopyChanged, CopyKind, CopyRemoved, CopySetup, CopyState, Diverged, Keep,
     Resolution, SetupState, SyncClosing, SyncFetch, SyncFetched, SyncOffer, SyncOffered, SyncOpen,
     SyncOpened, SyncResolve, SyncStopped, SyncUpdate, SyncUpdated,
 };
@@ -115,6 +115,10 @@ fn object_ids(ids: &[&str]) -> Result<(), RpcError> {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct Kept {
     id: String,
+    /// A routing copy (X62) syncs only at a run's fences, never shows in
+    /// `sync.list` and lives in a repository of its own under `runs/`.
+    #[serde(default, skip_serializing_if = "is_live")]
+    kind: CopyKind,
     /// The central host's name.
     host: String,
     session: String,
@@ -177,6 +181,13 @@ struct Kept {
     /// `MOONLET_SESSION_NAME`.
     #[serde(default)]
     name: String,
+    /// When a run last used this routing copy, in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_used: Option<u64>,
+    /// A run prepared this routing copy and has not ended: until then, at
+    /// most until this time, no sweep takes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    in_use_until: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -190,6 +201,8 @@ enum Side {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Served {
     id: String,
+    #[serde(default, skip_serializing_if = "is_live")]
+    kind: CopyKind,
     /// The worker's id.
     worker: String,
     session: String,
@@ -216,6 +229,10 @@ struct Served {
     /// is back.
     #[serde(default)]
     off_branch_sent: bool,
+}
+
+fn is_live(kind: &CopyKind) -> bool {
+    *kind == CopyKind::Live
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -280,6 +297,9 @@ struct ProjectChoices {
     keep_new_since: Option<u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     approved_setup: Vec<String>,
+    /// The project's heavy commands this machine runs (X62).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    approved_heavy: Option<m::HeavyApproval>,
 }
 
 /// A setup started in its own session (`setsid`), so stopping it reaches
@@ -562,7 +582,10 @@ impl LiveCopies {
     /// `sync.list`: this Mac's copies.
     pub fn list(&self) -> Vec<Copy> {
         let kept = self.data.lock().unwrap().worker.clone();
-        kept.iter().map(|k| self.copy_of(k)).collect()
+        kept.iter()
+            .filter(|k| k.kind == CopyKind::Live)
+            .map(|k| self.copy_of(k))
+            .collect()
     }
 
     /// Where this Mac's copies are, to leave out of its projects' worktrees.
@@ -583,7 +606,7 @@ impl LiveCopies {
 
     /// `sync.changed`, with the paths that just started to differ.
     fn changed_with(&self, id: &str, newly_differing: Vec<String>) {
-        if let Some(k) = self.kept(id) {
+        if let Some(k) = self.kept(id).filter(|k| k.kind == CopyKind::Live) {
             let ev = CopyChanged {
                 copy: self.copy_of(&k),
                 newly_differing,
@@ -757,7 +780,7 @@ impl LiveCopies {
             if let Some(k) = data
                 .worker
                 .iter()
-                .find(|k| k.session == session && k.host == host)
+                .find(|k| k.session == session && k.host == host && k.kind == CopyKind::Live)
             {
                 let k = k.clone();
                 drop(data);
@@ -868,7 +891,8 @@ impl LiveCopies {
         tokio::spawn(async move { me.fetch_sessions().await });
         let kept = self.data.lock().unwrap().worker.clone();
         for k in kept {
-            if self.elsewhere(&k).is_some() {
+            // A routing copy is made and brought up to date by its runs.
+            if self.elsewhere(&k).is_some() || k.kind == CopyKind::Run {
                 continue;
             }
             if k.paused.is_none() && k.base.is_none() {
@@ -918,7 +942,9 @@ impl LiveCopies {
         match self.make_copy(&k).await {
             Ok(path) => {
                 self.set_state(&id, CopyState::InSync);
-                self.watch(&path);
+                if k.kind == CopyKind::Live {
+                    self.watch(&path);
+                }
                 self.begin_setup(&id);
             }
             Err(Stop::Offline) => self.set_state(&id, CopyState::Waiting),
@@ -937,6 +963,7 @@ impl LiveCopies {
         let open = SyncOpen {
             copy: k.id.clone(),
             session: k.session.clone(),
+            kind: k.kind,
         };
         let opened: SyncOpened = serde_json::from_value(
             host.request(m::SYNC_OPEN, serde_json::to_value(open).unwrap())
@@ -945,9 +972,14 @@ impl LiveCopies {
         )
         .map_err(|e| Stop::Paused(e.to_string()))?;
 
-        let repo = self.repo_for(k, &opened).await?;
+        let repo = match k.kind {
+            CopyKind::Live => self.repo_for(k, &opened).await?,
+            CopyKind::Run => self.run_repo(&k.host, &opened).await?,
+        };
         self.update_kept(&k.id, |kept| kept.repo = repo.display().to_string());
-        git_sync::fetch_origin(&repo).await;
+        if k.kind == CopyKind::Live {
+            git_sync::fetch_origin(&repo).await;
+        }
         let fetch = SyncFetch {
             copy: k.id.clone(),
             have: git_sync::have(&repo).await,
@@ -1008,16 +1040,18 @@ impl LiveCopies {
                 .filter(|o| o.id != k.id && !o.path.is_empty())
                 .map(|o| PathBuf::from(&o.path))
                 .collect();
-            let fallback = free_folder(
-                copies_dir(&self.home, &k.host, &opened.project, &dir),
-                &others,
-            );
-            let path = copy_path(
-                Path::new(&opened.path),
-                &self.home.join("worktrees"),
-                &others,
-                fallback,
-            );
+            let path = match k.kind {
+                CopyKind::Live => copy_path(
+                    Path::new(&opened.path),
+                    &self.home.join("worktrees"),
+                    &others,
+                    free_folder(copies_dir(&self.home, &k.host, &opened.project, &dir), &others),
+                ),
+                CopyKind::Run => free_folder(
+                    runs_dir(&self.home, "", &k.host, &opened.project, &dir),
+                    &others,
+                ),
+            };
             let made_from = git_sync::commit_tree(&repo, &fetched.head)
                 .await
                 .map_err(|e| Stop::Paused(format!("{e:#}")))?;
@@ -1181,10 +1215,14 @@ impl LiveCopies {
         pack: Option<Vec<u8>>,
     ) -> Result<SyncUpdated, RpcError> {
         let lock = self.lock(&req.copy);
+        // A routing copy offers nothing: its fence waits for a reset after
+        // the last run to finish, rather than finding it half done (X62).
+        let run = self.kept(&req.copy).is_some_and(|k| k.kind == CopyKind::Run);
+        let held = if run { Ok(lock.lock().await) } else { lock.try_lock() };
         // An offer under way waits for the central host's session, which
         // this update holds: the update gives way, and an offer after it,
         // reconciled with the session as it is then, brings its changes.
-        let Ok(_one) = lock.try_lock() else {
+        let Ok(_one) = held else {
             self.offer_later(&req.copy);
             return Ok(SyncUpdated {
                 applied: false,
@@ -1488,6 +1526,10 @@ impl LiveCopies {
     /// one turned away is made again after [`OFFER_WAIT`], doubling up to
     /// [`OFFER_WAIT_MAX`]. The copy shows syncing meanwhile.
     async fn offer_until_taken(&self, id: &str, force: bool) {
+        // A routing copy's changes go back with its run (X62).
+        if self.kept(id).is_none_or(|k| k.kind == CopyKind::Run) {
+            return;
+        }
         let mut wait = OFFER_WAIT;
         let mut internal = 0;
         loop {
@@ -1640,7 +1682,8 @@ impl LiveCopies {
     fn link_holders(&self) -> usize {
         let keep_new = !self.keep_new_choices().is_empty();
         let data = self.data.lock().unwrap();
-        data.worker.len() + data.closed.len() + usize::from(keep_new)
+        let live = data.worker.iter().filter(|k| k.kind == CopyKind::Live).count();
+        live + data.closed.len() + usize::from(keep_new)
     }
 
     /// `sync.closing` from the central host: the session is going away.
@@ -1662,6 +1705,15 @@ impl LiveCopies {
     ) -> Result<SyncStopped, RpcError> {
         let lock = self.lock(id);
         let _one = lock.lock().await;
+        self.remove_held(id, reason).await
+    }
+
+    /// [`LiveCopies::remove`], holding copy `id`'s lock.
+    async fn remove_held(
+        self: &Arc<Self>,
+        id: &str,
+        reason: CloseReason,
+    ) -> Result<SyncStopped, RpcError> {
         let Some(k) = self.kept(id) else {
             return Ok(SyncStopped::default());
         };
@@ -1709,7 +1761,9 @@ impl LiveCopies {
                 s.link.set_synced(s.link_holders());
             }
         });
-        (self.emit)(Message::event(m::EV_SYNC_CHANGED, ev));
+        if k.kind == CopyKind::Live {
+            (self.emit)(Message::event(m::EV_SYNC_CHANGED, ev));
+        }
         Ok(saved)
     }
 
@@ -1817,7 +1871,7 @@ impl LiveCopies {
             .worker
             .iter()
             .filter(|k| k.base.is_some() && !k.path.is_empty() && !Path::new(&k.path).exists())
-            .filter(|k| k.paused.is_none())
+            .filter(|k| k.paused.is_none() && k.kind == CopyKind::Live)
             .cloned()
             .collect();
         for k in &gone {
@@ -2009,7 +2063,7 @@ impl LiveCopies {
                 .into_iter()
                 .filter(|s| !s.archived && s.created_at >= since)
                 .filter(|s| !data.auto.contains(&s.id))
-                .filter(|s| !data.worker.iter().any(|k| k.session == s.id))
+                .filter(|s| !data.worker.iter().any(|k| k.session == s.id && k.kind == CopyKind::Live))
                 .collect()
         };
         if fresh.is_empty() {
@@ -2045,7 +2099,9 @@ impl LiveCopies {
             // a choice made while this pass waited stands.
             {
                 let mut data = self.data.lock().unwrap();
-                if data.auto.contains(&s.id) || data.worker.iter().any(|k| k.session == s.id) {
+                if data.auto.contains(&s.id)
+                    || data.worker.iter().any(|k| k.session == s.id && k.kind == CopyKind::Live)
+                {
                     continue;
                 }
                 data.auto.push(s.id.clone());
@@ -2456,6 +2512,7 @@ impl LiveCopies {
             data.central.retain(|s| s.id != req.copy);
             data.central.push(Served {
                 id: req.copy.clone(),
+                kind: req.kind,
                 worker,
                 session: session.id.clone(),
                 path: session.path.clone(),
@@ -2826,7 +2883,7 @@ impl LiveCopies {
     /// Sends copy `id`'s worker what changed in its session since their
     /// base; with `always`, also when nothing did.
     async fn push(&self, id: &str, always: bool) {
-        let Some(served) = self.served(id) else {
+        let Some(served) = self.served(id).filter(|s| s.kind == CopyKind::Live) else {
             return;
         };
         let lock = self.lock(&format!("session:{}", served.path));
@@ -2985,7 +3042,7 @@ impl LiveCopies {
                             .collect(),
                         data.worker
                             .iter()
-                            .filter(|k| at_root(&k.path))
+                            .filter(|k| at_root(&k.path) && k.kind == CopyKind::Live)
                             .map(|k| k.id.clone())
                             .collect(),
                     )
@@ -3258,6 +3315,497 @@ fn copies_dir(home: &Path, host: &str, project: &str, session: &str) -> PathBuf 
         .join(segment(host))
         .join(segment(project))
         .join(segment(session));
+    debug_assert!(dir.starts_with(&base));
+    dir
+}
+
+/// Routing copies (X62): a worker's copy of a session that heavy commands
+/// run in. It syncs only at a run's fences: before the run the central host
+/// brings it to the session's files and commit, after it the run's changes
+/// go back and the copy returns to that fence, so between runs it always
+/// holds its base.
+impl LiveCopies {
+    /// `exec.prepare`: this worker's routing copy of `session`, made if it
+    /// has none yet. `setup_pending` while the project's setup runs or
+    /// waits for the user's approval.
+    pub async fn prepare_run(self: &Arc<Self>, session: String) -> Result<m::ExecPrepared, RpcError> {
+        let host = self
+            .link
+            .central_name()
+            .ok_or_else(|| RpcError::new("no_central_host", "this machine has no central host"))?;
+        // Found and marked in use under its lock, so a sweep removing it
+        // meanwhile is waited for, and the copy made anew.
+        let (id, _held) = loop {
+            let id = {
+                let mut data = self.data.lock().unwrap();
+                match data
+                    .worker
+                    .iter()
+                    .find(|k| k.kind == CopyKind::Run && k.session == session && k.host == host)
+                {
+                    Some(k) => k.id.clone(),
+                    None => {
+                        let kept = Kept {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            kind: CopyKind::Run,
+                            host: host.clone(),
+                            session: session.clone(),
+                            ..Kept::default()
+                        };
+                        let id = kept.id.clone();
+                        data.worker.push(kept);
+                        id
+                    }
+                }
+            };
+            let lock = self.lock(&id);
+            let held = lock.lock_owned().await;
+            if self.kept(&id).is_some() {
+                let now = moonlet_core::paths::now_ms();
+                self.update_kept(&id, |k| {
+                    k.last_used = Some(now);
+                    k.in_use_until = Some(now + RUN_IN_USE_MS);
+                });
+                break (id, held);
+            }
+        };
+        drop(_held);
+        self.save();
+        // A routing copy has nobody to retry it: one whose folder went, or
+        // that stopped on an error, is made again.
+        if let Some(k) = self.kept(&id)
+            && (k.paused.is_some() || (k.base.is_some() && !Path::new(&k.path).exists()))
+        {
+            self.update_kept(&id, |k| {
+                k.paused = None;
+                k.branch_pause = None;
+                if !Path::new(&k.path).exists() {
+                    k.path.clear();
+                    k.base = None;
+                    k.base_head = None;
+                    k.sent_base = None;
+                    k.tree = None;
+                    k.head = None;
+                }
+            });
+        }
+        self.clone().make(id.clone()).await;
+        self.update_kept(&id, |k| k.last_used = Some(moonlet_core::paths::now_ms()));
+        let k = self
+            .kept(&id)
+            .ok_or_else(|| RpcError::new("not_found", "the routing copy went"))?;
+        let (state, reason) = if let Some(p) = k.paused {
+            ("failed", Some(p))
+        } else if k.base.is_none() {
+            ("making", None)
+        } else {
+            match k.setup.map(|s| s.state) {
+                Some(SetupState::Running | SetupState::NeedsApproval) => ("setup_pending", None),
+                _ => ("ready", None),
+            }
+        };
+        Ok(m::ExecPrepared {
+            copy: id,
+            state: state.into(),
+            reason,
+        })
+    }
+
+    /// The routing copy `copy`'s folder, when it holds exactly the fence's
+    /// `tree` and `head`; otherwise `not_fenced`.
+    pub async fn run_copy_at(&self, copy: &str, tree: &str, head: &str) -> Result<PathBuf, RpcError> {
+        let k = self
+            .kept(copy)
+            .filter(|k| k.kind == CopyKind::Run && !k.path.is_empty())
+            .ok_or_else(|| RpcError::new("not_found", "no such routing copy"))?;
+        let path = PathBuf::from(&k.path);
+        let snap = git_sync::snapshot(&path, MAX_FILE).await.map_err(internal)?;
+        let now = git_sync::head(&path).await.map_err(internal)?;
+        if snap.tree != tree || now != head {
+            return Err(RpcError::new("not_fenced", "the copy does not match the session"));
+        }
+        self.update_kept(copy, |k| k.last_used = Some(moonlet_core::paths::now_ms()));
+        Ok(path)
+    }
+
+    /// The routing copy's files and commit after a run, and the pack of
+    /// what is new since its fence.
+    pub async fn run_changes(&self, copy: &str, outputs: Option<&str>) -> anyhow::Result<(String, String, Vec<u8>)> {
+        let k = self
+            .kept(copy)
+            .ok_or_else(|| anyhow::anyhow!("no such routing copy"))?;
+        let (Some(base), Some(base_head)) = (k.base.clone(), k.base_head.clone()) else {
+            anyhow::bail!("the routing copy has no fence");
+        };
+        let path = Path::new(&k.path);
+        let snap = git_sync::snapshot(path, MAX_FILE).await?;
+        let head = git_sync::head(path).await?;
+        let mut new = vec![snap.tree.as_str(), head.as_str()];
+        new.extend(outputs);
+        let pack = git_sync::pack_objects(path, &new, &[&base, &base_head]).await?;
+        Ok((snap.tree, head, pack))
+    }
+
+    /// The lock a run holds from sending its changes back until its copy
+    /// is back at the fence, so the next fence never finds it half done.
+    pub fn run_lock(&self, copy: &str) -> Arc<tokio::sync::Mutex<()>> {
+        self.lock(copy)
+    }
+
+    /// The central host's session routing copy `copy` is of.
+    pub fn run_copy_session(&self, copy: &str) -> Option<String> {
+        self.kept(copy)
+            .filter(|k| k.kind == CopyKind::Run)
+            .map(|k| k.session)
+    }
+
+    /// Routing copy `copy`'s folder.
+    pub fn run_copy_path(&self, copy: &str) -> Option<PathBuf> {
+        self.kept(copy)
+            .filter(|k| k.kind == CopyKind::Run && !k.path.is_empty())
+            .map(|k| PathBuf::from(k.path))
+    }
+
+    /// Takes the routing copy back to its fence: after its changes went to
+    /// the central host, or when its run was abandoned.
+    /// Removes this worker's routing copies, all of them or those not made
+    /// with `keep`, its central host now: heavy commands went off, or the
+    /// central host changed.
+    pub fn remove_run_copies(self: &Arc<Self>, keep: Option<String>) {
+        let ids: Vec<String> = self
+            .data
+            .lock()
+            .unwrap()
+            .worker
+            .iter()
+            .filter(|k| k.kind == CopyKind::Run && keep.as_deref() != Some(k.host.as_str()))
+            .map(|k| k.id.clone())
+            .collect();
+        for id in ids {
+            let me = self.clone();
+            tokio::spawn(async move {
+                if let Err(e) = me.remove(&id, CloseReason::Stopped).await {
+                    tracing::warn!(copy = %id, "cannot remove the routing copy: {}", e.message);
+                }
+            });
+        }
+    }
+
+    /// Removes routing copies no run used for a week (X62), every hour.
+    pub fn sweep_run_copies(self: &Arc<Self>) {
+        let ms = |var: &str, default: u64| {
+            std::env::var(var).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+        };
+        let ttl = ms("MOONLET_TEST_RUN_COPY_TTL_MS", 7 * 24 * 3600 * 1000);
+        let every = Duration::from_millis(ms("MOONLET_TEST_RUN_COPY_SWEEP_MS", 3600 * 1000));
+        let me = self.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(every).await;
+                let now = moonlet_core::paths::now_ms();
+                let old: Vec<String> = me
+                    .data
+                    .lock()
+                    .unwrap()
+                    .worker
+                    .iter()
+                    .filter(|k| k.kind == CopyKind::Run && unused(k, now, ttl))
+                    .map(|k| k.id.clone())
+                    .collect();
+                for id in old {
+                    // A copy in use now is not unused: it waits for the
+                    // next sweep, and its age is read again under its lock.
+                    let lock = me.lock(&id);
+                    let Ok(_one) = lock.try_lock() else { continue };
+                    let now = moonlet_core::paths::now_ms();
+                    if !me.kept(&id).is_some_and(|k| unused(&k, now, ttl)) {
+                        continue;
+                    }
+                    if let Err(e) = me.remove_held(&id, CloseReason::Stopped).await {
+                        tracing::warn!(copy = %id, "cannot remove the routing copy: {}", e.message);
+                    }
+                }
+            }
+        });
+    }
+
+    /// Call holding [`LiveCopies::run_lock`].
+    pub async fn reset_run(&self, copy: &str) {
+        self.update_kept(copy, |k| {
+            k.last_used = Some(moonlet_core::paths::now_ms());
+            k.in_use_until = None;
+        });
+        let Some(k) = self.kept(copy) else { return };
+        let (Some(base), Some(base_head)) = (k.base.clone(), k.base_head.clone()) else {
+            return;
+        };
+        let path = Path::new(&k.path);
+        if let Ok(head) = git_sync::head(path).await
+            && head != base_head
+        {
+            let _ = git_sync::reset_branch(path, &head, &base_head).await;
+        }
+        if let Err(Stop::Paused(reason)) = apply_tries(path, &base, &k.host).await {
+            self.update_kept(copy, |k| k.paused = Some(reason));
+        }
+    }
+
+    /// `heavy.approve` on a worker: the commands and `env` names of a
+    /// project of its central host it runs.
+    pub fn approve_heavy(&self, identity: &ProjectIdentity, approval: m::HeavyApproval) -> Result<(), RpcError> {
+        let host = self
+            .link
+            .central_name()
+            .ok_or_else(|| RpcError::new("no_central_host", "this machine has no central host"))?;
+        let key = project_key(&host, identity)
+            .ok_or_else(|| RpcError::new("no_identity", "the project has no first commit to keep the approval by"))?;
+        self.update_projects(&key, |p| p.approved_heavy = Some(approval))
+    }
+
+    /// What this worker approved of the project routing copy `copy` is of.
+    pub fn heavy_approval(&self, copy: &str) -> Option<m::HeavyApproval> {
+        let k = self.kept(copy)?;
+        let key = project_key(&k.host, k.identity.as_ref()?)?;
+        self.load_projects().remove(&key)?.approved_heavy
+    }
+
+    /// The fence before a run, on the central host: brings routing copy
+    /// `copy` to the session's files and commit, and gives them with the
+    /// session's worktree.
+    pub async fn fence(&self, copy: &str, worker: &str, session: &str) -> Result<(String, String, String), RpcError> {
+        let not_fenced = |why: &str| RpcError::new("not_fenced", why.to_string());
+        let served = self
+            .served(copy)
+            .filter(|s| s.kind == CopyKind::Run && s.worker == worker && s.session == session)
+            .ok_or_else(|| RpcError::new("not_found", "no such routing copy"))?;
+        let lock = self.lock(&format!("session:{}", served.path));
+        let _one = lock.lock().await;
+        let served = self.served(copy).ok_or_else(|| not_fenced("the copy went"))?;
+        let (Some(base), Some(base_head)) = (served.base.clone(), served.base_head.clone()) else {
+            return Err(not_fenced("the copy is not made"));
+        };
+        let conn = self
+            .workers
+            .conn(&served.worker)
+            .ok_or_else(|| RpcError::new("disconnected", "the worker went away"))?;
+        let path = Path::new(&served.path);
+        if off_branch(path, &served.branch).await.map_err(internal)?.is_some() {
+            return Err(not_fenced("the session is off its branch"));
+        }
+        self.push_to(&conn, &served, path, &base, &base_head, true)
+            .await
+            .map_err(|e| not_fenced(&format!("{e:#}")))?;
+        let after = self.served(copy).ok_or_else(|| not_fenced("the copy went"))?;
+        let snap = git_sync::snapshot(path, MAX_FILE).await.map_err(internal)?;
+        let head = git_sync::head(path).await.map_err(internal)?;
+        if after.base.as_deref() != Some(snap.tree.as_str()) || after.base_head.as_deref() != Some(head.as_str()) {
+            return Err(not_fenced("the session changed during the fence"));
+        }
+        Ok((snap.tree, head, served.path))
+    }
+
+    /// `exec.done` on the central host: brings a run's changes into the
+    /// session. A file the session changed during the run as well keeps
+    /// the session's version, and the run's is saved to
+    /// `sync-leftovers/<session folder>-run-<when>`.
+    pub async fn run_back(
+        &self,
+        conn: &Conn,
+        req: &m::ExecDone,
+        pack: Option<Vec<u8>>,
+        host: &str,
+        outputs: &[String],
+    ) -> Result<m::ExecBrought, RpcError> {
+        self.owner(conn, &req.copy)?;
+        object_ids(&[&req.tree, &req.head])?;
+        if let Some(t) = &req.outputs {
+            object_ids(&[t])?;
+        }
+        let served = self
+            .served(&req.copy)
+            .filter(|s| s.kind == CopyKind::Run)
+            .ok_or_else(|| RpcError::new("not_found", "no such routing copy"))?;
+        let lock = self.lock(&format!("session:{}", served.path));
+        let _one = lock.lock().await;
+        let (Some(base), Some(base_head)) = (served.base.clone(), served.base_head.clone()) else {
+            return Err(RpcError::new("not_fenced", "the copy has no fence"));
+        };
+        let path = Path::new(&served.path);
+        if let Some(pack) = pack {
+            git_sync::unpack(path, &pack)
+                .await
+                .map_err(|e| RpcError::new("refused", e.to_string()))?;
+        }
+        let now = git_sync::snapshot(path, MAX_FILE).await.map_err(internal)?;
+        let head_now = git_sync::head(path).await.map_err(internal)?;
+        let r = git_sync::reconcile_trees(path, &base, &now.tree, &req.tree)
+            .await
+            .map_err(internal)?;
+        if r.central != now.tree {
+            git_sync::apply(path, &now.tree, &r.central)
+                .await
+                .map_err(|e| RpcError::new("failed", e.to_string()))?;
+        }
+        // A commit the run made moves the session's branch forward.
+        if req.head != base_head
+            && req.head != head_now
+            && git_sync::is_ancestor(path, &head_now, &req.head).await.unwrap_or(false)
+        {
+            git_sync::fast_forward(path, &served.branch, &head_now, &req.head)
+                .await
+                .map_err(internal)?;
+        }
+        let notes = match &req.outputs {
+            Some(t) => bring_outputs(path, t, host, outputs).await.map_err(internal)?,
+            None => Vec::new(),
+        };
+        if r.differs.is_empty() {
+            return Ok(m::ExecBrought {
+                notes,
+                ..m::ExecBrought::default()
+            });
+        }
+        let dir = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "session".into());
+        let folder = make_leftovers_folder(&self.home.join("sync-leftovers"), &format!("{}-run", segment(&dir)))
+            .map_err(internal)?;
+        let files = git_sync::read_files(path, &req.tree).await.map_err(internal)?;
+        let mut saved = Vec::new();
+        for p in &r.differs {
+            let Some(entry) = files.get(p) else { continue };
+            // Plain files only, at paths inside the folder.
+            if entry.mode == "120000" || entry.mode == "160000" || p.split('/').any(|c| c.is_empty() || c == "." || c == "..") {
+                continue;
+            }
+            let bytes = git_sync::blob(path, &entry.oid).await.map_err(internal)?;
+            let to = folder.join(p);
+            if let Some(parent) = to.parent() {
+                std::fs::create_dir_all(parent).map_err(internal)?;
+            }
+            std::fs::write(&to, bytes).map_err(internal)?;
+            saved.push(p.clone());
+        }
+        Ok(m::ExecBrought {
+            leftovers: saved,
+            folder: Some(folder.display().to_string()),
+            notes,
+        })
+    }
+
+    /// The repository routing copies of a project go in: one of its own per
+    /// central host and project, filled only with what the central host
+    /// sends, so the user's own repositories and credentials are never used.
+    async fn run_repo(&self, host: &str, opened: &SyncOpened) -> Result<PathBuf, Stop> {
+        let id = &opened.identity;
+        let key = format!(
+            "{} {}",
+            id.origin.as_deref().unwrap_or(""),
+            id.root.as_deref().unwrap_or(&opened.project)
+        );
+        let repo = runs_dir(&self.home, "repos", host, &key, "");
+        git_sync::init_repo(&repo)
+            .await
+            .map_err(|e| Stop::Paused(format!("{e:#}")))?;
+        Ok(repo)
+    }
+}
+
+/// Writes a run's `outputs` tree into the session at `path` (X62): each of
+/// the project's `outputs` paths the tree has replaces the session's. A
+/// path with a symbolic link anywhere on its way inside the worktree is
+/// left alone, so nothing is written outside it; the notes say which.
+async fn bring_outputs(path: &Path, tree: &str, host: &str, roots: &[String]) -> anyhow::Result<Vec<String>> {
+    // The run's `outputs` as checked when it started, checked again here.
+    let checked = moonlet_proto::types::HeavyConfig {
+        outputs: roots.to_vec(),
+        ..Default::default()
+    };
+    moonlet_core::heavy::check(&checked).map_err(anyhow::Error::msg)?;
+    let files = git_sync::read_files(path, tree).await?;
+    // A path git would refuse to check out, such as one into `.git` or
+    // under a link of the same tree, stops all of them.
+    if let Some(bad) = git_sync::unsafe_path(&files) {
+        return Ok(vec![format!("outputs not brought back: {bad} is not a safe path")]);
+    }
+    let mut notes = Vec::new();
+    for root in roots {
+        let root = root.trim_end_matches('/');
+        let mine: Vec<(&String, &git_sync::Entry)> = files
+            .iter()
+            .filter(|(p, _)| p.as_str() == root || p.starts_with(&format!("{root}/")))
+            .collect();
+        if mine.is_empty() {
+            continue;
+        }
+        if crate::exec::through_link(path, root) {
+            notes.push(format!("{root} is a symbolic link on {host}; not brought back"));
+            continue;
+        }
+        let dest = path.join(root);
+        match std::fs::symlink_metadata(&dest) {
+            Ok(m) if m.is_dir() => std::fs::remove_dir_all(&dest)?,
+            Ok(_) => std::fs::remove_file(&dest)?,
+            Err(_) => {}
+        }
+        // Files first and links last, and nothing written through a link
+        // on its way: a tree from the worker never writes outside `dest`.
+        let (links, files): (Vec<_>, Vec<_>) = mine.into_iter().partition(|(_, e)| e.mode == "120000");
+        for (p, entry) in files.into_iter().chain(links) {
+            if p.split('/').any(|c| c.is_empty() || c == "." || c == "..") {
+                continue;
+            }
+            let parent = Path::new(p).parent().map(|d| d.display().to_string()).unwrap_or_default();
+            if crate::exec::through_link(path, &parent) {
+                continue;
+            }
+            let to = path.join(p);
+            if std::fs::symlink_metadata(&to).is_ok() {
+                continue;
+            }
+            if let Some(dir) = to.parent() {
+                std::fs::create_dir_all(dir)?;
+            }
+            let bytes = git_sync::blob(path, &entry.oid).await?;
+            match entry.mode.as_str() {
+                "120000" => {
+                    use std::os::unix::ffi::OsStrExt;
+                    std::os::unix::fs::symlink(std::ffi::OsStr::from_bytes(&bytes), &to)?;
+                }
+                mode => {
+                    std::fs::write(&to, &bytes)?;
+                    if mode == "100755" {
+                        use std::os::unix::fs::PermissionsExt;
+                        std::fs::set_permissions(&to, std::fs::Permissions::from_mode(0o755))?;
+                    }
+                }
+            }
+        }
+    }
+    Ok(notes)
+}
+
+/// How long a run may hold a routing copy it prepared before a sweep may
+/// take it after all: a run whose central host never started it.
+const RUN_IN_USE_MS: u64 = 10 * 60 * 1000;
+
+/// Whether routing copy `k` has gone unused for `ttl` at `now`.
+fn unused(k: &Kept, now: u64, ttl: u64) -> bool {
+    let in_use = k.in_use_until.is_some_and(|t| t > now);
+    !in_use && k.last_used.is_some_and(|t| now.saturating_sub(t) > ttl)
+}
+
+/// Where a routing copy goes (X62): `runs/<host>/<project>/<session>`, or,
+/// with `sub`, `runs/<sub>/<host>/<project>` for its repository.
+fn runs_dir(home: &Path, sub: &str, host: &str, project: &str, session: &str) -> PathBuf {
+    let base = home.join("runs");
+    let mut dir = base.clone();
+    for part in [sub, host, project, session] {
+        if !part.is_empty() {
+            dir = dir.join(segment(part));
+        }
+    }
     debug_assert!(dir.starts_with(&base));
     dir
 }
@@ -3566,6 +4114,7 @@ pub fn spawn(daemon: Arc<crate::daemon::Daemon>) {
             .insert(k.id.clone(), CopyState::Waiting);
     }
     sync.link.set_synced(sync.link_holders());
+    sync.sweep_run_copies();
     // New sessions that waited for the composer are looked at again.
     let due = sync.clone();
     tokio::spawn(async move {
@@ -3582,6 +4131,42 @@ pub fn spawn(daemon: Arc<crate::daemon::Daemon>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn git(dir: &Path, args: &[&str]) -> String {
+        let out = std::process::Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"])
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    /// A worker could send a tree whose link `coverage/L` stands where, on
+    /// a file system that ignores case, its folder `coverage/l` is: files
+    /// written through that link would land outside the worktree (X62).
+    #[tokio::test]
+    async fn a_tree_of_outputs_never_writes_through_its_own_links() {
+        let session = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let path = session.path();
+        git(path, &["init", "-q", "-b", "main"]);
+        std::fs::create_dir_all(path.join(".moonlet")).unwrap();
+        std::fs::write(path.join(".moonlet/config.toml"), "[heavy]\noutputs = [\"coverage\"]\n").unwrap();
+        git(path, &["add", "."]);
+        git(path, &["commit", "-qm", "shop"]);
+        let target = git_sync::hash_bytes(path, outside.path().to_str().unwrap().as_bytes()).await.unwrap();
+        let secret = git_sync::hash_bytes(path, b"owned\n").await.unwrap();
+        let mut files = Files::new();
+        files.insert("coverage/L".into(), git_sync::Entry { mode: "120000".into(), oid: target });
+        files.insert("coverage/l/passwd".into(), git_sync::Entry { mode: "100644".into(), oid: secret });
+        let tree = git_sync::write_files(path, &files).await.unwrap();
+        bring_outputs(path, &tree, "studio-mini", &["coverage".to_string()]).await.unwrap();
+        assert!(!outside.path().join("passwd").exists());
+    }
+
 
     #[test]
     fn a_projects_key_names_its_central_host_whole() {

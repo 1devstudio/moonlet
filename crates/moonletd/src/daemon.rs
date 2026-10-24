@@ -50,8 +50,8 @@ pub struct Daemon {
     pub sync: Arc<crate::sync::LiveCopies>,
     /// Approved heavy commands and routing decisions (X62).
     heavy: Arc<crate::heavy::Heavy>,
-    /// Heavy commands running on this machine (X62).
-    runs: Arc<crate::exec::Runs>,
+    /// Heavy commands running on this machine or routed to its workers (X62).
+    pub runs: Arc<crate::exec::Runs>,
 }
 
 pub type HandlerResult = Result<Value, RpcError>;
@@ -186,9 +186,11 @@ impl Daemon {
         );
         link.set_sync(Arc::downgrade(&sync));
         let heavy = crate::heavy::Heavy::new(&moonlet_core::paths::home(), sessions.clone());
+        let runs = crate::exec::Runs::new(terminals.base_env().clone());
+        link.set_runs(Arc::downgrade(&runs));
         Arc::new(Self {
             heavy,
-            runs: Arc::default(),
+            runs,
             clones,
             terminals,
             chats,
@@ -566,24 +568,80 @@ impl Daemon {
             // An agent could otherwise approve the commands it adds (X62).
             m::HEAVY_APPROVE => {
                 self.app_or_paired_mac(conn, "heavy commands")?;
-                ok(self.heavy.approve(params(p)?)?)
+                let r: m::HeavyApprove = params(p)?;
+                match (&r.project, &r.identity) {
+                    (Some(_), _) => ok(self.heavy.approve(r)?),
+                    // On a worker: a project of its central host (X62).
+                    (None, Some(identity)) => {
+                        let approval = m::HeavyApproval {
+                            commands: crate::heavy::sorted(&r.commands),
+                            env: crate::heavy::sorted(&r.env),
+                        };
+                        self.sync.approve_heavy(identity, approval)?;
+                        ok(true)
+                    }
+                    (None, None) => Err(RpcError::new("invalid_params", "give project or identity")),
+                }
             }
             m::EXEC_RUN => {
                 let r: m::ExecRun = params(p)?;
-                let (cwd, passed) = self
+                let checked = self
                     .heavy
                     .check_run(&r.session, &r.argv, &r.cwd, &r.env)
                     .map_err(crate::exec::refused)?;
                 let mut env = self.terminals.base_env().clone();
-                env.extend(passed);
+                env.extend(checked.env.clone());
                 env.insert("MOONLET_ROUTED".into(), "1".into());
                 env.insert("MOONLET_SESSION".into(), r.session.clone());
-                let cmd = crate::exec::Command { argv: r.argv, cwd, env };
-                ok(self.runs.start(conn.clone(), self.link.info().worker.name, cmd))
+                let me = self.link.info().worker;
+                let plan = crate::exec::Plan {
+                    session: r.session,
+                    argv: r.argv.clone(),
+                    cwd_rel: checked.cwd_rel,
+                    env: checked.env,
+                    local: crate::exec::Command { argv: r.argv, cwd: checked.cwd, env },
+                    os: checked.os,
+                    outputs: checked.outputs,
+                    host: me.name,
+                    slots: me.slots,
+                };
+                ok(self.runs.start(conn.clone(), plan, self.workers.clone(), self.sync.clone()))
             }
             m::EXEC_CANCEL => {
                 let r: m::ExecCancel = params(p)?;
-                ok(self.runs.cancel(conn.id, r.run))
+                ok(self.runs.cancel(conn.id, r.run).await)
+            }
+            // A worker's run ended: its changes come into the session
+            // before `moonlet exec` hears the exit status (X62).
+            m::EXEC_DONE => {
+                if conn.client != crate::link::WORKER_CLIENT || conn.phone.is_none() {
+                    return Err(RpcError::new("forbidden", "only a worker ends a run"));
+                }
+                let r: m::ExecDone = params(p)?;
+                let Some(outputs) = self.runs.runs_on(conn.id, r.run, &r.copy) else {
+                    return Err(RpcError::new("not_found", "no such run"));
+                };
+                let host = self.link.info().worker.name;
+                let brought = match r.pack {
+                    Some(t) => conn
+                        .take_pack(t)
+                        .ok_or_else(|| RpcError::new("invalid_params", "the pack did not arrive")),
+                    None => Ok(Vec::new()),
+                };
+                let brought = match brought {
+                    Ok(pack) => {
+                        let pack = r.pack.map(|_| pack);
+                        self.sync.run_back(conn, &r, pack, &host, &outputs).await
+                    }
+                    Err(e) => Err(e),
+                };
+                // The run ends either way: its client is told what was lost.
+                let ended = brought.clone().unwrap_or_else(|e| m::ExecBrought {
+                    notes: vec![format!("cannot bring back the run's changes: {}", e.message)],
+                    ..Default::default()
+                });
+                self.runs.done(conn.id, r.run, r.status, ended);
+                ok(brought?)
             }
             m::EXEC_ROUTE => {
                 let r: m::ExecRoute = params(p)?;
