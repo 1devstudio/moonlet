@@ -29,6 +29,9 @@ pub struct Daemon {
     pub sessions: Arc<SessionManager>,
     /// Design systems and designs under `~/.moonlet/design` (X64, X65).
     design: moonlet_core::design::store::Store,
+    /// Per design system (X64): one start of its agent, or one change of its
+    /// record or folder, at a time.
+    design_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     reads: TerminalReads,
     watchers: Arc<Watchers>,
     started_at: u64,
@@ -189,6 +192,7 @@ impl Daemon {
             chats,
             sessions,
             design: moonlet_core::design::store::Store::new(&moonlet_core::paths::home()),
+            design_locks: Mutex::new(HashMap::new()),
             reads,
             watchers,
             started_at: now_ms(),
@@ -342,6 +346,8 @@ impl Daemon {
                             session_id: None,
                             env: req.env,
                             add_dirs: req.add_dirs,
+                            settings: None,
+                            workspace: None,
                         })
                         .map_err(internal)?),
                     None => ok(s.create(req).map_err(internal)?),
@@ -693,33 +699,61 @@ impl Daemon {
                     let Some(p) = projects.iter().find(|p| p.id == pick.project) else {
                         return Err(RpcError::new("invalid_params", format!("no project {}", pick.project)));
                     };
-                    sources.push(Source {
+                    let source = Source {
                         project: p.id.clone(),
                         path: p.path.clone(),
                         identity: p.identity.clone(),
                         subdir: pick.subdir.clone(),
                         commit: None,
-                    });
+                    };
+                    // A sub-folder only inside the project, never one out of it.
+                    store::source_root(&source).map_err(|e| RpcError::new("invalid_params", format!("{e:#}")))?;
+                    sources.push(source);
                 }
-                ok(blocking(move || store.create_system(&r.workspace, &r.name, sources, now_ms())).await?)
+                let (workspace, start) = (r.workspace.clone(), r.agent);
+                let slug = blocking(move || store.create_system(&r.workspace, &r.name, sources, now_ms())).await?;
+                let (agent, agent_error) = match start {
+                    // The system exists either way; the app shows why its agent did not start.
+                    true => match self.start_sync_agent(&workspace, &slug).await {
+                        Ok(id) => (Some(id), None),
+                        Err(e) => (None, Some(format!("{e:#}"))),
+                    },
+                    false => (None, None),
+                };
+                ok(serde_json::json!({"slug": slug, "agent": agent, "agent_error": agent_error}))
+            }
+            m::DESIGN_SYSTEM_SYNC => {
+                let r: m::DesignSystemRef = params(p)?;
+                let agent = self.start_sync_agent(&r.workspace, &r.slug).await.map_err(internal)?;
+                ok(serde_json::json!({"agent": agent}))
             }
             m::DESIGN_SYSTEM_REMOVE => {
                 let r: m::DesignSystemRef = params(p)?;
+                // After a start running now, so its agent is the one stopped.
+                let lock = self.design_lock(&r.workspace, &r.slug);
+                let _held = lock.lock().await;
+                self.stop_sync_agent(&r.workspace, &r.slug);
                 blocking(move || store.remove_system(&r.workspace, &r.slug)).await?;
                 ok(true)
             }
             m::DESIGN_SYSTEM_PROGRESS => {
                 let r: m::DesignProgress = params(p)?;
+                let lock = self.design_lock(&r.workspace, &r.slug);
+                let _held = lock.lock().await;
                 blocking(move || store.progress(&r.workspace, &r.slug, &r.step, r.summary.as_deref())).await?;
                 ok(true)
             }
             m::DESIGN_SYSTEM_SYNCED => {
                 let r: m::DesignSystemRef = params(p)?;
-                let config = self.design.config(&r.workspace, &r.slug).map_err(internal)?;
+                // The record is read, changed and written whole: never while
+                // a start writes its agent into it.
+                let lock = self.design_lock(&r.workspace, &r.slug);
+                let _held = lock.lock().await;
+                let record = self.design.record(&r.workspace, &r.slug).map_err(internal)?;
                 // Every source gets an entry: one whose HEAD cannot be read
                 // gets none, so no stale commit stays recorded.
                 let mut commits = Vec::new();
-                for s in &config.sources {
+                for s in &record.sources {
                     commits.push((s.project.clone(), git::head(Path::new(&s.path)).await.ok()));
                 }
                 blocking(move || store.synced(&r.workspace, &r.slug, &commits, now_ms())).await?;
@@ -738,11 +772,96 @@ impl Daemon {
                 let r: m::DesignSettle = params(p)?;
                 let choice: Settle = serde_json::from_value(Value::String(r.choice.clone()))
                     .map_err(|_| RpcError::new("invalid_params", format!("unknown choice {}", r.choice)))?;
+                let lock = self.design_lock(&r.workspace, &r.slug);
+                let _held = lock.lock().await;
                 blocking(move || store.settle(&r.workspace, &r.slug, &r.card, choice)).await?;
                 ok(true)
             }
             _ => Err(RpcError::new("unknown_method", format!("unknown method {method}"))),
         }
+    }
+
+    /// Asks a design system's sync agent to build it, or to sync it again
+    /// (X64). Its chat is reused while it exists; otherwise a new one starts in
+    /// the workspace's Claude profile, with the sources read only.
+    async fn start_sync_agent(&self, workspace: &str, slug: &str) -> anyhow::Result<u32> {
+        use moonlet_core::design::{agent, anchor, store};
+        // One start or sync at a time per system, so two never make two agents.
+        let lock = self.design_lock(workspace, slug);
+        let _held = lock.lock().await;
+        // The folders and the chat come from the record moonlet keeps outside
+        // the system's folder, never from files the agent can edit. Reading and
+        // hashing the sources runs off the async workers.
+        let (store, ws, sl) = (self.design.clone(), workspace.to_string(), slug.to_string());
+        let (dir, record, launch) = blocking(move || {
+            let dir = store.system_dir(&ws, &sl)?.canonicalize()?;
+            let config = store.config(&ws, &sl)?;
+            let record = store.record(&ws, &sl)?;
+            let mut sources = Vec::new();
+            // Each a real folder inside its project, whatever the record says.
+            for s in &record.sources {
+                sources.push(store::source_root(s)?.display().to_string());
+            }
+            let bin = moonlet_cli_path()?;
+            let synced = dir.join(anchor::FILE).is_file();
+            let status = if synced { anchor::status(&dir, &store::source_roots(&record), &config.exceptions())? } else { Vec::new() };
+            let task = if synced { agent::Task::Resync(&status) } else { agent::Task::Build };
+            let launch = agent::sync_launch(&dir, &config, &sources, &bin, task)?;
+            Ok((dir, record, launch))
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e.message))?;
+        // What the chat starts with: a chat started with other folders or
+        // rules (a source moved) is replaced, not reused.
+        let fingerprint = format!("{}\n{}", launch.settings, launch.add_dirs.join("\n"));
+        if let Some(id) = self.system_agent(&record, &dir) {
+            if record.agent_launch.as_deref() == Some(fingerprint.as_str()) {
+                self.chats.send(id, &launch.prompt, &[])?;
+                return Ok(id);
+            }
+            let _ = self.terminals.kill(id, true);
+        }
+        let info = self.chats.create(ChatCreate {
+            cwd: launch.cwd,
+            agent: "claude".into(),
+            model: None,
+            effort: None,
+            mode: Some(launch.mode),
+            name: launch.title.clone(),
+            title: Some(launch.title.clone()),
+            session_id: None,
+            env: Default::default(),
+            add_dirs: launch.add_dirs,
+            settings: Some(launch.settings),
+            workspace: Some(workspace.to_string()),
+        })?;
+        self.design.set_agent(workspace, slug, info.id, &fingerprint)?;
+        self.chats.send(info.id, &launch.prompt, &[])?;
+        Ok(info.id)
+    }
+
+    /// The lock of one design system (see `design_locks`).
+    fn design_lock(&self, workspace: &str, slug: &str) -> Arc<tokio::sync::Mutex<()>> {
+        self.design_locks.lock().unwrap().entry(format!("{workspace}/{slug}")).or_default().clone()
+    }
+
+    /// Stops a design system's sync agent, when it still is that system's.
+    fn stop_sync_agent(&self, workspace: &str, slug: &str) {
+        let (Ok(record), Ok(dir)) = (self.design.record(workspace, slug), self.design.system_dir(workspace, slug)) else {
+            return;
+        };
+        let dir = dir.canonicalize().unwrap_or(dir);
+        if let Some(id) = self.system_agent(&record, &dir) {
+            let _ = self.terminals.kill(id, true);
+        }
+    }
+
+    /// The chat the record names, while it still is a sessionless chat in the
+    /// system's folder `dir`: never found through its title, which comes from
+    /// the name the agent may change in `config.toml`.
+    fn system_agent(&self, record: &moonlet_core::design::store::Record, dir: &Path) -> Option<u32> {
+        let id = record.agent?;
+        self.terminals.list().into_iter().any(|t| t.id == id && t.chat && t.session_id.is_none() && Path::new(&t.cwd) == dir).then_some(id)
     }
 
     /// Workspaces, projects, sessions, git and files.
