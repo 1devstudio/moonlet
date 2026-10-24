@@ -34,9 +34,19 @@ export function systemsOf(s: DesignState, host: string, workspace: string): Desi
 
 /** The latest request per workspace, so an older answer never lands last. */
 const asked: Record<string, number> = {};
+/** The listing on its way per workspace, shared by everyone asking meanwhile. */
+const onTheWay: Record<string, Promise<void>> = {};
+/** Workspaces whose systems were asked for, listed or not: a failed listing
+ * is asked for again when its host comes back or its folder changes. */
+const wanted = new Set<string>();
 
-export async function loadSystems(host: string, workspace: string): Promise<void> {
+export function loadSystems(host: string, workspace: string): Promise<void> {
   const key = wsKey(host, workspace);
+  wanted.add(key);
+  return (onTheWay[key] ??= fetchSystems(host, workspace, key).finally(() => delete onTheWay[key]));
+}
+
+async function fetchSystems(host: string, workspace: string, key: string) {
   const n = (asked[key] = (asked[key] ?? 0) + 1);
   const list = await rpc<DesignSystem[]>(host, M.designSystems, { workspace });
   if (asked[key] === n) useDesign.setState((s) => ({ systems: { ...s.systems, [key]: list } }));
@@ -66,7 +76,7 @@ export async function startDesign() {
   await onDaemonEvent((e) => {
     if (e.name === EV.designChanged) {
       const d = e.data as DesignChanged;
-      if (systemsOf(useDesign.getState(), e.host, d.workspace)) reload(e.host, d.workspace);
+      if (wanted.has(wsKey(e.host, d.workspace))) reload(e.host, d.workspace);
     } else if (e.name === EV.chatState) {
       const d = e.data as { id: number; state: ChatState };
       onChatState(e.host, d.id, d.state);
@@ -74,7 +84,7 @@ export async function startDesign() {
   });
   await onHostStatus((h) => {
     if (h.status !== "connected") return;
-    for (const key of Object.keys(useDesign.getState().systems)) {
+    for (const key of wanted) {
       const ws = parseWsKey(key);
       if (ws.host === h.id) reload(h.id, ws.id);
     }
