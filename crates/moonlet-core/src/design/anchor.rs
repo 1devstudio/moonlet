@@ -1,6 +1,7 @@
 //! `_ds_sync.json` (X64), the re-sync anchor, as design-sync's: per card, a
 //! hash of each source file it was made from and a hash of its HTML without
-//! the marker line. Comparing it with the folder and the sources now tells
+//! the marker line, and (moonlet's own) a hash of a component's `.css` and
+//! `.prompt.md`. Comparing it with the folder and the sources now tells
 //! which cards are out of date, edited by hand, orphaned or new.
 
 use std::collections::BTreeMap;
@@ -19,6 +20,10 @@ pub struct CardAnchor {
     pub source_key: String,
     /// A hash of the card's HTML after its first line, so a regroup keeps it.
     pub render_hash: String,
+    /// A hash of the component's `<name>.css` and `<name>.prompt.md` beside
+    /// the card; empty when it has neither (a layout has neither).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub companion_hash: String,
     /// Each source file, relative to its project, and its hash.
     pub sources: BTreeMap<String, String>,
 }
@@ -106,6 +111,7 @@ pub fn take(
     let entry = CardAnchor {
         source_key: source_key(&files, exceptions.get(card).map(String::as_str)),
         render_hash: render_hash(&text),
+        companion_hash: companion_hash(root, card),
         sources: files,
     };
     anchor.cards.insert(card.to_string(), entry);
@@ -151,11 +157,13 @@ pub fn compute(
             .map(|s| (s.clone(), source_hash(sources, s).unwrap_or_default()))
             .collect();
         let key = source_key(&files, exceptions.get(&rel_path).map(String::as_str));
+        let companion = companion_hash(root, &rel_path);
         cards.insert(
             rel_path,
             CardAnchor {
                 source_key: key,
                 render_hash: render_hash(&text),
+                companion_hash: companion,
                 sources: files,
             },
         );
@@ -286,7 +294,8 @@ pub fn status(
                 );
                 changed.sort();
                 st.changed_sources = changed;
-                st.edited_by_hand = now.render_hash != then.render_hash;
+                st.edited_by_hand = now.render_hash != then.render_hash
+                    || now.companion_hash != then.companion_hash;
                 st.exceptions_changed = st.changed_sources.is_empty()
                     && now.sources == then.sources
                     && now.source_key != then.source_key;
@@ -333,6 +342,37 @@ fn render_hash(html: &str) -> String {
             .map_or("", |(_, rest)| rest)
             .as_bytes(),
     )
+}
+
+/// The component card `card`'s `<name>.css` and `<name>.prompt.md`, each
+/// with its name, hashed together; empty for a layout or a card with
+/// neither. A link is not read.
+fn companion_hash(root: &Path, card: &str) -> String {
+    let Some(stem) = card
+        .strip_prefix("components/")
+        .and_then(|c| c.strip_suffix(".html"))
+    else {
+        return String::new();
+    };
+    let mut bytes = Vec::new();
+    for ext in ["css", "prompt.md"] {
+        let path = root.join(format!("components/{stem}.{ext}"));
+        if !std::fs::symlink_metadata(&path).is_ok_and(|m| m.is_file()) {
+            continue;
+        }
+        let Ok(b) = std::fs::read(&path) else {
+            continue;
+        };
+        bytes.extend_from_slice(ext.as_bytes());
+        bytes.push(0);
+        bytes.extend_from_slice(&b);
+        bytes.push(0);
+    }
+    if bytes.is_empty() {
+        String::new()
+    } else {
+        sha16(&bytes)
+    }
 }
 
 fn source_key(files: &BTreeMap<String, String>, exceptions: Option<&str>) -> String {
@@ -402,6 +442,50 @@ mod tests {
                 "sources": { "src/ui.tsx": "101086c04aac0612" }
             })
         );
+    }
+
+    #[test]
+    fn a_cards_css_or_prompt_edited_by_hand_makes_it_edited_by_hand() {
+        let (system, project) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        files(
+            system.path(),
+            &[
+                ("components/buttons/button/button.html", CARD),
+                (
+                    "components/buttons/button/button.css",
+                    ".btn { color: var(--color-accent); }\n",
+                ),
+                ("components/buttons/button/button.prompt.md", "A button.\n"),
+            ],
+        );
+        files(project.path(), &[("src/ui.tsx", UI)]);
+        let sources = [project.path().to_path_buf()];
+        let edited = || {
+            status(system.path(), &sources, &BTreeMap::new())
+                .unwrap()
+                .into_iter()
+                .map(|s| (s.path, s.edited_by_hand))
+                .collect::<Vec<_>>()
+        };
+        for (file, text) in [
+            (
+                "components/buttons/button/button.css",
+                ".btn { color: red; }\n",
+            ),
+            (
+                "components/buttons/button/button.prompt.md",
+                "A button, mine.\n",
+            ),
+        ] {
+            write(system.path(), &sources, &BTreeMap::new()).unwrap();
+            assert_eq!(edited(), vec![]);
+            files(system.path(), &[(file, text)]);
+            assert_eq!(
+                edited(),
+                vec![("components/buttons/button/button.html".to_string(), true)],
+                "{file} edited"
+            );
+        }
     }
 
     #[test]
