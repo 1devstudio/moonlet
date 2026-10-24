@@ -498,14 +498,8 @@ impl Machines {
         let setup = Self::machine_setup(&folder)?;
         // The machine pairs over the tailnet listener: without it, it would
         // be billed until its deadline.
-        if self.mobile.listening().is_empty() {
-            return Err(RpcError::new(
-                "no_listener",
-                format!(
-                    "{} takes no connections from your tailnet, so a cloud machine cannot pair with it. Turn on Allow connections from my tailnet in Hosts.",
-                    self.link.info().worker.name
-                ),
-            ));
+        if !self.mobile.status().enabled {
+            return Err(self.no_listener());
         }
         let id = format!("m{}", moonlet_cloud::machine::suffix());
         let name = moonlet_cloud::machine::machine_name(
@@ -633,11 +627,16 @@ impl Machines {
         } else {
             String::new()
         };
+        // Turned on, but not listening (yet, or it could not bind).
+        let addrs = self.mobile.listening();
+        if addrs.is_empty() {
+            return self.failed(&id, self.no_listener().message);
+        }
         let user_data = moonlet_cloud::cloud_init::render(&moonlet_cloud::cloud_init::CloudInit {
             name: name.clone(),
             tailscale_key: key,
             version: env!("CARGO_PKG_VERSION").into(),
-            addrs: self.mobile.listening(),
+            addrs,
             join_code: self.mobile.join_code(&id, &name),
             machine_setup: setup,
         });
@@ -679,6 +678,16 @@ impl Machines {
             }
             Err(e) => self.failed(&id, e.to_string()),
         }
+    }
+
+    fn no_listener(&self) -> RpcError {
+        RpcError::new(
+            "no_listener",
+            format!(
+                "{} takes no connections from your tailnet, so a cloud machine cannot pair with it. Turn on Allow connections from my tailnet in Hosts.",
+                self.link.info().worker.name
+            ),
+        )
     }
 
     /// This month's machine-hours: those booked, and the time of every
