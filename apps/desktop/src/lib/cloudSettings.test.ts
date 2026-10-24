@@ -231,9 +231,11 @@ describe("a project's cloud workers (X63)", () => {
   });
 
   it("the footer counts the project's machines and their commands", () => {
-    const ms = [machine({ running: 2 }), machine({ id: "m2" }), machine({ id: "m3", project: "payments-api", running: 1 })];
-    expect(projectCloudFooter(ms, "shop")).toBe("2 machines for shop · 2 running commands");
-    expect(projectCloudFooter([machine({ running: 1 })], "shop")).toBe("1 machine for shop · 1 running command");
-    expect(projectCloudFooter([], "shop")).toBe("No machines for shop");
+    const ms = [machine({ running: 2 }), machine({ id: "m2" }), machine({ id: "m3", project: "payments-api", project_key: "p", running: 1 })];
+    expect(projectCloudFooter(ms, "k", "shop")).toBe("2 machines for shop · 2 running commands");
+    expect(projectCloudFooter([machine({ running: 1 })], "k", "shop")).toBe("1 machine for shop · 1 running command");
+    expect(projectCloudFooter([], "k", "shop")).toBe("No machines for shop");
+    // Another project of the same name is another project.
+    expect(projectCloudFooter([machine({ project_key: "other-shop", running: 3 })], "k", "shop")).toBe("No machines for shop");
   });
 });

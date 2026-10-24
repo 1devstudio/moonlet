@@ -193,9 +193,10 @@ export const removalToast = (m: CloudMachine, provider: string): string =>
 /** "cpx41 · 8 cores · 16 GB · x86" in the Machine type menu. */
 export const machineTypeLabel = (t: MachineType): string => `${t.name} · ${t.cores} cores · ${t.memory_gb} GB · ${t.arch}`;
 
-/** The line under a project's Cloud workers section. */
-export function projectCloudFooter(all: CloudMachine[], project: string): string {
-  const mine = all.filter((m) => m.project === project);
+/** The line under a project's Cloud workers section: the machines of the
+ * project with cloud key `key`, named `project`. */
+export function projectCloudFooter(all: CloudMachine[], key: string, project: string): string {
+  const mine = all.filter((m) => m.project_key === key);
   if (!mine.length) return `No machines for ${project}`;
   const running = mine.reduce((n, m) => n + m.running, 0);
   return `${machines(mine.length)} for ${project} · ${running} running command${running === 1 ? "" : "s"}`;
