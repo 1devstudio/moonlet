@@ -180,6 +180,8 @@ pub struct Machines {
     usage: Mutex<moonlet_cloud::usage::Usage>,
     /// Held while a machine is checked against the limits and recorded.
     making: Mutex<()>,
+    /// Wakes the removals waiting between destroy attempts: **Retry**.
+    retry: tokio::sync::Notify,
     fake: Option<Arc<crate::cloud_fake::Fake>>,
     net: Arc<dyn Transport>,
     /// When `tailscale status` was last asked.
@@ -234,6 +236,7 @@ impl Machines {
             sessions,
             records: Mutex::new(records),
             usage: Mutex::new(usage),
+            retry: tokio::sync::Notify::new(),
             making: Mutex::new(()),
             fake: crate::cloud_fake::from_env().map(Arc::new),
             net,
@@ -495,6 +498,7 @@ impl Machines {
                 running: 0,
                 error: None,
                 error_since: None,
+                error_at: None,
                 reason: None,
             },
             image: setting.image.clone(),
@@ -1029,7 +1033,8 @@ impl Machines {
         }
     }
 
-    /// `cloud.down`: removes machine `machine` (id or name).
+    /// `cloud.down`: removes machine `machine` (id or name). On a machine
+    /// already being removed, the next destroy attempt is now.
     pub fn down(&self, machine: &str) -> Result<bool, RpcError> {
         let r = self
             .records
@@ -1039,6 +1044,10 @@ impl Machines {
             .find(|r| (r.shown.id == machine || r.shown.name == machine) && r.active())
             .cloned()
             .ok_or_else(|| RpcError::new("not_found", format!("no machine {machine}")))?;
+        if r.shown.state == "removing" {
+            self.retry.notify_waiters();
+            return Ok(true);
+        }
         self.retire(&r.shown.id, "removed on request".into());
         Ok(true)
     }
@@ -1150,12 +1159,15 @@ impl Machines {
                             self.update(&id, |r| {
                                 r.shown.error = Some(message.clone());
                                 r.shown.error_since.get_or_insert(started);
+                                r.shown.error_at = Some(now_ms());
                             });
                         }
                     }
                 }
-                tokio::time::sleep(wait).await;
-                wait = (wait * 2).min(Duration::from_secs(300));
+                tokio::select! {
+                    _ = tokio::time::sleep(wait) => wait = (wait * 2).min(Duration::from_secs(300)),
+                    _ = self.retry.notified() => wait = destroy_backoff(),
+                }
             }
         }
         let now = now_ms();
@@ -1165,6 +1177,7 @@ impl Machines {
             r.removed_at = Some(now);
             r.shown.error = None;
             r.shown.error_since = None;
+            r.shown.error_at = None;
         });
         // A provider being removed goes once its last machine has.
         if !self.has_machines(&r.shown.provider) {

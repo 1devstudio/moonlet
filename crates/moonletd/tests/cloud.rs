@@ -714,8 +714,38 @@ async fn a_failing_destroy_is_retried_and_reported_after_three_tries() {
     assert_eq!(reported["state"], json!("removing"), "{reported}");
     assert_eq!(reported["error"], json!("503 Service Unavailable"));
     assert!(reported["error_since"].is_u64());
+    assert!(reported["error_at"].as_u64() >= reported["error_since"].as_u64());
     let removed = c.until(&id, "removed").await;
     assert_eq!(removed["error"], Value::Null);
+}
+
+#[tokio::test]
+async fn retry_tries_a_failing_removal_again_at_once() {
+    // Tries at 0 s, 1 s and 3 s; the next would be at 7 s.
+    let c = cloud_with(SHOP_CONFIG, &[("MOONLET_TEST_CLOUD_BACKOFF_MS", "1000")]).await;
+    let m = c.ready().await;
+    let id = m["id"].as_str().unwrap().to_string();
+    c.steer("fail-destroy", "3");
+    let _: Value = c.d.call("cloud.down", json!({ "machine": id })).await;
+    let mut reported = false;
+    for _ in 0..100 {
+        let all = c.machines().await;
+        if all["machines"][0]["error"].is_string() {
+            reported = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(reported);
+    // Retry is `cloud.down` again.
+    let _: Value = c.d.call("cloud.down", json!({ "machine": id })).await;
+    for _ in 0..30 {
+        if c.machines().await["removed"][0]["id"] == id.as_str() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("not removed within 1.5 s of Retry");
 }
 
 #[tokio::test]

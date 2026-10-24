@@ -159,6 +159,11 @@ function index(c: SearchContext): Entry[] {
     app("hosts", "Machines › Hosts", "heavy-commands", "Use this Mac for heavy commands", "", "central host worker link"),
     app("hosts", "Machines › Hosts", "heavy-slots", "Run at most", "", "slots at once routed"),
     app("workers", "Machines › Workers", undefined, "Workers", "", "central host load slots routed running"),
+    app("cloud", "Machines › Cloud workers", undefined, "Cloud workers", "", "cloud provider Hetzner token rent machines"),
+    app("cloud", "Machines › Cloud workers", "cloud-tailscale", "Tailscale OAuth client", "", "tag policy auth key"),
+    app("cloud", "Machines › Cloud workers", "cloud-idle", "Remove a machine after", "", "cloud idle minutes"),
+    app("cloud", "Machines › Cloud workers", "cloud-max", "At most", "", "cloud machines limit"),
+    app("cloud", "Machines › Cloud workers", "cloud-hours", "Monthly limit", "", "cloud machine-hours usage"),
     app("phones", "Machines › Phones", "phones", "Allow connections from my tailnet", "", "mobile phone pair Tailscale"),
     ...c.workspaces.flatMap((w): Entry[] => {
       const route: SettingsRoute = { page: "workspace", host: w.host, id: w.id };
