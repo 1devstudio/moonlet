@@ -305,6 +305,12 @@ pub const EXEC_DONE: &str = "exec.done";
 /// `{}` → [`ExecStatus`]: this machine as a worker, the routed commands
 /// going on and why workers were skipped, for the Workers page (X62).
 pub const EXEC_STATUS: &str = "exec.status";
+/// `{}` → [`CloudInfo`]: the central host's cloud workers settings, with
+/// no secret in them (X63).
+pub const CLOUD_GET: &str = "cloud.get";
+/// [`CloudSet`] → [`CloudInfo`]: changes the settings; the app or a paired
+/// desktop only.
+pub const CLOUD_SET: &str = "cloud.set";
 /// `{}` → `[ExecSetup]`: this Mac's routing copies whose setup waits for
 /// the user's approval, for an app that starts after it was asked (X62).
 pub const EXEC_SETUPS: &str = "exec.setups";
@@ -650,6 +656,9 @@ pub struct SessionCreate {
     /// (Claude Code and Codex default to the structured view, X6).
     #[serde(default)]
     pub tui: bool,
+    /// Send its heavy commands to the project's cloud machine first (X63).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cloud: bool,
     /// The terminal of the agent asking for this session (X22). The new
     /// session records that terminal's session as its parent and starts in a
     /// permission mode no more permissive than the parent's.
@@ -691,6 +700,7 @@ impl SessionCreate {
             mode: None,
             pr: None,
             tui: false,
+            cloud: false,
             spawned_by: None,
             add_dirs: Vec::new(),
             workspace_id: None,
@@ -2090,4 +2100,86 @@ pub struct ExecSkip {
     /// The worker's words, such as `missing pnpm`.
     #[serde(default)]
     pub detail: Option<String>,
+}
+
+/// A project's cloud setting (X63), by its identity in `cloud.json`.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct ProjectCloud {
+    /// Start a machine when every worker is busy.
+    #[serde(default)]
+    pub overflow: bool,
+    pub provider: String,
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub location: String,
+    pub image: String,
+}
+
+/// A settings field of a cloud provider, for the form the app builds.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudField {
+    pub name: String,
+    pub label: String,
+    pub secret: bool,
+    pub help: String,
+}
+
+/// A cloud provider moonlet knows.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudKind {
+    pub id: String,
+    pub label: String,
+    pub fields: Vec<CloudField>,
+}
+
+/// The Tailscale OAuth client, as `cloud.get` shows it.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct CloudTailscale {
+    pub client_id: String,
+    pub has_client_secret: bool,
+    pub tag: String,
+}
+
+/// `cloud.get`: the settings. A secret field `x` of a provider shows as
+/// `has_x: true`, never its value.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudInfo {
+    pub host_id: String,
+    pub providers: BTreeMap<String, BTreeMap<String, serde_json::Value>>,
+    pub tailscale: CloudTailscale,
+    pub idle_minutes: u32,
+    pub max_machines: u32,
+    pub max_hours_month: u32,
+    pub projects: BTreeMap<String, ProjectCloud>,
+    /// The providers on offer.
+    pub kinds: Vec<CloudKind>,
+}
+
+/// The Tailscale part of `cloud.set`; a field left out keeps its value.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct CloudTailscaleSet {
+    #[serde(default)]
+    pub client_id: Option<String>,
+    #[serde(default)]
+    pub client_secret: Option<String>,
+    #[serde(default)]
+    pub tag: Option<String>,
+}
+
+/// `cloud.set`: what changes. A provider or project set to null is removed;
+/// a provider's field set to null is removed.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct CloudSet {
+    #[serde(default)]
+    pub providers: Option<BTreeMap<String, Option<BTreeMap<String, Option<String>>>>>,
+    #[serde(default)]
+    pub tailscale: Option<CloudTailscaleSet>,
+    #[serde(default)]
+    pub idle_minutes: Option<u32>,
+    #[serde(default)]
+    pub max_machines: Option<u32>,
+    #[serde(default)]
+    pub max_hours_month: Option<u32>,
+    #[serde(default)]
+    pub projects: Option<BTreeMap<String, Option<ProjectCloud>>>,
 }
