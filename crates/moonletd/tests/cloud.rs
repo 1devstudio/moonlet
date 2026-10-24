@@ -584,6 +584,162 @@ async fn authed(addr: &str, token: &str) -> bool {
 }
 
 #[tokio::test]
+async fn a_cloud_device_opens_copies_of_its_own_project_only() {
+    let c = cloud().await;
+    c.ready().await;
+    let token = c.machine_token();
+    let other = c.d.home.path().join("src/other");
+    std::fs::create_dir_all(&other).unwrap();
+    git(&other, &["init", "-q", "-b", "main"]);
+    std::fs::write(other.join("secret.txt"), "theirs\n").unwrap();
+    git(&other, &["add", "."]);
+    git(&other, &["commit", "-q", "-m", "other"]);
+    let project: Value = c.d.call("project.add", json!({ "path": other })).await;
+    let theirs: Value =
+        c.d.call(
+            "session.create",
+            json!({ "project_id": project["id"], "name": "theirs", "agent": "none" }),
+        )
+        .await;
+    let mine: Value =
+        c.d.call(
+            "session.create",
+            json!({ "project_id": c.project, "name": "mine", "agent": "none" }),
+        )
+        .await;
+    // As the machine's link: registered as a worker, then opening a copy.
+    let theirs = theirs["id"].as_str().unwrap();
+    let mine = mine["id"].as_str().unwrap();
+    assert_eq!(
+        open_as_worker(&c.addr, &token, theirs, "c-1")
+            .await
+            .as_deref(),
+        Some("forbidden")
+    );
+    assert_eq!(
+        open_as_worker(&c.addr, &token, mine, "c-2")
+            .await
+            .as_deref(),
+        None
+    );
+}
+
+/// `sync.open` of copy `copy` for session `session`, over a connection with
+/// `token` that registered as a worker first, as a machine's link does.
+async fn open_as_worker(addr: &str, token: &str, session: &str, copy: &str) -> Option<String> {
+    use moonlet_proto::{read_frame, write_frame};
+    let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let auth = Message::Auth {
+        token: Some(token.into()),
+        pair: None,
+        device: None,
+        route: None,
+        kind: None,
+    };
+    write_frame(&mut s, &Frame::Json(auth)).await.unwrap();
+    read_frame(&mut s).await.unwrap();
+    let hello = Message::Hello {
+        protocol: moonlet_proto::PROTOCOL_VERSION,
+        client: "moonletd-worker".into(),
+    };
+    write_frame(&mut s, &Frame::Json(hello)).await.unwrap();
+    read_frame(&mut s).await.unwrap();
+    let requests = [
+        (
+            1,
+            "worker.register",
+            json!({ "id": "8d0f6b1e-0000-4000-8000-00000000c10d", "name": "intruder", "os": "linux", "arch": "x86_64", "cores": 2, "version": "0.1.29", "projects": [], "heavy": true }),
+        ),
+        (
+            2,
+            "sync.open",
+            json!({ "copy": copy, "session": session, "kind": "run" }),
+        ),
+    ];
+    let mut last = None;
+    for (id, method, params) in requests {
+        write_frame(
+            &mut s,
+            &Frame::Json(Message::Request {
+                id,
+                method: method.into(),
+                params,
+            }),
+        )
+        .await
+        .unwrap();
+        loop {
+            let frame = tokio::time::timeout(Duration::from_secs(10), read_frame(&mut s))
+                .await
+                .expect("no reply")
+                .unwrap();
+            if let Some(Frame::Json(Message::Response { id: got, error, .. })) = frame
+                && got == id
+            {
+                last = error.map(|e| e.code);
+                break;
+            }
+        }
+    }
+    last
+}
+
+#[tokio::test]
+async fn cloud_up_takes_only_a_session_of_its_project() {
+    // Its machine setup would come from the other project's worktree.
+    let c = cloud().await;
+    let other = c.d.home.path().join("src/other");
+    std::fs::create_dir_all(&other).unwrap();
+    git(&other, &["init", "-q", "-b", "main"]);
+    git(&other, &["commit", "-q", "--allow-empty", "-m", "other"]);
+    let project: Value = c.d.call("project.add", json!({ "path": other })).await;
+    let theirs: Value =
+        c.d.call(
+            "session.create",
+            json!({ "project_id": project["id"], "name": "theirs", "agent": "none" }),
+        )
+        .await;
+    let e =
+        c.d.fails(
+            "cloud.up",
+            json!({ "project": c.project, "session": theirs["id"] }),
+        )
+        .await;
+    assert_eq!(e, "invalid_params: theirs is not a session of shop");
+}
+
+#[tokio::test]
+async fn a_cloud_device_cannot_take_a_route_to_a_remote_host() {
+    // A route would go straight to the remote daemon, past the worker-only
+    // methods.
+    let c = cloud().await;
+    c.ready().await;
+    let token = c.machine_token();
+    std::fs::write(
+        c.d.home.path().join("app-hosts.json"),
+        r#"{ "remotes": ["devbox"] }"#,
+    )
+    .unwrap();
+    use moonlet_proto::{read_frame, write_frame};
+    let mut s = tokio::net::TcpStream::connect(&c.addr).await.unwrap();
+    let auth = Message::Auth {
+        token: Some(token.clone()),
+        pair: None,
+        device: None,
+        route: Some("devbox".into()),
+        kind: None,
+    };
+    write_frame(&mut s, &Frame::Json(auth)).await.unwrap();
+    let answer = read_frame(&mut s).await;
+    assert!(
+        !matches!(answer, Ok(Some(Frame::Json(Message::Authed { .. })))),
+        "{answer:?}"
+    );
+    // The same token, without a route, still works.
+    assert!(authed(&c.addr, &token).await);
+}
+
+#[tokio::test]
 async fn a_cloud_device_may_call_only_worker_methods() {
     let c = cloud().await;
     c.ready().await;
@@ -672,6 +828,34 @@ async fn removing_revokes_the_device_retires_and_destroys() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     panic!("still a worker: {workers:?}");
+}
+
+#[tokio::test]
+async fn removing_logs_the_machine_out_of_the_tailnet() {
+    let c = cloud().await;
+    let m = c.ready().await;
+    let _: Value = c.d.call("cloud.down", json!({ "machine": m["id"] })).await;
+    c.until(m["id"].as_str().unwrap(), "removed").await;
+    // The fake machine's `tailscale` notes its arguments here.
+    let calls = std::fs::read_to_string(c.fake.path().join("tailscale-calls")).unwrap_or_default();
+    assert_eq!(calls, "logout\n");
+}
+
+#[tokio::test]
+async fn a_ready_machine_names_its_worker() {
+    let c = cloud().await;
+    let m = c.ready().await;
+    let workers: Vec<Value> = c.d.call("worker.list", json!({})).await;
+    assert_eq!(workers.len(), 1, "{workers:?}");
+    assert_eq!(m["worker"], workers[0]["id"]);
+}
+
+#[tokio::test]
+async fn a_slow_create_call_still_comes_up() {
+    let c = cloud().await;
+    c.steer("slow-create", "1000");
+    let m = c.ready().await;
+    assert_eq!(m["steps"][0]["state"], json!("done"), "{m}");
 }
 
 #[tokio::test]
@@ -1028,6 +1212,126 @@ async fn the_sweep_destroys_a_machine_moonlet_lost_track_of() {
 }
 
 #[tokio::test]
+async fn cloud_up_needs_the_central_host_to_take_tailnet_connections() {
+    // Without a listener the machine could never pair, and would be billed
+    // until its deadline.
+    let c = cloud().await;
+    let _: Value =
+        c.d.call("mobile.set_enabled", json!({ "enabled": false }))
+            .await;
+    let e = c.d.fails("cloud.up", json!({ "project": c.project })).await;
+    assert_eq!(
+        e,
+        "no_listener: studio-mini takes no connections from your tailnet, so a cloud machine cannot pair with it. Turn on Allow connections from my tailnet in Hosts."
+    );
+    assert!(c.fake_dirs().is_empty());
+}
+
+#[tokio::test]
+async fn running_machines_count_toward_the_monthly_limit() {
+    let mut c = cloud().await;
+    let month = String::from_utf8(
+        Command::new("date")
+            .args(["-u", "+%Y-%m"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    let month = month.trim();
+    // One second short of the limit.
+    std::fs::create_dir_all(c.d.home.path().join("cloud")).unwrap();
+    std::fs::write(
+        c.d.home.path().join("cloud/usage.json"),
+        json!({ month: 40 * 3600 - 1 }).to_string(),
+    )
+    .unwrap();
+    c.d.restart().await;
+    c.ready().await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let e = c.d.fails("cloud.up", json!({ "project": c.project })).await;
+    assert_eq!(
+        e,
+        "cloud_limit: Cloud limit reached: 40 of 40 machine-hours this month"
+    );
+}
+
+#[tokio::test]
+async fn a_machine_removed_during_its_create_call_is_destroyed_when_it_returns() {
+    let c = cloud().await;
+    c.steer("slow-create", "1000");
+    let m = c.up().await;
+    let _: Value = c.d.call("cloud.down", json!({ "machine": m["id"] })).await;
+    c.until(m["id"].as_str().unwrap(), "removed").await;
+    // The create call answers after the removal: what it made goes too.
+    for _ in 0..60 {
+        if !c.fake_dirs().is_empty() && c.fake_dirs().iter().all(|d| !d.join("meta.json").exists())
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(
+        c.fake_dirs().iter().all(|d| !d.join("meta.json").exists()),
+        "{:?}",
+        c.fake_dirs()
+    );
+}
+
+#[tokio::test]
+async fn the_sweep_books_the_time_of_a_machine_the_provider_lost() {
+    let c = cloud_with(SHOP_CONFIG, &[("MOONLET_TEST_CLOUD_SWEEP_MS", "300")]).await;
+    let m = c.ready().await;
+    // Usage counts whole seconds: rented for more than one.
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    // Gone at the provider without moonlet removing it.
+    let dir = c.fake_dirs()[0].clone();
+    std::fs::remove_dir_all(&dir).unwrap();
+    for _ in 0..100 {
+        let all = c.machines().await;
+        if all["machines"].as_array().unwrap().is_empty() {
+            assert!(all["hours_this_month"].as_f64().unwrap() > 0.0, "{all}");
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("{} was never dropped: {}", m["name"], c.machines().await);
+}
+
+#[tokio::test]
+async fn retry_tries_only_its_own_machine_again() {
+    // Tries at 0 s, 2 s and 6 s; the next would be at 14 s.
+    let c = cloud_with(SHOP_CONFIG, &[("MOONLET_TEST_CLOUD_BACKOFF_MS", "2000")]).await;
+    let _: Value = c.d.call("cloud.set", json!({ "max_machines": 3 })).await;
+    let a = c.ready().await;
+    let b = c.ready().await;
+    // Every attempt fails until the provider is let go.
+    c.steer("fail-destroy", "1000");
+    for m in [&a, &b] {
+        let _: Value = c.d.call("cloud.down", json!({ "machine": m["id"] })).await;
+    }
+    for _ in 0..200 {
+        let all = c.machines().await;
+        if all["machines"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|m| m["error"].is_string())
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    std::fs::remove_file(c.fake.path().join("fail-destroy")).unwrap();
+    let _: Value = c.d.call("cloud.down", json!({ "machine": a["id"] })).await;
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    let all = c.machines().await;
+    assert_eq!(all["removed"][0]["id"], a["id"], "{all}");
+    assert_eq!(all["machines"][0]["id"], b["id"], "{all}");
+}
+
+#[tokio::test]
 async fn a_machine_left_creating_by_a_restart_is_destroyed() {
     let mut c = cloud_with(SHOP_CONFIG, &[("MOONLET_TEST_CLOUD_SWEEP_MS", "300")]).await;
     c.steer("slow-create", "60000");
@@ -1053,7 +1357,17 @@ async fn a_machine_left_creating_by_a_restart_is_destroyed() {
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    panic!("left: {:?} {}", c.fake_dirs(), c.machines().await);
+    let info: Value = c.d.call("cloud.get", json!({})).await;
+    let metas: Vec<String> = c
+        .fake_dirs()
+        .iter()
+        .map(|d| std::fs::read_to_string(d.join("meta.json")).unwrap_or_default())
+        .collect();
+    panic!(
+        "left: {metas:?} {} host {}",
+        c.machines().await,
+        info["host_id"]
+    );
 }
 
 #[tokio::test]
@@ -1205,8 +1519,21 @@ async fn overflow_starts_a_machine_and_the_next_command_runs_there() {
 }
 
 #[tokio::test]
+async fn overflow_starts_no_machine_while_the_central_host_is_free() {
+    // Its other Macs are busy or absent, but studio-mini has room.
+    let c = routing(&[("MOONLET_TEST_LOAD", "0.1")]).await;
+    c.set_project(json!({ "overflow": true })).await;
+    let s = c.session("fix-cart", false).await;
+    let ran = c.run(&s, &["sh", "run.sh"]).await;
+    assert_eq!(ran_on(&ran), "studio-mini");
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(c.machines().await["machines"], json!([]));
+}
+
+#[tokio::test]
 async fn overflow_starts_no_second_machine_while_one_is_starting() {
-    let c = routing(&[]).await;
+    // The central host is busy.
+    let c = routing(&[("MOONLET_TEST_LOAD", "100")]).await;
     c.set_project(json!({ "overflow": true })).await;
     c.steer("slow-create", "5000");
     let s = c.session("fix-cart", false).await;
@@ -1311,6 +1638,51 @@ async fn run_here_runs_a_job_waiting_for_a_cloud_machine_on_the_central_host() {
     assert_eq!(m["state"], json!("creating"));
 }
 
+#[tokio::test]
+async fn two_first_commands_at_once_share_one_machine() {
+    let c = routing(&[]).await;
+    let _: Value = c.d.call("cloud.set", json!({ "max_machines": 4 })).await;
+    c.steer("slow-create", "60000");
+    let s = c.session("big-refactor", true).await;
+    let (a, b) = tokio::join!(
+        c.start(&s, &["sh", "run.sh"]),
+        c.start(&s, &["sh", "run.sh"])
+    );
+    drop((a, b));
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let all = c.machines().await;
+    assert_eq!(all["machines"].as_array().unwrap().len(), 1, "{all}");
+}
+
+#[tokio::test]
+async fn stop_ends_a_job_waiting_for_a_cloud_machine() {
+    let c = routing(&[]).await;
+    c.steer("slow-create", "60000");
+    let s = c.session("big-refactor", true).await;
+    let (client, run) = c.start(&s, &["sh", "run.sh"]).await;
+    let mut job = Value::Null;
+    for _ in 0..100 {
+        job = c.jobs(&s).await[0].clone();
+        if job["state"]["kind"] == "waiting" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(job["state"]["kind"], json!("waiting"), "{job}");
+    let stopped: Value = c.d.call("job.stop", json!({ "job": job["id"] })).await;
+    assert_eq!(stopped, json!(true));
+    let ran = tokio::time::timeout(Duration::from_secs(5), collect(client, run))
+        .await
+        .expect("the waiting command never ended");
+    assert!(
+        ran.stderr
+            .ends_with("moonlet: stopped from the Jobs panel\n"),
+        "{ran:?}"
+    );
+    assert_eq!(ran.stdout, "");
+    assert_ne!(ran.status, 0);
+}
+
 /// The routing copies on the first fake machine.
 fn copies_on(c: &Cloud) -> Vec<PathBuf> {
     let runs = c.fake_dirs()[0].join("home/runs");
@@ -1396,6 +1768,19 @@ async fn an_idle_machine_is_removed_after_the_idle_time() {
     // Idle from the command's end: removed 1 s later, not before.
     assert!(m["idle_until"].is_u64(), "{m}");
     let removed = c.until(m["id"].as_str().unwrap(), "removed").await;
+    assert_eq!(removed["reason"], json!("removed after 5 min idle"));
+}
+
+#[tokio::test]
+async fn with_idle_zero_an_unused_machine_stays_five_minutes() {
+    // A "minute" here is 200 ms: five of them are a second.
+    let c = cloud_with(SHOP_CONFIG, &[("MOONLET_TEST_CLOUD_MINUTE_MS", "200")]).await;
+    let _: Value = c.d.call("cloud.set", json!({ "idle_minutes": 0 })).await;
+    let m = c.ready().await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(c.machines().await["machines"][0]["state"], json!("ready"));
+    let removed = c.until(m["id"].as_str().unwrap(), "removed").await;
+    // The time it really waited, not the idle setting.
     assert_eq!(removed["reason"], json!("removed after 5 min idle"));
 }
 

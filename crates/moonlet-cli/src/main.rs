@@ -549,28 +549,31 @@ async fn run(cmd: Cmd, socket: PathBuf) -> Result<()> {
             match action {
                 WorkerAction::Up { project } => {
                     let projects: Vec<Project> = c.request(methods::PROJECT_LIST, ()).await?;
-                    let id = match project {
-                        Some(name) => projects
-                            .iter()
-                            .find(|p| p.name == name)
-                            .map(|p| p.id.clone())
-                            .with_context(|| format!("no project {name}"))?,
+                    // In a session, the machine is made for it, with its
+                    // worktree's machine setup.
+                    let (id, session) = match project {
+                        Some(name) => (
+                            projects
+                                .iter()
+                                .find(|p| p.name == name)
+                                .map(|p| p.id.clone())
+                                .with_context(|| format!("no project {name}"))?,
+                            None,
+                        ),
                         None => {
                             let session = std::env::var("MOONLET_SESSION")
                                 .context("give --project, or run it in a session")?;
                             let sessions: Vec<moonlet_proto::types::Session> =
                                 c.request(methods::SESSION_LIST, ()).await?;
-                            sessions
+                            let project = sessions
                                 .into_iter()
                                 .find(|s| s.id == session)
                                 .map(|s| s.project_id)
-                                .context("this session is not on this host")?
+                                .context("this session is not on this host")?;
+                            (project, Some(session))
                         }
                     };
-                    let up = methods::CloudUp {
-                        project: id,
-                        session: None,
-                    };
+                    let up = methods::CloudUp { project: id, session };
                     let m: methods::CloudMachine = c.request(methods::CLOUD_UP, up).await.map_err(plain)?;
                     println!("{}", m.name);
                 }

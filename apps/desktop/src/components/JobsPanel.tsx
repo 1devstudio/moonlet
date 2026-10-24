@@ -7,6 +7,8 @@ import { copyJobOutput, openJobTab, stopJob } from "../lib/actions";
 import { rpc } from "../lib/daemon";
 import { type JobIcon, type JobTone, type OutputLine, chipFromJob, jobRowLine, jobStateLine, jobsSummary, dur, outputLines, phaseList, workerLine } from "../lib/jobs";
 import { loadOutput, useJobs } from "../lib/jobsStore";
+import { startupCard, waitingNote, type StartupCard } from "../lib/cloudMachines";
+import { useCloud } from "../lib/cloudStore";
 import { M, type Job, type Session } from "../lib/protocol";
 import { clock } from "../lib/subagents";
 import { useNow } from "../lib/useNow";
@@ -118,6 +120,39 @@ const PHASE_ICON = {
   warn: <RotateCw size={13} className="text-blocked" />,
 };
 
+const STEP_ICON = {
+  done: <Check size={13} className="text-muted" />,
+  running: <LoaderCircle size={13} className="animate-spin text-accent" />,
+  pending: <Circle size={9} className="mx-[2px] text-faint" />,
+  failed: <Circle size={9} className="mx-[2px] fill-error text-error" />,
+};
+
+/** The machine a job waits for (X63): its startup steps, their times and its deadline. */
+function MachineCard({ card }: { card: StartupCard }) {
+  return (
+    <div data-machine-card className="mt-3 rounded-lg border border-border bg-panel-2 px-3 py-2.5">
+      <div className="flex items-center gap-2 ui-text-13 text-fg">
+        <Cloud size={14} className="text-accent" />
+        <span className="min-w-0 flex-1 truncate font-mono">{card.name}</span>
+        <span className="font-mono ui-text-12 text-muted">{card.kind}</span>
+      </div>
+      <div className="mt-2 flex flex-col">
+        {card.steps.map((s, i) => (
+          <div key={i} className="flex min-h-6 items-start gap-2.5 py-0.5">
+            <span className="flex h-[18px] w-[14px] items-center justify-center">{STEP_ICON[s.state]}</span>
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className={cx("ui-text-12.5", s.state === "pending" ? "text-faint" : s.state === "failed" ? "text-error" : "text-fg")}>{s.label}</span>
+              {s.error && <span className="ui-text-12 text-error">{s.error}</span>}
+            </span>
+            {s.took && <span className="font-mono ui-text-12 tabular-nums text-muted">{s.took}</span>}
+          </div>
+        ))}
+      </div>
+      {card.deadline && <div className="mt-2 ui-text-12 text-faint">{card.deadline}</div>}
+    </div>
+  );
+}
+
 function JobDetail({ host, ws, job, now }: { host: string; ws: Session; job: Job; now: number }) {
   const state = jobStateLine(job, now, ws.name);
   const lines = useJobLines(host, job.id);
@@ -126,6 +161,8 @@ function JobDetail({ host, ws, job, now }: { host: string; ws: Session; job: Job
   const central = useStore((s) => s.hosts[host]?.label) ?? "this Mac";
   const chip = chipFromJob(job);
   const runHere = () => void rpc(host, M.jobRunHere, { job: job.id }).catch(errorToast);
+  const waitingFor = job.state.kind === "waiting" ? job.state.for : null;
+  const machine = useCloud((s) => (waitingFor && s.host === host ? s.machines?.machines.find((m) => m.name === waitingFor) : undefined));
   return (
     <div className="flex h-full flex-col">
       <div className="flex min-h-0 flex-1 flex-col px-4 pb-4">
@@ -144,6 +181,8 @@ function JobDetail({ host, ws, job, now }: { host: string; ws: Session; job: Job
           <span className={TONE[state.tone]}>{state.text.split(" · ")[0]}</span>
           {state.text.split(" · ").slice(1).map((p) => ` · ${p}`)}
         </div>
+        {waitingFor && <p className="m-0 mt-3 ui-text-12.5 text-muted">{waitingNote(ws.name, central)}</p>}
+        {machine && <MachineCard card={startupCard(machine)} />}
         <div className="mt-4 flex flex-col gap-0.5">
           {phaseList(job, now).map((p, i) => (
             <div key={i} className="flex min-h-7 items-start gap-2.5 py-1">
@@ -186,9 +225,12 @@ function JobDetail({ host, ws, job, now }: { host: string; ws: Session; job: Job
         </div>
       </div>
       {job.state.kind === "waiting" ? (
-        <div className="flex h-11 shrink-0 items-center justify-end border-t border-border px-4">
-          <button className="ui-text-12.5 text-accent hover:text-accent-2" onClick={runHere}>
+        <div className="flex h-11 shrink-0 items-center justify-between border-t border-border px-4 ui-text-12.5">
+          <button className="text-accent hover:text-accent-2" onClick={runHere}>
             Run on {central} now
+          </button>
+          <button className="text-muted hover:text-fg" onClick={() => stopJob(host, job.id)}>
+            Stop
           </button>
         </div>
       ) : (

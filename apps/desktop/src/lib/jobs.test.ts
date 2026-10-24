@@ -76,6 +76,13 @@ describe("the Jobs tab (X62)", () => {
       { name: "Bring changes back", state: "pending", took: null, detail: null },
       { name: "Exit status to Claude", state: "pending", took: null, detail: null },
     ]);
+    // Waiting for a cloud machine (X63): nothing has started yet.
+    const waiting = job({ state: { kind: "waiting", for: "moonlet-shop-m3x9" }, worker: null, started_at: 0 });
+    expect(phaseList(waiting, 70_000)).toEqual([
+      { name: "Copy matches the session", state: "pending", took: null, detail: null },
+      { name: "Running", state: "pending", took: null, detail: null },
+      { name: "Bring changes back", state: "pending", took: null, detail: null },
+    ]);
     // Run on the central host itself: nothing to bring back.
     const here = job({ started_at: 0, worker: { name: "studio-mini", kind: "central", load: 1, cores: 12, slot: 1, slots: 2 } });
     expect(phaseList(here, 5000).map((p) => p.name)).toEqual(["Running", "Exit status to Claude"]);

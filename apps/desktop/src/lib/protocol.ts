@@ -485,6 +485,8 @@ export interface CloudMachine {
   error_since?: number | null;
   error_at?: number | null;
   reason?: string | null;
+  /** Its worker's id in `worker.list`, once it has registered. */
+  worker?: string | null;
 }
 
 export interface CloudMachines {

@@ -9,10 +9,15 @@ pub struct Activity {
     pub waiting: bool,
 }
 
+/// The least time a machine that has run nothing yet stays, whatever the
+/// idle time: overflow makes it for the next command.
+pub const FIRST_USE_MINUTES: u32 = 5;
+
 /// When the machine is removed, in the same unit as `a`'s times (ms):
 /// after `idle_minutes` of continuous idleness, counted from ready or from
-/// its last command's end. None while a command runs, or while one waits
-/// for a machine that has run nothing yet.
+/// its last command's end, and not before `FIRST_USE_MINUTES` after ready
+/// while it has run nothing. None while a command runs, or while one
+/// waits for a machine that has run nothing yet.
 pub fn removal_at(a: &Activity, idle_minutes: u32) -> Option<u64> {
     if a.runs.iter().any(|(_, end)| end.is_none()) {
         return None;
@@ -26,7 +31,12 @@ pub fn removal_at(a: &Activity, idle_minutes: u32) -> Option<u64> {
         .iter()
         .filter_map(|(_, end)| *end)
         .fold(a.ready_at, u64::max);
-    Some(idle_since + u64::from(idle_minutes) * 60_000)
+    let idle = if a.runs.is_empty() {
+        idle_minutes.max(FIRST_USE_MINUTES)
+    } else {
+        idle_minutes
+    };
+    Some(idle_since + u64::from(idle) * 60_000)
 }
 
 #[cfg(test)]
@@ -59,7 +69,9 @@ mod tests {
             removal_at(&ready(&[("10:01", "10:04")]), 0),
             Some(t("10:04"))
         );
-        assert_eq!(removal_at(&ready(&[]), 0), Some(t("10:00")));
+        // Nothing run yet: at least 5 minutes, for the command it was made for.
+        assert_eq!(removal_at(&ready(&[]), 0), Some(t("10:05")));
+        assert_eq!(removal_at(&ready(&[]), 3), Some(t("10:05")));
     }
 
     #[test]

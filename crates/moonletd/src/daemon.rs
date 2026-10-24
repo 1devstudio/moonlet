@@ -895,7 +895,14 @@ impl Daemon {
                     return Err(RpcError::new("forbidden", "only a worker keeps copies"));
                 }
                 match method {
-                    m::SYNC_OPEN => ok(self.sync.open(conn, params(p)?).await?),
+                    m::SYNC_OPEN => {
+                        let r: m::SyncOpen = params(p)?;
+                        // A cloud machine (X63) opens copies of its own project only.
+                        if let Some(machine) = conn.phone.as_deref().and_then(|d| self.machines.machine_of(d)) {
+                            self.machines.may_open(&machine, &r.session)?;
+                        }
+                        ok(self.sync.open(conn, r).await?)
+                    }
                     m::SYNC_FETCH => ok(self.sync.fetch(conn, params(p)?).await?),
                     m::SYNC_CLOSE => {
                         let r: m::CopyRef = params(p)?;

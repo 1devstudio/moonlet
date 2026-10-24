@@ -560,6 +560,14 @@ impl Mobile {
         Ok(())
     }
 
+    /// A cloud machine being removed (X63): its token stops working at once,
+    /// and its open connection stays for `worker.retire`; `close_device` ends it.
+    pub fn forget_device(&self, id: &str) -> Result<(), RpcError> {
+        self.forget(id)?;
+        self.changed();
+        Ok(())
+    }
+
     /// A paired device removes itself (X57). Its token stops working at once;
     /// its connections close a moment later, once the reply has gone out.
     pub fn unpair(self: &Arc<Self>, id: &str) -> Result<(), RpcError> {
@@ -593,7 +601,7 @@ impl Mobile {
         Ok(())
     }
 
-    fn close_device(&self, id: &str) {
+    pub fn close_device(&self, id: &str) {
         for c in self.conns.lock().unwrap().values() {
             if c.device_id == id {
                 let _ = c.close.send(true);
@@ -637,6 +645,12 @@ impl Mobile {
                     return None;
                 }
                 let d = data.devices.iter_mut().find(|d| d.token_sha256 == hash)?;
+                // A cloud machine (X63) reaches only this daemon's worker
+                // methods: a route would take it to a remote host's daemon.
+                if route.is_some() && d.kind == DeviceKind::Cloud {
+                    tracing::info!("a cloud machine asked for a route");
+                    return None;
+                }
                 d.last_seen = Some(now_ms());
                 let device_id = d.id.clone();
                 self.save(&data);
