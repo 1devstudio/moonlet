@@ -322,10 +322,13 @@ impl Runs {
                     let mut claims = self.claims.lock().unwrap();
                     let candidates = self.candidates(plan, workers, &skipped, &claims);
                     let chosen = heavy::pick(&candidates, plan.os, plan.cloud).cloned();
+                    // None fits, the central host included: it is busy too.
+                    let all_busy = chosen.is_none();
                     let Some(chosen) = chosen.filter(|c| c.kind != Kind::Central) else {
-                        // No worker is free: a project that allows it gets a
-                        // cloud machine for the next command (X63).
-                        if let Some(m) = self.machines() {
+                        // It runs here. With every machine busy, the central
+                        // host too, a project that allows it gets a cloud
+                        // machine for the next command (X63).
+                        if all_busy && let Some(m) = self.machines() {
                             m.overflow(&plan.project_id);
                         }
                         break;

@@ -1517,8 +1517,21 @@ async fn overflow_starts_a_machine_and_the_next_command_runs_there() {
 }
 
 #[tokio::test]
+async fn overflow_starts_no_machine_while_the_central_host_is_free() {
+    // Its other Macs are busy or absent, but studio-mini has room.
+    let c = routing(&[("MOONLET_TEST_LOAD", "0.1")]).await;
+    c.set_project(json!({ "overflow": true })).await;
+    let s = c.session("fix-cart", false).await;
+    let ran = c.run(&s, &["sh", "run.sh"]).await;
+    assert_eq!(ran_on(&ran), "studio-mini");
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(c.machines().await["machines"], json!([]));
+}
+
+#[tokio::test]
 async fn overflow_starts_no_second_machine_while_one_is_starting() {
-    let c = routing(&[]).await;
+    // The central host is busy.
+    let c = routing(&[("MOONLET_TEST_LOAD", "100")]).await;
     c.set_project(json!({ "overflow": true })).await;
     c.steer("slow-create", "5000");
     let s = c.session("fix-cart", false).await;
