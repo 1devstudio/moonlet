@@ -395,6 +395,10 @@ fn set_trackers(doc: &mut DocumentMut, trackers: &[String]) {
 
 fn apply_heavy(doc: &mut DocumentMut, h: &HeavyConfig) {
     let empty = h.commands.is_empty() && h.env.is_empty() && h.outputs.is_empty() && h.os == HeavyOs::Any;
+    // `heavy = { … }` becomes a `[heavy]` table, keeping its keys.
+    if let Some(inline) = doc.get("heavy").and_then(|i| i.as_inline_table()).cloned() {
+        doc.insert("heavy", Item::Table(inline.into_table()));
+    }
     // `machine_setup` (X63) is the file's own: it keeps the table.
     let keeps = doc
         .get("heavy")
@@ -550,6 +554,16 @@ mod tests {
         );
         set_heavy(dir.path(), &HeavyConfig { commands: vec!["pnpm build".into()], ..HeavyConfig::default() }).unwrap();
         assert_eq!(read(&dir), "[heavy]\ncommands = [\"pnpm build\"]\nmachine_setup = \"scripts/ci-deps.sh\"\n");
+        set_heavy(dir.path(), &HeavyConfig::default()).unwrap();
+        assert_eq!(read(&dir), "[heavy]\nmachine_setup = \"scripts/ci-deps.sh\"\n");
+    }
+
+    #[test]
+    fn heavy_set_keeps_an_inline_machine_setup() {
+        use moonlet_proto::types::HeavyConfig;
+        let dir = repo_with(Some("heavy = { machine_setup = \"scripts/ci-deps.sh\" }\n"));
+        set_heavy(dir.path(), &HeavyConfig { commands: vec!["pnpm build".into()], ..HeavyConfig::default() }).unwrap();
+        assert_eq!(read(&dir), "[heavy]\nmachine_setup = \"scripts/ci-deps.sh\"\ncommands = [\"pnpm build\"]\n");
         set_heavy(dir.path(), &HeavyConfig::default()).unwrap();
         assert_eq!(read(&dir), "[heavy]\nmachine_setup = \"scripts/ci-deps.sh\"\n");
     }
