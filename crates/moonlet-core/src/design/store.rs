@@ -461,6 +461,43 @@ impl Store {
         Ok(path)
     }
 
+    /// A design system's cards for the design system view and the card page
+    /// (X64): each as its marker says, with its check problems and the
+    /// sources changed since the last sync. Sorted by group and name; a card
+    /// whose marker does not parse is left out (the check reports it).
+    pub fn cards(&self, workspace: &str, slug: &str) -> Result<Vec<CardInfo>> {
+        let dir = self.system_dir(workspace, slug)?;
+        let config = read_config(&dir)?;
+        let record = self.record(workspace, slug)?;
+        let mut problems = check::check(&dir)?;
+        let status = anchor::status(&dir, &source_roots(&record), &config.exceptions())?;
+        let mut out = Vec::new();
+        for e in manifest::build(&dir)?.cards {
+            let text = fsx::read_inside(&dir, &dir.join(&e.path))?;
+            let marker = text.lines().next().unwrap_or_default().to_string();
+            let (mine, rest): (Vec<_>, Vec<_>) =
+                problems.into_iter().partition(|p| p.path == e.path);
+            problems = rest;
+            let changed_sources = status
+                .iter()
+                .find(|s| s.path == e.path)
+                .map(|s| s.changed_sources.clone())
+                .unwrap_or_default();
+            out.push(CardInfo {
+                group: e.group,
+                name: e.name,
+                path: e.path,
+                viewport: e.viewport,
+                source: e.source,
+                snippets: e.snippets,
+                marker,
+                problems: mine,
+                changed_sources,
+            });
+        }
+        Ok(out)
+    }
+
     /// Rewrites the generated files (foundation cards, `_ds_manifest.json`,
     /// `README.md`) and returns every problem of the system, by file and line.
     pub fn check_system(&self, workspace: &str, slug: &str) -> Result<Vec<check::Problem>> {
@@ -679,6 +716,26 @@ fn sync_changes(
     }
     out.sort_by(|x, y| x.path.cmp(&y.path));
     out
+}
+
+/// One card of a design system, as the app shows it (`design.cards`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CardInfo {
+    pub group: String,
+    pub name: String,
+    /// Relative to the design system's folder.
+    pub path: String,
+    /// Width and height.
+    pub viewport: (u32, u32),
+    /// The source files it was made from, relative to their project.
+    pub source: Vec<String>,
+    /// Its snippets' ids, in page order.
+    pub snippets: Vec<String>,
+    /// Its `@dsCard` line.
+    pub marker: String,
+    pub problems: Vec<check::Problem>,
+    /// Its sources changed since the last sync.
+    pub changed_sources: Vec<String>,
 }
 
 /// What the list shows of one design system.
@@ -2147,6 +2204,97 @@ root = \"9c1e0a2\"
             ]
         );
         assert_eq!(store.systems("w1").unwrap()[0].last_sync, second);
+    }
+
+    #[test]
+    fn a_systems_cards_come_with_their_marker_problems_and_changed_sources() {
+        let home = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        put(
+            project.path(),
+            &[("src/ui.tsx", "button\n"), ("src/form.tsx", "input\n")],
+        );
+        let store = Store::new(home.path());
+        let mut src = source();
+        src.path = project.path().display().to_string();
+        let slug = store
+            .create_system("w1", "storefront", vec![src], Cover::Core, 1)
+            .unwrap();
+        let dir = home.path().join("design/w1/systems").join(&slug);
+        let head = "<!doctype html>\n<html><head><meta charset=\"utf-8\"><link rel=\"stylesheet\" href=\"../../../styles.css\"></head>\n";
+        put(
+            &dir,
+            &[
+                ("styles.css", "@import \"components.css\";\n"),
+                ("components.css", ".btn {}\n.field {}\n"),
+                (
+                    "components/buttons/button/button.html",
+                    &format!(
+                        "<!-- @dsCard group=\"Buttons\" name=\"Button\" source=\"src/ui.tsx\" viewport=\"320x140\" -->\n{head}<body><section data-snippet=\"buttons/button/primary\"><button class=\"btn\">Run</button></section>\n<section data-snippet=\"buttons/button/ghost\"><button class=\"btn\">Cancel</button></section></body></html>\n"
+                    ),
+                ),
+                (
+                    "components/forms/field/field.html",
+                    &format!(
+                        "<!-- @dsCard group=\"Forms\" name=\"Field\" source=\"src/form.tsx\" -->\n{head}<body><section data-snippet=\"forms/field/default\"><input class=\"field\" style=\"color: var(--color-nope)\"></section></body></html>\n"
+                    ),
+                ),
+            ],
+        );
+        store.synced("w1", &slug, &[], 2).unwrap();
+        put(project.path(), &[("src/ui.tsx", "button, now primary\n")]);
+
+        let cards = store.cards("w1", &slug).unwrap();
+        let got: Vec<_> = cards
+            .iter()
+            .map(|c| {
+                (
+                    c.group.as_str(),
+                    c.name.as_str(),
+                    c.path.as_str(),
+                    c.viewport,
+                    c.source.clone(),
+                    c.snippets.clone(),
+                    c.changed_sources.clone(),
+                    c.problems
+                        .iter()
+                        .map(|p| (p.line, p.kind.clone()))
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (
+                    "Buttons",
+                    "Button",
+                    "components/buttons/button/button.html",
+                    (320, 140),
+                    vec!["src/ui.tsx".to_string()],
+                    vec![
+                        "buttons/button/primary".to_string(),
+                        "buttons/button/ghost".to_string()
+                    ],
+                    vec!["src/ui.tsx".to_string()],
+                    vec![],
+                ),
+                (
+                    "Forms",
+                    "Field",
+                    "components/forms/field/field.html",
+                    (900, 700),
+                    vec!["src/form.tsx".to_string()],
+                    vec!["forms/field/default".to_string()],
+                    vec![],
+                    vec![(4, check::Kind::UnknownToken)],
+                ),
+            ]
+        );
+        assert_eq!(
+            cards[0].marker,
+            "<!-- @dsCard group=\"Buttons\" name=\"Button\" source=\"src/ui.tsx\" viewport=\"320x140\" -->"
+        );
     }
 
     #[test]

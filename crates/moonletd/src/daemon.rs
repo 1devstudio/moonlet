@@ -1131,6 +1131,10 @@ impl Daemon {
                 let r: m::DesignSystemRef = params(p)?;
                 ok(blocking(move || store.check_system(&r.workspace, &r.slug)).await?)
             }
+            m::DESIGN_CARDS => {
+                let r: m::DesignSystemRef = params(p)?;
+                ok(blocking(move || store.cards(&r.workspace, &r.slug)).await?)
+            }
             m::DESIGN_FILE => {
                 let r: m::DesignFile = params(p)?;
                 let path = blocking(move || store.resolve(&r.workspace, &r.path)).await?;
