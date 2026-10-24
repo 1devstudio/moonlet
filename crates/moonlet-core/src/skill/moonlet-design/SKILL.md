@@ -72,7 +72,8 @@ Done when `moonlet design check` passes. Then `moonlet design system progress la
 
 Your first message lists the cards that changed since the last sync. For each:
 
-- **Its sources changed**: rewrite the card, its `.css` and its `.prompt.md` from the new source. If it says **edited by hand**, write your version as `<name>.proposed.html` beside the card instead; the user picks.
+- **Its sources changed**: rewrite the card, its `.css` and its `.prompt.md` from the new source.
+- **Edited by hand**: leave its files as they are. Write your version of each file you would change beside it instead: `<name>.proposed.html`, `<name>.proposed.css`, `<name>.proposed.prompt.md`. Keep importing `<name>.css` in `components.css`, never a proposal. The user picks yours or theirs, for all of them at once.
 - **New**: write it as in step 3.
 - **Its settings changed**: apply its entry in `config.toml`.
 - **Orphaned**: leave it for the user.
