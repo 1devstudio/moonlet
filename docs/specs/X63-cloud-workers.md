@@ -91,14 +91,14 @@ A cloud machine is a worker like any other in X62. It runs routed commands in a 
 
 ### When a machine is made
 
-- [x] **Overflow.** When X62 finds no free worker for a command of a project with **Use cloud machines when every worker is busy** on, the central host starts a machine for that project. It does not start one if one is already starting for the project, or if a limit would be passed. The command runs on the central host.
+- [x] **Overflow.** When X62 finds no free machine for a command of a project with **Use cloud machines when every worker is busy** on, the central host included (no free slot, or its load at 0.7 × its cores or more), the central host starts a machine for that project. While the central host has room, the command runs there and no machine starts. It does not start one if one is already starting for the project, or if a limit would be passed. The command runs on the central host.
 - [x] **A session that asked for the cloud.** The composer checkbox **Run heavy commands in the cloud** (`cloud: true` on the session) sends its routed commands to the project's ready cloud machine first. When there is none, the command starts one and waits for it. Every 10 s it prints "moonlet: waiting for moonlet-shop-m3x9 to start (1:10)". If the machine fails or a limit is reached, the command runs on the central host with "moonlet: no cloud machine (<reason>). Running on studio-mini."
 - [x] **`moonlet worker up [--project <name>]`** (the session's project by default) starts a machine and prints its name. `moonlet worker ls` lists the machines, and `moonlet worker down <name>` removes one, after its running commands end. Agents may use these. Only the limits bound them.
 - [x] **Start a machine** on the project page does what `moonlet worker up` does.
 
 ### Idle time and removal
 
-- [x] **Remove a machine after [N] minutes idle** takes 0 to 1440 and defaults to 15. A machine is idle while no routed command runs on it. It is removed after N minutes of continuous idleness, counted from ready or from its last command's end. With 0 it is removed when its last running command ends, or as soon as it is ready if nothing is waiting for it. Worked examples, with N = 15:
+- [x] **Remove a machine after [N] minutes idle** takes 0 to 1440 and defaults to 15. A machine is idle while no routed command runs on it. It is removed after N minutes of continuous idleness, counted from ready or from its last command's end. With 0 it is removed when its last running command ends. A machine that has run nothing yet stays at least 5 minutes after it is ready, whatever N is: overflow makes it for the next command. Worked examples, with N = 15:
 
   | Events | Removed at |
   |---|---|
@@ -106,7 +106,7 @@ A cloud machine is a worker like any other in X62. It runs routed commands in a 
   | ready 10:00, command 10:05–10:12 | 10:27 |
   | ready 10:00, commands 10:05–10:20 and 10:10–10:30 | 10:45 |
   | N = 0, ready 10:00, command 10:01–10:04 | 10:04 |
-  | N = 0, `worker up` ready 10:00, nothing waiting | 10:00 |
+  | N = 0, `worker up` ready 10:00, nothing waiting | 10:05 |
 
 - [ ] **Removing:**
   1. The machine leaves the candidates.
@@ -155,7 +155,7 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
     ]
     ```
 
-  - **Idle time and limits:** "Agents can start machines with moonlet worker up, but only you can change these." The rows are "Remove a machine after [15] minutes idle" ("With 0, a machine goes as soon as its command ends."), "At most [2] machines" ("Counts machines that are being created, starting, ready or being removed.") and "Monthly limit [40] machine-hours" ("From each create call to its confirmed removal, per calendar month (UTC)."), with a usage bar and "12.5 of 40 machine-hours this month".
+  - **Idle time and limits:** "Agents can start machines with moonlet worker up, but only you can change these." The rows are "Remove a machine after [15] minutes idle" ("With 0, a machine goes as soon as its command ends. One that has run nothing stays 5 minutes."), "At most [2] machines" ("Counts machines that are being created, starting, ready or being removed.") and "Monthly limit [40] machine-hours" ("From each create call to its confirmed removal, per calendar month (UTC)."), with a usage bar and "12.5 of 40 machine-hours this month".
   - A save bar: "~/.moonlet/cloud.json on studio-mini", "Unsaved changes", **Discard** and **Save** (⌘↵).
 - **Project page, Cloud workers** ([project-page.png](design/x62-x63/project-page.png)): "Machines studio-mini rents to run shop's heavy commands. Tokens and limits are in Settings › Machines › Cloud workers." Then:
   - **Use cloud machines when every worker is busy** ("The command still runs on studio-mini. A machine starts and takes the next one.");
@@ -268,11 +268,11 @@ Where the tests live:
 | The project comes from the central host, without older history | `a_cloud_machine_never_contacts_origin`, `a_cloud_machine_gets_no_older_history`, `a_secret_removed_from_the_files_never_reaches_a_cloud_machine`, `only_a_cloud_machines_routing_copy_starts_without_history`, `a_branch_at_a_shallow_boundary_moves_to_the_next_one`, `boundaries_marked_at_once_are_all_kept` |
 | Startup steps | `startup_steps_arrive_in_order_with_durations`, `a_failing_machine_setup_fails_and_removes_the_machine`; Vitest "the machine's startup checklist and deadline", "says why the job waits", "the phase checklist" |
 | Startup deadline | `a_machine_that_never_joins_is_removed_at_the_deadline` |
-| Overflow | `overflow_starts_a_machine_and_the_next_command_runs_there`, `overflow_starts_no_second_machine_while_one_is_starting` |
+| Overflow | `overflow_starts_a_machine_and_the_next_command_runs_there`, `overflow_starts_no_second_machine_while_one_is_starting`, `overflow_starts_no_machine_while_the_central_host_is_free` |
 | A session that asked for the cloud | `a_session_asks_for_the_cloud_when_it_is_made`, `two_first_commands_at_once_share_one_machine`, `a_cloud_session_waits_for_its_machine_and_runs_there`, `a_cloud_session_runs_on_the_central_host_when_no_machine_can_start`, `run_here_runs_a_job_waiting_for_a_cloud_machine_on_the_central_host`, `stop_ends_a_job_waiting_for_a_cloud_machine` |
 | `moonlet worker up`, `ls`, `down` | `worker_up_ls_and_down` |
 | Start a machine | e2e "Start a machine shows Starting, then Ready" |
-| Idle time (worked examples) | `removes_at_the_times_in_the_worked_examples`, `a_running_or_awaited_machine_is_not_removed`, `an_idle_machine_is_removed_after_the_idle_time`, `with_idle_zero_a_machine_goes_when_its_command_ends` |
+| Idle time (worked examples) | `removes_at_the_times_in_the_worked_examples`, `a_running_or_awaited_machine_is_not_removed`, `an_idle_machine_is_removed_after_the_idle_time`, `with_idle_zero_a_machine_goes_when_its_command_ends`, `with_idle_zero_an_unused_machine_stays_five_minutes` |
 | Removing | `removing_revokes_the_device_retires_and_destroys`, `removing_logs_the_machine_out_of_the_tailnet`, `a_failing_destroy_is_retried_and_reported_after_three_tries`, `retry_tries_a_failing_removal_again_at_once`, `retry_tries_only_its_own_machine_again`; Vitest "the removal toast", "toasts a removal error once, when it starts", "lists Cloud workers on the central host, with a dot while a machine is not removed (X63)" |
 | Remove now | `remove_now_removes_an_idle_machine_at_once`, `cloud_down_waits_for_running_commands` |
 | A link down for 10 minutes | `a_machine_whose_link_stays_down_is_removed` |
