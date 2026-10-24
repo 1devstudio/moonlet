@@ -27,6 +27,9 @@ function centralHost(): string {
 /** `cloud.down` on a machine being removed tries again now. */
 export const retryRemoval = (host: string, machine: string) => void rpc(host, M.cloudDown, { machine }).catch(errorToast);
 
+/** Counts `cloud.changed` events: an answer asked for before the latest one is older than it. */
+let changes = 0;
+
 function show(host: string, next: CloudMachines) {
   const prev = useCloud.getState();
   const failing = newRemovalErrors(prev.host === host ? (prev.machines?.machines ?? null) : null, next.machines);
@@ -41,8 +44,9 @@ function show(host: string, next: CloudMachines) {
 export function loadCloud() {
   const host = centralHost();
   if (useCloud.getState().host !== host) useCloud.setState({ host, machines: null });
+  const asked = changes;
   void rpc<CloudMachines>(host, M.cloudMachines).then(
-    (m) => centralHost() === host && show(host, m),
+    (m) => centralHost() === host && asked === changes && show(host, m),
     () => {},
   );
 }
@@ -53,7 +57,9 @@ export function startCloud() {
   if (started) return;
   started = true;
   void onDaemonEvent((e) => {
-    if (e.name === EV.cloudChanged && e.host === useCloud.getState().host) show(e.host, e.data as CloudMachines);
+    if (e.name !== EV.cloudChanged || e.host !== useCloud.getState().host) return;
+    changes++;
+    show(e.host, e.data as CloudMachines);
   });
   void onHostStatus((h) => {
     if (h.status === "connected" && h.id === centralHost()) loadCloud();
