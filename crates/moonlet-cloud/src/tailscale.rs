@@ -35,10 +35,15 @@ pub async fn machine_key(
         })
         .await
         .map_err(|e| CloudError::Network(format!("cannot reach Tailscale: {e}")))?;
-    if !(200..300).contains(&token.status) {
-        return Err(CloudError::Refused(
-            "Tailscale refused the OAuth client. Check it in Settings › Cloud workers.".into(),
-        ));
+    match token.status {
+        200..=299 => {}
+        // The client or its secret is wrong.
+        400 | 401 | 403 => {
+            return Err(CloudError::Refused(
+                "Tailscale refused the OAuth client. Check it in Settings › Cloud workers.".into(),
+            ));
+        }
+        status => return Err(answered(status, &token.body)),
     }
     let token = json(&token.body)?["access_token"]
         .as_str()
@@ -62,17 +67,31 @@ pub async fn machine_key(
         })
         .await
         .map_err(|e| CloudError::Network(format!("cannot reach Tailscale: {e}")))?;
-    let body = json(&key.body)?;
     if !(200..300).contains(&key.status) {
-        let why = body["message"].as_str().unwrap_or("no reason given");
+        // A refusal says why in JSON; anything else is an outage.
+        let Some(why) = serde_json::from_slice::<serde_json::Value>(&key.body)
+            .ok()
+            .and_then(|v| v["message"].as_str().map(String::from))
+        else {
+            return Err(answered(key.status, &key.body));
+        };
         return Err(CloudError::Provider(format!(
             "Tailscale refused the key: {why}"
         )));
     }
+    let body = json(&key.body)?;
     body["key"]
         .as_str()
         .map(String::from)
         .ok_or_else(|| CloudError::Network("Tailscale gave no key".into()))
+}
+
+/// An answer that is neither success nor a refusal: its status and text.
+fn answered(status: u16, body: &[u8]) -> CloudError {
+    CloudError::Provider(format!(
+        "Tailscale answered {status} {}",
+        String::from_utf8_lossy(body).trim()
+    ))
 }
 
 fn json(body: &[u8]) -> Result<serde_json::Value, CloudError> {
@@ -195,6 +214,29 @@ mod tests {
         assert_eq!(
             e.to_string(),
             "Tailscale refused the key: requested tags [tag:moonlet-worker] are invalid or not permitted"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_outage_is_not_a_refused_client() {
+        // A rate limit or an error page says what happened, not "check the client".
+        let script = Arc::new(Script {
+            answers: Mutex::new(vec![(503, "Service Unavailable")]),
+            sent: Mutex::default(),
+        });
+        let e = machine_key(&client(), "m", script).await.unwrap_err();
+        assert_eq!(e.to_string(), "Tailscale answered 503 Service Unavailable");
+        let script = Arc::new(Script {
+            answers: Mutex::new(vec![
+                (200, include_str!("fixtures/tailscale/oauth_token.json")),
+                (502, "<html>Bad Gateway</html>"),
+            ]),
+            sent: Mutex::default(),
+        });
+        let e = machine_key(&client(), "m", script).await.unwrap_err();
+        assert_eq!(
+            e.to_string(),
+            "Tailscale answered 502 <html>Bad Gateway</html>"
         );
     }
 }
