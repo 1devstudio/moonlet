@@ -999,7 +999,8 @@ impl Machines {
                     }
                     let idle = self.settings.file().idle_minutes;
                     if idle_until(&r, idle).is_some_and(|until| now >= until) {
-                        self.retire(&r.shown.id, format!("removed after {idle} min idle"));
+                        let waited = idle_for(&r, idle);
+                        self.retire(&r.shown.id, format!("removed after {waited} min idle"));
                     }
                 }
                 _ => {}
@@ -1449,12 +1450,16 @@ fn idle_until(r: &Record, idle: u32) -> Option<u64> {
         .last_end
         .unwrap_or(0)
         .max(r.ready_at.unwrap_or(r.shown.since));
-    // Nothing run yet: it stays a few minutes for the command it was made for.
-    let idle = match r.last_end {
+    Some(since + u64::from(idle_for(r, idle)) * minute())
+}
+
+/// The idle minutes machine `r` gets: `idle`, or a few more while it has
+/// run nothing yet, for the command it was made for.
+fn idle_for(r: &Record, idle: u32) -> u32 {
+    match r.last_end {
         None => idle.max(moonlet_cloud::idle::FIRST_USE_MINUTES),
         Some(_) => idle,
-    };
-    Some(since + u64::from(idle) * minute())
+    }
 }
 
 fn step(id: &str, label: String) -> CloudStep {
