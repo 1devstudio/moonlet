@@ -279,7 +279,7 @@ The boards of the design export are the reference. Layout of the design screen:
 - `design.history {design}`, `design.snapshot.restore {design, n}`
 - `design.open {design}` asks the app to show a design: Design mode for a workspace design, the session's Design tab for a session design. It is sent as the event `design.open`.
 - A design is addressed as `{workspace, slug}` or `{session, slug}`.
-- The app registers the `moonlet-design://` URI scheme. It serves files through `design.file` (X64), and adds the editor bridge script and the canvas CSP to every HTML page it serves.
+- The app registers the `moonlet-design://` URI scheme: `moonlet-design://<workspace>/<path>` is a file of that workspace's design folder on this Mac. It serves files through `design.file` (X64) with the canvas CSP, and (with the editor) adds the editor bridge script to every HTML page it serves. A URL with an empty, `.` or `..` part names nothing (`src-tauri/src/design_scheme.rs` a_url_names_a_workspace_and_a_file_of_its_design_folder, a_url_that_leaves_the_folder_or_names_nothing_is_refused, every_file_is_served_with_the_no_network_policy).
 
 ## Data and config
 

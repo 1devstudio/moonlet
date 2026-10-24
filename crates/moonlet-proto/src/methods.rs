@@ -209,6 +209,9 @@ pub const DESIGN_FILE: &str = "design.file";
 pub const DESIGN_DETECT: &str = "design.detect";
 /// [`DesignSettle`]: the user's choice for a card after a sync.
 pub const DESIGN_SETTLE: &str = "design.settle";
+/// [`DesignSystemRef`] → a design system's cards, each with its marker, check
+/// problems and the sources changed since the last sync.
+pub const DESIGN_CARDS: &str = "design.cards";
 
 // Phones (X39)
 /// Phone access, the Tailscale addresses and the paired phones: [`MobileStatus`].
