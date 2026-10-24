@@ -116,9 +116,7 @@ impl Store {
         sources: Vec<Source>,
         now: u64,
     ) -> Result<String> {
-        let systems = self.workspace(workspace)?.join("systems");
-        std::fs::create_dir_all(&systems)
-            .with_context(|| format!("cannot create {}", systems.display()))?;
+        let systems = self.systems_dir(workspace, true)?;
         let name = name.trim();
         if name.is_empty() {
             bail!("a design system needs a name");
@@ -162,11 +160,15 @@ impl Store {
 
     /// The workspace's design systems, by name.
     pub fn systems(&self, workspace: &str) -> Result<Vec<SystemSummary>> {
-        let Ok(entries) = std::fs::read_dir(self.workspace(workspace)?.join("systems")) else {
+        let Ok(entries) = std::fs::read_dir(self.systems_dir(workspace, false)?) else {
             return Ok(Vec::new());
         };
         let mut out = Vec::new();
         for e in entries.flatten() {
+            // A link is not a system, wherever it points.
+            if !e.file_type().is_ok_and(|t| t.is_dir()) {
+                continue;
+            }
             let dir = e.path();
             let Ok(config) = read_config(&dir) else {
                 continue;
@@ -207,7 +209,8 @@ impl Store {
         if !is_name(slug) {
             bail!("bad design system \"{slug}\"");
         }
-        let dir = self.workspace(workspace)?.join("systems").join(slug);
+        let dir = self.systems_dir(workspace, false)?.join(slug);
+        not_a_link(&dir)?;
         if !dir.join(CONFIG).is_file() {
             bail!("no design system \"{slug}\"");
         }
@@ -222,9 +225,11 @@ impl Store {
     /// Deletes a design system. Designs that use it keep their pages.
     pub fn remove_system(&self, workspace: &str, slug: &str) -> Result<()> {
         let dir = self.system_dir(workspace, slug)?;
-        std::fs::remove_dir_all(&dir)
+        // Through handles opened from the design folder, so a folder swapped
+        // for a link on the way is refused, not followed.
+        fsx::remove_dir_inside(&self.root, &dir)
             .with_context(|| format!("cannot remove {}", dir.display()))?;
-        let _ = std::fs::remove_file(self.record_path(workspace, slug)?);
+        let _ = fsx::remove_file_inside(&self.root, &self.record_path(workspace, slug)?);
         Ok(())
     }
 
@@ -400,13 +405,35 @@ impl Store {
         Ok(())
     }
 
-    /// `~/.moonlet/design/<workspace>`, refusing an id that is not one folder name.
+    /// `~/.moonlet/design/<workspace>`, refusing an id that is not one folder
+    /// name, and a folder that is a link (it would take writes elsewhere).
     fn workspace(&self, workspace: &str) -> Result<PathBuf> {
         if !is_name(workspace) {
             bail!("bad workspace id \"{workspace}\"");
         }
         crate::paths::ensure_private_dir(&self.root)?;
-        Ok(self.root.join(workspace))
+        let dir = self.root.join(workspace);
+        not_a_link(&dir)?;
+        Ok(dir)
+    }
+
+    /// `<workspace>/systems`, never through a link; with `create`, made
+    /// (with the workspace's folder) when missing.
+    fn systems_dir(&self, workspace: &str, create: bool) -> Result<PathBuf> {
+        let ws = self.workspace(workspace)?;
+        let systems = ws.join("systems");
+        if create {
+            for dir in [&ws, &systems] {
+                match std::fs::create_dir(dir) {
+                    Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => {
+                        return Err(e).with_context(|| format!("cannot create {}", dir.display()));
+                    }
+                    _ => not_a_link(dir)?,
+                }
+            }
+        }
+        not_a_link(&systems)?;
+        Ok(systems)
     }
 }
 
@@ -508,6 +535,15 @@ pub enum Settle {
     Remove,
     /// Leave an orphaned card until the next sync.
     Keep,
+}
+
+/// Refuses `dir` when it is there but not a folder of its own: a link
+/// (even to a folder) or a file.
+fn not_a_link(dir: &Path) -> Result<()> {
+    match std::fs::symlink_metadata(dir) {
+        Ok(m) if !m.is_dir() => bail!("{} is not a folder (a link is refused)", dir.display()),
+        _ => Ok(()),
+    }
 }
 
 /// One folder name: not empty, not `.` or `..`, no separator.
@@ -1171,6 +1207,54 @@ root = \"9c1e0a2\"
             s.error.as_deref().is_some_and(|e| e.contains("record")),
             "{:?}",
             s.error
+        );
+    }
+
+    // Review fixes (#343, on #347).
+
+    #[test]
+    fn a_linked_workspace_or_systems_folder_is_refused_and_nothing_outside_changes() {
+        let home = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        put(
+            outside.path(),
+            &[
+                (
+                    "storefront/config.toml",
+                    "name = \"storefront\"\ncreated_at = 1\n",
+                ),
+                ("storefront/keep.txt", "keep\n"),
+            ],
+        );
+        let store = Store::new(home.path());
+        // `design/w1/systems` links out.
+        std::fs::create_dir_all(home.path().join("design/w1")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), home.path().join("design/w1/systems")).unwrap();
+        assert!(store.remove_system("w1", "storefront").is_err());
+        assert!(store.config("w1", "storefront").is_err());
+        assert!(store.check_system("w1", "storefront").is_err());
+        assert!(store.create_system("w1", "pricing", vec![], 1).is_err());
+        assert!(store.systems("w1").is_err());
+        // `design/w2` links out.
+        std::os::unix::fs::symlink(outside.path(), home.path().join("design/w2")).unwrap();
+        assert!(store.create_system("w2", "pricing", vec![], 1).is_err());
+        // A system folder that is a link.
+        store.create_system("w3", "alpha", vec![], 1).unwrap();
+        std::os::unix::fs::symlink(
+            outside.path().join("storefront"),
+            home.path().join("design/w3/systems/storefront"),
+        )
+        .unwrap();
+        assert!(store.remove_system("w3", "storefront").is_err());
+        let mut left: Vec<String> = std::fs::read_dir(outside.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        assert_eq!(left, vec!["storefront".to_string()]);
+        assert_eq!(
+            std::fs::read_to_string(outside.path().join("storefront/keep.txt")).unwrap(),
+            "keep\n"
         );
     }
 
