@@ -179,6 +179,7 @@ A design system belongs to a moonlet workspace, so every project and design in t
   - a missing or malformed `@dsCard` line: it must be the whole first line, `group="…"` first, then only `name="value"` pairs
   - a `var(--x)` that no file in the `styles.css` closure defines
   - an `@import`, `<link>`, `src` or CSS `url()` (fonts included) that names no file; every `@import` and `url()` of a line is checked
+  - an `@import` of a proposal (`<name>.proposed.css`): it is not live until settled, and the styles closure does not follow it (`design/check.rs` a_proposal_waiting_to_be_settled_is_not_live_and_importing_it_is_reported)
   - a font family used first in a stack with no `@font-face`, also when the declaration spans lines
   - a URL outside the design system: any scheme but `data:`, `mailto:` and `tel:`, an absolute path, a relative path whose `..` climbs out of the folder (even when the file exists), or a symlink that points out of it. Folders that are symlinks are never entered.
   - a `<script>`, an `on*` attribute or a `javascript:` URL
@@ -242,9 +243,11 @@ A sync runs for a long time and may need the user: a question the code cannot se
   It also holds `style_sha` (`styles.css`, `components.css`, `tokens/`, `fonts/`), `aux_sha` (README, guidelines) and a hash per file, `.cache/` and the anchor itself left out. Hashes are the first 16 hex digits of SHA-256, as design-sync's. (`design/anchor.rs` the_anchor_records_each_cards_sources_and_body_hashes, the_anchor_hashes_styles_docs_and_files_and_a_style_change_keeps_the_cards)
 - [ ] **Sources changed.** A card with a source file whose hash now differs from the anchor's, or that is gone, is out of date, and that file is one of its changed sources. A card the anchor does not know is new, and with no anchor every card is; an anchor that cannot be read or parsed is an error, not a fresh start. (`design/anchor.rs` a_later_look_tells_out_of_date_edited_orphaned_and_new_cards_apart, a_missing_anchor_makes_every_card_new_and_an_unreadable_or_malformed_one_is_an_error) A source the card no longer names counts as changed, and a card whose marker broke keeps its place with the sources it had (`design/anchor.rs` a_dropped_source_or_a_broken_marker_still_shows_and_symlinked_folders_are_not_followed). The header says `<n> sources changed since sync` and names the files, and **Show cards** filters the view to those cards. moonlet checks when Design mode opens and when the design system is opened.
 - [ ] A later sync covers only the out-of-date cards, components that are new in the source, and orphaned cards. A change to styles or docs alone keeps every grade: no card is out of date for it (`design/anchor.rs` the_anchor_hashes_styles_docs_and_files_and_a_style_change_keeps_the_cards).
-- [ ] **Edited by hand.** A card whose `render_hash` on disk differs from the anchor was changed since the sync by something other than the sync agent; a change to its marker line alone (a regroup) is not an edit (`design/anchor.rs` a_later_look_tells_out_of_date_edited_orphaned_and_new_cards_apart). The sync writes its version beside it as `<Name>.proposed.html` and lists it under **Needs you**:
-  - **Keep mine**: deletes the proposal and anchors the user's version
-  - **Use synced**: replaces the card
+- [ ] **Edited by hand.** A card whose `render_hash` on disk differs from the anchor was changed since the sync by something other than the sync agent; a change to its marker line alone (a regroup) is not an edit (`design/anchor.rs` a_later_look_tells_out_of_date_edited_orphaned_and_new_cards_apart). The sync leaves the card's files as they are and writes its version of each one it changes beside it, as `<Name>.proposed.html`, `<Name>.proposed.css` or `<Name>.proposed.prompt.md`; `components.css` keeps importing `<Name>.css`. The card is listed once under **Needs you**, and counts once in `to_settle`, however many of its files are proposed:
+  - **Keep mine**: deletes every proposal and anchors the user's version, so the card keeps its own styling and `.prompt.md` too
+  - **Use synced**: replaces each file with its proposal
+
+  (`design/store.rs` settling_a_card_takes_or_drops_its_proposed_html_css_and_prompt_together)
 - [ ] **Orphaned.** A card whose source files are all gone is listed as orphaned, and so is a card whose marker broke when all the sources it had at the sync are gone (`design/anchor.rs` a_later_look_tells_out_of_date_edited_orphaned_and_new_cards_apart, a_card_whose_marker_broke_and_whose_sources_are_gone_is_orphaned): "Designs that inserted it keep their copy". **Remove card** deletes its folder. **Keep for now** leaves it until the next sync.
 
 ### Design system view
@@ -302,13 +305,13 @@ Every call names an existing moonlet workspace, or fails with `invalid_params` (
 - `design.check {workspace, slug}` → `[{path, line, kind, message}]`, after rewriting the generated files. Entry 6 adds `render?: bool` and the render counts.
 - `design.snap {workspace, path, viewport?, variant?}` → the PNG path. The app renders it (entry 6).
 - `design.file {workspace, path}` → `{path, content_type}`. The app's `moonlet-design://` scheme (X65) reads the file itself: designs are local only (ADR 0013), so no bytes cross the socket.
-- `design.settle {workspace, slug, card, choice: "mine" | "synced" | "remove" | "keep"}`. `card` is `components/<group>/<name>/<name>.html` or `ui_kits/<kit>/<screen>.html`, with no `.` or `..` and reached through no symlink (`design/store.rs` settling_a_card_keeps_mine_uses_the_synced_one_or_removes_it, settling_never_touches_files_outside_the_system_through_a_link_or_dots)
+- `design.settle {workspace, slug, card, choice: "mine" | "synced" | "remove" | "keep"}`. `card` is `components/<group>/<name>/<name>.html` or `ui_kits/<kit>/<screen>.html`, with no `.` or `..` and reached through no symlink (`design/store.rs` settling_a_card_keeps_mine_uses_the_synced_one_or_removes_it, settling_never_touches_files_outside_the_system_through_a_link_or_dots). `mine` removes each of its proposals; `synced` moves each over the file it proposes, and fails when there is none (`design/store.rs` settling_a_card_takes_or_drops_its_proposed_html_css_and_prompt_together).
 - Event `design.changed {workspace, paths}` when files under a workspace's design folder change.
 - Event `design.render {request id, path, viewport, variant}`, sent to the app, which answers with the DOM metrics or a PNG.
 
 ## Data and config
 
-- `~/.moonlet/design/<workspace id>/systems/<slug>/…` as above. moonlet itself writes `config.toml` (on create), `_ds_manifest.json`, `_ds_sync.json`, the foundation cards, the README's generated part and `.cache/`, and settles `.proposed.html` files.
+- `~/.moonlet/design/<workspace id>/systems/<slug>/…` as above. moonlet itself writes `config.toml` (on create), `_ds_manifest.json`, `_ds_sync.json`, the foundation cards, the README's generated part and `.cache/`, and settles proposals (`.proposed.html`, `.proposed.css`, `.proposed.prompt.md`).
 - moonletd remembers which agent terminal belongs to which design system with its other terminals, and restores it after a restart (S4).
 
 ## Security considerations
@@ -344,7 +347,7 @@ While the spec is a draft, the plan names test files and areas. Each criterion g
 - `crates/moonletd/tests/`:
   - `design.system.create` writes `config.toml` and starts a terminal with the expected `--add-dir` and `Edit` deny rules for each source
   - `synced` records `HEAD` and writes the anchor, both or neither
-  - a card edited by hand produces `.proposed.html`, and each `design.settle` choice
+  - a card edited by hand produces its proposals (`.proposed.html`, `.proposed.css`, `.proposed.prompt.md`), and each `design.settle` choice
 - Desktop `lib/`:
   - the render rubric from captured DOM measurements, compared with literal flags
   - group counts and the problem dot

@@ -18,7 +18,8 @@ pub enum Kind {
     Marker,
     /// A `var(--x)` that nothing in the `styles.css` closure defines.
     UnknownToken,
-    /// An `@import`, `<link>` or local `src` that names no file.
+    /// An `@import`, `<link>` or local `src` that names no file, or an
+    /// `@import` of a proposal not yet settled.
     Unresolved,
     /// A URL outside the design system.
     ExternalUrl,
@@ -229,7 +230,9 @@ pub(super) fn styles_closure(root: &Path) -> Vec<PathBuf> {
         seen.push(file);
         let text = blank(&text, &css_comments(&text));
         for c in IMPORT.captures_iter(&text) {
-            if let Target::Fine(Some(next)) = target(root, &dir, quoted(&c)) {
+            if let Target::Fine(Some(next)) = target(root, &dir, quoted(&c))
+                && !is_proposal(&next)
+            {
                 visit(next, root, seen);
             }
         }
@@ -237,6 +240,13 @@ pub(super) fn styles_closure(root: &Path) -> Vec<PathBuf> {
     let mut seen = Vec::new();
     visit(root.join("styles.css"), root, &mut seen);
     seen
+}
+
+/// A sync's proposed version of a card's file (`<name>.proposed.css`),
+/// not live until the user settles it.
+fn is_proposal(path: &Path) -> bool {
+    path.file_name()
+        .is_some_and(|n| n.to_string_lossy().contains(".proposed."))
 }
 
 /// Where a URL in a file of the design system points.
@@ -431,6 +441,19 @@ fn imports(root: &Path, path_rel: &str, path: &Path, text: &str, problems: &mut 
                     Kind::Script,
                     "a javascript: URL is not allowed in a card".into(),
                 ),
+                Target::Fine(Some(file)) if is_proposal(&file) => {
+                    let live = file
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .replace(".proposed.", ".");
+                    (
+                        Kind::Unresolved,
+                        format!(
+                            "@import \"{url}\" is a proposal waiting to be settled; import {live}"
+                        ),
+                    )
+                }
                 Target::Fine(_) => continue,
             };
             problems.push(Problem {
@@ -626,6 +649,13 @@ fn srcset_urls(value: &str) -> Vec<&str> {
 
 /// Every `.html` file, in a stable order, leaving out `.cache/`.
 pub(super) fn html_files(root: &Path) -> Vec<PathBuf> {
+    let mut out = files(root);
+    out.retain(|p| p.extension().is_some_and(|x| x == "html"));
+    out
+}
+
+/// Every file, in a stable order, leaving out `.cache/`.
+pub(super) fn files(root: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut todo = vec![root.to_path_buf()];
     while let Some(dir) = todo.pop() {
@@ -641,7 +671,7 @@ pub(super) fn html_files(root: &Path) -> Vec<PathBuf> {
                 if e.file_name() != ".cache" {
                     todo.push(p);
                 }
-            } else if kind.is_file() && p.extension().is_some_and(|x| x == "html") {
+            } else if kind.is_file() {
                 out.push(p);
             }
         }
@@ -831,6 +861,43 @@ mod tests {
                 line: 2,
                 kind: Kind::FontMissing,
                 message: "font \"JetBrains Mono\" has no @font-face in styles.css or the files it imports".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn a_proposal_waiting_to_be_settled_is_not_live_and_importing_it_is_reported() {
+        let card = "<!-- @dsCard group=\"Custom\" -->\n<!doctype html>\n<section class=\"ds-cell\" data-snippet=\"custom/row/default\"><h4>default</h4></section>\n";
+        let dir = system(&[
+            ("styles.css", STYLES),
+            ("tokens/colors.css", COLORS),
+            (
+                "components.css",
+                "@import \"components/custom/row/row.css\";\n@import \"components/custom/row/row.proposed.css\";\n",
+            ),
+            ("components/custom/row/row.html", card),
+            (
+                "components/custom/row/row.css",
+                ".row { color: var(--color-accent); }\n",
+            ),
+            ("components/custom/row/row.prompt.md", "A row.\n"),
+            ("components/custom/row/row.proposed.html", card),
+            (
+                "components/custom/row/row.proposed.css",
+                ".row { color: var(--color-bg); }\n",
+            ),
+            (
+                "components/custom/row/row.proposed.prompt.md",
+                "A row, synced.\n",
+            ),
+        ]);
+        assert_eq!(
+            check(dir.path()).unwrap(),
+            vec![Problem {
+                path: "components.css".into(),
+                line: 2,
+                kind: Kind::Unresolved,
+                message: "@import \"components/custom/row/row.proposed.css\" is a proposal waiting to be settled; import row.css".into(),
             }]
         );
     }
