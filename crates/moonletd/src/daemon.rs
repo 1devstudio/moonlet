@@ -29,7 +29,8 @@ pub struct Daemon {
     pub sessions: Arc<SessionManager>,
     /// Design systems and designs under `~/.moonlet/design` (X64, X65).
     design: moonlet_core::design::store::Store,
-    /// One sync agent start at a time per design system (X64).
+    /// Per design system (X64): one start of its agent, or one change of its
+    /// record or folder, at a time.
     design_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     reads: TerminalReads,
     watchers: Arc<Watchers>,
@@ -1030,17 +1031,26 @@ impl Daemon {
             }
             m::DESIGN_SYSTEM_REMOVE => {
                 let r: m::DesignSystemRef = params(p)?;
+                // After a start running now, so its agent is the one stopped.
+                let lock = self.design_lock(&r.workspace, &r.slug);
+                let _held = lock.lock().await;
                 self.stop_sync_agent(&r.workspace, &r.slug);
                 blocking(move || store.remove_system(&r.workspace, &r.slug)).await?;
                 ok(true)
             }
             m::DESIGN_SYSTEM_PROGRESS => {
                 let r: m::DesignProgress = params(p)?;
+                let lock = self.design_lock(&r.workspace, &r.slug);
+                let _held = lock.lock().await;
                 blocking(move || store.progress(&r.workspace, &r.slug, &r.step, r.summary.as_deref())).await?;
                 ok(true)
             }
             m::DESIGN_SYSTEM_SYNCED => {
                 let r: m::DesignSystemRef = params(p)?;
+                // The record is read, changed and written whole: never while
+                // a start writes its agent into it.
+                let lock = self.design_lock(&r.workspace, &r.slug);
+                let _held = lock.lock().await;
                 let record = self.design.record(&r.workspace, &r.slug).map_err(internal)?;
                 // Every source gets an entry: one whose HEAD cannot be read
                 // gets none, so no stale commit stays recorded.
@@ -1064,6 +1074,8 @@ impl Daemon {
                 let r: m::DesignSettle = params(p)?;
                 let choice: Settle = serde_json::from_value(Value::String(r.choice.clone()))
                     .map_err(|_| RpcError::new("invalid_params", format!("unknown choice {}", r.choice)))?;
+                let lock = self.design_lock(&r.workspace, &r.slug);
+                let _held = lock.lock().await;
                 blocking(move || store.settle(&r.workspace, &r.slug, &r.card, choice)).await?;
                 ok(true)
             }
@@ -1077,7 +1089,7 @@ impl Daemon {
     async fn start_sync_agent(&self, workspace: &str, slug: &str) -> anyhow::Result<u32> {
         use moonlet_core::design::{agent, anchor, store};
         // One start or sync at a time per system, so two never make two agents.
-        let lock = self.design_locks.lock().unwrap().entry(format!("{workspace}/{slug}")).or_default().clone();
+        let lock = self.design_lock(workspace, slug);
         let _held = lock.lock().await;
         // The folders and the chat come from the record moonlet keeps outside
         // the system's folder, never from files the agent can edit. Reading and
@@ -1128,6 +1140,11 @@ impl Daemon {
         self.design.set_agent(workspace, slug, info.id, &fingerprint)?;
         self.chats.send(info.id, &launch.prompt, &[])?;
         Ok(info.id)
+    }
+
+    /// The lock of one design system (see `design_locks`).
+    fn design_lock(&self, workspace: &str, slug: &str) -> Arc<tokio::sync::Mutex<()>> {
+        self.design_locks.lock().unwrap().entry(format!("{workspace}/{slug}")).or_default().clone()
     }
 
     /// Stops a design system's sync agent, when it still is that system's.
