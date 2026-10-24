@@ -225,7 +225,7 @@ A design system belongs to a moonlet workspace, so every project and design in t
 - [ ] **Edited by hand.** A card whose `render_hash` on disk differs from the anchor was changed since the sync by something other than the sync agent; a change to its marker line alone (a regroup) is not an edit (`design/anchor.rs` a_later_look_tells_out_of_date_edited_orphaned_and_new_cards_apart). The sync writes its version beside it as `<Name>.proposed.html` and lists it under **Needs you**:
   - **Keep mine**: deletes the proposal and anchors the user's version
   - **Use synced**: replaces the card
-- [ ] **Orphaned.** A card whose source files are all gone is listed as orphaned (`design/anchor.rs` a_later_look_tells_out_of_date_edited_orphaned_and_new_cards_apart): "Designs that inserted it keep their copy". **Remove card** deletes its folder. **Keep for now** leaves it until the next sync.
+- [ ] **Orphaned.** A card whose source files are all gone is listed as orphaned, and so is a card whose marker broke when all the sources it had at the sync are gone (`design/anchor.rs` a_later_look_tells_out_of_date_edited_orphaned_and_new_cards_apart, a_card_whose_marker_broke_and_whose_sources_are_gone_is_orphaned): "Designs that inserted it keep their copy". **Remove card** deletes its folder. **Keep for now** leaves it until the next sync.
 
 ### Design system view
 
