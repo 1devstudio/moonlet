@@ -99,9 +99,14 @@ pub(crate) fn remove_file_inside(root: &Path, path: &Path) -> Result<()> {
     }
 }
 
-/// Renames `from` over `to`, both inside `root`.
-pub(crate) fn rename_inside(root: &Path, from: &Path, to: &Path) -> Result<()> {
+/// Renames `from` over `to`, both inside `root`; false when `from` is
+/// missing.
+pub(crate) fn rename_inside(root: &Path, from: &Path, to: &Path) -> Result<bool> {
     let (from, to) = (from.strip_prefix(root)?, to.strip_prefix(root)?);
     let root_dir = open_root(root)?;
-    Ok(root_dir.rename(from, &root_dir, to)?)
+    match root_dir.rename(from, &root_dir, to) {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e.into()),
+    }
 }

@@ -11,7 +11,7 @@ use anyhow::{Context, Result, bail};
 use moonlet_proto::types::ProjectIdentity;
 use serde::{Deserialize, Serialize};
 
-use super::check::{self, html_files};
+use super::check;
 use super::{anchor, foundations, fsx, manifest, readme};
 
 /// One project a design system is built from.
@@ -437,14 +437,42 @@ impl Store {
         // outside it, whatever links are in the way.
         let path = dir.join(card);
         let folder = path.parent().unwrap_or(&dir).to_path_buf();
-        let proposed = path.with_extension("proposed.html");
+        // The sync's version of each of the card's files it changed, beside
+        // the file it would replace: settled together.
+        let stem = card[..card.len() - ".html".len()]
+            .rsplit('/')
+            .next()
+            .unwrap_or("");
+        let proposals: Vec<(PathBuf, PathBuf)> = PROPOSED
+            .iter()
+            .map(|ext| {
+                (
+                    folder.join(format!("{stem}.proposed.{ext}")),
+                    folder.join(format!("{stem}.{ext}")),
+                )
+            })
+            .collect();
         match choice {
-            Settle::Mine => fsx::remove_file_inside(&dir, &proposed)?,
-            Settle::Synced => fsx::rename_inside(&dir, &proposed, &path)?,
+            Settle::Mine => {
+                for (proposed, _) in &proposals {
+                    fsx::remove_file_inside(&dir, proposed)?;
+                }
+            }
+            Settle::Synced => {
+                let mut took = false;
+                for (proposed, live) in &proposals {
+                    took |= fsx::rename_inside(&dir, proposed, live)?;
+                }
+                if !took {
+                    bail!("{card} has no proposal to take");
+                }
+            }
             Settle::Remove if parts[0] == "components" => fsx::remove_dir_inside(&dir, &folder)?,
             Settle::Remove => {
                 fsx::remove_file_inside(&dir, &path)?;
-                fsx::remove_file_inside(&dir, &proposed)?;
+                for (proposed, _) in &proposals {
+                    fsx::remove_file_inside(&dir, proposed)?;
+                }
             }
             Settle::Keep => {}
         }
@@ -566,10 +594,7 @@ fn summary(
         .collect();
     changed.sort();
     changed.dedup();
-    let proposed = html_files(dir)
-        .iter()
-        .filter(|p| p.to_string_lossy().ends_with(".proposed.html"))
-        .count();
+    let proposed = proposed_cards(dir).len();
     Ok(SystemSummary {
         slug,
         name: config.name.clone(),
@@ -594,13 +619,32 @@ fn summary(
     })
 }
 
+/// The kinds of a card's files a sync may propose a new version of, as
+/// `<name>.proposed.<kind>` beside `<name>.<kind>` (X64).
+const PROPOSED: [&str; 3] = ["html", "css", "prompt.md"];
+
+/// Each card with a proposal waiting to be settled, as its folder and name:
+/// once, however many of its files are proposed.
+fn proposed_cards(dir: &Path) -> std::collections::BTreeSet<PathBuf> {
+    check::files(dir)
+        .into_iter()
+        .filter_map(|p| {
+            let name = p.file_name()?.to_str()?;
+            let stem = PROPOSED
+                .iter()
+                .find_map(|ext| name.strip_suffix(&format!(".proposed.{ext}")))?;
+            Some(p.with_file_name(stem))
+        })
+        .collect()
+}
+
 /// What the user picks for a card under Needs you (X64).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Settle {
-    /// Keep the card as edited by hand; drop the sync's proposal.
+    /// Keep the card as edited by hand; drop every file the sync proposed.
     Mine,
-    /// Replace the card with the sync's proposal.
+    /// Replace each of the card's files with the sync's proposal of it.
     Synced,
     /// Delete an orphaned card.
     Remove,
@@ -987,6 +1031,94 @@ root = \"9c1e0a2\"
             store
                 .settle("w1", &slug, "components/../../config.toml", Settle::Remove)
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn settling_a_card_takes_or_drops_its_proposed_html_css_and_prompt_together() {
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::new(home.path());
+        let slug = store
+            .create_system("w1", "storefront", vec![], Cover::Core, 1)
+            .unwrap();
+        let dir = home.path().join("design/w1/systems").join(&slug);
+        let row = "components/custom/row/row.html";
+        let mine = [
+            (
+                row,
+                "<!-- @dsCard group=\"Custom\" -->\n<div class=\"row\">mine</div>\n",
+            ),
+            (
+                "components/custom/row/row.css",
+                ".row { color: var(--mine); }\n",
+            ),
+            (
+                "components/custom/row/row.prompt.md",
+                "A row, as I wrote it.\n",
+            ),
+        ];
+        let proposals = [
+            (
+                "components/custom/row/row.proposed.html",
+                "<!-- @dsCard group=\"Custom\" -->\n<div class=\"row\">synced</div>\n",
+            ),
+            (
+                "components/custom/row/row.proposed.css",
+                ".row { color: var(--synced); }\n",
+            ),
+            (
+                "components/custom/row/row.proposed.prompt.md",
+                "A row, as the code has it.\n",
+            ),
+        ];
+        put(&dir, &mine);
+        put(&dir, &proposals);
+        assert_eq!(store.systems("w1").unwrap()[0].to_settle, 1, "one card");
+
+        store.settle("w1", &slug, row, Settle::Mine).unwrap();
+        for (path, text) in mine {
+            assert_eq!(std::fs::read_to_string(dir.join(path)).unwrap(), text);
+        }
+        for (path, _) in proposals {
+            assert!(!dir.join(path).exists(), "{path} left behind");
+        }
+        assert_eq!(store.systems("w1").unwrap()[0].to_settle, 0);
+
+        put(&dir, &proposals);
+        store.settle("w1", &slug, row, Settle::Synced).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join(row)).unwrap(),
+            "<!-- @dsCard group=\"Custom\" -->\n<div class=\"row\">synced</div>\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("components/custom/row/row.css")).unwrap(),
+            ".row { color: var(--synced); }\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("components/custom/row/row.prompt.md")).unwrap(),
+            "A row, as the code has it.\n"
+        );
+        for (path, _) in proposals {
+            assert!(!dir.join(path).exists(), "{path} left behind");
+        }
+
+        // A sync that changed only the styling proposes only that.
+        put(
+            &dir,
+            &[(
+                "components/custom/row/row.proposed.css",
+                ".row { color: red; }\n",
+            )],
+        );
+        assert_eq!(store.systems("w1").unwrap()[0].to_settle, 1);
+        store.settle("w1", &slug, row, Settle::Synced).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join("components/custom/row/row.css")).unwrap(),
+            ".row { color: red; }\n"
+        );
+        assert!(
+            store.settle("w1", &slug, row, Settle::Synced).is_err(),
+            "nothing left to take"
         );
     }
 
