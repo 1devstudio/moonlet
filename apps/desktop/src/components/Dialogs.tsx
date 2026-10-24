@@ -13,6 +13,7 @@ import { closesIssue, withCloses } from "../lib/keepInStep";
 import { githubRepo } from "../lib/tasks";
 import { rulesFor, trackersConfig, useTasks } from "../lib/tasksStore";
 import { NewWorkspaceDialog } from "./WorkspaceDialogs";
+import { NewDesignSystemDialog } from "./design/DesignMode";
 import { LinkTaskDialog } from "./tasks/SessionTask";
 
 const close = () => useStore.setState({ dialog: null });
@@ -208,6 +209,8 @@ export function Dialogs() {
       return <CommitDialog />;
     case "create-pr":
       return <CreatePrDialog />;
+    case "new-design-system":
+      return <NewDesignSystemDialog host={dialog.host} workspace={dialog.workspace} />;
     case "sync-compare":
       return <SyncCompare host={dialog.host} session={dialog.session} path={dialog.path} />;
     default:

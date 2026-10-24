@@ -1,6 +1,6 @@
 // Tasks mode (X45, X50): the sidebar's boards and the shown board of the workspace's tasks.
 
-import { Bot, ChevronDown, ChevronRight, ChevronUp, Copy, ExternalLink, Filter, GitBranch, LayoutGrid, List, MoreHorizontal, Plus, RotateCw, Search, Settings, SquareTerminal, Trash2, X } from "lucide-react";
+import { Bot, ChevronDown, ChevronRight, ChevronUp, Copy, ExternalLink, Filter, GitBranch, LayoutGrid, List, MoreHorizontal, PenTool, Plus, RotateCw, Search, Settings, SquareTerminal, Trash2, X } from "lucide-react";
 import { type DragEvent, useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { errorToast, selectSession, shownWorkspace, toast, useStore } from "../../lib/store";
@@ -18,7 +18,6 @@ import {
   failureOf,
   fixDrift,
   forgetGhScopes,
-  isTasksMode,
   leaveTasksMode,
   loadTrackersConfig,
   moveTask,
@@ -40,7 +39,6 @@ import {
   syncTasks,
   taskColumns,
   toggleExpanded,
-  toggleTasksMode,
   trackersConfig,
   useTasks,
 } from "../../lib/tasksStore";
@@ -48,6 +46,7 @@ import { boardListGroups, cleanUps, listRow } from "../../lib/tasksList";
 import { removeWorktreeAsk, withoutPutOffCard, withRules } from "../../lib/keepInStep";
 import { effectiveKeys, keyLabel } from "../../lib/runActions";
 import { keepCard, modeSwitch } from "../../lib/tasksView";
+import { modeOf, setMode } from "../../lib/mode";
 import { useNow } from "../../lib/useNow";
 import { TaskComments } from "./TaskComments";
 import { parseWsKey, wsKey } from "../../lib/workspaces";
@@ -763,29 +762,26 @@ function BoardSwitcher({ host, workspaceId, shown, title, subtitle, stats }: { h
   );
 }
 
-/** Sessions | Tasks beside the workspace switcher (X45), with a dot when tasks are out of sync. */
+/** Sessions | Tasks | Design beside the workspace switcher (X45, X65), with a dot when tasks are out of sync. */
 export function ModeSwitch() {
-  const tasks = useStore((s) => isTasksMode(s));
+  const mode = useStore((s) => modeOf(s));
   const { ws, board } = useWorkspaceTasks();
   useEffect(() => (ws ? pollTasks(ws.host, ws.id) : undefined), [ws]);
-  // The switch's shortcut as the user has it (Settings › Shortcuts).
-  const key = keyLabel(effectiveKeys(useStore((s) => s.settings.shortcuts)).tasks ?? "");
-  const m = modeSwitch(key, board ? outOfSync(board).length : 0);
-  const item = "no-drag relative flex h-[26px] w-[30px] items-center justify-center rounded-[5px]";
+  // The switch's shortcuts as the user has them (Settings › Shortcuts).
+  const keys = effectiveKeys(useStore((s) => s.settings.shortcuts));
+  const m = modeSwitch({ tasks: keyLabel(keys.tasks ?? ""), design: keyLabel(keys.design ?? "") }, mode, board ? outOfSync(board).length : 0);
+  const item = (on: boolean) => cx("no-drag relative flex h-[26px] w-[26px] items-center justify-center rounded-[5px]", on ? "bg-raised text-fg" : "text-muted hover:text-fg");
   return (
     <div role="group" aria-label="Mode" className="ml-auto flex shrink-0 items-center gap-0.5 rounded-md bg-panel-2 p-0.5">
-      <button aria-label="Sessions" aria-pressed={!tasks} title={m.sessions} onClick={() => tasks && toggleTasksMode()} className={cx(item, !tasks ? "bg-raised text-fg" : "text-muted hover:text-fg")}>
+      <button aria-label="Sessions" aria-pressed={mode === "sessions"} title={m.sessions} onClick={() => setMode("sessions")} className={item(mode === "sessions")}>
         <SquareTerminal size={14} />
       </button>
-      <button
-        aria-label={m.label}
-        aria-pressed={tasks}
-        title={m.tasks}
-        onClick={() => !tasks && toggleTasksMode()}
-        className={cx(item, tasks ? "bg-raised text-fg" : "text-muted hover:text-fg")}
-      >
+      <button aria-label={m.label} aria-pressed={mode === "tasks"} title={m.tasks} onClick={() => setMode("tasks")} className={item(mode === "tasks")}>
         <TaskGlyph column="in_progress" size={14} />
         {m.dot && <span aria-hidden="true" className="absolute right-[3px] top-[3px] h-[6px] w-[6px] rounded-full bg-accent" />}
+      </button>
+      <button aria-label="Design" aria-pressed={mode === "design"} title={m.design} onClick={() => setMode("design")} className={item(mode === "design")}>
+        <PenTool size={14} />
       </button>
     </div>
   );

@@ -867,6 +867,17 @@ mod tests {
         }
     }
 
+    // The app's New design system dialog shows the folder with the same
+    // cases (apps/desktop/src/lib/design.test.ts).
+    #[test]
+    fn a_slug_is_lowercase_letters_and_digits_joined_by_dashes() {
+        assert_eq!(slug("moonlet desktop"), "moonlet-desktop");
+        assert_eq!(slug("  Moonlet Desktop! "), "moonlet-desktop");
+        assert_eq!(slug("Café UI"), "caf-ui");
+        assert_eq!(slug("App 2.0"), "app-2-0");
+        assert_eq!(slug("---"), "design-system");
+    }
+
     #[test]
     fn a_new_design_system_gets_a_folder_and_a_config_and_a_used_name_gets_a_number() {
         let home = tempfile::tempdir().unwrap();
