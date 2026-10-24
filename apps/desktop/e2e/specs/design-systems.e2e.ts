@@ -56,7 +56,8 @@ describe("Design system view", () => {
     await expect($('//nav[@aria-label="Groups"]//button[.//span[normalize-space()="All"]]//span[normalize-space()="3"]')).toBeDisplayed();
     await expect($('//nav[@aria-label="Groups"]//button[.//span[normalize-space()="Forms"]]//span[@aria-label="has a check problem"]')).toBeExisting();
     const frame = $('//section[@aria-label="Buttons"]//iframe[@title="Button"]');
-    await expect(frame).toHaveAttribute("src", `moonlet-design://${workspaceId()}/systems/storefront-kit/components/buttons/button/button.html`);
+    // `?v=<n>` once the system changed, so the frame loads it again.
+    expect(await frame.getAttribute("src")).toMatch(new RegExp(`^moonlet-design://${workspaceId()}/systems/storefront-kit/components/buttons/button/button\\.html(\\?v=\\d+)?$`));
     await expect(frame).toHaveAttribute("sandbox", "allow-scripts");
     // Sandboxed with no same-origin: the app itself cannot reach into it (a
     // test driver cannot either; the screenshots show what it renders).

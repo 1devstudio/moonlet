@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DesignCard, DesignSystem } from "./protocol";
-import { cardGroups, cardUrl, changedBanner, fitScale, fixMessage, headerLine, variantsLabel } from "./designView";
+import { cardGroups, cardUrl, changedBanner, fitScale, fixMessage, headerLine, variantsLabel, visibleCards } from "./designView";
 
 const NOW = 1_761_200_000_000;
 const DAY = 86_400_000;
@@ -56,13 +56,39 @@ describe("the design system view's groups (X64)", () => {
       card("Custom", "Kbd"),
     ];
     expect(cardGroups(cards)).toEqual([
-      { name: "All", count: 11, problem: true },
-      { name: "Foundations", count: 2, problem: false },
-      { name: "Buttons", count: 2, problem: false },
-      { name: "Forms", count: 2, problem: false },
-      { name: "Custom", count: 3, problem: true },
-      { name: "Layouts", count: 2, problem: false },
+      { key: "", name: "All", count: 11, problem: true },
+      { key: "Foundations", name: "Foundations", count: 2, problem: false },
+      { key: "Buttons", name: "Buttons", count: 2, problem: false },
+      { key: "Forms", name: "Forms", count: 2, problem: false },
+      { key: "Custom", name: "Custom", count: 3, problem: true },
+      { key: "Layouts", name: "Layouts", count: 2, problem: false },
     ]);
+  });
+
+  it("keeps a group a card names All apart from all the cards", () => {
+    expect(cardGroups([card("All", "Everything"), card("Buttons", "Button")]).map((g) => [g.key, g.name, g.count])).toEqual([
+      ["", "All", 2],
+      ["All", "All", 1],
+      ["Buttons", "Buttons", 1],
+    ]);
+  });
+});
+
+describe("the cards the view shows (X64)", () => {
+  const cards = [card("Buttons", "Button", { changed_sources: ["src/ui.tsx"] }), card("Forms", "Field", { problems: [problem] }), card("Forms", "Switch")];
+  const names = (v: ReturnType<typeof visibleCards>) => v.cards.map((c) => c.name);
+
+  it("are a group's, or all of them", () => {
+    expect(names(visibleCards(cards, { group: "Forms", onlyProblems: false, onlyChanged: false }))).toEqual(["Field", "Switch"]);
+    expect(names(visibleCards(cards, { group: "", onlyProblems: false, onlyChanged: false }))).toEqual(["Button", "Field", "Switch"]);
+  });
+
+  it("are those with a check problem, or made from a changed source, while there are any", () => {
+    expect(visibleCards(cards, { group: "", onlyProblems: true, onlyChanged: false })).toEqual({ cards: [cards[1]], onlyProblems: true, onlyChanged: false });
+    expect(names(visibleCards(cards, { group: "", onlyProblems: false, onlyChanged: true }))).toEqual(["Button"]);
+    // Fixed, or synced: the filter lets go, so the grid never goes blank with no way back.
+    const fixed = cards.map((c) => ({ ...c, problems: [], changed_sources: [] }));
+    expect(visibleCards(fixed, { group: "", onlyProblems: true, onlyChanged: true })).toEqual({ cards: fixed, onlyProblems: false, onlyChanged: false });
   });
 });
 
@@ -101,6 +127,8 @@ describe("a card (X64, X65)", () => {
       "moonlet-design://w-1devstudio/systems/moonlet-desktop/components/custom/session-row/session-row.html",
     );
     expect(cardUrl("w1", "s", "ui_kits/app/home screen.html")).toBe("moonlet-design://w1/systems/s/ui_kits/app/home%20screen.html");
+    // After a change in the system, a new address, so the frame loads it again.
+    expect(cardUrl("w1", "s", "components/a/b/b.html", 3)).toBe("moonlet-design://w1/systems/s/components/a/b/b.html?v=3");
   });
 
   it("counts its variants", () => {

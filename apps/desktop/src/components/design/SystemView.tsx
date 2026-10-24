@@ -8,8 +8,8 @@ import { errorToast, toast, useStore } from "../../lib/store";
 import { rpc } from "../../lib/daemon";
 import { M, type DesignCard, type DesignSystem } from "../../lib/protocol";
 import type { RowLabel } from "../../lib/design";
-import { cardGroups, cardUrl, changedBanner, fitScale, fixMessage, headerLine, variantsLabel } from "../../lib/designView";
-import { cardsOf, loadCards, openCard, shownCard, useDesign } from "../../lib/designStore";
+import { cardGroups, cardUrl, changedBanner, fitScale, fixMessage, headerLine, variantsLabel, visibleCards } from "../../lib/designView";
+import { cardsOf, loadCards, openCard, revOf, shownCard, useDesign } from "../../lib/designStore";
 import { workspaceProjects } from "../../lib/tasksStore";
 import { useNow } from "../../lib/useNow";
 import { cx } from "../../lib/cx";
@@ -51,7 +51,7 @@ function useWidth<T extends HTMLElement>(): [React.RefObject<T | null>, number] 
   return [ref, width];
 }
 
-function CardTile({ workspace, slug, card, onOpen }: { workspace: string; slug: string; card: DesignCard; onOpen: () => void }) {
+function CardTile({ workspace, slug, rev, card, onOpen }: { workspace: string; slug: string; rev: number; card: DesignCard; onOpen: () => void }) {
   const [ref, width] = useWidth<HTMLDivElement>();
   const problems = card.problems.length;
   // At card scale: the tile's width, never larger than the card itself.
@@ -72,7 +72,7 @@ function CardTile({ workspace, slug, card, onOpen }: { workspace: string; slug: 
         )}
       </div>
       <div ref={ref} className="max-h-[320px] w-full overflow-hidden">
-        {scale > 0 && <CardFrame url={cardUrl(workspace, slug, card.path)} title={card.name} viewport={card.viewport} scale={scale} />}
+        {scale > 0 && <CardFrame url={cardUrl(workspace, slug, card.path, rev)} title={card.name} viewport={card.viewport} scale={scale} />}
       </div>
     </button>
   );
@@ -80,13 +80,16 @@ function CardTile({ workspace, slug, card, onOpen }: { workspace: string; slug: 
 
 /** A design system: its header, the sources-changed banner, its groups and cards, or one card's page; its agent's chat docked on the right. */
 export function DesignSystemView({ host, workspace, sys, label, inset }: { host: string; workspace: string; sys: DesignSystem; label: RowLabel; inset: number }) {
-  const cards = useDesign((d) => cardsOf(d, host, workspace, sys.slug));
-  const open = useDesign((d) => shownCard(d, host, workspace));
+  const listed = useDesign((d) => cardsOf(d, host, workspace, sys.slug));
+  // A system that cannot be read shows its error, never cards listed before.
+  const cards = sys.error ? undefined : listed;
+  const open = useDesign((d) => shownCard(d, host, workspace, sys.slug));
+  const rev = useDesign((d) => revOf(d, host, workspace, sys.slug));
   const projectList = useStore(useShallow((s) => workspaceProjects(s, host, workspace)));
   const projects = useMemo(() => projectList.map((p) => ({ path: p.path, name: p.name })), [projectList]);
   const agent = useStore((s) => (sys.agent !== null && s.terminals[host]?.[sys.agent]?.chat ? sys.agent : null));
   const [hidden, setHidden] = useState(false);
-  const [group, setGroup] = useState("All");
+  const [group, setGroup] = useState("");
   const [onlyProblems, setOnlyProblems] = useState(false);
   const [onlyChanged, setOnlyChanged] = useState(false);
   const now = useNow(true);
@@ -100,14 +103,15 @@ export function DesignSystemView({ host, workspace, sys, label, inset }: { host:
   const problems = (cards ?? []).reduce((n, c) => n + c.problems.length, 0);
   const banner = cards ? changedBanner(sys, cards) : null;
   const groups = useMemo(() => cardGroups(cards ?? []), [cards]);
-  const shown = (cards ?? []).filter((c) => (group === "All" || c.group === group) && (!onlyProblems || c.problems.length > 0) && (!onlyChanged || c.changed_sources.length > 0));
+  const view = visibleCards(cards ?? [], { group, onlyProblems, onlyChanged });
+  const shown = view.cards;
   const sync = () => void rpc(host, M.designSystemSync, { workspace, slug: sys.slug }).catch(errorToast);
 
   return (
     <div className="flex min-h-0 flex-1">
       <div className="flex min-w-0 flex-1 flex-col">
         {card ? (
-          <CardPage host={host} workspace={workspace} sys={sys} card={card} agent={agent} inset={inset} />
+          <CardPage host={host} workspace={workspace} sys={sys} rev={rev} card={card} agent={agent} inset={inset} />
         ) : (
           <>
             <header data-tauri-drag-region className="drag flex h-[52px] shrink-0 items-center gap-2 border-b border-border bg-panel pr-3" style={{ paddingLeft: inset + 20 }}>
@@ -120,9 +124,9 @@ export function DesignSystemView({ host, workspace, sys, label, inset }: { host:
               </div>
               {problems > 0 && (
                 <button
-                  aria-pressed={onlyProblems}
-                  onClick={() => setOnlyProblems(!onlyProblems)}
-                  className={cx("no-drag flex items-center gap-1.5 rounded-md border px-2 py-1 ui-text-12 text-blocked", onlyProblems ? "border-blocked bg-blocked/15" : "border-blocked/40 bg-blocked/10")}
+                  aria-pressed={view.onlyProblems}
+                  onClick={() => setOnlyProblems(!view.onlyProblems)}
+                  className={cx("no-drag flex items-center gap-1.5 rounded-md border px-2 py-1 ui-text-12 text-blocked", view.onlyProblems ? "border-blocked bg-blocked/15" : "border-blocked/40 bg-blocked/10")}
                 >
                   <ShieldAlert size={12} /> {problems} check problem{problems === 1 ? "" : "s"}
                 </button>
@@ -148,8 +152,8 @@ export function DesignSystemView({ host, workspace, sys, label, inset }: { host:
               <div className="flex shrink-0 items-center gap-2 border-b border-border bg-blocked/[0.06] px-5 py-2 ui-text-12.5 text-muted">
                 <span className="h-1.5 w-1.5 rounded-full bg-blocked" />
                 <span className="min-w-0 flex-1">{banner}</span>
-                <Button size="sm" variant="ghost" aria-pressed={onlyChanged} onClick={() => setOnlyChanged(!onlyChanged)}>
-                  {onlyChanged ? "Show all cards" : "Show cards"}
+                <Button size="sm" variant="ghost" aria-pressed={view.onlyChanged} onClick={() => setOnlyChanged(!view.onlyChanged)}>
+                  {view.onlyChanged ? "Show all cards" : "Show cards"}
                 </Button>
               </div>
             )}
@@ -160,10 +164,10 @@ export function DesignSystemView({ host, workspace, sys, label, inset }: { host:
                 <nav aria-label="Groups" className="w-[200px] shrink-0 overflow-y-auto border-r border-border p-2">
                   {groups.map((g) => (
                     <button
-                      key={g.name}
-                      aria-current={g.name === group ? "true" : undefined}
-                      onClick={() => setGroup(g.name)}
-                      className={cx("flex h-[30px] w-full items-center gap-2 rounded-md px-2.5 text-left ui-text-13", g.name === group ? "bg-raised text-fg" : "text-muted hover:bg-panel-2 hover:text-fg")}
+                      key={g.key}
+                      aria-current={g.key === group ? "true" : undefined}
+                      onClick={() => setGroup(g.key)}
+                      className={cx("flex h-[30px] w-full items-center gap-2 rounded-md px-2.5 text-left ui-text-13", g.key === group ? "bg-raised text-fg" : "text-muted hover:bg-panel-2 hover:text-fg")}
                     >
                       <span className="min-w-0 flex-1 truncate">{g.name}</span>
                       {g.problem && <span aria-label="has a check problem" className="h-1.5 w-1.5 rounded-full bg-blocked" />}
@@ -175,15 +179,15 @@ export function DesignSystemView({ host, workspace, sys, label, inset }: { host:
                   {cards?.length === 0 && <p className="ui-text-13 text-muted">No cards yet. The sync agent writes them in the Cards step.</p>}
                   {groups
                     .slice(1)
-                    .filter((g) => shown.some((c) => c.group === g.name))
+                    .filter((g) => shown.some((c) => c.group === g.key))
                     .map((g) => (
-                      <section key={g.name} aria-label={g.name} className="mb-8">
+                      <section key={g.key} aria-label={g.name} className="mb-8">
                         <h2 className="mb-3 ui-text-11.5 uppercase tracking-[0.08em] text-faint">{g.name}</h2>
                         <div className="grid grid-cols-[repeat(auto-fill,minmax(340px,1fr))] gap-4">
                           {shown
-                            .filter((c) => c.group === g.name)
+                            .filter((c) => c.group === g.key)
                             .map((c) => (
-                              <CardTile key={c.path} workspace={workspace} slug={sys.slug} card={c} onOpen={() => openCard(host, workspace, c.path)} />
+                              <CardTile key={c.path} workspace={workspace} slug={sys.slug} rev={rev} card={c} onOpen={() => openCard(host, workspace, sys.slug, c.path)} />
                             ))}
                         </div>
                       </section>
@@ -214,7 +218,7 @@ export function DesignSystemView({ host, workspace, sys, label, inset }: { host:
 
 /** One card (X64): the card at its viewport and zoom, and where it was made
  *  from, its marker, its check problems and its snippets. */
-function CardPage({ host, workspace, sys, card, agent, inset }: { host: string; workspace: string; sys: DesignSystem; card: DesignCard; agent: number | null; inset: number }) {
+function CardPage({ host, workspace, sys, rev, card, agent, inset }: { host: string; workspace: string; sys: DesignSystem; rev: number; card: DesignCard; agent: number | null; inset: number }) {
   const canvas = useRef<HTMLDivElement>(null);
   const [box, setBox] = useState<[number, number]>([0, 0]);
   useLayoutEffect(() => {
@@ -227,7 +231,10 @@ function CardPage({ host, workspace, sys, card, agent, inset }: { host: string; 
     return () => ro.disconnect();
   }, []);
   const scale = box[0] > 0 && box[1] > 0 ? fitScale(card.viewport, box) : 0;
+  const [asking, setAsking] = useState(false);
   const askToFix = async () => {
+    if (asking) return;
+    setAsking(true);
     try {
       // With no agent chat, Sync starts one; the request follows its first message.
       const id = agent ?? (await rpc<{ agent: number }>(host, M.designSystemSync, { workspace, slug: sys.slug })).agent;
@@ -235,6 +242,8 @@ function CardPage({ host, workspace, sys, card, agent, inset }: { host: string; 
       toast("Asked the sync agent to fix it");
     } catch (e) {
       errorToast(e);
+    } finally {
+      setAsking(false);
     }
   };
   const copy = (id: string) => void navigator.clipboard.writeText(id).then(() => toast(`Copied ${id}`));
@@ -242,7 +251,7 @@ function CardPage({ host, workspace, sys, card, agent, inset }: { host: string; 
   return (
     <>
       <header data-tauri-drag-region className="drag flex h-[52px] shrink-0 items-center gap-2 border-b border-border bg-panel pr-3" style={{ paddingLeft: inset + 12 }}>
-        <button aria-label="Back to the design system" className="no-drag rounded p-1 text-muted hover:bg-panel-2 hover:text-fg" onClick={() => openCard(host, workspace, null)}>
+        <button aria-label="Back to the design system" className="no-drag rounded p-1 text-muted hover:bg-panel-2 hover:text-fg" onClick={() => openCard(host, workspace, sys.slug, null)}>
           <ChevronLeft size={15} />
         </button>
         <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-1.5 ui-text-13">
@@ -264,7 +273,7 @@ function CardPage({ host, workspace, sys, card, agent, inset }: { host: string; 
           <div ref={canvas} className="flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-bg [background-image:radial-gradient(var(--color-border)_1px,transparent_1px)] [background-size:16px_16px]">
             {scale > 0 && (
               <div className="rounded-md border border-border-strong shadow-2xl">
-                <CardFrame url={cardUrl(workspace, sys.slug, card.path)} title={card.name} viewport={card.viewport} scale={scale} interactive />
+                <CardFrame url={cardUrl(workspace, sys.slug, card.path, rev)} title={card.name} viewport={card.viewport} scale={scale} interactive />
               </div>
             )}
           </div>
@@ -299,7 +308,7 @@ function CardPage({ host, workspace, sys, card, agent, inset }: { host: string; 
               </div>
             ))}
             {card.problems.length > 0 && (
-              <Button size="sm" className="w-full justify-center" onClick={() => void askToFix()}>
+              <Button size="sm" className="w-full justify-center" disabled={asking} onClick={() => void askToFix()}>
                 Ask the sync agent to fix
               </Button>
             )}
