@@ -128,9 +128,12 @@ fn users_own(path: &Path) -> bool {
     std::fs::read_to_string(path).is_ok_and(|s| !s.contains(SKILL_MARKER))
 }
 
-/// Every file of moonlet's skills is current, or the user's own.
+/// moonlet's own `moonlet` skill is current, and every other file of its
+/// skills is current or the user's own.
 fn skill_installed(path: &Path) -> bool {
-    skill_files(path).iter().all(|(p, text)| std::fs::read_to_string(p).is_ok_and(|s| s == *text) || users_own(p))
+    skill_files(path)
+        .iter()
+        .all(|(p, text)| std::fs::read_to_string(p).is_ok_and(|s| s == *text) || (p != path && users_own(p)))
 }
 
 fn write_skill(path: &Path) -> Result<()> {
@@ -601,6 +604,19 @@ mod tests {
         refresh_skills(&p).unwrap();
         uninstall(&p).unwrap();
         assert_eq!(std::fs::read_to_string(&theirs).unwrap(), "---\nname: moonlet-design\n---\nmy own\n");
+    }
+
+    /// X22: a `moonlet` skill the user wrote is not moonlet's, so an install
+    /// is still due (and would put moonlet's in its place).
+    #[test]
+    fn a_moonlet_skill_the_user_wrote_does_not_count_as_installed() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = paths(dir.path());
+        install(&p, Path::new("/bin/moonlet"), true, true).unwrap();
+        std::fs::write(&p.claude_skill, "---\nname: moonlet\n---\nmy own notes\n").unwrap();
+        let st = status(&p).unwrap();
+        assert!(!st.claude_skill && !st.claude_installed, "{st:?}");
+        assert!(st.codex_skill && st.codex_installed, "{st:?}");
     }
 
     /// X64: a moonlet that ships a new skill adds it on start wherever its
