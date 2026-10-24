@@ -175,7 +175,8 @@ pub fn check(root: &Path) -> Result<Vec<Problem>> {
         let mut known = defined.clone();
         known.extend(definitions(&text));
         unknown_tokens(&path_rel, &text, &known, &mut problems);
-        css_urls(root, &path, &path_rel, &text, &mut problems);
+        // A card's <style> may @import like a stylesheet.
+        imports(root, &path_rel, &path, &text, &mut problems);
         fonts(&path_rel, &text, &faces, &mut problems);
         for (line, id) in elements(root, &path_rel, &path, &text, &mut problems) {
             if proposed {
@@ -318,7 +319,7 @@ fn unknown_tokens(path: &str, text: &str, known: &BTreeSet<String>, problems: &m
 }
 
 /// Each `@import` that leaves the design system or names no file, and the
-/// other `url()`s of the file.
+/// other `url()`s of the file: a stylesheet or a card.
 fn imports(root: &Path, path_rel: &str, path: &Path, text: &str, problems: &mut Vec<Problem>) {
     let dir = path.parent().unwrap_or(root);
     for (i, line) in text.lines().enumerate() {
@@ -346,13 +347,6 @@ fn imports(root: &Path, path_rel: &str, path: &Path, text: &str, problems: &mut 
             });
         }
         css_urls_in_line(root, dir, path_rel, i + 1, line, &taken, problems);
-    }
-}
-
-fn css_urls(root: &Path, path: &Path, path_rel: &str, text: &str, problems: &mut Vec<Problem>) {
-    let dir = path.parent().unwrap_or(root);
-    for (i, line) in text.lines().enumerate() {
-        css_urls_in_line(root, dir, path_rel, i + 1, line, &[], problems);
     }
 }
 
@@ -957,6 +951,43 @@ mod tests {
                 kind: Kind::Unresolved,
                 message: "url(img/no such.png) does not resolve".into(),
             }]
+        );
+    }
+
+    #[test]
+    fn an_import_in_a_cards_style_is_checked_like_one_in_a_stylesheet() {
+        let card = "<!-- @dsCard group=\"Buttons\" -->\n\
+<!doctype html>\n\
+<style>\n\
+@import \"../../../components.css\";\n\
+@import \"https://example.com/theme.css\";\n\
+@import url(button-extra.css);\n\
+</style>\n";
+        let dir = system(&[
+            ("styles.css", STYLES),
+            ("tokens/colors.css", COLORS),
+            ("components.css", COMPONENTS),
+            ("components/buttons/button/button.html", card),
+        ]);
+        let got: Vec<(usize, Kind, String)> = check(dir.path())
+            .unwrap()
+            .into_iter()
+            .map(|p| (p.line, p.kind, p.message))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (
+                    5,
+                    Kind::ExternalUrl,
+                    "https://example.com/theme.css leaves the design system".into()
+                ),
+                (
+                    6,
+                    Kind::Unresolved,
+                    "@import \"button-extra.css\" does not resolve".into()
+                ),
+            ]
         );
     }
 
