@@ -60,7 +60,8 @@ export function workersPage(input: WorkersInput): { rows: WorkerRow[]; cloud: Cl
     status.running.filter((r) => r.worker === name).map((r) => ({ session: input.sessions[r.session] ?? r.session, command: r.command, since: r.started_at }));
   const linked = input.workers.filter((w) => w.heavy);
   const machines = input.cloud ?? [];
-  const cloudWorkers = new Set(machines.map((m) => m.worker).filter(Boolean));
+  // A removed machine's worker may still be connected for a moment.
+  const cloudWorkers = new Set([...machines, ...(input.removed ?? [])].map((m) => m.worker).filter(Boolean));
   const rows: WorkerRow[] = linked.filter((w) => !cloudWorkers.has(w.id)).map((w) => {
     const running = runningOn(w.name);
     const skip = status.skips.find((s) => s.worker === w.id);

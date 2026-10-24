@@ -150,6 +150,12 @@ describe("cloud machines on the Workers page (X63)", () => {
     expect(page.empty).toBe(true);
   });
 
+  it("a removed machine's worker, still connected, is no ordinary worker", () => {
+    const gone = machine({ state: "removed", worker: "w7", reason: "removed on request" });
+    const page = workersPage({ workers: [worker("w7", "moonlet-shop-7k2q", { os: "linux" })], status: status(), me: null, sessions, cloud: [], removed: [gone], now: 0, cloudSessions: {} });
+    expect(page.rows.map((r) => r.name)).toEqual(["studio-mini"]);
+  });
+
   it("is not empty with only cloud machines", () => {
     const page = workersPage({ workers: [], status: status(), me: null, sessions, cloud: [machine({ state: "starting" })], now: 0, cloudSessions: {} });
     expect(page.empty).toBe(false);
