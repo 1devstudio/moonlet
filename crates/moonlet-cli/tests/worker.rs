@@ -161,6 +161,11 @@ async fn worker_up_ls_and_down() {
     assert!(up.status.success(), "{}", text(&up.stderr));
     let name = text(&up.stdout).trim().to_string();
     assert!(name.starts_with("moonlet-shop-"), "{name}");
+    // Made for the session it was started in.
+    let mut app = Client::connect(&h.socket, "moonlet-app").await.unwrap();
+    let all: Value = app.request("cloud.machines", json!({})).await.unwrap();
+    let mine = all["machines"].as_array().unwrap().iter().find(|m| m["name"] == name.as_str()).unwrap().clone();
+    assert_eq!(mine["for_session"], json!(session));
     let up = worker(&h, None, &["up", "--project", "shop"]);
     assert!(up.status.success(), "{}", text(&up.stderr));
     // A third passes the limit.
