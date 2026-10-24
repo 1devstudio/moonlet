@@ -674,8 +674,11 @@ impl Machines {
                     Duration::from_secs(600),
                 )
                 .await;
+            let asked = asked.ok();
+            let reason = asked
+                .as_ref()
+                .and_then(|v| v["reason"].as_str().map(String::from));
             match asked
-                .ok()
                 .and_then(|v| v["state"].as_str().map(String::from))
                 .as_deref()
             {
@@ -701,7 +704,8 @@ impl Machines {
                                 .map(|s| s.label.clone())
                         })
                         .unwrap_or_default();
-                    self.remove(&machine, format!("{label} failed"));
+                    let why = reason.map(|r| format!(": {r}")).unwrap_or_default();
+                    self.remove(&machine, format!("{label} failed{why}"));
                     return;
                 }
                 // Still making it, or its setup runs.

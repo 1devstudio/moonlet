@@ -721,6 +721,52 @@ pub async fn delete_base_ref(repo: &Path, copy: &str) -> Result<()> {
     Ok(())
 }
 
+/// A pack of commit `head` without its parents, its tree and `tree`: what a
+/// cloud machine starts from, with no older history (X63).
+pub async fn pack_shallow(repo: &Path, head: &str, tree: &str) -> Result<Vec<u8>> {
+    if !is_object_id(head) || !is_object_id(tree) {
+        bail!("not an object id");
+    }
+    let revs = format!("{head}\n{tree}\n");
+    let objects = git_env(repo, &[], &["rev-list", "--objects", "--no-walk", "--stdin"], Some(revs.as_bytes())).await?;
+    git_env(repo, &[], &["pack-objects", "--stdout", "-q"], Some(&objects)).await
+}
+
+/// Held while a repository's `shallow` file is read and written: two copies
+/// of one project share the repository.
+static SHALLOW: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+async fn shallow_file(repo: &Path) -> Result<PathBuf> {
+    let dir = git_env(repo, &[], &["rev-parse", "--absolute-git-dir"], None).await?;
+    Ok(PathBuf::from(String::from_utf8_lossy(&dir).trim()).join("shallow"))
+}
+
+/// Records `head` as a shallow boundary of `repo`: git then reads it as a
+/// commit with no parents.
+pub async fn mark_shallow(repo: &Path, head: &str) -> Result<()> {
+    if !is_object_id(head) {
+        bail!("not an object id");
+    }
+    let file = shallow_file(repo).await?;
+    let _held = SHALLOW.lock().unwrap_or_else(|e| e.into_inner());
+    let mut lines = std::fs::read_to_string(&file).unwrap_or_default();
+    if !lines.lines().any(|l| l == head) {
+        lines.push_str(head);
+        lines.push('\n');
+        let tmp = file.with_extension("moonlet-tmp");
+        std::fs::write(&tmp, lines)?;
+        std::fs::rename(&tmp, &file)?;
+    }
+    Ok(())
+}
+
+/// Whether `id` is a shallow boundary of `repo`: a commit the central host
+/// sent without its history, so no work of this machine's.
+async fn is_boundary(repo: &Path, id: &str) -> bool {
+    let Ok(file) = shallow_file(repo).await else { return false };
+    std::fs::read_to_string(file).is_ok_and(|s| s.lines().any(|l| l == id))
+}
+
 /// A git pack of the objects `new` (trees or commits) reach and none of
 /// `not` does: what the other side, which has `not`, lacks. Empty when it
 /// lacks nothing.
@@ -1427,7 +1473,8 @@ pub async fn add_worktree(
             .await?
             .status
                 == 0;
-            if !behind {
+            // A cloud machine's copy gets each head as a new boundary.
+            if !behind && !is_boundary(repo, &here).await {
                 return Err(WorktreeError::Ahead);
             }
             // Moved only from where it was seen.
@@ -2479,6 +2526,50 @@ mod tests {
         assert!(matches!(e, WorktreeError::Ahead), "{e:?}");
         assert_eq!(rev(p, "mine").await, mine);
         assert!(!other.path().join("mine").exists());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn boundaries_marked_at_once_are_all_kept() {
+        let dir = worked_example().await;
+        let p = dir.path().to_path_buf();
+        let ids: Vec<String> = (0..32).map(|i| format!("{i:040x}")).collect();
+        let marks = ids.iter().map(|id| {
+            let (p, id) = (p.clone(), id.clone());
+            tokio::spawn(async move { mark_shallow(&p, &id).await.unwrap() })
+        });
+        for m in marks.collect::<Vec<_>>() {
+            m.await.unwrap();
+        }
+        let kept = std::fs::read_to_string(p.join(".git/shallow")).unwrap();
+        assert_eq!(kept.lines().count(), 32, "{kept}");
+    }
+
+    #[tokio::test]
+    async fn a_branch_at_a_shallow_boundary_moves_to_the_next_one() {
+        // A cloud machine's copy (X63): each head arrives with no parents.
+        let dir = worked_example().await;
+        let p = dir.path();
+        let base = head(p).await.unwrap();
+        git(p, &["commit", "-q", "--allow-empty", "-m", "theirs"]).await.unwrap();
+        let theirs = head(p).await.unwrap();
+        git(p, &["reset", "-q", "--soft", &base]).await.unwrap();
+        mark_shallow(p, &base).await.unwrap();
+        mark_shallow(p, &theirs).await.unwrap();
+        let other = tempfile::tempdir().unwrap();
+        git(p, &["branch", "copy", &base]).await.unwrap();
+        add_worktree(p, &other.path().join("copy"), "copy", &theirs)
+            .await
+            .unwrap();
+        assert_eq!(rev(p, "copy").await, theirs);
+        // A commit made on top of a boundary is the copy's own work.
+        git(p, &["branch", "worked", &base]).await.unwrap();
+        git(p, &["checkout", "-q", "worked"]).await.unwrap();
+        git(p, &["commit", "-q", "--allow-empty", "-m", "mine"]).await.unwrap();
+        git(p, &["checkout", "-q", "main"]).await.unwrap();
+        let e = add_worktree(p, &other.path().join("worked"), "worked", &theirs)
+            .await
+            .unwrap_err();
+        assert!(matches!(e, WorktreeError::Ahead), "{e:?}");
     }
 
     #[tokio::test]
