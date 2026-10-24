@@ -2190,3 +2190,45 @@ async fn a_renamed_design_system_keeps_its_one_agent_and_removing_it_stops_that_
     let running: Vec<u32> = terminals.iter().filter(|t| t.chat).map(|t| t.id).collect();
     assert_eq!(running, Vec::<u32>::new(), "the agent of the removed system ({agent}) still runs");
 }
+
+/// X64: a sync recorded while Sync starts the system's agent keeps both: the
+/// record names the new agent and the sync's time.
+#[tokio::test]
+async fn a_sync_recorded_while_its_agent_starts_keeps_both() {
+    use moonlet_proto::types::{Project, Workspace};
+    let d = fake_claude_daemon(FAKE_SYNC_CLAUDE).await;
+    let repo = d.home.path().join("repo");
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    std::fs::write(repo.join("src/ui.tsx"), "export const Button = () => null;\n").unwrap();
+    for args in [vec!["init", "-q", "-b", "main"], vec!["add", "-A"], vec!["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init"]] {
+        assert!(Command::new("git").args(&args).current_dir(&repo).output().unwrap().status.success());
+    }
+    let mut c = d.client().await;
+    let ws: Workspace = c.request(methods::WORKSPACE_CREATE, serde_json::json!({"name": "1devstudio", "color": "clay"})).await.unwrap();
+    let project: Project = c.request(methods::PROJECT_ADD, serde_json::json!({"path": repo})).await.unwrap();
+    let _: serde_json::Value = c
+        .request(
+            methods::DESIGN_SYSTEM_CREATE,
+            serde_json::json!({"workspace": ws.id, "name": "pricing", "sources": [{"project": project.id}], "agent": false}),
+        )
+        .await
+        .unwrap();
+    // Enough files that recording the sync takes a while.
+    let assets = d.home.path().join(".moonlet/design").join(&ws.id).join("systems/pricing/assets");
+    std::fs::create_dir_all(&assets).unwrap();
+    let body = "x".repeat(16 * 1024);
+    for i in 0..2000 {
+        std::fs::write(assets.join(format!("a{i}.txt")), &body).unwrap();
+    }
+    let mut c2 = d.client().await;
+    let system = serde_json::json!({"workspace": ws.id, "slug": "pricing"});
+    let (synced, started) = tokio::join!(c.request::<_, bool>(methods::DESIGN_SYSTEM_SYNCED, system.clone()), async {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        c2.request::<_, serde_json::Value>(methods::DESIGN_SYSTEM_SYNC, system.clone()).await
+    });
+    synced.unwrap();
+    let agent = started.unwrap()["agent"].as_u64().expect("an agent");
+    let list: serde_json::Value = c.request(methods::DESIGN_SYSTEMS, serde_json::json!({"workspace": ws.id})).await.unwrap();
+    assert_eq!(list[0]["agent"].as_u64(), Some(agent), "{list}");
+    assert!(list[0]["synced_at"].is_u64(), "{list}");
+}
