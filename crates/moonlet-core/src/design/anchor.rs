@@ -156,14 +156,13 @@ pub fn compute(
             .map(|s| (s.clone(), source_hash(sources, s).unwrap_or_default()))
             .collect();
         let key = source_key(&files, exceptions.get(&rel_path).map(String::as_str));
-        let companion = companion_hash(root, &rel_path);
         let proposed_sources = proposed_sources(root, &rel_path, sources);
         cards.insert(
             rel_path,
             CardAnchor {
                 source_key: key,
                 render_hash: card.render_hash,
-                companion_hash: companion,
+                companion_hash: card.companion_hash,
                 sources: files,
                 proposed_sources,
             },
@@ -200,6 +199,9 @@ pub fn compute(
 pub struct CardRender {
     /// As [`CardAnchor::render_hash`].
     pub render_hash: String,
+    /// As [`CardAnchor::companion_hash`]: its `.css` and `.prompt.md`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub companion_hash: String,
     /// The source files its marker names, relative to their project, sorted.
     pub sources: Vec<String>,
 }
@@ -221,10 +223,12 @@ pub fn renders(root: &Path) -> Result<BTreeMap<String, CardRender>> {
             .unwrap_or_default();
         sources.sort();
         sources.dedup();
+        let companion = companion_hash(root, &rel_path);
         cards.insert(
             rel_path,
             CardRender {
                 render_hash: render_hash(&text),
+                companion_hash: companion,
                 sources,
             },
         );

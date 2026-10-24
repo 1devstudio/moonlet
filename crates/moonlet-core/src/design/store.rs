@@ -403,6 +403,7 @@ impl Store {
                         .map(|(path, c)| {
                             let render = anchor::CardRender {
                                 render_hash: c.render_hash,
+                                companion_hash: c.companion_hash,
                                 sources: c.sources.into_keys().collect(),
                             };
                             (path, render)
@@ -654,7 +655,13 @@ fn sync_changes(
     for (path, now) in a {
         let change = match b.get(path) {
             None => "new",
-            Some(then) if then.render_hash != now.render_hash => "rewritten",
+            // Its HTML, or its `.css` or `.prompt.md` alone.
+            Some(then)
+                if then.render_hash != now.render_hash
+                    || then.companion_hash != now.companion_hash =>
+            {
+                "rewritten"
+            }
             Some(_) => continue,
         };
         out.push(SyncChange {
@@ -2129,6 +2136,67 @@ root = \"9c1e0a2\"
             ]
         );
         assert_eq!(store.systems("w1").unwrap()[0].last_sync, second);
+    }
+
+    #[test]
+    fn a_card_whose_css_or_prompt_alone_the_sync_rewrote_is_among_its_changes() {
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::new(home.path());
+        let slug = store
+            .create_system("w1", "storefront", vec![], Cover::Core, 1)
+            .unwrap();
+        let dir = home.path().join("design/w1/systems").join(&slug);
+        put(
+            &dir,
+            &[
+                (
+                    "components/forms/button/button.html",
+                    "<!-- @dsCard group=\"Forms\" -->\n<button class=\"btn\">Run</button>\n",
+                ),
+                (
+                    "components/forms/button/button.css",
+                    ".btn { color: red; }\n",
+                ),
+                (
+                    "components/forms/input/input.html",
+                    "<!-- @dsCard group=\"Forms\" -->\n<input>\n",
+                ),
+                ("components/forms/input/input.prompt.md", "An input.\n"),
+            ],
+        );
+        store.synced("w1", &slug, &[], 2).unwrap();
+        store.begin_sync("w1", &slug).unwrap();
+        put(
+            &dir,
+            &[
+                (
+                    "components/forms/button/button.css",
+                    ".btn { color: blue; }\n",
+                ),
+                ("components/forms/input/input.prompt.md", "A text input.\n"),
+            ],
+        );
+        store.synced("w1", &slug, &[], 3).unwrap();
+        let got: Vec<(String, String)> = store
+            .record("w1", &slug)
+            .unwrap()
+            .last_sync
+            .into_iter()
+            .map(|c| (c.path, c.change))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (
+                    "components/forms/button/button.html".to_string(),
+                    "rewritten".to_string()
+                ),
+                (
+                    "components/forms/input/input.html".to_string(),
+                    "rewritten".to_string()
+                ),
+            ]
+        );
     }
 
     #[test]
