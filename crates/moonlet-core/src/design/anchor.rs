@@ -147,20 +147,11 @@ pub fn compute(
     exceptions: &BTreeMap<String, String>,
 ) -> Result<Anchor> {
     let mut cards = BTreeMap::new();
-    for path in html_files(root) {
-        let rel_path = rel(root, &path);
-        if !(rel_path.starts_with("components/") || rel_path.starts_with("ui_kits/"))
-            || rel_path.ends_with(".proposed.html")
-        {
-            continue;
-        }
-        let text = std::fs::read_to_string(&path)?;
+    for (rel_path, card) in renders(root)? {
         // A card whose marker broke stays in the anchor, with no sources, so
         // its status still shows what it was made from.
-        let source = card::parse_marker(&text)
-            .map(|m| m.source)
-            .unwrap_or_default();
-        let files: BTreeMap<String, String> = source
+        let files: BTreeMap<String, String> = card
+            .sources
             .iter()
             .map(|s| (s.clone(), source_hash(sources, s).unwrap_or_default()))
             .collect();
@@ -171,7 +162,7 @@ pub fn compute(
             rel_path,
             CardAnchor {
                 source_key: key,
-                render_hash: render_hash(&text),
+                render_hash: card.render_hash,
                 companion_hash: companion,
                 sources: files,
                 proposed_sources,
@@ -202,6 +193,43 @@ pub fn compute(
         aux_sha,
         files,
     })
+}
+
+/// A card as it is: what a sync's changes are told against (X64).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CardRender {
+    /// As [`CardAnchor::render_hash`].
+    pub render_hash: String,
+    /// The source files its marker names, relative to their project, sorted.
+    pub sources: Vec<String>,
+}
+
+/// Every card of the system in `root` (`components/` and `ui_kits/`, not a
+/// proposal), by path, without reading its sources.
+pub fn renders(root: &Path) -> Result<BTreeMap<String, CardRender>> {
+    let mut cards = BTreeMap::new();
+    for path in html_files(root) {
+        let rel_path = rel(root, &path);
+        if !(rel_path.starts_with("components/") || rel_path.starts_with("ui_kits/"))
+            || rel_path.ends_with(".proposed.html")
+        {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path)?;
+        let mut sources = card::parse_marker(&text)
+            .map(|m| m.source)
+            .unwrap_or_default();
+        sources.sort();
+        sources.dedup();
+        cards.insert(
+            rel_path,
+            CardRender {
+                render_hash: render_hash(&text),
+                sources,
+            },
+        );
+    }
+    Ok(cards)
 }
 
 /// Every file of the system, by path, but `.cache/` and the anchor itself.

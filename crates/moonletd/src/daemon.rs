@@ -877,6 +877,9 @@ impl Daemon {
             let status = if synced { anchor::status(&dir, &store::source_roots(&record), &config.exceptions())? } else { Vec::new() };
             let task = if synced { agent::Task::Resync(&status) } else { agent::Task::Build };
             let launch = agent::sync_launch(&dir, &config, &sources, &bin, task)?;
+            // The cards as they are now: what the user changed before this
+            // sync is not among the changes it records.
+            store.begin_sync(&ws, &sl)?;
             Ok((record, launch))
         })
         .await
