@@ -111,7 +111,7 @@ A design system belongs to a moonlet workspace, so every project and design in t
 ### Styles and tokens
 
 - [ ] `styles.css` holds only `@import` lines, in this order: each `tokens/*.css`, `fonts/fonts.css`, then `components.css` last. Cards, layouts and design pages link only `styles.css`, so a card shows exactly what a prototype gets.
-- [ ] Token files the source already has as CSS custom properties are copied as they are, keeping their names and sub-folders. Tokens defined in code are written to `tokens/tokens.css` under the source's own names, and `NOTES.md` records where each came from.
+- [ ] Token files the source already has as CSS custom properties are copied as they are, keeping their names and sub-folders. Reading them ignores comments, takes a last declaration without a `;`, and lets a later declaration of a name win, as the cascade does (`design/tokens.rs` a_last_declaration_without_a_semicolon_counts_a_commented_one_does_not_and_a_later_one_wins). Tokens defined in code are written to `tokens/tokens.css` under the source's own names, and `NOTES.md` records where each came from.
 - [ ] `components.css` holds the classes the cards use. They are named after the project's own components and variants (`.btn`, `.btn--primary`, `.session-row`), and use only tokens for colour, space, type, radius and shadow.
 - [ ] Fonts the source uses are copied with an `@font-face` in `fonts/fonts.css`. The check reports a font family that is used but has no face.
 
@@ -119,7 +119,7 @@ A design system belongs to a moonlet workspace, so every project and design in t
 
 - [ ] A card's first line is `<!-- @dsCard group="<Group>" name="<Name>" source="<path>[,<path>…]" viewport="<w>x<h>" -->`.
   - `group` is required, as in design-sync.
-  - `source` lists the source files, relative to the source project, that the card was made from.
+  - `source` lists the source files, relative to the source project, that the card was made from. A path that is absolute or climbs out with `..` makes the marker malformed, so nothing outside a project is ever read (`design/card.rs` a_source_outside_the_project_is_malformed).
   - `viewport` defaults to 900x700.
   - The folder name is the group's slug.
 
@@ -143,12 +143,12 @@ A design system belongs to a moonlet workspace, so every project and design in t
 ### Foundations and layouts
 
 - [ ] moonlet writes the foundation cards from the tokens, with no agent involved, each time the tokens change:
-  - **Colours**: a swatch per colour token
-  - **Type**: a sample per size, and the font families
+  - **Colours**: a swatch per colour token. A token that is just `var(--other)` takes the family of the token it names, along the chain, so `--accent: var(--color-accent)` gets a swatch too; if that token is not one, says nothing, or the chain loops, its own name and value count. (`design/tokens.rs` a_token_that_is_just_another_tokens_var_takes_that_tokens_family; `design/foundations.rs` a_colour_alias_gets_a_swatch_on_the_written_colours_card; `design/readme.rs` a_colour_alias_is_listed_with_the_colours)
+  - **Type**: a sample per size, weight, line height and letter spacing, and the font families (`design/foundations.rs` a_font_weight_token_shows_as_a_weight)
   - **Spacing**
   - **Radius and shadow**
 
-  They are in group **Foundations**.
+  They are in group **Foundations**. A family with no tokens gets no card, and its old card is removed; folders under `foundations/` that are not moonlet's are left alone. (`design/tokens.rs` tokens_come_from_the_imported_token_files_by_family; `design/foundations.rs` the_colours_card_shows_a_swatch_per_colour_token, type_spacing_and_radius_and_shadow_cards_show_each_token_in_use, writing_the_cards_replaces_those_of_families_that_are_gone_and_passes_the_check)
 - [ ] The **Layouts** step writes whole screens to `ui_kits/<kit>/<Screen>.html` (group **Layouts**), at the viewport their marker names, with realistic data. A layout is composed only of the cards' snippets, plus layout glue that uses tokens.
 
 ### README
@@ -161,14 +161,14 @@ A design system belongs to a moonlet workspace, so every project and design in t
   - **Layouts**
   - **Guidelines**: "read these before composing larger layouts"
 
-  The check warns when the README passes 32,000 characters.
+  The check warns when the README passes 32,000 characters. (`design/readme.rs` the_readme_puts_the_conventions_first_then_the_index, writing_the_readme_reports_conventions_that_name_nothing_and_a_readme_over_budget)
 - [ ] The sync agent writes `conventions.md` after the cards pass. In 2,000–4,000 characters it covers:
   - the styling idiom, with its real class and token names
   - where the truth lives
   - one idiomatic snippet
   - what to use instead of raw elements
 
-  Every class and token it names must exist in `components.css` or `tokens/`, and the check reports any that do not. Later syncs check it again but never rewrite it.
+  Every class and token it names must exist in `components.css` or `tokens/`, and the check reports any that do not. A class counts only when a selector defines it, not when a comment, a string or a file name mentions it (`design/readme.rs` a_class_only_named_in_a_comment_string_or_import_does_not_count). Later syncs check it again but never rewrite it. (The name check: `design/readme.rs` writing_the_readme_reports_conventions_that_name_nothing_and_a_readme_over_budget.)
 
 ### Check (`moonlet design check`)
 
@@ -214,17 +214,18 @@ A design system belongs to a moonlet workspace, so every project and design in t
   Grades go to `.cache/grades/<Name>.json`. The step is done when nothing is `bad` and every card in scope is `good` or `match`.
 - [ ] **Layouts.** The agent writes `ui_kits/`, then `conventions.md`, and runs the check, which rebuilds the README.
 - [ ] The agent reports each step with `"$MOONLET_BIN" design system progress <system> <step> [<summary>]`. When it is done, `"$MOONLET_BIN" design system synced <system>` writes `_ds_sync.json` (last) and records each source's `HEAD` in `config.toml`.
-- [ ] `_ds_sync.json` holds, per card:
-  - `sourceKey`: a hash of the card's `source` files and its exceptions in `config.toml`
-  - `renderHash`: a hash of the card's HTML without its first line
+- [ ] `_ds_sync.json` holds, per card (components and layouts; the foundation cards are moonlet's and are rewritten from the tokens):
+  - `sources`: each source file and its hash, looked up in the source projects in order
+  - `source_key`: a hash of `sources`. The card's exceptions in `config.toml` join it with entry 3, which reads `config.toml`.
+  - `render_hash`: a hash of the card's HTML without its first line
 
-  It also holds `styleSha` (`styles.css`, `components.css`, `tokens/`, `fonts/`), `auxSha` (README, guidelines) and a hash per file.
-- [ ] **Sources changed.** A card whose `sourceKey`, computed from the source files now, differs from the anchor is out of date. The header says `<n> sources changed since sync` and names the files, and **Show cards** filters the view to those cards. moonlet checks when Design mode opens and when the design system is opened.
-- [ ] A later sync covers only the out-of-date cards, components that are new in the source, and orphaned cards. A change to styles or docs alone keeps every grade.
-- [ ] **Edited by hand.** A card whose `renderHash` on disk differs from the anchor was changed since the sync by something other than the sync agent. The sync writes its version beside it as `<Name>.proposed.html` and lists it under **Needs you**:
+  It also holds `style_sha` (`styles.css`, `components.css`, `tokens/`, `fonts/`), `aux_sha` (README, guidelines) and a hash per file, `.cache/` and the anchor itself left out. Hashes are the first 16 hex digits of SHA-256, as design-sync's. (`design/anchor.rs` the_anchor_records_each_cards_sources_and_body_hashes, the_anchor_hashes_styles_docs_and_files_and_a_style_change_keeps_the_cards)
+- [ ] **Sources changed.** A card with a source file whose hash now differs from the anchor's, or that is gone, is out of date, and that file is one of its changed sources. A card the anchor does not know is new, and with no anchor every card is; an anchor that cannot be read or parsed is an error, not a fresh start. (`design/anchor.rs` a_later_look_tells_out_of_date_edited_orphaned_and_new_cards_apart, a_missing_anchor_makes_every_card_new_and_an_unreadable_or_malformed_one_is_an_error) A source the card no longer names counts as changed, and a card whose marker broke keeps its place with the sources it had (`design/anchor.rs` a_dropped_source_or_a_broken_marker_still_shows_and_symlinked_folders_are_not_followed). The header says `<n> sources changed since sync` and names the files, and **Show cards** filters the view to those cards. moonlet checks when Design mode opens and when the design system is opened.
+- [ ] A later sync covers only the out-of-date cards, components that are new in the source, and orphaned cards. A change to styles or docs alone keeps every grade: no card is out of date for it (`design/anchor.rs` the_anchor_hashes_styles_docs_and_files_and_a_style_change_keeps_the_cards).
+- [ ] **Edited by hand.** A card whose `render_hash` on disk differs from the anchor was changed since the sync by something other than the sync agent; a change to its marker line alone (a regroup) is not an edit (`design/anchor.rs` a_later_look_tells_out_of_date_edited_orphaned_and_new_cards_apart). The sync writes its version beside it as `<Name>.proposed.html` and lists it under **Needs you**:
   - **Keep mine**: deletes the proposal and anchors the user's version
   - **Use synced**: replaces the card
-- [ ] **Orphaned.** A card whose source files are all gone is listed as orphaned: "Designs that inserted it keep their copy". **Remove card** deletes its folder. **Keep for now** leaves it until the next sync.
+- [ ] **Orphaned.** A card whose source files are all gone is listed as orphaned, and so is a card whose marker broke when all the sources it had at the sync are gone (`design/anchor.rs` a_later_look_tells_out_of_date_edited_orphaned_and_new_cards_apart, a_card_whose_marker_broke_and_whose_sources_are_gone_is_orphaned): "Designs that inserted it keep their copy". **Remove card** deletes its folder. **Keep for now** leaves it until the next sync.
 
 ### Design system view
 
@@ -315,7 +316,7 @@ While the spec is a draft, the plan names test files and areas. Each criterion g
   - foundation cards from a captured `tokens.css`, compared with literal HTML
   - the README index from fixture cards, and its budget warning
   - the `conventions.md` name check
-  - `sourceKey` and `renderHash`, and the out-of-date, edited-by-hand and orphaned results from a fixture anchor
+  - `source_key` and `render_hash`, and the out-of-date, edited-by-hand and orphaned results from a fixture anchor
   - path resolution rejecting `..` and an outside symlink
 - `crates/moonletd/tests/`:
   - `design.system.create` writes `config.toml` and starts a terminal with the expected `--add-dir` and `Edit` deny rules for each source

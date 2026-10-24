@@ -34,6 +34,10 @@ pub enum Kind {
     MissingMid,
     /// A `data-mid` an earlier element of the page already has (X65).
     DuplicateMid,
+    /// A class or token in `conventions.md` that nothing defines.
+    UnknownName,
+    /// A README longer than the design agent reads.
+    ReadmeOverBudget,
 }
 
 /// The folders whose `.html` files are cards: components, foundations and layouts.
@@ -211,8 +215,9 @@ pub fn check(root: &Path) -> Result<Vec<Problem>> {
     Ok(problems)
 }
 
-/// `styles.css` and every local file it imports, directly or not.
-fn styles_closure(root: &Path) -> Vec<PathBuf> {
+/// `styles.css` and every local file it imports, directly or not, in import
+/// order (each file once).
+pub(super) fn styles_closure(root: &Path) -> Vec<PathBuf> {
     fn visit(file: PathBuf, root: &Path, seen: &mut Vec<PathBuf>) {
         if seen.contains(&file) {
             return;
@@ -385,7 +390,7 @@ fn blank(text: &str, ranges: &[std::ops::Range<usize>]) -> String {
     String::from_utf8(bytes).unwrap_or_else(|_| text.to_string())
 }
 
-fn definitions(text: &str) -> impl Iterator<Item = String> + '_ {
+pub(super) fn definitions(text: &str) -> impl Iterator<Item = String> + '_ {
     DEFINITION.captures_iter(text).map(|c| c[1].to_string())
 }
 
