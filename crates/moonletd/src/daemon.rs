@@ -710,8 +710,10 @@ impl Daemon {
                     store::source_root(&source).map_err(|e| RpcError::new("invalid_params", format!("{e:#}")))?;
                     sources.push(source);
                 }
+                let cover: store::Cover = serde_json::from_value(Value::String(r.cover.clone().unwrap_or_else(|| "core".into())))
+                    .map_err(|_| RpcError::new("invalid_params", "cover is core, all or none"))?;
                 let (workspace, start) = (r.workspace.clone(), r.agent);
-                let slug = blocking(move || store.create_system(&r.workspace, &r.name, sources, now_ms())).await?;
+                let slug = blocking(move || store.create_system(&r.workspace, &r.name, sources, cover, now_ms())).await?;
                 let (agent, agent_error) = match start {
                     // The system exists either way; the app shows why its agent did not start.
                     true => match self.start_sync_agent(&workspace, &slug).await {

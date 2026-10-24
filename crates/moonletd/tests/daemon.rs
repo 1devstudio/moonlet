@@ -1937,11 +1937,20 @@ async fn design_systems_over_rpc() {
     let created: serde_json::Value = c
         .request(
             methods::DESIGN_SYSTEM_CREATE,
-            serde_json::json!({"workspace": w, "name": "moonlet desktop", "sources": [{"project": project.id}], "agent": false}),
+            serde_json::json!({"workspace": w, "name": "moonlet desktop", "sources": [{"project": project.id}], "cover": "all", "agent": false}),
         )
         .await
         .unwrap();
     assert_eq!((created["slug"].as_str(), created["agent"].as_u64()), (Some("moonlet-desktop"), None));
+    let config = std::fs::read_to_string(d.home.path().join("design").join(w).join("systems/moonlet-desktop/config.toml")).unwrap();
+    assert!(config.contains("cover = \"all\""), "{config}");
+    let bad = c
+        .request::<_, serde_json::Value>(
+            methods::DESIGN_SYSTEM_CREATE,
+            serde_json::json!({"workspace": w, "name": "x", "sources": [], "cover": "most", "agent": false}),
+        )
+        .await;
+    assert!(bad.is_err());
     let slug = "moonlet-desktop".to_string();
     let dir = d.home.path().join("design").join(w).join("systems/moonlet-desktop");
     for (path, text) in [
