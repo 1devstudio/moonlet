@@ -3408,6 +3408,7 @@ impl LiveCopies {
             copy: id,
             state: state.into(),
             reason,
+            path: (!k.path.is_empty()).then(|| k.path.clone()),
         })
     }
 
@@ -3641,6 +3642,12 @@ impl LiveCopies {
         let r = git_sync::reconcile_trees(path, &base, &now.tree, &req.tree)
             .await
             .map_err(internal)?;
+        let changed: Vec<m::JobFile> = git_sync::numstat(path, &now.tree, &r.central)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(path, added, removed)| m::JobFile { path, added, removed })
+            .collect();
         if r.central != now.tree {
             git_sync::apply(path, &now.tree, &r.central)
                 .await
@@ -3655,13 +3662,15 @@ impl LiveCopies {
                 .await
                 .map_err(internal)?;
         }
-        let notes = match &req.outputs {
+        let (notes, sizes) = match &req.outputs {
             Some(t) => bring_outputs(path, t, host, outputs).await.map_err(internal)?,
-            None => Vec::new(),
+            None => (Vec::new(), Vec::new()),
         };
         if r.differs.is_empty() {
             return Ok(m::ExecBrought {
                 notes,
+                files: changed,
+                outputs: sizes,
                 ..m::ExecBrought::default()
             });
         }
@@ -3691,6 +3700,8 @@ impl LiveCopies {
             leftovers: saved,
             folder: Some(folder.display().to_string()),
             notes,
+            files: changed,
+            outputs: sizes,
         })
     }
 
@@ -3716,7 +3727,12 @@ impl LiveCopies {
 /// the project's `outputs` paths the tree has replaces the session's. A
 /// path with a symbolic link anywhere on its way inside the worktree is
 /// left alone, so nothing is written outside it; the notes say which.
-async fn bring_outputs(path: &Path, tree: &str, host: &str, roots: &[String]) -> anyhow::Result<Vec<String>> {
+async fn bring_outputs(
+    path: &Path,
+    tree: &str,
+    host: &str,
+    roots: &[String],
+) -> anyhow::Result<(Vec<String>, Vec<m::JobBytes>)> {
     // The run's `outputs` as checked when it started, checked again here.
     let checked = moonlet_proto::types::HeavyConfig {
         outputs: roots.to_vec(),
@@ -3727,9 +3743,10 @@ async fn bring_outputs(path: &Path, tree: &str, host: &str, roots: &[String]) ->
     // A path git would refuse to check out, such as one into `.git` or
     // under a link of the same tree, stops all of them.
     if let Some(bad) = git_sync::unsafe_path(&files) {
-        return Ok(vec![format!("outputs not brought back: {bad} is not a safe path")]);
+        return Ok((vec![format!("outputs not brought back: {bad} is not a safe path")], Vec::new()));
     }
     let mut notes = Vec::new();
+    let mut sizes = Vec::new();
     for root in roots {
         let root = root.trim_end_matches('/');
         let mine: Vec<(&String, &git_sync::Entry)> = files
@@ -3751,6 +3768,7 @@ async fn bring_outputs(path: &Path, tree: &str, host: &str, roots: &[String]) ->
         }
         // Files first and links last, and nothing written through a link
         // on its way: a tree from the worker never writes outside `dest`.
+        let mut bytes_in = 0u64;
         let (links, files): (Vec<_>, Vec<_>) = mine.into_iter().partition(|(_, e)| e.mode == "120000");
         for (p, entry) in files.into_iter().chain(links) {
             if p.split('/').any(|c| c.is_empty() || c == "." || c == "..") {
@@ -3774,6 +3792,7 @@ async fn bring_outputs(path: &Path, tree: &str, host: &str, roots: &[String]) ->
                     std::os::unix::fs::symlink(std::ffi::OsStr::from_bytes(&bytes), &to)?;
                 }
                 mode => {
+                    bytes_in += bytes.len() as u64;
                     std::fs::write(&to, &bytes)?;
                     if mode == "100755" {
                         use std::os::unix::fs::PermissionsExt;
@@ -3782,8 +3801,12 @@ async fn bring_outputs(path: &Path, tree: &str, host: &str, roots: &[String]) ->
                 }
             }
         }
+        sizes.push(m::JobBytes {
+            path: root.to_string(),
+            bytes: bytes_in,
+        });
     }
-    Ok(notes)
+    Ok((notes, sizes))
 }
 
 /// How long a run may hold a routing copy it prepared before a sweep may
@@ -4163,7 +4186,9 @@ mod tests {
         files.insert("coverage/L".into(), git_sync::Entry { mode: "120000".into(), oid: target });
         files.insert("coverage/l/passwd".into(), git_sync::Entry { mode: "100644".into(), oid: secret });
         let tree = git_sync::write_files(path, &files).await.unwrap();
-        bring_outputs(path, &tree, "studio-mini", &["coverage".to_string()]).await.unwrap();
+        bring_outputs(path, &tree, "studio-mini", &["coverage".to_string()])
+            .await
+            .unwrap();
         assert!(!outside.path().join("passwd").exists());
     }
 

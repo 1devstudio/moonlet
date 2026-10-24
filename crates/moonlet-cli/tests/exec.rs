@@ -209,7 +209,10 @@ async fn the_hook_prints_nothing_when_the_daemon_says_no() {
     assert_eq!(
         answer["hookSpecificOutput"]["updatedInput"],
         json!({
-            "command": format!("'{}' exec -- pnpm test", env!("CARGO_BIN_EXE_moonlet")),
+            "command": format!(
+                "'{}' exec --tool-use toolu_012ftuDv3XBoqpcogRjeHhqb -- pnpm test",
+                env!("CARGO_BIN_EXE_moonlet")
+            ),
             "timeout": 600000,
             "description": "Run the tests",
         })
@@ -400,4 +403,32 @@ async fn a_stopped_central_daemon_ends_moonlet_exec_with_125() {
         err.ends_with("moonlet: lost studio-mini's daemon during the run\n"),
         "{err}"
     );
+}
+
+#[tokio::test]
+async fn a_job_knows_its_tool_call() {
+    let s = approved_shop().await;
+    let out = Command::new(env!("CARGO_BIN_EXE_moonlet"))
+        .args([
+            "exec",
+            "--tool-use",
+            "toolu_01Abc",
+            "--",
+            "sh",
+            "-c",
+            "echo hi",
+        ])
+        .current_dir(&s.worktree)
+        .env("MOONLET_SOCK", &s.socket)
+        .env("MOONLET_SESSION", &s.session)
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "hi\n");
+    let mut app = Client::connect(&s.socket, "moonlet-app").await.unwrap();
+    let jobs: Value = app
+        .request("job.list", json!({ "session": s.session }))
+        .await
+        .unwrap();
+    assert_eq!(jobs[0]["tool_use_id"], json!("toolu_01Abc"));
+    assert_eq!(jobs[0]["command"], json!("sh -c 'echo hi'"));
 }

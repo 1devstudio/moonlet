@@ -15,6 +15,7 @@ pub mod heavy;
 pub mod history;
 pub mod hooks;
 pub mod identity;
+pub mod job_summary;
 pub mod node;
 pub mod paths;
 pub mod profiles;

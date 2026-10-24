@@ -1,0 +1,51 @@
+
+ RUN  v4.1.11 /Users/alex/src/shop
+
+ ❯ src/tax.test.ts (2 tests | 2 failed) 4ms
+   × rate 3ms
+   × round 0ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/tax.test.ts > rate
+AssertionError: expected 0.2 to be 0.25 // Object.is equality
+
+- Expected
++ Received
+
+- 0.25
++ 0.2
+
+ ❯ src/tax.test.ts:2:32
+      1| import { expect, test } from "vitest";
+      2| test("rate", () => expect(0.2).toBe(0.25));
+       |                                ^
+      3| test("round", () => expect(Math.round(2.5)).toBe(2));
+      4|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  src/tax.test.ts > round
+AssertionError: expected 3 to be 2 // Object.is equality
+
+- Expected
++ Received
+
+- 2
++ 3
+
+ ❯ src/tax.test.ts:3:45
+      1| import { expect, test } from "vitest";
+      2| test("rate", () => expect(0.2).toBe(0.25));
+      3| test("round", () => expect(Math.round(2.5)).toBe(2));
+       |                                             ^
+      4|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+
+ Test Files  1 failed | 1 passed (2)
+      Tests  2 failed | 2 passed (4)
+   Start at  18:00:36
+   Duration  103ms (transform 11ms, setup 0ms, import 25ms, tests 6ms, environment 0ms)
+
