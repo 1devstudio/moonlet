@@ -334,8 +334,9 @@ impl Store {
         Ok(())
     }
 
-    /// Records a finished sync: each source's commit, the time, and the anchor
-    /// (written last).
+    /// Records a finished sync: each source's commit, the time, and the
+    /// anchor. Either both the record and the anchor say the sync is done, or
+    /// neither does and its progress stays.
     pub fn synced(
         &self,
         workspace: &str,
@@ -345,10 +346,11 @@ impl Store {
     ) -> Result<()> {
         let dir = self.system_dir(workspace, slug)?;
         let config = read_config(&dir)?;
-        let mut record = self.record(workspace, slug)?;
-        // The anchor first: until it is written the sync is not done, and the
-        // record and the progress still say so.
-        anchor::write(&dir, &source_roots(&record), &config.exceptions())?;
+        let old = self.record(workspace, slug)?;
+        // The anchor is worked out first: reading every card and source is
+        // what usually fails, and then nothing is written.
+        let anchor = anchor::compute(&dir, &source_roots(&old), &config.exceptions())?;
+        let mut record = old.clone();
         for s in &mut record.sources {
             if let Some((_, c)) = commits.iter().find(|(p, _)| *p == s.project) {
                 // A HEAD that could not be read leaves no commit, not a stale one.
@@ -356,7 +358,13 @@ impl Store {
             }
         }
         record.synced_at = Some(now);
+        // Then the record, and the anchor last; an anchor that cannot be
+        // written puts the old record back. Both are replaced whole.
         self.write_record(workspace, slug, &record)?;
+        if let Err(e) = anchor::save(&dir, &anchor) {
+            let _ = self.write_record(workspace, slug, &old);
+            return Err(e);
+        }
         let _ = fsx::remove_file_inside(&dir, &dir.join(PROGRESS));
         Ok(())
     }
@@ -1385,6 +1393,70 @@ root = \"9c1e0a2\"
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
         assert_eq!(left, vec!["storefront.toml".to_string()]);
+    }
+
+    #[test]
+    fn a_sync_that_cannot_be_recorded_leaves_the_anchor_and_the_record_as_they_were() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &Path, m: u32| {
+            std::fs::set_permissions(p, std::fs::Permissions::from_mode(m)).unwrap()
+        };
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::new(home.path());
+        let mut src = source();
+        src.commit = Some("old1234".into());
+        let slug = store
+            .create_system("w1", "storefront", vec![src], 1)
+            .unwrap();
+        let dir = home.path().join("design/w1/systems").join(&slug);
+        put(
+            &dir,
+            &[(
+                "components/buttons/button/button.html",
+                "<!-- @dsCard group=\"Buttons\" -->\n",
+            )],
+        );
+        store.progress("w1", &slug, "layouts", None).unwrap();
+        let unfinished = |store: &Store| {
+            let s = &store.systems("w1").unwrap()[0];
+            (s.synced_at, s.synced_commit.clone(), s.step.clone())
+        };
+        let before = (
+            None,
+            Some("old1234".to_string()),
+            Some("layouts".to_string()),
+        );
+        let sync = |store: &Store| {
+            store.synced(
+                "w1",
+                &slug,
+                &[("p-moonlet".into(), Some("new5678".into()))],
+                9,
+            )
+        };
+        // The record cannot be written: the anchor stays unwritten.
+        let records = home.path().join("design/w1/.records");
+        mode(&records, 0o555);
+        mode(&records.join("storefront.toml"), 0o444);
+        let failed = sync(&store);
+        mode(&records, 0o755);
+        mode(&records.join("storefront.toml"), 0o644);
+        assert!(failed.is_err());
+        assert!(!dir.join("_ds_sync.json").exists());
+        assert_eq!(unfinished(&store), before);
+        // The anchor cannot be written: the record is as it was.
+        mode(&dir, 0o555);
+        let failed = sync(&store);
+        mode(&dir, 0o755);
+        assert!(failed.is_err());
+        assert!(!dir.join("_ds_sync.json").exists());
+        assert_eq!(unfinished(&store), before);
+        sync(&store).unwrap();
+        assert!(dir.join("_ds_sync.json").is_file());
+        assert_eq!(
+            unfinished(&store),
+            (Some(9), Some("new5678".to_string()), None)
+        );
     }
 
     #[test]

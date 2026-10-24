@@ -45,9 +45,14 @@ pub fn write(
     sources: &[PathBuf],
     exceptions: &BTreeMap<String, String>,
 ) -> Result<()> {
-    let json = serde_json::to_string_pretty(&compute(root, sources, exceptions)?)?;
-    super::fsx::write_inside(root, &root.join(FILE), (json + "\n").as_bytes())?;
-    Ok(())
+    save(root, &compute(root, sources, exceptions)?)
+}
+
+/// Writes `anchor` as the `_ds_sync.json` of the design system in `root`,
+/// replacing the old one whole.
+pub fn save(root: &Path, anchor: &Anchor) -> Result<()> {
+    let json = serde_json::to_string_pretty(anchor)?;
+    super::fsx::write_inside(root, &root.join(FILE), (json + "\n").as_bytes())
 }
 
 /// The anchor as it would be written now.
