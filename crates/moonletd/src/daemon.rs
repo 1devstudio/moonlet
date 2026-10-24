@@ -1000,13 +1000,16 @@ impl Daemon {
                     let Some(p) = projects.iter().find(|p| p.id == pick.project) else {
                         return Err(RpcError::new("invalid_params", format!("no project {}", pick.project)));
                     };
-                    sources.push(Source {
+                    let source = Source {
                         project: p.id.clone(),
                         path: p.path.clone(),
                         identity: p.identity.clone(),
                         subdir: pick.subdir.clone(),
                         commit: None,
-                    });
+                    };
+                    // A sub-folder only inside the project, never one out of it.
+                    store::source_root(&source).map_err(|e| RpcError::new("invalid_params", format!("{e:#}")))?;
+                    sources.push(source);
                 }
                 let (workspace, start) = (r.workspace.clone(), r.agent);
                 let slug = blocking(move || store.create_system(&r.workspace, &r.name, sources, now_ms())).await?;
@@ -1085,9 +1088,9 @@ impl Daemon {
             let config = store.config(&ws, &sl)?;
             let record = store.record(&ws, &sl)?;
             let mut sources = Vec::new();
-            for root in store::source_roots(&record) {
-                let real = root.canonicalize().map_err(|e| anyhow::anyhow!("{}: {e}", root.display()))?;
-                sources.push(real.display().to_string());
+            // Each a real folder inside its project, whatever the record says.
+            for s in &record.sources {
+                sources.push(store::source_root(s)?.display().to_string());
             }
             let bin = moonlet_cli_path()?;
             let synced = dir.join(anchor::FILE).is_file();
