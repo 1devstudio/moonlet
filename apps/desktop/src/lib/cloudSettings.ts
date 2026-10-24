@@ -79,6 +79,14 @@ export function cloudChanges(info: CloudInfo, d: CloudDraft): CloudSet | null {
 
 const whole = (s: string) => /^\d+$/.test(s.trim());
 
+/** The form after provider `id` was removed (`next` is the answer): the
+ * other unsaved edits stay; the provider stays only while its machines go. */
+export function afterRemoving(d: CloudDraft, next: CloudInfo, id: string): CloudDraft {
+  const { [id]: _, ...providers } = d.providers;
+  const kept = cloudDraft(next).providers[id];
+  return { ...d, providers: kept ? { ...providers, [id]: kept } : providers };
+}
+
 /** "API token" stays as it is; "Token" becomes "token". */
 const lowerFirst = (s: string) => (/^[A-Z][a-z]/.test(s) ? s[0].toLowerCase() + s.slice(1) : s);
 

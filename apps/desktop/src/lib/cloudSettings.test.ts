@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  afterRemoving,
   cloudChanges,
   cloudDraft,
   cloudErrors,
@@ -114,6 +115,15 @@ describe("Settings › Cloud workers (X63)", () => {
     expect(cloudErrors({ ...d, providers: { hetzner: { token: "hc-new" } } }, i)).toEqual({});
     // A saved one keeps its secret until replaced.
     expect(cloudErrors(cloudDraft(info()), info())).toEqual({});
+  });
+
+  it("removing a provider keeps the page's other unsaved edits", () => {
+    const two = info({ providers: { hetzner: { has_token: true }, other: {} }, kinds: [hetzner, { id: "other", label: "Other", fields: [] }] });
+    const edited = { ...cloudDraft(two), idle_minutes: "0", tailscale: { client_id: "new-id", client_secret: "typed", tag: "tag:shop" } };
+    // Gone at once: the provider leaves the form, the edits stay.
+    expect(afterRemoving(edited, info({ providers: { hetzner: { has_token: true } } }), "other")).toEqual({ ...edited, providers: { hetzner: { token: "" } } });
+    // Its machines still draining: it stays until they are gone.
+    expect(afterRemoving(edited, two, "other").providers).toEqual({ hetzner: { token: "" }, other: {} });
   });
 
   it("the policy snippet with the tag and address", () => {
