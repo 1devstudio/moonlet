@@ -39,11 +39,20 @@ const onTheWay: Record<string, Promise<void>> = {};
 /** Workspaces whose systems were asked for, listed or not: a failed listing
  * is asked for again when its host comes back or its folder changes. */
 const wanted = new Set<string>();
+/** Workspaces where something changed while a listing was on its way, which
+ * may have been read before it: they are listed once more after it. */
+const stale = new Set<string>();
 
-export function loadSystems(host: string, workspace: string): Promise<void> {
+/** Lists a workspace's design systems. `fresh`: something just changed, so a
+ * listing already on its way is followed by one more. */
+export function loadSystems(host: string, workspace: string, fresh = false): Promise<void> {
   const key = wsKey(host, workspace);
   wanted.add(key);
-  return (onTheWay[key] ??= fetchSystems(host, workspace, key).finally(() => delete onTheWay[key]));
+  if (fresh && key in onTheWay) stale.add(key);
+  return (onTheWay[key] ??= fetchSystems(host, workspace, key).finally(() => {
+    delete onTheWay[key];
+    if (stale.delete(key)) reload(host, workspace);
+  }));
 }
 
 async function fetchSystems(host: string, workspace: string, key: string) {
@@ -52,7 +61,7 @@ async function fetchSystems(host: string, workspace: string, key: string) {
   if (asked[key] === n) useDesign.setState((s) => ({ systems: { ...s.systems, [key]: list } }));
 }
 
-const reload = (host: string, workspace: string) => void loadSystems(host, workspace).catch(() => {});
+const reload = (host: string, workspace: string) => void loadSystems(host, workspace, true).catch(() => {});
 
 /** What each sync agent's chat (`host/id`) last waited for. */
 const waiting: Record<string, string> = {};
