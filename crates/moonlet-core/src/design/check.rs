@@ -117,7 +117,13 @@ pub fn check(root: &Path) -> Result<Vec<Problem>> {
         .collect();
     for (path, text) in &texts {
         let path_rel = rel(root, path);
-        imports(root, &path_rel, path, text, &mut problems);
+        imports(
+            root,
+            &path_rel,
+            path,
+            &blank(text, &css_comments(text)),
+            &mut problems,
+        );
         unknown_tokens(&path_rel, text, &defined, &mut problems);
         fonts(&path_rel, text, &faces, &mut problems);
     }
@@ -176,7 +182,13 @@ pub fn check(root: &Path) -> Result<Vec<Problem>> {
         known.extend(definitions(&text));
         unknown_tokens(&path_rel, &text, &known, &mut problems);
         // A card's <style> may @import like a stylesheet.
-        imports(root, &path_rel, &path, &text, &mut problems);
+        imports(
+            root,
+            &path_rel,
+            &path,
+            &blank(&text, &style_comments(&text)),
+            &mut problems,
+        );
         fonts(&path_rel, &text, &faces, &mut problems);
         for (line, id) in elements(root, &path_rel, &path, &text, &mut problems) {
             if proposed {
@@ -210,6 +222,7 @@ fn styles_closure(root: &Path) -> Vec<PathBuf> {
         };
         let dir = file.parent().unwrap_or(root).to_path_buf();
         seen.push(file);
+        let text = blank(&text, &css_comments(&text));
         for c in IMPORT.captures_iter(&text) {
             if let Target::Fine(Some(next)) = target(root, &dir, quoted(&c)) {
                 visit(next, root, seen);
@@ -294,6 +307,82 @@ fn inside(root: &Path, dir: &Path, rel: &str) -> Option<PathBuf> {
             .iter()
             .fold(root.to_path_buf(), |p, part| p.join(part)),
     )
+}
+
+/// The byte ranges of the comments in `css`, found as a browser finds them:
+/// a `/*` in a string or an unquoted `url(…)` opens none.
+fn css_comments(css: &str) -> Vec<std::ops::Range<usize>> {
+    fn walk(p: &mut cssparser::Parser<'_, '_>, out: &mut Vec<std::ops::Range<usize>>) {
+        loop {
+            let start = p.position().byte_index();
+            let Ok(token) = p.next_including_whitespace_and_comments() else {
+                return;
+            };
+            let comment = matches!(token, cssparser::Token::Comment(_));
+            let block = matches!(
+                token,
+                cssparser::Token::Function(_)
+                    | cssparser::Token::ParenthesisBlock
+                    | cssparser::Token::SquareBracketBlock
+                    | cssparser::Token::CurlyBracketBlock
+            );
+            if comment {
+                out.push(start..p.position().byte_index());
+            } else if block {
+                let _ = p.parse_nested_block(|p| {
+                    walk(p, out);
+                    Ok::<_, cssparser::ParseError<'_, ()>>(())
+                });
+            }
+        }
+    }
+    let mut input = cssparser::ParserInput::new(css);
+    let mut out = Vec::new();
+    walk(&mut cssparser::Parser::new(&mut input), &mut out);
+    out
+}
+
+/// The comments of a page's `<style>` elements: elsewhere in a page `/*` is text.
+fn style_comments(html: &str) -> Vec<std::ops::Range<usize>> {
+    let styles = std::cell::RefCell::new(Vec::<std::ops::Range<usize>>::new());
+    let settings =
+        lol_html::Settings::new().append_element_content_handler(lol_html::text!("style", |t| {
+            // One style's text may come in several chunks.
+            let r = t.source_location().bytes();
+            let mut styles = styles.borrow_mut();
+            match styles.last_mut() {
+                Some(last) if last.end == r.start => last.end = r.end,
+                _ => styles.push(r),
+            }
+            Ok(())
+        }));
+    if lol_html::rewrite_str(html, settings).is_err() {
+        return Vec::new();
+    }
+    styles
+        .into_inner()
+        .into_iter()
+        .flat_map(|s| {
+            css_comments(&html[s.clone()])
+                .into_iter()
+                .map(move |c| s.start + c.start..s.start + c.end)
+        })
+        .collect()
+}
+
+/// `text` with every byte in `ranges` but line breaks made a space, so lines
+/// and offsets stay where they were.
+fn blank(text: &str, ranges: &[std::ops::Range<usize>]) -> String {
+    let mut bytes = text.as_bytes().to_vec();
+    for r in ranges {
+        for b in &mut bytes[r.clone()] {
+            if *b != b'\n' && *b != b'\r' {
+                *b = b' ';
+            }
+        }
+    }
+    // A comment starts and ends on ASCII, so the bytes are still UTF-8.
+    String::from_utf8(bytes).unwrap_or_else(|_| text.to_string())
 }
 
 fn definitions(text: &str) -> impl Iterator<Item = String> + '_ {
@@ -1060,6 +1149,65 @@ mod tests {
                     4,
                     Kind::ExternalUrl,
                     "//cdn.example.com/hero.png leaves the design system".into()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_import_or_url_in_a_css_comment_is_not_checked_nor_followed() {
+        let styles = "@import \"tokens/colors.css\";\n\
+/* @import \"old.css\";\n\
+   @import \"https://fonts.example.com/inter.css\"; */\n\
+@import \"components.css\";\n";
+        let components = ".session-row {\n\
+  background: var(--color-bg); /* url(removed.png) */\n\
+  /* was: background: URL(https://cdn.example.com/bg.png)\n\
+  */ border-image: url(missing.png);\n\
+}\n\
+.quote::before { content: \"/*\"; background: url(https://cdn.example.com/q.png); content: \"*/\"; }\n";
+        // Only a <style> holds CSS comments: elsewhere in a card `/*` is text.
+        let card = "<!-- @dsCard group=\"Buttons\" -->\n\
+<style>\n\
+/* @import \"https://example.com/theme.css\"; */\n\
+</style>\n\
+<p>/*</p><div style=\"background: url(https://cdn.example.com/bg.png)\"></div><p>*/</p>\n";
+        let dir = system(&[
+            ("styles.css", styles),
+            ("tokens/colors.css", COLORS),
+            (
+                "old.css",
+                ".old { background: url(https://cdn.example.com/old.png) }\n",
+            ),
+            ("components.css", components),
+            ("components/buttons/button/button.html", card),
+        ]);
+        let got: Vec<(String, usize, Kind, String)> = check(dir.path())
+            .unwrap()
+            .into_iter()
+            .map(|p| (p.path, p.line, p.kind, p.message))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (
+                    "components.css".into(),
+                    4,
+                    Kind::Unresolved,
+                    "url(missing.png) does not resolve".into()
+                ),
+                // A `/*` in a string opens no comment.
+                (
+                    "components.css".into(),
+                    6,
+                    Kind::ExternalUrl,
+                    "https://cdn.example.com/q.png leaves the design system".into()
+                ),
+                (
+                    "components/buttons/button/button.html".into(),
+                    5,
+                    Kind::ExternalUrl,
+                    "https://cdn.example.com/bg.png leaves the design system".into()
                 ),
             ]
         );
