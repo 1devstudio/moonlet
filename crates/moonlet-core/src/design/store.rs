@@ -1519,6 +1519,47 @@ root = \"9c1e0a2\"
     }
 
     #[test]
+    fn checking_never_writes_or_removes_through_a_linked_foundation_family() {
+        let home = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        put(
+            outside.path(),
+            &[
+                ("colours/colours.html", "theirs\n"),
+                ("type/type.html", "theirs\n"),
+            ],
+        );
+        let store = Store::new(home.path());
+        let slug = store.create_system("w1", "storefront", vec![], 1).unwrap();
+        let dir = home.path().join("design/w1/systems").join(&slug);
+        put(
+            &dir,
+            &[
+                ("styles.css", "@import \"tokens/c.css\";\n"),
+                ("tokens/c.css", ":root { --color-bg: #fff; }\n"),
+            ],
+        );
+        // `colours` has tokens (its card is written), `type` has none (its
+        // folder is removed).
+        std::fs::create_dir_all(dir.join("foundations")).unwrap();
+        for family in ["colours", "type"] {
+            std::os::unix::fs::symlink(
+                outside.path().join(family),
+                dir.join("foundations").join(family),
+            )
+            .unwrap();
+        }
+        let _ = store.check_system("w1", &slug);
+        for family in ["colours", "type"] {
+            assert_eq!(
+                std::fs::read_to_string(outside.path().join(format!("{family}/{family}.html")))
+                    .unwrap(),
+                "theirs\n"
+            );
+        }
+    }
+
+    #[test]
     fn a_recorded_agent_is_reused_only_with_the_launch_it_was_started_with() {
         let home = tempfile::tempdir().unwrap();
         let store = Store::new(home.path());
