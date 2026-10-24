@@ -1778,7 +1778,8 @@ async fn with_idle_zero_an_unused_machine_stays_five_minutes() {
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert_eq!(c.machines().await["machines"][0]["state"], json!("ready"));
     let removed = c.until(m["id"].as_str().unwrap(), "removed").await;
-    assert_eq!(removed["reason"], json!("removed after 0 min idle"));
+    // The time it really waited, not the idle setting.
+    assert_eq!(removed["reason"], json!("removed after 5 min idle"));
 }
 
 #[tokio::test]
