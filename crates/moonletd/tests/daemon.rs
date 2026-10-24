@@ -1966,6 +1966,20 @@ async fn design_systems_over_rpc() {
     assert_eq!(problems[0]["path"], "components.css");
     assert_eq!(problems[0]["kind"], "unknown_token");
     assert!(dir.join("README.md").is_file());
+    // The design system view's cards (X64): each as its marker says.
+    let cards: serde_json::Value = c.request(methods::DESIGN_CARDS, serde_json::json!({"workspace": w, "slug": slug})).await.unwrap();
+    let button = cards.as_array().unwrap().iter().find(|c| c["path"] == "components/buttons/button/button.html").expect("the button card");
+    assert_eq!(
+        (&button["group"], &button["name"], &button["viewport"], &button["source"], &button["marker"], &button["changed_sources"]),
+        (
+            &serde_json::json!("Buttons"),
+            &serde_json::json!("button"),
+            &serde_json::json!([900, 700]),
+            &serde_json::json!(["src/ui.tsx"]),
+            &serde_json::json!("<!-- @dsCard group=\"Buttons\" source=\"src/ui.tsx\" -->"),
+            &serde_json::json!([])
+        )
+    );
 
     let _: bool = c
         .request(methods::DESIGN_SYSTEM_PROGRESS, serde_json::json!({"workspace": w, "slug": slug, "step": "cards", "summary": "1 of 1"}))
