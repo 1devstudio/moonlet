@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DesignSystem } from "./protocol";
-import { designSlug, systemFolder, systemLabel } from "./design";
+import { designSlug, picksInWorkspace, systemFolder, systemLabel } from "./design";
 
 const NOW = 1_761_200_000_000;
 const DAY = 86_400_000;
@@ -27,36 +27,43 @@ const system = (over: Partial<DesignSystem>): DesignSystem => ({
 
 describe("a design system's sidebar row (X65)", () => {
   it("shows its age once synced", () => {
-    expect(systemLabel(system({}), NOW)).toEqual({ text: "3d", tone: "muted" });
-    expect(systemLabel(system({ synced_at: NOW - 16 * DAY }), NOW)).toEqual({ text: "2w", tone: "muted" });
-    expect(systemLabel(system({ synced_at: NOW - 5 * 3_600_000 }), NOW)).toEqual({ text: "5h", tone: "muted" });
-    expect(systemLabel(system({ synced_at: NOW - 12 * 60_000 }), NOW)).toEqual({ text: "12m", tone: "muted" });
-    expect(systemLabel(system({ synced_at: NOW - 20_000 }), NOW)).toEqual({ text: "now", tone: "muted" });
+    expect(systemLabel(system({}), NOW, false)).toEqual({ text: "3d", tone: "muted" });
+    expect(systemLabel(system({ synced_at: NOW - 16 * DAY }), NOW, false)).toEqual({ text: "2w", tone: "muted" });
+    expect(systemLabel(system({ synced_at: NOW - 5 * 3_600_000 }), NOW, false)).toEqual({ text: "5h", tone: "muted" });
+    expect(systemLabel(system({ synced_at: NOW - 12 * 60_000 }), NOW, false)).toEqual({ text: "12m", tone: "muted" });
+    expect(systemLabel(system({ synced_at: NOW - 20_000 }), NOW, false)).toEqual({ text: "now", tone: "muted" });
   });
 
   it("counts the source files changed since the sync", () => {
-    expect(systemLabel(system({ changed_sources: ["src/ui.tsx", "src/Sidebar.tsx", "src/Toolbar.tsx"] }), NOW)).toEqual({ text: "3 changed", tone: "changed" });
+    expect(systemLabel(system({ changed_sources: ["src/ui.tsx", "src/Sidebar.tsx", "src/Toolbar.tsx"] }), NOW, false)).toEqual({ text: "3 changed", tone: "changed" });
   });
 
   it("counts what waits to be settled, before what changed", () => {
-    expect(systemLabel(system({ to_settle: 2, changed_sources: ["src/ui.tsx"] }), NOW)).toEqual({ text: "2 to settle", tone: "changed" });
+    expect(systemLabel(system({ to_settle: 2, changed_sources: ["src/ui.tsx"] }), NOW, false)).toEqual({ text: "2 to settle", tone: "changed" });
   });
 
-  it("says syncing while a sync reports its steps, and before the first sync is done", () => {
-    expect(systemLabel(system({ step: "cards", to_settle: 2 }), NOW)).toEqual({ text: "syncing", tone: "muted" });
-    expect(systemLabel(system({ synced_at: null, cards: 0, layouts: 0 }), NOW)).toEqual({ text: "syncing", tone: "muted" });
+  it("says syncing while its agent works on a sync or the first build", () => {
+    expect(systemLabel(system({ step: "cards", to_settle: 2 }), NOW, true)).toEqual({ text: "syncing", tone: "muted" });
+    expect(systemLabel(system({ synced_at: null, cards: 0, layouts: 0 }), NOW, true)).toEqual({ text: "syncing", tone: "muted" });
+  });
+
+  it("stops saying syncing once its agent stopped without recording the sync", () => {
+    // A re-sync left midway shows what it showed before.
+    expect(systemLabel(system({ step: "cards", to_settle: 2 }), NOW, false)).toEqual({ text: "2 to settle", tone: "changed" });
+    // A first build left midway was never built.
+    expect(systemLabel(system({ synced_at: null, step: "tokens" }), NOW, false)).toEqual({ text: "not built", tone: "muted" });
   });
 
   it("says needs you over everything while its agent waits for an answer or an approval", () => {
-    expect(systemLabel(system({ step: "inventory", needs_you: { kind: "question", text: "Which button set is current?" } }), NOW)).toEqual({ text: "needs you", tone: "attention" });
+    expect(systemLabel(system({ step: "inventory", needs_you: { kind: "question", text: "Which button set is current?" } }), NOW, false)).toEqual({ text: "needs you", tone: "attention" });
   });
 
   it("says not built when it never synced and has no agent", () => {
-    expect(systemLabel(system({ synced_at: null, agent: null }), NOW)).toEqual({ text: "not built", tone: "muted" });
+    expect(systemLabel(system({ synced_at: null, agent: null }), NOW, false)).toEqual({ text: "not built", tone: "muted" });
   });
 
   it("says unreadable when its folder could not be read", () => {
-    expect(systemLabel(system({ error: "cannot read config.toml" }), NOW)).toEqual({ text: "unreadable", tone: "error" });
+    expect(systemLabel(system({ error: "cannot read config.toml" }), NOW, false)).toEqual({ text: "unreadable", tone: "error" });
   });
 });
 
@@ -70,8 +77,19 @@ describe("the New design system dialog's folder (X64)", () => {
     expect(designSlug("---")).toBe("design-system");
   });
 
+  it("shows no folder until the workspace's systems are listed, as a used name would change it", () => {
+    expect(systemFolder("w-1devstudio", "moonlet desktop", undefined)).toBeNull();
+  });
+
   it("shows where it will be, numbered as the daemon numbers a used name", () => {
     expect(systemFolder("w-1devstudio", "moonlet desktop", [])).toBe("~/.moonlet/design/w-1devstudio/systems/moonlet-desktop");
     expect(systemFolder("w-1devstudio", "moonlet desktop", ["moonlet-desktop", "moonlet-desktop-2"])).toBe("~/.moonlet/design/w-1devstudio/systems/moonlet-desktop-3");
+  });
+});
+
+describe("the projects a design system is built from (X64)", () => {
+  it("are only the picked ones still in the workspace", () => {
+    expect(picksInWorkspace(["p-web", "p-api", "p-gone"], ["p-api", "p-web", "p-docs"])).toEqual(["p-web", "p-api"]);
+    expect(picksInWorkspace(["p-gone"], ["p-web"])).toEqual([]);
   });
 });
