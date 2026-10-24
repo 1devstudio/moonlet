@@ -146,7 +146,12 @@ impl Store {
             created_at: now,
             cards: BTreeMap::new(),
         };
-        std::fs::write(systems.join(&slug).join(CONFIG), toml::to_string(&config)?)?;
+        let dir = systems.join(&slug);
+        fsx::write_inside(
+            &dir,
+            &dir.join(CONFIG),
+            toml::to_string(&config)?.as_bytes(),
+        )?;
         self.write_record(
             workspace,
             &slug,
@@ -211,7 +216,9 @@ impl Store {
         }
         let dir = self.systems_dir(workspace, false)?.join(slug);
         not_a_link(&dir)?;
-        if !dir.join(CONFIG).is_file() {
+        // Its own file: a link, which would take reads and writes elsewhere,
+        // is not one.
+        if !std::fs::symlink_metadata(dir.join(CONFIG)).is_ok_and(|m| m.is_file()) {
             bail!("no design system \"{slug}\"");
         }
         Ok(dir)
@@ -335,7 +342,7 @@ impl Store {
         }
         record.synced_at = Some(now);
         self.write_record(workspace, slug, &record)?;
-        let _ = std::fs::remove_file(dir.join(PROGRESS));
+        let _ = fsx::remove_file_inside(&dir, &dir.join(PROGRESS));
         Ok(())
     }
 
@@ -484,7 +491,7 @@ fn summary(
     config: &SystemConfig,
     record: &Record,
 ) -> Result<SystemSummary> {
-    let progress: Option<Progress> = std::fs::read_to_string(dir.join(PROGRESS))
+    let progress: Option<Progress> = fsx::read_inside(dir, &dir.join(PROGRESS))
         .ok()
         .and_then(|t| toml::from_str(&t).ok());
     let cards = manifest::build(dir)?.cards;
@@ -574,7 +581,7 @@ fn inside_dir(base: &Path, rel: &str) -> Option<PathBuf> {
 }
 
 fn read_config(dir: &Path) -> Result<SystemConfig> {
-    Ok(toml::from_str(&std::fs::read_to_string(dir.join(CONFIG))?)?)
+    Ok(toml::from_str(&fsx::read_inside(dir, &dir.join(CONFIG))?)?)
 }
 
 /// The sync's steps, in order (X64).
@@ -1255,6 +1262,56 @@ root = \"9c1e0a2\"
         assert_eq!(
             std::fs::read_to_string(outside.path().join("storefront/keep.txt")).unwrap(),
             "keep\n"
+        );
+    }
+
+    #[test]
+    fn a_linked_config_is_refused_and_a_sync_never_changes_files_outside_through_a_link() {
+        let home = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let theirs = "name = \"theirs\"\ncreated_at = 1\n";
+        put(
+            outside.path(),
+            &[
+                ("config.toml", theirs),
+                ("progress.toml", "step = \"cards\"\n"),
+            ],
+        );
+        let store = Store::new(home.path());
+        let a = store.create_system("w1", "alpha", vec![], 1).unwrap();
+        let b = store.create_system("w1", "beta", vec![], 1).unwrap();
+        let systems = home.path().join("design/w1/systems");
+        // alpha's config.toml links out: alpha is not read, nor written.
+        std::fs::remove_file(systems.join(&a).join(CONFIG)).unwrap();
+        std::os::unix::fs::symlink(
+            outside.path().join("config.toml"),
+            systems.join(&a).join(CONFIG),
+        )
+        .unwrap();
+        assert!(store.config("w1", &a).is_err());
+        assert!(store.synced("w1", &a, &[], 2).is_err());
+        assert!(store.progress("w1", &a, "cards", None).is_err());
+        assert!(store.check_system("w1", &a).is_err());
+        assert!(store.set_agent("w1", &a, 3, "l").is_err());
+        // beta's `.cache` links out: its sync leaves the file there alone.
+        std::os::unix::fs::symlink(outside.path(), systems.join(&b).join(".cache")).unwrap();
+        store.synced("w1", &b, &[], 2).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(outside.path().join("config.toml")).unwrap(),
+            theirs
+        );
+        assert_eq!(
+            std::fs::read_to_string(outside.path().join("progress.toml")).unwrap(),
+            "step = \"cards\"\n"
+        );
+        assert_eq!(
+            store
+                .systems("w1")
+                .unwrap()
+                .iter()
+                .map(|s| s.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["beta"]
         );
     }
 

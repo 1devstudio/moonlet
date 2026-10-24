@@ -57,6 +57,16 @@ pub(crate) fn write_inside(root: &Path, path: &Path, bytes: &[u8]) -> Result<()>
     Ok(())
 }
 
+/// Reads `path`, which must be inside `root`; a link out of it is refused.
+pub(crate) fn read_inside(root: &Path, path: &Path) -> Result<String> {
+    let rel = path
+        .strip_prefix(root)
+        .with_context(|| format!("{} is outside {}", path.display(), root.display()))?;
+    open_root(root)?
+        .read_to_string(rel)
+        .with_context(|| format!("cannot read {} in {}", rel.display(), root.display()))
+}
+
 /// Removes the folder `dir` inside `root`: a symlink only as a link.
 pub(crate) fn remove_dir_inside(root: &Path, dir: &Path) -> Result<()> {
     let rel = dir
