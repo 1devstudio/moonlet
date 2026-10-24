@@ -468,8 +468,7 @@ impl Store {
                 }
                 // What the user took is what the sync made: the next look
                 // finds it up to date, not edited by hand.
-                let roots = source_roots(&self.record(workspace, slug)?);
-                anchor::take(&dir, card, &roots, &read_config(&dir)?.exceptions())?;
+                anchor::take(&dir, card, &read_config(&dir)?.exceptions())?;
             }
             Settle::Remove => {
                 if parts[0] == "components" {
@@ -1258,6 +1257,53 @@ root = \"9c1e0a2\"
         assert_eq!(
             anchor::status(&dir, &roots, &BTreeMap::new()).unwrap(),
             vec![]
+        );
+    }
+
+    #[test]
+    fn a_source_the_proposal_names_that_changed_before_it_was_taken_shows_after() {
+        let home = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        put(
+            project.path(),
+            &[("src/Sidebar.tsx", "sidebar\n"), ("src/Row.tsx", "row\n")],
+        );
+        let store = Store::new(home.path());
+        let mut src = source();
+        src.path = project.path().display().to_string();
+        let slug = store
+            .create_system("w1", "storefront", vec![src], Cover::Core, 1)
+            .unwrap();
+        let dir = home.path().join("design/w1/systems").join(&slug);
+        let row = "components/custom/row/row.html";
+        put(
+            &dir,
+            &[
+                (
+                    row,
+                    "<!-- @dsCard group=\"Custom\" source=\"src/Sidebar.tsx\" -->\n<div>mine</div>\n",
+                ),
+                (
+                    "components/custom/row/row.proposed.html",
+                    "<!-- @dsCard group=\"Custom\" source=\"src/Sidebar.tsx,src/Row.tsx\" -->\n<div>synced</div>\n",
+                ),
+            ],
+        );
+        store.synced("w1", &slug, &[], 2).unwrap();
+        // While the proposal waits, a source only it names changes.
+        put(project.path(), &[("src/Row.tsx", "row, taller\n")]);
+        store.settle("w1", &slug, row, Settle::Synced).unwrap();
+        let roots = source_roots(&store.record("w1", &slug).unwrap());
+        assert_eq!(
+            anchor::status(&dir, &roots, &BTreeMap::new()).unwrap(),
+            vec![anchor::CardStatus {
+                path: row.into(),
+                changed_sources: vec!["src/Row.tsx".into()],
+                edited_by_hand: false,
+                orphaned: false,
+                new: false,
+                exceptions_changed: false,
+            }]
         );
     }
 
