@@ -584,6 +584,37 @@ async fn authed(addr: &str, token: &str) -> bool {
 }
 
 #[tokio::test]
+async fn a_cloud_device_cannot_take_a_route_to_a_remote_host() {
+    // A route would go straight to the remote daemon, past the worker-only
+    // methods.
+    let c = cloud().await;
+    c.ready().await;
+    let token = c.machine_token();
+    std::fs::write(
+        c.d.home.path().join("app-hosts.json"),
+        r#"{ "remotes": ["devbox"] }"#,
+    )
+    .unwrap();
+    use moonlet_proto::{read_frame, write_frame};
+    let mut s = tokio::net::TcpStream::connect(&c.addr).await.unwrap();
+    let auth = Message::Auth {
+        token: Some(token.clone()),
+        pair: None,
+        device: None,
+        route: Some("devbox".into()),
+        kind: None,
+    };
+    write_frame(&mut s, &Frame::Json(auth)).await.unwrap();
+    let answer = read_frame(&mut s).await;
+    assert!(
+        !matches!(answer, Ok(Some(Frame::Json(Message::Authed { .. })))),
+        "{answer:?}"
+    );
+    // The same token, without a route, still works.
+    assert!(authed(&c.addr, &token).await);
+}
+
+#[tokio::test]
 async fn a_cloud_device_may_call_only_worker_methods() {
     let c = cloud().await;
     c.ready().await;
