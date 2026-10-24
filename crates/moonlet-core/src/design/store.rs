@@ -466,13 +466,21 @@ impl Store {
                 if !took {
                     bail!("{card} has no proposal to take");
                 }
+                // What the user took is what the sync made: the next look
+                // finds it up to date, not edited by hand.
+                let roots = source_roots(&self.record(workspace, slug)?);
+                anchor::take(&dir, card, &roots, &read_config(&dir)?.exceptions())?;
             }
-            Settle::Remove if parts[0] == "components" => fsx::remove_dir_inside(&dir, &folder)?,
             Settle::Remove => {
-                fsx::remove_file_inside(&dir, &path)?;
-                for (proposed, _) in &proposals {
-                    fsx::remove_file_inside(&dir, proposed)?;
+                if parts[0] == "components" {
+                    fsx::remove_dir_inside(&dir, &folder)?;
+                } else {
+                    fsx::remove_file_inside(&dir, &path)?;
+                    for (proposed, _) in &proposals {
+                        fsx::remove_file_inside(&dir, proposed)?;
+                    }
                 }
+                anchor::forget(&dir, card)?;
             }
             Settle::Keep => {}
         }
@@ -1120,6 +1128,99 @@ root = \"9c1e0a2\"
             store.settle("w1", &slug, row, Settle::Synced).is_err(),
             "nothing left to take"
         );
+    }
+
+    #[test]
+    fn a_settled_card_is_up_to_date_on_the_next_look_and_a_removed_one_comes_back_new() {
+        let home = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        put(
+            project.path(),
+            &[("src/Sidebar.tsx", "sidebar\n"), ("src/Row.tsx", "row\n")],
+        );
+        let store = Store::new(home.path());
+        let mut src = source();
+        src.path = project.path().display().to_string();
+        let slug = store
+            .create_system("w1", "storefront", vec![src], Cover::Core, 1)
+            .unwrap();
+        let dir = home.path().join("design/w1/systems").join(&slug);
+        let row = "components/custom/row/row.html";
+        let look = || {
+            let roots = source_roots(&store.record("w1", &slug).unwrap());
+            anchor::status(&dir, &roots, &BTreeMap::new()).unwrap()
+        };
+        put(
+            &dir,
+            &[(
+                row,
+                "<!-- @dsCard group=\"Custom\" source=\"src/Sidebar.tsx\" -->\n<div>row</div>\n",
+            )],
+        );
+        store.synced("w1", &slug, &[], 2).unwrap();
+
+        // Edited by hand; the sync proposes its version, from one more
+        // source, and is recorded.
+        let mine =
+            "<!-- @dsCard group=\"Custom\" source=\"src/Sidebar.tsx\" -->\n<div>mine</div>\n";
+        let proposal = "<!-- @dsCard group=\"Custom\" source=\"src/Sidebar.tsx,src/Row.tsx\" -->\n<div>synced</div>\n";
+        put(
+            &dir,
+            &[
+                (row, mine),
+                ("components/custom/row/row.proposed.html", proposal),
+            ],
+        );
+        store.synced("w1", &slug, &[], 3).unwrap();
+        assert_eq!(look(), vec![]);
+        store.settle("w1", &slug, row, Settle::Synced).unwrap();
+        assert_eq!(look(), vec![], "the synced card is the anchored one");
+
+        // Keep mine: the sync recorded the user's card, so it stays up to date.
+        put(
+            &dir,
+            &[
+                (row, mine),
+                ("components/custom/row/row.proposed.html", proposal),
+            ],
+        );
+        store.synced("w1", &slug, &[], 4).unwrap();
+        store.settle("w1", &slug, row, Settle::Mine).unwrap();
+        assert_eq!(look(), vec![]);
+
+        // A source that changed after the sync still shows after taking it.
+        put(
+            &dir,
+            &[("components/custom/row/row.proposed.html", proposal)],
+        );
+        store.synced("w1", &slug, &[], 5).unwrap();
+        put(project.path(), &[("src/Sidebar.tsx", "sidebar, wider\n")]);
+        store.settle("w1", &slug, row, Settle::Synced).unwrap();
+        assert_eq!(
+            look(),
+            vec![anchor::CardStatus {
+                path: row.into(),
+                changed_sources: vec!["src/Sidebar.tsx".into()],
+                edited_by_hand: false,
+                orphaned: false,
+                new: false,
+                exceptions_changed: false,
+            }]
+        );
+
+        // An orphan removed is forgotten: a card written there later is new.
+        std::fs::remove_dir_all(project.path().join("src")).unwrap();
+        store.settle("w1", &slug, row, Settle::Remove).unwrap();
+        assert_eq!(look(), vec![]);
+        put(
+            &dir,
+            &[(
+                row,
+                "<!-- @dsCard group=\"Custom\" source=\"src/Sidebar.tsx\" -->\n<div>row</div>\n",
+            )],
+        );
+        let again = look();
+        assert!(again.len() == 1 && again[0].new, "{again:?}");
     }
 
     #[test]
