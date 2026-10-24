@@ -35,6 +35,11 @@ pub struct Hetzner {
 /// How often a rate-limited request is tried again before the user sees it.
 const RATE_LIMITED_TRIES: usize = 3;
 
+/// The longest a rate-limited request waits for the limit to reset. Hetzner
+/// refills its hourly quota slowly, and a wait past this would outlast the
+/// sweep's patience with a create call.
+const MAX_RATE_LIMIT_WAIT: u64 = 60;
+
 impl Hetzner {
     pub fn new(token: impl Into<String>, transport: Arc<dyn Transport>) -> Hetzner {
         Hetzner {
@@ -43,12 +48,33 @@ impl Hetzner {
         }
     }
 
-    /// Sends `method path` with `body`; a 404 is `Ok(None)`.
+    /// Sends `method path` with `body`; a 404 is an error.
     async fn call(
         &self,
         method: &'static str,
         path: &str,
         body: Option<Value>,
+    ) -> Result<Value, CloudError> {
+        self.send(method, path, body, false)
+            .await
+            .map(Option::unwrap_or_default)
+    }
+
+    /// As `call`, but a 404 is `Ok(None)`: the machine is gone.
+    async fn call_or_gone(
+        &self,
+        method: &'static str,
+        path: &str,
+    ) -> Result<Option<Value>, CloudError> {
+        self.send(method, path, None, true).await
+    }
+
+    async fn send(
+        &self,
+        method: &'static str,
+        path: &str,
+        body: Option<Value>,
+        gone_ok: bool,
     ) -> Result<Option<Value>, CloudError> {
         let mut tries = 0;
         loop {
@@ -72,7 +98,7 @@ impl Hetzner {
                         CloudError::Network(format!("Hetzner answered with something else: {e}"))
                     });
                 }
-                404 => return Ok(None),
+                404 if gone_ok => return Ok(None),
                 401 | 403 => {
                     return Err(CloudError::Refused(
                         "Hetzner refused the token. Check it in Settings › Cloud workers.".into(),
@@ -87,6 +113,12 @@ impl Hetzner {
                         .map(|reset| reset.saturating_sub(self.transport.now()))
                         .filter(|s| *s > 0)
                         .unwrap_or(5);
+                    if wait > MAX_RATE_LIMIT_WAIT {
+                        return Err(CloudError::Provider(format!(
+                            "429 Hetzner's rate limit resets in {} min",
+                            wait.div_ceil(60)
+                        )));
+                    }
                     self.transport.sleep(Duration::from_secs(wait)).await;
                 }
                 status => {
@@ -162,28 +194,40 @@ impl Provider for Hetzner {
     }
 
     async fn machine_types(&self, location: &str) -> Result<Vec<MachineType>, CloudError> {
-        let v = self
-            .call("GET", "/server_types?per_page=50", None)
-            .await?
-            .unwrap_or_default();
-        // A type is offered at a location when it has a price there.
-        Ok(v["server_types"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|t| !t["deprecated"].as_bool().unwrap_or(false))
-            .filter(|t| {
-                t["prices"]
+        let mut out = Vec::new();
+        let mut page = 1;
+        loop {
+            let v = self
+                .call(
+                    "GET",
+                    &format!("/server_types?per_page=50&page={page}"),
+                    None,
+                )
+                .await?;
+            // A type is offered at a location when it has a price there.
+            out.extend(
+                v["server_types"]
                     .as_array()
-                    .is_some_and(|p| p.iter().any(|p| p["location"] == location))
-            })
-            .map(|t| MachineType {
-                name: t["name"].as_str().unwrap_or_default().to_string(),
-                cores: t["cores"].as_u64().unwrap_or(0) as u32,
-                memory_gb: t["memory"].as_f64().unwrap_or(0.0),
-                arch: t["architecture"].as_str().unwrap_or_default().to_string(),
-            })
-            .collect())
+                    .into_iter()
+                    .flatten()
+                    .filter(|t| !t["deprecated"].as_bool().unwrap_or(false))
+                    .filter(|t| {
+                        t["prices"]
+                            .as_array()
+                            .is_some_and(|p| p.iter().any(|p| p["location"] == location))
+                    })
+                    .map(|t| MachineType {
+                        name: t["name"].as_str().unwrap_or_default().to_string(),
+                        cores: t["cores"].as_u64().unwrap_or(0) as u32,
+                        memory_gb: t["memory"].as_f64().unwrap_or(0.0),
+                        arch: t["architecture"].as_str().unwrap_or_default().to_string(),
+                    }),
+            );
+            match v["meta"]["pagination"]["next_page"].as_u64() {
+                Some(next) if next > page => page = next,
+                _ => return Ok(out),
+            }
+        }
     }
 
     async fn create(&self, m: &NewMachine) -> Result<String, CloudError> {
@@ -196,10 +240,7 @@ impl Provider for Hetzner {
             "labels": m.labels,
             "start_after_create": true,
         });
-        let v = self
-            .call("POST", "/servers", Some(body))
-            .await?
-            .ok_or_else(|| CloudError::Provider("404 not found".into()))?;
+        let v = self.call("POST", "/servers", Some(body)).await?;
         let id = id_of(&v["server"]["id"]);
         if id.is_empty() {
             return Err(CloudError::Network("Hetzner made no server".into()));
@@ -208,7 +249,7 @@ impl Provider for Hetzner {
     }
 
     async fn get(&self, id: &str) -> Result<MachineInfo, CloudError> {
-        let Some(v) = self.call("GET", &format!("/servers/{id}"), None).await? else {
+        let Some(v) = self.call_or_gone("GET", &format!("/servers/{id}")).await? else {
             return Ok(MachineInfo {
                 state: MachineState::Gone,
                 ipv4: None,
@@ -229,7 +270,7 @@ impl Provider for Hetzner {
                 "/servers?label_selector={}&per_page=50&page={page}",
                 selector(labels)
             );
-            let v = self.call("GET", &path, None).await?.unwrap_or_default();
+            let v = self.call("GET", &path, None).await?;
             for s in v["servers"].as_array().into_iter().flatten() {
                 out.push(Listed {
                     id: id_of(&s["id"]),
@@ -250,7 +291,7 @@ impl Provider for Hetzner {
 
     async fn destroy(&self, id: &str) -> Result<(), CloudError> {
         // Gone already is done.
-        self.call("DELETE", &format!("/servers/{id}"), None)
+        self.call_or_gone("DELETE", &format!("/servers/{id}"))
             .await
             .map(|_| ())
     }
@@ -411,6 +452,62 @@ mod tests {
         assert_eq!(h.get("42").await.unwrap().state, MachineState::Gone);
         assert_eq!(h.destroy("42").await, Ok(()));
         assert_eq!(script.sent.lock().unwrap()[1].method, "DELETE");
+    }
+
+    #[tokio::test]
+    async fn reads_every_page_of_server_types() {
+        let first = r#"{ "server_types": [ { "name": "cpx41", "cores": 8, "memory": 16.0, "architecture": "x86", "deprecated": false, "prices": [ { "location": "fsn1" } ] } ],
+            "meta": { "pagination": { "page": 1, "next_page": 2 } } }"#;
+        let second = r#"{ "server_types": [ { "name": "ccx63", "cores": 48, "memory": 192.0, "architecture": "x86", "deprecated": false, "prices": [ { "location": "fsn1" } ] } ],
+            "meta": { "pagination": { "page": 2, "next_page": null } } }"#;
+        let script = Script::new(vec![ok(first), ok(second)]);
+        let names: Vec<String> = hetzner(&script)
+            .machine_types("fsn1")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+        assert_eq!(names, ["cpx41", "ccx63"]);
+        assert_eq!(
+            script.sent.lock().unwrap()[1].url,
+            "https://api.hetzner.cloud/v1/server_types?per_page=50&page=2"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_404_on_the_list_is_an_error_not_an_empty_list() {
+        // Read as "no machines", it would make the sweep forget every record.
+        let script = Script::new(vec![(
+            404,
+            vec![],
+            include_str!("fixtures/hetzner/not_found.json"),
+        )]);
+        let host: BTreeMap<String, String> =
+            [("moonlet-host".to_string(), "c3f1a9e2b7d04c55".to_string())].into();
+        assert_eq!(
+            hetzner(&script).list(&host).await,
+            Err(CloudError::Provider(
+                "404 server with ID '42' not found".into()
+            ))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_429_resetting_later_than_a_minute_fails_instead_of_waiting() {
+        // `now` is 1792000000 in the script: the limit resets in 50 minutes.
+        let script = Script::new(vec![(
+            429,
+            vec![("RateLimit-Reset".into(), "1792003000".into())],
+            include_str!("fixtures/hetzner/rate_limited.json"),
+        )]);
+        assert_eq!(
+            hetzner(&script).get("42").await,
+            Err(CloudError::Provider(
+                "429 Hetzner's rate limit resets in 50 min".into()
+            ))
+        );
+        assert!(script.slept.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
