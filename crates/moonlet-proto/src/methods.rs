@@ -1299,6 +1299,14 @@ pub struct LinkWorker {
     pub id: String,
     pub name: String,
     pub enabled: bool,
+    /// How many routed commands this machine runs at once (X62).
+    #[serde(default = "default_slots")]
+    pub slots: u32,
+}
+
+/// A worker's slots unless set (X62).
+pub fn default_slots() -> u32 {
+    2
 }
 
 /// `link.set` params. An absent field stays as it is; `central: null`
@@ -1317,6 +1325,9 @@ pub struct LinkWorkerSet {
     pub enabled: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// From 1 to 64 (X62).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slots: Option<u32>,
 }
 
 /// The link's state: `off`, or one of the host statuses of `moonlet-link`.
@@ -1360,6 +1371,9 @@ pub struct WorkerRegister {
     pub cores: u32,
     pub version: String,
     pub projects: Vec<WorkerProject>,
+    /// How many routed commands it runs at once (X62).
+    #[serde(default = "default_slots")]
+    pub slots: u32,
 }
 
 /// A linked worker in `worker.list`.
@@ -1370,6 +1384,9 @@ pub struct WorkerInfo {
     pub connected_since: u64,
     /// The last `worker.ping` round trip; none before the first.
     pub rtt_ms: Option<u64>,
+    /// The 1-minute load average from the last `worker.ping` answer (X62).
+    #[serde(default)]
+    pub load: Option<f64>,
 }
 
 /// `sync.start` params: the session's id on the central host.
