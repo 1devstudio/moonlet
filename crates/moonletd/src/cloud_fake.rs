@@ -221,7 +221,12 @@ impl Provider for Fake {
         let dir = self.machine(&id);
         std::fs::create_dir_all(&dir).map_err(|e| CloudError::Provider(format!("500 {e}")))?;
         let meta = json!({ "name": m.name, "labels": m.labels, "created_at": now_ms() });
-        let _ = std::fs::write(dir.join("meta.json"), meta.to_string());
+        // Whole or not at all, as a provider's record of a machine: a test
+        // may kill the daemon right after it shows.
+        let tmp = dir.join("meta.json.tmp");
+        if std::fs::write(&tmp, meta.to_string()).is_ok() {
+            let _ = std::fs::rename(&tmp, dir.join("meta.json"));
+        }
         // Made, but slow to answer: what a crash in between leaves.
         if let Some(ms) = self
             .steer("slow-create")
