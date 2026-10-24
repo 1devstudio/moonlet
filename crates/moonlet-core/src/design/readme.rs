@@ -394,4 +394,20 @@ Style with classes: `.btn` and `.btn--primary`, colours from `--color-accent`.
             ]
         );
     }
+
+    #[test]
+    fn a_colour_alias_is_listed_with_the_colours() {
+        let dir = system(&[
+            ("styles.css", "@import \"tokens/colors.css\";\n"),
+            (
+                "tokens/colors.css",
+                ":root {\n  --color-accent: #e8774f;\n  --accent: var(--color-accent);\n}\n",
+            ),
+        ]);
+        let readme = build(dir.path(), "moonlet desktop").unwrap();
+        assert!(
+            readme.ends_with("## Tokens\n\n- **color** (2): `--color-accent`, `--accent`\n"),
+            "{readme}"
+        );
+    }
 }

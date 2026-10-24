@@ -143,7 +143,7 @@ A design system belongs to a moonlet workspace, so every project and design in t
 ### Foundations and layouts
 
 - [ ] moonlet writes the foundation cards from the tokens, with no agent involved, each time the tokens change:
-  - **Colours**: a swatch per colour token
+  - **Colours**: a swatch per colour token. A token that is just `var(--other)` takes the family of the token it names, along the chain, so `--accent: var(--color-accent)` gets a swatch too; if that token is not one, says nothing, or the chain loops, its own name and value count. (`design/tokens.rs` a_token_that_is_just_another_tokens_var_takes_that_tokens_family; `design/foundations.rs` a_colour_alias_gets_a_swatch_on_the_written_colours_card; `design/readme.rs` a_colour_alias_is_listed_with_the_colours)
   - **Type**: a sample per size, weight, line height and letter spacing, and the font families (`design/foundations.rs` a_font_weight_token_shows_as_a_weight)
   - **Spacing**
   - **Radius and shadow**
