@@ -17,6 +17,7 @@ import { Card, PageBody, PageHeading, Row, SaveBar, Section, Status, SwitchRow, 
 import { syncOffered } from "../../lib/sync";
 import { projectKeepsNew, setProjectKeepsNew, useSync } from "../../lib/syncStore";
 import { useUnsaved } from "./useUnsaved";
+import { HeavySection, useHeavy } from "./HeavySection";
 
 const EMPTY: Form = { setup: "", run: "", archive: "", default_agent: "", base_branch: "", branch_prefix: "", agents: [], trackers: [] };
 
@@ -124,7 +125,10 @@ export function ProjectPage({ host, id, focus }: { host: string; id: string; foc
   }, [keepShown, project?.identity?.origin, project?.identity?.root]); // eslint-disable-line react-hooks/exhaustive-deps
   const keepDirty = keepShown && keepNew !== origKeepNew;
   const configDirty = !parseError && isDirty(form, orig);
-  const dirty = configDirty || keepDirty;
+  // `[heavy]`, saved with the page through its own call (X62).
+  const heavy = useHeavy(host, id);
+  const heavyDirty = !parseError && heavy.dirty;
+  const dirty = configDirty || keepDirty || heavyDirty;
   const canSave = !loading && !parseError && dirty && !v.any && !saving;
   const path = file?.path ?? "";
   const name = configName(file?.path);
@@ -136,6 +140,11 @@ export function ProjectPage({ host, id, focus }: { host: string; id: string; foc
     // Mac's choice changes, and a failure names the part that failed.
     try {
       if (configDirty) show(await rpc<ProjectConfigFile>(host, M.projectSetConfig, { id, version: file.version, config: fromForm(form) }));
+      if (heavyDirty) {
+        await heavy.save();
+        // It wrote the file: the next save starts from this version.
+        show(await rpc<ProjectConfigFile>(host, M.projectConfigFile, { id }));
+      }
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       const stale = message.includes("config changed on disk");
@@ -149,7 +158,7 @@ export function ProjectPage({ host, id, focus }: { host: string; id: string; foc
         setKeepNew(r.keep_new);
         setOrigKeepNew(r.keep_new);
       }
-      toast(configDirty ? `Saved ${name}` : "Saved");
+      toast(configDirty || heavyDirty ? `Saved ${name}` : "Saved");
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       setSaveErr({ message: `${configDirty ? `Saved ${name}, but not` : "Could not save"} Keep new sessions in sync with this Mac: ${message}`, stale: false });
@@ -261,6 +270,7 @@ export function ProjectPage({ host, id, focus }: { host: string; id: string; foc
             onDiscard={() => {
               set({ ...orig });
               setKeepNew(origKeepNew);
+              heavy.discard();
             }}
             onSave={() => void save()}
           >
@@ -402,6 +412,8 @@ export function ProjectPage({ host, id, focus }: { host: string; id: string; foc
             </Row>
           </Card>
         </Section>
+
+        {project && <HeavySection host={host} id={id} project={project} heavy={heavy} />}
 
         {keepShown && (
           <Section title="This Mac">

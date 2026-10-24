@@ -18,6 +18,8 @@ use crate::daemon::internal;
 
 /// A command `exec.run` may run, as checked.
 pub struct Checked {
+    /// The session's project's name.
+    pub project: String,
     /// The session's worktree.
     pub worktree: PathBuf,
     pub cwd: PathBuf,
@@ -177,7 +179,15 @@ impl Heavy {
             .map_err(|_| "outside_worktree")?
             .display()
             .to_string();
+        let project = self
+            .sessions
+            .session(session)
+            .ok()
+            .and_then(|s| self.sessions.list_projects().into_iter().find(|p| p.id == s.project_id))
+            .map(|p| p.name)
+            .unwrap_or_default();
         Ok(Checked {
+            project,
             worktree: worktree.clone(),
             cwd,
             cwd_rel,

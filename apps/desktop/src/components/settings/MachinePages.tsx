@@ -3,16 +3,16 @@
 
 import { Fragment, useEffect, useId, useState } from "react";
 import { encode } from "uqr";
-import { Copy, Laptop, Plus, Server, Smartphone, SquareTerminal, Trash2 } from "lucide-react";
+import { Copy, Laptop, Minus, Plus, Server, Smartphone, SquareTerminal, Trash2 } from "lucide-react";
 import { askConfirm } from "../../lib/confirm";
 import { hostsApi, onDaemonEvent, onHostStatus, rpc } from "../../lib/daemon";
 import { countdown, deviceLine, devicesOfKind, pairEndedText } from "../../lib/mobile";
 import { addHostReady, displayCode, readAddHostInput } from "../../lib/addHost";
-import { EV, M, type HostInfo, type LinkInfo, type MobilePairing, type MobileStatus } from "../../lib/protocol";
+import { EV, M, type ExecStatus, type HostInfo, type LinkInfo, type MobilePairing, type MobileStatus } from "../../lib/protocol";
 import { errorToast, toast, useStore } from "../../lib/store";
 import { hostActions, hostLine, phoneAccessLine, removeAsks, updateCommand } from "../../lib/settingsPage";
 import { Button, Dialog, Field, IconButton, cx, inputCls } from "../ui";
-import { centralHostButton, centralHostId, heavyHostIds, linkLine, linkRetries, pairThenLink, pickCentral, remoteLinkAction, remoteLinkError, remoteLinkLine, remoteSwitchOn, turnOnNeeds, watchLink } from "../../lib/workerLink";
+import { centralHostButton, centralHostId, clampSlots, heavyHostIds, linkLine, linkRetries, pairThenLink, pickCentral, remoteLinkAction, remoteLinkError, remoteLinkLine, remoteSwitchOn, slotsHint, turnOnNeeds, watchLink, withRunning } from "../../lib/workerLink";
 import { changeCentral } from "../../lib/syncStore";
 import { Card, PageHeading, Row, Section, Status, Switch, SwitchRow } from "./controls";
 
@@ -272,21 +272,64 @@ function useLink(host = HOST): LinkInfo | null {
   return link;
 }
 
-/** "Use this Mac for heavy commands" and the link's state (X41). */
+/** How many routed commands `host` runs for its central host now (X62),
+ * read every few seconds while shown. */
+function useRouted(host: string, on: boolean): number {
+  const [n, setN] = useState(0);
+  useEffect(() => {
+    if (!on) return setN(0);
+    let live = true;
+    const read = () => void rpc<ExecStatus>(host, M.execStatus).then((s) => live && setN(s.routed), () => {});
+    read();
+    const timer = setInterval(read, 3000);
+    return () => {
+      live = false;
+      clearInterval(timer);
+    };
+  }, [host, on]);
+  return n;
+}
+
+/** "Run at most [N] at once" (X62): a machine's slots, kept in its own
+ * `link.json`. */
+function SlotsRow({ host, link, remote }: { host: string; link: LinkInfo; remote: string | null }) {
+  const slots = link.worker.slots ?? 2;
+  const set = (n: number) => void rpc(host, M.linkSet, { worker: { slots: clampSlots(n) } }).catch(errorToast);
+  return (
+    <div data-setting={remote ? `heavy-slots-${host}` : "heavy-slots"} className="flex items-center gap-6 bg-panel-2 py-3 pl-10 pr-4">
+      <div className="flex min-w-0 flex-1 flex-col gap-[3px]">
+        <span className="ui-text-13">Run at most</span>
+        <span className="ui-text-12 text-muted">{slotsHint(remote)}</span>
+      </div>
+      <div className="flex items-center gap-1.5">
+        <IconButton title="One fewer" disabled={slots <= 1} onClick={() => set(slots - 1)}>
+          <Minus size={13} />
+        </IconButton>
+        <span aria-label="Commands at once" className="w-9 rounded-md border border-border-strong bg-panel py-1 text-center font-mono ui-text-12.5">
+          {slots}
+        </span>
+        <IconButton title="One more" disabled={slots >= 64} onClick={() => set(slots + 1)}>
+          <Plus size={13} />
+        </IconButton>
+        <span className="ui-text-12.5 text-muted">at once</span>
+      </div>
+    </div>
+  );
+}
+
+/** "Use this Mac for heavy commands" and the link's state (X41), with how
+ * many routed commands run here (X62). */
 function HeavyCommandsRow({ link }: { link: LinkInfo | null }) {
   const id = useId();
   const set = (enabled: boolean) => rpc(HOST, M.linkSet, { worker: { enabled } }).catch(errorToast);
+  const running = useRouted(HOST, !!link?.worker.enabled);
   return (
+    <>
     <Row
       setting="heavy-commands"
       label="Use this Mac for heavy commands"
       labelId={id}
-      hint={
-        <>
-          {link && <Status line={linkLine(link)} />}
-          <span className="mt-0.5 block">For now this only links this Mac to its central host. Commands are not routed here yet.</span>
-        </>
-      }
+      hint={link && <Status line={withRunning(linkLine(link), running)} />}
     >
       {link && linkRetries(link) && (
         <Button size="sm" variant="ghost" onClick={() => void rpc(HOST, M.linkRetry).catch(errorToast)}>
@@ -295,6 +338,8 @@ function HeavyCommandsRow({ link }: { link: LinkInfo | null }) {
       )}
       <Switch on={!!link?.worker.enabled} disabled={!link} labelledBy={id} onChange={(on) => void set(on)} />
     </Row>
+    {link?.worker.enabled && <SlotsRow host={HOST} link={link} remote={null} />}
+    </>
   );
 }
 
@@ -320,12 +365,7 @@ function RemoteHeavyRow({ host, central }: { host: string; central: LinkInfo["ce
         setting={`heavy-commands-${host}`}
         label="Use for heavy commands"
         labelId={id}
-        hint={
-          <>
-            {link && <Status line={remoteLinkLine(link, host, centralName)} />}
-            <span className="mt-0.5 block">For now this only links {host} to the central host. Commands are not routed there yet.</span>
-          </>
-        }
+        hint={link && <Status line={remoteLinkLine(link, host, centralName)} />}
       >
         {action === "retry" && (
           <Button size="sm" variant="ghost" onClick={() => void rpc(host, M.linkRetry).catch(errorToast)}>
@@ -339,6 +379,7 @@ function RemoteHeavyRow({ host, central }: { host: string; central: LinkInfo["ce
         )}
         <Switch on={!!link && remoteSwitchOn(link, centralName)} disabled={!link || !central} labelledBy={id} onChange={(on) => void (on ? turnOn() : enable(false))} />
       </Row>
+      {link && remoteSwitchOn(link, centralName) && <SlotsRow host={host} link={link} remote={host} />}
       {pairing && central && <PairCentralDialog host={host} central={central} onClose={() => setPairing(false)} />}
     </>
   );
