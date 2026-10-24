@@ -186,6 +186,8 @@ pub struct Machines {
     /// Held while `machines.json` is written, so an older list never
     /// replaces a newer one.
     saving: Mutex<()>,
+    /// Held while a session's machine is found or started.
+    choosing: Mutex<()>,
     fake: Option<Arc<crate::cloud_fake::Fake>>,
     net: Arc<dyn Transport>,
     /// When `tailscale status` was last asked.
@@ -245,6 +247,7 @@ impl Machines {
             usage: Mutex::new(usage),
             retry: Mutex::default(),
             saving: Mutex::new(()),
+            choosing: Mutex::new(()),
             making: Mutex::new(()),
             fake: crate::cloud_fake::from_env().map(Arc::new),
             net,
@@ -668,9 +671,27 @@ impl Machines {
             .await;
         match made {
             Ok(provider_id) => {
-                // Removed while the call ran: what it made goes too.
-                if self.get(&id).is_none_or(|r| r.shown.state != "creating") {
-                    self.update(&id, |r| r.provider_id = Some(provider_id.clone()));
+                // Starting, unless it was removed while the call ran: then
+                // what it made goes too. Checked and set in one step, so a
+                // removal never misses the provider's id.
+                let made = {
+                    let mut records = self.records.lock().unwrap();
+                    match records.iter_mut().find(|r| r.shown.id == id) {
+                        Some(r) => {
+                            r.provider_id = Some(provider_id.clone());
+                            r.call_started = None;
+                            let creating = r.shown.state == "creating";
+                            if creating {
+                                r.set_state("starting");
+                                r.step("created", "done", Some(now_ms() - started), None);
+                            }
+                            creating
+                        }
+                        None => false,
+                    }
+                };
+                self.changed();
+                if !made {
                     let mut wait = destroy_backoff();
                     for _ in 0..5 {
                         if provider.destroy(&provider_id).await.is_ok() {
@@ -682,12 +703,6 @@ impl Machines {
                     // The sweep finds it by its labels.
                     return;
                 }
-                self.update(&id, |r| {
-                    r.provider_id = Some(provider_id);
-                    r.call_started = None;
-                    r.set_state("starting");
-                    r.step("created", "done", Some(now_ms() - started), None);
-                });
                 // It may have paired before the provider answered.
                 self.ready_if_done(&id);
             }
@@ -750,9 +765,21 @@ impl Machines {
     /// Whether machine `machine` may open a copy of session `session`: one
     /// of its own project's.
     pub fn may_open(&self, machine: &str, session: &str) -> Result<(), RpcError> {
-        let refused = || RpcError::new("forbidden", "a cloud machine opens copies of its own project only");
-        let key = self.get(machine).map(|r| r.shown.project_key).ok_or_else(refused)?;
-        let project = self.sessions.session(session).map_err(|_| refused())?.project_id;
+        let refused = || {
+            RpcError::new(
+                "forbidden",
+                "a cloud machine opens copies of its own project only",
+            )
+        };
+        let key = self
+            .get(machine)
+            .map(|r| r.shown.project_key)
+            .ok_or_else(refused)?;
+        let project = self
+            .sessions
+            .session(session)
+            .map_err(|_| refused())?
+            .project_id;
         match self.project_key(&project) {
             Some(k) if k == key => Ok(()),
             _ => Err(refused()),
@@ -964,13 +991,15 @@ impl Machines {
                     if r.shown.running > 0 {
                         continue;
                     }
+                    // `r` is a copy: a command may have started since, which
+                    // `retire` sees.
                     if let Some(reason) = r.down_after.clone() {
-                        self.remove(&r.shown.id, reason);
+                        self.retire(&r.shown.id, reason);
                         continue;
                     }
                     let idle = self.settings.file().idle_minutes;
                     if idle_until(&r, idle).is_some_and(|until| now >= until) {
-                        self.remove(&r.shown.id, format!("removed after {idle} min idle"));
+                        self.retire(&r.shown.id, format!("removed after {idle} min idle"));
                     }
                 }
                 _ => {}
@@ -1051,7 +1080,10 @@ impl Machines {
             .lock()
             .unwrap()
             .iter()
-            .filter(|r| r.shown.project_key == key && r.shown.state == "ready")
+            // One going down once its commands end takes no new one.
+            .filter(|r| {
+                r.shown.project_key == key && r.shown.state == "ready" && r.down_after.is_none()
+            })
             .filter_map(|r| r.worker.clone())
             .collect()
     }
@@ -1103,6 +1135,8 @@ impl Machines {
         let key = self
             .project_key(project)
             .ok_or_else(|| RpcError::new("no_identity", "the project has no first commit"))?;
+        // Two first commands at once share the machine one of them starts.
+        let _one = self.choosing.lock().unwrap();
         let coming = self
             .records
             .lock()
@@ -1111,6 +1145,7 @@ impl Machines {
             .find(|r| {
                 r.shown.project_key == key
                     && matches!(r.shown.state.as_str(), "creating" | "starting" | "ready")
+                    && r.down_after.is_none()
             })
             .map(|r| (r.shown.id.clone(), r.shown.name.clone()));
         match coming {
@@ -1176,12 +1211,7 @@ impl Machines {
 
     /// Removes machine `id` now, or once its running commands end.
     fn retire(&self, id: &str, reason: String) {
-        let busy = self.get(id).is_some_and(|r| r.shown.running > 0);
-        if busy {
-            self.update(id, |r| r.down_after = Some(reason.clone()));
-        } else {
-            self.remove(id, reason);
-        }
+        self.take_down(id, reason, true);
     }
 
     /// Project `key` no longer uses cloud machines: they go once their
@@ -1227,14 +1257,34 @@ impl Machines {
     /// Removes machine `id`: it leaves the candidates, its device is
     /// revoked, its worker retires, and the provider destroys it.
     pub fn remove(&self, id: &str, reason: String) {
-        let Some(r) = self.get(id) else { return };
-        if matches!(r.shown.state.as_str(), "removing" | "removed" | "failed") {
+        self.take_down(id, reason, false);
+    }
+
+    /// Marks machine `id` removing and starts its removal. With
+    /// `after_runs`, a machine running a command goes once they end. Checked
+    /// and marked in one step, so a command claiming it meanwhile is seen.
+    fn take_down(&self, id: &str, reason: String, after_runs: bool) {
+        let start = {
+            let mut records = self.records.lock().unwrap();
+            let Some(r) = records.iter_mut().find(|r| r.shown.id == id) else {
+                return;
+            };
+            if matches!(r.shown.state.as_str(), "removing" | "removed" | "failed") {
+                return;
+            }
+            if after_runs && r.shown.running > 0 {
+                r.down_after = Some(reason);
+                false
+            } else {
+                r.set_state("removing");
+                r.shown.reason = Some(reason);
+                true
+            }
+        };
+        self.changed();
+        if !start {
             return;
         }
-        self.update(id, |r| {
-            r.set_state("removing");
-            r.shown.reason = Some(reason.clone());
-        });
         let Some(me) = self.me.lock().unwrap().upgrade() else {
             return;
         };
