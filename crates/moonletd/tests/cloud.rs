@@ -1301,15 +1301,17 @@ async fn the_sweep_books_the_time_of_a_machine_the_provider_lost() {
 
 #[tokio::test]
 async fn retry_tries_only_its_own_machine_again() {
-    let c = cloud_with(SHOP_CONFIG, &[("MOONLET_TEST_CLOUD_BACKOFF_MS", "1000")]).await;
+    // Tries at 0 s, 2 s and 6 s; the next would be at 14 s.
+    let c = cloud_with(SHOP_CONFIG, &[("MOONLET_TEST_CLOUD_BACKOFF_MS", "2000")]).await;
     let _: Value = c.d.call("cloud.set", json!({ "max_machines": 3 })).await;
     let a = c.ready().await;
     let b = c.ready().await;
-    c.steer("fail-destroy", "6");
+    // Every attempt fails until the provider is let go.
+    c.steer("fail-destroy", "1000");
     for m in [&a, &b] {
         let _: Value = c.d.call("cloud.down", json!({ "machine": m["id"] })).await;
     }
-    for _ in 0..100 {
+    for _ in 0..200 {
         let all = c.machines().await;
         if all["machines"]
             .as_array()
