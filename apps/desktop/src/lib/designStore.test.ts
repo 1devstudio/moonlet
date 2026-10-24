@@ -85,12 +85,38 @@ describe("a workspace's design systems (X64, X65)", () => {
     expect(listed()).toHaveLength(2);
   });
 
+  it("are asked for once while a listing is on its way", async () => {
+    answers["design.systems"] = () => [system()];
+    await Promise.all([loadSystems("local", "w-1devstudio"), loadSystems("local", "w-1devstudio")]);
+    expect(listed()).toHaveLength(1);
+  });
+
+  it("are asked for again after a listing failed, when the host comes back or the folder changes", async () => {
+    answers["design.systems"] = () => {
+      throw new Error("host offline");
+    };
+    await expect(loadSystems("local", "w-acme")).rejects.toThrow("host offline");
+    answers["design.systems"] = () => [system()];
+    hostStatus.emit({ id: "local", status: "connected" });
+    await settle();
+    expect(systemsOf(useDesign.getState(), "local", "w-acme")?.map((s) => s.slug)).toEqual(["moonlet-desktop"]);
+    useDesign.setState({ systems: {} });
+    answers["design.systems"] = () => {
+      throw new Error("host offline");
+    };
+    await expect(loadSystems("local", "w-acme")).rejects.toThrow("host offline");
+    answers["design.systems"] = () => [system({ slug: "storefront" })];
+    events.emit({ host: "local", name: "design.changed", data: { workspace: "w-acme", system: "storefront", paths: ["config.toml"] } });
+    await settle();
+    expect(systemsOf(useDesign.getState(), "local", "w-acme")?.map((s) => s.slug)).toEqual(["storefront"]);
+  });
+
   it("are listed again when the host comes back", async () => {
     answers["design.systems"] = () => [system()];
     await loadSystems("local", "w-1devstudio");
     hostStatus.emit({ id: "local", status: "connected" });
     await settle();
-    expect(listed()).toHaveLength(2);
+    expect(listed().filter((c) => (c.params as { workspace: string }).workspace === "w-1devstudio")).toHaveLength(2);
   });
 });
 
