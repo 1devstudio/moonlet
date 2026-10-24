@@ -7,6 +7,7 @@ import { Cloud, Copy, Lock, Plus, TriangleAlert } from "lucide-react";
 import { askConfirm } from "../../lib/confirm";
 import { rpc } from "../../lib/daemon";
 import {
+  afterRemoving,
   cloudChanges,
   cloudDraft,
   cloudErrors,
@@ -121,7 +122,10 @@ export function CloudPage() {
     const count = all.filter((m) => m.provider === id).length;
     if (!(await askConfirm(removeProviderPrompt(label, count, name)))) return;
     try {
-      show(await rpc<CloudInfo>(host, M.cloudSet, { providers: { [id]: null } }));
+      const next = await rpc<CloudInfo>(host, M.cloudSet, { providers: { [id]: null } });
+      // The other unsaved edits stay for Save or Discard.
+      setInfo(next);
+      setDraft((d) => (d ? afterRemoving(d, next, id) : d));
     } catch (e) {
       errorToast(e);
     }
