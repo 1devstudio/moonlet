@@ -79,13 +79,28 @@ export function cloudChanges(info: CloudInfo, d: CloudDraft): CloudSet | null {
 
 const whole = (s: string) => /^\d+$/.test(s.trim());
 
-/** What is wrong with the draft, by field; empty when it can be saved. */
-export function cloudErrors(d: CloudDraft): Partial<Record<"idle_minutes" | "max_machines" | "max_hours_month" | "tag", string>> {
+/** "API token" stays as it is; "Token" becomes "token". */
+const lowerFirst = (s: string) => (/^[A-Z][a-z]/.test(s) ? s[0].toLowerCase() + s.slice(1) : s);
+
+/** A Tailscale tag: `tag:` then letters, digits and dashes. */
+const TAG = /^tag:[A-Za-z0-9-]+$/;
+
+/** What is wrong with the draft, by field (a provider's as `<provider>.<field>`); empty when it can be saved. `info` is what is saved. */
+export function cloudErrors(d: CloudDraft, info?: CloudInfo): Partial<Record<"idle_minutes" | "max_machines" | "max_hours_month" | "tag" | `${string}.${string}`, string>> {
   const e: ReturnType<typeof cloudErrors> = {};
   if (!whole(d.idle_minutes) || Number(d.idle_minutes) > 1440) e.idle_minutes = "From 0 to 1440 minutes.";
   if (!whole(d.max_machines) || Number(d.max_machines) < 1) e.max_machines = "At least 1 machine.";
   if (!whole(d.max_hours_month)) e.max_hours_month = "A whole number of hours.";
-  if (!d.tailscale.tag.trim().startsWith("tag:")) e.tag = "A tag starts with tag:, such as tag:moonlet-worker.";
+  if (!TAG.test(d.tailscale.tag.trim())) e.tag = "A tag is tag: then letters, digits and dashes, such as tag:moonlet-worker.";
+  // A secret not saved yet must be typed: a provider without it makes no machine.
+  for (const kind of info?.kinds ?? []) {
+    const fields = d.providers[kind.id];
+    if (!fields) continue;
+    for (const f of kind.fields) {
+      if (!f.secret || fields[f.name]?.trim() || info?.providers[kind.id]?.[`has_${f.name}`] === true) continue;
+      e[`${kind.id}.${f.name}`] = `Paste the ${lowerFirst(f.label)}.`;
+    }
+  }
   return e;
 }
 

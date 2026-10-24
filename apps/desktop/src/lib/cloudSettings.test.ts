@@ -100,8 +100,20 @@ describe("Settings › Cloud workers (X63)", () => {
       max_machines: "At least 1 machine.",
       max_hours_month: "A whole number of hours.",
     });
-    expect(cloudErrors({ ...d, tailscale: { ...d.tailscale, tag: "moonlet" } })).toEqual({ tag: "A tag starts with tag:, such as tag:moonlet-worker." });
+    expect(cloudErrors({ ...d, tailscale: { ...d.tailscale, tag: "moonlet" } })).toEqual({ tag: "A tag is tag: then letters, digits and dashes, such as tag:moonlet-worker." });
+    // The copied policy quotes the tag: nothing that would end the quote.
+    expect(cloudErrors({ ...d, tailscale: { ...d.tailscale, tag: 'tag:worker"' } })).toEqual({ tag: "A tag is tag: then letters, digits and dashes, such as tag:moonlet-worker." });
     expect(cloudErrors(d)).toEqual({});
+  });
+
+  it("a provider added without its secret cannot be saved", () => {
+    const i = info({ providers: {} });
+    const d = cloudDraft(i);
+    const added = { ...d, providers: { hetzner: { token: "" } } };
+    expect(cloudErrors(added, i)).toEqual({ "hetzner.token": "Paste the API token." });
+    expect(cloudErrors({ ...d, providers: { hetzner: { token: "hc-new" } } }, i)).toEqual({});
+    // A saved one keeps its secret until replaced.
+    expect(cloudErrors(cloudDraft(info()), info())).toEqual({});
   });
 
   it("the policy snippet with the tag and address", () => {

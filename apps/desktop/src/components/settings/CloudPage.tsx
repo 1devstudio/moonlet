@@ -89,7 +89,7 @@ export function CloudPage() {
 
   const name = status?.host || hostLabel || host;
   const changes = info && draft ? cloudChanges(info, draft) : null;
-  const errors = draft ? cloudErrors(draft) : {};
+  const errors = draft ? cloudErrors(draft, info ?? undefined) : {};
   const errorCount = Object.keys(errors).length;
   const dirty = !!changes;
   const canSave = dirty && !errorCount && !saving;
@@ -192,7 +192,7 @@ export function CloudPage() {
                       const id = `cloud-${kind.id}-${r.name}`;
                       const value = draft.providers[kind.id]?.[r.name] ?? "";
                       return (
-                        <Row key={r.name} label={r.label} hint={r.help} htmlFor={id}>
+                        <Row key={r.name} label={r.label} hint={hint(r.help, errors[`${kind.id}.${r.name}`])} htmlFor={id}>
                           {r.secret ? (
                             <SecretField id={id} label={r.label} saved={r.saved} value={value} onChange={(v) => setField(kind.id, r.name, v)} />
                           ) : (
