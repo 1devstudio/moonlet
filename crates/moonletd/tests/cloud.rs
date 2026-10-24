@@ -1199,7 +1199,17 @@ async fn a_machine_left_creating_by_a_restart_is_destroyed() {
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    panic!("left: {:?} {}", c.fake_dirs(), c.machines().await);
+    let info: Value = c.d.call("cloud.get", json!({})).await;
+    let metas: Vec<String> = c
+        .fake_dirs()
+        .iter()
+        .map(|d| std::fs::read_to_string(d.join("meta.json")).unwrap_or_default())
+        .collect();
+    panic!(
+        "left: {metas:?} {} host {}",
+        c.machines().await,
+        info["host_id"]
+    );
 }
 
 #[tokio::test]
