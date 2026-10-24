@@ -188,7 +188,15 @@ pub fn status(root: &Path, sources: &[PathBuf]) -> Result<Vec<CardStatus>> {
                 changed.sort();
                 st.changed_sources = changed;
                 st.edited_by_hand = now.render_hash != then.render_hash;
-                st.orphaned = !now.sources.is_empty() && now.sources.values().all(String::is_empty);
+                // A card whose marker broke names no sources now: the ones
+                // it had at the sync tell whether it is orphaned.
+                let named: Vec<&String> = if now.sources.is_empty() {
+                    then.sources.keys().collect()
+                } else {
+                    now.sources.keys().collect()
+                };
+                st.orphaned =
+                    !named.is_empty() && named.iter().all(|p| source_hash(sources, p).is_none());
             }
         }
         if !st.changed_sources.is_empty() || st.edited_by_hand || st.orphaned || st.new {
@@ -494,6 +502,37 @@ mod tests {
                     false
                 ),
             ]
+        );
+    }
+
+    #[test]
+    fn a_card_whose_marker_broke_and_whose_sources_are_gone_is_orphaned() {
+        let (system, project) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        files(
+            system.path(),
+            &[("components/buttons/button/button.html", CARD)],
+        );
+        files(project.path(), &[("src/ui.tsx", UI)]);
+        let sources = [project.path().to_path_buf()];
+        write(system.path(), &sources).unwrap();
+
+        files(
+            system.path(),
+            &[(
+                "components/buttons/button/button.html",
+                "<!-- @dsCard Buttons -->\n<!doctype html>\n<button class=\"btn\">Run</button>\n",
+            )],
+        );
+        std::fs::remove_file(project.path().join("src/ui.tsx")).unwrap();
+        assert_eq!(
+            status(system.path(), &sources).unwrap(),
+            vec![CardStatus {
+                path: "components/buttons/button/button.html".into(),
+                changed_sources: vec!["src/ui.tsx".into()],
+                edited_by_hand: false,
+                orphaned: true,
+                new: false,
+            }]
         );
     }
 }
