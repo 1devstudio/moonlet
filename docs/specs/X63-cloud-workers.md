@@ -255,17 +255,17 @@ Where the tests live:
 | Criterion | Tests |
 |---|---|
 | The adapter and its settings description | Vitest "the form from an adapter's description" |
-| Hetzner calls | `creates_a_server_as_in_the_captured_request`, `reads_a_captured_server`, `lists_servers_by_label`, `a_404_means_gone`, `reads_captured_server_types` |
-| Provider errors | `a_401_says_the_token_was_refused`, `a_403_says_the_token_was_refused`, `a_429_waits_for_the_reset_time`, `a_429_without_a_reset_time_waits_five_seconds`, `another_error_shows_the_providers_message`; Vitest "the last provider error with its time" |
+| Hetzner calls | `creates_a_server_as_in_the_captured_request`, `reads_a_captured_server`, `lists_servers_by_label`, `a_404_means_gone`, `a_404_on_the_list_is_an_error_not_an_empty_list`, `reads_captured_server_types`, `reads_every_page_of_server_types` |
+| Provider errors | `a_401_says_the_token_was_refused`, `a_403_says_the_token_was_refused`, `a_429_waits_for_the_reset_time`, `a_429_without_a_reset_time_waits_five_seconds`, `a_429_resetting_later_than_a_minute_fails_instead_of_waiting`, `another_error_shows_the_providers_message`; Vitest "the last provider error with its time" |
 | The fake provider | `the_fake_provider_is_off_without_its_setting`, `a_slow_create_call_still_comes_up` |
 | Name and labels | `names_fit_the_providers_limit_and_characters`, `labels_carry_the_host_machine_and_project` |
-| Recorded before creating, limit under a lock | `a_machine_is_recorded_before_the_create_call`, `two_cloud_up_calls_at_once_never_pass_the_limit` |
+| Recorded before creating, limit under a lock | `a_machine_is_recorded_before_the_create_call`, `two_cloud_up_calls_at_once_never_pass_the_limit`, `a_machine_removed_during_its_create_call_is_destroyed_when_it_returns`, `cloud_up_needs_the_central_host_to_take_tailnet_connections` |
 | `user_data` | `renders_the_worked_cloud_init_script`, `a_machine_without_machine_setup_runs_none` |
-| The Tailscale key | `asks_for_a_one_off_ephemeral_tagged_key_as_captured`, `a_refused_client_or_tag_says_so`, `a_machine_has_joined_once_tailscale_lists_its_peer` |
+| The Tailscale key | `asks_for_a_one_off_ephemeral_tagged_key_as_captured`, `a_refused_client_or_tag_says_so`, `an_outage_is_not_a_refused_client`, `a_machine_has_joined_once_tailscale_lists_its_peer` |
 | `machine_setup` | `machine_setup_comes_from_the_sessions_worktree`, `machine_setup_without_a_session_comes_from_the_projects_folder`, `a_machine_setup_over_16_kib_makes_no_machine`, `a_machine_setup_outside_the_folder_makes_no_machine`, `a_missing_machine_setup_makes_no_machine`, `a_machine_without_machine_setup_skips_that_step` |
 | Joining | `a_join_code_works_once`, `an_expired_join_code_is_refused`, `a_join_code_for_another_machine_is_refused` |
 | Ready | `a_machine_made_for_a_session_is_ready_with_its_copy_and_setup`, `a_machine_made_without_a_session_copies_on_its_first_command` |
-| The project comes from the central host, without older history | `a_cloud_machine_never_contacts_origin`, `a_cloud_machine_gets_no_older_history`, `a_secret_removed_from_the_files_never_reaches_a_cloud_machine`, `only_a_cloud_machines_routing_copy_starts_without_history` |
+| The project comes from the central host, without older history | `a_cloud_machine_never_contacts_origin`, `a_cloud_machine_gets_no_older_history`, `a_secret_removed_from_the_files_never_reaches_a_cloud_machine`, `only_a_cloud_machines_routing_copy_starts_without_history`, `a_branch_at_a_shallow_boundary_moves_to_the_next_one`, `boundaries_marked_at_once_are_all_kept` |
 | Startup steps | `startup_steps_arrive_in_order_with_durations`, `a_failing_machine_setup_fails_and_removes_the_machine`; Vitest "the machine's startup checklist and deadline", "says why the job waits", "the phase checklist" |
 | Startup deadline | `a_machine_that_never_joins_is_removed_at_the_deadline` |
 | Overflow | `overflow_starts_a_machine_and_the_next_command_runs_there`, `overflow_starts_no_second_machine_while_one_is_starting` |
@@ -273,15 +273,15 @@ Where the tests live:
 | `moonlet worker up`, `ls`, `down` | `worker_up_ls_and_down` |
 | Start a machine | e2e "Start a machine shows Starting, then Ready" |
 | Idle time (worked examples) | `removes_at_the_times_in_the_worked_examples`, `a_running_or_awaited_machine_is_not_removed`, `an_idle_machine_is_removed_after_the_idle_time`, `with_idle_zero_a_machine_goes_when_its_command_ends` |
-| Removing | `removing_revokes_the_device_retires_and_destroys`, `removing_logs_the_machine_out_of_the_tailnet`, `a_failing_destroy_is_retried_and_reported_after_three_tries`, `retry_tries_a_failing_removal_again_at_once`; Vitest "the removal toast", "toasts a removal error once, when it starts", "lists Cloud workers on the central host, with a dot while a machine is not removed (X63)" |
+| Removing | `removing_revokes_the_device_retires_and_destroys`, `removing_logs_the_machine_out_of_the_tailnet`, `a_failing_destroy_is_retried_and_reported_after_three_tries`, `retry_tries_a_failing_removal_again_at_once`, `retry_tries_only_its_own_machine_again`; Vitest "the removal toast", "toasts a removal error once, when it starts", "lists Cloud workers on the central host, with a dot while a machine is not removed (X63)" |
 | Remove now | `remove_now_removes_an_idle_machine_at_once`, `cloud_down_waits_for_running_commands` |
 | A link down for 10 minutes | `a_machine_whose_link_stays_down_is_removed` |
-| The sweep (worked examples) | `sweeps_as_in_the_worked_examples`, `a_create_call_running_over_five_minutes_counts_as_stuck`, `the_sweep_destroys_a_machine_moonlet_lost_track_of`, `a_machine_left_creating_by_a_restart_is_destroyed` |
-| Turning off, removing a provider | `turning_a_projects_cloud_off_removes_its_machines_after_their_commands`, `removing_a_provider_removes_its_machines_first` |
+| The sweep (worked examples) | `sweeps_as_in_the_worked_examples`, `a_create_call_running_over_five_minutes_counts_as_stuck`, `the_sweep_destroys_a_machine_moonlet_lost_track_of`, `the_sweep_books_the_time_of_a_machine_the_provider_lost`, `a_machine_left_creating_by_a_restart_is_destroyed` |
+| Turning off, removing a provider | `turning_a_projects_cloud_off_removes_its_machines_after_their_commands`, `removing_a_provider_removes_its_machines_first`, `a_provider_removed_while_busy_goes_later_even_after_a_restart_unless_added_again`; Vitest "removing a provider keeps the page's other unsaved edits" |
 | Archiving | `archiving_a_session_leaves_its_machine_to_the_idle_time` |
-| What the limits count | `a_creating_machine_counts_against_the_limit`, `counts_machine_hours_across_a_month_boundary` |
+| What the limits count | `a_creating_machine_counts_against_the_limit`, `counts_machine_hours_across_a_month_boundary`, `running_machines_count_toward_the_monthly_limit` |
 | At a limit | `a_limit_refuses_cloud_up_with_the_message` |
-| Who changes the settings | `cloud_set_from_the_cli_or_a_phone_is_forbidden`, `cloud_get_returns_no_secrets` |
+| Who changes the settings | `cloud_set_from_the_cli_or_a_phone_is_forbidden`, `a_phone_reaches_an_ssh_host_through_the_mac` (a routed phone), `cloud_get_returns_no_secrets`, `only_a_known_providers_fields_are_kept`, `a_tag_is_letters_digits_and_dashes`, `a_failed_write_changes_nothing`, `the_file_is_private_even_over_a_left_temporary_file_or_an_open_one`, `a_cloud_json_that_cannot_be_read_is_never_overwritten`; Vitest "a provider added without its secret cannot be saved" |
 | A cloud device's methods | `a_cloud_device_may_call_only_worker_methods` |
 | Cloud devices in the device list | `a_cloud_device_goes_away_with_its_machine` |
 | `cloud.types` | `cloud_types_lists_the_providers_machine_types` |
