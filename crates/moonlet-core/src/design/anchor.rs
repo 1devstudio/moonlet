@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -148,10 +148,17 @@ pub struct CardStatus {
     pub new: bool,
 }
 
-/// The cards that changed since `_ds_sync.json` was written, by path.
+/// The cards that changed since `_ds_sync.json` was written, by path. With no
+/// anchor every card is new; one that cannot be read or parsed is an error.
 pub fn status(root: &Path, sources: &[PathBuf]) -> Result<Vec<CardStatus>> {
-    let anchored: Anchor = match std::fs::read_to_string(root.join(FILE)) {
-        Ok(text) => serde_json::from_str(&text)?,
+    let path = root.join(FILE);
+    let anchored: Anchor = match std::fs::read_to_string(&path) {
+        Ok(text) => {
+            serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?
+        }
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            return Err(e).with_context(|| format!("reading {}", path.display()));
+        }
         Err(_) => Anchor {
             cards: BTreeMap::new(),
             style_sha: String::new(),
@@ -534,5 +541,34 @@ mod tests {
                 new: false,
             }]
         );
+    }
+
+    #[test]
+    fn a_missing_anchor_makes_every_card_new_and_an_unreadable_or_malformed_one_is_an_error() {
+        let (system, project) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        files(
+            system.path(),
+            &[("components/buttons/button/button.html", CARD)],
+        );
+        files(project.path(), &[("src/ui.tsx", UI)]);
+        let sources = [project.path().to_path_buf()];
+        assert_eq!(
+            status(system.path(), &sources).unwrap(),
+            vec![CardStatus {
+                path: "components/buttons/button/button.html".into(),
+                changed_sources: vec![],
+                edited_by_hand: false,
+                orphaned: false,
+                new: true,
+            }]
+        );
+
+        // An anchor that cannot be read is not one that was never written.
+        std::fs::create_dir(system.path().join("_ds_sync.json")).unwrap();
+        assert!(status(system.path(), &sources).is_err());
+
+        std::fs::remove_dir(system.path().join("_ds_sync.json")).unwrap();
+        files(system.path(), &[("_ds_sync.json", "{\"cards\": ")]);
+        assert!(status(system.path(), &sources).is_err());
     }
 }
