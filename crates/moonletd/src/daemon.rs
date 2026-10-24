@@ -27,6 +27,8 @@ pub struct Daemon {
     pub terminals: Arc<TerminalManager>,
     pub chats: Arc<ChatManager>,
     pub sessions: Arc<SessionManager>,
+    /// Design systems and designs under `~/.moonlet/design` (X64, X65).
+    design: moonlet_core::design::store::Store,
     reads: TerminalReads,
     watchers: Arc<Watchers>,
     started_at: u64,
@@ -186,6 +188,7 @@ impl Daemon {
             terminals,
             chats,
             sessions,
+            design: moonlet_core::design::store::Store::new(&moonlet_core::paths::home()),
             reads,
             watchers,
             started_at: now_ms(),
@@ -494,6 +497,7 @@ impl Daemon {
                 None => Err(RpcError::new("invalid_params", "not a paired device")),
             },
             method if method.starts_with("mobile.") => self.handle_mobile(conn, method, p),
+            method if method.starts_with("design.") => self.handle_design(conn, method, p).await,
             m::REPO_GH_STATUS => ok(moonlet_core::repo_clone::gh_status().await),
             m::REPO_LOOKUP => {
                 let r: m::RepoRef = params(p)?;
@@ -657,6 +661,84 @@ impl Daemon {
                 let r: m::IdRef = params(p)?;
                 self.mobile.revoke(&r.id)?;
                 self.workers.forget_device(&r.id);
+                ok(true)
+            }
+            _ => Err(RpcError::new("unknown_method", format!("unknown method {method}"))),
+        }
+    }
+
+    /// Design systems (X64).
+    async fn handle_design(&self, conn: &Conn, method: &str, p: Value) -> HandlerResult {
+        // The app and the agents' CLI on this Mac, never a paired device.
+        if conn.phone.is_some() {
+            return Err(RpcError::new("forbidden", "manage design systems from the Mac"));
+        }
+        use moonlet_core::design::store::{self, Settle, Source};
+        let store = self.design.clone();
+        // Design folders belong to a moonlet workspace (ADR 0013).
+        let workspace = p.get("workspace").and_then(Value::as_str).unwrap_or_default();
+        if !self.sessions.list_workspaces().iter().any(|w| w.id == workspace) {
+            return Err(RpcError::new("invalid_params", format!("no workspace \"{workspace}\"")));
+        }
+        match method {
+            m::DESIGN_SYSTEMS => {
+                let r: m::DesignWorkspace = params(p)?;
+                ok(blocking(move || store.systems(&r.workspace)).await?)
+            }
+            m::DESIGN_SYSTEM_CREATE => {
+                let r: m::DesignSystemCreate = params(p)?;
+                let projects = self.sessions.list_projects();
+                let mut sources = Vec::new();
+                for pick in &r.sources {
+                    let Some(p) = projects.iter().find(|p| p.id == pick.project) else {
+                        return Err(RpcError::new("invalid_params", format!("no project {}", pick.project)));
+                    };
+                    sources.push(Source {
+                        project: p.id.clone(),
+                        path: p.path.clone(),
+                        identity: p.identity.clone(),
+                        subdir: pick.subdir.clone(),
+                        commit: None,
+                    });
+                }
+                ok(blocking(move || store.create_system(&r.workspace, &r.name, sources, now_ms())).await?)
+            }
+            m::DESIGN_SYSTEM_REMOVE => {
+                let r: m::DesignSystemRef = params(p)?;
+                blocking(move || store.remove_system(&r.workspace, &r.slug)).await?;
+                ok(true)
+            }
+            m::DESIGN_SYSTEM_PROGRESS => {
+                let r: m::DesignProgress = params(p)?;
+                blocking(move || store.progress(&r.workspace, &r.slug, &r.step, r.summary.as_deref())).await?;
+                ok(true)
+            }
+            m::DESIGN_SYSTEM_SYNCED => {
+                let r: m::DesignSystemRef = params(p)?;
+                let config = self.design.config(&r.workspace, &r.slug).map_err(internal)?;
+                // Every source gets an entry: one whose HEAD cannot be read
+                // gets none, so no stale commit stays recorded.
+                let mut commits = Vec::new();
+                for s in &config.sources {
+                    commits.push((s.project.clone(), git::head(Path::new(&s.path)).await.ok()));
+                }
+                blocking(move || store.synced(&r.workspace, &r.slug, &commits, now_ms())).await?;
+                ok(true)
+            }
+            m::DESIGN_CHECK => {
+                let r: m::DesignSystemRef = params(p)?;
+                ok(blocking(move || store.check_system(&r.workspace, &r.slug)).await?)
+            }
+            m::DESIGN_FILE => {
+                let r: m::DesignFile = params(p)?;
+                let path = blocking(move || store.resolve(&r.workspace, &r.path)).await?;
+                ok(serde_json::json!({"path": path, "content_type": store::content_type(&path)}))
+            }
+            m::DESIGN_SETTLE => {
+                let r: m::DesignSettle = params(p)?;
+                let choice: Settle = serde_json::from_value(Value::String(r.choice.clone()))
+                    .map_err(|_| RpcError::new("invalid_params", format!("unknown choice {}", r.choice)))?;
+                blocking(move || store.settle(&r.workspace, &r.slug, &r.card, choice)).await?;
                 ok(true)
             }
             _ => Err(RpcError::new("unknown_method", format!("unknown method {method}"))),
