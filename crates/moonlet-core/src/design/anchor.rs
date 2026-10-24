@@ -26,6 +26,10 @@ pub struct CardAnchor {
     pub companion_hash: String,
     /// Each source file, relative to its project, and its hash.
     pub sources: BTreeMap<String, String>,
+    /// With a `<name>.proposed.html` waiting beside the card: each source
+    /// the proposal's marker names, and its hash when the sync made it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub proposed_sources: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -78,17 +82,13 @@ fn load(root: &Path) -> Result<Option<Anchor>> {
 }
 
 /// Records that `card` now holds the sync's version, taken by the user (X64):
-/// its HTML is the anchored one, and each source its marker names keeps the
-/// hash the sync recorded (one the anchor did not know is hashed now). So
-/// the next look finds it up to date, unless a source changed since the
-/// sync. Every other card stays as it is; with no anchor, or no entry for
-/// the card, nothing changes.
-pub fn take(
-    root: &Path,
-    card: &str,
-    sources: &[PathBuf],
-    exceptions: &BTreeMap<String, String>,
-) -> Result<()> {
+/// its HTML, `.css` and `.prompt.md` are the anchored ones, and each source
+/// its marker names keeps the hash the sync recorded for its proposal (one
+/// the sync did not record is unknown, so it shows as changed). So the next
+/// look finds it up to date, unless a source changed since the sync. Every
+/// other card stays as it is; with no anchor, or no entry for the card,
+/// nothing changes.
+pub fn take(root: &Path, card: &str, exceptions: &BTreeMap<String, String>) -> Result<()> {
     let Some(mut anchor) = load(root)? else {
         return Ok(());
     };
@@ -101,10 +101,12 @@ pub fn take(
         .unwrap_or_default()
         .into_iter()
         .map(|s| {
-            let hash = match then.sources.get(&s) {
-                Some(h) => h.clone(),
-                None => source_hash(sources, &s).unwrap_or_default(),
-            };
+            let hash = then
+                .proposed_sources
+                .get(&s)
+                .or_else(|| then.sources.get(&s))
+                .cloned()
+                .unwrap_or_else(|| UNKNOWN.to_string());
             (s, hash)
         })
         .collect();
@@ -113,6 +115,7 @@ pub fn take(
         render_hash: render_hash(&text),
         companion_hash: companion_hash(root, card),
         sources: files,
+        proposed_sources: BTreeMap::new(),
     };
     anchor.cards.insert(card.to_string(), entry);
     save(root, &anchor)
@@ -158,6 +161,7 @@ pub fn compute(
             .collect();
         let key = source_key(&files, exceptions.get(&rel_path).map(String::as_str));
         let companion = companion_hash(root, &rel_path);
+        let proposed_sources = proposed_sources(root, &rel_path, sources);
         cards.insert(
             rel_path,
             CardAnchor {
@@ -165,6 +169,7 @@ pub fn compute(
                 render_hash: render_hash(&text),
                 companion_hash: companion,
                 sources: files,
+                proposed_sources,
             },
         );
     }
@@ -342,6 +347,34 @@ fn render_hash(html: &str) -> String {
             .map_or("", |(_, rest)| rest)
             .as_bytes(),
     )
+}
+
+/// The hash a source gets in a taken card when the sync recorded none: it
+/// matches no file, so the source shows as changed.
+const UNKNOWN: &str = "unknown";
+
+/// The sources the `<name>.proposed.html` beside `card` names, with their
+/// hashes now; empty with no proposal (or a link in its place).
+fn proposed_sources(root: &Path, card: &str, sources: &[PathBuf]) -> BTreeMap<String, String> {
+    let Some(stem) = card.strip_suffix(".html") else {
+        return BTreeMap::new();
+    };
+    let path = root.join(format!("{stem}.proposed.html"));
+    if !std::fs::symlink_metadata(&path).is_ok_and(|m| m.is_file()) {
+        return BTreeMap::new();
+    }
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return BTreeMap::new();
+    };
+    card::parse_marker(&text)
+        .map(|m| m.source)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|s| {
+            let hash = source_hash(sources, &s).unwrap_or_default();
+            (s, hash)
+        })
+        .collect()
 }
 
 /// The component card `card`'s `<name>.css` and `<name>.prompt.md`, each
