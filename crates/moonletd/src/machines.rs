@@ -627,8 +627,16 @@ impl Machines {
         } else {
             String::new()
         };
-        // Turned on, but not listening (yet, or it could not bind).
-        let addrs = self.mobile.listening();
+        // Turned on, but maybe not listening yet: the daemon may have just
+        // started. Past 10 s it could not bind.
+        let mut addrs = self.mobile.listening();
+        for _ in 0..40 {
+            if !addrs.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            addrs = self.mobile.listening();
+        }
         if addrs.is_empty() {
             return self.failed(&id, self.no_listener().message);
         }
