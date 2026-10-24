@@ -584,6 +584,79 @@ async fn authed(addr: &str, token: &str) -> bool {
 }
 
 #[tokio::test]
+async fn a_cloud_device_opens_copies_of_its_own_project_only() {
+    let c = cloud().await;
+    c.ready().await;
+    let token = c.machine_token();
+    let other = c.d.home.path().join("src/other");
+    std::fs::create_dir_all(&other).unwrap();
+    git(&other, &["init", "-q", "-b", "main"]);
+    std::fs::write(other.join("secret.txt"), "theirs\n").unwrap();
+    git(&other, &["add", "."]);
+    git(&other, &["commit", "-q", "-m", "other"]);
+    let project: Value = c.d.call("project.add", json!({ "path": other })).await;
+    let theirs: Value = c
+        .d
+        .call(
+            "session.create",
+            json!({ "project_id": project["id"], "name": "theirs", "agent": "none" }),
+        )
+        .await;
+    let mine: Value = c
+        .d
+        .call(
+            "session.create",
+            json!({ "project_id": c.project, "name": "mine", "agent": "none" }),
+        )
+        .await;
+    // As the machine's link: registered as a worker, then opening a copy.
+    let theirs = theirs["id"].as_str().unwrap();
+    let mine = mine["id"].as_str().unwrap();
+    assert_eq!(open_as_worker(&c.addr, &token, theirs, "c-1").await.as_deref(), Some("forbidden"));
+    assert_eq!(open_as_worker(&c.addr, &token, mine, "c-2").await.as_deref(), None);
+}
+
+/// `sync.open` of copy `copy` for session `session`, over a connection with
+/// `token` that registered as a worker first, as a machine's link does.
+async fn open_as_worker(addr: &str, token: &str, session: &str, copy: &str) -> Option<String> {
+    use moonlet_proto::{read_frame, write_frame};
+    let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let auth = Message::Auth {
+        token: Some(token.into()),
+        pair: None,
+        device: None,
+        route: None,
+        kind: None,
+    };
+    write_frame(&mut s, &Frame::Json(auth)).await.unwrap();
+    read_frame(&mut s).await.unwrap();
+    let hello = Message::Hello {
+        protocol: moonlet_proto::PROTOCOL_VERSION,
+        client: "moonletd-worker".into(),
+    };
+    write_frame(&mut s, &Frame::Json(hello)).await.unwrap();
+    read_frame(&mut s).await.unwrap();
+    let requests = [
+        (1, "worker.register", json!({ "id": "8d0f6b1e-0000-4000-8000-00000000c10d", "name": "intruder", "os": "linux", "arch": "x86_64", "cores": 2, "version": "0.1.29", "projects": [], "heavy": true })),
+        (2, "sync.open", json!({ "copy": copy, "session": session, "kind": "run" })),
+    ];
+    let mut last = None;
+    for (id, method, params) in requests {
+        write_frame(&mut s, &Frame::Json(Message::Request { id, method: method.into(), params })).await.unwrap();
+        loop {
+            let frame = tokio::time::timeout(Duration::from_secs(10), read_frame(&mut s)).await.expect("no reply").unwrap();
+            if let Some(Frame::Json(Message::Response { id: got, error, .. })) = frame
+                && got == id
+            {
+                last = error.map(|e| e.code);
+                break;
+            }
+        }
+    }
+    last
+}
+
+#[tokio::test]
 async fn a_cloud_device_cannot_take_a_route_to_a_remote_host() {
     // A route would go straight to the remote daemon, past the worker-only
     // methods.

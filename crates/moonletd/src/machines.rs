@@ -740,6 +740,18 @@ impl Machines {
         self.mobile.cloud_machine(device)
     }
 
+    /// Whether machine `machine` may open a copy of session `session`: one
+    /// of its own project's.
+    pub fn may_open(&self, machine: &str, session: &str) -> Result<(), RpcError> {
+        let refused = || RpcError::new("forbidden", "a cloud machine opens copies of its own project only");
+        let key = self.get(machine).map(|r| r.shown.project_key).ok_or_else(refused)?;
+        let project = self.sessions.session(session).map_err(|_| refused())?.project_id;
+        match self.project_key(&project) {
+            Some(k) if k == key => Ok(()),
+            _ => Err(refused()),
+        }
+    }
+
     /// Its worker registered.
     pub fn registered(&self, machine: &str, worker: &str) {
         self.update(machine, |r| {
