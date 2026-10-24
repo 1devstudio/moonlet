@@ -2104,3 +2104,55 @@ done
     let terminals: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
     assert!(!terminals.iter().any(|t| t.title == "Design · pricing"), "the agent of a removed system still runs");
 }
+
+/// A `claude` that answers every message at once, for the design sync agent.
+const FAKE_SYNC_CLAUDE: &str = r#"#!/bin/sh
+while IFS= read -r line; do
+  case "$line" in
+    *'"subtype":"initialize"'*) echo '{"type":"system","subtype":"init","session_id":"s1","model":"fake"}' ;;
+    *'"type":"user"'*) echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}' ;;
+  esac
+done
+"#;
+
+/// X64: a design source's sub-folder is a folder inside its project: one that
+/// is absolute, climbs out with `..`, links out or is missing is refused, and a
+/// record that names one anyway never gets it granted to the sync agent.
+#[tokio::test]
+async fn a_design_source_never_reaches_outside_its_project() {
+    use moonlet_proto::types::{Project, Workspace};
+    let d = fake_claude_daemon(FAKE_SYNC_CLAUDE).await;
+    let repo = d.home.path().join("repo");
+    let outside = d.home.path().join("outside");
+    std::fs::create_dir_all(repo.join("apps/mobile")).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    std::os::unix::fs::symlink(&outside, repo.join("apps/out")).unwrap();
+    std::fs::write(repo.join("apps/mobile/ui.tsx"), "export const Button = () => null;\n").unwrap();
+    for args in [vec!["init", "-q", "-b", "main"], vec!["add", "-A"], vec!["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init"]] {
+        assert!(Command::new("git").args(&args).current_dir(&repo).output().unwrap().status.success());
+    }
+    let mut c = d.client().await;
+    let ws: Workspace = c.request(methods::WORKSPACE_CREATE, serde_json::json!({"name": "1devstudio", "color": "clay"})).await.unwrap();
+    let project: Project = c.request(methods::PROJECT_ADD, serde_json::json!({"path": repo})).await.unwrap();
+    let create = |name: &str, subdir: &str| {
+        serde_json::json!({"workspace": ws.id, "name": name, "sources": [{"project": project.id, "subdir": subdir}], "agent": false})
+    };
+    for bad in ["/etc", "../outside", "apps/../..", "apps/out", "apps/missing"] {
+        let refused = c.request::<_, serde_json::Value>(methods::DESIGN_SYSTEM_CREATE, create("x", bad)).await;
+        assert!(refused.as_ref().is_err_and(|e| e.to_string().starts_with("invalid_params")), "{bad}: {refused:?}");
+    }
+    let list: serde_json::Value = c.request(methods::DESIGN_SYSTEMS, serde_json::json!({"workspace": ws.id})).await.unwrap();
+    assert_eq!(list, serde_json::json!([]));
+
+    let created: serde_json::Value = c.request(methods::DESIGN_SYSTEM_CREATE, create("mobile", "apps/mobile")).await.unwrap();
+    assert_eq!(created["slug"], "mobile");
+    // A record that names a folder outside the project anyway.
+    let record = d.home.path().join(".moonlet/design").join(&ws.id).join(".records/mobile.toml");
+    let text = std::fs::read_to_string(&record).unwrap();
+    assert!(text.contains("subdir = \"apps/mobile\""), "{text}");
+    std::fs::write(&record, text.replace("subdir = \"apps/mobile\"", "subdir = \"apps/out\"")).unwrap();
+    let refused = c.request::<_, serde_json::Value>(methods::DESIGN_SYSTEM_SYNC, serde_json::json!({"workspace": ws.id, "slug": "mobile"})).await;
+    assert!(refused.as_ref().is_err_and(|e| e.to_string().contains("apps/out is not a folder inside")), "{refused:?}");
+    let terminals: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
+    assert!(!terminals.iter().any(|t| t.title == "Design · mobile"), "an agent started with a folder outside its project");
+}

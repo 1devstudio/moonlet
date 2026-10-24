@@ -507,6 +507,31 @@ pub fn source_roots(record: &Record) -> Vec<PathBuf> {
         .collect()
 }
 
+/// A source's folder as a real path (no links): the project, or its
+/// sub-folder, which must be a folder inside the project: named with no
+/// `..` and not absolute, and not a link out of it. Sync agents get only
+/// such folders.
+pub fn source_root(source: &Source) -> Result<PathBuf> {
+    use std::path::Component;
+    let project = std::fs::canonicalize(&source.path)
+        .with_context(|| format!("cannot reach {}", source.path))?;
+    let Some(sub) = &source.subdir else {
+        return Ok(project);
+    };
+    let outside = || anyhow::anyhow!("{sub} is not a folder inside {}", source.path);
+    let plain = Path::new(sub)
+        .components()
+        .all(|c| matches!(c, Component::Normal(_)));
+    if sub.is_empty() || !plain {
+        return Err(outside());
+    }
+    let root = std::fs::canonicalize(project.join(sub)).map_err(|_| outside())?;
+    if !root.starts_with(&project) || !root.is_dir() {
+        return Err(outside());
+    }
+    Ok(root)
+}
+
 /// What the list shows of one design system.
 fn summary(
     dir: &Path,
@@ -1457,6 +1482,40 @@ root = \"9c1e0a2\"
             unfinished(&store),
             (Some(9), Some("new5678".to_string()), None)
         );
+    }
+
+    #[test]
+    fn a_sources_folder_is_a_real_folder_inside_its_project() {
+        let repo = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        put(
+            repo.path(),
+            &[("apps/mobile/src/a.tsx", ""), ("README.md", "")],
+        );
+        std::os::unix::fs::symlink(outside.path(), repo.path().join("apps/out")).unwrap();
+        let real = repo.path().canonicalize().unwrap();
+        let with = |subdir: Option<&str>| Source {
+            path: repo.path().display().to_string(),
+            subdir: subdir.map(String::from),
+            ..source()
+        };
+        assert_eq!(source_root(&with(None)).unwrap(), real);
+        assert_eq!(
+            source_root(&with(Some("apps/mobile"))).unwrap(),
+            real.join("apps/mobile")
+        );
+        for bad in [
+            "/etc",
+            "..",
+            "apps/../..",
+            "apps/mobile/../../..",
+            "apps/out",
+            "apps/missing",
+            "README.md",
+            "",
+        ] {
+            assert!(source_root(&with(Some(bad))).is_err(), "{bad} accepted");
+        }
     }
 
     #[test]
