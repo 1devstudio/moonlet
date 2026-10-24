@@ -487,12 +487,19 @@ impl Machines {
         let info = provider.info();
         // From the session's worktree, or the project's own folder.
         let folder = match &session {
-            Some(s) => PathBuf::from(
-                self.sessions
+            Some(s) => {
+                let s = self
+                    .sessions
                     .session(s)
-                    .map_err(|e| RpcError::new("not_found", e.to_string()))?
-                    .path,
-            ),
+                    .map_err(|e| RpcError::new("not_found", e.to_string()))?;
+                if s.project_id != p.id {
+                    return Err(RpcError::new(
+                        "invalid_params",
+                        format!("{} is not a session of {}", s.name, p.name),
+                    ));
+                }
+                PathBuf::from(s.path)
+            }
             None => PathBuf::from(&p.path),
         };
         let setup = Self::machine_setup(&folder)?;
