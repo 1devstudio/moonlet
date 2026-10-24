@@ -802,10 +802,7 @@ impl Daemon {
         // What the chat starts with: a chat started with other folders or
         // rules (a source moved) is replaced, not reused.
         let fingerprint = format!("{}\n{}", launch.settings, launch.add_dirs.join("\n"));
-        let ours = |id: u32| {
-            self.terminals.list().into_iter().any(|t| t.id == id && t.chat && t.session_id.is_none() && t.title == launch.title && Path::new(&t.cwd) == dir)
-        };
-        if let Some(id) = record.agent.filter(|id| ours(*id)) {
+        if let Some(id) = self.system_agent(&record, &dir) {
             if record.agent_launch.as_deref() == Some(fingerprint.as_str()) {
                 self.chats.send(id, &launch.prompt, &[])?;
                 return Ok(id);
@@ -833,18 +830,21 @@ impl Daemon {
 
     /// Stops a design system's sync agent, when it still is that system's.
     fn stop_sync_agent(&self, workspace: &str, slug: &str) {
-        let (Ok(record), Ok(dir), Ok(config)) =
-            (self.design.record(workspace, slug), self.design.system_dir(workspace, slug), self.design.config(workspace, slug))
-        else {
+        let (Ok(record), Ok(dir)) = (self.design.record(workspace, slug), self.design.system_dir(workspace, slug)) else {
             return;
         };
         let dir = dir.canonicalize().unwrap_or(dir);
-        let title = format!("Design · {}", config.name);
-        if let Some(id) = record.agent
-            && self.terminals.list().into_iter().any(|t| t.id == id && t.chat && t.session_id.is_none() && t.title == title && Path::new(&t.cwd) == dir)
-        {
+        if let Some(id) = self.system_agent(&record, &dir) {
             let _ = self.terminals.kill(id, true);
         }
+    }
+
+    /// The chat the record names, while it still is a sessionless chat in the
+    /// system's folder `dir`: never found through its title, which comes from
+    /// the name the agent may change in `config.toml`.
+    fn system_agent(&self, record: &moonlet_core::design::store::Record, dir: &Path) -> Option<u32> {
+        let id = record.agent?;
+        self.terminals.list().into_iter().any(|t| t.id == id && t.chat && t.session_id.is_none() && Path::new(&t.cwd) == dir).then_some(id)
     }
 
     /// Workspaces, projects, sessions, git and files.

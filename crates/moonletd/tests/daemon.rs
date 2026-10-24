@@ -2156,3 +2156,37 @@ async fn a_design_source_never_reaches_outside_its_project() {
     let terminals: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
     assert!(!terminals.iter().any(|t| t.title == "Design · mobile"), "an agent started with a folder outside its project");
 }
+
+/// X64: a system's agent is the chat its record names, whatever name the
+/// agent gives the system in `config.toml`: Sync still asks that chat, and
+/// removing the system stops it.
+#[tokio::test]
+async fn a_renamed_design_system_keeps_its_one_agent_and_removing_it_stops_that_agent() {
+    use moonlet_proto::types::{Project, Workspace};
+    let d = fake_claude_daemon(FAKE_SYNC_CLAUDE).await;
+    let repo = d.home.path().join("repo");
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    std::fs::write(repo.join("src/ui.tsx"), "export const Button = () => null;\n").unwrap();
+    for args in [vec!["init", "-q", "-b", "main"], vec!["add", "-A"], vec!["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init"]] {
+        assert!(Command::new("git").args(&args).current_dir(&repo).output().unwrap().status.success());
+    }
+    let mut c = d.client().await;
+    let ws: Workspace = c.request(methods::WORKSPACE_CREATE, serde_json::json!({"name": "1devstudio", "color": "clay"})).await.unwrap();
+    let project: Project = c.request(methods::PROJECT_ADD, serde_json::json!({"path": repo})).await.unwrap();
+    let created: serde_json::Value = c
+        .request(methods::DESIGN_SYSTEM_CREATE, serde_json::json!({"workspace": ws.id, "name": "storefront", "sources": [{"project": project.id}]}))
+        .await
+        .unwrap();
+    let agent = created["agent"].as_u64().expect("an agent");
+    // The agent renames the system in the file it may edit.
+    let config = d.home.path().join(".moonlet/design").join(&ws.id).join("systems/storefront/config.toml");
+    let text = std::fs::read_to_string(&config).unwrap();
+    std::fs::write(&config, text.replace("name = \"storefront\"", "name = \"shop\"")).unwrap();
+    let again: serde_json::Value =
+        c.request(methods::DESIGN_SYSTEM_SYNC, serde_json::json!({"workspace": ws.id, "slug": "storefront"})).await.unwrap();
+    assert_eq!(again["agent"].as_u64(), Some(agent));
+    let _: bool = c.request(methods::DESIGN_SYSTEM_REMOVE, serde_json::json!({"workspace": ws.id, "slug": "storefront"})).await.unwrap();
+    let terminals: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
+    let running: Vec<u32> = terminals.iter().filter(|t| t.chat).map(|t| t.id).collect();
+    assert_eq!(running, Vec::<u32>::new(), "the agent of the removed system ({agent}) still runs");
+}
