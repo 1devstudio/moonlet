@@ -657,6 +657,29 @@ async fn open_as_worker(addr: &str, token: &str, session: &str, copy: &str) -> O
 }
 
 #[tokio::test]
+async fn cloud_up_takes_only_a_session_of_its_project() {
+    // Its machine setup would come from the other project's worktree.
+    let c = cloud().await;
+    let other = c.d.home.path().join("src/other");
+    std::fs::create_dir_all(&other).unwrap();
+    git(&other, &["init", "-q", "-b", "main"]);
+    git(&other, &["commit", "-q", "--allow-empty", "-m", "other"]);
+    let project: Value = c.d.call("project.add", json!({ "path": other })).await;
+    let theirs: Value = c
+        .d
+        .call(
+            "session.create",
+            json!({ "project_id": project["id"], "name": "theirs", "agent": "none" }),
+        )
+        .await;
+    let e = c
+        .d
+        .fails("cloud.up", json!({ "project": c.project, "session": theirs["id"] }))
+        .await;
+    assert_eq!(e, "invalid_params: theirs is not a session of shop");
+}
+
+#[tokio::test]
 async fn a_cloud_device_cannot_take_a_route_to_a_remote_host() {
     // A route would go straight to the remote daemon, past the worker-only
     // methods.
