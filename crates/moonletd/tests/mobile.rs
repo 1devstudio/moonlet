@@ -733,6 +733,16 @@ async fn a_phone_reaches_an_ssh_host_through_the_mac() {
         };
         assert_eq!(e.message, "manage the link from the Mac", "{method}");
     }
+    // Nor change the host's cloud workers (X63) or approve its heavy commands
+    // (X62): the host would take the phone for the Mac's app.
+    let Message::Response { error: Some(e), .. } = call(&mut phone, 8, "cloud.set").await else {
+        panic!("cloud.set worked through a route")
+    };
+    assert_eq!(e.message, "change cloud workers from the Mac");
+    let Message::Response { error: Some(e), .. } = call(&mut phone, 9, "heavy.approve").await else {
+        panic!("heavy.approve worked through a route")
+    };
+    assert_eq!(e.message, "approve heavy commands from the Mac");
 
     // Only the desktop's hosts can be reached.
     let (_, r) = auth(
