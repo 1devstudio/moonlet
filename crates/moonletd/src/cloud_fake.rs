@@ -24,7 +24,7 @@ pub struct Fake {
 pub fn from_env() -> Option<Fake> {
     let dir = PathBuf::from(std::env::var_os("MOONLET_CLOUD_FAKE")?);
     Some(Fake {
-        next: AtomicU32::new(count(&dir)),
+        next: AtomicU32::new(highest(&dir)),
         dir,
     })
 }
@@ -39,8 +39,34 @@ pub fn info() -> ProviderInfo {
     }
 }
 
-fn count(dir: &Path) -> u32 {
-    std::fs::read_dir(dir).map_or(0, |d| d.count() as u32)
+/// The highest `f<n>` machine in `dir`: the next one is above it, even
+/// with gaps left by destroyed ones.
+fn highest(dir: &Path) -> u32 {
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            e.file_name()
+                .to_str()?
+                .strip_prefix('f')?
+                .parse::<u32>()
+                .ok()
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+/// Whether `pid` is still a `moonletd`: a pid can be reused by anything.
+fn is_moonletd(pid: i32) -> bool {
+    std::process::Command::new("ps")
+        .args(["-o", "comm=", "-p", &pid.to_string()])
+        .output()
+        .is_ok_and(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .trim()
+                .ends_with("moonletd")
+        })
 }
 
 fn now_ms() -> u64 {
@@ -264,6 +290,7 @@ impl Provider for Fake {
         if let Some(pid) = std::fs::read_to_string(dir.join("pid"))
             .ok()
             .and_then(|p| p.trim().parse::<i32>().ok())
+            && is_moonletd(pid)
         {
             let _ = nix::sys::signal::kill(
                 nix::unistd::Pid::from_raw(pid),
