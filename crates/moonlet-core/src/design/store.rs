@@ -261,11 +261,15 @@ impl Store {
         }
     }
 
+    /// A new file renamed over the old record: a write cut short leaves the
+    /// old record whole, and a reader never sees half of one.
     fn write_record(&self, workspace: &str, slug: &str, record: &Record) -> Result<()> {
         let path = self.record_path(workspace, slug)?;
-        std::fs::create_dir_all(path.parent().unwrap_or(&self.root))?;
-        std::fs::write(&path, toml::to_string(record)?)?;
-        Ok(())
+        fsx::write_inside(
+            &self.workspace(workspace)?,
+            &path,
+            toml::to_string(record)?.as_bytes(),
+        )
     }
 
     fn record_path(&self, workspace: &str, slug: &str) -> Result<PathBuf> {
@@ -1348,6 +1352,39 @@ root = \"9c1e0a2\"
                 .unwrap(),
             "storefront"
         );
+    }
+
+    #[test]
+    fn a_record_is_replaced_whole_so_a_reader_never_sees_it_half_written() {
+        use std::io::Read;
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::new(home.path());
+        let slug = store
+            .create_system("w1", "storefront", vec![source()], 1)
+            .unwrap();
+        let records = home.path().join("design/w1/.records");
+        // Opened before the write, as by a read that the write interrupts.
+        let mut reader = std::fs::File::open(records.join("storefront.toml")).unwrap();
+        store.set_agent("w1", &slug, 7, "l").unwrap();
+        let mut seen = String::new();
+        reader.read_to_string(&mut seen).unwrap();
+        assert_eq!(
+            seen,
+            "[[sources]]
+project = \"p-moonlet\"
+path = \"/Users/alex/Workspace/1devstudio/moonlet\"
+
+[sources.identity]
+origin = \"github.com/1devstudio/moonlet\"
+root = \"9c1e0a2\"
+"
+        );
+        assert_eq!(store.agent("w1", &slug).unwrap(), Some(7));
+        let left: Vec<String> = std::fs::read_dir(&records)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(left, vec!["storefront.toml".to_string()]);
     }
 
     #[test]
