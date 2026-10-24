@@ -1127,7 +1127,8 @@ async fn a_machine_removed_during_its_create_call_is_destroyed_when_it_returns()
 async fn the_sweep_books_the_time_of_a_machine_the_provider_lost() {
     let c = cloud_with(SHOP_CONFIG, &[("MOONLET_TEST_CLOUD_SWEEP_MS", "300")]).await;
     let m = c.ready().await;
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    // Usage counts whole seconds: rented for more than one.
+    tokio::time::sleep(Duration::from_millis(1500)).await;
     // Gone at the provider without moonlet removing it.
     let dir = c.fake_dirs()[0].clone();
     std::fs::remove_dir_all(&dir).unwrap();
