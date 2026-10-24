@@ -180,8 +180,12 @@ pub struct Machines {
     usage: Mutex<moonlet_cloud::usage::Usage>,
     /// Held while a machine is checked against the limits and recorded.
     making: Mutex<()>,
-    /// Wakes the removals waiting between destroy attempts: **Retry**.
-    retry: tokio::sync::Notify,
+    /// Wakes one machine's removal waiting between destroy attempts:
+    /// **Retry**. A wake while an attempt runs is kept for after it.
+    retry: Mutex<std::collections::HashMap<String, Arc<tokio::sync::Notify>>>,
+    /// Held while `machines.json` is written, so an older list never
+    /// replaces a newer one.
+    saving: Mutex<()>,
     fake: Option<Arc<crate::cloud_fake::Fake>>,
     net: Arc<dyn Transport>,
     /// When `tailscale status` was last asked.
@@ -215,6 +219,9 @@ impl Machines {
         // it made.
         for r in &mut records {
             r.call_started = None;
+            // No command outlives the daemon either.
+            r.shown.running = 0;
+            r.waiting = 0;
         }
         let usage = std::fs::read(dir.join("usage.json"))
             .ok()
@@ -236,7 +243,8 @@ impl Machines {
             sessions,
             records: Mutex::new(records),
             usage: Mutex::new(usage),
-            retry: tokio::sync::Notify::new(),
+            retry: Mutex::default(),
+            saving: Mutex::new(()),
             making: Mutex::new(()),
             fake: crate::cloud_fake::from_env().map(Arc::new),
             net,
@@ -256,6 +264,25 @@ impl Machines {
 
     /// Starts the sweep and the watch over startup deadlines and links.
     pub fn start(self: &Arc<Self>) {
+        // Removals the daemon stopped during go on.
+        let removing: Vec<String> = self
+            .records
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.shown.state == "removing")
+            .map(|r| r.shown.id.clone())
+            .collect();
+        for id in removing {
+            let me = self.clone();
+            tokio::spawn(async move { me.removing(id).await });
+        }
+        // A provider whose machines went while the daemon was stopped.
+        for p in self.settings.removing() {
+            if !self.has_machines(&p) {
+                self.settings.drop_pending(&p);
+            }
+        }
         let weak = Arc::downgrade(self);
         tokio::spawn(async move {
             loop {
@@ -277,7 +304,17 @@ impl Machines {
 
     fn save(&self) {
         let _ = std::fs::create_dir_all(&self.dir);
-        let records = self.records.lock().unwrap().clone();
+        let _one = self.saving.lock().unwrap();
+        let now = now_ms();
+        // Removed machines are shown for an hour, then forgotten.
+        let records = {
+            let mut records = self.records.lock().unwrap();
+            records.retain(|r| {
+                r.removed_at
+                    .is_none_or(|t| now.saturating_sub(t) < 3_600_000)
+            });
+            records.clone()
+        };
         if let Ok(b) = serde_json::to_vec_pretty(&records) {
             let tmp = self.dir.join("machines.json.tmp");
             if std::fs::write(&tmp, b).is_ok() {
@@ -378,8 +415,14 @@ impl Machines {
                     shown
                 })
                 .collect(),
-            removed: removed.into_iter().map(|r| r.shown).collect(),
-            hours_this_month: moonlet_cloud::usage::hours(&self.usage.lock().unwrap(), now),
+            removed: removed
+                .into_iter()
+                .map(|r| CloudMachine {
+                    worker: r.worker,
+                    ..r.shown
+                })
+                .collect(),
+            hours_this_month: self.hours(&self.records.lock().unwrap(), now),
             max_hours_month: f.max_hours_month,
             max_machines: f.max_machines,
         }
@@ -453,6 +496,17 @@ impl Machines {
             None => PathBuf::from(&p.path),
         };
         let setup = Self::machine_setup(&folder)?;
+        // The machine pairs over the tailnet listener: without it, it would
+        // be billed until its deadline.
+        if self.mobile.listening().is_empty() {
+            return Err(RpcError::new(
+                "no_listener",
+                format!(
+                    "{} takes no connections from your tailnet, so a cloud machine cannot pair with it. Turn on Allow connections from my tailnet in Hosts.",
+                    self.link.info().worker.name
+                ),
+            ));
+        }
         let id = format!("m{}", moonlet_cloud::machine::suffix());
         let name = moonlet_cloud::machine::machine_name(
             &p.name,
@@ -533,7 +587,7 @@ impl Machines {
                     ),
                 ));
             }
-            let used = moonlet_cloud::usage::hours(&self.usage.lock().unwrap(), now);
+            let used = self.hours(&records, now);
             if used >= f64::from(f.max_hours_month) {
                 return Err(RpcError::new(
                     "cloud_limit",
@@ -599,14 +653,42 @@ impl Machines {
             })
             .await;
         match made {
-            Ok(provider_id) => self.update(&id, |r| {
-                r.provider_id = Some(provider_id);
-                r.call_started = None;
-                r.set_state("starting");
-                r.step("created", "done", Some(now_ms() - started), None);
-            }),
+            Ok(provider_id) => {
+                // Removed while the call ran: what it made goes too.
+                if self.get(&id).is_none_or(|r| r.shown.state != "creating") {
+                    self.update(&id, |r| r.provider_id = Some(provider_id.clone()));
+                    let mut wait = destroy_backoff();
+                    for _ in 0..5 {
+                        if provider.destroy(&provider_id).await.is_ok() {
+                            return;
+                        }
+                        tokio::time::sleep(wait).await;
+                        wait *= 2;
+                    }
+                    // The sweep finds it by its labels.
+                    return;
+                }
+                self.update(&id, |r| {
+                    r.provider_id = Some(provider_id);
+                    r.call_started = None;
+                    r.set_state("starting");
+                    r.step("created", "done", Some(now_ms() - started), None);
+                });
+                // It may have paired before the provider answered.
+                self.ready_if_done(&id);
+            }
             Err(e) => self.failed(&id, e.to_string()),
         }
+    }
+
+    /// This month's machine-hours: those booked, and the time of every
+    /// machine still rented, which counts from its create call.
+    fn hours(&self, records: &[Record], now: u64) -> f64 {
+        let mut usage = self.usage.lock().unwrap().clone();
+        for r in records.iter().filter(|r| counts(&r.shown.state)) {
+            moonlet_cloud::usage::add(&mut usage, r.created_at, now);
+        }
+        moonlet_cloud::usage::hours(&usage, now)
     }
 
     /// A machine that could not be made: nothing to remove at the provider.
@@ -671,6 +753,8 @@ impl Machines {
         self.update(&machine, |r| r.step("copy", "running", None, None));
         loop {
             let Some(conn) = self.workers.conn(&worker) else {
+                // Gone mid-copy: its next registration copies again.
+                self.update(&machine, |r| r.step("copy", "pending", None, None));
                 return;
             };
             let asked = conn
@@ -1047,7 +1131,7 @@ impl Machines {
             .cloned()
             .ok_or_else(|| RpcError::new("not_found", format!("no machine {machine}")))?;
         if r.shown.state == "removing" {
-            self.retry.notify_waiters();
+            self.retry_for(&r.shown.id).notify_one();
             return Ok(true);
         }
         self.retire(&r.shown.id, "removed on request".into());
@@ -1122,8 +1206,19 @@ impl Machines {
         tokio::spawn(async move { me.removing(id).await });
     }
 
+    /// Machine `id`'s Retry: a wake waits for its removal's next sleep.
+    fn retry_for(&self, id: &str) -> Arc<tokio::sync::Notify> {
+        self.retry
+            .lock()
+            .unwrap()
+            .entry(id.to_string())
+            .or_default()
+            .clone()
+    }
+
     async fn removing(self: Arc<Self>, id: String) {
         let Some(r) = self.get(&id) else { return };
+        let wake = self.retry_for(&id);
         // The token stops working now; the connection stays for the retire.
         if let Some(device) = &r.device {
             let _ = self.mobile.forget_device(device);
@@ -1141,19 +1236,21 @@ impl Machines {
             self.mobile.close_device(device);
         }
         if let Some(provider_id) = r.provider_id.clone() {
-            let Ok(provider) = self.provider(&r.shown.provider) else {
-                return;
-            };
             let started = now_ms();
             let mut wait = destroy_backoff();
             let mut tries = 0;
             loop {
-                let gone = match provider.destroy(&provider_id).await {
-                    Ok(()) => provider
-                        .get(&provider_id)
-                        .await
-                        .map(|i| i.state == MachineState::Gone),
-                    Err(e) => Err(e),
+                // A provider without its token cannot destroy: the error
+                // shows, and Retry tries again once it is back.
+                let gone = match self.provider(&r.shown.provider) {
+                    Err(e) => Err(CloudError::Provider(e.message)),
+                    Ok(provider) => match provider.destroy(&provider_id).await {
+                        Ok(()) => provider
+                            .get(&provider_id)
+                            .await
+                            .map(|i| i.state == MachineState::Gone),
+                        Err(e) => Err(e),
+                    },
                 };
                 match gone {
                     Ok(true) => break,
@@ -1172,10 +1269,11 @@ impl Machines {
                 }
                 tokio::select! {
                     _ = tokio::time::sleep(wait) => wait = (wait * 2).min(Duration::from_secs(300)),
-                    _ = self.retry.notified() => wait = destroy_backoff(),
+                    _ = wake.notified() => wait = destroy_backoff(),
                 }
             }
         }
+        self.retry.lock().unwrap().remove(&id);
         let now = now_ms();
         moonlet_cloud::usage::add(&mut self.usage.lock().unwrap(), r.created_at, now);
         self.update(&id, |r| {
@@ -1234,11 +1332,20 @@ impl Machines {
                 let _ = provider.destroy(&pid).await;
             }
             if !plan.drop.is_empty() {
-                self.records.lock().unwrap().retain(|r| {
-                    !(plan.drop.contains(&r.shown.id)
+                let now = now_ms();
+                let mut records = self.records.lock().unwrap();
+                let mut usage = self.usage.lock().unwrap();
+                records.retain(|r| {
+                    let drop = plan.drop.contains(&r.shown.id)
                         && r.shown.provider == id
-                        && r.shown.state != "removed")
+                        && r.shown.state != "removed";
+                    // Its time until now is billed, as a removal books it.
+                    if drop && counts(&r.shown.state) {
+                        moonlet_cloud::usage::add(&mut usage, r.created_at, now);
+                    }
+                    !drop
                 });
+                drop((records, usage));
                 self.changed();
             }
         }
