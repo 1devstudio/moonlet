@@ -595,16 +595,14 @@ async fn a_cloud_device_opens_copies_of_its_own_project_only() {
     git(&other, &["add", "."]);
     git(&other, &["commit", "-q", "-m", "other"]);
     let project: Value = c.d.call("project.add", json!({ "path": other })).await;
-    let theirs: Value = c
-        .d
-        .call(
+    let theirs: Value =
+        c.d.call(
             "session.create",
             json!({ "project_id": project["id"], "name": "theirs", "agent": "none" }),
         )
         .await;
-    let mine: Value = c
-        .d
-        .call(
+    let mine: Value =
+        c.d.call(
             "session.create",
             json!({ "project_id": c.project, "name": "mine", "agent": "none" }),
         )
@@ -612,8 +610,18 @@ async fn a_cloud_device_opens_copies_of_its_own_project_only() {
     // As the machine's link: registered as a worker, then opening a copy.
     let theirs = theirs["id"].as_str().unwrap();
     let mine = mine["id"].as_str().unwrap();
-    assert_eq!(open_as_worker(&c.addr, &token, theirs, "c-1").await.as_deref(), Some("forbidden"));
-    assert_eq!(open_as_worker(&c.addr, &token, mine, "c-2").await.as_deref(), None);
+    assert_eq!(
+        open_as_worker(&c.addr, &token, theirs, "c-1")
+            .await
+            .as_deref(),
+        Some("forbidden")
+    );
+    assert_eq!(
+        open_as_worker(&c.addr, &token, mine, "c-2")
+            .await
+            .as_deref(),
+        None
+    );
 }
 
 /// `sync.open` of copy `copy` for session `session`, over a connection with
@@ -637,14 +645,34 @@ async fn open_as_worker(addr: &str, token: &str, session: &str, copy: &str) -> O
     write_frame(&mut s, &Frame::Json(hello)).await.unwrap();
     read_frame(&mut s).await.unwrap();
     let requests = [
-        (1, "worker.register", json!({ "id": "8d0f6b1e-0000-4000-8000-00000000c10d", "name": "intruder", "os": "linux", "arch": "x86_64", "cores": 2, "version": "0.1.29", "projects": [], "heavy": true })),
-        (2, "sync.open", json!({ "copy": copy, "session": session, "kind": "run" })),
+        (
+            1,
+            "worker.register",
+            json!({ "id": "8d0f6b1e-0000-4000-8000-00000000c10d", "name": "intruder", "os": "linux", "arch": "x86_64", "cores": 2, "version": "0.1.29", "projects": [], "heavy": true }),
+        ),
+        (
+            2,
+            "sync.open",
+            json!({ "copy": copy, "session": session, "kind": "run" }),
+        ),
     ];
     let mut last = None;
     for (id, method, params) in requests {
-        write_frame(&mut s, &Frame::Json(Message::Request { id, method: method.into(), params })).await.unwrap();
+        write_frame(
+            &mut s,
+            &Frame::Json(Message::Request {
+                id,
+                method: method.into(),
+                params,
+            }),
+        )
+        .await
+        .unwrap();
         loop {
-            let frame = tokio::time::timeout(Duration::from_secs(10), read_frame(&mut s)).await.expect("no reply").unwrap();
+            let frame = tokio::time::timeout(Duration::from_secs(10), read_frame(&mut s))
+                .await
+                .expect("no reply")
+                .unwrap();
             if let Some(Frame::Json(Message::Response { id: got, error, .. })) = frame
                 && got == id
             {
@@ -665,16 +693,17 @@ async fn cloud_up_takes_only_a_session_of_its_project() {
     git(&other, &["init", "-q", "-b", "main"]);
     git(&other, &["commit", "-q", "--allow-empty", "-m", "other"]);
     let project: Value = c.d.call("project.add", json!({ "path": other })).await;
-    let theirs: Value = c
-        .d
-        .call(
+    let theirs: Value =
+        c.d.call(
             "session.create",
             json!({ "project_id": project["id"], "name": "theirs", "agent": "none" }),
         )
         .await;
-    let e = c
-        .d
-        .fails("cloud.up", json!({ "project": c.project, "session": theirs["id"] }))
+    let e =
+        c.d.fails(
+            "cloud.up",
+            json!({ "project": c.project, "session": theirs["id"] }),
+        )
         .await;
     assert_eq!(e, "invalid_params: theirs is not a session of shop");
 }
@@ -1592,6 +1621,22 @@ async fn run_here_runs_a_job_waiting_for_a_cloud_machine_on_the_central_host() {
     // The machine keeps starting, for the next command.
     let m = &c.machines().await["machines"][0];
     assert_eq!(m["state"], json!("creating"));
+}
+
+#[tokio::test]
+async fn two_first_commands_at_once_share_one_machine() {
+    let c = routing(&[]).await;
+    let _: Value = c.d.call("cloud.set", json!({ "max_machines": 4 })).await;
+    c.steer("slow-create", "60000");
+    let s = c.session("big-refactor", true).await;
+    let (a, b) = tokio::join!(
+        c.start(&s, &["sh", "run.sh"]),
+        c.start(&s, &["sh", "run.sh"])
+    );
+    drop((a, b));
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let all = c.machines().await;
+    assert_eq!(all["machines"].as_array().unwrap().len(), 1, "{all}");
 }
 
 #[tokio::test]
