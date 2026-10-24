@@ -1,6 +1,6 @@
 # X62 — Routed commands: heavy commands run on a free worker
 
-- **Status:** implemented (untried between real machines; **Run on studio-mini now** comes with X63, which makes jobs that wait)
+- **Status:** implemented (untried between real machines)
 - **Priority / phase:** P1 · phase 4 (sessions across machines)
 - **PRD refs:** none (new scope)
 - **Related ADRs:** [0009](../adr/0009-central-host-workers-live-copies.md) (routing, fences), [0011](../adr/0011-machines-connect-over-the-tailnet.md) (transport), [0012](../adr/0012-cloud-workers.md) (cloud workers)
@@ -225,7 +225,7 @@ This is ADR 0009's routing slice. It adds two things the ADR did not decide: an 
   The summary ends the job tab's state line ("… · run by Claude in fix-cart · 457 tests passed"). A row's second line adds it only for a job that did not exit 0 ("studio-mini · exit 1 · Type error in src/cart.ts:41").
 - [x] Jobs hold commands' output, so only the app and paired devices list, read and stop them. An agent's `moonlet` CLI and a worker are refused with `forbidden`, as the CLI is for another terminal's output without the user's approval (X31).
 - [x] **Stop** on a running or waiting job cancels it as `exec.cancel` does (SIGTERM, then SIGKILL after 5 s). The agent gets exit 143 and the line "moonlet: stopped from the Jobs panel". Changes the job made so far still come back. **Stop all** stops every running and waiting job of the session.
-- [ ] **Run on studio-mini now**, on a job waiting for a cloud machine, runs it on the central host at once, with the line "moonlet: running on studio-mini instead, as asked from the Jobs panel". The machine keeps starting, and takes the next command.
+- [x] **Run on studio-mini now**, on a job waiting for a cloud machine, runs it on the central host at once, with the line "moonlet: running on studio-mini instead, as asked from the Jobs panel". The machine keeps starting, and takes the next command.
 - [x] The Jobs tab's count is the number of the session's jobs in the history, whatever their state.
 - [x] The Jobs tab's summary reads "1 waiting · 3 done · 4m 38s on workers": counts by state, and the total running time of the session's jobs. Worked examples:
 
@@ -426,7 +426,7 @@ Where the tests live:
 | Stored output | `output_over_ten_mib_keeps_its_start_and_end`, `a_jobs_phases_and_timeline_after_a_rerun` (the separator line) |
 | Output summary | `summarises_as_in_the_worked_examples`, `summarises_captured_runs_of_each_tool` (captured vitest, jest, `cargo test` over two crates, pytest, `tsc` plain and `--pretty`, `cargo build` with a type error) |
 | Stop and Stop all | `stopping_a_job_gives_exit_143_and_brings_its_changes_back`, `stop_all_stops_every_running_and_waiting_job`; e2e "Stop ends a running job" |
-| Run on the central host now | `job_run_here_needs_a_waiting_job`; `run_here_runs_a_job_waiting_for_a_cloud_machine_on_the_central_host` comes with X63, which makes jobs that wait |
+| Run on the central host now | `job_run_here_needs_a_waiting_job`, `run_here_runs_a_job_waiting_for_a_cloud_machine_on_the_central_host` (in X63's `tests/cloud.rs`) |
 | Jobs tab count | Vitest "the tab counts every job" |
 | Jobs summary (worked examples) | Vitest "the summary line, as in the worked examples" |
 | Row second line (worked examples) | Vitest "a row's second line, as in the worked examples" |
