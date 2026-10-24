@@ -61,6 +61,7 @@ impl LinkStore {
                         name: computer_name.to_string(),
                         enabled: false,
                         slots: m::default_slots(),
+                        cloud: false,
                     },
                 };
                 return LinkStore { path, data, revision: 0 };
@@ -99,6 +100,7 @@ impl LinkStore {
                         name: computer_name.to_string(),
                         enabled: false,
                         slots: m::default_slots(),
+                        cloud: false,
                     },
                 };
                 if let Err(e) = save(&path, &d) {
@@ -138,6 +140,16 @@ impl LinkStore {
         self.revision
     }
 
+    /// Marks this machine a cloud machine (X63).
+    fn set_cloud(&mut self) -> Result<(), RpcError> {
+        let mut next = self.data.clone();
+        next.worker.cloud = true;
+        save(&self.path, &next)
+            .map_err(|e| RpcError::new("internal", format!("cannot write {}: {e:#}", self.path.display())))?;
+        self.data = next;
+        Ok(())
+    }
+
     /// [`LinkStore::set`], refused with `conflict` when `central` has been
     /// set since `revision`.
     fn set_at(&mut self, req: LinkSet, own: &[IpAddr], revision: Option<u64>) -> Result<(), RpcError> {
@@ -174,6 +186,57 @@ impl LinkStore {
             self.revision += 1;
         }
         Ok(())
+    }
+}
+
+/// Where a cloud machine's first-boot script writes `machine-setup.json`
+/// (X63): `MOONLET_MACHINE_SETUP_DIR` stands in for it in tests.
+fn machine_setup_file() -> std::path::PathBuf {
+    std::env::var_os("MOONLET_MACHINE_SETUP_DIR")
+        .map_or_else(|| std::path::PathBuf::from("/var/lib/moonlet"), std::path::PathBuf::from)
+        .join("machine-setup.json")
+}
+
+/// `machine-setup.json` as a step: running, done or failed.
+fn setup_step(v: &Value) -> Option<m::WorkerStep> {
+    let started = v["started"].as_u64()?;
+    let (state, error) = match (v["ended"].as_u64(), v["exit"].as_i64()) {
+        (Some(_), Some(0)) => ("done", None),
+        (Some(_), Some(code)) => ("failed", Some(format!("exit {code}; its output is in /var/log/moonlet/machine-setup.log"))),
+        _ => ("running", None),
+    };
+    Some(m::WorkerStep {
+        step: "machine_setup".into(),
+        state: state.into(),
+        took_ms: v["ended"].as_u64().map(|e| e.saturating_sub(started) * 1000),
+        error,
+    })
+}
+
+/// Tells the central host how the machine setup goes, until it has ended
+/// or the link closes.
+async fn report_machine_setup(host: Arc<Host>) {
+    let mut sent: Option<m::WorkerStep> = None;
+    loop {
+        if !matches!(host.info().status, moonlet_link::HostStatus::Connected) {
+            return;
+        }
+        let read = std::fs::read(machine_setup_file())
+            .ok()
+            .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+            .and_then(|v| setup_step(&v));
+        if let Some(step) = read
+            && sent.as_ref() != Some(&step)
+        {
+            let ended = step.state != "running";
+            if host.request(m::WORKER_STEP, serde_json::to_value(&step).unwrap()).await.is_ok() {
+                sent = Some(step);
+                if ended {
+                    return;
+                }
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
 }
 
@@ -407,6 +470,35 @@ impl WorkerLink {
         })
     }
 
+    /// `link.join` (X63): a cloud machine pairs with its central host with
+    /// the join code the central host made for it, as `name`, and takes
+    /// heavy commands.
+    pub async fn join(self: &Arc<Self>, req: m::LinkJoin, own: &[IpAddr]) -> Result<LinkInfo, RpcError> {
+        let revision = self.store.lock().unwrap().revision();
+        let paired = moonlet_link::tailnet::pair(&req.addrs, &req.code, &req.name, DeviceKind::Cloud)
+            .await
+            .map_err(|e| RpcError::new("pair_failed", moonlet_link::tailnet::pair_error_text("the central host", &e)))?;
+        let central = paired
+            .host
+            .filter(|h| !h.is_empty())
+            .or_else(|| req.addrs.first().cloned())
+            .unwrap_or_default();
+        self.store.lock().unwrap().set_cloud()?;
+        let set = LinkSet {
+            central: Some(Some(LinkCentral {
+                name: central,
+                addrs: req.addrs,
+                token: paired.token,
+            })),
+            worker: Some(m::LinkWorkerSet {
+                enabled: Some(true),
+                name: Some(req.name),
+                slots: None,
+            }),
+        };
+        self.set_at(set, own, Some(revision))
+    }
+
     /// Whether the link waits for the user: an update, or pairing again.
     fn waiting(&self) -> bool {
         matches!(
@@ -552,6 +644,10 @@ impl WorkerLink {
                 if let Some(sync) = self.sync() {
                     sync.link_up();
                 }
+                // A cloud machine reports its machine setup (X63).
+                if self.store.lock().unwrap().worker().cloud {
+                    tokio::spawn(report_machine_setup(host.clone()));
+                }
             }
             Err(e) => {
                 tracing::warn!("cannot register with the central host: {}", e.message);
@@ -613,7 +709,7 @@ pub fn os() -> &'static str {
     }
 }
 
-fn arch() -> &'static str {
+pub(crate) fn arch() -> &'static str {
     match std::env::consts::ARCH {
         "aarch64" => "arm64",
         other => other,
@@ -656,6 +752,17 @@ impl Requests for WorkerRequests {
         Box::pin(async move {
             match method.as_str() {
                 m::WORKER_PING => Ok(serde_json::json!({ "load": load() })),
+                // The machine is being removed (X63): it leaves the tailnet.
+                m::WORKER_RETIRE => {
+                    let logout = tokio::process::Command::new("tailscale")
+                        .arg("logout")
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status();
+                    let _ = tokio::time::timeout(std::time::Duration::from_secs(8), logout).await;
+                    Ok(serde_json::json!(true))
+                }
                 m::SYNC_UPDATE => {
                     let req: m::SyncUpdate = serde_json::from_value(params)
                         .map_err(|e| RpcError::new("invalid_params", e.to_string()))?;

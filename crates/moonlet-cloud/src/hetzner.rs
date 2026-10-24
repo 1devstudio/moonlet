@@ -24,6 +24,7 @@ pub fn info() -> ProviderInfo {
             help: "It can create and delete anything in its Hetzner project, so use a project made for moonlet.".into(),
         }],
         max_name: 63,
+        tailnet_key: true,
     }
 }
 

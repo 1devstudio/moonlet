@@ -311,6 +311,25 @@ pub const CLOUD_GET: &str = "cloud.get";
 /// [`CloudSet`] → [`CloudInfo`]: changes the settings; the app or a paired
 /// desktop only.
 pub const CLOUD_SET: &str = "cloud.set";
+/// [`CloudTypes`] → `[MachineType]`: a provider's machine types at a location.
+pub const CLOUD_TYPES: &str = "cloud.types";
+/// `{}` → [`CloudMachines`]: the central host's cloud machines, those
+/// removed in the last hour and the month's usage.
+pub const CLOUD_MACHINES: &str = "cloud.machines";
+/// [`CloudUp`] → [`CloudMachine`]: starts a machine for a project.
+pub const CLOUD_UP: &str = "cloud.up";
+/// [`CloudDown`] → `true`: removes a machine once its commands end.
+pub const CLOUD_DOWN: &str = "cloud.down";
+/// [`CloudMachines`]: a machine changed.
+pub const EV_CLOUD_CHANGED: &str = "cloud.changed";
+/// [`LinkJoin`] → [`LinkInfo`]: a cloud machine pairs with its central host
+/// with a join code and takes heavy commands (`moonletd join`).
+pub const LINK_JOIN: &str = "link.join";
+/// Worker → central host, [`WorkerStep`]: a startup step of a cloud machine.
+pub const WORKER_STEP: &str = "worker.step";
+/// Central host → worker, `{}`: the machine is being removed; it leaves the
+/// tailnet.
+pub const WORKER_RETIRE: &str = "worker.retire";
 /// `{}` → `[ExecSetup]`: this Mac's routing copies whose setup waits for
 /// the user's approval, for an app that starts after it was asked (X62).
 pub const EXEC_SETUPS: &str = "exec.setups";
@@ -1266,6 +1285,8 @@ pub enum DeviceKind {
     #[default]
     Phone,
     Desktop,
+    /// A cloud machine the central host made (X63): worker methods only.
+    Cloud,
 }
 
 /// A paired device (X39, X57).
@@ -1345,6 +1366,9 @@ pub struct LinkWorker {
     /// How many routed commands this machine runs at once (X62).
     #[serde(default = "default_slots")]
     pub slots: u32,
+    /// A cloud machine that joined with `moonletd join` (X63).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cloud: bool,
 }
 
 /// A worker's slots unless set (X62).
@@ -2182,4 +2206,114 @@ pub struct CloudSet {
     pub max_hours_month: Option<u32>,
     #[serde(default)]
     pub projects: Option<BTreeMap<String, Option<ProjectCloud>>>,
+}
+
+/// `link.join`: what `moonletd join` was given (X63).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LinkJoin {
+    /// The central host's tailnet addresses.
+    pub addrs: Vec<String>,
+    pub code: String,
+    /// The machine's name.
+    pub name: String,
+}
+
+/// `worker.step`: a cloud machine's startup step, as the worker sees it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkerStep {
+    /// `machine_setup` or `copy`.
+    pub step: String,
+    /// `running`, `done` or `failed`.
+    pub state: String,
+    #[serde(default)]
+    pub took_ms: Option<u64>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// A startup step of a cloud machine.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudStep {
+    /// `created`, `tailnet`, `installed`, `paired`, `machine_setup` or `copy`.
+    pub step: String,
+    /// What the user reads: "Created at Hetzner".
+    pub label: String,
+    /// `pending`, `running`, `done` or `failed`.
+    pub state: String,
+    #[serde(default)]
+    pub took_ms: Option<u64>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// A cloud machine (X63).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudMachine {
+    pub id: String,
+    pub name: String,
+    /// The project's name, and its key in `cloud.json`.
+    pub project: String,
+    pub project_key: String,
+    pub provider: String,
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub location: String,
+    /// `creating`, `starting`, `ready`, `removing`, `removed` or `failed`.
+    pub state: String,
+    /// When it entered its state, unix ms.
+    pub since: u64,
+    pub steps: Vec<CloudStep>,
+    /// Removed if not ready by then.
+    #[serde(default)]
+    pub deadline: Option<u64>,
+    /// When an idle machine is removed.
+    #[serde(default)]
+    pub idle_until: Option<u64>,
+    /// The session it was made for.
+    #[serde(default)]
+    pub for_session: Option<String>,
+    /// Its routed commands running now.
+    #[serde(default)]
+    pub running: u32,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub error_since: Option<u64>,
+    /// Why it was removed: "removed after 15 min idle".
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// `cloud.machines` and `cloud.changed`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudMachines {
+    pub machines: Vec<CloudMachine>,
+    /// Removed in the last hour.
+    pub removed: Vec<CloudMachine>,
+    pub hours_this_month: f64,
+    pub max_hours_month: u32,
+    pub max_machines: u32,
+}
+
+/// `cloud.up`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudUp {
+    /// The project's id on the central host.
+    pub project: String,
+    #[serde(default)]
+    pub session: Option<String>,
+}
+
+/// `cloud.down`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudDown {
+    /// The machine's id or name.
+    pub machine: String,
+}
+
+/// `cloud.types`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudTypes {
+    pub provider: String,
+    pub location: String,
 }
