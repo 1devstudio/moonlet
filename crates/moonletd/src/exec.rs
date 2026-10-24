@@ -514,7 +514,23 @@ impl Runs {
                 say(format!("waiting for {name} to start ({})", clock(waited)));
             }
             match m.state_of(&id) {
-                Some((state, _)) if state == "ready" => break CloudWait::Ready,
+                Some((state, _)) if state == "ready" => {
+                    // Run-now and this step take the same lock: asked
+                    // first, it runs here; after, the job no longer waits.
+                    let mut asked = self.here_now.lock().unwrap();
+                    if asked.remove(&run) {
+                        break CloudWait::Here(format!(
+                            "running on {} instead, as asked from the Jobs panel",
+                            plan.host
+                        ));
+                    }
+                    self.jobs.update(job, |j| {
+                        j.state = JobState::Running {
+                            worker: name.clone(),
+                        }
+                    });
+                    break CloudWait::Ready;
+                }
                 Some((state, reason))
                     if matches!(state.as_str(), "removing" | "removed" | "failed") =>
                 {
@@ -532,6 +548,8 @@ impl Runs {
     /// `job.run_here`: job `job`, waiting for a cloud machine, runs on the
     /// central host now (X63).
     pub fn run_here(&self, job: &str) -> Result<bool, RpcError> {
+        // Held while the job is checked: see `wait_for_cloud`.
+        let mut asked = self.here_now.lock().unwrap();
         let waiting = self
             .jobs
             .get(job)
@@ -545,7 +563,7 @@ impl Runs {
             .map(|(run, _)| *run);
         match (waiting, run) {
             (true, Some(run)) => {
-                self.here_now.lock().unwrap().insert(run);
+                asked.insert(run);
                 Ok(true)
             }
             _ if self.jobs.get(job).is_none() => Err(RpcError::new("not_found", "no such job")),
