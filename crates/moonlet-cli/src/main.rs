@@ -155,23 +155,16 @@ enum SystemAction {
         #[arg(long)]
         workspace: Option<String>,
     },
-    /// Report a sync step: inventory, tokens, cards or layouts.
+    /// Report a sync step: inventory, tokens, cards or layouts. For the
+    /// sync agent: runs in its design system's folder, and only for that system.
     Progress {
         step: String,
         /// A short result, such as "3 changed, 1 new".
         summary: Vec<String>,
-        #[arg(long)]
-        system: Option<String>,
-        #[arg(long)]
-        workspace: Option<String>,
     },
-    /// Record a finished sync: each source's commit, and the anchor.
-    Synced {
-        #[arg(long)]
-        system: Option<String>,
-        #[arg(long)]
-        workspace: Option<String>,
-    },
+    /// Record a finished sync: each source's commit, and the anchor. For the
+    /// sync agent: runs in its design system's folder, and only for that system.
+    Synced,
 }
 
 #[derive(Subcommand)]
@@ -724,6 +717,18 @@ async fn design_target(c: &mut Client, workspace: Option<String>, system: Option
     bail!("no workspace: run inside a design folder or a moonlet session, or pass --workspace")
 }
 
+/// The design system whose folder the command runs in, and its workspace:
+/// the sync agent's commands act on its own system only, never one named.
+fn own_system() -> Result<(String, String)> {
+    let root = moonlet_core::paths::home().join("design");
+    let root = std::fs::canonicalize(&root).unwrap_or(root);
+    let here = std::env::current_dir().ok().and_then(|cwd| design::locate(&cwd, &root));
+    match here {
+        Some(design::Located { workspace, system: Some(system) }) => Ok((workspace, system)),
+        _ => bail!("no design system: run inside its folder"),
+    }
+}
+
 async fn design_cmd(socket: &std::path::Path, action: DesignAction) -> Result<()> {
     let mut c = connect(socket).await?;
     let need = |s: Option<String>| s.context("no design system: run inside its folder or pass --system");
@@ -769,19 +774,19 @@ async fn design_cmd(socket: &std::path::Path, action: DesignAction) -> Result<()
                 let (w, _) = design_target(&mut c, workspace, None).await?;
                 let _: bool = c.request(methods::DESIGN_SYSTEM_REMOVE, serde_json::json!({"workspace": w, "slug": slug})).await?;
             }
-            SystemAction::Progress { step, summary, system, workspace } => {
-                let (w, s) = design_target(&mut c, workspace, system).await?;
+            SystemAction::Progress { step, summary } => {
+                let (w, s) = own_system()?;
                 let summary = Some(summary.join(" ")).filter(|s| !s.trim().is_empty());
                 let _: bool = c
                     .request(
                         methods::DESIGN_SYSTEM_PROGRESS,
-                        serde_json::json!({"workspace": w, "slug": need(s)?, "step": step, "summary": summary}),
+                        serde_json::json!({"workspace": w, "slug": s, "step": step, "summary": summary}),
                     )
                     .await?;
             }
-            SystemAction::Synced { system, workspace } => {
-                let (w, s) = design_target(&mut c, workspace, system).await?;
-                let _: bool = c.request(methods::DESIGN_SYSTEM_SYNCED, serde_json::json!({"workspace": w, "slug": need(s)?})).await?;
+            SystemAction::Synced => {
+                let (w, s) = own_system()?;
+                let _: bool = c.request(methods::DESIGN_SYSTEM_SYNCED, serde_json::json!({"workspace": w, "slug": s})).await?;
             }
         },
     }

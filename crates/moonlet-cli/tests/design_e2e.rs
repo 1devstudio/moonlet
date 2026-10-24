@@ -207,3 +207,68 @@ async fn the_sync_agent_reports_checks_and_records_from_its_folder() {
     assert!(!lost.status.success());
     assert!(String::from_utf8_lossy(&lost.stderr).contains("no workspace"));
 }
+
+/// The agent's commands act only on the system of the folder they run in:
+/// they take no `--system` or `--workspace`, so an agent cannot report a
+/// step or record a sync of another system.
+#[tokio::test]
+async fn the_sync_agents_commands_act_only_on_the_system_of_their_folder() {
+    let d = Daemon::start().await;
+    let mut c = Client::connect(&d.socket, "test").await.unwrap();
+    let ws: Workspace = c
+        .request(
+            methods::WORKSPACE_CREATE,
+            serde_json::json!({"name": "1devstudio", "color": "clay"}),
+        )
+        .await
+        .unwrap();
+    for name in ["alpha", "beta"] {
+        let _: serde_json::Value = c
+            .request(
+                methods::DESIGN_SYSTEM_CREATE,
+                serde_json::json!({"workspace": ws.id, "name": name, "sources": [], "agent": false}),
+            )
+            .await
+            .unwrap();
+    }
+    let alpha = d
+        .home
+        .path()
+        .join("design")
+        .join(&ws.id)
+        .join("systems/alpha");
+    for args in [
+        vec!["design", "system", "progress", "cards", "--system", "beta"],
+        vec![
+            "design",
+            "system",
+            "progress",
+            "cards",
+            "--workspace",
+            &ws.id,
+        ],
+        vec!["design", "system", "synced", "--system", "beta"],
+        vec!["design", "system", "synced", "--workspace", &ws.id],
+    ] {
+        let out = d.moonlet(&alpha, &args);
+        assert!(!out.status.success(), "{args:?} was accepted");
+    }
+    let list: serde_json::Value =
+        serde_json::from_str(&text(&d.moonlet(&alpha, &["design", "system", "ls"]))).unwrap();
+    let state: Vec<(&str, &serde_json::Value, &serde_json::Value)> = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| (s["slug"].as_str().unwrap(), &s["step"], &s["synced_at"]))
+        .collect();
+    assert_eq!(
+        state,
+        vec![
+            ("alpha", &serde_json::Value::Null, &serde_json::Value::Null),
+            ("beta", &serde_json::Value::Null, &serde_json::Value::Null),
+        ]
+    );
+    // Outside a system's folder, they say where to run them.
+    let lost = d.moonlet(d.home.path(), &["design", "system", "progress", "cards"]);
+    assert!(!lost.status.success());
+}

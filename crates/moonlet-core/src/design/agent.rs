@@ -59,6 +59,8 @@ pub fn sync_launch(
     let deny: Vec<String> = sources.iter().map(|s| format!("Edit(/{s}/**)")).collect();
     // Only what a sync needs: reporting a step (any summary), and the check
     // and the sync record of this folder's system, with no other arguments.
+    // `progress` and `synced` take no system or workspace: they act only on
+    // the system of the folder they run in.
     let allow = [
         format!("Bash({bin} design system progress:*)"),
         format!("Bash({bin} design check)"),
