@@ -50,8 +50,10 @@ pub struct Problem {
 }
 
 /// CSS keywords and functions are case-insensitive: `@IMPORT` and `URL(` count.
-static IMPORT: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"(?i)@import\s+(?:url\(\s*)?["']?([^"')\s;]+)"#).unwrap());
+/// A quoted URL runs to its closing quote and may hold spaces; see [`quoted`].
+static IMPORT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?i)@import\s+(?:url\(\s*)?(?:"([^"]*)"|'([^']*)'|([^"')\s;]+))"#).unwrap()
+});
 static DEFINITION: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(--[A-Za-z0-9_-]+)\s*:").unwrap());
 static VAR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"var\(\s*(--[A-Za-z0-9_-]+)").unwrap());
@@ -81,7 +83,12 @@ const SYSTEM_FONTS: [&str; 18] = [
     "revert",
 ];
 static URL: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"(?i)url\(\s*["']?([^"')\s]+)"#).unwrap());
+    LazyLock::new(|| Regex::new(r#"(?i)url\(\s*(?:"([^"]*)"|'([^']*)'|([^"')\s]+))"#).unwrap());
+
+/// The URL an [`IMPORT`] or [`URL`] match took: double-quoted, single-quoted or bare.
+fn quoted<'t>(c: &regex::Captures<'t>) -> &'t str {
+    (1..=3).find_map(|i| c.get(i)).map_or("", |m| m.as_str())
+}
 
 /// Checks the design system in `root`.
 pub fn check(root: &Path) -> Result<Vec<Problem>> {
@@ -203,7 +210,7 @@ fn styles_closure(root: &Path) -> Vec<PathBuf> {
         let dir = file.parent().unwrap_or(root).to_path_buf();
         seen.push(file);
         for c in IMPORT.captures_iter(&text) {
-            if let Target::Fine(Some(next)) = target(root, &dir, &c[1]) {
+            if let Target::Fine(Some(next)) = target(root, &dir, quoted(&c)) {
                 visit(next, root, seen);
             }
         }
@@ -318,7 +325,7 @@ fn imports(root: &Path, path_rel: &str, path: &Path, text: &str, problems: &mut 
         let mut taken = Vec::new();
         for c in IMPORT.captures_iter(line) {
             taken.push(c.get(0).map_or(0..0, |m| m.range()));
-            let url = &c[1];
+            let url = quoted(&c);
             let (kind, message) = match target(root, dir, url) {
                 Target::Leaves => (Kind::ExternalUrl, format!("{url} leaves the design system")),
                 Target::Missing => (
@@ -364,7 +371,7 @@ fn css_urls_in_line(
         if taken.iter().any(|r| r.contains(&at)) {
             continue;
         }
-        let url = &c[1];
+        let url = quoted(&c);
         let (kind, message) = match target(root, dir, url) {
             Target::Leaves => (Kind::ExternalUrl, format!("{url} leaves the design system")),
             Target::Missing => (Kind::Unresolved, format!("url({url}) does not resolve")),
@@ -925,6 +932,31 @@ mod tests {
                     "https://cdn.example.com/bg.png leaves the design system".into()
                 ),
             ]
+        );
+    }
+
+    #[test]
+    fn a_quoted_import_or_url_may_hold_spaces() {
+        let dir = system(&[
+            (
+                "styles.css",
+                "@import \"tokens/theme light.css\";\n@import 'components.css';\n",
+            ),
+            ("tokens/theme light.css", COLORS),
+            (
+                "components.css",
+                ".hero { background: url(\"img/hero shot.png\"); color: var(--color-accent); }\n.old { background: url('img/no such.png'); }\n",
+            ),
+            ("img/hero shot.png", "png"),
+        ]);
+        assert_eq!(
+            check(dir.path()).unwrap(),
+            vec![Problem {
+                path: "components.css".into(),
+                line: 2,
+                kind: Kind::Unresolved,
+                message: "url(img/no such.png) does not resolve".into(),
+            }]
         );
     }
 
