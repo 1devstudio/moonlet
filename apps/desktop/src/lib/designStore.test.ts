@@ -91,6 +91,22 @@ describe("a workspace's design systems (X64, X65)", () => {
     expect(listed()).toHaveLength(1);
   });
 
+  it("are listed again when something changes while a listing is on its way, so the last answer is the latest", async () => {
+    let release = (_list: DesignSystem[]) => {};
+    answers["design.systems"] = () => new Promise<DesignSystem[]>((r) => (release = r));
+    const first = loadSystems("local", "w-1devstudio");
+    await settle();
+    // The agent asks a question while the listing is on its way.
+    answers["design.systems"] = () => [system({ needs_you: { kind: "question", text: "Which button set is current?" } })];
+    events.emit({ host: "local", name: "design.changed", data: { workspace: "w-1devstudio", system: "moonlet-desktop", paths: [] } });
+    release([system()]);
+    await first;
+    await settle();
+    await settle();
+    expect(listed().filter((c) => (c.params as { workspace: string }).workspace === "w-1devstudio")).toHaveLength(2);
+    expect(systemsOf(useDesign.getState(), "local", "w-1devstudio")?.[0].needs_you?.kind).toBe("question");
+  });
+
   it("are asked for again after a listing failed, when the host comes back or the folder changes", async () => {
     answers["design.systems"] = () => {
       throw new Error("host offline");
