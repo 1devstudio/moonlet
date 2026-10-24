@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DesignSystem } from "./protocol";
-import { createSystem, detectStack, loadSystems, shownSystem, showSystem, startDesign, systemsOf, useDesign } from "./designStore";
+import { cardsOf, createSystem, detectStack, loadCards, loadSystems, openCard, shownCard, shownSystem, showSystem, startDesign, systemsOf, useDesign } from "./designStore";
 
 const calls = vi.hoisted(() => [] as { host: string; method: string; params: unknown }[]);
 /** What the daemon answers, by method. */
@@ -44,7 +44,7 @@ const listed = () => calls.filter((c) => c.method === "design.systems");
 beforeEach(async () => {
   calls.length = 0;
   for (const k of Object.keys(answers)) delete answers[k];
-  useDesign.setState({ systems: {}, shown: {} });
+  useDesign.setState({ systems: {}, shown: {}, cards: {}, card: {} });
   await startDesign();
 });
 
@@ -148,6 +148,35 @@ describe("the open design system (X65)", () => {
     answers["design.systems"] = () => [system()];
     await loadSystems("local", "w-1devstudio");
     expect(shownSystem(useDesign.getState(), "local", "w-1devstudio")?.slug).toBe("moonlet-desktop");
+  });
+});
+
+describe("a design system's cards (X64)", () => {
+  const button = { group: "Buttons", name: "Button", path: "components/buttons/button/button.html", viewport: [900, 700], source: ["src/ui.tsx"], snippets: [], marker: "", problems: [], changed_sources: [] };
+
+  it("are listed from the daemon, and again when a file of that system changes", async () => {
+    answers["design.cards"] = () => [button];
+    await loadCards("local", "w-1devstudio", "moonlet-desktop");
+    expect(calls.filter((c) => c.method === "design.cards").map((c) => c.params)).toEqual([{ workspace: "w-1devstudio", slug: "moonlet-desktop" }]);
+    expect(cardsOf(useDesign.getState(), "local", "w-1devstudio", "moonlet-desktop")?.map((c) => c.name)).toEqual(["Button"]);
+    answers["design.cards"] = () => [button, { ...button, name: "Icon button", path: "components/buttons/icon-button/icon-button.html" }];
+    events.emit({ host: "local", name: "design.changed", data: { workspace: "w-1devstudio", system: "storefront", paths: ["config.toml"] } });
+    await settle();
+    expect(cardsOf(useDesign.getState(), "local", "w-1devstudio", "moonlet-desktop")).toHaveLength(1);
+    events.emit({ host: "local", name: "design.changed", data: { workspace: "w-1devstudio", system: "moonlet-desktop", paths: ["components/buttons/icon-button/icon-button.html"] } });
+    await settle();
+    expect(cardsOf(useDesign.getState(), "local", "w-1devstudio", "moonlet-desktop")?.map((c) => c.name)).toEqual(["Button", "Icon button"]);
+  });
+
+  it("one opens as the card page, and opening another system closes it", () => {
+    showSystem("local", "w-1devstudio", "moonlet-desktop");
+    openCard("local", "w-1devstudio", "components/buttons/button/button.html");
+    expect(shownCard(useDesign.getState(), "local", "w-1devstudio")).toBe("components/buttons/button/button.html");
+    openCard("local", "w-1devstudio", null);
+    expect(shownCard(useDesign.getState(), "local", "w-1devstudio")).toBeNull();
+    openCard("local", "w-1devstudio", "components/buttons/button/button.html");
+    showSystem("local", "w-1devstudio", "storefront");
+    expect(shownCard(useDesign.getState(), "local", "w-1devstudio")).toBeNull();
   });
 });
 
