@@ -49,8 +49,9 @@ pub struct Problem {
     pub message: String,
 }
 
+/// CSS keywords and functions are case-insensitive: `@IMPORT` and `URL(` count.
 static IMPORT: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"@import\s+(?:url\(\s*)?["']?([^"')\s;]+)"#).unwrap());
+    LazyLock::new(|| Regex::new(r#"(?i)@import\s+(?:url\(\s*)?["']?([^"')\s;]+)"#).unwrap());
 static DEFINITION: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(--[A-Za-z0-9_-]+)\s*:").unwrap());
 static VAR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"var\(\s*(--[A-Za-z0-9_-]+)").unwrap());
@@ -79,7 +80,8 @@ const SYSTEM_FONTS: [&str; 18] = [
     "unset",
     "revert",
 ];
-static URL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"url\(\s*["']?([^"')\s]+)"#).unwrap());
+static URL: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?i)url\(\s*["']?([^"')\s]+)"#).unwrap());
 
 /// Checks the design system in `root`.
 pub fn check(root: &Path) -> Result<Vec<Problem>> {
@@ -892,6 +894,37 @@ mod tests {
                 kind: Kind::FontMissing,
                 message: "font \"JetBrains Mono\" has no @font-face in styles.css or the files it imports".into(),
             }]
+        );
+    }
+
+    #[test]
+    fn an_uppercase_import_or_url_is_checked_like_a_lowercase_one() {
+        let dir = system(&[
+            (
+                "styles.css",
+                "@import \"tokens/colors.css\";\n@IMPORT \"https://fonts.example.com/inter.css\";\n.x { background: URL(https://cdn.example.com/bg.png) }\n",
+            ),
+            ("tokens/colors.css", COLORS),
+        ]);
+        let got: Vec<(usize, Kind, String)> = check(dir.path())
+            .unwrap()
+            .into_iter()
+            .map(|p| (p.line, p.kind, p.message))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (
+                    2,
+                    Kind::ExternalUrl,
+                    "https://fonts.example.com/inter.css leaves the design system".into()
+                ),
+                (
+                    3,
+                    Kind::ExternalUrl,
+                    "https://cdn.example.com/bg.png leaves the design system".into()
+                ),
+            ]
         );
     }
 
