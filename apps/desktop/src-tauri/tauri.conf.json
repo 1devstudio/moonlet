@@ -38,7 +38,7 @@
         "font-src": "'self' data:",
         "worker-src": "'self' blob:",
         "connect-src": "'self' ipc: http://ipc.localhost",
-        "frame-src": "'self' blob: data:"
+        "frame-src": "'self' blob: data: moonlet-design:"
       },
       "freezePrototype": false
     }
