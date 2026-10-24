@@ -214,7 +214,7 @@ A design system belongs to a moonlet workspace, so every project and design in t
 
   Grades go to `.cache/grades/<Name>.json`. The step is done when nothing is `bad` and every card in scope is `good` or `match`.
 - [ ] **Layouts.** The agent writes `ui_kits/`, then `conventions.md`, and runs the check, which rebuilds the README.
-- [ ] The agent reports each step with `"$MOONLET_BIN" design system progress <step> [<summary>]`. When it is done, `"$MOONLET_BIN" design system synced` writes `_ds_sync.json` (last) and records each source's short `HEAD` in `config.toml`. In the design system's folder neither needs `--system` or `--workspace`; elsewhere the workspace comes from the agent's session. (`design/store.rs` sync_progress_shows_in_the_list_until_the_sync_is_recorded; `moonlet-cli/tests/design_e2e.rs` the_sync_agent_reports_checks_and_records_from_its_folder; `moonlet-cli/src/design.rs` a_folder_of_a_design_system_names_its_workspace_and_system, an_agents_terminal_names_its_sessions_workspace)
+- [ ] The agent reports each step with `"$MOONLET_BIN" design system progress <step> [<summary>]`. When it is done, `"$MOONLET_BIN" design system synced` records each source's short `HEAD` in the system's record and writes `_ds_sync.json`, both or neither. In the design system's folder neither needs `--system` or `--workspace`; elsewhere the workspace comes from the agent's session. (`design/store.rs` sync_progress_shows_in_the_list_until_the_sync_is_recorded; `moonlet-cli/tests/design_e2e.rs` the_sync_agent_reports_checks_and_records_from_its_folder; `moonlet-cli/src/design.rs` a_folder_of_a_design_system_names_its_workspace_and_system, an_agents_terminal_names_its_sessions_workspace)
 - [ ] `_ds_sync.json` holds, per card (components and layouts; the foundation cards are moonlet's and are rewritten from the tokens):
   - `sources`: each source file and its hash, looked up in the source projects in order
   - `source_key`: a hash of `sources`. The card's exceptions in `config.toml` join it with entry 3, which reads `config.toml`.
@@ -277,7 +277,7 @@ Every call names an existing moonlet workspace, or fails with `invalid_params` (
 - `design.system.create {workspace, name, sources: [{project, subdir?}]}` → the slug. With entry 3b it also starts the sync agent.
 - `design.system.sync {workspace, slug}` starts the sync agent on an existing system (entry 3b).
 - `design.system.progress {workspace, slug, step, summary?}`
-- `design.system.synced {workspace, slug}` writes the anchor, then records each source's short `HEAD` (none when it cannot be read) and the time. When the anchor cannot be written, nothing is recorded and the progress stays (`design/store.rs` a_sync_whose_anchor_cannot_be_written_stays_unfinished_and_a_lost_head_is_cleared).
+- `design.system.synced {workspace, slug}` works out the anchor, records each source's short `HEAD` (none when it cannot be read) and the time, then writes the anchor, each file replaced whole. Either both say the sync is done or neither does: when the anchor cannot be worked out nothing is written, when the record cannot be written the anchor is not either, and when the anchor cannot be written the old record is put back; the progress stays until both are written (`design/store.rs` a_sync_whose_anchor_cannot_be_written_stays_unfinished_and_a_lost_head_is_cleared, a_sync_that_cannot_be_recorded_leaves_the_anchor_and_the_record_as_they_were).
 - `design.system.remove {workspace, slug}`
 - `design.check {workspace, slug}` → `[{path, line, kind, message}]`, after rewriting the generated files. Entry 6 adds `render?: bool` and the render counts.
 - `design.snap {workspace, path, viewport?, variant?}` → the PNG path. The app renders it (entry 6).
@@ -323,7 +323,7 @@ While the spec is a draft, the plan names test files and areas. Each criterion g
   - path resolution rejecting `..` and an outside symlink
 - `crates/moonletd/tests/`:
   - `design.system.create` writes `config.toml` and starts a terminal with the expected `--add-dir` and `Edit` deny rules for each source
-  - `synced` writes the anchor last and records `HEAD`
+  - `synced` records `HEAD` and writes the anchor, both or neither
   - a card edited by hand produces `.proposed.html`, and each `design.settle` choice
 - Desktop `lib/`:
   - the render rubric from captured DOM measurements, compared with literal flags
