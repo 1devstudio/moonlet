@@ -1224,6 +1224,44 @@ root = \"9c1e0a2\"
     }
 
     #[test]
+    fn taking_a_proposed_css_and_prompt_leaves_the_card_up_to_date() {
+        let home = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        put(project.path(), &[("src/Row.tsx", "row\n")]);
+        let store = Store::new(home.path());
+        let mut src = source();
+        src.path = project.path().display().to_string();
+        let slug = store
+            .create_system("w1", "storefront", vec![src], Cover::Core, 1)
+            .unwrap();
+        let dir = home.path().join("design/w1/systems").join(&slug);
+        let row = "components/custom/row/row.html";
+        put(
+            &dir,
+            &[
+                (
+                    row,
+                    "<!-- @dsCard group=\"Custom\" source=\"src/Row.tsx\" -->\n<div class=\"row\">row</div>\n",
+                ),
+                ("components/custom/row/row.css", ".row { color: red; }\n"),
+                ("components/custom/row/row.prompt.md", "A row, mine.\n"),
+                (
+                    "components/custom/row/row.proposed.css",
+                    ".row { color: var(--color-row-text); }\n",
+                ),
+                ("components/custom/row/row.proposed.prompt.md", "A row.\n"),
+            ],
+        );
+        store.synced("w1", &slug, &[], 2).unwrap();
+        store.settle("w1", &slug, row, Settle::Synced).unwrap();
+        let roots = source_roots(&store.record("w1", &slug).unwrap());
+        assert_eq!(
+            anchor::status(&dir, &roots, &BTreeMap::new()).unwrap(),
+            vec![]
+        );
+    }
+
+    #[test]
     fn sync_progress_shows_in_the_list_until_the_sync_is_recorded() {
         let home = tempfile::tempdir().unwrap();
         let store = Store::new(home.path());
