@@ -1056,6 +1056,123 @@ async fn the_sweep_destroys_a_machine_moonlet_lost_track_of() {
 }
 
 #[tokio::test]
+async fn cloud_up_needs_the_central_host_to_take_tailnet_connections() {
+    // Without a listener the machine could never pair, and would be billed
+    // until its deadline.
+    let c = cloud().await;
+    let _: Value =
+        c.d.call("mobile.set_enabled", json!({ "enabled": false }))
+            .await;
+    let e = c.d.fails("cloud.up", json!({ "project": c.project })).await;
+    assert_eq!(
+        e,
+        "no_listener: studio-mini takes no connections from your tailnet, so a cloud machine cannot pair with it. Turn on Allow connections from my tailnet in Hosts."
+    );
+    assert!(c.fake_dirs().is_empty());
+}
+
+#[tokio::test]
+async fn running_machines_count_toward_the_monthly_limit() {
+    let mut c = cloud().await;
+    let month = String::from_utf8(
+        Command::new("date")
+            .args(["-u", "+%Y-%m"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    let month = month.trim();
+    // One second short of the limit.
+    std::fs::create_dir_all(c.d.home.path().join("cloud")).unwrap();
+    std::fs::write(
+        c.d.home.path().join("cloud/usage.json"),
+        json!({ month: 40 * 3600 - 1 }).to_string(),
+    )
+    .unwrap();
+    c.d.restart().await;
+    c.ready().await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let e = c.d.fails("cloud.up", json!({ "project": c.project })).await;
+    assert_eq!(
+        e,
+        "cloud_limit: Cloud limit reached: 40 of 40 machine-hours this month"
+    );
+}
+
+#[tokio::test]
+async fn a_machine_removed_during_its_create_call_is_destroyed_when_it_returns() {
+    let c = cloud().await;
+    c.steer("slow-create", "1000");
+    let m = c.up().await;
+    let _: Value = c.d.call("cloud.down", json!({ "machine": m["id"] })).await;
+    c.until(m["id"].as_str().unwrap(), "removed").await;
+    // The create call answers after the removal: what it made goes too.
+    for _ in 0..60 {
+        if !c.fake_dirs().is_empty() && c.fake_dirs().iter().all(|d| !d.join("meta.json").exists())
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(
+        c.fake_dirs().iter().all(|d| !d.join("meta.json").exists()),
+        "{:?}",
+        c.fake_dirs()
+    );
+}
+
+#[tokio::test]
+async fn the_sweep_books_the_time_of_a_machine_the_provider_lost() {
+    let c = cloud_with(SHOP_CONFIG, &[("MOONLET_TEST_CLOUD_SWEEP_MS", "300")]).await;
+    let m = c.ready().await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    // Gone at the provider without moonlet removing it.
+    let dir = c.fake_dirs()[0].clone();
+    std::fs::remove_dir_all(&dir).unwrap();
+    for _ in 0..100 {
+        let all = c.machines().await;
+        if all["machines"].as_array().unwrap().is_empty() {
+            assert!(all["hours_this_month"].as_f64().unwrap() > 0.0, "{all}");
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("{} was never dropped: {}", m["name"], c.machines().await);
+}
+
+#[tokio::test]
+async fn retry_tries_only_its_own_machine_again() {
+    let c = cloud_with(SHOP_CONFIG, &[("MOONLET_TEST_CLOUD_BACKOFF_MS", "1000")]).await;
+    let _: Value = c.d.call("cloud.set", json!({ "max_machines": 3 })).await;
+    let a = c.ready().await;
+    let b = c.ready().await;
+    c.steer("fail-destroy", "6");
+    for m in [&a, &b] {
+        let _: Value = c.d.call("cloud.down", json!({ "machine": m["id"] })).await;
+    }
+    for _ in 0..100 {
+        let all = c.machines().await;
+        if all["machines"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|m| m["error"].is_string())
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    std::fs::remove_file(c.fake.path().join("fail-destroy")).unwrap();
+    let _: Value = c.d.call("cloud.down", json!({ "machine": a["id"] })).await;
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    let all = c.machines().await;
+    assert_eq!(all["removed"][0]["id"], a["id"], "{all}");
+    assert_eq!(all["machines"][0]["id"], b["id"], "{all}");
+}
+
+#[tokio::test]
 async fn a_machine_left_creating_by_a_restart_is_destroyed() {
     let mut c = cloud_with(SHOP_CONFIG, &[("MOONLET_TEST_CLOUD_SWEEP_MS", "300")]).await;
     c.steer("slow-create", "60000");
@@ -1360,7 +1477,8 @@ async fn stop_ends_a_job_waiting_for_a_cloud_machine() {
         .await
         .expect("the waiting command never ended");
     assert!(
-        ran.stderr.ends_with("moonlet: stopped from the Jobs panel\n"),
+        ran.stderr
+            .ends_with("moonlet: stopped from the Jobs panel\n"),
         "{ran:?}"
     );
     assert_eq!(ran.stdout, "");
