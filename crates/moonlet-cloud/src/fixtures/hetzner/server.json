@@ -1,0 +1,19 @@
+{
+  "server": {
+    "id": 42,
+    "name": "moonlet-shop-7k2q",
+    "status": "running",
+    "created": "2026-10-22T10:40:00+00:00",
+    "public_net": {
+      "ipv4": { "id": 4711, "ip": "203.0.113.10", "blocked": false, "dns_ptr": "static.10.113.0.203.clients.your-server.de" },
+      "ipv6": { "id": 4712, "ip": "2001:db8::/64", "blocked": false, "dns_ptr": [] },
+      "floating_ips": [],
+      "firewalls": []
+    },
+    "server_type": { "id": 5, "name": "cpx41", "description": "CPX 41", "cores": 8, "memory": 16.0, "disk": 240, "architecture": "x86" },
+    "datacenter": { "id": 4, "name": "fsn1-dc14", "location": { "id": 1, "name": "fsn1" } },
+    "image": { "id": 161547269, "type": "system", "name": "ubuntu-24.04" },
+    "labels": { "moonlet-host": "c3f1a9e2b7d04c55", "moonlet-machine": "m7k2q", "moonlet-project": "9f86d081884c" },
+    "locked": false
+  }
+}
