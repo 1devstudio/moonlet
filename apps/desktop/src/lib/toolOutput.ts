@@ -4,7 +4,7 @@
 import { highlightLines, readRows } from "./codeHighlight";
 import type { ToolCall } from "./protocol";
 
-export type Tone = "add" | "del" | "dim" | "error" | "warn" | "ok";
+export type Tone = "add" | "del" | "dim" | "error" | "warn" | "ok" | "accent";
 export type Segment = { text: string; tone?: Tone };
 export type OutputView = { kind: "diff"; diff: string } | { kind: "code"; html: string[] } | { kind: "lines"; lines: Segment[][] } | null;
 
@@ -20,6 +20,8 @@ function isJson(text: string): boolean {
 
 /** One output line as text segments, some of them toned. */
 function lineSegments(line: string): Segment[] {
+  // A routed command's own lines (X62); a worker going away needs attention.
+  if (line.startsWith("moonlet: ")) return [{ text: line, tone: line.includes(" went away") ? "warn" : "accent" }];
   const stat = /^(.*\S\s+)(\|)(\s+\d+ )(\+*)(-*)$/.exec(line);
   if (stat && (stat[4] || stat[5])) {
     const [, path, bar, count, add, del] = stat;

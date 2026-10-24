@@ -98,6 +98,17 @@ describe("outputView", () => {
   });
 });
 
+describe("routed commands' output (X62)", () => {
+  it("colours moonlet's own lines, and a worker going away in the attention colour", () => {
+    expect(outputView("moonlet: running on studio-mini\n> vitest run")).toEqual({
+      kind: "lines",
+      lines: [[{ text: "moonlet: running on studio-mini", tone: "accent" }], [{ text: "> vitest run" }]],
+    });
+    const away = outputView("moonlet: Alex's MacBook Pro went away. Running again on studio-mini.");
+    expect(away).toEqual({ kind: "lines", lines: [[{ text: "moonlet: Alex's MacBook Pro went away. Running again on studio-mini.", tone: "warn" }]] });
+  });
+});
+
 describe("toolOutputView", () => {
   const tool = (name: string, input: unknown, output: string, summary = "") => ({ name, summary, input, output, status: "ok" as const });
 

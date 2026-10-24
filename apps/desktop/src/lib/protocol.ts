@@ -374,6 +374,42 @@ export interface WorkerInfo {
   load?: number | null;
 }
 
+/** A routed command of a session (X62), from `job.list` and `job.changed`. */
+export interface Job {
+  id: string;
+  session: string;
+  command: string;
+  tool_use_id?: string | null;
+  state: JobState;
+  started_at: number;
+  ended_at?: number | null;
+  phases: { name: string; took_ms?: number | null }[];
+  timeline: { at: number; text: string; detail?: string | null }[];
+  /** `kind`: mac, host, central or cloud. */
+  worker?: { name: string; kind: string; load: number; cores: number; slot: number; slots: number; rtt_ms?: number | null; copy?: string | null } | null;
+  brought: { path: string; added: number; removed: number }[];
+  outputs: { path: string; bytes: number }[];
+  leftovers: string[];
+  leftovers_folder?: string | null;
+  env: string[];
+  summary?: string | null;
+  output_bytes: number;
+}
+
+export type JobState =
+  | { kind: "waiting"; for: string }
+  | { kind: "running"; worker: string }
+  | { kind: "bringing_back" }
+  | { kind: "done"; exit: number }
+  | { kind: "stopped"; exit: number }
+  | { kind: "lost" };
+
+/** Part of a job's output: stream 1 is stdout, 2 stderr. */
+export interface JobChunk {
+  stream: 1 | 2;
+  text: string;
+}
+
 /** `exec.status` (X62): this machine, the routed commands going on, and why workers were skipped. */
 export interface ExecStatus {
   host: { name: string; os: string; cores: number; load: number | null; slots: number; used: number };
