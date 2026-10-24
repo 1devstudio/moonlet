@@ -26,6 +26,9 @@ regex = "1"
 # Design system checks (X64): element locations and attribute rewrites that
 # keep the rest of the file as it is.
 lol_html = "3"
+# Where a stylesheet's comments are, read as a browser reads them; the
+# version lol_html already builds.
+cssparser = "0.36"
 
 [dev-dependencies]
 tempfile.workspace = true

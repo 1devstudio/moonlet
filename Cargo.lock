@@ -2679,6 +2679,7 @@ name = "moonlet-core"
 version = "0.1.29"
 dependencies = [
  "anyhow",
+ "cssparser 0.36.0",
  "dirs 6.0.0",
  "ignore",
  "libc",
