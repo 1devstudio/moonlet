@@ -274,11 +274,14 @@ where
     // The text an agent asks to read is for the app alone, not for the
     // agent's own `moonlet` connections (X31).
     let is_cli = conn.client == crate::daemon::CLI_CLIENT;
+    // Design systems stay on the Mac (X64): a paired device hears nothing of them.
+    let is_device = conn.phone.is_some();
     let event_task = tokio::spawn(async move {
         loop {
             match events.recv().await {
                 Ok(Message::Event { name, .. })
                     if is_cli && name == moonlet_proto::methods::EV_TERMINAL_READ_REQUEST => {}
+                Ok(Message::Event { name, .. }) if is_device && name == moonlet_proto::methods::EV_DESIGN_CHANGED => {}
                 Ok(m) => {
                     if !ev_tx.send(Frame::Json(m)) {
                         break;

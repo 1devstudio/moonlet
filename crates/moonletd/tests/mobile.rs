@@ -765,3 +765,37 @@ async fn phones_cannot_reach_design_systems() {
         assert_eq!((e.code.as_str(), e.message.as_str()), ("forbidden", "manage design systems from the Mac"), "{method}");
     }
 }
+
+/// Design systems stay on the Mac (X64): a paired phone hears nothing of
+/// their files changing, while the Mac's own app does.
+#[tokio::test]
+async fn phones_do_not_hear_design_changes() {
+    let mac = Mac::start(None).await;
+    let addr = mac.allow_phones().await;
+    let token = mac.pair(&addr).await;
+    let (mut phone, _) = auth(&addr, json!({ "token": token })).await;
+    hello(&mut phone, "moonlet-mobile").await;
+    let mut app = Client::connect(&mac.socket, "test").await.unwrap();
+
+    let card = mac.home.path().join("design/w1/systems/storefront/components/buttons/button/button.html");
+    std::fs::create_dir_all(card.parent().unwrap()).unwrap();
+    std::fs::write(&card, "<!-- @dsCard group=\"Buttons\" -->\n").unwrap();
+
+    // The app hears it.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let f = tokio::time::timeout_at(deadline, app.next_frame()).await.expect("the app heard no design.changed").unwrap().unwrap();
+        if let Frame::Json(Message::Event { name, .. }) = f
+            && name == "design.changed"
+        {
+            break;
+        }
+    }
+    // The phone does not, within the next few seconds.
+    let until = tokio::time::Instant::now() + Duration::from_secs(3);
+    while let Ok(Some(m)) = tokio::time::timeout_at(until, next_json(&mut phone)).await {
+        if let Message::Event { name, .. } = &m {
+            assert_ne!(name, "design.changed", "a phone heard a design change");
+        }
+    }
+}

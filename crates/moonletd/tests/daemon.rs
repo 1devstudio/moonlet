@@ -1978,6 +1978,10 @@ async fn design_systems_over_rpc() {
     assert_eq!(list[0]["cards"], 1);
     assert_eq!(list[0]["step"], serde_json::Value::Null);
 
+    std::fs::write(repo.join("package.json"), r#"{"dependencies": {"react": "19"}, "devDependencies": {"tailwindcss": "4"}}"#).unwrap();
+    let stack: Vec<String> = c.request(methods::DESIGN_DETECT, serde_json::json!({"workspace": w, "path": repo})).await.unwrap();
+    assert_eq!(stack, ["React", "Tailwind"]);
+
     let file: serde_json::Value = c
         .request(methods::DESIGN_FILE, serde_json::json!({"workspace": w, "path": "systems/moonlet-desktop/styles.css"}))
         .await
@@ -2240,4 +2244,116 @@ async fn a_sync_recorded_while_its_agent_starts_keeps_both() {
     let list: serde_json::Value = c.request(methods::DESIGN_SYSTEMS, serde_json::json!({"workspace": ws.id})).await.unwrap();
     assert_eq!(list[0]["agent"].as_u64(), Some(agent), "{list}");
     assert!(list[0]["synced_at"].is_u64(), "{list}");
+}
+
+/// X64: Changed by this sync lists what the sync changed, not a card the user
+/// edited by hand before Sync started it.
+#[tokio::test]
+async fn a_card_edited_by_hand_before_sync_is_not_changed_by_that_sync() {
+    use moonlet_proto::types::{Project, Workspace};
+    let d = fake_claude_daemon(FAKE_SYNC_CLAUDE).await;
+    let repo = d.home.path().join("repo");
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    std::fs::write(repo.join("src/ui.tsx"), "export const Button = () => null;\n").unwrap();
+    for args in [vec!["init", "-q", "-b", "main"], vec!["add", "-A"], vec!["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init"]] {
+        assert!(Command::new("git").args(&args).current_dir(&repo).output().unwrap().status.success());
+    }
+    let mut c = d.client().await;
+    let ws: Workspace = c.request(methods::WORKSPACE_CREATE, serde_json::json!({"name": "1devstudio", "color": "clay"})).await.unwrap();
+    let project: Project = c.request(methods::PROJECT_ADD, serde_json::json!({"path": repo})).await.unwrap();
+    let _: serde_json::Value = c
+        .request(
+            methods::DESIGN_SYSTEM_CREATE,
+            serde_json::json!({"workspace": ws.id, "name": "pricing", "sources": [{"project": project.id}], "agent": false}),
+        )
+        .await
+        .unwrap();
+    let dir = d.home.path().join(".moonlet/design").join(&ws.id).join("systems/pricing");
+    let put = |path: &str, body: &str| {
+        std::fs::create_dir_all(dir.join(path).parent().unwrap()).unwrap();
+        std::fs::write(dir.join(path), format!("<!-- @dsCard group=\"Buttons\" source=\"src/ui.tsx\" -->\n{body}\n")).unwrap();
+    };
+    put("components/buttons/button/button.html", "<button>Run</button>");
+    let system = serde_json::json!({"workspace": ws.id, "slug": "pricing"});
+    let _: bool = c.request(methods::DESIGN_SYSTEM_SYNCED, system.clone()).await.unwrap();
+
+    // Edited by hand, then synced: the agent keeps that card and adds another.
+    put("components/buttons/button/button.html", "<button>Go</button>");
+    let _: serde_json::Value = c.request(methods::DESIGN_SYSTEM_SYNC, system.clone()).await.unwrap();
+    put("components/buttons/link/link.html", "<a>Run</a>");
+    let _: bool = c.request(methods::DESIGN_SYSTEM_SYNCED, system.clone()).await.unwrap();
+    let list: serde_json::Value = c.request(methods::DESIGN_SYSTEMS, serde_json::json!({"workspace": ws.id})).await.unwrap();
+    assert_eq!(
+        list[0]["last_sync"],
+        serde_json::json!([{"path": "components/buttons/link/link.html", "change": "new", "sources": ["src/ui.tsx"]}])
+    );
+}
+
+/// X64: while a design system's agent waits on a question, design.systems
+/// says so, so the sidebar and the step bar can show Needs you.
+#[tokio::test]
+async fn a_waiting_sync_agent_shows_in_the_design_system_list() {
+    use moonlet_proto::types::{Project, Workspace};
+    let d = fake_claude_daemon(
+        r#"#!/bin/sh
+while IFS= read -r line; do
+  case "$line" in
+    *'"subtype":"initialize"'*) echo '{"type":"system","subtype":"init","session_id":"s1","model":"fake"}' ;;
+    *'"type":"user"'*) echo '{"type":"control_request","request_id":"q1","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","tool_use_id":"t1","input":{"questions":[{"question":"Which button set is current?","header":"Buttons","multiSelect":false,"options":[{"label":"ui.tsx","description":"the new one"},{"label":"legacy","description":"the old one"}]}]}}}' ;;
+  esac
+done
+"#,
+    )
+    .await;
+    let repo = d.home.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    for args in [vec!["init", "-q", "-b", "main"], vec!["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"]] {
+        assert!(Command::new("git").args(&args).current_dir(&repo).output().unwrap().status.success());
+    }
+    let mut c = d.client().await;
+    let ws: Workspace = c.request(methods::WORKSPACE_CREATE, serde_json::json!({"name": "1devstudio", "color": "clay"})).await.unwrap();
+    let project: Project = c.request(methods::PROJECT_ADD, serde_json::json!({"path": repo})).await.unwrap();
+    let created: serde_json::Value = c
+        .request(methods::DESIGN_SYSTEM_CREATE, serde_json::json!({"workspace": ws.id, "name": "storefront", "sources": [{"project": project.id}]}))
+        .await
+        .unwrap();
+    assert!(created["agent"].is_u64(), "{created}");
+    let mut list = serde_json::Value::Null;
+    for _ in 0..100 {
+        list = c.request(methods::DESIGN_SYSTEMS, serde_json::json!({"workspace": ws.id})).await.unwrap();
+        if !list[0]["needs_you"].is_null() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(list[0]["needs_you"], serde_json::json!({"kind": "question", "text": "Which button set is current?"}));
+}
+
+/// X64: a file written in a design system reaches every client as
+/// design.changed, so Design mode updates while the agent works.
+#[tokio::test]
+async fn a_file_written_in_a_design_system_is_announced() {
+    use moonlet_proto::types::Workspace;
+    let d = TestDaemon::start().await;
+    let mut c = d.client().await;
+    let ws: Workspace = c.request(methods::WORKSPACE_CREATE, serde_json::json!({"name": "1devstudio", "color": "clay"})).await.unwrap();
+    let _: serde_json::Value = c
+        .request(methods::DESIGN_SYSTEM_CREATE, serde_json::json!({"workspace": ws.id, "name": "storefront", "sources": [], "agent": false}))
+        .await
+        .unwrap();
+    let mut listener = d.client().await;
+    let card = d.home.path().join("design").join(&ws.id).join("systems/storefront/components/buttons/button/button.html");
+    std::fs::create_dir_all(card.parent().unwrap()).unwrap();
+    std::fs::write(&card, "<!-- @dsCard group=\"Buttons\" -->\n").unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let f = tokio::time::timeout_at(deadline, listener.next_frame()).await.expect("no design.changed").unwrap().unwrap();
+        if let Frame::Json(Message::Event { name, data }) = f
+            && name == methods::EV_DESIGN_CHANGED
+            && data["paths"].as_array().is_some_and(|p| p.iter().any(|x| x == "components/buttons/button/button.html"))
+        {
+            assert_eq!((data["workspace"].as_str(), data["system"].as_str()), (Some(ws.id.as_str()), Some("storefront")));
+            break;
+        }
+    }
 }
