@@ -203,7 +203,8 @@ pub const DESIGN_SYSTEM_PROGRESS: &str = "design.system.progress";
 pub const DESIGN_SYSTEM_SYNCED: &str = "design.system.synced";
 /// [`DesignCheck`] → every problem, after rewriting the generated files.
 /// With `render`, `{problems, render: {total, bad, thin, variants_identical}}`
-/// once the app has rendered every card (X64).
+/// once the app has rendered every card (X64). With `design`, a workspace
+/// design's pages: their `data-mid`s and stylesheets (X65).
 pub const DESIGN_CHECK: &str = "design.check";
 /// [`DesignSnap`] → `{path, blank}`: a card's screenshot, taken by the app,
 /// saved in the system's `.cache/screenshots/` (X64).
@@ -1233,10 +1234,19 @@ pub struct DesignProgress {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DesignCheck {
     pub workspace: String,
+    /// The design system; empty when `design` names a design.
+    #[serde(default)]
     pub slug: String,
     /// Also render each card in the app and judge it (`--render`).
     #[serde(default)]
     pub render: bool,
+    /// A workspace design to check instead of a design system (X65).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub design: Option<String>,
+    /// With `design`: first give the missing and repeated `data-mid`s the
+    /// next free numbers (`--fix`).
+    #[serde(default)]
+    pub fix: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1159,6 +1159,16 @@ impl Daemon {
             }
             m::DESIGN_CHECK => {
                 let r: m::DesignCheck = params(p)?;
+                // A design's pages (X65): their ids and stylesheets.
+                if let Some(design) = r.design.clone() {
+                    if r.render {
+                        return Err(RpcError::new("invalid_params", "render checks a design system's cards"));
+                    }
+                    return ok(blocking(move || store.check_design(&r.workspace, &design, r.fix)).await?);
+                }
+                if r.fix {
+                    return Err(RpcError::new("invalid_params", "fix checks a design's pages"));
+                }
                 let (ws, slug) = (r.workspace.clone(), r.slug.clone());
                 let problems = {
                     let store = store.clone();
