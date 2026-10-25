@@ -32,6 +32,8 @@ tauri-plugin-notification = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 getrandom = "0.3"
+# Design card screenshots go to the daemon as base64 (X64).
+base64 = "0.22"
 # In-app updates (X35).
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
@@ -49,6 +51,8 @@ tauri-plugin-wdio = { version = "1", optional = true }
 security-framework = "3"
 # The daemon's login item (X56).
 objc2 = "0.6"
+# WKWebView's snapshot of a design card takes a completion block (X64).
+block2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSError"] }
 objc2-service-management = { version = "0.3", default-features = false, features = ["std", "SMAppService", "objc2", "objc2-foundation"] }
 

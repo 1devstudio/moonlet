@@ -3,6 +3,7 @@
 //! PTY output to the webview over a binary channel.
 
 mod attach;
+mod design_render;
 mod design_scheme;
 mod hosts;
 mod login_item;
@@ -496,7 +497,18 @@ pub fn run() {
                 responder.respond(design_scheme::serve(&app, &url).await);
             });
         })
+        // The hidden window that renders design cards goes with the main
+        // window, so closing it still quits the app (X64).
+        .on_window_event(|window, event| {
+            if window.label() == "main"
+                && matches!(event, tauri::WindowEvent::Destroyed)
+                && let Some(render) = window.app_handle().get_webview_window(design_render::LABEL)
+            {
+                let _ = render.destroy();
+            }
+        })
         .setup(|app| {
+            app.manage(Arc::new(design_render::Renderer::default()));
             let hosts = HostManager::new(app.handle().clone());
             app.manage(hosts);
             if let Some(window) = app.get_webview_window("main") {
@@ -548,6 +560,8 @@ pub fn run() {
             trackers::tracker_create,
             trackers::tracker_oauth_available,
             trackers::tracker_oauth_linear,
+            design_render::design_render_measured,
+            design_render::design_render_page_ready,
             app_info
         ])
         .run(context)
