@@ -1054,10 +1054,10 @@ export interface Design {
   system: string;
   /** The design's folder. */
   path: string;
-  /** What the user asked for when creating it. */
-  brief: string;
-  /** The viewport it was last shown at, `WxH` in px. */
-  viewport: string;
+  /** What the user asked for when creating it; none from an older daemon. */
+  brief?: string;
+  /** The viewport it was last shown at, `WxH` in px; none from an older daemon. */
+  viewport?: string;
   /** `index` first, then by name; a label from `design.toml` when it has one. */
   pages: { name: string; label: string | null }[];
   /** The newest change under `pages/`, ms; its creation before any page. */

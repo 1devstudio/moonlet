@@ -211,6 +211,11 @@ describe("the design's chat (X65)", () => {
     expect(briefShown("A left nav and a Git section, and a search field", "A left nav and a Git section", true)).toBeNull();
     expect(briefShown("A left nav and a Git section\n\n---\nmy own notes", "A left nav and a Git section", true)).toBeNull();
   });
+
+  it("shows the first message whole when an older daemon's design.list gives no brief", () => {
+    const sent = "A left nav and a Git section\n\n---\nThis is the design \"Settings page\" in this folder. Its README.md:\n\n# moonlet desktop";
+    expect(briefShown(sent, undefined, true)).toBeNull();
+  });
 });
 
 describe("the design screen's header (X65)", () => {

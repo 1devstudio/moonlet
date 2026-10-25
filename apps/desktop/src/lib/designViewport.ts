@@ -14,8 +14,10 @@ export const VIEWPORTS: { name: string; size: Size }[] = [
   { name: "Phone", size: [390, 844] },
 ];
 
-/** `WxH` as `design.toml` keeps it, or null when it is no size. */
-export function parseViewport(text: string): Size | null {
+/** `WxH` as `design.toml` keeps it, or null when it is no size or there is
+ *  none (`design.list` of an older daemon). */
+export function parseViewport(text: string | undefined): Size | null {
+  if (text === undefined) return null;
   const [w, h, ...rest] = text.split("x");
   return rest.length || h === undefined ? null : sizeOf(w, h);
 }
