@@ -1,13 +1,14 @@
 // A workspace design's screen (X65): its agent's chat on the left, the
 // canvas with its page tabs, viewport, zoom, mode, bar and the page in a
 // sandboxed frame on a host of its own, with its comments pinned over it or
-// its selection in Edit mode, and the right rail's Layers and Comments tabs.
+// its selection in Edit mode, and the right rail's Layers, Inspector,
+// Palette and Comments tabs.
 
 import { ArrowRight, ChevronDown, LayoutGrid, Loader2, Lock, MessageSquare, MoreHorizontal, PanelLeftClose, PanelLeftOpen, PanelRight, SwatchBook, Trash2, Undo2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import { errorToast, toast, updateSettings, useStore } from "../../lib/store";
 import { chatKey, useChat } from "../../lib/chat";
-import type { Design, DesignComment } from "../../lib/protocol";
+import type { Design, DesignComment, DesignToken } from "../../lib/protocol";
 import { briefShown, designSubtitle } from "../../lib/design";
 import {
   addPageMid,
@@ -21,6 +22,7 @@ import {
   problemsOf,
   reloadPage,
   removeDesign,
+  revOf,
   resolveComment,
   saveViewport,
   sendingOf,
@@ -30,14 +32,16 @@ import {
   systemsOf,
   useDesign,
 } from "../../lib/designStore";
-import { askWithEdits, closeDesign, hasCopy, sendCommentsWithEdits, copyElementOf, dismissUnsaved, editPage, loadPageSource, pasteInto, pendingOf, redoEdit, sendWithEdits, undoEdit, undoOf, unsavedOf, useEditor } from "../../lib/designEditor";
-import { EditRefused, editsChip, type Edit } from "../../lib/designEdits";
+import { askWithEdits, closeDesign, hasCopy, kitOf, loadKit, sendCommentsWithEdits, copyElementOf, dismissUnsaved, editPage, loadPageSource, pasteInto, pendingOf, redoEdit, sendWithEdits, sourceOf, undoEdit, undoOf, unsavedOf, useEditor } from "../../lib/designEditor";
+import { EditRefused, editsChip, inlineStyles, type Edit, type EditOp } from "../../lib/designEdits";
+import { offSystem, offSystemMids } from "../../lib/designTokens";
+import { snippetsOf, type Snippet } from "../../lib/designPalette";
 import { pageUrl } from "../../lib/designView";
 import { VIEWPORTS, canvasKey, canvasScale, canvasZoom, customViewports, fitBox, parseViewport, sizeOf, sizeText, viewportLabel, viewportText, withCustomViewport, type Size } from "../../lib/designViewport";
-import { breadcrumb, canvasPage, canvasStep, chatAfter, editorStep, isTyping, keyAct, layerPick, modeEntered, modeHint, onReport, undoOpen, writingPage, type CanvasAct, type CanvasMode, type CanvasState, type ChatPanel, type KeyAct, type RailTab } from "../../lib/designCanvas";
+import { breadcrumb, dropHint, canvasPage, canvasStep, chatAfter, editorStep, isTyping, keyAct, layerPick, modeEntered, modeHint, onReport, undoOpen, writingPage, type CanvasAct, type CanvasMode, type CanvasState, type ChatPanel, type KeyAct, type RailTab } from "../../lib/designCanvas";
 import { keyId } from "../../lib/runActions";
 import { chatCardLookup, commentCardSelector, messageView, commentsTab, keepAction, openCommentsLabel, pageCounts, sendAll } from "../../lib/designComments";
-import { bridgeMessage, editMessage, helloMessage, modeMessage, pinsMessage, scrollMessage, selectMessage, type Layer, type PickedElement, type Rect } from "../../lib/designBridge";
+import { bridgeMessage, editMessage, helloMessage, modeMessage, paletteMessage, pinsMessage, scrollMessage, selectMessage, type DropPlace, type Layer, type PickedElement, type Rect } from "../../lib/designBridge";
 import { pageFile, pagePath } from "../../lib/designPage";
 import { barProblems, chatOpensOn, designBar, pageFixMessage, type Bar, type BarAction, type PageProblem } from "../../lib/designBars";
 import { claimKeys } from "../../lib/keys";
@@ -51,9 +55,19 @@ import { useSize } from "../../lib/useSize";
 import { CardFrame, ZoomBar } from "./Frame";
 import { CommentBox, CommentCards, CommentsTab, PinLayer, type BoxTarget } from "./Comments";
 import { Breadcrumb, EditsChip, EditsMessage, LayersTab } from "./Editor";
+import { InspectorTab, PaletteTab } from "./Inspector";
 
 const NO_PINS: DesignComment[] = [];
 const NO_LAYERS: Layer[] = [];
+const NO_TOKENS: DesignToken[] = [];
+
+/** The right rail's tabs, in order. */
+const RAIL_TABS: { tab: RailTab; label: string }[] = [
+  { tab: "layers", label: "Layers" },
+  { tab: "inspector", label: "Inspector" },
+  { tab: "palette", label: "Palette" },
+  { tab: "comments", label: "Comments" },
+];
 
 /** A design's viewport until it has one: Desktop. */
 const DEFAULT_VIEWPORT = VIEWPORTS[0].size;
@@ -80,6 +94,12 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
   // Edit mode: the element selected on the shown page, and the page's tree.
   const [selected, setSelected] = useState<string | null>(null);
   const [layers, setLayers] = useState<Layer[]>(NO_LAYERS);
+  // The selection's computed style, as the page reports it, for the Inspector.
+  const [computed, setComputed] = useState<{ mid: string; style: Record<string, string> } | null>(null);
+  // Where an element or a Palette snippet dragged over the page would drop.
+  const [dragging, setDragging] = useState<{ mid: string | null; place: DropPlace | null } | null>(null);
+  // The snippet dragged from the Palette, until its drag ends.
+  const paletteDrag = useRef<Snippet | null>(null);
   // Talks to the shown page's bridge (PageFrame sets it).
   const bridge = useRef<((message: unknown) => void) | null>(null);
   const pending = useEditor((e) => pendingOf(e, host, workspace, design.slug));
@@ -101,6 +121,22 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
   const writing = writingPage(lastWritten, working);
   const bar = designBar({ working, needsYou: design.needs_you, page, problems, system: systemName, systemRemoved: !!systems && !system, unsaved });
   const chip = editsChip(pending);
+  // The design system's tokens and snippets, read again when it changes.
+  const kit = useEditor((e) => kitOf(e, host, workspace, design.slug));
+  const [kitError, setKitError] = useState<string | null>(null);
+  const systemRev = useDesign((d) => revOf(d, host, workspace, design.system));
+  useEffect(() => {
+    void loadKit(host, workspace, design.slug).then(
+      () => setKitError(null),
+      (e: unknown) => setKitError(e instanceof Error ? e.message : String(e)),
+    );
+  }, [host, workspace, design.slug, systemRev]);
+  const tokens = kit?.tokens ?? NO_TOKENS;
+  const snippets = useMemo(() => (kit ? snippetsOf(kit.cards) : null), [kit]);
+  // The page's inline styles, from its source, and its off-system elements.
+  const html = useEditor((e) => (page === null ? undefined : sourceOf(e, host, workspace, design.slug, page)?.html));
+  const styles = useMemo(() => (html ? inlineStyles(html) : {}), [html]);
+  const offMids = useMemo(() => offSystemMids(tokens, styles), [tokens, styles]);
 
   useEffect(() => {
     void loadComments(host, workspace, design.slug).catch(() => {});
@@ -110,6 +146,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
   useEffect(() => {
     setSelected(null);
     setLayers(NO_LAYERS);
+    setDragging(null);
   }, [design.slug, page]);
 
   // V, C, Esc and the mode buttons, as canvasStep decides; Edit is locked
@@ -156,6 +193,42 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
       if (e instanceof EditRefused) toast(e.message, "info");
       else errorToast(e);
     }
+  };
+  /** An edit of the shown page's source by `op`. */
+  const editShown = (op: EditOp, reload = false) => {
+    if (page !== null) edited(() => editPage(host, workspace, design.slug, page, op, selected), reload);
+  };
+  // A drag on the page: a move dropped, a size or place a handle or a drag
+  // gave, or a Palette snippet dropped; the live page shows a size or place
+  // already, so one the source cannot take loads the page again.
+  const onDragged = (m: { kind: "move"; mid: string; place: DropPlace } | { kind: "style"; mid: string; set: Record<string, string> } | { kind: "drop"; place: DropPlace | null }) => {
+    setDragging(null);
+    if (m.kind === "move") editShown({ kind: "move", mid: m.mid, place: m.place });
+    else if (m.kind === "style") editShown({ kind: "restyle", mid: m.mid, set: m.set }, true);
+    else if (paletteDrag.current && m.place) {
+      editShown({ kind: "insert", place: m.place, html: paletteDrag.current.html });
+      paletteDrag.current = null;
+    }
+  };
+  const dragRef = useRef(onDragged);
+  dragRef.current = onDragged;
+  // A snippet picked in the Palette goes after the selection, else at the
+  // end of the body; one dragged is dropped where the page shows.
+  const pickSnippet = (sn: Snippet) => editShown({ kind: "insert", place: selected ? { where: "below", ref: selected } : null, html: sn.html });
+  const dragSnippet = (sn: Snippet | null) => {
+    bridge.current?.(paletteMessage(sn !== null));
+    if (sn) {
+      paletteDrag.current = sn;
+      if (canvas.current.mode !== "edit") step("edit");
+      return;
+    }
+    setDragging(null);
+    // The drag ends in the app as it drops in the page, whose report comes
+    // from the page's own process a moment later: the snippet waits for it.
+    const ended = paletteDrag.current;
+    setTimeout(() => {
+      if (paletteDrag.current === ended) paletteDrag.current = null;
+    }, 2000);
   };
   const travel = (back: boolean) =>
     void (back ? undoEdit : redoEdit)(host, workspace, design.slug).then((to) => {
@@ -463,11 +536,11 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
           {page === null ? (
             <span className="text-muted">Every page at the same viewport. Click a page to open it.</span>
           ) : mode === "edit" && selected && breadcrumb(layers, selected).length ? (
-            <Breadcrumb path={breadcrumb(layers, selected)} hint={modeHint(mode)} onSelect={select} />
+            <Breadcrumb path={breadcrumb(layers, selected)} hint={(dragging && dropHint(layers, dragging)) ?? modeHint(mode)} onSelect={select} />
           ) : (
             <>
               <span className="font-mono text-fg">{pageFile(page)}</span>
-              <span className="truncate text-faint">{names.includes(page) ? modeHint(mode) : "not written yet"}</span>
+              <span className="truncate text-faint">{names.includes(page) ? ((dragging && dropHint(layers, dragging)) ?? modeHint(mode)) : "not written yet"}</span>
             </>
           )}
         </div>
@@ -488,8 +561,12 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
               scale={scale}
               mode={mode}
               selected={selected}
+              selectedOff={selected !== null && offMids.has(selected)}
               bridge={bridge}
               onTree={setLayers}
+              onComputed={(mid, style) => setComputed({ mid, style })}
+              onDrag={setDragging}
+              onDragged={(m) => dragRef.current(m)}
               onSelected={setSelected}
               onText={(mid, text) => textRef.current(mid, text)}
               pins={pagePins}
@@ -516,7 +593,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
       {railOpen && (
         <aside aria-label="Right rail" className="flex w-[300px] shrink-0 flex-col border-l border-border bg-panel">
           <div role="tablist" className="flex h-[52px] shrink-0 items-end gap-4 border-b border-border px-4">
-            {(["layers", "comments"] as const).map((t) => (
+            {RAIL_TABS.map(({ tab: t, label }) => (
               <button
                 key={t}
                 role="tab"
@@ -524,7 +601,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
                 onClick={() => setRailTab(t)}
                 className={cx("flex h-full items-center gap-1.5 border-b-2 ui-text-13", railTab === t ? "border-accent text-fg" : "border-transparent text-muted hover:text-fg")}
               >
-                {t === "layers" ? "Layers" : "Comments"}
+                {label}
                 {t === "comments" && <span className="rounded bg-raised px-1 font-mono ui-text-11 text-muted">{onPage.open}</span>}
               </button>
             ))}
@@ -533,12 +610,32 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
             <LayersTab
               layers={page === null ? NO_LAYERS : layers}
               selected={selected}
+              off={offMids}
               onSelect={(mid) => {
                 if (!layerPick(canvas.current, workingRef.current)) return;
                 if (canvas.current.mode !== "edit") step("edit");
                 select(mid);
               }}
             />
+          ) : railTab === "inspector" ? (
+            <InspectorTab
+              tag={(selected && layers.find((l) => l.mid === selected)?.tag) ?? null}
+              mid={selected}
+              inline={(selected && styles[selected]) || []}
+              computed={(computed?.mid === selected && computed?.style) || {}}
+              tokens={tokens}
+              off={selected && styles[selected] ? offSystem(tokens, styles[selected]) : []}
+              locked={working}
+              onSet={(prop, value) => {
+                if (selected) editShown({ kind: "restyle", mid: selected, set: { [prop]: value } });
+              }}
+            />
+          ) : railTab === "palette" ? (
+            kitError && !kit ? (
+              <p className="px-4 py-6 text-center ui-text-12.5 text-faint">The design system's snippets could not be read: {kitError}</p>
+            ) : (
+              <PaletteTab snippets={snippets} selected={selected} locked={working} onPick={pickSnippet} onDrag={dragSnippet} />
+            )
           ) : (
           <CommentsTab
             pins={comments}
@@ -587,8 +684,12 @@ function PageFrame({
   scale,
   mode,
   selected,
+  selectedOff,
   bridge,
   onTree,
+  onComputed,
+  onDrag,
+  onDragged,
   onSelected,
   onText,
   pins,
@@ -609,9 +710,14 @@ function PageFrame({
   scale: number;
   mode: CanvasMode;
   selected: string | null;
+  /** Whether the selection is off-system, which its outline's label says. */
+  selectedOff: boolean;
   /** Set to talk to the page's bridge. */
   bridge: MutableRefObject<((message: unknown) => void) | null>;
   onTree: (layers: Layer[]) => void;
+  onComputed: (mid: string, style: Record<string, string>) => void;
+  onDrag: (drag: { mid: string | null; place: DropPlace | null }) => void;
+  onDragged: (m: { kind: "move"; mid: string; place: DropPlace } | { kind: "style"; mid: string; set: Record<string, string> } | { kind: "drop"; place: DropPlace | null }) => void;
   onSelected: (mid: string | null) => void;
   onText: (mid: string, text: string) => void;
   pins: DesignComment[];
@@ -630,8 +736,8 @@ function PageFrame({
   // The elements whose boxes the page reports: the pins', and the open box's.
   const wanted = useMemo(() => [...pins.map((p) => p.mid), ...(box ? [box.element.mid] : [])], [pins, box]);
   const wantedKey = wanted.join(" ");
-  const latest = useRef({ mode, wanted, selected, rev, onPick, onKey, onTree, onSelected, onText });
-  latest.current = { mode, wanted, selected, rev, onPick, onKey, onTree, onSelected, onText };
+  const latest = useRef({ mode, wanted, selected, selectedOff, rev, onPick, onKey, onTree, onSelected, onText, onComputed, onDrag, onDragged });
+  latest.current = { mode, wanted, selected, selectedOff, rev, onPick, onKey, onTree, onSelected, onText, onComputed, onDrag, onDragged };
   const tell = (message: unknown) => frame.current?.contentWindow?.postMessage(message, "*");
   useEffect(() => {
     bridge.current = tell;
@@ -654,8 +760,8 @@ function PageFrame({
   useEffect(() => void tell(modeMessage(mode)), [mode]);
   useEffect(() => void tell(pinsMessage(wanted)), [wantedKey]);
   useEffect(() => {
-    if (mode === "edit") tell(selectMessage(selected));
-  }, [selected, mode]);
+    if (mode === "edit") tell(selectMessage(selected, selectedOff));
+  }, [selected, selectedOff, mode]);
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
       // Only this page's frame, and only a message the bridge sends.
@@ -673,13 +779,18 @@ function PageFrame({
         if (back) {
           reported.current = latest.current.rev;
           if (back.scroll) tell(scrollMessage(back.scroll.x, back.scroll.y));
-          if (back.select !== undefined) tell(selectMessage(back.select));
+          if (back.select !== undefined) tell(selectMessage(back.select, latest.current.selectedOff));
         }
       } else if (m.type === "tree") latest.current.onTree(m.layers);
       else if (m.type === "scroll") scrolled.current = { x: m.x, y: m.y };
       else if (m.type === "selected") {
         if (m.mid !== latest.current.selected) latest.current.onSelected(m.mid);
       } else if (m.type === "text") latest.current.onText(m.mid, m.text);
+      else if (m.type === "computed") latest.current.onComputed(m.mid, m.style);
+      else if (m.type === "drag") latest.current.onDrag({ mid: m.mid, place: m.place });
+      else if (m.type === "move") latest.current.onDragged({ kind: "move", mid: m.mid, place: m.place });
+      else if (m.type === "style") latest.current.onDragged({ kind: "style", mid: m.mid, set: m.set });
+      else if (m.type === "drop") latest.current.onDragged({ kind: "drop", place: m.place });
       else if (m.type === "rects") setRects(Object.fromEntries(m.rects.map(({ mid, ...r }) => [mid, r])));
       else if (m.type === "pick") {
         addPageMid(host, workspace, design.slug, page, m.element.mid);
