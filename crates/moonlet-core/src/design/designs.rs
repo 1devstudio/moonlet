@@ -401,8 +401,15 @@ pub fn styles_link(system: &str) -> String {
     format!("../../../systems/{system}/styles.css")
 }
 
-/// Each stylesheet a page links that is not `styles` (X65).
+/// Each stylesheet a page links, or imports in its `<style>`, that is not
+/// `styles` (X65).
 fn stylesheets(path_rel: &str, html: &str, styles: &str) -> Vec<Problem> {
+    let other = |line: usize, url: &str| Problem {
+        path: path_rel.to_string(),
+        line,
+        kind: Kind::Stylesheet,
+        message: format!("{url} is not the design system's styles.css: link {styles}"),
+    };
     let found = std::cell::RefCell::new(Vec::new());
     let line_of = |byte: usize| html[..byte.min(html.len())].matches('\n').count() + 1;
     let settings = lol_html::Settings::new().append_element_content_handler(lol_html::element!(
@@ -411,18 +418,21 @@ fn stylesheets(path_rel: &str, html: &str, styles: &str) -> Vec<Problem> {
             let rel = el.get_attribute("rel").unwrap_or_default().to_lowercase();
             let href = el.get_attribute("href").unwrap_or_default();
             if rel.split_whitespace().any(|r| r == "stylesheet") && href != styles {
-                found.borrow_mut().push(Problem {
-                    path: path_rel.to_string(),
-                    line: line_of(el.source_location().bytes().start),
-                    kind: Kind::Stylesheet,
-                    message: format!("{href} is not the design system's styles.css: link {styles}"),
-                });
+                found
+                    .borrow_mut()
+                    .push(other(line_of(el.source_location().bytes().start), &href));
             }
             Ok(())
         }
     ));
     let _ = lol_html::rewrite_str(html, settings);
-    found.into_inner()
+    let mut found = found.into_inner();
+    for (line, url) in super::check::style_imports(html) {
+        if url != styles {
+            found.push(other(line, &url));
+        }
+    }
+    found
 }
 
 /// The pins of `comments.json` whose `state` is `open`; none when it cannot be read.
@@ -814,6 +824,40 @@ created_at = 1761200000000
             std::fs::read_to_string(pages.join("git-a.html"))
                 .unwrap()
                 .contains("<body data-mid=\"m1\"><p data-mid=\"m2\">Git</p></body>")
+        );
+    }
+
+    #[test]
+    fn a_page_that_imports_another_stylesheet_in_its_style_is_reported_like_a_link() {
+        let (home, store) = store_with_system();
+        store.create_design("w1", "Settings page", "moonlet-desktop", "", 1).unwrap();
+        let pages = home.path().join("design/w1/designs/settings-page/pages");
+        std::fs::write(
+            pages.join("index.html"),
+            "<html><head><style>
+@import \"../../../systems/moonlet-desktop/styles.css\";
+@import url('https://fonts.example.com/inter.css');
+/* @import \"commented.css\"; */
+.x { color: red }
+</style></head>
+<body data-mid=\"m1\"></body></html>
+",
+        )
+        .unwrap();
+        let got: Vec<(String, usize, Kind, String)> = store
+            .check_design("w1", "settings-page", false)
+            .unwrap()
+            .into_iter()
+            .map(|p| (p.path, p.line, p.kind, p.message))
+            .collect();
+        assert_eq!(
+            got,
+            vec![(
+                "pages/index.html".into(),
+                3,
+                Kind::Stylesheet,
+                "https://fonts.example.com/inter.css is not the design system's styles.css: link ../../../systems/moonlet-desktop/styles.css".into()
+            )]
         );
     }
 }

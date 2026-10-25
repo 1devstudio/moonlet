@@ -388,6 +388,17 @@ fn style_comments(html: &str) -> Vec<std::ops::Range<usize>> {
         .collect()
 }
 
+/// Each `@import` in a page's `<style>`s, comments left out, as its line and
+/// URL: what a design page's check holds against its design system's
+/// `styles.css` (X65).
+pub(super) fn style_imports(html: &str) -> Vec<(usize, String)> {
+    let text = blank(html, &style_comments(html));
+    text.lines()
+        .enumerate()
+        .flat_map(|(i, line)| IMPORT.captures_iter(line).map(move |c| (i + 1, quoted(&c).to_string())))
+        .collect()
+}
+
 /// `text` with every byte in `ranges` but line breaks made a space, so lines
 /// and offsets stay where they were.
 fn blank(text: &str, ranges: &[std::ops::Range<usize>]) -> String {
