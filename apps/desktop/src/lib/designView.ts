@@ -79,7 +79,8 @@ export function fitScale(viewport: [number, number], box: [number, number]): num
 
 /** What **Ask the sync agent to fix** sends. */
 export function fixMessage(card: DesignCard): string {
-  const lines = card.problems.map((p) => `- line ${p.line}: ${p.message}`).join("\n");
+  // A problem in the card's own .css or .prompt.md names its file.
+  const lines = card.problems.map((p) => `- ${p.path && p.path !== card.path ? `${p.path} ` : ""}line ${p.line}: ${p.message}`).join("\n");
   return `Fix the check problems of ${card.path}, then run the check again:\n${lines}`;
 }
 

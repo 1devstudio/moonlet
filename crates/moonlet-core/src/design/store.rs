@@ -493,15 +493,17 @@ impl Store {
                 Ok(m) => (m.group, m.name.unwrap_or(stem), m.viewport, m.source),
                 Err(_) => ("Without a marker".to_string(), stem, (900, 700), Vec::new()),
             };
-            // A component's folder holds one card: its other files' problems
-            // are the card's.
-            let folder = path
-                .starts_with("components/")
-                .then(|| path.rsplit_once('/').map(|(f, _)| format!("{f}/")))
-                .flatten();
-            let (mine, rest): (Vec<_>, Vec<_>) = problems.into_iter().partition(|p| {
-                p.path == path || folder.as_ref().is_some_and(|f| p.path.starts_with(f))
-            });
+            // A component card's own `.css` and `.prompt.md`, beside it, are
+            // its files too; nothing else in its folder is.
+            let own: Vec<String> = match path.strip_suffix(".html") {
+                Some(stem) if path.starts_with("components/") => {
+                    vec![format!("{stem}.css"), format!("{stem}.prompt.md")]
+                }
+                _ => Vec::new(),
+            };
+            let (mine, rest): (Vec<_>, Vec<_>) = problems
+                .into_iter()
+                .partition(|p| p.path == path || own.contains(&p.path));
             problems = rest;
             let changed_sources = status
                 .iter()
@@ -2295,6 +2297,54 @@ root = \"9c1e0a2\"
                     "field",
                     "components/forms/field/field.html",
                     vec![("components/forms/field/field.html", 1, check::Kind::Marker)],
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_card_claims_only_its_own_files_problems_never_another_cards_beside_or_under_it() {
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::new(home.path());
+        let slug = store
+            .create_system("w1", "storefront", vec![], Cover::Core, 1)
+            .unwrap();
+        let dir = home.path().join("design/w1/systems").join(&slug);
+        let card = |name: &str, token: &str| {
+            format!(
+                "<!-- @dsCard group=\"Buttons\" name=\"{name}\" -->\n<p style=\"color: var({token})\">x</p>\n"
+            )
+        };
+        put(
+            &dir,
+            &[
+                ("styles.css", "\n"),
+                (
+                    "components/buttons/button/button.html",
+                    &card("Button", "--one"),
+                ),
+                (
+                    "components/buttons/button/inner/inner.html",
+                    &card("Inner", "--two"),
+                ),
+            ],
+        );
+        let got: Vec<(String, Vec<String>)> = store
+            .cards("w1", &slug)
+            .unwrap()
+            .into_iter()
+            .map(|c| (c.name, c.problems.into_iter().map(|p| p.path).collect()))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (
+                    "Button".to_string(),
+                    vec!["components/buttons/button/button.html".to_string()]
+                ),
+                (
+                    "Inner".to_string(),
+                    vec!["components/buttons/button/inner/inner.html".to_string()]
                 ),
             ]
         );

@@ -285,9 +285,9 @@ function CardPage({ host, workspace, sys, rev, card, agent, inset }: { host: str
               </IconButton>
             </span>
           </div>
-          <div ref={canvas} className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-bg [background-image:radial-gradient(var(--color-border)_1px,transparent_1px)] [background-size:16px_16px]">
+          <div ref={canvas} className="flex min-h-0 flex-1 overflow-auto bg-bg [background-image:radial-gradient(var(--color-border)_1px,transparent_1px)] [background-size:16px_16px]">
             {scale > 0 && (
-              <div className="rounded-md border border-border-strong shadow-2xl">
+              <div className="m-auto shrink-0 rounded-md border border-border-strong shadow-2xl">
                 <CardFrame url={cardUrl(workspace, sys.slug, card.path, rev)} title={card.name} viewport={card.viewport} scale={scale} interactive />
               </div>
             )}

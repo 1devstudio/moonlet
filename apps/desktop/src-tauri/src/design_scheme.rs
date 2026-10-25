@@ -88,10 +88,11 @@ pub async fn serve(app: &tauri::AppHandle, url: &str) -> tauri::http::Response<V
         return reply(404, "no such design file");
     };
     // Checked against the file actually opened, so a link put in its place
-    // after the daemon resolved it leads nowhere outside the design folder.
-    let root = moonlet_core::paths::home().join("design").join(&workspace);
-    let real = std::path::PathBuf::from(real);
-    let Ok(Ok(body)) = tokio::task::spawn_blocking(move || read_inside(&root, &real)).await else {
+    // after the daemon resolved it leads nowhere outside the workspace's folder.
+    let design = moonlet_core::paths::home().join("design");
+    let (real, ws) = (std::path::PathBuf::from(real), workspace.clone());
+    let Ok(Ok(body)) = tokio::task::spawn_blocking(move || read_inside(&design, &ws, &real)).await
+    else {
         return reply(404, "no such design file");
     };
     let mut res = tauri::http::Response::builder().status(200);
@@ -102,15 +103,21 @@ pub async fn serve(app: &tauri::AppHandle, url: &str) -> tauri::http::Response<V
 }
 
 /// The bytes of `path`, opened first and then checked: the file opened must
-/// be inside `root` (links resolved), or nothing is read.
-pub fn read_inside(root: &std::path::Path, path: &std::path::Path) -> std::io::Result<Vec<u8>> {
+/// be inside `workspace`'s folder of the design root `design`, measured from
+/// the design root's real path, so neither a link in the folder nor a
+/// workspace folder that is itself a link leads anywhere else.
+pub fn read_inside(
+    design: &std::path::Path,
+    workspace: &str,
+    path: &std::path::Path,
+) -> std::io::Result<Vec<u8>> {
     use std::io::Read;
-    let root = std::fs::canonicalize(root)?;
+    let root = std::fs::canonicalize(design)?.join(workspace);
     let mut file = std::fs::File::open(path)?;
     if !opened_path(&file)?.starts_with(&root) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
-            "outside the design folder",
+            "outside the workspace's design folder",
         ));
     }
     let mut bytes = Vec::new();
@@ -205,23 +212,29 @@ mod tests {
     }
 
     #[test]
-    fn only_a_file_that_is_inside_the_design_folder_when_opened_is_read() {
-        let root = tempfile::tempdir().unwrap();
+    fn only_a_file_that_is_inside_the_workspaces_folder_when_opened_is_read() {
+        let design = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
-        std::fs::write(root.path().join("card.html"), "<p>card</p>").unwrap();
+        let w1 = design.path().join("w1");
+        std::fs::create_dir(&w1).unwrap();
+        std::fs::write(w1.join("card.html"), "<p>card</p>").unwrap();
         std::fs::write(outside.path().join("secret.txt"), "secret").unwrap();
-        std::os::unix::fs::symlink(
-            outside.path().join("secret.txt"),
-            root.path().join("link.html"),
-        )
-        .unwrap();
-        std::os::unix::fs::symlink(outside.path(), root.path().join("dir")).unwrap();
+        std::os::unix::fs::symlink(outside.path().join("secret.txt"), w1.join("link.html"))
+            .unwrap();
+        std::os::unix::fs::symlink(outside.path(), w1.join("dir")).unwrap();
+        // A workspace folder that is a link, swapped in after the daemon checked.
+        std::os::unix::fs::symlink(outside.path(), design.path().join("w2")).unwrap();
+        // Another workspace's file is not this one's either.
+        std::fs::create_dir(design.path().join("w3")).unwrap();
+        std::fs::write(design.path().join("w3/card.html"), "<p>w3</p>").unwrap();
         assert_eq!(
-            read_inside(root.path(), &root.path().join("card.html")).unwrap(),
+            read_inside(design.path(), "w1", &w1.join("card.html")).unwrap(),
             b"<p>card</p>"
         );
-        assert!(read_inside(root.path(), &root.path().join("link.html")).is_err());
-        assert!(read_inside(root.path(), &root.path().join("dir/secret.txt")).is_err());
+        assert!(read_inside(design.path(), "w1", &w1.join("link.html")).is_err());
+        assert!(read_inside(design.path(), "w1", &w1.join("dir/secret.txt")).is_err());
+        assert!(read_inside(design.path(), "w2", &design.path().join("w2/secret.txt")).is_err());
+        assert!(read_inside(design.path(), "w1", &design.path().join("w3/card.html")).is_err());
     }
 
     #[test]
