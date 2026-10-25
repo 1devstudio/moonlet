@@ -1319,8 +1319,8 @@ async function openInTerminal(host: string, info: TerminalInfo, st: ChatState) {
  * session, such as a design system's sync agent (X64), which has no pane
  * layout or file tabs to open. */
 /** `lead`: shown above the conversation, such as a design's note of what went
- *  with its brief (X65); `userText`: what a message of the user's shows, when
- *  not its whole text (null keeps it). */
+ *  with its brief (X65); `userText`: what a message of the user's shows when
+ *  not its whole text (null keeps it), told whether it is the user's first. */
 export function AgentView({
   host,
   id,
@@ -1336,12 +1336,14 @@ export function AgentView({
   focused: boolean;
   visible: boolean;
   lead?: ReactNode;
-  userText?: (text: string) => string | null;
+  userText?: (text: string, first: boolean) => string | null;
 }) {
   const info = useStore((s) => s.terminals[host]?.[id]);
   const st = useChat((s) => s.chats[chatKey(host, id)]);
   const toolCalls = useStore((s) => s.settings.toolCalls);
   const blocks = useMemo(() => (st ? chatBlocks(st.items, toolCalls) : []), [st?.items, toolCalls]);
+  // The user's first message, which a design's chat shows as its brief (X65).
+  const firstUser = useMemo(() => st?.items.find((i) => i.kind === "user")?.id, [st?.items]);
   const scroller = useRef<HTMLDivElement>(null);
   const cwd = info?.cwd ?? "";
   const stick = useRef(true);
@@ -1638,7 +1640,7 @@ export function AgentView({
                     ) : b.kind === "tools" ? (
                       <ToolGroup key={b.id} tools={b.tools} cwd={info?.cwd ?? ""} />
                     ) : (
-                      <ChatItemView key={b.item.id} item={itemShown(b.item, userText)} cwd={info?.cwd ?? ""} />
+                      <ChatItemView key={b.item.id} item={itemShown(b.item, userText, b.item.id === firstUser)} cwd={info?.cwd ?? ""} />
                     );
                   const ids = b.kind === "item" ? [b.item.id] : b.tools.map((t) => t.id);
                   const hasPlan = plan?.itemId && ids.includes(plan.itemId);
