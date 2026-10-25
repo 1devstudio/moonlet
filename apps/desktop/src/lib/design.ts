@@ -1,5 +1,6 @@
 // Design mode's labels and names (X64, X65). Pure: the store is designStore.ts.
 
+import { ago } from "./mobile";
 import type { AgentState, Design, DesignSystem } from "./protocol";
 
 export interface RowLabel {
@@ -73,4 +74,30 @@ export function systemFolder(workspace: string, name: string, taken: string[] | 
 /** The picked projects still in the workspace, in the order they were picked. */
 export function picksInWorkspace(picked: string[], projects: string[]): string[] {
   return picked.filter((id) => projects.includes(id));
+}
+
+const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
+
+/** The New design dialog's line under the design system (X65): "moonlet
+ *  desktop: 11 cards, 2 layouts, synced 3 days ago from moonlet". */
+export function systemSummary(sys: DesignSystem, projects: { path: string; name: string }[], now: number): string {
+  const from = sys.sources.map((p) => projects.find((x) => x.path === p)?.name ?? p.split("/").filter(Boolean).pop() ?? p).join(", ");
+  const synced = sys.synced_at === null ? "not synced yet," : `synced ${ago(now - sys.synced_at)}`;
+  return `${sys.name}: ${plural(sys.cards, "card")}, ${plural(sys.layouts, "layout")}, ${synced}${from ? ` from ${from}` : ""}`;
+}
+
+export interface NewDesign {
+  name: string;
+  /** The design system's slug. */
+  system: string;
+  brief: string;
+}
+
+/** Whether **Create design** may run, and why not (X65): a name, one of the
+ *  workspace's design systems (`systems`, their slugs) and a brief. */
+export function newDesignReady(d: NewDesign, systems: string[]): { ready: boolean; why: string | null } {
+  if (!d.name.trim()) return { ready: false, why: "Name the design" };
+  if (!systems.includes(d.system)) return { ready: false, why: "A design starts from a design system" };
+  if (!d.brief.trim()) return { ready: false, why: "Say what to design: the brief is Claude's first message" };
+  return { ready: true, why: null };
 }

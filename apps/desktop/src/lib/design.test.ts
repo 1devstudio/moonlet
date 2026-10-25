@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Design, DesignSystem } from "./protocol";
-import { designRow, designSlug, picksInWorkspace, systemFolder, systemLabel } from "./design";
+import { designRow, designSlug, newDesignReady, systemSummary, picksInWorkspace, systemFolder, systemLabel } from "./design";
 
 const NOW = 1_761_200_000_000;
 const DAY = 86_400_000;
@@ -138,5 +138,22 @@ describe("a design's sidebar row (X65)", () => {
   it("has no dot without an agent, and says unreadable when its design.toml could not be read", () => {
     expect(designRow(design({ agent: null, agent_state: null }), NOW, null)).toEqual({ state: null, text: "2d", tone: "muted", comments: false });
     expect(designRow(design({ error: "cannot read design.toml" }), NOW, null)).toEqual({ state: null, text: "unreadable", tone: "error", comments: false });
+  });
+});
+
+describe("the New design dialog (X65)", () => {
+  it("says what the picked design system holds, when it was synced and from where", () => {
+    const projects = [{ path: "/Users/alex/Workspace/moonlet", name: "moonlet" }];
+    expect(systemSummary(system({ cards: 11, layouts: 2 }), projects, NOW)).toBe("moonlet desktop: 11 cards, 2 layouts, synced 3 days ago from moonlet");
+    expect(systemSummary(system({ cards: 1, layouts: 0, synced_at: null, sources: ["/Users/alex/Workspace/shop"] }), [], NOW)).toBe("moonlet desktop: 1 card, 0 layouts, not synced yet, from shop");
+  });
+
+  it("creates a design once it has a name, a design system the workspace has and a brief", () => {
+    const systems = ["moonlet-desktop", "storefront"];
+    expect(newDesignReady({ name: "Settings page", system: "storefront", brief: "A left nav" }, systems)).toEqual({ ready: true, why: null });
+    expect(newDesignReady({ name: "  ", system: "storefront", brief: "A left nav" }, systems)).toEqual({ ready: false, why: "Name the design" });
+    expect(newDesignReady({ name: "Settings page", system: "", brief: "A left nav" }, [])).toEqual({ ready: false, why: "A design starts from a design system" });
+    expect(newDesignReady({ name: "Settings page", system: "gone", brief: "A left nav" }, systems)).toEqual({ ready: false, why: "A design starts from a design system" });
+    expect(newDesignReady({ name: "Settings page", system: "storefront", brief: "\n " }, systems)).toEqual({ ready: false, why: "Say what to design: the brief is Claude's first message" });
   });
 });
