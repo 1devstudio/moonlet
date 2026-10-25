@@ -71,7 +71,7 @@ export const ROOT_PX = 16;
 
 /** A value as it compares: lowercase, single spaces, rem and em as px at
  *  {@link ROOT_PX}, `0px` as `0`, and colours written as hex or `rgb()` in
- *  either syntax as one `rgb()`. */
+ *  either syntax, its channels in numbers or percentages, as one `rgb()`. */
 function norm(value: string): string {
   return value
     .trim()
@@ -85,10 +85,12 @@ function norm(value: string): string {
       return rgbText(ch, full.length === 8 ? parseInt(full.slice(6), 16) / 255 : 1);
     })
     .replace(/rgba?\(([^)]*)\)/g, (all, inside: string) => {
+      // A channel in % is of 255, rounded as the page computes it; an
+      // alpha in % is of 1.
       const nums = inside
         .split(/[\s,/]+/)
         .filter(Boolean)
-        .map((x) => (x.endsWith("%") ? Number(x.slice(0, -1)) / 100 : Number(x)));
+        .map((x, i) => (!x.endsWith("%") ? Number(x) : i < 3 ? Math.round((Number(x.slice(0, -1)) * 255) / 100) : Number(x.slice(0, -1)) / 100));
       if (nums.length < 3 || nums.length > 4 || nums.some((x) => Number.isNaN(x))) return all;
       return rgbText(nums.slice(0, 3), nums[3] ?? 1);
     })
