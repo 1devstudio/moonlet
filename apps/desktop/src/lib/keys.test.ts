@@ -61,6 +61,34 @@ describe("workspace shortcuts (X32)", () => {
   });
 });
 
+describe("⇧⌘N (X54, X65)", () => {
+  const host = { id: "local", label: "This Mac", remote: false, status: "connected" as const, message: null, daemon_version: null, hostname: null, home: null };
+  const shiftCmd = (key: string) => document.body.dispatchEvent(new KeyboardEvent("keydown", { key, metaKey: true, shiftKey: true, bubbles: true }));
+
+  beforeAll(() => installShortcuts());
+  beforeEach(() =>
+    useStore.setState({
+      confirm: null,
+      dialog: null,
+      hosts: { local: host },
+      workspaces: { local: [{ id: "personal", name: "Personal", color: "clay" as const, section_ids: [], created_at: 0 }] },
+      workspace: { host: "local", id: "personal" },
+      mode: {},
+    }),
+  );
+
+  it("opens the New session composer in Sessions mode", () => {
+    shiftCmd("N");
+    expect(useStore.getState().dialog).toEqual({ kind: "new-session" });
+  });
+
+  it("opens New design in Design mode, for the shown workspace", () => {
+    useStore.setState({ mode: { "local/personal": "design" } });
+    shiftCmd("N");
+    expect(useStore.getState().dialog).toEqual({ kind: "new-design", host: "local", workspace: "personal" });
+  });
+});
+
 describe("font size shortcuts (X37)", () => {
   const press = (key: string, shiftKey = false, target: Element = document.body) => target.dispatchEvent(new KeyboardEvent("keydown", { key, metaKey: true, shiftKey, bubbles: true }));
   const fontSize = () => useStore.getState().settings.term.fontSize;
