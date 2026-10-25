@@ -89,20 +89,26 @@ export interface Untold extends HandEdit {
 /** The first line of a message that tells the agent the edits by hand. */
 export const EDITS_HEADER = "Edits by hand since your last turn:";
 
-/** One line per element edited, in the order first edited: its changes in
- *  order, a text change only as its latest text. */
-export function editLines(edits: Untold[]): string[] {
-  const byElement = new Map<string, { head: HandEdit; changes: string[]; text: number | null }>();
+/** Each element edited, in the order first edited, with its changes in
+ *  order, a text change only as its latest. */
+function byElement(edits: Untold[]): { head: HandEdit; changes: string[] }[] {
+  const out = new Map<string, { head: HandEdit; changes: string[]; text: number | null }>();
   for (const e of edits) {
     const key = `${e.page}\0${e.mid}`;
-    const el = byElement.get(key) ?? { head: e, changes: [], text: null };
-    byElement.set(key, el);
+    const el = out.get(key) ?? { head: e, changes: [], text: null };
+    out.set(key, el);
     const said = `${e.undone ? "undid " : ""}${changeText(e.change)}`;
     if (e.change.kind === "text" && !e.undone && el.text !== null) el.changes[el.text] = said;
     else if (e.change.kind === "text" && !e.undone) el.text = el.changes.push(said) - 1;
     else el.changes.push(said);
   }
-  return [...byElement.values()].map((el) => elementLine(el.head, el.changes));
+  return [...out.values()];
+}
+
+/** One line per element edited, in the order first edited: its changes in
+ *  order, a text change only as its latest. */
+export function editLines(edits: Untold[]): string[] {
+  return byElement(edits).map((el) => elementLine(el.head, el.changes));
 }
 
 /** An edit's line read back: its element and what it says changed. */
@@ -400,9 +406,10 @@ function textOnly(el: Element): boolean {
   return !RAW.has(el.tagName) && !!el.sourceCodeLocation?.startTag && el.childNodes.every((c) => c.nodeName === "#text");
 }
 
-/** The chip over the canvas: how many lines the next message tells the
- *  agent, "3 edits by hand · go with your next message"; null for none. */
+/** The chip over the canvas: how many edits the next message tells the
+ *  agent, one per change of an element, a text only as its latest, "3
+ *  edits by hand · go with your next message"; null for none. */
 export function editsChip(edits: Untold[]): string | null {
-  const n = editLines(edits).length;
+  const n = byElement(edits).reduce((sum, el) => sum + el.changes.length, 0);
   return n ? `${n} ${n === 1 ? "edit" : "edits"} by hand · go with your next message` : null;
 }

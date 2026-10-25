@@ -201,7 +201,12 @@ describe("edits by hand, as the agent is told them (X65)", () => {
     expect(readEditsMessage("Edits by hand since your last turn:\nnot an edit\n\nHi")).toBeNull();
   });
 
-  it("are counted on the chip by the lines the next message will have, and none shows no chip", () => {
+  it("are counted on the chip one per change, a text only as its latest, so a wrap and a text change of one element are 2", () => {
+    const m31 = (change: Untold["change"]): Untold => ({ page: "index", mid: "m31", tag: "span", change });
+    expect(editsChip([m31({ kind: "text", text: "Prefix" }), m31({ kind: "wrapped", box: "m42" }), m31({ kind: "text", text: "Prefix for new branches" })])).toBe("2 edits by hand · go with your next message");
+  });
+
+  it("are counted on the chip one each across elements, and none shows no chip", () => {
     const text = (mid: string, t: string): Untold => ({ page: "index", mid, tag: "span", change: { kind: "text", text: t } });
     expect(editsChip([text("m31", "Prefix"), text("m31", "Prefix for new branches"), { page: "index", mid: "m24", tag: "section", change: { kind: "deleted" } }, text("m25", "Git")])).toBe(
       "3 edits by hand · go with your next message",
