@@ -519,23 +519,23 @@ mod tests {
     #[tokio::test]
     async fn reads_captured_server_types() {
         let script = Script::new(vec![ok(include_str!("fixtures/hetzner/server_types.json"))]);
-        let types = hetzner(&script).machine_types("fsn1").await.unwrap();
+        // Ashburn sells 11 of the 26 types.
+        let types = hetzner(&script).machine_types("ash").await.unwrap();
         assert_eq!(
-            types,
+            types.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
             [
-                MachineType {
-                    name: "cpx41".into(),
-                    cores: 8,
-                    memory_gb: 16.0,
-                    arch: "x86".into()
-                },
-                MachineType {
-                    name: "cax21".into(),
-                    cores: 4,
-                    memory_gb: 8.0,
-                    arch: "arm".into()
-                },
+                "cpx11", "cpx21", "cpx31", "cpx41", "cpx51", "ccx13", "ccx23", "ccx33", "ccx43",
+                "ccx53", "ccx63"
             ]
+        );
+        assert_eq!(
+            types[3],
+            MachineType {
+                name: "cpx41".into(),
+                cores: 8,
+                memory_gb: 16.0,
+                arch: "x86".into()
+            }
         );
     }
 
