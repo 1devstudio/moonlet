@@ -2283,6 +2283,9 @@ pub struct CloudMachine {
     pub error: Option<String>,
     #[serde(default)]
     pub error_since: Option<u64>,
+    /// The last failed attempt.
+    #[serde(default)]
+    pub error_at: Option<u64>,
     /// Why it was removed: "removed after 15 min idle".
     #[serde(default)]
     pub reason: Option<String>,

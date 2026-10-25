@@ -206,6 +206,7 @@ describe("heavy commands in the search (X62)", () => {
     const found = (q: string) => searchSettings(q, ctx).map((r) => [r.before + r.hit + r.after, r.path, r.setting]);
     expect(found("workers")).toEqual([
       ["Workers", "Machines › Workers", undefined],
+      ["Cloud workers", "Machines › Cloud workers", undefined],
       ["Heavy commands", "Projects › storefront", "project-heavy"],
     ]);
     expect(found("run at most")).toEqual([["Run at most", "Machines › Hosts", "heavy-slots"]]);
@@ -213,5 +214,20 @@ describe("heavy commands in the search (X62)", () => {
       ["Use this Mac for heavy commands", "Machines › Hosts", "heavy-commands"],
       ["Heavy commands", "Projects › storefront", "project-heavy"],
     ]);
+  });
+});
+
+describe("cloud workers in the search (X63)", () => {
+  it("finds the Cloud workers page, its Tailscale client and its limits", () => {
+    const found = (q: string) => searchSettings(q, ctx).map((r) => [r.before + r.hit + r.after, r.path, r.setting]);
+    expect(found("cloud")).toEqual([
+      ["Cloud workers", "Machines › Cloud workers", undefined],
+      ["Remove a machine after", "Machines › Cloud workers", "cloud-idle"],
+      ["At most", "Machines › Cloud workers", "cloud-max"],
+      ["Monthly limit", "Machines › Cloud workers", "cloud-hours"],
+    ]);
+    expect(found("hetzner")).toEqual([["Cloud workers", "Machines › Cloud workers", undefined]]);
+    expect(found("oauth")).toEqual([["Tailscale OAuth client", "Machines › Cloud workers", "cloud-tailscale"]]);
+    expect(found("machine-hours")).toEqual([["Monthly limit", "Machines › Cloud workers", "cloud-hours"]]);
   });
 });

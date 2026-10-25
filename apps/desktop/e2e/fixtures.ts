@@ -74,6 +74,8 @@ function makeWorld(root: string): World {
       GIT_ALLOW_PROTOCOL: "file",
       // Linear, Jira and ClickUp go to a mock server the specs start (X44; e2e builds only).
       MOONLET_TRACKER_BASE: `http://127.0.0.1:${trackerPort(root)}`,
+      // Cloud machines (X63) are scratch daemons made by the fake provider, steered by files there.
+      MOONLET_CLOUD_FAKE: join(root, "cloud-fake"),
     },
   };
 }

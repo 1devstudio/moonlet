@@ -18,6 +18,7 @@ import { syncOffered } from "../../lib/sync";
 import { projectKeepsNew, setProjectKeepsNew, useSync } from "../../lib/syncStore";
 import { useUnsaved } from "./useUnsaved";
 import { HeavySection, useHeavy } from "./HeavySection";
+import { CloudSection, useProjectCloud } from "./CloudSection";
 
 const EMPTY: Form = { setup: "", run: "", archive: "", default_agent: "", base_branch: "", branch_prefix: "", agents: [], trackers: [] };
 
@@ -128,8 +129,10 @@ export function ProjectPage({ host, id, focus }: { host: string; id: string; foc
   // `[heavy]`, saved with the page through its own call (X62).
   const heavy = useHeavy(host, id);
   const heavyDirty = !parseError && heavy.dirty;
-  const dirty = configDirty || keepDirty || heavyDirty;
-  const canSave = !loading && !parseError && dirty && !v.any && !saving;
+  // The project's cloud setting (X63), saved to the central host's cloud.json.
+  const cloud = useProjectCloud(host, project?.identity);
+  const dirty = configDirty || keepDirty || heavyDirty || cloud.dirty;
+  const canSave = !loading && !parseError && dirty && !v.any && !cloud.errors && !saving;
   const path = file?.path ?? "";
   const name = configName(file?.path);
 
@@ -145,6 +148,7 @@ export function ProjectPage({ host, id, focus }: { host: string; id: string; foc
         // It wrote the file: the next save starts from this version.
         show(await rpc<ProjectConfigFile>(host, M.projectConfigFile, { id }));
       }
+      await cloud.save();
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       const stale = message.includes("config changed on disk");
@@ -271,6 +275,7 @@ export function ProjectPage({ host, id, focus }: { host: string; id: string; foc
               set({ ...orig });
               setKeepNew(origKeepNew);
               heavy.discard();
+              cloud.discard();
             }}
             onSave={() => void save()}
           >
@@ -414,6 +419,8 @@ export function ProjectPage({ host, id, focus }: { host: string; id: string; foc
         </Section>
 
         {project && <HeavySection host={host} id={id} project={project} heavy={heavy} />}
+
+        {project && <CloudSection host={host} project={project} cloud={cloud} machineSetup={heavy.info?.config.machine_setup} />}
 
         {keepShown && (
           <Section title="This Mac">
