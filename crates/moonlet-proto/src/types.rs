@@ -249,6 +249,36 @@ pub struct ProjectConfig {
     /// from, as `<connection>/<key>`: `jira:acme.atlassian.net/ABC` (X44).
     #[serde(default)]
     pub trackers: Vec<String>,
+    /// Commands that may run on another machine, `[heavy]` (X62).
+    #[serde(default)]
+    pub heavy: HeavyConfig,
+}
+
+/// A project's heavy commands, the `[heavy]` table of its config (X62).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct HeavyConfig {
+    /// Command prefixes, one or more words each: `pnpm test`.
+    #[serde(default)]
+    pub commands: Vec<String>,
+    /// The system a worker must run to take them.
+    #[serde(default)]
+    pub os: HeavyOs,
+    /// Names of the variables passed through to the worker.
+    #[serde(default)]
+    pub env: Vec<String>,
+    /// Ignored paths brought back after a run.
+    #[serde(default)]
+    pub outputs: Vec<String>,
+}
+
+/// Which workers may take a project's heavy commands (X62).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HeavyOs {
+    #[default]
+    Any,
+    Macos,
+    Linux,
 }
 
 /// A project's `.moonlet/config.toml` as the Project settings dialog sees it (X8).

@@ -224,9 +224,12 @@ fn normalize(c: &ProjectConfig) -> ProjectConfig {
                 seen
             },
         ),
+        heavy: c.heavy.clone(),
     }
 }
 
+/// Writes `c` into `doc`. `[heavy]` is left as it is: only `heavy.set`
+/// writes it (X62), so a client that does not know it never erases it.
 fn apply(doc: &mut DocumentMut, c: &ProjectConfig) {
     let values = [
         &c.setup,
@@ -374,6 +377,33 @@ fn version(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn saving_the_config_leaves_the_heavy_table_as_it_is() {
+        // `[heavy]` is written only by `heavy.set` (X62): a save that does
+        // not know it, or carries an old copy, neither erases nor blocks it.
+        let text = "run = \"pnpm dev\"\n\n[heavy]\ncommands = [\"pnpm test\"]\noutputs = [\"../shared\"]\n";
+        let dir = repo_with(Some(text));
+        let file = load(dir.path(), "main".into());
+        let config = ProjectConfig {
+            run: Some("pnpm start".into()),
+            ..ProjectConfig::default()
+        };
+        save(dir.path(), &file.version, &config).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(path(dir.path())).unwrap(),
+            "run = \"pnpm start\"\n\n[heavy]\ncommands = [\"pnpm test\"]\noutputs = [\"../shared\"]\n"
+        );
+        let mut stale = file.config.clone();
+        stale.run = Some("pnpm serve".into());
+        let file = load(dir.path(), "main".into());
+        save(dir.path(), &file.version, &stale).unwrap();
+        assert!(
+            std::fs::read_to_string(path(dir.path()))
+                .unwrap()
+                .starts_with("run = \"pnpm serve\"\n")
+        );
+    }
 
     fn repo_with(text: Option<&str>) -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
