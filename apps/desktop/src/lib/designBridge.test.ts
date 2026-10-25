@@ -84,7 +84,7 @@ describe("the bridge's messages (X65)", () => {
 
   it("tells the page an edit to make on its live page", () => {
     expect(editMessage({ op: "remove", mid: "m33" })).toEqual({ type: "bridge.edit", op: "remove", mid: "m33" });
-    expect(editMessage({ op: "insert", after: "m30", html: '<div data-mid="m41">Copy</div>' })).toEqual({ type: "bridge.edit", op: "insert", after: "m30", html: '<div data-mid="m41">Copy</div>' });
+    expect(editMessage({ op: "insert", place: { where: "below", ref: "m30" }, html: '<div data-mid="m41">Copy</div>' })).toEqual({ type: "bridge.edit", op: "insert", place: { where: "below", ref: "m30" }, html: '<div data-mid="m41">Copy</div>' });
     expect(editMessage({ op: "wrap", mid: "m25", box: "m41" })).toEqual({ type: "bridge.edit", op: "wrap", mid: "m25", box: "m41" });
     expect(editMessage({ op: "unwrap", mid: "m30" })).toEqual({ type: "bridge.edit", op: "unwrap", mid: "m30" });
   });
@@ -134,7 +134,7 @@ describe("the bridge's messages (X65)", () => {
   it("tells the page the new edits to make on its live page: a style, a move, and an insert above or into an element", () => {
     expect(editMessage({ op: "style", mid: "m24", style: "padding: var(--space-4)" })).toEqual({ type: "bridge.edit", op: "style", mid: "m24", style: "padding: var(--space-4)" });
     expect(editMessage({ op: "move", mid: "m24", place: { where: "above", ref: "m22" } })).toEqual({ type: "bridge.edit", op: "move", mid: "m24", place: { where: "above", ref: "m22" } });
-    expect(editMessage({ op: "insert", into: "m22", html: '<hr data-mid="m41">' })).toEqual({ type: "bridge.edit", op: "insert", into: "m22", html: '<hr data-mid="m41">' });
+    expect(editMessage({ op: "insert", place: { where: "into", ref: "m22" }, html: '<hr data-mid="m41">' })).toEqual({ type: "bridge.edit", op: "insert", place: { where: "into", ref: "m22" }, html: '<hr data-mid="m41">' });
   });
 
   it("drops a message of an unknown type, or that is not an object", () => {
@@ -362,7 +362,7 @@ describe("the bridge script in a page (X65)", () => {
     const { doc, tell, of } = framed('<section data-mid="m24"><h2 data-mid="m25">Git</h2><div data-mid="m30"><span data-mid="m31">Prefix</span></div></section>');
     await vi.waitFor(() => expect(of("tree")).toHaveLength(1));
     const body = () => doc.body.innerHTML;
-    tell(editMessage({ op: "insert", after: "m30", html: '<div data-mid="m41"><span data-mid="m42">Prefix</span></div>' }));
+    tell(editMessage({ op: "insert", place: { where: "below", ref: "m30" }, html: '<div data-mid="m41"><span data-mid="m42">Prefix</span></div>' }));
     tell(editMessage({ op: "wrap", mid: "m25", box: "m43" }));
     tell(editMessage({ op: "unwrap", mid: "m30" }));
     tell(editMessage({ op: "remove", mid: "m41" }));
@@ -382,7 +382,7 @@ describe("the bridge script in a page (X65)", () => {
     tell({ type: "bridge.edit", op: "remove", mid: '[data-mid="m24"]' });
     tell({ type: "bridge.edit", op: "wrap", mid: "m25", box: 'x" onclick="' });
     tell({ type: "bridge.edit", op: "replace", mid: "m24" });
-    tell(editMessage({ op: "insert", after: null, html: '<p data-mid="m44">First</p>' }));
+    tell(editMessage({ op: "insert", place: null, html: '<p data-mid="m44">First</p>' }));
     expect(body()).toBe('<p data-mid="m44">First</p><section data-mid="m24"><div data-mid="m43"><h2 data-mid="m25">Git</h2></div><span data-mid="m31">Prefix</span></section>');
   });
 
@@ -600,8 +600,8 @@ describe("the bridge script in a page (X65)", () => {
     await vi.waitFor(() => expect(of("tree")).toHaveLength(1));
     tell(editMessage({ op: "move", mid: "m24", place: { where: "above", ref: "m22" } }));
     tell(editMessage({ op: "style", mid: "m25", style: "padding: var(--space-4)" }));
-    tell(editMessage({ op: "insert", above: "m23", html: '<hr data-mid="m41">' }));
-    tell(editMessage({ op: "insert", into: "m22", html: '<p data-mid="m42">New</p>' }));
+    tell(editMessage({ op: "insert", place: { where: "above", ref: "m23" }, html: '<hr data-mid="m41">' }));
+    tell(editMessage({ op: "insert", place: { where: "into", ref: "m22" }, html: '<p data-mid="m42">New</p>' }));
     tell(editMessage({ op: "move", mid: "m22", place: { where: "into", ref: "m23" } }));
     expect(doc.body.innerHTML).toBe('<section data-mid="m24"><h2 data-mid="m25" style="padding: var(--space-4)">Git</h2></section><section data-mid="m22"><hr data-mid="m41"><h2 data-mid="m23">General</h2><p data-mid="m42">New</p></section>');
     tell(editMessage({ op: "style", mid: "m25", style: "" }));

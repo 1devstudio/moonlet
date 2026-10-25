@@ -260,14 +260,13 @@ export function helloMessage(): { type: "bridge.hello" } {
 
 /** An edit by hand made on the live page too, so it shows at once without
  *  loading the page again (the saved file is what counts): remove an
- *  element, insert one's source after element `after` (null: first in the
- *  body), wrap one in a box with id `box`, unwrap one, or give one its new
+ *  element, insert one's source at a place (null: first in the body), wrap
+ *  one in a box with id `box`, unwrap one, or give one its new
  *  inline style. */
 export type LiveEdit =
   | { op: "remove"; mid: string }
-  | { op: "insert"; after: string | null; html: string }
-  | { op: "insert"; above: string; html: string }
-  | { op: "insert"; into: string; html: string }
+  /** An element's source put at `place`; null: first in the body. */
+  | { op: "insert"; place: DropPlace | null; html: string }
   | { op: "wrap"; mid: string; box: string }
   | { op: "unwrap"; mid: string }
   /** Its `style` attribute's new text; empty: none. */
