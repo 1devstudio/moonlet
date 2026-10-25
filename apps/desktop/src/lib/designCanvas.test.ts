@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canvasPage, changedPages, reloadsPage, writingPage } from "./designCanvas";
+import { canvasPage, changedPages, modeHint, modeKey, reloadsPage, writingPage } from "./designCanvas";
 
 const change = (over: { system?: string | null; design?: string | null; paths: string[] }) => ({ workspace: "w1", system: null, design: null, ...over });
 
@@ -52,5 +52,23 @@ describe("the page the canvas shows (X65)", () => {
     expect(canvasPage("git-b", ["git-a"])).toBe("git-a");
     expect(canvasPage("index", [])).toBe("index");
     expect(canvasPage("git-b", [])).toBe("index");
+  });
+});
+
+describe("the canvas's mode (X65)", () => {
+  it("says what View and Comment do in the hint line", () => {
+    expect(modeHint("view")).toBe("View: the page runs as in a browser, so its links, menus and scripts work");
+    expect(modeHint("comment")).toBe("Hover outlines elements · click pins a comment · ⌥-click picks the parent");
+  });
+
+  it("takes C to switch Comment on and off, and Esc to close the box or leave Comment, never while typing or with a modifier", () => {
+    const key = (k: string, over: Partial<{ meta: boolean; ctrl: boolean; alt: boolean; shift: boolean; typing: boolean }> = {}) =>
+      modeKey({ key: k, meta: false, ctrl: false, alt: false, shift: false, typing: false, ...over });
+    expect(key("c")).toBe("comment");
+    expect(key("C", { shift: true })).toBeNull();
+    expect(key("c", { meta: true })).toBeNull();
+    expect(key("c", { typing: true })).toBeNull();
+    expect(key("Escape")).toBe("escape");
+    expect(key("v")).toBeNull();
   });
 });

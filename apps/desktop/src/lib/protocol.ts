@@ -1071,6 +1071,24 @@ export interface Design {
   error: string | null;
 }
 
+/** A comment pinned on an element of a design's page, as `design.comments`
+ *  gives it (X65). */
+export interface DesignComment {
+  /** Its number in the design, on its pin. */
+  n: number;
+  /** The page it is on (`index` for `pages/index.html`); "" in a pin that names none. */
+  page: string;
+  /** The element's `data-mid`. */
+  mid: string;
+  tag: string;
+  /** Up to 60 characters of the element's text. */
+  text: string;
+  comment: string;
+  /** When it was last sent to the chat, ms; null while not sent. */
+  sent_at: number | null;
+  state: "open" | "resolved";
+}
+
 /** `design.create`'s answer: the design, and why its agent did not start. */
 export interface DesignCreated extends Design {
   agent_error: string | null;
@@ -1283,6 +1301,9 @@ export const M = {
   designCards: "design.cards",
   designCheck: "design.check",
   designList: "design.list",
+  designComments: "design.comments",
+  designCommentPut: "design.comment.put",
+  designCommentResolve: "design.comment.resolve",
   designCreate: "design.create",
   designRemove: "design.remove",
   designOpen: "design.open",
