@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { VIEWPORTS, canvasKey, sizeOf, customViewports, withCustomViewport, canvasScale, canvasZoom, parseViewport, viewportLabel, viewportText } from "./designViewport";
+import { VIEWPORTS, canvasKey, fitBox, sizeOf, customViewports, withCustomViewport, canvasScale, canvasZoom, parseViewport, viewportLabel, viewportText } from "./designViewport";
 
 describe("the canvas's viewport (X65)", () => {
   it("is Desktop, Laptop, Tablet or Phone, at their sizes", () => {
@@ -30,6 +30,11 @@ describe("the canvas's zoom (X65)", () => {
     expect(canvasScale(1.5, [1440, 900], [720, 900])).toBe(1.5);
     // Nothing to fit into yet.
     expect(canvasScale(null, [1440, 900], [0, 0])).toBe(0);
+  });
+
+  it("fits into the canvas less a margin of 48 px around the frame, a card's as a page's", () => {
+    expect(fitBox([1000, 800])).toEqual([904, 704]);
+    expect(fitBox([60, 800])).toEqual([0, 704]);
   });
 
   it("steps from 25% to 200% with − and +", () => {

@@ -262,6 +262,21 @@ export async function removeDesign(host: string, workspace: string, slug: string
   await loadDesigns(host, workspace, true).catch(() => {});
 }
 
+/** Stops what a Design mode agent is doing: Stop and Stop sync. */
+export async function stopAgent(host: string, agent: number): Promise<void> {
+  await rpc(host, M.chatInterrupt, { id: agent });
+}
+
+/** Sends a Design mode agent a message: Ask the agent to fix. */
+export async function askAgent(host: string, agent: number, text: string): Promise<void> {
+  await rpc(host, M.chatSend, { id: agent, text, images: [] });
+}
+
+/** Opens New design for a workspace (X65): the sidebar's button and ⇧⌘N. */
+export function openNewDesign(ws: { host: string; id: string }) {
+  useStore.setState({ dialog: { kind: "new-design", host: ws.host, workspace: ws.id } });
+}
+
 /** Saves the viewport a design was last shown at in its design.toml. */
 export async function saveViewport(host: string, workspace: string, slug: string, viewport: string): Promise<void> {
   await rpc(host, M.designViewport, { workspace, slug, viewport });
