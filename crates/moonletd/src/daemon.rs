@@ -1317,13 +1317,14 @@ impl Daemon {
                 // After a start running now, so its agent is the one stopped.
                 let lock = self.workspace_design_lock(&r.workspace, &r.slug);
                 let _held = lock.lock().await;
-                let (ws, sl) = (r.workspace.clone(), r.slug.clone());
-                let found = {
-                    let store = store.clone();
-                    blocking(move || Ok((store.design_dir(&ws, &sl)?, store.design_record(&ws, &sl)?.agent))).await?
-                };
-                if let Some(id) = folder_agent(&self.terminals.list(), found.1, &found.0) {
-                    let _ = self.terminals.kill(id, true);
+                // No save, snapshot or restore of it meanwhile, and none to come.
+                let pages = self.pages_lock(&r.workspace, &r.slug);
+                let _pages = pages.lock().await;
+                let history = self.history_lock(&r.workspace, &r.slug);
+                let _history = history.lock().await;
+                self.take_hand_edits(&r.workspace, &r.slug);
+                if let Some(agent) = self.design_agent(&r.workspace, &r.slug).await? {
+                    let _ = self.terminals.kill(agent.id, true);
                 }
                 blocking(move || store.remove_design(&r.workspace, &r.slug)).await?;
                 ok(true)

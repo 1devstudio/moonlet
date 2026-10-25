@@ -271,10 +271,14 @@ fn open_folder(dir: &Dir, name: &std::ffi::OsStr, create: bool) -> Result<Option
 /// never a link; with `create`, made when missing. `None` when it is
 /// missing, or a link on the way when not creating.
 fn open_path(root: &Path, rel: &Path, create: bool) -> Result<Option<Dir>> {
-    let mut dir = open_root(root)?;
+    open_under(open_root(root)?, rel, create)
+}
+
+/// As [`open_path`], from the folder `dir`.
+fn open_under(mut dir: Dir, rel: &Path, create: bool) -> Result<Option<Dir>> {
     for part in rel.components() {
         let std::path::Component::Normal(name) = part else {
-            anyhow::bail!("{} is not a path inside {}", rel.display(), root.display());
+            anyhow::bail!("{} is not a path inside its folder", rel.display());
         };
         match open_folder(&dir, name, create)? {
             Some(next) => dir = next,
@@ -368,18 +372,22 @@ fn parent_of<'p>(dir: &Dir, path: &'p str) -> Result<(Dir, &'p std::ffi::OsStr)>
     Ok((at, name))
 }
 
-/// Writes `files` (by their paths in `rel`) into the folder `rel` inside
-/// `root`, made when missing, each replacing what is there: a link in its
-/// place is replaced, never followed. With `exact`, every other file and
-/// link in it that is not hidden is removed, so the folder holds `files`
-/// and nothing else.
+/// Writes `files` (by their paths in `rel`) into the folder `rel` of the
+/// folder `base` inside `root`: `rel` is made when missing, `base` never
+/// (a folder removed meanwhile stays removed). Each file replaces what is
+/// there: a link in its place is replaced, never followed. With `exact`,
+/// every other file and link in it that is not hidden is removed, so the
+/// folder holds `files` and nothing else.
 pub(crate) fn write_tree(
     root: &Path,
+    base: &Path,
     rel: &Path,
     files: &std::collections::BTreeMap<String, Vec<u8>>,
     exact: bool,
 ) -> Result<()> {
-    let dir = open_path(root, rel, true)?.context("a folder went away")?;
+    let base_dir = open_path(root, base, false)?
+        .with_context(|| format!("no {} in {}", base.display(), root.display()))?;
+    let dir = open_under(base_dir, rel, true)?.context("a folder went away")?;
     for (path, bytes) in files {
         let (at, name) = parent_of(&dir, path)?;
         replace_in(&at, name, bytes)?;
