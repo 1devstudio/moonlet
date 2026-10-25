@@ -2,6 +2,7 @@
 // lists them, and the snapshot the canvas previews. Pure: the screen is
 // components/design/DesignScreen.tsx.
 
+import { MONTHS } from "./dates";
 import type { DesignSnapshot, SnapshotKind } from "./protocol";
 
 /** One snapshot as the History tab lists it. */
@@ -16,12 +17,12 @@ export interface HistoryRow {
 
 const TITLES: Record<SnapshotKind, string> = { agent_turn: "Agent turn", edits_by_hand: "Edits by hand", restored: "Restored snapshot" };
 
-/** A snapshot's type: "Agent turn", "Edits by hand", "Restored snapshot 3". */
-function title(s: DesignSnapshot): string {
-  return s.type === "restored" && s.from ? `${TITLES.restored} ${s.from.n}` : TITLES[s.type];
+/** A snapshot's type as History says it ("Agent turn", "Edits by hand",
+ *  "Restored snapshot 3"), and for a restore the snapshot it made current. */
+function typeOf(s: DesignSnapshot): { title: string; from: { n: number; time: number } | null } {
+  if (s.type === "restored" && s.from) return { title: `${TITLES.restored} ${s.from.n}`, from: s.from };
+  return { title: TITLES[s.type], from: null };
 }
-
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const two = (n: number) => String(n).padStart(2, "0");
 
 /** When a snapshot was taken, in local time: "10:41" today, else "Oct 24, 18:30". */
@@ -36,18 +37,15 @@ export function snapshotTime(ms: number, now: number): string {
 /** The History tab's rows, in the order `design.history` gives them (newest
  *  first): a restore says the time of the snapshot it made current. */
 export function historyRows(snapshots: DesignSnapshot[], now: number): HistoryRow[] {
-  return snapshots.map((s) => ({
-    n: s.n,
-    kind: s.type,
-    title: title(s),
-    summary: s.type === "restored" && s.from ? `From ${snapshotTime(s.from.time, now)}` : s.summary,
-    time: snapshotTime(s.time, now),
-  }));
+  return snapshots.map((s) => {
+    const { title, from } = typeOf(s);
+    return { n: s.n, kind: s.type, title, summary: from ? `From ${snapshotTime(from.time, now)}` : s.summary, time: snapshotTime(s.time, now) };
+  });
 }
 
 /** The blue bar's time and type of the snapshot previewed: "10:33", "edits by hand". */
 export function previewBar(s: DesignSnapshot, now: number): { time: string; type: string } {
-  return { time: snapshotTime(s.time, now), type: title(s).toLowerCase() };
+  return { time: snapshotTime(s.time, now), type: typeOf(s).title.toLowerCase() };
 }
 
 /** The snapshot the canvas previews, by number; null for the current pages. */

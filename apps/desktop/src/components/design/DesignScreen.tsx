@@ -909,7 +909,7 @@ function Overview({
  *  nothing on it can be picked or edited, and outlined in the preview's blue. */
 function SnapshotFrame({ workspace, design, snapshot, page, viewport, scale }: { workspace: string; design: Design; snapshot: DesignSnapshot; page: string; viewport: Size; scale: number }) {
   return (
-    <div className="relative m-auto shrink-0 rounded-md border-2 border-[#5b8def] shadow-2xl">
+    <div className="relative m-auto shrink-0 rounded-md border-2 border-preview shadow-2xl">
       <CardFrame key={`${snapshot.n}/${page}`} url={snapshotPageUrl(workspace, design.slug, snapshot.n, page)} title={`${pageFile(page)} at snapshot ${snapshot.n}`} viewport={viewport} scale={scale} interactive />
     </div>
   );
@@ -964,7 +964,7 @@ const BAR_TONES: Record<Bar["tone"], { box: string; dot: string }> = {
   red: { box: "bg-error/[0.08]", dot: "bg-error" },
   yellow: { box: "bg-[rgba(242,201,76,0.10)]", dot: "bg-[#f2c94c]" },
   grey: { box: "bg-panel-2", dot: "bg-idle" },
-  blue: { box: "bg-[rgba(91,141,239,0.12)]", dot: "bg-[#5b8def]" },
+  blue: { box: "bg-preview/[0.12]", dot: "bg-preview" },
 };
 
 const BAR_ACTIONS: Record<BarAction, string> = { stop: "Stop", details: "Details", fix: "Ask the agent to fix", dismiss: "Dismiss", back: "Back to current", restore: "Restore" };
