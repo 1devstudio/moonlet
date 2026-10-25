@@ -2080,6 +2080,47 @@ async fn usage_counts_every_started_hour() {
 }
 
 #[tokio::test]
+async fn a_machine_that_goes_while_its_removal_retries_is_booked_once() {
+    let c = cloud_with(
+        SHOP_CONFIG,
+        &[
+            ("MOONLET_TEST_CLOUD_SWEEP_MS", "300"),
+            ("MOONLET_TEST_CLOUD_BACKOFF_MS", "2000"),
+        ],
+    )
+    .await;
+    c.steer("billing", "3600");
+    let m = c.ready().await;
+    c.steer("fail-destroy", "1");
+    let _: Value = c.d.call("cloud.down", json!({ "machine": m["id"] })).await;
+    let fails_left = || std::fs::read_to_string(c.fake.path().join("fail-destroy")).unwrap();
+    for _ in 0..100 {
+        if fails_left() == "0" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(fails_left(), "0");
+    // Gone at the provider before the next try: sweeps see it missing.
+    let dir = c.fake_dirs()[0].clone();
+    let pid: i32 = std::fs::read_to_string(dir.join("pid"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let _ = nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(pid),
+        nix::sys::signal::Signal::SIGKILL,
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+    // Past the next try, which finds it gone.
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let all = c.machines().await;
+    assert_eq!(all["machines"], json!([]), "{all}");
+    assert_eq!(all["hours_this_month"], json!(1.0), "{all}");
+}
+
+#[tokio::test]
 async fn with_idle_zero_a_machine_goes_when_its_command_ends() {
     let c = routing(&[]).await;
     let _: Value = c.d.call("cloud.set", json!({ "idle_minutes": 0 })).await;
