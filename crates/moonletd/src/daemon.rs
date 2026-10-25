@@ -1276,7 +1276,7 @@ impl Daemon {
             m::DESIGN_REMOVE => {
                 let r: m::DesignRef = params(p)?;
                 // After a start running now, so its agent is the one stopped.
-                let lock = self.design_lock(&r.workspace, &format!("designs/{}", r.slug));
+                let lock = self.workspace_design_lock(&r.workspace, &r.slug);
                 let _held = lock.lock().await;
                 let (ws, sl) = (r.workspace.clone(), r.slug.clone());
                 let found = {
@@ -1401,7 +1401,7 @@ impl Daemon {
     async fn start_design_agent(&self, workspace: &str, slug: &str) -> anyhow::Result<u32> {
         use moonlet_core::design::agent;
         use moonlet_proto::types::{DesignAgent, DesignAgentKind};
-        let lock = self.design_lock(workspace, &format!("designs/{slug}"));
+        let lock = self.workspace_design_lock(workspace, slug);
         let _held = lock.lock().await;
         // The folders come from the store, never from what the agent edits:
         // `design.toml` names the design system, which must be the workspace's.
@@ -1472,6 +1472,13 @@ impl Daemon {
     /// The lock of one design system (see `design_locks`).
     fn design_lock(&self, workspace: &str, slug: &str) -> Arc<tokio::sync::Mutex<()>> {
         self.design_locks.lock().unwrap().entry(format!("{workspace}/{slug}")).or_default().clone()
+    }
+
+    /// The lock of one workspace design (X65): one start of its agent or one
+    /// removal at a time. Its key never meets a design system's, whose slug
+    /// has no `/`.
+    fn workspace_design_lock(&self, workspace: &str, slug: &str) -> Arc<tokio::sync::Mutex<()>> {
+        self.design_lock(workspace, &format!("designs/{slug}"))
     }
 
     /// The chat of a design system's sync agent, while it still is that system's.
