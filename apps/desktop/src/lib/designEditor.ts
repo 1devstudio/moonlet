@@ -6,12 +6,12 @@
 
 import { create } from "zustand";
 import { DaemonError, rpc } from "./daemon";
-import { ownPages, reloadPage, sendComments } from "./designStore";
+import { itemKey, ownPages, pageKey, reloadPage, sendComments } from "./designStore";
+import { latestSends } from "./latestSend";
 import { errorToast } from "./store";
 import { latestPerKey } from "./prPoll";
-import { M, type DesignComment, type DesignPageText } from "./protocol";
+import { M, type DesignComment, type DesignPageText, type DesignPageWritten } from "./protocol";
 import type { ChatImage } from "./attachments";
-import { wsKey } from "./workspaces";
 import { applyEdit, copyElement, EditRefused, editLine, editsMessage, highestMid, type Edit, type EditOp } from "./designEdits";
 import { NO_UNDO, dropPage, pendingAfter, pushStep, redoStep, undoStep, type Pending, type Step, type Undo } from "./designUndo";
 
@@ -32,16 +32,9 @@ const EMPTY: EditorState = { sources: {}, undo: {}, pending: {}, unsaved: {} };
 
 export const useEditor = create<EditorState>(() => EMPTY);
 
-const itemKey = (host: string, workspace: string, slug: string) => `${wsKey(host, workspace)}/${slug}`;
-const pageKey = (host: string, workspace: string, slug: string, page: string) => `${itemKey(host, workspace, slug)}/${page}`;
 
-/** A page's saves: the one on its way, and whether the source changed since
- *  it was sent, so one more follows with the latest. */
-interface Saving {
-  busy: Promise<void> | null;
-  again: boolean;
-}
-const saving: Record<string, Saving> = {};
+/** Each page's saves, one at a time, the latest source last. */
+let saves = latestSends();
 /** The highest id number each page has had since it was first read: a new
  *  element never takes the id of one deleted since. */
 const highest: Record<string, number> = {};
@@ -52,7 +45,7 @@ let nextStep = 1;
 /** Forgets every page, change and edit (tests). */
 export function resetEditor() {
   useEditor.setState(EMPTY, true);
-  for (const k of Object.keys(saving)) delete saving[k];
+  saves = latestSends();
   for (const k of Object.keys(savedStep)) delete savedStep[k];
   for (const k of Object.keys(highest)) delete highest[k];
   for (const k of Object.keys(clips)) delete clips[k];
@@ -63,11 +56,11 @@ export function resetEditor() {
  *  may not and decides what is there. */
 export async function loadPageSource(host: string, workspace: string, slug: string, page: string): Promise<void> {
   const key = pageKey(host, workspace, slug, page);
-  if (saving[key]?.busy) return;
+  if (saves.busy(key)) return;
   const latest = reads.start(key);
   const text = await rpc<DesignPageText>(host, M.designPage, { workspace, slug, page });
   // An older read coming back after a newer one is dropped.
-  if (latest() && !saving[key]?.busy) setSource(key, text);
+  if (latest() && !saves.busy(key)) setSource(key, text);
 }
 
 /** The latest read of each page, so an older answer never lands last. */
@@ -134,33 +127,24 @@ async function travel(host: string, workspace: string, slug: string, act: "undo"
  *  every change made meanwhile, so saves keep their order. */
 function save(host: string, workspace: string, slug: string, page: string): Promise<void> {
   const key = pageKey(host, workspace, slug, page);
-  const s = (saving[key] ??= { busy: null, again: false });
-  if (s.busy) {
-    s.again = true;
-    return s.busy;
-  }
-  const run = async () => {
-    do {
-      s.again = false;
-      const source = useEditor.getState().sources[key];
-      if (!source) return;
-      const html = source.html;
-      const step = nextStep - 1;
-      let version: string;
-      try {
-        ({ version } = await rpc<{ version: string }>(host, M.designWritePage, { workspace, slug, page, html, base_version: source.version }));
-      } catch (e) {
-        if (e instanceof DaemonError && e.code === "stale") return lost(host, workspace, slug, page);
-        throw e;
+  return saves.send(key, async () => {
+    const source = useEditor.getState().sources[key];
+    if (!source) return "stop";
+    const html = source.html;
+    const step = nextStep - 1;
+    let written: DesignPageWritten;
+    try {
+      written = await rpc<DesignPageWritten>(host, M.designWritePage, { workspace, slug, page, html, base_version: source.version });
+    } catch (e) {
+      if (e instanceof DaemonError && e.code === "stale") {
+        await lost(host, workspace, slug, page);
+        return "stop";
       }
-      savedStep[key] = step;
-      useEditor.setState((st) => ({ sources: { ...st.sources, [key]: { html: st.sources[key]?.html ?? html, version } } }));
-    } while (s.again);
-  };
-  s.busy = run().finally(() => {
-    s.busy = null;
+      throw e;
+    }
+    savedStep[key] = step;
+    useEditor.setState((st) => ({ sources: { ...st.sources, [key]: { html: st.sources[key]?.html ?? html, version: written.version } } }));
   });
-  return s.busy;
 }
 
 /** The user's message to a design's agent, with the edits by hand not told
@@ -271,10 +255,10 @@ const checking = new Set<Promise<void>>();
  *  page's changes forgotten, as undoing them would undo that writer's. */
 async function changedOnDisk(host: string, workspace: string, slug: string, page: string): Promise<void> {
   const key = pageKey(host, workspace, slug, page);
-  if (saving[key]?.busy) return;
+  if (saves.busy(key)) return;
   const text = await rpc<DesignPageText>(host, M.designPage, { workspace, slug, page });
   const now = useEditor.getState().sources[key];
-  if (saving[key]?.busy || !now || text.version === now.version) return;
+  if (saves.busy(key) || !now || text.version === now.version) return;
   const design = itemKey(host, workspace, slug);
   setSource(key, text);
   useEditor.setState((s) => ({ undo: { ...s.undo, [design]: dropPage(s.undo[design] ?? NO_UNDO, page) } }));
@@ -296,8 +280,8 @@ export async function settleChecks(): Promise<void> {
 }
 
 /** Waits for every save on its way. */
-export async function settleSaves(): Promise<void> {
-  while (Object.values(saving).some((s) => s.busy)) await Promise.all(Object.values(saving).map((s) => s.busy?.catch(() => {})));
+export function settleSaves(): Promise<void> {
+  return saves.settle();
 }
 
 /** The changes of a design that can be undone and redone. */
