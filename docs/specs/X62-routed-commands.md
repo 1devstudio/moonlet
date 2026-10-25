@@ -1,6 +1,6 @@
 # X62 — Routed commands: heavy commands run on a free worker
 
-- **Status:** draft
+- **Status:** implemented (untried between real machines; **Run on studio-mini now** comes with X63, which makes jobs that wait)
 - **Priority / phase:** P1 · phase 4 (sessions across machines)
 - **PRD refs:** none (new scope)
 - **Related ADRs:** [0009](../adr/0009-central-host-workers-live-copies.md) (routing, fences), [0011](../adr/0011-machines-connect-over-the-tailnet.md) (transport), [0012](../adr/0012-cloud-workers.md) (cloud workers)
@@ -38,11 +38,11 @@ This is ADR 0009's routing slice. It adds two things the ADR did not decide: an 
 
 ### Which commands are routed
 
-- [ ] A project lists its heavy commands as `[heavy] commands` in `.moonlet/config.toml`. Each entry is a command prefix of one or more words. Optional keys:
+- [x] A project lists its heavy commands as `[heavy] commands` in `.moonlet/config.toml`. Each entry is a command prefix of one or more words. Optional keys:
   - `os`: `"any"` (the default), `"macos"` or `"linux"`;
   - `env`: names of environment variables passed through to the worker;
   - `outputs`: ignored paths brought back after a run.
-- [ ] A Bash command is routed when it splits into words, by POSIX shell rules, that begin with an approved entry's words, and when it has no part a shell would expand or chain. Worked examples (entries `pnpm test` and `cargo test`):
+- [x] A Bash command is routed when it splits into words, by POSIX shell rules, that begin with an approved entry's words, and when it has no part a shell would expand or chain. Worked examples (entries `pnpm test` and `cargo test`):
 
   | Bash command | Routed |
   |---|---|
@@ -62,16 +62,16 @@ This is ADR 0009's routing slice. It adds two things the ADR did not decide: an 
   | `pnpm test # all` | no: a comment |
 
   A command is not routed when it has, outside single quotes, any of `;` `&` `|` `<` `>` `(` `)` `$` `` ` `` `*` `?` `[` `{` `~` `#`, or a newline, or when it starts with an assignment. Nor is one whose first word is a Bash keyword (`time`, `!`, `if`…) or a builtin with no program of its own (`cd`, `export`, `source`…), approved or not: Bash runs those itself, and a worker runs a command without a shell.
-- [ ] Only Bash calls of Claude Code agents in sessions on the central host are routed: calls with `MOONLET_SESSION` set, whose working directory is inside the session's worktree. A call whose input has any field but `command`, `timeout` and `description` is not routed: `run_in_background`, or one that asks to leave Claude Code's sandbox, goes through Claude Code's own checks. Nothing is routed while the agent is in plan mode (`permission_mode` `plan`), so the hook's `allow` never gets round it. Codex is not routed yet.
-- [ ] A command is routed only when its entry is approved for the project on this central host. Approval holds for the exact list of entries and the exact list of `env` names. An entry that is added or changed is not routed until it is approved, and the project page shows it as not approved. A name added to `env` stops routing for the project until the list is approved again, because approving is the user's consent to send those variables to every worker, cloud machines included. Removing an entry or a name needs no approval.
-- [ ] Only the Mac's app and paired desktops approve. `heavy.approve` from the `moonlet` CLI or a phone is refused with `forbidden`, so an agent cannot approve the commands it adds.
-- [ ] Each linked worker keeps its own approval, for the machine it runs on. **Approve** on the project page approves the list on the central host and on every linked worker the app reaches: this Mac, and remote hosts through their tailnet connection (X61). A worker linked later, or one the app could not reach, shows "not approved for shop" on the Workers screen, with **Approve**. `heavy.approve` on a worker follows X61's rule for `link.set`: the worker's own app or a paired Mac, never a phone or the CLI.
-- [ ] A command is not routed when the Claude Code settings that apply to the session (managed, user or the X33 profile's, project and local) have a `deny` or `ask` rule for `Bash` that matches it. Prefix rules (`Bash(pnpm build:*)`, `Bash(pnpm build)`) are matched as prefixes. A rule that moonlet cannot read as a prefix stops routing for every command that starts with the rule's first word. A rule that starts with a wildcard, and a settings file that exists but is not valid JSON, stop routing for every command. Prefixes are matched as text, so `Bash(pnpm build:*)` also keeps `pnpm builder` where it is.
+- [x] Only Bash calls of Claude Code agents in sessions on the central host are routed: calls with `MOONLET_SESSION` set, whose working directory is inside the session's worktree. A call whose input has any field but `command`, `timeout` and `description` is not routed: `run_in_background`, or one that asks to leave Claude Code's sandbox, goes through Claude Code's own checks. Nothing is routed while the agent is in plan mode (`permission_mode` `plan`), so the hook's `allow` never gets round it. Codex is not routed yet.
+- [x] A command is routed only when its entry is approved for the project on this central host. Approval holds for the exact list of entries and the exact list of `env` names. An entry that is added or changed is not routed until it is approved, and the project page shows it as not approved. A name added to `env` stops routing for the project until the list is approved again, because approving is the user's consent to send those variables to every worker, cloud machines included. Removing an entry or a name needs no approval.
+- [x] Only the Mac's app and paired desktops approve. `heavy.approve` from the `moonlet` CLI or a phone is refused with `forbidden`, so an agent cannot approve the commands it adds.
+- [x] Each linked worker keeps its own approval, for the machine it runs on. **Approve** on the project page approves the list on the central host and on every linked worker the app reaches: this Mac, and remote hosts through their tailnet connection (X61). A worker linked later, or one the app could not reach, shows "not approved for shop" on the Workers screen, with **Approve**. `heavy.approve` on a worker follows X61's rule for `link.set`: the worker's own app or a paired Mac, never a phone or the CLI.
+- [x] A command is not routed when the Claude Code settings that apply to the session (managed, user or the X33 profile's, project and local) have a `deny` or `ask` rule for `Bash` that matches it. Prefix rules (`Bash(pnpm build:*)`, `Bash(pnpm build)`) are matched as prefixes. A rule that moonlet cannot read as a prefix stops routing for every command that starts with the rule's first word. A rule that starts with a wildcard, and a settings file that exists but is not valid JSON, stop routing for every command. Prefixes are matched as text, so `Bash(pnpm build:*)` also keeps `pnpm builder` where it is.
 
 ### The hook
 
-- [ ] moonlet's `PreToolUse` hook (A2) asks the daemon `exec.route {session, command, cwd, tool_use_id}` for Bash calls, with the session from `MOONLET_SESSION`. With `route: false`, an error, or no answer within 2 s, it prints nothing and the call runs as it would without moonlet.
-- [ ] With `route: true`, it prints:
+- [x] moonlet's `PreToolUse` hook (A2) asks the daemon `exec.route {session, command, cwd, tool_use_id}` for Bash calls, with the session from `MOONLET_SESSION`. With `route: false`, an error, or no answer within 2 s, it prints nothing and the call runs as it would without moonlet.
+- [x] With `route: true`, it prints:
 
   ```json
   {
@@ -89,19 +89,19 @@ This is ADR 0009's routing slice. It adds two things the ADR did not decide: an 
   ```
 
   `updatedInput` repeats every field of the call's `tool_input` and changes only `command`: the original command text, unchanged, after the `moonlet` binary's own path in single quotes, `exec`, the tool call's id as `--tool-use <id>` (so the job is found from the chat's row) and `--`. Agents do not have `moonlet` on their `PATH`, so the path is spelled out. Claude Code still applies the user's deny and ask rules to the rewritten command.
-- [ ] `moonlet exec` started anywhere without a central host's routing (no daemon, or `MOONLET_SESSION` not set) runs the command where it is, so a rewritten command always runs. A command it cannot start exits with 127 and "moonlet: cannot run <command>: <reason>", as a shell would.
+- [x] `moonlet exec` started anywhere without a central host's routing (no daemon, or `MOONLET_SESSION` not set) runs the command where it is, so a rewritten command always runs. A command it cannot start exits with 127 and "moonlet: cannot run <command>: <reason>", as a shell would.
 
 ### Picking a worker
 
-- [ ] The candidates are:
+- [x] The candidates are:
   - linked workers: Macs with **Use this Mac for heavy commands** on (X41) and remote hosts with **Use for heavy commands** on (X61), each of which approved the project's list;
   - the central host;
   - the project's cloud machines that are ready (X63).
 
   A candidate must have the project's `os` when one is set, a free slot, and a load below busy.
-- [ ] Each worker has **slots**: how many routed commands it runs at once, from 1 to 64. The default is 2. Every machine keeps its own in its `link.json` (`link.set {worker: {slots}}`), the central host included, and a linked worker sends them when it registers, and again when they change. The worker's own This Mac page sets them.
-- [ ] A worker is **busy** when its 1-minute load average (`getloadavg`) is at least 0.7 × its cores. The worker sends its load in each `worker.ping` answer, and `worker.list` shows it. The central host reads its own load the same way.
-- [ ] Order:
+- [x] Each worker has **slots**: how many routed commands it runs at once, from 1 to 64. The default is 2. Every machine keeps its own in its `link.json` (`link.set {worker: {slots}}`), the central host included, and a linked worker sends them when it registers, and again when they change. The worker's own This Mac page sets them.
+- [x] A worker is **busy** when its 1-minute load average (`getloadavg`) is at least 0.7 × its cores. The worker sends its load in each `worker.ping` answer, and `worker.list` shows it. The central host reads its own load the same way.
+- [x] Order:
   1. linked workers, by lowest load per core, then lowest round trip, then worker id;
   2. the central host;
   3. ready cloud machines, by lowest load per core.
@@ -117,8 +117,8 @@ This is ADR 0009's routing slice. It adds two things the ADR did not decide: an 
   | no linked workers, central 9.0/10 (2), a ready cloud machine | the cloud machine |
   | no linked workers, central 9.0/10 (2), no cloud machine | central host anyway |
 
-- [ ] A command never waits for a slot. When no candidate is free, it runs on the central host. If the project allows cloud overflow, a machine is started for the next command (X63).
-- [ ] A worker may refuse a command:
+- [x] A command never waits for a slot. When no candidate is free, it runs on the central host. If the project allows cloud overflow, a machine is started for the next command (X63).
+- [x] A worker may refuse a command:
   - `busy`;
   - `missing_tool`: the command's first word is not on the copy's `PATH`;
   - `setup_pending`;
@@ -129,11 +129,11 @@ This is ADR 0009's routing slice. It adds two things the ADR did not decide: an 
 
 ### Routing copies
 
-- [ ] A worker runs routed commands in a **routing copy** of the session, at `$MOONLET_HOME/runs/<host>/<project>/<session>/`. It is made with X60's `sync.open` and `sync.fetch`, in a repository of its own under `runs/repos/`, filled only with what the central host sends: the user's own repositories, branches and credentials are never used, so a routing copy and a live copy of the same session never stand in each other's way. A copy the user keeps in sync (X60) is never used for routing, and a routing copy never shows in `sync.list`, its events or the sidebar.
-- [ ] A routing copy syncs only at fences. After each run, once the central host has its changes, it returns to that run's fence, so between runs it holds exactly what the last fence left.
-- [ ] Setup in a routing copy on a Mac follows X60: the user approves the exact command once per project and central host, and the approval is shared with live copies. Until setup has finished, the Mac refuses with `setup_pending`, and the app shows X60's setup modal. Cloud machines run setup without asking (X63).
-- [ ] Paths in output are the session's paths. The worker replaces the routing copy's absolute path with the session's path in every output byte stream, including across chunk boundaries. Example: `/Users/alex/.moonlet/runs/studio-mini/shop/fix-cart/src/cart.ts:12` reads `/Users/alex/.moonlet/worktrees/shop/fix-cart/src/cart.ts:12`.
-- [ ] A routing copy is removed:
+- [x] A worker runs routed commands in a **routing copy** of the session, at `$MOONLET_HOME/runs/<host>/<project>/<session>/`. It is made with X60's `sync.open` and `sync.fetch`, in a repository of its own under `runs/repos/`, filled only with what the central host sends: the user's own repositories, branches and credentials are never used, so a routing copy and a live copy of the same session never stand in each other's way. A copy the user keeps in sync (X60) is never used for routing, and a routing copy never shows in `sync.list`, its events or the sidebar.
+- [x] A routing copy syncs only at fences. After each run, once the central host has its changes, it returns to that run's fence, so between runs it holds exactly what the last fence left.
+- [x] Setup in a routing copy on a Mac follows X60: the user approves the exact command once per project and central host, and the approval is shared with live copies. Until setup has finished, the Mac refuses with `setup_pending`, and the app shows X60's setup modal. Cloud machines run setup without asking (X63).
+- [x] Paths in output are the session's paths. The worker replaces the routing copy's absolute path with the session's path in every output byte stream, including across chunk boundaries. Example: `/Users/alex/.moonlet/runs/studio-mini/shop/fix-cart/src/cart.ts:12` reads `/Users/alex/.moonlet/worktrees/shop/fix-cart/src/cart.ts:12`.
+- [x] A routing copy is removed:
   - when the session is archived;
   - when the worker turns off heavy commands;
   - when the worker's central host changes;
@@ -143,11 +143,11 @@ This is ADR 0009's routing slice. It adds two things the ADR did not decide: an 
 
 ### Fences
 
-- [ ] **Before:** the central host snapshots the session (X60's private index) and sends the routing copy an update to that tree and `HEAD`. The command starts only when the copy's snapshot equals the session's tree and its `HEAD` equals the session's. A copy that cannot reach that state within 60 s refuses with `not_fenced`.
-- [ ] **During:** the routing copy takes no updates, and edits on the central host during the run stay.
-- [ ] **After:** when the command exits, the worker snapshots the copy and offers it against the fence's tree, with the objects of any commit the run made. The central host applies it. `moonlet exec` returns the exit status only after the central host has applied it. A test: a command that writes `out.txt` and exits 0, then `cat out.txt` in the next Bash call on the central host, prints its contents.
-- [ ] A file that both the run and the central host changed during the run keeps the central host's version. The run's version is saved to `$MOONLET_HOME/sync-leftovers/<session>-run-<YYYYMMDD-HHMMSS>/` on the central host. The last output line reads "moonlet: src/cart.ts changed on studio-mini during the run; the run's version is in ~/.moonlet/sync-leftovers/fix-cart-run-20261022-104200".
-- [ ] The `outputs` that count are the ones checked when the run started: a run that edits the config cannot widen them. Ignored files a run makes stay on the worker, as git's rules decide (X60), except the paths in `[heavy] outputs`. Those replace the same paths on the central host after the run. Each `outputs` path must be a non-empty relative path below the worktree root. The root itself (`.`, `./` or an empty string), a path outside the worktree, one with `..`, and one through a `.git` or `.moonlet` folder are refused when the config is read. Symbolic links are never followed:
+- [x] **Before:** the central host snapshots the session (X60's private index) and sends the routing copy an update to that tree and `HEAD`. The command starts only when the copy's snapshot equals the session's tree and its `HEAD` equals the session's. A copy that cannot reach that state within 60 s refuses with `not_fenced`.
+- [x] **During:** the routing copy takes no updates, and edits on the central host during the run stay.
+- [x] **After:** when the command exits, the worker snapshots the copy and offers it against the fence's tree, with the objects of any commit the run made. The central host applies it. `moonlet exec` returns the exit status only after the central host has applied it. A test: a command that writes `out.txt` and exits 0, then `cat out.txt` in the next Bash call on the central host, prints its contents.
+- [x] A file that both the run and the central host changed during the run keeps the central host's version. The run's version is saved to `$MOONLET_HOME/sync-leftovers/<session>-run-<YYYYMMDD-HHMMSS>/` on the central host. The last output line reads "moonlet: src/cart.ts changed on studio-mini during the run; the run's version is in ~/.moonlet/sync-leftovers/fix-cart-run-20261022-104200".
+- [x] The `outputs` that count are the ones checked when the run started: a run that edits the config cannot widen them. Ignored files a run makes stay on the worker, as git's rules decide (X60), except the paths in `[heavy] outputs`. Those replace the same paths on the central host after the run. Each `outputs` path must be a non-empty relative path below the worktree root. The root itself (`.`, `./` or an empty string), a path outside the worktree, one with `..`, and one through a `.git` or `.moonlet` folder are refused when the config is read. Symbolic links are never followed:
   - an `outputs` path that is itself a symbolic link is skipped with "moonlet: coverage is a symbolic link; not brought back";
   - a link inside an `outputs` path comes back as a link, with its target text unchanged, and is never resolved on either side;
   - on the central host, a path is replaced only when none of its parent folders inside the worktree is a symbolic link. Otherwise it is skipped with the same kind of line.
@@ -156,45 +156,45 @@ This is ADR 0009's routing slice. It adds two things the ADR did not decide: an 
 
 ### Output, exit status, cancelling
 
-- [ ] The first stderr line is "moonlet: running on Alex's MacBook Pro". The command's stdout and stderr then stream to `moonlet exec`'s stdout and stderr, each in order, with no TTY, as Claude Code's Bash tool runs commands.
-- [ ] The exit status is the command's own. A command ended by signal N gives 128 + N.
-- [ ] stdin is `/dev/null`.
-- [ ] The command runs with the worker's login environment, plus `MOONLET_ROUTED=1`, `MOONLET_SESSION` and the variables named in `[heavy] env`, taken from `moonlet exec`'s environment. No other variable crosses machines.
-- [ ] The worker runs the words as an argument list (no shell), from the call's working directory relative to the worktree.
-- [ ] `exec.run` checks the words again as the hook would have, because an agent can call `moonlet exec` itself: a command the hook would not route is refused with `not_routable` and its reason, and `moonlet exec` then runs it where it is, as without moonlet.
-- [ ] When `moonlet exec` gets SIGINT or SIGTERM (the Bash tool's timeout, or the user stopping the turn), the worker sends SIGTERM to the command's process group, then SIGKILL after 5 s. The run's changes still come back, and `moonlet exec` exits with 130 or 143.
+- [x] The first stderr line is "moonlet: running on Alex's MacBook Pro". The command's stdout and stderr then stream to `moonlet exec`'s stdout and stderr, each in order, with no TTY, as Claude Code's Bash tool runs commands.
+- [x] The exit status is the command's own. A command ended by signal N gives 128 + N.
+- [x] stdin is `/dev/null`.
+- [x] The command runs with the worker's login environment, plus `MOONLET_ROUTED=1`, `MOONLET_SESSION` and the variables named in `[heavy] env`, taken from `moonlet exec`'s environment. No other variable crosses machines.
+- [x] The worker runs the words as an argument list (no shell), from the call's working directory relative to the worktree.
+- [x] `exec.run` checks the words again as the hook would have, because an agent can call `moonlet exec` itself: a command the hook would not route is refused with `not_routable` and its reason, and `moonlet exec` then runs it where it is, as without moonlet.
+- [x] When `moonlet exec` gets SIGINT or SIGTERM (the Bash tool's timeout, or the user stopping the turn), the worker sends SIGTERM to the command's process group, then SIGKILL after 5 s. The run's changes still come back, and `moonlet exec` exits with 130 or 143.
 
 ### When a worker goes away
 
-- [ ] A run whose worker disconnects, or misses 3 pings (X41), is abandoned. It runs again on the central host from the same fence, and the output gets "moonlet: Alex's MacBook Pro went away. Running again on studio-mini." The exit status is the second run's.
-- [ ] The changes of an abandoned run never reach the session. When the worker links again, its routing copy goes back to the central host's tree before it runs anything.
-- [ ] When the central host's daemon stops during a run, `moonlet exec` exits with 125 and "moonlet: lost studio-mini's daemon during the run". The worker stops the command.
+- [x] A run whose worker disconnects, or misses 3 pings (X41), is abandoned. It runs again on the central host from the same fence, and the output gets "moonlet: Alex's MacBook Pro went away. Running again on studio-mini." The exit status is the second run's.
+- [x] The changes of an abandoned run never reach the session. When the worker links again, its routing copy goes back to the central host's tree before it runs anything.
+- [x] When the central host's daemon stops during a run, `moonlet exec` exits with 125 and "moonlet: lost studio-mini's daemon during the run". The worker stops the command.
 
 ### Workers screen
 
-- [ ] Settings › Machines › Workers on the central host lists each worker: name, OS, cores, load, slots in use of total, round trip, and its running commands (session, command, running for). It follows `workers.changed` and `job.changed`.
-- [ ] **Approve** on a worker's line first shows the project's exact commands and variable names in the confirm modal (X23), as its page has them now, so nothing is approved unseen.
-- [ ] A worker's line says why the project's commands skip it: "Not approved for shop" (with **Approve**), "skipped for shop: missing pnpm", or, for the central host when no other worker is free, "busy, takes commands no one else can".
-- [ ] The summary line reads "5 commands running · 5 of 13 slots in use": the jobs running now, and used slots of all slots of every linked worker, the central host and ready cloud machines.
+- [x] Settings › Machines › Workers on the central host lists each worker: name, OS, cores, load, slots in use of total, round trip, and its running commands (session, command, running for). It follows `workers.changed` and `job.changed`.
+- [x] **Approve** on a worker's line first shows the project's exact commands and variable names in the confirm modal (X23), as its page has them now, so nothing is approved unseen.
+- [x] A worker's line says why the project's commands skip it: "Not approved for shop" (with **Approve**), "skipped for shop: missing pnpm", or, for the central host when no other worker is free, "busy, takes commands no one else can".
+- [x] The summary line reads "5 commands running · 5 of 13 slots in use": the jobs running now, and used slots of all slots of every linked worker, the central host and ready cloud machines.
 
 ### Jobs
 
-- [ ] Every routed command is a **job** of its session. So is every command `exec.route` routed that ran on the central host because no worker was free. The central host keeps each session's last 50 jobs, with their output, until the session is archived, and through daemon restarts.
-- [ ] A job's state is one of:
+- [x] Every routed command is a **job** of its session. So is every command `exec.route` routed that ran on the central host because no worker was free. The central host keeps each session's last 50 jobs, with their output, until the session is archived, and through daemon restarts.
+- [x] A job's state is one of:
   - `waiting {for}`: for setup approval, or for a cloud machine (X63). A command never waits for a slot;
   - `running {worker}`;
   - `bringing_back`;
   - `done {exit}`;
   - `stopped`;
   - `lost` (the central daemon stopped, exit 125).
-- [ ] A job records its **phases** with their durations: "Copy matched the session", "Ran on <worker>", "Brought back", "Exit status to Claude". It also records its **timeline**:
+- [x] A job records its **phases** with their durations: "Copy matched the session", "Ran on <worker>", "Brought back", "Exit status to Claude". It also records its **timeline**:
   - started on <worker>;
   - <worker> went away, with why ("It missed 3 pings." or "Its link closed.") and "That run's changes were dropped.";
   - ran again on <host>, from the same files;
   - exited N, and the status went to the agent.
-- [ ] A job records what came back: each changed file with its added and removed line counts, each `outputs` path with its size, and each leftover from the fence (a file that changed on the central host during the run). It also records the worker as it was at the start: load, the slot it took ("1 of 2"), round trip and the routing copy's path. Of the environment, it records only the names passed to the worker, never the values.
-- [ ] A job's output is kept as it streamed, stdout and stderr apart, up to 10 MiB per job. Past that, the middle is dropped and replaced by one line, "moonlet: 3.2 MB of output dropped here". After a rerun, the output of each run stays, with a separator line "──── run 2 · studio-mini ────" between them.
-- [ ] **Output summary.** When a job ends, the central host reads its output (ANSI escapes removed, the last run only after a rerun) and keeps one summary line. The first rule that matches wins:
+- [x] A job records what came back: each changed file with its added and removed line counts, each `outputs` path with its size, and each leftover from the fence (a file that changed on the central host during the run). It also records the worker as it was at the start: load, the slot it took ("1 of 2"), round trip and the routing copy's path. Of the environment, it records only the names passed to the worker, never the values.
+- [x] A job's output is kept as it streamed, stdout and stderr apart, up to 10 MiB per job. Past that, the middle is dropped and replaced by one line, "moonlet: 3.2 MB of output dropped here". After a rerun, the output of each run stays, with a separator line "──── run 2 · studio-mini ────" between them.
+- [x] **Output summary.** When a job ends, the central host reads its output (ANSI escapes removed, the last run only after a rerun) and keeps one summary line. The first rule that matches wins:
   1. **Test results.** Formats read:
      - vitest's `Tests  … (N)` line;
      - jest's `Tests: …, N total`;
@@ -223,11 +223,11 @@ This is ADR 0009's routing slice. It adds two things the ADR did not decide: an 
   | `Done in 2.1s` | 0 | (none) |
 
   The summary ends the job tab's state line ("… · run by Claude in fix-cart · 457 tests passed"). A row's second line adds it only for a job that did not exit 0 ("studio-mini · exit 1 · Type error in src/cart.ts:41").
-- [ ] Jobs hold commands' output, so only the app and paired devices list, read and stop them. An agent's `moonlet` CLI and a worker are refused with `forbidden`, as the CLI is for another terminal's output without the user's approval (X31).
-- [ ] **Stop** on a running or waiting job cancels it as `exec.cancel` does (SIGTERM, then SIGKILL after 5 s). The agent gets exit 143 and the line "moonlet: stopped from the Jobs panel". Changes the job made so far still come back. **Stop all** stops every running and waiting job of the session.
+- [x] Jobs hold commands' output, so only the app and paired devices list, read and stop them. An agent's `moonlet` CLI and a worker are refused with `forbidden`, as the CLI is for another terminal's output without the user's approval (X31).
+- [x] **Stop** on a running or waiting job cancels it as `exec.cancel` does (SIGTERM, then SIGKILL after 5 s). The agent gets exit 143 and the line "moonlet: stopped from the Jobs panel". Changes the job made so far still come back. **Stop all** stops every running and waiting job of the session.
 - [ ] **Run on studio-mini now**, on a job waiting for a cloud machine, runs it on the central host at once, with the line "moonlet: running on studio-mini instead, as asked from the Jobs panel". The machine keeps starting, and takes the next command.
-- [ ] The Jobs tab's count is the number of the session's jobs in the history, whatever their state.
-- [ ] The Jobs tab's summary reads "1 waiting · 3 done · 4m 38s on workers": counts by state, and the total running time of the session's jobs. Worked examples:
+- [x] The Jobs tab's count is the number of the session's jobs in the history, whatever their state.
+- [x] The Jobs tab's summary reads "1 waiting · 3 done · 4m 38s on workers": counts by state, and the total running time of the session's jobs. Worked examples:
 
   | Jobs | Summary |
   |---|---|
@@ -237,7 +237,7 @@ This is ADR 0009's routing slice. It adds two things the ADR did not decide: an 
   | 2 done (59 s, 1 s) | 2 done · 1m 00s on workers |
 
   Waiting time does not count as time on workers.
-- [ ] A job row's second line, worked examples:
+- [x] A job row's second line, worked examples:
 
   | Job | Second line |
   |---|---|
@@ -310,6 +310,7 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
   - the event `exec.exited {run, status, worker, rerun, leftovers}`.
 - `exec.cancel {run}`.
 - `exec.status` → `{host: {name, os, cores, load, slots, used}, running: [{job, session, command, worker, started_at}], skips: [{worker, project, reason, detail}], routed}`: this machine, the routed commands going on wherever they run, why workers were skipped in the last hour, and how many commands this machine runs for its own central host. The Workers page and the Hosts page's `· 1 running` read it.
+- `exec.setups` → `[{copy, host, project, command}]` on a Mac: its routing copies whose setup waits for the user's approval, and the event `exec.setup {copy, host, project, command}` when one starts to wait. The app asks with X60's setup modal and answers with `sync.run_setup` or `sync.skip_setup`.
 - `job.list {session}` returns the session's jobs, newest first, with state, phases, timeline, worker, what came back, env names and `summary`.
 - `job.output {job, from}` → `{chunks: [{stream, text}], next, more}`: the stored output from byte `from` of its file, up to 1 MiB at a time. A running job's new output also comes as the event `job.output {job, session, chunks}`, so the app needs no frames to follow it.
 - `job.stop {job}` → `true`/`false`, `job.stop_all {session}` → how many it stopped, and `job.run_here {job}` (a job waiting for a cloud machine; until X63, every job answers `not_waiting`).
@@ -372,7 +373,7 @@ Where the tests live:
 - **Rust unit tests:** `crates/moonlet-core/src/heavy.rs` (matching, Claude Code rules, picking, paths), `crates/moonlet-core/src/job_summary.rs` and `crates/moonlet-cli/src/hook.rs`, each in its `#[cfg(test)] mod tests`.
 - **Daemon end-to-end:** `crates/moonletd/tests/exec.rs`. It runs a central host and one or two worker `TestDaemon`s, linked as in `tests/link.rs`, with a test-only setting for load and size limits. Slots and load over the link are in `crates/moonletd/tests/link.rs`.
 - **CLI end-to-end:** `crates/moonlet-cli/tests/exec.rs`.
-- **Vitest:** `apps/desktop/src/lib/heavyCommands.test.ts`, `workers.test.ts`, `jobs.test.ts`, `layout.test.ts`, `toolOutput.test.ts` and `jobsStore.test.ts`.
+- **Vitest:** `apps/desktop/src/lib/heavyCommands.test.ts`, `heavyApproval.test.ts`, `workers.test.ts`, `jobs.test.ts`, `layout.test.ts`, `toolOutput.test.ts`, `jobsStore.test.ts` and `syncStore.test.ts`.
 - **e2e:** `apps/desktop/e2e/specs/routing.e2e.ts` and `jobs.e2e.ts`.
 
 | Criterion | Tests |
@@ -395,12 +396,12 @@ Where the tests live:
 | Never waits for a slot | `a_command_with_no_free_worker_runs_on_the_central_host` |
 | Refusals | `a_missing_tool_sends_the_command_to_the_next_worker`, `a_worker_waiting_for_setup_approval_is_skipped`, `a_copy_that_cannot_match_in_time_refuses_not_fenced` |
 | Routing copies, apart from live copies | `a_routing_copy_lives_under_runs_and_not_in_sync_list` |
-| Syncs only at fences | `a_routing_copy_takes_no_update_between_runs` |
-| Setup in a routing copy on a Mac | `a_routing_copy_on_a_mac_waits_for_setup_approval` |
+| Syncs only at fences | `a_command_starts_only_once_the_copy_matches_the_session` (an edit on the central host between runs waits for the next run) |
+| Setup in a routing copy on a Mac | `a_routing_copy_on_a_mac_waits_for_setup_approval`, `a_worker_waiting_for_setup_approval_is_skipped`; Vitest "asks about a routing copy's setup (X62), and Skip skips it", "asks about a routing copy's setup that waited before the app started (X62)" |
 | Session paths in output | `replaces_the_copys_path_split_across_two_chunks`, `the_copys_path_reads_as_the_sessions_in_output` |
 | Removing routing copies | `archiving_the_session_removes_its_routing_copies`, `turning_heavy_commands_off_removes_the_routing_copies`, `a_routing_copy_unused_for_seven_days_is_removed` |
 | Fence before | `a_command_starts_only_once_the_copy_matches_the_session` |
-| Fence during | `an_edit_on_the_central_host_during_a_run_stays` |
+| Fence during | `a_file_changed_on_both_sides_during_a_run_keeps_the_central_version_and_saves_the_runs` |
 | Fence after | `a_file_written_by_the_run_is_on_the_central_host_before_the_exit_status`, `a_commit_made_by_the_run_moves_the_sessions_branch` |
 | Leftovers | `a_file_changed_on_both_sides_during_a_run_keeps_the_central_version_and_saves_the_runs` |
 | `outputs` | `outputs_bring_back_an_ignored_coverage_folder`, `an_outputs_path_outside_the_worktree_is_refused`, `the_worktree_root_is_refused_as_an_outputs_path`, `git_and_moonlet_folders_are_refused_as_outputs_paths`, `a_symbolic_link_in_outputs_is_never_followed`, `an_outputs_path_that_is_a_symbolic_link_is_skipped`, `outputs_over_one_gib_stay_on_the_worker_and_say_so`, `a_tree_of_outputs_never_writes_through_its_own_links` |
@@ -422,7 +423,7 @@ Where the tests live:
 | Job states | Vitest "the state line for each state" |
 | Phases and timeline | `a_jobs_phases_and_timeline_after_a_rerun`; Vitest "the phase checklist", "the rerun timeline" |
 | What came back | `a_job_lists_what_came_back_and_the_env_names_only` |
-| Stored output | `output_over_ten_mib_keeps_its_start_and_end`, `a_rerun_keeps_both_runs_output_with_a_separator` |
+| Stored output | `output_over_ten_mib_keeps_its_start_and_end`, `a_jobs_phases_and_timeline_after_a_rerun` (the separator line) |
 | Output summary | `summarises_as_in_the_worked_examples`, `summarises_captured_runs_of_each_tool` (captured vitest, jest, `cargo test` over two crates, pytest, `tsc` plain and `--pretty`, `cargo build` with a type error) |
 | Stop and Stop all | `stopping_a_job_gives_exit_143_and_brings_its_changes_back`, `stop_all_stops_every_running_and_waiting_job`; e2e "Stop ends a running job" |
 | Run on the central host now | `job_run_here_needs_a_waiting_job`; `run_here_runs_a_job_waiting_for_a_cloud_machine_on_the_central_host` comes with X63, which makes jobs that wait |

@@ -5,7 +5,7 @@
 import { create } from "zustand";
 import { DaemonError, hostsApi, onDaemonEvent, onHostStatus, rpc } from "./daemon";
 import { askConfirm, askConfirmOrCovered, whenNoConfirm } from "./confirm";
-import { EV, M, type Copy, type CopyChanged, type DaemonInfo, type LinkInfo, type LinkState, type ProjectIdentity } from "./protocol";
+import { EV, M, type Copy, type CopyChanged, type DaemonInfo, type ExecSetup, type LinkInfo, type LinkState, type ProjectIdentity } from "./protocol";
 import { centralChangePrompt, centralPrompt, differsNotice, endedToast, setupActions, setupPrompt, stopPrompt, syncChoice } from "./sync";
 import { errorToast, notify, selectSession, sesKey, toast, useStore } from "./store";
 import { differsAlert } from "./alerts";
@@ -83,6 +83,8 @@ async function load() {
       };
     });
     for (const c of listed) maybeAskSetup(c);
+    // Routing copies' setups asked about before this app started (X62).
+    for (const ask of await rpc<ExecSetup[]>(LOCAL, M.execSetups).catch(() => [])) maybeAskRunSetup(ask);
   } catch {
     /* an older daemon without sync */
   } finally {
@@ -141,43 +143,65 @@ let setupQueue: Promise<void> = Promise.resolve();
  * unrun. Only an explicit Skip skips: a modal that another question covered
  * is asked again once that question is answered. */
 export function askSetup(copy: Copy, command: string): Promise<void> {
-  const turn = setupQueue.then(() => askSetupNow(copy, command));
+  const project = useStore.getState().projects[copy.host]?.find((p) => p.id === sessionOf(copy)?.project_id)?.name ?? "the project";
+  return askFor({ id: copy.id, project, name: sessionName(copy, "The session") }, command);
+}
+
+/** A copy whose setup the user is asked about: a live copy, or a routing copy (X62). */
+interface SetupTarget {
+  id: string;
+  project: string;
+  /** What `no_setup` names. */
+  name: string;
+}
+
+function askFor(target: SetupTarget, command: string): Promise<void> {
+  const turn = setupQueue.then(() => askSetupNow(target, command));
   setupQueue = turn.catch(() => {});
   return turn;
 }
 
-async function askSetupNow(copy: Copy, first: string): Promise<void> {
-  const project = useStore.getState().projects[copy.host]?.find((p) => p.id === sessionOf(copy)?.project_id)?.name ?? "the project";
+/** A routing copy's setup (X62): X60's modal asks once for each command. */
+function maybeAskRunSetup(ask: ExecSetup) {
+  const key = `${ask.copy}\n${ask.command}`;
+  if (asked.has(key)) return;
+  asked.add(key);
+  // Once answered, a copy made anew that waits again is asked again.
+  void askFor({ id: ask.copy, project: ask.project || "the project", name: `${ask.project || "The project"}'s routing copy` }, ask.command).finally(() => asked.delete(key));
+}
+
+async function askSetupNow(target: SetupTarget, first: string): Promise<void> {
+  const { project } = target;
   let command: string | null = first;
   while (command !== null) {
     await whenNoConfirm();
     const answer = await askConfirmOrCovered(setupPrompt(project, command));
     if (answer === "covered") continue;
     if (!answer) {
-      await rpc(LOCAL, M.syncSkipSetup, { copy: copy.id }).catch(errorToast);
+      await rpc(LOCAL, M.syncSkipSetup, { copy: target.id }).catch(errorToast);
       return;
     }
-    command = await runSetupNow(copy, command);
+    command = await runSetupNow(target, command);
   }
 }
 
 /** Runs `command`, asking again when the copy's setup changed meanwhile. */
 export async function runSetup(copy: Copy, command: string): Promise<void> {
-  const changed = await runSetupNow(copy, command);
+  const changed = await runSetupNow({ id: copy.id, project: "", name: sessionName(copy, "The session") }, command);
   if (changed !== null) await askSetup(copy, changed);
 }
 
 /** Runs `command`. Gives the new command when the copy's setup changed
  * meanwhile, for the caller to ask about. */
-async function runSetupNow(copy: Copy, command: string): Promise<string | null> {
+async function runSetupNow(target: SetupTarget, command: string): Promise<string | null> {
   try {
-    await rpc(LOCAL, M.syncRunSetup, { copy: copy.id, command });
+    await rpc(LOCAL, M.syncRunSetup, { copy: target.id, command });
   } catch (e) {
     if (e instanceof DaemonError && e.code === "setup_changed") {
-      asked.add(`${copy.id}\n${e.message}`);
+      asked.add(`${target.id}\n${e.message}`);
       return e.message;
     }
-    if (e instanceof DaemonError && e.code === "no_setup") toast(`${sessionName(copy, "The session")} has no setup script any more.`);
+    if (e instanceof DaemonError && e.code === "no_setup") toast(`${target.name} has no setup script any more.`);
     else errorToast(e);
   }
   return null;
@@ -291,6 +315,7 @@ export async function startSync() {
   await onDaemonEvent((e) => {
     if (e.host !== LOCAL) return;
     if (e.name === EV.syncChanged) onChanged(e.data as CopyChanged);
+    else if (e.name === EV.execSetup) maybeAskRunSetup(e.data as ExecSetup);
     else if (e.name === EV.linkChanged) {
       for (const l of loading) l.link = true;
       setSync(fromLink(e.data as LinkInfo));
