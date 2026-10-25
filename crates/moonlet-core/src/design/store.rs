@@ -252,6 +252,7 @@ impl Store {
                         to_settle: 0,
                         step: None,
                         step_summary: None,
+                        steps: Vec::new(),
                         error: Some(format!("{err:#}")),
                         agent: record.agent,
                         last_sync: record.last_sync.clone(),
@@ -367,11 +368,15 @@ impl Store {
             );
         }
         let dir = self.system_dir(workspace, slug)?;
-
-        let p = Progress {
+        // The steps before this one stay; this one is replaced, and any after
+        // it go (a sync that starts over).
+        let at = step_index(step);
+        let mut p = read_progress(&dir);
+        p.steps.retain(|r| step_index(&r.step) < at);
+        p.steps.push(StepReport {
             step: step.into(),
             summary: summary.map(String::from),
-        };
+        });
         fsx::write_inside(&dir, &dir.join(PROGRESS), toml::to_string(&p)?.as_bytes())?;
         Ok(())
     }
@@ -664,6 +669,9 @@ pub struct SystemSummary {
     /// The step a running sync reported last: `inventory`, `tokens`, `cards` or `layouts`.
     pub step: Option<String>,
     pub step_summary: Option<String>,
+    /// Every step the running sync reported, in the order of [`STEPS`], each
+    /// with its last summary; empty with no sync running.
+    pub steps: Vec<StepReport>,
     /// Why the system could not be read, when it could not.
     pub error: Option<String>,
     /// The chat of its sync agent, once one was started.
@@ -773,9 +781,8 @@ fn summary(
     config: &SystemConfig,
     record: &Record,
 ) -> Result<SystemSummary> {
-    let progress: Option<Progress> = fsx::read_inside(dir, &dir.join(PROGRESS))
-        .ok()
-        .and_then(|t| toml::from_str(&t).ok());
+    let steps = read_progress(dir).steps;
+    let last = steps.last();
     let cards = manifest::build(dir)?.cards;
     let status = anchor::status(dir, &source_roots(record), &config.exceptions())?;
     let mut changed: Vec<String> = status
@@ -802,8 +809,9 @@ fn summary(
         changed_sources: changed,
         check_problems: check::check(dir)?.len(),
         to_settle: proposed + status.iter().filter(|s| s.orphaned).count(),
-        step: progress.as_ref().map(|p| p.step.clone()),
-        step_summary: progress.and_then(|p| p.summary),
+        step: last.map(|r| r.step.clone()),
+        step_summary: last.and_then(|r| r.summary.clone()),
+        steps,
         error: None,
         agent: record.agent,
         last_sync: record.last_sync.clone(),
@@ -887,11 +895,31 @@ fn read_config(dir: &Path) -> Result<SystemConfig> {
 pub const STEPS: [&str; 4] = ["inventory", "tokens", "cards", "layouts"];
 const PROGRESS: &str = ".cache/progress.toml";
 
-#[derive(Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize)]
 struct Progress {
-    step: String,
+    #[serde(default)]
+    steps: Vec<StepReport>,
+}
+
+/// One step a running sync reported, with its summary (X64).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StepReport {
+    pub step: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    summary: Option<String>,
+    pub summary: Option<String>,
+}
+
+/// The running sync's progress; none when it cannot be read.
+fn read_progress(dir: &Path) -> Progress {
+    fsx::read_inside(dir, &dir.join(PROGRESS))
+        .ok()
+        .and_then(|t| toml::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
+/// Where `step` comes in [`STEPS`]; an unknown one after them all.
+fn step_index(step: &str) -> usize {
+    STEPS.iter().position(|s| *s == step).unwrap_or(STEPS.len())
 }
 
 /// The content type the app serves a design file with.
@@ -1098,6 +1126,7 @@ root = \"9c1e0a2\"
                 to_settle: 1,
                 step: None,
                 step_summary: None,
+                steps: vec![],
                 error: None,
                 agent: None,
                 last_sync: vec![
@@ -1537,6 +1566,68 @@ root = \"9c1e0a2\"
         assert!(store.progress("w1", &slug, "painting", None).is_err());
         store.synced("w1", &slug, &[], 2).unwrap();
         assert_eq!(store.systems("w1").unwrap()[0].step, None);
+    }
+
+    #[test]
+    fn a_sync_keeps_every_step_it_reported_and_a_step_reported_again_starts_over_from_it() {
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::new(home.path());
+        let slug = store
+            .create_system("w1", "storefront", vec![], Cover::Core, 1)
+            .unwrap();
+        let report =
+            |step: &str, summary: &str| store.progress("w1", &slug, step, Some(summary)).unwrap();
+        let steps = || {
+            let s = store.systems("w1").unwrap().remove(0);
+            let steps: Vec<(String, Option<String>)> =
+                s.steps.into_iter().map(|r| (r.step, r.summary)).collect();
+            (s.step, s.step_summary, steps)
+        };
+        let pair = |step: &str, summary: &str| (step.to_string(), Some(summary.to_string()));
+        assert_eq!(steps(), (None, None, vec![]));
+
+        report("inventory", "3 changed, 1 new, 1 gone");
+        report("tokens", "no change");
+        report("cards", "1 of 3");
+        report("cards", "2 of 3");
+        assert_eq!(
+            steps(),
+            (
+                Some("cards".into()),
+                Some("2 of 3".into()),
+                vec![
+                    pair("inventory", "3 changed, 1 new, 1 gone"),
+                    pair("tokens", "no change"),
+                    pair("cards", "2 of 3"),
+                ]
+            )
+        );
+
+        // A sync that goes back to an earlier step drops the later ones.
+        report("tokens", "1 changed");
+        assert_eq!(
+            steps(),
+            (
+                Some("tokens".into()),
+                Some("1 changed".into()),
+                vec![
+                    pair("inventory", "3 changed, 1 new, 1 gone"),
+                    pair("tokens", "1 changed"),
+                ]
+            )
+        );
+        store.progress("w1", &slug, "cards", None).unwrap();
+        assert_eq!(
+            steps().2,
+            vec![
+                pair("inventory", "3 changed, 1 new, 1 gone"),
+                pair("tokens", "1 changed"),
+                ("cards".to_string(), None),
+            ]
+        );
+
+        store.synced("w1", &slug, &[], 2).unwrap();
+        assert_eq!(steps(), (None, None, vec![]));
     }
 
     #[test]
