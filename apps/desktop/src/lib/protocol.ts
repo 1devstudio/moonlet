@@ -1096,6 +1096,13 @@ export type CommentChange =
   | { edit: { n: number; comment: string } }
   | { sent: { pins: { n: number; comment: string }[] } };
 
+/** `design.page`: a design's page as the visual editor reads it, and its
+ *  version, which `design.write_page` saves over (X65). */
+export interface DesignPageText {
+  html: string;
+  version: string;
+}
+
 /** `design.create`'s answer: the design, and why its agent did not start. */
 export interface DesignCreated extends Design {
   agent_error: string | null;
@@ -1311,6 +1318,8 @@ export const M = {
   designComments: "design.comments",
   designCommentPut: "design.comment.put",
   designCommentResolve: "design.comment.resolve",
+  designPage: "design.page",
+  designWritePage: "design.write_page",
   designCreate: "design.create",
   designRemove: "design.remove",
   designOpen: "design.open",
