@@ -11,7 +11,6 @@ import type { Design, DesignComment } from "../../lib/protocol";
 import { briefShown, designSubtitle } from "../../lib/design";
 import {
   addPageMid,
-  askAgent,
   commentsOf,
   editComment,
   keepComment,
@@ -24,7 +23,6 @@ import {
   removeDesign,
   resolveComment,
   saveViewport,
-  sendComments,
   sendingOf,
   setPageMids,
   stopAgent,
@@ -32,12 +30,12 @@ import {
   systemsOf,
   useDesign,
 } from "../../lib/designStore";
-import { copyElementOf, dismissUnsaved, editPage, loadPageSource, pasteInto, pendingOf, redoEdit, sendWithEdits, undoEdit, undoOf, unsavedOf, useEditor } from "../../lib/designEditor";
-import { EditRefused, editsChip, readEditsMessage, type EditOp } from "../../lib/designEdits";
+import { askWithEdits, sendCommentsWithEdits, copyElementOf, dismissUnsaved, editPage, loadPageSource, pasteInto, pendingOf, redoEdit, sendWithEdits, undoEdit, undoOf, unsavedOf, useEditor } from "../../lib/designEditor";
+import { EditRefused, editsChip, type EditOp } from "../../lib/designEdits";
 import { pageUrl } from "../../lib/designView";
 import { VIEWPORTS, canvasKey, canvasScale, canvasZoom, customViewports, fitBox, parseViewport, sizeOf, sizeText, viewportLabel, viewportText, withCustomViewport, type Size } from "../../lib/designViewport";
 import { breadcrumb, canvasPage, canvasStep, isTyping, keyAct, layerStep, modeEntered, modeHint, writingPage, type CanvasAct, type CanvasMode, type CanvasState, type EditKey, type ModeKeyPress, type RailTab } from "../../lib/designCanvas";
-import { chatCardLookup, commentCards, commentCardSelector, commentsTab, keepAction, openCommentsLabel, pageCounts, sendAll } from "../../lib/designComments";
+import { chatCardLookup, commentCardSelector, messageView, commentsTab, keepAction, openCommentsLabel, pageCounts, sendAll } from "../../lib/designComments";
 import { bridgeMessage, editMessage, helloMessage, modeMessage, pinsMessage, scrollMessage, selectMessage, type Layer, type PickedElement, type Rect } from "../../lib/designBridge";
 import { pageFile, pagePath } from "../../lib/designPage";
 import { barProblems, chatOpensOn, designBar, pageFixMessage, type Bar, type BarAction, type PageProblem } from "../../lib/designBars";
@@ -263,7 +261,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
   };
   const sendPins = (pins: DesignComment[]) => {
     if (agent === null) return toast("The design's agent is not running", "error");
-    void sendComments(host, workspace, design.slug, agent, pins).catch(errorToast);
+    void sendCommentsWithEdits(host, workspace, design.slug, agent, pins).catch(errorToast);
   };
   const keep = async (target: BoxTarget & { page: string }, comment: string): Promise<DesignComment> => {
     const action = keepAction(target.pin, comment);
@@ -281,7 +279,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
     const target = box;
     setBox(null);
     void keep(target, comment)
-      .then((pin) => sendComments(host, workspace, design.slug, agent, [pin]))
+      .then((pin) => sendCommentsWithEdits(host, workspace, design.slug, agent, [pin]))
       .catch(errorToast);
   };
   const onSendAll = () => {
@@ -343,7 +341,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
       const check = barProblems(page, problems);
       if (!check) return;
       if (agent === null) return toast("The design's agent is not running", "error");
-      void askAgent(host, agent, pageFixMessage(check.page, check.problems)).then(() => toast("Asked the agent to fix it"), errorToast);
+      void askWithEdits(host, workspace, design.slug, agent, pageFixMessage(check.page, check.problems)).then(() => toast("Asked the agent to fix it"), errorToast);
     }
   };
 
@@ -389,10 +387,16 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
                 }
                 userText={(text, first) => briefShown(text, design.brief, first)}
                 userView={(text) => {
-                  const edits = readEditsMessage(text);
-                  if (edits) return <EditsMessage edits={edits.edits} text={edits.text} />;
-                  const cards = commentCards(text, comments);
-                  return cards && <CommentCards cards={cards} />;
+                  const view = messageView(text, comments);
+                  if (!view) return null;
+                  const cards = view.cards && <CommentCards cards={view.cards} />;
+                  return view.edits ? (
+                    <EditsMessage edits={view.edits} text={view.text}>
+                      {cards}
+                    </EditsMessage>
+                  ) : (
+                    cards
+                  );
                 }}
                 sendText={(text, images) => sendWithEdits(host, workspace, design.slug, agent, text, images)}
               />
