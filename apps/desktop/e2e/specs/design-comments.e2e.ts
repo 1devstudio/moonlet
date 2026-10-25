@@ -139,6 +139,8 @@ describe("A design's comments", () => {
     writeFileSync(join(dir(), "pages", "index.html"), page(false));
     const orphaned = rail().$('.//section[@aria-label="Orphaned"]');
     await expect(orphaned).toBeDisplayed();
+    // "Orphaned", shown in capitals as the sidebar's group headings are.
+    expect(await orphaned.$(".//h3").getProperty("textContent")).toBe("Orphaned 1");
     await expect(orphaned).toHaveText(expect.stringContaining("The element is gone after the last change"));
     await expect(orphaned.$('.//article[@aria-label="Comment 3"]')).toBeExisting();
     // The pin still on the page keeps its place over it after the reload.
