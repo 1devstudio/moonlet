@@ -1,6 +1,8 @@
 // The bar over the design canvas (X65): one at a time, its colour saying who
 // has to act. Pure: the screen is components/design/DesignScreen.tsx.
 
+import { pageFile, pageOfPath, pagePath } from "./designPage";
+
 /** One problem of `design.check` for a design. */
 export interface PageProblem {
   path: string;
@@ -34,14 +36,12 @@ export interface Bar {
   actions: BarAction[];
 }
 
-const pageOf = (path: string) => /^pages\/(.+)\.html$/.exec(path)?.[1] ?? null;
-
 /** The problems the bar is about: the shown page's, or in Overview the first
  *  page's that has any. */
 export function barProblems(page: string | null, problems: PageProblem[]): { page: string; problems: PageProblem[] } | null {
-  const named = page ?? problems.map((p) => pageOf(p.path)).find((p) => p !== null) ?? null;
+  const named = page ?? problems.map((p) => pageOfPath(p.path)).find((p) => p !== null) ?? null;
   if (named === null) return null;
-  const own = problems.filter((p) => p.path === `pages/${named}.html`);
+  const own = problems.filter((p) => p.path === pagePath(named));
   return own.length ? { page: named, problems: own } : null;
 }
 
@@ -67,7 +67,7 @@ export function designBar(s: BarState): Bar | null {
   if (s.working) return { tone: "orange", text: "Claude is changing the design. Edit mode opens when it stops; comments still work", detail: null, actions: ["stop"] };
   if (s.needsYou) return { tone: "orange", text: s.needsYou.kind === "question" ? "Claude asks…" : "Claude needs your approval", detail: s.needsYou.text, actions: [] };
   const check = barProblems(s.page, s.problems);
-  if (check) return { tone: "red", text: `${check.page}.html has check problems:`, detail: summary(check.problems), actions: ["details", "fix"] };
+  if (check) return { tone: "red", text: `${pageFile(check.page)} has check problems:`, detail: summary(check.problems), actions: ["details", "fix"] };
   if (s.systemRemoved) return { tone: "grey", text: "Design system removed.", detail: `Pages show without ${s.system}'s styles.`, actions: [] };
   return null;
 }
@@ -75,5 +75,5 @@ export function designBar(s: BarState): Bar | null {
 /** What **Ask the agent to fix** sends the design's agent. */
 export function pageFixMessage(page: string, problems: PageProblem[]): string {
   const lines = problems.map((p) => `- line ${p.line}: ${p.message}`).join("\n");
-  return `Fix the check problems of pages/${page}.html, then run the check again:\n${lines}`;
+  return `Fix the check problems of ${pagePath(page)}, then run the check again:\n${lines}`;
 }
