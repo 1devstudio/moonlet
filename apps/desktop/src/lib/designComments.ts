@@ -142,3 +142,39 @@ export function sentLabel(pin: DesignComment): string {
 export function footerLabel(unsent: number): string {
   return unsent ? `${unsent} not sent yet, one line each` : "All sent";
 }
+
+/** The attribute a chat card carries with its pin's number, which Show in
+ *  chat looks for. */
+export const COMMENT_PIN_ATTR = "data-comment-pin";
+
+/** The chat cards of pin `n`. */
+export function commentCardSelector(n: number): string {
+  return `[${COMMENT_PIN_ATTR}="${n}"]`;
+}
+
+/** "1 open comment", "3 open comments". */
+export function openCommentsLabel(n: number): string {
+  return `${n} open comment${n === 1 ? "" : "s"}`;
+}
+
+/** What Keep and Send do with the box's text: a new pin, a changed comment
+ *  of a kept one, or nothing to change. */
+export function keepAction(pin: DesignComment | null, comment: string): "new" | "edit" | "unchanged" {
+  if (!pin) return "new";
+  return oneLine(comment) === oneLine(pin.comment) ? "unchanged" : "edit";
+}
+
+/** The comment box's size, near enough to place it. */
+export const BOX_SIZE = { w: 300, h: 150 } as const;
+
+/** Where the comment box goes over the page of `size` px shown at `scale`,
+ *  for an element at `rect` in the page: under it, else above it, else (an
+ *  element as tall as the page) inside the page, so the box never leaves
+ *  it; and never past the page's right edge. */
+export function boxPlace(rect: { x: number; y: number; w: number; h: number }, scale: number, size: [number, number]): { left: number; top: number } {
+  const left = Math.max(0, Math.min(rect.x * scale, size[0] - BOX_SIZE.w));
+  const below = (rect.y + rect.h) * scale + 8;
+  const above = rect.y * scale - BOX_SIZE.h - 8;
+  const top = below + BOX_SIZE.h <= size[1] ? below : above >= 0 ? above : Math.max(0, Math.min(rect.y * scale + 8, size[1] - BOX_SIZE.h));
+  return { left, top };
+}

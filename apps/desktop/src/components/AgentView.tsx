@@ -1,4 +1,4 @@
-import { type ReactNode, type Ref, createContext, memo, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, type ReactNode, type Ref, createContext, memo, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -502,11 +502,6 @@ export const ChatItemView = memo(function Item({ item, cwd }: { item: ChatItem; 
       return <div className="py-1 text-center ui-text-12 text-faint">{item.text}</div>;
   }
 });
-
-/** A message of the user's in its own view when it has one, else as a message. */
-function UserOwnView({ own, children }: { own: ReactNode | null; children: ReactNode }) {
-  return <>{own ?? children}</>;
-}
 
 /** An AskUserQuestion with questions we can render; anything else gets the plain card. */
 const isQuestion = (ask: PermissionAsk) => ask.tool === "AskUserQuestion" && askQuestions(ask.input).length > 0;
@@ -1345,7 +1340,7 @@ export function AgentView({
   visible: boolean;
   lead?: ReactNode;
   userText?: (text: string, first: boolean) => string | null;
-  userView?: (text: string, first: boolean) => ReactNode | null;
+  userView?: (text: string) => ReactNode | null;
 }) {
   const info = useStore((s) => s.terminals[host]?.[id]);
   const st = useChat((s) => s.chats[chatKey(host, id)]);
@@ -1643,15 +1638,16 @@ export function AgentView({
               [
                 ...placed.lead.map((n, i) => <AgentNoteView key={`lead-${i}`} note={n} />),
                 ...blocks.map((b) => {
+                  const own = b.kind === "item" && b.item.kind === "user" ? (userView?.(b.item.text) ?? null) : null;
                   const view =
                     b.kind === "agents" ? (
                       <LaunchedCard key={b.id} tools={b.tools} rows={agentRowsHere} />
                     ) : b.kind === "tools" ? (
                       <ToolGroup key={b.id} tools={b.tools} cwd={info?.cwd ?? ""} />
+                    ) : own ? (
+                      <Fragment key={b.item.id}>{own}</Fragment>
                     ) : (
-                      <UserOwnView key={b.item.id} own={b.item.kind === "user" ? (userView?.(b.item.text, b.item.id === firstUser) ?? null) : null}>
-                        <ChatItemView item={itemShown(b.item, userText, b.item.id === firstUser)} cwd={info?.cwd ?? ""} />
-                      </UserOwnView>
+                      <ChatItemView key={b.item.id} item={itemShown(b.item, userText, b.item.id === firstUser)} cwd={info?.cwd ?? ""} />
                     );
                   const ids = b.kind === "item" ? [b.item.id] : b.tools.map((t) => t.id);
                   const hasPlan = plan?.itemId && ids.includes(plan.itemId);

@@ -30,8 +30,8 @@ import {
 } from "../../lib/designStore";
 import { pageUrl } from "../../lib/designView";
 import { VIEWPORTS, canvasKey, canvasScale, canvasZoom, customViewports, fitBox, parseViewport, sizeOf, sizeText, viewportLabel, viewportText, withCustomViewport, type Size } from "../../lib/designViewport";
-import { canvasPage, isTyping, modeHint, modeKey, writingPage, type CanvasMode } from "../../lib/designCanvas";
-import { commentCards, isOrphaned, pageCounts, sendAll } from "../../lib/designComments";
+import { canvasPage, canvasStep, isTyping, modeHint, modeKey, writingPage, type CanvasAct, type CanvasMode, type CanvasState } from "../../lib/designCanvas";
+import { commentCards, commentCardSelector, commentsTab, keepAction, openCommentsLabel, pageCounts, sendAll } from "../../lib/designComments";
 import { bridgeMessage, modeMessage, pinsMessage, type PickedElement, type Rect } from "../../lib/designBridge";
 import { pageFile, pagePath } from "../../lib/designPage";
 import { barProblems, chatOpensOn, designBar, pageFixMessage, type Bar, type BarAction, type PageProblem } from "../../lib/designBars";
@@ -45,6 +45,8 @@ import { AgentView } from "../AgentView";
 import { useSize } from "../../lib/useSize";
 import { CardFrame, ZoomBar } from "./Frame";
 import { CommentBox, CommentCards, CommentsTab, PinLayer, type BoxTarget } from "./Comments";
+
+const NO_PINS: DesignComment[] = [];
 
 /** A design's viewport until it has one: Desktop. */
 const DEFAULT_VIEWPORT = VIEWPORTS[0].size;
@@ -87,15 +89,14 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
   }, [host, workspace, design.slug]);
   useEffect(() => setBox(null), [design.slug]);
 
-  // C switches Comment on and off; Esc closes the box, then leaves Comment.
-  const boxOpen = useRef(false);
-  boxOpen.current = box !== null;
-  const onModeKey = useCallback((k: "comment" | "escape") => {
-    if (k === "comment") {
-      setMode((m) => (m === "comment" ? "view" : "comment"));
-      setRailOpen(true);
-    } else if (boxOpen.current) setBox(null);
-    else setMode("view");
+  // C, Esc and the mode buttons, as canvasStep decides.
+  const canvas = useRef<CanvasState>({ mode, box: box !== null, rail: railOpen });
+  canvas.current = { mode, box: box !== null, rail: railOpen };
+  const step = useCallback((act: CanvasAct) => {
+    const next = canvasStep(canvas.current, act);
+    setMode(next.mode);
+    setRailOpen(next.rail);
+    if (!next.box) setBox(null);
   }, []);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -103,11 +104,11 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
       if (dialog || confirm || settingsPage) return;
       const typing = isTyping(e.target instanceof Element ? e.target : null);
       const k = modeKey({ key: e.key, meta: e.metaKey, ctrl: e.ctrlKey, alt: e.altKey, shift: e.shiftKey, typing });
-      if (k) onModeKey(k);
+      if (k) step(k);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onModeKey]);
+  }, [step]);
 
   // The chat opens when the agent starts to ask; folded meanwhile, it stays so.
   const asked = useRef(design.needs_you);
@@ -144,8 +145,9 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
     void sendComments(host, workspace, design.slug, agent, pins).catch(errorToast);
   };
   const keep = async (target: BoxTarget & { page: string }, comment: string): Promise<DesignComment> => {
-    if (!target.pin) return keepComment(host, workspace, design.slug, { page: target.page, ...target.element, comment });
-    return comment.trim() === target.pin.comment ? target.pin : editComment(host, workspace, design.slug, target.pin.n, comment);
+    const action = keepAction(target.pin, comment);
+    if (action === "new" || !target.pin) return keepComment(host, workspace, design.slug, { page: target.page, ...target.element, comment });
+    return action === "unchanged" ? target.pin : editComment(host, workspace, design.slug, target.pin.n, comment);
   };
   const onKeep = (comment: string) => {
     if (!box) return;
@@ -164,18 +166,28 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
   const onSendAll = () => {
     sendPins(sendAll(comments, mids));
   };
-  // Show in chat: the chat opens, scrolled to the pin's last card.
+  // Show in chat: the chat opens, then scrolls to the pin's last card.
+  const [shownPin, setShownPin] = useState<{ n: number } | null>(null);
   const showInChat = (pin: DesignComment) => {
     setChatOpen(true);
-    setTimeout(() => {
-      const cards = chatRef.current?.querySelectorAll<HTMLElement>(`[data-comment-pin="${pin.n}"]`);
-      const card = cards?.[cards.length - 1];
-      if (!card) return toast("Its message is not in the chat any more", "info");
-      card.scrollIntoView({ block: "center" });
-      card.classList.add("ring-2", "ring-accent");
-      setTimeout(() => card.classList.remove("ring-2", "ring-accent"), 1500);
-    }, 50);
+    setShownPin({ n: pin.n });
   };
+  useEffect(() => {
+    if (!shownPin || !chatOpen) return;
+    const cards = chatRef.current?.querySelectorAll<HTMLElement>(commentCardSelector(shownPin.n));
+    const card = cards?.[cards.length - 1];
+    if (!card) {
+      toast("Its message is not in the chat any more", "info");
+      return;
+    }
+    card.scrollIntoView({ block: "center" });
+    card.classList.add("ring-2", "ring-accent");
+    const done = setTimeout(() => card.classList.remove("ring-2", "ring-accent"), 1500);
+    return () => {
+      clearTimeout(done);
+      card.classList.remove("ring-2", "ring-accent");
+    };
+  }, [shownPin, chatOpen]);
   // A pin picked in the rail: its page, with its box open.
   const openPin = (pin: DesignComment) => {
     if (!pin.page) return;
@@ -183,8 +195,8 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
     setBox({ page: pin.page, element: { mid: pin.mid, tag: pin.tag, text: pin.text }, rect: { x: 0, y: 0, w: 0, h: 0 }, pin });
   };
   const onPick = useCallback((el: PickedElement) => setBox(page === null ? null : { page, element: { mid: el.mid, tag: el.tag, text: el.text }, rect: el.rect, pin: null }), [page]);
-  const pagePins = useMemo(() => comments.filter((p) => p.state === "open" && p.page === page && !isOrphaned(p, mids)), [comments, page, mids]);
-  const openCount = comments.filter((p) => p.state === "open").length;
+  const onPage = useMemo(() => commentsTab(comments, { tab: "open", page }, mids), [comments, page, mids]);
+  const pagePins = page === null ? NO_PINS : onPage.shown;
 
   const onBarAction = (a: BarAction) => {
     if (a === "stop" && agent !== null) void stopAgent(host, agent).catch(errorToast);
@@ -290,11 +302,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
                 key={m}
                 aria-pressed={mode === m}
                 title={m === "comment" ? "Comment (C)" : "View"}
-                onClick={() => {
-                  setMode(m);
-                  if (m === "comment") setRailOpen(true);
-                  else setBox(null);
-                }}
+                onClick={() => step(m)}
                 className={cx("flex h-full items-center gap-1.5 rounded px-2.5", mode === m ? "bg-raised text-fg" : "text-muted hover:text-fg")}
               >
                 {m === "comment" ? "Comment" : "View"}
@@ -338,7 +346,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
               canSend={agent !== null}
               onPick={onPick}
               onOpenPin={openPin}
-              onKey={onModeKey}
+              onKey={step}
               onKeep={onKeep}
               onSend={onSend}
               onCloseBox={() => setBox(null)}
@@ -358,7 +366,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
         <aside aria-label="Right rail" className="flex w-[300px] shrink-0 flex-col border-l border-border bg-panel">
           <div role="tablist" className="flex h-[52px] shrink-0 items-end gap-4 border-b border-border px-4">
             <button role="tab" aria-selected className="flex h-full items-center gap-1.5 border-b-2 border-accent ui-text-13 text-fg">
-              Comments <span className="rounded bg-raised px-1 font-mono ui-text-11 text-muted">{openCount}</span>
+              Comments <span className="rounded bg-raised px-1 font-mono ui-text-11 text-muted">{onPage.open}</span>
             </button>
           </div>
           <CommentsTab
@@ -426,7 +434,7 @@ function PageFrame({
   canSend: boolean;
   onPick: (el: PickedElement) => void;
   onOpenPin: (pin: DesignComment) => void;
-  onKey: (k: "comment" | "escape") => void;
+  onKey: (act: CanvasAct) => void;
   onKeep: (comment: string) => void;
   onSend: (comment: string) => void;
   onCloseBox: () => void;
@@ -457,7 +465,11 @@ function PageFrame({
         tell(pinsMessage(latest.current.wanted));
       } else if (m.type === "rects") setRects(Object.fromEntries(m.rects.map(({ mid, ...r }) => [mid, r])));
       else if (m.type === "pick") latest.current.onPick(m.element);
-      else latest.current.onKey(m.key === "c" ? "comment" : "escape");
+      else {
+        // A key pressed in the page, where the bridge already left out typing.
+        const k = modeKey({ key: m.key, meta: false, ctrl: false, alt: false, shift: false, typing: false });
+        if (k) latest.current.onKey(k);
+      }
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
@@ -525,7 +537,7 @@ function OverviewTile({
         <span className="font-mono text-fg">{pageFile(page)}</span>
         {label && <span className="truncate text-muted">{label}</span>}
         {comments > 0 && (
-          <span title={`${comments} open comment${comments === 1 ? "" : "s"}`} className="ml-auto flex shrink-0 items-center gap-1 text-muted">
+          <span title={openCommentsLabel(comments)} className="ml-auto flex shrink-0 items-center gap-1 text-muted">
             <MessageSquare size={12} /> {comments}
           </span>
         )}

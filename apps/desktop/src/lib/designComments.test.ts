@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DesignComment } from "./protocol";
-import { boxLabel, commentCards, footerLabel, pinLabel, sentLabel, commentLine, commentsMessage, commentsTab, isOrphaned, pageCounts, parseCommentLine, sendAll, withPins } from "./designComments";
+import { boxLabel, boxPlace, keepAction, openCommentsLabel, commentCards, footerLabel, pinLabel, sentLabel, commentLine, commentsMessage, commentsTab, isOrphaned, pageCounts, parseCommentLine, sendAll, withPins } from "./designComments";
 
 const pin = (n: number, over: Partial<DesignComment> = {}): DesignComment => ({
   n,
@@ -148,5 +148,27 @@ describe("pins the daemon gives back (X65)", () => {
       [2, null],
       [3, 7],
     ]);
+  });
+});
+
+describe("the comment box (X65)", () => {
+  // A Phone page (390 × 844) at 50%: 195 × 422 px on the canvas.
+  const size: [number, number] = [195, 422];
+  it("goes under its element, else above it, else inside the page for an element as tall as it", () => {
+    expect(boxPlace({ x: 20, y: 40, w: 200, h: 40 }, 0.5, size)).toEqual({ left: 0, top: 48 });
+    expect(boxPlace({ x: 0, y: 700, w: 390, h: 100 }, 0.5, size)).toEqual({ left: 0, top: 192 });
+    expect(boxPlace({ x: 0, y: 0, w: 390, h: 844 }, 0.5, size)).toEqual({ left: 0, top: 8 });
+  });
+
+  it("keeps a new pin, changes a kept pin's comment, and leaves one whose text did not change", () => {
+    expect(keepAction(null, "Collapse it")).toBe("new");
+    expect(keepAction(pin(1), "Collapse into a menu on phone ")).toBe("unchanged");
+    expect(keepAction(pin(1), "Collapse into a menu below 600 px")).toBe("edit");
+  });
+});
+
+describe("a page's count in Overview (X65)", () => {
+  it("says how many comments are open", () => {
+    expect([openCommentsLabel(1), openCommentsLabel(3)]).toEqual(["1 open comment", "3 open comments"]);
   });
 });

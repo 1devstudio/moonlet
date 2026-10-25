@@ -64,13 +64,13 @@ export interface ModeKeyPress {
   typing: boolean;
 }
 
-/** What a key does to the canvas's mode: C switches Comment on and off, Esc
- *  closes the comment box or leaves Comment; null for any other key, and
- *  for C while typing or with a modifier. */
-export function modeKey(k: ModeKeyPress): "comment" | "escape" | null {
+/** What a key does to the canvas (see {@link canvasStep}): C switches
+ *  Comment on and off, Esc closes the comment box or leaves Comment; null
+ *  for any other key, and for C while typing or with a modifier. */
+export function modeKey(k: ModeKeyPress): "toggle" | "escape" | null {
   if (k.key === "Escape") return "escape";
   if (k.meta || k.ctrl || k.alt || k.shift || k.typing) return null;
-  return k.key === "c" ? "comment" : null;
+  return k.key === "c" ? "toggle" : null;
 }
 
 /** Where a key is text: a field or an editable element. The bridge script
@@ -81,4 +81,30 @@ export const TYPING_SELECTOR = 'input, textarea, select, [contenteditable]:not([
  *  editable element, or a terminal (which a page never has). */
 export function isTyping(el: Element | null): boolean {
   return !!el?.closest(`${TYPING_SELECTOR}, .xterm`);
+}
+
+/** What the design screen's canvas shows around the page: its mode, whether
+ *  a comment box is open, and whether the right rail is shown. */
+export interface CanvasState {
+  mode: CanvasMode;
+  box: boolean;
+  rail: boolean;
+}
+
+/** C (`toggle`), Esc, and the View and Comment buttons. */
+export type CanvasAct = "toggle" | "escape" | "view" | "comment";
+
+/** The canvas after `act`: entering Comment shows the rail; Esc closes the
+ *  box, else goes back to View; the View button closes the box. */
+export function canvasStep(s: CanvasState, act: CanvasAct): CanvasState {
+  switch (act) {
+    case "toggle":
+      return s.mode === "comment" ? { ...s, mode: "view" } : { ...s, mode: "comment", rail: true };
+    case "comment":
+      return { ...s, mode: "comment", rail: true };
+    case "view":
+      return { ...s, mode: "view", box: false };
+    case "escape":
+      return s.box ? { ...s, box: false } : { ...s, mode: "view" };
+  }
 }
