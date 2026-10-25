@@ -66,10 +66,13 @@ export interface ModeKeyPress {
 
 /** What a key does to the canvas (see {@link canvasStep}): C switches
  *  Comment on and off, Esc closes the comment box or leaves Comment; null
- *  for any other key, and for C while typing or with a modifier. */
+ *  for any other key, for C with a modifier, and for C or Esc while typing:
+ *  Esc in a field such as the chat's composer is that field's (it stops the
+ *  agent), and the comment box's own field closes the box itself. */
 export function modeKey(k: ModeKeyPress): "toggle" | "escape" | null {
+  if (k.typing) return null;
   if (k.key === "Escape") return "escape";
-  if (k.meta || k.ctrl || k.alt || k.shift || k.typing) return null;
+  if (k.meta || k.ctrl || k.alt || k.shift) return null;
   return k.key === "c" ? "toggle" : null;
 }
 
