@@ -6,7 +6,7 @@
 
 import { create } from "zustand";
 import { DaemonError, rpc } from "./daemon";
-import { itemKey, ownPages, pageKey, reloadPage, sendComments } from "./designStore";
+import { itemKey, pageKey, registerPageOwner, reloadPage, sendComments } from "./designStore";
 import { latestSends } from "./latestSend";
 import { errorToast } from "./store";
 import { latestPerKey } from "./prPoll";
@@ -265,14 +265,18 @@ async function changedOnDisk(host: string, workspace: string, slug: string, page
   reloadPage(host, workspace, slug, page);
 }
 
-ownPages((host, workspace, slug, page) => {
-  if (!useEditor.getState().sources[pageKey(host, workspace, slug, page)]) return false;
-  const check: Promise<void> = changedOnDisk(host, workspace, slug, page)
-    .catch(() => reloadPage(host, workspace, slug, page))
-    .finally(() => checking.delete(check));
-  checking.add(check);
-  return true;
-});
+/** Starts the editor: it takes the changes on disk of the pages it has
+ *  read (changedOnDisk). */
+export function startEditor() {
+  registerPageOwner((host, workspace, slug, page) => {
+    if (!useEditor.getState().sources[pageKey(host, workspace, slug, page)]) return false;
+    const check: Promise<void> = changedOnDisk(host, workspace, slug, page)
+      .catch(() => reloadPage(host, workspace, slug, page))
+      .finally(() => checking.delete(check));
+    checking.add(check);
+    return true;
+  });
+}
 
 /** Waits for the checks of pages changed on disk (tests). */
 export async function settleChecks(): Promise<void> {
