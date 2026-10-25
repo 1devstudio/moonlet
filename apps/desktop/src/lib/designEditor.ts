@@ -8,6 +8,7 @@ import { create } from "zustand";
 import { DaemonError, rpc } from "./daemon";
 import { ownPages, reloadPage, sendComments } from "./designStore";
 import { errorToast } from "./store";
+import { latestPerKey } from "./prPoll";
 import { M, type DesignComment, type DesignPageText } from "./protocol";
 import type { ChatImage } from "./attachments";
 import { wsKey } from "./workspaces";
@@ -63,9 +64,14 @@ export function resetEditor() {
 export async function loadPageSource(host: string, workspace: string, slug: string, page: string): Promise<void> {
   const key = pageKey(host, workspace, slug, page);
   if (saving[key]?.busy) return;
+  const latest = reads.start(key);
   const text = await rpc<DesignPageText>(host, M.designPage, { workspace, slug, page });
-  if (!saving[key]?.busy) setSource(key, text);
+  // An older read coming back after a newer one is dropped.
+  if (latest() && !saving[key]?.busy) setSource(key, text);
 }
+
+/** The latest read of each page, so an older answer never lands last. */
+const reads = latestPerKey();
 
 function setSource(key: string, text: DesignPageText) {
   highest[key] = Math.max(highest[key] ?? 0, highestMid(text.html));
@@ -191,6 +197,11 @@ export function copyElementOf(host: string, workspace: string, slug: string, pag
   return true;
 }
 
+/** Whether an element of the design was copied, for ⌘V. */
+export function hasCopy(host: string, workspace: string, slug: string): boolean {
+  return itemKey(host, workspace, slug) in clips;
+}
+
 /** ⌘V: the design's copied element pasted into a page after element
  *  `after`, or at the end of its body; null when nothing was copied. */
 export function pasteInto(host: string, workspace: string, slug: string, page: string, after: string | null): Edit | null {
@@ -217,6 +228,14 @@ async function lost(host: string, workspace: string, slug: string, page: string)
   }));
   setSource(key, await rpc<DesignPageText>(host, M.designPage, { workspace, slug, page }));
   reloadPage(host, workspace, slug, page);
+}
+
+/** A design closed, or another opened: its changes can no longer be
+ *  undone or redone ("since the design was opened"); its edits by hand not
+ *  told yet still go with the next message. */
+export function closeDesign(host: string, workspace: string, slug: string) {
+  const design = itemKey(host, workspace, slug);
+  useEditor.setState((s) => ({ undo: { ...s.undo, [design]: NO_UNDO } }));
 }
 
 /** Puts the yellow bar away. */
