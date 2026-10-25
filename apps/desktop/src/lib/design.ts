@@ -29,6 +29,12 @@ export interface DesignRowLabel extends RowLabel {
   comments: boolean;
 }
 
+/** A design's agent's state: its chat's live state (`live`, from its
+ *  terminal), else the one `design.list` gave; null without an agent. */
+export function designAgentState(d: Design, live: AgentState | undefined): AgentState | null {
+  return d.agent === null ? null : (live ?? d.agent_state);
+}
+
 /** A design's sidebar row (X65): its agent's state (`state`, the agent's
  *  live state, which the caller knows), then needs you, else its open
  *  comments, else its age. */
@@ -117,4 +123,17 @@ export function designOpenAction(ev: DesignOpen, sessions: { id: string; name: s
 export function briefShown(text: string, brief: string): string | null {
   const b = brief.trim();
   return b && text.length > b.length && text.startsWith(b) ? b : null;
+}
+
+/** The design screen's line under the name: "moonlet desktop · 3 pages". */
+export function designSubtitle(system: string, pages: number): string {
+  return `${system} · ${pages === 0 ? "no pages yet" : plural(pages, "page")}`;
+}
+
+/** What the sidebar's Designs says while it lists none: that a design starts
+ *  from a design system while the workspace has none, else that it has no
+ *  designs yet; null while it has some or they are not listed yet. */
+export function designsEmpty(designs: Design[] | undefined, systems: DesignSystem[] | undefined): string | null {
+  if (systems?.length === 0) return designs?.length ? null : "A design starts from a design system.";
+  return designs?.length === 0 ? "No designs yet." : null;
 }

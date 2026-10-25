@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Design, DesignSystem } from "./protocol";
-import { briefShown, designOpenAction, designRow, designSlug, newDesignReady, systemSummary, picksInWorkspace, systemFolder, systemLabel } from "./design";
+import { briefShown, designAgentState, designOpenAction, designsEmpty, designSubtitle, designRow, designSlug, newDesignReady, systemSummary, picksInWorkspace, systemFolder, systemLabel } from "./design";
 
 const NOW = 1_761_200_000_000;
 const DAY = 86_400_000;
@@ -116,6 +116,14 @@ const design = (over: Partial<Design>): Design => ({
   ...over,
 });
 
+describe("a design's agent's state (X65)", () => {
+  it("is its chat's live state, else the one design.list gave, and none without an agent", () => {
+    expect(designAgentState(design({ agent_state: "idle" }), "working")).toBe("working");
+    expect(designAgentState(design({ agent_state: "idle" }), undefined)).toBe("idle");
+    expect(designAgentState(design({ agent: null, agent_state: null }), "working")).toBeNull();
+  });
+});
+
 describe("a design's sidebar row (X65)", () => {
   it("shows its agent's state and its age", () => {
     expect(designRow(design({}), NOW, "done")).toEqual({ state: "done", text: "2d", tone: "muted", comments: false });
@@ -184,5 +192,25 @@ describe("the design's chat (X65)", () => {
     expect(briefShown("Two more variants", "A left nav and a Git section")).toBeNull();
     expect(briefShown("A left nav and a Git section", "A left nav and a Git section")).toBeNull();
     expect(briefShown("anything", "")).toBeNull();
+  });
+});
+
+describe("the design screen's header (X65)", () => {
+  it("names the design system and counts the pages, or says there are none yet", () => {
+    expect(designSubtitle("moonlet desktop", 3)).toBe("moonlet desktop · 3 pages");
+    expect(designSubtitle("moonlet desktop", 1)).toBe("moonlet desktop · 1 page");
+    expect(designSubtitle("moonlet desktop", 0)).toBe("moonlet desktop · no pages yet");
+  });
+});
+
+describe("the sidebar's Designs when it has none (X65)", () => {
+  it("says a design starts from a design system, or that there are no designs yet, once listed", () => {
+    expect(designsEmpty([], [])).toBe("A design starts from a design system.");
+    expect(designsEmpty(undefined, [])).toBe("A design starts from a design system.");
+    expect(designsEmpty([], [system({})])).toBe("No designs yet.");
+    expect(designsEmpty([design({})], [system({})])).toBeNull();
+    // Nothing before either is listed.
+    expect(designsEmpty(undefined, undefined)).toBeNull();
+    expect(designsEmpty(undefined, [system({})])).toBeNull();
   });
 });
