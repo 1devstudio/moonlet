@@ -29,7 +29,7 @@ export const TONES: Record<RowLabel["tone"], string> = { attention: "text-blocke
 /** A card rendered at `scale`: its viewport, in a frame that may run its own
  *  scripts but never reach the app (no `allow-same-origin`). Not `live`, the
  *  same box without the frame, so its web process (X64) is not started. */
-function CardFrame({ url, title, viewport, scale, interactive = false, live = true }: { url: string; title: string; viewport: [number, number]; scale: number; interactive?: boolean; live?: boolean }) {
+export function CardFrame({ url, title, viewport, scale, interactive = false, live = true }: { url: string; title: string; viewport: [number, number]; scale: number; interactive?: boolean; live?: boolean }) {
   const [w, h] = viewport;
   return (
     <div className="relative overflow-hidden" style={{ width: w * scale, height: h * scale }}>
@@ -45,7 +45,7 @@ function CardFrame({ url, title, viewport, scale, interactive = false, live = tr
 }
 
 /** The inner size an element has, kept up to date. */
-function useSize<T extends HTMLElement>(): [React.RefObject<T | null>, [number, number]] {
+export function useSize<T extends HTMLElement>(): [React.RefObject<T | null>, [number, number]] {
   const ref = useRef<T>(null);
   const [size, setSize] = useState<[number, number]>([0, 0]);
   useLayoutEffect(() => {
