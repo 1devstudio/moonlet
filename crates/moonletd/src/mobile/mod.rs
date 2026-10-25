@@ -22,7 +22,6 @@ use moonlet_proto::methods::{
 };
 use moonlet_proto::{Message, RpcError};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use tokio::sync::{Notify, watch};
 use tokio::task::JoinHandle;
 
@@ -65,13 +64,8 @@ pub fn tailscale_addresses() -> Vec<IpAddr> {
     out
 }
 
-pub fn sha256_hex(data: &[u8]) -> String {
-    hex(&Sha256::digest(data))
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
+pub use moonlet_core::hash::sha256_hex;
+use moonlet_core::hash::hex;
 
 fn random_bytes(n: usize) -> Vec<u8> {
     let mut buf = vec![0u8; n];

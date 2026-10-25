@@ -311,34 +311,44 @@ pub(crate) fn read_tree(
     root: &Path,
     rel: &Path,
 ) -> Result<std::collections::BTreeMap<String, Vec<u8>>> {
-    fn walk(
-        dir: &Dir,
-        prefix: &str,
-        out: &mut std::collections::BTreeMap<String, Vec<u8>>,
-    ) -> Result<()> {
-        for entry in dir.entries()? {
-            let entry = entry?;
-            let name = entry.file_name();
-            let Some(text) = name.to_str().filter(|n| !n.starts_with('.')) else {
-                continue;
-            };
-            let kind = entry.file_type()?;
-            let path = format!("{prefix}{text}");
-            if kind.is_dir() {
-                if let Some(sub) = open_folder(dir, &name, false)? {
-                    walk(&sub, &format!("{path}/"), out)?;
-                }
-            } else if kind.is_file() {
-                out.insert(path, read_file(dir, &name)?);
-            }
-        }
-        Ok(())
-    }
     let mut out = std::collections::BTreeMap::new();
     if let Some(dir) = open_path(root, rel, false)? {
-        walk(&dir, "", &mut out)?;
+        walk(&dir, "", &mut |at, name, path, kind| {
+            if kind.is_file() {
+                out.insert(path.to_string(), read_file(at, name)?);
+            }
+            Ok(())
+        })?;
     }
     Ok(out)
+}
+
+/// Calls `visit` with each entry of the folder `dir` and its folders that
+/// is not a folder: the folder it is in, its name, its path in `dir`
+/// (`img/logo.png`) and its type. Hidden entries are left out, and a link
+/// is an entry, never followed.
+fn walk(
+    dir: &Dir,
+    prefix: &str,
+    visit: &mut dyn FnMut(&Dir, &std::ffi::OsStr, &str, cap_std::fs::FileType) -> Result<()>,
+) -> Result<()> {
+    for entry in dir.entries()? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(text) = name.to_str().filter(|n| !n.starts_with('.')) else {
+            continue;
+        };
+        let kind = entry.file_type()?;
+        let path = format!("{prefix}{text}");
+        if kind.is_dir() {
+            if let Some(sub) = open_folder(dir, &name, false)? {
+                walk(&sub, &format!("{path}/"), visit)?;
+            }
+        } else {
+            visit(dir, &name, &path, kind)?;
+        }
+    }
+    Ok(())
 }
 
 /// The folder of `path` (`img/logo.png`) in `dir`, made when missing, and
@@ -375,30 +385,13 @@ pub(crate) fn write_tree(
         replace_in(&at, name, bytes)?;
     }
     if exact {
-        fn prune(
-            dir: &Dir,
-            prefix: &str,
-            keep: &std::collections::BTreeMap<String, Vec<u8>>,
-        ) -> Result<()> {
-            for entry in dir.entries()? {
-                let entry = entry?;
-                let name = entry.file_name();
-                let Some(text) = name.to_str().filter(|n| !n.starts_with('.')) else {
-                    continue;
-                };
-                let path = format!("{prefix}{text}");
-                if entry.file_type()?.is_dir() {
-                    if let Some(sub) = open_folder(dir, &name, false)? {
-                        prune(&sub, &format!("{path}/"), keep)?;
-                    }
-                } else if !keep.contains_key(&path) {
-                    // A link goes as a link: its target is never touched.
-                    dir.remove_file(&name)?;
-                }
+        walk(&dir, "", &mut |at, name, path, _| {
+            if !files.contains_key(path) {
+                // A link goes as a link: its target is never touched.
+                at.remove_file(name)?;
             }
             Ok(())
-        }
-        prune(&dir, "", files)?;
+        })?;
     }
     Ok(())
 }

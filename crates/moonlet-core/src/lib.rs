@@ -12,6 +12,7 @@ pub mod gh_issues;
 pub mod gh_projects;
 pub mod git;
 pub mod git_settings;
+pub mod hash;
 pub mod heavy;
 pub mod history;
 pub mod hooks;

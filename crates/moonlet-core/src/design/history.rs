@@ -7,12 +7,12 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use moonlet_proto::types::{DesignSnapshot, SnapshotFrom, SnapshotKind};
 
 use super::fsx;
 use super::store::Store;
+use crate::hash::sha256_hex;
 
 /// The folder of a design's snapshots.
 pub const HISTORY_DIR: &str = "history";
@@ -133,11 +133,11 @@ impl Store {
             .into_iter()
             .find(|r| r.n == n)
             .ok_or(NoSnapshot(n))?;
-        let kept = history_rel(slug).join(n.to_string());
+        let kept = snapshot_rel(slug, n);
         let mut files = BTreeMap::new();
         for (path, hash) in &from.files {
             let bytes = fsx::read_file_inside(&designs, &kept.join(path))?;
-            if &hex(&Sha256::digest(&bytes)) != hash {
+            if &sha256_hex(&bytes) != hash {
                 bail!("snapshot {n}'s {path} is not as it was kept");
             }
             files.insert(path.clone(), bytes);
@@ -194,7 +194,7 @@ pub fn snapshot_file(rel: &str) -> Result<Option<String>> {
         return Ok(None);
     };
     let rest: Vec<&str> = parts.collect();
-    let numbered = !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit());
+    let numbered = is_number(n);
     let kept = rest.len() >= 2 && KEPT.contains(&rest[0]);
     if !super::store::is_name(slug) || !numbered || !kept {
         bail!("{rel} is no file of a snapshot");
@@ -208,6 +208,16 @@ pub fn snapshot_file(rel: &str) -> Result<Option<String>> {
 /// `<slug>/history`, inside the designs folder.
 fn history_rel(slug: &str) -> PathBuf {
     Path::new(slug).join(HISTORY_DIR)
+}
+
+/// `<slug>/history/<n>`, snapshot `n`'s folder inside the designs folder.
+fn snapshot_rel(slug: &str, n: u32) -> PathBuf {
+    history_rel(slug).join(n.to_string())
+}
+
+/// Digits only, at least one: a snapshot's number as its folder names it.
+fn is_number(text: &str) -> bool {
+    !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit())
 }
 
 /// The design's `pages/` and `assets/` files, by their paths in its folder.
@@ -224,12 +234,8 @@ fn current_files(designs: &Path, slug: &str) -> Result<BTreeMap<String, Vec<u8>>
 fn hashes_of(files: &BTreeMap<String, Vec<u8>>) -> BTreeMap<String, String> {
     files
         .iter()
-        .map(|(path, bytes)| (path.clone(), hex(&Sha256::digest(bytes))))
+        .map(|(path, bytes)| (path.clone(), sha256_hex(bytes)))
         .collect()
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// The numbers of the snapshot folders, `history/<n>`, ascending.
@@ -249,9 +255,7 @@ fn numbers(designs: &Path, slug: &str) -> Result<Vec<u32>> {
         .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
         .filter_map(|e| {
             let name = e.file_name().to_str()?.to_string();
-            name.bytes()
-                .all(|b| b.is_ascii_digit())
-                .then(|| name.parse().ok())?
+            is_number(&name).then(|| name.parse().ok())?
         })
         .collect();
     out.sort_unstable();
@@ -267,7 +271,7 @@ fn next_n(designs: &Path, slug: &str) -> Result<u32> {
 fn records(designs: &Path, slug: &str) -> Result<Vec<Record>> {
     let mut out = Vec::new();
     for n in numbers(designs, slug)? {
-        let rel = history_rel(slug).join(n.to_string()).join(RECORD_FILE);
+        let rel = snapshot_rel(slug, n).join(RECORD_FILE);
         let Ok(text) = fsx::read_file_inside(designs, &rel) else {
             continue;
         };
@@ -286,7 +290,7 @@ fn write_snapshot(
     record: &Record,
     files: &BTreeMap<String, Vec<u8>>,
 ) -> Result<()> {
-    let rel = history_rel(slug).join(record.n.to_string());
+    let rel = snapshot_rel(slug, record.n);
     let record_file = BTreeMap::from([(
         RECORD_FILE.to_string(),
         format!("{}\n", serde_json::to_string_pretty(record)?).into_bytes(),
@@ -305,10 +309,7 @@ fn rotate(designs: &Path, slug: &str, keep: usize) -> Result<()> {
     let numbers = numbers(designs, slug)?;
     let old = numbers.len().saturating_sub(keep);
     for n in &numbers[..old] {
-        fsx::remove_dir_inside(
-            designs,
-            &designs.join(history_rel(slug)).join(n.to_string()),
-        )?;
+        fsx::remove_dir_inside(designs, &designs.join(snapshot_rel(slug, *n)))?;
     }
     Ok(())
 }
@@ -325,22 +326,28 @@ fn page_names<'a>(paths: impl Iterator<Item = &'a String>) -> Vec<String> {
     pages
 }
 
+/// The first `most` of `items`, and how many more there are.
+fn capped(items: &[String], most: usize) -> (&[String], usize) {
+    let shown = &items[..items.len().min(most)];
+    (shown, items.len() - shown.len())
+}
+
+/// `shown` joined with commas, then "and 2 more" when there are more.
+fn with_more(shown: &[String], more: usize) -> String {
+    format!("{} and {more} more", shown.join(", "))
+}
+
 /// "a", "a and b", "a, b and c"; past `most`, "a, b, c and 2 more".
 fn listing(items: &[String], most: usize) -> String {
-    let (shown, more) = if items.len() > most {
-        (&items[..most], items.len() - most)
-    } else {
-        (items, 0)
-    };
-    match (shown, more) {
+    match capped(items, most) {
+        (shown, more) if more > 0 => with_more(shown, more),
         ([], _) => String::new(),
-        ([one], 0) => one.clone(),
-        (_, 0) => format!(
+        ([one], _) => one.clone(),
+        (shown, _) => format!(
             "{} and {}",
             shown[..shown.len() - 1].join(", "),
             shown[shown.len() - 1]
         ),
-        _ => format!("{} and {more} more", shown.join(", ")),
     }
 }
 
@@ -422,10 +429,9 @@ pub fn edits_summary(edits: &[String]) -> String {
             seen.push(e);
         }
     }
-    let shown = if seen.len() > 5 {
-        format!("{} and {} more", seen[..5].join(", "), seen.len() - 5)
-    } else {
-        seen.join(", ")
+    let shown = match capped(&seen, 5) {
+        (shown, more) if more > 0 => with_more(shown, more),
+        (shown, _) => shown.join(", "),
     };
     capitalised(&shown)
 }
