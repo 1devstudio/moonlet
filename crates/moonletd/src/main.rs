@@ -288,6 +288,8 @@ fn run_daemon(
         });
         // Phones over Tailscale, when the user allows them (X39).
         mobile::spawn(daemon.clone());
+        // A design's snapshot when its agent ends a turn (X65).
+        daemon.snapshot_agent_turns();
         // Cloud machines: the sweep and the startup deadlines (X63).
         daemon.machines.start();
         // Live copies, before the link they may open (X60).

@@ -257,6 +257,13 @@ pub const DESIGN_WRITE_PAGE: &str = "design.write_page";
 /// from its own design system, its tokens and the cards that hold snippets
 /// (X65 entry 10).
 pub const DESIGN_KIT: &str = "design.kit";
+/// [`DesignRef`] → the design's snapshots, newest first:
+/// [`crate::types::DesignSnapshot`]s (X65 entry 11).
+pub const DESIGN_HISTORY: &str = "design.history";
+/// [`DesignSnapshotRef`] → the **Restored snapshot** entry: snapshot `n`
+/// made the design's `pages/` and `assets/`. Refused with `busy` while the
+/// design's agent works.
+pub const DESIGN_SNAPSHOT_RESTORE: &str = "design.snapshot.restore";
 
 // Phones (X39)
 /// Phone access, the Tailscale addresses and the paired phones: [`MobileStatus`].
@@ -1418,6 +1425,19 @@ pub struct DesignWritePage {
     pub page: String,
     pub html: String,
     pub base_version: String,
+    /// What each edit by hand this save carries did, such as `moved
+    /// section m24`, for the summary of the snapshot taken once edits by
+    /// hand stop (X65 entry 11); none from an older app.
+    #[serde(default)]
+    pub edits: Vec<String>,
+}
+
+/// [`DESIGN_SNAPSHOT_RESTORE`]'s params: a design's snapshot `n`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DesignSnapshotRef {
+    pub workspace: String,
+    pub slug: String,
+    pub n: u32,
 }
 
 /// A page saved: its new version.

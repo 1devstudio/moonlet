@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use moonlet_core::design::history::Take;
 use moonlet_core::fs::Watchers;
 use moonlet_core::hooks::{self, HookPaths};
 use moonlet_core::paths::{hostname, now_ms};
@@ -34,6 +35,13 @@ pub struct Daemon {
     design_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// Announces changes under `~/.moonlet/design` as `design.changed` (X64).
     _design_watch: Option<moonlet_core::design::watch::Watching>,
+    /// Each workspace design's edits by hand saved since its last snapshot
+    /// (X65): what they did, and how many saves, so only the last save's
+    /// wait takes the snapshot.
+    hand_edits: Mutex<HashMap<String, HandEdits>>,
+    /// How long edits by hand stop before their snapshot is taken: 10 s, or
+    /// `MOONLET_DESIGN_QUIET_MS` (tests).
+    edits_quiet: std::time::Duration,
     /// The app that renders design cards, and the cards it is rendering (X64).
     renders: crate::render::Renders,
     reads: TerminalReads,
@@ -70,6 +78,18 @@ pub struct Daemon {
 
 pub type HandlerResult = Result<Value, RpcError>;
 
+/// How long edits by hand stop before their snapshot is taken (X65).
+const EDITS_QUIET: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// A design's edits by hand saved since its last snapshot (X65).
+#[derive(Default)]
+struct HandEdits {
+    /// What each did, as the app said with its saves.
+    said: Vec<String>,
+    /// Saves so far: a wait that ends after a later save takes nothing.
+    saves: u64,
+}
+
 /// A raised flag, lowered when dropped: also when the request that raised
 /// it ends early.
 struct Flag<'a>(&'a AtomicBool);
@@ -85,6 +105,11 @@ impl Drop for Flag<'_> {
     fn drop(&mut self) {
         self.0.store(false, Ordering::SeqCst);
     }
+}
+
+/// A workspace design's key in the daemon's maps.
+fn design_key(workspace: &str, slug: &str) -> String {
+    format!("{workspace}/{slug}")
 }
 
 /// The name the `moonlet` CLI gives in its hello; agents reach the daemon
@@ -167,12 +192,13 @@ async fn blocking<T: Send + 'static>(
 
 /// What the design store's error means to the caller: a design system the
 /// workspace does not have, a viewport that is none, a comment that names
-/// no element or pin, or a page name that names no page, is a bad parameter
+/// no element or pin, a page name that names no page, or a snapshot the
+/// design does not have, is a bad parameter
 /// (X65); a page saved over a version no longer on disk is `stale`;
 /// anything else failed.
 fn store_error(e: anyhow::Error) -> RpcError {
-    use moonlet_core::design::{comments, designs, pages};
-    if e.is::<designs::NoSystem>() || e.is::<designs::BadViewport>() || e.is::<comments::BadComment>() || e.is::<pages::BadPage>() {
+    use moonlet_core::design::{comments, designs, history, pages};
+    if e.is::<designs::NoSystem>() || e.is::<designs::BadViewport>() || e.is::<comments::BadComment>() || e.is::<pages::BadPage>() || e.is::<history::NoSnapshot>() {
         return RpcError::new("invalid_params", e.to_string());
     }
     if e.is::<pages::Stale>() {
@@ -310,6 +336,11 @@ impl Daemon {
             design: moonlet_core::design::store::Store::new(&moonlet_core::paths::home()),
             design_locks: Mutex::new(HashMap::new()),
             _design_watch: design_watch,
+            hand_edits: Mutex::new(HashMap::new()),
+            edits_quiet: std::env::var("MOONLET_DESIGN_QUIET_MS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .map_or(EDITS_QUIET, std::time::Duration::from_millis),
             renders: Default::default(),
             reads,
             watchers,
@@ -1042,7 +1073,7 @@ impl Daemon {
     }
 
     /// Design systems (X64).
-    async fn handle_design(&self, conn: &Conn, method: &str, p: Value) -> HandlerResult {
+    async fn handle_design(self: &Arc<Self>, conn: &Conn, method: &str, p: Value) -> HandlerResult {
         // The app and the agents' CLI on this Mac, never a paired device.
         if conn.phone.is_some() {
             return Err(RpcError::new("forbidden", "manage design systems from the Mac"));
@@ -1332,12 +1363,44 @@ impl Daemon {
                 let r: m::DesignWritePage = params(p)?;
                 let lock = self.pages_lock(&r.workspace, &r.slug);
                 let _held = lock.lock().await;
+                let (ws, slug, edits) = (r.workspace.clone(), r.slug.clone(), r.edits.clone());
                 let version = blocking(move || store.write_page(&r.workspace, &r.slug, &r.page, &r.html, &r.base_version)).await?;
+                self.edited_by_hand(&ws, &slug, edits);
                 ok(m::DesignPageWritten { version })
             }
             m::DESIGN_KIT => {
                 let r: m::DesignRef = params(p)?;
                 ok(blocking(move || store.design_kit(&r.workspace, &r.slug)).await?)
+            }
+            m::DESIGN_HISTORY => {
+                let r: m::DesignRef = params(p)?;
+                ok(blocking(move || store.history(&r.workspace, &r.slug)).await?)
+            }
+            m::DESIGN_SNAPSHOT_RESTORE => {
+                let r: m::DesignSnapshotRef = params(p)?;
+                // Never while the agent writes the pages it would replace.
+                let (ws, sl) = (r.workspace.clone(), r.slug.clone());
+                let found = {
+                    let store = store.clone();
+                    blocking(move || Ok((store.design_dir(&ws, &sl)?, store.design_record(&ws, &sl)?.agent))).await?
+                };
+                let terminals = self.terminals.list();
+                let working = folder_agent(&terminals, found.1, &found.0)
+                    .and_then(|id| terminals.iter().find(|t| t.id == id))
+                    .is_some_and(|t| t.agent_state == moonlet_proto::types::AgentState::Working);
+                if working {
+                    return Err(RpcError::new("busy", "Claude is changing the design; restore once it stops"));
+                }
+                // No save of a page, and no other snapshot, meanwhile.
+                let pages = self.pages_lock(&r.workspace, &r.slug);
+                let _pages = pages.lock().await;
+                let history = self.history_lock(&r.workspace, &r.slug);
+                let _history = history.lock().await;
+                // What is not kept yet is kept first, as edits by hand.
+                let said = self.hand_edits.lock().unwrap().remove(&design_key(&r.workspace, &r.slug)).map(|e| e.said).unwrap_or_default();
+                let (ws, sl, keep) = (r.workspace.clone(), r.slug.clone(), store.clone());
+                blocking(move || keep.take_snapshot(&ws, &sl, Take::EditsByHand(&said), now_ms())).await?;
+                ok(blocking(move || store.restore_snapshot(&r.workspace, &r.slug, r.n, now_ms())).await?)
             }
             m::DESIGN_SETTLE => {
                 let r: m::DesignSettle = params(p)?;
@@ -1544,6 +1607,89 @@ impl Daemon {
     /// agent, does not take it (see `Store::write_page`).
     fn pages_lock(&self, workspace: &str, slug: &str) -> Arc<tokio::sync::Mutex<()>> {
         self.design_lock(workspace, &format!("pages/{slug}"))
+    }
+
+    /// The lock of one workspace design's history (X65): one snapshot or
+    /// restore at a time, so two never take the same number. A restore
+    /// takes the pages' lock first, then this one.
+    fn history_lock(&self, workspace: &str, slug: &str) -> Arc<tokio::sync::Mutex<()>> {
+        self.design_lock(workspace, &format!("history/{slug}"))
+    }
+
+    /// Takes a snapshot of a design's pages and assets, if they changed
+    /// since its last (X65). A failure is logged: it never fails what took
+    /// it.
+    async fn snapshot(&self, workspace: &str, slug: &str, said: Option<Vec<String>>) {
+        let lock = self.history_lock(workspace, slug);
+        let _held = lock.lock().await;
+        let (store, ws, sl) = (self.design.clone(), workspace.to_string(), slug.to_string());
+        let taken = blocking(move || {
+            let take = match &said {
+                Some(said) => Take::EditsByHand(said),
+                None => Take::AgentTurn,
+            };
+            store.take_snapshot(&ws, &sl, take, now_ms())
+        })
+        .await;
+        if let Err(e) = taken {
+            tracing::warn!("cannot take a snapshot of {workspace}/{slug}: {}", e.message);
+        }
+    }
+
+    /// A design's page saved by its editor (X65): what its edits did is
+    /// kept for the snapshot, taken once its saves stop for
+    /// [`EDITS_QUIET`]. The daemon sees every save, so the snapshot comes
+    /// also when the app closes meanwhile.
+    fn edited_by_hand(self: &Arc<Self>, workspace: &str, slug: &str, said: Vec<String>) {
+        let key = design_key(workspace, slug);
+        let saves = {
+            let mut all = self.hand_edits.lock().unwrap();
+            let edits = all.entry(key.clone()).or_default();
+            edits.said.extend(said);
+            edits.saves += 1;
+            edits.saves
+        };
+        let (d, ws, sl) = (self.clone(), workspace.to_string(), slug.to_string());
+        tokio::spawn(async move {
+            tokio::time::sleep(d.edits_quiet).await;
+            let said = {
+                let mut all = d.hand_edits.lock().unwrap();
+                // A later save waits on.
+                if all.get(&key).is_none_or(|e| e.saves != saves) {
+                    return;
+                }
+                all.remove(&key).map(|e| e.said).unwrap_or_default()
+            };
+            d.snapshot(&ws, &sl, Some(said)).await;
+        });
+    }
+
+    /// Takes a snapshot of a workspace design when its agent ends a turn
+    /// (X65): the agent's `done`, which `agent.attention` announces, tagged
+    /// with its design. Runs for the daemon's life.
+    pub fn snapshot_agent_turns(self: &Arc<Self>) {
+        use moonlet_proto::types::{AgentState, DesignAgentKind};
+        let mut events = self.terminals.subscribe_events();
+        let d = self.clone();
+        tokio::spawn(async move {
+            loop {
+                let message = match events.recv().await {
+                    Ok(m) => m,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(_) => return,
+                };
+                let Message::Event { name, data } = message else { continue };
+                if name != m::EV_AGENT_ATTENTION {
+                    continue;
+                }
+                let Ok(a) = serde_json::from_value::<m::Attention>(data) else { continue };
+                let Some(design) = a.design.filter(|t| t.kind == DesignAgentKind::Design) else { continue };
+                if a.state == AgentState::Done {
+                    let d = d.clone();
+                    tokio::spawn(async move { d.snapshot(&design.workspace, &design.slug, None).await });
+                }
+            }
+        });
     }
 
     /// The chat of a design system's sync agent, while it still is that system's.
