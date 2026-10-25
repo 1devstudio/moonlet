@@ -1081,6 +1081,41 @@ async fn retry_tries_a_failing_removal_again_at_once() {
 }
 
 #[tokio::test]
+async fn retry_tries_a_failing_removal_again_after_the_central_host_restarts() {
+    // The next try would be a minute away.
+    let mut c = cloud_with(SHOP_CONFIG, &[("MOONLET_TEST_CLOUD_BACKOFF_MS", "60000")]).await;
+    let m = c.ready().await;
+    let id = m["id"].as_str().unwrap().to_string();
+    let fails_left = |c: &Cloud| std::fs::read_to_string(c.fake.path().join("fail-destroy")).unwrap();
+    c.steer("fail-destroy", "2");
+    let _: Value = c.d.call("cloud.down", json!({ "machine": id })).await;
+    for _ in 0..100 {
+        if fails_left(&c) == "1" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(fails_left(&c), "1");
+    c.d.restart().await;
+    // The removal goes on after the restart, and fails once more.
+    for _ in 0..100 {
+        if fails_left(&c) == "0" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(fails_left(&c), "0");
+    let _: Value = c.d.call("cloud.down", json!({ "machine": id })).await;
+    for _ in 0..30 {
+        if c.machines().await["removed"][0]["id"] == id.as_str() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("not removed within 1.5 s of Retry");
+}
+
+#[tokio::test]
 async fn a_machine_removed_while_it_waits_for_the_listener_stays_removed() {
     // Tailnet access is on, but nothing can listen on this address.
     let c = cloud_with(SHOP_CONFIG, &[("MOONLET_MOBILE_ADDRS", "192.0.2.1")]).await;
