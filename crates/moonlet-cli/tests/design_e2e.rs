@@ -391,7 +391,7 @@ async fn the_sync_agent_renders_its_cards_and_snaps_one_from_its_folder() {
     assert_eq!(shot["blank"], false);
     let path = PathBuf::from(shot["path"].as_str().unwrap());
     assert!(
-        path.ends_with(".cache/screenshots/button--ghost-600x400.png"),
+        path.ends_with(".cache/screenshots/components/buttons/button/button--ghost-600x400.png"),
         "{path:?}"
     );
     assert!(path.is_file());

@@ -2521,7 +2521,7 @@ async fn the_app_snaps_a_card_and_the_screenshot_is_saved_in_the_system() {
         )
         .await
         .unwrap();
-    let path = dir.join(".cache/screenshots/button--ghost-320x140.png");
+    let path = dir.join(".cache/screenshots/components/buttons/button/button--ghost-320x140.png");
     assert_eq!(shot, serde_json::json!({"path": path, "blank": false}));
     let png = std::fs::read(&path).unwrap();
     assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
@@ -2549,7 +2549,7 @@ async fn a_screenshot_under_5_kb_is_blank() {
         .await
         .unwrap();
     assert_eq!(shot["blank"], true);
-    assert!(shot["path"].as_str().unwrap().ends_with("/.cache/screenshots/field-600x400.png"), "{shot}");
+    assert!(shot["path"].as_str().unwrap().ends_with("/.cache/screenshots/components/forms/field/field-600x400.png"), "{shot}");
 }
 
 #[tokio::test]

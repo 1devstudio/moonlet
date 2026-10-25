@@ -100,21 +100,19 @@ pub fn counts(cards: &[RenderResult]) -> RenderCounts {
     }
 }
 
-/// The screenshot's file name: `<card>[--<variant>]-<w>x<h>.png`.
-pub fn screenshot_name(target: &SnapTarget) -> String {
-    let stem = target
-        .path
-        .rsplit('/')
-        .next()
-        .unwrap_or_default()
-        .trim_end_matches(".html");
+/// Where the screenshot goes in `.cache/screenshots/`: the card's own path,
+/// so two cards with one file name in two groups never share it, as
+/// `<card path without .html>[--<variant>]-<w>x<h>.png`, such as
+/// `components/custom/row/row--ghost-720x200.png`.
+pub fn screenshot_path(target: &SnapTarget) -> String {
+    let card = target.path.trim_end_matches(".html");
     let variant = target
         .variant
         .as_deref()
         .map(|v| format!("--{}", v.rsplit('/').next().unwrap_or(v)))
         .unwrap_or_default();
     let (w, h) = target.viewport;
-    format!("{stem}{variant}-{w}x{h}.png")
+    format!("{card}{variant}-{w}x{h}.png")
 }
 
 /// A card's path in a system: `components/<group>/<name>/<name>.html`,
@@ -220,7 +218,7 @@ impl Store {
         png: &[u8],
     ) -> Result<PathBuf> {
         let dir = self.system_dir(workspace, slug)?;
-        let path = dir.join(".cache/screenshots").join(screenshot_name(target));
+        let path = dir.join(".cache/screenshots").join(screenshot_path(target));
         fsx::write_inside(&dir, &path, png)?;
         Ok(path)
     }
@@ -349,10 +347,13 @@ mod tests {
         let png = b"\x89PNG\r\n\x1a\n fake";
         assert_eq!(
             store.write_screenshot("w1", &slug, &whole, png).unwrap(),
-            dir.join(".cache/screenshots/button-320x140.png")
+            dir.join(".cache/screenshots/components/buttons/button/button-320x140.png")
         );
         assert_eq!(
-            std::fs::read(dir.join(".cache/screenshots/button-320x140.png")).unwrap(),
+            std::fs::read(
+                dir.join(".cache/screenshots/components/buttons/button/button-320x140.png")
+            )
+            .unwrap(),
             png
         );
         // A variant by the last part of its id, at another viewport.
@@ -362,7 +363,7 @@ mod tests {
         assert_eq!(ghost.variant.as_deref(), Some("buttons/button/ghost"));
         assert_eq!(
             store.write_screenshot("w1", &slug, &ghost, png).unwrap(),
-            dir.join(".cache/screenshots/button--ghost-600x400.png")
+            dir.join(".cache/screenshots/components/buttons/button/button--ghost-600x400.png")
         );
     }
 
@@ -511,5 +512,47 @@ mod tests {
                 error: None,
             }
         );
+    }
+
+    #[test]
+    fn two_cards_with_one_file_name_in_two_groups_keep_their_own_screenshots() {
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::new(home.path());
+        let slug = store
+            .create_system("w1", "storefront", vec![], Cover::Core, 1)
+            .unwrap();
+        let dir = home.path().join("design/w1/systems/storefront");
+        let row = |group: &str| {
+            format!(
+                "<!-- @dsCard group=\"{group}\" name=\"Row\" -->\n<section class=\"ds-cell\" data-snippet=\"{group}/row/default\"><div class=\"ds-mount\">Row</div></section>\n"
+            )
+        };
+        put(
+            &dir,
+            &[
+                ("components/forms/row/row.html", &row("forms")),
+                ("components/custom/row/row.html", &row("custom")),
+                ("ui_kits/app/row.html", &row("layouts")),
+            ],
+        );
+        let mut saved = Vec::new();
+        for (card, png) in [
+            ("components/forms/row/row.html", b"forms".as_slice()),
+            ("components/custom/row/row.html", b"custom".as_slice()),
+            ("ui_kits/app/row.html", b"layout".as_slice()),
+        ] {
+            let target = store.snap_target("w1", &slug, card, None, None).unwrap();
+            saved.push(store.write_screenshot("w1", &slug, &target, png).unwrap());
+        }
+        assert_eq!(
+            saved,
+            vec![
+                dir.join(".cache/screenshots/components/forms/row/row-900x700.png"),
+                dir.join(".cache/screenshots/components/custom/row/row-900x700.png"),
+                dir.join(".cache/screenshots/ui_kits/app/row-900x700.png"),
+            ]
+        );
+        assert_eq!(std::fs::read(&saved[0]).unwrap(), b"forms");
+        assert_eq!(std::fs::read(&saved[1]).unwrap(), b"custom");
     }
 }
