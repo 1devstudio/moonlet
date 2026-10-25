@@ -2408,6 +2408,60 @@ async fn the_viewport_a_design_was_last_shown_at_is_saved_and_listed() {
     assert_eq!(bad.unwrap_err().to_string(), "invalid_params: bad viewport \"phone\": give a width and a height in px, such as 390x844");
 }
 
+/// X65 entry 8: a design's comments are kept, sent and resolved over the
+/// socket, each change announced as the design's, and its listing counts the
+/// open ones.
+#[tokio::test]
+async fn a_designs_comments_are_put_sent_resolved_and_counted_in_its_listing() {
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    let ws = workspace_with_system(&d, &mut c).await;
+    let _: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    let mut listener = d.client().await;
+    let pin: serde_json::Value = c
+        .request(
+            methods::DESIGN_COMMENT_PUT,
+            serde_json::json!({"workspace": ws, "slug": "settings-page", "page": "index", "mid": "m12", "tag": "nav", "text": "General Appearance", "comment": "Collapse into a menu on phone"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        pin,
+        serde_json::json!({"n": 1, "page": "index", "mid": "m12", "tag": "nav", "text": "General Appearance", "comment": "Collapse into a menu on phone", "sent_at": null, "state": "open"})
+    );
+    let data = next_change_of(&mut listener, "comments.json").await;
+    assert_eq!(data["design"], "settings-page");
+    let list: serde_json::Value = c.request(methods::DESIGN_LIST, serde_json::json!({"workspace": ws})).await.unwrap();
+    assert_eq!(list[0]["open_comments"], 1);
+    let sent: serde_json::Value = c
+        .request(
+            methods::DESIGN_COMMENT_PUT,
+            serde_json::json!({"workspace": ws, "slug": "settings-page", "n": 1, "comment": "Collapse into a menu on phone", "sent": true}),
+        )
+        .await
+        .unwrap();
+    assert!(sent["sent_at"].as_u64().is_some(), "{sent}");
+    let resolved: serde_json::Value = c
+        .request(methods::DESIGN_COMMENT_RESOLVE, serde_json::json!({"workspace": ws, "slug": "settings-page", "n": 1}))
+        .await
+        .unwrap();
+    assert_eq!(resolved["state"], "resolved");
+    let pins: serde_json::Value = c.request(methods::DESIGN_COMMENTS, serde_json::json!({"workspace": ws, "slug": "settings-page"})).await.unwrap();
+    assert_eq!((pins.as_array().map(Vec::len), &pins[0]["state"]), (Some(1), &serde_json::json!("resolved")));
+    let list: serde_json::Value = c.request(methods::DESIGN_LIST, serde_json::json!({"workspace": ws})).await.unwrap();
+    assert_eq!(list[0]["open_comments"], 0);
+    let bad = c
+        .request::<_, serde_json::Value>(
+            methods::DESIGN_COMMENT_PUT,
+            serde_json::json!({"workspace": ws, "slug": "settings-page", "page": "index", "mid": "x\"]", "tag": "nav", "text": "", "comment": "c"}),
+        )
+        .await;
+    assert_eq!(bad.unwrap_err().to_string(), "invalid_params: bad data-mid \"x\"]\"");
+}
+
 /// X65: a design needs a design system its workspace has, and a session
 /// design is not made yet (entry 12).
 #[tokio::test]
