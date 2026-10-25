@@ -13,6 +13,7 @@ path = "src/main.rs"
 moonlet-proto.workspace = true
 moonlet-core.workspace = true
 moonlet-link.workspace = true
+moonlet-cloud.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
