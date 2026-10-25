@@ -65,13 +65,19 @@ function rgbText(ch: number[], a: number): string {
   return a >= 1 ? `rgb(${ch.map(n).join(", ")})` : `rgba(${ch.map(n).join(", ")}, ${n(a)})`;
 }
 
-/** A value as it compares: lowercase, single spaces, `0px` as `0`, and
- *  colours written as hex or `rgb()` in either syntax as one `rgb()`. */
+/** The root's font size the page computes px from, as a browser's
+ *  default: a token in rem (or em, at the root) is that many times it. */
+export const ROOT_PX = 16;
+
+/** A value as it compares: lowercase, single spaces, rem and em as px at
+ *  {@link ROOT_PX}, `0px` as `0`, and colours written as hex or `rgb()` in
+ *  either syntax as one `rgb()`. */
 function norm(value: string): string {
   return value
     .trim()
     .toLowerCase()
     .replace(/\s+/g, " ")
+    .replace(/(^|[\s(,])(-?\d*\.?\d+)r?em\b/g, (_all, pre: string, n: string) => `${pre}${Math.round(Number(n) * ROOT_PX * 1000) / 1000}px`)
     .replace(/#([0-9a-f]{3,8})\b/g, (all, hex: string) => {
       if (![3, 4, 6, 8].includes(hex.length)) return all;
       const full = hex.length <= 4 ? [...hex].map((c) => c + c).join("") : hex;
@@ -111,8 +117,8 @@ export function fieldShown(tokens: DesignToken[], value: string, family: TokenFa
   return { token: null, value: resolveValue(tokens, value) };
 }
 
-/** The first number of a value, along aliases; NaN for none. */
-const numberOf = (tokens: DesignToken[], value: string) => parseFloat(/-?\d*\.?\d+/.exec(resolveValue(tokens, value))?.[0] ?? "NaN");
+/** The first number of a value, along aliases, a length in px; NaN for none. */
+const numberOf = (tokens: DesignToken[], value: string) => parseFloat(/-?\d*\.?\d+/.exec(norm(resolveValue(tokens, value)))?.[0] ?? "NaN");
 
 /** The token popover of a field whose value is `value`: the tokens of its
  *  family, first those a part of the value is (the one it names, then
