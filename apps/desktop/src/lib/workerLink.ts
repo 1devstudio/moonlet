@@ -32,6 +32,18 @@ export function linkLine(link: LinkInfo): StatusLine {
   }
 }
 
+/** `line` with how many routed commands run on this machine now (X62), while linked. */
+export function withRunning(line: StatusLine, running: number): StatusLine {
+  return line.tone === "done" && running > 0 ? { ...line, text: `${line.text} · ${running} running` } : line;
+}
+
+/** The hint under "Run at most [N] at once": a remote host keeps its own (X62). */
+export const slotsHint = (remote: string | null): string =>
+  remote ? `Saved on ${remote}.` : "Routed commands side by side. 1 suits a laptop on battery.";
+
+/** Slots are from 1 to 64, as the daemon keeps them. */
+export const clampSlots = (n: number): number => Math.min(64, Math.max(1, Math.round(n) || 1));
+
 /** Retry goes with a connection error, and with an update made on the
  * central host; a host that removed this Mac needs pairing again instead,
  * from its row. */

@@ -9,7 +9,7 @@ import { mobileLine } from "./mobile";
 import { DEV_BUILD_NOTE, updateButton, updateStatus, type UpdateState } from "./updater";
 
 /** The app-wide pages, in nav order. */
-export type AppPage = "general" | "appearance" | "terminal" | "agents" | "git" | "notifications" | "trackers" | "shortcuts" | "profiles" | "hooks" | "hosts" | "phones";
+export type AppPage = "general" | "appearance" | "terminal" | "agents" | "git" | "notifications" | "trackers" | "shortcuts" | "profiles" | "hooks" | "hosts" | "workers" | "phones";
 
 export type SettingsRoute =
   /** `focus` is a row's `data-setting`, scrolled to and highlighted (X50 Manage › Boards). */
@@ -52,6 +52,8 @@ export interface NavInput {
   trackersNeedAttention?: number;
   workspaces: (NavItem & { color: WorkspaceColor })[];
   projects: NavItem[];
+  /** This Mac's central host, whose workers the Workers page shows (X62). */
+  central?: string | null;
 }
 
 const app = (page: AppPage, label: string, extra: Partial<NavEntry> = {}): NavEntry => ({ key: page, route: { page }, label, ...extra });
@@ -70,7 +72,7 @@ export function settingsNav(input: NavInput): NavGroup[] {
       title: "Claude Code",
       entries: [app("profiles", "Profiles", input.profilesNeedSignIn ? { dot: "a profile is not signed in" } : {}), app("hooks", "Hooks")],
     },
-    { title: "Machines", entries: [counted("hosts", "Hosts", input.remoteHosts), counted("phones", "Phones", input.phones)] },
+    { title: "Machines", entries: [counted("hosts", "Hosts", input.remoteHosts), app("workers", "Workers", onHost(input.central ?? null)), counted("phones", "Phones", input.phones)] },
   ];
   if (input.workspaces.length)
     groups.push({
