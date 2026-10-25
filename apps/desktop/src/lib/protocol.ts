@@ -1103,7 +1103,6 @@ export interface DesignPageText {
   version: string;
 }
 
-/** `design.write_page`'s answer: the page's new version. */
 /** What took a design's snapshot (X65). */
 export type SnapshotKind = "agent_turn" | "edits_by_hand" | "restored";
 
@@ -1121,6 +1120,7 @@ export interface DesignSnapshot {
   pages: string[];
 }
 
+/** `design.write_page`'s answer: the page's new version. */
 export interface DesignPageWritten {
   version: string;
 }
