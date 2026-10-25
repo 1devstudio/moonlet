@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { EditRefused, applyEdit, copyElement, highestMid, editLine, editsChip, editsMessage, lineRead, readEditsMessage, type EditOp, type Untold } from "./designEdits";
+import { EditRefused, applyEdit, copyElement, highestMid, editLine, editsChip, editsMessage, inlineStyles, lineRead, readEditsMessage, type EditOp, type Untold } from "./designEdits";
 
 /** A page as a design's agent writes it (designs.md): the design system's
  *  styles.css, classes, a page script, an <svg> whose part holds an id, and
@@ -264,6 +264,32 @@ describe("an edit by hand on a page's source (X65)", () => {
     expect(applyEdit(input, { kind: "restyle", mid: "m32", set: { width: "320px" } }).html).toBe(
       withLines(20, 1, '      <div data-mid="m30" class="row"><span data-mid="m31">Branch prefix</span><input data-mid="m32" class="field" value="marcin/" style="width: 320px" /></div>'),
     );
+  });
+
+  it("leaves every declaration it does not set as written: a custom property's case, a comment, a duplicate with !important, an underscore and a vendor prefix", () => {
+    const p = (style: string) => withLines(21, 1, `      <p data-mid="m33" class=hint style="${style}">Tom &amp; Jerry&nbsp;rules</p>`);
+    const padded = (style: string) => applyEdit(p(style), { kind: "restyle", mid: "m33", set: { padding: "4px" } }).html;
+    expect(padded("--Main: #161616; color: var(--Main)")).toBe(p("--Main: #161616; color: var(--Main); padding: 4px"));
+    expect(padded("/* brand */ color: red;margin:0")).toBe(p("/* brand */ color: red;margin:0; padding: 4px"));
+    expect(padded("color: red !important; color: blue")).toBe(p("color: red !important; color: blue; padding: 4px"));
+    expect(padded("--a_b: 2px; margin: var(--a_b)")).toBe(p("--a_b: 2px; margin: var(--a_b); padding: 4px"));
+    expect(padded("-webkit-line-clamp:2;display:-webkit-box;")).toBe(p("-webkit-line-clamp:2;display:-webkit-box; padding: 4px"));
+    expect(padded("color: red; padding: 2px /* tight */; margin: 0")).toBe(p("color: red; padding: 4px; margin: 0"));
+    expect(applyEdit(p("/* brand */ color: red;  margin:0"), { kind: "restyle", mid: "m33", set: { color: null } }).html).toBe(p("/* brand */ margin:0"));
+  });
+
+  it("sets a property written twice in the place of the first, and reads the one that counts, an !important one first", () => {
+    const p = (style: string) => withLines(21, 1, `      <p data-mid="m33" class=hint style="${style}">Tom &amp; Jerry&nbsp;rules</p>`);
+    expect(inlineStyles(p("color: red !important; gap: 2px; color: blue"))["m33"]).toEqual([
+      ["color", "red !important"],
+      ["gap", "2px"],
+    ]);
+    expect(inlineStyles(p("--Main: #161616; /* note */ Color: blue; color: var(--Main)"))["m33"]).toEqual([
+      ["--Main", "#161616"],
+      ["color", "var(--Main)"],
+    ]);
+    expect(inlineStyles(p("padding: 4px /* tight */ 8px"))["m33"]).toEqual([["padding", "4px 8px"]]);
+    expect(applyEdit(p("color: red !important; gap: 2px; color: blue"), { kind: "restyle", mid: "m33", set: { color: "green" } }).html).toBe(p("color: green; gap: 2px"));
   });
 
   it("rewrites a property keeping parts its value already had, as a background's image, which a new value could not bring", () => {

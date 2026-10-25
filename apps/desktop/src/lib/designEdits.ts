@@ -11,7 +11,7 @@ import { parse, parseFragment } from "parse5";
 import type { DefaultTreeAdapterMap } from "parse5";
 import { pageFile, pageOfFile } from "./designPage";
 import type { DropPlace, LiveEdit } from "./designBridge";
-import { attrText, isStyleProp, isStyleValue, parseStyle, styleText, valueParts, withStyle, type Decl, type StyleSet } from "./designStyle";
+import { attrText, isStyleProp, isStyleValue, parseStyle, restyled, valueParts, type Decl, type StyleSet } from "./designStyle";
 
 type Node = DefaultTreeAdapterMap["node"];
 type Element = DefaultTreeAdapterMap["element"];
@@ -440,10 +440,11 @@ function into(html: string, el: Element, text: string): string {
   return splice(html, [start, start], indent + text + eolOf(html, at, html.length));
 }
 
-/** `el` with its inline style's properties set or removed, the rest of its
- *  style kept in its order; the attribute is written in double quotes
- *  after the element's others, and removed once it has no property left.
- *  A property or value that is not one is refused. */
+/** `el` with its inline style's properties set or removed, spliced, the
+ *  rest of its style kept as written (designStyle's `restyled`); the
+ *  attribute is written in double quotes after the element's others, and
+ *  removed once nothing is left in it. A property or value that is not one
+ *  is refused. */
 function restyle(html: string, el: Element, set: StyleSet): Edit {
   inBody(el);
   const loc = el.sourceCodeLocation!;
@@ -457,7 +458,8 @@ function restyle(html: string, el: Element, set: StyleSet): Edit {
     const fresh = value === null ? [] : valueParts(value).filter((p) => !kept.includes(p));
     if (value !== null && (fresh.length ? !isStyleValue(fresh.join(" ")) : !value.trim())) throw new EditRefused(`${value} is not a value the editor writes`);
   }
-  const text = styleText(withStyle(had, set));
+  const spliced = restyled(old?.value ?? "", set);
+  const text = spliced.trim() ? spliced : "";
   const attr = text ? `style="${attrText(text)}"` : "";
   const at = loc.attrs?.style;
   let out: string;
