@@ -293,6 +293,12 @@ describe("the bridge script in a page (X65)", () => {
     expect(of("key")).toEqual([]);
   });
 
+  it("names each element of the tree by its text, its parts' texts apart", async () => {
+    const { of } = framed('<nav data-mid="m12"><a data-mid="m13">General</a><a data-mid="m14">Appearance</a></nav>');
+    await vi.waitFor(() => expect(of("tree")).toHaveLength(1));
+    expect((of("tree")[0] as { layers: { text: string }[] }).layers.map((l) => l.text)).toEqual(["General Appearance", "General Appearance", "General", "Appearance"]);
+  });
+
   it("makes the app's edits on its live page, only well formed, and reports the tree again after each", async () => {
     const { doc, tell, of } = framed('<section data-mid="m24"><h2 data-mid="m25">Git</h2><div data-mid="m30"><span data-mid="m31">Prefix</span></div></section>');
     await vi.waitFor(() => expect(of("tree")).toHaveLength(1));
@@ -306,8 +312,8 @@ describe("the bridge script in a page (X65)", () => {
     expect(of("tree").at(-1)).toEqual({
       type: "tree",
       layers: [
-        { mid: "m1", tag: "body", depth: 0, text: "GitPrefix" },
-        { mid: "m24", tag: "section", depth: 1, text: "GitPrefix" },
+        { mid: "m1", tag: "body", depth: 0, text: "Git Prefix" },
+        { mid: "m24", tag: "section", depth: 1, text: "Git Prefix" },
         { mid: "m43", tag: "div", depth: 2, text: "Git" },
         { mid: "m25", tag: "h2", depth: 3, text: "Git" },
         { mid: "m31", tag: "span", depth: 2, text: "Prefix" },
