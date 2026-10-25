@@ -1,5 +1,5 @@
 import { AddBoardDialog } from "./tasks/AddBoard";
-import { SyncCompare } from "./SyncCompare";
+import { JobLeftoverCompare, SyncCompare } from "./SyncCompare";
 import { AddProjectDialog } from "./AddProject";
 import { useEffect, useState } from "react";
 import { rpc } from "../lib/daemon";
@@ -210,6 +210,8 @@ export function Dialogs() {
       return <CreatePrDialog />;
     case "sync-compare":
       return <SyncCompare host={dialog.host} session={dialog.session} path={dialog.path} />;
+    case "job-compare":
+      return <JobLeftoverCompare host={dialog.host} session={dialog.session} path={dialog.path} folder={dialog.folder} />;
     default:
       return null;
   }
