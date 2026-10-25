@@ -665,10 +665,11 @@ pub struct Attention {
     pub state: AgentState,
     pub title: String,
     pub message: Option<String>,
-    /// From a design system's sync agent (X64): the app notifies for it in
-    /// Design mode, never as a session's agent (X65).
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub design: bool,
+    /// From a design system's sync agent (X64), which the app notifies for
+    /// in Design mode, never as a session's agent, or a design's agent, which
+    /// notifies like a session's (X65).
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::types::design_tag")]
+    pub design: Option<crate::types::DesignAgent>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

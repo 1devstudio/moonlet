@@ -33,13 +33,28 @@ export interface TerminalInfo {
   chat?: boolean;
   /** Shell keeps its own prompt; no Blocks-mode editor (T7). */
   classic?: boolean;
-  /** A design system's sync agent (X64). */
-  design?: boolean;
+  /** A design system's sync agent (X64) or a design's agent (X65). */
+  design?: DesignTag;
   /** Running subagents of a chat terminal (X42). */
   subagents?: number;
   created_at: number;
   last_output_at: number;
 }
+
+/** What a Design mode agent works on (X64, X65): a design system's sync
+ * agent, or a workspace design's agent. */
+export interface DesignAgent {
+  kind: "sync" | "design";
+  workspace: string;
+  /** The design system's or the design's slug. */
+  slug: string;
+  /** For `Design · <name>`. */
+  name: string;
+}
+
+/** A terminal's design tag. `true` comes from a daemon before X65 entry 7a,
+ * which marked only sync agents. */
+export type DesignTag = DesignAgent | boolean;
 
 export type ChatKind = "user" | "assistant" | "thinking" | "tool" | "system" | "error";
 export type ToolStatus = "running" | "ok" | "error" | "denied";
@@ -814,8 +829,8 @@ export interface Attention {
   state: AgentState;
   title: string;
   message: string | null;
-  /** From a design system's sync agent (X64). */
-  design?: boolean;
+  /** From a design system's sync agent (X64) or a design's agent (X65). */
+  design?: DesignTag;
 }
 
 /** An agent asks to read a terminal of its session (X31). `text` is

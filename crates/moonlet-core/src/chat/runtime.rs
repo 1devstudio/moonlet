@@ -38,8 +38,9 @@ pub struct ChatCreate {
     /// For a chat with no session, such as a design system's agent (X64):
     /// the workspace whose Claude profile it starts in.
     pub workspace: Option<String>,
-    /// A design system's sync agent (X64), marked so on its terminal.
-    pub design: bool,
+    /// A design system's sync agent (X64) or a design's agent (X65), marked
+    /// so on its terminal.
+    pub design: Option<moonlet_proto::types::DesignAgent>,
 }
 
 /// What is persisted per chat.

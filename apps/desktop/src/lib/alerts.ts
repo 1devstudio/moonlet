@@ -1,5 +1,6 @@
 // How moonlet gets the user's attention for an agent event (A3, X10, X47).
 
+import type { DesignTag } from "./protocol";
 import { soundFor, type SoundEvent, type SoundSettings } from "./sounds";
 
 /** Another "done" for the same session this soon after the last one stays silent (X47). */
@@ -79,8 +80,10 @@ export function differsAlert(o: { focused: boolean; notifyWhenFocused: boolean; 
 }
 
 /** Whether an agent's `agent.attention` alerts as a session's does (X47).
- *  The daemon marks a design system's sync agent `design`: Design mode
- *  notifies for it, when it asks or the sync is done, never per turn (X65). */
-export function alertsLikeASession(a: { design?: boolean }): boolean {
-  return !a.design;
+ *  The daemon tags a design system's sync agent `design: {kind: "sync"}`
+ *  (`design: true` before X65 entry 7a): Design mode notifies for it, when it
+ *  asks or the sync is done, never per turn. A design's agent notifies like a
+ *  session's (X65). */
+export function alertsLikeASession(a: { design?: DesignTag }): boolean {
+  return !(a.design === true || (typeof a.design === "object" && a.design.kind === "sync"));
 }

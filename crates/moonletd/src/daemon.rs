@@ -463,7 +463,7 @@ impl Daemon {
                             add_dirs: req.add_dirs,
                             settings: None,
                             workspace: None,
-                            design: false,
+                            design: None,
                         })
                         .map_err(internal)?),
                     None => ok(s.create(req).map_err(internal)?),
@@ -1232,7 +1232,7 @@ impl Daemon {
         // the system's folder, never from files the agent can edit. Reading and
         // hashing the sources runs off the async workers.
         let (store, ws, sl) = (self.design.clone(), workspace.to_string(), slug.to_string());
-        let (record, launch) = blocking(move || {
+        let (record, launch, name) = blocking(move || {
             let dir = store.system_dir(&ws, &sl)?.canonicalize()?;
             let config = store.config(&ws, &sl)?;
             let record = store.record(&ws, &sl)?;
@@ -1249,7 +1249,7 @@ impl Daemon {
             // The cards as they are now: what the user changed before this
             // sync is not among the changes it records.
             store.begin_sync(&ws, &sl)?;
-            Ok((record, launch))
+            Ok((record, launch, config.name))
         })
         .await
         .map_err(|e| anyhow::anyhow!("{}", e.message))?;
@@ -1276,7 +1276,12 @@ impl Daemon {
             add_dirs: launch.add_dirs,
             settings: Some(launch.settings),
             workspace: Some(workspace.to_string()),
-            design: true,
+            design: Some(moonlet_proto::types::DesignAgent {
+                kind: moonlet_proto::types::DesignAgentKind::Sync,
+                workspace: workspace.to_string(),
+                slug: slug.to_string(),
+                name,
+            }),
         })?;
         self.design.set_agent(workspace, slug, info.id, &fingerprint)?;
         self.chats.send(info.id, &launch.prompt, &[])?;

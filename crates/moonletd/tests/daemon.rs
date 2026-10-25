@@ -955,15 +955,39 @@ async fn starting_refreshes_an_outdated_moonlet_skill() {
 struct HomeDaemon {
     home: tempfile::TempDir,
     socket: PathBuf,
+    path: Option<String>,
     child: Child,
 }
 
 impl HomeDaemon {
     async fn start(home: tempfile::TempDir, path: Option<&str>) -> HomeDaemon {
         let socket = home.path().join(".moonlet/run/moonletd.sock");
+        let child = Self::spawn(home.path(), &socket, path).await;
+        HomeDaemon { home, socket, path: path.map(String::from), child }
+    }
+
+    /// Kills the daemon and starts it again on the same home, as after a
+    /// crash: what it restores comes from what it saved as it went.
+    async fn restart(&mut self) {
+        self.stop();
+        self.start_again().await;
+    }
+
+    /// Kills the daemon; `start_again` brings it back.
+    fn stop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        let _ = std::fs::remove_file(&self.socket);
+    }
+
+    async fn start_again(&mut self) {
+        self.child = Self::spawn(self.home.path(), &self.socket, self.path.as_deref()).await;
+    }
+
+    async fn spawn(home: &std::path::Path, socket: &std::path::Path, path: Option<&str>) -> Child {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_moonletd"));
         cmd.arg("daemon")
-            .env("HOME", home.path())
+            .env("HOME", home)
             .env_remove("MOONLET_SOCK")
             .env_remove("MOONLET_HOME")
             .env_remove("JAUNT_HOME")
@@ -976,8 +1000,8 @@ impl HomeDaemon {
             cmd.env("PATH", p);
         }
         let child = cmd.spawn().unwrap();
-        wait_for_socket(&socket, Duration::from_secs(15)).await.unwrap();
-        HomeDaemon { home, socket, child }
+        wait_for_socket(&socket.to_path_buf(), Duration::from_secs(15)).await.unwrap();
+        child
     }
 
     async fn client(&self) -> Client {
@@ -2096,7 +2120,13 @@ done
     let t = terminals.iter().find(|t| t.id == agent).expect("the agent's chat");
     // Marked as a design system's sync agent: the app notifies for it in
     // Design mode, never as a session (X65); a standalone chat is not one.
-    assert_eq!((t.title.as_str(), t.session_id.as_deref(), t.chat, t.design), ("Design · moonlet desktop", None, true, true));
+    let tag = moonlet_proto::types::DesignAgent {
+        kind: moonlet_proto::types::DesignAgentKind::Sync,
+        workspace: ws.id.clone(),
+        slug: "moonlet-desktop".into(),
+        name: "moonlet desktop".into(),
+    };
+    assert_eq!((t.title.as_str(), t.session_id.as_deref(), t.chat, t.design.clone()), ("Design · moonlet desktop", None, true, Some(tag)));
 
     let file = |name: &str| {
         let p = dir.join(name);
@@ -2173,6 +2203,34 @@ done
     let _: bool = c.request(methods::DESIGN_SYSTEM_REMOVE, serde_json::json!({"workspace": ws.id, "slug": "pricing"})).await.unwrap();
     let terminals: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
     assert!(!terminals.iter().any(|t| t.title == "Design · pricing"), "the agent of a removed system still runs");
+}
+
+/// X65: a sync agent saved before its design tag said which agent it is
+/// (`design: true`) comes back after a restart as a sync agent, so the app
+/// still never alerts for it like a session.
+#[tokio::test]
+async fn a_sync_agent_saved_as_design_true_comes_back_as_a_sync_agent() {
+    use moonlet_proto::types::{DesignAgentKind, Workspace};
+    let mut d = fake_claude_daemon(FAKE_SYNC_CLAUDE).await;
+    let mut c = d.client().await;
+    let ws: Workspace = c.request(methods::WORKSPACE_CREATE, serde_json::json!({"name": "1devstudio", "color": "clay"})).await.unwrap();
+    let created: serde_json::Value = c
+        .request(methods::DESIGN_SYSTEM_CREATE, serde_json::json!({"workspace": ws.id, "name": "storefront", "sources": []}))
+        .await
+        .unwrap();
+    let agent = created["agent"].as_u64().expect("an agent") as u32;
+    // Saved as a daemon before X65 entry 7a saved it.
+    let saved = d.home.path().join(format!(".moonlet/chats/{agent}.json"));
+    let mut chat: serde_json::Value = serde_json::from_slice(&std::fs::read(&saved).unwrap()).unwrap();
+    assert_eq!(chat["info"]["design"]["kind"], "sync", "{chat}");
+    chat["info"]["design"] = serde_json::json!(true);
+    d.stop();
+    std::fs::write(&saved, serde_json::to_vec(&chat).unwrap()).unwrap();
+    d.start_again().await;
+    let mut c = d.client().await;
+    let terminals: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
+    let t = terminals.iter().find(|t| t.id == agent).expect("the restored chat");
+    assert_eq!(t.design.as_ref().map(|tag| tag.kind), Some(DesignAgentKind::Sync));
 }
 
 /// A `claude` that answers every message at once, for the design sync agent.
