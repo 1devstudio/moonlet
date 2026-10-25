@@ -1,0 +1,9 @@
+{
+  "id": "kAbC123CNTRL",
+  "key": "fake-tailscale-auth-key",
+  "created": "2026-10-22T10:40:02Z",
+  "expires": "2026-10-22T11:40:02Z",
+  "revoked": "",
+  "capabilities": { "devices": { "create": { "reusable": false, "ephemeral": true, "preauthorized": true, "tags": ["tag:moonlet-worker"] } } },
+  "description": "moonlet moonlet-shop-7k2q"
+}

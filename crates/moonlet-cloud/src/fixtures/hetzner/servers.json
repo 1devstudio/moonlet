@@ -1,0 +1,21 @@
+{
+  "servers": [
+    {
+      "id": 42,
+      "name": "moonlet-shop-7k2q",
+      "status": "running",
+      "created": "2026-10-22T10:40:00+00:00",
+      "public_net": { "ipv4": { "id": 4711, "ip": "203.0.113.10", "blocked": false, "dns_ptr": "" }, "ipv6": null, "floating_ips": [], "firewalls": [] },
+      "labels": { "moonlet-host": "c3f1a9e2b7d04c55", "moonlet-machine": "m7k2q", "moonlet-project": "9f86d081884c" }
+    },
+    {
+      "id": 43,
+      "name": "moonlet-shop-m3x9",
+      "status": "starting",
+      "created": "2026-10-22T11:05:30+00:00",
+      "public_net": { "ipv4": null, "ipv6": null, "floating_ips": [], "firewalls": [] },
+      "labels": { "moonlet-host": "c3f1a9e2b7d04c55", "moonlet-machine": "mm3x9", "moonlet-project": "9f86d081884c" }
+    }
+  ],
+  "meta": { "pagination": { "page": 1, "per_page": 50, "previous_page": null, "next_page": null, "last_page": 1, "total_entries": 2 } }
+}
