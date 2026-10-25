@@ -92,6 +92,15 @@ struct HandEdits {
     quiet: Option<tokio::task::AbortHandle>,
 }
 
+/// What a workspace design's agent does, for the design's snapshots (X65).
+#[derive(Debug, Clone, Copy)]
+enum AgentStep {
+    /// It starts working: the edits by hand not kept yet are kept first.
+    Starts,
+    /// It ends a turn: the turn's snapshot.
+    EndsTurn,
+}
+
 /// A raised flag, lowered when dropped: also when the request that raised
 /// it ends early.
 struct Flag<'a>(&'a AtomicBool);
@@ -536,6 +545,7 @@ impl Daemon {
                 .collect::<Vec<_>>()),
             m::CHAT_SEND => {
                 let r: m::ChatSend = params(p)?;
+                self.keep_before_message(r.id).await;
                 self.chats.send(r.id, &r.text, &r.images).map_err(internal)?;
                 ok(true)
             }
@@ -1616,19 +1626,10 @@ impl Daemon {
     }
 
     /// Takes a snapshot of a design's pages and assets, if they changed
-    /// since its last (X65), under the locks of its pages and history, so
-    /// a save in progress ends first. A failure is logged: it never fails
+    /// since its last (X65), by one that holds the locks of its pages and
+    /// history, so no save falls in it. A failure is logged: it never fails
     /// what took it.
     async fn snapshot(&self, workspace: &str, slug: &str, take: Take) {
-        let (pages, history) = (self.pages_lock(workspace, slug), self.history_lock(workspace, slug));
-        let _pages = pages.lock().await;
-        let _history = history.lock().await;
-        self.snapshot_held(workspace, slug, take).await;
-    }
-
-    /// As [`Self::snapshot`], by one that holds the design's pages and
-    /// history locks.
-    async fn snapshot_held(&self, workspace: &str, slug: &str, take: Take) {
         let (store, ws, sl) = (self.design.clone(), workspace.to_string(), slug.to_string());
         if let Err(e) = blocking(move || store.take_snapshot(&ws, &sl, take, now_ms())).await {
             tracing::warn!("cannot take a snapshot of {workspace}/{slug}: {}", e.message);
@@ -1702,20 +1703,33 @@ impl Daemon {
                 }
                 all.remove(&key).map(|e| e.edits).unwrap_or_default()
             };
-            d.snapshot_held(&ws, &sl, Take::EditsByHand(edits)).await;
+            d.snapshot(&ws, &sl, Take::EditsByHand(edits)).await;
         });
         pending.quiet = Some(quiet.abort_handle());
     }
 
     /// A workspace design's snapshots as its agent works (X65): when the
-    /// agent starts working, the edits by hand not kept yet are kept at
-    /// once, so the turn's snapshot holds only the agent's work; when it
-    /// ends a turn (its `done`, which `agent.attention` announces), the
-    /// turn's snapshot is taken. Runs for the daemon's life.
+    /// agent starts working, the edits by hand not kept yet are kept, if
+    /// `chat.send` did not keep them already (see
+    /// [`Self::keep_before_message`]), so the turn's snapshot holds only
+    /// the agent's work; when it ends a turn (its `done`, which
+    /// `agent.attention` announces), the turn's snapshot is taken. Each is
+    /// taken in the order its event came, one after the other, without
+    /// holding up the events. A turn that starts without `chat.send` keeps
+    /// the edits only once the daemon hears the agent works, so its first
+    /// writes could go with them; none does on a design with edits waiting
+    /// (the first message comes as the design is made, and a queued one
+    /// after the turn's snapshot). Runs for the daemon's life.
     pub fn snapshot_agent_turns(self: &Arc<Self>) {
         use moonlet_proto::types::{AgentState, DesignAgentKind, TerminalInfo};
         let mut events = self.terminals.subscribe_events();
+        let (steps, mut todo) = tokio::sync::mpsc::unbounded_channel::<(String, String, AgentStep)>();
         let d = self.clone();
+        tokio::spawn(async move {
+            while let Some((workspace, slug, step)) = todo.recv().await {
+                d.agent_snapshot(&workspace, &slug, step).await;
+            }
+        });
         tokio::spawn(async move {
             loop {
                 let message = match events.recv().await {
@@ -1734,22 +1748,51 @@ impl Daemon {
                     continue;
                 };
                 let Some(design) = design.filter(|t| t.kind == DesignAgentKind::Design) else { continue };
-                let take = match state {
-                    // Kept on their own, before the agent changes anything.
-                    AgentState::Working if name == m::EV_TERMINAL_UPDATED => d.take_hand_edits(&design.workspace, &design.slug).map(Take::EditsByHand),
-                    // The turn's snapshot holds everything since.
-                    AgentState::Done if name == m::EV_AGENT_ATTENTION => {
-                        d.take_hand_edits(&design.workspace, &design.slug);
-                        Some(Take::AgentTurn)
-                    }
-                    _ => None,
+                let step = match state {
+                    AgentState::Working if name == m::EV_TERMINAL_UPDATED => AgentStep::Starts,
+                    AgentState::Done if name == m::EV_AGENT_ATTENTION => AgentStep::EndsTurn,
+                    _ => continue,
                 };
-                if let Some(take) = take {
-                    let d = d.clone();
-                    tokio::spawn(async move { d.snapshot(&design.workspace, &design.slug, take).await });
+                if steps.send((design.workspace, design.slug, step)).is_err() {
+                    return;
                 }
             }
         });
+    }
+
+    /// The snapshot a step of a design's agent takes (X65), under the
+    /// locks of the design's pages and history, so the edits by hand not
+    /// kept yet are read and taken only under them: as it starts, they are
+    /// kept on their own, if there are any; as it ends a turn, everything
+    /// since is kept, edits saved during the turn with it.
+    async fn agent_snapshot(&self, workspace: &str, slug: &str, step: AgentStep) {
+        let (pages, history) = (self.pages_lock(workspace, slug), self.history_lock(workspace, slug));
+        let _pages = pages.lock().await;
+        let _history = history.lock().await;
+        let edits = self.take_hand_edits(workspace, slug);
+        let take = match (step, edits) {
+            (AgentStep::EndsTurn, _) => Take::AgentTurn,
+            (AgentStep::Starts, Some(edits)) => Take::EditsByHand(edits),
+            (AgentStep::Starts, None) => return,
+        };
+        self.snapshot(workspace, slug, take).await;
+    }
+
+    /// Before a message reaches a workspace design's agent that is not in
+    /// a turn (X65), its design's edits by hand not kept yet are kept on
+    /// their own: the agent can change the pages the moment it has the
+    /// message, before the daemon hears that it works. One at work, or
+    /// asking the user, is within its turn, its pages maybe half written:
+    /// the edits go with that turn.
+    async fn keep_before_message(&self, id: moonlet_proto::TerminalId) {
+        use moonlet_proto::types::{AgentState, DesignAgentKind};
+        let Some(info) = self.terminals.get(id).map(|t| t.info()) else { return };
+        if matches!(info.agent_state, AgentState::Working | AgentState::Blocked) {
+            return;
+        }
+        if let Some(design) = info.design.filter(|t| t.kind == DesignAgentKind::Design) {
+            self.agent_snapshot(&design.workspace, &design.slug, AgentStep::Starts).await;
+        }
     }
 
     /// The chat of a design system's sync agent, while it still is that system's.

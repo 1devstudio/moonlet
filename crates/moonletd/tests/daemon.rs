@@ -3554,6 +3554,99 @@ async fn a_snapshot_of_edits_by_hand_waits_for_a_save_in_progress() {
     assert!(kept == now, "snapshot 2 has the page as the check left it, not {} bytes with {} data-mids", kept.len(), kept.matches("data-mid").count());
 }
 
+/// A design's agent that writes `pages/index.html`, "turn <n>", the moment
+/// each message reaches it, with the shell's own commands only.
+const QUICK_CLAUDE: &str = r#"#!/bin/sh
+n=0
+mkdir -p pages
+while IFS= read -r line; do
+  case "$line" in
+    *'"subtype":"initialize"'*) echo '{"type":"system","subtype":"init","session_id":"s1","model":"fake"}' ;;
+    *'"type":"user"'*) n=$((n+1)); printf '<p data-mid="m2">turn %s</p>\n' "$n" > pages/index.html
+      echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}' ;;
+  esac
+done
+"#;
+
+/// X65: edits by hand not kept yet are kept before a message reaches the
+/// design's agent, so their snapshot never holds what the agent writes,
+/// even one that writes the moment the message reaches it, and its turn's
+/// snapshot holds only its own work.
+#[tokio::test]
+async fn edits_by_hand_are_kept_before_the_message_reaches_the_agent() {
+    let d = fake_claude_daemon_with(QUICK_CLAUDE, vec![("MOONLET_DESIGN_QUIET_MS".into(), "60000".into())]).await;
+    let mut c = d.client().await;
+    let ws = workspace_with_system(&d, &mut c).await;
+    let created: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    let agent = created["agent"].as_u64().unwrap();
+    history_of(&mut c, &ws, 1).await;
+    let dir = d.home.path().join(".moonlet/design").join(&ws).join("designs/settings-page");
+    for k in 1..=10u64 {
+        turn_over(&mut c, agent).await;
+        save_by_hand(&mut c, &ws, &format!("<p>by hand {k}</p>\n"), &[&format!("text of m{k}")]).await;
+        let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": agent, "text": "Again"})).await.unwrap();
+        let (hand, turn) = (2 * k, 2 * k + 1);
+        let listed = history_of(&mut c, &ws, turn as usize).await;
+        let kinds: Vec<(u64, &str)> = listed.as_array().unwrap()[..2].iter().map(|s| (s["n"].as_u64().unwrap(), s["type"].as_str().unwrap())).collect();
+        assert_eq!(kinds, [(turn, "agent_turn"), (hand, "edits_by_hand")], "turn {k}");
+        assert_eq!(std::fs::read_to_string(dir.join(format!("history/{hand}/pages/index.html"))).unwrap(), format!("<p>by hand {k}</p>\n"), "turn {k}");
+        assert_eq!(std::fs::read_to_string(dir.join(format!("history/{turn}/pages/index.html"))).unwrap(), format!("<p data-mid=\"m2\">turn {}</p>\n", k + 1), "turn {k}");
+    }
+}
+
+/// A design's agent that, told `ASK-ME`, writes half of `pages/other.html`
+/// and asks to run a command, and ends its turn on any other message.
+const ASKING_CLAUDE: &str = r#"#!/bin/sh
+mkdir -p pages
+while IFS= read -r line; do
+  case "$line" in
+    *'"subtype":"initialize"'*) echo '{"type":"system","subtype":"init","session_id":"s1","model":"fake"}' ;;
+    *'ASK-ME'*) printf '<p data-mid="m3">half</p>\n' > pages/other.html
+      echo '{"type":"assistant","message":{"id":"m1","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]}}'
+      echo '{"type":"control_request","request_id":"b1","request":{"subtype":"can_use_tool","tool_name":"Bash","tool_use_id":"t1","input":{"command":"ls"}}}' ;;
+    *'"type":"user"'*) printf '<p data-mid="m3">whole</p>\n' > pages/other.html
+      echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}' ;;
+  esac
+done
+"#;
+
+/// X65: a message sent while the design's agent asks the user is within
+/// its turn: the edits by hand not kept yet then go with the turn's
+/// snapshot, never on their own with its half-written pages.
+#[tokio::test]
+async fn edits_by_hand_go_with_the_turn_when_a_message_comes_while_the_agent_asks() {
+    let d = fake_claude_daemon_with(ASKING_CLAUDE, vec![("MOONLET_DESIGN_QUIET_MS".into(), "60000".into())]).await;
+    let mut c = d.client().await;
+    let ws = workspace_with_system(&d, &mut c).await;
+    let created: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    let agent = created["agent"].as_u64().unwrap();
+    history_of(&mut c, &ws, 1).await;
+    turn_over(&mut c, agent).await;
+    let dir = d.home.path().join(".moonlet/design").join(&ws).join("designs/settings-page");
+    std::fs::write(dir.join("pages/index.html"), "<p data-mid=\"m2\">first</p>\n").unwrap();
+    let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": agent, "text": "ASK-ME"})).await.unwrap();
+    for _ in 0..100 {
+        let terminals: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
+        if terminals.iter().any(|t| u64::from(t.id) == agent && t.agent_state == moonlet_proto::types::AgentState::Blocked) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    save_by_hand(&mut c, &ws, "<p>by hand</p>\n", &["text of m2"]).await;
+    let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": agent, "text": "Go on"})).await.unwrap();
+    let listed = history_of(&mut c, &ws, 2).await;
+    let kinds: Vec<(u64, &str)> = listed.as_array().unwrap().iter().map(|s| (s["n"].as_u64().unwrap(), s["type"].as_str().unwrap())).collect();
+    assert_eq!(kinds, [(2, "agent_turn"), (1, "agent_turn")]);
+    assert_eq!(std::fs::read_to_string(dir.join("history/2/pages/index.html")).unwrap(), "<p>by hand</p>\n");
+    assert_eq!(std::fs::read_to_string(dir.join("history/2/pages/other.html")).unwrap(), "<p data-mid=\"m3\">whole</p>\n");
+}
+
 /// X65: a design removed while its edits by hand wait for quiet stays
 /// removed: its snapshot is never taken, and nothing of its folder comes
 /// back.
