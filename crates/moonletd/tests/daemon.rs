@@ -2579,3 +2579,72 @@ async fn without_the_app_the_render_check_and_snap_say_to_open_moonlet() {
         .unwrap_err();
     assert_eq!(e.to_string(), "no_app: Open moonlet to render cards");
 }
+
+/// The app renders one card at a time, so the daemon sends it one at a
+/// time, and a card's time to render starts on its turn (X64): a snap asked
+/// during a render check waits without its clock running. Here the app takes
+/// 1 s a card and the daemon gives it 1.5 s.
+#[tokio::test]
+async fn a_render_waits_its_turn_without_its_clock_running() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let d = TestDaemon::start_with(&[("MOONLET_RENDER_TIMEOUT_MS", "1500".into())]).await;
+    let (mut c, w, _) = render_fixture(&d).await;
+    let mut app = Client::connect(&d.socket, "moonlet-app").await.unwrap();
+    let _: serde_json::Value = app.request(methods::DESIGN_RENDER_READY, serde_json::json!({})).await.unwrap();
+    let (mut reader, mut writer) = app.into_stream().into_split();
+    let (answers, mut to_send) = tokio::sync::mpsc::unbounded_channel::<serde_json::Value>();
+    tokio::spawn(async move {
+        let mut id = 1000;
+        while let Some(done) = to_send.recv().await {
+            id += 1;
+            let frame = Frame::Json(Message::Request { id, method: methods::DESIGN_RENDER_DONE.into(), params: done });
+            if write_frame(&mut writer, &frame).await.is_err() {
+                break;
+            }
+        }
+    });
+    let (in_flight, most) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+    let one_at_a_time = Arc::new(tokio::sync::Mutex::new(()));
+    {
+        let (in_flight, most) = (in_flight.clone(), most.clone());
+        tokio::spawn(async move {
+            while let Ok(Some(f)) = read_frame(&mut reader).await {
+                let Frame::Json(Message::Event { name, data }) = f else { continue };
+                if name != methods::EV_DESIGN_RENDER {
+                    continue;
+                }
+                let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                most.fetch_max(now, Ordering::SeqCst);
+                let (in_flight, answers, turn) = (in_flight.clone(), answers.clone(), one_at_a_time.clone());
+                tokio::spawn(async move {
+                    let _turn = turn.lock().await;
+                    tokio::time::sleep(Duration::from_millis(1000)).await;
+                    let mut done = serde_json::json!({"id": data["id"]});
+                    if data["want"] == "png" {
+                        done["png_base64"] = "iVBORw0KGgo=".into();
+                    } else {
+                        done["metrics"] = serde_json::json!({"flags": []});
+                    }
+                    in_flight.fetch_sub(1, Ordering::SeqCst);
+                    let _ = answers.send(done);
+                });
+            }
+        });
+    }
+    let socket = d.socket.clone();
+    let ws = w.clone();
+    let check = tokio::spawn(async move {
+        let mut c2 = Client::connect(&socket, "test").await.unwrap();
+        c2.request::<_, serde_json::Value>(methods::DESIGN_CHECK, serde_json::json!({"workspace": ws, "slug": "storefront", "render": true})).await
+    });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let shot = c
+        .request::<_, serde_json::Value>(methods::DESIGN_SNAP, serde_json::json!({"workspace": w, "slug": "storefront", "path": "components/buttons/button/button.html"}))
+        .await;
+    assert!(shot.is_ok(), "{shot:?}");
+    let checked = check.await.unwrap().unwrap();
+    // Neither card ran out of time: both were measured.
+    assert_eq!(checked["render"], serde_json::json!({"total": 2, "bad": 0, "thin": 0, "variants_identical": 0}));
+    assert_eq!(most.load(Ordering::SeqCst), 1);
+}
