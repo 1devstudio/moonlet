@@ -180,10 +180,19 @@ function save(host: string, workspace: string, slug: string, page: string): Prom
 }
 
 /** The user's message to a design's agent, with the edits by hand not told
- *  yet before it; once it is sent, those are told. */
+ *  yet before it, once their pages' saves on their way are back: only the
+ *  edits a save took are told. One a save refused as stale was taken back
+ *  meanwhile; one whose save failed waits for a save that takes it. Once
+ *  the message is sent, those are told. */
 export async function sendWithEdits(host: string, workspace: string, slug: string, agent: number, text: string, images: ChatImage[]): Promise<void> {
   const design = itemKey(host, workspace, slug);
-  const told = useEditor.getState().pending[design] ?? [];
+  const keyOf = (p: Pending) => pageKey(host, workspace, slug, p.page);
+  for (;;) {
+    const busy = [...new Set((useEditor.getState().pending[design] ?? []).map(keyOf))].filter((k) => saves.busy(k));
+    if (!busy.length) break;
+    await Promise.all(busy.map((k) => saves.idle(k)));
+  }
+  const told = (useEditor.getState().pending[design] ?? []).filter((p) => !unsaved[keyOf(p)]?.some((c) => c.step === p.id));
   await rpc(host, M.chatSend, { id: agent, text: editsMessage(told, text), images });
   useEditor.setState((s) => ({ pending: { ...s.pending, [design]: (s.pending[design] ?? []).filter((p) => !told.includes(p)) } }));
 }

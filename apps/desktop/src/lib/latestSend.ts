@@ -41,6 +41,10 @@ export function latestSends() {
     busy(key: string): boolean {
       return key in going;
     },
+    /** Waits until no send of `key` is on its way, whatever its outcome. */
+    async idle(key: string): Promise<void> {
+      while (going[key]) await going[key].busy.catch(() => {});
+    },
     /** Waits for every send on its way. */
     async settle(): Promise<void> {
       while (Object.keys(going).length) await Promise.all(Object.values(going).map((g) => g.busy.catch(() => {})));
