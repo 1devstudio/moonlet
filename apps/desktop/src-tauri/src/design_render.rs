@@ -42,7 +42,8 @@ pub struct Renderer {
     waiting: Mutex<HashMap<u64, oneshot::Sender<Measured>>>,
     /// True once the render page says it is ready for cards; false again
     /// while it loads.
-    loaded: (watch::Sender<bool>, watch::Receiver<bool>),
+    /// (`send_replace`, so it holds without anyone waiting.)
+    page_ready: watch::Sender<bool>,
 }
 
 impl Default for Renderer {
@@ -50,7 +51,7 @@ impl Default for Renderer {
         Renderer {
             turn: Default::default(),
             waiting: Default::default(),
-            loaded: watch::channel(false),
+            page_ready: watch::Sender::new(false),
         }
     }
 }
@@ -103,8 +104,8 @@ async fn render(app: &AppHandle, ask: DesignRender) -> Result<Value, String> {
     let renderer = app.state::<Arc<Renderer>>().inner().clone();
     let _turn = renderer.turn.lock().await;
     let window = window(app, &renderer)?;
-    let mut loaded = renderer.loaded.1.clone();
-    tokio::time::timeout(PAGE_ANSWER, loaded.wait_for(|l| *l))
+    let mut ready = renderer.page_ready.subscribe();
+    tokio::time::timeout(PAGE_ANSWER, ready.wait_for(|r| *r))
         .await
         .map_err(|_| "the render page did not load".to_string())?
         .map_err(|_| "the render page went away".to_string())?;
@@ -153,7 +154,7 @@ fn window(app: &AppHandle, renderer: &Arc<Renderer>) -> Result<WebviewWindow, St
     if let Some(w) = app.get_webview_window(LABEL) {
         return Ok(w);
     }
-    let _ = renderer.loaded.0.send(false);
+    renderer.page_ready.send_replace(false);
     let r = renderer.clone();
     WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("render.html".into()))
         .title("moonlet render")
@@ -167,7 +168,7 @@ fn window(app: &AppHandle, renderer: &Arc<Renderer>) -> Result<WebviewWindow, St
         // finished load can come before its script has run.
         .on_page_load(move |_, p| {
             if matches!(p.event(), tauri::webview::PageLoadEvent::Started) {
-                let _ = r.loaded.0.send(false);
+                r.page_ready.send_replace(false);
             }
         })
         .build()
@@ -186,7 +187,7 @@ pub fn design_render_page_ready(
             "only the render window renders cards",
         ));
     }
-    let _ = renderer.loaded.0.send(true);
+    renderer.page_ready.send_replace(true);
     Ok(())
 }
 
