@@ -35,6 +35,9 @@ pub enum Kind {
     MissingMid,
     /// A `data-mid` an earlier element of the page already has (X65).
     DuplicateMid,
+    /// A design page's stylesheet that is not its design system's
+    /// `styles.css` (X65).
+    Stylesheet,
     /// A class or token in `conventions.md` that nothing defines.
     UnknownName,
     /// A README longer than the design agent reads.
