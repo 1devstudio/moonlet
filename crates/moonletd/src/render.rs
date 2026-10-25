@@ -15,8 +15,14 @@ use moonlet_proto::methods::{DesignRender, DesignRenderDone, EV_DESIGN_RENDER, R
 use moonlet_proto::{Frame, Message, RpcError};
 use tokio::sync::oneshot;
 
-/// How long the app has for one card.
-const PER_CARD: Duration = Duration::from_secs(30);
+/// How long the app has for one card, from when it is sent: 30 s, or
+/// `MOONLET_RENDER_TIMEOUT_MS` (tests).
+fn per_card() -> Duration {
+    std::env::var("MOONLET_RENDER_TIMEOUT_MS")
+        .ok()
+        .and_then(|ms| ms.parse().ok())
+        .map_or(Duration::from_secs(30), Duration::from_millis)
+}
 
 type Reply = oneshot::Sender<Result<DesignRenderDone, RenderError>>;
 
@@ -60,6 +66,9 @@ pub struct Ask {
 
 #[derive(Default)]
 pub struct Renders {
+    /// The app renders one card at a time: one is sent, and its clock
+    /// runs, only once the one before it is answered.
+    turn: tokio::sync::Mutex<()>,
     /// The app's connection, once it said it renders.
     app: Mutex<Option<(ClientId, ClientTx)>>,
     /// Renders sent to the app, by id, with the connection they went to.
@@ -104,9 +113,11 @@ impl Renders {
         self.app.lock().unwrap().is_some()
     }
 
-    /// Asks the app to render `ask` and waits for its answer: `NoApp`
-    /// without one, `Timeout` after [`PER_CARD`].
+    /// Asks the app to render `ask`, once the cards asked before it are
+    /// answered, and waits for its answer: `NoApp` without one, `Timeout`
+    /// after [`per_card`] from when it was sent.
     pub async fn render(&self, ask: Ask) -> Result<DesignRenderDone, RenderError> {
+        let _turn = self.turn.lock().await;
         let Some((client, tx)) = self.app.lock().unwrap().clone() else {
             return Err(RenderError::NoApp);
         };
@@ -126,7 +137,8 @@ impl Renders {
             self.waiting.lock().unwrap().remove(&id);
             return Err(RenderError::NoApp);
         }
-        match tokio::time::timeout(PER_CARD, rx).await {
+        let limit = per_card();
+        match tokio::time::timeout(limit, rx).await {
             Ok(Ok(done)) => done,
             Ok(Err(_)) => Err(RenderError::NoApp),
             Err(_) => {
@@ -134,7 +146,7 @@ impl Renders {
                 Err(RenderError::Timeout(format!(
                     "the app did not render {} in {} s",
                     ask.path,
-                    PER_CARD.as_secs()
+                    limit.as_secs_f32()
                 )))
             }
         }
