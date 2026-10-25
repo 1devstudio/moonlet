@@ -100,7 +100,9 @@
     let out = "";
     const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
     for (let n = walker.nextNode(); n && out.length < 4 * TEXT_MAX; n = walker.nextNode()) {
-      if (!n.parentElement || !n.parentElement.closest("script, style, template, noscript")) out += n.data;
+      // Apart, as each element's text reads: "General Appearance", not
+      // "GeneralAppearance" from <a>General</a><a>Appearance</a>.
+      if (!n.parentElement || !n.parentElement.closest("script, style, template, noscript")) out += ` ${n.data}`;
     }
     return [...out.replace(/\s+/g, " ").trim()].slice(0, TEXT_MAX).join("");
   };
