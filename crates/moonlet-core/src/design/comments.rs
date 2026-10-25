@@ -37,7 +37,7 @@ impl Store {
 
     /// Changes a design's comments and returns the pins changed: a new pin
     /// gets the number after the highest so far; an edited pin its new
-    /// comment; sent pins record
+    /// comment, and, when it changed, is not sent any more; sent pins record
     /// the time. Written through the designs folder as a handle, read again
     /// when the agent changed the file meanwhile, so its change is kept.
     pub fn put_comment(
@@ -67,7 +67,10 @@ impl Store {
                 let comment = comment_text(comment)?;
                 self.update_comments(workspace, slug, |pins| {
                     let pin = find(pins, *n)?;
-                    pin.comment = comment.clone();
+                    if pin.comment != comment {
+                        pin.comment = comment.clone();
+                        pin.sent_at = None;
+                    }
                     Ok(vec![pin.clone()])
                 })
             }
@@ -349,6 +352,27 @@ mod tests {
         assert_eq!(
             store.comments("w1", "settings-page").unwrap()[2].sent_at,
             None
+        );
+    }
+
+    #[test]
+    fn an_edited_comment_is_not_sent_any_more_and_an_unchanged_one_stays_sent() {
+        let (_home, store) = store_with_design();
+        put(&store, nav(), 1);
+        store
+            .put_comment(
+                "w1",
+                "settings-page",
+                &CommentChange::Sent { pins: vec![1] },
+                1_761_200_100_000,
+            )
+            .unwrap();
+        let same = put(&store, edit(1, " Collapse into a menu on phone "), 2);
+        assert_eq!(same.sent_at, Some(1_761_200_100_000));
+        let changed = put(&store, edit(1, "Collapse into a menu below 600 px"), 3);
+        assert_eq!(
+            (changed.comment.as_str(), changed.sent_at),
+            ("Collapse into a menu below 600 px", None)
         );
     }
 
