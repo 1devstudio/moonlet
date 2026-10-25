@@ -181,6 +181,20 @@ export function keepAction(pin: DesignComment | null, comment: string): "new" | 
   return oneLine(comment) === oneLine(pin.comment) ? "unchanged" : "edit";
 }
 
+/** A pin's badge, near enough to keep it inside the page. */
+const PIN_SIZE = 20;
+
+/** Where an element's pin goes over the page of `size` px shown at
+ *  `scale`, for the element at `rect` in the page's viewport: at its top
+ *  right corner, kept inside the page; null while the element is scrolled
+ *  out of the page, so no pin floats over the canvas. */
+export function pinPlace(rect: { x: number; y: number; w: number; h: number }, scale: number, size: [number, number]): { left: number; top: number } | null {
+  const [left, top, right, bottom] = [rect.x * scale, rect.y * scale, (rect.x + rect.w) * scale, (rect.y + rect.h) * scale];
+  if (right < 0 || bottom < 0 || left > size[0] || top > size[1]) return null;
+  const inside = (v: number, max: number) => Math.max(0, Math.min(v, max - PIN_SIZE));
+  return { left: inside(right - PIN_SIZE / 2, size[0]), top: inside(top - PIN_SIZE / 2, size[1]) };
+}
+
 /** The comment box's size, near enough to place it. */
 export const BOX_SIZE = { w: 300, h: 150 } as const;
 

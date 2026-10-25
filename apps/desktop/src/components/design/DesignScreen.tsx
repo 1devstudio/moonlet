@@ -492,7 +492,7 @@ function PageFrame({
   return (
     <div className="relative m-auto shrink-0 rounded-md border border-border-strong shadow-2xl">
       <CardFrame url={pageUrl(workspace, design.slug, page, rev, true)} title={pageFile(page)} viewport={viewport} scale={scale} interactive frameRef={frame} />
-      <PinLayer pins={pins} rects={rects} scale={scale} open={box?.pin?.n ?? null} onOpen={onOpenPin} />
+      <PinLayer pins={pins} rects={rects} scale={scale} size={[viewport[0] * scale, viewport[1] * scale]} open={box?.pin?.n ?? null} onOpen={onOpenPin} />
       {box && (
         <CommentBox
           key={box.pin ? `pin-${box.pin.n}` : `new-${box.element.mid}`}
