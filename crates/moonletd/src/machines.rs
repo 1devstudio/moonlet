@@ -704,6 +704,11 @@ impl Machines {
             machine_setup: setup,
         });
         let labels = moonlet_cloud::machine::labels(&f.host_id, &id, &r.shown.project_key);
+        // Removed while the key was made or the listener awaited: nothing
+        // is rented.
+        if self.get(&id).is_none_or(|r| r.shown.state != "creating") {
+            return;
+        }
         let made = provider
             .create(&NewMachine {
                 name: name.clone(),
@@ -752,7 +757,11 @@ impl Machines {
                 // It may have paired before the provider answered.
                 self.ready_if_done(&id);
             }
-            Err(e) => self.failed(&id, e.to_string()),
+            // A removal meanwhile already said why it went.
+            Err(e) if self.get(&id).is_some_and(|r| r.shown.state == "creating") => {
+                self.failed(&id, e.to_string())
+            }
+            Err(_) => {}
         }
     }
 
@@ -1508,9 +1517,10 @@ impl Machines {
                 let mut records = self.records.lock().unwrap();
                 let mut usage = self.usage.lock().unwrap();
                 records.retain(|r| {
+                    // One being removed is its removal's to finish and book.
                     let drop = plan.drop.contains(&r.shown.id)
                         && r.shown.provider == id
-                        && r.shown.state != "removed";
+                        && !matches!(r.shown.state.as_str(), "removed" | "removing");
                     // Its time until now is billed, as a removal books it.
                     if drop && counts(&r.shown.state) {
                         moonlet_cloud::usage::add_billed(&mut usage, billed_from(r), now, billing);

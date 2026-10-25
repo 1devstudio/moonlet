@@ -903,8 +903,15 @@ impl Daemon {
                     m::SYNC_OPEN => {
                         let r: m::SyncOpen = params(p)?;
                         // A cloud machine (X63) opens copies of its own project only.
-                        if let Some(machine) = conn.phone.as_deref().and_then(|d| self.machines.machine_of(d)) {
-                            self.machines.may_open(&machine, &r.session)?;
+                        let machine = conn.phone.as_deref().and_then(|d| self.machines.machine_of(d));
+                        match machine {
+                            Some(machine) => self.machines.may_open(&machine, &r.session)?,
+                            // A cloud connection whose device is gone (its
+                            // machine is being removed) opens nothing.
+                            None if conn.cloud.load(std::sync::atomic::Ordering::Relaxed) => {
+                                return Err(RpcError::new("forbidden", "this machine is being removed"));
+                            }
+                            None => {}
                         }
                         ok(self.sync.open(conn, r).await?)
                     }
