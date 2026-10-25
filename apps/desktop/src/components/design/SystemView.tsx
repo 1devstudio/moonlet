@@ -156,11 +156,11 @@ export function DesignSystemView({ host, workspace, sys, label, working, inset }
                 </button>
               )}
               {working ? (
-                <Button size="sm" variant="danger" className="no-drag" onClick={stop}>
+                <Button key="stop" size="sm" variant="danger" className="no-drag" onClick={stop}>
                   Stop sync
                 </Button>
               ) : (
-                <Button size="sm" className="no-drag" onClick={sync}>
+                <Button key="sync" size="sm" className="no-drag" onClick={sync}>
                   <RotateCw size={12} /> Sync
                 </Button>
               )}
