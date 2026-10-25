@@ -40,6 +40,22 @@ describe("a value's token (X65)", () => {
   });
 });
 
+describe("a token in rem (X65)", () => {
+  const REM: DesignToken[] = [
+    { name: "--space-2", value: "0.5rem", family: "spacing" },
+    { name: "--space-4", value: "1rem", family: "spacing" },
+    { name: "--space-8", value: "2rem", family: "spacing" },
+  ];
+
+  it("matches the px the page computes, at the root's 16 px, and is ranked by it", () => {
+    expect(tokenOf(REM, "16px", "spacing")?.name).toBe("--space-4");
+    expect(tokenOf(REM, "1rem", "spacing")?.name).toBe("--space-4");
+    expect(fieldShown(REM, "8px 32px", "spacing")).toEqual({ token: "--space-2 --space-8", value: "0.5rem 2rem" });
+    expect(popoverTokens(REM, "10px", "spacing").map((t) => t.name)).toEqual(["--space-2", "--space-4", "--space-8"]);
+    expect(offSystem(REM, [["padding", "8px 1rem"]])).toEqual([]);
+  });
+});
+
 describe("the token popover (X65)", () => {
   it("lists the field's family, the tokens its value matches first, then the nearest to it", () => {
     expect(popoverTokens(TOKENS, "14px 24px", "spacing").map((t) => t.name)).toEqual(["--space-6", "--space-4", "--space-5", "--space-1", "--space-8"]);
