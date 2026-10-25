@@ -120,9 +120,15 @@ export function pageCounts(pins: DesignComment[]): Record<string, number> {
   return counts;
 }
 
-/** The element as the comment box names it: `nav · m12 · "General Appearance"`. */
+/** How much of an element's text the comment box shows, in characters. */
+const BOX_TEXT = 12;
+
+/** The element as the comment box names it, its text cut inside the quotes:
+ *  `nav · m12 · "General Appe…"`. */
 export function boxLabel(el: { tag: string; mid: string; text: string }): string {
-  return [el.tag, el.mid, ...(el.text ? [`"${el.text}"`] : [])].join(" · ");
+  const chars = [...el.text];
+  const text = chars.length > BOX_TEXT ? `${chars.slice(0, BOX_TEXT).join("")}…` : el.text;
+  return [el.tag, el.mid, ...(text ? [`"${text}"`] : [])].join(" · ");
 }
 
 /** A pin as the Comments tab names it: `index.html · m12 · nav "General Appearance"`. */
