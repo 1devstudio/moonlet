@@ -88,6 +88,22 @@ export function valueParts(value: string): string[] {
   return out;
 }
 
+/** Words of a border or a background that are no colour: widths, styles,
+ *  repeats, places, sizes and boxes, and the keywords of any property. */
+const NOT_A_COLOUR = new Set<string>(["thin", "medium", "thick", ...BORDER_STYLES, "repeat", "no-repeat", "repeat-x", "repeat-y", "space", "round", "scroll", "fixed", "local", "center", "top", "bottom", "left", "right", "cover", "contain", "auto", "border-box", "padding-box", "content-box", "text", "inherit", "initial", "unset", "revert", "/"]);
+
+/** The parts of a shorthand value that are colours, as in `border` or
+ *  `background`: a hex, a colour function, a `var()`, or a word that is
+ *  not one of a border's or a background's other words; never a length,
+ *  a number or an image. */
+export function colourParts(value: string): string[] {
+  return valueParts(value).filter((p) => {
+    const v = p.toLowerCase();
+    if (/^#[0-9a-f]{3,8}$/.test(v) || /^(rgba?|hsla?|hwb|lab|lch|oklab|oklch|color|color-mix|var)\(/.test(v)) return true;
+    return /^[a-z][a-z-]*$/.test(v) && !NOT_A_COLOUR.has(v);
+  });
+}
+
 /** A property the editor writes: lowercase letters and `-`, as `padding`
  *  or `border-radius`. */
 export function isStyleProp(prop: string): boolean {

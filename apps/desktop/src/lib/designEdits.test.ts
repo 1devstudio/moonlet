@@ -266,6 +266,14 @@ describe("an edit by hand on a page's source (X65)", () => {
     );
   });
 
+  it("rewrites a property keeping parts its value already had, as a background's image, which a new value could not bring", () => {
+    const styled = withLines(21, 1, "      <p data-mid=\"m33\" style='background: url(\"grain.png\") #161616' class=hint>Tom &amp; Jerry&nbsp;rules</p>");
+    expect(applyEdit(styled, { kind: "restyle", mid: "m33", set: { background: 'url("grain.png") var(--color-panel)' } }).html).toBe(
+      withLines(21, 1, '      <p data-mid="m33" style="background: url(&quot;grain.png&quot;) var(--color-panel)" class=hint>Tom &amp; Jerry&nbsp;rules</p>'),
+    );
+    expect(() => applyEdit(styled, { kind: "restyle", mid: "m33", set: { background: 'url("other.png") red' } })).toThrow(new EditRefused('url("other.png") red is not a value the editor writes'));
+  });
+
   it("refuses a style value that could end the declaration or the attribute, or a property that is not one", () => {
     for (const value of ['4px" onclick="alert(1)', "4px; color: red", "4px</p><script>x</script>", "url(https://x.test/a.png)", "calc(4px", "\\34 px", "{}"]) {
       expect(() => applyEdit(PAGE, { kind: "restyle", mid: "m24", set: { padding: value } })).toThrow(new EditRefused(`${value} is not a value the editor writes`));

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fieldEntries, fieldInput, fieldShows, fieldValue, inspectorSections, pickToken } from "./designInspector";
+import { fieldEntries, fieldInput, fieldSet, fieldShows, fieldValue, inspectorSections, pickToken } from "./designInspector";
 
 const labels = (display: string) => inspectorSections(display).map((s) => `${s.title}: ${s.fields.map((f) => f.label).join(", ")}`);
 
@@ -78,5 +78,28 @@ describe("a size field (X65)", () => {
     expect(fieldEntries(height, tokens, "")).toEqual([]);
     expect(fieldShows(width, tokens, "32px")).toEqual({ token: null, value: "32px" });
     expect(fieldEntries(padding, tokens, "32px")).toEqual([{ names: ["--space-8"], value: "32px" }]);
+  });
+});
+
+describe("the Fill field (X65)", () => {
+  const fill = inspectorSections("block")[3].fields[0];
+
+  it("writes background-color, and takes away a background shorthand that holds only a colour, so it never overrides the write or comes back", () => {
+    expect(fieldSet(fill, [], "var(--color-panel)")).toEqual({ "background-color": "var(--color-panel)" });
+    expect(fieldSet(fill, [["background", "#161616"]], "var(--color-panel)")).toEqual({ background: null, "background-color": "var(--color-panel)" });
+    expect(fieldSet(fill, [["background", "#161616"]], null)).toEqual({ background: null, "background-color": null });
+  });
+
+  it("writes its colour into a background shorthand with an image, keeping the image and the rest as written", () => {
+    const style: [string, string][] = [["background", 'url("grain.png") no-repeat #161616']];
+    expect(fieldValue(fill, style, {})).toEqual({ value: "#161616", inline: true });
+    expect(fieldSet(fill, style, "var(--color-panel)")).toEqual({ background: 'url("grain.png") no-repeat var(--color-panel)', "background-color": null });
+    expect(fieldSet(fill, style, null)).toEqual({ background: 'url("grain.png") no-repeat', "background-color": null });
+    expect(fieldSet(fill, [["background", 'url("grain.png")']], "#fff")).toEqual({ background: 'url("grain.png") #fff', "background-color": null });
+  });
+
+  it("writes any other field's property alone", () => {
+    const [padding] = inspectorSections("block")[1].fields;
+    expect(fieldSet(padding, [["background", "#161616"]], "4px")).toEqual({ padding: "4px" });
   });
 });
