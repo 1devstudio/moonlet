@@ -7,7 +7,7 @@ import { useStore } from "./store";
 import { answerConfirm } from "./confirm";
 import { rpc } from "./daemon";
 import { createIssue, setColumnShow } from "./tasksStore";
-import { type TrackersConfig, activityOf, autoFixed, boardInput, openBoard, removeBoard, previewBoard, showBoard, branchUser, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, lookUpPasted, moveTask, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, pollTasks, saveTrackersConfig, setAssignee, setExpanded, setFilters, setKeepInStep, startedFromTask, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
+import { type TrackersConfig, activityOf, autoFixed, boardInput, openBoard, removeBoard, previewBoard, showBoard, branchUser, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, lookUpPasted, moveTask, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, pollTasks, saveTrackersConfig, settleSaves, setAssignee, setExpanded, setFilters, setKeepInStep, startedFromTask, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
 
 const answers: Record<string, (params: { path?: string; id?: string }) => unknown> = {};
 vi.mock("./daemon", () => ({
@@ -103,7 +103,10 @@ const issue: GhTask = {
   closing_prs: [],
 };
 
-beforeEach(() => {
+beforeEach(async () => {
+  // A sync saves new board columns without waiting for the write: let any
+  // still on its way land before the next test empties `saved`.
+  await settleSaves();
   configDelay.ms = 0;
   for (const k of Object.keys(answers)) delete answers[k];
   useTasks.setState({ data: {} });
@@ -829,6 +832,15 @@ describe("loadTrackersConfig", () => {
 });
 
 describe("saveTrackersConfig", () => {
+  it("lets a caller wait for writes still on their way, such as a board's columns a sync saves", async () => {
+    saved.length = 0;
+    await loadTrackersConfig(true);
+    void saveTrackersConfig((c) => ({ ...c, sync: { ...c.sync, interval: 45 } }));
+    await settleSaves();
+    expect((saved.at(-1) as { sync: { interval: number } }).sync.interval).toBe(45);
+    useTasks.setState({ config: null });
+  });
+
   it("keeps both of two quick changes", async () => {
     saved.length = 0;
     await loadTrackersConfig(true);
