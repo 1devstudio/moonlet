@@ -346,6 +346,28 @@ describe("a project's cloud workers (X63)", () => {
     expect(projectCloudErrors({ overflow: false, provider: "", type: "", location: "", image: "" })).toEqual({});
   });
 
+  it("refuses a type the location does not make and an image for the other architecture", () => {
+    // From Hetzner's lists for fsn1: cpx41 is retired there, cax21 is Arm.
+    const types = [
+      { name: "cpx42", cores: 8, memory_gb: 16, arch: "x86" },
+      { name: "cax21", cores: 4, memory_gb: 8, arch: "arm" },
+    ];
+    const images = [
+      { name: "ubuntu-24.04", label: "Ubuntu 24.04", arch: "x86" },
+      { name: "ubuntu-24.04", label: "Ubuntu 24.04", arch: "arm" },
+      { name: "401234567", label: "Snapshot: shop deps", arch: "x86" },
+    ];
+    const d = { overflow: true, provider: "hetzner", type: "cpx41", location: "fsn1", image: "ubuntu-24.04" };
+    expect(projectCloudErrors(d, { types, images })).toEqual({ type: "fsn1 no longer makes cpx41. Pick another type." });
+    expect(projectCloudErrors({ ...d, type: "cax21", image: "401234567" }, { types, images })).toEqual({
+      image: "401234567 is not for arm machines. Pick another image.",
+    });
+    expect(projectCloudErrors({ ...d, type: "cax21" }, { types, images })).toEqual({});
+    // Lists not loaded yet, or not readable: nothing to say.
+    expect(projectCloudErrors(d, { types: null, images: null })).toEqual({});
+    expect(projectCloudErrors(d)).toEqual({});
+  });
+
   it("the footer counts the project's machines and their commands", () => {
     const ms = [machine({ running: 2 }), machine({ id: "m2" }), machine({ id: "m3", project: "payments-api", project_key: "p", running: 1 })];
     expect(projectCloudFooter(ms, "k", "shop")).toBe("2 machines for shop · 2 running commands");

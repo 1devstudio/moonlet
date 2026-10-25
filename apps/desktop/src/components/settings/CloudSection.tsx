@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Play } from "lucide-react";
 import { rpc } from "../../lib/daemon";
-import { imageOptions, locationOptions, machineTypeLabel, projectCloudChange, projectCloudDraft, projectCloudErrors, projectCloudFooter, projectCloudKey, type ProjectCloudDraft } from "../../lib/cloudSettings";
+import { imageOptions, locationOptions, machineTypeLabel, type Offered, projectCloudChange, projectCloudDraft, projectCloudErrors, projectCloudFooter, projectCloudKey, type ProjectCloudDraft } from "../../lib/cloudSettings";
 import { useCloud } from "../../lib/cloudStore";
 import { M, type CloudImage, type CloudInfo, type CloudLocation, type MachineType, type ProjectIdentity } from "../../lib/protocol";
 import { goSettings } from "../../lib/settingsNavigation";
@@ -25,6 +25,40 @@ const listed = <T,>(host: string, method: string, params: object): Promise<Liste
     (list) => ({ list }),
     (e) => ({ list: [], error: e instanceof Error ? e.message : String(e) }),
   );
+
+/** Provider `provider`'s locations and images, and its machine types at `location`. */
+function useProviderLists(host: string, provider: string, location: string) {
+  const [types, setTypes] = useState<Listed<MachineType> | null>(null);
+  const [locations, setLocations] = useState<Listed<CloudLocation> | null>(null);
+  const [images, setImages] = useState<Listed<CloudImage> | null>(null);
+  useEffect(() => {
+    setLocations(null);
+    setImages(null);
+    if (!provider) return;
+    let live = true;
+    void listed<CloudLocation>(host, M.cloudLocations, { provider }).then((l) => live && setLocations(l));
+    void listed<CloudImage>(host, M.cloudImages, { provider }).then((l) => live && setImages(l));
+    return () => {
+      live = false;
+    };
+  }, [host, provider]);
+  useEffect(() => {
+    setTypes(null);
+    if (!provider || !location) return;
+    let live = true;
+    void listed<MachineType>(host, M.cloudTypes, { provider, location }).then((l) => live && setTypes(l));
+    return () => {
+      live = false;
+    };
+  }, [host, provider, location]);
+  return { types, locations, images };
+}
+
+/** The lists the errors check against: only those read without an error. */
+const offered = (l: ReturnType<typeof useProviderLists>): Offered => ({
+  types: l.types && !l.types.error ? l.types.list : null,
+  images: l.images && !l.images.error ? l.images.list : null,
+});
 
 /** The section's state, kept by the project page for its Save. */
 export function useProjectCloud(host: string, identity: ProjectIdentity | null | undefined) {
@@ -59,9 +93,10 @@ export function useProjectCloud(host: string, identity: ProjectIdentity | null |
       live = false;
     };
   }, [central, host, key, show]);
+  const lists = useProviderLists(host, draft?.provider ?? "", draft?.location.trim() ?? "");
   const shown = central && !!key && !!info && !!draft;
   const change = shown ? projectCloudChange(info, key, draft) : null;
-  const errors = shown && draft ? projectCloudErrors(draft) : {};
+  const errors = shown && draft ? projectCloudErrors(draft, offered(lists)) : {};
   const save = async () => {
     if (change) show(await rpc<CloudInfo>(host, M.cloudSet, change));
   };
@@ -73,6 +108,7 @@ export function useProjectCloud(host: string, identity: ProjectIdentity | null |
     info,
     draft,
     setDraft,
+    lists,
     dirty: !!change,
     errors: Object.keys(errors).length,
     save,
@@ -83,32 +119,10 @@ export function useProjectCloud(host: string, identity: ProjectIdentity | null |
 export function CloudSection({ host, project, cloud, machineSetup }: { host: string; project: { id: string; name: string }; cloud: ReturnType<typeof useProjectCloud>; machineSetup?: string | null }) {
   const machines = useCloud((s) => s.machines);
   const { info, draft, setDraft } = cloud;
-  const [types, setTypes] = useState<Listed<MachineType> | null>(null);
-  const [locations, setLocations] = useState<Listed<CloudLocation> | null>(null);
-  const [images, setImages] = useState<Listed<CloudImage> | null>(null);
+  const { types, locations, images } = cloud.lists;
   const [starting, setStarting] = useState(false);
   const provider = draft?.provider ?? "";
   const location = draft?.location.trim() ?? "";
-  useEffect(() => {
-    setLocations(null);
-    setImages(null);
-    if (!provider) return;
-    let live = true;
-    void listed<CloudLocation>(host, M.cloudLocations, { provider }).then((l) => live && setLocations(l));
-    void listed<CloudImage>(host, M.cloudImages, { provider }).then((l) => live && setImages(l));
-    return () => {
-      live = false;
-    };
-  }, [host, provider]);
-  useEffect(() => {
-    setTypes(null);
-    if (!provider || !location) return;
-    let live = true;
-    void listed<MachineType>(host, M.cloudTypes, { provider, location }).then((l) => live && setTypes(l));
-    return () => {
-      live = false;
-    };
-  }, [host, provider, location]);
   if (cloud.failed)
     return (
       <Section title="Cloud workers">
@@ -120,7 +134,7 @@ export function CloudSection({ host, project, cloud, machineSetup }: { host: str
       </Section>
     );
   if (!cloud.shown || !info || !draft) return null;
-  const errors = projectCloudErrors(draft);
+  const errors = projectCloudErrors(draft, offered(cloud.lists));
   const set = (patch: Partial<ProjectCloudDraft>) => setDraft({ ...draft, ...patch });
   const name = host === "local" ? "this Mac" : host;
   const configured = info.kinds.filter((k) => info.providers[k.id]);
