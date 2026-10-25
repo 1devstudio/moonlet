@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChatItem, DesignCard, DesignSystem } from "./protocol";
-import { afterSyncLine, changedRows, needsYou, rewritingCard, stepBar, syncNotice } from "./designSync";
+import { afterSyncLine, afterSyncShown, agentShown, changedRows, needsYou, orphanLine, proposalLabel, rewritingCard, stepBar, syncNotice } from "./designSync";
 
 const system = (over: Partial<DesignSystem> = {}): DesignSystem => ({
   slug: "moonlet-desktop",
@@ -103,6 +103,32 @@ describe("after a sync (X64)", () => {
     ]);
   });
 
+  it("lists an orphan that also has the sync's proposals both ways, so it can be removed too", () => {
+    const both = card("components/custom/bar/bar.html", "Bar", { orphaned: true, proposals: ["components/custom/bar/bar.proposed.css"] });
+    expect(needsYou([both]).map((i) => i.kind)).toEqual(["edited", "orphaned"]);
+  });
+
+  it("labels the sync's version, and says what an orphan was made from", () => {
+    expect(proposalLabel(needsYou(cards)[0])).toBe("session-row.proposed.html");
+    const cssOnly = card("components/custom/bar/bar.html", "Bar", { proposals: ["components/custom/bar/bar.proposed.css", "components/custom/bar/bar.proposed.prompt.md"] });
+    expect(proposalLabel(needsYou([cssOnly])[0])).toBe("bar.proposed.css, bar.proposed.prompt.md");
+    expect(orphanLine(card("components/custom/toolbar/toolbar.html", "Toolbar", { source: ["apps/desktop/src/components/Toolbar.tsx"] }))).toBe(
+      "Its source Toolbar.tsx was deleted. Designs that inserted it keep their copy.",
+    );
+    expect(orphanLine(card("components/custom/toolbar/toolbar.html", "Toolbar", { source: ["a/One.tsx", "b/Two.tsx"] }))).toBe(
+      "Its sources One.tsx, Two.tsx were deleted. Designs that inserted it keep their copy.",
+    );
+  });
+
+  it("sums up a sync that finished while the app runs, even one that changed nothing, and one that left something", () => {
+    const started = 1_000;
+    expect(afterSyncShown(system({ synced_at: 2_000 }), [], started)).toBe(true);
+    expect(afterSyncLine(system({ synced_at: 2_000 }), [])).toBe("Nothing changed. 0 check problems.");
+    expect(afterSyncShown(system({ synced_at: 500 }), [], started)).toBe(false);
+    expect(afterSyncShown(system({ synced_at: 500 }), cards, started)).toBe(true);
+    expect(afterSyncShown(system({ synced_at: null }), cards, started)).toBe(false);
+  });
+
   it("lists what it changed, each with its name and sources", () => {
     expect(changedRows(synced, cards)).toEqual([
       { path: "components/buttons/button/button.html", label: "Rewritten", name: "Button", sources: "ui.tsx", open: true },
@@ -110,6 +136,14 @@ describe("after a sync (X64)", () => {
       { path: "components/forms/kbd/kbd.html", label: "New", name: "kbd", sources: "ui.tsx", open: false },
       { path: "components/custom/gone/gone.html", label: "Removed", name: "gone", sources: "", open: false },
     ]);
+  });
+});
+
+describe("the docked sync agent (X64)", () => {
+  it("opens by itself while the agent asks something, even when hidden", () => {
+    expect(agentShown(false, system())).toBe(true);
+    expect(agentShown(true, system())).toBe(false);
+    expect(agentShown(true, system({ needs_you: { kind: "question", text: "Which?" } }))).toBe(true);
   });
 });
 
@@ -131,16 +165,19 @@ describe("the card a sync is writing (X64)", () => {
 
 describe("the sync agent's notifications (X64, X65)", () => {
   it("say when it asks, when it needs an approval, and when the sync is done", () => {
+    // `state` is the event a session's would be (X47), for the same settings.
     expect(syncNotice(system(), system({ needs_you: { kind: "question", text: "Which button set is current?" } }))).toEqual({
       title: "Design · moonlet desktop",
       body: "asks: Which button set is current?",
+      state: "blocked",
     });
     expect(syncNotice(system(), system({ needs_you: { kind: "approval", text: "Bash: rm -r .cache" } }))).toEqual({
       title: "Design · moonlet desktop",
       body: "needs your approval: Bash: rm -r .cache",
+      state: "blocked",
     });
-    expect(syncNotice(system({ synced_at: 1 }), system({ synced_at: 2, to_settle: 2 }))).toEqual({ title: "Design · moonlet desktop", body: "moonlet desktop synced · 2 to settle" });
-    expect(syncNotice(system({ synced_at: 1 }), system({ synced_at: 2 }))).toEqual({ title: "Design · moonlet desktop", body: "moonlet desktop synced" });
+    expect(syncNotice(system({ synced_at: 1 }), system({ synced_at: 2, to_settle: 2 }))).toEqual({ title: "Design · moonlet desktop", body: "moonlet desktop synced · 2 to settle", state: "done" });
+    expect(syncNotice(system({ synced_at: 1 }), system({ synced_at: 2 }))).toEqual({ title: "Design · moonlet desktop", body: "moonlet desktop synced", state: "done" });
   });
 
   it("say nothing for the same question, or nothing new", () => {

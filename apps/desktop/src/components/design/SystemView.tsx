@@ -16,7 +16,7 @@ import { cx } from "../../lib/cx";
 import { AgentIcon, Button, IconButton } from "../ui";
 import { Menu } from "../Menu";
 import { AfterSyncBar, ChangedSection, NeedsYouSection, StepBar } from "./SyncParts";
-import { rewritingCard, stepBar } from "../../lib/designSync";
+import { agentShown, rewritingCard, stepBar } from "../../lib/designSync";
 import { chatKey, useChat } from "../../lib/chat";
 import { askConfirm } from "../../lib/confirm";
 import { AgentView } from "../AgentView";
@@ -119,11 +119,13 @@ export function DesignSystemView({ host, workspace, sys, label, working, inset }
   const status = statusLine(sys);
   const steps = stepBar(sys, working);
   // The card the agent is writing: from its chat, in the system's folder.
+  const agentDir = useStore((s) => (agent !== null ? s.terminals[host]?.[agent]?.cwd : undefined));
   const rewriting = useChat((c) => {
     const items = agent !== null && working ? c.chats[chatKey(host, agent)]?.items : undefined;
-    const dir = agent !== null ? useStore.getState().terminals[host]?.[agent]?.cwd : undefined;
-    return items && dir ? rewritingCard(items, dir) : null;
+    return items && agentDir ? rewritingCard(items, agentDir) : null;
   });
+  // Hidden as the user left it, but open while the agent asks something.
+  const showAgent = agent !== null && agentShown(hidden, sys);
   const stop = () => agent !== null && void rpc(host, M.chatInterrupt, { id: agent }).catch(errorToast);
   const sync = () => void rpc(host, M.designSystemSync, { workspace, slug: sys.slug }).catch(errorToast);
   const remove = async () => {
@@ -164,7 +166,7 @@ export function DesignSystemView({ host, workspace, sys, label, working, inset }
                   <RotateCw size={12} /> Sync
                 </Button>
               )}
-              {agent !== null && hidden && (
+              {agent !== null && !showAgent && (
                 <Button size="sm" variant="ghost" className="no-drag" onClick={() => setHidden(false)}>
                   Show agent
                 </Button>
@@ -241,7 +243,7 @@ export function DesignSystemView({ host, workspace, sys, label, working, inset }
           </>
         )}
       </div>
-      {agent !== null && !hidden && (
+      {agent !== null && showAgent && (
         <section aria-label={`Design · ${sys.name}`} className="flex w-[440px] shrink-0 flex-col border-l border-border">
           <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3 ui-text-12.5">
             <AgentIcon agent="claude" size={13} />

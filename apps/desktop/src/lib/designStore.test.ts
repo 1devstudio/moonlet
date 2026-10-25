@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DesignSystem } from "./protocol";
+import { useStore } from "./store";
 import { cardsOf, createSystem, detectStack, loadCards, loadSystems, openCard, revOf, shownCard, shownSystem, showSystem, startDesign, systemsOf, useDesign } from "./designStore";
 
 const calls = vi.hoisted(() => [] as { host: string; method: string; params: unknown }[]);
@@ -229,6 +230,34 @@ describe("the sync agent's notifications (X64, X65)", () => {
       { title: "Design · moonlet desktop", body: "asks: Which button set is current?" },
       { title: "Design · moonlet desktop", body: "moonlet desktop synced · 1 to settle" },
     ]);
+  });
+});
+
+describe("the sync agent's notifications, as the settings say (X47, X65)", () => {
+  it("follow the banner settings for a question and for a finished sync", async () => {
+    shown.length = 0;
+    useStore.setState((st) => ({ settings: { ...st.settings, banners: { blocked: false } } }));
+    answers["design.systems"] = () => [system()];
+    await loadSystems("local", "w-quiet");
+    answers["design.systems"] = () => [system({ needs_you: { kind: "question", text: "Which?" } })];
+    await loadSystems("local", "w-quiet");
+    answers["design.systems"] = () => [system({ synced_at: 9 })];
+    await loadSystems("local", "w-quiet");
+    await settle();
+    expect(shown).toEqual([{ title: "Design · moonlet desktop", body: "moonlet desktop synced" }]);
+    useStore.setState((st) => ({ settings: { ...st.settings, banners: {} } }));
+  });
+});
+
+describe("every workspace's design systems (X64, X65)", () => {
+  it("are listed once a host is connected, so a sync started from a session notifies too", async () => {
+    answers["design.systems"] = () => [];
+    useStore.setState({
+      hosts: { local: { id: "local", label: "This Mac", remote: false, status: "connected", message: null, daemon_version: null, hostname: null, home: null } },
+      workspaces: { local: [{ id: "w-everyone", name: "Everyone", color: "clay", section_ids: [], created_at: 0 }] },
+    });
+    await settle();
+    expect(listed().some((c) => (c.params as { workspace: string }).workspace === "w-everyone")).toBe(true);
   });
 });
 

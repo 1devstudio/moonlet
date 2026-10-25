@@ -71,7 +71,7 @@ A design system belongs to a moonlet workspace, so every project and design in t
    - a card the user had edited, with theirs and the synced version side by side, and **Keep mine** or **Use synced**
    - an orphaned card, whose source was deleted, with **Keep for now** or **Remove card**
 
-   **Changed by this sync** lists each card rewritten or new, with its source and **View**.
+   **Changed by this sync** lists each card rewritten, new or removed, with its source and **View**.
 8. An agent in any session can start a sync: `/moonlet-design sync` runs `"$MOONLET_BIN" design system sync`, or `design system new --from <project>` when there is no design system yet.
 
 ## Behaviour and acceptance criteria
@@ -218,13 +218,14 @@ A sync runs for a long time and may need the user: a question the code cannot se
 - [ ] The skill keeps approvals rare: files are read, searched and written with Claude Code's own tools (Read, Grep, Glob, Write, Edit), which run without asking in Accept edits, and Bash is kept for the three `moonlet` commands it may run.
 - [ ] The skill asks only what the code and `config.toml` cannot settle, one question at a time, with the agent's recommendation first.
 - [ ] While the sync agent waits for an answer or an approval:
-  - the step bar's current step reads **Needs you**, with the question's first line
-  - the design system's sidebar row says `needs you`, in the attention colour
-  - the docked chat opens on the question or approval, as the structured chat shows them (X6: the question card with its options, the approval card with Allow and Deny)
-  - a notification (X47) says `Design · <name> asks: <question>` or `Design · <name> needs your approval: <command>`, and clicking it opens the design system with its chat
-  - the approval also waits in the approval inbox (A5), labelled `Design · <name>`
-- [ ] A sync started from a session (`/moonlet-design sync`) raises its questions the same way: in Design mode and as a notification, never in the session that started it.
+  - the step bar's current step reads **Needs you**, with the question's first line (`lib/designSync.test.ts` reads Needs you with the question's first line while the agent waits)
+  - the design system's sidebar row says `needs you`, in the attention colour (`lib/design.test.ts` says needs you over everything while its agent waits for an answer or an approval)
+  - the docked chat opens on the question or approval, also when the user hid it, as the structured chat shows them (X6: the question card with its options, the approval card with Allow and Deny) (`lib/designSync.test.ts` opens by itself while the agent asks something, even when hidden)
+  - a notification (X47) says `Design · <name>` with `asks: <question>` or `needs your approval: <command>`, by the same banner and focus settings as a session's; the sync agent never sends a session's per-turn alert (`lib/designSync.test.ts` say when it asks, when it needs an approval, and when the sync is done; `lib/designStore.test.ts` follow the banner settings for a question and for a finished sync; `lib/alerts.test.ts` never alerts like a session: Design mode notifies for it). Clicking it to open the design system, and the approval inbox (A5) label `Design · <name>`, come later: notifications carry no click target yet
+- [ ] A sync started from a session (`/moonlet-design sync`) raises its questions the same way: in Design mode and as a notification, never in the session that started it. The app lists every connected workspace's design systems, so this holds before Design mode was ever opened (`lib/designStore.test.ts` are listed once a host is connected, so a sync started from a session notifies too).
 - [ ] Answering resumes the sync where it stopped; the step bar goes back to the step's progress.
+- [ ] While the agent works, the step bar shows each reported step's result, the step at work and the steps to come; **Stop sync** (beside **Hide agent**, as the boards show) ends its turn, and a sync stopped before it was recorded shows where it stopped. The card the agent is writing reads **Rewriting** (`lib/designSync.test.ts` shows each step's result, the one at work, and the steps to come; says a sync stopped before it was recorded, and shows nothing when no sync is under way; is the card its running Write or Edit is on; `e2e/specs/design-sync.e2e.ts` shows each step's result while its agent works).
+- [ ] After a sync recorded while the app runs, or while one left changes or something to settle, a green bar says "Sync finished" with what it did and what is left (rewritten, new, removed, changes to settle, orphaned, check problems; "Nothing changed" when that is all), with **Open agent** and Dismiss. **Needs you** shows a card edited by hand with yours beside the sync's version (**Keep mine**, **Use synced**) and an orphan (**Keep for now**, **Remove card**; an orphan with proposals is listed both ways). **Changed by this sync** lists each card rewritten, new or removed, with its sources and **View** (`lib/designSync.test.ts` sums up what it did and what is left to the user; sums up a sync that finished while the app runs, even one that changed nothing, and one that left something; lists a card edited by hand beside its proposal, and an orphan not kept; lists what it changed, each with its name and sources; `e2e/specs/design-sync.e2e.ts` stops the sync, then shows what it left: a card edited by hand beside the sync's version; takes the sync's version with Use synced, and nothing is left to settle; keeps an orphan for now, and it no longer waits to be settled).
 - [ ] `design.systems` gives each system `needs_you`: `null`, or `{kind: "question" | "approval", text}` from its agent chat's pending asks, so the sidebar and the step bar can show it without opening the chat (`design/agent.rs` the_first_pending_ask_says_what_the_agent_needs; `moonletd/tests/daemon.rs` a_waiting_sync_agent_shows_in_the_design_system_list).
 - [ ] **Tokens.** The agent writes `tokens/`, `fonts/`, `guidelines/` and `styles.css`, then runs the check.
 - [ ] **Cards.** The agent writes `components.css`, the cards and the `.prompt.md` files. It does 2–3 diverse components itself first (one compound, one with many states, one text-heavy), then hands the rest to subagents in disjoint batches. A subagent edits only its own cards and notes, and never runs the whole check. A cause shared by two or more cards stops the batch and goes to `NOTES.md` as `[GENERAL]`. The agent runs `design check --render` and fixes until nothing is `bad`, at most 3 rounds, and records accepted warnings in `NOTES.md`.
@@ -361,10 +362,12 @@ While the spec is a draft, the plan names test files and areas. Each criterion g
   - group counts and the problem dot
   - the "sources changed" banner text
   - the after-sync summary and the Needs you list
-- e2e `design-systems.e2e.ts`, with a fixture design system in a scratch home and a fake agent binary that writes fixture files:
+- e2e `design-systems.e2e.ts`, with a fixture design system in a scratch home:
   - Design mode lists it and shows its cards
   - a check problem shows the badge, and the card page shows the line
-  - a fake sync goes through the step bar and ends with a change to settle
+- e2e `design-sync.e2e.ts`, with a fake agent that stays at work until it is stopped:
+  - a sync goes through the step bar, stops, and ends with a change to settle, taken with **Use synced**
+  - an orphan kept for now waits no more
 - Manual: build a design system of moonlet's own desktop app and compare its cards with the running app and with `apps/desktop/src/ds`.
 
 ## Delivery

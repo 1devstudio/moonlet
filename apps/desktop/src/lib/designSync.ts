@@ -37,7 +37,8 @@ export function stepBar(sys: DesignSystem, working: boolean): StepCell[] | null 
 }
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
-const base = (path: string) => path.split("/").pop() ?? path;
+/** A path's file name. */
+export const base = (path: string) => path.split("/").pop() ?? path;
 
 /** "2 cards rewritten, 1 new, 1 change to settle, 1 orphaned. 0 check problems." */
 export function afterSyncLine(sys: DesignSystem, cards: DesignCard[]): string {
@@ -69,8 +70,35 @@ export function needsYou(cards: DesignCard[]): NeedsYouItem[] {
   const edited = cards
     .filter((c) => c.proposals.length > 0)
     .map((card) => ({ kind: "edited" as const, card, proposal: card.proposals.find((p) => p.endsWith(".proposed.html")) ?? null }));
-  const orphaned = cards.filter((c) => c.orphaned && !c.kept && c.proposals.length === 0).map((card) => ({ kind: "orphaned" as const, card, proposal: null }));
+  // An orphan with proposals is listed both ways: its proposals can be settled, and it can go.
+  const orphaned = cards.filter((c) => c.orphaned && !c.kept).map((card) => ({ kind: "orphaned" as const, card, proposal: null }));
   return [...edited, ...orphaned];
+}
+
+/** The sync's version beside a card edited by hand: its proposed HTML, or
+ *  the files it proposes when it left the HTML alone. */
+export function proposalLabel(item: NeedsYouItem): string {
+  return item.proposal ? base(item.proposal) : item.card.proposals.map(base).join(", ");
+}
+
+/** What an orphan says of the sources it was made from. */
+export function orphanLine(card: DesignCard): string {
+  const files = card.source.map(base).join(", ") || "file";
+  return `Its ${card.source.length > 1 ? `sources ${files} were` : `source ${files} was`} deleted. Designs that inserted it keep their copy.`;
+}
+
+/** Whether the "Sync finished" bar shows: after a sync recorded while the
+ *  app runs (even one that changed nothing), or while one left changes or
+ *  something to settle. */
+export function afterSyncShown(sys: DesignSystem, cards: DesignCard[], appStartedAt: number): boolean {
+  if (sys.synced_at === null) return false;
+  return sys.synced_at >= appStartedAt || sys.last_sync.length > 0 || needsYou(cards).length > 0;
+}
+
+/** Whether the docked sync agent shows: as the user left it, and always
+ *  while it asks something or waits for an approval. */
+export function agentShown(hidden: boolean, sys: DesignSystem): boolean {
+  return !hidden || !!sys.needs_you;
 }
 
 export interface ChangedRow {
@@ -110,14 +138,14 @@ export function rewritingCard(items: ChatItem[], systemDir: string): string | nu
 
 /** The notification a change of a design system calls for (X65): its agent
  *  asks or needs an approval, or the sync was recorded; else null. */
-export function syncNotice(before: DesignSystem, after: DesignSystem): { title: string; body: string } | null {
+export function syncNotice(before: DesignSystem, after: DesignSystem): { title: string; body: string; state: "blocked" | "done" } | null {
   const title = `Design · ${after.name}`;
   const asks = after.needs_you;
   if (asks && (asks.kind !== before.needs_you?.kind || asks.text !== before.needs_you?.text)) {
-    return { title, body: `${asks.kind === "question" ? "asks" : "needs your approval"}: ${asks.text}` };
+    return { title, body: `${asks.kind === "question" ? "asks" : "needs your approval"}: ${asks.text}`, state: "blocked" };
   }
   if (after.synced_at !== null && after.synced_at !== before.synced_at) {
-    return { title, body: `${after.name} synced${after.to_settle ? ` · ${after.to_settle} to settle` : ""}` };
+    return { title, body: `${after.name} synced${after.to_settle ? ` · ${after.to_settle} to settle` : ""}`, state: "done" };
   }
   return null;
 }

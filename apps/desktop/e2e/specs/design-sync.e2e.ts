@@ -2,7 +2,7 @@
 // works, Stop sync, then what the sync left: a card edited by hand beside the
 // sync's version, settled with Use synced, and Changed by this sync.
 
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { $, expect } from "@wdio/globals";
 import { projectId, rpc, sel, world } from "../fixtures";
@@ -86,5 +86,21 @@ describe("Design system sync", () => {
     await $('//section[@aria-label="Needs you"]').$(sel.button("Use synced")).click();
     await expect($('//section[@aria-label="Needs you"]')).not.toBeExisting();
     expect(readFileSync(join(dir(), "components/custom/row/row.html"), "utf8")).toContain("Saved carts, from the sync");
+  });
+
+  it("keeps an orphan for now, and it no longer waits to be settled", async () => {
+    // A card made from a file the project then deletes.
+    const source = join(w.repo, "Toolbar.md");
+    writeFileSync(source, "toolbar\n");
+    put("components/custom/toolbar/toolbar.html", `<!-- @dsCard group="Custom" name="Toolbar" source="Toolbar.md" -->\n${head}<body><nav>Toolbar</nav></body></html>\n`);
+    rpc(w, "design.system.synced", { workspace: workspaceId(), slug: SLUG });
+    rmSync(source);
+    rpc(w, "design.system.progress", { workspace: workspaceId(), slug: SLUG, step: "inventory", summary: "1 gone" });
+    rpc(w, "design.system.synced", { workspace: workspaceId(), slug: SLUG });
+    const orphan = $('//section[@aria-label="Needs you"]//div[contains(., "Toolbar · Custom · orphaned")]');
+    await expect(orphan).toHaveText(expect.stringContaining("Its source Toolbar.md was deleted."));
+    await orphan.$(sel.button("Keep for now")).click();
+    await expect($('//section[@aria-label="Needs you"]')).not.toBeExisting();
+    await expect($('//nav[@aria-label="Design systems"]//button[.//span[normalize-space()="Checkout kit"]]')).not.toHaveText(expect.stringContaining("to settle"));
   });
 });
