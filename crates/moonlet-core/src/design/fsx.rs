@@ -60,6 +60,13 @@ pub(crate) fn write_inside(root: &Path, path: &Path, bytes: &[u8]) -> Result<()>
 /// Replaces the file `name` in the folder `dir` with `bytes`, through a
 /// temporary file renamed over it within that folder.
 fn replace_in(dir: &Dir, name: &std::ffi::OsStr, bytes: &[u8]) -> Result<()> {
+    let tmp = stage(dir, name, bytes)?;
+    commit(dir, &tmp, name)
+}
+
+/// `bytes` written to a new temporary file beside `name` in `dir`, for
+/// [`commit`] to put in its place; its name.
+fn stage(dir: &Dir, name: &std::ffi::OsStr, bytes: &[u8]) -> Result<String> {
     let tmp = format!(
         ".{}.moonlet-{}-{}",
         name.to_string_lossy(),
@@ -70,11 +77,18 @@ fn replace_in(dir: &Dir, name: &std::ffi::OsStr, bytes: &[u8]) -> Result<()> {
         use std::io::Write;
         // `create_new` refuses an existing file or link at the temporary name.
         let mut f = dir.open_with(&tmp, OpenOptions::new().write(true).create_new(true))?;
-        f.write_all(bytes)?;
+        f.write_all(bytes).inspect_err(|_| {
+            let _ = dir.remove_file(&tmp);
+        })?;
     }
-    // A rename replaces the entry at `name`, a link included, never its target.
-    dir.rename(&tmp, dir, name).inspect_err(|_| {
-        let _ = dir.remove_file(&tmp);
+    Ok(tmp)
+}
+
+/// The file [`stage`] wrote put at `name`. A rename replaces the entry at
+/// `name`, a link included, never its target.
+fn commit(dir: &Dir, tmp: &str, name: &std::ffi::OsStr) -> Result<()> {
+    dir.rename(tmp, dir, name).inspect_err(|_| {
+        let _ = dir.remove_file(tmp);
     })?;
     Ok(())
 }
@@ -89,7 +103,10 @@ const UPDATE_TRIES: usize = 8;
 /// replace go through that handle, so a folder swapped for a link meanwhile
 /// is never followed. When another writer, such as the design's agent,
 /// changed the file after it was read, it is read again and edited from
-/// there, so that writer's change is kept.
+/// there, so that writer's change is kept. The new text is written aside
+/// before the last read, so only the rename follows it: a write by another
+/// process in that moment is still replaced, as no rename can compare
+/// first. Moonlet's own writers of a file take a lock around this.
 pub(crate) fn update_inside(
     root: &Path,
     rel: &Path,
@@ -144,12 +161,15 @@ fn update(
     for _ in 0..UPDATE_TRIES {
         let before = read(&dir)?;
         let after = edit(before.as_deref().unwrap_or(""))?;
+        // Written aside first, so the last read is right before the rename.
+        let tmp = stage(&dir, name, after.as_bytes())?;
         before_replace();
         // Changed, or made, since it was read: start again from the newest text.
         if read(&dir)? != before {
+            let _ = dir.remove_file(&tmp);
             continue;
         }
-        return replace_in(&dir, name, after.as_bytes());
+        return commit(&dir, &tmp, name);
     }
     anyhow::bail!("{} kept changing while it was saved", rel.display())
 }

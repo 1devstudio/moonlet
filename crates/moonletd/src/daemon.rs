@@ -1175,6 +1175,10 @@ impl Daemon {
                     if r.render {
                         return Err(RpcError::new("invalid_params", "render checks a design system's cards"));
                     }
+                    // `--fix` saves pages: never between a save's check of
+                    // its version and its replace.
+                    let lock = self.pages_lock(&r.workspace, &design);
+                    let _held = if r.fix { Some(lock.lock().await) } else { None };
                     return ok(blocking(move || store.check_design(&r.workspace, &design, r.fix)).await?);
                 }
                 if r.fix {
@@ -1326,6 +1330,8 @@ impl Daemon {
             }
             m::DESIGN_WRITE_PAGE => {
                 let r: m::DesignWritePage = params(p)?;
+                let lock = self.pages_lock(&r.workspace, &r.slug);
+                let _held = lock.lock().await;
                 let version = blocking(move || store.write_page(&r.workspace, &r.slug, &r.page, &r.html, &r.base_version)).await?;
                 ok(m::DesignPageWritten { version })
             }
@@ -1525,6 +1531,15 @@ impl Daemon {
     /// lock, so a comment never waits for an agent to start.
     fn comments_lock(&self, workspace: &str, slug: &str) -> Arc<tokio::sync::Mutex<()>> {
         self.design_lock(workspace, &format!("comments/{slug}"))
+    }
+
+    /// The lock of one workspace design's pages (X65): one save of them by
+    /// moonlet at a time, `design.write_page` or `check --fix`, so a save's
+    /// check of the version it was made over and its replace are never
+    /// split by another of moonlet's. Another writer, such as the design's
+    /// agent, does not take it (see `Store::write_page`).
+    fn pages_lock(&self, workspace: &str, slug: &str) -> Arc<tokio::sync::Mutex<()>> {
+        self.design_lock(workspace, &format!("pages/{slug}"))
     }
 
     /// The chat of a design system's sync agent, while it still is that system's.
