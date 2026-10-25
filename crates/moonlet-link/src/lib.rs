@@ -309,6 +309,20 @@ impl Host {
         Ok(transfer)
     }
 
+    /// Sends output of routed command `run` to the central host (X62):
+    /// `stream` 1 is stdout, 2 stderr.
+    pub fn send_run_output(&self, run: u32, stream: u8, data: Vec<u8>) -> Result<(), RpcError> {
+        let link = self.link.lock().unwrap();
+        let link = link
+            .as_ref()
+            .ok_or_else(|| RpcError::new("disconnected", "not connected"))?;
+        let bytes = encode_frame(&Frame::RunOutput { run, stream, data })
+            .map_err(|e| RpcError::new("too_large", e.to_string()))?;
+        link.tx
+            .send(bytes)
+            .map_err(|_| RpcError::new("disconnected", "connection closed"))
+    }
+
     /// The pack the daemon sent as `transfer`, once it is whole; once.
     pub fn take_pack(&self, transfer: u32) -> Option<Vec<u8>> {
         self.packs.lock().unwrap().take(transfer)

@@ -311,6 +311,13 @@ where
                 Frame::Input { terminal, data } => {
                     let _ = daemon.terminals.write(terminal, data);
                 }
+                // A worker's routed command's output, for `moonlet exec`
+                // (X62); from anyone else, nothing.
+                Frame::RunOutput { run, stream, data } => {
+                    if conn.client == crate::link::WORKER_CLIENT {
+                        daemon.runs.forward(conn.id, run, stream, data);
+                    }
+                }
                 // Before the request that names it is read (X60). Only a
                 // worker's daemon sends packs; from anyone else, or over the
                 // limits, they end the connection.
