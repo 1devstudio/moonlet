@@ -197,6 +197,13 @@ export function newRemovalErrors(prev: CloudMachine[] | null, next: CloudMachine
   return next.filter((m) => m.state === "removing" && m.error && !prev.find((p) => p.id === m.id)?.error);
 }
 
+/** The line under the provider cards: which providers moonlet has (X67). */
+export function providersLine(kinds: CloudKind[]): string {
+  if (kinds.length === 0) return "";
+  if (kinds.length === 1) return `${kinds[0].label} is the only provider so far.`;
+  return `${joinNames(kinds.map((k) => k.label))} so far.`;
+}
+
 /** A provider as its errors name it: "Hetzner" for `hetzner`. */
 export const providerName = (id: string): string => id.charAt(0).toUpperCase() + id.slice(1);
 
