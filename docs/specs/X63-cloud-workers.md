@@ -182,6 +182,7 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
   - **Machine type**, a dropdown from `machine_types` at that location, shown as "cpx41 · 8 cores · 16 GB · x86";
   - **Image**, a dropdown from `images`, for the picked type's architecture, each name once, the provider's in name order and snapshots after, shown as "Ubuntu 24.04 (ubuntu-24.04)";
   - a saved location, type or image that the provider no longer lists stays in its dropdown, so opening the page changes nothing;
+  - each dropdown is off until the one it depends on is picked: **Machine type** until a location ("Pick a location first"), **Image** until a machine type ("Pick a machine type first");
   - **Machine setup**, read-only from `[heavy] machine_setup` ("Runs as root on each new machine, after moonlet pairs it.");
   - a footer, "4 machines for shop · 2 running commands · Workers", with **Start a machine**.
   - under the toggle, the note "Cloud machines get every tracked file of the session, and untracked files that are not ignored. Remove secrets from the files, not only from the history."

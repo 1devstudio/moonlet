@@ -199,9 +199,9 @@ export function CloudSection({ host, project, cloud, machineSetup }: { host: str
                 ))}
               </select>
             </Row>
-            <Row label="Image" htmlFor="project-cloud-image" hint={images?.error ? <span className="text-error">{images.error}</span> : hint(arch ? `The provider's images for ${arch} machines, and your project's snapshots.` : "The provider's images, and your project's snapshots.", errors.image)}>
-              <select id="project-cloud-image" aria-invalid={!!errors.image} className={cx(fieldCls, "w-[260px]")} value={draft.image} onChange={(e) => set({ image: e.target.value })}>
-                <option value="">{images ? "Pick an image…" : "Loading…"}</option>
+            <Row label="Image" htmlFor="project-cloud-image" hint={images?.error ? <span className="text-error">{images.error}</span> : hint(arch ? `The provider's images for ${arch} machines, and your project's snapshots.` : "Images depend on the machine type's architecture.", errors.image)}>
+              <select id="project-cloud-image" aria-invalid={!!errors.image} disabled={!draft.type} className={cx(fieldCls, "w-[260px]")} value={draft.image} onChange={(e) => set({ image: e.target.value })}>
+                <option value="">{draft.type ? (images ? "Pick an image…" : "Loading…") : "Pick a machine type first"}</option>
                 {imageOptions(images?.list ?? null, arch, draft.image).map((o) => (
                   <option key={o.value} value={o.value}>
                     {o.label}
