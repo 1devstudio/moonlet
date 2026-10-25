@@ -60,6 +60,13 @@ export function isOrphaned(pin: DesignComment, mids: PageMids): boolean {
   return !!there && !there.includes(pin.mid);
 }
 
+/** A page's reported `data-mid`s with `mid`, an element picked since the
+ *  report, which counts as there until the page reports again; a page not
+ *  reported since the app started stays not known (undefined). */
+export function withMid(there: readonly string[] | undefined, mid: string): readonly string[] | undefined {
+  return !there || there.includes(mid) ? there : [...there, mid];
+}
+
 /** What the Comments tab shows. */
 export interface CommentsTab {
   /** The pins listed: open ones whose element is there, or the resolved ones. */

@@ -5,9 +5,10 @@
 // talks to it only through postMessage (src/lib/designBridge.ts checks every
 // message it posts).
 //
-// It reports the page's data-mids once loaded, and again whenever the app
-// asks (bridge.hello), so a report sent before the app listened is not lost;
-// in Comment mode it outlines
+// It reports the page's data-mids once loaded, again whenever the app asks
+// (bridge.hello), so a report sent before the app listened is not lost, and
+// again when the page's scripts add, remove or renumber elements; in
+// Comment mode it outlines
 // the element under the pointer, inside the page, and reports a click's
 // element (⌥-click: its parent) instead of letting the page have the click;
 // it reports the boxes of the pinned elements when asked, and again on load,
@@ -77,8 +78,22 @@
     });
   };
 
-  if (document.readyState === "loading") addEventListener("DOMContentLoaded", reportMids, { once: true });
-  else reportMids();
+  // Again after the page's scripts change its elements (a menu, a tab panel
+  // or a dialog they add), once a burst of changes ends; the bridge's own
+  // outline is no change of the page.
+  const own = (n) => n.nodeType === 1 && n.hasAttribute("data-moonlet-bridge");
+  const ofPage = (r) => r.type === "attributes" || ![...r.addedNodes, ...r.removedNodes].every(own);
+  let midsTimer = null;
+  const watch = () => {
+    reportMids();
+    new MutationObserver((records) => {
+      if (!records.some(ofPage)) return;
+      clearTimeout(midsTimer);
+      midsTimer = setTimeout(reportMids, 100);
+    }).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-mid"] });
+  };
+  if (document.readyState === "loading") addEventListener("DOMContentLoaded", watch, { once: true });
+  else watch();
   addEventListener("load", rectsSoon);
   addEventListener("resize", rectsSoon);
   addEventListener("scroll", rectsSoon, true);
