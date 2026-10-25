@@ -716,6 +716,21 @@ pub(crate) fn arch() -> &'static str {
     }
 }
 
+/// How a retiring cloud machine (X63) leaves its tailnet: as `moonlet`, with
+/// the one sudo rule its cloud-init wrote, so moonletd needs no other say
+/// over tailscaled. `stub`, from `MOONLET_TAILSCALE`, is the fake provider's.
+fn logout_command(
+    stub: Option<std::ffi::OsString>,
+) -> (std::ffi::OsString, Vec<std::ffi::OsString>) {
+    match stub {
+        Some(stub) => (stub, vec!["logout".into()]),
+        None => (
+            "sudo".into(),
+            vec!["-n".into(), "/usr/bin/tailscale".into(), "logout".into()],
+        ),
+    }
+}
+
 /// A host's news for its link, with the host's generation.
 struct LinkEvents(Weak<WorkerLink>, u64);
 
@@ -760,9 +775,9 @@ impl Requests for WorkerRequests {
                     }
                     // The fake provider (X63) points this at a stub, so a test
                     // never logs the machine running it out of its tailnet.
-                    let tailscale = std::env::var_os("MOONLET_TAILSCALE").unwrap_or_else(|| "tailscale".into());
-                    let logout = tokio::process::Command::new(tailscale)
-                        .arg("logout")
+                    let (program, args) = logout_command(std::env::var_os("MOONLET_TAILSCALE"));
+                    let logout = tokio::process::Command::new(program)
+                        .args(args)
                         .stdin(std::process::Stdio::null())
                         .stdout(std::process::Stdio::null())
                         .stderr(std::process::Stdio::null())
@@ -856,6 +871,23 @@ mod tests {
 
     fn file(dir: &tempfile::TempDir) -> PathBuf {
         dir.path().join("link.json")
+    }
+
+    #[test]
+    fn a_retiring_cloud_machine_logs_out_through_its_one_sudo_rule() {
+        // Cloud-init allows `moonlet` exactly this command as root.
+        assert_eq!(
+            logout_command(None),
+            (
+                "sudo".into(),
+                vec!["-n".into(), "/usr/bin/tailscale".into(), "logout".into()]
+            )
+        );
+        // The fake provider's stub, in tests.
+        assert_eq!(
+            logout_command(Some("/tmp/fake/tailscale".into())),
+            ("/tmp/fake/tailscale".into(), vec!["logout".into()])
+        );
     }
 
     #[test]
