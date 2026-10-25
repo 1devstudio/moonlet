@@ -2,7 +2,7 @@
 // canvas with its page tabs, viewport, zoom, bar and the page in a sandboxed
 // frame on a host of its own; and the New design dialog.
 
-import { ArrowRight, ChevronDown, LayoutGrid, Loader2, MessageSquare, Minus, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Plus, SwatchBook, Trash2 } from "lucide-react";
+import { ArrowRight, ChevronDown, LayoutGrid, Loader2, Minus, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Plus, SwatchBook, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { errorToast, toast, useStore } from "../../lib/store";
@@ -263,18 +263,12 @@ function OverviewTile({ host, workspace, design, page, label, viewport, onOpen }
   const near = useNear(ref);
   const rev = useDesign((d) => pageRevOf(d, host, workspace, design.slug, page));
   const scale = width ? width / viewport[0] : 0;
-  // Comments come with entry 8; the count is the design's open ones on index.
-  const comments = page === "index" ? design.open_comments : 0;
   return (
     <button aria-label={`${page}.html`} onClick={onOpen} className="flex min-w-0 flex-col text-left">
       <span className="mb-2 flex w-full items-center gap-2 ui-text-12.5">
         <span className="font-mono text-fg">{page}.html</span>
         {label && <span className="truncate text-muted">{label}</span>}
-        {comments > 0 && (
-          <span className="ml-auto flex items-center gap-1 text-faint">
-            <MessageSquare size={12} /> {comments}
-          </span>
-        )}
+        {/* Each page's open comments come with comments (entry 8). */}
       </span>
       <div ref={ref} className="w-full overflow-hidden rounded-md border border-border-strong hover:border-accent">
         {scale > 0 && <CardFrame url={pageUrl(workspace, design.slug, page, rev)} title={`${page}.html`} viewport={viewport} scale={scale} live={near} />}
