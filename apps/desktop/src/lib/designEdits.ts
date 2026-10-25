@@ -204,14 +204,80 @@ export function applyEdit(html: string, op: EditOp, floor = 0): Edit {
   const want = written(doc);
   if (op.kind === "delete") for (const id of written(find(doc, op.mid))) remove(want, id);
   if (op.kind === "unwrap") remove(want, op.mid);
-  const got = written(parsed(edit.html));
+  const after = parsed(edit.html);
+  const got = written(after);
   const added = [...got];
   for (const id of want) remove(added, id);
   const lost = want.filter((id) => !got.includes(id));
   if (lost.length || (added.length && !["duplicate", "wrap", "paste"].includes(op.kind))) {
     throw new EditRefused(`The page's markup around ${op.kind === "paste" ? (op.after ?? "the body") : op.mid} is tangled: ask the agent to fix it`);
   }
+  // The page read back must be the tree the live page gets: a box the
+  // parser moves out of a <p> or a table's row, or a paste it moves, would
+  // save another page than the canvas shows.
+  if (JSON.stringify(reshaped(doc, edit.live)) !== JSON.stringify(tree(after).top)) {
+    if (op.kind === "wrap") throw new EditRefused(`A box cannot go around ${op.mid} inside <${tagOf(find(doc, op.mid).parentNode)}>`);
+    throw new EditRefused(`The page would not keep its structure around ${op.kind === "paste" ? (op.after ?? "the body") : op.mid}`);
+  }
   return edit;
+}
+
+/** An element in a page's tree: its tag, its id and its child elements. */
+interface Shape {
+  tag: string;
+  mid: string | null;
+  kids: Shape[];
+}
+
+/** The node whose children are `n`'s: a `<template>`'s content. */
+const container = (n: Node): Node => (isElement(n) && n.tagName === "template" && "content" in n ? (n as DefaultTreeAdapterMap["template"]).content : n);
+
+const tagOf = (n: Node | null) => (n && isElement(n) ? n.tagName : "its parent");
+
+/** The tree of `root`'s elements, with each element's own shape and the
+ *  list each node's children are in. */
+function tree(root: Node) {
+  const own = new Map<Element, Shape>();
+  const kidsOf = new Map<Node, Shape[]>();
+  const walk = (n: Node): Shape[] => {
+    const box = container(n);
+    const kids = ("childNodes" in box ? box.childNodes : []).filter(isElement).map((c) => {
+      const s: Shape = { tag: c.tagName, mid: midOf(c), kids: walk(c) };
+      own.set(c, s);
+      return s;
+    });
+    kidsOf.set(box, kids);
+    return kids;
+  };
+  return { top: walk(root), own, kidsOf };
+}
+
+/** The page `doc`'s tree with `live` made on it, as the live page makes it. */
+function reshaped(doc: Node, live: LiveEdit | null): Shape[] {
+  const t = tree(doc);
+  /** The list element `mid` is in, and where. */
+  const place = (mid: string): [Shape[], number] => {
+    const el = find(doc, mid);
+    const list = t.kidsOf.get(el.parentNode!)!;
+    return [list, list.indexOf(t.own.get(el)!)];
+  };
+  if (!live) return t.top;
+  if (live.op === "insert") {
+    const added = tree(parseFragment(live.html)).top;
+    if (live.after !== null) {
+      const [list, i] = place(live.after);
+      list.splice(i + 1, 0, ...added);
+    } else {
+      const body = [...elements(doc)].find((e) => e.tagName === "body");
+      if (body) t.kidsOf.get(body)!.unshift(...added);
+    }
+    return t.top;
+  }
+  const [list, i] = place(live.mid);
+  if (live.op === "remove") list.splice(i, 1);
+  if (live.op === "wrap") list.splice(i, 1, { tag: "div", mid: live.box, kids: [list[i]] });
+  if (live.op === "unwrap") list.splice(i, 1, ...list[i].kids);
+  return t.top;
 }
 
 /** The ids of the elements written in a page's source, in document order. */

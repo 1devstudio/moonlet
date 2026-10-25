@@ -122,6 +122,14 @@ describe("an edit by hand on a page's source (X65)", () => {
     expect(() => applyEdit(PAGE, { kind: "wrap", mid: "m1" })).toThrow(new EditRefused("The page's body stays"));
   });
 
+  it("refuses a box where the browser would not keep it around the element: inside a <p>, or around a table's cell", () => {
+    const para = '<!doctype html>\n<body data-mid="m1">\n<p data-mid="m2">Branch <span data-mid="m3">prefix</span></p>\n</body>\n';
+    expect(() => applyEdit(para, { kind: "wrap", mid: "m3" })).toThrow(new EditRefused("A box cannot go around m3 inside <p>"));
+    const table = '<!doctype html>\n<body data-mid="m1">\n<table data-mid="m2"><tr data-mid="m3"><td data-mid="m4">Git</td></tr></table>\n</body>\n';
+    expect(() => applyEdit(table, { kind: "wrap", mid: "m4" })).toThrow(new EditRefused("A box cannot go around m4 inside <tr>"));
+    expect(applyEdit(table, { kind: "wrap", mid: "m2" }).html).toBe('<!doctype html>\n<body data-mid="m1">\n<div data-mid="m5"><table data-mid="m2"><tr data-mid="m3"><td data-mid="m4">Git</td></tr></table></div>\n</body>\n');
+  });
+
   it("unwraps an element, keeping what is inside it in its place, and selects its first child, else its parent", () => {
     const unwrapped = applyEdit(PAGE, { kind: "unwrap", mid: "m30" });
     expect(unwrapped.html).toBe(withLines(20, 1, '      <span data-mid="m31">Branch prefix</span><input data-mid="m32" class="field" value="marcin/">'));
