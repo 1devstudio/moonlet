@@ -283,7 +283,7 @@ The boards of the design export are the reference. Layout of the design screen:
 - `design.write_page {design, page, html, base_version}` → `{version}`, or the error `stale`
 - `design.comments {design}`, `design.comment.put {…}`, `design.comment.resolve {…}`
 - `design.history {design}`, `design.snapshot.restore {design, n}`
-- `design.open {design}` asks the app to show a design: Design mode for a workspace design, the session's Design tab for a session design. It is sent as the event `design.open {workspace, slug, name, spawned_by?, session?}`. Until entry 12 it takes `{workspace, slug}`. (`moonletd/tests/daemon.rs` design_open_and_a_design_an_agent_starts_reach_the_app)
+- `design.open {design}` asks the app to show a design: Design mode for a workspace design, the session's Design tab for a session design. It is sent as the event `design.open {workspace, slug, name, spawned_by?, session?}`. Until entry 12 it takes `{workspace, slug}`. (`moonletd/tests/daemon.rs` design_open_and_a_design_an_agent_starts_reach_the_app) Like `design.changed`, it goes to the Mac's clients only: a paired phone never hears it. (`moonletd/tests/mobile.rs` phones_do_not_hear_a_design_opened)
 - `design.check {workspace, design, fix?}` checks a workspace design's pages: each element's `data-mid`, and each stylesheet that is not its design system's. With `fix`, the missing and repeated ids are numbered first.
 - `design.changed {workspace, system, design, paths}` names the workspace design whose files changed, its paths relative to the design's folder, and fires for its record too.
 - A design is addressed as `{workspace, slug}` or `{session, slug}`.
