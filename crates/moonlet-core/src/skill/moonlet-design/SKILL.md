@@ -1,6 +1,6 @@
 ---
 name: moonlet-design
-description: "Build or sync a moonlet design system: static HTML cards, tokens and layouts copied from a project's code, for moonlet's Design mode; and write a design's pages on one. Use when your first message asks you to build or sync a design system, when you work in a design's folder, or the user runs /moonlet-design."
+description: "Build or sync a moonlet design system: static HTML cards, tokens and layouts copied from a project's code, for moonlet's Design mode; write a design's pages on one; and in a session, prototype a page as a session design, write its spec from it and build it. Use when your first message asks you to build or sync a design system, when you work in a design's folder, or the user runs /moonlet-design."
 ---
 
 <!-- Installed by moonlet (`moonlet hooks install`); reinstalling overwrites this file. -->
@@ -11,6 +11,8 @@ A **design system** is a folder of static HTML and CSS that shows a project's UI
 
 ## Which branch
 
+- **You work in a session of a project and the user ran `/moonlet-design <brief>`**: make a session design here and write it yourself, in this chat. Follow [A session design](#a-session-design).
+- **The user ran `/moonlet-design new <brief>`** in a session: run `"$MOONLET_BIN" design new --system <slug> "<brief>"`, with the design system `"$MOONLET_BIN" design system ls` lists as built from this project (ask the user when several are). It makes a workspace design with its own agent, which the app offers in a toast. Tell the user, and stop.
 - **You work in a session of a project** (the user ran `/moonlet-design sync`): run `"$MOONLET_BIN" design system ls`. If a design system is built from this project, run `"$MOONLET_BIN" design system sync --system <slug>`; otherwise `"$MOONLET_BIN" design system new "<name>" --from <this project's path>`. Tell the user its own agent now does the work in Design mode, and stop.
 - **You are the sync agent**: your working folder holds `config.toml`, and your first message names the source folders and the path of `moonlet`. On a **build**, do steps 1 to 4. On a **sync**, do the steps of [Sync](#sync).
 - **You are a design's agent**: your working folder holds `design.toml`, and your first message is the user's brief, with the design system's `README.md`. Follow [designs.md](designs.md), the design rules; the rest of this skill is for design systems.
@@ -99,3 +101,29 @@ Your first message lists the cards that changed since the last sync. For each:
 - **Orphaned**: leave it for the user.
 
 Then `moonlet design check`, fix every problem, `moonlet design check --render` and grade each card you wrote (steps 4 and 5 of [Cards](#3-cards)), `moonlet design system progress cards "<done> of <total>"`, and `moonlet design system synced`.
+
+## A session design
+
+A session design lives in this session's worktree and ships in its PR with the spec and the code it leads to.
+
+1. Run `"$MOONLET_BIN" design new --here "<brief>"`. It makes the design on the design system built from this project (when several are, it names them: run it again with `--system <slug>`), prints it as JSON and opens the session's Design tab. Its `path` is the design's folder (`docs/design/<slug>/`, or the project's `[design] dir`); `slug` is its slug.
+2. Read the design system from the copy moonlet made for you: `.moonlet/design/<slug>/system/README.md` first, then its layouts, cards and `.prompt.md` files there. Never edit that copy, nor the pinned `system/` beside the pages.
+3. Write the pages in the design's `pages/` as [designs.md](designs.md) says, in this chat, and label them in its `design.toml`. After each change run `"$MOONLET_BIN" design check --here <slug>`, with `--fix` for missing ids.
+4. The user comments and edits by hand in the Design tab; their comments and edits come to this chat as messages. A message saying the design system was updated lists the cards that changed: use the new ones.
+
+### The spec from the design
+
+Asked to write the spec from the design:
+
+- Add `- **Design:** <design folder>` to the spec's header list.
+- Each criterion about the UI names its page, and names the `data-mid` of the element it describes, such as (`index.html` m24).
+- List the pages you did not choose, each with why, under the criteria.
+
+Then offer **Implement it** and **Back to the design** as the next steps.
+
+### After the build
+
+Once the code is written and its checks pass:
+
+- Save a screenshot of each built screen at its page's viewport (`viewport` in `design.toml`) to `.moonlet/design/<slug>/built/<page>.png`, with `e2e/snap.ts` in moonlet or the project's own screenshot tool. That folder is not committed.
+- Start the PR description with `Spec: <id> · Design: <design folder>`.
