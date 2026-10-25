@@ -1235,19 +1235,29 @@ pub struct DesignSnap {
     pub variant: Option<String>,
 }
 
+/// What the app is asked for a card (X64).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RenderWant {
+    /// The rubric's flags, from what the card measured of itself.
+    Metrics,
+    /// A screenshot.
+    Png,
+}
+
 /// What the app is asked to render (event [`EV_DESIGN_RENDER`]).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DesignRender {
     pub id: u64,
     pub workspace: String,
-    /// Relative to the workspace's design folder, such as
-    /// `systems/<slug>/components/buttons/button/button.html`.
+    /// The design system.
+    pub slug: String,
+    /// The card's path in the system, such as `components/buttons/button/button.html`.
     pub path: String,
     pub viewport: (u32, u32),
     /// The snippet shown alone, by its full id.
     pub variant: Option<String>,
-    /// `metrics`: the rubric's flags; `png`: a screenshot.
-    pub want: String,
+    pub want: RenderWant,
 }
 
 /// The rubric's verdict on a rendered card.
@@ -1271,6 +1281,17 @@ pub struct DesignRenderDone {
     /// Why the card could not be rendered.
     #[serde(default)]
     pub error: Option<String>,
+}
+
+impl DesignRenderDone {
+    /// The rubric's verdict, or why the app has none.
+    pub fn metrics(self) -> Result<RenderMetrics, String> {
+        match (self.error, self.metrics) {
+            (Some(e), _) => Err(e),
+            (None, Some(m)) => Ok(m),
+            (None, None) => Err("the app measured nothing".into()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

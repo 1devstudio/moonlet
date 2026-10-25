@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use moonlet_proto::RpcError;
-use moonlet_proto::methods::{DESIGN_RENDER_DONE, DESIGN_RENDER_READY, DesignRender};
+use moonlet_proto::methods::{DESIGN_RENDER_DONE, DESIGN_RENDER_READY, DesignRender, RenderWant};
 use serde_json::{Value, json};
 use tauri::{AppHandle, LogicalSize, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tokio::sync::{oneshot, watch};
@@ -117,6 +117,7 @@ async fn render(app: &AppHandle, ask: DesignRender) -> Result<Value, String> {
     let job = json!({
         "id": ask.id,
         "workspace": ask.workspace,
+        "slug": ask.slug,
         "path": ask.path,
         "viewport": [w, h],
         "variant": ask.variant,
@@ -132,7 +133,7 @@ async fn render(app: &AppHandle, ask: DesignRender) -> Result<Value, String> {
             return Err("the render page did not answer".into());
         }
     };
-    if ask.want != "png" {
+    if ask.want == RenderWant::Metrics {
         return Ok(json!({"id": ask.id, "metrics": measured.metrics, "error": measured.error}));
     }
     if let Some(e) = measured.error {
