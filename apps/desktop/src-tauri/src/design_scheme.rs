@@ -3,24 +3,41 @@
 //! CSP with no network. `moonlet-design://<workspace>/<path>` names a file of
 //! that workspace's design folder; this Mac's daemon resolves it
 //! (`design.file`), never outside the folder.
+//!
+//! A card framed in the app's window is asked on its own host,
+//! `moonlet-design://<card key>.<workspace>/<path>` (`cardUrl` in
+//! `src/lib/designView.ts` builds it), so WebKit's site isolation gives it a
+//! web process of its own (X64). The key only names the process: the file is
+//! the path's, whichever key asks for it.
 
-/// The policy every file of `workspace` is served with: a page may load only
-/// that workspace's design files, inline styles and scripts, and
-/// `data:`/`blob:` URLs; it cannot fetch, post or frame anything.
-pub fn csp(workspace: &str) -> String {
+/// What a `moonlet-design://` URL names: the host it was asked on (the
+/// workspace, or a card's key and the workspace), the workspace, and the path
+/// (decoded, relative to the workspace's design folder).
+#[derive(Debug, PartialEq, Eq)]
+pub struct Target {
+    pub host: String,
+    pub workspace: String,
+    pub path: String,
+}
+
+/// The policy every file asked on `host` is served with: a page may load
+/// only that host's design files, inline styles and scripts, and
+/// `data:`/`blob:` URLs; it cannot fetch, post or frame anything. A card on
+/// its own host reaches no other card's host, nor another workspace.
+pub fn csp(host: &str) -> String {
     format!(
-        "default-src moonlet-design://{workspace} data: blob: 'unsafe-inline'; connect-src 'none'; form-action 'none'; frame-src 'none'"
+        "default-src moonlet-design://{host} data: blob: 'unsafe-inline'; connect-src 'none'; form-action 'none'; frame-src 'none'"
     )
 }
 
-/// The workspace and the path (decoded, relative to its design folder) a URL
-/// names, or `None` for anything else: another scheme, no workspace, no
-/// path, or a path with an empty, `.` or `..` part.
-pub fn target(url: &str) -> Option<(String, String)> {
+/// What `url` names, or `None` for anything else: another scheme, no
+/// workspace, no path, a path with an empty, `.` or `..` part, or a host
+/// that is neither `<workspace>` nor `<card key>.<workspace>`.
+pub fn target(url: &str) -> Option<Target> {
     let rest = url.strip_prefix("moonlet-design://")?;
     let rest = rest.split(['?', '#']).next().unwrap_or_default();
-    let (workspace, path) = rest.split_once('/')?;
-    if workspace.is_empty() || path.is_empty() {
+    let (host, path) = rest.split_once('/')?;
+    if host.is_empty() || path.is_empty() {
         return None;
     }
     let mut parts = Vec::new();
@@ -31,15 +48,33 @@ pub fn target(url: &str) -> Option<(String, String)> {
         }
         parts.push(part);
     }
+    // A card's key is a DNS label: lowercase letters and digits, 1 to 63.
+    let workspace = match host.split('.').collect::<Vec<_>>()[..] {
+        [workspace] => workspace,
+        [key, workspace]
+            if (1..=63).contains(&key.len())
+                && key
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit()) =>
+        {
+            workspace
+        }
+        _ => return None,
+    };
     // A workspace is an id, never another folder of the design root.
     let workspace = decode(workspace)?;
-    if !workspace
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    if workspace.is_empty()
+        || !workspace
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
     {
         return None;
     }
-    Some((workspace, parts.join("/")))
+    Some(Target {
+        host: host.to_string(),
+        workspace,
+        path: parts.join("/"),
+    })
 }
 
 /// The render check's measuring script (X64), put in a card the render
@@ -92,11 +127,11 @@ pub fn with_script(html: &[u8], script: &[u8]) -> Vec<u8> {
     [&html[..at], script, &html[at..]].concat()
 }
 
-/// The headers of a served file.
-pub fn headers(content_type: &str, workspace: &str) -> [(&'static str, String); 4] {
+/// The headers of a file served on `host`.
+pub fn headers(content_type: &str, host: &str) -> [(&'static str, String); 4] {
     [
         ("Content-Type", content_type.to_string()),
-        ("Content-Security-Policy", csp(workspace)),
+        ("Content-Security-Policy", csp(host)),
         ("X-Content-Type-Options", "nosniff".to_string()),
         // The canvas reloads on every change.
         ("Cache-Control", "no-store".to_string()),
@@ -116,7 +151,12 @@ pub async fn serve(app: &tauri::AppHandle, url: &str) -> tauri::http::Response<V
             .body(body.as_bytes().to_vec())
             .unwrap_or_default()
     };
-    let Some((workspace, path)) = target(url) else {
+    let Some(Target {
+        host,
+        workspace,
+        path,
+    }) = target(url)
+    else {
         return reply(400, "not a design file");
     };
     let hosts = app.state::<Arc<crate::hosts::HostManager>>();
@@ -152,7 +192,7 @@ pub async fn serve(app: &tauri::AppHandle, url: &str) -> tauri::http::Response<V
         body
     };
     let mut res = tauri::http::Response::builder().status(200);
-    for (name, value) in headers(content_type, &workspace) {
+    for (name, value) in headers(content_type, &host) {
         res = res.header(name, value);
     }
     res.body(body).unwrap_or_default()
@@ -227,7 +267,13 @@ mod tests {
 
     #[test]
     fn a_url_names_a_workspace_and_a_file_of_its_design_folder() {
-        let t = |w: &str, p: &str| Some((w.to_string(), p.to_string()));
+        let t = |w: &str, p: &str| {
+            Some(Target {
+                host: w.to_string(),
+                workspace: w.to_string(),
+                path: p.to_string(),
+            })
+        };
         assert_eq!(
             target(
                 "moonlet-design://w-1devstudio/systems/storefront/components/buttons/button/button.html"
@@ -244,6 +290,66 @@ mod tests {
         assert_eq!(
             target("moonlet-design://w1/systems/s/styles.css?v=2#top"),
             t("w1", "systems/s/styles.css")
+        );
+    }
+
+    #[test]
+    fn a_cards_own_host_names_its_key_and_its_workspace() {
+        assert_eq!(
+            target(
+                "moonlet-design://5a1c3e0f9b2d4c67.w-1devstudio/systems/storefront/components/buttons/button/button.html?v=3"
+            ),
+            Some(Target {
+                host: "5a1c3e0f9b2d4c67.w-1devstudio".to_string(),
+                workspace: "w-1devstudio".to_string(),
+                path: "systems/storefront/components/buttons/button/button.html".to_string(),
+            })
+        );
+        // The card's stylesheet, asked on the card's host.
+        assert_eq!(
+            target("moonlet-design://5a1c3e0f9b2d4c67.w1/systems/s/styles.css"),
+            Some(Target {
+                host: "5a1c3e0f9b2d4c67.w1".to_string(),
+                workspace: "w1".to_string(),
+                path: "systems/s/styles.css".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn a_card_host_with_a_bad_key_or_workspace_or_extra_labels_is_refused() {
+        for bad in [
+            // Empty labels.
+            "moonlet-design://.w1/systems/s/styles.css",
+            "moonlet-design://5a1c.//systems/s/styles.css",
+            "moonlet-design://5a1c./systems/s/styles.css",
+            "moonlet-design://5a1c..w1/systems/s/styles.css",
+            // Extra labels.
+            "moonlet-design://a.5a1c.w1/systems/s/styles.css",
+            // A key is lowercase letters and digits, at most 63 of them.
+            "moonlet-design://5A1C.w1/systems/s/styles.css",
+            "moonlet-design://5a_1c.w1/systems/s/styles.css",
+            "moonlet-design://5a-1c.w1/systems/s/styles.css",
+            "moonlet-design://5a%31c.w1/systems/s/styles.css",
+            "moonlet-design://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.w1/systems/s/styles.css",
+            // The workspace is still an id.
+            "moonlet-design://5a1c.w1%2fx/systems/s/styles.css",
+            "moonlet-design://5a1c.%2e%2e/w2/systems/s/styles.css",
+            "moonlet-design://5a1c.w%201/systems/s/styles.css",
+        ] {
+            assert_eq!(target(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_card_on_its_own_host_may_load_only_that_hosts_files() {
+        let h = headers("text/html; charset=utf-8", "5a1c3e0f9b2d4c67.w-1devstudio");
+        let get = |name: &str| h.iter().find(|(n, _)| *n == name).map(|(_, v)| v.as_str());
+        assert_eq!(
+            get("Content-Security-Policy"),
+            Some(
+                "default-src moonlet-design://5a1c3e0f9b2d4c67.w-1devstudio data: blob: 'unsafe-inline'; connect-src 'none'; form-action 'none'; frame-src 'none'"
+            )
         );
     }
 
