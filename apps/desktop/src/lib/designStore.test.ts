@@ -44,7 +44,7 @@ const listed = () => calls.filter((c) => c.method === "design.systems");
 beforeEach(async () => {
   calls.length = 0;
   for (const k of Object.keys(answers)) delete answers[k];
-  useDesign.setState({ systems: {}, shown: {}, cards: {}, card: {}, rev: {} });
+  useDesign.setState({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {} });
   await startDesign();
 });
 

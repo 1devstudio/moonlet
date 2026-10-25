@@ -15,12 +15,12 @@ interface DesignState {
   /** Each design system's cards (`wsKey/slug`), once listed. */
   cards: Record<string, DesignCard[]>;
   /** The card open as the card page in each workspace: its system and path. */
-  card: Record<string, { slug: string; path: string } | null>;
-  /** Each design system's changes so far (`wsKey/slug`), so its frames load again. */
-  rev: Record<string, number>;
+  opened: Record<string, { slug: string; path: string } | null>;
+  /** How many times each design system (`wsKey/slug`) changed, so its frames load again. */
+  changes: Record<string, number>;
 }
 
-export const useDesign = create<DesignState>(() => ({ systems: {}, shown: {}, cards: {}, card: {}, rev: {} }));
+export const useDesign = create<DesignState>(() => ({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {} }));
 
 const systemKey = (host: string, workspace: string, slug: string) => `${wsKey(host, workspace)}/${slug}`;
 
@@ -31,18 +31,18 @@ export function cardsOf(s: DesignState, host: string, workspace: string, slug: s
 
 /** The card of design system `slug` open as the card page, or null. */
 export function shownCard(s: DesignState, host: string, workspace: string, slug: string): string | null {
-  const open = s.card[wsKey(host, workspace)];
+  const open = s.opened[wsKey(host, workspace)];
   return open?.slug === slug ? open.path : null;
 }
 
 /** Opens a card of `slug` as the card page, or (null) goes back to its design system. */
 export function openCard(host: string, workspace: string, slug: string, path: string | null) {
-  useDesign.setState((s) => ({ card: { ...s.card, [wsKey(host, workspace)]: path === null ? null : { slug, path } } }));
+  useDesign.setState((s) => ({ opened: { ...s.opened, [wsKey(host, workspace)]: path === null ? null : { slug, path } } }));
 }
 
 /** How many times design system `slug` changed since the app started. */
 export function revOf(s: DesignState, host: string, workspace: string, slug: string): number {
-  return s.rev[systemKey(host, workspace, slug)] ?? 0;
+  return s.changes[systemKey(host, workspace, slug)] ?? 0;
 }
 
 /** Systems whose cards were asked for, listed or not: listed again when they change. */
@@ -68,7 +68,7 @@ export function shownSystem(s: DesignState, host: string, workspace: string): De
 /** Opens a design system in Design mode's main area. */
 export function showSystem(host: string, workspace: string, slug: string) {
   const key = wsKey(host, workspace);
-  useDesign.setState((s) => ({ shown: { ...s.shown, [key]: slug }, card: { ...s.card, [key]: null } }));
+  useDesign.setState((s) => ({ shown: { ...s.shown, [key]: slug }, opened: { ...s.opened, [key]: null } }));
 }
 
 /** A workspace's design systems; undefined until listed. */
@@ -134,7 +134,7 @@ export async function startDesign() {
         const key = systemKey(e.host, d.workspace, d.system);
         // Its frames load again, and its cards are listed again when asked for
         // (a newer request always lands last).
-        useDesign.setState((s) => ({ rev: { ...s.rev, [key]: (s.rev[key] ?? 0) + 1 } }));
+        useDesign.setState((s) => ({ changes: { ...s.changes, [key]: (s.changes[key] ?? 0) + 1 } }));
         if (cardsWanted.has(key)) void loadCards(e.host, d.workspace, d.system).catch(() => {});
       }
     } else if (e.name === EV.chatState) {

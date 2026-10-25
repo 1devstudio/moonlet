@@ -258,16 +258,20 @@ A sync runs for a long time and may need the user: a question the code cannot se
   - the name
   - "From <project> · synced <age> at <commit> · <n> cards"
   - a "<n> check problems" chip, which filters to those cards
-  - **New design** (X65), **Sync** and `⋯`
-- [ ] A column lists the groups with counts (All, Foundations, Buttons, Forms, Custom, Layouts). A group holding a card with a check problem has a dot. (`lib/designView.test.ts` the design system view's groups, header and sources-changed banner; `e2e/specs/design-systems.e2e.ts`)
-- [ ] Each card shows its name, its variant count and its cells at card scale. A card with a check problem has a yellow outline and a count badge. Its `⋯` menu offers **Open source** (in the project's code viewer, F2), **Comment**, **Edit** and **Copy snippet**.
+  - **New design** (X65), **Sync** and `⋯`, whose **Remove design system…** asks first
+  (`lib/designView.test.ts` the design system view's header (X64); the "<n> check problems" chip counts every problem of the system, as the sidebar does, and filters to the cards that have one, letting go once none has: the cards the view shows (X64))
+  - under it, why the system cannot be read (then no cards show), what its agent waits for, or the step a sync is at (`lib/designView.test.ts` the design system view's status (X64))
+  - a banner while sources changed since the sync, with **Show cards**, which filters to the cards made from them (`lib/designView.test.ts` the sources-changed banner (X64); `e2e/specs/design-systems.e2e.ts` says which source changed since the sync and how many cards a sync rewrites)
+  - cards render on the Mac the design system is on (ADR 0013); another host's workspace says so instead
+- [ ] A column lists the groups with counts (All, Foundations, Buttons, Forms, Custom, Layouts). A group holding a card with a check problem has a dot. (`lib/designView.test.ts` the design system view's groups (X64); `e2e/specs/design-systems.e2e.ts` shows the cards by group, each rendered in its sandboxed frame)
+- [ ] Each card shows its name, its variant count and its cells at card scale. A card with a check problem has a yellow outline and a count badge; its problems include its own `.css` and `.prompt.md`, and a card whose marker does not parse shows in **Without a marker** (`lib/designView.test.ts` a card (X64, X65); `design/store.rs` a_cards_own_files_problems_are_its_own_and_a_card_without_a_marker_is_listed; `e2e/specs/design-systems.e2e.ts` says which source changed since the sync and how many cards a sync rewrites). Its `⋯` menu offers **Open source** (in the project's code viewer, F2), **Comment**, **Edit** and **Copy snippet**.
 - [ ] The card page shows:
   - a breadcrumb (`moonlet desktop / Custom / Session row`)
-  - the card at its viewport and zoom, with View, Comment and Edit (X65)
+  - the card at its viewport and zoom (fitted, then −, + and Fit by steps from 25% to 400%: `lib/designView.test.ts` a card (X64, X65)), with View, Comment and Edit (X65)
   - a side panel with:
     - **Made from**: the source files, and "Changed since the sync at <commit>"
     - the `@dsCard` line
-    - **Check**: each problem with its line, and **Ask the sync agent to fix**
+    - **Check**: each problem with its line, and **Ask the sync agent to fix**, which sends the problems to the running sync agent, once at a time, and never starts a sync (`lib/designView.test.ts` a card (X64, X65))
     - **Snippets**: each id, with copy (`e2e/specs/design-systems.e2e.ts` opens a card with its check problem's line and its snippets)
     - **Comments**: comments wait for the next sync, or are sent now with **Send now**
 - [ ] While a sync runs, the sidebar row says `syncing`, and after it `<n> to settle` until **Needs you** is empty.

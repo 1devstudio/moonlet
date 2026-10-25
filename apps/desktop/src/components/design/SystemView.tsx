@@ -2,22 +2,25 @@
 // rendered in a sandboxed frame on the moonlet-design:// scheme, and one card
 // with where it was made from, its check problems and its snippets.
 
-import { ChevronLeft, Copy, RotateCw, ShieldAlert } from "lucide-react";
+import { ChevronLeft, Copy, Maximize, Minus, MoreHorizontal, Plus, RotateCw, ShieldAlert, Trash2 } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { errorToast, toast, useStore } from "../../lib/store";
 import { rpc } from "../../lib/daemon";
 import { M, type DesignCard, type DesignSystem } from "../../lib/protocol";
 import type { RowLabel } from "../../lib/design";
-import { cardGroups, cardUrl, changedBanner, fitScale, fixMessage, headerLine, variantsLabel, visibleCards } from "../../lib/designView";
+import { cardGroups, cardUrl, changedBanner, fitScale, fixMessage, fixState, headerLine, listedCards, problemsLabel, rendersHere, statusLine, variantsLabel, visibleCards, zoomStep } from "../../lib/designView";
 import { cardsOf, loadCards, openCard, revOf, shownCard, useDesign } from "../../lib/designStore";
 import { workspaceProjects } from "../../lib/tasksStore";
 import { useNow } from "../../lib/useNow";
 import { cx } from "../../lib/cx";
-import { AgentIcon, Button } from "../ui";
+import { AgentIcon, Button, IconButton } from "../ui";
+import { Menu } from "../Menu";
+import { askConfirm } from "../../lib/confirm";
 import { AgentView } from "../AgentView";
 import { useShallow } from "zustand/react/shallow";
 
-const TONES: Record<RowLabel["tone"], string> = { attention: "text-blocked", changed: "text-accent", error: "text-error", muted: "text-faint" };
+/** The colour of a design system's status label (sidebar row and header). */
+export const TONES: Record<RowLabel["tone"], string> = { attention: "text-blocked", changed: "text-accent", error: "text-error", muted: "text-faint" };
 
 /** A card rendered at `scale`: its viewport, in a frame that may run its own
  *  scripts but never reach the app (no `allow-same-origin`). */
@@ -36,23 +39,24 @@ function CardFrame({ url, title, viewport, scale, interactive = false }: { url: 
   );
 }
 
-/** The width an element has, kept up to date. */
-function useWidth<T extends HTMLElement>(): [React.RefObject<T | null>, number] {
+/** The inner size an element has, kept up to date. */
+function useSize<T extends HTMLElement>(): [React.RefObject<T | null>, [number, number]] {
   const ref = useRef<T>(null);
-  const [width, setWidth] = useState(0);
+  const [size, setSize] = useState<[number, number]>([0, 0]);
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const ro = new ResizeObserver(() => setWidth(el.clientWidth));
+    const measure = () => setSize([el.clientWidth, el.clientHeight]);
+    const ro = new ResizeObserver(measure);
     ro.observe(el);
-    setWidth(el.clientWidth);
+    measure();
     return () => ro.disconnect();
   }, []);
-  return [ref, width];
+  return [ref, size];
 }
 
 function CardTile({ workspace, slug, rev, card, onOpen }: { workspace: string; slug: string; rev: number; card: DesignCard; onOpen: () => void }) {
-  const [ref, width] = useWidth<HTMLDivElement>();
+  const [ref, [width]] = useSize<HTMLDivElement>();
   const problems = card.problems.length;
   // At card scale: the tile's width, never larger than the card itself.
   const scale = width ? Math.min(width / card.viewport[0], 1) : 0;
@@ -66,7 +70,7 @@ function CardTile({ workspace, slug, rev, card, onOpen }: { workspace: string; s
         <span className="truncate ui-text-13 font-medium text-fg">{card.name}</span>
         <span className="truncate font-mono ui-text-11.5 text-faint">{variantsLabel(card)}</span>
         {problems > 0 && (
-          <span title={`${problems} check problem${problems === 1 ? "" : "s"}`} className="ml-auto flex items-center gap-1 rounded bg-blocked/15 px-1.5 ui-text-11.5 text-blocked">
+          <span title={problemsLabel(problems)} className="ml-auto flex items-center gap-1 rounded bg-blocked/15 px-1.5 ui-text-11.5 text-blocked">
             <ShieldAlert size={11} /> {problems}
           </span>
         )}
@@ -80,9 +84,7 @@ function CardTile({ workspace, slug, rev, card, onOpen }: { workspace: string; s
 
 /** A design system: its header, the sources-changed banner, its groups and cards, or one card's page; its agent's chat docked on the right. */
 export function DesignSystemView({ host, workspace, sys, label, inset }: { host: string; workspace: string; sys: DesignSystem; label: RowLabel; inset: number }) {
-  const listed = useDesign((d) => cardsOf(d, host, workspace, sys.slug));
-  // A system that cannot be read shows its error, never cards listed before.
-  const cards = sys.error ? undefined : listed;
+  const cards = listedCards(sys, useDesign((d) => cardsOf(d, host, workspace, sys.slug)));
   const open = useDesign((d) => shownCard(d, host, workspace, sys.slug));
   const rev = useDesign((d) => revOf(d, host, workspace, sys.slug));
   const projectList = useStore(useShallow((s) => workspaceProjects(s, host, workspace)));
@@ -93,19 +95,25 @@ export function DesignSystemView({ host, workspace, sys, label, inset }: { host:
   const [onlyProblems, setOnlyProblems] = useState(false);
   const [onlyChanged, setOnlyChanged] = useState(false);
   const now = useNow(true);
-  const local = host === "local";
+  const local = rendersHere(host);
 
   useEffect(() => {
     if (local) void loadCards(host, workspace, sys.slug).catch(errorToast);
   }, [host, workspace, sys.slug, local]);
 
   const card = open ? cards?.find((c) => c.path === open) : undefined;
-  const problems = (cards ?? []).reduce((n, c) => n + c.problems.length, 0);
+  // Every problem of the system, as the sidebar counts them; the filter shows the cards with one.
+  const problems = sys.check_problems;
   const banner = cards ? changedBanner(sys, cards) : null;
   const groups = useMemo(() => cardGroups(cards ?? []), [cards]);
   const view = visibleCards(cards ?? [], { group, onlyProblems, onlyChanged });
   const shown = view.cards;
+  const status = statusLine(sys);
   const sync = () => void rpc(host, M.designSystemSync, { workspace, slug: sys.slug }).catch(errorToast);
+  const remove = async () => {
+    const ok = await askConfirm({ title: `Remove ${sys.name}?`, message: `Its folder, systems/${sys.slug}, and its cards are deleted. Designs that use it keep their copies.`, action: "Remove", variant: "danger" });
+    if (ok) void rpc(host, M.designSystemRemove, { workspace, slug: sys.slug }).catch(errorToast);
+  };
 
   return (
     <div className="flex min-h-0 flex-1">
@@ -128,7 +136,7 @@ export function DesignSystemView({ host, workspace, sys, label, inset }: { host:
                   onClick={() => setOnlyProblems(!view.onlyProblems)}
                   className={cx("no-drag flex items-center gap-1.5 rounded-md border px-2 py-1 ui-text-12 text-blocked", view.onlyProblems ? "border-blocked bg-blocked/15" : "border-blocked/40 bg-blocked/10")}
                 >
-                  <ShieldAlert size={12} /> {problems} check problem{problems === 1 ? "" : "s"}
+                  <ShieldAlert size={12} /> {problemsLabel(problems)}
                 </button>
               )}
               <Button size="sm" className="no-drag" onClick={sync}>
@@ -139,14 +147,18 @@ export function DesignSystemView({ host, workspace, sys, label, inset }: { host:
                   Show agent
                 </Button>
               )}
+              <Menu
+                align="right"
+                trigger={(open) => (
+                  <IconButton title="More" className="no-drag" onClick={open}>
+                    <MoreHorizontal size={14} />
+                  </IconButton>
+                )}
+                items={[{ label: "Remove design system…", icon: <Trash2 size={14} />, danger: true, onSelect: () => void remove() }]}
+              />
             </header>
-            {(sys.needs_you || sys.step || sys.error) && (
-              <p className={cx("shrink-0 border-b border-border px-5 py-2 ui-text-12.5", sys.error ? "text-error" : sys.needs_you ? "text-blocked" : "text-muted")}>
-                {sys.error ??
-                  (sys.needs_you
-                    ? `Claude ${sys.needs_you.kind === "question" ? "asks" : "needs your approval"}: ${sys.needs_you.text}`
-                    : `${sys.step![0].toUpperCase()}${sys.step!.slice(1)}${sys.step_summary ? ` · ${sys.step_summary}` : ""}`)}
-              </p>
+            {status && (
+              <p className={cx("shrink-0 border-b border-border px-5 py-2 ui-text-12.5", sys.error ? "text-error" : sys.needs_you ? "text-blocked" : "text-muted")}>{status}</p>
             )}
             {banner && (
               <div className="flex shrink-0 items-center gap-2 border-b border-border bg-blocked/[0.06] px-5 py-2 ui-text-12.5 text-muted">
@@ -219,26 +231,18 @@ export function DesignSystemView({ host, workspace, sys, label, inset }: { host:
 /** One card (X64): the card at its viewport and zoom, and where it was made
  *  from, its marker, its check problems and its snippets. */
 function CardPage({ host, workspace, sys, rev, card, agent, inset }: { host: string; workspace: string; sys: DesignSystem; rev: number; card: DesignCard; agent: number | null; inset: number }) {
-  const canvas = useRef<HTMLDivElement>(null);
-  const [box, setBox] = useState<[number, number]>([0, 0]);
-  useLayoutEffect(() => {
-    const el = canvas.current;
-    if (!el) return;
-    const measure = () => setBox([el.clientWidth - 96, el.clientHeight - 96]);
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    measure();
-    return () => ro.disconnect();
-  }, []);
-  const scale = box[0] > 0 && box[1] > 0 ? fitScale(card.viewport, box) : 0;
+  const [canvas, [cw, ch]] = useSize<HTMLDivElement>();
+  // Fitted until the user zooms.
+  const [zoom, setZoom] = useState<number | null>(null);
+  const fit = cw > 96 && ch > 96 ? fitScale(card.viewport, [cw - 96, ch - 96]) : 0;
+  const scale = zoom ?? fit;
   const [asking, setAsking] = useState(false);
+  const fix = fixState(agent, asking);
   const askToFix = async () => {
-    if (asking) return;
+    if (!fix.enabled || agent === null) return;
     setAsking(true);
     try {
-      // With no agent chat, Sync starts one; the request follows its first message.
-      const id = agent ?? (await rpc<{ agent: number }>(host, M.designSystemSync, { workspace, slug: sys.slug })).agent;
-      await rpc(host, M.chatSend, { id, text: fixMessage(card), images: [] });
+      await rpc(host, M.chatSend, { id: agent, text: fixMessage(card), images: [] });
       toast("Asked the sync agent to fix it");
     } catch (e) {
       errorToast(e);
@@ -268,9 +272,20 @@ function CardPage({ host, workspace, sys, rev, card, agent, inset }: { host: str
             <span className="rounded-md border border-border-strong px-2 py-0.5 text-fg">
               Card viewport <span className="font-mono text-faint">{`${card.viewport[0]}×${card.viewport[1]}`}</span>
             </span>
-            <span className="font-mono text-faint">{scale ? `${Math.round(scale * 100)}%` : ""}</span>
+            <span className="ml-auto flex items-center gap-0.5">
+              <IconButton title="Zoom out" disabled={!scale} onClick={() => setZoom(zoomStep(scale, -1))}>
+                <Minus size={13} />
+              </IconButton>
+              <span className="w-12 text-center font-mono text-faint">{scale ? `${Math.round(scale * 100)}%` : ""}</span>
+              <IconButton title="Zoom in" disabled={!scale} onClick={() => setZoom(zoomStep(scale, 1))}>
+                <Plus size={13} />
+              </IconButton>
+              <IconButton title="Fit" aria-pressed={zoom === null} onClick={() => setZoom(null)}>
+                <Maximize size={13} />
+              </IconButton>
+            </span>
           </div>
-          <div ref={canvas} className="flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-bg [background-image:radial-gradient(var(--color-border)_1px,transparent_1px)] [background-size:16px_16px]">
+          <div ref={canvas} className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-bg [background-image:radial-gradient(var(--color-border)_1px,transparent_1px)] [background-size:16px_16px]">
             {scale > 0 && (
               <div className="rounded-md border border-border-strong shadow-2xl">
                 <CardFrame url={cardUrl(workspace, sys.slug, card.path, rev)} title={card.name} viewport={card.viewport} scale={scale} interactive />
@@ -302,15 +317,18 @@ function CardPage({ host, workspace, sys, rev, card, agent, inset }: { host: str
             {card.problems.map((p) => (
               <div key={`${p.line}-${p.message}`} className="mb-2 rounded-md border border-blocked/40 bg-blocked/[0.06] p-2.5">
                 <p className="font-mono ui-text-11.5 text-faint">
-                  line {p.line} · {p.kind.replace(/_/g, " ")}
+                  {p.path !== card.path && `${p.path.split("/").pop()} `}line {p.line} · {p.kind.replace(/_/g, " ")}
                 </p>
                 <p className="selectable mt-1 ui-text-12.5 text-fg">{p.message}</p>
               </div>
             ))}
             {card.problems.length > 0 && (
-              <Button size="sm" className="w-full justify-center" disabled={asking} onClick={() => void askToFix()}>
-                Ask the sync agent to fix
-              </Button>
+              <>
+                <Button size="sm" className="w-full justify-center" disabled={!fix.enabled} onClick={() => void askToFix()}>
+                  Ask the sync agent to fix
+                </Button>
+                {fix.hint && <p className="mt-1.5 ui-text-11.5 text-faint">{fix.hint}</p>}
+              </>
             )}
           </section>
           <section className="p-4">

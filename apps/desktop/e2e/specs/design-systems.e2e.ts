@@ -68,6 +68,9 @@ describe("Design system view", () => {
   it("says which source changed since the sync and how many cards a sync rewrites", async () => {
     await expect($(sel.text("1 source changed since sync · README.md. A sync rewrites only the card made from it."))).toBeDisplayed();
     await expect($('//button[normalize-space()="1 check problem"]')).toBeDisplayed();
+    // The card with the problem has its badge.
+    await expect($('//button[@aria-label="Field"]//span[@title="1 check problem"]')).toBeDisplayed();
+    await expect($('//button[@aria-label="Button"]//span[@title]')).not.toBeExisting();
   });
 
   it("opens a card with its check problem's line and its snippets", async () => {

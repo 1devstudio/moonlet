@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DesignCard, DesignSystem } from "./protocol";
-import { cardGroups, cardUrl, changedBanner, fitScale, fixMessage, headerLine, variantsLabel, visibleCards } from "./designView";
+import { cardGroups, cardUrl, changedBanner, fitScale, fixMessage, fixState, headerLine, listedCards, problemsLabel, rendersHere, statusLine, variantsLabel, visibleCards, zoomStep } from "./designView";
 
 const NOW = 1_761_200_000_000;
 const DAY = 86_400_000;
@@ -119,6 +119,41 @@ describe("the sources-changed banner (X64)", () => {
     );
     expect(changedBanner(system(), cards.slice(3))).toBeNull();
   });
+
+  it("says it right when two sources made one card, or none", () => {
+    const two = system({ changed_sources: ["src/ui.tsx", "src/theme.ts"] });
+    expect(changedBanner(two, [card("Buttons", "Button", { changed_sources: ["src/ui.tsx", "src/theme.ts"] })])).toBe(
+      "2 sources changed since sync · ui.tsx, theme.ts. A sync rewrites only the card made from them.",
+    );
+    expect(changedBanner(two, [card("Buttons", "Button")])).toBe("2 sources changed since sync · ui.tsx, theme.ts. No card is made from them.");
+  });
+});
+
+describe("the design system view's status (X64)", () => {
+  it("says why it cannot be read, what its agent waits for, or the step a sync is at", () => {
+    expect(statusLine(system({ error: "cannot read config.toml" }))).toBe("cannot read config.toml");
+    expect(statusLine(system({ needs_you: { kind: "question", text: "Which button set is current?" } }))).toBe("Claude asks: Which button set is current?");
+    expect(statusLine(system({ needs_you: { kind: "approval", text: "Bash: rm -r .cache" } }))).toBe("Claude needs your approval: Bash: rm -r .cache");
+    expect(statusLine(system({ step: "cards", step_summary: "1 of 3" }))).toBe("Cards · 1 of 3");
+    expect(statusLine(system({ step: "tokens" }))).toBe("Tokens");
+    expect(statusLine(system())).toBeNull();
+  });
+
+  it("shows no cards of a system that cannot be read, whatever was listed before", () => {
+    const listed = [card("Buttons", "Button")];
+    expect(listedCards(system(), listed)).toBe(listed);
+    expect(listedCards(system({ error: "cannot read config.toml" }), listed)).toBeUndefined();
+  });
+
+  it("counts check problems", () => {
+    expect(problemsLabel(1)).toBe("1 check problem");
+    expect(problemsLabel(3)).toBe("3 check problems");
+  });
+
+  it("renders cards only on this Mac, where their files are", () => {
+    expect(rendersHere("local")).toBe(true);
+    expect(rendersHere("studio-mini")).toBe(false);
+  });
 });
 
 describe("a card (X64, X65)", () => {
@@ -141,6 +176,22 @@ describe("a card (X64, X65)", () => {
     expect(fitScale([320, 140], [1200, 800])).toBe(2);
     expect(fitScale([900, 700], [450, 700])).toBe(0.5);
     expect(fitScale([1440, 900], [720, 900])).toBe(0.5);
+  });
+
+  it("zooms by steps from 25% to 400%", () => {
+    expect(zoomStep(1, 1)).toBe(1.5);
+    expect(zoomStep(1, -1)).toBe(0.75);
+    // From a fitted zoom, to the next step either way.
+    expect(zoomStep(0.85, 1)).toBe(1);
+    expect(zoomStep(0.85, -1)).toBe(0.75);
+    expect(zoomStep(4, 1)).toBe(4);
+    expect(zoomStep(0.25, -1)).toBe(0.25);
+  });
+
+  it("asks the sync agent to fix only while it runs, once at a time", () => {
+    expect(fixState(7, false)).toEqual({ enabled: true, hint: null });
+    expect(fixState(7, true)).toEqual({ enabled: false, hint: null });
+    expect(fixState(null, false)).toEqual({ enabled: false, hint: "Its sync agent is not running. Sync starts it." });
   });
 
   it("asks the sync agent to fix its check problems by line", () => {

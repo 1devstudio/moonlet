@@ -6,7 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { errorToast, shownWorkspace, toast, useStore } from "../../lib/store";
 import { type DesignCover } from "../../lib/protocol";
-import { picksInWorkspace, systemFolder, systemLabel, type RowLabel } from "../../lib/design";
+import { picksInWorkspace, systemFolder, systemLabel } from "../../lib/design";
 import { createSystem, detectStack, loadSystems, shownSystem, showSystem, systemsOf, useDesign } from "../../lib/designStore";
 import { workspaceProjects } from "../../lib/tasksStore";
 import { tildePath } from "../../lib/profiles";
@@ -14,7 +14,7 @@ import { useNow } from "../../lib/useNow";
 import { cx } from "../../lib/cx";
 import { AgentIcon, Button, Dialog, Field, IconButton, Kbd, inputCls } from "../ui";
 import { ProjectMark } from "../Sidebar";
-import { DesignSystemView } from "./SystemView";
+import { DesignSystemView, TONES } from "./SystemView";
 
 /** The shown workspace and its design systems; `load` lists them when the
  * workspace is shown (the sidebar does, so a failure shows once). */
@@ -36,7 +36,6 @@ function agentWorking(s: ReturnType<typeof useStore.getState>, host: string, id:
 
 const openNewSystem = (ws: { host: string; id: string } | null) => ws && useStore.setState({ dialog: { kind: "new-design-system", host: ws.host, workspace: ws.id } });
 
-const TONES: Record<RowLabel["tone"], string> = { attention: "text-blocked", changed: "text-accent", error: "text-error", muted: "text-faint" };
 
 function Heading({ label, add }: { label: string; add?: { title: string; run: () => void } }) {
   return (
