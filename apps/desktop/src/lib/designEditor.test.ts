@@ -86,6 +86,31 @@ describe("an edit by hand saved (X65)", () => {
   });
 });
 
+describe("an edit by hand made while a refused save reads the page again (X65)", () => {
+  it("is taken back with the edit the save lost, and the yellow bar names it, as the latest", async () => {
+    await loadPageSource("local", WS, SLUG, "index");
+    const agents = '<!doctype html>\n<body data-mid="m1">\n  <h2 data-mid="m25">Git, by the agent</h2>\n  <p data-mid="m30">Branch prefix</p>\n</body>\n';
+    disk.index = { html: agents, version: "v9" };
+    const answer = answers["design.page"];
+    let reread = (_: unknown) => {};
+    answers["design.page"] = () => new Promise((r) => (reread = r));
+    editPage("local", WS, SLUG, "index", { kind: "delete", mid: "m30" }, "m30");
+    await new Promise((r) => setTimeout(r, 0));
+    // The save was refused; the page is being read again.
+    expect(calls.map((c) => c.method).at(-1)).toBe("design.page");
+    answers["design.page"] = answer;
+    editPage("local", WS, SLUG, "index", { kind: "text", mid: "m25", text: "Git and GitHub" }, "m25");
+    reread(disk.index);
+    await settleSaves();
+    const st = useEditor.getState();
+    expect(disk.index.html).toBe(agents);
+    expect(sourceOf(st, "local", WS, SLUG, "index")).toEqual({ html: agents, version: "v9" });
+    expect(pendingOf(st, "local", WS, SLUG)).toEqual([]);
+    expect(undoOf(st, "local", WS, SLUG).done).toEqual([]);
+    expect(unsavedOf(st, "local", WS, SLUG)).toBe("index.html m25 h2: text “Git and GitHub”");
+  });
+});
+
 describe("an edit by hand redone (X65)", () => {
   it("is taken back when its save is refused, whatever was saved of another page meanwhile, and the yellow bar names it", async () => {
     disk["git-a"] = { html: '<!doctype html>\n<body data-mid="m1">\n  <section data-mid="m3"><h3 data-mid="m4">Rows</h3></section>\n</body>\n', version: "v1" };
