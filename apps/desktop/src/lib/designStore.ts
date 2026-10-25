@@ -221,7 +221,8 @@ export async function editComment(host: string, workspace: string, slug: string,
 export async function sendComments(host: string, workspace: string, slug: string, agent: number, pins: DesignComment[]): Promise<void> {
   if (!pins.length) return;
   await askAgent(host, agent, commentsMessage(pins));
-  await changeComments(host, workspace, slug, { sent: { pins: pins.map((p) => p.n) } });
+  // Each with the comment sent: one edited meanwhile is not marked sent.
+  await changeComments(host, workspace, slug, { sent: { pins: pins.map((p) => ({ n: p.n, comment: p.comment })) } });
 }
 
 /** **Resolve**: the pin is done. */

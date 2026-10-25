@@ -38,7 +38,8 @@ impl Store {
     /// Changes a design's comments and returns the pins changed: a new pin
     /// gets the number after the highest so far; an edited pin its new
     /// comment, and, when it changed, is not sent any more; sent pins record
-    /// the time. Written through the designs folder as a handle, read again
+    /// the time, each only while its comment is still the one sent, so one
+    /// edited meanwhile stays not sent (and is returned as it is). Written through the designs folder as a handle, read again
     /// when the agent changed the file meanwhile, so its change is kept.
     pub fn put_comment(
         &self,
@@ -76,13 +77,15 @@ impl Store {
             }
             CommentChange::Sent { pins: sent } => self.update_comments(workspace, slug, |pins| {
                 // Every pin is there before any is marked.
-                for n in sent {
-                    find(pins, *n)?;
+                for s in sent {
+                    find(pins, s.n)?;
                 }
                 let mut out = Vec::new();
-                for n in sent {
-                    let pin = find(pins, *n)?;
-                    pin.sent_at = Some(now);
+                for s in sent {
+                    let pin = find(pins, s.n)?;
+                    if pin.comment == s.comment {
+                        pin.sent_at = Some(now);
+                    }
                     out.push(pin.clone());
                 }
                 Ok(out)
@@ -311,16 +314,16 @@ mod tests {
             (kept.comment.as_str(), kept.sent_at, kept.mid.as_str()),
             ("Collapse into a menu below 600 px", None, "m12")
         );
-        let sent = store
+        let marked = store
             .put_comment(
                 "w1",
                 "settings-page",
-                &CommentChange::Sent { pins: vec![1, 2] },
+                &sent(&[(1, "Collapse into a menu below 600 px"), (2, "Git first")]),
                 1_761_200_100_000,
             )
             .unwrap();
         assert_eq!(
-            sent.iter().map(|p| (p.n, p.sent_at)).collect::<Vec<_>>(),
+            marked.iter().map(|p| (p.n, p.sent_at)).collect::<Vec<_>>(),
             vec![(1, Some(1_761_200_100_000)), (2, Some(1_761_200_100_000))]
         );
         let resolved = store.resolve_comment("w1", "settings-page", 1).unwrap();
@@ -342,7 +345,7 @@ mod tests {
         let none = store.put_comment(
             "w1",
             "settings-page",
-            &CommentChange::Sent { pins: vec![3, 9] },
+            &sent(&[(3, "Collapse into a menu on phone"), (9, "x")]),
             4,
         );
         assert_eq!(none.unwrap_err().to_string(), "no comment 9");
@@ -360,7 +363,7 @@ mod tests {
             .put_comment(
                 "w1",
                 "settings-page",
-                &CommentChange::Sent { pins: vec![1] },
+                &sent(&[(1, "Collapse into a menu on phone")]),
                 1_761_200_100_000,
             )
             .unwrap();
@@ -371,6 +374,43 @@ mod tests {
             (changed.comment.as_str(), changed.sent_at),
             ("Collapse into a menu below 600 px", None)
         );
+    }
+
+    /// `sent` as the app sends it: each pin's number and its comment as sent.
+    fn sent(pins: &[(u32, &str)]) -> CommentChange {
+        let pins: Vec<_> = pins
+            .iter()
+            .map(|(n, comment)| serde_json::json!({"n": n, "comment": comment}))
+            .collect();
+        serde_json::from_value(serde_json::json!({"sent": {"pins": pins}})).unwrap()
+    }
+
+    #[test]
+    fn a_pin_edited_while_it_was_being_sent_stays_not_sent() {
+        let (_home, store) = store_with_design();
+        put(&store, nav(), 1);
+        put(&store, new("index", "m25", "h2", "Git", "Git first"), 1);
+        // Pin 1 was edited after the chat got its old comment.
+        put(&store, edit(1, "Collapse into a menu below 600 px"), 2);
+        let back = store
+            .put_comment(
+                "w1",
+                "settings-page",
+                &sent(&[(1, "Collapse into a menu on phone"), (2, "Git first")]),
+                1_761_200_100_000,
+            )
+            .unwrap();
+        let shown = |pins: &[DesignComment]| {
+            pins.iter()
+                .map(|p| (p.n, p.comment.clone(), p.sent_at))
+                .collect::<Vec<_>>()
+        };
+        let want = vec![
+            (1, "Collapse into a menu below 600 px".to_string(), None),
+            (2, "Git first".to_string(), Some(1_761_200_100_000)),
+        ];
+        assert_eq!(shown(&back), want);
+        assert_eq!(shown(&store.comments("w1", "settings-page").unwrap()), want);
     }
 
     #[test]

@@ -201,8 +201,17 @@ pub enum CommentChange {
     },
     /// Pin `n`'s comment; a changed comment is not sent any more.
     Edit { n: u32, comment: String },
-    /// These pins were sent to the chat now.
-    Sent { pins: Vec<u32> },
+    /// These pins were sent to the chat now, each with its comment as sent:
+    /// a pin whose comment changed since is not marked sent.
+    Sent { pins: Vec<SentComment> },
+}
+
+/// A pin as `design.comment.put`'s `sent` names it (X65): its number and
+/// the comment the chat got.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SentComment {
+    pub n: u32,
+    pub comment: String,
 }
 
 /// Whether a comment still needs doing (X65).

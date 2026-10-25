@@ -1094,7 +1094,7 @@ export interface DesignComment {
 export type CommentChange =
   | { new: { page: string; mid: string; tag: string; text: string; comment: string } }
   | { edit: { n: number; comment: string } }
-  | { sent: { pins: number[] } };
+  | { sent: { pins: { n: number; comment: string }[] } };
 
 /** `design.create`'s answer: the design, and why its agent did not start. */
 export interface DesignCreated extends Design {
