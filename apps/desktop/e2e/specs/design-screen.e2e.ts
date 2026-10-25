@@ -20,14 +20,21 @@ const chat = () => $('//section[@aria-label="Design · Settings page"]');
 const bar = () => $('//div[@role="status"][@data-tone]');
 const frame = (title: string) => $(`//iframe[@title="${title}"]`);
 
-// A design agent that stays at work on every message until it is interrupted.
-// printf, because /bin/sh's echo expands the \n in the JSON.
+// A design agent that stays at work on every message until it is
+// interrupted; a message with ASK_FOR_APPROVAL makes it ask to run a command,
+// and its answer ends the turn. printf, because /bin/sh's echo expands the \n
+// in the JSON.
+const ASK = "ASK_FOR_APPROVAL";
 const WORKING_CLAUDE = String.raw`#!/bin/sh
 out() { printf '%s\n' "$1"; }
 while IFS= read -r line; do
   case "$line" in
     *'"subtype":"initialize"'*) out '{"type":"system","subtype":"init","session_id":"e2e-design","model":"e2e-model","permissionMode":"acceptEdits","slash_commands":[]}' ;;
     *'"subtype":"interrupt"'*) out '{"type":"result","subtype":"success","is_error":false,"usage":{}}' ;;
+    *ASK_FOR_APPROVAL*)
+      out '{"type":"assistant","message":{"id":"m2","content":[{"type":"tool_use","id":"b1","name":"Bash","input":{"command":"rm -rf assets"}}]}}'
+      out '{"type":"control_request","request_id":"r1","request":{"subtype":"can_use_tool","tool_name":"Bash","tool_use_id":"b1","input":{"command":"rm -rf assets"}}}' ;;
+    *'"type":"control_response"'*) out '{"type":"result","subtype":"success","is_error":false,"usage":{}}' ;;
   esac
 done
 `;
@@ -84,6 +91,25 @@ describe("A design's screen", () => {
     await expect(bar()).not.toBeExisting();
   });
 
+  it("opens the folded chat when its agent asks for an approval, with the orange bar, and leaves it folded while it still waits", async () => {
+    await chat().$('.//button[@title="Hide chat (⌘\\)"]').click();
+    await expect(chat()).not.toBeExisting();
+    const agent = rpc<{ agent: number }[]>(w, "design.list", { workspace: workspaceId() })[0].agent;
+    rpc(w, "chat.send", { id: agent, text: `${ASK} please`, images: [] });
+    await expect(chat()).toBeDisplayed();
+    await expect(bar()).toHaveAttribute("data-tone", "orange");
+    await expect(bar()).toHaveText(expect.stringContaining("Claude needs your approval"));
+    await expect($('//nav[@aria-label="Designs"]//button[.//span[normalize-space()="Settings page"]]')).toHaveText(expect.stringContaining("needs you"));
+    // Folded again while the agent still waits, a new listing leaves it folded.
+    await chat().$('.//button[@title="Hide chat (⌘\\)"]').click();
+    writeFileSync(join(dir(), "comments.json"), "[]\n");
+    await browser.pause(1_000);
+    await expect(chat()).not.toBeExisting();
+    await $('//button[@title="Show chat (⌘\\)"]').click();
+    await chat().$(sel.button("Deny")).click();
+    await expect(bar()).not.toBeExisting();
+  });
+
   it("shows the page once it is written, and loads it again when it is written again", async () => {
     writeFileSync(join(dir(), "pages", "index.html"), page("Settings"));
     await expect(frame("index.html")).toBeExisting();
@@ -111,14 +137,32 @@ describe("A design's screen", () => {
     await expect(fit).toHaveText(fitted);
   });
 
+  it("keeps a custom size in the app's settings, listed after the presets", async () => {
+    await $('//button[@aria-label="Viewport"]').click();
+    await $('//button[starts-with(normalize-space(), "Custom size")]').click();
+    await fill('//div[@role="dialog"][@aria-label="Custom viewport"]//input[@aria-label="Width"]', "1024");
+    await fill('//div[@role="dialog"][@aria-label="Custom viewport"]//input[@aria-label="Height"]', "768");
+    await $('//div[@role="dialog"][@aria-label="Custom viewport"]').$(sel.button("Use this size")).click();
+    await expect($('//button[@aria-label="Viewport"]')).toHaveText(expect.stringContaining("Custom 1024×768"));
+    await browser.waitUntil(() => readFileSync(join(dir(), "design.toml"), "utf8").includes('viewport = "1024x768"'), { timeoutMsg: "the viewport was not saved" });
+    await $('//button[@aria-label="Viewport"]').click();
+    await $('//button[starts-with(normalize-space(), "Phone")]').click();
+    await $('//button[@aria-label="Viewport"]').click();
+    await expect($('//button[starts-with(normalize-space(), "Custom")][contains(normalize-space(), "1024×768")]')).toBeDisplayed();
+    await browser.keys("Escape");
+  });
+
   it("shows every page in Overview with its label, and opens one from there", async () => {
+    // An open comment counts on the design's row, not on a page until comments come (entry 8).
+    writeFileSync(join(dir(), "comments.json"), '[{"n": 1, "state": "open"}]\n');
     writeFileSync(join(dir(), "pages", "git-a.html"), page("Git, cards"));
     writeFileSync(join(dir(), "design.toml"), `${readFileSync(join(dir(), "design.toml"), "utf8")}\n[pages.git-a]\nlabel = "cards"\n`);
     await $('//nav[@aria-label="Pages"]//button[normalize-space()="git-a"]').waitForExist();
     await $('//nav[@aria-label="Pages"]//button[normalize-space()="Overview"]').click();
     const tile = $('//button[@aria-label="git-a.html"]');
     await expect(tile).toHaveText(expect.stringContaining("cards"));
-    await expect($('//button[@aria-label="index.html"]')).toBeExisting();
+    await expect($('//button[@aria-label="index.html"]')).toHaveText("index.html");
+    await expect($('//nav[@aria-label="Designs"]//button[.//span[normalize-space()="Settings page"]]')).toHaveText(expect.stringContaining("1"));
     await expect($$('//button[@aria-label="git-a.html" or @aria-label="index.html"]//iframe')).toBeElementsArrayOfSize(2);
     await tile.click();
     await expect($('//nav[@aria-label="Pages"]//button[normalize-space()="git-a"]')).toHaveAttribute("aria-current", "page");
@@ -152,7 +196,7 @@ describe("A design's screen", () => {
   it("shows the grey bar once its design system is removed", async () => {
     rpc(w, "design.system.remove", { workspace: workspaceId(), slug: SYSTEM });
     await expect(bar()).toHaveAttribute("data-tone", "grey");
-    await expect(bar()).toHaveText(expect.stringContaining(`Design system removed. Pages show without ${SYSTEM}'s styles.`));
+    await expect(bar()).toHaveText(expect.stringContaining(`Design system removed. Pages show without Screen kit's styles.`));
   });
 
   it("leaves the window answering while a page never stops running", async () => {
