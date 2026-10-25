@@ -29,12 +29,18 @@ struct Daemon {
 
 impl Daemon {
     async fn start() -> Daemon {
-        let home = tempfile::tempdir().unwrap();
+        Self::start_in(tempfile::tempdir().unwrap(), &[]).await
+    }
+
+    /// A daemon on the scratch folder `home`, with `env` added.
+    async fn start_in(home: tempfile::TempDir, env: &[(&str, String)]) -> Daemon {
         let socket = home.path().join("run/d.sock");
         let child = Command::new(target_bin("moonletd"))
             .arg("daemon")
             .env("MOONLET_HOME", home.path())
             .env("MOONLET_SOCK", &socket)
+            .envs(env.iter().map(|(k, v)| (*k, v.as_str())))
+            .env_remove("CLAUDE_CONFIG_DIR")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -75,21 +81,11 @@ done
         for rc in [".profile", ".zshenv", ".zprofile", ".zshrc", ".bash_profile"] {
             std::fs::write(home.path().join(rc), &first).unwrap();
         }
-        let socket = home.path().join("run/d.sock");
-        let child = Command::new(target_bin("moonletd"))
-            .arg("daemon")
-            .env("HOME", home.path())
-            .env("MOONLET_HOME", home.path())
-            .env("MOONLET_SOCK", &socket)
-            .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
-            .env_remove("CLAUDE_CONFIG_DIR")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
-        wait_for_socket(&socket, Duration::from_secs(15)).await.unwrap();
-        Daemon { home, socket, child }
+        let env = [
+            ("HOME", home.path().display().to_string()),
+            ("PATH", format!("{}:/usr/bin:/bin", bin.display())),
+        ];
+        Self::start_in(home, &env).await
     }
 
     /// `moonlet <args>` in folder `cwd`, outside any moonlet terminal.
