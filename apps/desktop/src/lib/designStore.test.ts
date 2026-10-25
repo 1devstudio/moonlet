@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Design, DesignSystem, TerminalInfo } from "./protocol";
 import { modeOf, setMode } from "./mode";
 import { agentOnScreen, goToAgent, useStore } from "./store";
-import { cardsOf, checkDesign, createSystem, designsOf, detectStack, latestOf, loadCards, loadDesigns, loadSystems, openCard, saveViewport, pageRevOf, problemsOf, revOf, shownCard, shownDesign, shownSystem, showDesign, showSystem, startDesign, systemNameOf, systemsOf, useDesign } from "./designStore";
+import { cardsOf, checkDesign, createFromNewDesign, createSystem, designsOf, detectStack, latestOf, loadCards, loadDesigns, loadSystems, openCard, saveViewport, pageRevOf, problemsOf, revOf, shownCard, shownDesign, shownSystem, showDesign, showSystem, startDesign, systemNameOf, systemsOf, useDesign } from "./designStore";
 
 const calls = vi.hoisted(() => [] as { host: string; method: string; params: unknown }[]);
 /** What the daemon answers, by method. */
@@ -365,6 +365,37 @@ describe("a design's check (X65)", () => {
     };
     await checkDesign("local", "w-1devstudio", "settings-page");
     expect(problems()).toEqual([]);
+  });
+});
+
+describe("Create design in the New design dialog (X65)", () => {
+  const brief = { name: "Settings page", system: "moonlet-desktop", brief: "A left nav" };
+  const toasts = () => useStore.getState().toasts.map((t) => [t.text, t.action?.label ?? null]);
+  beforeEach(() => {
+    useStore.setState({ toasts: [], dialog: { kind: "new-design", host: "local", workspace: "w-1devstudio" } });
+    answers["design.list"] = () => [design()];
+    answers["design.check"] = () => [];
+  });
+
+  it("shows the design and closes the dialog while it is still open", async () => {
+    answers["design.create"] = () => ({ ...design(), agent_error: null });
+    await createFromNewDesign("local", "w-1devstudio", brief);
+    expect(useStore.getState().dialog).toBeNull();
+    expect(shownDesign(useDesign.getState(), "local", "w-1devstudio")?.slug).toBe("settings-page");
+    expect(toasts()).toEqual([]);
+  });
+
+  it("leaves the view and another dialog opened meanwhile as they are, and offers the design in a toast", async () => {
+    let made = (_: unknown) => {};
+    answers["design.create"] = () => new Promise((r) => (made = r));
+    const creating = createFromNewDesign("local", "w-1devstudio", brief);
+    await settle();
+    useStore.setState({ dialog: { kind: "new-design-system", host: "local", workspace: "w-1devstudio" } });
+    made({ ...design(), agent_error: null });
+    await creating;
+    expect(useStore.getState().dialog).toEqual({ kind: "new-design-system", host: "local", workspace: "w-1devstudio" });
+    expect(shownDesign(useDesign.getState(), "local", "w-1devstudio")).toBeNull();
+    expect(toasts()).toEqual([["Settings page was made", "Open"]]);
   });
 });
 
