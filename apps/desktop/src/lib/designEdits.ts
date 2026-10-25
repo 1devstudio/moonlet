@@ -11,7 +11,7 @@ import { parse, parseFragment } from "parse5";
 import type { DefaultTreeAdapterMap } from "parse5";
 import { pageFile, pageOfFile } from "./designPage";
 import type { DropPlace, LiveEdit } from "./designBridge";
-import { attrText, isStyleProp, isStyleValue, parseStyle, styleText, withStyle, type StyleSet } from "./designStyle";
+import { attrText, isStyleProp, isStyleValue, parseStyle, styleText, withStyle, type Decl, type StyleSet } from "./designStyle";
 
 type Node = DefaultTreeAdapterMap["node"];
 type Element = DefaultTreeAdapterMap["element"];
@@ -522,6 +522,19 @@ function after(html: string, span: [number, number], text: string): string {
   if (whole[0] === from && whole[1] === to) return splice(html, [to, to], text);
   const indent = html.slice(whole[0], from);
   return splice(html, [to, to], eolOf(html, to, whole[1]) + indent + text);
+}
+
+/** The inline style of each element of page `html` that has one, by its
+ *  `data-mid`, as its source writes it (designStyle's parse). */
+export function inlineStyles(html: string): Record<string, Decl[]> {
+  const out: Record<string, Decl[]> = {};
+  for (const el of elements(parsed(html))) {
+    const mid = midOf(el);
+    const style = el.attrs.find((a) => a.name === "style")?.value;
+    const decls = mid && style ? parseStyle(style) : [];
+    if (mid && decls.length) out[mid] = decls;
+  }
+  return out;
 }
 
 /** The source of element `mid` of page `html`, for a paste; null when the

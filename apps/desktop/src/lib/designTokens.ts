@@ -160,5 +160,11 @@ export function offSystem(tokens: DesignToken[], style: Decl[]): string[] {
     .map(([prop]) => prop);
 }
 
+/** The elements of a page, by their inline styles (`inlineStyles`), that
+ *  are off-system, in the page's order. */
+export function offSystemMids(tokens: DesignToken[], styles: Record<string, Decl[]>): Set<string> {
+  return new Set(Object.keys(styles).filter((mid) => offSystem(tokens, styles[mid]).length > 0));
+}
+
 /** A token as a style value: `var(--space-4)`. */
 export const tokenRef = (name: string) => `var(${name})`;
