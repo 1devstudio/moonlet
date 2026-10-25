@@ -265,6 +265,8 @@ pub struct WorkerLink {
     quiet: AtomicBool,
     /// The copies this Mac keeps, which the link serves (X60).
     sync: std::sync::OnceLock<Weak<crate::sync::LiveCopies>>,
+    /// Routed commands this machine runs for its central host (X62).
+    runs: std::sync::OnceLock<Weak<crate::exec::Runs>>,
     sessions: Arc<SessionManager>,
     emit: Box<dyn Fn(Message) + Send + Sync>,
 }
@@ -283,6 +285,7 @@ impl WorkerLink {
             synced: AtomicUsize::new(0),
             quiet: AtomicBool::new(false),
             sync: std::sync::OnceLock::new(),
+            runs: std::sync::OnceLock::new(),
             sessions,
             emit: Box::new(emit),
         })
@@ -322,8 +325,23 @@ impl WorkerLink {
     /// [`WorkerLink::set`], only while `central` is still at `revision`.
     fn set_at(self: &Arc<Self>, req: LinkSet, own: &[IpAddr], revision: Option<u64>) -> Result<LinkInfo, RpcError> {
         let moved = req.central.is_some();
-        let renamed = req.worker.as_ref().is_some_and(|w| w.name.is_some() || w.slots.is_some());
+        // What the central host lists of this worker: its name, slots and
+        // whether it takes heavy commands (X62).
+        let renamed = req
+            .worker
+            .as_ref()
+            .is_some_and(|w| w.name.is_some() || w.slots.is_some() || w.enabled.is_some());
         self.store.lock().unwrap().set_at(req, own, revision)?;
+        // Routing copies go with heavy commands, and with the central host
+        // they were made for (X62).
+        if let Some(sync) = self.sync() {
+            let info = self.info();
+            if !info.worker.enabled {
+                sync.remove_run_copies(None);
+            } else if moved {
+                sync.remove_run_copies(info.central.map(|c| c.name));
+            }
+        }
         // One link.changed for the whole change, at the end.
         self.quiet.store(true, Ordering::SeqCst);
         if moved {
@@ -335,8 +353,8 @@ impl WorkerLink {
         if !moved && self.waiting() {
             self.retry();
         }
-        // The central host learns a new name or slots now, not at the next
-        // link.
+        // The central host learns a new name, slots or heavy commands now,
+        // not at the next link.
         if renamed
             && !moved
             && matches!(*self.state.lock().unwrap(), LinkState::Connected { .. })
@@ -413,6 +431,14 @@ impl WorkerLink {
 
     fn sync(&self) -> Option<Arc<crate::sync::LiveCopies>> {
         self.sync.get().and_then(Weak::upgrade)
+    }
+
+    pub fn set_runs(&self, runs: Weak<crate::exec::Runs>) {
+        let _ = self.runs.set(runs);
+    }
+
+    fn runs(&self) -> Option<Arc<crate::exec::Runs>> {
+        self.runs.get().and_then(Weak::upgrade)
     }
 
     /// The central host's name, when one is set.
@@ -511,6 +537,7 @@ impl WorkerLink {
             version: env!("CARGO_PKG_VERSION").into(),
             projects,
             slots: worker.slots,
+            heavy: worker.enabled,
         };
         let params = serde_json::to_value(reg).unwrap();
         match host.request(m::WORKER_REGISTER, params).await {
@@ -572,7 +599,7 @@ impl WorkerLink {
     }
 }
 
-fn os() -> &'static str {
+pub fn os() -> &'static str {
     if cfg!(target_os = "macos") {
         "macos"
     } else {
@@ -634,6 +661,36 @@ impl Requests for WorkerRequests {
                     }
                     let done = sync.update(req, pack).await?;
                     Ok(serde_json::to_value(done).unwrap())
+                }
+                m::EXEC_PREPARE => {
+                    let req: m::ExecPrepare = serde_json::from_value(params)
+                        .map_err(|e| RpcError::new("invalid_params", e.to_string()))?;
+                    let link = link.ok_or_else(|| RpcError::new("gone", "the link closed"))?;
+                    if !link.info().worker.enabled {
+                        return Err(RpcError::new("not_approved", "heavy commands are off here"));
+                    }
+                    let sync = link.sync().ok_or_else(|| RpcError::new("gone", "no copies"))?;
+                    Ok(serde_json::to_value(sync.prepare_run(req.session).await?).unwrap())
+                }
+                m::EXEC_START => {
+                    let req: m::ExecStart = serde_json::from_value(params)
+                        .map_err(|e| RpcError::new("invalid_params", e.to_string()))?;
+                    let link = link.ok_or_else(|| RpcError::new("gone", "the link closed"))?;
+                    let info = link.info();
+                    if !info.worker.enabled {
+                        return Err(RpcError::new("not_approved", "heavy commands are off here"));
+                    }
+                    let sync = link.sync().ok_or_else(|| RpcError::new("gone", "no copies"))?;
+                    let runs = link.runs().ok_or_else(|| RpcError::new("gone", "no runs"))?;
+                    let host = link.host().ok_or_else(|| RpcError::new("gone", "the link closed"))?;
+                    Ok(serde_json::json!(runs.start_here(req, sync, host, info.worker.slots).await?))
+                }
+                m::EXEC_CANCEL => {
+                    let req: m::ExecCancel = serde_json::from_value(params)
+                        .map_err(|e| RpcError::new("invalid_params", e.to_string()))?;
+                    let link = link.ok_or_else(|| RpcError::new("gone", "the link closed"))?;
+                    let runs = link.runs().ok_or_else(|| RpcError::new("gone", "no runs"))?;
+                    Ok(serde_json::json!(runs.cancel_here(req.run)))
                 }
                 m::SYNC_CLOSING => {
                     let req: m::SyncClosing = serde_json::from_value(params)

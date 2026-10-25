@@ -367,6 +367,74 @@ pub fn pick(candidates: &[Candidate], os: HeavyOs, cloud_first: bool) -> Option<
     })
 }
 
+/// Replaces paths in a run's output as it streams (X62): a routing copy's
+/// path becomes the session's, also when a chunk ends inside it.
+pub struct Rewriter {
+    /// Longest first, so a longer path wins over one it contains.
+    pairs: Vec<(Vec<u8>, Vec<u8>)>,
+    /// The end of the last chunk, which may be the start of a path.
+    held: Vec<u8>,
+}
+
+impl Rewriter {
+    pub fn new(pairs: &[(&str, &str)]) -> Self {
+        let mut pairs: Vec<(Vec<u8>, Vec<u8>)> = pairs
+            .iter()
+            .filter(|(from, to)| !from.is_empty() && from != to)
+            .map(|(from, to)| (from.as_bytes().to_vec(), to.as_bytes().to_vec()))
+            .collect();
+        pairs.sort_by_key(|(from, _)| std::cmp::Reverse(from.len()));
+        Self {
+            pairs,
+            held: Vec::new(),
+        }
+    }
+
+    /// The output of `data` that can be given now.
+    pub fn push(&mut self, data: &[u8]) -> Vec<u8> {
+        self.held.extend_from_slice(data);
+        let (out, rest) = self.replace(false);
+        self.held.drain(..rest);
+        out
+    }
+
+    /// Everything held back, at the end of the stream.
+    pub fn finish(&mut self) -> Vec<u8> {
+        let (out, _) = self.replace(true);
+        self.held.clear();
+        out
+    }
+
+    /// The replaced output of `held`, and how much of it was used: all of
+    /// it, but for an end that could still become a path.
+    fn replace(&self, last: bool) -> (Vec<u8>, usize) {
+        let h = &self.held;
+        let mut out = Vec::with_capacity(h.len());
+        let mut i = 0;
+        'scan: while i < h.len() {
+            for (from, to) in &self.pairs {
+                if h[i..].starts_with(from) {
+                    out.extend_from_slice(to);
+                    i += from.len();
+                    continue 'scan;
+                }
+            }
+            let rest = &h[i..];
+            if !last
+                && self
+                    .pairs
+                    .iter()
+                    .any(|(from, _)| from.len() > rest.len() && from.starts_with(rest))
+            {
+                return (out, i);
+            }
+            out.push(h[i]);
+            i += 1;
+        }
+        (out, i)
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -739,5 +807,33 @@ mod tests {
             "macbook"
         );
         assert!(pick(&[mac("macbook", 7.0, 10, 0)], HeavyOs::Any, false).is_none());
+    }
+
+    #[test]
+    fn replaces_the_copys_path_split_across_two_chunks() {
+        let copy = "/Users/alex/.moonlet/runs/studio-mini/shop/fix-cart";
+        let session = "/Users/alex/.moonlet/worktrees/shop/fix-cart";
+        let mut r = Rewriter::new(&[(copy, session)]);
+        let mut out = r.push(b"FAIL /Users/alex/.moonlet/runs/studio-");
+        out.extend(r.push(b"mini/shop/fix-cart/src/cart.ts:12\n"));
+        out.extend(r.finish());
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "FAIL /Users/alex/.moonlet/worktrees/shop/fix-cart/src/cart.ts:12\n"
+        );
+        // Nothing held back when nothing could be the start of the path.
+        let mut r = Rewriter::new(&[(copy, session)]);
+        assert_eq!(r.push(b"ok\n"), b"ok\n");
+        // The canonical form of the copy's path too, longest first.
+        let mut r = Rewriter::new(&[
+            ("/var/x/runs/c", "/var/x/worktrees/s"),
+            ("/private/var/x/runs/c", "/var/x/worktrees/s"),
+        ]);
+        let mut out = r.push(b"cd /private/var/x/runs/c && ls /var/x/runs/c/a");
+        out.extend(r.finish());
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "cd /var/x/worktrees/s && ls /var/x/worktrees/s/a"
+        );
     }
 }

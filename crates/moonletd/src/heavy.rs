@@ -16,6 +16,18 @@ use moonlet_proto::types::{Project, ProjectIdentity};
 
 use crate::daemon::internal;
 
+/// A command `exec.run` may run, as checked.
+pub struct Checked {
+    pub cwd: PathBuf,
+    /// `cwd` relative to the session's worktree, for a routing copy.
+    pub cwd_rel: String,
+    /// The approved variables of `moonlet exec`'s environment.
+    pub env: BTreeMap<String, String>,
+    pub os: moonlet_proto::types::HeavyOs,
+    /// Ignored paths brought back after a run.
+    pub outputs: Vec<String>,
+}
+
 pub struct Heavy {
     file: PathBuf,
     /// Reads and writes of `heavy.json` never interleave.
@@ -66,7 +78,8 @@ impl Heavy {
     /// `heavy.approve`: the lists must be the config's as it is now, so the
     /// user never approves a list they did not see.
     pub fn approve(&self, r: HeavyApprove) -> Result<HeavyInfo, RpcError> {
-        let p = self.project(&r.project)?;
+        let project = r.project.clone().unwrap_or_default();
+        let p = self.project(&project)?;
         let Some(k) = key(&p.identity) else {
             return Err(RpcError::new(
                 "no_identity",
@@ -100,7 +113,7 @@ impl Heavy {
             let bytes = serde_json::to_vec_pretty(&all).map_err(internal)?;
             crate::mobile::write_private(&self.file, &bytes).map_err(internal)?;
         }
-        self.get(&r.project)
+        self.get(&project)
     }
 
     /// `exec.route`: whether a Bash call of an agent in a session may run
@@ -129,7 +142,7 @@ impl Heavy {
         argv: &[String],
         cwd: &str,
         env: &BTreeMap<String, String>,
-    ) -> Result<(PathBuf, BTreeMap<String, String>), &'static str> {
+    ) -> Result<Checked, &'static str> {
         if argv.is_empty() {
             return Err("not_heavy");
         }
@@ -148,6 +161,8 @@ impl Heavy {
             .and_then(|s| std::fs::canonicalize(s.path).ok())
             .ok_or("no_session")?;
         let config = project_config::load(&worktree, String::new());
+        let os = config.config.heavy.os;
+        let outputs = config.config.heavy.outputs.clone();
         let names = config.config.heavy.env;
         let passed = env
             .iter()
@@ -155,7 +170,18 @@ impl Heavy {
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         let cwd = std::fs::canonicalize(cwd).map_err(|_| "outside_worktree")?;
-        Ok((cwd, passed))
+        let cwd_rel = cwd
+            .strip_prefix(&worktree)
+            .map_err(|_| "outside_worktree")?
+            .display()
+            .to_string();
+        Ok(Checked {
+            cwd,
+            cwd_rel,
+            env: passed,
+            os,
+            outputs,
+        })
     }
 
     fn why_not(&self, r: &ExecRoute) -> Result<(), &'static str> {
@@ -261,7 +287,7 @@ fn key(id: &ProjectIdentity) -> Option<String> {
 
 /// `w` as one word for a POSIX shell: as it is when it holds nothing a
 /// shell reads, in single quotes otherwise.
-fn quote(w: &str) -> String {
+pub fn quote(w: &str) -> String {
     let plain = !w.is_empty()
         && w.chars()
             .all(|c| c.is_ascii_alphanumeric() || "-_./=:,+@%".contains(c));
@@ -272,7 +298,7 @@ fn quote(w: &str) -> String {
     }
 }
 
-fn sorted(v: &[String]) -> Vec<String> {
+pub fn sorted(v: &[String]) -> Vec<String> {
     let mut v = v.to_vec();
     v.sort();
     v.dedup();

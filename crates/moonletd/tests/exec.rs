@@ -148,6 +148,8 @@ async fn central_in(home: tempfile::TempDir, config: &str, env: &[(&str, &str)])
         ],
     );
     write(&repo.join("package.json"), "{}\n");
+    // `coverage` without a slash: a link of that name is ignored too.
+    write(&repo.join(".gitignore"), "coverage\nnode_modules/\n");
     // A command the run tests use: prints to both streams, then exits with
     // its first argument.
     write(
@@ -385,6 +387,10 @@ async fn a_deny_rule_in_the_worktree_keeps_the_command_here() {
 /// The central host with tailnet access on, listening on 127.0.0.1 as its
 /// own "Tailscale address".
 async fn central_listening() -> (Central, String) {
+    central_listening_with(CONFIG, &[]).await
+}
+
+async fn central_listening_with(config: &str, env: &[(&str, &str)]) -> (Central, String) {
     let home = tempfile::tempdir().unwrap();
     let port = std::net::TcpListener::bind("127.0.0.1:0")
         .unwrap()
@@ -396,7 +402,9 @@ async fn central_listening() -> (Central, String) {
         format!(r#"{{ "enabled": true, "port": {port} }}"#),
     )
     .unwrap();
-    let c = central_in(home, CONFIG, &[("MOONLET_MOBILE_ADDRS", "127.0.0.1")]).await;
+    let mut all = vec![("MOONLET_MOBILE_ADDRS", "127.0.0.1")];
+    all.extend_from_slice(env);
+    let c = central_in(home, config, &all).await;
     let addr = format!("127.0.0.1:{port}");
     for _ in 0..100 {
         let st: Value = c.daemon.call("mobile.status", json!({})).await;
@@ -585,7 +593,7 @@ async fn a_managed_deny_rule_keeps_the_command_here() {
     assert_eq!(c.route("pnpm build").await["route"], json!(true));
 }
 
-const RUN_CONFIG: &str = "[heavy]\ncommands = [\"sh run.sh\", \"sh -c\", \"cat\", \"env\", \"pwd\", \"printf\"]\nenv = [\"CI\"]\n";
+const RUN_CONFIG: &str = "[heavy]\ncommands = [\"sh run.sh\", \"sh -c\", \"cat\", \"env\", \"pwd\", \"printf\", \"shop-tool\"]\nenv = [\"CI\"]\noutputs = [\"coverage\"]\n";
 
 /// What a run sent back: its stdout, its stderr and its exit status.
 #[derive(Debug, PartialEq)]
@@ -832,5 +840,675 @@ async fn an_unapproved_moonlet_exec_is_refused() {
     assert_eq!(
         refuse(json!(["rm", "-rf", "."])).await,
         "not_routable: not_heavy"
+    );
+}
+
+const MAC_ID: &str = "7d3f1c2a-5b8e-4e61-9a0f-2c4d6e8b1f37";
+
+/// The central host and Alex's MacBook Pro linked to it with heavy
+/// commands on, both approving [`RUN_CONFIG`]'s commands. Both report a
+/// light load: this machine's own may be anything.
+async fn linked() -> (Central, Daemon) {
+    linked_as(&[]).await
+}
+
+async fn linked_as(worker_env: &[(&str, &str)]) -> (Central, Daemon) {
+    linked_with(RUN_CONFIG, worker_env, true).await
+}
+
+/// [`linked_as`] with `config` for the project, and the Mac approving its
+/// heavy commands only when `mac_approves`.
+async fn linked_with(
+    config: &str,
+    worker_env: &[(&str, &str)],
+    mac_approves: bool,
+) -> (Central, Daemon) {
+    let tools = tempfile::tempdir().unwrap().keep();
+    // A tool only the central host has, on its login shell's PATH.
+    write(&tools.join("bin/shop-tool"), "#!/bin/sh\necho tool\n");
+    std::fs::set_permissions(
+        tools.join("bin/shop-tool"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .unwrap();
+    write(
+        &tools.join(".profile"),
+        &format!("PATH=\"{}/bin:$PATH\"\n", tools.display()),
+    );
+    let (c, addr) = central_listening_with(
+        config,
+        &[
+            ("MOONLET_TEST_LOAD", "0.5"),
+            ("MOONLET_WORKER_PING_MS", "200"),
+            ("SHELL", "/bin/sh"),
+            ("HOME", tools.to_str().unwrap()),
+        ],
+    )
+    .await;
+    c.approve_runs().await;
+    let home = tempfile::tempdir().unwrap();
+    write(
+        &home.path().join("link.json"),
+        &json!({ "central": null, "worker": { "id": MAC_ID, "name": "Alex's MacBook Pro", "enabled": true } })
+            .to_string(),
+    );
+    let mac_home = home.path().to_str().unwrap().to_string();
+    let mut env = vec![
+        ("MOONLET_MOBILE_ADDRS", "127.0.0.2"),
+        ("MOONLET_TEST_LOAD", "0.5"),
+        ("SHELL", "/bin/sh"),
+        ("HOME", mac_home.as_str()),
+    ];
+    // Later settings win: a test's own load replaces the light one.
+    env.retain(|(k, _)| !worker_env.iter().any(|(w, _)| w == k));
+    env.extend_from_slice(worker_env);
+    let mac = Daemon::start(home, &env).await;
+    let token = pair(&c, &addr, "Alex's MacBook Pro", DeviceKind::Desktop).await;
+    let _: Value = mac
+        .call(
+            "link.set",
+            json!({ "central": { "name": "studio-mini", "addrs": [addr], "token": token } }),
+        )
+        .await;
+    if mac_approves {
+        approve_on(&c, &mac).await;
+    }
+    for _ in 0..200 {
+        let list: Value = c.daemon.call("worker.list", json!({})).await;
+        if list[0]["load"].is_number() {
+            return (c, mac);
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("the Mac never linked");
+}
+
+/// Approves the project's heavy commands on `mac` too, as the app does.
+async fn approve_on(c: &Central, mac: &Daemon) {
+    let projects: Value = c.daemon.call("project.list", json!({})).await;
+    let info: Value = c
+        .daemon
+        .call("heavy.get", json!({ "project": c.project }))
+        .await;
+    let _: Value = mac
+        .call(
+            "heavy.approve",
+            json!({ "identity": projects[0]["identity"], "commands": info["config"]["commands"], "env": info["config"]["env"] }),
+        )
+        .await;
+}
+
+#[tokio::test]
+async fn a_routing_copy_lives_under_runs_and_not_in_sync_list() {
+    let (c, mac) = linked().await;
+    assert_eq!(
+        c.run(&["sh", "run.sh", "3"]).await,
+        Ran {
+            stdout: "out\n".into(),
+            stderr: "moonlet: running on Alex's MacBook Pro\nerr\n".into(),
+            status: 3,
+        }
+    );
+    let dir = c.worktree.file_name().unwrap();
+    let copy = mac.home.path().join("runs/studio-mini/shop").join(dir);
+    assert_eq!(
+        std::fs::read_to_string(copy.join("run.sh")).unwrap(),
+        "echo out\necho err >&2\nexit \"${1:-0}\"\n"
+    );
+    let listed: Value = mac.call("sync.list", json!({})).await;
+    assert_eq!(listed, json!([]));
+}
+
+/// The routing copy on the Mac.
+fn routing_copy(c: &Central, mac: &Daemon) -> PathBuf {
+    mac.home
+        .path()
+        .join("runs/studio-mini/shop")
+        .join(c.worktree.file_name().unwrap())
+}
+
+#[tokio::test]
+async fn a_file_written_by_the_run_is_on_the_central_host_before_the_exit_status() {
+    let (c, _mac) = linked().await;
+    let ran = c
+        .run(&["sh", "-c", "echo hi > out.txt; rm package.json"])
+        .await;
+    assert_eq!(ran.stderr, "moonlet: running on Alex's MacBook Pro\n");
+    assert_eq!(
+        std::fs::read_to_string(c.worktree.join("out.txt")).unwrap(),
+        "hi\n"
+    );
+    assert!(!c.worktree.join("package.json").exists());
+}
+
+#[tokio::test]
+async fn a_commit_made_by_the_run_moves_the_sessions_branch() {
+    let (c, _mac) = linked().await;
+    let ran = c
+        .run(&[
+            "sh",
+            "-c",
+            "echo x > c.txt && git add c.txt && git -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit -qm 'from the run'",
+        ])
+        .await;
+    assert_eq!(ran.status, 0, "{ran:?}");
+    assert_eq!(
+        git(&c.worktree, &["log", "-1", "--format=%s"]),
+        "from the run"
+    );
+    assert_eq!(git(&c.worktree, &["status", "--porcelain"]), "");
+}
+
+#[tokio::test]
+async fn a_run_whose_changes_cannot_come_back_still_ends() {
+    let (c, _mac) = linked().await;
+    // The central host cannot write the run's file: its folder is read-only.
+    write(&c.worktree.join("locked/keep.txt"), "kept\n");
+    git(&c.worktree, &["add", "locked"]);
+    git(
+        &c.worktree,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-qm",
+            "locked",
+        ],
+    );
+    let locked = c.worktree.join("locked");
+    let mode = |m: u32| {
+        std::fs::set_permissions(&locked, std::os::unix::fs::PermissionsExt::from_mode(m)).unwrap()
+    };
+    mode(0o555);
+    let ran = c.run(&["sh", "-c", "echo hi > locked/out.txt"]).await;
+    mode(0o755);
+    assert_eq!(ran_on(&ran), "Alex's MacBook Pro");
+    assert!(
+        ran.stderr
+            .contains("moonlet: cannot bring back the run's changes"),
+        "{ran:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_command_on_a_worker_knows_its_session() {
+    let (c, _mac) = linked().await;
+    let ran = c.run(&["env"]).await;
+    assert_eq!(ran_on(&ran), "Alex's MacBook Pro");
+    let lines: Vec<&str> = ran.stdout.lines().collect();
+    assert!(
+        lines.contains(&format!("MOONLET_SESSION={}", c.session).as_str()),
+        "{ran:?}"
+    );
+    assert!(lines.contains(&"MOONLET_ROUTED=1"), "{ran:?}");
+}
+
+#[tokio::test]
+async fn two_commands_of_one_session_never_share_a_routing_copy() {
+    let (c, _mac) = linked().await;
+    // The copy exists already, so both would be ready at once.
+    c.run(&["sh", "run.sh"]).await;
+    // The Mac has two slots, but one copy of the session: one of them
+    // runs there, the others here.
+    let (a, b, d) = tokio::join!(
+        c.run(&["sh", "-c", "sleep 1"]),
+        c.run(&["sh", "-c", "echo b > b.txt; sleep 1.5; cat b.txt"]),
+        c.run(&["sh", "-c", "sleep 1"])
+    );
+    assert_eq!((b.stdout.as_str(), b.status), ("b\n", 0), "{b:?}");
+    let on_mac = [&a, &b, &d]
+        .iter()
+        .filter(|r| ran_on(r) == "Alex's MacBook Pro")
+        .count();
+    assert_eq!(on_mac, 1, "{a:?} {b:?} {d:?}");
+}
+
+#[tokio::test]
+async fn cancelling_while_the_worker_prepares_never_runs_the_command() {
+    let (c, _mac) = linked().await;
+    let worktree = c.worktree.clone();
+    // The first run makes the routing copy: cancelled meanwhile.
+    let (mut client, run) = c
+        .start(&["sh", "-c", "echo ran > ran.txt"], &worktree, json!({}))
+        .await;
+    let _: Value = client
+        .request("exec.cancel", json!({ "run": run }))
+        .await
+        .unwrap();
+    let ran = collect(client, run).await;
+    assert_eq!(ran.status, 130, "{ran:?}");
+    assert!(!worktree.join("ran.txt").exists());
+}
+
+#[tokio::test]
+async fn a_command_starts_only_once_the_copy_matches_the_session() {
+    let (c, mac) = linked().await;
+    assert_eq!(c.run(&["cat", "package.json"]).await.stdout, "{}\n");
+    // Edited on the central host between runs: the copy waits for the
+    // next run to get it.
+    write(&c.worktree.join("package.json"), "{\"name\":\"shop\"}\n");
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(
+        std::fs::read_to_string(routing_copy(&c, &mac).join("package.json")).unwrap(),
+        "{}\n"
+    );
+    assert_eq!(
+        c.run(&["cat", "package.json"]).await.stdout,
+        "{\"name\":\"shop\"}\n"
+    );
+}
+
+#[tokio::test]
+async fn a_file_changed_on_both_sides_during_a_run_keeps_the_central_version_and_saves_the_runs() {
+    let (c, _mac) = linked().await;
+    let (mut client, run) = c
+        .start(
+            &[
+                "sh",
+                "-c",
+                "echo started; sleep 2; echo run > run.sh; echo run > other.txt",
+            ],
+            &c.worktree.clone(),
+            json!({}),
+        )
+        .await;
+    loop {
+        let f = client.next_frame().await.unwrap().unwrap();
+        if matches!(&f, Frame::RunOutput { stream: 1, data, .. } if data.starts_with(b"started")) {
+            break;
+        }
+    }
+    write(&c.worktree.join("run.sh"), "central\n");
+    write(&c.worktree.join("notes.md"), "kept\n");
+    let ran = collect(client, run).await;
+    assert_eq!(ran.status, 0);
+    assert_eq!(
+        std::fs::read_to_string(c.worktree.join("run.sh")).unwrap(),
+        "central\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(c.worktree.join("other.txt")).unwrap(),
+        "run\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(c.worktree.join("notes.md")).unwrap(),
+        "kept\n"
+    );
+    let last = ran.stderr.lines().last().unwrap().to_string();
+    let prefix = "moonlet: run.sh changed on studio-mini during the run; the run's version is in ";
+    assert!(last.starts_with(prefix), "{last}");
+    let folder = PathBuf::from(&last[prefix.len()..]);
+    assert_eq!(
+        std::fs::read_to_string(folder.join("run.sh")).unwrap(),
+        "run\n"
+    );
+    assert!(
+        folder.starts_with(c.daemon.home.path().join("sync-leftovers")),
+        "{}",
+        folder.display()
+    );
+}
+
+#[tokio::test]
+async fn outputs_bring_back_an_ignored_coverage_folder() {
+    let (c, _mac) = linked().await;
+    // Last run's report, which this run's replaces.
+    write(&c.worktree.join("coverage/old.txt"), "stale\n");
+    let ran = c
+        .run(&[
+            "sh",
+            "-c",
+            "mkdir -p coverage/lcov && echo 87 > coverage/lcov/index.txt",
+        ])
+        .await;
+    assert_eq!(ran.stderr, "moonlet: running on Alex's MacBook Pro\n");
+    assert_eq!(
+        std::fs::read_to_string(c.worktree.join("coverage/lcov/index.txt")).unwrap(),
+        "87\n"
+    );
+    assert!(!c.worktree.join("coverage/old.txt").exists());
+    // Ignored, so nothing of it shows as a change in the session.
+    assert_eq!(git(&c.worktree, &["status", "--porcelain"]), "");
+}
+
+#[tokio::test]
+async fn a_symbolic_link_in_outputs_is_never_followed() {
+    let (c, _mac) = linked().await;
+    c.run(&[
+        "sh",
+        "-c",
+        "mkdir -p coverage && echo 1 > coverage/a.txt && ln -s /etc coverage/etc",
+    ])
+    .await;
+    let link = c.worktree.join("coverage/etc");
+    let meta = std::fs::symlink_metadata(&link).unwrap();
+    assert!(meta.file_type().is_symlink());
+    assert_eq!(std::fs::read_link(&link).unwrap(), PathBuf::from("/etc"));
+    // On the central host, a folder that leads elsewhere is never written
+    // through.
+    let elsewhere = tempfile::tempdir().unwrap();
+    std::fs::remove_dir_all(c.worktree.join("coverage")).unwrap();
+    std::os::unix::fs::symlink(elsewhere.path(), c.worktree.join("coverage")).unwrap();
+    let ran = c
+        .run(&["sh", "-c", "mkdir -p coverage && echo 2 > coverage/a.txt"])
+        .await;
+    assert_eq!(
+        ran.stderr.lines().last().unwrap(),
+        "moonlet: coverage is a symbolic link on studio-mini; not brought back"
+    );
+    assert!(!elsewhere.path().join("a.txt").exists());
+}
+
+#[tokio::test]
+async fn an_outputs_path_that_is_a_symbolic_link_is_skipped() {
+    let (c, _mac) = linked().await;
+    let ran = c.run(&["sh", "-c", "ln -s /etc coverage"]).await;
+    assert_eq!(
+        ran.stderr.lines().last().unwrap(),
+        "moonlet: coverage is a symbolic link; not brought back"
+    );
+    assert!(!c.worktree.join("coverage").exists());
+}
+
+#[tokio::test]
+async fn outputs_over_one_gib_stay_on_the_worker_and_say_so() {
+    let (c, _mac) = linked_as(&[("MOONLET_TEST_OUTPUTS_LIMIT", "10")]).await;
+    let ran = c
+        .run(&[
+            "sh",
+            "-c",
+            "mkdir -p coverage && printf 01234567890123456789 > coverage/big.txt",
+        ])
+        .await;
+    assert_eq!(
+        ran.stderr.lines().last().unwrap(),
+        "moonlet: outputs are 20 B, over the 10 B limit; not brought back"
+    );
+    assert!(!c.worktree.join("coverage").exists());
+}
+
+/// Where a run went, from its first line.
+fn ran_on(ran: &Ran) -> &str {
+    ran.stderr
+        .lines()
+        .next()
+        .and_then(|l| l.strip_prefix("moonlet: running on "))
+        .unwrap_or("")
+}
+
+#[tokio::test]
+async fn a_worker_that_has_not_approved_refuses_and_the_next_one_runs_it() {
+    let (c, mac) = linked_with(RUN_CONFIG, &[], false).await;
+    assert_eq!(ran_on(&c.run(&["sh", "run.sh"]).await), "studio-mini");
+    // The Mac approved other commands of the project: not this one.
+    let projects: Value = c.daemon.call("project.list", json!({})).await;
+    let _: Value = mac
+        .call(
+            "heavy.approve",
+            json!({ "identity": projects[0]["identity"], "commands": ["cat"], "env": ["CI"] }),
+        )
+        .await;
+    assert_eq!(ran_on(&c.run(&["sh", "run.sh"]).await), "studio-mini");
+    assert_eq!(
+        ran_on(&c.run(&["cat", "package.json"]).await),
+        "Alex's MacBook Pro"
+    );
+    approve_on(&c, &mac).await;
+    assert_eq!(
+        ran_on(&c.run(&["sh", "run.sh"]).await),
+        "Alex's MacBook Pro"
+    );
+}
+
+#[tokio::test]
+async fn a_missing_tool_sends_the_command_to_the_next_worker() {
+    let (c, _mac) = linked().await;
+    let ran = c.run(&["shop-tool"]).await;
+    assert_eq!(ran_on(&ran), "studio-mini");
+    assert_eq!(ran.stdout, "tool\n");
+}
+
+#[tokio::test]
+async fn a_worker_waiting_for_setup_approval_is_skipped() {
+    let config = format!("setup = \"true\"\n{RUN_CONFIG}");
+    let (c, _mac) = linked_with(&config, &[], true).await;
+    assert_eq!(ran_on(&c.run(&["sh", "run.sh"]).await), "studio-mini");
+}
+
+#[tokio::test]
+async fn a_worker_with_no_free_slot_is_skipped() {
+    let (c, mac) = linked().await;
+    let _: Value = mac
+        .call("link.set", json!({ "worker": { "slots": 1 } }))
+        .await;
+    for _ in 0..100 {
+        let list: Value = c.daemon.call("worker.list", json!({})).await;
+        if list[0]["slots"] == json!(1) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let (mut first, run) = c
+        .start(
+            &["sh", "-c", "echo started; sleep 3"],
+            &c.worktree.clone(),
+            json!({}),
+        )
+        .await;
+    let mut said = Vec::new();
+    loop {
+        match first.next_frame().await.unwrap().unwrap() {
+            Frame::RunOutput {
+                stream: 2, data, ..
+            } => said.extend(data),
+            Frame::RunOutput {
+                stream: 1, data, ..
+            } if data.starts_with(b"started") => break,
+            _ => {}
+        }
+    }
+    assert_eq!(
+        String::from_utf8_lossy(&said),
+        "moonlet: running on Alex's MacBook Pro\n"
+    );
+    assert_eq!(ran_on(&c.run(&["sh", "run.sh"]).await), "studio-mini");
+    assert_eq!(collect(first, run).await.status, 0);
+    // Two at once: the Mac takes one, whatever the central host thought.
+    // Long enough to overlap however slow preparing the other one is.
+    let (a, b) = tokio::join!(
+        c.run(&["sh", "-c", "sleep 4"]),
+        c.run(&["sh", "-c", "sleep 4"])
+    );
+    let mut on = vec![ran_on(&a).to_string(), ran_on(&b).to_string()];
+    on.sort();
+    assert_eq!(on, ["Alex's MacBook Pro", "studio-mini"]);
+}
+
+#[tokio::test]
+async fn a_command_with_no_free_worker_runs_on_the_central_host() {
+    let (c, _mac) = linked_as(&[("MOONLET_TEST_LOAD", "1000")]).await;
+    assert_eq!(ran_on(&c.run(&["sh", "run.sh"]).await), "studio-mini");
+}
+
+#[tokio::test]
+async fn a_copy_that_cannot_match_in_time_refuses_not_fenced() {
+    let (c, _mac) = linked().await;
+    assert_eq!(
+        ran_on(&c.run(&["sh", "run.sh"]).await),
+        "Alex's MacBook Pro"
+    );
+    // Off its branch, the session cannot be fenced: the command stays.
+    git(&c.worktree, &["checkout", "-q", "--detach"]);
+    assert_eq!(ran_on(&c.run(&["sh", "run.sh"]).await), "studio-mini");
+}
+
+#[tokio::test]
+async fn a_worker_that_goes_away_mid_run_makes_the_command_run_again_on_the_central_host() {
+    let (c, mac) = linked().await;
+    // On the Mac the run leaves a mark in its copy; on the central host
+    // it does not.
+    let (mut client, run) = c
+        .start(
+            &[
+                "sh",
+                "-c",
+                "case \"$PWD\" in */runs/*) echo mac > from-mac.txt;; esac; echo started; sleep 3; echo finished",
+            ],
+            &c.worktree.clone(),
+            json!({}),
+        )
+        .await;
+    let mut said = Vec::new();
+    loop {
+        match client.next_frame().await.unwrap().unwrap() {
+            Frame::RunOutput {
+                stream: 2, data, ..
+            } => said.extend(data),
+            Frame::RunOutput {
+                stream: 1, data, ..
+            } if data.starts_with(b"started") => break,
+            _ => {}
+        }
+    }
+    assert_eq!(
+        String::from_utf8_lossy(&said),
+        "moonlet: running on Alex's MacBook Pro\n"
+    );
+    let pid = nix::unistd::Pid::from_raw(mac.child.id() as i32);
+    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGSTOP).unwrap();
+    let ran = collect(client, run).await;
+    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGCONT).unwrap();
+    assert_eq!(ran.status, 0);
+    assert_eq!(
+        ran.stderr,
+        "moonlet: Alex's MacBook Pro went away. Running again on studio-mini.\nmoonlet: running on studio-mini\n"
+    );
+    assert_eq!(ran.stdout, "started\nfinished\n");
+}
+
+#[tokio::test]
+async fn an_abandoned_runs_changes_never_reach_the_session() {
+    let (c, mac) = linked().await;
+    let (mut client, run) = c
+        .start(
+            &["sh", "-c", "echo mac > from-mac.txt; echo started; sleep 3"],
+            &c.worktree.clone(),
+            json!({}),
+        )
+        .await;
+    loop {
+        if let Frame::RunOutput {
+            stream: 1, data, ..
+        } = client.next_frame().await.unwrap().unwrap()
+            && data.starts_with(b"started")
+        {
+            break;
+        }
+    }
+    let pid = nix::unistd::Pid::from_raw(mac.child.id() as i32);
+    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGSTOP).unwrap();
+    // Run again on the central host, where it writes the file itself.
+    let ran = collect(client, run).await;
+    assert_eq!(ran.status, 0);
+    std::fs::remove_file(c.worktree.join("from-mac.txt")).unwrap();
+    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGCONT).unwrap();
+    // The Mac links again; the abandoned run's file goes with its copy's
+    // return to the fence, and never reaches the session.
+    let copy = routing_copy(&c, &mac);
+    for _ in 0..200 {
+        if !copy.join("from-mac.txt").exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(!copy.join("from-mac.txt").exists());
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert!(!c.worktree.join("from-mac.txt").exists());
+    // And the Mac runs the next command from the session's files.
+    assert_eq!(
+        ran_on(&c.run(&["sh", "run.sh"]).await),
+        "Alex's MacBook Pro"
+    );
+    assert!(!c.worktree.join("from-mac.txt").exists());
+}
+
+#[tokio::test]
+async fn the_copys_path_reads_as_the_sessions_in_output() {
+    let (c, _mac) = linked().await;
+    let ran = c.run(&["sh", "-c", "pwd; echo \"$PWD/run.sh\" >&2"]).await;
+    assert_eq!(ran_on(&ran), "Alex's MacBook Pro");
+    let session = c.worktree.display().to_string();
+    assert_eq!(ran.stdout, format!("{session}\n"));
+    assert!(
+        ran.stderr.ends_with(&format!("{session}/run.sh\n")),
+        "{}",
+        ran.stderr
+    );
+}
+
+async fn gone(path: &Path) -> bool {
+    for _ in 0..200 {
+        if !path.exists() {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    false
+}
+
+#[tokio::test]
+async fn archiving_the_session_removes_its_routing_copies() {
+    let (c, mac) = linked().await;
+    assert_eq!(
+        ran_on(&c.run(&["sh", "run.sh"]).await),
+        "Alex's MacBook Pro"
+    );
+    let copy = routing_copy(&c, &mac);
+    assert!(copy.exists());
+    let _: Value = c
+        .daemon
+        .call("session.archive", json!({ "id": c.session, "force": true }))
+        .await;
+    assert!(gone(&copy).await, "the routing copy stayed");
+    assert!(!mac.home.path().join("sync-leftovers").exists());
+}
+
+#[tokio::test]
+async fn turning_heavy_commands_off_removes_the_routing_copies() {
+    let (c, mac) = linked().await;
+    assert_eq!(
+        ran_on(&c.run(&["sh", "run.sh"]).await),
+        "Alex's MacBook Pro"
+    );
+    let copy = routing_copy(&c, &mac);
+    let _: Value = mac
+        .call("link.set", json!({ "worker": { "enabled": false } }))
+        .await;
+    assert!(gone(&copy).await, "the routing copy stayed");
+}
+
+#[tokio::test]
+async fn a_routing_copy_unused_for_seven_days_is_removed() {
+    let (c, mac) = linked_as(&[
+        ("MOONLET_TEST_RUN_COPY_TTL_MS", "1500"),
+        ("MOONLET_TEST_RUN_COPY_SWEEP_MS", "100"),
+    ])
+    .await;
+    assert_eq!(
+        ran_on(&c.run(&["sh", "run.sh"]).await),
+        "Alex's MacBook Pro"
+    );
+    assert!(
+        gone(&routing_copy(&c, &mac)).await,
+        "the routing copy stayed"
+    );
+    // And the next run makes it again.
+    assert_eq!(
+        ran_on(&c.run(&["sh", "run.sh"]).await),
+        "Alex's MacBook Pro"
     );
 }
