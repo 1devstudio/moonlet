@@ -80,12 +80,12 @@ describe("Design card render check and snapshots", () => {
     const ws = workspaceId();
     const card = "components/buttons/button/button.html";
     const whole = rpc<{ path: string; blank: boolean }>(w, "design.snap", { workspace: ws, slug: SLUG, path: card });
-    expect(whole).toEqual({ path: join(dir(), ".cache", "screenshots", "button-720x200.png"), blank: false });
+    expect(whole).toEqual({ path: join(dir(), ".cache", "screenshots", "components", "buttons", "button", "button-720x200.png"), blank: false });
     const png = readFileSync(whole.path);
     expect(png.subarray(0, 8)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
     expect(pngSize(png)).toEqual([720, 200]);
     const ghost = rpc<{ path: string; blank: boolean }>(w, "design.snap", { workspace: ws, slug: SLUG, path: card, variant: "ghost", viewport: [400, 160] });
-    expect(ghost).toEqual({ path: join(dir(), ".cache", "screenshots", "button--ghost-400x160.png"), blank: false });
+    expect(ghost).toEqual({ path: join(dir(), ".cache", "screenshots", "components", "buttons", "button", "button--ghost-400x160.png"), blank: false });
     expect(pngSize(readFileSync(ghost.path))).toEqual([400, 160]);
   });
 
