@@ -2439,7 +2439,7 @@ async fn a_designs_comments_are_put_sent_resolved_and_counted_in_its_listing() {
     let sent: serde_json::Value = c
         .request(
             methods::DESIGN_COMMENT_PUT,
-            serde_json::json!({"workspace": ws, "slug": "settings-page", "sent": {"pins": [1]}}),
+            serde_json::json!({"workspace": ws, "slug": "settings-page", "sent": {"pins": [{"n": 1, "comment": "Collapse into a menu on phone"}]}}),
         )
         .await
         .unwrap();

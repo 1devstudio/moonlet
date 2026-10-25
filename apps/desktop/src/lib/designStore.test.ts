@@ -548,7 +548,19 @@ describe("a design's comments (X65)", () => {
     expect(sent).toEqual([
       ["design.comment.put", { workspace: "w-1devstudio", slug: "settings-page", new: { page: "index", mid: "m33", tag: "div", text: "Warn", comment: "More space" } }],
       ["chat.send", { id: 12, text: 'Comment on index.html [data-mid=m12] (nav "General Appearance"): Collapse into a menu on phone\nComment on index.html [data-mid=m33] (div "Warn"): More space', images: [] }],
-      ["design.comment.put", { workspace: "w-1devstudio", slug: "settings-page", sent: { pins: [1, 3] } }],
+      [
+        "design.comment.put",
+        {
+          workspace: "w-1devstudio",
+          slug: "settings-page",
+          sent: {
+            pins: [
+              { n: 1, comment: "Collapse into a menu on phone" },
+              { n: 3, comment: "More space" },
+            ],
+          },
+        },
+      ],
     ]);
     expect(ns()).toEqual([
       [1, "open", 9],
