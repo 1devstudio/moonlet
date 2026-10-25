@@ -2,7 +2,8 @@
 //! `~/.moonlet/design/<workspace id>/designs/<slug>/` with `design.toml`,
 //! `pages/`, `assets/`, `comments.json` and `history/`. Its agent may edit
 //! all of that, `design.toml` included; what moonlet trusts (the agent's
-//! chat) is in `<workspace>/.records/designs/<slug>.toml`, outside its reach.
+//! chat) is in `<workspace>/.records/designs/<slug>.toml`, outside its
+//! folders, so it cannot change it without the user approving the edit.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -91,7 +92,8 @@ pub struct DesignSummary {
     pub error: Option<String>,
 }
 
-/// What moonlet trusts about a design, where its agent cannot write.
+/// What moonlet trusts about a design, outside its agent's folders: the agent
+/// cannot change it without the user approving the edit.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DesignRecord {
     /// The chat of its agent.
