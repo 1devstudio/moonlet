@@ -264,6 +264,11 @@ impl CloudSettings {
             {
                 return Err(invalid(format!("{id} has no field {k}")));
             }
+            for (k, v) in fields {
+                if let Some(v) = v.as_deref().filter(|v| !v.trim().is_empty()) {
+                    moonlet_cloud::check_field(id, k, v).map_err(invalid)?;
+                }
+            }
             // A secret cleared while its machines run: none could be destroyed.
             let clears = |f: &&moonlet_cloud::Field| {
                 f.secret
