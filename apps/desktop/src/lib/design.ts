@@ -1,6 +1,6 @@
 // Design mode's labels and names (X64, X65). Pure: the store is designStore.ts.
 
-import type { DesignSystem } from "./protocol";
+import type { AgentState, Design, DesignSystem } from "./protocol";
 
 export interface RowLabel {
   text: string;
@@ -19,6 +19,24 @@ export function systemLabel(sys: DesignSystem, now: number, working: boolean): R
   if (sys.to_settle) return { text: `${sys.to_settle} to settle`, tone: "changed" };
   if (sys.changed_sources.length) return { text: `${sys.changed_sources.length} changed`, tone: "changed" };
   return { text: shortAge(now - sys.synced_at), tone: "muted" };
+}
+
+export interface DesignRowLabel extends RowLabel {
+  /** Its agent's state, for the dot; null without an agent. */
+  state: AgentState | null;
+  /** `text` counts open comments. */
+  comments: boolean;
+}
+
+/** A design's sidebar row (X65): its agent's state (`state`, the agent's
+ *  live state, which the caller knows), then needs you, else its open
+ *  comments, else its age. */
+export function designRow(d: Design, now: number, state: AgentState | null): DesignRowLabel {
+  const dot = d.agent === null ? null : state;
+  if (d.error) return { state: dot, text: "unreadable", tone: "error", comments: false };
+  if (d.needs_you) return { state: dot, text: "needs you", tone: "attention", comments: false };
+  if (d.open_comments > 0) return { state: dot, text: String(d.open_comments), tone: "muted", comments: true };
+  return { state: dot, text: shortAge(now - d.updated_at), tone: "muted", comments: false };
 }
 
 /** "now", "12m", "5h", "3d", "2w". */
