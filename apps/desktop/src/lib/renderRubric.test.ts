@@ -78,4 +78,16 @@ describe("the render rubric (X64)", () => {
       expect(readMeasurements(bad)).toBeNull();
     }
   });
+
+  // Measured by the measuring script in the app's WebKit (e2e, 2026-10-25):
+  // a two-variant button, a field whose mount was left empty, and a badge in 4 px type.
+  it("judges measurements captured from real cards", () => {
+    const button = {"errors":[],"fallback":false,"cells":[{"snippet":"buttons/button/primary","escaped":0,"empty":false,"html":"<button class=\"btn\">Create PR</button>","text":"Create PR","overflow680":0,"textHeight":16.48828125,"painted":1},{"escaped":0,"snippet":"buttons/button/ghost","overflow680":0,"html":"<button class=\"btn btn--ghost\">Cancel</button>","text":"Cancel","textHeight":16.48828125,"empty":false,"painted":1}],"fixedOutside":0,"name":"Button"};
+    const field = {"cells":[{"snippet":"forms/field/default","escaped":0,"empty":true,"text":"","html":"","overflow680":0,"textHeight":0,"painted":0}],"fallback":false,"errors":[],"fixedOutside":0,"name":"Field"};
+    const badge = {"errors":[],"fallback":false,"cells":[{"snippet":"data/badge/count","escaped":0,"empty":false,"html":"<span style=\"font-size:4px\">3</span>","text":"3","overflow680":0,"textHeight":5,"painted":0}],"fixedOutside":0,"name":"Badge"};
+    const judge = (m: unknown) => rubric(readMeasurements(m)!);
+    expect(judge(button)).toEqual([]);
+    expect(judge(field)).toEqual(["rootEmpty", "allHollow", "thin", "bad"]);
+    expect(judge(badge)).toEqual(["collapsed", "thin"]);
+  });
 });
