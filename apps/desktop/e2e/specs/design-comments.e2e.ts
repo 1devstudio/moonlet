@@ -79,6 +79,18 @@ describe("A design's comments", () => {
     await expect(rail()).toBeDisplayed();
   });
 
+  it("shows and hides the right rail with its button, and Comment mode shows it", async () => {
+    const toggle = $('//button[@title="Comments"]');
+    await toggle.click();
+    await expect(rail()).not.toBeExisting();
+    await toggle.click();
+    await expect(rail()).toBeDisplayed();
+    await toggle.click();
+    await $('//div[@aria-label="Canvas mode"]/button[normalize-space()="View"]').click();
+    await $('//div[@aria-label="Canvas mode"]/button[starts-with(normalize-space(), "Comment")]').click();
+    await expect(rail()).toBeDisplayed();
+  });
+
   // WebDriver's pointer never reaches the page: it is in a sandboxed frame on
   // another host, in its own web process, where WebDriver cannot switch to
   // and its pointer actions are not delivered (tried: a click at the frame's
