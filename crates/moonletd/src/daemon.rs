@@ -1663,6 +1663,10 @@ impl Daemon {
         let (d, ws, sl, saves) = (self.clone(), workspace.to_string(), slug.to_string(), pending.saves);
         let quiet = tokio::spawn(async move {
             tokio::time::sleep(d.edits_quiet).await;
+            // The agent's pages may be half written: its turn keeps them.
+            if d.design_agent_working(&ws, &sl).await.unwrap_or(false) {
+                return;
+            }
             let edits = {
                 let mut all = d.hand_edits.lock().unwrap();
                 // A later save waits on.
