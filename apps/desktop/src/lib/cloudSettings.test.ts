@@ -17,6 +17,7 @@ import {
   projectCloudChange,
   projectCloudDraft,
   projectCloudErrors,
+  projectCloudSaveErrors,
   projectCloudKey,
   providerForm,
   providerName,
@@ -366,6 +367,18 @@ describe("a project's cloud workers (X63)", () => {
     // Lists not loaded yet, or not readable: nothing to say.
     expect(projectCloudErrors(d, { types: null, images: null })).toEqual({});
     expect(projectCloudErrors(d)).toEqual({});
+  });
+
+  it("a saved type the provider retired holds back Save only once the cloud setting changes", () => {
+    const key = " 6b0ff5f6474428fae67b56a2a026b1849c28ff05";
+    const saved = { overflow: true, provider: "hetzner", type: "cpx41", location: "fsn1", image: "ubuntu-24.04" };
+    const offered = { types: [{ name: "cpx42", cores: 8, memory_gb: 16, arch: "x86" }], images: [{ name: "ubuntu-24.04", label: "Ubuntu 24.04", arch: "x86" }] };
+    const withSaved = info({ projects: { [key]: saved } });
+    // Untouched: the project page's other edits can still be saved.
+    expect(projectCloudSaveErrors(withSaved, key, saved, offered)).toBe(0);
+    // Changed, still with the retired type: Save waits.
+    expect(projectCloudSaveErrors(withSaved, key, { ...saved, overflow: false }, offered)).toBe(1);
+    expect(projectCloudSaveErrors(withSaved, key, { ...saved, type: "cpx42" }, offered)).toBe(0);
   });
 
   it("the footer counts the project's machines and their commands", () => {

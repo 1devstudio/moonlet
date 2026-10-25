@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Play } from "lucide-react";
 import { rpc } from "../../lib/daemon";
-import { imageOptions, locationOptions, machineTypeLabel, type Offered, projectCloudChange, projectCloudDraft, projectCloudErrors, projectCloudFooter, projectCloudKey, type ProjectCloudDraft } from "../../lib/cloudSettings";
+import { imageOptions, locationOptions, machineTypeLabel, type Offered, projectCloudChange, projectCloudDraft, projectCloudErrors, projectCloudFooter, projectCloudSaveErrors, projectCloudKey, type ProjectCloudDraft } from "../../lib/cloudSettings";
 import { useCloud } from "../../lib/cloudStore";
 import { M, type CloudImage, type CloudInfo, type CloudLocation, type MachineType, type ProjectIdentity } from "../../lib/protocol";
 import { goSettings } from "../../lib/settingsNavigation";
@@ -96,7 +96,7 @@ export function useProjectCloud(host: string, identity: ProjectIdentity | null |
   const lists = useProviderLists(host, draft?.provider ?? "", draft?.location.trim() ?? "");
   const shown = central && !!key && !!info && !!draft;
   const change = shown ? projectCloudChange(info, key, draft) : null;
-  const errors = shown && draft ? projectCloudErrors(draft, offered(lists)) : {};
+  const errors = shown && draft ? projectCloudSaveErrors(info, key, draft, offered(lists)) : 0;
   const save = async () => {
     if (change) show(await rpc<CloudInfo>(host, M.cloudSet, change));
   };
@@ -110,7 +110,7 @@ export function useProjectCloud(host: string, identity: ProjectIdentity | null |
     setDraft,
     lists,
     dirty: !!change,
-    errors: Object.keys(errors).length,
+    errors,
     save,
     discard: () => info && key && setDraft(projectCloudDraft(info, key)),
   };

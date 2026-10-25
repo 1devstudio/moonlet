@@ -307,6 +307,13 @@ export function projectCloudErrors(d: ProjectCloudDraft, offered: Offered = {}):
   return e;
 }
 
+/** How many of the cloud setting's errors hold back the project page's
+ * Save: none while the setting is unchanged, so a type the provider retired
+ * since does not block the page's other edits. */
+export function projectCloudSaveErrors(info: CloudInfo, key: string, d: ProjectCloudDraft, offered: Offered): number {
+  return projectCloudChange(info, key, d) ? Object.keys(projectCloudErrors(d, offered)).length : 0;
+}
+
 /** "hour", "2 hours", "10 minutes". */
 function unitText(secs: number): string {
   if (secs % 3600 === 0) return secs === 3600 ? "hour" : `${secs / 3600} hours`;
