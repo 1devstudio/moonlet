@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Design, DesignSystem, TerminalInfo } from "./protocol";
 import { modeOf, setMode } from "./mode";
 import { agentOnScreen, goToAgent, useStore } from "./store";
-import { cardsOf, createSystem, designsOf, detectStack, latestOf, loadCards, loadDesigns, loadSystems, openCard, saveViewport, pageRevOf, revOf, shownCard, shownDesign, shownSystem, showDesign, showSystem, startDesign, systemNameOf, systemsOf, useDesign } from "./designStore";
+import { cardsOf, checkDesign, createSystem, designsOf, detectStack, latestOf, loadCards, loadDesigns, loadSystems, openCard, saveViewport, pageRevOf, problemsOf, revOf, shownCard, shownDesign, shownSystem, showDesign, showSystem, startDesign, systemNameOf, systemsOf, useDesign } from "./designStore";
 
 const calls = vi.hoisted(() => [] as { host: string; method: string; params: unknown }[]);
 /** What the daemon answers, by method. */
@@ -350,6 +350,21 @@ describe("a design's pages on a change (X65)", () => {
     await loadDesigns("local", "w-1devstudio");
     changed("w-1devstudio", { design: "settings-page", paths: ["pages/index.html"] });
     expect(pageRevOf(useDesign.getState(), "local", "w-1devstudio", "settings-page", "index")).toBe(1);
+  });
+});
+
+describe("a design's check (X65)", () => {
+  const problems = () => problemsOf(useDesign.getState(), "local", "w-1devstudio", "settings-page");
+
+  it("keeps no earlier problems once a check fails, so the bar never shows them as the page's", async () => {
+    answers["design.check"] = () => [{ path: "pages/index.html", line: 4, kind: "missing_mid", message: "<p> has no data-mid" }];
+    await checkDesign("local", "w-1devstudio", "settings-page");
+    expect(problems()).toEqual([{ path: "pages/index.html", line: 4, kind: "missing_mid", message: "<p> has no data-mid" }]);
+    answers["design.check"] = () => {
+      throw new Error("cannot read pages/index.html");
+    };
+    await checkDesign("local", "w-1devstudio", "settings-page");
+    expect(problems()).toEqual([]);
   });
 });
 
