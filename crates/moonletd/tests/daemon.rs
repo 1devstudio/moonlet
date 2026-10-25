@@ -2414,3 +2414,168 @@ async fn a_file_written_in_a_design_system_is_announced() {
         }
     }
 }
+
+/// A design system with two cards for the render check (X64): a button
+/// with two variants, and a field whose mount is empty.
+async fn render_fixture(d: &TestDaemon) -> (Client, String, PathBuf) {
+    let mut c = d.client().await;
+    let ws: moonlet_proto::types::Workspace = c.request(methods::WORKSPACE_CREATE, serde_json::json!({"name": "1devstudio", "color": "clay"})).await.unwrap();
+    let _: serde_json::Value = c
+        .request(methods::DESIGN_SYSTEM_CREATE, serde_json::json!({"workspace": ws.id, "name": "storefront", "sources": [], "agent": false}))
+        .await
+        .unwrap();
+    let dir = d.home.path().join("design").join(&ws.id).join("systems/storefront");
+    for (path, text) in [
+        ("styles.css", "@import \"components.css\";\n"),
+        ("components.css", ".btn { color: red; }\n"),
+        (
+            "components/buttons/button/button.html",
+            "<!-- @dsCard group=\"Buttons\" name=\"Button\" viewport=\"320x140\" -->\n<!doctype html>\n<html><head><link rel=\"stylesheet\" href=\"../../../styles.css\"></head><body><section class=\"ds-cell\" data-snippet=\"buttons/button/primary\"><h4>primary</h4><div class=\"ds-mount\"><button class=\"btn\">Run</button></div></section><section class=\"ds-cell\" data-snippet=\"buttons/button/ghost\"><h4>ghost</h4><div class=\"ds-mount\"><button class=\"btn\">Cancel</button></div></section></body></html>\n",
+        ),
+        (
+            "components/forms/field/field.html",
+            "<!-- @dsCard group=\"Forms\" name=\"Field\" -->\n<!doctype html>\n<html><head><link rel=\"stylesheet\" href=\"../../../styles.css\"></head><body><section class=\"ds-cell\" data-snippet=\"forms/field/default\"><h4>default</h4><div class=\"ds-mount\"></div></section></body></html>\n",
+        ),
+    ] {
+        std::fs::create_dir_all(dir.join(path).parent().unwrap()).unwrap();
+        std::fs::write(dir.join(path), text).unwrap();
+    }
+    (c, ws.id, dir)
+}
+
+/// A stand-in for the moonlet app (X64): says it renders cards, then
+/// answers each `design.render` it gets, and hands every one to `seen`. A
+/// card's flags: the field's empty mount is bad; a screenshot is the PNG
+/// signature, padded to `png_bytes`.
+async fn fake_app(d: &TestDaemon, png_bytes: usize) -> tokio::sync::mpsc::UnboundedReceiver<serde_json::Value> {
+    let mut app = Client::connect(&d.socket, "moonlet-app").await.unwrap();
+    let _: serde_json::Value = app.request(methods::DESIGN_RENDER_READY, serde_json::json!({})).await.unwrap();
+    let (seen, rx) = tokio::sync::mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        while let Ok(Some(f)) = app.next_frame().await {
+            let Frame::Json(Message::Event { name, data }) = f else { continue };
+            if name != methods::EV_DESIGN_RENDER {
+                continue;
+            }
+            let mut done = serde_json::json!({"id": data["id"]});
+            if data["want"] == "png" {
+                // `iVBORw0KGgo` is the PNG signature; each `AAAA` three zero bytes more.
+                done["png_base64"] = format!("iVBORw0KGgo{}", "A".repeat((png_bytes - 8) / 3 * 4 + 1)).into();
+            } else if data["path"].as_str().is_some_and(|p| p.ends_with("field.html")) {
+                done["metrics"] = serde_json::json!({"flags": ["rootEmpty", "bad"], "errors": []});
+            } else {
+                done["metrics"] = serde_json::json!({"flags": [], "errors": []});
+            }
+            let _ = seen.send(data);
+            let _: serde_json::Value = app.request(methods::DESIGN_RENDER_DONE, done).await.unwrap();
+        }
+    });
+    rx
+}
+
+#[tokio::test]
+async fn the_app_renders_each_card_for_the_render_check_and_its_flags_are_kept() {
+    let d = TestDaemon::start().await;
+    let (mut c, w, dir) = render_fixture(&d).await;
+    let mut seen = fake_app(&d, 100).await;
+    let out: serde_json::Value = c
+        .request(methods::DESIGN_CHECK, serde_json::json!({"workspace": w, "slug": "storefront", "render": true}))
+        .await
+        .unwrap();
+    assert_eq!(out["render"], serde_json::json!({"total": 2, "bad": 1, "thin": 0, "variants_identical": 0}));
+    assert!(out["problems"].is_array(), "{out}");
+    // Each card was asked of the app, by its path in the workspace's design folder.
+    let mut asked = Vec::new();
+    while let Ok(a) = seen.try_recv() {
+        asked.push((a["path"].as_str().unwrap().to_string(), a["viewport"].clone(), a["want"].clone(), a["workspace"].clone()));
+    }
+    assert_eq!(
+        asked,
+        vec![
+            ("systems/storefront/components/buttons/button/button.html".into(), serde_json::json!([320, 140]), serde_json::json!("metrics"), serde_json::json!(w)),
+            ("systems/storefront/components/forms/field/field.html".into(), serde_json::json!([900, 700]), serde_json::json!("metrics"), serde_json::json!(w)),
+        ]
+    );
+    let report: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join(".cache/render-check.json")).unwrap()).unwrap();
+    assert_eq!(
+        report["cards"],
+        serde_json::json!([
+            {"path": "components/buttons/button/button.html", "flags": []},
+            {"path": "components/forms/field/field.html", "flags": ["rootEmpty", "bad"]},
+        ])
+    );
+    // Without `render`, the check is the plain list of problems, as before.
+    let plain: serde_json::Value = c.request(methods::DESIGN_CHECK, serde_json::json!({"workspace": w, "slug": "storefront"})).await.unwrap();
+    assert!(plain.is_array(), "{plain}");
+}
+
+#[tokio::test]
+async fn the_app_snaps_a_card_and_the_screenshot_is_saved_in_the_system() {
+    let d = TestDaemon::start().await;
+    let (mut c, w, dir) = render_fixture(&d).await;
+    let mut seen = fake_app(&d, 6 * 1024).await;
+    let shot: serde_json::Value = c
+        .request(
+            methods::DESIGN_SNAP,
+            serde_json::json!({"workspace": w, "slug": "storefront", "path": "components/buttons/button/button.html", "variant": "ghost"}),
+        )
+        .await
+        .unwrap();
+    let path = dir.join(".cache/screenshots/button--ghost-320x140.png");
+    assert_eq!(shot, serde_json::json!({"path": path, "blank": false}));
+    let png = std::fs::read(&path).unwrap();
+    assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+    let asked = seen.recv().await.unwrap();
+    assert_eq!(
+        (asked["variant"].as_str(), asked["want"].as_str(), asked["viewport"].clone()),
+        (Some("buttons/button/ghost"), Some("png"), serde_json::json!([320, 140]))
+    );
+    // A card that is not one, or a variant it does not have, is refused before the app is asked.
+    for (path, variant) in [("components/buttons/button/../button/button.html", None), ("components/buttons/button/button.html", Some("danger"))] {
+        let e = c
+            .request::<_, serde_json::Value>(methods::DESIGN_SNAP, serde_json::json!({"workspace": w, "slug": "storefront", "path": path, "variant": variant}))
+            .await;
+        assert!(e.is_err(), "{path} {variant:?}");
+    }
+}
+
+#[tokio::test]
+async fn a_screenshot_under_5_kb_is_blank() {
+    let d = TestDaemon::start().await;
+    let (mut c, w, _) = render_fixture(&d).await;
+    let _seen = fake_app(&d, 100).await;
+    let shot: serde_json::Value = c
+        .request(methods::DESIGN_SNAP, serde_json::json!({"workspace": w, "slug": "storefront", "path": "components/forms/field/field.html", "viewport": [600, 400]}))
+        .await
+        .unwrap();
+    assert_eq!(shot["blank"], true);
+    assert!(shot["path"].as_str().unwrap().ends_with("/.cache/screenshots/field-600x400.png"), "{shot}");
+}
+
+#[tokio::test]
+async fn without_the_app_the_render_check_and_snap_say_to_open_moonlet() {
+    let d = TestDaemon::start().await;
+    let (mut c, w, dir) = render_fixture(&d).await;
+    // An agent's CLI cannot stand in for the app.
+    let mut cli = Client::connect(&d.socket, "moonlet-cli").await.unwrap();
+    let refused = cli.request::<_, serde_json::Value>(methods::DESIGN_RENDER_READY, serde_json::json!({})).await;
+    assert!(refused.is_err());
+    for (method, params) in [
+        (methods::DESIGN_CHECK, serde_json::json!({"workspace": w, "slug": "storefront", "render": true})),
+        (methods::DESIGN_SNAP, serde_json::json!({"workspace": w, "slug": "storefront", "path": "components/buttons/button/button.html"})),
+    ] {
+        let e = c.request::<_, serde_json::Value>(method, params).await.unwrap_err();
+        assert_eq!(e.to_string(), "no_app: Open moonlet to render cards", "{method}");
+    }
+    // The rest of the check ran: the manifest is written.
+    assert!(dir.join("_ds_manifest.json").is_file());
+    // An app that said it renders, then quit, renders no more.
+    let mut app = Client::connect(&d.socket, "moonlet-app").await.unwrap();
+    let _: serde_json::Value = app.request(methods::DESIGN_RENDER_READY, serde_json::json!({})).await.unwrap();
+    drop(app);
+    let e = c
+        .request::<_, serde_json::Value>(methods::DESIGN_SNAP, serde_json::json!({"workspace": w, "slug": "storefront", "path": "components/buttons/button/button.html"}))
+        .await
+        .unwrap_err();
+    assert_eq!(e.to_string(), "no_app: Open moonlet to render cards");
+}

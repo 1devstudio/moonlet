@@ -18,6 +18,7 @@ mod link;
 mod machines;
 mod mobile;
 mod notify;
+mod render;
 mod server;
 mod service;
 mod sync;
