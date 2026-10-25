@@ -62,6 +62,9 @@ enum Cmd {
     /// approved heavy commands to this; with no central host to route it,
     /// the command runs here.
     Exec {
+        /// The Claude Code tool call it runs for, so its job is found (X62).
+        #[arg(long)]
+        tool_use: Option<String>,
         /// The command and its arguments, after `--`.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
         command: Vec<String>,
@@ -259,11 +262,11 @@ fn main() {
         .enable_all()
         .build()
         .expect("runtime");
-    if let Cmd::Exec { command } = &cli.cmd {
+    if let Cmd::Exec { command, tool_use } = &cli.cmd {
         // In a session, the session's daemon runs it (X62); anything it
         // refuses, or no daemon at all, runs here as without moonlet.
         if let Ok(session) = std::env::var("MOONLET_SESSION") {
-            if let Some(status) = rt.block_on(exec::routed(&socket, &session, command)) {
+            if let Some(status) = rt.block_on(exec::routed(&socket, &session, command, tool_use.clone())) {
                 std::process::exit(status);
             }
         }

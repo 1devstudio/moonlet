@@ -1,0 +1,32 @@
+   Compiling tax v0.1.0 (/Users/alex/src/shop/tax)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running unittests src/lib.rs (target/debug/deps/cart-dc1157402d1613a2)
+
+running 2 tests
+test tests::adds ... ok
+test tests::empty ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/tax-99257ddb5d349e16)
+
+running 1 test
+test tests::rate ... FAILED
+
+failures:
+
+---- tests::rate stdout ----
+
+thread 'tests::rate' (324817627) panicked at tax/src/lib.rs:4:25:
+assertion `left == right` failed
+  left: 20
+ right: 25
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::rate
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p tax --lib`

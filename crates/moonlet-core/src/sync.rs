@@ -1042,6 +1042,25 @@ pub async fn init_repo(dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The files that differ between trees `from` and `to` in `repo`, with
+/// the lines added and removed in each (0 and 0 for a binary file).
+pub async fn numstat(repo: &Path, from: &str, to: &str) -> Result<Vec<(String, u64, u64)>> {
+    if !is_object_id(from) || !is_object_id(to) {
+        bail!("not an object id");
+    }
+    let out = git_env(repo, &[], &["diff", "--numstat", "-z", "--no-renames", from, to], None).await?;
+    let mut files = Vec::new();
+    for record in out.split(|b| *b == 0).filter(|r| !r.is_empty()) {
+        let text = String::from_utf8_lossy(record);
+        let mut parts = text.splitn(3, '\t');
+        let (Some(added), Some(removed), Some(path)) = (parts.next(), parts.next(), parts.next()) else {
+            continue;
+        };
+        files.push((path.to_string(), added.parse().unwrap_or(0), removed.parse().unwrap_or(0)));
+    }
+    Ok(files)
+}
+
 /// Stores `bytes` as a blob in `repo` and gives its id.
 pub async fn hash_bytes(repo: &Path, bytes: &[u8]) -> Result<String> {
     let out = git_env(repo, &[], &["hash-object", "-w", "--stdin"], Some(bytes)).await?;

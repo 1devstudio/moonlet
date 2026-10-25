@@ -1,0 +1,8 @@
+[96msrc/cart.ts[0m:[93m4[0m:[93m14[0m - [91merror[0m[90m TS2322: [0mType 'string' is not assignable to type 'number'.
+
+[7m4[0m export const label: number = "total";
+[7m [0m [91m             ~~~~~[0m
+
+
+Found 1 error in src/cart.ts[90m:4[0m
+

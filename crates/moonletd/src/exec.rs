@@ -15,7 +15,8 @@ use std::time::Duration;
 use moonlet_core::heavy::{self, Candidate, Kind};
 use moonlet_core::terminal::ClientId;
 use moonlet_proto::methods::{
-    self as m, ExecBrought, ExecDone, ExecExited, ExecPrepared, ExecRunStarted, ExecStart,
+    self as m, ExecBrought, ExecDone, ExecExited, ExecPrepared, ExecRunStarted, ExecStart, Job,
+    JobEvent, JobPhase, JobState, JobWorker,
 };
 use moonlet_proto::types::HeavyOs;
 use moonlet_proto::{Frame, Message, RpcError};
@@ -24,6 +25,7 @@ use nix::unistd::Pid;
 use tokio::io::AsyncReadExt;
 use tokio::sync::{Notify, oneshot};
 
+use crate::jobs::Jobs;
 use crate::server::Conn;
 use crate::sync::LiveCopies;
 use crate::workers::Workers;
@@ -50,6 +52,8 @@ pub struct Command {
 struct Remote {
     /// The `moonlet exec` connection the output goes to.
     client: Arc<Conn>,
+    /// Its job.
+    job: String,
     /// The routing copy the run was fenced on.
     copy: String,
     /// The `outputs` checked when the run started: the session's config
@@ -57,7 +61,16 @@ struct Remote {
     outputs: Vec<String>,
     /// The worker's connection.
     conn: Arc<Conn>,
-    done: Option<oneshot::Sender<(i32, ExecBrought)>>,
+    done: Option<oneshot::Sender<(i32, ExecBrought, u64)>>,
+}
+
+/// A run of this central host's, for stopping it from its job.
+struct Going {
+    job: String,
+    session: String,
+    client: Arc<Conn>,
+    /// Stopped from the Jobs panel.
+    stopped: bool,
 }
 
 pub struct Runs {
@@ -81,13 +94,18 @@ pub struct Runs {
     stops: Mutex<HashMap<u32, i32>>,
     /// Routing copies a run is using on this worker.
     copies_in_use: Mutex<HashSet<String>>,
+    /// This central host's runs going on, wherever they run, by run.
+    going: Mutex<HashMap<u32, Going>>,
     /// The daemon's own environment, which commands start from.
     base_env: BTreeMap<String, String>,
+    jobs: Arc<Jobs>,
 }
 
 /// Everything a run on the central host needs to know.
 pub struct Plan {
     pub session: String,
+    /// The session's worktree.
+    pub worktree: String,
     pub argv: Vec<String>,
     /// The working directory, relative to the session's worktree.
     pub cwd_rel: String,
@@ -100,19 +118,20 @@ pub struct Plan {
     /// This machine's name.
     pub host: String,
     pub slots: u32,
+    pub tool_use_id: Option<String>,
 }
 
 enum Fail {
     /// The worker would not run it: the next one is tried.
     Refused(String),
-    /// The worker went away mid-run.
-    Gone,
+    /// The worker went away mid-run: why.
+    Gone(&'static str),
     /// Stopped before the command started, ending with this status.
     Stopped(i32),
 }
 
 impl Runs {
-    pub fn new(base_env: BTreeMap<String, String>) -> Arc<Self> {
+    pub fn new(base_env: BTreeMap<String, String>, jobs: Arc<Jobs>) -> Arc<Self> {
         Arc::new(Self {
             next: AtomicU32::new(0),
             running: Mutex::default(),
@@ -122,11 +141,14 @@ impl Runs {
             claims: Mutex::default(),
             stops: Mutex::default(),
             copies_in_use: Mutex::default(),
+            going: Mutex::default(),
             base_env,
+            jobs,
         })
     }
 
-    /// `exec.run` on the central host: starts `plan` for `client`.
+    /// `exec.run` on the central host: starts `plan` for `client`, as a
+    /// job of its session.
     pub fn start(
         self: &Arc<Self>,
         client: Arc<Conn>,
@@ -136,15 +158,69 @@ impl Runs {
     ) -> ExecRunStarted {
         let run = self.next.fetch_add(1, Ordering::Relaxed) + 1;
         self.owners.lock().unwrap().insert(run, client.id);
+        let job = self.jobs.start(Job {
+            id: uuid::Uuid::new_v4().to_string(),
+            session: plan.session.clone(),
+            command: plan
+                .argv
+                .iter()
+                .map(|w| crate::heavy::quote(w))
+                .collect::<Vec<_>>()
+                .join(" "),
+            tool_use_id: plan.tool_use_id.clone(),
+            state: JobState::Running {
+                worker: plan.host.clone(),
+            },
+            started_at: 0,
+            ended_at: None,
+            phases: Vec::new(),
+            timeline: Vec::new(),
+            worker: None,
+            brought: Vec::new(),
+            outputs: Vec::new(),
+            leftovers: Vec::new(),
+            leftovers_folder: None,
+            env: plan.env.keys().cloned().collect(),
+            summary: None,
+            output_bytes: 0,
+        });
+        self.going.lock().unwrap().insert(
+            run,
+            Going {
+                job: job.clone(),
+                session: plan.session.clone(),
+                client: client.clone(),
+                stopped: false,
+            },
+        );
         let started = ExecRunStarted {
             run,
             host: plan.host.clone(),
         };
         let runs = self.clone();
         tokio::spawn(async move {
-            let status = runs.route(run, &client, &plan, &workers, &sync).await;
+            let status = runs.route(run, &job, &client, &plan, &workers, &sync).await;
             runs.owners.lock().unwrap().remove(&run);
             runs.stops.lock().unwrap().remove(&run);
+            let stopped = runs
+                .going
+                .lock()
+                .unwrap()
+                .remove(&run)
+                .is_some_and(|g| g.stopped);
+            runs.jobs.update(&job, |j| {
+                event(j, format!("Exited {status} · status went to Claude"), None);
+                j.phases.push(JobPhase {
+                    name: "Exit status to Claude".into(),
+                    took_ms: Some(0),
+                });
+            });
+            let state = if stopped {
+                JobState::Stopped { exit: status }
+            } else {
+                JobState::Done { exit: status }
+            };
+            runs.jobs.finish(&job, state, Some(&plan.worktree));
             let exited = ExecExited { run, status };
             client
                 .tx
@@ -153,23 +229,33 @@ impl Runs {
         started
     }
 
+    /// Output of run `run` of job `job`: to `moonlet exec` and the job.
+    fn emit(&self, run: u32, job: &str, client: &Conn, stream: u8, data: Vec<u8>) -> bool {
+        self.jobs.output(job, stream, &data);
+        client.tx.send(Frame::RunOutput { run, stream, data })
+    }
+
     /// Runs `plan` on the freest worker, or here, and gives its status.
     async fn route(
         self: &Arc<Self>,
         run: u32,
+        job: &str,
         client: &Arc<Conn>,
         plan: &Plan,
         workers: &Workers,
         sync: &Arc<LiveCopies>,
     ) -> i32 {
         let say = |text: String| {
-            client.tx.send(Frame::RunOutput {
+            self.emit(
                 run,
-                stream: 2,
-                data: format!("moonlet: {text}\n").into_bytes(),
-            })
+                job,
+                client,
+                2,
+                format!("moonlet: {text}\n").into_bytes(),
+            )
         };
         let mut skipped = HashSet::new();
+        let mut rerun = false;
         loop {
             if let Some(status) = self.stopped(run, client) {
                 return status;
@@ -195,11 +281,11 @@ impl Runs {
                 .map(|w| w.worker.name)
                 .unwrap_or_else(|| chosen.id.clone());
             let ran = self
-                .remote(run, client, plan, &chosen.id, &name, workers, sync)
+                .remote(run, job, client, plan, &chosen, &name, workers, sync)
                 .await;
             self.claims.lock().unwrap().remove(&run);
             match ran {
-                Ok((status, brought)) => {
+                Ok((status, brought, back_ms)) => {
                     for note in &brought.notes {
                         say(note.clone());
                     }
@@ -211,14 +297,43 @@ impl Runs {
                             tilde(brought.folder.as_deref().unwrap_or_default())
                         ));
                     }
+                    self.jobs.update(job, |j| {
+                        j.phases.push(JobPhase {
+                            name: "Brought back".into(),
+                            took_ms: Some(back_ms),
+                        });
+                        j.brought = brought.files.clone();
+                        j.outputs = brought.outputs.clone();
+                        j.leftovers = brought.leftovers.clone();
+                        j.leftovers_folder = brought.folder.clone();
+                    });
                     return status;
                 }
                 Err(Fail::Refused(why)) => {
                     tracing::debug!(worker = %name, "a worker refused a routed command: {why}");
                     skipped.insert(chosen.id);
                 }
-                Err(Fail::Gone) => {
+                Err(Fail::Gone(why)) => {
+                    // A stopped run is not run again.
+                    let stopped = self.stops.lock().unwrap().get(&run).copied();
+                    if let Some(status) = stopped {
+                        say(format!("{name} went away."));
+                        self.jobs.update(job, |j| {
+                            event(j, format!("{name} went away"), Some(why.to_string()))
+                        });
+                        return status;
+                    }
                     say(format!("{name} went away. Running again on {}.", plan.host));
+                    self.jobs.update(job, |j| {
+                        event(
+                            j,
+                            format!("{name} went away"),
+                            Some(format!("{why} That run's changes were dropped.")),
+                        );
+                    });
+                    self.jobs
+                        .mark(job, &format!("──── run 2 · {} ────\n", plan.host));
+                    rerun = true;
                     break;
                 }
                 Err(Fail::Stopped(status)) => return status,
@@ -227,8 +342,39 @@ impl Runs {
         if let Some(status) = self.stopped(run, client) {
             return status;
         }
+        // Here, on the central host.
+        let used = self.running.lock().unwrap().len() as u32;
+        self.jobs.update(job, |j| {
+            j.state = JobState::Running {
+                worker: plan.host.clone(),
+            };
+            let text = if rerun {
+                format!("Ran again on {}, from the same files", plan.host)
+            } else {
+                format!("Started on {}", plan.host)
+            };
+            event(j, text, None);
+            j.worker = Some(JobWorker {
+                name: plan.host.clone(),
+                kind: "central".into(),
+                load: crate::link::load().unwrap_or(0.0),
+                cores: cores(),
+                slot: used + 1,
+                slots: plan.slots,
+                rtt_ms: None,
+                copy: None,
+            });
+        });
         say(format!("running on {}", plan.host));
-        self.here(run, client, &plan.local).await
+        let began = std::time::Instant::now();
+        let status = self.here(run, job, client, &plan.local).await;
+        self.jobs.update(job, |j| {
+            j.phases.push(JobPhase {
+                name: format!("Ran on {}", plan.host),
+                took_ms: Some(began.elapsed().as_millis() as u64),
+            });
+        });
+        status
     }
 
     /// The machines that might run a command of `plan`: linked workers
@@ -264,7 +410,7 @@ impl Runs {
             id: plan.host.clone(),
             kind: Kind::Central,
             os: crate::link::os().into(),
-            cores: std::thread::available_parallelism().map_or(1, |n| n.get() as u32),
+            cores: cores(),
             load: crate::link::load().unwrap_or(0.0),
             slots: plan.slots,
             used: self.running.lock().unwrap().len() as u32,
@@ -273,19 +419,22 @@ impl Runs {
         out
     }
 
-    /// Runs `plan` on worker `worker`: prepares and fences its routing
-    /// copy, starts the command and waits for `exec.done`.
+    /// Runs `plan` on worker `chosen`: prepares and fences its routing
+    /// copy, starts the command and waits for `exec.done`. Gives the
+    /// status, what came back and how long bringing it back took.
     #[allow(clippy::too_many_arguments)]
     async fn remote(
         self: &Arc<Self>,
         run: u32,
+        job: &str,
         client: &Arc<Conn>,
         plan: &Plan,
-        worker: &str,
+        chosen: &Candidate,
         name: &str,
         workers: &Workers,
         sync: &Arc<LiveCopies>,
-    ) -> Result<(i32, ExecBrought), Fail> {
+    ) -> Result<(i32, ExecBrought, u64), Fail> {
+        let worker = chosen.id.as_str();
         let conn = workers
             .conn(worker)
             .ok_or_else(|| Fail::Refused("gone".into()))?;
@@ -309,6 +458,7 @@ impl Runs {
         if prepared.state != "ready" {
             return Err(Fail::Refused(prepared.state));
         }
+        let fencing = std::time::Instant::now();
         let (tree, head, session_path) = self
             .unless_stopped(
                 run,
@@ -317,6 +467,7 @@ impl Runs {
             )
             .await?
             .map_err(|e| Fail::Refused(e.code))?;
+        let fenced_ms = fencing.elapsed().as_millis() as u64;
         if let Some(status) = self.stopped(run, client) {
             return Err(Fail::Stopped(status));
         }
@@ -325,6 +476,7 @@ impl Runs {
             run,
             Remote {
                 client: client.clone(),
+                job: job.to_string(),
                 copy: prepared.copy.clone(),
                 outputs: plan.outputs.clone(),
                 conn: conn.clone(),
@@ -353,26 +505,62 @@ impl Runs {
             self.remote.lock().unwrap().remove(&run);
             return Err(Fail::Refused(e.code));
         }
-        client.tx.send(Frame::RunOutput {
-            run,
-            stream: 2,
-            data: format!("moonlet: running on {name}\n").into_bytes(),
+        let kind = if chosen.os == "macos" { "mac" } else { "host" };
+        self.jobs.update(job, |j| {
+            j.state = JobState::Running {
+                worker: name.to_string(),
+            };
+            event(j, format!("Started on {name}"), None);
+            j.phases.push(JobPhase {
+                name: "Copy matched the session".into(),
+                took_ms: Some(fenced_ms),
+            });
+            j.worker = Some(JobWorker {
+                name: name.to_string(),
+                kind: kind.into(),
+                load: chosen.load,
+                cores: chosen.cores,
+                slot: chosen.used + 1,
+                slots: chosen.slots,
+                rtt_ms: chosen.rtt_ms,
+                copy: prepared.path.clone(),
+            });
         });
+        self.emit(
+            run,
+            job,
+            client,
+            2,
+            format!("moonlet: running on {name}\n").into_bytes(),
+        );
         // Stopped while it was being started: the worker stops it now.
         if self.stops.lock().unwrap().contains_key(&run) {
             self.cancel_remote(run).await;
         }
+        let began = std::time::Instant::now();
         let mut tick = tokio::time::interval(Duration::from_millis(250));
         let mut cancelled = false;
         loop {
             tokio::select! {
-                done = &mut rx => return done.map_err(|_| Fail::Gone),
+                done = &mut rx => {
+                    let (status, brought, back_ms) = done.map_err(|_| Fail::Gone("Its link closed."))?;
+                    let ran = (began.elapsed().as_millis() as u64).saturating_sub(back_ms);
+                    self.jobs.update(job, |j| {
+                        j.phases.push(JobPhase { name: format!("Ran on {name}"), took_ms: Some(ran) });
+                    });
+                    return Ok((status, brought, back_ms));
+                }
                 _ = tick.tick() => {
                     let gone = conn.is_gone()
                         || workers.conn(worker).is_none_or(|c| c.id != conn.id);
                     if gone {
                         self.remote.lock().unwrap().remove(&run);
-                        return Err(Fail::Gone);
+                        let why = if workers.missed_pings(conn.id) {
+                            "It missed 3 pings."
+                        } else {
+                            "Its link closed."
+                        };
+                        return Err(Fail::Gone(why));
                     }
                     if client.is_gone() && !cancelled {
                         cancelled = true;
@@ -402,28 +590,23 @@ impl Runs {
     }
 
     /// Runs `cmd` here for `client` and gives its status.
-    async fn here(self: &Arc<Self>, run: u32, client: &Arc<Conn>, cmd: &Command) -> i32 {
+    async fn here(self: &Arc<Self>, run: u32, job: &str, client: &Arc<Conn>, cmd: &Command) -> i32 {
         let cancel = Arc::new(Notify::new());
         self.running.lock().unwrap().insert(run, cancel.clone());
         if self.stops.lock().unwrap().contains_key(&run) {
             cancel.notify_one();
         }
-        let send =
-            |stream: u8, data: Vec<u8>| client.tx.send(Frame::RunOutput { run, stream, data });
+        let send = |stream: u8, data: Vec<u8>| self.emit(run, job, client, stream, data);
         let full = || client.tx.queued() > MAX_QUEUED && !client.is_gone();
         let status = execute(cmd, &|| client.is_gone(), &full, &cancel, &send).await;
         self.running.lock().unwrap().remove(&run);
         status
     }
 
-    /// `exec.cancel` from connection `conn`: stops its run `run`, here or
-    /// on a worker.
-    pub async fn cancel(&self, conn: ClientId, run: u32) -> bool {
-        if self.owners.lock().unwrap().get(&run) != Some(&conn) {
-            return false;
-        }
-        // Kept, so a run still being prepared never starts its command.
-        self.stops.lock().unwrap().entry(run).or_insert(130);
+    /// Stops run `run`, here or on its worker, to end with `status`. A run
+    /// still being prepared never starts its command.
+    async fn stop(&self, run: u32, status: i32) -> bool {
+        self.stops.lock().unwrap().entry(run).or_insert(status);
         let here = self.running.lock().unwrap().get(&run).cloned();
         if let Some(n) = here {
             n.notify_one();
@@ -461,13 +644,69 @@ impl Runs {
         }
     }
 
+    /// `exec.cancel` from connection `conn`: stops its run `run`.
+    pub async fn cancel(&self, conn: ClientId, run: u32) -> bool {
+        if self.owners.lock().unwrap().get(&run) != Some(&conn) {
+            return false;
+        }
+        self.stop(run, 130).await
+    }
+
+    /// `job.stop`: stops the run of job `job`, saying so in its output.
+    pub async fn stop_job(&self, job: &str) -> bool {
+        let found = {
+            let mut going = self.going.lock().unwrap();
+            going
+                .iter_mut()
+                .find(|(_, g)| g.job == job)
+                .map(|(run, g)| {
+                    g.stopped = true;
+                    (*run, g.client.clone())
+                })
+        };
+        let Some((run, client)) = found else {
+            return false;
+        };
+        self.emit(
+            run,
+            job,
+            &client,
+            2,
+            b"moonlet: stopped from the Jobs panel\n".to_vec(),
+        );
+        self.stop(run, 143).await
+    }
+
+    /// `job.stop_all`: stops every run of `session`; gives how many.
+    pub async fn stop_session(&self, session: &str) -> u32 {
+        let jobs: Vec<String> = self
+            .going
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|g| g.session == session)
+            .map(|g| g.job.clone())
+            .collect();
+        let mut n = 0;
+        for job in jobs {
+            if self.stop_job(&job).await {
+                n += 1;
+            }
+        }
+        n
+    }
+
     /// Output of a remote run, from the worker on connection `from`.
     pub fn forward(&self, from: ClientId, run: u32, stream: u8, data: Vec<u8>) {
-        let remote = self.remote.lock().unwrap();
-        if let Some(r) = remote.get(&run)
-            && r.conn.id == from
-        {
-            r.client.tx.send(Frame::RunOutput { run, stream, data });
+        let target = {
+            let remote = self.remote.lock().unwrap();
+            remote
+                .get(&run)
+                .filter(|r| r.conn.id == from)
+                .map(|r| (r.client.clone(), r.job.clone()))
+        };
+        if let Some((client, job)) = target {
+            self.emit(run, &job, &client, stream, data);
         }
     }
 
@@ -483,13 +722,14 @@ impl Runs {
     }
 
     /// `exec.done` from a worker: its changes are in; the run is over.
-    pub fn done(&self, from: ClientId, run: u32, status: i32, brought: ExecBrought) {
+    /// `back_ms` is how long bringing them in took.
+    pub fn done(&self, from: ClientId, run: u32, status: i32, brought: ExecBrought, back_ms: u64) {
         let mut remote = self.remote.lock().unwrap();
         if remote.get(&run).is_some_and(|r| r.conn.id == from)
             && let Some(mut r) = remote.remove(&run)
             && let Some(tx) = r.done.take()
         {
-            let _ = tx.send((status, brought));
+            let _ = tx.send((status, brought, back_ms));
         }
     }
 
@@ -681,6 +921,19 @@ impl Drop for Claim {
     }
 }
 
+fn cores() -> u32 {
+    std::thread::available_parallelism().map_or(1, |n| n.get() as u32)
+}
+
+/// Adds `text` to job `j`'s timeline, now.
+fn event(j: &mut Job, text: String, detail: Option<String>) {
+    j.timeline.push(JobEvent {
+        at: moonlet_core::paths::now_ms(),
+        text,
+        detail,
+    });
+}
+
 /// Sends the central host routing copy `copy`'s changes after run `run`.
 /// When they cannot be read or sent, the run still ends, with none: the
 /// fence's `tree` and `head` and no pack.
@@ -811,8 +1064,8 @@ async fn collect_outputs(
     if total > limit {
         say(format!(
             "outputs are {}, over the {} limit; not brought back",
-            size(total),
-            size(limit)
+            crate::jobs::size(total),
+            crate::jobs::size(limit)
         ));
         return Ok(None);
     }
@@ -858,22 +1111,6 @@ pub fn through_link(root: &Path, rel: &str) -> bool {
         at = at.join(part);
         std::fs::symlink_metadata(&at).is_ok_and(|m| m.file_type().is_symlink())
     })
-}
-
-/// `n` bytes for a person: `20 B`, `1.2 MiB`, `1 GiB`.
-fn size(n: u64) -> String {
-    const UNITS: [&str; 4] = ["KiB", "MiB", "GiB", "TiB"];
-    if n < 1024 {
-        return format!("{n} B");
-    }
-    let mut v = n as f64 / 1024.0;
-    let mut unit = 0;
-    while v >= 1024.0 && unit < UNITS.len() - 1 {
-        v /= 1024.0;
-        unit += 1;
-    }
-    let text = format!("{v:.1}");
-    format!("{} {}", text.trim_end_matches(".0"), UNITS[unit])
 }
 
 /// Whether `program` can be started from `cwd` with `path`.

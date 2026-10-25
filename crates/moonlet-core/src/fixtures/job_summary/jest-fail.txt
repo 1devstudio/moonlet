@@ -1,0 +1,21 @@
+FAIL ./tax.test.js
+  ● rate
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 0.25
+    Received: 0.2
+
+    [0m[31m[1m>[22m[39m[90m 1 |[39m test([32m"rate"[39m[33m,[39m () [33m=>[39m expect([35m0.2[39m)[33m.[39mtoBe([35m0.25[39m))[33m;[39m
+     [90m   |[39m                                           [31m[1m^[22m[39m
+     [90m 2 |[39m[0m
+
+      at Object.<anonymous> (tax.test.js:1:43)
+
+PASS ./cart.test.js
+
+Test Suites: 1 failed, 1 passed, 2 total
+Tests:       1 failed, 2 passed, 3 total
+Snapshots:   0 total
+Time:        0.112 s, estimated 1 s
+Ran all test suites.
