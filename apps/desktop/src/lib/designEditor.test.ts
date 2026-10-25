@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { askWithEdits, copyElementOf, dismissUnsaved, editPage, pasteInto, sendCommentsWithEdits, sendWithEdits, redoEdit, undoEdit, loadPageSource, pendingOf, resetEditor, settleChecks, settleSaves, sourceOf, undoOf, unsavedOf, useEditor } from "./designEditor";
 import { loadDesigns, pageRevOf, startDesign, useDesign } from "./designStore";
 import { editLines } from "./designEdits";
+import { useStore } from "./store";
 
 const calls = vi.hoisted(() => [] as { method: string; params: Record<string, unknown> }[]);
 /** What the daemon answers, by method. */
@@ -82,6 +83,39 @@ describe("an edit by hand saved (X65)", () => {
     expect(pageRevOf(useDesign.getState(), "local", WS, SLUG, "index")).toBe(1);
     dismissUnsaved("local", WS, SLUG);
     expect(unsavedOf(useEditor.getState(), "local", WS, SLUG)).toBeNull();
+  });
+});
+
+describe("a page's source while a save is on its way (X65)", () => {
+  it("is not read over the save, which has edits the text read may not have, so the next edit keeps them", async () => {
+    await loadPageSource("local", WS, SLUG, "index");
+    let release = () => {};
+    const write = answers["design.write_page"];
+    // The first save waits; the next goes at once.
+    answers["design.write_page"] = (p) =>
+      new Promise((r) => {
+        answers["design.write_page"] = write;
+        release = () => r(write(p));
+      });
+    editPage("local", WS, SLUG, "index", { kind: "delete", mid: "m30" }, "m30");
+    await new Promise((r) => setTimeout(r, 0));
+    // The canvas loads the page again meanwhile, still as it was on disk.
+    await loadPageSource("local", WS, SLUG, "index");
+    editPage("local", WS, SLUG, "index", { kind: "text", mid: "m25", text: "Git and GitHub" }, "m25");
+    release();
+    await settleSaves();
+    expect(disk.index.html).toBe('<!doctype html>\n<body data-mid="m1">\n  <h2 data-mid="m25">Git and GitHub</h2>\n</body>\n');
+  });
+
+  it("shows a save that fails for another reason than a change on disk", async () => {
+    await loadPageSource("local", WS, SLUG, "index");
+    answers["design.write_page"] = () => {
+      throw new DaemonError({ code: "failed", message: "disk full" });
+    };
+    editPage("local", WS, SLUG, "index", { kind: "delete", mid: "m30" }, "m30");
+    await settleSaves();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(useStore.getState().toasts.map((t) => [t.kind, t.text])).toContainEqual(["error", "disk full"]);
   });
 });
 
