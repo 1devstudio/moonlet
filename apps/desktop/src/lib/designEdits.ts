@@ -10,18 +10,15 @@
 import { parse, parseFragment } from "parse5";
 import type { DefaultTreeAdapterMap } from "parse5";
 import { pageFile, pageOfFile } from "./designPage";
-import type { LiveEdit } from "./designBridge";
+import type { DropPlace, LiveEdit } from "./designBridge";
 import { attrText, isStyleProp, isStyleValue, parseStyle, styleText, withStyle, type StyleSet } from "./designStyle";
 
 type Node = DefaultTreeAdapterMap["node"];
 type Element = DefaultTreeAdapterMap["element"];
 
 /** Where an element goes: above or below element `ref`, or into it, after
- *  its last child. */
-export interface Place {
-  where: "above" | "below" | "into";
-  ref: string;
-}
+ *  its last child; as the bridge reports a drop. */
+export type Place = DropPlace;
 
 /** An operation of the visual editor on one element of a page. */
 export type EditOp = { kind: "text"; mid: string; text: string } | { kind: "delete"; mid: string } | { kind: "duplicate"; mid: string } | { kind: "wrap"; mid: string } | { kind: "unwrap"; mid: string }

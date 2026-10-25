@@ -31,6 +31,33 @@ export interface Layer {
   text: string;
 }
 
+/** Where a dragged element or snippet would go: above or below element
+ *  `ref`, or into it, last. */
+export interface DropPlace {
+  where: "above" | "below" | "into";
+  ref: string;
+}
+
+/** The properties of the selection's computed style the bridge reports,
+ *  for the Inspector. */
+export const COMPUTED_PROPS = [
+  "display",
+  "flex-direction",
+  "gap",
+  "align-items",
+  "grid-template-columns",
+  "padding",
+  "margin",
+  "width",
+  "height",
+  "background-color",
+  "border",
+  "border-radius",
+  "box-shadow",
+  "opacity",
+  "position",
+] as const;
+
 /** What the page tells the app. */
 export type BridgeMessage =
   | { type: "mids"; mids: string[] }
@@ -44,7 +71,19 @@ export type BridgeMessage =
   | { type: "text"; mid: string; text: string }
   | { type: "pick"; element: PickedElement }
   | { type: "rects"; rects: ({ mid: string } & Rect)[] }
-  | { type: "key"; key: PageKey; shift: boolean; alt: boolean; meta: boolean };
+  | { type: "key"; key: PageKey; shift: boolean; alt: boolean; meta: boolean }
+  /** The selection's computed style, the Inspector's properties of it. */
+  | { type: "computed"; mid: string; style: Record<string, string> }
+  /** Where the element dragged (`mid`), or (null) a snippet dragged from
+   *  the Palette, would drop now; null: nowhere. */
+  | { type: "drag"; mid: string | null; place: DropPlace | null }
+  /** A dragged element dropped at `place`. */
+  | { type: "move"; mid: string; place: DropPlace }
+  /** A size a handle gave, or the place an absolutely positioned element
+   *  was dragged to, in px. */
+  | { type: "style"; mid: string; set: Record<string, string> }
+  /** A snippet dragged from the Palette dropped at `place`, or nowhere. */
+  | { type: "drop"; place: DropPlace | null };
 
 /** The keys the bridge sends the app from the page: C, V and Esc for the
  *  mode, and in Edit mode the editor's (Tab, Delete, ⌘D, ⌥⌘G, ⌘C, ⌘V, ⌘Z…). */
@@ -77,6 +116,16 @@ const TEXT_EDIT_MAX = 10_000;
 const DEPTH_MAX = 1_000;
 
 const num = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n);
+
+function placeOf(p: unknown): DropPlace | null {
+  if (typeof p !== "object" || p === null) return null;
+  const { where, ref } = p as Record<string, unknown>;
+  return (where === "above" || where === "below" || where === "into") && isMid(ref) ? { where, ref } : null;
+}
+
+/** What a drag or a handle writes: `left` and `top`, or `width` and
+ *  `height`, each a number of px. */
+const PX_PROPS = ["left", "top", "width", "height"];
 
 function rectOf(r: unknown): Rect | null {
   if (typeof r !== "object" || r === null) return null;
@@ -136,6 +185,35 @@ export function bridgeMessage(data: unknown): BridgeMessage | null {
       }
       return { type: "rects", rects };
     }
+    case "bridge.computed": {
+      if (!isMid(d.mid) || typeof d.style !== "object" || d.style === null) return null;
+      const got = d.style as Record<string, unknown>;
+      const style: Record<string, string> = {};
+      for (const p of COMPUTED_PROPS) {
+        const v = got[p];
+        if (typeof v === "string" && v.length <= 200) style[p] = v;
+      }
+      return { type: "computed", mid: d.mid, style };
+    }
+    case "bridge.drag": {
+      const place = d.place === null ? null : placeOf(d.place);
+      if ((d.mid !== null && !isMid(d.mid)) || (d.place !== null && !place)) return null;
+      return { type: "drag", mid: d.mid, place };
+    }
+    case "bridge.move": {
+      const place = placeOf(d.place);
+      return isMid(d.mid) && place ? { type: "move", mid: d.mid, place } : null;
+    }
+    case "bridge.style": {
+      if (!isMid(d.mid) || typeof d.set !== "object" || d.set === null) return null;
+      const entries = Object.entries(d.set as Record<string, unknown>);
+      if (!entries.length || !entries.every(([k, v]) => PX_PROPS.includes(k) && typeof v === "string" && /^-?\d{1,6}(\.\d{1,3})?px$/.test(v))) return null;
+      return { type: "style", mid: d.mid, set: Object.fromEntries(entries) as Record<string, string> };
+    }
+    case "bridge.drop": {
+      const place = d.place === null ? null : placeOf(d.place);
+      return d.place !== null && !place ? null : { type: "drop", place };
+    }
     case "bridge.key":
       return (PAGE_KEYS as readonly unknown[]).includes(d.key) ? { type: "key", key: d.key as PageKey, shift: d.shift === true, alt: d.alt === true, meta: d.meta === true } : null;
     default:
@@ -154,9 +232,16 @@ export function scrollMessage(x: number, y: number): { type: "bridge.scrollTo"; 
   return { type: "bridge.scrollTo", x, y };
 }
 
-/** Tells the page which element is selected in Edit mode, or none. */
-export function selectMessage(mid: string | null): { type: "bridge.select"; mid: string | null } {
-  return { type: "bridge.select", mid: isMid(mid) ? mid : null };
+/** Tells the page which element is selected in Edit mode, or none, and
+ *  whether it is off-system, which its outline's label says. */
+export function selectMessage(mid: string | null, off = false): { type: "bridge.select"; mid: string | null; off?: true } {
+  return { type: "bridge.select", mid: isMid(mid) ? mid : null, ...(off ? { off: true as const } : {}) };
+}
+
+/** Tells the page a snippet is being dragged from the Palette, so it shows
+ *  where it would drop and reports the drop; and when that drag ends. */
+export function paletteMessage(dragging: boolean): { type: "bridge.palette"; dragging: boolean } {
+  return { type: "bridge.palette", dragging };
 }
 
 /** Asks the page for the boxes of the pinned elements, now and as they move. */
@@ -185,7 +270,7 @@ export type LiveEdit =
   /** Its `style` attribute's new text; empty: none. */
   | { op: "style"; mid: string; style: string }
   /** Moved above or below element `ref`, or into it, last. */
-  | { op: "move"; mid: string; place: { where: "above" | "below" | "into"; ref: string } };
+  | { op: "move"; mid: string; place: DropPlace };
 
 /** Tells the page to make an edit on its live page. */
 export function editMessage(edit: LiveEdit): { type: "bridge.edit" } & LiveEdit {
