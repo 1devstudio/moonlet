@@ -44,6 +44,7 @@ const system = (over: Partial<DesignSystem> = {}): DesignSystem => ({
   last_sync: [],
   needs_you: null,
   steps: [],
+  sync_running: false,
   ...over,
 });
 
@@ -215,11 +216,14 @@ describe("a design system's cards (X64)", () => {
 });
 
 describe("the sync agent's notifications (X64, X65)", () => {
-  it("come when a listing shows it asking, or the sync recorded, never on the first listing", async () => {
+  it("come when a listing shows it asking, also the first, or the sync recorded since the last", async () => {
     shown.length = 0;
-    answers["design.systems"] = () => [system({ needs_you: { kind: "question", text: "Old question?" } })];
+    // The first listing tells a question still waiting, never a sync recorded before.
+    answers["design.systems"] = () => [system({ synced_at: 3, needs_you: { kind: "question", text: "Still waiting?" } })];
     await loadSystems("local", "w-notes");
-    expect(shown).toEqual([]);
+    await settle();
+    expect(shown).toEqual([{ title: "Design · moonlet desktop", body: "asks: Still waiting?" }]);
+    shown.length = 0;
     answers["design.systems"] = () => [system({ needs_you: { kind: "question", text: "Which button set is current?" } })];
     await loadSystems("local", "w-notes");
     await settle();

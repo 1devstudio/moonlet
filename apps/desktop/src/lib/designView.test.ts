@@ -40,6 +40,7 @@ const system = (over: Partial<DesignSystem> = {}): DesignSystem => ({
   last_sync: [],
   needs_you: null,
   steps: [],
+  sync_running: false,
   ...over,
 });
 

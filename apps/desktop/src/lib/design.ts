@@ -14,7 +14,7 @@ export interface RowLabel {
 export function systemLabel(sys: DesignSystem, now: number, working: boolean): RowLabel {
   if (sys.error) return { text: "unreadable", tone: "error" };
   if (sys.needs_you) return { text: "needs you", tone: "attention" };
-  if (working) return { text: "syncing", tone: "muted" };
+  if (working && sys.sync_running) return { text: "syncing", tone: "muted" };
   if (sys.synced_at === null) return { text: "not built", tone: "muted" };
   if (sys.to_settle) return { text: `${sys.to_settle} to settle`, tone: "changed" };
   if (sys.changed_sources.length) return { text: `${sys.changed_sources.length} changed`, tone: "changed" };

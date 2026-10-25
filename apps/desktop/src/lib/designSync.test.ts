@@ -20,6 +20,7 @@ const system = (over: Partial<DesignSystem> = {}): DesignSystem => ({
   last_sync: [],
   needs_you: null,
   steps: [],
+  sync_running: false,
   ...over,
 });
 
@@ -41,6 +42,7 @@ const card = (path: string, name: string, over: Partial<DesignCard> = {}): Desig
 });
 
 const reported = system({
+  sync_running: true,
   step: "cards",
   step_summary: "1 of 3",
   steps: [
@@ -61,7 +63,11 @@ describe("the sync step bar (X64)", () => {
   });
 
   it("starts on Inventory before the agent reports a step", () => {
-    expect(stepBar(system({ synced_at: null }), true)?.map((s) => s.state)).toEqual(["current", "pending", "pending", "pending"]);
+    expect(stepBar(system({ synced_at: null, sync_running: true }), true)?.map((s) => s.state)).toEqual(["current", "pending", "pending", "pending"]);
+  });
+
+  it("is not shown for a turn of the agent after the sync was recorded", () => {
+    expect(stepBar(system({ sync_running: false }), true)).toBeNull();
   });
 
   it("reads Needs you with the question's first line while the agent waits", () => {
@@ -178,6 +184,11 @@ describe("the sync agent's notifications (X64, X65)", () => {
     });
     expect(syncNotice(system({ synced_at: 1 }), system({ synced_at: 2, to_settle: 2 }))).toEqual({ title: "Design · moonlet desktop", body: "moonlet desktop synced · 2 to settle", state: "done" });
     expect(syncNotice(system({ synced_at: 1 }), system({ synced_at: 2 }))).toEqual({ title: "Design · moonlet desktop", body: "moonlet desktop synced", state: "done" });
+  });
+
+  it("say a pending question on the first look, never an old sync", () => {
+    expect(syncNotice(null, system({ needs_you: { kind: "question", text: "Which?" } }))).toEqual({ title: "Design · moonlet desktop", body: "asks: Which?", state: "blocked" });
+    expect(syncNotice(null, system({ synced_at: 2 }))).toBeNull();
   });
 
   it("say nothing for the same question, or nothing new", () => {

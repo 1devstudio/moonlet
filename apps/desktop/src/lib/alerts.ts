@@ -79,8 +79,8 @@ export function differsAlert(o: { focused: boolean; notifyWhenFocused: boolean; 
 }
 
 /** Whether an agent's `agent.attention` alerts as a session's does (X47).
- *  A chat with no session is a design system's sync agent: Design mode
+ *  The daemon marks a design system's sync agent `design`: Design mode
  *  notifies for it, when it asks or the sync is done, never per turn (X65). */
-export function alertsLikeASession(t: { session_id: string | null | undefined; chat: boolean }): boolean {
-  return !!t.session_id || !t.chat;
+export function alertsLikeASession(a: { design?: boolean }): boolean {
+  return !a.design;
 }

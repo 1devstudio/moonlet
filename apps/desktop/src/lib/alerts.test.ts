@@ -91,9 +91,10 @@ describe("differsAlert (X60 a file differs between machines)", () => {
 
 describe("a design system's sync agent (X65)", () => {
   it("never alerts like a session: Design mode notifies for it", () => {
-    // A chat with no session is a sync agent.
-    expect(alertsLikeASession({ session_id: null, chat: true })).toBe(false);
-    expect(alertsLikeASession({ session_id: "s1", chat: true })).toBe(true);
-    expect(alertsLikeASession({ session_id: "s1", chat: false })).toBe(true);
+    // The daemon marks a sync agent's attention `design`.
+    expect(alertsLikeASession({ design: true })).toBe(false);
+    // A standalone chat, with no session either, still alerts.
+    expect(alertsLikeASession({ design: false })).toBe(true);
+    expect(alertsLikeASession({})).toBe(true);
   });
 });

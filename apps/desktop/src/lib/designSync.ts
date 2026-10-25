@@ -22,7 +22,9 @@ export interface StepCell {
 
 /** The step bar while a sync is under way (`working`: its agent is at work),
  *  or after one stopped unrecorded; null when no sync is under way. */
-export function stepBar(sys: DesignSystem, working: boolean): StepCell[] | null {
+export function stepBar(sys: DesignSystem, agentWorking: boolean): StepCell[] | null {
+  // Only a sync's turns: a later one, such as the user's chat, is no sync.
+  const working = agentWorking && sys.sync_running;
   if (!working && sys.steps.length === 0) return null;
   // The last step reported is the one at work; before any, the first.
   const at = sys.steps.length ? STEPS.findIndex((s) => s.step === sys.steps[sys.steps.length - 1].step) : 0;
@@ -138,13 +140,14 @@ export function rewritingCard(items: ChatItem[], systemDir: string): string | nu
 
 /** The notification a change of a design system calls for (X65): its agent
  *  asks or needs an approval, or the sync was recorded; else null. */
-export function syncNotice(before: DesignSystem, after: DesignSystem): { title: string; body: string; state: "blocked" | "done" } | null {
+export function syncNotice(before: DesignSystem | null, after: DesignSystem): { title: string; body: string; state: "blocked" | "done" } | null {
   const title = `Design · ${after.name}`;
   const asks = after.needs_you;
-  if (asks && (asks.kind !== before.needs_you?.kind || asks.text !== before.needs_you?.text)) {
+  if (asks && (asks.kind !== before?.needs_you?.kind || asks.text !== before?.needs_you?.text)) {
     return { title, body: `${asks.kind === "question" ? "asks" : "needs your approval"}: ${asks.text}`, state: "blocked" };
   }
-  if (after.synced_at !== null && after.synced_at !== before.synced_at) {
+  // A sync recorded before the first look is old news.
+  if (before && after.synced_at !== null && after.synced_at !== before.synced_at) {
     return { title, body: `${after.name} synced${after.to_settle ? ` · ${after.to_settle} to settle` : ""}`, state: "done" };
   }
   return null;

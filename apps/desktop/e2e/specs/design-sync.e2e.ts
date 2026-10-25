@@ -62,6 +62,9 @@ describe("Design system sync", () => {
   });
 
   it("stops the sync, then shows what it left: a card edited by hand beside the sync's version", async () => {
+    await $(sel.button("Stop sync")).click();
+    // The stopped sync shows where it stopped until one is recorded.
+    await expect($('//ol[@aria-label="Sync steps"]')).toHaveText(expect.stringContaining("1 of 3"));
     // The agent wrote the card and recorded a sync; the user edited it by hand;
     // a later sync wrote its version beside it.
     put("styles.css", '@import "components.css";\n');
@@ -73,7 +76,6 @@ describe("Design system sync", () => {
     put("components/custom/kbd/kbd.html", `<!-- @dsCard group="Custom" name="Kbd" source="README.md" -->\n${head}<body><kbd>K</kbd></body></html>\n`);
     rpc(w, "design.system.synced", { workspace: workspaceId(), slug: SLUG });
 
-    await $(sel.button("Stop sync")).click();
     await expect($(sel.button("Sync"))).toBeDisplayed();
     await expect($('//div[@role="status"][contains(., "Sync finished")]')).toHaveText(expect.stringContaining("1 change to settle"));
     const needs = $('//section[@aria-label="Needs you"]');

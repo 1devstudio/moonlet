@@ -109,11 +109,10 @@ async function fetchSystems(host: string, workspace: string, key: string) {
   if (asked[key] !== n) return;
   const before = useDesign.getState().systems[key];
   useDesign.setState((s) => ({ systems: { ...s.systems, [key]: list } }));
-  // What a sync agent asks, or a sync recorded since the last listing (X65);
-  // a first listing only tells how things are.
-  for (const sys of before ? list : []) {
-    const was = before!.find((b) => b.slug === sys.slug);
-    const notice = was && syncNotice(was, sys);
+  // What a sync agent asks, also on a first listing (it still waits), or a
+  // sync recorded since the last listing (X65).
+  for (const sys of list) {
+    const notice = syncNotice(before ? (before.find((b) => b.slug === sys.slug) ?? null) : null, sys);
     if (notice && bannerFor(notice.state, host, workspace, sys.slug)) void notify(notice.title, notice.body);
   }
 }
