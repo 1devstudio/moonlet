@@ -87,6 +87,10 @@ pub struct TerminalInfo {
     /// Shell shows its own prompt instead of the app's editor (T7).
     #[serde(default)]
     pub classic: bool,
+    /// A design system's sync agent (X64): the app notifies for it in Design
+    /// mode, never as a session's agent (X65).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub design: bool,
     /// `node --version` of the `node` on the shell's PATH, reported by the
     /// prompt hook when that `node` changes (T8 context chips).
     #[serde(default, skip_serializing_if = "Option::is_none")]

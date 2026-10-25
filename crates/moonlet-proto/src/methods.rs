@@ -650,6 +650,10 @@ pub struct Attention {
     pub state: AgentState,
     pub title: String,
     pub message: Option<String>,
+    /// From a design system's sync agent (X64): the app notifies for it in
+    /// Design mode, never as a session's agent (X65).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub design: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

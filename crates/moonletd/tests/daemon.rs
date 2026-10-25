@@ -2094,7 +2094,9 @@ done
     let real_repo = repo.canonicalize().unwrap().display().to_string();
     let terminals: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
     let t = terminals.iter().find(|t| t.id == agent).expect("the agent's chat");
-    assert_eq!((t.title.as_str(), t.session_id.as_deref(), t.chat), ("Design · moonlet desktop", None, true));
+    // Marked as a design system's sync agent: the app notifies for it in
+    // Design mode, never as a session (X65); a standalone chat is not one.
+    assert_eq!((t.title.as_str(), t.session_id.as_deref(), t.chat, t.design), ("Design · moonlet desktop", None, true, true));
 
     let file = |name: &str| {
         let p = dir.join(name);

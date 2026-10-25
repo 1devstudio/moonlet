@@ -258,6 +258,7 @@ impl Store {
                         step: None,
                         step_summary: None,
                         steps: Vec::new(),
+                        sync_running: record.sync_start.is_some(),
                         error: Some(format!("{err:#}")),
                         agent: record.agent,
                         last_sync: record.last_sync.clone(),
@@ -430,9 +431,15 @@ impl Store {
             }
         }
         record.synced_at = Some(now);
-        record
-            .kept
-            .retain(|card| anchor.cards.get(card).is_some_and(|c| c.orphaned()));
+        // A kept card stays kept while it is there and its sources are gone,
+        // or unknown (its marker broke): only a source back, or the card gone,
+        // ends it.
+        record.kept.retain(|card| {
+            anchor
+                .cards
+                .get(card)
+                .is_some_and(|c| c.orphaned() || c.sources.is_empty())
+        });
         // Then the record, and the anchor last; an anchor that cannot be
         // written puts the old record back. Both are replaced whole.
         self.write_record(workspace, slug, &record)?;
@@ -711,6 +718,9 @@ pub struct SystemSummary {
     /// Every step the running sync reported, in the order of [`STEPS`], each
     /// with its last summary; empty with no sync running.
     pub steps: Vec<StepReport>,
+    /// A sync started and not yet recorded: its agent's turns are the sync's
+    /// (a later turn, such as the user's chat, is not).
+    pub sync_running: bool,
     /// Why the system could not be read, when it could not.
     pub error: Option<String>,
     /// The chat of its sync agent, once one was started.
@@ -864,6 +874,7 @@ fn summary(
         step: last.map(|r| r.step.clone()),
         step_summary: last.and_then(|r| r.summary.clone()),
         steps,
+        sync_running: record.sync_start.is_some(),
         error: None,
         agent: record.agent,
         last_sync: record.last_sync.clone(),
@@ -1193,6 +1204,7 @@ root = \"9c1e0a2\"
                 step: None,
                 step_summary: None,
                 steps: vec![],
+                sync_running: false,
                 error: None,
                 agent: None,
                 last_sync: vec![
@@ -1478,6 +1490,13 @@ root = \"9c1e0a2\"
         store.synced("w1", &slug, &[], 3).unwrap();
         assert_eq!(to_settle(), 0);
 
+        // A sync while the row's marker is broken (its sources unknown) keeps
+        // it kept, so once the marker is repaired it still waits for nothing.
+        put(&dir, &[(row, "<!-- @dsCard broken -->\n<div>row</div>\n")]);
+        store.synced("w1", &slug, &[], 3).unwrap();
+        put(&dir, &[(row, row_card)]);
+        assert_eq!(to_settle(), 0, "kept through a broken marker");
+
         // The row's source comes back and a sync records it: kept no more,
         // so when it goes again the row waits again.
         put(project.path(), &[("src/Row.tsx", "row\n")]);
@@ -1701,6 +1720,21 @@ root = \"9c1e0a2\"
         assert!(store.progress("w1", &slug, "painting", None).is_err());
         store.synced("w1", &slug, &[], 2).unwrap();
         assert_eq!(store.systems("w1").unwrap()[0].step, None);
+    }
+
+    #[test]
+    fn a_sync_runs_from_its_start_until_it_is_recorded() {
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::new(home.path());
+        let slug = store
+            .create_system("w1", "storefront", vec![], Cover::Core, 1)
+            .unwrap();
+        let running = || store.systems("w1").unwrap()[0].sync_running;
+        assert!(!running());
+        store.begin_sync("w1", &slug).unwrap();
+        assert!(running());
+        store.synced("w1", &slug, &[], 2).unwrap();
+        assert!(!running(), "a later turn of the agent is no sync");
     }
 
     #[test]
