@@ -200,7 +200,12 @@ pub fn snapshot_file(rel: &str) -> Result<Option<String>> {
     };
     let rest: Vec<&str> = parts.collect();
     let numbered = is_number(n);
-    let kept = rest.len() >= 2 && KEPT.contains(&rest[0]);
+    // Only down into the snapshot's pages or assets, never out of them.
+    let kept = rest.len() >= 2
+        && KEPT.contains(&rest[0])
+        && rest
+            .iter()
+            .all(|p| !p.is_empty() && *p != "." && *p != "..");
     if !super::store::is_name(slug) || !numbered || !kept {
         bail!("{rel} is no file of a snapshot");
     }
@@ -858,5 +863,31 @@ mod tests {
                 (51, SnapshotKind::EditsByHand, "Text of m1".to_string())
             ]
         );
+    }
+
+    #[test]
+    fn an_at_sign_names_no_page_or_design_and_a_snapshots_path_never_climbs_out() {
+        let (_home, store, dir) = store_with_design();
+        write(&dir, "pages/index.html", INDEX);
+        store
+            .take_snapshot("w1", "settings-page", Take::AgentTurn, 1000)
+            .unwrap()
+            .unwrap();
+        // `<slug>@<n>` is a snapshot's folder: no design or page is named so.
+        assert!(!super::super::pages::is_page_name("git@2"));
+        assert!(store.page("w1", "settings-page", "git@2").is_err());
+        std::fs::create_dir_all(dir.with_file_name("settings-page@1")).unwrap();
+        std::fs::write(
+            dir.with_file_name("settings-page@1/design.toml"),
+            "name = \"x\"\nsystem = \"moonlet-desktop\"\n",
+        )
+        .unwrap();
+        assert!(store.design_dir("w1", "settings-page@1").is_err());
+        for climbing in [
+            "designs/settings-page@1/pages/../../snapshot.json",
+            "designs/settings-page@1/assets/../pages/index.html",
+        ] {
+            assert!(store.resolve("w1", climbing).is_err(), "{climbing}");
+        }
     }
 }
