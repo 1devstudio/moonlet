@@ -136,12 +136,12 @@ const tailnet = (ip: string) => {
   return a === 100 && b >= 64 && b < 128;
 };
 
-/** Where cloud machines reach the central host `host`: its Tailscale `ip:port` from `mobile.status`, else its name. */
+/** Where cloud machines reach the central host `host`: its Tailscale `ip:port`, else a placeholder to fill in. */
 export function policyAddress(status: { port: number; listening: string[] }, host: string): string {
   // IPv4 first; an IPv6 one, `[fd7a:115c:a1e0::…]:port`, as the policy takes it.
   const v4 = status.listening.find((l) => tailnet(l.split(":")[0]));
   const v6 = status.listening.find((l) => /^\[fd7a:115c:a1e0:/i.test(l));
-  return v4 ?? v6 ?? `${host}:${status.port || DEFAULT_PORT}`;
+  return v4 ?? v6 ?? `<${host}'s Tailscale IP>:${status.port || DEFAULT_PORT}`;
 }
 
 /** The port moonletd listens on for phones, desktops and cloud machines. */
@@ -338,6 +338,19 @@ export interface Step {
 }
 
 const POLICY = "https://login.tailscale.com/admin/acls/file";
+
+/** Where the policy snippet's parts go, for central host `host` listening on `port`. */
+export function policySteps(host: string, port: number): Step[] {
+  return [
+    { text: "Open your tailnet policy file in Tailscale's admin console.", link: POLICY },
+    { text: 'Under "tagOwners", add the tag\'s line. A policy without "tagOwners" gets the whole line.' },
+    { text: 'Under "acls", add the rule. A policy without "acls", such as one with only "grants", gets the whole list: the two work side by side.' },
+    {
+      text: 'If a rule still lets everything reach everything, such as the first policy\'s { "action": "accept", "src": ["*"], "dst": ["*:*"] }, cloud machines can reach your whole tailnet too. Narrow its "src", for example to ["autogroup:member"].',
+    },
+    { text: `Save. Cloud machines then reach only ${host}'s port ${port}.` },
+  ];
+}
 
 /** How to set up each way machines join the tailnet. */
 export function tailscaleSteps(mode: TailscaleMode, tag: string): Step[] {

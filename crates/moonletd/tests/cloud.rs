@@ -182,6 +182,21 @@ fn settings() -> Value {
 }
 
 #[tokio::test]
+async fn cloud_get_names_where_machines_reach_the_central_host() {
+    // A paired Mac may not ask mobile.status, and its policy snippet needs the address.
+    let c = cloud().await;
+    let info: Value = c.d.call("cloud.get", json!({})).await;
+    assert_eq!(info["listening"], json!([c.addr]));
+    // The port also while tailnet connections are off, for the policy to name.
+    let port: u16 = c.addr.rsplit(':').next().unwrap().parse().unwrap();
+    assert_eq!(info["port"], json!(port));
+    // Saving answers the same, so the page keeps the address.
+    let saved: Value = c.d.call("cloud.set", json!({ "idle_minutes": 20 })).await;
+    assert_eq!(saved["listening"], json!([c.addr]));
+    assert_eq!(saved["port"], json!(port));
+}
+
+#[tokio::test]
 async fn cloud_get_returns_no_secrets() {
     let d = Daemon::start(tempfile::tempdir().unwrap(), &[]).await;
     let _: Value = d.call("cloud.set", settings()).await;
