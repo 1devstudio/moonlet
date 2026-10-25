@@ -27,13 +27,29 @@
   const DRAWN = new Set(["img", "svg", "canvas", "video", "input", "select", "textarea", "progress", "meter", "hr", "picture", "button"]);
   const seen = (c) => !!c && c !== "transparent" && !/^rgba\(.*,\s*0\)$/.test(c) && !/\/\s*0\)$/.test(c);
 
+  // Whether `el` is kept from showing by itself or anything around it: not
+  // displayed, hidden, fully transparent, its content hidden, or inside a
+  // box that clips it to nothing.
+  function unseen(el) {
+    for (let e = el; e && e.nodeType === Node.ELEMENT_NODE; e = e.parentElement) {
+      const s = getComputedStyle(e);
+      if (s.display === "none" || s.visibility === "hidden" || parseFloat(s.opacity) === 0) return true;
+      if (e !== el && s.contentVisibility === "hidden") return true;
+      if (e !== el && /hidden|clip/.test(s.overflow)) {
+        const r = e.getBoundingClientRect();
+        if (r.width <= 0 || r.height <= 0) return true;
+      }
+    }
+    return false;
+  }
+
   // Something the eye sees: a box with a background, border or shadow, an
   // image or a control.
   function paints(el) {
     const r = el.getBoundingClientRect();
     if (r.width <= 0 || r.height <= 0) return false;
+    if (unseen(el)) return false;
     const s = getComputedStyle(el);
-    if (s.visibility === "hidden" || s.opacity === "0") return false;
     if (DRAWN.has(el.tagName.toLowerCase())) return true;
     if (seen(s.backgroundColor) || s.backgroundImage !== "none" || s.boxShadow !== "none") return true;
     return ["Top", "Right", "Bottom", "Left"].some((side) => parseFloat(s[`border${side}Width`]) > 0 && s[`border${side}Style`] !== "none" && seen(s[`border${side}Color`]));
@@ -58,7 +74,7 @@
 
   // A text node's tallest line box; 0 when it does not show.
   function lineHeight(n) {
-    if (getComputedStyle(n.parentElement).visibility === "hidden") return 0;
+    if (unseen(n.parentElement)) return 0;
     const range = document.createRange();
     range.selectNodeContents(n);
     let max = 0;
@@ -112,13 +128,17 @@
           const own = [...el.childNodes].filter((n) => n.nodeType === Node.TEXT_NODE && n.data.trim());
           return paints(el) || own.some((n) => lineHeight(n) > 0);
         }).length;
-    // Grid overflow: the page 680 px wide, as design-sync measures it.
+    // Grid overflow: the page 680 px wide, as design-sync measures it. A
+    // cell overflows when its content does not fit in it, or when it reaches
+    // past the page itself (a grid track wider than 680 px).
     if (!page) {
+      const WIDTH = 680;
       const html = document.documentElement;
       const before = html.style.width;
-      html.style.width = "680px";
+      html.style.width = `${WIDTH}px`;
       all.forEach((c, i) => {
-        cells[i].overflow680 = Math.max(0, c.scrollWidth - c.clientWidth);
+        const past = Math.ceil(c.getBoundingClientRect().right - WIDTH);
+        cells[i].overflow680 = Math.max(0, c.scrollWidth - c.clientWidth, past);
       });
       html.style.width = before;
     }
