@@ -39,6 +39,18 @@ pub fn add(usage: &mut Usage, from: u64, to: u64) {
     }
 }
 
+/// Adds a machine's billed time from `from` to `to` (unix ms): its time
+/// split by month, and what its provider bills beyond it (the rest of a
+/// started unit, or up to its minimum) in the month it ends.
+pub fn add_billed(usage: &mut Usage, from: u64, to: u64, billing: crate::Billing) {
+    add(usage, from, to);
+    let secs = to.saturating_sub(from) / 1000;
+    let extra = billing.billed(secs) - secs;
+    if extra > 0 {
+        *usage.entry(month_of(to)).or_default() += extra;
+    }
+}
+
 /// Machine-hours in the month of `at`.
 pub fn hours(usage: &Usage, at: u64) -> f64 {
     usage.get(&month_of(at)).copied().unwrap_or(0) as f64 / 3600.0
@@ -47,6 +59,56 @@ pub fn hours(usage: &Usage, at: u64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Billing;
+
+    #[test]
+    fn counts_billed_time_by_the_providers_unit() {
+        let hourly = Billing {
+            unit_secs: 3600,
+            minimum_secs: 0,
+        };
+        let mut u = Usage::new();
+        // Five minutes of an hourly machine is an hour.
+        add_billed(
+            &mut u,
+            ms("2026-10-22T10:00:00Z"),
+            ms("2026-10-22T10:05:00Z"),
+            hourly,
+        );
+        assert_eq!(hours(&u, ms("2026-10-22T12:00:00Z")), 1.0);
+        // An hour and a minute is two.
+        add_billed(
+            &mut u,
+            ms("2026-10-22T10:00:00Z"),
+            ms("2026-10-22T11:01:00Z"),
+            hourly,
+        );
+        assert_eq!(hours(&u, ms("2026-10-22T12:00:00Z")), 3.0);
+        // By the second, at least a minute.
+        let per_second = Billing {
+            unit_secs: 1,
+            minimum_secs: 60,
+        };
+        let mut u = Usage::new();
+        add_billed(
+            &mut u,
+            ms("2026-10-22T10:00:00Z"),
+            ms("2026-10-22T10:00:10Z"),
+            per_second,
+        );
+        assert_eq!(u["2026-10"], 60);
+        add_billed(
+            &mut u,
+            ms("2026-10-22T10:00:00Z"),
+            ms("2026-10-22T10:02:30Z"),
+            per_second,
+        );
+        assert_eq!(u["2026-10"], 210);
+        // A machine just made has started its first hour.
+        let mut u = Usage::new();
+        add_billed(&mut u, ms("2026-10-22T10:00:00Z"), ms("2026-10-22T10:00:00Z"), hourly);
+        assert_eq!(u["2026-10"], 3600);
+    }
 
     fn ms(rfc3339: &str) -> u64 {
         chrono::DateTime::parse_from_rfc3339(rfc3339)

@@ -22,6 +22,35 @@ pub async fn machine_key(
     name: &str,
     transport: Arc<dyn Transport>,
 ) -> Result<String, CloudError> {
+    let token = token(client, &transport).await?;
+    new_key(client, &token, &format!("moonlet {name}"), &transport)
+        .await
+        .map(|(_, key)| key)
+}
+
+/// Whether `client` can make machines' keys: it makes a test key and
+/// revokes it at once.
+pub async fn check(client: &OAuthClient, transport: Arc<dyn Transport>) -> Result<(), CloudError> {
+    let token = token(client, &transport).await?;
+    let (id, _) = new_key(client, &token, "moonlet check", &transport).await?;
+    let r = transport
+        .send(Request {
+            method: "DELETE",
+            url: format!("{API}/tailnet/-/keys/{id}"),
+            headers: vec![("Authorization".into(), format!("Bearer {token}"))],
+            body: None,
+        })
+        .await
+        .map_err(|e| CloudError::Network(format!("cannot reach Tailscale: {e}")))?;
+    if (200..300).contains(&r.status) {
+        Ok(())
+    } else {
+        Err(answered(r.status, &r.body))
+    }
+}
+
+/// An access token for `client`.
+async fn token(client: &OAuthClient, transport: &Arc<dyn Transport>) -> Result<String, CloudError> {
     let token = transport
         .send(Request {
             method: "POST",
@@ -45,10 +74,19 @@ pub async fn machine_key(
         }
         status => return Err(answered(status, &token.body)),
     }
-    let token = json(&token.body)?["access_token"]
+    json(&token.body)?["access_token"]
         .as_str()
-        .ok_or_else(|| CloudError::Network("Tailscale gave no access token".into()))?
-        .to_string();
+        .map(String::from)
+        .ok_or_else(|| CloudError::Network("Tailscale gave no access token".into()))
+}
+
+/// A new key, described as `description`: its id and the key.
+async fn new_key(
+    client: &OAuthClient,
+    token: &str,
+    description: &str,
+    transport: &Arc<dyn Transport>,
+) -> Result<(String, String), CloudError> {
     let key = transport
         .send(Request {
             method: "POST",
@@ -62,7 +100,7 @@ pub async fn machine_key(
                     "tags": [client.tag],
                 } } },
                 "expirySeconds": 3600,
-                "description": format!("moonlet {name}"),
+                "description": description,
             }))),
         })
         .await
@@ -80,9 +118,10 @@ pub async fn machine_key(
         )));
     }
     let body = json(&key.body)?;
+    let id = body["id"].as_str().unwrap_or_default().to_string();
     body["key"]
         .as_str()
-        .map(String::from)
+        .map(|k| (id, k.to_string()))
         .ok_or_else(|| CloudError::Network("Tailscale gave no key".into()))
 }
 
@@ -213,6 +252,39 @@ mod tests {
         let e = machine_key(&client(), "m", script).await.unwrap_err();
         assert_eq!(
             e.to_string(),
+            "Tailscale refused the key: requested tags [tag:moonlet-worker] are invalid or not permitted"
+        );
+    }
+
+    #[tokio::test]
+    async fn check_makes_a_test_key_and_revokes_it() {
+        let script = Arc::new(Script {
+            answers: Mutex::new(vec![
+                (200, include_str!("fixtures/tailscale/oauth_token.json")),
+                (200, include_str!("fixtures/tailscale/create_key.json")),
+                (200, include_str!("fixtures/tailscale/delete_key.json")),
+            ]),
+            sent: Mutex::default(),
+        });
+        assert_eq!(check(&client(), script.clone()).await, Ok(()));
+        let sent = script.sent.lock().unwrap();
+        assert_eq!(sent[1].method, "POST");
+        assert_eq!(sent[2].method, "DELETE");
+        assert_eq!(
+            sent[2].url,
+            "https://api.tailscale.com/api/v2/tailnet/-/keys/kAbC123CNTRL"
+        );
+        assert_eq!(sent[2].headers, sent[1].headers);
+        // A client without the tag says so, as a machine's start would.
+        let script = Arc::new(Script {
+            answers: Mutex::new(vec![
+                (200, include_str!("fixtures/tailscale/oauth_token.json")),
+                (403, include_str!("fixtures/tailscale/bad_tags.json")),
+            ]),
+            sent: Mutex::default(),
+        });
+        assert_eq!(
+            check(&client(), script).await.unwrap_err().to_string(),
             "Tailscale refused the key: requested tags [tag:moonlet-worker] are invalid or not permitted"
         );
     }

@@ -320,6 +320,9 @@ pub const CLOUD_MACHINES: &str = "cloud.machines";
 pub const CLOUD_UP: &str = "cloud.up";
 /// [`CloudDown`] → `true`: removes a machine once its commands end.
 pub const CLOUD_DOWN: &str = "cloud.down";
+/// `{}` → `true` once the OAuth client made a test key and revoked it; the
+/// error says why it could not. App or paired desktop only.
+pub const CLOUD_CHECK: &str = "cloud.check";
 /// [`CloudMachines`]: a machine changed.
 pub const EV_CLOUD_CHANGED: &str = "cloud.changed";
 /// [`LinkJoin`] → [`LinkInfo`]: a cloud machine pairs with its central host
@@ -2158,14 +2161,34 @@ pub struct CloudKind {
     pub id: String,
     pub label: String,
     pub fields: Vec<CloudField>,
+    /// It bills every started this many seconds (3600: by the hour).
+    #[serde(default)]
+    pub billing_unit_secs: u64,
 }
 
 /// The Tailscale OAuth client, as `cloud.get` shows it.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct CloudTailscale {
+    /// How machines get their key: from the OAuth client, or the pasted
+    /// auth key.
+    #[serde(default)]
+    pub mode: TailscaleMode,
     pub client_id: String,
     pub has_client_secret: bool,
+    #[serde(default)]
+    pub has_auth_key: bool,
     pub tag: String,
+}
+
+/// How cloud machines get a Tailscale key (X63).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TailscaleMode {
+    /// A one-off key for each machine, minted with the OAuth client.
+    #[default]
+    Oauth,
+    /// One reusable key the user pasted.
+    AuthKey,
 }
 
 /// `cloud.get`: the settings. A secret field `x` of a provider shows as
@@ -2186,6 +2209,10 @@ pub struct CloudInfo {
 /// The Tailscale part of `cloud.set`; a field left out keeps its value.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct CloudTailscaleSet {
+    #[serde(default)]
+    pub mode: Option<TailscaleMode>,
+    #[serde(default)]
+    pub auth_key: Option<String>,
     #[serde(default)]
     pub client_id: Option<String>,
     #[serde(default)]
@@ -2289,6 +2316,10 @@ pub struct CloudMachine {
     /// Why it was removed: "removed after 15 min idle".
     #[serde(default)]
     pub reason: Option<String>,
+    /// Its worker's id in `worker.list`, once it has registered. Only in
+    /// `cloud.machines` and `cloud.changed`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker: Option<String>,
 }
 
 /// `cloud.machines` and `cloud.changed`.

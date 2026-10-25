@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   afterRemoving,
+  billingNote,
+  checkLine,
   cloudChanges,
   cloudDraft,
   cloudErrors,
@@ -20,6 +22,7 @@ import {
   removalError,
   removalToast,
   removeProviderPrompt,
+  tailscaleSteps,
   usageLine,
 } from "./cloudSettings";
 import type { CloudInfo, CloudKind, CloudMachine } from "./protocol";
@@ -33,7 +36,7 @@ const hetzner: CloudKind = {
 const info = (patch: Partial<CloudInfo> = {}): CloudInfo => ({
   host_id: "c3f1a9e2b7d04c55",
   providers: { hetzner: { has_token: true } },
-  tailscale: { client_id: "kD3fQx7CNTRL", has_client_secret: true, tag: "tag:moonlet-worker" },
+  tailscale: { mode: "oauth", client_id: "kD3fQx7CNTRL", has_client_secret: true, has_auth_key: false, tag: "tag:moonlet-worker" },
   idle_minutes: 15,
   max_machines: 2,
   max_hours_month: 40,
@@ -81,7 +84,7 @@ describe("Settings › Cloud workers (X63)", () => {
     const d = cloudDraft(i);
     expect(d).toEqual({
       providers: { hetzner: { token: "" } },
-      tailscale: { client_id: "kD3fQx7CNTRL", client_secret: "", tag: "tag:moonlet-worker" },
+      tailscale: { mode: "oauth", client_id: "kD3fQx7CNTRL", client_secret: "", auth_key: "", tag: "tag:moonlet-worker" },
       idle_minutes: "15",
       max_machines: "2",
       max_hours_month: "40",
@@ -92,6 +95,38 @@ describe("Settings › Cloud workers (X63)", () => {
       tailscale: { client_secret: "tskey-client-new" },
     });
     expect(cloudChanges(i, { ...d, providers: { hetzner: { token: "hc-new" } } })).toEqual({ providers: { hetzner: { token: "hc-new" } } });
+  });
+
+  it("switches to a pasted auth key, sent only once typed", () => {
+    const i = info();
+    const d = cloudDraft(i);
+    expect(cloudChanges(i, { ...d, tailscale: { ...d.tailscale, mode: "auth_key" } })).toEqual({ tailscale: { mode: "auth_key" } });
+    expect(cloudChanges(i, { ...d, tailscale: { ...d.tailscale, mode: "auth_key", auth_key: " tskey-auth-new " } })).toEqual({
+      tailscale: { mode: "auth_key", auth_key: "tskey-auth-new" },
+    });
+  });
+
+  it("the steps for each way of joining the tailnet", () => {
+    expect(tailscaleSteps("oauth", "tag:moonlet-worker")).toEqual([
+      { text: "Open Tailscale's OAuth clients page.", link: "https://login.tailscale.com/admin/settings/oauth" },
+      { text: "Generate a client with the Auth Keys scope (write) and the tag tag:moonlet-worker." },
+      { text: "Paste its ID and secret below, then Check." },
+      { text: "Add the lines below to your tailnet policy.", link: "https://login.tailscale.com/admin/acls/file" },
+    ]);
+    expect(tailscaleSteps("auth_key", "tag:moonlet-worker")).toEqual([
+      { text: "Open Tailscale's keys page.", link: "https://login.tailscale.com/admin/settings/keys" },
+      { text: "Generate an auth key that is reusable, ephemeral and pre-approved, with the tag tag:moonlet-worker." },
+      { text: "Paste it below. It works until it expires, at most 90 days: then paste a new one." },
+      { text: "Add the lines below to your tailnet policy.", link: "https://login.tailscale.com/admin/acls/file" },
+    ]);
+  });
+
+  it("the line after Check", () => {
+    expect(checkLine(true)).toEqual({ tone: "done", text: "Tailscale made and revoked a test key: machines can join." });
+    expect(checkLine("Tailscale refused the OAuth client. Check it in Settings › Cloud workers.")).toEqual({
+      tone: "error",
+      text: "Tailscale refused the OAuth client. Check it in Settings › Cloud workers.",
+    });
   });
 
   it("says what is wrong with the limits", () => {
@@ -107,6 +142,23 @@ describe("Settings › Cloud workers (X63)", () => {
     expect(cloudErrors(d)).toEqual({});
   });
 
+  it("limits the daemon can hold, and an auth key when that is the way machines join", () => {
+    const d = cloudDraft(info());
+    expect(cloudErrors({ ...d, max_machines: "5000000000", max_hours_month: "5000000000" })).toEqual({
+      max_machines: "At most 1000 machines.",
+      max_hours_month: "At most 1000000 hours.",
+    });
+    // Switched to an auth key, none saved or pasted: every machine would fail.
+    expect(cloudErrors({ ...d, tailscale: { ...d.tailscale, mode: "auth_key" } }, info())).toEqual({ auth_key: "Paste the auth key." });
+    expect(cloudErrors({ ...d, tailscale: { ...d.tailscale, mode: "auth_key", auth_key: "k" } }, info())).toEqual({});
+  });
+
+  it("sends a pasted provider token without spaces around it", () => {
+    const i = info({ providers: {} });
+    const d = cloudDraft(i);
+    expect(cloudChanges(i, { ...d, providers: { hetzner: { token: " hc-new\n" } } })).toEqual({ providers: { hetzner: { token: "hc-new" } } });
+  });
+
   it("a provider added without its secret cannot be saved", () => {
     const i = info({ providers: {} });
     const d = cloudDraft(i);
@@ -119,11 +171,29 @@ describe("Settings › Cloud workers (X63)", () => {
 
   it("removing a provider keeps the page's other unsaved edits", () => {
     const two = info({ providers: { hetzner: { has_token: true }, other: {} }, kinds: [hetzner, { id: "other", label: "Other", fields: [] }] });
-    const edited = { ...cloudDraft(two), idle_minutes: "0", tailscale: { client_id: "new-id", client_secret: "typed", tag: "tag:shop" } };
+    const edited = { ...cloudDraft(two), idle_minutes: "0", tailscale: { mode: "oauth" as const, client_id: "new-id", client_secret: "typed", auth_key: "", tag: "tag:shop" } };
     // Gone at once: the provider leaves the form, the edits stay.
     expect(afterRemoving(edited, info({ providers: { hetzner: { has_token: true } } }), "other")).toEqual({ ...edited, providers: { hetzner: { token: "" } } });
     // Its machines still draining: it stays until they are gone.
     expect(afterRemoving(edited, two, "other").providers).toEqual({ hetzner: { token: "" }, other: {} });
+  });
+
+  it("says which providers keep an idle machine until its paid time ends", () => {
+    const hourly = { ...hetzner, billing_unit_secs: 3600 };
+    expect(billingNote([hourly], { hetzner: { has_token: true } })).toBe(
+      "Hetzner Cloud bills every started hour, so an idle machine stays until the time paid for is about to end.",
+    );
+    // Its own unit, whatever it is.
+    expect(billingNote([{ ...hetzner, billing_unit_secs: 7200 }], { hetzner: {} })).toBe(
+      "Hetzner Cloud bills every started 2 hours, so an idle machine stays until the time paid for is about to end.",
+    );
+    expect(billingNote([{ ...hetzner, billing_unit_secs: 600 }], { hetzner: {} })).toBe(
+      "Hetzner Cloud bills every started 10 minutes, so an idle machine stays until the time paid for is about to end.",
+    );
+    // A provider billing by the second leaves at the idle time.
+    expect(billingNote([{ ...hetzner, billing_unit_secs: 1 }], { hetzner: {} })).toBeNull();
+    // Only providers in use.
+    expect(billingNote([hourly], {})).toBeNull();
   });
 
   it("the policy snippet with the tag and address", () => {
@@ -139,6 +209,9 @@ describe("Settings › Cloud workers (X63)", () => {
     expect(policyAddress({ port: 47428, listening: ["127.0.0.1:47428", "100.101.102.103:47428"] }, "studio-mini")).toBe("100.101.102.103:47428");
     expect(policyAddress({ port: 47428, listening: [] }, "studio-mini")).toBe("studio-mini:47428");
     expect(policyAddress({ port: 0, listening: [] }, "studio-mini")).toBe("studio-mini:47428");
+    // Only an IPv6 Tailscale address: in brackets, as the policy takes it.
+    expect(policyAddress({ port: 47428, listening: ["[fd7a:115c:a1e0::1]:47428"] }, "studio-mini")).toBe("[fd7a:115c:a1e0::1]:47428");
+    expect(policyAddress({ port: 47428, listening: ["[fd7a:115c:a1e0::1]:47428", "100.101.102.103:47428"] }, "studio-mini")).toBe("100.101.102.103:47428");
   });
 
   it("warns while the central host takes no tailnet connections", () => {

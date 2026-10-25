@@ -65,5 +65,7 @@ export function startCloud() {
     if (h.status === "connected" && h.id === centralHost()) loadCloud();
   });
   useSync.subscribe((s, p) => s.central !== p.central && loadCloud());
+  // The central host may be known before the desktop's host list has it.
+  useStore.subscribe((s, p) => s.hosts !== p.hosts && centralHost() !== useCloud.getState().host && loadCloud());
   loadCloud();
 }
