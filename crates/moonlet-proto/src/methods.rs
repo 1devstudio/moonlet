@@ -405,8 +405,9 @@ pub const EV_JOB_CHANGED: &str = "job.changed";
 pub const EV_JOB_OUTPUT: &str = "job.output";
 /// A [`CopyChanged`], on every change of a copy's state.
 pub const EV_SYNC_CHANGED: &str = "sync.changed";
-/// `{workspace, system, paths}`: files changed in a design system, or in a
-/// workspace's other design files (`system: null`) (X64).
+/// `{workspace, system, design, paths}`: files changed in a design system,
+/// in a workspace design (`design`, X65), or in a workspace's other design
+/// files (both `null`) (X64).
 pub const EV_DESIGN_CHANGED: &str = "design.changed";
 /// [`DesignRender`]: render a card, sent only to the connection of the app
 /// that said [`DESIGN_RENDER_READY`] (X64).

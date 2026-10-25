@@ -2682,6 +2682,36 @@ async fn a_file_written_in_a_design_system_is_announced() {
     }
 }
 
+/// X65: a page written in a workspace design reaches every client as
+/// design.changed, naming the design, so its canvas reloads.
+#[tokio::test]
+async fn a_page_written_in_a_design_is_announced() {
+    let d = fake_claude_daemon(FAKE_SYNC_CLAUDE).await;
+    let mut c = d.client().await;
+    let ws = workspace_with_system(&d, &mut c).await;
+    let _: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    let mut listener = d.client().await;
+    let page = d.home.path().join(".moonlet/design").join(&ws).join("designs/settings-page/pages/index.html");
+    std::fs::write(&page, "<body data-mid=\"m1\"></body>\n").unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let f = tokio::time::timeout_at(deadline, listener.next_frame()).await.expect("no design.changed").unwrap().unwrap();
+        if let Frame::Json(Message::Event { name, data }) = f
+            && name == methods::EV_DESIGN_CHANGED
+            && data["paths"].as_array().is_some_and(|p| p.iter().any(|x| x == "pages/index.html"))
+        {
+            assert_eq!(
+                (data["workspace"].as_str(), &data["system"], data["design"].as_str()),
+                (Some(ws.as_str()), &serde_json::Value::Null, Some("settings-page"))
+            );
+            break;
+        }
+    }
+}
+
 /// A design system with two cards for the render check (X64): a button
 /// with two variants, and a field whose mount is empty.
 async fn render_fixture(d: &TestDaemon) -> (Client, String, PathBuf) {
