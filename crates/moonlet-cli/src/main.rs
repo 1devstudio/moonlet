@@ -908,20 +908,21 @@ async fn design_target(c: &mut Client, workspace: Option<String>, system: Option
 
 /// What the folder the command runs in belongs to under `~/.moonlet/design`.
 fn here() -> Option<design::Located> {
-    // The working folder comes back with symlinks resolved (`/private/var`
-    // for `/var` on macOS), so compare it with the resolved design folder.
+    std::env::current_dir().ok().and_then(|cwd| design::locate(&cwd, &design_root()))
+}
+
+/// `~/.moonlet/design`, with its symlinks resolved: the working folder comes
+/// back resolved (`/private/var` for `/var` on macOS), so it is compared
+/// with this.
+fn design_root() -> std::path::PathBuf {
     let root = moonlet_core::paths::home().join("design");
-    let root = std::fs::canonicalize(&root).unwrap_or(root);
-    std::env::current_dir().ok().and_then(|cwd| design::locate(&cwd, &root))
+    std::fs::canonicalize(&root).unwrap_or(root)
 }
 
 /// The design system whose folder the command runs in, and its workspace:
 /// the sync agent's commands act on its own system only, never one named.
 fn own_system() -> Result<(String, String)> {
-    let root = moonlet_core::paths::home().join("design");
-    let root = std::fs::canonicalize(&root).unwrap_or(root);
-    let here = std::env::current_dir().ok().and_then(|cwd| design::locate(&cwd, &root));
-    match here {
+    match here() {
         Some(design::Located { workspace, system: Some(system), .. }) => Ok((workspace, system)),
         _ => bail!("no design system: run inside its folder"),
     }
@@ -995,10 +996,8 @@ async fn design_cmd(socket: &std::path::Path, action: DesignAction) -> Result<()
         DesignAction::Snap { card, variant, viewport } => {
             // A card of the system this folder is in, never another's.
             let (w, s) = own_system()?;
-            let root = moonlet_core::paths::home().join("design");
-            let root = std::fs::canonicalize(&root).unwrap_or(root);
             let cwd = std::env::current_dir()?;
-            let path = design::card_in_system(&cwd, &card, &root.join(&w).join("systems").join(&s))
+            let path = design::card_in_system(&cwd, &card, &design_root().join(&w).join("systems").join(&s))
                 .with_context(|| format!("{card} is not in the design system {s}"))?;
             let shot: serde_json::Value = c
                 .request(
