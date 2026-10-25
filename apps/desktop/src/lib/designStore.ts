@@ -6,6 +6,8 @@ import { create } from "zustand";
 import { onDaemonEvent, onHostStatus, rpc } from "./daemon";
 import { EV, M, type ChatState, type DesignCard, type DesignChanged, type DesignCover, type DesignSystem, type DesignSystemCreated } from "./protocol";
 import { parseWsKey, wsKey } from "./workspaces";
+import { syncNotice } from "./designSync";
+import { notify } from "./store";
 
 interface DesignState {
   /** By workspace (`wsKey(host, id)`), once listed. */
@@ -102,7 +104,16 @@ export function loadSystems(host: string, workspace: string, fresh = false): Pro
 async function fetchSystems(host: string, workspace: string, key: string) {
   const n = (asked[key] = (asked[key] ?? 0) + 1);
   const list = await rpc<DesignSystem[]>(host, M.designSystems, { workspace });
-  if (asked[key] === n) useDesign.setState((s) => ({ systems: { ...s.systems, [key]: list } }));
+  if (asked[key] !== n) return;
+  const before = useDesign.getState().systems[key];
+  useDesign.setState((s) => ({ systems: { ...s.systems, [key]: list } }));
+  // What a sync agent asks, or a sync recorded since the last listing (X65);
+  // a first listing only tells how things are.
+  for (const sys of before ? list : []) {
+    const was = before!.find((b) => b.slug === sys.slug);
+    const notice = was && syncNotice(was, sys);
+    if (notice) void notify(notice.title, notice.body);
+  }
 }
 
 const reload = (host: string, workspace: string) => void loadSystems(host, workspace, true).catch(() => {});

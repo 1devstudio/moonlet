@@ -114,7 +114,7 @@ export function DesignMain() {
   if (shown && ws) {
     return (
       <div className="flex h-full flex-col bg-bg">
-        <DesignSystemView key={shown.slug} host={ws.host} workspace={ws.id} sys={shown} label={systemLabel(shown, now, working)} inset={sidebarOpen ? 0 : 84} />
+        <DesignSystemView key={shown.slug} host={ws.host} workspace={ws.id} sys={shown} label={systemLabel(shown, now, working)} working={working} inset={sidebarOpen ? 0 : 84} />
       </div>
     );
   }
