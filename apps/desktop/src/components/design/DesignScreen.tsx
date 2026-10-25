@@ -483,10 +483,9 @@ function PageFrame({
       else if (m.type === "pick") {
         addPageMid(host, workspace, design.slug, page, m.element.mid);
         latest.current.onPick(m.element);
-      }
-      else {
+      } else if (m.type === "key") {
         // A key pressed in the page, where the bridge already left out typing.
-        const k = modeKey({ key: m.key, meta: false, ctrl: false, alt: false, shift: false, typing: false });
+        const k = modeKey({ key: m.key, meta: m.meta, ctrl: false, alt: m.alt, shift: m.shift, typing: false });
         if (k) latest.current.onKey(k);
       }
     };
