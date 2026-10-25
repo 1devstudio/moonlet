@@ -428,6 +428,9 @@ export interface CloudKind {
   billing_unit_secs?: number;
 }
 
+/** How cloud machines get a Tailscale key: one-off from the OAuth client, or a pasted auth key. */
+export type TailscaleMode = "oauth" | "auth_key";
+
 /** A project's cloud setting, by its identity key. */
 export interface ProjectCloud {
   overflow: boolean;
@@ -441,7 +444,7 @@ export interface ProjectCloud {
 export interface CloudInfo {
   host_id: string;
   providers: Record<string, Record<string, string | boolean>>;
-  tailscale: { client_id: string; has_client_secret: boolean; tag: string };
+  tailscale: { mode: TailscaleMode; client_id: string; has_client_secret: boolean; has_auth_key: boolean; tag: string };
   idle_minutes: number;
   max_machines: number;
   max_hours_month: number;
@@ -452,7 +455,7 @@ export interface CloudInfo {
 /** `cloud.set`: what changes; null removes a provider or project. */
 export interface CloudSet {
   providers?: Record<string, Record<string, string | null> | null>;
-  tailscale?: { client_id?: string; client_secret?: string; tag?: string };
+  tailscale?: { mode?: TailscaleMode; auth_key?: string; client_id?: string; client_secret?: string; tag?: string };
   idle_minutes?: number;
   max_machines?: number;
   max_hours_month?: number;
@@ -1114,6 +1117,7 @@ export const M = {
   cloudMachines: "cloud.machines",
   cloudUp: "cloud.up",
   cloudDown: "cloud.down",
+  cloudCheck: "cloud.check",
   jobList: "job.list",
   jobOutput: "job.output",
   jobStop: "job.stop",

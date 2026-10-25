@@ -4,7 +4,7 @@
 
 import type { ConfirmOptions } from "./confirmOptions";
 import { joinNames } from "./heavyCommands";
-import type { CloudInfo, CloudKind, CloudMachine, CloudSet, MachineType, ProjectIdentity } from "./protocol";
+import type { CloudInfo, CloudKind, CloudMachine, CloudSet, MachineType, ProjectIdentity, TailscaleMode } from "./protocol";
 
 export interface ProviderRow {
   name: string;
@@ -35,7 +35,7 @@ export function providerForm(kind: CloudKind, saved: Record<string, string | boo
 /** The page's form. Secrets start empty: typing one replaces the saved value. */
 export interface CloudDraft {
   providers: Record<string, Record<string, string>>;
-  tailscale: { client_id: string; client_secret: string; tag: string };
+  tailscale: { mode: TailscaleMode; client_id: string; client_secret: string; auth_key: string; tag: string };
   idle_minutes: string;
   max_machines: string;
   max_hours_month: string;
@@ -49,7 +49,7 @@ export function cloudDraft(info: CloudInfo): CloudDraft {
   }
   return {
     providers,
-    tailscale: { client_id: info.tailscale.client_id, client_secret: "", tag: info.tailscale.tag },
+    tailscale: { mode: info.tailscale.mode ?? "oauth", client_id: info.tailscale.client_id, client_secret: "", auth_key: "", tag: info.tailscale.tag },
     idle_minutes: String(info.idle_minutes),
     max_machines: String(info.max_machines),
     max_hours_month: String(info.max_hours_month),
@@ -67,6 +67,8 @@ export function cloudChanges(info: CloudInfo, d: CloudDraft): CloudSet | null {
   }
   if (Object.keys(providers).length) out.providers = providers;
   const ts: NonNullable<CloudSet["tailscale"]> = {};
+  if (d.tailscale.mode !== base.tailscale.mode) ts.mode = d.tailscale.mode;
+  if (d.tailscale.auth_key.trim()) ts.auth_key = d.tailscale.auth_key.trim();
   if (d.tailscale.client_id !== base.tailscale.client_id) ts.client_id = d.tailscale.client_id.trim();
   if (d.tailscale.client_secret) ts.client_secret = d.tailscale.client_secret.trim();
   if (d.tailscale.tag !== base.tailscale.tag) ts.tag = d.tailscale.tag.trim();
@@ -269,4 +271,35 @@ export function billingNote(kinds: CloudKind[], providers: CloudInfo["providers"
     ? `${joinNames(long.map((k) => k.label))} ${long.length === 1 ? "bills" : "bill"} every started ${unitText(long[0].billing_unit_secs ?? 3600)}`
     : joinNames(long.map((k) => `${k.label} bills every started ${unitText(k.billing_unit_secs ?? 3600)}`));
   return `${who}, so an idle machine stays until the time paid for is about to end.`;
+}
+
+/** A step of setting up Tailscale, with the page it happens on. */
+export interface Step {
+  text: string;
+  link?: string;
+}
+
+const POLICY = "https://login.tailscale.com/admin/acls/file";
+
+/** How to set up each way machines join the tailnet. */
+export function tailscaleSteps(mode: TailscaleMode, tag: string): Step[] {
+  const policy = { text: "Add the lines below to your tailnet policy.", link: POLICY };
+  if (mode === "auth_key")
+    return [
+      { text: "Open Tailscale's keys page.", link: "https://login.tailscale.com/admin/settings/keys" },
+      { text: `Generate an auth key that is reusable, ephemeral and pre-approved, with the tag ${tag}.` },
+      { text: "Paste it below. It works until it expires, at most 90 days: then paste a new one." },
+      policy,
+    ];
+  return [
+    { text: "Open Tailscale's OAuth clients page.", link: "https://login.tailscale.com/admin/settings/oauth" },
+    { text: `Generate a client with the Auth Keys scope (write) and the tag ${tag}.` },
+    { text: "Paste its ID and secret below, then Check." },
+    policy,
+  ];
+}
+
+/** The line after **Check**: `true`, or what went wrong. */
+export function checkLine(result: true | string): { tone: "done" | "error"; text: string } {
+  return result === true ? { tone: "done", text: "Tailscale made and revoked a test key: machines can join." } : { tone: "error", text: result };
 }

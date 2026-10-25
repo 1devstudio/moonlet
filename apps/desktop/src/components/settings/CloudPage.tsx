@@ -3,11 +3,14 @@
 // Secrets are never read back: a saved one shows "Saved" with Replace.
 
 import { useEffect, useState } from "react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { Cloud, Copy, Lock, Plus, TriangleAlert } from "lucide-react";
 import { askConfirm } from "../../lib/confirm";
 import { rpc } from "../../lib/daemon";
 import {
   afterRemoving,
+  checkLine,
+  tailscaleSteps,
   billingNote,
   cloudChanges,
   cloudDraft,
@@ -29,7 +32,7 @@ import { goSettings } from "../../lib/settingsNavigation";
 import { M, type CloudInfo, type MobileStatus } from "../../lib/protocol";
 import { errorToast, toast, useStore } from "../../lib/store";
 import { Button, cx } from "../ui";
-import { Card, PageBody, PageHeading, Row, SaveBar, Section, Status, fieldCls } from "./controls";
+import { Card, PageBody, PageHeading, Row, SaveBar, Section, Segmented, Status, fieldCls } from "./controls";
 import { useUnsaved } from "./useUnsaved";
 
 function Badge({ children }: { children: string }) {
@@ -73,6 +76,20 @@ export function CloudPage() {
   const [status, setStatus] = useState<MobileStatus | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // The last Check: true, or what went wrong.
+  const [checked, setChecked] = useState<true | string | null>(null);
+  const [checking, setChecking] = useState(false);
+  const check = async () => {
+    setChecking(true);
+    try {
+      await rpc(host, M.cloudCheck);
+      setChecked(true);
+    } catch (e) {
+      setChecked(e instanceof Error ? e.message : String(e));
+    } finally {
+      setChecking(false);
+    }
+  };
   // Re-renders the secret fields, so Replace closes after Save and Discard.
   const [generation, setGeneration] = useState(0);
 
@@ -263,20 +280,73 @@ export function CloudPage() {
           </Card>
         </Section>
 
-        <Section title="Tailscale" hint={`Each machine joins your tailnet with a one-off key that ${name} makes from this OAuth client. The secret never leaves ${name}.`}>
+        <Section
+          title="Tailscale"
+          hint={
+            draft.tailscale.mode === "oauth"
+              ? `Each machine joins your tailnet with a one-off key that ${name} makes from this OAuth client. The secret never leaves ${name}.`
+              : "Each machine joins your tailnet with this key. Set up once; replace it when it expires."
+          }
+        >
           <Card key={`tailscale-${generation}`}>
-            <Row setting="cloud-tailscale" label="OAuth client ID" hint="Needs the auth_keys scope and the tag below." htmlFor="cloud-ts-id">
-              <input id="cloud-ts-id" className={cx(fieldCls, "w-[260px] font-mono ui-text-12.5")} spellCheck={false} value={draft.tailscale.client_id} onChange={(e) => set({ tailscale: { ...draft.tailscale, client_id: e.target.value } })} />
-            </Row>
-            <Row label="OAuth client secret" htmlFor="cloud-ts-secret">
-              <SecretField
-                id="cloud-ts-secret"
-                label="OAuth client secret"
-                saved={info.tailscale.has_client_secret}
-                value={draft.tailscale.client_secret}
-                onChange={(v) => set({ tailscale: { ...draft.tailscale, client_secret: v } })}
+            <Row setting="cloud-tailscale" label="Machines join with" labelId="cloud-ts-mode">
+              <Segmented
+                labelledBy="cloud-ts-mode"
+                value={draft.tailscale.mode}
+                options={[
+                  { id: "oauth", label: "OAuth client (recommended)" },
+                  { id: "auth_key", label: "Auth key" },
+                ]}
+                onChange={(mode) => {
+                  setChecked(null);
+                  set({ tailscale: { ...draft.tailscale, mode } });
+                }}
               />
             </Row>
+            <ol data-setting="cloud-ts-steps" className="m-0 flex list-none flex-col gap-1.5 px-4 py-3.5">
+              {tailscaleSteps(draft.tailscale.mode, draft.tailscale.tag.trim() || info.tailscale.tag).map((step, i) => (
+                <li key={i} className="flex items-baseline gap-2.5 ui-text-12.5 text-muted">
+                  <span className="w-4 shrink-0 text-right font-mono text-faint">{i + 1}.</span>
+                  <span className="flex-1">
+                    {step.text}
+                    {step.link && (
+                      <>
+                        {" "}
+                        <button type="button" className="text-accent hover:underline" onClick={() => void openUrl(step.link!).catch(errorToast)}>
+                          Open
+                        </button>
+                      </>
+                    )}
+                  </span>
+                </li>
+              ))}
+            </ol>
+            {draft.tailscale.mode === "oauth" ? (
+              <>
+                <Row label="OAuth client ID" hint="Needs the Auth Keys scope and the tag below." htmlFor="cloud-ts-id">
+                  <input id="cloud-ts-id" className={cx(fieldCls, "w-[260px] font-mono ui-text-12.5")} spellCheck={false} value={draft.tailscale.client_id} onChange={(e) => set({ tailscale: { ...draft.tailscale, client_id: e.target.value } })} />
+                </Row>
+                <Row label="OAuth client secret" htmlFor="cloud-ts-secret">
+                  <SecretField
+                    id="cloud-ts-secret"
+                    label="OAuth client secret"
+                    saved={info.tailscale.has_client_secret}
+                    value={draft.tailscale.client_secret}
+                    onChange={(v) => set({ tailscale: { ...draft.tailscale, client_secret: v } })}
+                  />
+                </Row>
+              </>
+            ) : (
+              <Row label="Auth key" hint="Reusable, ephemeral, pre-approved, with the tag below." htmlFor="cloud-ts-auth-key">
+                <SecretField
+                  id="cloud-ts-auth-key"
+                  label="Auth key"
+                  saved={info.tailscale.has_auth_key}
+                  value={draft.tailscale.auth_key}
+                  onChange={(v) => set({ tailscale: { ...draft.tailscale, auth_key: v } })}
+                />
+              </Row>
+            )}
             <Row label="Tag" hint={hint("Every cloud machine gets it.", errors.tag)} htmlFor="cloud-ts-tag">
               <input
                 id="cloud-ts-tag"
@@ -287,6 +357,18 @@ export function CloudPage() {
                 onChange={(e) => set({ tailscale: { ...draft.tailscale, tag: e.target.value } })}
               />
             </Row>
+            {draft.tailscale.mode === "oauth" && (
+              <div data-setting="cloud-ts-check" className="flex items-center gap-3 px-4 py-3">
+                <Button size="sm" disabled={checking || !!changes?.tailscale} title={changes?.tailscale ? "Save first: Check tests the saved client." : undefined} onClick={() => void check()}>
+                  {checking ? "Checking…" : "Check"}
+                </Button>
+                {checked !== null ? (
+                  <Status line={checkLine(checked)} className="flex-1" />
+                ) : (
+                  <span className="flex-1 ui-text-12 text-muted">Makes a test key with the saved client and revokes it at once.</span>
+                )}
+              </div>
+            )}
             <div data-setting="cloud-policy" className="flex flex-col gap-2.5 px-4 py-3.5">
               {unreachable && (
                 <span className="flex items-start gap-2 ui-text-12.5 text-blocked">
@@ -324,7 +406,7 @@ export function CloudPage() {
                   <label htmlFor="cloud-hours" className="ui-text-13">
                     Monthly limit
                   </label>
-                  <span className="ui-text-12 text-muted">{hint("From each create call to its confirmed removal, per calendar month (UTC).", errors.max_hours_month)}</span>
+                  <span className="ui-text-12 text-muted">{hint("What the provider bills, from when it makes a machine to its confirmed removal, per calendar month (UTC).", errors.max_hours_month)}</span>
                 </div>
                 <NumberField id="cloud-hours" value={draft.max_hours_month} onChange={(v) => set({ max_hours_month: v })} unit="machine-hours" error={errors.max_hours_month} />
               </div>
