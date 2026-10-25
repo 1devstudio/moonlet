@@ -35,7 +35,7 @@ import {
 import { sanitize } from "./sanitize";
 import { DEFAULT_MODE } from "./agents";
 import { DEFAULT_SOUNDS, type SoundSettings } from "./sounds";
-import { DoneBursts, alertFor, alertsLikeASession, type BannerSettings } from "./alerts";
+import { DoneBursts, agentPlace, alertFor, alertsLikeASession, type BannerSettings } from "./alerts";
 import { type ToolCallView, forgetChat, loadChat, onChatItem, onChatState } from "./chat";
 import { autoPulls, fetchDue, justMerged, pullToast, type FetchInfo } from "./baseSync";
 import { gitSettingsOf } from "./gitSettings";
@@ -245,6 +245,8 @@ interface State extends UiPersist {
     | { kind: "new-workspace" }
     /** New design system (X64), in a workspace. */
     | { kind: "new-design-system"; host: string; workspace: string }
+    /** New design (X65). */
+    | { kind: "new-design"; host: string; workspace: string }
     | { kind: "create-pr" }
     /** Link a session to a task (X46). */
     | { kind: "link-task"; host: string; session: string }
@@ -660,6 +662,15 @@ export function sessionNeedsYou(s: State, host: string, id: string): boolean {
   return sessionState(s, host, id) === "blocked" || sessionTerminals(s, host, id).some((t) => !!s.unread[termKey(host, t.id)]);
 }
 
+/** Shows an agent: its session's tab, or a design's agent's design (X65),
+ *  through the `moonlet:open-design` event Design mode listens to. */
+export function goToAgent(host: string, terminal: number) {
+  const info = get().terminals[host]?.[terminal];
+  const design = info ? agentPlace(info, undefined).design : null;
+  if (design) window.dispatchEvent(new CustomEvent("moonlet:open-design", { detail: { host, ...design } }));
+  else focusTerminal(host, terminal);
+}
+
 export function focusTerminal(host: string, session: number) {
   const info = get().terminals[host]?.[session];
   if (!info?.session_id) return;
@@ -897,9 +908,29 @@ export async function notify(title: string, body: string) {
   }
 }
 
+/** Where agents without a session are on screen: Design mode tells whether
+ *  a design's agent is, as its design screen shows it (X65). */
+export const agentsShownElsewhere: { shown: (host: string, terminal: number) => boolean } = { shown: () => false };
+
+/** The user looked at an agent shown outside the sessions (a design's,
+ *  X65): its unread mark goes, and its next "done" alerts again. */
+export function agentSeen(host: string, terminal: number) {
+  const key = termKey(host, terminal);
+  if (get().unread[key]) {
+    set((s) => {
+      const unread = { ...s.unread };
+      delete unread[key];
+      return { unread };
+    });
+    updateBadge();
+  }
+  doneBursts.seen(key);
+}
+
 function isVisible(host: string, session: number): boolean {
   const s = get();
   const info = s.terminals[host]?.[session];
+  if (info && !info.session_id) return agentsShownElsewhere.shown(host, session);
   if (!info?.session_id || !s.selected) return false;
   if (s.selected.host !== host || s.selected.session !== info.session_id) return false;
   const layout = s.layouts[sesKey(host, info.session_id)];
@@ -943,7 +974,8 @@ async function onAttention(host: string, a: Attention) {
   if (alert.banner) {
     const ws = a.session_id ? s.sessions[host]?.find((w) => w.id === a.session_id) : undefined;
     const verb = a.state === "blocked" ? "needs you" : a.state === "error" ? "failed" : "is done";
-    const where = ws ? ws.name : sanitize(a.title, 60);
+    // A design's agent is `Design · <name>` (X65).
+    const where = sanitize(agentPlace(a, ws?.name).label, 60);
     const hostLabel = host === "local" ? "" : ` · ${host}`;
     set({ lastAttention: { host, session: a.terminal, at: Date.now() } });
     await notify(`${where} ${verb}${hostLabel}`, sanitize(a.message) || sanitize(a.title));
@@ -1160,7 +1192,8 @@ export async function startStore() {
       set({ lastAttention: null });
       const info = get().terminals[la.host]?.[la.session];
       const ws = info?.session_id ? get().sessions[la.host]?.find((w) => w.id === info.session_id) : undefined;
-      toast(`${ws?.name ?? info?.title ?? "An agent"} needs attention`, "info", { label: "Go to", run: () => focusTerminal(la.host, la.session) });
+      const place = info ? agentPlace(info, ws?.name) : null;
+      toast(`${place?.label ?? "An agent"} needs attention`, "info", { label: "Go to", run: () => goToAgent(la.host, la.session) });
     }
   });
   setInterval(() => {
