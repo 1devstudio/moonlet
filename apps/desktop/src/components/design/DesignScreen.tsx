@@ -14,7 +14,7 @@ import { pageUrl } from "../../lib/designView";
 import { VIEWPORTS, canvasKey, canvasScale, canvasZoom, parseViewport, viewportLabel, viewportText, type Size } from "../../lib/designViewport";
 import { canvasPage, writingPage } from "../../lib/designCanvas";
 import { pageFile, pagePath } from "../../lib/designPage";
-import { barProblems, designBar, pageFixMessage, type Bar, type BarAction } from "../../lib/designBars";
+import { barProblems, chatOpensOn, designBar, pageFixMessage, type Bar, type BarAction } from "../../lib/designBars";
 import { claimKeys } from "../../lib/keys";
 import { askConfirm } from "../../lib/confirm";
 import { workspaceProjects } from "../../lib/tasksStore";
@@ -55,9 +55,11 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
   const writing = writingPage(latest, working);
   const bar = designBar({ working, needsYou: design.needs_you, page, problems, system: systemName, systemRemoved: !!systems && !system });
 
-  // The chat opens on what the agent asks.
+  // The chat opens when the agent starts to ask; folded meanwhile, it stays so.
+  const asked = useRef(design.needs_you);
   useEffect(() => {
-    if (design.needs_you) setChatOpen(true);
+    if (chatOpensOn(asked.current, design.needs_you)) setChatOpen(true);
+    asked.current = design.needs_you;
   }, [design.needs_you]);
 
   // ⌘0 fits, ⌘= and ⌘- zoom, ⌘\ folds the chat, while this screen is shown.
