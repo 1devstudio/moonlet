@@ -10,6 +10,7 @@
 import { parse, parseFragment } from "parse5";
 import type { DefaultTreeAdapterMap } from "parse5";
 import { pageFile } from "./designPage";
+import type { LiveEdit } from "./designBridge";
 
 type Node = DefaultTreeAdapterMap["node"];
 type Element = DefaultTreeAdapterMap["element"];
@@ -46,6 +47,9 @@ export interface Edit {
   select: string | null;
   /** What it did, to which element. */
   change: Omit<HandEdit, "page">;
+  /** The same edit on the live page, so it shows at once; none for a text
+   *  edited in place, which the page already shows. */
+  live: LiveEdit | null;
 }
 
 /** What a change says: `text “…”`, `deleted`, `duplicated as m41`, … */
@@ -216,29 +220,29 @@ function edited(html: string, doc: Node, op: EditOp): Edit {
   switch (op.kind) {
     case "text":
       if (!textOnly(el)) throw new EditRefused(`${op.mid} holds more than text: edit the text of its parts`);
-      return { html: splice(html, inner(el), escapeText(op.text)), select: op.mid, change: { ...who(el), change: { kind: "text", text: op.text } } };
+      return { html: splice(html, inner(el), escapeText(op.text)), select: op.mid, change: { ...who(el), change: { kind: "text", text: op.text } }, live: null };
     case "delete": {
       inBody(el);
-      return { html: splice(html, line(html, outer(el)), ""), select: sibling(el, 1) ?? sibling(el, -1) ?? parentMid(el), change: { ...who(el), change: { kind: "deleted" } } };
+      return { html: splice(html, line(html, outer(el)), ""), select: sibling(el, 1) ?? sibling(el, -1) ?? parentMid(el), change: { ...who(el), change: { kind: "deleted" } }, live: { op: "remove", mid: op.mid } };
     }
     case "duplicate": {
       inBody(el);
       const ids = freshIds(doc);
       const copy = renumbered(html, el, ids);
-      return { html: after(html, outer(el), copy), select: ids.taken[0], change: { ...who(el), change: { kind: "duplicated", copy: ids.taken[0] } } };
+      return { html: after(html, outer(el), copy), select: ids.taken[0], change: { ...who(el), change: { kind: "duplicated", copy: ids.taken[0] } }, live: { op: "insert", after: op.mid, html: copy } };
     }
     case "wrap": {
       inBody(el);
       const box = freshIds(doc).take();
       const [from, to] = outer(el);
-      return { html: splice(html, [from, to], `<div data-mid="${box}">${html.slice(from, to)}</div>`), select: box, change: { ...who(el), change: { kind: "wrapped", box } } };
+      return { html: splice(html, [from, to], `<div data-mid="${box}">${html.slice(from, to)}</div>`), select: box, change: { ...who(el), change: { kind: "wrapped", box } }, live: { op: "wrap", mid: op.mid, box } };
     }
     case "unwrap": {
       inBody(el);
       const [a, b] = inner(el);
       if (a >= b) throw new EditRefused(`<${el.tagName}> ${op.mid} has nothing inside to keep`);
       const first = el.childNodes.filter(isElement).map(midOf).find((m) => m !== null);
-      return { html: splice(html, outer(el), html.slice(a, b)), select: first ?? parentMid(el), change: { ...who(el), change: { kind: "unwrapped" } } };
+      return { html: splice(html, outer(el), html.slice(a, b)), select: first ?? parentMid(el), change: { ...who(el), change: { kind: "unwrapped" } }, live: { op: "unwrap", mid: op.mid } };
     }
   }
 }
@@ -318,10 +322,10 @@ function paste(html: string, doc: Node, mid: string | null, copied: string): Edi
   const body = [...elements(doc)].find((e) => e.tagName === "body");
   at ??= body?.childNodes.filter(isElement).filter((e) => midOf(e) !== null && e.sourceCodeLocation).at(-1);
   const change = { mid: ids.taken[0], tag: root.tagName, change: { kind: "inserted", after: mid } as const };
-  if (at) return { html: after(html, outer(at), text), select: ids.taken[0], change };
+  if (at) return { html: after(html, outer(at), text), select: ids.taken[0], change, live: { op: "insert", after: midOf(at), html: text } };
   const start = body?.sourceCodeLocation?.startTag?.endOffset;
   if (start === undefined) throw new EditRefused("The page has no body to paste into");
-  return { html: splice(html, [start, start], text), select: ids.taken[0], change };
+  return { html: splice(html, [start, start], text), select: ids.taken[0], change, live: { op: "insert", after: null, html: text } };
 }
 
 /** Refuses the body and anything outside it: only the body's elements are edited. */
