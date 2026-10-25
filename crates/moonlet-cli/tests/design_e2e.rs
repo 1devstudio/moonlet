@@ -114,7 +114,8 @@ fn text(o: &Output) -> String {
 
 #[tokio::test]
 async fn the_sync_agent_reports_checks_and_records_from_its_folder() {
-    let d = Daemon::start().await;
+    // `design system new` starts the sync agent: a fake claude, never a real one.
+    let d = Daemon::with_fake_claude().await;
     let repo = d.home.path().join("repo");
     std::fs::create_dir_all(repo.join("src")).unwrap();
     std::fs::write(
