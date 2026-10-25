@@ -5,13 +5,13 @@
 import { ArrowRight, ChevronDown, LayoutGrid, Loader2, Minus, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Plus, SwatchBook, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { errorToast, toast, useStore } from "../../lib/store";
+import { errorToast, toast, updateSettings, useStore } from "../../lib/store";
 import { rpc } from "../../lib/daemon";
 import { M, type Design } from "../../lib/protocol";
 import { briefShown, designSubtitle, newDesignReady, systemSummary } from "../../lib/design";
 import { createDesign, latestOf, systemNameOf, pageRevOf, problemsOf, removeDesign, saveViewport, showDesign, systemsOf, useDesign } from "../../lib/designStore";
 import { pageUrl } from "../../lib/designView";
-import { VIEWPORTS, canvasKey, canvasScale, canvasZoom, parseViewport, viewportLabel, viewportText, type Size } from "../../lib/designViewport";
+import { VIEWPORTS, canvasKey, canvasScale, canvasZoom, customViewports, parseViewport, sizeOf, sizeText, viewportLabel, viewportText, withCustomViewport, type Size } from "../../lib/designViewport";
 import { canvasPage, writingPage } from "../../lib/designCanvas";
 import { pageFile, pagePath } from "../../lib/designPage";
 import { barProblems, chatOpensOn, designBar, pageFixMessage, type Bar, type BarAction } from "../../lib/designBars";
@@ -26,7 +26,8 @@ import { Menu } from "../Menu";
 import { AgentView } from "../AgentView";
 import { CardFrame, useSize } from "./SystemView";
 
-const DESKTOP: Size = [1440, 900];
+/** A design's viewport until it has one: Desktop. */
+const DEFAULT_VIEWPORT = VIEWPORTS[0].size;
 
 /** The design screen of `design`, in workspace `workspace` of `host`. */
 export function DesignScreen({ host, workspace, design, inset }: { host: string; workspace: string; design: Design; inset: number }) {
@@ -49,7 +50,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
   const names = design.pages.map((p) => p.name);
   // A page that went away shows the first one; before any, index (being written).
   const page = canvasPage(picked, names);
-  const viewport = parseViewport(design.viewport) ?? DESKTOP;
+  const viewport = parseViewport(design.viewport) ?? DEFAULT_VIEWPORT;
   const fit: Size = [Math.max(cw - 96, 0), Math.max(ch - 96, 0)];
   const scale = canvasScale(zoom, viewport, fit);
   const writing = writingPage(latest, working);
@@ -230,6 +231,8 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
           onClose={() => setCustom(false)}
           onApply={(size) => {
             setCustom(false);
+            // The user's custom sizes are kept in the app's settings, for every design.
+            updateSettings({ designViewports: withCustomViewport(useStore.getState().settings.designViewports, size) });
             setViewport(size);
           }}
         />
@@ -313,6 +316,9 @@ function BarView({ bar, onAct }: { bar: Bar; onAct: (a: BarAction) => void }) {
 
 function ViewportMenu({ viewport, onPick, onCustom }: { viewport: Size; onPick: (size: Size) => void; onCustom: () => void }) {
   const label = viewportLabel(viewport);
+  const saved = useStore((s) => s.settings.designViewports);
+  const customs = useMemo(() => customViewports(saved), [saved]);
+  const current = viewportText(viewport);
   return (
     <Menu
       trigger={(open) => (
@@ -322,9 +328,10 @@ function ViewportMenu({ viewport, onPick, onCustom }: { viewport: Size; onPick: 
         </button>
       )}
       items={[
-        ...VIEWPORTS.map((v) => ({ label: v.name, hint: `${v.size[0]}×${v.size[1]}`, checked: v.size[0] === viewport[0] && v.size[1] === viewport[1], onSelect: () => onPick(v.size) })),
+        ...VIEWPORTS.map((v) => ({ label: v.name, hint: sizeText(v.size), checked: viewportText(v.size) === current, onSelect: () => onPick(v.size) })),
         { kind: "divider" as const },
-        { label: "Custom size…", checked: label.name === "Custom", onSelect: onCustom },
+        ...customs.map((size) => ({ label: "Custom", hint: sizeText(size), checked: viewportText(size) === current, onSelect: () => onPick(size) })),
+        { label: "Custom size…", onSelect: onCustom },
       ]}
     />
   );
@@ -333,7 +340,7 @@ function ViewportMenu({ viewport, onPick, onCustom }: { viewport: Size; onPick: 
 function CustomViewport({ viewport, onClose, onApply }: { viewport: Size; onClose: () => void; onApply: (size: Size) => void }) {
   const [w, setW] = useState(String(viewport[0]));
   const [h, setH] = useState(String(viewport[1]));
-  const size = parseViewport(`${w}x${h}`);
+  const size = sizeOf(w, h);
   return (
     <Dialog
       title="Custom viewport"

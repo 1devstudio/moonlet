@@ -95,6 +95,8 @@ export interface Settings {
   claudeUpdateDismissed?: string | null;
   /** Desktop notification when a file differs between machines; on unless false (X60). */
   syncBanner?: boolean;
+  /** The user's custom design canvas sizes, `WxH`, newest first; none when missing (X65). */
+  designViewports?: string[];
 }
 
 export const sesKey = (host: string, id: string) => `${host}/${id}`;
