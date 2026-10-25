@@ -31,9 +31,16 @@ export type BridgeMessage =
 /** How much of an element's text a pin keeps, in characters. */
 export const TEXT_MAX = 60;
 
-/** A page's element id: `m` and digits. */
+/** A page's element id: `m` and digits. The app's one check of a
+ *  `data-mid`; the bridge script and the daemon keep their own. */
 export function isMid(mid: unknown): mid is string {
   return typeof mid === "string" && /^m\d+$/.test(mid);
+}
+
+/** A tag's name as a pin keeps it: lowercase, a letter then letters, digits
+ *  or `-`, at most 32 characters, as the daemon takes it. */
+export function isTag(tag: unknown): tag is string {
+  return typeof tag === "string" && /^[a-z][a-z0-9-]{0,31}$/.test(tag);
 }
 
 /** The most ids a page reports, so a page cannot flood the app. */
@@ -65,7 +72,7 @@ export function bridgeMessage(data: unknown): BridgeMessage | null {
     case "bridge.pick": {
       const rect = rectOf(d.rect);
       const tag = typeof d.tag === "string" ? d.tag.toLowerCase() : "";
-      if (!isMid(d.mid) || !/^[a-z][a-z0-9-]{0,31}$/.test(tag) || !rect) return null;
+      if (!isMid(d.mid) || !isTag(tag) || !rect) return null;
       return { type: "pick", element: { mid: d.mid, tag, text: textOf(d.text), rect } };
     }
     case "bridge.rects": {
