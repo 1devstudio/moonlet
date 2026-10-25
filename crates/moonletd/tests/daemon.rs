@@ -3499,6 +3499,29 @@ async fn edits_by_hand_saved_while_the_agent_works_go_with_its_turn() {
     assert_eq!(listed.as_array().unwrap().len(), 2, "{listed}");
 }
 
+/// X65: a restore that fails, of a snapshot the design does not have,
+/// leaves the edits by hand not kept yet waiting: they are kept once they
+/// stop, as without the restore.
+#[tokio::test]
+async fn a_failed_restore_leaves_the_edits_by_hand_waiting_to_be_kept() {
+    let d = fake_claude_daemon_with(WRITING_CLAUDE, vec![("MOONLET_DESIGN_QUIET_MS".into(), "1000".into())]).await;
+    let mut c = d.client().await;
+    let ws = workspace_with_system(&d, &mut c).await;
+    let created: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    history_of(&mut c, &ws, 1).await;
+    turn_over(&mut c, created["agent"].as_u64().unwrap()).await;
+    save_by_hand(&mut c, &ws, "<p>by hand</p>\n", &["text of m2"]).await;
+    let failed = c.request::<_, serde_json::Value>(methods::DESIGN_SNAPSHOT_RESTORE, serde_json::json!({"workspace": ws, "slug": "settings-page", "n": 9})).await;
+    assert_eq!(failed.unwrap_err().to_string(), "invalid_params: no snapshot 9");
+    let listed = history_of(&mut c, &ws, 2).await;
+    assert_eq!((&listed[0]["n"], &listed[0]["type"], &listed[0]["summary"]), (&serde_json::json!(2), &serde_json::json!("edits_by_hand"), &serde_json::json!("Text of m2")));
+    let dir = d.home.path().join(".moonlet/design").join(&ws).join("designs/settings-page");
+    assert_eq!(std::fs::read_to_string(dir.join("history/2/pages/index.html")).unwrap(), "<p>by hand</p>\n");
+}
+
 /// X65: a design removed while its edits by hand wait for quiet stays
 /// removed: its snapshot is never taken, and nothing of its folder comes
 /// back.
