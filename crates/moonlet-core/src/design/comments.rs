@@ -111,9 +111,7 @@ impl Store {
         slug: &str,
         mut change: impl FnMut(&mut Vec<DesignComment>) -> Result<T>,
     ) -> Result<T> {
-        // An existing design, its folder no link.
-        self.design_dir(workspace, slug)?;
-        let designs = self.designs_dir(workspace, false)?;
+        let designs = self.designs_of(workspace, slug)?;
         let rel = Path::new(slug).join(COMMENTS_FILE);
         let mut out = None;
         fsx::update_or_create_inside(&designs, &rel, |text| {

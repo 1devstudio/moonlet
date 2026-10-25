@@ -8,6 +8,8 @@ use std::path::Path;
 use anyhow::Result;
 use sha2::{Digest, Sha256};
 
+use moonlet_proto::methods::DesignPageText;
+
 use super::fsx;
 use super::store::Store;
 
@@ -20,13 +22,6 @@ pub struct Stale(pub String);
 #[derive(Debug, thiserror::Error)]
 #[error("bad page \"{0}\"")]
 pub struct BadPage(pub String);
-
-/// A page's text and its version.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PageText {
-    pub html: String,
-    pub version: String,
-}
 
 /// A page's name, `index` for `pages/index.html`: not empty, no folder and
 /// no hidden file.
@@ -52,13 +47,11 @@ fn page_rel(slug: &str, page: &str) -> Result<std::path::PathBuf> {
 
 impl Store {
     /// A design's page, `pages/<page>.html`, with its version.
-    pub fn page(&self, workspace: &str, slug: &str, page: &str) -> Result<PageText> {
+    pub fn page(&self, workspace: &str, slug: &str, page: &str) -> Result<DesignPageText> {
         let rel = page_rel(slug, page)?;
-        // An existing design, its folder no link.
-        self.design_dir(workspace, slug)?;
-        let designs = self.designs_dir(workspace, false)?;
+        let designs = self.designs_of(workspace, slug)?;
         let html = fsx::read_inside(&designs, &designs.join(rel))?;
-        Ok(PageText {
+        Ok(DesignPageText {
             version: version_of(&html),
             html,
         })
@@ -78,8 +71,7 @@ impl Store {
         base: &str,
     ) -> Result<String> {
         let rel = page_rel(slug, page)?;
-        self.design_dir(workspace, slug)?;
-        let designs = self.designs_dir(workspace, false)?;
+        let designs = self.designs_of(workspace, slug)?;
         // Read again just before it is replaced: changed meanwhile, it is
         // read again, and is no longer at `base`.
         fsx::update_inside(&designs, &rel, |text| {
@@ -141,7 +133,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&file).unwrap(), edited);
         assert_eq!(
             store.page("w1", "settings-page", "index").unwrap(),
-            PageText {
+            DesignPageText {
                 html: edited.into(),
                 version: version.clone()
             }
