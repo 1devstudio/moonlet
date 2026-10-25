@@ -241,13 +241,13 @@ function edited(html: string, doc: Node, op: EditOp, floor: number): Edit {
     }
     case "duplicate": {
       inBody(el);
-      const ids = freshIds(doc, floor);
+      const ids = freshIds(html, floor);
       const copy = renumbered(html, el, ids);
       return { html: after(html, outer(el), copy), select: ids.taken[0], change: { ...who(el), change: { kind: "duplicated", copy: ids.taken[0] } }, live: { op: "insert", after: op.mid, html: copy } };
     }
     case "wrap": {
       inBody(el);
-      const box = freshIds(doc, floor).take();
+      const box = freshIds(html, floor).take();
       const [from, to] = outer(el);
       return { html: splice(html, [from, to], `<div data-mid="${box}">${html.slice(from, to)}</div>`), select: box, change: { ...who(el), change: { kind: "wrapped", box } }, live: { op: "wrap", mid: op.mid, box } };
     }
@@ -264,7 +264,9 @@ function edited(html: string, doc: Node, op: EditOp, floor: number): Edit {
 /** The highest number of a `data-mid` in page `html`, anywhere in it
  *  (inside an `<svg>` and its other exceptions too); 0 for none. */
 export function highestMid(html: string): number {
-  return highest(parsed(html));
+  // Read as with scripts off, so the inside of a <noscript>, which a page
+  // running scripts reads as text, counts too.
+  return highest(parse(html, { scriptingEnabled: false }));
 }
 
 function highest(doc: Node): number {
@@ -280,8 +282,8 @@ function highest(doc: Node): number {
  *  `moonlet design check --fix` gives them, and after `floor`, the highest
  *  it had before (an id an element deleted since held is never given
  *  again); `taken` lists those given so far. */
-function freshIds(doc: Node, floor = 0) {
-  let next = Math.max(highest(doc), floor) + 1;
+function freshIds(html: string, floor = 0) {
+  let next = Math.max(highestMid(html), floor) + 1;
   const taken: string[] = [];
   return {
     taken,
@@ -338,7 +340,7 @@ export function copyElement(html: string, mid: string): string | null {
 function paste(html: string, doc: Node, mid: string | null, copied: string, floor: number): Edit {
   const root = parseFragment(copied, { sourceCodeLocationInfo: true }).childNodes.find(isElement);
   if (!root?.sourceCodeLocation) throw new EditRefused("Nothing to paste");
-  const ids = freshIds(doc, floor);
+  const ids = freshIds(html, floor);
   const text = renumbered(copied, root, ids);
   let at: Element | undefined;
   if (mid !== null) {

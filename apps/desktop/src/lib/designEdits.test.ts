@@ -102,6 +102,12 @@ describe("an edit by hand on a page's source (X65)", () => {
     expect(applyEdit(without, { kind: "wrap", mid: "m25" }, highestMid(PAGE)).select).toBe("m41");
   });
 
+  it("never gives an id an element inside a <noscript> holds, which a browser running scripts reads as text", () => {
+    const page = '<!doctype html>\n<body data-mid="m1">\n<p data-mid="m2">Git</p>\n<noscript><p data-mid="m50">Turn on scripts</p></noscript>\n</body>\n';
+    expect(highestMid(page)).toBe(50);
+    expect(applyEdit(page, { kind: "wrap", mid: "m2" }).select).toBe("m51");
+  });
+
   it("wraps an element in a box, a div with the next free id, which it selects", () => {
     const wrapped = applyEdit(PAGE, { kind: "wrap", mid: "m25" });
     expect(wrapped.html).toBe(withLines(19, 1, '      <div data-mid="m41"><h2 data-mid="m25">Git</h2></div>'));
