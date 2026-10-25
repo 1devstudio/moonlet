@@ -12,7 +12,7 @@ use moonlet_proto::types::ProjectIdentity;
 use serde::{Deserialize, Serialize};
 
 use super::check;
-use super::{anchor, foundations, fsx, manifest, readme};
+use super::{anchor, card, foundations, fsx, manifest, readme};
 
 /// One project a design system is built from.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -462,9 +462,11 @@ impl Store {
     }
 
     /// A design system's cards for the design system view and the card page
-    /// (X64): each as its marker says, with its check problems and the
-    /// sources changed since the last sync. Sorted by group and name; a card
-    /// whose marker does not parse is left out (the check reports it).
+    /// (X64): each as its marker says, with its check problems (its own
+    /// files' too: a component's `.css` and `.prompt.md`) and the sources
+    /// changed since the last sync. A card whose marker does not parse is
+    /// listed in the group "Without a marker", with its problem. Sorted by
+    /// group and name.
     pub fn cards(&self, workspace: &str, slug: &str) -> Result<Vec<CardInfo>> {
         let dir = self.system_dir(workspace, slug)?;
         let config = read_config(&dir)?;
@@ -472,29 +474,53 @@ impl Store {
         let mut problems = check::check(&dir)?;
         let status = anchor::status(&dir, &source_roots(&record), &config.exceptions())?;
         let mut out = Vec::new();
-        for e in manifest::build(&dir)?.cards {
-            let text = fsx::read_inside(&dir, &dir.join(&e.path))?;
-            let marker = text.lines().next().unwrap_or_default().to_string();
-            let (mine, rest): (Vec<_>, Vec<_>) =
-                problems.into_iter().partition(|p| p.path == e.path);
+        for file in check::html_files(&dir) {
+            let path = check::rel(&dir, &file);
+            if !check::CARD_DIRS
+                .iter()
+                .any(|d| path.starts_with(&format!("{d}/")))
+                || path.ends_with(".proposed.html")
+            {
+                continue;
+            }
+            let text = fsx::read_inside(&dir, &file)?;
+            let stem = file
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            let (group, name, viewport, source) = match card::parse_marker(&text) {
+                Ok(m) => (m.group, m.name.unwrap_or(stem), m.viewport, m.source),
+                Err(_) => ("Without a marker".to_string(), stem, (900, 700), Vec::new()),
+            };
+            // A component's folder holds one card: its other files' problems
+            // are the card's.
+            let folder = path
+                .starts_with("components/")
+                .then(|| path.rsplit_once('/').map(|(f, _)| format!("{f}/")))
+                .flatten();
+            let (mine, rest): (Vec<_>, Vec<_>) = problems.into_iter().partition(|p| {
+                p.path == path || folder.as_ref().is_some_and(|f| p.path.starts_with(f))
+            });
             problems = rest;
             let changed_sources = status
                 .iter()
-                .find(|s| s.path == e.path)
+                .find(|s| s.path == path)
                 .map(|s| s.changed_sources.clone())
                 .unwrap_or_default();
             out.push(CardInfo {
-                group: e.group,
-                name: e.name,
-                path: e.path,
-                viewport: e.viewport,
-                source: e.source,
-                snippets: e.snippets,
-                marker,
+                group,
+                name,
+                path,
+                viewport,
+                source,
+                snippets: card::snippets(&text),
+                marker: text.lines().next().unwrap_or_default().to_string(),
                 problems: mine,
                 changed_sources,
             });
         }
+        out.sort_by(|a, b| (&a.group, &a.name).cmp(&(&b.group, &b.name)));
         Ok(out)
     }
 
@@ -2204,6 +2230,74 @@ root = \"9c1e0a2\"
             ]
         );
         assert_eq!(store.systems("w1").unwrap()[0].last_sync, second);
+    }
+
+    #[test]
+    fn a_cards_own_files_problems_are_its_own_and_a_card_without_a_marker_is_listed() {
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::new(home.path());
+        let slug = store
+            .create_system("w1", "storefront", vec![], Cover::Core, 1)
+            .unwrap();
+        let dir = home.path().join("design/w1/systems").join(&slug);
+        put(
+            &dir,
+            &[
+                ("styles.css", "@import \"components.css\";\n"),
+                (
+                    "components.css",
+                    "@import \"components/buttons/button/button.css\";\n",
+                ),
+                (
+                    "components/buttons/button/button.html",
+                    "<!-- @dsCard group=\"Buttons\" name=\"Button\" -->\n<button class=\"btn\">Run</button>\n",
+                ),
+                (
+                    "components/buttons/button/button.css",
+                    ".btn {\n  color: var(--color-nope);\n}\n",
+                ),
+                (
+                    "components/forms/field/field.html",
+                    "<input class=\"field\">\n",
+                ),
+            ],
+        );
+        let cards = store.cards("w1", &slug).unwrap();
+        let got: Vec<_> = cards
+            .iter()
+            .map(|c| {
+                (
+                    c.group.as_str(),
+                    c.name.as_str(),
+                    c.path.as_str(),
+                    c.problems
+                        .iter()
+                        .map(|p| (p.path.as_str(), p.line, p.kind.clone()))
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (
+                    "Buttons",
+                    "Button",
+                    "components/buttons/button/button.html",
+                    vec![(
+                        "components/buttons/button/button.css",
+                        2,
+                        check::Kind::UnknownToken
+                    )],
+                ),
+                (
+                    "Without a marker",
+                    "field",
+                    "components/forms/field/field.html",
+                    vec![("components/forms/field/field.html", 1, check::Kind::Marker)],
+                ),
+            ]
+        );
     }
 
     #[test]
