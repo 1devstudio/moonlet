@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 struct Daemon {
     home: tempfile::TempDir,
     socket: PathBuf,
+    env: Vec<(String, String)>,
     child: Child,
 }
 
@@ -24,8 +25,23 @@ impl Daemon {
         Daemon {
             home,
             socket,
+            env: env
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
             child,
         }
+    }
+
+    async fn restart(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        let env: Vec<(&str, &str)> = self
+            .env
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        self.child = spawn(self.home.path(), &self.socket, &env).await;
     }
 
     async fn app(&self) -> Client {
@@ -309,4 +325,716 @@ async fn a_session_asks_for_the_cloud_when_it_is_made() {
     };
     assert_eq!(cloud_of(&cloudy["id"]), json!(true));
     assert_eq!(cloud_of(&plain["id"]), Value::Null);
+}
+
+/// A central host `studio-mini` listening on the loopback, with the fake
+/// provider making its machines in `fake`.
+struct Cloud {
+    d: Daemon,
+    addr: String,
+    fake: tempfile::TempDir,
+    project: String,
+    key: String,
+}
+
+const SHOP_CONFIG: &str = "[heavy]\ncommands = [\"sh run.sh\"]\nmachine_setup = \"ci.sh\"\n";
+
+impl Drop for Cloud {
+    /// The fake machines' daemons go with the test.
+    fn drop(&mut self) {
+        for e in std::fs::read_dir(self.fake.path())
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            if let Some(pid) = std::fs::read_to_string(e.path().join("pid"))
+                .ok()
+                .and_then(|p| p.trim().parse::<i32>().ok())
+            {
+                let _ = nix::sys::signal::kill(
+                    nix::unistd::Pid::from_raw(pid),
+                    nix::sys::signal::Signal::SIGKILL,
+                );
+            }
+        }
+    }
+}
+
+async fn cloud_with(config: &str, env: &[(&str, &str)]) -> Cloud {
+    let home = tempfile::tempdir().unwrap();
+    let fake = tempfile::tempdir().unwrap();
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    std::fs::write(
+        home.path().join("mobile.json"),
+        format!(r#"{{ "enabled": true, "port": {port} }}"#),
+    )
+    .unwrap();
+    std::fs::write(
+        home.path().join("link.json"),
+        r#"{ "central": null, "worker": { "id": "c0ffee00-0000-4000-8000-000000000001", "name": "studio-mini", "enabled": false } }"#,
+    )
+    .unwrap();
+    let fake_dir = fake.path().to_str().unwrap().to_string();
+    let mut all = vec![
+        ("MOONLET_MOBILE_ADDRS", "127.0.0.1"),
+        ("MOONLET_CLOUD_FAKE", fake_dir.as_str()),
+        ("MOONLET_TEST_LOAD", "0.5"),
+        ("SHELL", "/bin/sh"),
+    ];
+    all.extend_from_slice(env);
+    let d = Daemon::start(home, &all).await;
+    let addr = format!("127.0.0.1:{port}");
+    for _ in 0..100 {
+        let st: Value = d.call("mobile.status", json!({})).await;
+        if st["listening"]
+            .as_array()
+            .is_some_and(|l| l.contains(&json!(addr)))
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let repo = d.home.path().join("src/shop");
+    std::fs::create_dir_all(repo.join(".moonlet")).unwrap();
+    git(&repo, &["init", "-q", "-b", "main"]);
+    std::fs::write(repo.join(".moonlet/config.toml"), config).unwrap();
+    std::fs::write(repo.join("ci.sh"), "echo deps installed\n").unwrap();
+    std::fs::write(repo.join("run.sh"), "echo out\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-q", "-m", "shop"]);
+    let project: Value = d.call("project.add", json!({ "path": repo })).await;
+    let root = project["identity"]["root"].as_str().unwrap();
+    let key = format!(" {root}");
+    let _: Value = d
+        .call(
+            "cloud.set",
+            json!({
+                "providers": { "fake": {} },
+                "projects": { key.clone(): { "overflow": false, "provider": "fake", "type": "small", "location": "here", "image": "none" } }
+            }),
+        )
+        .await;
+    Cloud {
+        d,
+        addr,
+        fake,
+        project: project["id"].as_str().unwrap().to_string(),
+        key,
+    }
+}
+
+async fn cloud() -> Cloud {
+    cloud_with(SHOP_CONFIG, &[]).await
+}
+
+impl Cloud {
+    async fn machines(&self) -> Value {
+        self.d.call("cloud.machines", json!({})).await
+    }
+
+    /// Waits until machine `id` is in `state`; gives it.
+    async fn until(&self, id: &str, state: &str) -> Value {
+        for _ in 0..600 {
+            let all = self.machines().await;
+            let found = all["machines"]
+                .as_array()
+                .into_iter()
+                .chain(all["removed"].as_array())
+                .flatten()
+                .find(|m| m["id"] == id)
+                .cloned();
+            if let Some(m) = found
+                && m["state"] == state
+            {
+                return m;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        panic!("machine {id} never {state}: {}", self.machines().await);
+    }
+
+    async fn up(&self) -> Value {
+        self.d
+            .call("cloud.up", json!({ "project": self.project }))
+            .await
+    }
+}
+
+#[tokio::test]
+async fn the_fake_provider_is_off_without_its_setting() {
+    let d = Daemon::start(tempfile::tempdir().unwrap(), &[]).await;
+    let got: Value = d.call("cloud.get", json!({})).await;
+    let ids: Vec<&str> = got["kinds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|k| k["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["hetzner"]);
+    let c = cloud().await;
+    let got: Value = c.d.call("cloud.get", json!({})).await;
+    let ids: Vec<&str> = got["kinds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|k| k["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["hetzner", "fake"]);
+}
+
+#[tokio::test]
+async fn startup_steps_arrive_in_order_with_durations() {
+    let c = cloud().await;
+    let m = c.up().await;
+    assert_eq!(m["state"], json!("creating"));
+    assert!(
+        m["name"].as_str().unwrap().starts_with("moonlet-shop-"),
+        "{m}"
+    );
+    let ready = c.until(m["id"].as_str().unwrap(), "ready").await;
+    let steps: Vec<(String, String)> = ready["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| {
+            (
+                s["label"].as_str().unwrap().to_string(),
+                s["state"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    let version = env!("CARGO_PKG_VERSION");
+    assert_eq!(
+        steps,
+        [
+            ("Created at Fake cloud".to_string(), "done".to_string()),
+            ("Joined your tailnet".into(), "done".into()),
+            (format!("Installed moonlet {version}"), "done".into()),
+            ("Paired with studio-mini".into(), "done".into()),
+            ("Machine setup ci.sh".into(), "done".into()),
+        ]
+    );
+    assert!(
+        ready["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|s| s["took_ms"].is_u64()),
+        "{ready}"
+    );
+    // It is a worker of the central host, taking heavy commands.
+    let workers: Vec<Value> = c.d.call("worker.list", json!({})).await;
+    assert_eq!(workers.len(), 1, "{workers:?}");
+    assert_eq!(workers[0]["name"], ready["name"]);
+    assert_eq!(workers[0]["heavy"], json!(true));
+}
+
+impl Cloud {
+    /// The fake machines' folders, oldest first.
+    fn fake_dirs(&self) -> Vec<PathBuf> {
+        let mut dirs: Vec<PathBuf> = std::fs::read_dir(self.fake.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.join("meta.json").exists())
+            .collect();
+        dirs.sort();
+        dirs
+    }
+
+    /// The device token the first fake machine paired with.
+    fn machine_token(&self) -> String {
+        let link: Value = serde_json::from_slice(
+            &std::fs::read(self.fake_dirs()[0].join("home/link.json")).unwrap(),
+        )
+        .unwrap();
+        link["central"]["token"].as_str().unwrap().to_string()
+    }
+
+    async fn ready(&self) -> Value {
+        let m = self.up().await;
+        self.until(m["id"].as_str().unwrap(), "ready").await
+    }
+
+    fn steer(&self, file: &str, value: &str) {
+        std::fs::write(self.fake.path().join(file), value).unwrap();
+    }
+}
+
+/// Whether `token` still opens a connection.
+async fn authed(addr: &str, token: &str) -> bool {
+    use moonlet_proto::{read_frame, write_frame};
+    let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let auth = Message::Auth {
+        token: Some(token.into()),
+        pair: None,
+        device: None,
+        route: None,
+        kind: None,
+    };
+    write_frame(&mut s, &Frame::Json(auth)).await.unwrap();
+    matches!(
+        read_frame(&mut s).await,
+        Ok(Some(Frame::Json(Message::Authed { .. })))
+    )
+}
+
+#[tokio::test]
+async fn a_cloud_device_may_call_only_worker_methods() {
+    let c = cloud().await;
+    c.ready().await;
+    let token = c.machine_token();
+    for method in [
+        "session.list",
+        "terminal.list",
+        "terminal.attach",
+        "cloud.set",
+        "heavy.approve",
+        "mobile.status",
+    ] {
+        assert_eq!(
+            as_device_client(&c.addr, &token, "moonletd-worker", method, json!({}))
+                .await
+                .as_deref(),
+            Some("forbidden"),
+            "{method}"
+        );
+    }
+    // Nor does it hear the central host's events.
+    use moonlet_proto::{read_frame, write_frame};
+    let mut s = tokio::net::TcpStream::connect(&c.addr).await.unwrap();
+    let auth = Message::Auth {
+        token: Some(token.clone()),
+        pair: None,
+        device: None,
+        route: None,
+        kind: None,
+    };
+    write_frame(&mut s, &Frame::Json(auth)).await.unwrap();
+    read_frame(&mut s).await.unwrap();
+    let hello = Message::Hello {
+        protocol: moonlet_proto::PROTOCOL_VERSION,
+        client: "moonletd-worker".into(),
+    };
+    write_frame(&mut s, &Frame::Json(hello)).await.unwrap();
+    read_frame(&mut s).await.unwrap();
+    let _: Value =
+        c.d.call(
+            "session.create",
+            json!({ "project_id": c.project, "name": "fix-cart", "agent": "none" }),
+        )
+        .await;
+    while let Ok(Ok(Some(frame))) =
+        tokio::time::timeout(Duration::from_millis(500), read_frame(&mut s)).await
+    {
+        assert!(
+            !matches!(frame, Frame::Json(Message::Event { .. })),
+            "{frame:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_cloud_device_goes_away_with_its_machine() {
+    let c = cloud().await;
+    let m = c.ready().await;
+    // Listed under its machine, never as a paired device.
+    let status: Value = c.d.call("mobile.status", json!({})).await;
+    assert_eq!(status["devices"], json!([]));
+    let token = c.machine_token();
+    assert!(authed(&c.addr, &token).await);
+    let _: Value =
+        c.d.call("cloud.down", json!({ "machine": m["name"] }))
+            .await;
+    c.until(m["id"].as_str().unwrap(), "removed").await;
+    assert!(!authed(&c.addr, &token).await);
+}
+
+#[tokio::test]
+async fn removing_revokes_the_device_retires_and_destroys() {
+    let c = cloud().await;
+    let m = c.ready().await;
+    let dir = c.fake_dirs()[0].clone();
+    let _: Value = c.d.call("cloud.down", json!({ "machine": m["id"] })).await;
+    let removed = c.until(m["id"].as_str().unwrap(), "removed").await;
+    assert_eq!(removed["reason"], json!("removed on request"));
+    assert!(!dir.exists(), "the provider still has it");
+    let workers: Vec<Value> = c.d.call("worker.list", json!({})).await;
+    for _ in 0..50 {
+        let workers: Vec<Value> = c.d.call("worker.list", json!({})).await;
+        if workers.is_empty() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("still a worker: {workers:?}");
+}
+
+#[tokio::test]
+async fn remove_now_removes_an_idle_machine_at_once() {
+    let c = cloud().await;
+    let m = c.ready().await;
+    let started = std::time::Instant::now();
+    let _: Value =
+        c.d.call("cloud.down", json!({ "machine": m["name"] }))
+            .await;
+    c.until(m["id"].as_str().unwrap(), "removed").await;
+    assert!(started.elapsed() < Duration::from_secs(5));
+    let all = c.machines().await;
+    assert_eq!(all["machines"], json!([]));
+    assert_eq!(all["removed"][0]["name"], m["name"]);
+}
+
+#[tokio::test]
+async fn a_failing_destroy_is_retried_and_reported_after_three_tries() {
+    let c = cloud_with(SHOP_CONFIG, &[("MOONLET_TEST_CLOUD_BACKOFF_MS", "200")]).await;
+    let m = c.ready().await;
+    let id = m["id"].as_str().unwrap().to_string();
+    c.steer("fail-destroy", "4");
+    let _: Value = c.d.call("cloud.down", json!({ "machine": id })).await;
+    let mut reported = Value::Null;
+    for _ in 0..100 {
+        let all = c.machines().await;
+        if let Some(m) = all["machines"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["id"] == id.as_str())
+            && m["error"].is_string()
+        {
+            reported = m.clone();
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(reported["state"], json!("removing"), "{reported}");
+    assert_eq!(reported["error"], json!("503 Service Unavailable"));
+    assert!(reported["error_since"].is_u64());
+    let removed = c.until(&id, "removed").await;
+    assert_eq!(removed["error"], Value::Null);
+}
+
+#[tokio::test]
+async fn a_machine_that_never_joins_is_removed_at_the_deadline() {
+    let c = cloud_with(SHOP_CONFIG, &[("MOONLET_TEST_CLOUD_DEADLINE_MS", "1500")]).await;
+    c.steer("no-join", "");
+    let m = c.up().await;
+    let removed = c.until(m["id"].as_str().unwrap(), "removed").await;
+    let reason = removed["reason"].as_str().unwrap();
+    assert!(
+        reason.starts_with(&format!(
+            "{} did not come up in ",
+            m["name"].as_str().unwrap()
+        )),
+        "{reason}"
+    );
+    assert!(
+        reason.ends_with("; last: Created at Fake cloud"),
+        "{reason}"
+    );
+    assert!(c.fake_dirs().is_empty());
+}
+
+#[tokio::test]
+async fn a_machine_whose_link_stays_down_is_removed() {
+    let c = cloud_with(
+        SHOP_CONFIG,
+        &[
+            ("MOONLET_TEST_CLOUD_LINK_DOWN_MS", "1000"),
+            ("MOONLET_WORKER_PING_MS", "200"),
+        ],
+    )
+    .await;
+    let m = c.ready().await;
+    let pid: i32 = std::fs::read_to_string(c.fake_dirs()[0].join("pid"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(pid),
+        nix::sys::signal::Signal::SIGSTOP,
+    )
+    .unwrap();
+    let removed = c.until(m["id"].as_str().unwrap(), "removed").await;
+    assert!(
+        removed["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("its link was down"),
+        "{removed}"
+    );
+}
+
+#[tokio::test]
+async fn two_cloud_up_calls_at_once_never_pass_the_limit() {
+    let c = cloud().await;
+    c.ready().await;
+    let (mut x, mut y) = (c.d.app().await, c.d.app().await);
+    let (a, b) = tokio::join!(
+        x.request::<_, Value>("cloud.up", json!({ "project": c.project })),
+        y.request::<_, Value>("cloud.up", json!({ "project": c.project }))
+    );
+    let mut errors: Vec<String> = [&a, &b]
+        .iter()
+        .filter_map(|r| r.as_ref().err().map(|e| e.to_string()))
+        .collect();
+    errors.sort();
+    assert_eq!(
+        errors,
+        ["cloud_limit: Cloud limit reached: 2 of 2 machines"],
+        "{a:?} {b:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_creating_machine_counts_against_the_limit() {
+    let c = cloud().await;
+    let _: Value = c.d.call("cloud.set", json!({ "max_machines": 1 })).await;
+    c.steer("slow-create", "3000");
+    let m = c.up().await;
+    assert_eq!(m["state"], json!("creating"));
+    assert_eq!(
+        c.d.fails("cloud.up", json!({ "project": c.project })).await,
+        "cloud_limit: Cloud limit reached: 1 of 1 machines"
+    );
+}
+
+#[tokio::test]
+async fn a_limit_refuses_cloud_up_with_the_message() {
+    let mut c = cloud().await;
+    let month = String::from_utf8(
+        Command::new("date")
+            .args(["-u", "+%Y-%m"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    std::fs::create_dir_all(c.d.home.path().join("cloud")).unwrap();
+    std::fs::write(
+        c.d.home.path().join("cloud/usage.json"),
+        json!({ month.trim(): 40 * 3600 }).to_string(),
+    )
+    .unwrap();
+    c.d.restart().await;
+    assert_eq!(
+        c.d.fails("cloud.up", json!({ "project": c.project })).await,
+        "cloud_limit: Cloud limit reached: 40 of 40 machine-hours this month"
+    );
+    let all = c.machines().await;
+    assert_eq!(
+        (
+            all["hours_this_month"].clone(),
+            all["max_hours_month"].clone()
+        ),
+        (json!(40.0), json!(40))
+    );
+}
+
+#[tokio::test]
+async fn a_machine_is_recorded_before_the_create_call() {
+    let c = cloud().await;
+    c.steer("slow-create", "3000");
+    let m = c.up().await;
+    let recorded: Value = serde_json::from_slice(
+        &std::fs::read(c.d.home.path().join("cloud/machines.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(recorded[0]["id"], m["id"]);
+    assert_eq!(recorded[0]["state"], json!("creating"));
+    assert_eq!(recorded[0]["provider_id"], Value::Null);
+}
+
+impl Cloud {
+    fn repo(&self) -> PathBuf {
+        self.d.home.path().join("src/shop")
+    }
+}
+
+#[tokio::test]
+async fn machine_setup_without_a_session_comes_from_the_projects_folder() {
+    let c = cloud_with(SHOP_CONFIG, &[]).await;
+    // The project's folder, not what was committed.
+    std::fs::write(c.repo().join("ci.sh"), "echo from-folder > marker\n").unwrap();
+    c.ready().await;
+    assert_eq!(
+        std::fs::read_to_string(c.fake_dirs()[0].join("marker")).unwrap(),
+        "from-folder\n"
+    );
+}
+
+#[tokio::test]
+async fn machine_setup_comes_from_the_sessions_worktree() {
+    let c = cloud().await;
+    let session: Value =
+        c.d.call(
+            "session.create",
+            json!({ "project_id": c.project, "name": "big-refactor", "agent": "none" }),
+        )
+        .await;
+    let worktree = PathBuf::from(session["path"].as_str().unwrap());
+    std::fs::write(worktree.join("ci.sh"), "echo from-session > marker\n").unwrap();
+    let m: Value =
+        c.d.call(
+            "cloud.up",
+            json!({ "project": c.project, "session": session["id"] }),
+        )
+        .await;
+    assert_eq!(m["for_session"], session["id"]);
+    c.until(m["id"].as_str().unwrap(), "starting").await;
+    for _ in 0..100 {
+        if let Ok(text) = std::fs::read_to_string(c.fake_dirs()[0].join("marker")) {
+            assert_eq!(text, "from-session\n");
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("the machine setup never ran");
+}
+
+#[tokio::test]
+async fn a_machine_setup_over_16_kib_makes_no_machine() {
+    let c = cloud().await;
+    std::fs::write(c.repo().join("ci.sh"), "#".repeat(16 * 1024 + 1)).unwrap();
+    assert_eq!(
+        c.d.fails("cloud.up", json!({ "project": c.project })).await,
+        "machine_setup: ci.sh is over 16 KiB"
+    );
+    assert_eq!(c.machines().await["machines"], json!([]));
+}
+
+#[tokio::test]
+async fn a_machine_setup_outside_the_folder_makes_no_machine() {
+    let c = cloud().await;
+    let outside = c.d.home.path().join("secret.sh");
+    std::fs::write(&outside, "echo secret\n").unwrap();
+    std::fs::remove_file(c.repo().join("ci.sh")).unwrap();
+    std::os::unix::fs::symlink(&outside, c.repo().join("ci.sh")).unwrap();
+    assert_eq!(
+        c.d.fails("cloud.up", json!({ "project": c.project })).await,
+        "machine_setup: ci.sh is outside the repository"
+    );
+    assert!(c.fake_dirs().is_empty());
+}
+
+#[tokio::test]
+async fn a_missing_machine_setup_makes_no_machine() {
+    let c = cloud().await;
+    std::fs::remove_file(c.repo().join("ci.sh")).unwrap();
+    assert_eq!(
+        c.d.fails("cloud.up", json!({ "project": c.project })).await,
+        "machine_setup: ci.sh is missing"
+    );
+}
+
+#[tokio::test]
+async fn a_machine_without_machine_setup_skips_that_step() {
+    let c = cloud_with("[heavy]\ncommands = [\"sh run.sh\"]\n", &[]).await;
+    let ready = c.ready().await;
+    let steps: Vec<&str> = ready["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["step"].as_str().unwrap())
+        .collect();
+    assert_eq!(steps, ["created", "tailnet", "installed", "paired"]);
+}
+
+#[tokio::test]
+async fn a_failing_machine_setup_fails_and_removes_the_machine() {
+    let c = cloud().await;
+    std::fs::write(c.repo().join("ci.sh"), "echo nope; exit 3\n").unwrap();
+    let m = c.up().await;
+    let removed = c.until(m["id"].as_str().unwrap(), "removed").await;
+    assert_eq!(
+        removed["reason"],
+        json!(
+            "Machine setup ci.sh failed: exit 3; its output is in /var/log/moonlet/machine-setup.log"
+        )
+    );
+    let step = removed["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["step"] == "machine_setup")
+        .cloned()
+        .unwrap();
+    assert_eq!(step["state"], json!("failed"));
+}
+
+#[tokio::test]
+async fn the_sweep_destroys_a_machine_moonlet_lost_track_of() {
+    let c = cloud_with(SHOP_CONFIG, &[("MOONLET_TEST_CLOUD_SWEEP_MS", "300")]).await;
+    let info: Value = c.d.call("cloud.get", json!({})).await;
+    let host = info["host_id"].as_str().unwrap();
+    // Labelled for this central host, with no record: left by a crash.
+    let ghost = c.fake.path().join("f9");
+    std::fs::create_dir_all(&ghost).unwrap();
+    let meta = json!({
+        "name": "moonlet-shop-gh05",
+        "labels": { "moonlet-host": host, "moonlet-machine": "mgh05", "moonlet-project": "x" },
+        "created_at": 1
+    });
+    std::fs::write(ghost.join("meta.json"), meta.to_string()).unwrap();
+    // Another central host's machine is left alone.
+    let other = c.fake.path().join("f8");
+    std::fs::create_dir_all(&other).unwrap();
+    let meta =
+        json!({ "name": "theirs", "labels": { "moonlet-host": "someone-else" }, "created_at": 1 });
+    std::fs::write(other.join("meta.json"), meta.to_string()).unwrap();
+    for _ in 0..50 {
+        if !ghost.exists() {
+            assert!(other.exists());
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("the sweep left the machine");
+}
+
+#[tokio::test]
+async fn a_machine_left_creating_by_a_restart_is_destroyed() {
+    let mut c = cloud_with(SHOP_CONFIG, &[("MOONLET_TEST_CLOUD_SWEEP_MS", "300")]).await;
+    c.steer("slow-create", "60000");
+    let m = c.up().await;
+    for _ in 0..50 {
+        if !c.fake_dirs().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(c.fake_dirs().len(), 1);
+    // The daemon restarts during the create call.
+    c.d.restart().await;
+    for _ in 0..100 {
+        let all = c.machines().await;
+        let recorded = all["machines"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|x| x["id"] == m["id"]);
+        if c.fake_dirs().is_empty() && !recorded {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("left: {:?} {}", c.fake_dirs(), c.machines().await);
+}
+
+#[tokio::test]
+async fn cloud_types_lists_the_providers_machine_types() {
+    let c = cloud().await;
+    let types: Value =
+        c.d.call(
+            "cloud.types",
+            json!({ "provider": "fake", "location": "here" }),
+        )
+        .await;
+    assert_eq!(types[0]["name"], json!("small"));
+    assert_eq!(types[0]["cores"], json!(2));
 }
