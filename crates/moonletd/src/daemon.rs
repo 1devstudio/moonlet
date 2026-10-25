@@ -143,17 +143,12 @@ fn system_agent(
 ) -> Option<u32> {
     let record = store.record(workspace, slug).ok()?;
     let dir = store.system_dir(workspace, slug).ok()?;
-    let dir = dir.canonicalize().unwrap_or(dir);
-    let id = record.agent?;
-    terminals
-        .iter()
-        .any(|t| t.id == id && t.chat && t.session_id.is_none() && Path::new(&t.cwd) == dir)
-        .then_some(id)
+    folder_agent(terminals, record.agent, &dir)
 }
 
-/// The chat of a workspace design's agent, while it still is that design's:
-/// the chat its record names, still a sessionless chat in its folder (X65).
-fn design_agent(terminals: &[moonlet_proto::types::TerminalInfo], recorded: Option<u32>, dir: &Path) -> Option<u32> {
+/// The recorded chat of a design system's or a design's agent, while it is
+/// still a sessionless chat in that folder (X64, X65).
+fn folder_agent(terminals: &[moonlet_proto::types::TerminalInfo], recorded: Option<u32>, dir: &Path) -> Option<u32> {
     let id = recorded?;
     let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
     terminals
@@ -1283,7 +1278,7 @@ impl Daemon {
                     let store = store.clone();
                     blocking(move || Ok((store.design_dir(&ws, &sl)?, store.design_record(&ws, &sl)?.agent))).await?
                 };
-                if let Some(id) = design_agent(&self.terminals.list(), found.1, &found.0) {
+                if let Some(id) = folder_agent(&self.terminals.list(), found.1, &found.0) {
                     let _ = self.terminals.kill(id, true);
                 }
                 blocking(move || store.remove_design(&r.workspace, &r.slug)).await?;
@@ -1382,7 +1377,7 @@ impl Daemon {
     /// chat is still its design's, with the agent's state and what it waits
     /// for from the user.
     fn design_value(&self, d: moonlet_core::design::designs::DesignSummary, terminals: &[moonlet_proto::types::TerminalInfo]) -> Value {
-        let agent = design_agent(terminals, d.agent, Path::new(&d.path));
+        let agent = folder_agent(terminals, d.agent, Path::new(&d.path));
         let state = agent.and_then(|id| terminals.iter().find(|t| t.id == id)).map(|t| t.agent_state);
         let waiting = agent
             .and_then(|id| self.chats.pending(id).ok())
