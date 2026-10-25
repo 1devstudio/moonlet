@@ -173,8 +173,15 @@ export function helloMessage(): { type: "bridge.hello" } {
 /** An edit by hand made on the live page too, so it shows at once without
  *  loading the page again (the saved file is what counts): remove an
  *  element, insert one's source after element `after` (null: first in the
- *  body), wrap one in a box with id `box`, or unwrap one. */
-export type LiveEdit = { op: "remove"; mid: string } | { op: "insert"; after: string | null; html: string } | { op: "wrap"; mid: string; box: string } | { op: "unwrap"; mid: string };
+ *  body), wrap one in a box with id `box`, unwrap one, or give one its new
+ *  inline style. */
+export type LiveEdit =
+  | { op: "remove"; mid: string }
+  | { op: "insert"; after: string | null; html: string }
+  | { op: "wrap"; mid: string; box: string }
+  | { op: "unwrap"; mid: string }
+  /** Its `style` attribute's new text; empty: none. */
+  | { op: "style"; mid: string; style: string };
 
 /** Tells the page to make an edit on its live page. */
 export function editMessage(edit: LiveEdit): { type: "bridge.edit" } & LiveEdit {

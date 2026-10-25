@@ -11,6 +11,7 @@ import { parse, parseFragment } from "parse5";
 import type { DefaultTreeAdapterMap } from "parse5";
 import { pageFile, pageOfFile } from "./designPage";
 import type { LiveEdit } from "./designBridge";
+import { attrText, isStyleProp, isStyleValue, parseStyle, styleText, withStyle, type StyleSet } from "./designStyle";
 
 type Node = DefaultTreeAdapterMap["node"];
 type Element = DefaultTreeAdapterMap["element"];
@@ -19,7 +20,9 @@ type Element = DefaultTreeAdapterMap["element"];
 export type EditOp = { kind: "text"; mid: string; text: string } | { kind: "delete"; mid: string } | { kind: "duplicate"; mid: string } | { kind: "wrap"; mid: string } | { kind: "unwrap"; mid: string }
   /** A copied element's source (see {@link copyElement}) after element
    *  `after`, or at the end of the body. */
-  | { kind: "paste"; after: string | null; html: string };
+  | { kind: "paste"; after: string | null; html: string }
+  /** Properties of its inline `style` set (a value) or removed (null). */
+  | { kind: "restyle"; mid: string; set: StyleSet };
 
 /** What an edit did to its element, as the agent is told. */
 export type Change =
@@ -29,7 +32,9 @@ export type Change =
   | { kind: "wrapped"; box: string }
   | { kind: "unwrapped" }
   /** Pasted after element `after`, or (null) at the end of the body. */
-  | { kind: "inserted"; after: string | null };
+  | { kind: "inserted"; after: string | null }
+  /** Its inline style's properties set, or (null) removed. */
+  | { kind: "restyled"; set: StyleSet };
 
 /** An edit by hand of one element of a page. */
 export interface HandEdit {
@@ -66,6 +71,10 @@ function changeText(c: Change): string {
       return `wrapped in div ${c.box}`;
     case "inserted":
       return c.after === null ? "inserted at the end of the body" : `inserted after ${c.after}`;
+    case "restyled":
+      return `restyled with ${Object.entries(c.set)
+        .map(([p, v]) => (v === null ? `no ${p}` : `${p}: ${v}`))
+        .join("; ")}`;
   }
 }
 
@@ -90,17 +99,23 @@ export interface Untold extends HandEdit {
 export const EDITS_HEADER = "Edits by hand since your last turn:";
 
 /** Each element edited, in the order first edited, with its changes in
- *  order, a text change only as its latest. */
+ *  order: a text change only as its latest, and its restyles as one, in
+ *  the place of the first, each property at its latest value. */
 function byElement(edits: Untold[]): { head: HandEdit; changes: string[] }[] {
-  const out = new Map<string, { head: HandEdit; changes: string[]; text: number | null }>();
+  const out = new Map<string, { head: HandEdit; changes: string[]; text: number | null; style: { at: number; set: StyleSet } | null }>();
   for (const e of edits) {
     const key = `${e.page}\0${e.mid}`;
-    const el = out.get(key) ?? { head: e, changes: [], text: null };
+    const el = out.get(key) ?? { head: e, changes: [], text: null, style: null };
     out.set(key, el);
     const said = `${e.undone ? "undid " : ""}${changeText(e.change)}`;
     if (e.change.kind === "text" && !e.undone && el.text !== null) el.changes[el.text] = said;
     else if (e.change.kind === "text" && !e.undone) el.text = el.changes.push(said) - 1;
-    else el.changes.push(said);
+    else if (e.change.kind === "restyled" && !e.undone) {
+      const set = { ...el.style?.set, ...e.change.set };
+      const text = changeText({ kind: "restyled", set });
+      if (el.style) el.changes[el.style.at] = text;
+      el.style = { at: el.style ? el.style.at : el.changes.push(text) - 1, set };
+    } else el.changes.push(said);
   }
   return [...out.values()];
 }
@@ -317,6 +332,8 @@ function edited(html: string, doc: Node, op: EditOp, floor: number): Edit {
       const [from, to] = outer(el);
       return { html: splice(html, [from, to], `<div data-mid="${box}">${html.slice(from, to)}</div>`), select: box, change: { ...who(el), change: { kind: "wrapped", box } }, live: { op: "wrap", mid: op.mid, box } };
     }
+    case "restyle":
+      return restyle(html, el, op.set);
     case "unwrap": {
       inBody(el);
       const [a, b] = inner(el);
@@ -325,6 +342,36 @@ function edited(html: string, doc: Node, op: EditOp, floor: number): Edit {
       return { html: splice(html, outer(el), html.slice(a, b)), select: first ?? parentMid(el), change: { ...who(el), change: { kind: "unwrapped" } }, live: { op: "unwrap", mid: op.mid } };
     }
   }
+}
+
+/** `el` with its inline style's properties set or removed, the rest of its
+ *  style kept in its order; the attribute is written in double quotes
+ *  after the element's others, and removed once it has no property left.
+ *  A property or value that is not one is refused. */
+function restyle(html: string, el: Element, set: StyleSet): Edit {
+  inBody(el);
+  for (const [prop, value] of Object.entries(set)) {
+    if (!isStyleProp(prop)) throw new EditRefused(`${prop} is not a style property`);
+    if (value !== null && !isStyleValue(value)) throw new EditRefused(`${value} is not a value the editor writes`);
+  }
+  const loc = el.sourceCodeLocation!;
+  const old = el.attrs.find((a) => a.name === "style");
+  const text = styleText(withStyle(parseStyle(old?.value ?? ""), set));
+  const attr = text ? `style="${attrText(text)}"` : "";
+  const at = loc.attrs?.style;
+  let out: string;
+  if (old && at) {
+    // Removed with the space before it.
+    const from = text ? at.startOffset : at.startOffset - (/\s+$/.exec(html.slice(0, at.startOffset))?.[0].length ?? 0);
+    out = splice(html, [from, at.endOffset], attr);
+  } else if (text) {
+    // After its last attribute, before any space and `/>` or `>`.
+    const end = loc.startTag!.endOffset;
+    let close = html[end - 2] === "/" ? end - 2 : end - 1;
+    while (/\s/.test(html[close - 1])) close--;
+    out = splice(html, [close, close], ` ${attr}`);
+  } else out = html;
+  return { html: out, select: midOf(el), change: { ...who(el), change: { kind: "restyled", set } }, live: { op: "style", mid: midOf(el)!, style: text } };
 }
 
 /** The highest number of a `data-mid` in page `html`, anywhere in it
