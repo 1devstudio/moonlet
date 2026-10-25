@@ -219,6 +219,19 @@ impl Store {
         )
     }
 
+    /// Forgets the design's agent: one whose start failed.
+    pub fn clear_design_agent(&self, workspace: &str, slug: &str) -> Result<()> {
+        self.design_dir(workspace, slug)?;
+        let mut record = self.design_record(workspace, slug)?;
+        record.agent = None;
+        let path = self.design_record_path(workspace, slug)?;
+        fsx::write_inside(
+            &self.workspace(workspace)?,
+            &path,
+            toml::to_string(&record)?.as_bytes(),
+        )
+    }
+
     /// Deletes a design: its folder and its record.
     pub fn remove_design(&self, workspace: &str, slug: &str) -> Result<()> {
         let dir = self.design_dir(workspace, slug)?;
