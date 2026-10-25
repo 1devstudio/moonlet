@@ -50,6 +50,8 @@ pub struct Daemon {
     pub sync: Arc<crate::sync::LiveCopies>,
     /// Approved heavy commands and routing decisions (X62).
     heavy: Arc<crate::heavy::Heavy>,
+    /// Cloud workers' settings (X63).
+    cloud: crate::cloud::CloudSettings,
     /// Heavy commands running on this machine or routed to its workers (X62).
     pub runs: Arc<crate::exec::Runs>,
     /// Every session's routed commands, with their output (X62).
@@ -206,6 +208,7 @@ impl Daemon {
         link.set_runs(Arc::downgrade(&runs));
         Arc::new(Self {
             heavy,
+            cloud: crate::cloud::CloudSettings::load(&moonlet_core::paths::home()),
             runs,
             jobs,
             clones,
@@ -628,6 +631,13 @@ impl Daemon {
                     slots: me.slots,
                 };
                 ok(self.runs.start(conn.clone(), plan, self.workers.clone(), self.sync.clone()))
+            }
+            m::CLOUD_GET => ok(self.cloud.info()),
+            m::CLOUD_SET => {
+                // Tokens and limits: never an agent's CLI nor a phone.
+                self.app_or_paired_mac(conn, "cloud workers")?;
+                let r: m::CloudSet = params(p)?;
+                ok(self.cloud.set(r)?)
             }
             m::EXEC_SETUPS => {
                 app_only(conn, "setup")?;

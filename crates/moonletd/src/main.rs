@@ -7,6 +7,7 @@
 //! * `moonletd stop` / `moonletd status`.
 
 mod clones;
+mod cloud;
 mod daemon;
 mod exec;
 mod heavy;
