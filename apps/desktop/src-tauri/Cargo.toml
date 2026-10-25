@@ -53,7 +53,10 @@ security-framework = "3"
 objc2 = "0.6"
 # WKWebView's snapshot of a design card takes a completion block (X64).
 block2 = "0.6"
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSError"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSError", "NSArray"] }
+# The main window's WebKit site isolation, so a design card runs in its own
+# web process (X64). The version wry already pulls in.
+objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std", "WKWebViewConfiguration", "WKPreferences"] }
 objc2-service-management = { version = "0.3", default-features = false, features = ["std", "SMAppService", "objc2", "objc2-foundation"] }
 
 [features]

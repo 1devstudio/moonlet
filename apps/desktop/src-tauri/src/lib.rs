@@ -6,6 +6,8 @@ mod attach;
 mod design_render;
 mod design_scheme;
 mod hosts;
+#[cfg(target_os = "macos")]
+mod isolation;
 mod login_item;
 mod native_menu;
 mod remote;
@@ -462,6 +464,31 @@ fn app_info() -> Value {
     })
 }
 
+/// The main window, as `tauri.conf.json` describes it. It is made here
+/// (`"create": false` there) because on macOS its webview needs site
+/// isolation from its first load, so each design card runs in its own web
+/// process (X64). A WebKit without the feature gets the window as before.
+fn main_window(app: &tauri::App) -> tauri::Result<tauri::WebviewWindow> {
+    let config = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|w| w.label == "main")
+        .cloned()
+        .unwrap_or_default();
+    let builder = tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?;
+    #[cfg(target_os = "macos")]
+    let builder = match isolation::configuration() {
+        Ok(webview) => builder.with_webview_configuration(webview),
+        Err(why) => {
+            tracing::warn!("design cards share the window's web process: {why}");
+            builder
+        }
+    };
+    builder.build()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _ = tracing_subscriber::fmt()
@@ -508,6 +535,7 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            main_window(app)?;
             app.manage(Arc::new(design_render::Renderer::default()));
             let hosts = HostManager::new(app.handle().clone());
             app.manage(hosts);
