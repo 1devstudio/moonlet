@@ -118,6 +118,12 @@
     }
     post({ type: "bridge.computed", mid: midOf(el), style });
   };
+  // An absolutely positioned element's left and top in px, which a drag or
+  // a west or north handle moves; null for one in flow.
+  const placed = (el) => {
+    const cs = getComputedStyle(el);
+    return /^(absolute|fixed)$/.test(cs.position) ? { left: parseFloat(cs.left) || 0, top: parseFloat(cs.top) || 0 } : null;
+  };
   const drawSelection = () => {
     if (!selected || !selected.isConnected) {
       if (selection) selection.style.display = "none";
@@ -139,6 +145,11 @@
       }
       document.documentElement.append(selection);
     }
+    // One in flow resizes only from its east and south: its west or north
+    // edge stays where the flow puts it, so a handle there would move the
+    // opposite edge.
+    const all = placed(selected);
+    for (const h of selection.querySelectorAll("[data-moonlet-handle]")) h.style.display = all || !/[nw]/.test(h.getAttribute("data-moonlet-handle")) ? "" : "none";
     const r = box(selected);
     selection.firstChild.textContent = `${selected.tagName.toLowerCase()} · ${midOf(selected)}${offMark ? " · off-system" : ""}`;
     selection.firstChild.style.background = offMark ? "#e8a24f" : "#5b9cff";
@@ -406,7 +417,10 @@
 
   // A press on a handle of the selection resizes it: its width and height
   // in px, shown at once, ⇧ keeping its aspect ratio; the size is reported
-  // on release, for the app to write in the page's source.
+  // on release, for the app to write in the page's source. An absolutely
+  // positioned one resized from its west or north edge moves its left or
+  // top by as much, so the opposite edge stays; one in flow has no handle
+  // there.
   let sizing = null;
   // A press on the selection that moves a few px drags it to another place;
   // an absolutely positioned one moves by its left and top instead.
@@ -432,13 +446,16 @@
       if (handle) {
         e.preventDefault();
         e.stopImmediatePropagation();
+        const edge = handle.getAttribute("data-moonlet-handle");
+        const abs = placed(selected);
+        if (!abs && /[nw]/.test(edge)) return;
         const r = box(selected);
-        sizing = { el: selected, edge: handle.getAttribute("data-moonlet-handle"), x: e.clientX, y: e.clientY, w: r.w, h: r.h, style: { width: selected.style.width, height: selected.style.height }, size: null };
+        const s = selected.style;
+        sizing = { el: selected, edge, x: e.clientX, y: e.clientY, w: r.w, h: r.h, abs, style: { width: s.width, height: s.height, left: s.left, top: s.top }, size: null };
         return;
       }
       if (editing || !(e.target instanceof Node) || !selected.contains(e.target)) return;
-      const cs = getComputedStyle(selected);
-      const abs = /^(absolute|fixed)$/.test(cs.position) ? { left: parseFloat(cs.left) || 0, top: parseFloat(cs.top) || 0 } : null;
+      const abs = placed(selected);
       drag = { el: selected, x: e.clientX, y: e.clientY, on: false, abs, style: { left: selected.style.left, top: selected.style.top }, place: null };
     },
     true,
@@ -458,8 +475,11 @@
           if (across && (!down || Math.abs(w / s.w - 1) >= Math.abs(h / s.h - 1))) h = (w * s.h) / s.w;
           else w = (h * s.w) / s.h;
         }
-        s.size = { w: Math.max(1, Math.round(w)), h: Math.max(1, Math.round(h)) };
-        Object.assign(s.el.style, { width: `${s.size.w}px`, height: `${s.size.h}px` });
+        const size = { width: Math.max(1, Math.round(w)), height: Math.max(1, Math.round(h)) };
+        s.size = { width: `${size.width}px`, height: `${size.height}px` };
+        if (s.abs && s.edge.includes("w")) s.size.left = `${Math.round(s.abs.left + s.w - size.width)}px`;
+        if (s.abs && s.edge.includes("n")) s.size.top = `${Math.round(s.abs.top + s.h - size.height)}px`;
+        Object.assign(s.el.style, s.size);
         drawSelection();
         return;
       }
@@ -487,7 +507,7 @@
       sizing = drag = null;
       if (s) {
         endDrag();
-        if (s.size) post({ type: "bridge.style", mid: midOf(s.el), set: { width: `${s.size.w}px`, height: `${s.size.h}px` } });
+        if (s.size) post({ type: "bridge.style", mid: midOf(s.el), set: s.size });
         return;
       }
       if (!d || !d.on) return;
