@@ -4103,3 +4103,88 @@ async fn a_session_design_is_marked_when_its_design_system_syncs_and_update_brin
         .await;
     assert_eq!(refused.unwrap_err().to_string(), "invalid_params: only a session design has a copy of its design system to update");
 }
+
+/// A session's Claude Code that, on each message, writes turn <n> into the
+/// session design `settings-page`'s index page when the worktree has it.
+const SESSION_WRITING_CLAUDE: &str = r#"#!/bin/sh
+n=0
+while IFS= read -r line; do
+  case "$line" in
+    *'"subtype":"initialize"'*) echo '{"type":"system","subtype":"init","session_id":"s1","model":"fake"}' ;;
+    *'"type":"user"'*) n=$((n+1))
+      if [ -d docs/design/settings-page/pages ]; then
+        printf '<body data-mid="m1"><p data-mid="m2">turn %s</p></body>\n' "$n" > docs/design/settings-page/pages/index.html
+      fi
+      echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}' ;;
+  esac
+done
+"#;
+
+/// X65 entry 12: a session design's snapshots are kept in the worktree's
+/// `.moonlet/design/<slug>/history/`: one when the session's agent ends a
+/// turn that changed it, one when edits by hand saved with
+/// `design.write_page` stop for a while, and `design.snapshot.restore`
+/// makes one current, all by `{session, slug}`.
+#[tokio::test]
+async fn a_session_designs_snapshots_follow_its_sessions_agent_turns_and_edits_by_hand() {
+    use moonlet_proto::types::Session;
+    let d = fake_claude_daemon_with(SESSION_WRITING_CLAUDE, vec![("MOONLET_DESIGN_QUIET_MS".into(), "1000".into())]).await;
+    let mut c = d.client().await;
+    let (ws, project, _) = workspace_with_session(&d, &mut c, &[]).await;
+    let session: Session = c
+        .request(methods::SESSION_CREATE, serde_json::json!({"project_id": project.id, "name": "Settings", "agent": "claude", "workspace_id": ws}))
+        .await
+        .unwrap();
+    let _: serde_json::Value = c
+        .request(
+            methods::DESIGN_CREATE,
+            serde_json::json!({"workspace": ws, "session": session.id, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}),
+        )
+        .await
+        .unwrap();
+    let at = serde_json::json!({"session": session.id, "slug": "settings-page"});
+    let history = async |c: &mut Client, n: usize| {
+        for _ in 0..100 {
+            let listed: serde_json::Value = c.request(methods::DESIGN_HISTORY, at.clone()).await.unwrap();
+            if listed.as_array().is_some_and(|a| a.len() >= n) {
+                return listed;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        panic!("no {n} snapshots");
+    };
+    let agent = session.terminals[0];
+    let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": agent, "text": "Write the page"})).await.unwrap();
+    let listed = history(&mut c, 1).await;
+    assert_eq!(
+        (&listed[0]["n"], &listed[0]["type"], &listed[0]["summary"]),
+        (&serde_json::json!(1), &serde_json::json!("agent_turn"), &serde_json::json!("Wrote index.html · 1 page"))
+    );
+    let side = std::path::PathBuf::from(&session.path).join(".moonlet/design/settings-page");
+    assert_eq!(
+        std::fs::read_to_string(side.join("history/1/pages/index.html")).unwrap(),
+        "<body data-mid=\"m1\"><p data-mid=\"m2\">turn 1</p></body>\n"
+    );
+
+    turn_over(&mut c, agent as u64).await;
+    let read: serde_json::Value = c.request(methods::DESIGN_PAGE, serde_json::json!({"session": session.id, "slug": "settings-page", "page": "index"})).await.unwrap();
+    let _: serde_json::Value = c
+        .request(
+            methods::DESIGN_WRITE_PAGE,
+            serde_json::json!({"session": session.id, "slug": "settings-page", "page": "index", "html": "<p>by hand</p>\n", "base_version": read["version"], "edits": ["text of m2"]}),
+        )
+        .await
+        .unwrap();
+    let listed = history(&mut c, 2).await;
+    assert_eq!((&listed[0]["n"], &listed[0]["type"], &listed[0]["summary"]), (&serde_json::json!(2), &serde_json::json!("edits_by_hand"), &serde_json::json!("Text of m2")));
+
+    let restored: serde_json::Value = c
+        .request(methods::DESIGN_SNAPSHOT_RESTORE, serde_json::json!({"session": session.id, "slug": "settings-page", "n": 1}))
+        .await
+        .unwrap();
+    assert_eq!((&restored["n"], &restored["type"]), (&serde_json::json!(3), &serde_json::json!("restored")));
+    assert_eq!(
+        std::fs::read_to_string(std::path::PathBuf::from(&session.path).join("docs/design/settings-page/pages/index.html")).unwrap(),
+        "<body data-mid=\"m1\"><p data-mid=\"m2\">turn 1</p></body>\n"
+    );
+}

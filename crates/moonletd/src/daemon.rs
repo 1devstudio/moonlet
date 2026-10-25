@@ -96,7 +96,26 @@ struct HandEdits {
     in_turn: bool,
 }
 
-/// What a workspace design's agent does, for the design's snapshots (X65).
+/// Whose turn a design's snapshots follow (X65): a workspace design's own
+/// agent's, or a session's agent's for its session designs (entry 12).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TurnOf {
+    Design { workspace: String, slug: String },
+    Session(String),
+}
+
+/// The turn an agent's terminal works in for the design snapshots, if any:
+/// a workspace design's agent (its tag), or a session's structured agent.
+fn turn_of(t: &moonlet_proto::types::TerminalInfo) -> Option<TurnOf> {
+    use moonlet_proto::types::{DesignAgentKind, TerminalKind};
+    match &t.design {
+        Some(d) if d.kind == DesignAgentKind::Design => Some(TurnOf::Design { workspace: d.workspace.clone(), slug: d.slug.clone() }),
+        Some(_) => None,
+        None => t.session_id.clone().filter(|_| t.chat && t.kind == TerminalKind::Agent).map(TurnOf::Session),
+    }
+}
+
+/// What a design's agent does, for the design's snapshots (X65).
 #[derive(Debug, Clone, Copy)]
 enum AgentStep {
     /// It starts working: the edits by hand not kept yet are kept first.
@@ -1916,9 +1935,10 @@ impl Daemon {
         pending.quiet = Some(quiet.abort_handle());
     }
 
-    /// A workspace design's snapshots as its agent works (X65): when the
-    /// agent starts working, the edits by hand not kept yet are kept, if
-    /// `chat.send` did not keep them already (see
+    /// A design's snapshots as its agent works (X65): a workspace design's
+    /// agent's, and a session's agent's for that session's designs (entry
+    /// 12). When the agent starts working, the edits by hand not kept yet
+    /// are kept, if `chat.send` did not keep them already (see
     /// [`Self::keep_before_message`]), so the turn's snapshot holds only
     /// the agent's work; when its turn ends, done, stopped (idle) or
     /// failed (error), the turn's snapshot is taken. Each is
@@ -1929,19 +1949,19 @@ impl Daemon {
     /// (the first message comes as the design is made, and a queued one
     /// after the turn's snapshot). Runs for the daemon's life.
     pub fn snapshot_agent_turns(self: &Arc<Self>) {
-        use moonlet_proto::types::{AgentState, DesignAgentKind, TerminalInfo};
+        use moonlet_proto::types::{AgentState, TerminalInfo};
         let mut events = self.terminals.subscribe_events();
-        let (steps, mut todo) = tokio::sync::mpsc::unbounded_channel::<(String, String, AgentStep)>();
+        let (steps, mut todo) = tokio::sync::mpsc::unbounded_channel::<(TurnOf, AgentStep)>();
         let d = self.clone();
         tokio::spawn(async move {
-            while let Some((workspace, slug, step)) = todo.recv().await {
-                if let Ok(at) = d.design.workspace_design(&workspace, &slug) {
+            while let Some((of, step)) = todo.recv().await {
+                for at in d.designs_of_turn(&of).await {
                     d.agent_snapshot(&at, step).await;
                 }
             }
         });
         tokio::spawn(async move {
-            // The design agents in a turn: from working until done, idle
+            // The agents in a turn: from working until done, idle
             // (stopped) or error; asking the user is still within it.
             let mut in_turn = std::collections::HashSet::new();
             loop {
@@ -1955,17 +1975,26 @@ impl Daemon {
                     continue;
                 }
                 let Ok(t) = serde_json::from_value::<TerminalInfo>(data) else { continue };
-                let Some(design) = t.design.filter(|d| d.kind == DesignAgentKind::Design) else { continue };
+                let Some(of) = turn_of(&t) else { continue };
                 let step = match t.agent_state {
                     AgentState::Working if in_turn.insert(t.id) => AgentStep::Starts,
                     AgentState::Done | AgentState::Idle | AgentState::Error if in_turn.remove(&t.id) => AgentStep::EndsTurn,
                     _ => continue,
                 };
-                if steps.send((design.workspace, design.slug, step)).is_err() {
+                if steps.send((of, step)).is_err() {
                     return;
                 }
             }
         });
+    }
+
+    /// The designs a turn of an agent changes: a workspace design's agent's
+    /// own design, or every session design of a session's agent's session.
+    async fn designs_of_turn(&self, of: &TurnOf) -> Vec<DesignAt> {
+        match of {
+            TurnOf::Design { workspace, slug } => self.design.workspace_design(workspace, slug).into_iter().collect(),
+            TurnOf::Session(session) => self.session_designs_at(session).await,
+        }
     }
 
     /// The snapshot a step of a design's agent takes (X65), under the
@@ -1991,23 +2020,40 @@ impl Daemon {
         self.snapshot(at, take).await;
     }
 
-    /// Before a message reaches a workspace design's agent that is not in
-    /// a turn (X65), its design's edits by hand not kept yet are kept on
-    /// their own: the agent can change the pages the moment it has the
-    /// message, before the daemon hears that it works. One at work, or
-    /// asking the user, is within its turn, its pages maybe half written:
-    /// the edits go with that turn.
+    /// Before a message reaches a design's agent that is not in a turn
+    /// (X65), a workspace design's agent or a session's agent with session
+    /// designs, its designs' edits by hand not kept yet are kept on their
+    /// own: the agent can change the pages the moment it has the message,
+    /// before the daemon hears that it works. One at work, or asking the
+    /// user, is within its turn, its pages maybe half written: the edits go
+    /// with that turn.
     async fn keep_before_message(&self, id: moonlet_proto::TerminalId) {
-        use moonlet_proto::types::{AgentState, DesignAgentKind};
+        use moonlet_proto::types::AgentState;
         let Some(info) = self.terminals.get(id).map(|t| t.info()) else { return };
         if matches!(info.agent_state, AgentState::Working | AgentState::Blocked) {
             return;
         }
-        if let Some(design) = info.design.filter(|t| t.kind == DesignAgentKind::Design)
-            && let Ok(at) = self.design.workspace_design(&design.workspace, &design.slug)
-        {
+        let Some(of) = turn_of(&info) else { return };
+        for at in self.designs_of_turn(&of).await {
             self.agent_snapshot(&at, AgentStep::Starts).await;
         }
+    }
+
+    /// The session designs in a session's worktree (X65), found as the
+    /// resolver finds them; none when they cannot be listed.
+    async fn session_designs_at(&self, session: &str) -> Vec<DesignAt> {
+        let Ok((s, folder)) = self.design_session(session) else { return Vec::new() };
+        let (store, id) = (self.design.clone(), session.to_string());
+        blocking(move || {
+            let worktree = Path::new(&s.path);
+            Ok(store
+                .session_designs(&id, worktree, &folder)?
+                .into_iter()
+                .filter_map(|d| moonlet_core::design::session::session_design(&id, worktree, &folder, &d.slug).ok())
+                .collect())
+        })
+        .await
+        .unwrap_or_default()
     }
 
     /// The chat of a design system's sync agent, while it still is that system's.
