@@ -539,13 +539,48 @@ describe("the bridge script in a page (X65)", () => {
     expect(of("move")).toEqual([]);
   });
 
+  /** The handles the selection shows, by their edge. */
+  const shownHandles = (doc: Document) => [...doc.querySelectorAll<HTMLElement>("[data-moonlet-handle]")].filter((h) => h.style.display !== "none").map((h) => h.getAttribute("data-moonlet-handle"));
+
+  it("in Edit mode, resizes an absolutely positioned selection from its west and north edges by its left and top too, so the opposite edges stay, and one in flow only from its east and south", () => {
+    const { win, doc, el, tell, of } = framed('<div data-mid="m60" style="position: absolute; left: 40px; top: 10px">New</div><h2 data-mid="m25">Git</h2>');
+    hits(doc, { m1: [0, 0, 390, 400], m60: [40, 10, 60, 20], m25: [0, 40, 390, 40] });
+    tell(modeMessage("edit"));
+    tell(selectMessage("m60"));
+    const handle = (edge: string) => doc.querySelector(`[data-moonlet-handle="${edge}"]`)!;
+    expect(shownHandles(doc)).toEqual(["nw", "n", "ne", "e", "se", "s", "sw", "w"]);
+    mouse(win, "mousedown", handle("nw"), { clientX: 40, clientY: 10 });
+    mouse(win, "mousemove", handle("nw"), { clientX: 30, clientY: 4 });
+    expect([el("m60").style.left, el("m60").style.top, el("m60").style.width, el("m60").style.height]).toEqual(["30px", "4px", "70px", "26px"]);
+    mouse(win, "mouseup", handle("nw"), { clientX: 30, clientY: 4 });
+    hits(doc, { m60: [30, 4, 70, 26] });
+    mouse(win, "mousedown", handle("e"), { clientX: 100, clientY: 20 });
+    mouse(win, "mousemove", handle("e"), { clientX: 110, clientY: 20 });
+    mouse(win, "mouseup", handle("e"), { clientX: 110, clientY: 20 });
+    mouse(win, "mousedown", handle("sw"), { clientX: 40, clientY: 30 });
+    mouse(win, "mousemove", handle("sw"), { clientX: 50, clientY: 40 });
+    doc.body.dispatchEvent(new win.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    mouse(win, "mouseup", handle("sw"), { clientX: 50, clientY: 40 });
+    expect([el("m60").style.left, el("m60").style.top, el("m60").style.width, el("m60").style.height]).toEqual(["30px", "4px", "80px", "26px"]);
+    tell(selectMessage("m25"));
+    expect(shownHandles(doc)).toEqual(["e", "se", "s"]);
+    mouse(win, "mousedown", handle("w"), { clientX: 0, clientY: 60 });
+    mouse(win, "mousemove", handle("w"), { clientX: 20, clientY: 60 });
+    mouse(win, "mouseup", handle("w"), { clientX: 20, clientY: 60 });
+    expect(el("m25").style.width).toBe("");
+    expect(of("style")).toEqual([
+      { type: "style", mid: "m60", set: { width: "70px", height: "26px", left: "30px", top: "4px" } },
+      { type: "style", mid: "m60", set: { width: "80px", height: "26px" } },
+    ]);
+  });
+
   it("in Edit mode, resizes the selection by its handles in px, ⇧ keeping its aspect ratio, and Esc puts the size back", () => {
     const { win, doc, el, tell, of } = framed('<h2 data-mid="m25">Git</h2>');
     hits(doc, { m1: [0, 0, 390, 400], m25: [0, 40, 390, 40] });
     tell(modeMessage("edit"));
     tell(selectMessage("m25"));
     const handle = (edge: string) => doc.querySelector(`[data-moonlet-handle="${edge}"]`)!;
-    expect([...doc.querySelectorAll("[data-moonlet-handle]")].map((h) => h.getAttribute("data-moonlet-handle"))).toEqual(["nw", "n", "ne", "e", "se", "s", "sw", "w"]);
+    expect(shownHandles(doc)).toEqual(["e", "se", "s"]);
     expect(doc.body.contains(handle("se"))).toBe(false);
     mouse(win, "mousedown", handle("se"), { clientX: 390, clientY: 80 });
     mouse(win, "mousemove", handle("se"), { clientX: 300, clientY: 100 });
