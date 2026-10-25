@@ -799,4 +799,41 @@ created_at = 1761200000000
             )]
         );
     }
+
+    #[test]
+    fn an_import_whose_url_is_on_the_next_line_is_reported_on_the_line_of_its_import() {
+        let (home, store) = store_with_system();
+        store
+            .create_design("w1", "Settings page", "moonlet-desktop", "", 1)
+            .unwrap();
+        let pages = home.path().join("design/w1/designs/settings-page/pages");
+        std::fs::write(
+            pages.join("index.html"),
+            "<html><head>
+<link rel=\"stylesheet\" href=\"../../../systems/moonlet-desktop/styles.css\">
+<style>
+.x { color: red }
+@import
+  url(\"https://fonts.example.com/inter.css\");
+</style></head>
+<body data-mid=\"m1\"></body></html>
+",
+        )
+        .unwrap();
+        let got: Vec<(String, usize, Kind, String)> = store
+            .check_design("w1", "settings-page", false)
+            .unwrap()
+            .into_iter()
+            .map(|p| (p.path, p.line, p.kind, p.message))
+            .collect();
+        assert_eq!(
+            got,
+            vec![(
+                "pages/index.html".into(),
+                5,
+                Kind::Stylesheet,
+                "https://fonts.example.com/inter.css is not the design system's styles.css: link ../../../systems/moonlet-desktop/styles.css".into()
+            )]
+        );
+    }
 }
