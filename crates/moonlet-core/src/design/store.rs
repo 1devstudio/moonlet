@@ -4,7 +4,7 @@
 //! the commits of the last sync, the agent's chat) is in
 //! `<workspace>/.records/<slug>.toml`, outside the agent's reach.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -114,6 +114,11 @@ pub struct Record {
     /// recorded, so a retry after it stopped midway still knows them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sync_start: Option<BTreeMap<String, anchor::CardRender>>,
+    /// The orphaned cards the user keeps for now: not asked about again
+    /// while they stay orphaned. A sync drops each one that is no longer
+    /// orphaned or no longer there, and removing a card drops it.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub kept: BTreeSet<String>,
 }
 
 /// One card a sync changed.
@@ -425,6 +430,9 @@ impl Store {
             }
         }
         record.synced_at = Some(now);
+        record
+            .kept
+            .retain(|card| anchor.cards.get(card).is_some_and(|c| c.orphaned()));
         // Then the record, and the anchor last; an anchor that cannot be
         // written puts the old record back. Both are replaced whole.
         self.write_record(workspace, slug, &record)?;
@@ -610,8 +618,24 @@ impl Store {
                     }
                 }
                 anchor::forget(&dir, card)?;
+                let mut record = self.record(workspace, slug)?;
+                if record.kept.remove(card) {
+                    self.write_record(workspace, slug, &record)?;
+                }
             }
-            Settle::Keep => {}
+            Settle::Keep => {
+                let mut record = self.record(workspace, slug)?;
+                let status = anchor::status(
+                    &dir,
+                    &source_roots(&record),
+                    &read_config(&dir)?.exceptions(),
+                )?;
+                if !status.iter().any(|s| s.path == card && s.orphaned) {
+                    bail!("{card} is not orphaned");
+                }
+                record.kept.insert(card.to_string());
+                self.write_record(workspace, slug, &record)?;
+            }
         }
         Ok(())
     }
@@ -808,7 +832,11 @@ fn summary(
             .count(),
         changed_sources: changed,
         check_problems: check::check(dir)?.len(),
-        to_settle: proposed + status.iter().filter(|s| s.orphaned).count(),
+        to_settle: proposed
+            + status
+                .iter()
+                .filter(|s| s.orphaned && !record.kept.contains(&s.path))
+                .count(),
         step: last.map(|r| r.step.clone()),
         step_summary: last.and_then(|r| r.summary.clone()),
         steps,
@@ -1368,6 +1396,75 @@ root = \"9c1e0a2\"
             store.settle("w1", &slug, row, Settle::Synced).is_err(),
             "nothing left to take"
         );
+    }
+
+    #[test]
+    fn an_orphan_kept_for_now_waits_no_more_until_it_is_orphaned_again() {
+        let home = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        put(
+            project.path(),
+            &[("src/Row.tsx", "row\n"), ("src/Chip.tsx", "chip\n")],
+        );
+        let store = Store::new(home.path());
+        let mut src = source();
+        src.path = project.path().display().to_string();
+        let slug = store
+            .create_system("w1", "storefront", vec![src], Cover::Core, 1)
+            .unwrap();
+        let dir = home.path().join("design/w1/systems").join(&slug);
+        let (row, chip) = (
+            "components/custom/row/row.html",
+            "components/custom/chip/chip.html",
+        );
+        let row_card = "<!-- @dsCard group=\"Custom\" source=\"src/Row.tsx\" -->\n<div>row</div>\n";
+        let chip_card =
+            "<!-- @dsCard group=\"Custom\" source=\"src/Chip.tsx\" -->\n<div>chip</div>\n";
+        put(&dir, &[(row, row_card), (chip, chip_card)]);
+        store.synced("w1", &slug, &[], 2).unwrap();
+        let to_settle = || store.systems("w1").unwrap()[0].to_settle;
+
+        // A card that is not orphaned cannot be kept for now.
+        assert!(store.settle("w1", &slug, row, Settle::Keep).is_err());
+        assert_eq!(to_settle(), 0);
+
+        std::fs::remove_file(project.path().join("src/Row.tsx")).unwrap();
+        std::fs::remove_file(project.path().join("src/Chip.tsx")).unwrap();
+        assert_eq!(to_settle(), 2, "two orphans");
+        store.settle("w1", &slug, row, Settle::Keep).unwrap();
+        store.settle("w1", &slug, chip, Settle::Keep).unwrap();
+        assert_eq!(to_settle(), 0, "both kept");
+        assert_eq!(std::fs::read_to_string(dir.join(row)).unwrap(), row_card);
+
+        // A sync that leaves them orphaned keeps them kept.
+        store.synced("w1", &slug, &[], 3).unwrap();
+        assert_eq!(to_settle(), 0);
+
+        // The row's source comes back and a sync records it: kept no more,
+        // so when it goes again the row waits again.
+        put(project.path(), &[("src/Row.tsx", "row\n")]);
+        store.synced("w1", &slug, &[], 4).unwrap();
+        std::fs::remove_file(project.path().join("src/Row.tsx")).unwrap();
+        assert_eq!(to_settle(), 1);
+
+        // A kept card removed is kept no more: one written there later
+        // and orphaned waits.
+        store.settle("w1", &slug, chip, Settle::Remove).unwrap();
+        put(project.path(), &[("src/Chip.tsx", "chip\n")]);
+        put(&dir, &[(chip, chip_card)]);
+        store.synced("w1", &slug, &[], 5).unwrap();
+        std::fs::remove_file(project.path().join("src/Chip.tsx")).unwrap();
+        assert_eq!(to_settle(), 2);
+
+        // A kept card deleted by hand before a sync is kept no more either.
+        store.settle("w1", &slug, chip, Settle::Keep).unwrap();
+        std::fs::remove_dir_all(dir.join("components/custom/chip")).unwrap();
+        store.synced("w1", &slug, &[], 6).unwrap();
+        put(project.path(), &[("src/Chip.tsx", "chip\n")]);
+        put(&dir, &[(chip, chip_card)]);
+        store.synced("w1", &slug, &[], 7).unwrap();
+        std::fs::remove_file(project.path().join("src/Chip.tsx")).unwrap();
+        assert_eq!(to_settle(), 2);
     }
 
     #[test]
