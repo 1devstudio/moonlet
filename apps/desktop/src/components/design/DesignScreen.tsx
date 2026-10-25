@@ -22,6 +22,7 @@ import {
   resolveComment,
   saveViewport,
   sendComments,
+  sendingOf,
   setPageMids,
   stopAgent,
   systemNameOf,
@@ -74,6 +75,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
   const [canvasRef, [cw, ch]] = useSize<HTMLDivElement>();
   const comments = useDesign((d) => commentsOf(d, host, workspace, design.slug));
   const mids = useDesign((d) => midsOf(d, host, workspace, design.slug));
+  const sending = useDesign((d) => sendingOf(d, host, workspace, design.slug));
   const chatRef = useRef<HTMLElement>(null);
 
   const names = design.pages.map((p) => p.name);
@@ -373,6 +375,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
             pins={comments}
             mids={mids}
             pages={names}
+            sending={sending}
             canSend={agent !== null}
             onSend={(p) => sendPins([p])}
             onSendAll={onSendAll}

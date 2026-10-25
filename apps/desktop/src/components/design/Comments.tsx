@@ -135,6 +135,7 @@ export function CommentsTab({
   pins,
   mids,
   pages,
+  sending,
   canSend,
   onSend,
   onSendAll,
@@ -145,6 +146,8 @@ export function CommentsTab({
   pins: DesignComment[];
   mids: PageMids;
   pages: string[];
+  /** The pins a Send is on its way with, whose Send is off meanwhile. */
+  sending: number[];
   canSend: boolean;
   onSend: (pin: DesignComment) => void;
   onSendAll: () => void;
@@ -198,8 +201,8 @@ export function CommentsTab({
                 <span className={cx("mr-auto ui-text-12", p.sent_at === null ? "text-accent" : "text-faint")}>{sentLabel(p)}</span>
                 {p.state === "open" &&
                   (p.sent_at === null ? (
-                    <button className={action} disabled={!canSend} title={canSend ? undefined : "The design's agent is not running"} onClick={() => onSend(p)}>
-                      Send
+                    <button className={action} disabled={!canSend || sending.includes(p.n)} title={canSend ? undefined : "The design's agent is not running"} onClick={() => onSend(p)}>
+                      {sending.includes(p.n) ? "Sending…" : "Send"}
                     </button>
                   ) : (
                     <button className={action} onClick={() => onShowInChat(p)}>

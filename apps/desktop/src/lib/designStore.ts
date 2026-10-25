@@ -46,9 +46,11 @@ interface DesignState {
   /** The `data-mid`s each page of a design (`wsKey/slug`) reported after it
    *  last loaded on the canvas, by page. */
   mids: Record<string, PageMids>;
+  /** The pins of each design (`wsKey/slug`) a Send is on its way with, by number. */
+  sending: Record<string, number[]>;
 }
 
-export const useDesign = create<DesignState>(() => ({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, designs: {}, designShown: {}, pageRevs: {}, latest: {}, problems: {}, systemNames: {}, comments: {}, mids: {} }));
+export const useDesign = create<DesignState>(() => ({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, designs: {}, designShown: {}, pageRevs: {}, latest: {}, problems: {}, systemNames: {}, comments: {}, mids: {}, sending: {} }));
 
 /** A design system's or a design's key, `wsKey/slug`. */
 const itemKey = (host: string, workspace: string, slug: string) => `${wsKey(host, workspace)}/${slug}`;
@@ -164,6 +166,14 @@ export function midsOf(s: DesignState, host: string, workspace: string, slug: st
   return s.mids[itemKey(host, workspace, slug)] ?? NO_MIDS;
 }
 
+const NOT_SENDING: number[] = [];
+
+/** The pins of a design a Send is on its way with, by number: their Send
+ *  is off until it is done. */
+export function sendingOf(s: DesignState, host: string, workspace: string, slug: string): number[] {
+  return s.sending[itemKey(host, workspace, slug)] ?? NOT_SENDING;
+}
+
 /** Records the `data-mid`s a page reported after it loaded (the bridge's). */
 export function setPageMids(host: string, workspace: string, slug: string, page: string, mids: string[]) {
   const key = itemKey(host, workspace, slug);
@@ -217,12 +227,23 @@ export async function editComment(host: string, workspace: string, slug: string,
 }
 
 /** **Send** and **Send all**: the pins go to the design's agent as one
- *  message, one line each, and only then are they marked sent. */
+ *  message, one line each, and only then are they marked sent. A pin a
+ *  Send is already on its way with is left out, so a second click never
+ *  sends it twice. */
 export async function sendComments(host: string, workspace: string, slug: string, agent: number, pins: DesignComment[]): Promise<void> {
-  if (!pins.length) return;
-  await askAgent(host, agent, commentsMessage(pins));
-  // Each with the comment sent: one edited meanwhile is not marked sent.
-  await changeComments(host, workspace, slug, { sent: { pins: pins.map((p) => ({ n: p.n, comment: p.comment })) } });
+  const key = itemKey(host, workspace, slug);
+  const busy = new Set(sendingOf(useDesign.getState(), host, workspace, slug));
+  const going = pins.filter((p) => !busy.has(p.n));
+  if (!going.length) return;
+  const ns = going.map((p) => p.n);
+  useDesign.setState((s) => ({ sending: { ...s.sending, [key]: [...(s.sending[key] ?? []), ...ns].sort((a, b) => a - b) } }));
+  try {
+    await askAgent(host, agent, commentsMessage(going));
+    // Each with the comment sent: one edited meanwhile is not marked sent.
+    await changeComments(host, workspace, slug, { sent: { pins: going.map((p) => ({ n: p.n, comment: p.comment })) } });
+  } finally {
+    useDesign.setState((s) => ({ sending: { ...s.sending, [key]: (s.sending[key] ?? []).filter((n) => !ns.includes(n)) } }));
+  }
 }
 
 /** **Resolve**: the pin is done. */
