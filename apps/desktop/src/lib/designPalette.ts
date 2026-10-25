@@ -19,6 +19,16 @@ export interface Snippet {
   html: string;
 }
 
+/** A snippet id, `<group>/<name>/<variant>` (X64), read as its parts;
+ *  null for one that is not three parts. The sync agent writes the ids
+ *  into its cards; the app only reads them. */
+export function parseSnippetId(id: string): { group: string; name: string; variant: string } | null {
+  const parts = id.split("/");
+  if (parts.length !== 3 || parts.some((p) => !p)) return null;
+  const [group, name, variant] = parts;
+  return { group, name, variant };
+}
+
 const isElement = (n: Node): n is Element => "tagName" in n;
 const attr = (el: Element, name: string) => el.attrs.find((a) => a.name === name)?.value ?? null;
 
@@ -28,21 +38,22 @@ function* elements(root: Node): Generator<Element> {
 }
 
 /** The snippets of `cards`, in their order: each `[data-snippet]` cell's
- *  `.ds-mount`, its markup as the card writes it. A cell without a mount
- *  has none. */
+ *  `.ds-mount`, its markup as the card writes it. A cell without a mount,
+ *  or whose id is not a snippet id, has none. */
 export function snippetsOf(cards: DesignKitCard[]): Snippet[] {
   const out: Snippet[] = [];
   for (const card of cards) {
     const doc = parse(card.html, { sourceCodeLocationInfo: true });
     for (const cell of elements(doc)) {
       const id = attr(cell, "data-snippet");
-      if (!id) continue;
+      const parsed = id === null ? null : parseSnippetId(id);
+      if (!id || !parsed) continue;
       const mount = [...elements(cell)].find((e) => (attr(e, "class") ?? "").split(/\s+/).includes("ds-mount"));
       const loc = mount?.sourceCodeLocation;
       if (!loc?.startTag || !loc.endTag) continue;
       const html = card.html.slice(loc.startTag.endOffset, loc.endTag.startOffset).trim();
       if (!html) continue;
-      out.push({ id, group: card.group, card: card.name, variant: id.split("/").at(-1) ?? id, html });
+      out.push({ id, group: card.group, card: card.name, variant: parsed.variant, html });
     }
   }
   return out;
