@@ -536,18 +536,23 @@ describe("a design's comments (X65)", () => {
 
   it("go to the design's agent as their lines in one message, and are then marked sent", async () => {
     const kept = pin(3, { mid: "m33", tag: "div", text: "Warn", comment: "More space" });
-    answers["design.comment.put"] = (p) => ({ ...kept, sent_at: (p as { sent?: boolean }).sent ? 1 : null });
+    answers["design.comment.put"] = (p) => ("sent" in (p as object) ? [pin(1, { sent_at: 9 }), { ...kept, sent_at: 9 }] : [kept]);
     answers["design.comments"] = () => [];
     answers["chat.send"] = () => true;
     const made = await keepComment("local", "w-1devstudio", "settings-page", { page: "index", mid: "m33", tag: "div", text: "Warn", comment: "More space" });
     expect(made.n).toBe(3);
+    // Shown at once, before the change is announced.
+    expect(ns()).toEqual([[3, "open", null]]);
     await sendComments("local", "w-1devstudio", "settings-page", 12, [pin(1), made]);
     const sent = calls.filter((c) => c.method === "chat.send" || c.method === "design.comment.put").map((c) => [c.method, c.params]);
     expect(sent).toEqual([
-      ["design.comment.put", { workspace: "w-1devstudio", slug: "settings-page", page: "index", mid: "m33", tag: "div", text: "Warn", comment: "More space" }],
+      ["design.comment.put", { workspace: "w-1devstudio", slug: "settings-page", new: { page: "index", mid: "m33", tag: "div", text: "Warn", comment: "More space" } }],
       ["chat.send", { id: 12, text: 'Comment on index.html [data-mid=m12] (nav "General Appearance"): Collapse into a menu on phone\nComment on index.html [data-mid=m33] (div "Warn"): More space', images: [] }],
-      ["design.comment.put", { workspace: "w-1devstudio", slug: "settings-page", n: 1, comment: "Collapse into a menu on phone", sent: true }],
-      ["design.comment.put", { workspace: "w-1devstudio", slug: "settings-page", n: 3, comment: "More space", sent: true }],
+      ["design.comment.put", { workspace: "w-1devstudio", slug: "settings-page", sent: { pins: [1, 3] } }],
+    ]);
+    expect(ns()).toEqual([
+      [1, "open", 9],
+      [3, "open", 9],
     ]);
   });
 
@@ -560,8 +565,9 @@ describe("a design's comments (X65)", () => {
   });
 
   it("are resolved one at a time", async () => {
+    answers["design.comments"] = () => [pin(1)];
+    await loadComments("local", "w-1devstudio", "settings-page");
     answers["design.comment.resolve"] = () => pin(1, { state: "resolved" });
-    answers["design.comments"] = () => [pin(1, { state: "resolved" })];
     await resolveComment("local", "w-1devstudio", "settings-page", 1);
     expect(calls.filter((c) => c.method === "design.comment.resolve").map((c) => c.params)).toEqual([{ workspace: "w-1devstudio", slug: "settings-page", n: 1 }]);
     expect(ns()).toEqual([[1, "resolved", null]]);
