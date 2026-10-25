@@ -30,16 +30,17 @@ const DISPLAY: Field = { label: "Display", prop: "display", kind: "keyword", opt
 const DIRECTION: Field = { label: "Direction", prop: "flex-direction", kind: "keyword", options: ["row", "column", "row-reverse", "column-reverse"] };
 const GAP: Field = { label: "Gap", prop: "gap", kind: "token", family: "spacing" };
 const ALIGN: Field = { label: "Alignment", prop: "align-items", kind: "keyword", options: ["stretch", "start", "center", "end", "baseline"] };
+const JUSTIFY: Field = { label: "Justify", prop: "justify-content", kind: "keyword", options: ["start", "center", "end", "space-between", "space-around", "space-evenly", "stretch"] };
 const COLUMNS: Field = { label: "Grid columns", prop: "grid-template-columns", kind: "text" };
 
 /** The Inspector's sections for an element whose `display` is `display`:
- *  Layout (display; direction for flex, columns for grid; gap and
- *  alignment for both), Spacing, Size, Fill and border, Effects. */
+ *  Layout (display; direction for flex, columns for grid; gap, alignment
+ *  and justification for both), Spacing, Size, Fill and border, Effects. */
 export function inspectorSections(display: string): Section[] {
   const flex = /flex$/.test(display);
   const grid = /grid$/.test(display);
   return [
-    { title: "Layout", fields: [DISPLAY, ...(flex ? [DIRECTION] : []), ...(grid ? [COLUMNS] : []), ...(flex || grid ? [GAP, ALIGN] : [])] },
+    { title: "Layout", fields: [DISPLAY, ...(flex ? [DIRECTION] : []), ...(grid ? [COLUMNS] : []), ...(flex || grid ? [GAP, ALIGN, JUSTIFY] : [])] },
     {
       title: "Spacing",
       fields: [

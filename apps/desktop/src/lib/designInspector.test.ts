@@ -4,10 +4,11 @@ import { fieldInput, fieldShows, fieldValue, inspectorSections, pickToken } from
 const labels = (display: string) => inspectorSections(display).map((s) => `${s.title}: ${s.fields.map((f) => f.label).join(", ")}`);
 
 describe("the Inspector (X65)", () => {
-  it("has Layout, Spacing, Size, Fill and border and Effects, with direction for flex and columns for grid", () => {
+  it("has Layout, Spacing, Size, Fill and border and Effects, with direction for flex and columns for grid, and alignment and justification for both", () => {
     expect(labels("block")).toEqual(["Layout: Display", "Spacing: Padding, Margin", "Size: Width, Height", "Fill and border: Fill, Border, Radius", "Effects: Shadow, Opacity"]);
-    expect(labels("inline-flex")[0]).toBe("Layout: Display, Direction, Gap, Alignment");
-    expect(labels("grid")[0]).toBe("Layout: Display, Grid columns, Gap, Alignment");
+    expect(labels("inline-flex")[0]).toBe("Layout: Display, Direction, Gap, Alignment, Justify");
+    expect(labels("grid")[0]).toBe("Layout: Display, Grid columns, Gap, Alignment, Justify");
+    expect(inspectorSections("flex")[0].fields.map((f) => f.prop)).toEqual(["display", "flex-direction", "gap", "align-items", "justify-content"]);
   });
 
   it("takes a size as px, %, auto or fill, a number alone as px", () => {
