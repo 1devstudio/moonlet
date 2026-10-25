@@ -951,6 +951,11 @@ const PROGRESS: &str = ".cache/progress.toml";
 struct Progress {
     #[serde(default)]
     steps: Vec<StepReport>,
+    /// The one step a progress file held before `steps`; read, never written.
+    #[serde(default, skip_serializing)]
+    step: Option<String>,
+    #[serde(default, skip_serializing)]
+    summary: Option<String>,
 }
 
 /// One step a running sync reported, with its summary (X64).
@@ -963,10 +968,19 @@ pub struct StepReport {
 
 /// The running sync's progress; none when it cannot be read.
 fn read_progress(dir: &Path) -> Progress {
-    fsx::read_inside(dir, &dir.join(PROGRESS))
+    let mut p: Progress = fsx::read_inside(dir, &dir.join(PROGRESS))
         .ok()
         .and_then(|t| toml::from_str(&t).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    if p.steps.is_empty()
+        && let Some(step) = p.step.take()
+    {
+        p.steps.push(StepReport {
+            step,
+            summary: p.summary.take(),
+        });
+    }
+    p
 }
 
 /// Where `step` comes in [`STEPS`]; an unknown one after them all.
@@ -1687,6 +1701,35 @@ root = \"9c1e0a2\"
         assert!(store.progress("w1", &slug, "painting", None).is_err());
         store.synced("w1", &slug, &[], 2).unwrap();
         assert_eq!(store.systems("w1").unwrap()[0].step, None);
+    }
+
+    #[test]
+    fn a_progress_file_of_one_step_written_before_steps_reads_as_that_step() {
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::new(home.path());
+        let slug = store
+            .create_system("w1", "storefront", vec![], Cover::Core, 1)
+            .unwrap();
+        let dir = home.path().join("design/w1/systems").join(&slug);
+        put(
+            &dir,
+            &[(
+                ".cache/progress.toml",
+                "step = \"cards\"\nsummary = \"1 of 3\"\n",
+            )],
+        );
+        let sys = store.systems("w1").unwrap().remove(0);
+        assert_eq!(
+            sys.steps,
+            vec![StepReport {
+                step: "cards".into(),
+                summary: Some("1 of 3".into())
+            }]
+        );
+        assert_eq!(
+            (sys.step.as_deref(), sys.step_summary.as_deref()),
+            (Some("cards"), Some("1 of 3"))
+        );
     }
 
     #[test]
