@@ -1301,8 +1301,8 @@ async fn the_sweep_books_the_time_of_a_machine_the_provider_lost() {
 
 #[tokio::test]
 async fn retry_tries_only_its_own_machine_again() {
-    // Tries at 0 s, 2 s and 6 s; the next would be at 14 s.
-    let c = cloud_with(SHOP_CONFIG, &[("MOONLET_TEST_CLOUD_BACKOFF_MS", "2000")]).await;
+    // Tries at 0 s, 5 s and 15 s; the next would be at 35 s.
+    let c = cloud_with(SHOP_CONFIG, &[("MOONLET_TEST_CLOUD_BACKOFF_MS", "5000")]).await;
     let _: Value = c.d.call("cloud.set", json!({ "max_machines": 3 })).await;
     let a = c.ready().await;
     let b = c.ready().await;
@@ -1311,7 +1311,9 @@ async fn retry_tries_only_its_own_machine_again() {
     for m in [&a, &b] {
         let _: Value = c.d.call("cloud.down", json!({ "machine": m["id"] })).await;
     }
-    for _ in 0..200 {
+    // Both have failed three times: well before their next tries.
+    let mut both = false;
+    for _ in 0..600 {
         let all = c.machines().await;
         if all["machines"]
             .as_array()
@@ -1319,10 +1321,12 @@ async fn retry_tries_only_its_own_machine_again() {
             .iter()
             .all(|m| m["error"].is_string())
         {
+            both = true;
             break;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+    assert!(both, "{}", c.machines().await);
     std::fs::remove_file(c.fake.path().join("fail-destroy")).unwrap();
     let _: Value = c.d.call("cloud.down", json!({ "machine": a["id"] })).await;
     tokio::time::sleep(Duration::from_millis(1000)).await;
