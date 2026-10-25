@@ -75,7 +75,7 @@ import { bashChip, shownCommand } from "../lib/jobs";
 import { useToolJob } from "../lib/jobsStore";
 import { WorkerIcon } from "./JobsPanel";
 import { type AsideAnswer, type ChatItem, type ChatState, M, type PermissionAsk, type QueuedMessage, type TerminalInfo, type ToolCall, type TurnTime } from "../lib/protocol";
-import { type Aside, type Line, type Running, asideFooter, asideSettled, canAskAside, composerPlaceholder, interruptedLine, queuedCount, queuedHeader, sendNowLabel, sendNowParams, sendNowWarning, unqueued, waitingOn } from "../lib/queued";
+import { type Aside, type Line, type Running, asideFooter, asideSettled, canAskAside, composerPlaceholder, interruptedLine, queuedCount, queuedHeader, requeue, sendNowLabel, sendNowParams, sendNowWarning, unqueued, userSend, waitingOn } from "../lib/queued";
 import { firstWord, suggest } from "../lib/suggest";
 import { canMentionFiles, fileMention, isAttachShortcut, withMention, withSlashCommand } from "../lib/plusMenu";
 import { type ChatImage, base64, splitAttachments } from "../lib/attachments";
@@ -1417,6 +1417,9 @@ export function AgentView({
     />
   );
 
+  // A message typed and an aside requeued go the same way: a design's
+  // chat puts its edits by hand before them.
+  const sendUser = userSend(sendText, (text, images) => call(M.chatSend, { text, images }));
   const send = (text: string, images: ChatImage[]) => {
     stick.current = true;
     if (revising) {
@@ -1425,8 +1428,7 @@ export function AgentView({
       if (answer) void call(M.chatPermission, { ask: revise, ...answer });
       return;
     }
-    if (sendText) void sendText(text, images).catch(errorToast);
-    else void call(M.chatSend, { text, images });
+    void sendUser(text, images).catch(errorToast);
   };
   const stop = () => void call(M.chatInterrupt, {});
   // Queued messages (X49): Send now, Ask aside, and the aside's card.
@@ -1462,8 +1464,8 @@ export function AgentView({
     if (outcome === "cancelled") askAside(unqueuing.text);
     else toast("Claude read the message before it could be asked aside");
   }, [st, unqueuing]); // eslint-disable-line react-hooks/exhaustive-deps
-  const requeue = () => {
-    if (aside) void call(M.chatSend, { text: aside.question, images: [] });
+  const requeueAside = () => {
+    void requeue(aside, sendUser).catch(errorToast);
     setAside(null);
   };
   const column = useRef<HTMLElement>(null);
@@ -1685,7 +1687,7 @@ export function AgentView({
                 onRing={setRing}
               />
             )}
-            {aside && <AsideCard aside={aside} onRequeue={requeue} onClose={() => setAside(null)} />}
+            {aside && <AsideCard aside={aside} onRequeue={requeueAside} onClose={() => setAside(null)} />}
             {st?.pending.map((ask) => {
               if (planOf(ask)) return null;
               return isQuestion(ask) ? (
