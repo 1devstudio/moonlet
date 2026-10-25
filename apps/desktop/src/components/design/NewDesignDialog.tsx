@@ -3,9 +3,9 @@
 
 import { useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { errorToast, toast, useStore } from "../../lib/store";
+import { errorToast, useStore } from "../../lib/store";
 import { newDesignReady, newDesignSystem, systemSummary } from "../../lib/design";
-import { createDesign, showDesign, systemsOf, useDesign } from "../../lib/designStore";
+import { createFromNewDesign, systemsOf, useDesign } from "../../lib/designStore";
 import { workspaceProjects } from "../../lib/tasksStore";
 import { useNow } from "../../lib/useNow";
 import { wsKey } from "../../lib/workspaces";
@@ -33,10 +33,7 @@ export function NewDesignDialog({ host, workspace }: { host: string; workspace: 
     if (!ready) return;
     setCreating(true);
     try {
-      const made = await createDesign(host, workspace, { name: name.trim(), system, brief: brief.trim() });
-      showDesign(host, workspace, made.slug);
-      close();
-      if (made.agent_error) toast(`${made.name} was made, but its agent did not start: ${made.agent_error}`, "error");
+      await createFromNewDesign(host, workspace, { name: name.trim(), system, brief: brief.trim() });
     } catch (e) {
       errorToast(e);
       setCreating(false);

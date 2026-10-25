@@ -255,6 +255,23 @@ export async function createDesign(host: string, workspace: string, n: { name: s
   return created;
 }
 
+/** **Create design** in the New design dialog (X65): makes the design, then
+ *  shows it and closes the dialog while that dialog is still the one open.
+ *  Dismissed meanwhile, the design is still made, but the view and any
+ *  dialog opened since stay as they are; a toast offers the design. */
+export async function createFromNewDesign(host: string, workspace: string, n: { name: string; system: string; brief: string }): Promise<DesignCreated> {
+  const dialog = useStore.getState().dialog;
+  const made = await createDesign(host, workspace, n);
+  if (dialog?.kind === "new-design" && useStore.getState().dialog === dialog) {
+    showDesign(host, workspace, made.slug);
+    useStore.setState({ dialog: null });
+  } else {
+    toast(`${made.name} was made`, "info", { label: "Open", run: () => void openDesign(host, workspace, made.slug) });
+  }
+  if (made.agent_error) toast(`${made.name} was made, but its agent did not start: ${made.agent_error}`, "error");
+  return made;
+}
+
 /** Removes a design and stops its agent. */
 export async function removeDesign(host: string, workspace: string, slug: string): Promise<void> {
   await rpc(host, M.designRemove, { workspace, slug });
