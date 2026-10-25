@@ -95,6 +95,13 @@ describe("an edit by hand on a page's source (X65)", () => {
     expect(() => applyEdit(PAGE, { kind: "duplicate", mid: "m1" })).toThrow(new EditRefused("The page's body stays"));
   });
 
+  it("gives a copy's ids fresh values where its data-mids are written, unquoted, single- or double-quoted, or with an entity", () => {
+    const page = '<!doctype html>\n<body data-mid="m1">\n<ul data-mid=m2><li data-mid=m3>a</li><li data-mid=\'m4\'>b</li><li data-mid="m5">c</li><li data-mid="m&#54;">m6</li></ul>\n</body>\n';
+    expect(applyEdit(page, { kind: "duplicate", mid: "m2" }).html).toBe(
+      '<!doctype html>\n<body data-mid="m1">\n<ul data-mid=m2><li data-mid=m3>a</li><li data-mid=\'m4\'>b</li><li data-mid="m5">c</li><li data-mid="m&#54;">m6</li></ul>\n<ul data-mid=m7><li data-mid=m8>a</li><li data-mid=\'m9\'>b</li><li data-mid="m10">c</li><li data-mid="m11">m6</li></ul>\n</body>\n',
+    );
+  });
+
   it("never gives an id the page had earlier, as one an element deleted since held: fresh ids start after the highest it ever had", () => {
     const without = applyEdit(PAGE, { kind: "delete", mid: "m34" }).html;
     expect(highestMid(PAGE)).toBe(40);
