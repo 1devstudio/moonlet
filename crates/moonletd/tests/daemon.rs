@@ -2338,6 +2338,61 @@ async fn a_new_design_starts_its_agent_in_its_folder_on_its_design_system() {
     assert_eq!(list, serde_json::json!([]));
 }
 
+/// The next `design.open` event `c` gets, within 10 s.
+async fn next_design_open(c: &mut Client) -> serde_json::Value {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let f = tokio::time::timeout_at(deadline, c.next_frame()).await.expect("no design.open").unwrap().unwrap();
+        if let Frame::Json(Message::Event { name, data }) = f
+            && name == methods::EV_DESIGN_OPEN
+        {
+            return data;
+        }
+    }
+}
+
+/// X65: `design.open` reaches every client as the event `design.open`, and
+/// a design an agent started (`spawned_by`) is announced the same way with
+/// that agent's terminal and session, so the app shows a toast instead.
+#[tokio::test]
+async fn design_open_and_a_design_an_agent_starts_reach_the_app() {
+    let d = fake_claude_daemon(RECORDING_CLAUDE).await;
+    let mut c = d.client().await;
+    let ws = workspace_with_system(&d, &mut c).await;
+    let mut app = d.client().await;
+    let refused = c
+        .request::<_, serde_json::Value>(
+            methods::DESIGN_CREATE,
+            serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b", "spawned_by": 99}),
+        )
+        .await;
+    assert_eq!(refused.unwrap_err().to_string(), "invalid_params: no terminal 99");
+    let created: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    let agent = created["agent"].as_u64().unwrap();
+    // The design's own agent stands in for an agent in a session here.
+    let _: serde_json::Value = c
+        .request(
+            methods::DESIGN_CREATE,
+            serde_json::json!({"workspace": ws, "name": "Onboarding", "system": "moonlet-desktop", "brief": "b", "spawned_by": agent}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        next_design_open(&mut app).await,
+        serde_json::json!({"workspace": ws, "slug": "onboarding", "name": "Onboarding", "spawned_by": agent})
+    );
+    let _: bool = c.request(methods::DESIGN_OPEN, serde_json::json!({"workspace": ws, "slug": "settings-page"})).await.unwrap();
+    assert_eq!(
+        next_design_open(&mut app).await,
+        serde_json::json!({"workspace": ws, "slug": "settings-page", "name": "Settings page"})
+    );
+    let missing = c.request::<_, bool>(methods::DESIGN_OPEN, serde_json::json!({"workspace": ws, "slug": "nope"})).await;
+    assert!(missing.is_err());
+}
+
 /// X65: a design needs a design system its workspace has, and a session
 /// design is not made yet (entry 12).
 #[tokio::test]

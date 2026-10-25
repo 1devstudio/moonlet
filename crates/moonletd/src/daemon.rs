@@ -1229,6 +1229,14 @@ impl Daemon {
                 if r.session.is_some() {
                     return Err(RpcError::new("not_yet", "session designs are not made yet"));
                 }
+                // The agent that asked for it (X22), and its session.
+                let spawner = match r.spawned_by {
+                    Some(t) => match self.terminals.list().into_iter().find(|i| i.id == t) {
+                        Some(i) => Some((t, i.session_id)),
+                        None => return Err(RpcError::new("invalid_params", format!("no terminal {t}"))),
+                    },
+                    None => None,
+                };
                 let (ws, system) = (r.workspace.clone(), r.system.clone());
                 let known = {
                     let store = store.clone();
@@ -1245,8 +1253,14 @@ impl Daemon {
                 let agent_error = self.start_design_agent(&r.workspace, &slug).await.err().map(|e| format!("{e:#}"));
                 let (ws, sl) = (r.workspace.clone(), slug.clone());
                 let design = blocking(move || store.design(&ws, &sl)).await?;
+                let name = design.name.clone();
                 let mut v = self.design_value(design, &self.terminals.list());
                 v["agent_error"] = serde_json::to_value(agent_error).unwrap_or_default();
+                // An agent's `design new`: the app shows a toast, the focus stays (X22).
+                if let Some((t, session)) = spawner {
+                    let opened = m::DesignOpened { workspace: r.workspace, slug, name, spawned_by: Some(t), session };
+                    self.terminals.emit(Message::event(m::EV_DESIGN_OPEN, opened));
+                }
                 ok(v)
             }
             m::DESIGN_REMOVE => {
@@ -1263,6 +1277,14 @@ impl Daemon {
                     let _ = self.terminals.kill(id, true);
                 }
                 blocking(move || store.remove_design(&r.workspace, &r.slug)).await?;
+                ok(true)
+            }
+            m::DESIGN_OPEN => {
+                let r: m::DesignRef = params(p)?;
+                let (ws, sl) = (r.workspace.clone(), r.slug.clone());
+                let config = blocking(move || store.design_config(&ws, &sl)).await?;
+                let opened = m::DesignOpened { workspace: r.workspace, slug: r.slug, name: config.name, spawned_by: None, session: None };
+                self.terminals.emit(Message::event(m::EV_DESIGN_OPEN, opened));
                 ok(true)
             }
             m::DESIGN_SETTLE => {
