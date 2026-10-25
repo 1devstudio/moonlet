@@ -76,6 +76,10 @@ struct Record {
     #[serde(default)]
     call_started: Option<u64>,
     created_at: u64,
+    /// When the provider made it, as far as moonlet knows: its create call
+    /// answered. Billing counts from here.
+    #[serde(default)]
+    made_at: Option<u64>,
     #[serde(default)]
     ready_at: Option<u64>,
     #[serde(default)]
@@ -579,6 +583,7 @@ impl Machines {
             provider_id: None,
             call_started: Some(now),
             created_at: now,
+            made_at: None,
             ready_at: None,
             removed_at: None,
             device: None,
@@ -693,6 +698,7 @@ impl Machines {
                     match records.iter_mut().find(|r| r.shown.id == id) {
                         Some(r) => {
                             r.provider_id = Some(provider_id.clone());
+                            r.made_at = Some(now_ms());
                             r.call_started = None;
                             let creating = r.shown.state == "creating";
                             if creating {
@@ -741,7 +747,7 @@ impl Machines {
         for r in records.iter().filter(|r| counts(&r.shown.state)) {
             moonlet_cloud::usage::add_billed(
                 &mut usage,
-                r.created_at,
+                billed_from(r),
                 now,
                 self.billing(&r.shown.provider),
             );
@@ -1388,7 +1394,7 @@ impl Machines {
         let billing = self.billing(&r.shown.provider);
         moonlet_cloud::usage::add_billed(
             &mut self.usage.lock().unwrap(),
-            r.created_at,
+            billed_from(&r),
             now,
             billing,
         );
@@ -1458,7 +1464,7 @@ impl Machines {
                         && r.shown.state != "removed";
                     // Its time until now is billed, as a removal books it.
                     if drop && counts(&r.shown.state) {
-                        moonlet_cloud::usage::add_billed(&mut usage, r.created_at, now, billing);
+                        moonlet_cloud::usage::add_billed(&mut usage, billed_from(r), now, billing);
                     }
                     !drop
                 });
@@ -1480,10 +1486,16 @@ fn idle_until(r: &Record, idle: u32, billing: moonlet_cloud::Billing) -> Option<
     // Leaving before its paid time ends would save nothing.
     Some(moonlet_cloud::idle::paid_end(
         at,
-        r.created_at,
+        billed_from(r),
         billing,
         minute(),
     ))
+}
+
+/// When `r`'s billing started: when the provider made it, or, before its
+/// create call answered, when it was asked for.
+fn billed_from(r: &Record) -> u64 {
+    r.made_at.unwrap_or(r.created_at)
 }
 
 /// Since when ready machine `r` has been idle: ready, or its last command's end.
