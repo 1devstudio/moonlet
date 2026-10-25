@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fieldInput, fieldValue, inspectorSections, pickToken } from "./designInspector";
+import { fieldInput, fieldShows, fieldValue, inspectorSections, pickToken } from "./designInspector";
 
 const labels = (display: string) => inspectorSections(display).map((s) => `${s.title}: ${s.fields.map((f) => f.label).join(", ")}`);
 
@@ -49,5 +49,20 @@ describe("the Inspector (X65)", () => {
     expect(pickToken(padding, "14px 24px", "--space-4")).toBe("var(--space-4)");
     expect(pickToken(border, "2px dashed #ff0000", "--color-border")).toBe("2px dashed var(--color-border)");
     expect(pickToken(border, "", "--color-border")).toBe("1px solid var(--color-border)");
+  });
+});
+
+describe("an Inspector field's token (X65)", () => {
+  it("is shown in a border as its width and style with its colour's token, as the page computes it too", () => {
+    const tokens = [
+      { name: "--color-border", value: "#2a2a2a", family: "color" as const },
+      { name: "--space-4", value: "16px", family: "spacing" as const },
+    ];
+    const [, border] = inspectorSections("block")[3].fields;
+    const [padding] = inspectorSections("block")[1].fields;
+    expect(fieldShows(border, tokens, "1px solid rgb(42, 42, 42)")).toEqual({ token: "1px solid --color-border", value: "#2a2a2a" });
+    expect(fieldShows(border, tokens, "1px solid #ff0000")).toEqual({ token: null, value: "1px solid #ff0000" });
+    expect(fieldShows(border, tokens, "none")).toEqual({ token: null, value: "none" });
+    expect(fieldShows(padding, tokens, "16px")).toEqual({ token: "--space-4", value: "16px" });
   });
 });

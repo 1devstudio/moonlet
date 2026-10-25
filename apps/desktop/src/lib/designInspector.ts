@@ -5,7 +5,8 @@
 // are designTokens.ts; the write is a restyle edit (designEdits.ts).
 
 import { isStyleValue, type Decl } from "./designStyle";
-import { tokenRef, type TokenFamily } from "./designTokens";
+import { fieldShown, resolveValue, tokenOf, tokenRef, type TokenFamily } from "./designTokens";
+import type { DesignToken } from "./protocol";
 
 /** One field: the property it writes, and how its value is typed. */
 export interface Field {
@@ -113,4 +114,18 @@ export function pickToken(field: Field, current: string, token: string): string 
   const width = parts.find((p) => /^-?[\d.]+[a-z]*$/.test(p) || /^(thin|medium|thick)$/.test(p)) ?? "1px";
   const style = parts.find((p) => /^(none|hidden|dotted|dashed|solid|double|groove|ridge|inset|outset)$/.test(p)) ?? "solid";
   return `${width} ${style} ${tokenRef(token)}`;
+}
+
+/** What a field shows of `value`, its token and the token's value
+ *  (designTokens' fieldShown); a border as its width and style with its
+ *  colour's token (`1px solid --color-border`, `#2a2a2a`). Free text and
+ *  keywords show no token. */
+export function fieldShows(field: Field, tokens: DesignToken[], value: string): { token: string | null; value: string } {
+  if (!field.family || field.kind === "text" || field.kind === "keyword" || field.kind === "opacity") return { token: null, value };
+  if (field.prop !== "border") return fieldShown(tokens, value, field.family);
+  const parts = value.trim().split(/\s+(?![^(]*\))/);
+  const at = parts.findIndex((p) => tokenOf(tokens, p, "color") !== null);
+  if (at < 0) return { token: null, value };
+  const t = tokenOf(tokens, parts[at], "color")!;
+  return { token: parts.map((p, i) => (i === at ? t.name : p)).join(" "), value: resolveValue(tokens, t.value) };
 }
