@@ -1390,9 +1390,14 @@ impl Daemon {
                 if self.design_agent_working(&r.workspace, &r.slug).await? {
                     return Err(RpcError::new("busy", "Claude is changing the design; restore once it stops"));
                 }
-                // What is not kept yet is kept first, as edits by hand.
-                let edits = self.take_hand_edits(&r.workspace, &r.slug).unwrap_or_default();
-                ok(blocking(move || store.restore_snapshot(&r.workspace, &r.slug, r.n, Take::EditsByHand(edits), now_ms())).await?)
+                // What is not kept yet is kept first, as edits by hand. They
+                // are taken only once the restore is done: one that fails
+                // leaves them, and their wait, as they were.
+                let edits = self.pending_hand_edits(&r.workspace, &r.slug);
+                let (ws, slug) = (r.workspace.clone(), r.slug.clone());
+                let restored = blocking(move || store.restore_snapshot(&r.workspace, &r.slug, r.n, Take::EditsByHand(edits), now_ms())).await?;
+                self.take_hand_edits(&ws, &slug);
+                ok(restored)
             }
             m::DESIGN_SETTLE => {
                 let r: m::DesignSettle = params(p)?;
@@ -1632,6 +1637,12 @@ impl Daemon {
     /// Whether a workspace design's agent is at work (X65).
     async fn design_agent_working(&self, workspace: &str, slug: &str) -> Result<bool, RpcError> {
         Ok(self.design_agent(workspace, slug).await?.is_some_and(|t| t.agent_state == moonlet_proto::types::AgentState::Working))
+    }
+
+    /// What a design's edits by hand not kept yet did, leaving them and
+    /// their wait in place.
+    fn pending_hand_edits(&self, workspace: &str, slug: &str) -> Vec<String> {
+        self.hand_edits.lock().unwrap().get(&design_key(workspace, slug)).map(|e| e.edits.clone()).unwrap_or_default()
     }
 
     /// Takes a design's edits by hand not kept yet, with what they did, and
