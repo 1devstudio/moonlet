@@ -4,6 +4,7 @@
 
 import type { DesignComment } from "./protocol";
 import { pageFile } from "./designPage";
+import { isMid, isTag } from "./designBridge";
 
 /** Text on one line: every run of spaces and line breaks one space. */
 const oneLine = (s: string) => s.replace(/\s+/g, " ").trim();
@@ -26,8 +27,8 @@ export interface CommentRef {
 
 /** The line {@link commentLine} writes, read back; null for any other line. */
 export function parseCommentLine(line: string): CommentRef | null {
-  const m = /^Comment on (.+)\.html \[data-mid=(m\d+)\] \(([a-z][a-z0-9-]*) "(.*?)"\): (.+)$/.exec(line);
-  return m ? { page: m[1], mid: m[2], tag: m[3], text: m[4], comment: m[5] } : null;
+  const m = /^Comment on (.+)\.html \[data-mid=([^\]]*)\] \((\S*) "(.*?)"\): (.+)$/.exec(line);
+  return m && isMid(m[2]) && isTag(m[3]) ? { page: m[1], mid: m[2], tag: m[3], text: m[4], comment: m[5] } : null;
 }
 
 /** A user's message in the design's chat as **Comment from the canvas**

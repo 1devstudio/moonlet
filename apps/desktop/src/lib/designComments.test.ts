@@ -36,6 +36,9 @@ describe("a message of comments in the chat (X65)", () => {
       comment: "Make Git the first section",
     });
     expect(parseCommentLine("Comment on index.html: make it blue")).toBeNull();
+    // Only the ids and tags a pin can have.
+    expect(parseCommentLine('Comment on index.html [data-mid=m1x] (nav "x"): y')).toBeNull();
+    expect(parseCommentLine(`Comment on index.html [data-mid=m1] (${"a".repeat(33)} "x"): y`)).toBeNull();
   });
 
   it("shows as Comment from the canvas cards, numbered like their pins, when every line is a comment's", () => {
