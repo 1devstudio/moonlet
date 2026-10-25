@@ -120,6 +120,47 @@ describe("the setup modal (X60)", () => {
     expect(useStore.getState().confirm).toBeNull();
   });
 
+  it("asks about a routing copy's setup (X62), and Skip skips it", async () => {
+    events.emit({ host: "local", name: "exec.setup", data: { copy: "r1", host: "studio-mini", project: "shop", command: "pnpm install" } });
+    await settle();
+    expect(useStore.getState().confirm?.options).toMatchObject({
+      title: "Run setup",
+      message: "Run shop's setup in the copy on this Mac? (from .moonlet/config.toml)",
+      code: "pnpm install",
+    });
+    answers["sync.skip_setup"] = () => copy();
+    answerConfirm(false, false);
+    await settle();
+    expect(calls.filter((c) => c.method === "sync.skip_setup")).toEqual([{ method: "sync.skip_setup", params: { copy: "r1" } }]);
+  });
+
+  it("asks again about a routing copy made anew after its setup was skipped (X62)", async () => {
+    const ask = { copy: "r3", host: "studio-mini", project: "shop", command: "pnpm install" };
+    answers["sync.skip_setup"] = () => copy();
+    events.emit({ host: "local", name: "exec.setup", data: ask });
+    await settle();
+    answerConfirm(false, false);
+    await settle();
+    events.emit({ host: "local", name: "exec.setup", data: ask });
+    await settle();
+    expect(useStore.getState().confirm?.options).toMatchObject({ title: "Run setup", code: "pnpm install" });
+    answerConfirm(false, false);
+    await settle();
+  });
+
+  it("asks about a routing copy's setup that waited before the app started (X62)", async () => {
+    answers["exec.setups"] = () => [{ copy: "r2", host: "studio-mini", project: "shop", command: "pnpm i" }];
+    answers["sync.run_setup"] = () => copy();
+    hostStatus.emit({ id: "local", status: "connected" });
+    await settle();
+    await settle();
+    expect(useStore.getState().confirm?.options).toMatchObject({ title: "Run setup", code: "pnpm i" });
+    answerConfirm(true, false);
+    await settle();
+    expect(calls.filter((c) => c.method === "sync.run_setup")).toEqual([{ method: "sync.run_setup", params: { copy: "r2", command: "pnpm i" } }]);
+    delete answers["exec.setups"];
+  });
+
   it("asks for two copies one after the other, skipping neither", async () => {
     answers["sync.run_setup"] = () => copy();
     answers["sync.skip_setup"] = () => copy();

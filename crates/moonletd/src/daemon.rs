@@ -629,6 +629,10 @@ impl Daemon {
                 };
                 ok(self.runs.start(conn.clone(), plan, self.workers.clone(), self.sync.clone()))
             }
+            m::EXEC_SETUPS => {
+                app_only(conn, "setup")?;
+                ok(self.sync.run_setups())
+            }
             m::EXEC_STATUS => {
                 jobs_reader(conn)?;
                 let me = self.link.info().worker;

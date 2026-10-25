@@ -99,6 +99,6 @@ Each feature of moonlet has its own spec in this directory. Write the spec befor
 | X59 | Add a project from GitHub (clone tab, your repositories, live progress) | P1 | 3 | implemented (remote hosts untried) | [X59-add-project-from-github.md](X59-add-project-from-github.md) |
 | X60 | Keep in sync: a live copy of a remote session on this Mac | P1 | 4 | implemented (untried between two real Macs) | [X60-keep-in-sync.md](X60-keep-in-sync.md) |
 | X61 | Remote hosts take heavy commands (a switch per tailnet host; the host pairs with the central host itself) | P1 | 4 | implemented (untried between real machines) | [X61-remote-hosts-for-heavy-commands.md](X61-remote-hosts-for-heavy-commands.md) |
-| X62 | Routed commands: heavy commands run on a free worker | P1 | 4 | draft | [X62-routed-commands.md](X62-routed-commands.md) |
+| X62 | Routed commands: heavy commands run on a free worker | P1 | 4 | implemented (untried between real machines) | [X62-routed-commands.md](X62-routed-commands.md) |
 | X63 | Cloud workers: machines made for heavy commands and removed when idle | P1 | 4 | draft | [X63-cloud-workers.md](X63-cloud-workers.md) |
 | X66 | Task comments (read and post a tracker issue's comments in the Task detail and Task tab) | P1 | 3 | implemented (Linear and ClickUp untried on a real account) | [X66-task-comments.md](X66-task-comments.md) |

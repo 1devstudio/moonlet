@@ -410,6 +410,15 @@ export interface JobChunk {
   text: string;
 }
 
+/** A routing copy's setup waiting for the user's approval (X62), from `exec.setups` and `exec.setup`. */
+export interface ExecSetup {
+  copy: string;
+  /** The central host's name. */
+  host: string;
+  project: string;
+  command: string;
+}
+
 /** `exec.status` (X62): this machine, the routed commands going on, and why workers were skipped. */
 export interface ExecStatus {
   host: { name: string; os: string; cores: number; load: number | null; slots: number; used: number };
@@ -1000,6 +1009,7 @@ export const M = {
   heavyApprove: "heavy.approve",
   workerList: "worker.list",
   execStatus: "exec.status",
+  execSetups: "exec.setups",
   jobList: "job.list",
   jobOutput: "job.output",
   jobStop: "job.stop",
@@ -1037,6 +1047,7 @@ export const EV = {
   syncChanged: "sync.changed",
   workersChanged: "workers.changed",
   jobChanged: "job.changed",
+  execSetup: "exec.setup",
   jobOutput: "job.output",
 } as const;
 

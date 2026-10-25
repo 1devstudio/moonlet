@@ -145,6 +145,9 @@ struct Kept {
     differs: Vec<String>,
     #[serde(default)]
     too_big: Vec<String>,
+    /// The central host's name for the project, for asking about setup.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    project: String,
     /// Why the copy waits for `sync.retry`.
     #[serde(default)]
     paused: Option<String>,
@@ -1059,6 +1062,7 @@ impl LiveCopies {
             // found again rather than made a second time.
             self.update_kept(&k.id, |kept| {
                 kept.path = path.display().to_string();
+                kept.project = opened.project.clone();
                 kept.made_from = Some(made_from.clone());
             });
             if let Err(e) =
@@ -2151,6 +2155,21 @@ impl LiveCopies {
     fn set_setup(&self, id: &str, setup: Option<CopySetup>) {
         self.update_kept(id, |k| k.setup = setup);
         self.changed(id);
+        // A routing copy has no `sync.changed`: its app is asked on its own (X62).
+        if let Some(ask) = self.kept(id).as_ref().and_then(run_setup_ask) {
+            (self.emit)(Message::event(m::EV_EXEC_SETUP, ask));
+        }
+    }
+
+    /// `exec.setups`: the routing copies whose setup waits for the user.
+    pub fn run_setups(&self) -> Vec<m::ExecSetup> {
+        self.data
+            .lock()
+            .unwrap()
+            .worker
+            .iter()
+            .filter_map(run_setup_ask)
+            .collect()
     }
 
     /// A copy just made: its setup runs when this exact command was
@@ -3951,6 +3970,20 @@ impl Unsaved {
             error: error.to_string(),
         }
     }
+}
+
+/// Routing copy `k`'s setup question, while it waits for the user.
+fn run_setup_ask(k: &Kept) -> Option<m::ExecSetup> {
+    let setup = k
+        .setup
+        .as_ref()
+        .filter(|s| s.state == SetupState::NeedsApproval)?;
+    (k.kind == CopyKind::Run).then(|| m::ExecSetup {
+        copy: k.id.clone(),
+        host: k.host.clone(),
+        project: k.project.clone(),
+        command: setup.command.clone(),
+    })
 }
 
 /// A folder under `root` for `name`'s leftovers, named for now:
