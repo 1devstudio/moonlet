@@ -239,14 +239,14 @@ async fn cloud_get_shows_the_tailscale_mode_and_never_the_auth_key() {
         .d
         .call(
             "cloud.set",
-            json!({ "tailscale": { "mode": "auth_key", "auth_key": "tskey-auth-kQ7cTest1CNTRL-abc" } }),
+            json!({ "tailscale": { "mode": "auth_key", "auth_key": "fake-tailscale-pasted-key" } }),
         )
         .await;
     assert_eq!(
         info["tailscale"],
         json!({ "mode": "auth_key", "client_id": "", "has_client_secret": false, "has_auth_key": true, "tag": "tag:moonlet-worker" })
     );
-    assert!(!info.to_string().contains("tskey-auth"));
+    assert!(!info.to_string().contains("fake-tailscale-pasted-key"));
 }
 
 #[tokio::test]
@@ -258,7 +258,7 @@ async fn a_machine_joins_the_tailnet_with_the_pasted_auth_key() {
         .d
         .call(
             "cloud.set",
-            json!({ "tailscale": { "mode": "auth_key", "auth_key": "tskey-auth-kQ7cTest1CNTRL-abc" } }),
+            json!({ "tailscale": { "mode": "auth_key", "auth_key": "fake-tailscale-pasted-key" } }),
         )
         .await;
     c.up().await;
@@ -275,7 +275,7 @@ async fn a_machine_joins_the_tailnet_with_the_pasted_auth_key() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     assert!(
-        script.contains("tailscale up --auth-key='tskey-auth-kQ7cTest1CNTRL-abc'"),
+        script.contains("tailscale up --auth-key='fake-tailscale-pasted-key'"),
         "{script}"
     );
 }
