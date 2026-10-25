@@ -450,6 +450,10 @@ export interface CloudInfo {
   max_hours_month: number;
   projects: Record<string, ProjectCloud>;
   kinds: CloudKind[];
+  /** The central host's tailnet addresses (`ip:port`) where machines pair; left out by a daemon before 0.1.31. */
+  listening?: string[];
+  /** The port it listens on for the tailnet, also while that is off; left out before 0.1.31. */
+  port?: number;
 }
 
 /** `cloud.set`: what changes; null removes a provider or project. */
