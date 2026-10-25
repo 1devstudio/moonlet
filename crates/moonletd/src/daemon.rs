@@ -2262,7 +2262,28 @@ impl Daemon {
                 list.retain(|t| real(std::path::Path::new(&t.path)).is_none_or(|p| !copies.contains(&p)));
                 ok(list)
             }
-            m::SESSION_CREATE => ok(w.create_session(params(p)?).await.map_err(internal)?),
+            m::SESSION_CREATE => {
+                let req: m::SessionCreate = params(p)?;
+                let Some(pick) = req.design.clone() else {
+                    return ok(w.create_session(req).await.map_err(internal)?);
+                };
+                // Build it (X65): the workspace design copied into the worktree
+                // before its agent starts, and recorded as built there.
+                let from = self.locate(&m::DesignRef::Workspace { workspace: pick.workspace.clone(), slug: pick.slug.clone() }).await?;
+                let store = self.design.clone();
+                let made = w
+                    .create_session_prepared(req, move |s| {
+                        if s.workspace_id.as_deref() != Some(pick.workspace.as_str()) {
+                            anyhow::bail!("the design is not in the session's workspace");
+                        }
+                        let worktree = Path::new(&s.path);
+                        let folder = moonlet_core::design::session::design_folder(&moonlet_core::session::read_config(worktree))?;
+                        store.copy_to_session(&from, &pick.pages, &s.id, worktree, &folder, now_ms())?;
+                        Ok(())
+                    })
+                    .await;
+                ok(made.map_err(store_error)?)
+            }
             m::SESSION_LIST => ok(w.list_sessions()),
             m::SESSION_ARCHIVE => {
                 let r: m::SessionArchive = params(p)?;

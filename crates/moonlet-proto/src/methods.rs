@@ -801,10 +801,23 @@ pub struct SessionCreate {
     /// instead of making a new one (X46).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<String>,
+    /// A workspace design to build (X65 Build it): copied into the new
+    /// worktree as a session design before the agent starts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub design: Option<SessionDesignPick>,
     #[serde(default = "default_cols")]
     pub cols: u16,
     #[serde(default = "default_rows")]
     pub rows: u16,
+}
+
+/// The workspace design a new session builds, and its pages kept (X65).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionDesignPick {
+    pub workspace: String,
+    pub slug: String,
+    /// Its pages to copy (`index` for `pages/index.html`).
+    pub pages: Vec<String>,
 }
 
 impl SessionCreate {
@@ -829,6 +842,7 @@ impl SessionCreate {
             workspace_id: None,
             task: None,
             worktree: None,
+            design: None,
             cols: default_cols(),
             rows: default_rows(),
         }

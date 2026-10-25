@@ -1227,6 +1227,19 @@ impl SessionManager {
     }
 
     pub async fn create_session(&self, req: SessionCreate) -> Result<Session> {
+        self.create_session_prepared(req, |_| Ok(())).await
+    }
+
+    /// [`Self::create_session`], with `prepare` run on the new session
+    /// once its worktree is there and before anything starts in it, such
+    /// as the design a session builds copied into it (X65). When `prepare`
+    /// fails, the session is not made: a worktree and branch made for it
+    /// are removed again.
+    pub async fn create_session_prepared(
+        &self,
+        req: SessionCreate,
+        prepare: impl FnOnce(&Session) -> Result<()>,
+    ) -> Result<Session> {
         let mut req = req;
         crate::chat::check_mode(req.mode.as_deref())?;
         // Directories widen what the agent may write (X29): only the user
@@ -1387,6 +1400,15 @@ impl SessionManager {
             layout: serde_json::Value::Null,
             restore: vec![],
         };
+        if let Err(e) = prepare(&ws) {
+            if adopted.is_none() {
+                let _ = git::worktree_remove(&repo_path, &dir).await;
+                if !req.existing_branch {
+                    let _ = git::delete_branch(&repo_path, &ws.branch).await;
+                }
+            }
+            return Err(e);
+        }
         let w = ws.clone();
         self.mutate(|st| {
             st.sessions.push(w);
@@ -1885,6 +1907,7 @@ mod tests {
             workspace_id: None,
             task: None,
             worktree: None,
+            design: None,
         };
         for bad in ["", "yolo"] {
             let err = mgr.create_session(req(bad)).await.unwrap_err();
@@ -1924,6 +1947,7 @@ mod tests {
                 workspace_id: None,
                 task: None,
                 worktree: None,
+                design: None,
             })
             .await
             .unwrap();
@@ -1967,6 +1991,7 @@ mod tests {
                 workspace_id: None,
                 task: None,
                 worktree: None,
+                design: None,
             })
             .await
             .unwrap();
@@ -2604,6 +2629,7 @@ mod tests {
                     workspace_id: None,
                     task: None,
                     worktree: None,
+                    design: None,
                 })
                 .await
                 .unwrap();
@@ -2666,6 +2692,7 @@ mod tests {
                 workspace_id: None,
                 task: None,
                 worktree: None,
+                design: None,
             })
             .await
             .unwrap();
@@ -2704,6 +2731,7 @@ mod tests {
                 workspace_id: None,
                 task: None,
                 worktree: None,
+                design: None,
             })
             .await
             .unwrap();
@@ -2768,6 +2796,7 @@ mod tests {
                 workspace_id: None,
                 task: None,
                 worktree: None,
+                design: None,
             })
             .await
             .unwrap();
@@ -2830,6 +2859,7 @@ mod tests {
                 workspace_id: None,
                 task: None,
                 worktree: None,
+                design: None,
             })
             .await
             .unwrap();
@@ -2898,6 +2928,7 @@ mod tests {
                 workspace_id: None,
                 task: None,
                 worktree: None,
+                design: None,
             })
             .await
             .unwrap();
