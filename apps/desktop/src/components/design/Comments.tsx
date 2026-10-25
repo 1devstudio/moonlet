@@ -56,6 +56,8 @@ export interface BoxTarget {
 }
 
 const BOX_W = 300;
+/** The box's height, near enough to place it. */
+const BOX_H = 150;
 
 /** The comment box, pinned under its element (above it when there is no
  *  room below), inside the frame of `size` px. **Keep** saves it, **Send**
@@ -82,8 +84,11 @@ export function CommentBox({
   const [text, setText] = useState(target.pin?.comment ?? "");
   const ok = text.trim().length > 0;
   const left = Math.max(0, Math.min(rect.x * scale, size[0] - BOX_W));
+  // Under the element, else above it, else (an element as tall as the
+  // page) inside the frame, so the box never leaves the page.
   const below = (rect.y + rect.h) * scale + 8;
-  const top = below + 150 > size[1] && rect.y * scale > 158 ? rect.y * scale - 158 : below;
+  const above = rect.y * scale - BOX_H - 8;
+  const top = below + BOX_H <= size[1] ? below : above >= 0 ? above : Math.max(0, Math.min(rect.y * scale + 8, size[1] - BOX_H));
   return (
     <div
       role="dialog"
