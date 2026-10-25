@@ -29,6 +29,13 @@ describe("a value's token (X65)", () => {
     expect(tokenOf(TOKENS, "var(--nowhere)", "spacing")).toBeNull();
   });
 
+  it("is no token of the field when it names one of another family, which is off-system there", () => {
+    expect(tokenOf(TOKENS, "var(--color-panel)", "spacing")).toBeNull();
+    expect(tokenOf(TOKENS, "var(--color-panel)", "color")?.name).toBe("--color-panel");
+    expect(fieldShown(TOKENS, "var(--color-panel)", "spacing")).toEqual({ token: null, value: "#161616" });
+    expect(offSystem(TOKENS, [["padding", "var(--color-panel)"], ["color", "var(--color-panel)"], ["margin", "var(--space-1) var(--radius-xl)"]])).toEqual(["padding", "margin"]);
+  });
+
   it("shows on a field as its token and value, a token per part, else the value alone", () => {
     expect(fieldShown(TOKENS, "var(--space-1)", "spacing")).toEqual({ token: "--space-1", value: "4px" });
     expect(fieldShown(TOKENS, "4px", "spacing")).toEqual({ token: "--space-1", value: "4px" });
