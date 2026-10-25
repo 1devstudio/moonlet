@@ -3522,6 +3522,38 @@ async fn a_failed_restore_leaves_the_edits_by_hand_waiting_to_be_kept() {
     assert_eq!(std::fs::read_to_string(dir.join("history/2/pages/index.html")).unwrap(), "<p>by hand</p>\n");
 }
 
+/// X65: the wait for edits by hand to stop takes its snapshot under the
+/// lock of the design's pages, as a save does: one that ends during a save
+/// (here `design.check --fix` adding data-mids to a long page) waits for
+/// it, and keeps what it wrote.
+#[tokio::test]
+async fn a_snapshot_of_edits_by_hand_waits_for_a_save_in_progress() {
+    let d = fake_claude_daemon_with(WRITING_CLAUDE, vec![("MOONLET_DESIGN_QUIET_MS".into(), "500".into())]).await;
+    let mut c = d.client().await;
+    let mut checker = d.client().await;
+    let ws = workspace_with_system(&d, &mut c).await;
+    let created: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    history_of(&mut c, &ws, 1).await;
+    turn_over(&mut c, created["agent"].as_u64().unwrap()).await;
+    let dir = d.home.path().join(".moonlet/design").join(&ws).join("designs/settings-page");
+    // A long page with no data-mids, which the check, started at once
+    // after the save, numbers and writes after the wait has ended.
+    let long = format!("<body>{}</body>\n", "<p>row</p>".repeat(80_000));
+    std::fs::write(dir.join("pages/long.html"), &long).unwrap();
+    save_by_hand(&mut c, &ws, "<p>by hand</p>\n", &["text of m2"]).await;
+    let fixed: serde_json::Value = checker.request(methods::DESIGN_CHECK, serde_json::json!({"workspace": ws, "design": "settings-page", "fix": true})).await.unwrap();
+    assert!(fixed.is_array(), "{fixed}");
+    let now = std::fs::read_to_string(dir.join("pages/long.html")).unwrap();
+    assert!(now.contains("data-mid"), "the check numbered the page");
+    let listed = history_of(&mut c, &ws, 2).await;
+    assert_eq!((&listed[0]["n"], &listed[0]["type"], &listed[0]["summary"]), (&serde_json::json!(2), &serde_json::json!("edits_by_hand"), &serde_json::json!("Text of m2")));
+    let kept = std::fs::read_to_string(dir.join("history/2/pages/long.html")).unwrap();
+    assert!(kept == now, "snapshot 2 has the page as the check left it, not {} bytes with {} data-mids", kept.len(), kept.matches("data-mid").count());
+}
+
 /// X65: a design removed while its edits by hand wait for quiet stays
 /// removed: its snapshot is never taken, and nothing of its folder comes
 /// back.
