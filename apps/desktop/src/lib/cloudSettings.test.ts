@@ -6,6 +6,8 @@ import {
   cloudChanges,
   cloudDraft,
   cloudErrors,
+  imageOptions,
+  locationOptions,
   machineTypeLabel,
   newRemovalErrors,
   policyAddress,
@@ -15,6 +17,7 @@ import {
   projectCloudChange,
   projectCloudDraft,
   projectCloudErrors,
+  projectCloudSaveErrors,
   projectCloudKey,
   providerForm,
   providerName,
@@ -294,13 +297,88 @@ describe("a project's cloud workers (X63)", () => {
     expect(projectCloudChange(saved, key, { ...shop, provider: "" })).toEqual({ projects: { [key]: null } });
   });
 
+  it("offers the provider's locations, and keeps a saved one it no longer lists", () => {
+    // From Hetzner's /locations, as cloud.locations gives them.
+    const hetznerLocations = [
+      { name: "fsn1", label: "Falkenstein, DE" },
+      { name: "ash", label: "Ashburn, VA, US" },
+    ];
+    expect(locationOptions(hetznerLocations, "")).toEqual([
+      { value: "fsn1", label: "Falkenstein, DE (fsn1)" },
+      { value: "ash", label: "Ashburn, VA, US (ash)" },
+    ]);
+    expect(locationOptions(hetznerLocations, "hel2")).toEqual([
+      { value: "fsn1", label: "Falkenstein, DE (fsn1)" },
+      { value: "ash", label: "Ashburn, VA, US (ash)" },
+      { value: "hel2", label: "hel2" },
+    ]);
+    // Not loaded yet: the saved one still shows.
+    expect(locationOptions(null, "fsn1")).toEqual([{ value: "fsn1", label: "fsn1" }]);
+  });
+
+  it("offers the images for the machine type's architecture, snapshots last", () => {
+    // cloud.images from Hetzner: each system image once per architecture, in its order.
+    const images = [
+      { name: "ubuntu-22.04", label: "Ubuntu 22.04", arch: "x86" },
+      { name: "ubuntu-22.04", label: "Ubuntu 22.04", arch: "arm" },
+      { name: "debian-12", label: "Debian 12", arch: "x86" },
+      { name: "401234567", label: "Snapshot: shop deps", arch: "arm" },
+      { name: "ubuntu-24.04", label: "Ubuntu 24.04", arch: "x86" },
+      { name: "ubuntu-24.04", label: "Ubuntu 24.04", arch: "arm" },
+    ];
+    expect(imageOptions(images, "arm", "ubuntu-24.04")).toEqual([
+      { value: "ubuntu-22.04", label: "Ubuntu 22.04 (ubuntu-22.04)" },
+      { value: "ubuntu-24.04", label: "Ubuntu 24.04 (ubuntu-24.04)" },
+      { value: "401234567", label: "Snapshot: shop deps (401234567)" },
+    ]);
+    // No type picked yet: every image, once.
+    expect(imageOptions(images, "", "").map((o) => o.value)).toEqual(["debian-12", "ubuntu-22.04", "ubuntu-24.04", "401234567"]);
+    // A saved image the list lacks, such as one for the other architecture, stays.
+    expect(imageOptions(images, "x86", "401234567").map((o) => o.value)).toEqual(["debian-12", "ubuntu-22.04", "ubuntu-24.04", "401234567"]);
+    expect(imageOptions(null, "x86", "ubuntu-24.04")).toEqual([{ value: "ubuntu-24.04", label: "ubuntu-24.04" }]);
+  });
+
   it("says what a project's cloud setting misses", () => {
     expect(projectCloudErrors({ overflow: true, provider: "hetzner", type: "", location: " ", image: "" })).toEqual({
       type: "Pick a machine type.",
-      location: "Name a location, such as fsn1.",
-      image: "Name an image, such as ubuntu-24.04.",
+      location: "Pick a location.",
+      image: "Pick an image.",
     });
     expect(projectCloudErrors({ overflow: false, provider: "", type: "", location: "", image: "" })).toEqual({});
+  });
+
+  it("refuses a type the location does not make and an image for the other architecture", () => {
+    // From Hetzner's lists for fsn1: cpx41 is retired there, cax21 is Arm.
+    const types = [
+      { name: "cpx42", cores: 8, memory_gb: 16, arch: "x86" },
+      { name: "cax21", cores: 4, memory_gb: 8, arch: "arm" },
+    ];
+    const images = [
+      { name: "ubuntu-24.04", label: "Ubuntu 24.04", arch: "x86" },
+      { name: "ubuntu-24.04", label: "Ubuntu 24.04", arch: "arm" },
+      { name: "401234567", label: "Snapshot: shop deps", arch: "x86" },
+    ];
+    const d = { overflow: true, provider: "hetzner", type: "cpx41", location: "fsn1", image: "ubuntu-24.04" };
+    expect(projectCloudErrors(d, { types, images })).toEqual({ type: "fsn1 no longer makes cpx41. Pick another type." });
+    expect(projectCloudErrors({ ...d, type: "cax21", image: "401234567" }, { types, images })).toEqual({
+      image: "401234567 is not for arm machines. Pick another image.",
+    });
+    expect(projectCloudErrors({ ...d, type: "cax21" }, { types, images })).toEqual({});
+    // Lists not loaded yet, or not readable: nothing to say.
+    expect(projectCloudErrors(d, { types: null, images: null })).toEqual({});
+    expect(projectCloudErrors(d)).toEqual({});
+  });
+
+  it("a saved type the provider retired holds back Save only once the cloud setting changes", () => {
+    const key = " 6b0ff5f6474428fae67b56a2a026b1849c28ff05";
+    const saved = { overflow: true, provider: "hetzner", type: "cpx41", location: "fsn1", image: "ubuntu-24.04" };
+    const offered = { types: [{ name: "cpx42", cores: 8, memory_gb: 16, arch: "x86" }], images: [{ name: "ubuntu-24.04", label: "Ubuntu 24.04", arch: "x86" }] };
+    const withSaved = info({ projects: { [key]: saved } });
+    // Untouched: the project page's other edits can still be saved.
+    expect(projectCloudSaveErrors(withSaved, key, saved, offered)).toBe(0);
+    // Changed, still with the retired type: Save waits.
+    expect(projectCloudSaveErrors(withSaved, key, { ...saved, overflow: false }, offered)).toBe(1);
+    expect(projectCloudSaveErrors(withSaved, key, { ...saved, type: "cpx42" }, offered)).toBe(0);
   });
 
   it("the footer counts the project's machines and their commands", () => {

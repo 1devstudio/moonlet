@@ -11,7 +11,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use moonlet_cloud::{
-    CloudError, Listed, MachineInfo, MachineState, MachineType, NewMachine, Provider, ProviderInfo,
+    CloudError, Image, Listed, Location, MachineInfo, MachineState, MachineType, NewMachine,
+    Provider, ProviderInfo,
 };
 use serde_json::{Value, json};
 
@@ -215,6 +216,21 @@ impl Provider for Fake {
             self.steer("billing").and_then(|v| v.parse().ok()),
             self.steer("tailnet-key").is_some(),
         )
+    }
+
+    async fn locations(&self) -> Result<Vec<Location>, CloudError> {
+        Ok(vec![Location {
+            name: "here".into(),
+            label: "This machine".into(),
+        }])
+    }
+
+    async fn images(&self) -> Result<Vec<Image>, CloudError> {
+        Ok(vec![Image {
+            name: "none".into(),
+            label: "No image: the machine runs here".into(),
+            arch: crate::link::arch().into(),
+        }])
     }
 
     async fn machine_types(&self, _location: &str) -> Result<Vec<MachineType>, CloudError> {

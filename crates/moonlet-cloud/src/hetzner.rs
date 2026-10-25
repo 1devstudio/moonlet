@@ -7,11 +7,25 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use crate::{
-    Body, CloudError, Field, Listed, MachineInfo, MachineState, MachineType, NewMachine, Provider,
-    ProviderInfo, Request, Transport,
+    Body, CloudError, Field, Image, Listed, Location, MachineInfo, MachineState, MachineType,
+    NewMachine, Provider, ProviderInfo, Request, Transport,
 };
 
 pub const API: &str = "https://api.hetzner.cloud/v1";
+
+/// Whether server type `t` can be made at `location`. Its `locations` say
+/// so: a retired type keeps its price there but is not `available`, and
+/// a create call answers 422. An answer without them goes by the prices.
+fn made_at(t: &Value, location: &str) -> bool {
+    match t["locations"].as_array() {
+        Some(at) => at
+            .iter()
+            .any(|l| l["name"] == location && l["available"].as_bool().unwrap_or(false)),
+        None => t["prices"]
+            .as_array()
+            .is_some_and(|p| p.iter().any(|p| p["location"] == location)),
+    }
+}
 
 pub fn info() -> ProviderInfo {
     ProviderInfo {
@@ -199,6 +213,74 @@ impl Provider for Hetzner {
         info()
     }
 
+    async fn locations(&self) -> Result<Vec<Location>, CloudError> {
+        // Six of them: one page.
+        let v = self.call("GET", "/locations", None).await?;
+        Ok(v["locations"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|l| Location {
+                name: l["name"].as_str().unwrap_or_default().to_string(),
+                label: format!(
+                    "{}, {}",
+                    l["city"].as_str().unwrap_or_default(),
+                    l["country"].as_str().unwrap_or_default()
+                ),
+            })
+            .collect())
+    }
+
+    async fn images(&self) -> Result<Vec<Image>, CloudError> {
+        let mut out = Vec::new();
+        for kind in ["system", "snapshot"] {
+            let mut page = 1;
+            loop {
+                let v = self
+                    .call(
+                        "GET",
+                        &format!("/images?type={kind}&status=available&per_page=50&page={page}"),
+                        None,
+                    )
+                    .await?;
+                out.extend(
+                    v["images"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter(|i| i["deprecated"].is_null())
+                        .map(|i| {
+                            let description = i["description"].as_str().unwrap_or_default();
+                            // A snapshot has no name: `create` takes its id.
+                            match i["name"].as_str() {
+                                Some(name) => Image {
+                                    name: name.to_string(),
+                                    label: description.to_string(),
+                                    arch: i["architecture"]
+                                        .as_str()
+                                        .unwrap_or_default()
+                                        .to_string(),
+                                },
+                                None => Image {
+                                    name: id_of(&i["id"]),
+                                    label: format!("Snapshot: {description}"),
+                                    arch: i["architecture"]
+                                        .as_str()
+                                        .unwrap_or_default()
+                                        .to_string(),
+                                },
+                            }
+                        }),
+                );
+                match v["meta"]["pagination"]["next_page"].as_u64() {
+                    Some(next) if next > page => page = next,
+                    _ => break,
+                }
+            }
+        }
+        Ok(out)
+    }
+
     async fn machine_types(&self, location: &str) -> Result<Vec<MachineType>, CloudError> {
         let mut out = Vec::new();
         let mut page = 1;
@@ -210,18 +292,13 @@ impl Provider for Hetzner {
                     None,
                 )
                 .await?;
-            // A type is offered at a location when it has a price there.
             out.extend(
                 v["server_types"]
                     .as_array()
                     .into_iter()
                     .flatten()
                     .filter(|t| !t["deprecated"].as_bool().unwrap_or(false))
-                    .filter(|t| {
-                        t["prices"]
-                            .as_array()
-                            .is_some_and(|p| p.iter().any(|p| p["location"] == location))
-                    })
+                    .filter(|t| made_at(t, location))
                     .map(|t| MachineType {
                         name: t["name"].as_str().unwrap_or_default().to_string(),
                         cores: t["cores"].as_u64().unwrap_or(0) as u32,
@@ -517,24 +594,119 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn reads_captured_locations() {
+        let script = Script::new(vec![ok(include_str!("fixtures/hetzner/locations.json"))]);
+        let all = hetzner(&script).locations().await.unwrap();
+        assert_eq!(
+            all.iter()
+                .map(|l| (l.name.as_str(), l.label.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("fsn1", "Falkenstein, DE"),
+                ("nbg1", "Nuremberg, DE"),
+                ("hel1", "Helsinki, FI"),
+                ("ash", "Ashburn, VA, US"),
+                ("hil", "Hillsboro, OR, US"),
+                ("sin", "Singapore, SG"),
+            ]
+        );
+        assert_eq!(
+            script.sent.lock().unwrap()[0].url,
+            "https://api.hetzner.cloud/v1/locations"
+        );
+    }
+
+    #[tokio::test]
+    async fn reads_captured_images() {
+        let script = Script::new(vec![
+            ok(include_str!("fixtures/hetzner/images_system.json")),
+            ok(include_str!("fixtures/hetzner/images_snapshot.json")),
+        ]);
+        let all = hetzner(&script).images().await.unwrap();
+        assert_eq!(all.len(), 32);
+        assert_eq!(
+            all[14..16]
+                .iter()
+                .map(|i| (i.name.as_str(), i.label.as_str(), i.arch.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("ubuntu-24.04", "Ubuntu 24.04", "x86"),
+                ("ubuntu-24.04", "Ubuntu 24.04", "arm"),
+            ]
+        );
+        let sent = script.sent.lock().unwrap();
+        assert_eq!(
+            sent[0].url,
+            "https://api.hetzner.cloud/v1/images?type=system&status=available&per_page=50&page=1"
+        );
+        assert_eq!(
+            sent[1].url,
+            "https://api.hetzner.cloud/v1/images?type=snapshot&status=available&per_page=50&page=1"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_snapshot_goes_by_its_id_and_a_deprecated_image_is_left_out() {
+        // Shaped as the captured system images.
+        let system = r#"{ "images": [
+            { "id": 45780948, "name": "rocky-8", "architecture": "x86", "deprecated": "2026-11-01T00:00:00Z", "description": "Rocky Linux 8", "type": "system" },
+            { "id": 161547269, "name": "ubuntu-24.04", "architecture": "x86", "deprecated": null, "description": "Ubuntu 24.04", "type": "system" } ],
+            "meta": { "pagination": { "page": 1, "next_page": null } } }"#;
+        let snapshots = r#"{ "images": [
+            { "id": 401234567, "name": null, "architecture": "arm", "deprecated": null, "description": "shop deps", "type": "snapshot" } ],
+            "meta": { "pagination": { "page": 1, "next_page": null } } }"#;
+        let script = Script::new(vec![ok(system), ok(snapshots)]);
+        assert_eq!(
+            hetzner(&script).images().await.unwrap(),
+            [
+                Image {
+                    name: "ubuntu-24.04".into(),
+                    label: "Ubuntu 24.04".into(),
+                    arch: "x86".into()
+                },
+                Image {
+                    name: "401234567".into(),
+                    label: "Snapshot: shop deps".into(),
+                    arch: "arm".into()
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
     async fn reads_captured_server_types() {
+        let script = Script::new(vec![ok(include_str!("fixtures/hetzner/server_types.json"))]);
+        // Ashburn sells 11 of the 26 types.
+        let types = hetzner(&script).machine_types("ash").await.unwrap();
+        assert_eq!(
+            types.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
+            [
+                "cpx11", "cpx21", "cpx31", "cpx41", "cpx51", "ccx13", "ccx23", "ccx33", "ccx43",
+                "ccx53", "ccx63"
+            ]
+        );
+        assert_eq!(
+            types[3],
+            MachineType {
+                name: "cpx41".into(),
+                cores: 8,
+                memory_gb: 16.0,
+                arch: "x86".into()
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn offers_only_the_types_a_location_still_makes() {
+        // cpx11 to cpx51 still have prices in Falkenstein, but Hetzner stopped
+        // making them there: a create call answers 422.
         let script = Script::new(vec![ok(include_str!("fixtures/hetzner/server_types.json"))]);
         let types = hetzner(&script).machine_types("fsn1").await.unwrap();
         assert_eq!(
-            types,
+            types.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
             [
-                MachineType {
-                    name: "cpx41".into(),
-                    cores: 8,
-                    memory_gb: 16.0,
-                    arch: "x86".into()
-                },
-                MachineType {
-                    name: "cax21".into(),
-                    cores: 4,
-                    memory_gb: 8.0,
-                    arch: "arm".into()
-                },
+                "cax11", "cax21", "cax31", "cax41", "ccx13", "ccx23", "ccx33", "ccx43", "ccx53",
+                "ccx63", "cpx12", "cpx22", "cpx32", "cpx42", "cpx52", "cpx62", "cpx02"
             ]
         );
     }

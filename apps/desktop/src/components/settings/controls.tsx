@@ -6,7 +6,7 @@ import { radioKey, type StatusLine, type Tone } from "../../lib/settingsPage";
 import { cx } from "../ui";
 
 export const fieldCls =
-  "h-[30px] rounded-md border border-border-strong bg-panel-2 px-2.5 ui-text-13 text-fg outline-none placeholder:text-faint focus:border-accent aria-[invalid=true]:border-error";
+  "h-[30px] rounded-md border border-border-strong bg-panel-2 px-2.5 ui-text-13 text-fg outline-none placeholder:text-faint focus:border-accent aria-[invalid=true]:border-error disabled:cursor-not-allowed disabled:opacity-40";
 
 export function PageHeading({ title, children, aside, icon }: { title: ReactNode; children?: ReactNode; aside?: ReactNode; icon?: ReactNode }) {
   return (

@@ -502,6 +502,19 @@ export interface CloudMachines {
   max_machines: number;
 }
 
+/** `cloud.locations` (X63). */
+export interface CloudLocation {
+  name: string;
+  label: string;
+}
+
+/** `cloud.images` (X63): `arch` as the provider's machine types give it. */
+export interface CloudImage {
+  name: string;
+  label: string;
+  arch: string;
+}
+
 export interface MachineType {
   name: string;
   cores: number;
@@ -1114,6 +1127,8 @@ export const M = {
   cloudGet: "cloud.get",
   cloudSet: "cloud.set",
   cloudTypes: "cloud.types",
+  cloudLocations: "cloud.locations",
+  cloudImages: "cloud.images",
   cloudMachines: "cloud.machines",
   cloudUp: "cloud.up",
   cloudDown: "cloud.down",
