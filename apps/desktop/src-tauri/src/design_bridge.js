@@ -228,6 +228,9 @@
       draw(null);
       if (mode !== "edit") select(null);
     } else if (d.type === "bridge.select") {
+      // Another selection, from Layers or the breadcrumb, commits the text
+      // being edited; the app telling it the one being edited does not.
+      if (editing && byMid(d.mid) !== editing) finish(true);
       const el = mode === "edit" ? byMid(d.mid) : null;
       select(el);
       post(el ? { type: "bridge.selected", mid: midOf(el), rect: box(el) } : { type: "bridge.selected", mid: null });
@@ -281,6 +284,14 @@
     }
     drawSelection();
   };
+  // A click outside it in the app takes the focus from the page, or from
+  // the element: that commits it too.
+  addEventListener("focusout", (e) => {
+    if (editing && e.target === editing) finish(true);
+  }, true);
+  addEventListener("blur", (e) => {
+    if (e.target === window) finish(true);
+  });
   addEventListener(
     "dblclick",
     (e) => {
