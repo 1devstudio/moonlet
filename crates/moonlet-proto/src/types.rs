@@ -157,6 +157,43 @@ pub struct DesignPage {
     pub label: Option<String>,
 }
 
+/// A comment pinned on an element of a design's page, as `comments.json`
+/// keeps it (X65). Every field but the number has a default, so a pin
+/// written before a field existed still loads.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DesignComment {
+    /// Its number in the design, shown on its pin; never reused.
+    pub n: u32,
+    /// The page it is on (`index` for `pages/index.html`).
+    #[serde(default)]
+    pub page: String,
+    /// The element's `data-mid`.
+    #[serde(default)]
+    pub mid: String,
+    /// The element's tag, such as `nav`.
+    #[serde(default)]
+    pub tag: String,
+    /// Up to 60 characters of the element's text.
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub comment: String,
+    /// When it was last sent to the chat, in ms; null while not sent.
+    #[serde(default)]
+    pub sent_at: Option<u64>,
+    #[serde(default)]
+    pub state: CommentState,
+}
+
+/// Whether a comment still needs doing (X65).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommentState {
+    #[default]
+    Open,
+    Resolved,
+}
+
 /// What a design system's or a design's agent waits for from the user (X64, X65).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NeedsYou {
