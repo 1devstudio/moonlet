@@ -7,8 +7,8 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use crate::{
-    Body, CloudError, Field, Listed, MachineInfo, MachineState, MachineType, NewMachine, Provider,
-    ProviderInfo, Request, Transport,
+    Body, CloudError, Field, Image, Listed, Location, MachineInfo, MachineState, MachineType,
+    NewMachine, Provider, ProviderInfo, Request, Transport,
 };
 
 pub const API: &str = "https://api.hetzner.cloud/v1";
@@ -197,6 +197,74 @@ fn selector(labels: &BTreeMap<String, String>) -> String {
 impl Provider for Hetzner {
     fn info(&self) -> ProviderInfo {
         info()
+    }
+
+    async fn locations(&self) -> Result<Vec<Location>, CloudError> {
+        // Six of them: one page.
+        let v = self.call("GET", "/locations", None).await?;
+        Ok(v["locations"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|l| Location {
+                name: l["name"].as_str().unwrap_or_default().to_string(),
+                label: format!(
+                    "{}, {}",
+                    l["city"].as_str().unwrap_or_default(),
+                    l["country"].as_str().unwrap_or_default()
+                ),
+            })
+            .collect())
+    }
+
+    async fn images(&self) -> Result<Vec<Image>, CloudError> {
+        let mut out = Vec::new();
+        for kind in ["system", "snapshot"] {
+            let mut page = 1;
+            loop {
+                let v = self
+                    .call(
+                        "GET",
+                        &format!("/images?type={kind}&status=available&per_page=50&page={page}"),
+                        None,
+                    )
+                    .await?;
+                out.extend(
+                    v["images"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter(|i| i["deprecated"].is_null())
+                        .map(|i| {
+                            let description = i["description"].as_str().unwrap_or_default();
+                            // A snapshot has no name: `create` takes its id.
+                            match i["name"].as_str() {
+                                Some(name) => Image {
+                                    name: name.to_string(),
+                                    label: description.to_string(),
+                                    arch: i["architecture"]
+                                        .as_str()
+                                        .unwrap_or_default()
+                                        .to_string(),
+                                },
+                                None => Image {
+                                    name: id_of(&i["id"]),
+                                    label: format!("Snapshot: {description}"),
+                                    arch: i["architecture"]
+                                        .as_str()
+                                        .unwrap_or_default()
+                                        .to_string(),
+                                },
+                            }
+                        }),
+                );
+                match v["meta"]["pagination"]["next_page"].as_u64() {
+                    Some(next) if next > page => page = next,
+                    _ => break,
+                }
+            }
+        }
+        Ok(out)
     }
 
     async fn machine_types(&self, location: &str) -> Result<Vec<MachineType>, CloudError> {
@@ -514,6 +582,86 @@ mod tests {
             ))
         );
         assert!(script.slept.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn reads_captured_locations() {
+        let script = Script::new(vec![ok(include_str!("fixtures/hetzner/locations.json"))]);
+        let all = hetzner(&script).locations().await.unwrap();
+        assert_eq!(
+            all.iter()
+                .map(|l| (l.name.as_str(), l.label.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("fsn1", "Falkenstein, DE"),
+                ("nbg1", "Nuremberg, DE"),
+                ("hel1", "Helsinki, FI"),
+                ("ash", "Ashburn, VA, US"),
+                ("hil", "Hillsboro, OR, US"),
+                ("sin", "Singapore, SG"),
+            ]
+        );
+        assert_eq!(
+            script.sent.lock().unwrap()[0].url,
+            "https://api.hetzner.cloud/v1/locations"
+        );
+    }
+
+    #[tokio::test]
+    async fn reads_captured_images() {
+        let script = Script::new(vec![
+            ok(include_str!("fixtures/hetzner/images_system.json")),
+            ok(include_str!("fixtures/hetzner/images_snapshot.json")),
+        ]);
+        let all = hetzner(&script).images().await.unwrap();
+        assert_eq!(all.len(), 32);
+        assert_eq!(
+            all[14..16]
+                .iter()
+                .map(|i| (i.name.as_str(), i.label.as_str(), i.arch.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("ubuntu-24.04", "Ubuntu 24.04", "x86"),
+                ("ubuntu-24.04", "Ubuntu 24.04", "arm"),
+            ]
+        );
+        let sent = script.sent.lock().unwrap();
+        assert_eq!(
+            sent[0].url,
+            "https://api.hetzner.cloud/v1/images?type=system&status=available&per_page=50&page=1"
+        );
+        assert_eq!(
+            sent[1].url,
+            "https://api.hetzner.cloud/v1/images?type=snapshot&status=available&per_page=50&page=1"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_snapshot_goes_by_its_id_and_a_deprecated_image_is_left_out() {
+        // Shaped as the captured system images.
+        let system = r#"{ "images": [
+            { "id": 45780948, "name": "rocky-8", "architecture": "x86", "deprecated": "2026-11-01T00:00:00Z", "description": "Rocky Linux 8", "type": "system" },
+            { "id": 161547269, "name": "ubuntu-24.04", "architecture": "x86", "deprecated": null, "description": "Ubuntu 24.04", "type": "system" } ],
+            "meta": { "pagination": { "page": 1, "next_page": null } } }"#;
+        let snapshots = r#"{ "images": [
+            { "id": 401234567, "name": null, "architecture": "arm", "deprecated": null, "description": "shop deps", "type": "snapshot" } ],
+            "meta": { "pagination": { "page": 1, "next_page": null } } }"#;
+        let script = Script::new(vec![ok(system), ok(snapshots)]);
+        assert_eq!(
+            hetzner(&script).images().await.unwrap(),
+            [
+                Image {
+                    name: "ubuntu-24.04".into(),
+                    label: "Ubuntu 24.04".into(),
+                    arch: "x86".into()
+                },
+                Image {
+                    name: "401234567".into(),
+                    label: "Snapshot: shop deps".into(),
+                    arch: "arm".into()
+                },
+            ]
+        );
     }
 
     #[tokio::test]

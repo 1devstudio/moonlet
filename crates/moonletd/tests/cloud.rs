@@ -1651,6 +1651,37 @@ async fn cloud_types_lists_the_providers_machine_types() {
     assert_eq!(types[0]["cores"], json!(2));
 }
 
+#[tokio::test]
+async fn cloud_locations_and_images_list_the_providers() {
+    let c = cloud().await;
+    let locations: Value =
+        c.d.call("cloud.locations", json!({ "provider": "fake" }))
+            .await;
+    assert_eq!(
+        locations,
+        json!([{ "name": "here", "label": "This machine" }])
+    );
+    let images: Value =
+        c.d.call("cloud.images", json!({ "provider": "fake" }))
+            .await;
+    // The fake's machine type is this machine's, so its image is too.
+    let arch = if cfg!(target_arch = "aarch64") {
+        "arm64"
+    } else {
+        "x86_64"
+    };
+    assert_eq!(
+        images,
+        json!([{ "name": "none", "label": "No image: the machine runs here", "arch": arch }])
+    );
+    // A provider moonlet does not have.
+    assert_eq!(
+        c.d.fails("cloud.locations", json!({ "provider": "nowhere" }))
+            .await,
+        "no_provider: no provider nowhere"
+    );
+}
+
 const ROUTE_CONFIG: &str =
     "[heavy]\ncommands = [\"sh run.sh\", \"sh -c\"]\nmachine_setup = \"ci.sh\"\n";
 

@@ -679,6 +679,14 @@ impl Daemon {
                 let r: m::CloudTypes = params(p)?;
                 ok(self.machines.types(&r.provider, &r.location).await?)
             }
+            m::CLOUD_LOCATIONS => {
+                let r: m::CloudProvider = params(p)?;
+                ok(self.machines.locations(&r.provider).await?)
+            }
+            m::CLOUD_IMAGES => {
+                let r: m::CloudProvider = params(p)?;
+                ok(self.machines.images(&r.provider).await?)
+            }
             m::CLOUD_MACHINES => ok(self.machines.list()),
             // Agents may start and remove machines: the limits bound them.
             m::CLOUD_UP => {

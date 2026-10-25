@@ -461,6 +461,25 @@ impl Machines {
             .map_err(|e| RpcError::new("provider", e.to_string()))
     }
 
+    /// `cloud.locations`.
+    pub async fn locations(
+        &self,
+        provider: &str,
+    ) -> Result<Vec<moonlet_cloud::Location>, RpcError> {
+        self.provider(provider)?
+            .locations()
+            .await
+            .map_err(|e| RpcError::new("provider", e.to_string()))
+    }
+
+    /// `cloud.images`.
+    pub async fn images(&self, provider: &str) -> Result<Vec<moonlet_cloud::Image>, RpcError> {
+        self.provider(provider)?
+            .images()
+            .await
+            .map_err(|e| RpcError::new("provider", e.to_string()))
+    }
+
     /// `machine_setup` of the project in `folder`: its path and content.
     fn machine_setup(folder: &Path) -> Result<Option<(String, String)>, RpcError> {
         let config = moonlet_core::project_config::load(folder, String::new());
