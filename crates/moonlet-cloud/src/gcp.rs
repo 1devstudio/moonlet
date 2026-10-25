@@ -327,10 +327,16 @@ impl Gcp {
         let mut signed_in_again = false;
         loop {
             let token = self.tokens.token(&self.key, &self.transport).await?;
+            let mut headers = vec![("Authorization".into(), format!("Bearer {token}"))];
+            // Google answers a POST without a length with 411 Length Required,
+            // and a request with no body is sent without one.
+            if body.is_none() && method == "POST" {
+                headers.push(("Content-Length".into(), "0".into()));
+            }
             let request = Request {
                 method,
                 url: format!("{}{path}", self.project()),
-                headers: vec![("Authorization".into(), format!("Bearer {token}"))],
+                headers,
                 body: body.clone().map(Body::Json),
             };
             let r = self
@@ -950,6 +956,15 @@ mod tests {
             format!(
                 "{PROJECT}/zones/europe-west4-a/operations/operation-1761400000000-6420a1b2c3d4e-5f6a7b8c-9d0e1f2a/wait"
             )
+        );
+        // Google answers a POST without a length with 411 Length Required.
+        assert_eq!(sent[1].body, None);
+        assert!(
+            sent[1]
+                .headers
+                .contains(&("Content-Length".into(), "0".into())),
+            "{:?}",
+            sent[1].headers
         );
         assert_eq!(sent.len(), 2);
     }
