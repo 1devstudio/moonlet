@@ -13,6 +13,7 @@ import { createDesign, latestOf, pageRevOf, problemsOf, removeDesign, saveViewpo
 import { pageUrl } from "../../lib/designView";
 import { VIEWPORTS, canvasKey, canvasScale, canvasZoom, parseViewport, viewportLabel, viewportText, type Size } from "../../lib/designViewport";
 import { writingPage } from "../../lib/designCanvas";
+import { pageFile, pagePath } from "../../lib/designPage";
 import { barProblems, designBar, pageFixMessage, type Bar, type BarAction } from "../../lib/designBars";
 import { claimKeys } from "../../lib/keys";
 import { askConfirm } from "../../lib/confirm";
@@ -193,7 +194,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
             <span className="text-muted">Every page at the same viewport. Click a page to open it.</span>
           ) : (
             <>
-              <span className="font-mono text-fg">{page}.html</span>
+              <span className="font-mono text-fg">{pageFile(page)}</span>
               <span className="truncate text-faint">
                 {names.includes(page) ? "View: the page runs as in a browser, so its links, menus and scripts work" : "not written yet"}
               </span>
@@ -213,7 +214,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
             scale > 0 && (
               <div className="m-auto flex shrink-0 flex-col items-center justify-center gap-2 rounded-md border border-dashed border-border-strong p-6 text-center" style={{ width: viewport[0] * scale, height: viewport[1] * scale }}>
                 <Loader2 size={16} className="animate-spin text-muted" />
-                <p className="ui-text-13 text-fg">Claude is writing {page}.html</p>
+                <p className="ui-text-13 text-fg">Claude is writing {pageFile(page)}</p>
                 <p className="max-w-sm ui-text-12 text-muted">The canvas shows it as soon as the file is saved, and reloads on every change</p>
               </div>
             )
@@ -241,7 +242,7 @@ function PageFrame({ host, workspace, design, page, viewport, scale }: { host: s
   const rev = useDesign((d) => pageRevOf(d, host, workspace, design.slug, page));
   return (
     <div className="m-auto shrink-0 rounded-md border border-border-strong shadow-2xl">
-      <CardFrame url={pageUrl(workspace, design.slug, page, rev)} title={`${page}.html`} viewport={viewport} scale={scale} interactive />
+      <CardFrame url={pageUrl(workspace, design.slug, page, rev)} title={pageFile(page)} viewport={viewport} scale={scale} interactive />
     </div>
   );
 }
@@ -264,14 +265,14 @@ function OverviewTile({ host, workspace, design, page, label, viewport, onOpen }
   const rev = useDesign((d) => pageRevOf(d, host, workspace, design.slug, page));
   const scale = width ? width / viewport[0] : 0;
   return (
-    <button aria-label={`${page}.html`} onClick={onOpen} className="flex min-w-0 flex-col text-left">
+    <button aria-label={pageFile(page)} onClick={onOpen} className="flex min-w-0 flex-col text-left">
       <span className="mb-2 flex w-full items-center gap-2 ui-text-12.5">
-        <span className="font-mono text-fg">{page}.html</span>
+        <span className="font-mono text-fg">{pageFile(page)}</span>
         {label && <span className="truncate text-muted">{label}</span>}
         {/* Each page's open comments come with comments (entry 8). */}
       </span>
       <div ref={ref} className="w-full overflow-hidden rounded-md border border-border-strong hover:border-accent">
-        {scale > 0 && <CardFrame url={pageUrl(workspace, design.slug, page, rev)} title={`${page}.html`} viewport={viewport} scale={scale} live={near} />}
+        {scale > 0 && <CardFrame url={pageUrl(workspace, design.slug, page, rev)} title={pageFile(page)} viewport={viewport} scale={scale} live={near} />}
       </div>
     </button>
   );
@@ -366,7 +367,7 @@ function DetailsDialog({ page, problems, onClose }: { page: string | null; probl
     <Dialog title="Check problems" width={560} onClose={onClose}>
       {check ? (
         <>
-          <p className="mb-3 font-mono ui-text-12.5 text-fg">pages/{check.page}.html</p>
+          <p className="mb-3 font-mono ui-text-12.5 text-fg">{pagePath(check.page)}</p>
           {check.problems.map((p) => (
             <div key={`${p.line}-${p.message}`} className="mb-2 rounded-md border border-error/40 bg-error/[0.06] p-2.5">
               <p className="font-mono ui-text-11.5 text-faint">

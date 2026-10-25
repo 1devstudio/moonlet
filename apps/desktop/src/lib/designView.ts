@@ -2,6 +2,7 @@
 // banner and card frames. Pure: the store is designStore.ts.
 
 import { ago } from "./mobile";
+import { pagePath } from "./designPage";
 import type { DesignCard, DesignSystem } from "./protocol";
 
 export interface CardGroup {
@@ -79,7 +80,7 @@ export function cardUrl(workspace: string, slug: string, path: string, rev = 0):
 
 /** A workspace design's page (`index` for `pages/index.html`) on a host of its own (X65). */
 export function pageUrl(workspace: string, design: string, page: string, rev = 0): string {
-  return designUrl(workspace, `designs/${design}/pages/${page}.html`, rev);
+  return designUrl(workspace, `designs/${design}/${pagePath(page)}`, rev);
 }
 
 /** The 64-bit FNV-1a hash of `text`'s UTF-8 bytes, as 16 lowercase hex digits. */
