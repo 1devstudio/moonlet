@@ -302,11 +302,8 @@ function renumbered(html: string, el: Element, ids: ReturnType<typeof freshIds>)
   const spans: [number, number][] = [];
   for (const e of elements(el)) {
     const at = e.sourceCodeLocation?.attrs?.["data-mid"];
-    const mid = midOf(e);
-    if (!at || !mid) continue;
-    // The value is the attribute's last `mid`, whatever its quotes.
-    const value = html.lastIndexOf(mid, at.endOffset);
-    spans.push([value, value + mid.length]);
+    if (!at || !midOf(e)) continue;
+    spans.push(attrValue(html, at));
   }
   let out = "";
   let at = from;
@@ -315,6 +312,15 @@ function renumbered(html: string, el: Element, ids: ReturnType<typeof freshIds>)
     at = b;
   }
   return out + html.slice(at, to);
+}
+
+/** Where an attribute's value is written in `html`, from the attribute's own
+ *  place in the source: after its `=`, inside its quotes if it has them, as
+ *  written (an entity in it included). */
+function attrValue(html: string, at: { startOffset: number; endOffset: number }): [number, number] {
+  const m = /=\s*(["']?)/.exec(html.slice(at.startOffset, at.endOffset));
+  if (!m) throw new EditRefused("An element's data-mid has no value");
+  return [at.startOffset + m.index + m[0].length, at.endOffset - m[1].length];
 }
 
 /** `html` with `text` put after `span`: on a line of its own, indented as
