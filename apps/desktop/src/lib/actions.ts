@@ -14,7 +14,7 @@ import { ARCHIVE_FOLD_MS, ARCHIVE_MIN_MS, type Archiving, pickLoader } from "./a
 import { archivePrompt, askConfirm, unpushedPrompt } from "./confirm";
 import { archiveFlags, archivePlan, gitSettingsOf, unpushedParams, unpushedView } from "./gitSettings";
 import { goSettings } from "./settingsNavigation";
-import { modeOf, toggleMode } from "./mode";
+import { setMode, toggleMode } from "./mode";
 import { openNewDesign } from "./designStore";
 
 function current(): { host: string; ws: Session } | null {
@@ -399,17 +399,19 @@ export function copyOutput() {
   else if (message) toast(message);
 }
 
-/** ⇧⌘N: the New session composer, or in Design mode New design (X65). */
-function newSessionOrDesign() {
-  const s = useStore.getState();
-  const ws = shownWorkspace(s);
-  if (ws && modeOf(s) === "design") openNewDesign(ws);
-  else useStore.setState({ dialog: { kind: "new-session" } });
+/** New design… (⇧⌘N in Design mode): New design for the shown workspace,
+ *  in Design mode, where the design it makes shows (X65). */
+function newDesign() {
+  const ws = shownWorkspace(useStore.getState());
+  if (!ws) return;
+  setMode("design");
+  openNewDesign(ws);
 }
 
 /** Handlers of the Run action modal's actions, by id (X19). */
 const RUN: Record<string, () => void> = {
-  "new-session": newSessionOrDesign,
+  "new-session": () => useStore.setState({ dialog: { kind: "new-session" } }),
+  "new-design": newDesign,
   "new-ws": () => useStore.setState({ dialog: { kind: "new-workspace" } }),
   "new-section": () => useStore.setState({ dialog: { kind: "new-section" } }),
   "add-project": () => useStore.setState({ dialog: { kind: "add-project" } }),
