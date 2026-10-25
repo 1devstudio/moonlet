@@ -876,3 +876,39 @@ async fn phones_do_not_hear_design_changes() {
         }
     }
 }
+
+/// Designs stay on the Mac (X65): a paired phone does not hear `design.open`,
+/// with the design's workspace, name and agent, while the Mac's own app does.
+#[tokio::test]
+async fn phones_do_not_hear_a_design_opened() {
+    let mac = Mac::start(None).await;
+    let addr = mac.allow_phones().await;
+    let token = mac.pair(&addr).await;
+    let (mut phone, _) = auth(&addr, json!({ "token": token })).await;
+    hello(&mut phone, "moonlet-mobile").await;
+    let mut app = Client::connect(&mac.socket, "test").await.unwrap();
+    let ws: Value = app.request("workspace.create", json!({"name": "1devstudio", "color": "clay"})).await.unwrap();
+    let ws = ws["id"].as_str().unwrap().to_string();
+    let design = mac.home.path().join("design").join(&ws).join("designs/settings-page");
+    std::fs::create_dir_all(&design).unwrap();
+    std::fs::write(design.join("design.toml"), "name = \"Settings page\"\nsystem = \"moonlet-desktop\"\n").unwrap();
+
+    let _: bool = app.request("design.open", json!({"workspace": ws, "slug": "settings-page"})).await.unwrap();
+    // The app hears it.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let f = tokio::time::timeout_at(deadline, app.next_frame()).await.expect("the app heard no design.open").unwrap().unwrap();
+        if let Frame::Json(Message::Event { name, .. }) = f
+            && name == "design.open"
+        {
+            break;
+        }
+    }
+    // The phone does not, within the next few seconds.
+    let until = tokio::time::Instant::now() + Duration::from_secs(3);
+    while let Ok(Some(m)) = tokio::time::timeout_at(until, next_json(&mut phone)).await {
+        if let Message::Event { name, .. } = &m {
+            assert_ne!(name, "design.open", "a phone heard a design opened");
+        }
+    }
+}
