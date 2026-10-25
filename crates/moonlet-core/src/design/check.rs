@@ -45,7 +45,7 @@ pub enum Kind {
 }
 
 /// The folders whose `.html` files are cards: components, foundations and layouts.
-pub(super) const CARD_DIRS: [&str; 3] = ["components", "foundations", "ui_kits"];
+pub(crate) const CARD_DIRS: [&str; 3] = ["components", "foundations", "ui_kits"];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Problem {

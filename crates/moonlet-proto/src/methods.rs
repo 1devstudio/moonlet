@@ -1490,6 +1490,27 @@ pub struct DesignKitCard {
     pub html: String,
 }
 
+/// A session design's copies of its design system replaced by the system
+/// as it is now (X65): the anchor recorded, and the cards that changed since
+/// the copy, for the chat.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DesignSystemUpdated {
+    /// The design system's sync anchor now; none before its first sync.
+    pub anchor: Option<String>,
+    /// By path.
+    pub cards: Vec<DesignCardChange>,
+}
+
+/// A card of a design system that changed since a session design copied
+/// it (X65).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DesignCardChange {
+    /// Relative to the design system's folder.
+    pub path: String,
+    /// `new`, `changed` or `removed`.
+    pub change: String,
+}
+
 /// One pin of a design (X65).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DesignCommentRef {
