@@ -55,8 +55,9 @@ export function changedBanner(sys: DesignSystem, cards: DesignCard[]): string | 
   const n = sys.changed_sources.length;
   if (!n) return null;
   const made = cards.filter((c) => c.changed_sources.length > 0).length;
-  const rewrites = made === 1 ? "the card made from it" : `the ${made} cards made from them`;
-  return `${plural(n, "source")} changed since sync · ${sys.changed_sources.map(base).join(", ")}. A sync rewrites only ${rewrites}.`;
+  const them = n === 1 ? "it" : "them";
+  const rewrites = made === 0 ? `No card is made from ${them}.` : `A sync rewrites only ${made === 1 ? "the card" : `the ${made} cards`} made from ${them}.`;
+  return `${plural(n, "source")} changed since sync · ${sys.changed_sources.map(base).join(", ")}. ${rewrites}`;
 }
 
 /** A card's URL on the `moonlet-design://` scheme; `rev`, the system's
@@ -80,4 +81,43 @@ export function fitScale(viewport: [number, number], box: [number, number]): num
 export function fixMessage(card: DesignCard): string {
   const lines = card.problems.map((p) => `- line ${p.line}: ${p.message}`).join("\n");
   return `Fix the check problems of ${card.path}, then run the check again:\n${lines}`;
+}
+
+/** The line under the header: why the system cannot be read, what its agent
+ *  waits for, or the step a sync is at; null when there is nothing to say. */
+export function statusLine(sys: DesignSystem): string | null {
+  if (sys.error) return sys.error;
+  if (sys.needs_you) return `Claude ${sys.needs_you.kind === "question" ? "asks" : "needs your approval"}: ${sys.needs_you.text}`;
+  if (sys.step) return `${sys.step[0].toUpperCase()}${sys.step.slice(1)}${sys.step_summary ? ` · ${sys.step_summary}` : ""}`;
+  return null;
+}
+
+/** The cards the view may show: none of a system that cannot be read. */
+export function listedCards(sys: DesignSystem, listed: DesignCard[] | undefined): DesignCard[] | undefined {
+  return sys.error ? undefined : listed;
+}
+
+/** "1 check problem", "3 check problems". */
+export function problemsLabel(n: number): string {
+  return plural(n, "check problem");
+}
+
+/** Cards render only on this Mac: their files are read here (ADR 0013). */
+export function rendersHere(host: string): boolean {
+  return host === "local";
+}
+
+const ZOOMS = [0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4];
+
+/** The next zoom step from `zoom`, up (1) or down (-1), within 25%–400%. */
+export function zoomStep(zoom: number, dir: 1 | -1): number {
+  const next = dir === 1 ? ZOOMS.find((z) => z > zoom + 1e-9) : [...ZOOMS].reverse().find((z) => z < zoom - 1e-9);
+  return next ?? zoom;
+}
+
+/** **Ask the sync agent to fix**: only to its running agent, once at a time;
+ *  a sync is never started for it. */
+export function fixState(agent: number | null, asking: boolean): { enabled: boolean; hint: string | null } {
+  if (agent === null) return { enabled: false, hint: "Its sync agent is not running. Sync starts it." };
+  return { enabled: !asking, hint: null };
 }
