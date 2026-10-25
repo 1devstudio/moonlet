@@ -796,6 +796,7 @@ impl Machines {
 
     /// A machine that could not be made: nothing to remove at the provider.
     fn failed(&self, id: &str, error: String) {
+        self.mobile.forget_join(id);
         self.update(id, |r| {
             r.call_started = None;
             r.set_state("failed");
@@ -1345,6 +1346,8 @@ impl Machines {
                 r.down_after = Some(reason);
                 false
             } else {
+                // Not joined yet: its code would still pair it.
+                self.mobile.forget_join(id);
                 r.set_state("removing");
                 r.shown.reason = Some(reason);
                 true

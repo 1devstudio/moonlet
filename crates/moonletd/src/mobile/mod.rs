@@ -264,14 +264,16 @@ pub const JOIN_TTL_MS: u64 = 30 * 60_000;
 
 /// One-use codes the central host makes for the cloud machines it creates
 /// (X63), each bound to its machine: its id and the name it joins with.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct JoinCodes {
     codes: Vec<JoinCode>,
 }
 
-#[derive(Debug, Clone)]
+/// Kept on disk, so a machine still joins after the central host restarts;
+/// only the code's hash is kept.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct JoinCode {
-    code: String,
+    code_sha256: String,
     machine: String,
     name: String,
     expires_at: u64,
@@ -283,7 +285,7 @@ impl JoinCodes {
         self.codes.retain(|c| c.expires_at > now);
         let code = new_code();
         self.codes.push(JoinCode {
-            code: code.clone(),
+            code_sha256: sha256_hex(code.as_bytes()),
             machine: machine.to_string(),
             name: name.to_string(),
             expires_at: now + JOIN_TTL_MS,
@@ -294,8 +296,8 @@ impl JoinCodes {
     /// The machine a code joins `name` as, using the code up; None for a
     /// code that is unknown, expired, used or for another machine.
     pub fn redeem(&mut self, code: &str, name: &str, now: u64) -> Option<String> {
-        let code = normalize_code(code);
-        let i = self.codes.iter().position(|c| c.code == code)?;
+        let hash = sha256_hex(normalize_code(code).as_bytes());
+        let i = self.codes.iter().position(|c| c.code_sha256 == hash)?;
         let c = &self.codes[i];
         if c.expires_at <= now || c.name != name {
             return None;
@@ -305,8 +307,13 @@ impl JoinCodes {
 
     /// Whether `code` is a join code waiting to be used.
     pub fn knows(&self, code: &str) -> bool {
-        let code = normalize_code(code);
-        self.codes.iter().any(|c| c.code == code)
+        let hash = sha256_hex(normalize_code(code).as_bytes());
+        self.codes.iter().any(|c| c.code_sha256 == hash)
+    }
+
+    /// Machine `machine` failed or was removed: its code no longer pairs.
+    pub fn forget(&mut self, machine: &str) {
+        self.codes.retain(|c| c.machine != machine);
     }
 }
 
@@ -363,6 +370,10 @@ impl Mobile {
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
+        let joins = std::fs::read(file.with_file_name("join-codes.json"))
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default();
         Mobile {
             file,
             data: Mutex::new(data),
@@ -372,15 +383,32 @@ impl Mobile {
             listening: Mutex::new(Listening::default()),
             kick: Notify::new(),
             emit: Box::new(emit),
-            joins: Mutex::default(),
+            joins: Mutex::new(joins),
             on_join: Mutex::new(None),
         }
+    }
+
+    fn save_joins(&self, joins: &JoinCodes) {
+        let file = self.file.with_file_name("join-codes.json");
+        if let Err(e) = write_private(&file, &serde_json::to_vec_pretty(joins).unwrap()) {
+            tracing::warn!("cannot write {}: {e:#}", file.display());
+        }
+    }
+
+    /// Machine `machine` failed or was removed: its join code goes.
+    pub fn forget_join(&self, machine: &str) {
+        let mut joins = self.joins.lock().unwrap();
+        joins.forget(machine);
+        self.save_joins(&joins);
     }
 
     /// A one-use code that pairs cloud machine `machine`, named `name`.
     /// Only the central host makes them, for machines it creates.
     pub fn join_code(&self, machine: &str, name: &str) -> String {
-        self.joins.lock().unwrap().mint(machine, name, now_ms())
+        let mut joins = self.joins.lock().unwrap();
+        let code = joins.mint(machine, name, now_ms());
+        self.save_joins(&joins);
+        code
     }
 
     /// Calls `f(machine, device)` when a cloud machine joins.
@@ -662,7 +690,12 @@ impl Mobile {
             }
             (None, Some(code)) if route.is_none() && self.joins.lock().unwrap().knows(code) => {
                 let name = device.unwrap_or_default();
-                let machine = self.joins.lock().unwrap().redeem(code, name, now_ms())?;
+                let machine = {
+                    let mut joins = self.joins.lock().unwrap();
+                    let machine = joins.redeem(code, name, now_ms());
+                    self.save_joins(&joins);
+                    machine?
+                };
                 let token = random_hex(32);
                 let now = now_ms();
                 let dev = StoredDevice {

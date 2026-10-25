@@ -232,6 +232,72 @@ async fn cloud_get_returns_no_secrets() {
     );
 }
 
+/// The join code and name in machine `dir`'s first-boot script.
+fn join_of(dir: &Path) -> Option<(String, String)> {
+    let script = std::fs::read_to_string(dir.join("user_data")).ok()?;
+    let line = script.lines().find(|l| l.contains("moonletd join"))?;
+    let mut parts = line.split("'\\''").skip(1).step_by(2);
+    let (_, code, name) = (parts.next()?, parts.next()?, parts.next()?);
+    Some((code.to_string(), name.to_string()))
+}
+
+/// Whether join code `code` pairs as `name` with the central host at `addr`.
+async fn joins(addr: &str, code: &str, name: &str) -> bool {
+    use moonlet_proto::{read_frame, write_frame};
+    let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let auth = Message::Auth {
+        token: None,
+        pair: Some(code.into()),
+        device: Some(name.into()),
+        route: None,
+        kind: None,
+    };
+    write_frame(&mut s, &Frame::Json(auth)).await.unwrap();
+    matches!(
+        read_frame(&mut s).await,
+        Ok(Some(Frame::Json(Message::Authed { .. })))
+    )
+}
+
+/// A machine that never joins on its own, and its join code and name.
+async fn unjoined(c: &Cloud) -> (Value, String, String) {
+    c.steer("no-join", "");
+    let m = c.up().await;
+    for _ in 0..50 {
+        if let Some((code, name)) = c.fake_dirs().first().and_then(|d| join_of(d)) {
+            return (m, code, name);
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("no join line");
+}
+
+#[tokio::test]
+async fn a_removed_machines_join_code_no_longer_pairs() {
+    let c = cloud().await;
+    let (m, code, name) = unjoined(&c).await;
+    let _: Value = c.d.call("cloud.down", json!({ "machine": m["id"] })).await;
+    c.until(m["id"].as_str().unwrap(), "removed").await;
+    assert!(!joins(&c.addr, &code, &name).await);
+}
+
+#[tokio::test]
+async fn a_machine_joins_after_the_central_host_restarts() {
+    let mut c = cloud().await;
+    let (_, code, name) = unjoined(&c).await;
+    c.d.restart().await;
+    // The listener comes back with the daemon.
+    let mut ok = false;
+    for _ in 0..50 {
+        if tokio::net::TcpStream::connect(&c.addr).await.is_ok() {
+            ok = joins(&c.addr, &code, &name).await;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(ok);
+}
+
 #[tokio::test]
 async fn cloud_get_shows_the_tailscale_mode_and_never_the_auth_key() {
     let c = cloud().await;
