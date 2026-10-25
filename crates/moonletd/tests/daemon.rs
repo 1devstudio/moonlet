@@ -3498,3 +3498,26 @@ async fn edits_by_hand_saved_while_the_agent_works_go_with_its_turn() {
     let listed: serde_json::Value = c.request(methods::DESIGN_HISTORY, serde_json::json!({"workspace": ws, "slug": "settings-page"})).await.unwrap();
     assert_eq!(listed.as_array().unwrap().len(), 2, "{listed}");
 }
+
+/// X65: a design removed while its edits by hand wait for quiet stays
+/// removed: its snapshot is never taken, and nothing of its folder comes
+/// back.
+#[tokio::test]
+async fn a_design_removed_while_its_edits_by_hand_wait_for_quiet_does_not_come_back() {
+    let d = fake_claude_daemon_with(FAKE_CLAUDE, vec![("MOONLET_DESIGN_QUIET_MS".into(), "500".into())]).await;
+    let mut c = d.client().await;
+    let ws = workspace_with_system(&d, &mut c).await;
+    let created: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    turn_over(&mut c, created["agent"].as_u64().unwrap()).await;
+    let dir = d.home.path().join(".moonlet/design").join(&ws).join("designs/settings-page");
+    std::fs::write(dir.join("pages/index.html"), "<p>first</p>\n").unwrap();
+    save_by_hand(&mut c, &ws, "<p>by hand</p>\n", &["text of m2"]).await;
+    let _: bool = c.request(methods::DESIGN_REMOVE, serde_json::json!({"workspace": ws, "slug": "settings-page"})).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert!(!dir.exists(), "{:?}", std::fs::read_dir(&dir).map(|r| r.flatten().map(|e| e.file_name()).collect::<Vec<_>>()));
+    let listed: serde_json::Value = c.request(methods::DESIGN_LIST, serde_json::json!({"workspace": ws})).await.unwrap();
+    assert_eq!(listed, serde_json::json!([]));
+}

@@ -153,7 +153,7 @@ impl Store {
                 .iter()
                 .filter_map(|(p, b)| Some((p.strip_prefix(&prefix)?.to_string(), b.clone())))
                 .collect();
-            fsx::write_tree(&designs, &Path::new(slug).join(folder), &inside, true)?;
+            fsx::write_tree(&designs, Path::new(slug), Path::new(folder), &inside, true)?;
         }
         let record = Record {
             n: next_n(&designs, slug)?,
@@ -295,15 +295,17 @@ fn write_snapshot(
     record: &Record,
     files: &BTreeMap<String, Vec<u8>>,
 ) -> Result<()> {
-    let rel = snapshot_rel(slug, record.n);
+    let rel = Path::new(HISTORY_DIR).join(record.n.to_string());
     let record_file = BTreeMap::from([(
         RECORD_FILE.to_string(),
         format!("{}\n", serde_json::to_string_pretty(record)?).into_bytes(),
     )]);
-    let written = fsx::write_tree(designs, &rel, files, false)
-        .and_then(|()| fsx::write_tree(designs, &rel, &record_file, false));
+    // Never the design's folder itself: one removed meanwhile stays so.
+    let design = Path::new(slug);
+    let written = fsx::write_tree(designs, design, &rel, files, false)
+        .and_then(|()| fsx::write_tree(designs, design, &rel, &record_file, false));
     if let Err(e) = written {
-        let _ = fsx::remove_dir_inside(designs, &designs.join(&rel));
+        let _ = fsx::remove_dir_inside(designs, &designs.join(snapshot_rel(slug, record.n)));
         return Err(e);
     }
     Ok(())
@@ -823,7 +825,13 @@ mod tests {
         write(&dir, "pages/index.html", "<p>by hand</p>");
         let edits = ["text of m1".to_string()];
         let restored = store
-            .restore_snapshot("w1", "settings-page", 1, Take::EditsByHand(edits.to_vec()), 60_000)
+            .restore_snapshot(
+                "w1",
+                "settings-page",
+                1,
+                Take::EditsByHand(edits.to_vec()),
+                60_000,
+            )
             .unwrap();
         assert_eq!(
             (restored.n, restored.from),
