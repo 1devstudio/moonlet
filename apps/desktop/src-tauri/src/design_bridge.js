@@ -217,7 +217,11 @@
       // Before the page has loaded, its load's report answers.
       if (document.readyState !== "loading") loaded();
     } else if (d.type === "bridge.mode") {
-      mode = d.mode === "comment" || d.mode === "edit" ? d.mode : "view";
+      // Told again after each report of the page's ids: only a new mode
+      // ends a text being edited or the selection.
+      const next = d.mode === "comment" || d.mode === "edit" ? d.mode : "view";
+      if (next === mode) return;
+      mode = next;
       finish(true);
       draw(null);
       if (mode !== "edit") select(null);

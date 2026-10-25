@@ -354,6 +354,18 @@ describe("the bridge script in a page (X65)", () => {
     expect(keys()).toHaveLength(12);
   });
 
+  it("keeps a text being edited and the selection when told the mode it is in again, as after each report of its ids", () => {
+    const { win, doc, el, tell, of } = framed('<h2 data-mid="m25">Git</h2>');
+    tell(modeMessage("edit"));
+    mouse(win, "click", el("m25"));
+    mouse(win, "dblclick", el("m25"));
+    el("m25").textContent = "Git and";
+    tell(modeMessage("edit"));
+    expect(el("m25").getAttribute("contenteditable")).toBe("plaintext-only");
+    expect(of("text")).toEqual([]);
+    expect((doc.querySelector('[data-moonlet-bridge="selection"]') as HTMLElement).style.display).toBe("block");
+  });
+
   it("reports the boxes of the pinned elements when asked, and again on scroll and resize", async () => {
     const { win, place, tell, posted } = framed(NAV);
     place("m12", 0, 56, 390, 44);
