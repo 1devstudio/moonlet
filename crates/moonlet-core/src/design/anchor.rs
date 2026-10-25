@@ -32,6 +32,13 @@ pub struct CardAnchor {
     pub proposed_sources: BTreeMap<String, String>,
 }
 
+impl CardAnchor {
+    /// Every source it names was gone when the anchor was made.
+    pub fn orphaned(&self) -> bool {
+        !self.sources.is_empty() && self.sources.values().all(String::is_empty)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Anchor {
     pub cards: BTreeMap<String, CardAnchor>,
