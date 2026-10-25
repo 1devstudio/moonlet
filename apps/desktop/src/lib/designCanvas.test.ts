@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canvasPage, changedPages, modeHint, modeKey, reloadsPage, writingPage } from "./designCanvas";
+import { canvasPage, changedPages, isTyping, modeHint, modeKey, reloadsPage, writingPage } from "./designCanvas";
 
 const change = (over: { system?: string | null; design?: string | null; paths: string[] }) => ({ workspace: "w1", system: null, design: null, ...over });
 
@@ -70,5 +70,15 @@ describe("the canvas's mode (X65)", () => {
     expect(key("c", { typing: true })).toBeNull();
     expect(key("Escape")).toBe("escape");
     expect(key("v")).toBeNull();
+  });
+});
+
+describe("typing (X65)", () => {
+  it("is in a field, an editable element or a terminal, where C is text", () => {
+    document.body.innerHTML = '<input id="i"><textarea id="t"></textarea><div contenteditable><b id="e">x</b></div><div contenteditable="false"><b id="f">x</b></div><div class="xterm"><span id="x">$</span></div><p id="p">text</p>';
+    const at = (id: string) => isTyping(document.getElementById(id));
+    expect(["i", "t", "e", "x"].map(at)).toEqual([true, true, true, true]);
+    expect(["f", "p"].map(at)).toEqual([false, false]);
+    expect(isTyping(null)).toBe(false);
   });
 });

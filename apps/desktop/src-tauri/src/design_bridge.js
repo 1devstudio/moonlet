@@ -122,8 +122,10 @@
     "keydown",
     (e) => {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
+      // As the app's isTyping (src/lib/designCanvas.ts), without its
+      // terminals: a page has none.
       const t = e.target;
-      const typing = t && t.nodeType === 1 && (t.isContentEditable || /^(input|textarea|select)$/i.test(t.tagName));
+      const typing = !!(t && t.nodeType === 1 && t.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])'));
       if (e.key === "Escape") post({ type: "bridge.key", key: "Escape" });
       else if (!typing && (e.key === "c" || e.key === "C") && !e.shiftKey) post({ type: "bridge.key", key: "c" });
     },
