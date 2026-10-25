@@ -4,7 +4,7 @@
 
 import type { ConfirmOptions } from "./confirmOptions";
 import { joinNames } from "./heavyCommands";
-import type { CloudInfo, CloudKind, CloudMachine, CloudSet, MachineType, ProjectIdentity, TailscaleMode } from "./protocol";
+import type { CloudImage, CloudInfo, CloudKind, CloudLocation, CloudMachine, CloudSet, MachineType, ProjectIdentity, TailscaleMode } from "./protocol";
 
 export interface ProviderRow {
   name: string;
@@ -204,6 +204,32 @@ export const providerName = (id: string): string => id.charAt(0).toUpperCase() +
 export const removalToast = (m: CloudMachine, provider: string): string =>
   `Could not remove ${m.name} at ${provider}: ${m.error}. It is billed until removed.`;
 
+/** A dropdown's choice. */
+export interface Choice {
+  value: string;
+  label: string;
+}
+
+/** The project page's locations: the provider's, and a saved one it no longer
+ * lists (or has not listed yet). */
+export function locationOptions(list: CloudLocation[] | null, current: string): Choice[] {
+  const out = (list ?? []).map((l) => ({ value: l.name, label: `${l.label} (${l.name})` }));
+  return current && !out.some((o) => o.value === current) ? [...out, { value: current, label: current }] : out;
+}
+
+/** The project page's images: those for architecture `arch` (any, before a
+ * type is picked), each name once, the provider's in name order and the
+ * account's snapshots after; a saved image it does not offer stays. */
+export function imageOptions(list: CloudImage[] | null, arch: string, current: string): Choice[] {
+  const seen = new Set<string>();
+  const mine = (i: CloudImage) => i.label.startsWith("Snapshot: ");
+  const out = (list ?? [])
+    .filter((i) => (!arch || i.arch === arch) && !seen.has(i.name) && seen.add(i.name))
+    .sort((a, b) => Number(mine(a)) - Number(mine(b)) || a.label.localeCompare(b.label, undefined, { numeric: true }))
+    .map((i) => ({ value: i.name, label: `${i.label} (${i.name})` }));
+  return current && !out.some((o) => o.value === current) ? [...out, { value: current, label: current }] : out;
+}
+
 /** "cpx41 · 8 cores · 16 GB · x86" in the Machine type menu. */
 export const machineTypeLabel = (t: MachineType): string => `${t.name} · ${t.cores} cores · ${t.memory_gb} GB · ${t.arch}`;
 
@@ -259,13 +285,33 @@ export function projectCloudChange(info: CloudInfo, key: string, d: ProjectCloud
   return same ? null : { projects: { [key]: next } };
 }
 
-export function projectCloudErrors(d: ProjectCloudDraft): Partial<Record<"type" | "location" | "image", string>> {
+/** The provider's lists for the project page, null until read. */
+export interface Offered {
+  types?: MachineType[] | null;
+  images?: CloudImage[] | null;
+}
+
+/** What the project's cloud setting misses, and, once the provider's lists
+ * are read, a type its location does not make or an image for the other
+ * architecture: the provider would refuse to make the machine. */
+export function projectCloudErrors(d: ProjectCloudDraft, offered: Offered = {}): Partial<Record<"type" | "location" | "image", string>> {
   if (!d.provider) return {};
   const e: ReturnType<typeof projectCloudErrors> = {};
+  const type = offered.types?.find((t) => t.name === d.type);
   if (!d.type) e.type = "Pick a machine type.";
-  if (!d.location.trim()) e.location = "Name a location, such as fsn1.";
-  if (!d.image.trim()) e.image = "Name an image, such as ubuntu-24.04.";
+  else if (offered.types && !type) e.type = `${d.location.trim()} no longer makes ${d.type}. Pick another type.`;
+  else if (type && offered.images && d.image.trim() && !offered.images.some((i) => i.name === d.image.trim() && i.arch === type.arch))
+    e.image = `${d.image.trim()} is not for ${type.arch} machines. Pick another image.`;
+  if (!d.location.trim()) e.location = "Pick a location.";
+  if (!d.image.trim()) e.image = "Pick an image.";
   return e;
+}
+
+/** How many of the cloud setting's errors hold back the project page's
+ * Save: none while the setting is unchanged, so a type the provider retired
+ * since does not block the page's other edits. */
+export function projectCloudSaveErrors(info: CloudInfo, key: string, d: ProjectCloudDraft, offered: Offered): number {
+  return projectCloudChange(info, key, d) ? Object.keys(projectCloudErrors(d, offered)).length : 0;
 }
 
 /** "hour", "2 hours", "10 minutes". */

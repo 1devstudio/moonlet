@@ -38,6 +38,26 @@ pub struct MachineType {
     pub arch: String,
 }
 
+/// A place a provider makes machines in.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Location {
+    /// What `create` takes, such as `fsn1`.
+    pub name: String,
+    /// Where it is, such as "Falkenstein, DE".
+    pub label: String,
+}
+
+/// An image a provider can make machines from.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Image {
+    /// What `create` takes: a name such as `ubuntu-24.04`, or an id.
+    pub name: String,
+    /// Such as "Ubuntu 24.04".
+    pub label: String,
+    /// `x86` or `arm`.
+    pub arch: String,
+}
+
 /// What `create` makes.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NewMachine {
@@ -185,6 +205,9 @@ pub trait Transport: Send + Sync {
 #[async_trait::async_trait]
 pub trait Provider: Send + Sync {
     fn info(&self) -> ProviderInfo;
+    async fn locations(&self) -> Result<Vec<Location>, CloudError>;
+    /// The provider's images and the account's own, for every architecture.
+    async fn images(&self) -> Result<Vec<Image>, CloudError>;
     async fn machine_types(&self, location: &str) -> Result<Vec<MachineType>, CloudError>;
     /// Makes a machine; gives its provider id.
     async fn create(&self, machine: &NewMachine) -> Result<String, CloudError>;

@@ -313,6 +313,10 @@ pub const CLOUD_GET: &str = "cloud.get";
 pub const CLOUD_SET: &str = "cloud.set";
 /// [`CloudTypes`] → `[MachineType]`: a provider's machine types at a location.
 pub const CLOUD_TYPES: &str = "cloud.types";
+/// [`CloudProvider`] → `[Location]`: where a provider makes machines.
+pub const CLOUD_LOCATIONS: &str = "cloud.locations";
+/// [`CloudProvider`] → `[Image]`: the images a provider makes machines from.
+pub const CLOUD_IMAGES: &str = "cloud.images";
 /// `{}` → [`CloudMachines`]: the central host's cloud machines, those
 /// removed in the last hour and the month's usage.
 pub const CLOUD_MACHINES: &str = "cloud.machines";
@@ -2354,6 +2358,12 @@ pub struct CloudUp {
 pub struct CloudDown {
     /// The machine's id or name.
     pub machine: String,
+}
+
+/// `cloud.locations` and `cloud.images`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudProvider {
+    pub provider: String,
 }
 
 /// `cloud.types`.
