@@ -165,6 +165,7 @@ impl Store {
                 slug: slug.clone(),
                 kind: DesignKind::Workspace,
                 workspace: Some(workspace.to_string()),
+                session: None,
                 key: format!("w/{workspace}/{slug}"),
             };
             out.push(match read_design_config(&at) {

@@ -26,6 +26,8 @@ pub struct DesignAt {
     pub kind: DesignKind,
     /// The workspace whose live design system a workspace design reads.
     pub workspace: Option<String>,
+    /// The session whose worktree holds a session design.
+    pub session: Option<String>,
     /// The design's key in the daemon's maps and locks, unique among every
     /// design and design system.
     pub key: String,
@@ -60,6 +62,7 @@ impl Store {
             slug: slug.to_string(),
             kind: DesignKind::Workspace,
             workspace: Some(workspace.to_string()),
+            session: None,
             key: format!("w/{workspace}/{slug}"),
         })
     }
