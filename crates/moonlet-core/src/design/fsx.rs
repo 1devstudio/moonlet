@@ -227,3 +227,188 @@ pub(crate) fn rename_inside(root: &Path, from: &Path, to: &Path) -> Result<bool>
         Err(e) => Err(e.into()),
     }
 }
+
+/// Whether the entry `name` of `dir` and the handle `opened` are one file:
+/// a link swapped in between the look and the open is refused.
+fn same(look: &cap_std::fs::Metadata, opened: &cap_std::fs::Metadata) -> bool {
+    use cap_std::fs::MetadataExt;
+    look.dev() == opened.dev() && look.ino() == opened.ino()
+}
+
+/// The folder `name` of `dir`, which must be a folder of its own, never a
+/// link: `None` when it is missing, or for reading (not `create`) a link,
+/// which is left out; with `create`, made when missing, and a link is
+/// refused.
+fn open_folder(dir: &Dir, name: &std::ffi::OsStr, create: bool) -> Result<Option<Dir>> {
+    if create {
+        match dir.create_dir(name) {
+            Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => return Err(e.into()),
+            _ => {}
+        }
+    }
+    let look = match dir.symlink_metadata(name) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    if look.is_symlink() && !create {
+        return Ok(None);
+    }
+    if !look.is_dir() {
+        anyhow::bail!(
+            "{} is not a folder (a link is refused)",
+            name.to_string_lossy()
+        );
+    }
+    let opened = dir.open_dir(name)?;
+    if !same(&look, &opened.dir_metadata()?) {
+        anyhow::bail!("{} changed while it was opened", name.to_string_lossy());
+    }
+    Ok(Some(opened))
+}
+
+/// The folder `rel` inside `root`, each of its folders one of its own,
+/// never a link; with `create`, made when missing. `None` when it is
+/// missing, or a link on the way when not creating.
+fn open_path(root: &Path, rel: &Path, create: bool) -> Result<Option<Dir>> {
+    let mut dir = open_root(root)?;
+    for part in rel.components() {
+        let std::path::Component::Normal(name) = part else {
+            anyhow::bail!("{} is not a path inside {}", rel.display(), root.display());
+        };
+        match open_folder(&dir, name, create)? {
+            Some(next) => dir = next,
+            None => return Ok(None),
+        }
+    }
+    Ok(Some(dir))
+}
+
+/// The bytes of file `name` in `dir`, a file of its own, never a link.
+fn read_file(dir: &Dir, name: &std::ffi::OsStr) -> Result<Vec<u8>> {
+    use std::io::Read;
+    let look = dir.symlink_metadata(name)?;
+    if !look.is_file() {
+        anyhow::bail!(
+            "{} is not a file (a link is refused)",
+            name.to_string_lossy()
+        );
+    }
+    let mut file = dir.open(name)?;
+    if !same(&look, &file.metadata()?) {
+        anyhow::bail!("{} changed while it was opened", name.to_string_lossy());
+    }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+/// Every file in the folder `rel` inside `root` and its folders, by its
+/// path in `rel` (`img/logo.png`): links are left out, never followed, and
+/// so are hidden files, such as moonlet's own temporary ones. A missing
+/// folder, or one that is a link, has none.
+pub(crate) fn read_tree(
+    root: &Path,
+    rel: &Path,
+) -> Result<std::collections::BTreeMap<String, Vec<u8>>> {
+    fn walk(
+        dir: &Dir,
+        prefix: &str,
+        out: &mut std::collections::BTreeMap<String, Vec<u8>>,
+    ) -> Result<()> {
+        for entry in dir.entries()? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let Some(text) = name.to_str().filter(|n| !n.starts_with('.')) else {
+                continue;
+            };
+            let kind = entry.file_type()?;
+            let path = format!("{prefix}{text}");
+            if kind.is_dir() {
+                if let Some(sub) = open_folder(dir, &name, false)? {
+                    walk(&sub, &format!("{path}/"), out)?;
+                }
+            } else if kind.is_file() {
+                out.insert(path, read_file(dir, &name)?);
+            }
+        }
+        Ok(())
+    }
+    let mut out = std::collections::BTreeMap::new();
+    if let Some(dir) = open_path(root, rel, false)? {
+        walk(&dir, "", &mut out)?;
+    }
+    Ok(out)
+}
+
+/// The folder of `path` (`img/logo.png`) in `dir`, made when missing, and
+/// the file's name: never through a link.
+fn parent_of<'p>(dir: &Dir, path: &'p str) -> Result<(Dir, &'p std::ffi::OsStr)> {
+    let path = Path::new(path);
+    let name = path.file_name().context("a file needs a name")?;
+    let mut at = dir.try_clone()?;
+    if let Some(parent) = path.parent() {
+        for part in parent.components() {
+            let std::path::Component::Normal(folder) = part else {
+                anyhow::bail!("{} is not a path inside its folder", path.display());
+            };
+            at = open_folder(&at, folder, true)?.context("a folder went away")?;
+        }
+    }
+    Ok((at, name))
+}
+
+/// Writes `files` (by their paths in `rel`) into the folder `rel` inside
+/// `root`, made when missing, each replacing what is there: a link in its
+/// place is replaced, never followed. With `exact`, every other file and
+/// link in it that is not hidden is removed, so the folder holds `files`
+/// and nothing else.
+pub(crate) fn write_tree(
+    root: &Path,
+    rel: &Path,
+    files: &std::collections::BTreeMap<String, Vec<u8>>,
+    exact: bool,
+) -> Result<()> {
+    let dir = open_path(root, rel, true)?.context("a folder went away")?;
+    for (path, bytes) in files {
+        let (at, name) = parent_of(&dir, path)?;
+        replace_in(&at, name, bytes)?;
+    }
+    if exact {
+        fn prune(
+            dir: &Dir,
+            prefix: &str,
+            keep: &std::collections::BTreeMap<String, Vec<u8>>,
+        ) -> Result<()> {
+            for entry in dir.entries()? {
+                let entry = entry?;
+                let name = entry.file_name();
+                let Some(text) = name.to_str().filter(|n| !n.starts_with('.')) else {
+                    continue;
+                };
+                let path = format!("{prefix}{text}");
+                if entry.file_type()?.is_dir() {
+                    if let Some(sub) = open_folder(dir, &name, false)? {
+                        prune(&sub, &format!("{path}/"), keep)?;
+                    }
+                } else if !keep.contains_key(&path) {
+                    // A link goes as a link: its target is never touched.
+                    dir.remove_file(&name)?;
+                }
+            }
+            Ok(())
+        }
+        prune(&dir, "", files)?;
+    }
+    Ok(())
+}
+
+/// Reads the file `rel` inside `root`: neither it nor any folder on its way
+/// may be a link.
+pub(crate) fn read_file_inside(root: &Path, rel: &Path) -> Result<Vec<u8>> {
+    let name = rel.file_name().context("a file needs a name")?;
+    let folder = rel.parent().unwrap_or(Path::new(""));
+    let dir = open_path(root, folder, false)?
+        .with_context(|| format!("no {} in {}", folder.display(), root.display()))?;
+    read_file(&dir, name)
+}
