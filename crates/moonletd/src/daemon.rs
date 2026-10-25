@@ -1348,29 +1348,16 @@ impl Daemon {
             }
             let _ = self.terminals.kill(id, true);
         }
-        let info = self.chats.create(ChatCreate {
-            cwd: launch.cwd,
-            agent: "claude".into(),
-            model: None,
-            effort: None,
-            mode: Some(launch.mode),
-            name: launch.title.clone(),
-            title: Some(launch.title.clone()),
-            session_id: None,
-            env: Default::default(),
-            add_dirs: launch.add_dirs,
-            settings: Some(launch.settings),
-            workspace: Some(workspace.to_string()),
-            design: Some(moonlet_proto::types::DesignAgent {
-                kind: moonlet_proto::types::DesignAgentKind::Sync,
-                workspace: workspace.to_string(),
-                slug: slug.to_string(),
-                name,
-            }),
-        })?;
-        self.design.set_agent(workspace, slug, info.id, &fingerprint)?;
-        self.chats.send(info.id, &launch.prompt, &[])?;
-        Ok(info.id)
+        let tag = moonlet_proto::types::DesignAgent {
+            kind: moonlet_proto::types::DesignAgentKind::Sync,
+            workspace: workspace.to_string(),
+            slug: slug.to_string(),
+            name,
+        };
+        let id = self.agent_chat(&launch, tag)?;
+        self.design.set_agent(workspace, slug, id, &fingerprint)?;
+        self.chats.send(id, &launch.prompt, &[])?;
+        Ok(id)
     }
 
     /// A design as `design.list` gives it (X65): its agent only while that
@@ -1411,23 +1398,32 @@ impl Daemon {
         })
         .await
         .map_err(|e| anyhow::anyhow!("{}", e.message))?;
+        let tag = DesignAgent { kind: DesignAgentKind::Design, workspace: workspace.to_string(), slug: slug.to_string(), name };
+        let id = self.agent_chat(&launch, tag)?;
+        self.design.set_design_agent(workspace, slug, id)?;
+        self.chats.send(id, &launch.prompt, &[])?;
+        Ok(id)
+    }
+
+    /// The chat of a Design mode agent (X64, X65): Claude Code, with no
+    /// session, in the Claude profile of the workspace its tag names, started
+    /// as `launch` says and tagged so; its first message is the caller's.
+    fn agent_chat(&self, launch: &moonlet_core::design::agent::Launch, tag: moonlet_proto::types::DesignAgent) -> anyhow::Result<u32> {
         let info = self.chats.create(ChatCreate {
-            cwd: launch.cwd,
+            cwd: launch.cwd.clone(),
             agent: "claude".into(),
             model: None,
             effort: None,
-            mode: Some(launch.mode),
+            mode: Some(launch.mode.clone()),
             name: launch.title.clone(),
-            title: Some(launch.title),
+            title: Some(launch.title.clone()),
             session_id: None,
             env: Default::default(),
-            add_dirs: launch.add_dirs,
-            settings: Some(launch.settings),
-            workspace: Some(workspace.to_string()),
-            design: Some(DesignAgent { kind: DesignAgentKind::Design, workspace: workspace.to_string(), slug: slug.to_string(), name }),
+            add_dirs: launch.add_dirs.clone(),
+            settings: Some(launch.settings.clone()),
+            workspace: Some(tag.workspace.clone()),
+            design: Some(tag),
         })?;
-        self.design.set_design_agent(workspace, slug, info.id)?;
-        self.chats.send(info.id, &launch.prompt, &[])?;
         Ok(info.id)
     }
 
