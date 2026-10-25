@@ -10,6 +10,7 @@ use anyhow::Result;
 use moonlet_proto::methods::DesignPageText;
 
 use super::fsx;
+use super::place::DesignAt;
 use super::store::Store;
 
 /// A save over a page that changed on disk since the editor read it.
@@ -34,20 +35,19 @@ fn version_of(text: &str) -> String {
     crate::hash::sha256_hex(text.as_bytes())
 }
 
-/// `<slug>/pages/<page>.html`, inside the designs folder.
-fn page_rel(slug: &str, page: &str) -> Result<std::path::PathBuf> {
+/// `pages/<page>.html` of the design, inside its root.
+fn page_rel(at: &DesignAt, page: &str) -> Result<std::path::PathBuf> {
     if !is_page_name(page) {
         return Err(BadPage(page.to_string()).into());
     }
-    Ok(Path::new(slug).join("pages").join(format!("{page}.html")))
+    Ok(at.in_dir(Path::new("pages").join(format!("{page}.html"))))
 }
 
 impl Store {
     /// A design's page, `pages/<page>.html`, with its version.
-    pub fn page(&self, workspace: &str, slug: &str, page: &str) -> Result<DesignPageText> {
-        let rel = page_rel(slug, page)?;
-        let designs = self.designs_of(workspace, slug)?;
-        let html = fsx::read_inside(&designs, &designs.join(rel))?;
+    pub fn page(&self, at: &DesignAt, page: &str) -> Result<DesignPageText> {
+        let rel = page_rel(at, page)?;
+        let html = fsx::read_inside(&at.root, &at.root.join(rel))?;
         Ok(DesignPageText {
             version: version_of(&html),
             html,
@@ -66,19 +66,11 @@ impl Store {
     /// design's agent's own edit, is replaced, not refused. The daemon
     /// takes a lock of the design's pages around this, so moonlet's own
     /// saves never fall between them.
-    pub fn write_page(
-        &self,
-        workspace: &str,
-        slug: &str,
-        page: &str,
-        html: &str,
-        base: &str,
-    ) -> Result<String> {
-        let rel = page_rel(slug, page)?;
-        let designs = self.designs_of(workspace, slug)?;
+    pub fn write_page(&self, at: &DesignAt, page: &str, html: &str, base: &str) -> Result<String> {
+        let rel = page_rel(at, page)?;
         // Read again just before it is replaced: changed meanwhile, it is
         // read again, and is no longer at `base`.
-        fsx::update_inside(&designs, &rel, |text| {
+        fsx::update_inside(&at.root, &rel, |text| {
             if version_of(text) != base {
                 return Err(Stale(format!("pages/{page}.html")).into());
             }
@@ -120,7 +112,12 @@ mod tests {
     #[test]
     fn a_page_is_read_with_its_version_and_written_exactly_as_sent_over_that_version() {
         let (home, store) = store_with_page();
-        let read = store.page("w1", "settings-page", "index").unwrap();
+        let read = store
+            .page(
+                &store.workspace_design("w1", "settings-page").unwrap(),
+                "index",
+            )
+            .unwrap();
         assert_eq!(read.html, INDEX);
         // `shasum -a 256` of INDEX.
         assert_eq!(
@@ -129,14 +126,24 @@ mod tests {
         );
         let edited = "<!doctype html>\r\n<body data-mid=\"m1\">\r\n<h1 data-mid=m2>Settings</h1>\r\n<p data-mid=m3>Saved &amp; kept</p></body>";
         let version = store
-            .write_page("w1", "settings-page", "index", edited, &read.version)
+            .write_page(
+                &store.workspace_design("w1", "settings-page").unwrap(),
+                "index",
+                edited,
+                &read.version,
+            )
             .unwrap();
         let file = home
             .path()
             .join("design/w1/designs/settings-page/pages/index.html");
         assert_eq!(std::fs::read_to_string(&file).unwrap(), edited);
         assert_eq!(
-            store.page("w1", "settings-page", "index").unwrap(),
+            store
+                .page(
+                    &store.workspace_design("w1", "settings-page").unwrap(),
+                    "index"
+                )
+                .unwrap(),
             DesignPageText {
                 html: edited.into(),
                 version: version.clone()
@@ -144,7 +151,12 @@ mod tests {
         );
         // A second edit goes over the version the first one gave.
         store
-            .write_page("w1", "settings-page", "index", INDEX, &version)
+            .write_page(
+                &store.workspace_design("w1", "settings-page").unwrap(),
+                "index",
+                INDEX,
+                &version,
+            )
             .unwrap();
         assert_eq!(std::fs::read_to_string(&file).unwrap(), INDEX);
     }
@@ -155,11 +167,21 @@ mod tests {
         let file = home
             .path()
             .join("design/w1/designs/settings-page/pages/index.html");
-        let read = store.page("w1", "settings-page", "index").unwrap();
+        let read = store
+            .page(
+                &store.workspace_design("w1", "settings-page").unwrap(),
+                "index",
+            )
+            .unwrap();
         let agents = "<!doctype html>\n<body data-mid=\"m1\"><h1 data-mid=\"m2\">Settings, by the agent</h1></body>\n";
         std::fs::write(&file, agents).unwrap();
         let err = store
-            .write_page("w1", "settings-page", "index", "<p>mine</p>", &read.version)
+            .write_page(
+                &store.workspace_design("w1", "settings-page").unwrap(),
+                "index",
+                "<p>mine</p>",
+                &read.version,
+            )
             .unwrap_err();
         assert!(err.is::<Stale>(), "{err:#}");
         assert_eq!(
@@ -168,7 +190,12 @@ mod tests {
         );
         assert_eq!(std::fs::read_to_string(&file).unwrap(), agents);
         // The agent writing it while it is saved: refused too.
-        let read = store.page("w1", "settings-page", "index").unwrap();
+        let read = store
+            .page(
+                &store.workspace_design("w1", "settings-page").unwrap(),
+                "index",
+            )
+            .unwrap();
         let theirs = file.clone();
         fsx::BEFORE_REPLACE.with(|h| {
             *h.borrow_mut() = Some(Box::new(move || {
@@ -176,7 +203,12 @@ mod tests {
             }))
         });
         let err = store
-            .write_page("w1", "settings-page", "index", "<p>mine</p>", &read.version)
+            .write_page(
+                &store.workspace_design("w1", "settings-page").unwrap(),
+                "index",
+                "<p>mine</p>",
+                &read.version,
+            )
             .unwrap_err();
         assert!(err.is::<Stale>(), "{err:#}");
         assert_eq!(
@@ -191,21 +223,43 @@ mod tests {
         let designs = home.path().join("design/w1/designs");
         let outside = tempfile::tempdir().unwrap();
         std::fs::write(outside.path().join("index.html"), "outside").unwrap();
-        let read = store.page("w1", "settings-page", "index").unwrap();
+        let read = store
+            .page(
+                &store.workspace_design("w1", "settings-page").unwrap(),
+                "index",
+            )
+            .unwrap();
         // A pages folder swapped for a link to a folder outside.
         let pages = designs.join("settings-page/pages");
         std::fs::rename(&pages, designs.join("settings-page/.pages")).unwrap();
         std::os::unix::fs::symlink(outside.path(), &pages).unwrap();
-        assert!(store.page("w1", "settings-page", "index").is_err());
+        assert!(
+            store
+                .page(
+                    &store.workspace_design("w1", "settings-page").unwrap(),
+                    "index"
+                )
+                .is_err()
+        );
         let version = super::version_of("outside");
         assert!(
             store
-                .write_page("w1", "settings-page", "index", "mine", &version)
+                .write_page(
+                    &store.workspace_design("w1", "settings-page").unwrap(),
+                    "index",
+                    "mine",
+                    &version
+                )
                 .is_err()
         );
         assert!(
             store
-                .write_page("w1", "settings-page", "index", "mine", &read.version)
+                .write_page(
+                    &store.workspace_design("w1", "settings-page").unwrap(),
+                    "index",
+                    "mine",
+                    &read.version
+                )
                 .is_err()
         );
         assert_eq!(
@@ -214,7 +268,12 @@ mod tests {
         );
         for bad in ["../index", "", ".hidden", "a/b"] {
             let err = store
-                .write_page("w1", "settings-page", bad, "mine", &read.version)
+                .write_page(
+                    &store.workspace_design("w1", "settings-page").unwrap(),
+                    bad,
+                    "mine",
+                    &read.version,
+                )
                 .unwrap_err();
             assert!(err.is::<BadPage>(), "{bad}: {err:#}");
         }

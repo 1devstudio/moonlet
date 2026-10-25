@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use moonlet_proto::types::{DesignSnapshot, SnapshotFrom, SnapshotKind};
 
 use super::fsx;
+use super::place::DesignAt;
 use super::store::Store;
 use crate::hash::sha256_hex;
 
@@ -80,15 +81,13 @@ impl Store {
     /// through a link. The daemon takes one snapshot of a design at a time.
     pub fn take_snapshot(
         &self,
-        workspace: &str,
-        slug: &str,
+        at: &DesignAt,
         take: Take,
         now: u64,
     ) -> Result<Option<DesignSnapshot>> {
-        let designs = self.designs_of(workspace, slug)?;
-        let files = current_files(&designs, slug)?;
+        let files = current_files(at)?;
         let hashes = hashes_of(&files);
-        let records = records(&designs, slug)?;
+        let records = records(at)?;
         let last = records.last().map(|r| &r.files);
         if last.unwrap_or(&BTreeMap::new()) == &hashes {
             return Ok(None);
@@ -102,15 +101,15 @@ impl Store {
             Take::EditsByHand(_) => SnapshotKind::EditsByHand,
         };
         let record = Record {
-            n: next_n(&designs, slug)?,
+            n: next_n(at)?,
             time: now,
             kind,
             summary,
             from: None,
             files: hashes,
         };
-        write_snapshot(&designs, slug, &record, &files)?;
-        rotate(&designs, slug, SNAPSHOT_KEEP)?;
+        write_snapshot(at, &record, &files)?;
+        rotate(at, SNAPSHOT_KEEP)?;
         Ok(Some(record.listed()))
     }
 
@@ -124,21 +123,19 @@ impl Store {
     /// written. The daemon takes no snapshot and saves no page meanwhile.
     pub fn restore_snapshot(
         &self,
-        workspace: &str,
-        slug: &str,
+        at: &DesignAt,
         n: u32,
         unkept: Take,
         now: u64,
     ) -> Result<DesignSnapshot> {
-        let designs = self.designs_of(workspace, slug)?;
-        let from = records(&designs, slug)?
+        let from = records(at)?
             .into_iter()
             .find(|r| r.n == n)
             .ok_or(NoSnapshot(n))?;
-        let kept = snapshot_rel(slug, n);
+        let kept = snapshot_rel(at, n);
         let mut files = BTreeMap::new();
         for (path, hash) in &from.files {
-            let bytes = fsx::read_file_inside(&designs, &kept.join(path))?;
+            let bytes = fsx::read_file_inside(&at.root, &kept.join(path))?;
             if &sha256_hex(&bytes) != hash {
                 bail!("snapshot {n}'s {path} is not as it was kept");
             }
@@ -146,16 +143,16 @@ impl Store {
         }
         // Snapshot n is read first: keeping what is not kept yet may rotate
         // it out of the newest 50.
-        self.take_snapshot(workspace, slug, unkept, now)?;
+        self.take_snapshot(at, unkept, now)?;
         // Its number before any file is written: none left writes nothing.
-        let n_restored = next_n(&designs, slug)?;
+        let n_restored = next_n(at)?;
         for folder in KEPT {
             let prefix = format!("{folder}/");
             let inside: BTreeMap<String, Vec<u8>> = files
                 .iter()
                 .filter_map(|(p, b)| Some((p.strip_prefix(&prefix)?.to_string(), b.clone())))
                 .collect();
-            fsx::write_tree(&designs, Path::new(slug), Path::new(folder), &inside, true)?;
+            fsx::write_tree(&at.root, &at.dir, Path::new(folder), &inside, true)?;
         }
         let record = Record {
             n: n_restored,
@@ -168,20 +165,15 @@ impl Store {
             }),
             files: from.files.clone(),
         };
-        write_snapshot(&designs, slug, &record, &files)?;
-        rotate(&designs, slug, SNAPSHOT_KEEP)?;
+        write_snapshot(at, &record, &files)?;
+        rotate(at, SNAPSHOT_KEEP)?;
         Ok(record.listed())
     }
 
     /// A design's snapshots, newest first. One whose record cannot be read
     /// is left out.
-    pub fn history(&self, workspace: &str, slug: &str) -> Result<Vec<DesignSnapshot>> {
-        let designs = self.designs_of(workspace, slug)?;
-        Ok(records(&designs, slug)?
-            .iter()
-            .rev()
-            .map(Record::listed)
-            .collect())
+    pub fn history(&self, at: &DesignAt) -> Result<Vec<DesignSnapshot>> {
+        Ok(records(at)?.iter().rev().map(Record::listed).collect())
     }
 }
 
@@ -217,14 +209,14 @@ pub fn snapshot_file(rel: &str) -> Result<Option<String>> {
     )))
 }
 
-/// `<slug>/history`, inside the designs folder.
-fn history_rel(slug: &str) -> PathBuf {
-    Path::new(slug).join(HISTORY_DIR)
+/// The design's `history/`, inside its root.
+fn history_rel(at: &DesignAt) -> PathBuf {
+    at.in_side(HISTORY_DIR)
 }
 
-/// `<slug>/history/<n>`, snapshot `n`'s folder inside the designs folder.
-fn snapshot_rel(slug: &str, n: u32) -> PathBuf {
-    history_rel(slug).join(n.to_string())
+/// `history/<n>`, snapshot `n`'s folder inside the design's root.
+fn snapshot_rel(at: &DesignAt, n: u32) -> PathBuf {
+    history_rel(at).join(n.to_string())
 }
 
 /// A snapshot's number as its folder names it: digits only, at least one,
@@ -235,10 +227,10 @@ fn is_number(text: &str) -> bool {
 }
 
 /// The design's `pages/` and `assets/` files, by their paths in its folder.
-fn current_files(designs: &Path, slug: &str) -> Result<BTreeMap<String, Vec<u8>>> {
+fn current_files(at: &DesignAt) -> Result<BTreeMap<String, Vec<u8>>> {
     let mut out = BTreeMap::new();
     for folder in KEPT {
-        for (path, bytes) in fsx::read_tree(designs, &Path::new(slug).join(folder))? {
+        for (path, bytes) in fsx::read_tree(&at.root, &at.in_dir(folder))? {
             out.insert(format!("{folder}/{path}"), bytes);
         }
     }
@@ -253,8 +245,8 @@ fn hashes_of(files: &BTreeMap<String, Vec<u8>>) -> BTreeMap<String, String> {
 }
 
 /// The numbers of the snapshot folders, `history/<n>`, ascending.
-fn numbers(designs: &Path, slug: &str) -> Result<Vec<u32>> {
-    let folder = designs.join(history_rel(slug));
+fn numbers(at: &DesignAt) -> Result<Vec<u32>> {
+    let folder = at.root.join(history_rel(at));
     // A link is no history: never listed through.
     if std::fs::symlink_metadata(&folder).is_ok_and(|m| !m.is_dir()) {
         return Ok(Vec::new());
@@ -278,23 +270,23 @@ fn numbers(designs: &Path, slug: &str) -> Result<Vec<u32>> {
 
 /// The number after the highest snapshot folder's, so none is given twice;
 /// an error once the highest is the last a `u32` holds, never 0 again.
-fn next_n(designs: &Path, slug: &str) -> Result<u32> {
-    match numbers(designs, slug)?.last() {
+fn next_n(at: &DesignAt) -> Result<u32> {
+    match numbers(at)?.last() {
         None => Ok(1),
         Some(n) => n
             .checked_add(1)
-            .with_context(|| format!("{slug} has no snapshot number left")),
+            .with_context(|| format!("{} has no snapshot number left", at.slug)),
     }
 }
 
 /// The snapshots whose record can be read, oldest first. The folder's
 /// number is the snapshot's: a record naming another is damaged, and left
 /// out as one that cannot be read is.
-fn records(designs: &Path, slug: &str) -> Result<Vec<Record>> {
+fn records(at: &DesignAt) -> Result<Vec<Record>> {
     let mut out = Vec::new();
-    for n in numbers(designs, slug)? {
-        let rel = snapshot_rel(slug, n).join(RECORD_FILE);
-        let Ok(text) = fsx::read_file_inside(designs, &rel) else {
+    for n in numbers(at)? {
+        let rel = snapshot_rel(at, n).join(RECORD_FILE);
+        let Ok(text) = fsx::read_file_inside(&at.root, &rel) else {
             continue;
         };
         match serde_json::from_slice::<Record>(&text) {
@@ -307,34 +299,29 @@ fn records(designs: &Path, slug: &str) -> Result<Vec<Record>> {
 
 /// Writes snapshot `record` with `files` into `history/<n>/`, its record
 /// last, so a snapshot cut short has none and is not listed.
-fn write_snapshot(
-    designs: &Path,
-    slug: &str,
-    record: &Record,
-    files: &BTreeMap<String, Vec<u8>>,
-) -> Result<()> {
+fn write_snapshot(at: &DesignAt, record: &Record, files: &BTreeMap<String, Vec<u8>>) -> Result<()> {
     let rel = Path::new(HISTORY_DIR).join(record.n.to_string());
     let record_file = BTreeMap::from([(
         RECORD_FILE.to_string(),
         format!("{}\n", serde_json::to_string_pretty(record)?).into_bytes(),
     )]);
     // Never the design's folder itself: one removed meanwhile stays so.
-    let design = Path::new(slug);
-    let written = fsx::write_tree(designs, design, &rel, files, false)
-        .and_then(|()| fsx::write_tree(designs, design, &rel, &record_file, false));
+    let side = &at.side;
+    let written = fsx::write_tree(&at.root, side, &rel, files, false)
+        .and_then(|()| fsx::write_tree(&at.root, side, &rel, &record_file, false));
     if let Err(e) = written {
-        let _ = fsx::remove_dir_inside(designs, &designs.join(snapshot_rel(slug, record.n)));
+        let _ = fsx::remove_dir_inside(&at.root, &at.root.join(snapshot_rel(at, record.n)));
         return Err(e);
     }
     Ok(())
 }
 
 /// Removes all but the newest `keep` snapshots.
-fn rotate(designs: &Path, slug: &str, keep: usize) -> Result<()> {
-    let numbers = numbers(designs, slug)?;
+fn rotate(at: &DesignAt, keep: usize) -> Result<()> {
+    let numbers = numbers(at)?;
     let old = numbers.len().saturating_sub(keep);
     for n in &numbers[..old] {
-        fsx::remove_dir_inside(designs, &designs.join(snapshot_rel(slug, *n)))?;
+        fsx::remove_dir_inside(&at.root, &at.root.join(snapshot_rel(at, *n)))?;
     }
     Ok(())
 }
@@ -502,13 +489,21 @@ mod tests {
         // A new design has nothing to keep.
         assert_eq!(
             store
-                .take_snapshot("w1", "settings-page", Take::AgentTurn, 1000)
+                .take_snapshot(
+                    &store.workspace_design("w1", "settings-page").unwrap(),
+                    Take::AgentTurn,
+                    1000
+                )
                 .unwrap(),
             None
         );
         write(&dir, "pages/index.html", INDEX);
         let first = store
-            .take_snapshot("w1", "settings-page", Take::AgentTurn, 2000)
+            .take_snapshot(
+                &store.workspace_design("w1", "settings-page").unwrap(),
+                Take::AgentTurn,
+                2000,
+            )
             .unwrap()
             .expect("a snapshot of the new page");
         assert_eq!(
@@ -522,7 +517,11 @@ mod tests {
         // Nothing changed since: none.
         assert_eq!(
             store
-                .take_snapshot("w1", "settings-page", Take::AgentTurn, 3000)
+                .take_snapshot(
+                    &store.workspace_design("w1", "settings-page").unwrap(),
+                    Take::AgentTurn,
+                    3000
+                )
                 .unwrap(),
             None
         );
@@ -530,14 +529,22 @@ mod tests {
         write(&dir, "pages/index.html", INDEX);
         assert_eq!(
             store
-                .take_snapshot("w1", "settings-page", Take::EditsByHand(vec![]), 3500)
+                .take_snapshot(
+                    &store.workspace_design("w1", "settings-page").unwrap(),
+                    Take::EditsByHand(vec![]),
+                    3500
+                )
                 .unwrap(),
             None
         );
         // An asset is.
         write(&dir, "assets/logo.svg", "<svg/>");
         let second = store
-            .take_snapshot("w1", "settings-page", Take::AgentTurn, 4000)
+            .take_snapshot(
+                &store.workspace_design("w1", "settings-page").unwrap(),
+                Take::AgentTurn,
+                4000,
+            )
             .unwrap()
             .expect("a snapshot of the new asset");
         assert_eq!(second.n, 2);
@@ -546,7 +553,7 @@ mod tests {
             "<svg/>"
         );
         let listed: Vec<(u32, u64)> = store
-            .history("w1", "settings-page")
+            .history(&store.workspace_design("w1", "settings-page").unwrap())
             .unwrap()
             .iter()
             .map(|s| (s.n, s.time))
@@ -564,12 +571,16 @@ mod tests {
                 &format!("<p data-mid=\"m1\">{i}</p>"),
             );
             store
-                .take_snapshot("w1", "settings-page", Take::AgentTurn, i * 1000)
+                .take_snapshot(
+                    &store.workspace_design("w1", "settings-page").unwrap(),
+                    Take::AgentTurn,
+                    i * 1000,
+                )
                 .unwrap()
                 .expect("a change");
         }
         let listed: Vec<u32> = store
-            .history("w1", "settings-page")
+            .history(&store.workspace_design("w1", "settings-page").unwrap())
             .unwrap()
             .iter()
             .map(|s| s.n)
@@ -582,11 +593,21 @@ mod tests {
         );
         write(&dir, "pages/index.html", "<p data-mid=\"m1\">52</p>");
         let next = store
-            .take_snapshot("w1", "settings-page", Take::AgentTurn, 52_000)
+            .take_snapshot(
+                &store.workspace_design("w1", "settings-page").unwrap(),
+                Take::AgentTurn,
+                52_000,
+            )
             .unwrap()
             .unwrap();
         assert_eq!(next.n, 52);
-        assert_eq!(store.history("w1", "settings-page").unwrap().len(), 50);
+        assert_eq!(
+            store
+                .history(&store.workspace_design("w1", "settings-page").unwrap())
+                .unwrap()
+                .len(),
+            50
+        );
     }
 
     #[test]
@@ -594,7 +615,11 @@ mod tests {
         let (_home, store, dir) = store_with_design();
         let summary = |take: Take, now: u64| {
             store
-                .take_snapshot("w1", "settings-page", take, now)
+                .take_snapshot(
+                    &store.workspace_design("w1", "settings-page").unwrap(),
+                    take,
+                    now,
+                )
                 .unwrap()
                 .expect("a change")
                 .summary
@@ -647,7 +672,7 @@ mod tests {
             "Deleted p m1, deleted p m2, deleted p m3, deleted p m4, deleted p m5 and 2 more"
         );
         let kinds: Vec<SnapshotKind> = store
-            .history("w1", "settings-page")
+            .history(&store.workspace_design("w1", "settings-page").unwrap())
             .unwrap()
             .iter()
             .map(|s| s.kind)
@@ -670,7 +695,11 @@ mod tests {
         write(&dir, "pages/index.html", v1);
         write(&dir, "assets/img/a.svg", "<svg>a</svg>");
         store
-            .take_snapshot("w1", "settings-page", Take::AgentTurn, 1000)
+            .take_snapshot(
+                &store.workspace_design("w1", "settings-page").unwrap(),
+                Take::AgentTurn,
+                1000,
+            )
             .unwrap()
             .unwrap();
         write(&dir, "pages/index.html", "<p>v2</p>");
@@ -678,12 +707,21 @@ mod tests {
         std::fs::remove_file(dir.join("assets/img/a.svg")).unwrap();
         write(&dir, "assets/b.svg", "<svg>b</svg>");
         store
-            .take_snapshot("w1", "settings-page", Take::AgentTurn, 2000)
+            .take_snapshot(
+                &store.workspace_design("w1", "settings-page").unwrap(),
+                Take::AgentTurn,
+                2000,
+            )
             .unwrap()
             .unwrap();
 
         let restored = store
-            .restore_snapshot("w1", "settings-page", 1, Take::EditsByHand(vec![]), 5000)
+            .restore_snapshot(
+                &store.workspace_design("w1", "settings-page").unwrap(),
+                1,
+                Take::EditsByHand(vec![]),
+                5000,
+            )
             .unwrap();
         assert_eq!(
             restored,
@@ -707,7 +745,7 @@ mod tests {
         assert!(!dir.join("pages/git-a.html").exists());
         assert!(!dir.join("assets/b.svg").exists());
         let listed: Vec<(u32, SnapshotKind)> = store
-            .history("w1", "settings-page")
+            .history(&store.workspace_design("w1", "settings-page").unwrap())
             .unwrap()
             .iter()
             .map(|s| (s.n, s.kind))
@@ -723,12 +761,21 @@ mod tests {
         // As it is now: the next turn that changes nothing takes none.
         assert_eq!(
             store
-                .take_snapshot("w1", "settings-page", Take::AgentTurn, 6000)
+                .take_snapshot(
+                    &store.workspace_design("w1", "settings-page").unwrap(),
+                    Take::AgentTurn,
+                    6000
+                )
                 .unwrap(),
             None
         );
         let err = store
-            .restore_snapshot("w1", "settings-page", 9, Take::EditsByHand(vec![]), 7000)
+            .restore_snapshot(
+                &store.workspace_design("w1", "settings-page").unwrap(),
+                9,
+                Take::EditsByHand(vec![]),
+                7000,
+            )
             .unwrap_err();
         assert!(err.is::<NoSnapshot>(), "{err:#}");
     }
@@ -745,7 +792,11 @@ mod tests {
         std::fs::remove_dir(dir.join("assets")).unwrap();
         std::os::unix::fs::symlink(outside.path(), dir.join("assets")).unwrap();
         let taken = store
-            .take_snapshot("w1", "settings-page", Take::AgentTurn, 1000)
+            .take_snapshot(
+                &store.workspace_design("w1", "settings-page").unwrap(),
+                Take::AgentTurn,
+                1000,
+            )
             .unwrap()
             .unwrap();
         assert_eq!(taken.pages, ["index"]);
@@ -759,7 +810,12 @@ mod tests {
         std::fs::remove_file(dir.join("pages/index.html")).unwrap();
         std::os::unix::fs::symlink(&secret, dir.join("pages/index.html")).unwrap();
         store
-            .restore_snapshot("w1", "settings-page", 1, Take::EditsByHand(vec![]), 2000)
+            .restore_snapshot(
+                &store.workspace_design("w1", "settings-page").unwrap(),
+                1,
+                Take::EditsByHand(vec![]),
+                2000,
+            )
             .unwrap();
         assert_eq!(std::fs::read_to_string(&secret).unwrap(), "secret");
         assert!(
@@ -784,11 +840,20 @@ mod tests {
         write(&dir, "pages/index.html", "<p>changed</p>");
         assert!(
             store
-                .take_snapshot("w1", "settings-page", Take::AgentTurn, 3000)
+                .take_snapshot(
+                    &store.workspace_design("w1", "settings-page").unwrap(),
+                    Take::AgentTurn,
+                    3000
+                )
                 .is_err()
         );
         assert_eq!(std::fs::read_dir(elsewhere.path()).unwrap().count(), 0);
-        assert_eq!(store.history("w1", "settings-page").unwrap(), []);
+        assert_eq!(
+            store
+                .history(&store.workspace_design("w1", "settings-page").unwrap())
+                .unwrap(),
+            []
+        );
     }
 
     #[test]
@@ -797,7 +862,11 @@ mod tests {
         write(&dir, "pages/index.html", INDEX);
         write(&dir, "assets/logo.svg", "<svg/>");
         store
-            .take_snapshot("w1", "settings-page", Take::AgentTurn, 1000)
+            .take_snapshot(
+                &store.workspace_design("w1", "settings-page").unwrap(),
+                Take::AgentTurn,
+                1000,
+            )
             .unwrap()
             .unwrap();
         let real = |p: &Path| p.canonicalize().unwrap();
@@ -836,7 +905,11 @@ mod tests {
         for i in 1..=50u64 {
             write(&dir, "pages/index.html", &format!("<p>{i}</p>"));
             store
-                .take_snapshot("w1", "settings-page", Take::AgentTurn, i * 1000)
+                .take_snapshot(
+                    &store.workspace_design("w1", "settings-page").unwrap(),
+                    Take::AgentTurn,
+                    i * 1000,
+                )
                 .unwrap()
                 .expect("a change");
         }
@@ -844,8 +917,7 @@ mod tests {
         let edits = ["text of m1".to_string()];
         let restored = store
             .restore_snapshot(
-                "w1",
-                "settings-page",
+                &store.workspace_design("w1", "settings-page").unwrap(),
                 1,
                 Take::EditsByHand(edits.to_vec()),
                 60_000,
@@ -863,7 +935,7 @@ mod tests {
             "<p>1</p>"
         );
         let listed: Vec<(u32, SnapshotKind, String)> = store
-            .history("w1", "settings-page")
+            .history(&store.workspace_design("w1", "settings-page").unwrap())
             .unwrap()
             .into_iter()
             .map(|s| (s.n, s.kind, s.summary))
@@ -883,7 +955,11 @@ mod tests {
         let (_home, store, dir) = store_with_design();
         write(&dir, "pages/index.html", INDEX);
         store
-            .take_snapshot("w1", "settings-page", Take::AgentTurn, 1000)
+            .take_snapshot(
+                &store.workspace_design("w1", "settings-page").unwrap(),
+                Take::AgentTurn,
+                1000,
+            )
             .unwrap()
             .unwrap();
         // The same snapshot again under names that also read as 1 and 0.
@@ -894,7 +970,7 @@ mod tests {
         }
         let listed = |store: &Store| -> Vec<u32> {
             store
-                .history("w1", "settings-page")
+                .history(&store.workspace_design("w1", "settings-page").unwrap())
                 .unwrap()
                 .iter()
                 .map(|s| s.n)
@@ -911,7 +987,11 @@ mod tests {
         for i in 2..=51u64 {
             write(&dir, "pages/index.html", &format!("<p>{i}</p>"));
             store
-                .take_snapshot("w1", "settings-page", Take::AgentTurn, i * 1000)
+                .take_snapshot(
+                    &store.workspace_design("w1", "settings-page").unwrap(),
+                    Take::AgentTurn,
+                    i * 1000,
+                )
                 .unwrap()
                 .expect("a change");
         }
@@ -927,12 +1007,20 @@ mod tests {
         let (_home, store, dir) = store_with_design();
         write(&dir, "pages/index.html", INDEX);
         store
-            .take_snapshot("w1", "settings-page", Take::AgentTurn, 1000)
+            .take_snapshot(
+                &store.workspace_design("w1", "settings-page").unwrap(),
+                Take::AgentTurn,
+                1000,
+            )
             .unwrap()
             .unwrap();
         write(&dir, "pages/index.html", "<p>changed</p>");
         store
-            .take_snapshot("w1", "settings-page", Take::AgentTurn, 2000)
+            .take_snapshot(
+                &store.workspace_design("w1", "settings-page").unwrap(),
+                Take::AgentTurn,
+                2000,
+            )
             .unwrap()
             .unwrap();
         // Snapshot 2 made the last number there is.
@@ -946,19 +1034,32 @@ mod tests {
         // Nothing changed: no number is needed.
         assert_eq!(
             store
-                .take_snapshot("w1", "settings-page", Take::AgentTurn, 3000)
+                .take_snapshot(
+                    &store.workspace_design("w1", "settings-page").unwrap(),
+                    Take::AgentTurn,
+                    3000
+                )
                 .unwrap(),
             None
         );
         write(&dir, "pages/index.html", "<p>third</p>");
         let err = store
-            .take_snapshot("w1", "settings-page", Take::AgentTurn, 4000)
+            .take_snapshot(
+                &store.workspace_design("w1", "settings-page").unwrap(),
+                Take::AgentTurn,
+                4000,
+            )
             .unwrap_err();
         assert_eq!(err.to_string(), "settings-page has no snapshot number left");
         // A restore with nothing to keep first writes nothing either.
         write(&dir, "pages/index.html", "<p>changed</p>");
         let err = store
-            .restore_snapshot("w1", "settings-page", 1, Take::AgentTurn, 5000)
+            .restore_snapshot(
+                &store.workspace_design("w1", "settings-page").unwrap(),
+                1,
+                Take::AgentTurn,
+                5000,
+            )
             .unwrap_err();
         assert_eq!(err.to_string(), "settings-page has no snapshot number left");
         assert_eq!(
@@ -978,12 +1079,20 @@ mod tests {
         let (_home, store, dir) = store_with_design();
         write(&dir, "pages/index.html", INDEX);
         store
-            .take_snapshot("w1", "settings-page", Take::AgentTurn, 1000)
+            .take_snapshot(
+                &store.workspace_design("w1", "settings-page").unwrap(),
+                Take::AgentTurn,
+                1000,
+            )
             .unwrap()
             .unwrap();
         write(&dir, "pages/index.html", "<p>two</p>");
         store
-            .take_snapshot("w1", "settings-page", Take::AgentTurn, 2000)
+            .take_snapshot(
+                &store.workspace_design("w1", "settings-page").unwrap(),
+                Take::AgentTurn,
+                2000,
+            )
             .unwrap()
             .unwrap();
         // Snapshot 2's record, damaged, says it is snapshot 1.
@@ -994,7 +1103,7 @@ mod tests {
             &record.replace("\"n\": 2,", "\"n\": 1,"),
         );
         let listed: Vec<(u32, u64)> = store
-            .history("w1", "settings-page")
+            .history(&store.workspace_design("w1", "settings-page").unwrap())
             .unwrap()
             .iter()
             .map(|s| (s.n, s.time))
@@ -1002,7 +1111,12 @@ mod tests {
         assert_eq!(listed, [(1, 1000)]);
         // Restoring 1 restores folder 1's files.
         store
-            .restore_snapshot("w1", "settings-page", 1, Take::AgentTurn, 3000)
+            .restore_snapshot(
+                &store.workspace_design("w1", "settings-page").unwrap(),
+                1,
+                Take::AgentTurn,
+                3000,
+            )
             .unwrap();
         assert_eq!(
             std::fs::read_to_string(dir.join("pages/index.html")).unwrap(),
@@ -1015,12 +1129,23 @@ mod tests {
         let (_home, store, dir) = store_with_design();
         write(&dir, "pages/index.html", INDEX);
         store
-            .take_snapshot("w1", "settings-page", Take::AgentTurn, 1000)
+            .take_snapshot(
+                &store.workspace_design("w1", "settings-page").unwrap(),
+                Take::AgentTurn,
+                1000,
+            )
             .unwrap()
             .unwrap();
         // `<slug>@<n>` is a snapshot's folder: no design or page is named so.
         assert!(!super::super::pages::is_page_name("git@2"));
-        assert!(store.page("w1", "settings-page", "git@2").is_err());
+        assert!(
+            store
+                .page(
+                    &store.workspace_design("w1", "settings-page").unwrap(),
+                    "git@2"
+                )
+                .is_err()
+        );
         std::fs::create_dir_all(dir.with_file_name("settings-page@1")).unwrap();
         std::fs::write(
             dir.with_file_name("settings-page@1/design.toml"),
