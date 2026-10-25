@@ -102,3 +102,4 @@ Each feature of moonlet has its own spec in this directory. Write the spec befor
 | X62 | Routed commands: heavy commands run on a free worker | P1 | 4 | implemented (untried between real machines) | [X62-routed-commands.md](X62-routed-commands.md) |
 | X63 | Cloud workers: machines made for heavy commands and removed when idle | P1 | 4 | implemented (untried with a real provider; provisional API captures) | [X63-cloud-workers.md](X63-cloud-workers.md) |
 | X66 | Task comments (read and post a tracker issue's comments in the Task detail and Task tab) | P1 | 3 | implemented (Linear and ClickUp untried on a real account) | [X66-task-comments.md](X66-task-comments.md) |
+| X67 | Google Cloud workers: a Compute Engine adapter for cloud machines | P1 | 4 | draft | [X67-google-cloud-workers.md](X67-google-cloud-workers.md) |
