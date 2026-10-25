@@ -117,7 +117,7 @@ async fn listening() -> (Daemon, String) {
 }
 
 async fn pair(d: &Daemon, addr: &str, device: &str, kind: DeviceKind) -> String {
-    let p: MobilePairing = d.call("mobile.pair_start", json!({})).await;
+    let p: MobilePairing = d.call("mobile.pair_start", json!({ "kind": kind })).await;
     moonlet_link::tailnet::pair(&[addr.to_string()], &p.code, device, kind)
         .await
         .unwrap()

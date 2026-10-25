@@ -513,6 +513,12 @@ impl Mobile {
     }
 
     pub fn pair_start(self: &Arc<Self>, kind: DeviceKind) -> Result<MobilePairing, RpcError> {
+        if kind == DeviceKind::Cloud {
+            return Err(RpcError::new(
+                "invalid_params",
+                "a cloud machine pairs only with its join code",
+            ));
+        }
         if !self.data.lock().unwrap().enabled {
             return Err(RpcError::new("mobile_off", "phone access is off"));
         }

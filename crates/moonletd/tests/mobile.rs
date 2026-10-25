@@ -392,6 +392,29 @@ async fn a_device_pairs_only_as_the_kind_its_code_was_made_for() {
 }
 
 #[tokio::test]
+async fn no_pairing_code_is_made_for_a_cloud_machine() {
+    let mac = Mac::start(None).await;
+    let addr = mac.allow_phones().await;
+    let mut app = mac.app().await;
+    let e = app
+        .request::<_, MobilePairing>("mobile.pair_start", json!({ "kind": "cloud" }))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        e.to_string(),
+        "invalid_params: a cloud machine pairs only with its join code"
+    );
+    // Nor does a phone's code pair something that says it is one.
+    let p: MobilePairing = app.request("mobile.pair_start", json!({})).await.unwrap();
+    let (_, reply) = auth(
+        &addr,
+        json!({ "pair": p.code, "device": "moonlet-shop-1", "kind": "cloud" }),
+    )
+    .await;
+    assert!(unauthorized(&reply), "{reply:?}");
+}
+
+#[tokio::test]
 async fn a_paired_mac_can_remove_itself_but_manage_nothing_else() {
     let mac = Mac::start(None).await;
     let addr = mac.allow_phones().await;
