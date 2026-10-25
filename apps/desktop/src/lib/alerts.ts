@@ -87,3 +87,11 @@ export function differsAlert(o: { focused: boolean; notifyWhenFocused: boolean; 
 export function alertsLikeASession(a: { design?: DesignTag }): boolean {
   return !(a.design === true || (typeof a.design === "object" && a.design.kind === "sync"));
 }
+
+/** Where an agent's notification and its approval in the inbox (A5) point:
+ *  `Design · <name>` and its design for a design's agent (X65), else its
+ *  session's name (`session`), else the terminal's title. */
+export function agentPlace(a: { design?: DesignTag; title: string }, session: string | undefined): { label: string; design: { workspace: string; slug: string } | null } {
+  if (typeof a.design === "object" && a.design.kind === "design") return { label: `Design · ${a.design.name}`, design: { workspace: a.design.workspace, slug: a.design.slug } };
+  return { label: session ?? a.title, design: null };
+}
