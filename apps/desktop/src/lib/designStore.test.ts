@@ -564,6 +564,26 @@ describe("a design's comments (X65)", () => {
     expect(calls.filter((c) => c.method === "design.comment.put")).toEqual([]);
   });
 
+  it("keep a pin kept while an older listing was on its way, whatever order the answers come back in", async () => {
+    const kept = pin(3, { mid: "m33", tag: "div", text: "Warn", comment: "More space" });
+    // The first listing read the file before the Keep, and answers after it.
+    let answerOld = (_: DesignComment[]) => {};
+    let asked = 0;
+    answers["design.comments"] = () => (++asked === 1 ? new Promise<DesignComment[]>((r) => (answerOld = r)) : [pin(1), kept]);
+    answers["design.comment.put"] = () => [kept];
+    const old = loadComments("local", "w-1devstudio", "settings-page");
+    await settle();
+    await keepComment("local", "w-1devstudio", "settings-page", { page: "index", mid: "m33", tag: "div", text: "Warn", comment: "More space" });
+    answerOld([pin(1)]);
+    await old;
+    await settle();
+    await settle();
+    expect(ns()).toEqual([
+      [1, "open", null],
+      [3, "open", null],
+    ]);
+  });
+
   it("are resolved one at a time", async () => {
     answers["design.comments"] = () => [pin(1)];
     await loadComments("local", "w-1devstudio", "settings-page");
