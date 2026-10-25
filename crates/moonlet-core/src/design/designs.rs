@@ -15,6 +15,11 @@ use super::check::{Kind, Problem};
 use super::fsx;
 use super::store::Store;
 
+/// A design asked for on a design system the workspace does not have.
+#[derive(Debug, thiserror::Error)]
+#[error("no design system \"{0}\"")]
+pub struct NoSystem(pub String);
+
 /// A design's settings file.
 pub const DESIGN_FILE: &str = "design.toml";
 
@@ -118,8 +123,9 @@ impl Store {
             bail!("a design needs a name");
         }
         // Only on a design system the workspace has.
-        self.system_dir(workspace, system)
-            .with_context(|| format!("no design system \"{system}\""))?;
+        if self.system_dir(workspace, system).is_err() {
+            return Err(NoSystem(system.to_string()).into());
+        }
         let designs = self.designs_dir(workspace, true)?;
         let (name_n, slug) = super::store::create_numbered(&designs, name, "design")?;
         let dir = designs.join(&slug);
