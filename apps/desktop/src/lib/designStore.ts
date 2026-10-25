@@ -186,7 +186,6 @@ const NO_PROBLEMS: PageProblem[] = [];
 const NO_COMMENTS: DesignComment[] = [];
 const NO_MIDS: PageMids = {};
 
-/** A design's comments, by number; none until listed. */
 /** A design's snapshots, newest first; undefined until listed. */
 export function historyOf(s: DesignState, host: string, workspace: string, slug: string): DesignSnapshot[] | undefined {
   return s.histories[itemKey(host, workspace, slug)];
@@ -202,6 +201,7 @@ export function loadHistory(host: string, workspace: string, slug: string): Prom
 /** A file of a design's snapshots: under `history/`. */
 const isHistoryPath = (path: string) => path.startsWith("history/");
 
+/** A design's comments, by number; none until listed. */
 export function commentsOf(s: DesignState, host: string, workspace: string, slug: string): DesignComment[] {
   return s.comments[itemKey(host, workspace, slug)] ?? NO_COMMENTS;
 }
