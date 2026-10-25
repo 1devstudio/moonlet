@@ -698,6 +698,11 @@ impl Daemon {
                 self.machines.step(&machine, r);
                 ok(true)
             }
+            // It uses the OAuth client's secret: as cloud.set.
+            m::CLOUD_CHECK => {
+                self.app_or_paired_mac(conn, "cloud workers")?;
+                ok(self.machines.check_tailscale().await?)
+            }
             m::CLOUD_SET => {
                 // Tokens and limits: never an agent's CLI nor a phone.
                 self.app_or_paired_mac(conn, "cloud workers")?;

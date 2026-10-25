@@ -6,7 +6,7 @@ use std::sync::Mutex;
 
 use moonlet_proto::RpcError;
 use moonlet_proto::methods::{
-    CloudField, CloudInfo, CloudKind, CloudSet, CloudTailscale, ProjectCloud,
+    CloudField, CloudInfo, CloudKind, CloudSet, CloudTailscale, ProjectCloud, TailscaleMode,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -38,9 +38,14 @@ pub struct CloudFile {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Tailscale {
     #[serde(default)]
+    pub mode: TailscaleMode,
+    #[serde(default)]
     pub client_id: String,
     #[serde(default)]
     pub client_secret: String,
+    /// A reusable, ephemeral, tagged key the user pasted.
+    #[serde(default)]
+    pub auth_key: String,
     #[serde(default = "tag_default")]
     pub tag: String,
 }
@@ -48,8 +53,10 @@ pub struct Tailscale {
 impl Default for Tailscale {
     fn default() -> Self {
         Tailscale {
+            mode: TailscaleMode::default(),
             client_id: String::new(),
             client_secret: String::new(),
+            auth_key: String::new(),
             tag: tag_default(),
         }
     }
@@ -189,8 +196,10 @@ impl CloudSettings {
             host_id: f.host_id,
             providers,
             tailscale: CloudTailscale {
+                mode: f.tailscale.mode,
                 client_id: f.tailscale.client_id,
                 has_client_secret: !f.tailscale.client_secret.is_empty(),
+                has_auth_key: !f.tailscale.auth_key.is_empty(),
                 tag: f.tailscale.tag,
             },
             idle_minutes: f.idle_minutes,
@@ -273,6 +282,12 @@ impl CloudSettings {
             }
         }
         if let Some(t) = req.tailscale {
+            if let Some(v) = t.mode {
+                next.tailscale.mode = v;
+            }
+            if let Some(v) = t.auth_key {
+                next.tailscale.auth_key = v;
+            }
             if let Some(v) = t.client_id {
                 next.tailscale.client_id = v;
             }

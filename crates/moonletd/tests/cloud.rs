@@ -192,7 +192,7 @@ async fn cloud_get_returns_no_secrets() {
     );
     assert_eq!(
         got["tailscale"],
-        json!({ "client_id": "kQ7cLient1CNTRL", "has_client_secret": true, "tag": "tag:moonlet-worker" })
+        json!({ "mode": "oauth", "client_id": "kQ7cLient1CNTRL", "has_client_secret": true, "has_auth_key": false, "tag": "tag:moonlet-worker" })
     );
     assert_eq!(
         (
@@ -233,11 +233,93 @@ async fn cloud_get_returns_no_secrets() {
 }
 
 #[tokio::test]
+async fn cloud_get_shows_the_tailscale_mode_and_never_the_auth_key() {
+    let c = cloud().await;
+    let info: Value = c
+        .d
+        .call(
+            "cloud.set",
+            json!({ "tailscale": { "mode": "auth_key", "auth_key": "tskey-auth-kQ7cTest1CNTRL-abc" } }),
+        )
+        .await;
+    assert_eq!(
+        info["tailscale"],
+        json!({ "mode": "auth_key", "client_id": "", "has_client_secret": false, "has_auth_key": true, "tag": "tag:moonlet-worker" })
+    );
+    assert!(!info.to_string().contains("tskey-auth"));
+}
+
+#[tokio::test]
+async fn a_machine_joins_the_tailnet_with_the_pasted_auth_key() {
+    let c = cloud().await;
+    // A provider whose machines need a Tailscale key, as Hetzner's do.
+    c.steer("tailnet-key", "");
+    let _: Value = c
+        .d
+        .call(
+            "cloud.set",
+            json!({ "tailscale": { "mode": "auth_key", "auth_key": "tskey-auth-kQ7cTest1CNTRL-abc" } }),
+        )
+        .await;
+    c.up().await;
+    let mut script = String::new();
+    for _ in 0..50 {
+        script = c
+            .fake_dirs()
+            .first()
+            .and_then(|d| std::fs::read_to_string(d.join("user_data")).ok())
+            .unwrap_or_default();
+        if !script.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        script.contains("tailscale up --auth-key='tskey-auth-kQ7cTest1CNTRL-abc'"),
+        "{script}"
+    );
+}
+
+#[tokio::test]
+async fn without_a_tailscale_credential_a_machine_fails_and_says_why() {
+    let c = cloud().await;
+    c.steer("tailnet-key", "");
+    let m = c.up().await;
+    let failed = c.until(m["id"].as_str().unwrap(), "failed").await;
+    assert_eq!(
+        failed["reason"],
+        json!(
+            "could not be made: Set a Tailscale OAuth client or auth key in Settings › Cloud workers."
+        )
+    );
+    assert!(c.fake_dirs().is_empty());
+}
+
+#[tokio::test]
+async fn cloud_check_needs_an_oauth_client() {
+    let c = cloud().await;
+    let e = c.d.fails("cloud.check", json!({})).await;
+    assert_eq!(
+        e,
+        "invalid_params: Set the OAuth client's ID and secret first."
+    );
+}
+
+#[tokio::test]
 async fn cloud_set_from_the_cli_or_a_phone_is_forbidden() {
     let (d, addr) = listening().await;
     let mut cli = Client::connect(&d.socket, "moonlet-cli").await.unwrap();
     let e = cli
         .request::<_, Value>("cloud.set", settings())
+        .await
+        .unwrap_err();
+    assert_eq!(
+        e.to_string(),
+        "forbidden: only the moonlet app manages cloud workers"
+    );
+    // Check uses the OAuth client's secret too.
+    let e = cli
+        .request::<_, Value>("cloud.check", json!({}))
         .await
         .unwrap_err();
     assert_eq!(

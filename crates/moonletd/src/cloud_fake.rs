@@ -30,14 +30,15 @@ pub fn from_env() -> Option<Fake> {
 }
 
 /// The fake provider. It bills by the second, or every started
-/// `<billing>` seconds when its folder has that file.
-pub fn info(billing: Option<u64>) -> ProviderInfo {
+/// `<billing>` seconds when its folder has that file; with `tailnet-key`
+/// there, its machines need a Tailscale key, as Hetzner's do.
+pub fn info(billing: Option<u64>, tailnet_key: bool) -> ProviderInfo {
     ProviderInfo {
         id: "fake".into(),
         label: "Fake cloud".into(),
         fields: vec![],
         max_name: 63,
-        tailnet_key: false,
+        tailnet_key,
         billing: moonlet_cloud::Billing {
             unit_secs: billing.unwrap_or(1),
             minimum_secs: 0,
@@ -210,7 +211,10 @@ async fn boot(dir: PathBuf, user_data: String, join: bool) {
 #[async_trait::async_trait]
 impl Provider for Fake {
     fn info(&self) -> ProviderInfo {
-        info(self.steer("billing").and_then(|v| v.parse().ok()))
+        info(
+            self.steer("billing").and_then(|v| v.parse().ok()),
+            self.steer("tailnet-key").is_some(),
+        )
     }
 
     async fn machine_types(&self, _location: &str) -> Result<Vec<MachineType>, CloudError> {
@@ -229,6 +233,8 @@ impl Provider for Fake {
         let meta = json!({ "name": m.name, "labels": m.labels, "created_at": now_ms() });
         // Whole or not at all, as a provider's record of a machine: a test
         // may kill the daemon right after it shows.
+        // What a real machine would boot with, for tests to read.
+        let _ = std::fs::write(dir.join("user_data"), &m.user_data);
         let tmp = dir.join("meta.json.tmp");
         if std::fs::write(&tmp, meta.to_string()).is_ok() {
             let _ = std::fs::rename(&tmp, dir.join("meta.json"));

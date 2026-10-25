@@ -644,14 +644,33 @@ impl Machines {
         let started = now_ms();
         let f = self.settings.file();
         let key = if provider.info().tailnet_key {
-            let client = moonlet_cloud::tailscale::OAuthClient {
-                id: f.tailscale.client_id.clone(),
-                secret: f.tailscale.client_secret.clone(),
-                tag: f.tailscale.tag.clone(),
-            };
-            match moonlet_cloud::tailscale::machine_key(&client, &name, self.net.clone()).await {
-                Ok(k) => k,
-                Err(e) => return self.failed(&id, e.to_string()),
+            let t = &f.tailscale;
+            match t.mode {
+                // One reusable key, the same for every machine.
+                m::TailscaleMode::AuthKey if !t.auth_key.is_empty() => t.auth_key.clone(),
+                // A one-off key for this machine.
+                m::TailscaleMode::Oauth
+                    if !t.client_id.is_empty() && !t.client_secret.is_empty() =>
+                {
+                    let client = moonlet_cloud::tailscale::OAuthClient {
+                        id: t.client_id.clone(),
+                        secret: t.client_secret.clone(),
+                        tag: t.tag.clone(),
+                    };
+                    match moonlet_cloud::tailscale::machine_key(&client, &name, self.net.clone())
+                        .await
+                    {
+                        Ok(k) => k,
+                        Err(e) => return self.failed(&id, e.to_string()),
+                    }
+                }
+                _ => {
+                    return self.failed(
+                        &id,
+                        "Set a Tailscale OAuth client or auth key in Settings › Cloud workers."
+                            .into(),
+                    );
+                }
             }
         } else {
             String::new()
@@ -728,6 +747,26 @@ impl Machines {
             }
             Err(e) => self.failed(&id, e.to_string()),
         }
+    }
+
+    /// `cloud.check`: the OAuth client makes a test key and revokes it.
+    pub async fn check_tailscale(&self) -> Result<bool, RpcError> {
+        let t = self.settings.file().tailscale;
+        if t.client_id.is_empty() || t.client_secret.is_empty() {
+            return Err(RpcError::new(
+                "invalid_params",
+                "Set the OAuth client's ID and secret first.",
+            ));
+        }
+        let client = moonlet_cloud::tailscale::OAuthClient {
+            id: t.client_id,
+            secret: t.client_secret,
+            tag: t.tag,
+        };
+        moonlet_cloud::tailscale::check(&client, self.net.clone())
+            .await
+            .map(|()| true)
+            .map_err(|e| RpcError::new("tailscale", e.to_string()))
     }
 
     fn no_listener(&self) -> RpcError {
