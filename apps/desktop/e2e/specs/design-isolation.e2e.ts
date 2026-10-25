@@ -67,23 +67,34 @@ describe("A design card that never stops running", () => {
     await mode("Design").click();
     const opened = await within(10_000, $('//nav[@aria-label="Design systems"]//button[.//span[normalize-space()="Looping kit"]]').click());
     expect(opened).not.toBe("timed out");
-    // Give the looping card time to load and start.
-    await browser.pause(2_000);
-
-    const heard = await within(2_000, browser.execute(() => (window as unknown as Heard).heard ?? []));
+    // Until the looping card has started, the window answers each look within 2 s.
+    let heard: string[] | "timed out" = [];
+    for (const until = Date.now() + 10_000; Date.now() < until; await browser.pause(100)) {
+      heard = await within(2_000, browser.execute(() => (window as unknown as Heard).heard ?? []));
+      if (heard === "timed out" || heard.includes(LOOPING)) break;
+    }
     // The window answered, and the card did start its loop.
     expect(heard).toContain(LOOPING);
   });
 
   it("leaves the other cards running", async () => {
     await expect($('//iframe[@title="Loop"]')).toBeExisting();
-    await browser.execute((ping: string) => {
-      (document.querySelector('iframe[title="Calm"]') as HTMLIFrameElement | null)?.contentWindow?.postMessage(ping, "*");
-    }, PING);
-    await browser.waitUntil(async () => (await browser.execute(() => (window as unknown as Heard).heard ?? [])).includes(PONG), {
-      timeout: 3_000,
-      timeoutMsg: "the calm card did not answer while the other one loops",
-    });
+    // Asked right after the loop started, and again every 200 ms: the window
+    // may be hidden (a locked screen, other windows over it), and WebKit then
+    // suspends a frame's web process about 2 s after it loads, looping card or
+    // not. A calm card in the looping card's process never answers at all.
+    await browser.waitUntil(
+      () =>
+        browser.execute(
+          (ping: string, pong: string) => {
+            (document.querySelector('iframe[title="Calm"]') as HTMLIFrameElement | null)?.contentWindow?.postMessage(ping, "*");
+            return ((window as unknown as Heard).heard ?? []).includes(pong);
+          },
+          PING,
+          PONG,
+        ),
+      { timeout: 3_000, interval: 200, timeoutMsg: "the calm card did not answer while the other one loops" },
+    );
   });
 
   it("leaves the app's controls working", async () => {
