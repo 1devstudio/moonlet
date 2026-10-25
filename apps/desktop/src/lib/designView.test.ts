@@ -15,6 +15,10 @@ const card = (group: string, name: string, over: Partial<DesignCard> = {}): Desi
   marker: `<!-- @dsCard group="${group}" name="${name}" -->`,
   problems: [],
   changed_sources: [],
+  proposals: [],
+  edited_by_hand: false,
+  orphaned: false,
+  kept: false,
   ...over,
 });
 
@@ -35,6 +39,7 @@ const system = (over: Partial<DesignSystem> = {}): DesignSystem => ({
   agent: null,
   last_sync: [],
   needs_you: null,
+  steps: [],
   ...over,
 });
 

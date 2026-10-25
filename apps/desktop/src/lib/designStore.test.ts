@@ -7,6 +7,13 @@ const calls = vi.hoisted(() => [] as { host: string; method: string; params: unk
 const answers = vi.hoisted(() => ({}) as Record<string, (params: unknown) => unknown>);
 const events = vi.hoisted(() => ({ emit: (_e: { host: string; name: string; data: unknown }) => {} }));
 const hostStatus = vi.hoisted(() => ({ emit: (_h: { id: string; status: string }) => {} }));
+const shown = vi.hoisted(() => [] as { title: string; body: string }[]);
+vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ setBadgeCount: () => Promise.resolve() }) }));
+vi.mock("@tauri-apps/plugin-notification", () => ({
+  isPermissionGranted: () => Promise.resolve(true),
+  requestPermission: () => Promise.resolve("granted"),
+  sendNotification: (n: { title: string; body: string }) => shown.push(n),
+}));
 
 vi.mock("./daemon", () => ({
   rpc: vi.fn((host: string, method: string, params: unknown) => {
@@ -35,6 +42,7 @@ const system = (over: Partial<DesignSystem> = {}): DesignSystem => ({
   agent: 7,
   last_sync: [],
   needs_you: null,
+  steps: [],
   ...over,
 });
 
@@ -202,6 +210,25 @@ describe("a design system's cards (X64)", () => {
     events.emit({ host: "local", name: "design.changed", data: { workspace: "w-1devstudio", system: "moonlet-desktop", paths: ["components.css"] } });
     events.emit({ host: "local", name: "design.changed", data: { workspace: "w-1devstudio", system: "storefront", paths: ["components.css"] } });
     expect(revOf(useDesign.getState(), "local", "w-1devstudio", "moonlet-desktop")).toBe(1);
+  });
+});
+
+describe("the sync agent's notifications (X64, X65)", () => {
+  it("come when a listing shows it asking, or the sync recorded, never on the first listing", async () => {
+    shown.length = 0;
+    answers["design.systems"] = () => [system({ needs_you: { kind: "question", text: "Old question?" } })];
+    await loadSystems("local", "w-notes");
+    expect(shown).toEqual([]);
+    answers["design.systems"] = () => [system({ needs_you: { kind: "question", text: "Which button set is current?" } })];
+    await loadSystems("local", "w-notes");
+    await settle();
+    answers["design.systems"] = () => [system({ synced_at: 5, to_settle: 1 })];
+    await loadSystems("local", "w-notes");
+    await settle();
+    expect(shown).toEqual([
+      { title: "Design · moonlet desktop", body: "asks: Which button set is current?" },
+      { title: "Design · moonlet desktop", body: "moonlet desktop synced · 1 to settle" },
+    ]);
   });
 });
 

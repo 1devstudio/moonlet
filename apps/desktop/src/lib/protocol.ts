@@ -971,8 +971,10 @@ export interface DesignSystem {
   /** Proposed changes and orphaned cards waiting for the user. */
   to_settle: number;
   /** The step a running sync reported last. */
-  step: "inventory" | "tokens" | "cards" | "layouts" | null;
+  step: DesignStep | null;
   step_summary: string | null;
+  /** Each step the running sync reported, in step order, with its summary. */
+  steps: { step: DesignStep; summary: string | null }[];
   /** Why the system could not be read. */
   error: string | null;
   /** Its sync agent's chat, once one was started. */
@@ -981,6 +983,9 @@ export interface DesignSystem {
   /** What its sync agent waits for from the user. */
   needs_you: { kind: "question" | "approval"; text: string } | null;
 }
+
+/** A sync's steps, in order (X64). */
+export type DesignStep = "inventory" | "tokens" | "cards" | "layouts";
 
 /** One card of a design system, from `design.cards` (X64). */
 export interface DesignCard {
@@ -999,6 +1004,13 @@ export interface DesignCard {
   problems: { path: string; line: number; kind: string; message: string }[];
   /** Its sources changed since the last sync. */
   changed_sources: string[];
+  /** The proposals a sync wrote beside it (it was edited by hand), relative to the system. */
+  proposals: string[];
+  edited_by_hand: boolean;
+  /** Its sources are gone. */
+  orphaned: boolean;
+  /** An orphan the user keeps for now. */
+  kept: boolean;
 }
 
 /** What a design system covers: the components that matter most, all of them, or none yet. */

@@ -22,6 +22,7 @@ const system = (over: Partial<DesignSystem>): DesignSystem => ({
   agent: 7,
   last_sync: [],
   needs_you: null,
+  steps: [],
   ...over,
 });
 
