@@ -1103,7 +1103,7 @@ impl SessionManager {
                 add_dirs: req.add_dirs.clone(),
                 settings: None,
                 workspace: None,
-                design: false,
+                design: None,
             })?,
             None => self.terminals.create(req.clone())?,
         };
@@ -2201,7 +2201,7 @@ mod tests {
                 title: Some("Design · storefront".into()),
                 session_id: None,
                 workspace: Some(ws.id.clone()),
-                design: false,
+                design: None,
                 env: BTreeMap::new(),
                 add_dirs: vec![],
                 settings: Some(settings.into()),
