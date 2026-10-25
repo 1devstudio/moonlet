@@ -124,9 +124,14 @@ impl Store {
 
     /// The workspace's designs, by name. A design whose `design.toml` cannot
     /// be read still lists, with its error, so it never hides the others.
+    /// A workspace with no designs folder has none; a folder that is there
+    /// but cannot be read fails the listing with the reason.
     pub fn designs(&self, workspace: &str) -> Result<Vec<DesignInfo>> {
-        let Ok(entries) = std::fs::read_dir(self.designs_dir(workspace, false)?) else {
-            return Ok(Vec::new());
+        let folder = self.designs_dir(workspace, false)?;
+        let entries = match std::fs::read_dir(&folder) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e).with_context(|| format!("cannot read {}", folder.display())),
         };
         let mut out = Vec::new();
         for e in entries.flatten() {
@@ -597,6 +602,25 @@ created_at = 1761200000000
                 .starts_with("cannot read design.toml"),
             "{:?}",
             list[0].error
+        );
+    }
+
+    #[test]
+    fn a_designs_folder_that_cannot_be_read_fails_the_listing_with_its_reason() {
+        use std::os::unix::fs::PermissionsExt;
+        let (home, store) = store_with_system();
+        store
+            .create_design("w1", "Settings page", "moonlet-desktop", "", 1)
+            .unwrap();
+        let designs = home.path().join("design/w1/designs");
+        std::fs::set_permissions(&designs, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let listed = store.designs("w1");
+        std::fs::set_permissions(&designs, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let err = format!("{:#}", listed.unwrap_err());
+        assert!(
+            err.starts_with(&format!("cannot read {}", designs.display()))
+                && err.contains("Permission denied"),
+            "{err}"
         );
     }
 
