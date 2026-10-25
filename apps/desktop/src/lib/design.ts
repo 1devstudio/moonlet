@@ -1,7 +1,7 @@
 // Design mode's labels and names (X64, X65). Pure: the store is designStore.ts.
 
 import { ago } from "./mobile";
-import type { AgentState, Design, DesignSystem } from "./protocol";
+import type { AgentState, Design, DesignOpen, DesignSystem } from "./protocol";
 
 export interface RowLabel {
   text: string;
@@ -100,4 +100,21 @@ export function newDesignReady(d: NewDesign, systems: string[]): { ready: boolea
   if (!systems.includes(d.system)) return { ready: false, why: "A design starts from a design system" };
   if (!d.brief.trim()) return { ready: false, why: "Say what to design: the brief is Claude's first message" };
   return { ready: true, why: null };
+}
+
+/** What the app does on `design.open` (X65): show the design the user asked
+ *  for; one an agent started (`spawned_by`) is offered in a toast instead, and
+ *  the focus stays where it is (as X22). */
+export function designOpenAction(ev: DesignOpen, sessions: { id: string; name: string }[]): { kind: "show" } | { kind: "toast"; text: string } {
+  if (ev.spawned_by === undefined || ev.spawned_by === null) return { kind: "show" };
+  const by = sessions.find((s) => s.id === ev.session)?.name ?? "An agent";
+  return { kind: "toast", text: `${by} started the design ${ev.name}` };
+}
+
+/** A design agent's first message is its brief with the design system's
+ *  README and the design rules after it; the chat shows the brief alone,
+ *  under a note that says what went with it. Null for any other message. */
+export function briefShown(text: string, brief: string): string | null {
+  const b = brief.trim();
+  return b && text.length > b.length && text.startsWith(b) ? b : null;
 }

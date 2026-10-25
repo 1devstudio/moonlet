@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Design, DesignSystem } from "./protocol";
-import { designRow, designSlug, newDesignReady, systemSummary, picksInWorkspace, systemFolder, systemLabel } from "./design";
+import { briefShown, designOpenAction, designRow, designSlug, newDesignReady, systemSummary, picksInWorkspace, systemFolder, systemLabel } from "./design";
 
 const NOW = 1_761_200_000_000;
 const DAY = 86_400_000;
@@ -155,5 +155,32 @@ describe("the New design dialog (X65)", () => {
     expect(newDesignReady({ name: "Settings page", system: "", brief: "A left nav" }, [])).toEqual({ ready: false, why: "A design starts from a design system" });
     expect(newDesignReady({ name: "Settings page", system: "gone", brief: "A left nav" }, systems)).toEqual({ ready: false, why: "A design starts from a design system" });
     expect(newDesignReady({ name: "Settings page", system: "storefront", brief: "\n " }, systems)).toEqual({ ready: false, why: "Say what to design: the brief is Claude's first message" });
+  });
+});
+
+describe("design.open in the app (X65)", () => {
+  const sessions = [{ id: "s1", name: "Fix checkout button" }];
+
+  it("shows the design when the user asked for it", () => {
+    expect(designOpenAction({ workspace: "w1", slug: "settings-page", name: "Settings page" }, sessions)).toEqual({ kind: "show" });
+  });
+
+  it("offers it in a toast, and leaves the focus where it is, when an agent started it", () => {
+    expect(designOpenAction({ workspace: "w1", slug: "settings-page", name: "Settings page", spawned_by: 4, session: "s1" }, sessions)).toEqual({
+      kind: "toast",
+      text: "Fix checkout button started the design Settings page",
+    });
+    expect(designOpenAction({ workspace: "w1", slug: "onboarding", name: "Onboarding", spawned_by: 9 }, sessions)).toEqual({ kind: "toast", text: "An agent started the design Onboarding" });
+  });
+});
+
+describe("the design's chat (X65)", () => {
+  it("shows the first message as the brief alone, since the README and the design rules went with it", () => {
+    const sent = "A left nav and a Git section\n\n---\nThis is the design \"Settings page\" in this folder. Its README.md:\n\n# moonlet desktop";
+    expect(briefShown(sent, "A left nav and a Git section")).toBe("A left nav and a Git section");
+    // Any other message shows as it was sent.
+    expect(briefShown("Two more variants", "A left nav and a Git section")).toBeNull();
+    expect(briefShown("A left nav and a Git section", "A left nav and a Git section")).toBeNull();
+    expect(briefShown("anything", "")).toBeNull();
   });
 });
