@@ -256,9 +256,13 @@ impl Store {
         if parse_viewport(viewport).is_none() {
             return Err(BadViewport(viewport.to_string()).into());
         }
-        let dir = self.design_dir(workspace, slug)?;
-        // The agent may label a page meanwhile: its edit is kept.
-        fsx::update_inside(&dir, Path::new(DESIGN_FILE), |text| {
+        // An existing design, its folder no link.
+        self.design_dir(workspace, slug)?;
+        // Through the designs folder, so a design folder swapped for a link
+        // after that check is not followed; and the agent may label a page
+        // meanwhile: its edit is kept.
+        let designs = self.designs_dir(workspace, false)?;
+        fsx::update_inside(&designs, &Path::new(slug).join(DESIGN_FILE), |text| {
             let mut doc: toml_edit::DocumentMut = text
                 .parse()
                 .with_context(|| format!("cannot read {DESIGN_FILE}"))?;
@@ -689,6 +693,39 @@ label = \"rows\"
         let text = std::fs::read_to_string(&file).unwrap();
         assert!(text.contains("viewport = \"390x844\""), "{text}");
         assert!(text.contains("[pages.index]\nlabel = \"rows\""), "{text}");
+    }
+
+    #[test]
+    fn a_viewport_save_never_writes_through_a_design_folder_swapped_for_a_link() {
+        let (home, store) = store_with_system();
+        store
+            .create_design("w1", "Settings page", "moonlet-desktop", "", 1)
+            .unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let theirs = "name = \"Theirs\"\nsystem = \"x\"\nviewport = \"1440x900\"\n";
+        std::fs::write(outside.path().join("design.toml"), theirs).unwrap();
+        let designs = home.path().join("design/w1/designs");
+        // A design folder that is a link is refused outright.
+        std::os::unix::fs::symlink(outside.path(), designs.join("linked")).unwrap();
+        assert!(
+            store
+                .set_design_viewport("w1", "linked", "390x844")
+                .is_err()
+        );
+        // One swapped for a link after the save found it is not followed.
+        let (dir, target) = (designs.join("settings-page"), outside.path().to_path_buf());
+        let moved = designs.join(".moved");
+        fsx::BEFORE_REPLACE.with(|h| {
+            *h.borrow_mut() = Some(Box::new(move || {
+                std::fs::rename(&dir, &moved).unwrap();
+                std::os::unix::fs::symlink(&target, &dir).unwrap();
+            }))
+        });
+        let _ = store.set_design_viewport("w1", "settings-page", "390x844");
+        assert_eq!(
+            std::fs::read_to_string(outside.path().join("design.toml")).unwrap(),
+            theirs
+        );
     }
 
     #[test]
