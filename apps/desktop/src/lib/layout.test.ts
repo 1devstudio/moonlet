@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addTab, allSessions, closeFile, cycleFocus, emptyLayout, leaves, openFile, parseLayout, reconcile, removeSession, splitLeaf } from "./layout";
+import { addTab, allSessions, closeFile, closeJob, cycleFocus, emptyLayout, leaves, openFile, openJob, parseLayout, reconcile, removeSession, splitLeaf } from "./layout";
 
 describe("layout", () => {
   it("opens a tab per unseen session and drops dead ones", () => {
@@ -99,6 +99,34 @@ describe("file tabs (X26)", () => {
     const l = closeFile(opened, file);
     expect(l.tabs.map((t) => t.root)).toEqual([{ type: "leaf", session: 1 }]);
     expect(l.active).toBe(l.tabs[0].id);
+    expect(l.focused).toBe(1);
+  });
+});
+
+describe("job tabs (X62)", () => {
+  it("opens a job as a new active tab, and switches to it when open", () => {
+    const l = openJob(reconcile(emptyLayout(), [1]), "j7");
+    expect(l.tabs.map((t) => t.root)).toEqual([
+      { type: "leaf", session: 1 },
+      { type: "job", job: "j7" },
+    ]);
+    expect(l.active).toBe(l.tabs[1].id);
+    expect(l.focused).toBeNull();
+    const again = openJob({ ...l, active: l.tabs[0].id, focused: 1 }, "j7");
+    expect(again.tabs).toHaveLength(2);
+    expect(again.active).toBe(l.tabs[1].id);
+  });
+
+  it("keeps job tabs when the terminals are synced, and reads them back", () => {
+    const l = reconcile(openJob(reconcile(emptyLayout(), [1]), "j7"), [1, 2]);
+    expect(allSessions(l)).toEqual([1, 2]);
+    const stored = { tabs: [{ id: "a", root: { type: "job", job: "j7" } }, { id: "b", root: { type: "job" } }], active: "a", focused: null };
+    expect(parseLayout(stored).tabs).toEqual([{ id: "a", root: { type: "job", job: "j7" } }]);
+  });
+
+  it("closes a job tab and activates its neighbour", () => {
+    const l = closeJob(openJob(reconcile(emptyLayout(), [1]), "j7"), "j7");
+    expect(l.tabs.map((t) => t.root)).toEqual([{ type: "leaf", session: 1 }]);
     expect(l.focused).toBe(1);
   });
 });

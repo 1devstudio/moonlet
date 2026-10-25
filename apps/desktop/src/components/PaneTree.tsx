@@ -7,6 +7,7 @@ import { AgentView } from "./AgentView";
 import { useStore } from "../lib/store";
 
 const FileEditor = lazy(() => import("./FileEditor"));
+const JobView = lazy(() => import("./JobView"));
 
 interface Props {
   host: string;
@@ -25,6 +26,12 @@ export function PaneTree({ host, wsId, tabId, node, path, focused, visible }: Pr
     return (
       <Suspense fallback={null}>
         <FileEditor host={host} wsId={wsId} path={node.path} line={node.line} visible={visible} />
+      </Suspense>
+    );
+  if (node.type === "job")
+    return (
+      <Suspense fallback={null}>
+        <JobView host={host} wsId={wsId} job={node.job} />
       </Suspense>
     );
   if (node.type === "leaf") {

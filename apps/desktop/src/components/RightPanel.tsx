@@ -17,6 +17,9 @@ import { grantMenuLabel } from "../lib/terminalRead";
 import { ChecksPanel } from "./ChecksPanel";
 import { PlanPanel } from "./PlanPanel";
 import { AgentsPanel } from "./AgentsPanel";
+import { JobsPanel } from "./JobsPanel";
+import { useSessionJobs } from "../lib/jobsStore";
+import { jobsTabCount } from "../lib/jobs";
 import { FileLinks, useProjectFiles } from "./AgentView";
 import { useNow } from "../lib/useNow";
 import { FilesPanel } from "./FilesPanel";
@@ -257,8 +260,11 @@ export function RightPanel({ host, ws }: { host: string; ws: Session }) {
   // The Task tab is there for a session linked to a task (X46); otherwise Files stands in.
   const linked = !!useSessionTask(host, ws);
   const chosen = useStore((s) => s.rightTab);
-  const tab = chosen === "task" && !linked ? "files" : chosen;
-  const tabs = linked ? [{ id: "task" as const, label: "Task" }, ...TABS] : TABS;
+  // The Jobs tab is there once the session has routed a command (X62).
+  const jobs = useSessionJobs(host, ws.id);
+  const tab = (chosen === "task" && !linked) || (chosen === "jobs" && !jobs.length) ? "files" : chosen;
+  const shown = jobs.length ? TABS.flatMap((t) => (t.id === "agents" ? [t, { id: "jobs" as const, label: "Jobs" }] : [t])) : TABS;
+  const tabs = linked ? [{ id: "task" as const, label: "Task" }, ...shown] : shown;
   const plan = useSessionPlan(host, ws);
   const agents = useSessionAgents(host, ws);
   // Plan file links (X30) check the worktree while the Plan tab shows, and again whenever the plan changes.
@@ -282,13 +288,16 @@ export function RightPanel({ host, ws }: { host: string; ws: Session }) {
             aria-selected={tab === t.id}
             aria-controls="right-tabpanel"
             // The Agents tab always opens on its list (X42).
-            onClick={() => useStore.setState(t.id === "agents" ? { rightTab: t.id, agentDetail: null } : { rightTab: t.id })}
+            onClick={() =>
+              useStore.setState(t.id === "agents" ? { rightTab: t.id, agentDetail: null } : t.id === "jobs" ? { rightTab: t.id, jobDetail: null } : { rightTab: t.id })
+            }
             className={cx(
               "flex items-center gap-1.5 px-3 ui-text-13 transition-colors",
               tab === t.id ? "text-fg shadow-[inset_0_-2px_0_var(--color-accent)]" : "text-muted hover:text-fg",
             )}
           >
             {t.label}
+            {t.id === "jobs" && <span className="ui-text-12 tabular-nums text-faint">{jobsTabCount(jobs)}</span>}
             {t.id === "plan" && planTabDot(tab, plan?.status === "pending") && <span aria-label="plan waiting" className="h-1.5 w-1.5 rounded-full bg-blocked" />}
             {t.id === "agents" && agentsTabDot(tab, agents.rows) && <span aria-label="agent waiting" className="h-1.5 w-1.5 rounded-full bg-blocked" />}
           </button>
@@ -311,6 +320,8 @@ export function RightPanel({ host, ws }: { host: string; ws: Session }) {
             <FileLinks.Provider value={{ host, wsId: ws.id, cwd: ws.path, exists }}>
               <AgentsPanel host={host} cwd={ws.path} rows={agents.rows} now={agents.now} />
             </FileLinks.Provider>
+          ) : tab === "jobs" ? (
+            <JobsPanel host={host} ws={ws} jobs={jobs} />
           ) : tab === "files" ? (
             <FilesPanel host={host} ws={ws} />
           ) : tab === "changes" ? (

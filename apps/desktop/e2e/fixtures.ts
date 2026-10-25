@@ -171,6 +171,16 @@ export function socketRpc<T>(sock: string, env: NodeJS.ProcessEnv, method: strin
   });
 }
 
+/** The scratch daemon's socket, where moonlet places it (`paths::default_socket_path`). */
+export function daemonSock(w: World): string {
+  const path = join(w.home, "run", "moonletd.sock");
+  if (path.length < 100) return path;
+  // A long home falls back to a short per-user directory, by an FNV-1a hash of the home.
+  let hash = 0xcbf29ce484222325n;
+  for (const b of Buffer.from(w.home)) hash = BigInt.asUintN(64, (hash ^ BigInt(b)) * 0x100000001b3n);
+  return `/tmp/moonlet-${process.getuid!()}-${(hash & 0xffffffffn).toString(16).padStart(8, "0")}/moonletd.sock`;
+}
+
 export const projectId = (w: World) => rpc<{ id: string; name: string }[]>(w, "project.list", {}).find((p) => p.name === PROJECT)!.id;
 
 /** Puts `text` on disk and, when it parses, tells the app through a no-op
