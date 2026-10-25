@@ -293,6 +293,21 @@ describe("the bridge script in a page (X65)", () => {
     expect(of("key")).toEqual([]);
   });
 
+  it("puts back a text edited in place that is longer than the app takes, so the page never shows a text that is not saved", () => {
+    const { win, el, tell, posted, of } = framed('<h2 data-mid="m25">Git</h2>');
+    tell(modeMessage("edit"));
+    mouse(win, "dblclick", el("m25"));
+    el("m25").textContent = "x".repeat(10_001);
+    el("m25").dispatchEvent(new win.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    expect(el("m25").textContent).toBe("Git");
+    expect(el("m25").getAttribute("contenteditable")).toBeNull();
+    expect(posted.filter((m) => "dropped" in (m as object))).toEqual([]);
+    mouse(win, "dblclick", el("m25"));
+    el("m25").textContent = "x".repeat(10_000);
+    el("m25").dispatchEvent(new win.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    expect(of("text")).toEqual([{ type: "text", mid: "m25", text: "x".repeat(10_000) }]);
+  });
+
   it("names each element of the tree by its text, its parts' texts apart", async () => {
     // The settings page's nav, as the agent wrote it, which Layers names
     // "General Appearance Terminal Git", as the design export's board does.

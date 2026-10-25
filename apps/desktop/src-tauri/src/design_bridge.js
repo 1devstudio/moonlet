@@ -25,6 +25,8 @@
   const post = (message) => app.postMessage(message, "*");
   const MID = /^m\d+$/;
   const TEXT_MAX = 60;
+  // The longest text the app takes for an element (designBridge.ts).
+  const TEXT_EDIT_MAX = 10000;
   let mode = "view";
   let pinned = [];
 
@@ -266,8 +268,8 @@
 
   // Editing an element's text in place (Edit mode): a double-click on an
   // element that holds only text makes it editable as plain text; Enter or
-  // a press outside it commits, and the new text is reported; Esc puts the
-  // text back. The page's own handlers never see the presses.
+  // a press outside it commits, and the new text is reported; Esc, or a text
+  // longer than the app takes, puts the text back. The page's own handlers never see the presses.
   let editing = null;
   let before = "";
   const inEdit = (e) => !!editing && e.target instanceof Node && editing.contains(e.target);
@@ -277,7 +279,9 @@
     if (!el) return;
     editing = null;
     el.removeAttribute("contenteditable");
-    if (!keep) el.textContent = before;
+    // A text longer than the app takes is put back too: the app would
+    // never save it, so the page must not show it.
+    if (!keep || el.textContent.length > TEXT_EDIT_MAX) el.textContent = before;
     else if (el.textContent !== before) {
       post({ type: "bridge.text", mid: midOf(el), text: el.textContent });
       reportTree();
