@@ -121,10 +121,20 @@ export function newDesignSystem(chosen: string, systems: string[], shown: string
 /** What the app does on `design.open` (X65): show the design the user asked
  *  for; one an agent started (`spawned_by`) is offered in a toast instead, and
  *  the focus stays where it is (as X22). */
-export function designOpenAction(ev: DesignOpen, sessions: { id: string; name: string }[]): { kind: "show" } | { kind: "toast"; text: string } {
+export function designOpenAction(ev: DesignOpen, sessions: { id: string; name: string }[]): { kind: "show" } | { kind: "toast"; text: string } | { kind: "none" } {
+  // A session design shows in its session's Design tab (X65 entry 12b).
+  if (ev.kind === "session") return { kind: "none" };
   if (ev.spawned_by === undefined || ev.spawned_by === null) return { kind: "show" };
   const by = sessions.find((s) => s.id === ev.session)?.name ?? "An agent";
   return { kind: "toast", text: `${by} started the design ${ev.name}` };
+}
+
+/** The designs Design mode lists and opens on its design screen: the
+ *  workspace designs of `design.list`. Its session designs belong to their
+ *  sessions' Design tabs and its project designs to the Designs index (X65
+ *  entries 12b and 12c). */
+export function workspaceDesigns(list: Design[]): Design[] {
+  return list.filter((d) => d.kind === "workspace");
 }
 
 /** A design agent's first message is its brief, then the design system's
