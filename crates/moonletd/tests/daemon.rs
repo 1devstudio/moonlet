@@ -3954,3 +3954,92 @@ async fn a_project_design_on_the_base_branch_is_listed_and_copied_into_a_new_wor
         .await;
     assert_eq!(missing.unwrap_err().to_string(), "invalid_params: no design at docs/design/nope on main");
 }
+
+/// A Claude Code that first records every file of the session designs its
+/// worktree has as it starts, in `claude-saw`, then answers as FAKE_CLAUDE.
+const SEEING_CLAUDE: &str = r#"#!/bin/sh
+find docs/design .moonlet/design -type f 2>/dev/null | LC_ALL=C sort > claude-saw
+echo "$@" >> claude-args
+while IFS= read -r line; do
+  case "$line" in
+    *'"subtype":"initialize"'*) echo '{"type":"system","subtype":"init","session_id":"s1","model":"fake"}' ;;
+    *'"type":"user"'*) echo "$line" >> claude-user
+      echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}' ;;
+  esac
+done
+"#;
+
+/// X65 entry 12, Build it: `session.create` with a design copies that
+/// workspace design into the new worktree as a session design before the
+/// session's agent starts (the pages kept, its assets, the pinned styles,
+/// `design.toml` and the whole design system in `.moonlet/design/`), and
+/// the workspace design records the session it is built in. A page the
+/// design does not have makes no session.
+#[tokio::test]
+async fn session_create_with_a_design_copies_it_into_the_worktree_before_the_agent_starts() {
+    use moonlet_proto::types::Session;
+    let d = fake_claude_daemon(SEEING_CLAUDE).await;
+    let mut c = d.client().await;
+    let (ws, project, _) = workspace_with_session(&d, &mut c, &[]).await;
+    let _: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "A left nav"}))
+        .await
+        .unwrap();
+    let design = d.home.path().join(".moonlet/design").join(&ws).join("designs/settings-page");
+    for page in ["index", "git-a", "git-b"] {
+        std::fs::write(
+            design.join(format!("pages/{page}.html")),
+            format!("<link rel=\"stylesheet\" href=\"../../../systems/moonlet-desktop/styles.css\">\n<body data-mid=\"m1\">{page}</body>\n"),
+        )
+        .unwrap();
+    }
+    std::fs::write(design.join("assets/logo.svg"), "<svg></svg>\n").unwrap();
+    let create = |pages: &[&str]| {
+        serde_json::json!({
+            "project_id": project.id, "name": "Implement settings page", "workspace_id": ws, "agent": "claude",
+            "prompt": "Implement the Settings page design",
+            "design": {"workspace": ws, "slug": "settings-page", "pages": pages}
+        })
+    };
+    let refused = c.request::<_, Session>(methods::SESSION_CREATE, create(&["index", "nope"])).await;
+    assert!(refused.is_err(), "{refused:?}");
+    let sessions: Vec<Session> = c.request(methods::SESSION_LIST, ()).await.unwrap();
+    assert_eq!(sessions.len(), 1, "a session made for a page the design does not have");
+
+    let session: Session = c.request(methods::SESSION_CREATE, create(&["index", "git-a"])).await.unwrap();
+    let worktree = std::path::PathBuf::from(&session.path);
+    let saw = until_contains(
+        {
+            let p = worktree.join("claude-saw");
+            move || std::fs::read_to_string(&p).unwrap_or_default()
+        },
+        "docs/design",
+    )
+    .await;
+    assert_eq!(
+        saw,
+        ".moonlet/design/.gitignore
+.moonlet/design/settings-page/comments.json
+.moonlet/design/settings-page/system/README.md
+.moonlet/design/settings-page/system/_ds_sync.json
+.moonlet/design/settings-page/system/components/buttons/button/button.html
+.moonlet/design/settings-page/system/styles.css
+.moonlet/design/settings-page/system/tokens/colors.css
+docs/design/settings-page/assets/logo.svg
+docs/design/settings-page/design.toml
+docs/design/settings-page/pages/git-a.html
+docs/design/settings-page/pages/index.html
+docs/design/settings-page/system/styles.css
+docs/design/settings-page/system/tokens/colors.css
+"
+    );
+    assert_eq!(
+        std::fs::read_to_string(worktree.join("docs/design/settings-page/pages/index.html")).unwrap(),
+        "<link rel=\"stylesheet\" href=\"../system/styles.css\">\n<body data-mid=\"m1\">index</body>\n"
+    );
+    let list: serde_json::Value = c.request(methods::DESIGN_LIST, serde_json::json!({"workspace": ws})).await.unwrap();
+    let workspace_design = list.as_array().unwrap().iter().find(|d| d["kind"] == "workspace").unwrap();
+    assert_eq!(workspace_design["built_in"], serde_json::json!({"session": session.id, "project": project.id}));
+    let in_session = list.as_array().unwrap().iter().find(|d| d["kind"] == "session").unwrap();
+    assert_eq!((&in_session["slug"], &in_session["session"]), (&serde_json::json!("settings-page"), &serde_json::json!(session.id)));
+}

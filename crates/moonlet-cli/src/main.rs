@@ -772,6 +772,7 @@ async fn run(cmd: Cmd, socket: PathBuf) -> Result<()> {
                         add_dirs: vec![],
                         task: None,
                         worktree: None,
+                        design: None,
                         cols: 120,
                         rows: 32,
                     },
