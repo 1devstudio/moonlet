@@ -1785,6 +1785,32 @@ async fn with_idle_zero_an_unused_machine_stays_five_minutes() {
 }
 
 #[tokio::test]
+async fn an_idle_machine_stays_until_its_paid_hour_ends() {
+    // A provider billing every started hour, as Hetzner does.
+    let c = cloud().await;
+    c.steer("billing", "3600");
+    let m = c.ready().await;
+    let shown = c.machines().await["machines"][0].clone();
+    // Idle 15 minutes would be 10:15; the hour is paid until 11:00, and
+    // the removal starts 3 minutes before.
+    let until = shown["idle_until"].as_u64().unwrap() - m["since"].as_u64().unwrap();
+    assert!(
+        (56 * 60_000..=57 * 60_000).contains(&until),
+        "{until} ms after ready"
+    );
+}
+
+#[tokio::test]
+async fn usage_counts_every_started_hour() {
+    let c = cloud().await;
+    c.steer("billing", "3600");
+    let m = c.ready().await;
+    let _: Value = c.d.call("cloud.down", json!({ "machine": m["id"] })).await;
+    c.until(m["id"].as_str().unwrap(), "removed").await;
+    assert_eq!(c.machines().await["hours_this_month"], json!(1.0));
+}
+
+#[tokio::test]
 async fn with_idle_zero_a_machine_goes_when_its_command_ends() {
     let c = routing(&[]).await;
     let _: Value = c.d.call("cloud.set", json!({ "idle_minutes": 0 })).await;

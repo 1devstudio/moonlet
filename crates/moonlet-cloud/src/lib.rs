@@ -86,6 +86,25 @@ pub struct ProviderInfo {
     pub max_name: usize,
     /// Its machines join the tailnet with a one-off Tailscale key.
     pub tailnet_key: bool,
+    /// How it bills a machine: idle machines stay until their paid time
+    /// ends, and usage counts what is billed.
+    pub billing: Billing,
+}
+
+/// How a provider bills a machine: every started `unit_secs` in full, and
+/// at least `minimum_secs`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Billing {
+    pub unit_secs: u64,
+    pub minimum_secs: u64,
+}
+
+impl Billing {
+    /// The seconds billed for `secs` of machine time.
+    pub fn billed(&self, secs: u64) -> u64 {
+        let unit = self.unit_secs.max(1);
+        secs.max(self.minimum_secs).div_ceil(unit) * unit
+    }
 }
 
 /// Every provider, for the app's **Add provider**.

@@ -29,13 +29,19 @@ pub fn from_env() -> Option<Fake> {
     })
 }
 
-pub fn info() -> ProviderInfo {
+/// The fake provider. It bills by the second, or every started
+/// `<billing>` seconds when its folder has that file.
+pub fn info(billing: Option<u64>) -> ProviderInfo {
     ProviderInfo {
         id: "fake".into(),
         label: "Fake cloud".into(),
         fields: vec![],
         max_name: 63,
         tailnet_key: false,
+        billing: moonlet_cloud::Billing {
+            unit_secs: billing.unwrap_or(1),
+            minimum_secs: 0,
+        },
     }
 }
 
@@ -204,7 +210,7 @@ async fn boot(dir: PathBuf, user_data: String, join: bool) {
 #[async_trait::async_trait]
 impl Provider for Fake {
     fn info(&self) -> ProviderInfo {
-        info()
+        info(self.steer("billing").and_then(|v| v.parse().ok()))
     }
 
     async fn machine_types(&self, _location: &str) -> Result<Vec<MachineType>, CloudError> {

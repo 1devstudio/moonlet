@@ -25,6 +25,11 @@ pub fn info() -> ProviderInfo {
         }],
         max_name: 63,
         tailnet_key: true,
+        // Every started hour.
+        billing: crate::Billing {
+            unit_secs: 3600,
+            minimum_secs: 0,
+        },
     }
 }
 

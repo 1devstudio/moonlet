@@ -356,11 +356,25 @@ impl Machines {
             .cloned()
     }
 
+    /// How provider `id` bills; by the second when it is unknown.
+    fn billing(&self, id: &str) -> moonlet_cloud::Billing {
+        self.provider_infos()
+            .into_iter()
+            .find(|p| p.id == id)
+            .map_or(
+                moonlet_cloud::Billing {
+                    unit_secs: 1,
+                    minimum_secs: 0,
+                },
+                |p| p.billing,
+            )
+    }
+
     /// The providers on offer: the fake one only with its setting.
     pub fn provider_infos(&self) -> Vec<moonlet_cloud::ProviderInfo> {
         let mut out = moonlet_cloud::providers();
-        if self.fake.is_some() {
-            out.push(crate::cloud_fake::info());
+        if let Some(fake) = &self.fake {
+            out.push(fake.info());
         }
         out
     }
@@ -411,7 +425,7 @@ impl Machines {
             machines: machines
                 .into_iter()
                 .map(|r| {
-                    let until = idle_until(&r, f.idle_minutes);
+                    let until = idle_until(&r, f.idle_minutes, self.billing(&r.shown.provider));
                     let mut shown = r.shown;
                     shown.idle_until = until;
                     shown.worker = r.worker;
@@ -725,7 +739,12 @@ impl Machines {
     fn hours(&self, records: &[Record], now: u64) -> f64 {
         let mut usage = self.usage.lock().unwrap().clone();
         for r in records.iter().filter(|r| counts(&r.shown.state)) {
-            moonlet_cloud::usage::add(&mut usage, r.created_at, now);
+            moonlet_cloud::usage::add_billed(
+                &mut usage,
+                r.created_at,
+                now,
+                self.billing(&r.shown.provider),
+            );
         }
         moonlet_cloud::usage::hours(&usage, now)
     }
@@ -998,8 +1017,12 @@ impl Machines {
                         continue;
                     }
                     let idle = self.settings.file().idle_minutes;
-                    if idle_until(&r, idle).is_some_and(|until| now >= until) {
-                        let waited = idle_for(&r, idle);
+                    let billing = self.billing(&r.shown.provider);
+                    if let Some(until) = idle_until(&r, idle, billing)
+                        && now >= until
+                    {
+                        // The idle time it was given: the setting, or more.
+                        let waited = (until - idle_since(&r)) / minute();
                         self.retire(&r.shown.id, format!("removed after {waited} min idle"));
                     }
                 }
@@ -1362,7 +1385,13 @@ impl Machines {
         }
         self.retry.lock().unwrap().remove(&id);
         let now = now_ms();
-        moonlet_cloud::usage::add(&mut self.usage.lock().unwrap(), r.created_at, now);
+        let billing = self.billing(&r.shown.provider);
+        moonlet_cloud::usage::add_billed(
+            &mut self.usage.lock().unwrap(),
+            r.created_at,
+            now,
+            billing,
+        );
         self.update(&id, |r| {
             r.set_state("removed");
             r.removed_at = Some(now);
@@ -1420,6 +1449,7 @@ impl Machines {
             }
             if !plan.drop.is_empty() {
                 let now = now_ms();
+                let billing = self.billing(&id);
                 let mut records = self.records.lock().unwrap();
                 let mut usage = self.usage.lock().unwrap();
                 records.retain(|r| {
@@ -1428,7 +1458,7 @@ impl Machines {
                         && r.shown.state != "removed";
                     // Its time until now is billed, as a removal books it.
                     if drop && counts(&r.shown.state) {
-                        moonlet_cloud::usage::add(&mut usage, r.created_at, now);
+                        moonlet_cloud::usage::add_billed(&mut usage, r.created_at, now, billing);
                     }
                     !drop
                 });
@@ -1442,15 +1472,25 @@ impl Machines {
 /// When ready machine `r` is removed for its idleness: after `idle`
 /// minutes from ready or from its last command's end. None while it runs a
 /// command, or before it ran one a command waits on.
-fn idle_until(r: &Record, idle: u32) -> Option<u64> {
+fn idle_until(r: &Record, idle: u32, billing: moonlet_cloud::Billing) -> Option<u64> {
     if r.shown.state != "ready" || r.shown.running > 0 || (r.waiting > 0 && r.last_end.is_none()) {
         return None;
     }
-    let since = r
-        .last_end
+    let at = idle_since(r) + u64::from(idle_for(r, idle)) * minute();
+    // Leaving before its paid time ends would save nothing.
+    Some(moonlet_cloud::idle::paid_end(
+        at,
+        r.created_at,
+        billing,
+        minute(),
+    ))
+}
+
+/// Since when ready machine `r` has been idle: ready, or its last command's end.
+fn idle_since(r: &Record) -> u64 {
+    r.last_end
         .unwrap_or(0)
-        .max(r.ready_at.unwrap_or(r.shown.since));
-    Some(since + u64::from(idle_for(r, idle)) * minute())
+        .max(r.ready_at.unwrap_or(r.shown.since))
 }
 
 /// The idle minutes machine `r` gets: `idle`, or a few more while it has
