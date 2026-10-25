@@ -33,6 +33,8 @@ export interface TerminalInfo {
   chat?: boolean;
   /** Shell keeps its own prompt; no Blocks-mode editor (T7). */
   classic?: boolean;
+  /** A design system's sync agent (X64). */
+  design?: boolean;
   /** Running subagents of a chat terminal (X42). */
   subagents?: number;
   created_at: number;
@@ -812,6 +814,8 @@ export interface Attention {
   state: AgentState;
   title: string;
   message: string | null;
+  /** From a design system's sync agent (X64). */
+  design?: boolean;
 }
 
 /** An agent asks to read a terminal of its session (X31). `text` is
@@ -975,6 +979,8 @@ export interface DesignSystem {
   step_summary: string | null;
   /** Each step the running sync reported, in step order, with its summary. */
   steps: { step: DesignStep; summary: string | null }[];
+  /** A sync started and not yet recorded: its agent's turns are the sync's. */
+  sync_running: boolean;
   /** Why the system could not be read. */
   error: string | null;
   /** Its sync agent's chat, once one was started. */

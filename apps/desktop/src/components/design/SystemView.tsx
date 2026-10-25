@@ -118,10 +118,12 @@ export function DesignSystemView({ host, workspace, sys, label, working, inset }
   const shown = view.cards;
   const status = statusLine(sys);
   const steps = stepBar(sys, working);
+  // The agent at work on a sync; a later turn, such as the user's chat, is not one.
+  const syncing = working && sys.sync_running;
   // The card the agent is writing: from its chat, in the system's folder.
   const agentDir = useStore((s) => (agent !== null ? s.terminals[host]?.[agent]?.cwd : undefined));
   const rewriting = useChat((c) => {
-    const items = agent !== null && working ? c.chats[chatKey(host, agent)]?.items : undefined;
+    const items = agent !== null && syncing ? c.chats[chatKey(host, agent)]?.items : undefined;
     return items && agentDir ? rewritingCard(items, agentDir) : null;
   });
   // Hidden as the user left it, but open while the agent asks something.
@@ -157,7 +159,7 @@ export function DesignSystemView({ host, workspace, sys, label, working, inset }
                   <ShieldAlert size={12} /> {problemsLabel(problems)}
                 </button>
               )}
-              {working ? (
+              {syncing ? (
                 <Button key="stop" size="sm" variant="danger" className="no-drag" onClick={stop}>
                   Stop sync
                 </Button>
@@ -186,7 +188,7 @@ export function DesignSystemView({ host, workspace, sys, label, working, inset }
             ) : (
               status && <p className={cx("shrink-0 border-b border-border px-5 py-2 ui-text-12.5", sys.error ? "text-error" : sys.needs_you ? "text-blocked" : "text-muted")}>{status}</p>
             )}
-            {!working && cards && <AfterSyncBar sys={sys} cards={cards} onOpenAgent={agent !== null ? () => setHidden(false) : null} />}
+            {!syncing && cards && <AfterSyncBar sys={sys} cards={cards} onOpenAgent={agent !== null ? () => setHidden(false) : null} />}
             {banner && (
               <div className="flex shrink-0 items-center gap-2 border-b border-border bg-blocked/[0.06] px-5 py-2 ui-text-12.5 text-muted">
                 <span className="h-1.5 w-1.5 rounded-full bg-blocked" />
@@ -216,7 +218,7 @@ export function DesignSystemView({ host, workspace, sys, label, working, inset }
                 </nav>
                 <div className="min-w-0 flex-1 overflow-y-auto p-6">
                   {cards?.length === 0 && <p className="ui-text-13 text-muted">No cards yet. The sync agent writes them in the Cards step.</p>}
-                  {!working && cards && (
+                  {!syncing && cards && (
                     <>
                       <NeedsYouSection host={host} workspace={workspace} sys={sys} cards={cards} rev={rev} />
                       <ChangedSection host={host} workspace={workspace} sys={sys} cards={cards} />
