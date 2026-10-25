@@ -1,0 +1,18 @@
+{
+  "session_id": "8de3b575-7c1c-4fc1-a497-429c518725f6",
+  "transcript_path": "/Users/alex/.claude/projects/-Users-alex--moonlet-worktrees-shop-fix-cart/8de3b575-7c1c-4fc1-a497-429c518725f6.jsonl",
+  "cwd": "/Users/alex/.moonlet/worktrees/shop/fix-cart",
+  "prompt_id": "5caadb8d-2d3f-4496-bfcf-a219a3e4b702",
+  "permission_mode": "default",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "pnpm test",
+    "timeout": 600000,
+    "description": "Run the tests"
+  },
+  "tool_use_id": "toolu_012ftuDv3XBoqpcogRjeHhqb"
+}

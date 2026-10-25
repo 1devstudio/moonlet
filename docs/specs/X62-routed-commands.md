@@ -62,7 +62,7 @@ This is ADR 0009's routing slice. It adds two things the ADR did not decide: an 
   | `pnpm test # all` | no: a comment |
 
   A command is not routed when it has, outside single quotes, any of `;` `&` `|` `<` `>` `(` `)` `$` `` ` `` `*` `?` `[` `{` `~` `#`, or a newline, or when it starts with an assignment. Nor is one whose first word is a Bash keyword (`time`, `!`, `if`…) or a builtin with no program of its own (`cd`, `export`, `source`…), approved or not: Bash runs those itself, and a worker runs a command without a shell.
-- [ ] Only Bash calls of Claude Code agents in sessions on the central host are routed: calls with `MOONLET_SESSION` set, whose working directory is inside the session's worktree. A call with `run_in_background` is not routed. Codex is not routed yet.
+- [ ] Only Bash calls of Claude Code agents in sessions on the central host are routed: calls with `MOONLET_SESSION` set, whose working directory is inside the session's worktree. A call whose input has any field but `command`, `timeout` and `description` is not routed: `run_in_background`, or one that asks to leave Claude Code's sandbox, goes through Claude Code's own checks. Nothing is routed while the agent is in plan mode (`permission_mode` `plan`), so the hook's `allow` never gets round it. Codex is not routed yet.
 - [ ] A command is routed only when its entry is approved for the project on this central host. Approval holds for the exact list of entries and the exact list of `env` names. An entry that is added or changed is not routed until it is approved, and the project page shows it as not approved. A name added to `env` stops routing for the project until the list is approved again, because approving is the user's consent to send those variables to every worker, cloud machines included. Removing an entry or a name needs no approval.
 - [ ] Only the Mac's app and paired desktops approve. `heavy.approve` from the `moonlet` CLI or a phone is refused with `forbidden`, so an agent cannot approve the commands it adds.
 - [ ] Each linked worker keeps its own approval, for the machine it runs on. **Approve** on the project page approves the list on the central host and on every linked worker the app reaches: this Mac, and remote hosts through their tailnet connection (X61). A worker linked later, or one the app could not reach, shows "not approved for shop" on the Workers screen, with **Approve**. `heavy.approve` on a worker follows X61's rule for `link.set`: the worker's own app or a paired Mac, never a phone or the CLI.
@@ -78,9 +78,9 @@ This is ADR 0009's routing slice. It adds two things the ADR did not decide: an 
     "hookSpecificOutput": {
       "hookEventName": "PreToolUse",
       "permissionDecision": "allow",
-      "permissionDecisionReason": "moonlet: pnpm test is an approved heavy command of shop",
+      "permissionDecisionReason": "moonlet: an approved heavy command; it runs on whichever machine is free",
       "updatedInput": {
-        "command": "moonlet exec -- pnpm test",
+        "command": "'/Applications/moonlet.app/Contents/MacOS/moonlet' exec -- pnpm test",
         "description": "Run the tests",
         "timeout": 600000
       }
@@ -88,8 +88,8 @@ This is ADR 0009's routing slice. It adds two things the ADR did not decide: an 
   }
   ```
 
-  `updatedInput` repeats every field of the call's `tool_input` and changes only `command`: the original command text, unchanged, after `moonlet exec -- `. Claude Code still applies the user's deny and ask rules to the rewritten command.
-- [ ] `moonlet exec` started anywhere without a central host's routing (no daemon, or `MOONLET_SESSION` not set) runs the command where it is, so a rewritten command always runs.
+  `updatedInput` repeats every field of the call's `tool_input` and changes only `command`: the original command text, unchanged, after the `moonlet` binary's own path in single quotes and `exec -- `. Agents do not have `moonlet` on their `PATH`, so the path is spelled out. Claude Code still applies the user's deny and ask rules to the rewritten command.
+- [ ] `moonlet exec` started anywhere without a central host's routing (no daemon, or `MOONLET_SESSION` not set) runs the command where it is, so a rewritten command always runs. A command it cannot start exits with 127 and "moonlet: cannot run <command>: <reason>", as a shell would.
 
 ### Picking a worker
 
