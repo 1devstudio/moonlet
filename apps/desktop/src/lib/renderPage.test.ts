@@ -14,8 +14,8 @@ const button = {
   name: "Button",
   fallback: false,
   errors: [],
-  fixedOutside: 0,
-  cells: [{ snippet: "buttons/button/primary", html: '<button class="btn">Run</button>', text: "Run", empty: false, textHeight: 17, painted: 1, overflow680: 0, escaped: 0 }],
+  outside: 0,
+  cells: [{ snippet: "buttons/button/primary", html: '<button class="btn">Run</button>', text: "Run", empty: false, smallestText: 17, painted: 1, overflow680: 0, escaped: 0 }],
 };
 
 describe("the render page (X64)", () => {
@@ -28,7 +28,7 @@ describe("the render page (X64)", () => {
 
   it("judges the measurements its job's card posts", () => {
     expect(verdict({ type: "moonlet-render", job: "7", metrics: button, errors: [] }, 7)).toEqual({ metrics: { flags: [], errors: [] } });
-    const empty = { ...button, errors: ["link did not load: ../../../styles.css"], cells: [{ ...button.cells[0], html: "", text: "", empty: true, textHeight: 0, painted: 0 }] };
+    const empty = { ...button, errors: ["link did not load: ../../../styles.css"], cells: [{ ...button.cells[0], html: "", text: "", empty: true, smallestText: 0, painted: 0 }] };
     expect(verdict({ type: "moonlet-render", job: "7", metrics: empty, errors: empty.errors }, 7)).toEqual({
       metrics: { flags: ["rootEmpty", "errs", "allHollow", "thin", "bad"], errors: ["link did not load: ../../../styles.css"] },
     });
