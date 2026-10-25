@@ -3254,14 +3254,15 @@ async fn a_render_waits_its_turn_without_its_clock_running() {
 }
 
 /// A design's agent that writes `pages/index.html` on each turn, "turn <n>",
-/// and leaves a message that says `HANG-NOW` unanswered, so it keeps working.
+/// and holds a turn whose message says `HOLD-NOW`, working, until a file
+/// `release` is in its folder.
 const WRITING_CLAUDE: &str = r#"#!/bin/sh
 n=0
 while IFS= read -r line; do
   case "$line" in
     *'"subtype":"initialize"'*) echo '{"type":"system","subtype":"init","session_id":"s1","model":"fake"}' ;;
-    *'HANG-NOW'*) ;;
-    *'"type":"user"'*) n=$((n+1)); mkdir -p pages
+    *'"type":"user"'*) case "$line" in *'HOLD-NOW'*) while [ ! -f release ]; do sleep 0.05; done; rm -f release ;; esac
+      n=$((n+1)); mkdir -p pages
       printf '<body data-mid="m1"><p data-mid="m2">turn %s</p></body>\n' "$n" > pages/index.html
       echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}' ;;
   esac
@@ -3395,16 +3396,23 @@ async fn a_snapshot_is_restored_over_rpc_but_never_while_the_agent_works() {
     let unknown = c.request::<_, serde_json::Value>(methods::DESIGN_SNAPSHOT_RESTORE, restore(9)).await;
     assert_eq!(unknown.unwrap_err().to_string(), "invalid_params: no snapshot 9");
 
-    let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": created["agent"], "text": "HANG-NOW"})).await.unwrap();
-    let mut busy = None;
+    // The agent at work, held there: the first restore is refused.
+    let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": created["agent"], "text": "HOLD-NOW"})).await.unwrap();
+    working(&mut c, created["agent"].as_u64().unwrap()).await;
+    let busy = c.request::<_, serde_json::Value>(methods::DESIGN_SNAPSHOT_RESTORE, restore(2)).await;
+    assert_eq!(busy.unwrap_err().to_string(), "busy: Claude is changing the design; restore once it stops");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "<body data-mid=\"m1\"><p data-mid=\"m2\">turn 1</p></body>\n");
+    std::fs::write(file.parent().unwrap().parent().unwrap().join("release"), "").unwrap();
+}
+
+/// Waits until chat `id`'s agent works, within 10 s.
+async fn working(c: &mut Client, id: u64) {
     for _ in 0..100 {
-        match c.request::<_, serde_json::Value>(methods::DESIGN_SNAPSHOT_RESTORE, restore(2)).await {
-            Err(e) => {
-                busy = Some(e.to_string());
-                break;
-            }
-            Ok(_) => tokio::time::sleep(Duration::from_millis(100)).await,
+        let terminals: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
+        if terminals.iter().any(|t| u64::from(t.id) == id && t.agent_state == moonlet_proto::types::AgentState::Working) {
+            return;
         }
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    assert_eq!(busy.as_deref(), Some("busy: Claude is changing the design; restore once it stops"));
+    panic!("chat {id} never worked");
 }
