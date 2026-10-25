@@ -369,6 +369,25 @@ describe("the bridge script in a page (X65)", () => {
     expect(keys()).toHaveLength(12);
   });
 
+  it("commits a text being edited when it loses the focus, the page loses it to the app, or the app selects another element", () => {
+    const { win, el, tell, of } = framed('<h2 data-mid="m25">Git</h2><p data-mid="m30">Branch prefix</p>');
+    const edit = (mid: string, text: string) => {
+      mouse(win, "dblclick", el(mid));
+      el(mid).textContent = text;
+    };
+    tell(modeMessage("edit"));
+    edit("m25", "Git and GitHub");
+    el("m25").dispatchEvent(new win.FocusEvent("focusout", { bubbles: true }));
+    expect(of("text").at(-1)).toEqual({ type: "text", mid: "m25", text: "Git and GitHub" });
+    edit("m30", "Prefix");
+    win.dispatchEvent(new win.FocusEvent("blur"));
+    expect(of("text").at(-1)).toEqual({ type: "text", mid: "m30", text: "Prefix" });
+    edit("m25", "Git, GitHub");
+    tell(selectMessage("m30"));
+    expect(of("text").at(-1)).toEqual({ type: "text", mid: "m25", text: "Git, GitHub" });
+    expect(el("m25").getAttribute("contenteditable")).toBeNull();
+  });
+
   it("keeps a text being edited and the selection when told the mode it is in again, as after each report of its ids", () => {
     const { win, doc, el, tell, of } = framed('<h2 data-mid="m25">Git</h2>');
     tell(modeMessage("edit"));
