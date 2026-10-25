@@ -60,11 +60,24 @@ export function changedBanner(sys: DesignSystem, cards: DesignCard[]): string | 
   return `${plural(n, "source")} changed since sync · ${sys.changed_sources.map(base).join(", ")}. ${rewrites}`;
 }
 
-/** A card's URL on the `moonlet-design://` scheme; `rev`, the system's
- *  changes so far, makes a frame load it again after one. */
+/** A card's URL on the `moonlet-design://` scheme, on a host of its own,
+ *  `<card key>.<workspace>`, so WebKit's site isolation gives each card its
+ *  own web process and one that never stops running blocks no other (X64).
+ *  The key is the 64-bit FNV-1a hash, in hex, of the card's path in the
+ *  workspace's design folder (`systems/<slug>/<path>`): the same card always
+ *  gets the same host. `rev`, the system's changes so far, makes a frame load
+ *  it again after one. `design_scheme.rs` (`target`) parses it. */
 export function cardUrl(workspace: string, slug: string, path: string, rev = 0): string {
-  const url = `moonlet-design://${encodeURIComponent(workspace)}/systems/${encodeURIComponent(slug)}/${path.split("/").map(encodeURIComponent).join("/")}`;
+  const key = fnv1a64(`systems/${slug}/${path}`);
+  const url = `moonlet-design://${key}.${encodeURIComponent(workspace)}/systems/${encodeURIComponent(slug)}/${path.split("/").map(encodeURIComponent).join("/")}`;
   return rev ? `${url}?v=${rev}` : url;
+}
+
+/** The 64-bit FNV-1a hash of `text`'s UTF-8 bytes, as 16 lowercase hex digits. */
+function fnv1a64(text: string): string {
+  let hash = 0xcbf29ce484222325n;
+  for (const byte of new TextEncoder().encode(text)) hash = ((hash ^ BigInt(byte)) * 0x100000001b3n) & 0xffffffffffffffffn;
+  return hash.toString(16).padStart(16, "0");
 }
 
 /** "7 variants", from its snippets; "" for a card with none. */
