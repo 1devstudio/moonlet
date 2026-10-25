@@ -121,26 +121,7 @@ impl Store {
         self.system_dir(workspace, system)
             .with_context(|| format!("no design system \"{system}\""))?;
         let designs = self.designs_dir(workspace, true)?;
-        // `create_dir` fails when the folder exists, even when another request
-        // made it a moment ago, so two creations never share a slug.
-        let mut n = 1;
-        let (name_n, slug) = loop {
-            let name_n = if n == 1 {
-                name.to_string()
-            } else {
-                format!("{name} {n}")
-            };
-            let slug = super::store::slug_or(&name_n, "design");
-            match std::fs::create_dir(designs.join(&slug)) {
-                Ok(()) => break (name_n, slug),
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => n += 1,
-                Err(e) => {
-                    return Err(e).with_context(|| {
-                        format!("cannot create {}", designs.join(&slug).display())
-                    });
-                }
-            }
-        };
+        let (name_n, slug) = super::store::create_numbered(&designs, name, "design")?;
         let dir = designs.join(&slug);
         let config = DesignConfig {
             name: name_n,
@@ -212,12 +193,7 @@ impl Store {
 
     /// What moonlet trusts about a design (see [`DesignRecord`]).
     pub fn design_record(&self, workspace: &str, slug: &str) -> Result<DesignRecord> {
-        let path = self.design_record_path(workspace, slug)?;
-        match std::fs::read_to_string(&path) {
-            Ok(text) => Ok(toml::from_str(&text)?),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(DesignRecord::default()),
-            Err(e) => Err(e).with_context(|| format!("cannot read {}", path.display())),
-        }
+        super::store::read_record(&self.design_record_path(workspace, slug)?)
     }
 
     fn design_record_path(&self, workspace: &str, slug: &str) -> Result<PathBuf> {
@@ -294,22 +270,10 @@ impl Store {
         let dir = self.design_dir(workspace, slug)?;
         let config = read_design_config(&dir)?;
         let styles = styles_link(&config.system);
-        let mut names: Vec<String> = std::fs::read_dir(dir.join("pages"))
-            .into_iter()
-            .flatten()
-            .flatten()
-            .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
-            .filter_map(|e| {
-                e.file_name()
-                    .to_str()
-                    .filter(|n| n.ends_with(".html"))
-                    .map(String::from)
-            })
-            .collect();
-        names.sort();
         let mut problems = Vec::new();
-        for name in names {
-            let (rel, path) = (format!("pages/{name}"), dir.join("pages").join(&name));
+        for (name, _) in pages(&dir) {
+            let file = format!("{name}.html");
+            let (rel, path) = (format!("pages/{file}"), dir.join("pages").join(&file));
             let mut html = fsx::read_inside(&dir, &path)?;
             if fix {
                 let fixed = super::mid::fix_page(&html);
@@ -328,20 +292,7 @@ impl Store {
     /// `<workspace>/designs`, never through a link; with `create`, made
     /// (with the workspace's folder) when missing.
     fn designs_dir(&self, workspace: &str, create: bool) -> Result<PathBuf> {
-        let ws = self.workspace(workspace)?;
-        let designs = ws.join("designs");
-        if create {
-            for dir in [&ws, &designs] {
-                match std::fs::create_dir(dir) {
-                    Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => {
-                        return Err(e).with_context(|| format!("cannot create {}", dir.display()));
-                    }
-                    _ => super::store::not_a_link(dir)?,
-                }
-            }
-        }
-        super::store::not_a_link(&designs)?;
-        Ok(designs)
+        self.kind_dir(workspace, "designs", create)
     }
 }
 
@@ -352,23 +303,7 @@ fn read_design_config(dir: &Path) -> Result<DesignConfig> {
 
 /// What the list shows of one design.
 fn summary(dir: &Path, slug: String, config: &DesignConfig, agent: Option<u32>) -> DesignSummary {
-    let mut pages: Vec<(String, u64)> = std::fs::read_dir(dir.join("pages"))
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
-        .filter_map(|e| {
-            let name = e.file_name().to_str()?.strip_suffix(".html")?.to_string();
-            let changed = e.metadata().ok()?.modified().ok()?;
-            let ms = changed
-                .duration_since(std::time::UNIX_EPOCH)
-                .ok()?
-                .as_millis() as u64;
-            Some((name, ms))
-        })
-        .collect();
-    // `index` first, then by name, so tabs keep their places.
-    pages.sort_by(|(a, _), (b, _)| (a != "index", a).cmp(&(b != "index", b)));
+    let pages = pages(dir);
     DesignSummary {
         slug,
         name: config.name.clone(),
@@ -395,6 +330,28 @@ fn summary(dir: &Path, slug: String, config: &DesignConfig, agent: Option<u32>) 
         agent,
         error: None,
     }
+}
+
+/// A design's pages, `pages/<name>.html`, as their names and last changes in
+/// ms: `index` first, then by name, so tabs keep their places.
+fn pages(dir: &Path) -> Vec<(String, u64)> {
+    let mut pages: Vec<(String, u64)> = std::fs::read_dir(dir.join("pages"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+        .filter_map(|e| {
+            let name = e.file_name().to_str()?.strip_suffix(".html")?.to_string();
+            let changed = e.metadata().ok()?.modified().ok()?;
+            let ms = changed
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()?
+                .as_millis() as u64;
+            Some((name, ms))
+        })
+        .collect();
+    pages.sort_by(|(a, _), (b, _)| (a != "index", a).cmp(&(b != "index", b)));
+    pages
 }
 
 /// How a page in `pages/` links its design system's `styles.css`: relative,
@@ -832,7 +789,9 @@ created_at = 1761200000000
     #[test]
     fn a_page_that_imports_another_stylesheet_in_its_style_is_reported_like_a_link() {
         let (home, store) = store_with_system();
-        store.create_design("w1", "Settings page", "moonlet-desktop", "", 1).unwrap();
+        store
+            .create_design("w1", "Settings page", "moonlet-desktop", "", 1)
+            .unwrap();
         let pages = home.path().join("design/w1/designs/settings-page/pages");
         std::fs::write(
             pages.join("index.html"),

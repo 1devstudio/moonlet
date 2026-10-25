@@ -166,26 +166,7 @@ impl Store {
         if name.is_empty() {
             bail!("a design system needs a name");
         }
-        // `create_dir` fails when the folder exists, even when another request
-        // made it a moment ago, so two creations never share a slug.
-        let mut n = 1;
-        let (name_n, slug) = loop {
-            let name_n = if n == 1 {
-                name.to_string()
-            } else {
-                format!("{name} {n}")
-            };
-            let slug = slug(&name_n);
-            match std::fs::create_dir(systems.join(&slug)) {
-                Ok(()) => break (name_n, slug),
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => n += 1,
-                Err(e) => {
-                    return Err(e).with_context(|| {
-                        format!("cannot create {}", systems.join(&slug).display())
-                    });
-                }
-            }
-        };
+        let (name_n, slug) = create_numbered(&systems, name, "design-system")?;
         let config = SystemConfig {
             name: name_n,
             created_at: now,
@@ -312,12 +293,7 @@ impl Store {
 
     /// What moonlet trusts about a system (see [`Record`]).
     pub fn record(&self, workspace: &str, slug: &str) -> Result<Record> {
-        let path = self.record_path(workspace, slug)?;
-        match std::fs::read_to_string(&path) {
-            Ok(text) => Ok(toml::from_str(&text)?),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Record::default()),
-            Err(e) => Err(e).with_context(|| format!("cannot read {}", path.display())),
-        }
+        read_record(&self.record_path(workspace, slug)?)
     }
 
     /// A new file renamed over the old record: a write cut short leaves the
@@ -692,10 +668,16 @@ impl Store {
     /// `<workspace>/systems`, never through a link; with `create`, made
     /// (with the workspace's folder) when missing.
     fn systems_dir(&self, workspace: &str, create: bool) -> Result<PathBuf> {
+        self.kind_dir(workspace, "systems", create)
+    }
+
+    /// `<workspace>/<kind>` (`systems` or `designs`), never through a link;
+    /// with `create`, made (with the workspace's folder) when missing.
+    pub(super) fn kind_dir(&self, workspace: &str, kind: &str, create: bool) -> Result<PathBuf> {
         let ws = self.workspace(workspace)?;
-        let systems = ws.join("systems");
+        let folder = ws.join(kind);
         if create {
-            for dir in [&ws, &systems] {
+            for dir in [&ws, &folder] {
                 match std::fs::create_dir(dir) {
                     Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => {
                         return Err(e).with_context(|| format!("cannot create {}", dir.display()));
@@ -704,8 +686,8 @@ impl Store {
                 }
             }
         }
-        not_a_link(&systems)?;
-        Ok(systems)
+        not_a_link(&folder)?;
+        Ok(folder)
     }
 }
 
@@ -927,6 +909,34 @@ pub enum Settle {
     Remove,
     /// Leave an orphaned card until the next sync.
     Keep,
+}
+
+/// Makes a folder in `parent` named after `name`, or `<name> 2` (` 3`, …)
+/// when that one is taken, and returns the name and the folder's slug.
+/// `create_dir` fails when the folder exists, even when another request made
+/// it a moment ago, so two creations never share a slug.
+pub(super) fn create_numbered(parent: &Path, name: &str, fallback: &str) -> Result<(String, String)> {
+    let mut n = 1;
+    loop {
+        let name_n = if n == 1 { name.to_string() } else { format!("{name} {n}") };
+        let slug = slug_or(&name_n, fallback);
+        match std::fs::create_dir(parent.join(&slug)) {
+            Ok(()) => return Ok((name_n, slug)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => n += 1,
+            Err(e) => {
+                return Err(e).with_context(|| format!("cannot create {}", parent.join(&slug).display()));
+            }
+        }
+    }
+}
+
+/// A record moonlet keeps outside an agent's folders; a missing one is empty.
+pub(super) fn read_record<T: Default + serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(toml::from_str(&text)?),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(T::default()),
+        Err(e) => Err(e).with_context(|| format!("cannot read {}", path.display())),
+    }
 }
 
 /// Refuses `dir` when it is there but not a folder of its own: a link
