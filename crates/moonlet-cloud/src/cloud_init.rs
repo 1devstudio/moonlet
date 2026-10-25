@@ -46,6 +46,10 @@ pub fn render(c: &CloudInit) -> String {
         quote(&c.join_code),
         quote(&c.name)
     );
+    // moonletd runs as `moonlet`. When the machine is removed it leaves the
+    // tailnet with `sudo -n /usr/bin/tailscale logout`, the one tailscaled
+    // action it may take: routed commands run as `moonlet` too. An image
+    // without sudo still boots; its ephemeral node goes once offline.
     let mut out = format!(
         r#"#!/bin/sh
 # moonlet cloud worker {name} (X63)
@@ -58,6 +62,7 @@ as_moonlet() {{
 }}
 curl -fsSL https://tailscale.com/install.sh | sh
 tailscale up --auth-key={key} --hostname={qname}
+{{ mkdir -p /etc/sudoers.d && printf '%s\n' 'moonlet ALL=(root) NOPASSWD: /usr/bin/tailscale logout' > /etc/sudoers.d/moonlet-tailscale && chmod 0440 /etc/sudoers.d/moonlet-tailscale; }} || true
 as_moonlet {install}
 as_moonlet {join}
 "#,
@@ -114,6 +119,7 @@ as_moonlet() {
 }
 curl -fsSL https://tailscale.com/install.sh | sh
 tailscale up --auth-key='fake-tailscale-auth-key' --hostname='moonlet-shop-7k2q'
+{ mkdir -p /etc/sudoers.d && printf '%s\n' 'moonlet ALL=(root) NOPASSWD: /usr/bin/tailscale logout' > /etc/sudoers.d/moonlet-tailscale && chmod 0440 /etc/sudoers.d/moonlet-tailscale; } || true
 as_moonlet 'curl -fsSL https://github.com/1devstudio/moonlet/releases/download/v0.1.29/install.sh | sh -s -- --no-pair --no-listen'
 as_moonlet '~/.moonlet/bin/moonletd join '\''100.101.102.103:47428'\'' '\''7KQ2MXW9PD'\'' --name '\''moonlet-shop-7k2q'\'''
 echo 'YXB0LWdldCBpbnN0YWxsIC15IG5vZGVqcwo=' | base64 -d > /var/lib/moonlet/machine-setup.sh
