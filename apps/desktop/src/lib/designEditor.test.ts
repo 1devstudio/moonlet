@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { copyElementOf, dismissUnsaved, editPage, pasteInto, sendWithEdits, redoEdit, undoEdit, loadPageSource, pendingOf, resetEditor, settleChecks, settleSaves, sourceOf, undoOf, unsavedOf, useEditor } from "./designEditor";
+import { askWithEdits, copyElementOf, dismissUnsaved, editPage, pasteInto, sendCommentsWithEdits, sendWithEdits, redoEdit, undoEdit, loadPageSource, pendingOf, resetEditor, settleChecks, settleSaves, sourceOf, undoOf, unsavedOf, useEditor } from "./designEditor";
 import { loadDesigns, pageRevOf, startDesign, useDesign } from "./designStore";
 import { editLines } from "./designEdits";
 
@@ -159,6 +159,22 @@ describe("edits by hand told to the agent (X65)", () => {
       { id: 12, text: "Thanks", images: [] },
     ]);
     expect(pendingOf(useEditor.getState(), "local", WS, SLUG)).toEqual([]);
+  });
+});
+
+describe("edits by hand before the app's own messages to the agent (X65)", () => {
+  it("go before a message of comments that Send sends, which keeps its comment lines after them", async () => {
+    answers["chat.send"] = () => true;
+    answers["design.comment.put"] = () => [];
+    await loadPageSource("local", WS, SLUG, "index");
+    editPage("local", WS, SLUG, "index", { kind: "delete", mid: "m30" }, "m30");
+    const nav = { n: 1, page: "index", mid: "m12", tag: "nav", text: "General", comment: "Collapse it", sent_at: null, state: "open" as const };
+    await sendCommentsWithEdits("local", WS, SLUG, 12, [nav]);
+    await askWithEdits("local", WS, SLUG, 12, "Fix the check problems of pages/index.html");
+    expect(calls.filter((c) => c.method === "chat.send").map((c) => c.params.text)).toEqual([
+      'Edits by hand since your last turn:\nindex.html m30 p: deleted\n\nComment on index.html [data-mid=m12] (nav "General"): Collapse it',
+      "Fix the check problems of pages/index.html",
+    ]);
   });
 });
 

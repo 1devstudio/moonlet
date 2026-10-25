@@ -6,9 +6,9 @@
 
 import { create } from "zustand";
 import { DaemonError, rpc } from "./daemon";
-import { ownPages, reloadPage } from "./designStore";
+import { ownPages, reloadPage, sendComments } from "./designStore";
 import { errorToast } from "./store";
-import { M, type DesignPageText } from "./protocol";
+import { M, type DesignComment, type DesignPageText } from "./protocol";
 import type { ChatImage } from "./attachments";
 import { wsKey } from "./workspaces";
 import { applyEdit, copyElement, EditRefused, editLine, editsMessage, highestMid, type Edit, type EditOp } from "./designEdits";
@@ -164,6 +164,18 @@ export async function sendWithEdits(host: string, workspace: string, slug: strin
   const told = useEditor.getState().pending[design] ?? [];
   await rpc(host, M.chatSend, { id: agent, text: editsMessage(told, text), images });
   useEditor.setState((s) => ({ pending: { ...s.pending, [design]: (s.pending[design] ?? []).filter((p) => !told.includes(p)) } }));
+}
+
+/** **Send** and **Send all** of comments, the edits by hand not told yet
+ *  before their lines. */
+export function sendCommentsWithEdits(host: string, workspace: string, slug: string, agent: number, pins: DesignComment[]): Promise<void> {
+  return sendComments(host, workspace, slug, agent, pins, (text) => sendWithEdits(host, workspace, slug, agent, text, []));
+}
+
+/** A message the app sends the design's agent, such as **Ask the agent to
+ *  fix**, the edits by hand not told yet before it. */
+export function askWithEdits(host: string, workspace: string, slug: string, agent: number, text: string): Promise<void> {
+  return sendWithEdits(host, workspace, slug, agent, text, []);
 }
 
 /** The element copied with ⌘C in each design, as its source: ⌘V pastes

@@ -4,9 +4,9 @@
 // What they decide is in lib/designCanvas.ts and lib/designEdits.ts.
 
 import { ChevronRight, Pencil } from "lucide-react";
-import { Fragment, useEffect, useRef } from "react";
+import { Fragment, useEffect, useRef, type ReactNode } from "react";
 import type { Layer } from "../../lib/designBridge";
-import { lineRead, type EditLineRead } from "../../lib/designEdits";
+import { EDITS_HEADER, lineRead, type EditLineRead } from "../../lib/designEdits";
 import { cx } from "../../lib/cx";
 
 /** The selection's blue, as the page's outline draws it. */
@@ -74,13 +74,13 @@ export function EditsChip({ text }: { text: string }) {
 }
 
 /** A message of the user's that carries edits by hand: the block of their
- *  lines, then what the user wrote. */
-export function EditsMessage({ edits, text }: { edits: EditLineRead[]; text: string }) {
+ *  lines, then what the user wrote, or the comments it sends as cards. */
+export function EditsMessage({ edits, text, children }: { edits: EditLineRead[]; text: string; children?: ReactNode }) {
   return (
-    <div className="flex justify-end py-1">
+    <div className="flex flex-col items-end gap-1.5 py-1">
       <div className="flex max-w-[88%] flex-col gap-2 rounded-xl bg-raised px-3 py-2.5">
-        <div aria-label="Edits by hand since your last turn" className="flex flex-col gap-0.5 rounded-lg bg-panel-2 px-2.5 py-2 font-mono ui-text-11.5 leading-normal text-muted">
-          <span className="font-sans ui-text-11.5 text-fg">Edits by hand since your last turn:</span>
+        <div aria-label={EDITS_HEADER.slice(0, -1)} className="flex flex-col gap-0.5 rounded-lg bg-panel-2 px-2.5 py-2 font-mono ui-text-11.5 leading-normal text-muted">
+          <span className="font-sans ui-text-11.5 text-fg">{EDITS_HEADER}</span>
           {edits.map((e, i) => (
             <span key={i} className="selectable break-words">
               {lineRead(e)}
@@ -89,6 +89,7 @@ export function EditsMessage({ edits, text }: { edits: EditLineRead[]; text: str
         </div>
         {text && <p className="selectable whitespace-pre-wrap break-words ui-text-13 text-fg">{text}</p>}
       </div>
+      {children}
     </div>
   );
 }

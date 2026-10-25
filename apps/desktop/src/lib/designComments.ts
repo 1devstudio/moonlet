@@ -2,6 +2,7 @@
 // chat reads it back, Send all's message, the Comments tab's groups and
 // counts, and which pins lost their element. Pure: the store is designStore.ts.
 
+import { readEditsMessage, type EditLineRead } from "./designEdits";
 import type { DesignComment } from "./protocol";
 import { pageFile } from "./designPage";
 import { isMid, isTag } from "./designBridge";
@@ -47,6 +48,18 @@ export function commentCards(text: string, pins: DesignComment[]): (CommentRef &
     n: pins.find((p) => p.page === r.page && p.mid === r.mid && oneLine(p.comment) === r.comment)?.n ?? null,
     ...r,
   }));
+}
+
+/** How a message of the user's to a design's agent shows in the chat: its
+ *  edits by hand first (readEditsMessage), then its comments as Comment
+ *  from the canvas cards when every line after the edits is a comment's,
+ *  else the rest as text; null for a message with neither. */
+export function messageView(message: string, pins: DesignComment[]): { edits: EditLineRead[] | null; cards: (CommentRef & { n: number | null })[] | null; text: string } | null {
+  const read = readEditsMessage(message);
+  const rest = read ? read.text : message;
+  const cards = commentCards(rest, pins);
+  if (!read && !cards) return null;
+  return { edits: read?.edits ?? null, cards, text: cards ? "" : rest };
 }
 
 /** The `data-mid`s each page (by name) reported after it last loaded. */

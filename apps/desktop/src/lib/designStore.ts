@@ -250,10 +250,11 @@ export async function editComment(host: string, workspace: string, slug: string,
 }
 
 /** **Send** and **Send all**: the pins go to the design's agent as one
- *  message, one line each, and only then are they marked sent. A pin a
+ *  message, one line each (by `ask`, which may put more before them), and
+ *  only then are they marked sent. A pin a
  *  Send is already on its way with is left out, so a second click never
  *  sends it twice. */
-export async function sendComments(host: string, workspace: string, slug: string, agent: number, pins: DesignComment[]): Promise<void> {
+export async function sendComments(host: string, workspace: string, slug: string, agent: number, pins: DesignComment[], ask: (text: string) => Promise<void> = (text) => askAgent(host, agent, text)): Promise<void> {
   const key = itemKey(host, workspace, slug);
   const busy = new Set(sendingOf(useDesign.getState(), host, workspace, slug));
   const going = pins.filter((p) => !busy.has(p.n));
@@ -261,7 +262,7 @@ export async function sendComments(host: string, workspace: string, slug: string
   const ns = going.map((p) => p.n);
   useDesign.setState((s) => ({ sending: { ...s.sending, [key]: [...(s.sending[key] ?? []), ...ns].sort((a, b) => a - b) } }));
   try {
-    await askAgent(host, agent, commentsMessage(going));
+    await ask(commentsMessage(going));
     // Each with the comment sent: one edited meanwhile is not marked sent.
     await changeComments(host, workspace, slug, { sent: { pins: going.map((p) => ({ n: p.n, comment: p.comment })) } });
   } finally {
