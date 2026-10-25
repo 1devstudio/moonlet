@@ -20,9 +20,9 @@ const button = {
 
 describe("the render page (X64)", () => {
   it("frames the card on the moonlet-design scheme with its job, and the variant to show alone", () => {
-    expect(renderUrl(job)).toBe("moonlet-design://w-1devstudio/systems/storefront%20kit/components/buttons/button/button.html?moonlet-render=7");
+    expect(renderUrl(job)).toBe("moonlet-design://6555e5faa68d4eba.w-1devstudio/systems/storefront%20kit/components/buttons/button/button.html?moonlet-render=7");
     expect(renderUrl({ ...job, variant: "buttons/button/ghost" })).toBe(
-      "moonlet-design://w-1devstudio/systems/storefront%20kit/components/buttons/button/button.html?moonlet-render=7&variant=buttons%2Fbutton%2Fghost",
+      "moonlet-design://6555e5faa68d4eba.w-1devstudio/systems/storefront%20kit/components/buttons/button/button.html?moonlet-render=7&variant=buttons%2Fbutton%2Fghost",
     );
   });
 
