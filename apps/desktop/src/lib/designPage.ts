@@ -11,7 +11,20 @@ export function pagePath(page: string): string {
   return `pages/${pageFile(page)}`;
 }
 
+/** A page's name, `index` for `pages/index.html`, as the daemon takes it
+ *  (`is_page_name` in design/pages.rs): not empty, no folder, no hidden
+ *  file. */
+export function isPageName(page: string): boolean {
+  return page !== "" && !page.startsWith(".") && !/[/\\\0]/.test(page);
+}
+
+/** The page a file name (`<page>.html`) is, or null: the parse of {@link pageFile}. */
+export function pageOfFile(file: string): string | null {
+  const page = file.endsWith(".html") ? file.slice(0, -".html".length) : null;
+  return page !== null && isPageName(page) ? page : null;
+}
+
 /** The page a path in the design's folder is, or null for any other file. */
 export function pageOfPath(path: string): string | null {
-  return /^pages\/([^/]+)\.html$/.exec(path)?.[1] ?? null;
+  return path.startsWith("pages/") ? pageOfFile(path.slice("pages/".length)) : null;
 }
