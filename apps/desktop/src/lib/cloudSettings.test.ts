@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   afterRemoving,
+  billingNote,
   cloudChanges,
   cloudDraft,
   cloudErrors,
@@ -124,6 +125,17 @@ describe("Settings › Cloud workers (X63)", () => {
     expect(afterRemoving(edited, info({ providers: { hetzner: { has_token: true } } }), "other")).toEqual({ ...edited, providers: { hetzner: { token: "" } } });
     // Its machines still draining: it stays until they are gone.
     expect(afterRemoving(edited, two, "other").providers).toEqual({ hetzner: { token: "" }, other: {} });
+  });
+
+  it("says which providers keep an idle machine until its paid hour ends", () => {
+    const hourly = { ...hetzner, billing_unit_secs: 3600 };
+    expect(billingNote([hourly], { hetzner: { has_token: true } })).toBe(
+      "Hetzner Cloud bills every started hour, so an idle machine stays until its hour is about to end.",
+    );
+    // A provider billing by the second leaves at the idle time.
+    expect(billingNote([{ ...hetzner, billing_unit_secs: 1 }], { hetzner: {} })).toBeNull();
+    // Only providers in use.
+    expect(billingNote([hourly], {})).toBeNull();
   });
 
   it("the policy snippet with the tag and address", () => {

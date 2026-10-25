@@ -8,6 +8,7 @@ import { askConfirm } from "../../lib/confirm";
 import { rpc } from "../../lib/daemon";
 import {
   afterRemoving,
+  billingNote,
   cloudChanges,
   cloudDraft,
   cloudErrors,
@@ -311,7 +312,7 @@ export function CloudPage() {
 
         <Section title="Idle time and limits" hint="Agents can start machines with moonlet worker up, but only you can change these.">
           <Card>
-            <Row setting="cloud-idle" label="Remove a machine after" hint={hint("With 0, a machine goes as soon as its command ends. One that has run nothing stays 5 minutes.", errors.idle_minutes)} htmlFor="cloud-idle">
+            <Row setting="cloud-idle" label="Remove a machine after" hint={hint(["With 0, a machine goes as soon as its command ends. One that has run nothing stays 5 minutes.", billingNote(info.kinds, info.providers)].filter(Boolean).join(" "), errors.idle_minutes)} htmlFor="cloud-idle">
               <NumberField id="cloud-idle" value={draft.idle_minutes} onChange={(v) => set({ idle_minutes: v })} unit="minutes idle" error={errors.idle_minutes} />
             </Row>
             <Row setting="cloud-max" label="At most" hint={hint("Counts machines that are being created, starting, ready or being removed.", errors.max_machines)} htmlFor="cloud-max">

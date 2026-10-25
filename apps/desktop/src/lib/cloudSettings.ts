@@ -253,3 +253,10 @@ export function projectCloudErrors(d: ProjectCloudDraft): Partial<Record<"type" 
   if (!d.image.trim()) e.image = "Name an image, such as ubuntu-24.04.";
   return e;
 }
+
+/** Under the idle time: providers in use that bill by the hour or longer keep an idle machine until its paid time is about to end. */
+export function billingNote(kinds: CloudKind[], providers: CloudInfo["providers"]): string | null {
+  const hourly = kinds.filter((k) => providers[k.id] && (k.billing_unit_secs ?? 1) >= 3600).map((k) => k.label);
+  if (!hourly.length) return null;
+  return `${joinNames(hourly)} ${hourly.length === 1 ? "bills" : "bill"} every started hour, so an idle machine stays until its hour is about to end.`;
+}

@@ -2158,6 +2158,9 @@ pub struct CloudKind {
     pub id: String,
     pub label: String,
     pub fields: Vec<CloudField>,
+    /// It bills every started this many seconds (3600: by the hour).
+    #[serde(default)]
+    pub billing_unit_secs: u64,
 }
 
 /// The Tailscale OAuth client, as `cloud.get` shows it.

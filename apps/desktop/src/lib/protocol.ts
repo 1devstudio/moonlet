@@ -424,6 +424,8 @@ export interface CloudKind {
   id: string;
   label: string;
   fields: CloudField[];
+  /** It bills every started this many seconds (3600: by the hour). */
+  billing_unit_secs?: number;
 }
 
 /** A project's cloud setting, by its identity key. */

@@ -88,6 +88,7 @@ fn kinds(providers: Vec<moonlet_cloud::ProviderInfo>) -> Vec<CloudKind> {
     providers
         .into_iter()
         .map(|p| CloudKind {
+            billing_unit_secs: p.billing.unit_secs,
             id: p.id,
             label: p.label,
             fields: p
