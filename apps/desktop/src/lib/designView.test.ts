@@ -194,6 +194,16 @@ describe("a card (X64, X65)", () => {
     expect(fixState(null, false)).toEqual({ enabled: false, hint: "Its sync agent is not running. Sync starts it." });
   });
 
+  it("names the file of a problem in the card's own .css or .prompt.md", () => {
+    const c = card("Buttons", "Button", {
+      path: "components/buttons/button/button.html",
+      problems: [{ path: "components/buttons/button/button.css", line: 2, kind: "unknown_token", message: "var(--color-nope) is not defined" }],
+    });
+    expect(fixMessage(c)).toBe(
+      "Fix the check problems of components/buttons/button/button.html, then run the check again:\n- components/buttons/button/button.css line 2: var(--color-nope) is not defined",
+    );
+  });
+
   it("asks the sync agent to fix its check problems by line", () => {
     const c = card("Custom", "Session row", {
       path: "components/custom/session-row/session-row.html",
