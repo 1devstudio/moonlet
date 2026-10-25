@@ -47,7 +47,7 @@ export async function stage(html: string, width = 360): Promise<void> {
 }
 
 // The e2e app's largest window on screen (the main one), by CGWindowID.
-const WINDOW_ID = `ObjC.import("CoreGraphics");
+const WINDOW_NUMBER_SCRIPT = `ObjC.import("CoreGraphics");
 function run(pids) {
   const all = ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo(1 | 16, 0))) || [];
   const area = (w) => w.kCGWindowBounds.Width * w.kCGWindowBounds.Height;
@@ -64,7 +64,7 @@ function run(pids) {
 function shootWindow(file: string): boolean {
   try {
     const pids = execFileSync("pgrep", ["-f", APP.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")]).toString().trim().split("\n");
-    const id = execFileSync("osascript", ["-l", "JavaScript", "-e", WINDOW_ID, ...pids]).toString().trim();
+    const id = execFileSync("osascript", ["-l", "JavaScript", "-e", WINDOW_NUMBER_SCRIPT, ...pids]).toString().trim();
     if (!id) return false;
     execFileSync("screencapture", ["-x", "-o", "-l", id, file], { stdio: "ignore" });
     return true;
