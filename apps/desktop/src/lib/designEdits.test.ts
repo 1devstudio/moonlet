@@ -282,6 +282,13 @@ describe("an edit by hand on a page's source (X65)", () => {
     expect(() => applyEdit(PAGE, { kind: "restyle", mid: "m1", set: { padding: "4px" } })).toThrow(new EditRefused("The page's body stays"));
   });
 
+  it("refuses a value that opens or closes a comment, which would hide the declarations after it, and keeps a slash where CSS has one", () => {
+    for (const value of ["4px /*", "*/ red", "4px/**/8px"]) {
+      expect(() => applyEdit(PAGE, { kind: "restyle", mid: "m24", set: { padding: value } })).toThrow(new EditRefused(`${value} is not a value the editor writes`));
+    }
+    expect(applyEdit(PAGE, { kind: "restyle", mid: "m24", set: { "grid-column": "1 / 3", font: "12px/1.5 system-ui" } }).html).toBe(withLines(18, 1, '    <section data-mid="m24" class="card rows" style="grid-column: 1 / 3; font: 12px/1.5 system-ui">'));
+  });
+
   it("refuses an edit that would lose another element of the page, where an element's tags cross another's", () => {
     const tangled = '<!doctype html>\n<body data-mid="m1"><b data-mid="m2">bold<p data-mid="m3">para</b> tail</p></body>\n';
     expect(() => applyEdit(tangled, { kind: "delete", mid: "m2" })).toThrow(new EditRefused("The page's markup around m2 is tangled: ask the agent to fix it"));

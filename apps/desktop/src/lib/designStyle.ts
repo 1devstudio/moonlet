@@ -114,9 +114,11 @@ export function isStyleProp(prop: string): boolean {
  *  colours, keywords, `var(--token)` and functions such as `rgb()`, with
  *  balanced parentheses, at most {@link STYLE_VALUE_MAX} characters, and nothing that could
  *  end the declaration or the attribute or load anything: no quotes, `;`,
- *  braces, angle brackets, backslash, `url(` or `@`. */
+ *  braces, angle brackets, backslash, `url(` or `@`; and no `/*` or `*\/`,
+ *  which would open or close a comment and hide the declarations after
+ *  it. A `/` alone stays, as in `1 / 3` or `12px/1.5`. */
 export function isStyleValue(value: string): boolean {
-  if (!value.trim() || value.length > STYLE_VALUE_MAX || !/^[A-Za-z0-9\s#%.,()/+*!_-]+$/.test(value) || /url\s*\(|expression\s*\(/i.test(value)) return false;
+  if (!value.trim() || value.length > STYLE_VALUE_MAX || !/^[A-Za-z0-9\s#%.,()/+*!_-]+$/.test(value) || /url\s*\(|expression\s*\(|\/\*|\*\//i.test(value)) return false;
   let depth = 0;
   for (const c of value) {
     depth += c === "(" ? 1 : c === ")" ? -1 : 0;
