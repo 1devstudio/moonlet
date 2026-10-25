@@ -41,8 +41,10 @@ export const config: WebdriverIO.Config = {
   async afterTest(test, _context, { passed }) {
     if (passed) return;
     // A picture of the window for every failure, in e2e/artifacts (ignored).
+    // A window that froze never takes it, so the test's own error is kept.
     mkdirSync(ARTIFACTS, { recursive: true });
-    await browser.saveScreenshot(join(ARTIFACTS, `${test.title.replace(/[^\w-]+/g, "_")}.png`));
+    const shot = browser.saveScreenshot(join(ARTIFACTS, `${test.title.replace(/[^\w-]+/g, "_")}.png`));
+    await Promise.race([shot.catch(() => undefined), new Promise((r) => setTimeout(r, 5_000))]);
   },
   onComplete() {
     tearDown(w);
