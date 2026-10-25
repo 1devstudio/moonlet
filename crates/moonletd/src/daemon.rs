@@ -1156,8 +1156,14 @@ impl Daemon {
                 if !r.render {
                     return ok(problems);
                 }
-                let counts = self.render_check(&r.workspace, &r.slug).await?;
-                ok(serde_json::json!({"problems": problems, "render": counts}))
+                // Without the app, the problems still come, with why nothing rendered.
+                match self.render_check(&r.workspace, &r.slug).await {
+                    Ok(counts) => ok(serde_json::json!({"problems": problems, "render": counts, "render_error": null})),
+                    Err(crate::render::RenderError::NoApp) => {
+                        ok(serde_json::json!({"problems": problems, "render": null, "render_error": moonlet_core::design::render::NO_APP}))
+                    }
+                    Err(e) => Err(e.into()),
+                }
             }
             m::DESIGN_SNAP => {
                 let r: m::DesignSnap = params(p)?;
@@ -1280,15 +1286,15 @@ impl Daemon {
     /// Has the app render every card of a design system, one at a time, and
     /// writes what it found to `.cache/render-check.json` (X64). A card the
     /// app could not render is `bad`, with why; without the app, nothing is
-    /// written and it fails with "Open moonlet to render cards".
-    async fn render_check(&self, workspace: &str, slug: &str) -> Result<moonlet_core::design::render::RenderCounts, RpcError> {
+    /// written and it fails with `NoApp`.
+    async fn render_check(&self, workspace: &str, slug: &str) -> Result<moonlet_core::design::render::RenderCounts, crate::render::RenderError> {
         use crate::render::{Ask, RenderError};
         use moonlet_core::design::render::RenderResult;
         if !self.renders.has_app() {
-            return Err(crate::render::no_app());
+            return Err(RenderError::NoApp);
         }
         let (store, ws, sl) = (self.design.clone(), workspace.to_string(), slug.to_string());
-        let cards = blocking(move || store.render_cards(&ws, &sl)).await?;
+        let cards = blocking(move || store.render_cards(&ws, &sl)).await.map_err(RenderError::Failed)?;
         let mut results = Vec::new();
         for card in cards {
             let ask = Ask {
@@ -1301,13 +1307,13 @@ impl Daemon {
             };
             let answer = match self.renders.render(ask).await {
                 Ok(done) => done.metrics(),
-                Err(RenderError::NoApp) => return Err(RenderError::NoApp.into()),
+                Err(RenderError::NoApp) => return Err(RenderError::NoApp),
                 Err(e) => Err(e.to_string()),
             };
             results.push(RenderResult::new(card.path, answer));
         }
         let (store, ws, sl) = (self.design.clone(), workspace.to_string(), slug.to_string());
-        blocking(move || store.write_render_check(&ws, &sl, &results)).await
+        blocking(move || store.write_render_check(&ws, &sl, &results)).await.map_err(RenderError::Failed)
     }
 
     /// The lock of one design system (see `design_locks`).

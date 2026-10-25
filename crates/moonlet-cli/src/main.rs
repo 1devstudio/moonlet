@@ -893,6 +893,10 @@ async fn design_cmd(socket: &std::path::Path, action: DesignAction) -> Result<()
                 .request(methods::DESIGN_CHECK, serde_json::json!({"workspace": w, "slug": need(s)?, "render": render}))
                 .await?;
             println!("{}", serde_json::to_string_pretty(&out)?);
+            // The problems are printed; then why nothing rendered.
+            if let Some(why) = out["render_error"].as_str() {
+                bail!("{why}");
+            }
             let problems = if render { &out["problems"] } else { &out };
             let bad = out["render"]["bad"].as_u64().unwrap_or(0);
             if problems.as_array().is_some_and(|p| !p.is_empty()) || bad > 0 {

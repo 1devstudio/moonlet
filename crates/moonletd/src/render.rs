@@ -33,6 +33,8 @@ pub enum RenderError {
     NoApp,
     /// The app did not answer in time.
     Timeout(String),
+    /// The daemon could not list the cards or keep the results.
+    Failed(RpcError),
 }
 
 impl From<RenderError> for RpcError {
@@ -40,6 +42,7 @@ impl From<RenderError> for RpcError {
         match e {
             RenderError::NoApp => no_app(),
             RenderError::Timeout(why) => RpcError::new("timeout", why),
+            RenderError::Failed(e) => e,
         }
     }
 }
@@ -49,6 +52,7 @@ impl std::fmt::Display for RenderError {
         match self {
             RenderError::NoApp => f.write_str(NO_APP),
             RenderError::Timeout(why) => f.write_str(why),
+            RenderError::Failed(e) => f.write_str(&e.message),
         }
     }
 }

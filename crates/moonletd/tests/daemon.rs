@@ -2560,15 +2560,22 @@ async fn without_the_app_the_render_check_and_snap_say_to_open_moonlet() {
     let mut cli = Client::connect(&d.socket, "moonlet-cli").await.unwrap();
     let refused = cli.request::<_, serde_json::Value>(methods::DESIGN_RENDER_READY, serde_json::json!({})).await;
     assert!(refused.is_err());
-    for (method, params) in [
-        (methods::DESIGN_CHECK, serde_json::json!({"workspace": w, "slug": "storefront", "render": true})),
-        (methods::DESIGN_SNAP, serde_json::json!({"workspace": w, "slug": "storefront", "path": "components/buttons/button/button.html"})),
-    ] {
-        let e = c.request::<_, serde_json::Value>(method, params).await.unwrap_err();
-        assert_eq!(e.to_string(), "no_app: Open moonlet to render cards", "{method}");
-    }
-    // The rest of the check ran: the manifest is written.
+    // The check still runs, and says why it rendered nothing.
+    std::fs::write(dir.join("components.css"), ".btn { color: var(--color-nope); }\n").unwrap();
+    let out: serde_json::Value = c
+        .request(methods::DESIGN_CHECK, serde_json::json!({"workspace": w, "slug": "storefront", "render": true}))
+        .await
+        .unwrap();
+    assert_eq!(out["problems"][0]["kind"], "unknown_token", "{out}");
+    assert_eq!((&out["render"], &out["render_error"]), (&serde_json::Value::Null, &serde_json::json!("Open moonlet to render cards")));
     assert!(dir.join("_ds_manifest.json").is_file());
+    assert!(!dir.join(".cache/render-check.json").exists());
+    // A snapshot cannot be had at all.
+    let e = c
+        .request::<_, serde_json::Value>(methods::DESIGN_SNAP, serde_json::json!({"workspace": w, "slug": "storefront", "path": "components/buttons/button/button.html"}))
+        .await
+        .unwrap_err();
+    assert_eq!(e.to_string(), "no_app: Open moonlet to render cards");
     // An app that said it renders, then quit, renders no more.
     let mut app = Client::connect(&d.socket, "moonlet-app").await.unwrap();
     let _: serde_json::Value = app.request(methods::DESIGN_RENDER_READY, serde_json::json!({})).await.unwrap();
