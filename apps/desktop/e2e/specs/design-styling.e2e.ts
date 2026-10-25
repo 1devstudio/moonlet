@@ -12,6 +12,7 @@
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { $, browser, expect } from "@wdio/globals";
+import { diskShows, press, within } from "../design";
 import { fill, rpc, world } from "../fixtures";
 
 const w = world();
@@ -66,30 +67,12 @@ while IFS= read -r line; do
 done
 `;
 
-/** A key pressed on the app, outside any field, as the keyboard sends it. */
-async function press(key: string, init: { code?: string; metaKey?: boolean; altKey?: boolean; shiftKey?: boolean } = {}) {
-  await browser.execute(
-    (k: string, m: object) => {
-      (document.activeElement as HTMLElement | null)?.blur();
-      document.body.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true, ...m }));
-    },
-    key,
-    init,
-  );
-}
-
 /** Enter pressed in the field at `xpath`. */
 const enterIn = (xpath: string) =>
   browser.execute((xp: string) => {
     const el = document.evaluate(xp, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue as HTMLElement | null;
     el?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
   }, xpath);
-
-/** Waits until the page file on disk passes `ok`. */
-const diskShows = (ok: (html: string) => boolean, what: string) => browser.waitUntil(() => ok(onDisk()), { timeoutMsg: `the page file never ${what}:\n${onDisk()}` });
-
-/** `p`'s value, or "timed out" when it takes longer than `ms`. */
-const within = <T>(ms: number, p: Promise<T>) => Promise.race([p, new Promise<"timed out">((r) => setTimeout(() => r("timed out"), ms))]);
 
 describe("The visual editor's styling", () => {
   let fake = "";
@@ -139,7 +122,7 @@ describe("The visual editor's styling", () => {
     await expect(popover("Padding")).toHaveText(expect.stringContaining("Any value works. One that matches no token marks the element off-system."));
     expect(await popover("Padding").$$('.//button[@role="option"]').map((o) => o.getAttribute("aria-label"))).toEqual(["--space-1", "--space-4", "--space-6"]);
     await popover("Padding").$('.//button[@aria-label="--space-4"]').click();
-    await diskShows((html) => html.includes('<section data-mid="m24" style="padding: var(--space-4)"><h2 data-mid="m25">Git</h2>'), "got the padding token");
+    await diskShows(onDisk, (html) => html.includes('<section data-mid="m24" style="padding: var(--space-4)"><h2 data-mid="m25">Git</h2>'), "got the padding token");
     await expect(field("Padding")).toHaveText(expect.stringContaining("--space-4"));
     await expect(field("Padding")).toHaveText(expect.stringContaining("16px"));
     // The rest of the file is as it was written.
@@ -152,7 +135,7 @@ describe("The visual editor's styling", () => {
     const input = '//div[@role="dialog"][@aria-label="Margin tokens"]//input[@aria-label="Margin value"]';
     await fill(input, "13px");
     await enterIn(input);
-    await diskShows((html) => html.includes('<section data-mid="m24" style="padding: var(--space-4); margin: 13px">'), "got the free margin");
+    await diskShows(onDisk, (html) => html.includes('<section data-mid="m24" style="padding: var(--space-4); margin: 13px">'), "got the free margin");
     await tab("Layers").click();
     await expect(layer("section m24").$('.//*[@aria-label="off-system"]')).toBeExisting();
     await expect(layer("section m22").$('.//*[@aria-label="off-system"]')).not.toBeExisting();
@@ -167,14 +150,14 @@ describe("The visual editor's styling", () => {
     await fill('//aside[@aria-label="Right rail"]//input[@aria-label="Search snippets"]', "ghost");
     await expect(palette.$('.//button[@aria-label="buttons/button/primary"]')).not.toBeExisting();
     await palette.$('.//button[@aria-label="buttons/button/ghost"]').click();
-    await diskShows((html) => html.includes('    <p data-mid="m30">Branch prefix</p>\n  </section>\n  <button data-mid="m31" class="btn btn--ghost">Cancel</button>\n</main>'), "got the ghost button after m24");
+    await diskShows(onDisk, (html) => html.includes('    <p data-mid="m30">Branch prefix</p>\n  </section>\n  <button data-mid="m31" class="btn btn--ghost">Cancel</button>\n</main>'), "got the ghost button after m24");
   });
 
   it("undoes the insert and the margin with ⌘Z, and counts the edits by hand left on the chip", async () => {
     await press("z", { code: "KeyZ", metaKey: true });
-    await diskShows((html) => !html.includes("m31"), "lost the button");
+    await diskShows(onDisk, (html) => !html.includes("m31"), "lost the button");
     await press("z", { code: "KeyZ", metaKey: true });
-    await diskShows((html) => html.includes('<section data-mid="m24" style="padding: var(--space-4)"><h2'), "lost the margin");
+    await diskShows(onDisk, (html) => html.includes('<section data-mid="m24" style="padding: var(--space-4)"><h2'), "lost the margin");
     await expect($('//*[@aria-label="Edits by hand"]')).toHaveText("1 edit by hand · go with your next message");
   });
 });

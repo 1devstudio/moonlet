@@ -15,6 +15,7 @@
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { $, browser, expect } from "@wdio/globals";
+import { diskShows, press, within } from "../design";
 import { fill, rpc, sel, world } from "../fixtures";
 
 const w = world();
@@ -58,24 +59,6 @@ while IFS= read -r line; do
   esac
 done
 `;
-
-/** A key pressed on the app, outside any field, as the keyboard sends it. */
-async function press(key: string, init: { code?: string; metaKey?: boolean; altKey?: boolean; shiftKey?: boolean } = {}) {
-  await browser.execute(
-    (k: string, m: object) => {
-      (document.activeElement as HTMLElement | null)?.blur();
-      document.body.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true, ...m }));
-    },
-    key,
-    init,
-  );
-}
-
-/** Waits until the page file on disk passes `ok`. */
-const diskShows = (ok: (html: string) => boolean, what: string) => browser.waitUntil(() => ok(onDisk()), { timeoutMsg: `the page file never ${what}:\n${onDisk()}` });
-
-/** `p`'s value, or "timed out" when it takes longer than `ms`. */
-const within = <T>(ms: number, p: Promise<T>) => Promise.race([p, new Promise<"timed out">((r) => setTimeout(() => r("timed out"), ms))]);
 
 describe("The visual editor", () => {
   let fake = "";
@@ -126,21 +109,21 @@ describe("The visual editor", () => {
   it("deletes the selection with Delete, duplicates it with ⌘D and wraps it with ⌥⌘G, saving the page file each time", async () => {
     await layer("p m30").click();
     await press("Delete");
-    await diskShows((html) => !html.includes("m30") && html.includes('<h2 data-mid="m25">Git</h2>\n  </section>'), "lost m30");
+    await diskShows(onDisk, (html) => !html.includes("m30") && html.includes('<h2 data-mid="m25">Git</h2>\n  </section>'), "lost m30");
     await layer("h2 m25").click();
     await press("d", { code: "KeyD", metaKey: true });
-    await diskShows((html) => html.includes('<h2 data-mid="m25">Git</h2><h2 data-mid="m31">Git</h2>'), "got the copy m31");
+    await diskShows(onDisk, (html) => html.includes('<h2 data-mid="m25">Git</h2><h2 data-mid="m31">Git</h2>'), "got the copy m31");
     await press("©", { code: "KeyG", altKey: true, metaKey: true });
-    await diskShows((html) => html.includes('<div data-mid="m32"><h2 data-mid="m31">Git</h2></div>'), "wrapped m31 in m32");
+    await diskShows(onDisk, (html) => html.includes('<div data-mid="m32"><h2 data-mid="m31">Git</h2></div>'), "wrapped m31 in m32");
     // The rest of the file is as it was written.
     expect(onDisk().startsWith(PAGE.split('  <section data-mid="m24">')[0])).toBe(true);
   });
 
   it("undoes the wrap with ⌘Z and the copy with the toolbar's undo button", async () => {
     await press("z", { code: "KeyZ", metaKey: true });
-    await diskShows((html) => !html.includes("m32") && html.includes('<h2 data-mid="m31">Git</h2>'), "unwrapped m31");
+    await diskShows(onDisk, (html) => !html.includes("m32") && html.includes('<h2 data-mid="m31">Git</h2>'), "unwrapped m31");
     await $('//button[@title="Undo (⌘Z)"]').click();
-    await diskShows((html) => !html.includes("m31") && !html.includes("m30"), "lost the copy");
+    await diskShows(onDisk, (html) => !html.includes("m31") && !html.includes("m30"), "lost the copy");
   });
 
   it("counts the edits by hand on the chip, and the next message to the agent starts with them", async () => {
