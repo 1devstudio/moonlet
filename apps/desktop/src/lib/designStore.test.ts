@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Design, DesignSystem, TerminalInfo } from "./protocol";
 import { modeOf, setMode } from "./mode";
 import { agentOnScreen, goToAgent, useStore } from "./store";
-import { cardsOf, createSystem, designsOf, detectStack, latestOf, loadCards, loadDesigns, loadSystems, openCard, pageRevOf, revOf, shownCard, shownDesign, shownSystem, showDesign, showSystem, startDesign, systemNameOf, systemsOf, useDesign } from "./designStore";
+import { cardsOf, createSystem, designsOf, detectStack, latestOf, loadCards, loadDesigns, loadSystems, openCard, saveViewport, pageRevOf, revOf, shownCard, shownDesign, shownSystem, showDesign, showSystem, startDesign, systemNameOf, systemsOf, useDesign } from "./designStore";
 
 const calls = vi.hoisted(() => [] as { host: string; method: string; params: unknown }[]);
 /** What the daemon answers, by method. */
@@ -425,5 +425,38 @@ describe("a design's agent outside the sessions (X65)", () => {
     expect(useStore.getState().unread["local:12"]).toBeUndefined();
     showSystem("local", "w-1devstudio", "moonlet-desktop");
     expect(agentOnScreen("local", 12)).toBe(false);
+  });
+});
+
+describe("a design's viewport picked in a row (X65)", () => {
+  it("shows and keeps the latest pick, whatever order the saves come back in", async () => {
+    answers["design.list"] = () => [design()];
+    await loadDesigns("local", "w-picks");
+    const pending: (() => void)[] = [];
+    answers["design.viewport"] = () => new Promise<boolean>((r) => pending.push(() => r(true)));
+    const first = saveViewport("local", "w-picks", "settings-page", "390x844");
+    const second = saveViewport("local", "w-picks", "settings-page", "834x1112");
+    await settle();
+    const shown = () => designsOf(useDesign.getState(), "local", "w-picks")?.[0].viewport;
+    expect(shown()).toBe("834x1112");
+    // Each round, the later save comes back first, then the earlier one.
+    for (let i = 0; i < 5; i++) {
+      pending.splice(0).reverse().forEach((done) => done());
+      await settle();
+    }
+    await Promise.all([first, second]);
+    expect(shown()).toBe("834x1112");
+    // The last size the daemon was asked to save is the latest pick.
+    expect(calls.filter((c) => c.method === "design.viewport").at(-1)?.params).toEqual({ workspace: "w-picks", slug: "settings-page", viewport: "834x1112" });
+  });
+
+  it("stays the latest pick when its save fails", async () => {
+    answers["design.list"] = () => [design()];
+    await loadDesigns("local", "w-fails");
+    answers["design.viewport"] = () => {
+      throw new Error("host offline");
+    };
+    await expect(saveViewport("local", "w-fails", "settings-page", "390x844")).rejects.toThrow("host offline");
+    expect(designsOf(useDesign.getState(), "local", "w-fails")?.[0].viewport).toBe("390x844");
   });
 });

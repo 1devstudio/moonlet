@@ -168,7 +168,7 @@ function listing(fetch: (host: string, workspace: string, key: string) => Promis
 }
 
 const designListing = listing(async (host, workspace, key) => {
-  const list = await rpc<Design[]>(host, M.designList, { workspace });
+  const list = withPickedViewports(host, workspace, await rpc<Design[]>(host, M.designList, { workspace }));
   useDesign.setState((s) => ({ designs: { ...s.designs, [key]: list } }));
 });
 
@@ -277,14 +277,49 @@ export function openNewDesign(ws: { host: string; id: string }) {
   useStore.setState({ dialog: { kind: "new-design", host: ws.host, workspace: ws.id } });
 }
 
-/** Saves the viewport a design was last shown at in its design.toml. */
-export async function saveViewport(host: string, workspace: string, slug: string, viewport: string): Promise<void> {
-  await rpc(host, M.designViewport, { workspace, slug, viewport });
+/** The viewport picked last per design (`itemKey`) while it is not saved:
+ *  shown, and laid over a listing that comes back meanwhile. */
+const pickedViewports: Record<string, string> = {};
+/** Designs whose viewport is being saved. */
+const savingViewports = new Set<string>();
+
+/** Shows `viewport` as the design's, in its listing. */
+function showViewport(host: string, workspace: string, slug: string, viewport: string) {
   useDesign.setState((s) => {
     const key = wsKey(host, workspace);
     const list = s.designs[key];
     return list ? { designs: { ...s.designs, [key]: list.map((d) => (d.slug === slug ? { ...d, viewport } : d)) } } : {};
   });
+}
+
+/** A listing with each design's picked, not yet saved, viewport. */
+function withPickedViewports(host: string, workspace: string, list: Design[]): Design[] {
+  return list.map((d) => {
+    const picked = pickedViewports[itemKey(host, workspace, d.slug)];
+    return picked ? { ...d, viewport: picked } : d;
+  });
+}
+
+/** Saves the viewport a design was last shown at in its design.toml. It
+ *  shows at once; saves of one design go one at a time, and a pick made
+ *  while one is on its way is saved after it, so the latest pick is what
+ *  shows and what is kept. A failed save leaves the pick shown. */
+export async function saveViewport(host: string, workspace: string, slug: string, viewport: string): Promise<void> {
+  const key = itemKey(host, workspace, slug);
+  pickedViewports[key] = viewport;
+  showViewport(host, workspace, slug, viewport);
+  if (savingViewports.has(key)) return;
+  savingViewports.add(key);
+  try {
+    let sent: string;
+    do {
+      sent = pickedViewports[key];
+      await rpc(host, M.designViewport, { workspace, slug, viewport: sent });
+    } while (pickedViewports[key] !== sent);
+    delete pickedViewports[key];
+  } finally {
+    savingViewports.delete(key);
+  }
 }
 
 /** A design system's name, also after it was removed; null when never listed. */
