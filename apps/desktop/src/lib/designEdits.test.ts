@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { EditRefused, applyEdit, copyElement, editLine, editsChip, editsMessage, readEditsMessage, type EditOp, type Untold } from "./designEdits";
+import { EditRefused, applyEdit, copyElement, highestMid, editLine, editsChip, editsMessage, readEditsMessage, type EditOp, type Untold } from "./designEdits";
 
 /** A page as a design's agent writes it (designs.md): the design system's
  *  styles.css, classes, a page script, an <svg> whose part holds an id, and
@@ -93,6 +93,13 @@ describe("an edit by hand on a page's source (X65)", () => {
     const inline = applyEdit(PAGE, { kind: "duplicate", mid: "m13" });
     expect(inline.html).toBe(withLines(12, 1, "  <nav data-mid='m12' class=sidenav><a data-mid=\"m13\" href=\"#general\">General</a><a data-mid=\"m41\" href=\"#general\">General</a><a data-mid=\"m14\" href=\"#git\">Git</a></nav>"));
     expect(() => applyEdit(PAGE, { kind: "duplicate", mid: "m1" })).toThrow(new EditRefused("The page's body stays"));
+  });
+
+  it("never gives an id the page had earlier, as one an element deleted since held: fresh ids start after the highest it ever had", () => {
+    const without = applyEdit(PAGE, { kind: "delete", mid: "m34" }).html;
+    expect(highestMid(PAGE)).toBe(40);
+    expect(applyEdit(without, { kind: "wrap", mid: "m25" }).select).toBe("m38");
+    expect(applyEdit(without, { kind: "wrap", mid: "m25" }, highestMid(PAGE)).select).toBe("m41");
   });
 
   it("wraps an element in a box, a div with the next free id, which it selects", () => {
