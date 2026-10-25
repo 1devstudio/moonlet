@@ -62,6 +62,13 @@ impl Store {
     /// [`Stale`] and left as it is. Written through the designs folder as a
     /// handle, so a design or pages folder swapped for a link is never
     /// followed.
+    ///
+    /// The file is read again right before the rename that replaces it, the
+    /// new text already written aside, but a check and a rename are two
+    /// steps: a write by another process between them, such as the
+    /// design's agent's own edit, is replaced, not refused. The daemon
+    /// takes a lock of the design's pages around this, so moonlet's own
+    /// saves never fall between them.
     pub fn write_page(
         &self,
         workspace: &str,
