@@ -131,7 +131,7 @@ mod tests {
     fn client() -> OAuthClient {
         OAuthClient {
             id: "kQ7cLient1CNTRL".into(),
-            secret: "tskey-client-kQ7cLient1CNTRL-secret".into(),
+            secret: "fake-tailscale-client-secret".into(),
             tag: "tag:moonlet-worker".into(),
         }
     }
@@ -148,7 +148,7 @@ mod tests {
         let key = machine_key(&client(), "moonlet-shop-7k2q", script.clone())
             .await
             .unwrap();
-        assert_eq!(key, "tskey-auth-kAbC123CNTRL-0123456789abcdef");
+        assert_eq!(key, "fake-tailscale-auth-key");
         let sent = script.sent.lock().unwrap();
         assert_eq!(
             sent[0],
@@ -160,7 +160,7 @@ mod tests {
                     ("client_id".into(), "kQ7cLient1CNTRL".into()),
                     (
                         "client_secret".into(),
-                        "tskey-client-kQ7cLient1CNTRL-secret".into()
+                        "fake-tailscale-client-secret".into()
                     ),
                     ("grant_type".into(), "client_credentials".into()),
                 ])),
@@ -173,7 +173,7 @@ mod tests {
                 url: "https://api.tailscale.com/api/v2/tailnet/-/keys".into(),
                 headers: vec![(
                     "Authorization".into(),
-                    "Bearer tskey-api-k9QwPfX3CNTRL-ZbE1example".into()
+                    "Bearer fake-tailscale-access-token".into()
                 )],
                 body: Some(Body::Json(serde_json::json!({
                     "capabilities": { "devices": { "create": {

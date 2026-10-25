@@ -92,7 +92,7 @@ mod tests {
     fn renders_the_worked_cloud_init_script() {
         let script = render(&CloudInit {
             name: "moonlet-shop-7k2q".into(),
-            tailscale_key: "tskey-auth-kAbC123CNTRL-0123456789abcdef".into(),
+            tailscale_key: "fake-tailscale-auth-key".into(),
             version: "0.1.29".into(),
             addrs: vec!["100.101.102.103:47428".into()],
             join_code: "7KQ2MXW9PD".into(),
@@ -113,7 +113,7 @@ as_moonlet() {
   runuser -l moonlet -c "export XDG_RUNTIME_DIR=/run/user/$(id -u moonlet); $1"
 }
 curl -fsSL https://tailscale.com/install.sh | sh
-tailscale up --auth-key='tskey-auth-kAbC123CNTRL-0123456789abcdef' --hostname='moonlet-shop-7k2q'
+tailscale up --auth-key='fake-tailscale-auth-key' --hostname='moonlet-shop-7k2q'
 as_moonlet 'curl -fsSL https://github.com/1devstudio/moonlet/releases/download/v0.1.29/install.sh | sh -s -- --no-pair --no-listen'
 as_moonlet '~/.moonlet/bin/moonletd join '\''100.101.102.103:47428'\'' '\''7KQ2MXW9PD'\'' --name '\''moonlet-shop-7k2q'\'''
 echo 'YXB0LWdldCBpbnN0YWxsIC15IG5vZGVqcwo=' | base64 -d > /var/lib/moonlet/machine-setup.sh
