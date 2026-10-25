@@ -98,6 +98,14 @@ export function editLine(e: HandEdit): string {
   return elementLine(e, [changeText(e.change)]);
 }
 
+/** What an edit did, as a snapshot of edits by hand sums it up (X65):
+ *  `moved section m24`, `restyled h2 m25`, `text of m30`; one undone since
+ *  it was made, `undid …`. Sent with the save that carries it. */
+export function editSaid(e: Untold): string {
+  const said = e.change.kind === "text" ? `text of ${e.mid}` : `${e.change.kind} ${e.tag} ${e.mid}`;
+  return e.undone ? `undid ${said}` : said;
+}
+
 /** An edit by hand the agent has not been told yet; `undone`: one it was
  *  told, undone since. */
 export interface Untold extends HandEdit {

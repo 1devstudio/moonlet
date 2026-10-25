@@ -86,6 +86,20 @@ describe("an edit by hand saved (X65)", () => {
   });
 });
 
+describe("a save of edits by hand (X65)", () => {
+  it("says what the edits it carries did, for the snapshot the daemon takes once they stop, an undo as undone", async () => {
+    await loadPageSource("local", WS, SLUG, "index");
+    editPage("local", WS, SLUG, "index", { kind: "delete", mid: "m30" }, "m30");
+    // Made while the first save is on its way: the next save carries both.
+    editPage("local", WS, SLUG, "index", { kind: "text", mid: "m25", text: "Git & GitHub" }, "m25");
+    editPage("local", WS, SLUG, "index", { kind: "wrap", mid: "m25" }, "m25");
+    await settleSaves();
+    await undoEdit("local", WS, SLUG);
+    await settleSaves();
+    expect(calls.filter((c) => c.method === "design.write_page").map((c) => c.params.edits)).toEqual([["deleted p m30"], ["text of m25", "wrapped h2 m25"], ["undid wrapped h2 m25"]]);
+  });
+});
+
 describe("an edit by hand made while a refused save reads the page again (X65)", () => {
   it("is taken back with the edit the save lost, and the yellow bar names it, as the latest", async () => {
     await loadPageSource("local", WS, SLUG, "index");
