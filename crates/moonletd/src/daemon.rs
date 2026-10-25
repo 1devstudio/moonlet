@@ -166,11 +166,17 @@ async fn blocking<T: Send + 'static>(
 }
 
 /// What the design store's error means to the caller: a design system the
-/// workspace does not have, a viewport that is none, or a comment that names
-/// no element or pin, is a bad parameter (X65); anything else failed.
+/// workspace does not have, a viewport that is none, a comment that names
+/// no element or pin, or a page name that names no page, is a bad parameter
+/// (X65); a page saved over a version no longer on disk is `stale`;
+/// anything else failed.
 fn store_error(e: anyhow::Error) -> RpcError {
-    if e.is::<moonlet_core::design::designs::NoSystem>() || e.is::<moonlet_core::design::designs::BadViewport>() || e.is::<moonlet_core::design::comments::BadComment>() {
+    use moonlet_core::design::{comments, designs, pages};
+    if e.is::<designs::NoSystem>() || e.is::<designs::BadViewport>() || e.is::<comments::BadComment>() || e.is::<pages::BadPage>() {
         return RpcError::new("invalid_params", e.to_string());
+    }
+    if e.is::<pages::Stale>() {
+        return RpcError::new("stale", e.to_string());
     }
     internal(e)
 }
@@ -1313,6 +1319,16 @@ impl Daemon {
                 let lock = self.comments_lock(&r.workspace, &r.slug);
                 let _held = lock.lock().await;
                 ok(blocking(move || store.resolve_comment(&r.workspace, &r.slug, r.n)).await?)
+            }
+            m::DESIGN_PAGE => {
+                let r: m::DesignPageRef = params(p)?;
+                let page = blocking(move || store.page(&r.workspace, &r.slug, &r.page)).await?;
+                ok(m::DesignPageText { html: page.html, version: page.version })
+            }
+            m::DESIGN_WRITE_PAGE => {
+                let r: m::DesignWritePage = params(p)?;
+                let version = blocking(move || store.write_page(&r.workspace, &r.slug, &r.page, &r.html, &r.base_version)).await?;
+                ok(m::DesignPageWritten { version })
             }
             m::DESIGN_SETTLE => {
                 let r: m::DesignSettle = params(p)?;

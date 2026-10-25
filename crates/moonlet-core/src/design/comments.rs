@@ -146,8 +146,7 @@ fn comment_text(comment: &str) -> Result<String> {
 /// `m` and digits, the tag a tag's name; the text squashed to one line and
 /// cut to [`TEXT_MAX`] characters.
 fn new_pin(page: &str, mid: &str, tag: &str, text: &str, comment: String) -> Result<DesignComment> {
-    let page_ok = !page.is_empty() && !page.starts_with('.') && !page.contains(['/', '\\', '\0']);
-    if !page_ok {
+    if !super::pages::is_page_name(page) {
         return Err(BadComment(format!("bad page \"{page}\"")).into());
     }
     if !is_mid(mid) {
