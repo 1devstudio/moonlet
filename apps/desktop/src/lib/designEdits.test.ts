@@ -162,6 +162,56 @@ describe("an edit by hand on a page's source (X65)", () => {
     expect(applyEdit(PAGE, { kind: "text", mid: "m31", text: "Prefix" }).live).toBeNull();
   });
 
+  it("moves an element above another, with its lines when it has them to itself, and selects it", () => {
+    const moved = applyEdit(PAGE, { kind: "move", mid: "m24", place: { where: "above", ref: "m22" } });
+    expect(moved.html).toBe(
+      withLines(
+        15,
+        10,
+        '    <section data-mid="m24" class="card rows">',
+        '      <h2 data-mid="m25">Git</h2>',
+        '      <div data-mid="m30" class="row"><span data-mid="m31">Branch prefix</span><input data-mid="m32" class="field" value="marcin/"></div>',
+        '      <p data-mid="m33" class=hint>Tom &amp; Jerry&nbsp;rules</p>',
+        '      <ul data-mid="m35"><li data-mid="m36">Rows<li data-mid="m37">Cards</ul>',
+        '      <svg data-mid="m34" viewBox="0 0 8 8"><path data-mid="m40" d="M0 0h8"/></svg>',
+        "    </section>",
+        '    <section data-mid="m22" class="card">',
+        '      <h2 data-mid="m23">General</h2>',
+        "    </section>",
+      ),
+    );
+    expect(moved.select).toBe("m24");
+    expect(moved.live).toEqual({ op: "move", mid: "m24", place: { where: "above", ref: "m22" } });
+    expect(applyEdit(PAGE, { kind: "move", mid: "m14", place: { where: "above", ref: "m13" } }).html).toBe(
+      withLines(12, 1, "  <nav data-mid='m12' class=sidenav><a data-mid=\"m14\" href=\"#git\">Git</a><a data-mid=\"m13\" href=\"#general\">General</a></nav>"),
+    );
+  });
+
+  it("moves an element below another, or into a container after its last child, on a line of its own indented as that child", () => {
+    expect(applyEdit(PAGE, { kind: "move", mid: "m21", place: { where: "below", ref: "m22" } }).html).toBe(
+      withLines(14, 4, '    <section data-mid="m22" class="card">', '      <h2 data-mid="m23">General</h2>', "    </section>", '    <h1 data-mid="m21">Settings</h1>'),
+    );
+    expect(applyEdit(PAGE, { kind: "move", mid: "m33", place: { where: "into", ref: "m22" } }).html).toBe(
+      withLines(
+        17,
+        5,
+        '      <p data-mid="m33" class=hint>Tom &amp; Jerry&nbsp;rules</p>',
+        "    </section>",
+        '    <section data-mid="m24" class="card rows">',
+        '      <h2 data-mid="m25">Git</h2>',
+        '      <div data-mid="m30" class="row"><span data-mid="m31">Branch prefix</span><input data-mid="m32" class="field" value="marcin/"></div>',
+      ),
+    );
+  });
+
+  it("refuses to move an element into itself, into an element that holds no elements, or the body", () => {
+    expect(() => applyEdit(PAGE, { kind: "move", mid: "m24", place: { where: "into", ref: "m30" } })).toThrow(new EditRefused("m24 cannot go inside itself"));
+    expect(() => applyEdit(PAGE, { kind: "move", mid: "m24", place: { where: "above", ref: "m24" } })).toThrow(new EditRefused("m24 cannot go inside itself"));
+    expect(() => applyEdit(PAGE, { kind: "move", mid: "m33", place: { where: "into", ref: "m32" } })).toThrow(new EditRefused("<input> m32 holds no elements"));
+    expect(() => applyEdit(PAGE, { kind: "move", mid: "m33", place: { where: "into", ref: "m34" } })).toThrow(new EditRefused("<svg> m34 holds no elements"));
+    expect(() => applyEdit(PAGE, { kind: "move", mid: "m1", place: { where: "above", ref: "m22" } })).toThrow(new EditRefused("The page's body stays"));
+  });
+
   it("restyles an element by its inline style, written as the style attribute after its others", () => {
     const edit = applyEdit(PAGE, { kind: "restyle", mid: "m24", set: { padding: "var(--space-4)" } });
     expect(edit.html).toBe(withLines(18, 1, '    <section data-mid="m24" class="card rows" style="padding: var(--space-4)">'));
@@ -210,6 +260,9 @@ describe("edits by hand, as the agent is told them (X65)", () => {
     expect(line({ kind: "unwrap", mid: "m30" })).toBe("index.html m30 div: unwrapped");
     expect(line({ kind: "paste", after: "m25", html: '<section data-mid="m3"><h3 data-mid="m4">Rows</h3></section>' })).toBe("index.html m41 section: inserted after m25");
     expect(line({ kind: "paste", after: null, html: '<p data-mid="m9">Note</p>' })).toBe("index.html m41 p: inserted at the end of the body");
+    expect(line({ kind: "move", mid: "m24", place: { where: "above", ref: "m22" } })).toBe("index.html m24 section: moved above m22");
+    expect(line({ kind: "move", mid: "m21", place: { where: "below", ref: "m22" } })).toBe("index.html m21 h1: moved below m22");
+    expect(line({ kind: "move", mid: "m33", place: { where: "into", ref: "m22" } })).toBe("index.html m33 p: moved into m22");
   });
 
   it("go before the user's next message, one line per element, its changes in order with only its latest text, an earlier edit undone too", () => {

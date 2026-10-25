@@ -16,13 +16,22 @@ import { attrText, isStyleProp, isStyleValue, parseStyle, styleText, withStyle, 
 type Node = DefaultTreeAdapterMap["node"];
 type Element = DefaultTreeAdapterMap["element"];
 
+/** Where an element goes: above or below element `ref`, or into it, after
+ *  its last child. */
+export interface Place {
+  where: "above" | "below" | "into";
+  ref: string;
+}
+
 /** An operation of the visual editor on one element of a page. */
 export type EditOp = { kind: "text"; mid: string; text: string } | { kind: "delete"; mid: string } | { kind: "duplicate"; mid: string } | { kind: "wrap"; mid: string } | { kind: "unwrap"; mid: string }
   /** A copied element's source (see {@link copyElement}) after element
    *  `after`, or at the end of the body. */
   | { kind: "paste"; after: string | null; html: string }
   /** Properties of its inline `style` set (a value) or removed (null). */
-  | { kind: "restyle"; mid: string; set: StyleSet };
+  | { kind: "restyle"; mid: string; set: StyleSet }
+  /** Moved to `place` (drag to move). */
+  | { kind: "move"; mid: string; place: Place };
 
 /** What an edit did to its element, as the agent is told. */
 export type Change =
@@ -34,7 +43,8 @@ export type Change =
   /** Pasted after element `after`, or (null) at the end of the body. */
   | { kind: "inserted"; after: string | null }
   /** Its inline style's properties set, or (null) removed. */
-  | { kind: "restyled"; set: StyleSet };
+  | { kind: "restyled"; set: StyleSet }
+  | { kind: "moved"; place: Place };
 
 /** An edit by hand of one element of a page. */
 export interface HandEdit {
@@ -71,6 +81,8 @@ function changeText(c: Change): string {
       return `wrapped in div ${c.box}`;
     case "inserted":
       return c.after === null ? "inserted at the end of the body" : `inserted after ${c.after}`;
+    case "moved":
+      return `moved ${c.place.where} ${c.place.ref}`;
     case "restyled":
       return `restyled with ${Object.entries(c.set)
         .map(([p, v]) => (v === null ? `no ${p}` : `${p}: ${v}`))
@@ -334,6 +346,8 @@ function edited(html: string, doc: Node, op: EditOp, floor: number): Edit {
     }
     case "restyle":
       return restyle(html, el, op.set);
+    case "move":
+      return move(html, doc, el, op.place);
     case "unwrap": {
       inBody(el);
       const [a, b] = inner(el);
@@ -342,6 +356,63 @@ function edited(html: string, doc: Node, op: EditOp, floor: number): Edit {
       return { html: splice(html, outer(el), html.slice(a, b)), select: first ?? parentMid(el), change: { ...who(el), change: { kind: "unwrapped" } }, live: { op: "unwrap", mid: op.mid } };
     }
   }
+}
+
+/** Elements that hold no elements of the page: void ones, and those whose
+ *  inside is not the page's (scripts, styles, an <svg>'s drawing). */
+const VOID = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr", "svg", "math", "select", "option"]);
+
+/** `el` moved to `place`: taken out with its line when it has the line to
+ *  itself, and put above or below element `ref`, on a line of its own
+ *  indented as `ref` when `ref` has its line, or into `ref` after its last
+ *  child, on a line of its own indented as that child when the end tag has
+ *  its line. Never into itself, into an element that holds no elements,
+ *  or the body moved. */
+function move(html: string, doc: Node, el: Element, place: Place): Edit {
+  inBody(el);
+  const mid = midOf(el)!;
+  const ref = find(doc, place.ref);
+  for (let p: Node | null = ref; p && isElement(p); p = p.parentNode) if (p === el) throw new EditRefused(`${mid} cannot go inside itself`);
+  if (place.where === "into") {
+    if (ref.tagName !== "body") inBody(ref);
+    if (VOID.has(ref.tagName) || RAW.has(ref.tagName)) throw new EditRefused(`<${ref.tagName}> ${place.ref} holds no elements`);
+    for (let p = ref.parentNode; p && isElement(p); p = p.parentNode) if (p.tagName === "svg" || p.tagName === "math") throw new EditRefused(`<${ref.tagName}> ${place.ref} holds no elements`);
+  } else inBody(ref);
+  const text = html.slice(...outer(el));
+  const rest = splice(html, line(html, outer(el)), "");
+  const target = find(parsed(rest), place.ref);
+  const out = place.where === "above" ? before(rest, outer(target), text) : place.where === "below" ? after(rest, outer(target), text) : into(rest, target, text);
+  return { html: out, select: mid, change: { ...who(el), change: { kind: "moved", place } }, live: { op: "move", mid, place } };
+}
+
+/** `html` with `text` put before `span`: on a line of its own, indented as
+ *  `span`, when `span` has its line to itself; else right before it. */
+function before(html: string, span: [number, number], text: string): string {
+  const [from, to] = span;
+  const whole = line(html, span);
+  if (whole[0] === from && whole[1] === to) return splice(html, [from, from], text);
+  const indent = html.slice(whole[0], from);
+  return splice(html, [from, from], text + eolOf(html, to, whole[1]) + indent);
+}
+
+/** The line end after `to` on its line, else the page's. */
+function eolOf(html: string, to: number, end: number): string {
+  return html.slice(to, end).match(/\r?\n/)?.[0] ?? (html.includes("\r\n") ? "\r\n" : "\n");
+}
+
+/** `html` with `text` put into element `el` after its last child: when its
+ *  end tag has its line to itself, on a line of its own before it,
+ *  indented as its last element child when that has its line, else one
+ *  step in from the end tag; else right before the end tag. */
+function into(html: string, el: Element, text: string): string {
+  const loc = el.sourceCodeLocation!;
+  const at = loc.endTag ? loc.endTag.startOffset : loc.endOffset;
+  const start = html.lastIndexOf("\n", at - 1) + 1;
+  if (!loc.endTag || /\S/.test(html.slice(start, at))) return splice(html, [at, at], text);
+  const last = el.childNodes.filter(isElement).at(-1);
+  const own = last ? line(html, outer(last)) : null;
+  const indent = own && last && own[0] !== outer(last)[0] ? html.slice(own[0], outer(last)[0]) : html.slice(start, at) + "  ";
+  return splice(html, [start, start], indent + text + eolOf(html, at, html.length));
 }
 
 /** `el` with its inline style's properties set or removed, the rest of its
@@ -443,8 +514,7 @@ function after(html: string, span: [number, number], text: string): string {
   const whole = line(html, span);
   if (whole[0] === from && whole[1] === to) return splice(html, [to, to], text);
   const indent = html.slice(whole[0], from);
-  const eol = html.slice(to, whole[1]).match(/\r?\n/)?.[0] ?? (html.includes("\r\n") ? "\r\n" : "\n");
-  return splice(html, [to, to], eol + indent + text);
+  return splice(html, [to, to], eolOf(html, to, whole[1]) + indent + text);
 }
 
 /** The source of element `mid` of page `html`, for a paste; null when the
