@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { EditRefused, applyEdit, copyElement, highestMid, editLine, editLines, editsChip, editsMessage, inlineStyles, lineRead, readEditsMessage, type EditOp, type Untold } from "./designEdits";
+import { EditRefused, applyEdit, copyElement, highestMid, editLine, editLines, editSaid, editsChip, editsMessage, inlineStyles, lineRead, readEditsMessage, type EditOp, type Untold } from "./designEdits";
 
 /** A page as a design's agent writes it (designs.md): the design system's
  *  styles.css, classes, a page script, an <svg> whose part holds an id, and
@@ -414,5 +414,24 @@ describe("edits by hand, as the agent is told them (X65)", () => {
     );
     expect(editsChip([text("m31", "Prefix")])).toBe("1 edit by hand · go with your next message");
     expect(editsChip([])).toBeNull();
+  });
+});
+
+describe("edits by hand, as a snapshot sums them up (X65)", () => {
+  it("say what each did to which element, an undone one as undone: moved section m24, restyled h2 m25, text of m30", () => {
+    const e = (mid: string, tag: string, change: Untold["change"], undone = false): Untold => ({ page: "index", mid, tag, change, ...(undone ? { undone } : {}) });
+    expect(
+      [
+        e("m24", "section", { kind: "moved", place: { where: "above", ref: "m22" } }),
+        e("m25", "h2", { kind: "restyled", set: { "font-size": "var(--text-lg)" } }),
+        e("m30", "p", { kind: "text", text: "Prefix for new branches" }),
+        e("m30", "p", { kind: "deleted" }),
+        e("m25", "h2", { kind: "duplicated", copy: "m41" }),
+        e("m25", "h2", { kind: "wrapped", box: "m42" }),
+        e("m42", "div", { kind: "unwrapped" }),
+        e("m43", "button", { kind: "inserted", place: null }),
+        e("m24", "section", { kind: "moved", place: { where: "above", ref: "m22" } }, true),
+      ].map(editSaid),
+    ).toEqual(["moved section m24", "restyled h2 m25", "text of m30", "deleted p m30", "duplicated h2 m25", "wrapped h2 m25", "unwrapped div m42", "inserted button m43", "undid moved section m24"]);
   });
 });

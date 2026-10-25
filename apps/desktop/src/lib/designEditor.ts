@@ -12,7 +12,7 @@ import { errorToast } from "./store";
 import { latestPerKey } from "./prPoll";
 import { M, type DesignComment, type DesignKit, type DesignPageText, type DesignPageWritten } from "./protocol";
 import type { ChatImage } from "./attachments";
-import { applyEdit, copyElement, EditRefused, editLine, editsMessage, highestMid, type Edit, type EditOp } from "./designEdits";
+import { applyEdit, copyElement, EditRefused, editLine, editSaid, editsMessage, highestMid, type Edit, type EditOp } from "./designEdits";
 import { NO_UNDO, dropPage, pendingAfter, pushStep, redoStep, undoStep, type Pending, type Step, type Undo } from "./designUndo";
 
 interface EditorState {
@@ -50,12 +50,13 @@ const gens: Record<string, number> = {};
 /** A page's source changed in the editor. */
 const touch = (key: string) => void (gens[key] = (gens[key] ?? 0) + 1);
 /** Each page's changes, made, undone or redone, that no save took yet, with
- *  the page's generation after each. */
-const notSaved: Record<string, { step: number; gen: number }[]> = {};
-/** Change `step` made, undone or redone on a page's source. */
-function changed(key: string, step: number) {
+ *  the page's generation after each, and what it did (editSaid), which its
+ *  save tells the daemon for the snapshot of edits by hand. */
+const notSaved: Record<string, { step: number; gen: number; said: string }[]> = {};
+/** Change `step` made, undone or redone on a page's source: `said` is what it did. */
+function changed(key: string, step: number, said: string) {
   touch(key);
-  (notSaved[key] ??= []).push({ step, gen: gens[key] });
+  (notSaved[key] ??= []).push({ step, gen: gens[key], said });
 }
 
 /** Forgets every page, change and edit (tests). */
@@ -112,7 +113,7 @@ export function editPage(host: string, workspace: string, slug: string, page: st
   highest[key] = Math.max(highest[key] ?? 0, highestMid(edit.html));
   const step: Step = { id: nextStep++, page, before: source.html, after: edit.html, edit: { page, ...edit.change }, selectBefore: selected, selectAfter: edit.select };
   const design = itemKey(host, workspace, slug);
-  changed(key, step.id);
+  changed(key, step.id, editSaid(step.edit));
   useEditor.setState((s) => ({
     sources: { ...s.sources, [key]: { ...source, html: edit.html } },
     undo: { ...s.undo, [design]: pushStep(s.undo[design] ?? NO_UNDO, step) },
@@ -142,7 +143,7 @@ async function travel(host: string, workspace: string, slug: string, act: "undo"
   const key = pageKey(host, workspace, slug, step.page);
   const source = useEditor.getState().sources[key];
   if (!source) return null;
-  changed(key, step.id);
+  changed(key, step.id, editSaid({ ...step.edit, undone: act === "undo" }));
   useEditor.setState((s) => ({
     sources: { ...s.sources, [key]: { ...source, html: act === "undo" ? step.before : step.after } },
     undo: { ...s.undo, [design]: moved.undo },
@@ -165,9 +166,10 @@ function save(host: string, workspace: string, slug: string, page: string): Prom
     const html = source.html;
     // The page's changes up to now are in `html`.
     const at = gens[key] ?? 0;
+    const edits = (notSaved[key] ?? []).filter((c) => c.gen <= at).map((c) => c.said);
     let written: DesignPageWritten;
     try {
-      written = await rpc<DesignPageWritten>(host, M.designWritePage, { workspace, slug, page, html, base_version: source.version });
+      written = await rpc<DesignPageWritten>(host, M.designWritePage, { workspace, slug, page, html, base_version: source.version, edits });
     } catch (e) {
       if (e instanceof DaemonError && e.code === "stale") {
         await lost(host, workspace, slug, page);
