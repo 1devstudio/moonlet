@@ -3880,3 +3880,77 @@ async fn a_session_design_is_made_in_its_worktree_and_reached_by_its_session_and
     let missing = c.request::<_, serde_json::Value>(methods::DESIGN_PAGE, serde_json::json!({"session": session.id, "slug": "nope", "page": "index"})).await;
     assert!(missing.is_err());
 }
+
+/// A session design as merged: what `docs/design/settings-page/` holds on a
+/// project's base branch.
+const MERGED_DESIGN: [(&str, &str); 5] = [
+    ("docs/design/settings-page/design.toml", "name = \"Settings page\"\nsystem = \"moonlet-desktop\"\nbrief = \"A left nav\"\nviewport = \"390x844\"\n\n[pages.git-a]\nlabel = \"cards\"\n"),
+    ("docs/design/settings-page/pages/index.html", "<link rel=\"stylesheet\" href=\"../system/styles.css\">\n<body data-mid=\"m1\">rows</body>\n"),
+    ("docs/design/settings-page/pages/git-a.html", "<link rel=\"stylesheet\" href=\"../system/styles.css\">\n<body data-mid=\"m1\">cards</body>\n"),
+    ("docs/design/settings-page/assets/logo.svg", "<svg></svg>\n"),
+    ("docs/design/settings-page/system/styles.css", "@import \"tokens/colors.css\";\n"),
+];
+
+/// X65 entry 12: a session design merged into a project's base branch is
+/// listed as a project design, read from git without checking anything
+/// out, and `design.copy` starts a new workspace design from it: its pages
+/// linking the live design system, its assets and labels, its agent told
+/// it is a copy.
+#[tokio::test]
+async fn a_project_design_on_the_base_branch_is_listed_and_copied_into_a_new_workspace_design() {
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    let (ws, project, _) = workspace_with_session(&d, &mut c, &MERGED_DESIGN).await;
+    // Not checked out: the base branch's files only, whatever the folder has.
+    std::fs::remove_dir_all(d.home.path().join("repo/docs")).unwrap();
+    let list: serde_json::Value = c.request(methods::DESIGN_LIST, serde_json::json!({"workspace": ws})).await.unwrap();
+    let found = list.as_array().unwrap().iter().find(|d| d["kind"] == "project").expect("the project design");
+    assert_eq!(
+        (&found["slug"], &found["name"], &found["project"], &found["path"], &found["system"], &found["pages"]),
+        (
+            &serde_json::json!("settings-page"),
+            &serde_json::json!("Settings page"),
+            &serde_json::json!(project.id),
+            &serde_json::json!("docs/design/settings-page"),
+            &serde_json::json!("moonlet-desktop"),
+            &serde_json::json!([{"name": "index", "label": null}, {"name": "git-a", "label": "cards"}])
+        )
+    );
+
+    let copied: serde_json::Value = c
+        .request(
+            methods::DESIGN_COPY,
+            serde_json::json!({"workspace": ws, "from": {"project": project.id, "path": "docs/design/settings-page"}, "name": "Settings page v2"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        (&copied["slug"], &copied["kind"], &copied["agent_error"]),
+        (&serde_json::json!("settings-page-v2"), &serde_json::json!("workspace"), &serde_json::Value::Null)
+    );
+    let dir = d.home.path().join(".moonlet/design").join(&ws).join("designs/settings-page-v2");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("pages/index.html")).unwrap(),
+        "<link rel=\"stylesheet\" href=\"../../../systems/moonlet-desktop/styles.css\">\n<body data-mid=\"m1\">rows</body>\n"
+    );
+    assert_eq!(std::fs::read_to_string(dir.join("assets/logo.svg")).unwrap(), "<svg></svg>\n");
+    let toml = std::fs::read_to_string(dir.join("design.toml")).unwrap();
+    assert!(toml.contains("viewport = \"390x844\"\n") && toml.contains("[pages.git-a]\nlabel = \"cards\"\n"), "{toml}");
+    let user = until_contains(
+        {
+            let p = dir.join("claude-user");
+            move || std::fs::read_to_string(&p).unwrap_or_default()
+        },
+        "docs/design/settings-page",
+    )
+    .await;
+    assert!(user.contains("its pages are written already"), "{user}");
+
+    let missing = c
+        .request::<_, serde_json::Value>(
+            methods::DESIGN_COPY,
+            serde_json::json!({"workspace": ws, "from": {"project": project.id, "path": "docs/design/nope"}, "name": "x"}),
+        )
+        .await;
+    assert_eq!(missing.unwrap_err().to_string(), "invalid_params: no design at docs/design/nope on main");
+}

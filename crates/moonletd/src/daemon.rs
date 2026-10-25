@@ -221,8 +221,14 @@ async fn blocking<T: Send + 'static>(
 /// (X65); a page saved over a version no longer on disk is `stale`;
 /// anything else failed.
 fn store_error(e: anyhow::Error) -> RpcError {
-    use moonlet_core::design::{comments, designs, history, pages};
-    if e.is::<designs::NoSystem>() || e.is::<designs::BadViewport>() || e.is::<comments::BadComment>() || e.is::<pages::BadPage>() || e.is::<history::NoSnapshot>() {
+    use moonlet_core::design::{comments, designs, history, pages, project};
+    if e.is::<designs::NoSystem>()
+        || e.is::<designs::BadViewport>()
+        || e.is::<comments::BadComment>()
+        || e.is::<pages::BadPage>()
+        || e.is::<history::NoSnapshot>()
+        || e.is::<project::NoProjectDesign>()
+    {
         return RpcError::new("invalid_params", e.to_string());
     }
     if e.is::<pages::Stale>() {
@@ -1353,7 +1359,7 @@ impl Daemon {
                 };
                 let at = self.locate(&m::DesignRef::Workspace { workspace: r.workspace.clone(), slug: slug.clone() }).await?;
                 // The design exists either way; the app shows why its agent did not start.
-                let agent_error = self.start_design_agent(&at).await.err().map(|e| format!("{e:#}"));
+                let agent_error = self.start_design_agent(&at, None).await.err().map(|e| format!("{e:#}"));
                 let design = blocking(move || store.design(&at)).await?;
                 let name = design.name.clone();
                 let created = moonlet_proto::types::DesignCreated { design: self.design_info(design, &self.terminals.list()), agent_error };
@@ -1363,6 +1369,28 @@ impl Daemon {
                     self.terminals.emit(Message::event(m::EV_DESIGN_OPEN, opened));
                 }
                 ok(created)
+            }
+            m::DESIGN_COPY => {
+                let r: m::DesignCopy = params(p)?;
+                let Some(project) = self.workspace_projects(&r.workspace).into_iter().find(|p| p.id == r.from.project) else {
+                    return Err(RpcError::new("invalid_params", format!("no project \"{}\" in the workspace", r.from.project)));
+                };
+                let (repo, base, path) = (Path::new(&project.path), project.base_branch.clone(), r.from.path.clone());
+                let from = moonlet_core::design::project::read_project_design(repo, &base, &path).await.map_err(store_error)?;
+                // Its agent starts from the pages it has, never over them.
+                let intro = format!(
+                    "This design starts as a copy of the design \"{}\" at {path} on {base} of the project {}: its pages are written already. Read them, then wait for what the user asks. Its brief was: {}",
+                    from.config.name,
+                    project.name,
+                    from.config.brief.trim()
+                );
+                let (made, ws, name) = (store.clone(), r.workspace.clone(), r.name.clone());
+                let slug = blocking(move || made.create_from_project(&ws, &name, &from, now_ms())).await?;
+                let at = self.locate(&m::DesignRef::Workspace { workspace: r.workspace.clone(), slug }).await?;
+                // The design exists either way; the app shows why its agent did not start.
+                let agent_error = self.start_design_agent(&at, Some(intro)).await.err().map(|e| format!("{e:#}"));
+                let design = blocking(move || store.design(&at)).await?;
+                ok(moonlet_proto::types::DesignCreated { design: self.design_info(design, &self.terminals.list()), agent_error })
             }
             m::DESIGN_REMOVE => {
                 let r: m::DesignRef = params(p)?;
@@ -1555,7 +1583,9 @@ impl Daemon {
     /// folder, in the workspace's Claude profile, with its design system's
     /// folder read only, and the brief with the design system's README and the
     /// design rules as its first message.
-    async fn start_design_agent(&self, at: &DesignAt) -> anyhow::Result<u32> {
+    /// `intro`, when given, is the first message's opening in place of the
+    /// brief, such as what a copied design starts from.
+    async fn start_design_agent(&self, at: &DesignAt, intro: Option<String>) -> anyhow::Result<u32> {
         use moonlet_core::design::agent;
         use moonlet_proto::types::{DesignAgent, DesignAgentKind};
         let lock = self.lock_of(at, "agent");
@@ -1567,7 +1597,10 @@ impl Daemon {
         let (store, ws, design) = (self.design.clone(), workspace.clone(), at.clone());
         let (launch, name) = blocking(move || {
             let dir = design.folder().canonicalize()?;
-            let config = store.design_config(&design)?;
+            let mut config = store.design_config(&design)?;
+            if let Some(intro) = intro {
+                config.brief = intro;
+            }
             let system = store.system_dir(&ws, &config.system)?.canonicalize()?;
             let readme = store.readme(&ws, &config.system)?;
             let launch = agent::design_launch(&dir, &config, &system, &readme, &moonlet_cli_path()?)?;
