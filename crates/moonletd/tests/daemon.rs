@@ -2219,18 +2219,20 @@ async fn a_sync_agent_saved_as_design_true_comes_back_as_a_sync_agent() {
         .await
         .unwrap();
     let agent = created["agent"].as_u64().expect("an agent") as u32;
+    let kind = |terminals: &[TerminalInfo]| terminals.iter().find(|t| t.id == agent).and_then(|t| t.design.as_ref()).map(|tag| tag.kind);
+    let terminals: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
+    assert_eq!(kind(&terminals), Some(DesignAgentKind::Sync));
     // Saved as a daemon before X65 entry 7a saved it.
     let saved = d.home.path().join(format!(".moonlet/chats/{agent}.json"));
     let mut chat: serde_json::Value = serde_json::from_slice(&std::fs::read(&saved).unwrap()).unwrap();
-    assert_eq!(chat["info"]["design"]["kind"], "sync", "{chat}");
     chat["info"]["design"] = serde_json::json!(true);
     d.stop();
     std::fs::write(&saved, serde_json::to_vec(&chat).unwrap()).unwrap();
     d.start_again().await;
     let mut c = d.client().await;
     let terminals: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
-    let t = terminals.iter().find(|t| t.id == agent).expect("the restored chat");
-    assert_eq!(t.design.as_ref().map(|tag| tag.kind), Some(DesignAgentKind::Sync));
+    assert!(terminals.iter().any(|t| t.id == agent), "the chat was not restored");
+    assert_eq!(kind(&terminals), Some(DesignAgentKind::Sync));
 }
 
 /// A `claude` that records its arguments and every message in its folder,
