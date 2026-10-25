@@ -772,9 +772,45 @@ async fn a_cloud_device_opens_copies_of_its_own_project_only() {
     );
 }
 
-/// `sync.open` of copy `copy` for session `session`, over a connection with
-/// `token` that registered as a worker first, as a machine's link does.
-async fn open_as_worker(addr: &str, token: &str, session: &str, copy: &str) -> Option<String> {
+#[tokio::test]
+async fn a_machine_being_removed_opens_no_copy_over_its_open_connection() {
+    let c = cloud().await;
+    c.ready().await;
+    let mut link = worker_link(&c.addr, &c.machine_token()).await;
+    let mine: Value =
+        c.d.call(
+            "session.create",
+            json!({ "project_id": c.project, "name": "mine", "agent": "none" }),
+        )
+        .await;
+    // The machine answers nothing, so its retire waits while the link is open.
+    let pid = nix::unistd::Pid::from_raw(
+        std::fs::read_to_string(c.fake_dirs()[0].join("pid"))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap(),
+    );
+    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGSTOP).unwrap();
+    let m = &c.machines().await["machines"][0];
+    let _: Value = c.d.call("cloud.down", json!({ "machine": m["id"] })).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let refused = ask_link(
+        &mut link,
+        2,
+        "sync.open",
+        json!({ "copy": "c-1", "session": mine["id"], "kind": "run" }),
+    )
+    .await;
+    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGCONT).unwrap();
+    assert_eq!(
+        refused,
+        Some(("forbidden".into(), "this machine is being removed".into()))
+    );
+}
+
+/// A connection with `token`, registered as a worker, as a machine's link is.
+async fn worker_link(addr: &str, token: &str) -> tokio::net::TcpStream {
     use moonlet_proto::{read_frame, write_frame};
     let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
     let auth = Message::Auth {
@@ -792,44 +828,61 @@ async fn open_as_worker(addr: &str, token: &str, session: &str, copy: &str) -> O
     };
     write_frame(&mut s, &Frame::Json(hello)).await.unwrap();
     read_frame(&mut s).await.unwrap();
-    let requests = [
-        (
-            1,
-            "worker.register",
-            json!({ "id": "8d0f6b1e-0000-4000-8000-00000000c10d", "name": "intruder", "os": "linux", "arch": "x86_64", "cores": 2, "version": "0.1.29", "projects": [], "heavy": true }),
-        ),
-        (
-            2,
-            "sync.open",
-            json!({ "copy": copy, "session": session, "kind": "run" }),
-        ),
-    ];
-    let mut last = None;
-    for (id, method, params) in requests {
-        write_frame(
-            &mut s,
-            &Frame::Json(Message::Request {
-                id,
-                method: method.into(),
-                params,
-            }),
-        )
-        .await
-        .unwrap();
-        loop {
-            let frame = tokio::time::timeout(Duration::from_secs(10), read_frame(&mut s))
-                .await
-                .expect("no reply")
-                .unwrap();
-            if let Some(Frame::Json(Message::Response { id: got, error, .. })) = frame
-                && got == id
-            {
-                last = error.map(|e| e.code);
-                break;
-            }
+    let registered = ask_link(
+        &mut s,
+        1,
+        "worker.register",
+        json!({ "id": "8d0f6b1e-0000-4000-8000-00000000c10d", "name": "intruder", "os": "linux", "arch": "x86_64", "cores": 2, "version": "0.1.29", "projects": [], "heavy": true }),
+    )
+    .await;
+    assert_eq!(registered, None);
+    s
+}
+
+/// Request `method` over `s`: its error's code and message, None when it
+/// succeeded.
+async fn ask_link(
+    s: &mut tokio::net::TcpStream,
+    id: u64,
+    method: &str,
+    params: Value,
+) -> Option<(String, String)> {
+    use moonlet_proto::{read_frame, write_frame};
+    write_frame(
+        s,
+        &Frame::Json(Message::Request {
+            id,
+            method: method.into(),
+            params,
+        }),
+    )
+    .await
+    .unwrap();
+    loop {
+        let frame = tokio::time::timeout(Duration::from_secs(10), read_frame(s))
+            .await
+            .expect("no reply")
+            .unwrap();
+        if let Some(Frame::Json(Message::Response { id: got, error, .. })) = frame
+            && got == id
+        {
+            return error.map(|e| (e.code, e.message));
         }
     }
-    last
+}
+
+/// `sync.open` of copy `copy` for session `session`, over a connection with
+/// `token` that registered as a worker first, as a machine's link does.
+async fn open_as_worker(addr: &str, token: &str, session: &str, copy: &str) -> Option<String> {
+    let mut s = worker_link(addr, token).await;
+    ask_link(
+        &mut s,
+        2,
+        "sync.open",
+        json!({ "copy": copy, "session": session, "kind": "run" }),
+    )
+    .await
+    .map(|(code, _)| code)
 }
 
 #[tokio::test]
