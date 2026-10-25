@@ -367,12 +367,18 @@ describe("a message as a chat shows it (X65)", () => {
   const briefOnly = (text: string) => (text.startsWith("A left nav\n") ? "A left nav" : null);
 
   it("is the user's text as the chat's own reading gives it, else as sent", () => {
-    expect(itemShown(user, briefOnly)).toEqual({ ...user, text: "A left nav" });
-    expect(itemShown({ ...user, text: "Two more variants" }, briefOnly)).toEqual({ ...user, text: "Two more variants" });
-    expect(itemShown(user, undefined)).toEqual(user);
+    expect(itemShown(user, briefOnly, true)).toEqual({ ...user, text: "A left nav" });
+    expect(itemShown({ ...user, text: "Two more variants" }, briefOnly, true)).toEqual({ ...user, text: "Two more variants" });
+    expect(itemShown(user, undefined, true)).toEqual(user);
   });
 
   it("leaves the agent's own messages as they are", () => {
-    expect(itemShown(reply, briefOnly)).toEqual(reply);
+    expect(itemShown(reply, briefOnly, false)).toEqual(reply);
+  });
+
+  it("tells the chat's own reading whether the message is the user's first", () => {
+    const firstOnly = (text: string, first: boolean) => (first ? text.split("\n")[0] : null);
+    expect(itemShown(user, firstOnly, true).text).toBe("A left nav");
+    expect(itemShown(user, firstOnly, false)).toEqual(user);
   });
 });

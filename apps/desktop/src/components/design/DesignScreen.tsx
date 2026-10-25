@@ -133,7 +133,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
                     <SwatchBook size={13} className="mt-0.5 shrink-0" /> The brief went with the design system's README.md and the design rules.
                   </p>
                 }
-                userText={(text) => briefShown(text, design.brief)}
+                userText={(text, first) => briefShown(text, design.brief, first)}
               />
             ) : (
               <p className="p-5 ui-text-13 text-muted">This design's agent is not running.</p>

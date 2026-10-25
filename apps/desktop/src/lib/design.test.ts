@@ -187,11 +187,18 @@ describe("design.open in the app (X65)", () => {
 describe("the design's chat (X65)", () => {
   it("shows the first message as the brief alone, since the README and the design rules went with it", () => {
     const sent = "A left nav and a Git section\n\n---\nThis is the design \"Settings page\" in this folder. Its README.md:\n\n# moonlet desktop";
-    expect(briefShown(sent, "A left nav and a Git section")).toBe("A left nav and a Git section");
+    expect(briefShown(sent, "A left nav and a Git section", true)).toBe("A left nav and a Git section");
     // Any other message shows as it was sent.
-    expect(briefShown("Two more variants", "A left nav and a Git section")).toBeNull();
-    expect(briefShown("A left nav and a Git section", "A left nav and a Git section")).toBeNull();
-    expect(briefShown("anything", "")).toBeNull();
+    expect(briefShown("Two more variants", "A left nav and a Git section", true)).toBeNull();
+    expect(briefShown("A left nav and a Git section", "A left nav and a Git section", true)).toBeNull();
+    expect(briefShown("anything", "", true)).toBeNull();
+  });
+
+  it("keeps a later message that starts with the brief, or a first one not as the daemon sends it, whole", () => {
+    const sent = "A left nav and a Git section\n\n---\nThis is the design \"Settings page\" in this folder. Its README.md:\n\n# moonlet desktop";
+    expect(briefShown(sent, "A left nav and a Git section", false)).toBeNull();
+    expect(briefShown("A left nav and a Git section, and a search field", "A left nav and a Git section", true)).toBeNull();
+    expect(briefShown("A left nav and a Git section\n\n---\nmy own notes", "A left nav and a Git section", true)).toBeNull();
   });
 });
 

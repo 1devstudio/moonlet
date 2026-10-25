@@ -117,12 +117,15 @@ export function designOpenAction(ev: DesignOpen, sessions: { id: string; name: s
   return { kind: "toast", text: `${by} started the design ${ev.name}` };
 }
 
-/** A design agent's first message is its brief with the design system's
- *  README and the design rules after it; the chat shows the brief alone,
- *  under a note that says what went with it. Null for any other message. */
-export function briefShown(text: string, brief: string): string | null {
+/** A design agent's first message is its brief, then the design system's
+ *  README and the design rules, as the daemon writes it (`design/agent.rs`
+ *  `design_launch`: the brief, `\n\n---\n`, then `This is the design "`).
+ *  The chat shows that message (`first`) as the brief alone, under a note
+ *  that says what went with it; null for any other message, a later one
+ *  that starts with the brief included. */
+export function briefShown(text: string, brief: string, first: boolean): string | null {
   const b = brief.trim();
-  return b && text.length > b.length && text.startsWith(b) ? b : null;
+  return first && b && text.startsWith(`${b}\n\n---\nThis is the design "`) ? b : null;
 }
 
 /** The design screen's line under the name: "moonlet desktop · 3 pages". */
