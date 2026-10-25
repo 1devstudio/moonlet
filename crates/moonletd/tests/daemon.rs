@@ -2381,6 +2381,33 @@ async fn design_open_and_a_design_an_agent_starts_reach_the_app() {
     assert!(missing.is_err());
 }
 
+/// X65 entry 7: the design screen saves the viewport it shows a design at,
+/// and design.list gives it back with the brief.
+#[tokio::test]
+async fn the_viewport_a_design_was_last_shown_at_is_saved_and_listed() {
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    let ws = workspace_with_system(&d, &mut c).await;
+    let _: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "A left nav"}))
+        .await
+        .unwrap();
+    let list: serde_json::Value = c.request(methods::DESIGN_LIST, serde_json::json!({"workspace": ws})).await.unwrap();
+    assert_eq!((&list[0]["brief"], &list[0]["viewport"]), (&serde_json::json!("A left nav"), &serde_json::json!("1440x900")));
+    let _: bool = c
+        .request(methods::DESIGN_VIEWPORT, serde_json::json!({"workspace": ws, "slug": "settings-page", "viewport": "390x844"}))
+        .await
+        .unwrap();
+    let list: serde_json::Value = c.request(methods::DESIGN_LIST, serde_json::json!({"workspace": ws})).await.unwrap();
+    assert_eq!(list[0]["viewport"], "390x844");
+    let toml = std::fs::read_to_string(d.home.path().join(".moonlet/design").join(&ws).join("designs/settings-page/design.toml")).unwrap();
+    assert!(toml.contains("viewport = \"390x844\"\n"), "{toml}");
+    let bad = c
+        .request::<_, bool>(methods::DESIGN_VIEWPORT, serde_json::json!({"workspace": ws, "slug": "settings-page", "viewport": "phone"}))
+        .await;
+    assert_eq!(bad.unwrap_err().to_string(), "invalid_params: bad viewport \"phone\": give a width and a height in px, such as 390x844");
+}
+
 /// X65: a design needs a design system its workspace has, and a session
 /// design is not made yet (entry 12).
 #[tokio::test]
