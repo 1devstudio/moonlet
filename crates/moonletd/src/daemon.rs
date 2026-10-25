@@ -268,6 +268,14 @@ impl Daemon {
             .collect()
     }
 
+    /// Cloud settings with where the central host's machines reach it: its
+    /// tailnet addresses and port, for the page's policy snippet (X63).
+    fn reached(&self, mut info: m::CloudInfo) -> m::CloudInfo {
+        info.listening = self.mobile.listening();
+        info.port = self.mobile.status().port;
+        info
+    }
+
     /// Refuses all but the Mac's app and a paired Mac over the tailnet
     /// (X61): never a phone, nor an agent's CLI.
     fn app_or_paired_mac(&self, conn: &Conn, what: &str) -> Result<(), RpcError> {
@@ -674,11 +682,7 @@ impl Daemon {
                 };
                 ok(self.runs.start(conn.clone(), plan, self.workers.clone(), self.sync.clone()))
             }
-            m::CLOUD_GET => {
-                let mut info = self.cloud.info(self.machines.provider_infos());
-                info.listening = self.mobile.listening();
-                ok(info)
-            }
+            m::CLOUD_GET => ok(self.reached(self.cloud.info(self.machines.provider_infos()))),
             m::CLOUD_TYPES => {
                 let r: m::CloudTypes = params(p)?;
                 ok(self.machines.types(&r.provider, &r.location).await?)
@@ -742,7 +746,7 @@ impl Daemon {
                 for provider in gone {
                     self.machines.provider_off(&provider);
                 }
-                ok(info)
+                ok(self.reached(info))
             }
             m::EXEC_SETUPS => {
                 app_only(conn, "setup")?;

@@ -2219,6 +2219,9 @@ pub struct CloudInfo {
     /// pair; empty while it takes no tailnet connections.
     #[serde(default)]
     pub listening: Vec<String>,
+    /// The port it listens on for the tailnet, also while that is off.
+    #[serde(default)]
+    pub port: u16,
 }
 
 /// The Tailscale part of `cloud.set`; a field left out keeps its value.

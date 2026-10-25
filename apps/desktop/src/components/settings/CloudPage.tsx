@@ -189,7 +189,7 @@ export function CloudPage() {
   const usage = usageLine(machines?.hours_this_month ?? 0, info.max_hours_month);
   // A daemon before 0.1.31 does not say where it listens.
   const listening = info?.listening;
-  const addr = policyAddress({ port: 47428, listening: listening ?? [] }, name);
+  const addr = policyAddress({ port: info?.port ?? 0, listening: listening ?? [] }, name);
   const snippet = policySnippet(draft.tailscale.tag.trim() || info.tailscale.tag, addr);
   const port = addr.split(":").pop();
   const unreachable = listening && reachWarning({ listening }, name);

@@ -216,6 +216,7 @@ impl CloudSettings {
             projects: f.projects,
             kinds,
             listening: Vec::new(),
+            port: 0,
         }
     }
 
