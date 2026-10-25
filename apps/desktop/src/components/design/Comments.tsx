@@ -7,7 +7,7 @@ import { ChevronDown, X } from "lucide-react";
 import { useState } from "react";
 import type { DesignComment } from "../../lib/protocol";
 import type { Rect } from "../../lib/designBridge";
-import { BOX_SIZE, COMMENT_PIN_ATTR, boxLabel, boxPlace, commentLine, commentsTab, footerLabel, pinLabel, sentLabel, type CommentRef, type PageMids } from "../../lib/designComments";
+import { BOX_SIZE, COMMENT_PIN_ATTR, boxLabel, boxPlace, commentLine, pinPlace, commentsTab, footerLabel, pinLabel, sentLabel, type CommentRef, type PageMids } from "../../lib/designComments";
 import { pageFile } from "../../lib/designPage";
 import { cx } from "../../lib/cx";
 import { Button } from "../ui";
@@ -22,28 +22,30 @@ export function PinBadge({ n, className }: { n: number | null; className?: strin
   );
 }
 
-/** The open pins over the page at `scale`: each at its element's top right
- *  corner, as the bridge last reported its box. */
-export function PinLayer({ pins, rects, scale, open, onOpen }: { pins: DesignComment[]; rects: Record<string, Rect>; scale: number; open: number | null; onOpen: (pin: DesignComment) => void }) {
+/** The open pins over the page of `size` px at `scale`: each at its
+ *  element's top right corner, as the bridge last reported its box, clipped
+ *  to the page; none for an element scrolled out of it (pinPlace). */
+export function PinLayer({ pins, rects, scale, size, open, onOpen }: { pins: DesignComment[]; rects: Record<string, Rect>; scale: number; size: [number, number]; open: number | null; onOpen: (pin: DesignComment) => void }) {
   return (
-    <>
+    <div className="pointer-events-none absolute left-0 top-0 z-10 overflow-hidden" style={{ width: size[0], height: size[1] }}>
       {pins.map((p) => {
         const r = rects[p.mid];
-        if (!r) return null;
+        const place = r && pinPlace(r, scale, size);
+        if (!place) return null;
         return (
           <button
             key={p.n}
             aria-label={`Comment ${p.n}`}
             title={p.comment}
             onClick={() => onOpen(p)}
-            className={cx("absolute z-10 rounded-full shadow-md ring-2 ring-bg", open === p.n && "ring-fg")}
-            style={{ left: (r.x + r.w) * scale - 10, top: r.y * scale - 10 }}
+            className={cx("pointer-events-auto absolute rounded-full shadow-md ring-2 ring-bg", open === p.n && "ring-fg")}
+            style={place}
           >
             <PinBadge n={p.n} />
           </button>
         );
       })}
-    </>
+    </div>
   );
 }
 

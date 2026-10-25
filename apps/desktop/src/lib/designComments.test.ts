@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DesignComment } from "./protocol";
-import { boxLabel, boxPlace, chatCardLookup, keepAction, openCommentsLabel, commentCards, footerLabel, pinLabel, sentLabel, commentLine, commentsMessage, commentsTab, isOrphaned, pageCounts, parseCommentLine, sendAll, withPins } from "./designComments";
+import { boxLabel, boxPlace, chatCardLookup, pinPlace, keepAction, openCommentsLabel, commentCards, footerLabel, pinLabel, sentLabel, commentLine, commentsMessage, commentsTab, isOrphaned, pageCounts, parseCommentLine, sendAll, withPins } from "./designComments";
 
 const pin = (n: number, over: Partial<DesignComment> = {}): DesignComment => ({
   n,
@@ -183,5 +183,20 @@ describe("Show in chat (X65)", () => {
     expect(chatCardLookup({ found: true, loaded: true, waitedMs: 300 })).toBe("found");
     expect(chatCardLookup({ found: false, loaded: true, waitedMs: 300 })).toBe("missing");
     expect(chatCardLookup({ found: false, loaded: false, waitedMs: 5000 })).toBe("missing");
+  });
+});
+
+describe("a pin over the page (X65)", () => {
+  // A 1440×900 page shown at 50%.
+  const at = (x: number, y: number, w: number, h: number) => pinPlace({ x, y, w, h }, 0.5, [720, 450]);
+  it("goes at its element's top right corner, kept inside the page, and is hidden while its element is scrolled out of it", () => {
+    expect(at(100, 200, 300, 40)).toEqual({ left: 190, top: 90 });
+    // A full-width nav at the top: its pin stays inside the page.
+    expect(at(0, 0, 1440, 60)).toEqual({ left: 700, top: 0 });
+    // Scrolled partly out at the top: still shown, at the page's edge.
+    expect(at(0, -30, 200, 60)).toEqual({ left: 90, top: 0 });
+    // Scrolled out above, or below the page.
+    expect(at(0, -300, 400, 100)).toBeNull();
+    expect(at(0, 1000, 100, 20)).toBeNull();
   });
 });
