@@ -105,17 +105,28 @@ impl Workers {
                 return Err(RpcError::new("forbidden", "another Mac links with this worker id"));
             }
         }
-        let old = self.list.lock().unwrap().insert(
-            id.clone(),
-            Entry {
-                info: WorkerInfo {
-                    worker,
-                    connected_since: now_ms(),
-                    rtt_ms: None,
+        let old = {
+            let mut list = self.list.lock().unwrap();
+            // Registering again on the same connection keeps what its pings
+            // measured; a new connection starts afresh.
+            let kept = list
+                .get(&id)
+                .filter(|o| o.conn.id == conn.id)
+                .map(|o| (o.info.connected_since, o.info.rtt_ms, o.info.load));
+            let (connected_since, rtt_ms, load) = kept.unwrap_or((now_ms(), None, None));
+            list.insert(
+                id.clone(),
+                Entry {
+                    info: WorkerInfo {
+                        worker,
+                        connected_since,
+                        rtt_ms,
+                        load,
+                    },
+                    conn: conn.clone(),
                 },
-                conn: conn.clone(),
-            },
-        );
+            )
+        };
         let again = old.as_ref().is_some_and(|o| o.conn.id == conn.id);
         if let Some(old) = old
             && !again
@@ -184,7 +195,7 @@ async fn ping_loop(workers: std::sync::Weak<Workers>, id: String, conn: Arc<Conn
             .request(m::WORKER_PING, serde_json::json!({}), every)
             .await
         {
-            Ok(_) => {
+            Ok(answer) => {
                 missed = 0;
                 let rtt = sent.elapsed().as_millis() as u64;
                 if let Some(w) = workers.upgrade()
@@ -192,6 +203,7 @@ async fn ping_loop(workers: std::sync::Weak<Workers>, id: String, conn: Arc<Conn
                     && e.conn.id == conn.id
                 {
                     e.info.rtt_ms = Some(rtt);
+                    e.info.load = answer["load"].as_f64();
                 }
             }
             Err(e) => {

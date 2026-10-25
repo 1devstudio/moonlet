@@ -99,8 +99,8 @@ This is ADR 0009's routing slice. It adds two things the ADR did not decide: an 
   - the project's cloud machines that are ready (X63).
 
   A candidate must have the project's `os` when one is set, a free slot, and a load below busy.
-- [ ] Each worker has **slots**: how many routed commands it runs at once. The default is 2. The worker's own This Mac page sets it, and the central host's page sets the central host's own.
-- [ ] A worker is **busy** when its 1-minute load average is at least 0.7 × its cores. The worker sends its load in each `worker.ping` answer. The central host reads its own load the same way.
+- [ ] Each worker has **slots**: how many routed commands it runs at once, from 1 to 64. The default is 2. Every machine keeps its own in its `link.json` (`link.set {worker: {slots}}`), the central host included, and a linked worker sends them when it registers, and again when they change. The worker's own This Mac page sets them.
+- [ ] A worker is **busy** when its 1-minute load average (`getloadavg`) is at least 0.7 × its cores. The worker sends its load in each `worker.ping` answer, and `worker.list` shows it. The central host reads its own load the same way.
 - [ ] Order:
   1. linked workers, by lowest load per core, then lowest round trip, then worker id;
   2. the central host;
@@ -339,7 +339,7 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
 - **`.moonlet/config.toml`:** a `[heavy]` table with `commands`, `os`, `env` and `outputs`. It is read by `ProjectConfig` and edited by X8's dialog.
 - **Central host, `$MOONLET_HOME/heavy.json`:** the approval per project identity: the exact commands and the exact `env` names, saved together. Example: `{"github.com/acme/shop 4171b03…": {"commands": ["pnpm build", "pnpm test"], "env": ["CI", "NPM_TOKEN"]}}`. A routed command needs both lists to match the config.
 - **Each linked worker, `$MOONLET_HOME/sync/projects.json`:** each project gains `approved_heavy {commands, env}`, the lists approved for that worker, under X60's `<host> <origin> <root>` key.
-- **`link.json`:** `worker` gains `slots`. The central host keeps its own slots in `heavy.json`.
+- **`link.json`:** `worker` gains `slots`, on every machine, the central host included.
 - **Routing copies:** `$MOONLET_HOME/runs/`, listed in `sync/copies.json` with `kind: "run"`.
 - **Jobs, on the central host:** `$MOONLET_HOME/jobs/<session>/jobs.json` (the last 50 jobs) and `<job>.out`, the output as tagged stdout and stderr chunks. They are removed with the session.
 
@@ -366,8 +366,8 @@ Every acceptance criterion maps to at least one test below. The names are the on
 
 Where the tests live:
 
-- **Rust unit tests:** `crates/moonlet-core/src/heavy.rs` (matching, Claude Code rules, picking, load, paths), `crates/moonlet-core/src/job_summary.rs` and `crates/moonlet-cli/src/hook.rs`, each in its `#[cfg(test)] mod tests`.
-- **Daemon end-to-end:** `crates/moonletd/tests/exec.rs`. It runs a central host and one or two worker `TestDaemon`s, linked as in `tests/link.rs`, with a test-only setting for load and size limits.
+- **Rust unit tests:** `crates/moonlet-core/src/heavy.rs` (matching, Claude Code rules, picking, paths), `crates/moonlet-core/src/job_summary.rs` and `crates/moonlet-cli/src/hook.rs`, each in its `#[cfg(test)] mod tests`.
+- **Daemon end-to-end:** `crates/moonletd/tests/exec.rs`. It runs a central host and one or two worker `TestDaemon`s, linked as in `tests/link.rs`, with a test-only setting for load and size limits. Slots and load over the link are in `crates/moonletd/tests/link.rs`.
 - **CLI end-to-end:** `crates/moonlet-cli/tests/exec.rs`.
 - **Vitest:** `apps/desktop/src/lib/heavyCommands.test.ts`, `workers.test.ts`, `jobs.test.ts` and `routedChip.test.ts`.
 - **e2e:** `apps/desktop/e2e/specs/routing.e2e.ts`.
@@ -387,7 +387,7 @@ Where the tests live:
 | `moonlet exec` in a session, and `exec.run`'s own check | `moonlet_exec_in_a_session_runs_through_its_daemon`, `an_unapproved_moonlet_exec_is_refused` |
 | Candidates and `os` | `a_worker_on_another_os_is_skipped` |
 | Slots | `slots_default_to_two_and_link_set_changes_them`, `a_worker_with_no_free_slot_is_skipped`; Vitest "the run-at-most row" |
-| Busy | `reads_the_load_from_captured_macos_and_linux_output`, `a_worker_at_seven_tenths_of_its_cores_is_busy` |
+| Busy | `a_worker_reports_its_load_with_each_ping`, `a_worker_at_seven_tenths_of_its_cores_is_busy` |
 | Order (worked examples) | `picks_as_in_the_order_table` |
 | Never waits for a slot | `a_command_with_no_free_worker_runs_on_the_central_host` |
 | Refusals | `a_missing_tool_sends_the_command_to_the_next_worker`, `a_worker_waiting_for_setup_approval_is_skipped`, `a_copy_that_cannot_match_in_time_refuses_not_fenced` |
