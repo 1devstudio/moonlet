@@ -147,9 +147,9 @@ export function layerPick(s: CanvasState, locked: boolean): CanvasState | null {
   return locked ? null : canvasStep(s, "edit");
 }
 
-/** The right rail's tabs so far: Layers (Edit), Inspector, Palette and
- *  Comments. */
-export type RailTab = "layers" | "inspector" | "palette" | "comments";
+/** The right rail's tabs: Layers (Edit), Inspector, Palette, Comments and
+ *  History. */
+export type RailTab = "layers" | "inspector" | "palette" | "comments" | "history";
 
 /** The rail's tab entering mode `after` from `before` shows: Layers for
  *  Edit, Comments for Comment; null for none. */

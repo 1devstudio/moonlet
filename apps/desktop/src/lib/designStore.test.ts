@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Design, DesignComment, DesignSystem, TerminalInfo } from "./protocol";
 import { modeOf, setMode } from "./mode";
 import { agentOnScreen, goToAgent, useStore } from "./store";
-import { commentsOf, keepComment, loadComments, sendComments, sendingOf, resolveComment } from "./designStore";
+import { commentsOf, historyOf, keepComment, loadComments, loadHistory, sendComments, sendingOf, resolveComment } from "./designStore";
 import { cardsOf, checkDesign, createFromNewDesign, createSystem, designsOf, detectStack, latestOf, loadCards, loadDesigns, loadSystems, openCard, saveViewport, pageRevOf, problemsOf, revOf, shownCard, shownDesign, shownSystem, showDesign, showSystem, startDesign, systemNameOf, systemsOf, useDesign } from "./designStore";
 
 const calls = vi.hoisted(() => [] as { host: string; method: string; params: unknown }[]);
@@ -56,7 +56,7 @@ const listed = () => calls.filter((c) => c.method === "design.systems");
 beforeEach(async () => {
   calls.length = 0;
   for (const k of Object.keys(answers)) delete answers[k];
-  useDesign.setState({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, designs: {}, designShown: {}, pageRevs: {}, latest: {}, problems: {}, systemNames: {}, comments: {}, mids: {}, sending: {} });
+  useDesign.setState({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, designs: {}, designShown: {}, pageRevs: {}, latest: {}, problems: {}, systemNames: {}, comments: {}, mids: {}, sending: {}, histories: {} });
   await startDesign();
 });
 
@@ -351,6 +351,27 @@ describe("a design's pages on a change (X65)", () => {
     await loadDesigns("local", "w-1devstudio");
     changed("w-1devstudio", { design: "settings-page", paths: ["pages/index.html"] });
     expect(pageRevOf(useDesign.getState(), "local", "w-1devstudio", "settings-page", "index")).toBe(1);
+  });
+});
+
+describe("a design's snapshots (X65)", () => {
+  const snapshot = (n: number) => ({ n, time: n * 1000, type: "agent_turn", summary: "Wrote index.html · 1 page", pages: ["index"] });
+  const ns = () => historyOf(useDesign.getState(), "local", "w-1devstudio", "settings-page")?.map((s) => s.n);
+
+  it("are listed from the daemon, and again as each is taken, which loads no page", async () => {
+    answers["design.list"] = () => [design()];
+    answers["design.check"] = () => [];
+    await loadDesigns("local", "w-1devstudio");
+    answers["design.history"] = () => [snapshot(1)];
+    await loadHistory("local", "w-1devstudio", "settings-page");
+    expect(calls.filter((c) => c.method === "design.history").map((c) => c.params)).toEqual([{ workspace: "w-1devstudio", slug: "settings-page" }]);
+    expect(ns()).toEqual([1]);
+    answers["design.history"] = () => [snapshot(2), snapshot(1)];
+    changed("w-1devstudio", { design: "settings-page", paths: ["history/2/pages/index.html", "history/2/snapshot.json"] });
+    await settle();
+    await settle();
+    expect(ns()).toEqual([2, 1]);
+    expect(pageRevOf(useDesign.getState(), "local", "w-1devstudio", "settings-page", "index")).toBe(0);
   });
 });
 

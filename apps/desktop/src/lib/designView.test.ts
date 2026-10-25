@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DesignCard, DesignSystem } from "./protocol";
-import { cardGroups, cardUrl, pageUrl, changedBanner, fitScale, fixMessage, fixState, headerLine, listedCards, problemsLabel, rendersHere, statusLine, variantsLabel, visibleCards, zoomStep } from "./designView";
+import { cardGroups, cardUrl, pageUrl, snapshotPageUrl, changedBanner, fitScale, fixMessage, fixState, headerLine, listedCards, problemsLabel, rendersHere, statusLine, variantsLabel, visibleCards, zoomStep } from "./designView";
 
 const NOW = 1_761_200_000_000;
 const DAY = 86_400_000;
@@ -173,6 +173,13 @@ describe("a design's page (X65)", () => {
   it("asks for the comment bridge when the canvas frames it, on the same host", () => {
     expect(pageUrl("w-1devstudio", "settings-page", "index", 0, true)).toBe("moonlet-design://77b546eb07dc1f7b.w-1devstudio/designs/settings-page/pages/index.html?moonlet-bridge=1");
     expect(pageUrl("w-1devstudio", "settings-page", "index", 4, true)).toBe("moonlet-design://77b546eb07dc1f7b.w-1devstudio/designs/settings-page/pages/index.html?v=4&moonlet-bridge=1");
+  });
+});
+
+describe("a snapshot's page (X65)", () => {
+  it("is served from its snapshot as deep as its design's pages, so its links resolve as theirs, on a host of its own, never with the bridge", () => {
+    expect(snapshotPageUrl("w-1devstudio", "settings-page", 3, "index")).toBe("moonlet-design://bde3977b4fe8bcc8.w-1devstudio/designs/settings-page%403/pages/index.html");
+    expect(snapshotPageUrl("w-1devstudio", "settings-page", 3, "git-a")).toBe("moonlet-design://d33e539a169502d6.w-1devstudio/designs/settings-page%403/pages/git-a.html");
   });
 });
 

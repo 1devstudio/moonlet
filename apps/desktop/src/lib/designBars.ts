@@ -27,12 +27,15 @@ export interface BarState {
   /** The edit by hand a save lost to a change on disk, as its line says it;
    *  null once dismissed. */
   unsaved: string | null;
+  /** The snapshot the canvas previews, as History says its time and type
+   *  ("10:33", "edits by hand"); null while it shows the current pages. */
+  preview: { time: string; type: string } | null;
 }
 
-export type BarAction = "stop" | "details" | "fix" | "dismiss";
+export type BarAction = "stop" | "details" | "fix" | "dismiss" | "back" | "restore";
 
 export interface Bar {
-  tone: "orange" | "red" | "yellow" | "grey";
+  tone: "orange" | "red" | "yellow" | "grey" | "blue";
   text: string;
   /** Said after the text, in a quieter type. */
   detail: string | null;
@@ -63,10 +66,16 @@ function summary(problems: PageProblem[]): string {
   return [...known, ...(rest > 0 ? [count(rest, "other problem", "other problems")] : [])].join(", ");
 }
 
-/** The bar to show, or null: the agent at work, then what it asks, then an
- *  edit by hand a save lost to a change on disk, then the page's check
- *  problems, then a removed design system. */
+/** The bar to show, or null: a snapshot previewed, as the canvas then shows
+ *  it and not the current pages the others are about; then the agent at
+ *  work, then what it asks, then an edit by hand a save lost to a change on
+ *  disk, then the page's check problems, then a removed design system. */
 export function designBar(s: BarState): Bar | null {
+  if (s.preview) {
+    const text = `Previewing the snapshot from ${s.preview.time}, ${s.preview.type}. Nothing changes until you restore it.`;
+    // A restore waits for the agent, as edits by hand do.
+    return s.working ? { tone: "blue", text, detail: "Restore opens when Claude stops.", actions: ["back"] } : { tone: "blue", text, detail: null, actions: ["back", "restore"] };
+  }
   if (s.working) return { tone: "orange", text: "Claude is changing the design. Edit mode opens when it stops; comments still work", detail: null, actions: ["stop"] };
   if (s.needsYou) return { tone: "orange", text: s.needsYou.kind === "question" ? "Claude asks…" : "Claude needs your approval", detail: s.needsYou.text, actions: [] };
   if (s.unsaved) return { tone: "yellow", text: "The page changed; your last edit was not saved.", detail: s.unsaved, actions: ["dismiss"] };
