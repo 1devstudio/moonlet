@@ -158,6 +158,17 @@ export function commentCardSelector(n: number): string {
   return `[${COMMENT_PIN_ATTR}="${n}"]`;
 }
 
+/** How long Show in chat waits for its chat to load. */
+const SHOW_IN_CHAT_WAIT_MS = 5000;
+
+/** What Show in chat does after looking for the pin's card: scrolls to it
+ *  when `found`; else, while the chat's messages have not `loaded`, looks
+ *  again, for at most 5 s; else says its message is not in the chat. */
+export function chatCardLookup(l: { found: boolean; loaded: boolean; waitedMs: number }): "found" | "wait" | "missing" {
+  if (l.found) return "found";
+  return !l.loaded && l.waitedMs < SHOW_IN_CHAT_WAIT_MS ? "wait" : "missing";
+}
+
 /** "1 open comment", "3 open comments". */
 export function openCommentsLabel(n: number): string {
   return `${n} open comment${n === 1 ? "" : "s"}`;
