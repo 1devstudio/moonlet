@@ -35,7 +35,7 @@ import {
 import { sanitize } from "./sanitize";
 import { DEFAULT_MODE } from "./agents";
 import { DEFAULT_SOUNDS, type SoundSettings } from "./sounds";
-import { DoneBursts, alertFor, type BannerSettings } from "./alerts";
+import { DoneBursts, alertFor, alertsLikeASession, type BannerSettings } from "./alerts";
 import { type ToolCallView, forgetChat, loadChat, onChatItem, onChatState } from "./chat";
 import { autoPulls, fetchDue, justMerged, pullToast, type FetchInfo } from "./baseSync";
 import { gitSettingsOf } from "./gitSettings";
@@ -911,6 +911,8 @@ const doneBursts = new DoneBursts();
 async function onAttention(host: string, a: Attention) {
   const s = get();
   const chatInView = !!s.terminals[host]?.[a.terminal]?.chat;
+  // A design system's sync agent notifies through Design mode (X65).
+  if (!alertsLikeASession({ session_id: a.session_id, chat: chatInView })) return;
   // A structured agent shows the outcome and approvals inline; no floating card on top.
   if (a.session_id && s.selected?.host === host && s.selected.session === a.session_id && !chatInView) {
     const since = s.workingSince[termKey(host, a.terminal)];

@@ -7,7 +7,9 @@ import { onDaemonEvent, onHostStatus, rpc } from "./daemon";
 import { EV, M, type ChatState, type DesignCard, type DesignChanged, type DesignCover, type DesignSystem, type DesignSystemCreated } from "./protocol";
 import { parseWsKey, wsKey } from "./workspaces";
 import { syncNotice } from "./designSync";
-import { notify } from "./store";
+import { notify, shownWorkspace, useStore } from "./store";
+import { alertFor } from "./alerts";
+import { modeOf } from "./mode";
 
 interface DesignState {
   /** By workspace (`wsKey(host, id)`), once listed. */
@@ -112,8 +114,18 @@ async function fetchSystems(host: string, workspace: string, key: string) {
   for (const sys of before ? list : []) {
     const was = before!.find((b) => b.slug === sys.slug);
     const notice = was && syncNotice(was, sys);
-    if (notice) void notify(notice.title, notice.body);
+    if (notice && bannerFor(notice.state, host, workspace, sys.slug)) void notify(notice.title, notice.body);
   }
+}
+
+/** Whether a notification goes out, as a session's would (X47): by the
+ *  banner settings, and while the window has focus only when asked to and
+ *  the design system is not on screen. */
+function bannerFor(state: "blocked" | "done", host: string, workspace: string, slug: string): boolean {
+  const s = useStore.getState();
+  const ws = shownWorkspace(s);
+  const visible = modeOf(s) === "design" && ws?.host === host && ws.id === workspace && shownSystem(useDesign.getState(), host, workspace)?.slug === slug;
+  return alertFor({ state, focused: document.hasFocus(), visible, settings: s.settings, now: Date.now() }).banner;
 }
 
 const reload = (host: string, workspace: string) => void loadSystems(host, workspace, true).catch(() => {});
@@ -153,6 +165,19 @@ export async function startDesign() {
       onChatState(e.host, d.id, d.state);
     }
   });
+  // Every connected workspace's systems are listed, so a sync started from a
+  // session notifies even when Design mode was never opened (X64).
+  const listAll = () => {
+    const s = useStore.getState();
+    for (const [host, info] of Object.entries(s.hosts)) {
+      if (info.status !== "connected") continue;
+      for (const w of s.workspaces[host] ?? []) if (!wanted.has(wsKey(host, w.id))) reload(host, w.id);
+    }
+  };
+  useStore.subscribe((s, prev) => {
+    if (s.hosts !== prev.hosts || s.workspaces !== prev.workspaces) listAll();
+  });
+  listAll();
   await onHostStatus((h) => {
     if (h.status !== "connected") return;
     for (const key of wanted) {

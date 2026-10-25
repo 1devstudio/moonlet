@@ -6,7 +6,7 @@ import { useState } from "react";
 import { errorToast } from "../../lib/store";
 import { rpc } from "../../lib/daemon";
 import { M, type DesignCard, type DesignSystem } from "../../lib/protocol";
-import { afterSyncLine, changedRows, needsYou, type NeedsYouItem, type StepCell } from "../../lib/designSync";
+import { afterSyncLine, afterSyncShown, base, changedRows, needsYou, orphanLine, proposalLabel, type NeedsYouItem, type StepCell } from "../../lib/designSync";
 import { cardUrl } from "../../lib/designView";
 import { loadCards, loadSystems, openCard } from "../../lib/designStore";
 import { cx } from "../../lib/cx";
@@ -51,10 +51,13 @@ export function StepBar({ cells }: { cells: StepCell[] }) {
   );
 }
 
+/** When the app started: a sync recorded since is summed up even when it changed nothing. */
+const STARTED = Date.now();
+
 /** "Sync finished · …", dismissed until the next sync. */
 export function AfterSyncBar({ sys, cards, onOpenAgent }: { sys: DesignSystem; cards: DesignCard[]; onOpenAgent: (() => void) | null }) {
   const [dismissed, setDismissed] = useState<number | null>(null);
-  if (sys.synced_at === null || dismissed === sys.synced_at || (sys.last_sync.length === 0 && needsYou(cards).length === 0)) return null;
+  if (!afterSyncShown(sys, cards, STARTED) || dismissed === sys.synced_at) return null;
   return (
     <div role="status" className="flex shrink-0 items-center gap-2 border-b border-border bg-done/[0.07] px-5 py-2 ui-text-12.5">
       <Check size={13} className="text-done" />
@@ -106,7 +109,7 @@ export function NeedsYouSection({ host, workspace, sys, cards, rev }: { host: st
       <div className="flex flex-col gap-4">
         {items.map((item) =>
           item.kind === "edited" ? (
-            <div key={item.card.path} className="overflow-hidden rounded-lg border border-accent/50 bg-panel">
+            <div key={`edited-${item.card.path}`} className="overflow-hidden rounded-lg border border-accent/50 bg-panel">
               <div className="flex items-center gap-3 border-b border-border px-4 py-2.5">
                 <div className="min-w-0 flex-1">
                   <p className="ui-text-13 text-fg">
@@ -123,28 +126,26 @@ export function NeedsYouSection({ host, workspace, sys, cards, rev }: { host: st
               </div>
               <div className="grid grid-cols-2 divide-x divide-border">
                 <div className="min-w-0 p-3">
-                  <p className="mb-2 font-mono ui-text-11.5 text-muted">{item.card.path.split("/").pop()} · yours</p>
+                  <p className="mb-2 font-mono ui-text-11.5 text-muted">{base(item.card.path)} · yours</p>
                   <Preview url={cardUrl(workspace, sys.slug, item.card.path, rev)} title={`${item.card.name}, yours`} viewport={item.card.viewport} width={420} />
                 </div>
                 <div className="min-w-0 p-3">
-                  <p className="mb-2 font-mono ui-text-11.5 text-accent">{(item.proposal ?? item.card.proposals.join(", ")).split("/").pop()} · synced</p>
+                  <p className="mb-2 font-mono ui-text-11.5 text-accent">{proposalLabel(item)} · synced</p>
                   {item.proposal ? (
                     <Preview url={cardUrl(workspace, sys.slug, item.proposal, rev)} title={`${item.card.name}, synced`} viewport={item.card.viewport} width={420} />
                   ) : (
-                    <p className="ui-text-12.5 text-muted">The sync changed {item.card.proposals.map((p) => p.split("/").pop()).join(" and ")}; your HTML stays.</p>
+                    <p className="ui-text-12.5 text-muted">The sync changed {proposalLabel(item)}; your HTML stays.</p>
                   )}
                 </div>
               </div>
             </div>
           ) : (
-            <div key={item.card.path} className="flex items-center gap-3 rounded-lg border border-dashed border-border-strong bg-panel px-4 py-3">
+            <div key={`orphaned-${item.card.path}`} className="flex items-center gap-3 rounded-lg border border-dashed border-border-strong bg-panel px-4 py-3">
               <div className="min-w-0 flex-1">
                 <p className="ui-text-13 text-fg">
                   {item.card.name} <span className="text-faint">· {item.card.group} · orphaned</span>
                 </p>
-                <p className="ui-text-12 text-muted">
-                  Its source {item.card.source.map((s) => s.split("/").pop()).join(", ") || "file"} was deleted. Designs that inserted it keep their copy.
-                </p>
+                <p className="ui-text-12 text-muted">{orphanLine(item.card)}</p>
               </div>
               <Button size="sm" variant="ghost" disabled={busy !== null} onClick={() => void settle(item, "keep")}>
                 Keep for now
