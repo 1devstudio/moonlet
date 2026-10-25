@@ -46,9 +46,6 @@ pub fn sync_launch(
 ) -> Result<Launch> {
     no_pattern(sources)?;
     let bin = bin.display();
-    // `Edit(//abs/**)`: an absolute path, as Claude's rules write one. It
-    // covers every tool that edits files; `--add-dir` alone would not.
-    let deny: Vec<String> = sources.iter().map(|s| format!("Edit(/{s}/**)")).collect();
     // Only what a sync needs: reporting a step (any summary), the check (with
     // or without rendering the cards) and the sync record of this folder's
     // system, with no other arguments, and a card's screenshot for grading.
@@ -61,7 +58,7 @@ pub fn sync_launch(
         format!("Bash({bin} design snap:*)"),
         format!("Bash({bin} design system synced)"),
     ];
-    let settings = serde_json::json!({ "permissions": { "allow": allow, "deny": deny } });
+    let settings = settings(&allow, sources);
     let listed: String = sources
         .iter()
         .map(|s| format!("- {s} (read only)\n"))
@@ -88,11 +85,20 @@ pub fn sync_launch(
     Ok(Launch {
         cwd: dir.display().to_string(),
         add_dirs: sources.to_vec(),
-        settings: settings.to_string(),
+        settings,
         title: format!("Design · {}", config.name),
         mode: "acceptEdits".into(),
         prompt,
     })
+}
+
+/// Claude's `--settings` for a Design mode agent: `allow` runs without
+/// asking, and every tool that edits files is denied in each of the
+/// `read_only` folders (real paths), as `Edit(//abs/**)`, the way Claude's
+/// rules write an absolute path; `--add-dir` alone would not stop an edit.
+fn settings(allow: &[String], read_only: &[String]) -> String {
+    let deny: Vec<String> = read_only.iter().map(|s| format!("Edit(/{s}/**)")).collect();
+    serde_json::json!({ "permissions": { "allow": allow, "deny": deny } }).to_string()
 }
 
 /// The design rules (X65), as the `moonlet-design` skill installs them in
@@ -114,15 +120,14 @@ pub fn design_launch(
     let system = system_dir.display().to_string();
     no_pattern(std::slice::from_ref(&system))?;
     let bin = bin.display();
-    // Every Claude Code tool that edits files is denied in the design system;
-    // the design's own folder is covered by Accept edits.
-    let deny = [format!("Edit(/{system}/**)")];
-    // The check of this folder's design, and its fix, with no other arguments.
+    // The check of this folder's design, and its fix, with no other
+    // arguments. The design system is read only; the design's own folder is
+    // covered by Accept edits.
     let allow = [
         format!("Bash({bin} design check)"),
         format!("Bash({bin} design check --fix)"),
     ];
-    let settings = serde_json::json!({ "permissions": { "allow": allow, "deny": deny } });
+    let settings = settings(&allow, std::slice::from_ref(&system));
     // The rules as the skill installs them, without its install mark.
     let rules = crate::hooks::without_install_mark(DESIGN_RULES);
     let rules = rules.trim_start();
@@ -138,7 +143,7 @@ pub fn design_launch(
     Ok(Launch {
         cwd: dir.display().to_string(),
         add_dirs: vec![system],
-        settings: settings.to_string(),
+        settings,
         title: format!("Design · {}", config.name),
         mode: "acceptEdits".into(),
         prompt,
