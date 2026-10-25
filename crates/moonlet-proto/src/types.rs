@@ -141,6 +141,64 @@ pub fn design_tag<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Desig
     })
 }
 
+/// Where a design lives (X65). Session and project designs come with entry 12.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DesignKind {
+    /// In `~/.moonlet/design/<workspace>/designs/`, with its own agent.
+    Workspace,
+}
+
+/// One page of a design: `pages/<name>.html` (X65).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DesignPage {
+    pub name: String,
+    /// Its label in `design.toml`, when it has one.
+    pub label: Option<String>,
+}
+
+/// What a design system's or a design's agent waits for from the user (X64, X65).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NeedsYou {
+    /// `question` or `approval`.
+    pub kind: String,
+    pub text: String,
+}
+
+/// One design of a workspace, as `design.list` gives it (X65).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DesignInfo {
+    pub slug: String,
+    pub name: String,
+    pub kind: DesignKind,
+    /// The design system's slug.
+    pub system: String,
+    /// The design's folder.
+    pub path: String,
+    /// Its pages, `index` first, then by name.
+    pub pages: Vec<DesignPage>,
+    /// The newest change under `pages/`, in ms; its creation before any page.
+    pub updated_at: u64,
+    /// Comments still open in `comments.json`.
+    pub open_comments: usize,
+    /// The chat of its agent, while it is still the design's.
+    pub agent: Option<u32>,
+    /// That agent's state.
+    pub agent_state: Option<AgentState>,
+    /// What that agent waits for from the user.
+    pub needs_you: Option<NeedsYou>,
+    /// Why the design could not be read, when it could not.
+    pub error: Option<String>,
+}
+
+/// `design.create`'s answer (X65): the design, and why its agent did not start.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DesignCreated {
+    #[serde(flatten)]
+    pub design: DesignInfo,
+    pub agent_error: Option<String>,
+}
+
 /// Which agent of Design mode a terminal is (X65).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

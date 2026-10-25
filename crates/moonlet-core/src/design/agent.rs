@@ -192,13 +192,7 @@ fn changes(cards: &[CardStatus]) -> String {
     out
 }
 
-/// What a design system's or design's agent waits for from the user (X64).
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct NeedsYou {
-    /// `question` or `approval`.
-    pub kind: String,
-    pub text: String,
-}
+pub use moonlet_proto::types::NeedsYou;
 
 /// The first thing the agent's chat waits for, from its pending asks.
 pub fn needs_you(pending: &[moonlet_proto::types::PermissionAsk]) -> Option<NeedsYou> {

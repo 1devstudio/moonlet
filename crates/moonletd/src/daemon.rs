@@ -1236,7 +1236,7 @@ impl Daemon {
                 let r: m::DesignWorkspace = params(p)?;
                 let designs = blocking(move || store.designs(&r.workspace)).await?;
                 let terminals = self.terminals.list();
-                ok(designs.into_iter().map(|d| self.design_value(d, &terminals)).collect::<Vec<_>>())
+                ok(designs.into_iter().map(|d| self.design_info(d, &terminals)).collect::<Vec<_>>())
             }
             m::DESIGN_CREATE => {
                 let r: m::DesignCreate = params(p)?;
@@ -1260,14 +1260,13 @@ impl Daemon {
                 let (ws, sl) = (r.workspace.clone(), slug.clone());
                 let design = blocking(move || store.design(&ws, &sl)).await?;
                 let name = design.name.clone();
-                let mut v = self.design_value(design, &self.terminals.list());
-                v["agent_error"] = serde_json::to_value(agent_error).unwrap_or_default();
+                let created = moonlet_proto::types::DesignCreated { design: self.design_info(design, &self.terminals.list()), agent_error };
                 // An agent's `design new`: the app shows a toast, the focus stays (X22).
                 if let Some((t, session)) = spawner {
                     let opened = m::DesignOpened { workspace: r.workspace, slug, name, spawned_by: Some(t), session };
                     self.terminals.emit(Message::event(m::EV_DESIGN_OPEN, opened));
                 }
-                ok(v)
+                ok(created)
             }
             m::DESIGN_REMOVE => {
                 let r: m::DesignRef = params(p)?;
@@ -1364,17 +1363,14 @@ impl Daemon {
     /// A design as `design.list` gives it (X65): its agent only while that
     /// chat is still its design's, with the agent's state and what it waits
     /// for from the user.
-    fn design_value(&self, d: moonlet_core::design::designs::DesignSummary, terminals: &[moonlet_proto::types::TerminalInfo]) -> Value {
-        let agent = folder_agent(terminals, d.agent, Path::new(&d.path));
-        let state = agent.and_then(|id| terminals.iter().find(|t| t.id == id)).map(|t| t.agent_state);
-        let waiting = agent
+    fn design_info(&self, mut d: moonlet_proto::types::DesignInfo, terminals: &[moonlet_proto::types::TerminalInfo]) -> moonlet_proto::types::DesignInfo {
+        d.agent = folder_agent(terminals, d.agent, Path::new(&d.path));
+        d.agent_state = d.agent.and_then(|id| terminals.iter().find(|t| t.id == id)).map(|t| t.agent_state);
+        d.needs_you = d
+            .agent
             .and_then(|id| self.chats.pending(id).ok())
             .and_then(|pending| moonlet_core::design::agent::needs_you(&pending));
-        let mut v = serde_json::to_value(&d).unwrap_or_default();
-        v["agent"] = serde_json::to_value(agent).unwrap_or_default();
-        v["agent_state"] = serde_json::to_value(state).unwrap_or_default();
-        v["needs_you"] = serde_json::to_value(waiting).unwrap_or_default();
-        v
+        d
     }
 
     /// Starts a workspace design's agent (X65): Claude Code in the design's
