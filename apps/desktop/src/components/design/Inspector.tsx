@@ -9,8 +9,8 @@ import { ChevronDown, Search } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { DesignToken } from "../../lib/protocol";
 import type { Decl } from "../../lib/designStyle";
-import { fieldInput, fieldValue, inspectorSections, pickToken, type Field } from "../../lib/designInspector";
-import { fieldShown, popoverTokens } from "../../lib/designTokens";
+import { fieldInput, fieldShows, fieldValue, inspectorSections, pickToken, type Field } from "../../lib/designInspector";
+import { popoverTokens } from "../../lib/designTokens";
 import { paletteGroups, type Snippet } from "../../lib/designPalette";
 import { cx } from "../../lib/cx";
 import { Menu } from "../Menu";
@@ -125,7 +125,7 @@ function FieldRow({
       />,
     );
   }
-  const shown = field.family && field.kind !== "text" ? fieldShown(tokens, value.value, field.family) : { token: null, value: value.value };
+  const shown = fieldShows(field, tokens, value.value);
   return row(
     <>
       <button ref={anchor} aria-label={field.label} aria-expanded={open} disabled={locked} className={cx(box, open && "border-accent")} onClick={() => onOpen(!open)}>
