@@ -33,7 +33,7 @@ import {
 } from "../../lib/designStore";
 import { pageUrl } from "../../lib/designView";
 import { VIEWPORTS, canvasKey, canvasScale, canvasZoom, customViewports, fitBox, parseViewport, sizeOf, sizeText, viewportLabel, viewportText, withCustomViewport, type Size } from "../../lib/designViewport";
-import { canvasPage, canvasStep, isTyping, modeHint, modeKey, writingPage, type CanvasAct, type CanvasMode, type CanvasState } from "../../lib/designCanvas";
+import { canvasPage, canvasStep, isTyping, modeHint, keyAct, writingPage, type CanvasAct, type CanvasMode, type CanvasState } from "../../lib/designCanvas";
 import { chatCardLookup, commentCards, commentCardSelector, commentsTab, keepAction, openCommentsLabel, pageCounts, sendAll } from "../../lib/designComments";
 import { bridgeMessage, helloMessage, modeMessage, pinsMessage, type PickedElement, type Rect } from "../../lib/designBridge";
 import { pageFile, pagePath } from "../../lib/designPage";
@@ -107,8 +107,8 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
       const { dialog, confirm, settingsPage } = useStore.getState();
       if (dialog || confirm || settingsPage) return;
       const typing = isTyping(e.target instanceof Element ? e.target : null);
-      const k = modeKey({ key: e.key, meta: e.metaKey, ctrl: e.ctrlKey, alt: e.altKey, shift: e.shiftKey, typing });
-      if (k) step(k);
+      const k = keyAct({ key: e.key, meta: e.metaKey, ctrl: e.ctrlKey, alt: e.altKey, shift: e.shiftKey, typing });
+      if (k === "toggle" || k === "escape") step(k);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -485,8 +485,8 @@ function PageFrame({
         latest.current.onPick(m.element);
       } else if (m.type === "key") {
         // A key pressed in the page, where the bridge already left out typing.
-        const k = modeKey({ key: m.key, meta: m.meta, ctrl: false, alt: m.alt, shift: m.shift, typing: false });
-        if (k) latest.current.onKey(k);
+        const k = keyAct({ key: m.key, meta: m.meta, ctrl: false, alt: m.alt, shift: m.shift, typing: false });
+        if (k === "toggle" || k === "escape") latest.current.onKey(k);
       }
     };
     window.addEventListener("message", onMessage);

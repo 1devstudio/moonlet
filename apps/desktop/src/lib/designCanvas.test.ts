@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canvasPage, canvasStep, changedPages, isTyping, modeHint, modeKey, reloadsPage, writingPage } from "./designCanvas";
+import { breadcrumb, canvasPage, layerStep, modeEntered, canvasStep, changedPages, isTyping, modeHint, keyAct, reloadsPage, writingPage } from "./designCanvas";
 
 const change = (over: { system?: string | null; design?: string | null; paths: string[] }) => ({ workspace: "w1", system: null, design: null, ...over });
 
@@ -63,20 +63,44 @@ describe("the canvas's mode (X65)", () => {
 
   it("takes C to switch Comment on and off, and Esc to close the box or leave Comment, never while typing or with a modifier", () => {
     const key = (k: string, over: Partial<{ meta: boolean; ctrl: boolean; alt: boolean; shift: boolean; typing: boolean }> = {}) =>
-      modeKey({ key: k, meta: false, ctrl: false, alt: false, shift: false, typing: false, ...over });
+      keyAct({ key: k, meta: false, ctrl: false, alt: false, shift: false, typing: false, ...over });
     expect(key("c")).toBe("toggle");
     expect(key("C", { shift: true })).toBeNull();
-    expect(key("c", { meta: true })).toBeNull();
+    expect(key("c", { alt: true })).toBeNull();
     expect(key("c", { typing: true })).toBeNull();
     expect(key("Escape")).toBe("escape");
-    expect(key("v")).toBeNull();
+    expect(key("q")).toBeNull();
+  });
+});
+
+describe("the editor's keys (X65)", () => {
+  const key = (k: string, over: Partial<{ code: string; meta: boolean; alt: boolean; shift: boolean; typing: boolean }> = {}) =>
+    keyAct({ key: k, meta: false, ctrl: false, alt: false, shift: false, typing: false, ...over });
+
+  it("are V for Edit, Tab and ⇧Tab, Delete, ⌘D, ⌥⌘G and ⇧⌥⌘G, ⌘C, ⌘V, ⌘Z and ⇧⌘Z, never while typing", () => {
+    expect(key("v")).toBe("toggleEdit");
+    expect(key("Tab")).toBe("next");
+    expect(key("Tab", { shift: true })).toBe("prev");
+    expect(key("Delete")).toBe("delete");
+    expect(key("Backspace")).toBe("delete");
+    expect(key("d", { meta: true })).toBe("duplicate");
+    // ⌥ makes another character of G: the key's place says which.
+    expect(key("©", { code: "KeyG", alt: true, meta: true })).toBe("wrap");
+    expect(key("©", { code: "KeyG", alt: true, meta: true, shift: true })).toBe("unwrap");
+    expect(key("c", { meta: true })).toBe("copy");
+    expect(key("v", { meta: true })).toBe("paste");
+    expect(key("z", { meta: true })).toBe("undo");
+    expect(key("Z", { meta: true, shift: true })).toBe("redo");
+    for (const [k, over] of [["v", {}], ["Tab", {}], ["Backspace", {}], ["z", { meta: true }], ["c", { meta: true }], ["d", { meta: true }]] as const) expect(key(k, { ...over, typing: true })).toBeNull();
+    expect(key("d", { meta: true, shift: true })).toBeNull();
+    expect(key("Delete", { meta: true })).toBeNull();
   });
 });
 
 describe("typing (X65)", () => {
   it("leaves Esc typed in a field, such as the chat's composer, to that field, so it neither closes the comment box nor leaves Comment", () => {
     document.body.innerHTML = '<section><textarea id="composer"></textarea></section><p id="page">text</p>';
-    const esc = (id: string) => modeKey({ key: "Escape", meta: false, ctrl: false, alt: false, shift: false, typing: isTyping(document.getElementById(id)) });
+    const esc = (id: string) => keyAct({ key: "Escape", meta: false, ctrl: false, alt: false, shift: false, typing: isTyping(document.getElementById(id)) });
     expect(esc("composer")).toBeNull();
     expect(esc("page")).toBe("escape");
   });
@@ -111,5 +135,73 @@ describe("the canvas's mode, box and rail (X65)", () => {
     expect(canvasStep(boxed, "escape")).toEqual({ mode: "comment", box: false, rail: true });
     expect(canvasStep(canvasStep(boxed, "escape"), "escape")).toEqual({ mode: "view", box: false, rail: true });
     expect(canvasStep(boxed, "view")).toEqual({ mode: "view", box: false, rail: true });
+  });
+});
+
+describe("Edit mode (X65)", () => {
+  const view = { mode: "view" as const, box: false, rail: false };
+
+  it("is entered with V or its button, which shows the rail and closes the comment box, and V leaves it for View, C for Comment", () => {
+    expect(canvasStep(view, "toggleEdit")).toEqual({ mode: "edit", box: false, rail: true });
+    expect(canvasStep({ mode: "comment", box: true, rail: true }, "edit")).toEqual({ mode: "edit", box: false, rail: true });
+    expect(canvasStep({ mode: "edit", box: false, rail: true }, "toggleEdit")).toEqual({ mode: "view", box: false, rail: true });
+    expect(canvasStep({ mode: "edit", box: false, rail: false }, "toggle")).toEqual({ mode: "comment", box: false, rail: true });
+    expect(canvasStep({ mode: "edit", box: false, rail: true }, "escape")).toEqual({ mode: "view", box: false, rail: true });
+  });
+
+  it("folds the chat to its rail and shows Layers on entering it, and Comments on entering Comment", () => {
+    expect(modeEntered("view", "edit")).toEqual({ tab: "layers", foldChat: true });
+    expect(modeEntered("comment", "edit")).toEqual({ tab: "layers", foldChat: true });
+    expect(modeEntered("edit", "edit")).toEqual({ tab: null, foldChat: false });
+    expect(modeEntered("edit", "comment")).toEqual({ tab: "comments", foldChat: false });
+    expect(modeEntered("edit", "view")).toEqual({ tab: null, foldChat: false });
+  });
+
+  it("says what it does in the hint line", () => {
+    expect(modeHint("edit")).toBe("Click selects · double-click edits text · Esc selects the parent · Tab the next sibling");
+  });
+
+  it("is locked while the agent works, and left for View when the agent starts", () => {
+    expect(canvasStep(view, "toggleEdit", true)).toEqual(view);
+    expect(canvasStep(view, "edit", true)).toEqual(view);
+    expect(canvasStep({ mode: "edit", box: false, rail: true }, "lock")).toEqual({ mode: "view", box: false, rail: true });
+    expect(canvasStep({ mode: "comment", box: true, rail: true }, "lock")).toEqual({ mode: "comment", box: true, rail: true });
+    // Comments still work.
+    expect(canvasStep(view, "toggle", true)).toEqual({ mode: "comment", box: false, rail: true });
+  });
+});
+
+/** A settings page's tree as the bridge reports it. */
+const LAYERS = [
+  { mid: "m1", tag: "body", depth: 0, text: "" },
+  { mid: "m12", tag: "nav", depth: 1, text: "General Appearance" },
+  { mid: "m20", tag: "main", depth: 1, text: "Settings" },
+  { mid: "m22", tag: "section", depth: 2, text: "General" },
+  { mid: "m24", tag: "section", depth: 2, text: "Git" },
+  { mid: "m25", tag: "h2", depth: 3, text: "Git" },
+  { mid: "m30", tag: "div", depth: 3, text: "Branch prefix" },
+  { mid: "m40", tag: "footer", depth: 1, text: "" },
+];
+
+describe("the selection in Edit mode (X65)", () => {
+  it("has a breadcrumb of its ancestors from the body, the body named by its tag alone", () => {
+    expect(breadcrumb(LAYERS, "m24")).toEqual([
+      { mid: "m1", label: "body" },
+      { mid: "m20", label: "main m20" },
+      { mid: "m24", label: "section m24" },
+    ]);
+    expect(breadcrumb(LAYERS, "m1")).toEqual([{ mid: "m1", label: "body" }]);
+    expect(breadcrumb(LAYERS, "m99")).toEqual([]);
+  });
+
+  it("moves to the parent on Esc, and to the next and previous sibling on Tab and ⇧Tab, staying put past the ends", () => {
+    expect(layerStep(LAYERS, "m24", "parent")).toBe("m20");
+    expect(layerStep(LAYERS, "m1", "parent")).toBeNull();
+    expect(layerStep(LAYERS, "m22", "next")).toBe("m24");
+    expect(layerStep(LAYERS, "m24", "prev")).toBe("m22");
+    expect(layerStep(LAYERS, "m24", "next")).toBe("m24");
+    expect(layerStep(LAYERS, "m12", "prev")).toBe("m12");
+    expect(layerStep(LAYERS, "m20", "next")).toBe("m40");
+    expect(layerStep(LAYERS, "m99", "next")).toBeNull();
   });
 });
