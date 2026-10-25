@@ -69,7 +69,8 @@ export function isTag(tag: unknown): tag is string {
 /** The most ids a page reports, so a page cannot flood the app. */
 const MIDS_MAX = 20_000;
 
-/** The longest text an element is given in place, in UTF-16 units. */
+/** The longest text an element is given in place, in UTF-16 units; the
+ *  bridge script keeps its own, and puts a longer text back. */
 const TEXT_EDIT_MAX = 10_000;
 
 /** The deepest an element of the tree is taken. */
