@@ -86,7 +86,8 @@ describe("the render rubric (X64)", () => {
   // Measured by the measuring script in the app's WebKit (e2e, 2026-10-25):
   // a two-variant button, a field whose mount was left empty, a badge in 4 px
   // type, a label beside one that is hidden, a mount holding only a <style>,
-  // and a menu shown outside its cell.
+  // a menu shown outside its cell, text and a box under a wrapper at opacity
+  // 0, and a grid track wider than 680 px.
   it("judges measurements captured from real cards", () => {
     const button = {"errors":[],"cells":[{"escaped":0,"snippet":"buttons/button/primary","empty":false,"smallestText":16.48828125,"text":"Create PR","html":"<button class=\"btn\">Create PR</button>","overflow680":0,"painted":1},{"escaped":0,"snippet":"buttons/button/ghost","overflow680":0,"smallestText":16.48828125,"text":"Cancel","empty":false,"html":"<button class=\"btn btn--ghost\">Cancel</button>","painted":1}],"fallback":false,"name":"Button","outside":0};
     const field = {"errors":[],"fallback":false,"cells":[{"snippet":"forms/field/default","escaped":0,"overflow680":0,"html":"","smallestText":0,"empty":true,"text":"","painted":0}],"name":"Field","outside":0};
@@ -94,6 +95,9 @@ describe("the render rubric (X64)", () => {
     const email = {"cells":[{"escaped":0,"snippet":"forms/email/default","html":"<label>Email address</label> <span hidden=\"\">Required</span>","text":"Email address Required","overflow680":0,"empty":false,"smallestText":0,"painted":0}],"fallback":false,"errors":[],"name":"Email","outside":0};
     const tag = {"cells":[{"escaped":0,"snippet":"data/tag/default","overflow680":0,"smallestText":0,"html":"<style>.tag { color: red; }</style>","empty":true,"text":"","painted":0}],"fallback":false,"errors":[],"name":"Tag","outside":0};
     const menu = {"cells":[{"escaped":0,"snippet":"menus/menu/open","html":"<button class=\"btn\">Actions</button>","text":"Actions","overflow680":0,"smallestText":16.48828125,"empty":false,"painted":1}],"fallback":false,"errors":[],"name":"Menu","outside":1};
+    const note = {"errors":[],"fallback":false,"cells":[{"snippet":"data/note/saved","escaped":0,"html":"<p>Saved</p><p style=\"opacity:0\"><span>Undo</span></p>","smallestText":0,"overflow680":0,"empty":false,"text":"Saved Undo","painted":0}],"name":"Note","outside":0};
+    const dot = {"errors":[],"cells":[{"escaped":0,"snippet":"data/dot/default","empty":false,"overflow680":0,"html":"<div style=\"opacity:0\"><div style=\"width:40px;height:40px;background:#4f8de8\"></div></div>","smallestText":0,"text":"","painted":0}],"fallback":false,"name":"Dot","outside":0};
+    const table = {"errors":[],"cells":[{"escaped":0,"snippet":"data/table/default","html":"<span>Name</span> <span>Owner</span>","text":"Name Owner","empty":false,"smallestText":18,"overflow680":244,"painted":0}],"fallback":false,"name":"Table","outside":0};
     const judge = (m: unknown) => rubric(readMeasurements(m)!);
     expect(judge(button)).toEqual([]);
     expect(judge(field)).toEqual(["rootEmpty", "allHollow", "thin", "bad"]);
@@ -101,5 +105,8 @@ describe("the render rubric (X64)", () => {
     expect(judge(email)).toEqual(["collapsed", "thin"]);
     expect(judge(tag)).toEqual(["rootEmpty", "allHollow", "thin", "bad"]);
     expect(judge(menu)).toEqual(["escape"]);
+    expect(judge(note)).toEqual(["collapsed", "thin"]);
+    expect(judge(dot)).toEqual(["allHollow", "thin"]);
+    expect(judge(table)).toEqual(["wide"]);
   });
 });
