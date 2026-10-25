@@ -157,6 +157,9 @@ fi
 
 # A cloud machine (X63) connects out: tailnet access stays off.
 if [ "$systemd" = 0 ]; then
+  # Turned on by an earlier install: --no-listen turns it off.
+  mkdir -p "$work/home3/.moonlet"
+  printf '{ "enabled": true, "port": 0 }\n' >"$work/home3/.moonlet/mobile.json"
   out=$(HOME="$work/home3" run_install --no-listen) || fail "install with --no-listen failed: $out"
   has "$out" "Tailnet access stays off: this machine connects to its central host."
   if grep -q '"enabled": *true' "$work/home3/.moonlet/mobile.json" 2>/dev/null; then
