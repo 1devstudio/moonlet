@@ -9,7 +9,7 @@
 
 import { parse, parseFragment } from "parse5";
 import type { DefaultTreeAdapterMap } from "parse5";
-import { pageFile } from "./designPage";
+import { pageFile, pageOfFile } from "./designPage";
 import type { LiveEdit } from "./designBridge";
 
 type Node = DefaultTreeAdapterMap["node"];
@@ -128,9 +128,10 @@ export function readEditsMessage(message: string): { edits: EditLineRead[]; text
   const lines = blank < 0 ? rest : rest.slice(0, blank);
   const edits: EditLineRead[] = [];
   for (const l of lines) {
-    const m = /^([^\s/]+)\.html (m\d+) ([a-z][a-z0-9-]*): (.+)$/.exec(l);
-    if (!m) return null;
-    edits.push({ page: m[1], mid: m[2], tag: m[3], said: m[4] });
+    const m = /^(.+?\.html) (m\d+) ([a-z][a-z0-9-]*): (.+)$/.exec(l);
+    const page = m ? pageOfFile(m[1]) : null;
+    if (!m || page === null) return null;
+    edits.push({ page, mid: m[2], tag: m[3], said: m[4] });
   }
   return edits.length ? { edits, text: blank < 0 ? "" : rest.slice(blank + 1).join("\n") } : null;
 }

@@ -194,6 +194,9 @@ describe("edits by hand, as the agent is told them (X65)", () => {
     });
     expect(readEditsMessage(sent)?.edits.map(lineRead)).toEqual(["index.html m31 span: text “Prefix, for new branches”, wrapped in div m42", "git-a.html m31 p: deleted"]);
     expect(readEditsMessage("Edits by hand since your last turn:\nindex.html m31 span: deleted")).toEqual({ edits: [{ page: "index", mid: "m31", tag: "span", said: "deleted" }], text: "" });
+    // A page name may have a space, as the daemon takes it.
+    expect(readEditsMessage("Edits by hand since your last turn:\ngit rows.html m31 p: deleted")?.edits).toEqual([{ page: "git rows", mid: "m31", tag: "p", said: "deleted" }]);
+    expect(readEditsMessage("Edits by hand since your last turn:\n.git.html m31 p: deleted")).toBeNull();
     expect(readEditsMessage("Two more variants of the Git section")).toBeNull();
     expect(readEditsMessage("Edits by hand since your last turn:\nnot an edit\n\nHi")).toBeNull();
   });
