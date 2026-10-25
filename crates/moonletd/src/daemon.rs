@@ -1398,9 +1398,7 @@ impl Daemon {
                 let _history = history.lock().await;
                 // What is not kept yet is kept first, as edits by hand.
                 let said = self.hand_edits.lock().unwrap().remove(&design_key(&r.workspace, &r.slug)).map(|e| e.said).unwrap_or_default();
-                let (ws, sl, keep) = (r.workspace.clone(), r.slug.clone(), store.clone());
-                blocking(move || keep.take_snapshot(&ws, &sl, Take::EditsByHand(&said), now_ms())).await?;
-                ok(blocking(move || store.restore_snapshot(&r.workspace, &r.slug, r.n, now_ms())).await?)
+                ok(blocking(move || store.restore_snapshot(&r.workspace, &r.slug, r.n, Take::EditsByHand(&said), now_ms())).await?)
             }
             m::DESIGN_SETTLE => {
                 let r: m::DesignSettle = params(p)?;
