@@ -12,6 +12,7 @@ import { agentSeen, notify, registerAgentsElsewhere, shownWorkspace, switchWorks
 import { alertFor } from "./alerts";
 import { modeOf, setMode } from "./mode";
 import { latestPerKey } from "./prPoll";
+import { latestSends } from "./latestSend";
 import { designOpenAction } from "./design";
 import { changedPages, reloadsPage } from "./designCanvas";
 import { pageOfPath } from "./designPage";
@@ -54,10 +55,10 @@ interface DesignState {
 export const useDesign = create<DesignState>(() => ({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, designs: {}, designShown: {}, pageRevs: {}, latest: {}, problems: {}, systemNames: {}, comments: {}, mids: {}, sending: {} }));
 
 /** A design system's or a design's key, `wsKey/slug`. */
-const itemKey = (host: string, workspace: string, slug: string) => `${wsKey(host, workspace)}/${slug}`;
+export const itemKey = (host: string, workspace: string, slug: string) => `${wsKey(host, workspace)}/${slug}`;
 
 /** A design page's key, `wsKey/slug/page`. */
-const pageKey = (host: string, workspace: string, slug: string, page: string) => `${itemKey(host, workspace, slug)}/${page}`;
+export const pageKey = (host: string, workspace: string, slug: string, page: string) => `${itemKey(host, workspace, slug)}/${page}`;
 
 /** A design system's cards; undefined until listed. */
 export function cardsOf(s: DesignState, host: string, workspace: string, slug: string): DesignCard[] | undefined {
@@ -459,8 +460,8 @@ export function openNewDesign(ws: { host: string; id: string }) {
 /** The viewport picked last per design (`itemKey`) while it is not saved:
  *  shown, and laid over a listing that comes back meanwhile. */
 const pickedViewports: Record<string, string> = {};
-/** Designs whose viewport is being saved. */
-const savingViewports = new Set<string>();
+/** The viewport saves of each design, one at a time, the latest pick last. */
+const viewportSaves = latestSends();
 
 /** Shows `viewport` as the design's, in its listing. */
 function showViewport(host: string, workspace: string, slug: string, viewport: string) {
@@ -487,18 +488,12 @@ export async function saveViewport(host: string, workspace: string, slug: string
   const key = itemKey(host, workspace, slug);
   pickedViewports[key] = viewport;
   showViewport(host, workspace, slug, viewport);
-  if (savingViewports.has(key)) return;
-  savingViewports.add(key);
-  try {
-    let sent: string;
-    do {
-      sent = pickedViewports[key];
-      await rpc(host, M.designViewport, { workspace, slug, viewport: sent });
-    } while (pickedViewports[key] !== sent);
-    delete pickedViewports[key];
-  } finally {
-    savingViewports.delete(key);
-  }
+  let sent = viewport;
+  await viewportSaves.send(key, async () => {
+    sent = pickedViewports[key];
+    await rpc(host, M.designViewport, { workspace, slug, viewport: sent });
+  });
+  if (!viewportSaves.busy(key) && pickedViewports[key] === sent) delete pickedViewports[key];
 }
 
 /** A design system's name, also after it was removed; null when never listed. */

@@ -1103,6 +1103,11 @@ export interface DesignPageText {
   version: string;
 }
 
+/** `design.write_page`'s answer: the page's new version. */
+export interface DesignPageWritten {
+  version: string;
+}
+
 /** `design.create`'s answer: the design, and why its agent did not start. */
 export interface DesignCreated extends Design {
   agent_error: string | null;
