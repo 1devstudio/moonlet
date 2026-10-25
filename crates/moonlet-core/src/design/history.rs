@@ -147,6 +147,8 @@ impl Store {
         // Snapshot n is read first: keeping what is not kept yet may rotate
         // it out of the newest 50.
         self.take_snapshot(workspace, slug, unkept, now)?;
+        // Its number before any file is written: none left writes nothing.
+        let n_restored = next_n(&designs, slug)?;
         for folder in KEPT {
             let prefix = format!("{folder}/");
             let inside: BTreeMap<String, Vec<u8>> = files
@@ -156,7 +158,7 @@ impl Store {
             fsx::write_tree(&designs, Path::new(slug), Path::new(folder), &inside, true)?;
         }
         let record = Record {
-            n: next_n(&designs, slug)?,
+            n: n_restored,
             time: now,
             kind: SnapshotKind::Restored,
             summary: String::new(),
@@ -274,9 +276,15 @@ fn numbers(designs: &Path, slug: &str) -> Result<Vec<u32>> {
     Ok(out)
 }
 
-/// The number after the highest snapshot folder's, so none is given twice.
+/// The number after the highest snapshot folder's, so none is given twice;
+/// an error once the highest is the last a `u32` holds, never 0 again.
 fn next_n(designs: &Path, slug: &str) -> Result<u32> {
-    Ok(numbers(designs, slug)?.last().map_or(1, |n| n + 1))
+    match numbers(designs, slug)?.last() {
+        None => Ok(1),
+        Some(n) => n
+            .checked_add(1)
+            .with_context(|| format!("{slug} has no snapshot number left")),
+    }
 }
 
 /// The snapshots whose record can be read, oldest first.
@@ -909,6 +917,57 @@ mod tests {
         for other in ["01", "001", "00"] {
             assert!(dir.join("history").join(other).exists(), "{other}");
         }
+    }
+
+    #[test]
+    fn a_snapshot_after_the_last_number_fails_rather_than_wrap_to_zero() {
+        let (_home, store, dir) = store_with_design();
+        write(&dir, "pages/index.html", INDEX);
+        store
+            .take_snapshot("w1", "settings-page", Take::AgentTurn, 1000)
+            .unwrap()
+            .unwrap();
+        write(&dir, "pages/index.html", "<p>changed</p>");
+        store
+            .take_snapshot("w1", "settings-page", Take::AgentTurn, 2000)
+            .unwrap()
+            .unwrap();
+        // Snapshot 2 made the last number there is.
+        let record = std::fs::read_to_string(dir.join("history/2/snapshot.json")).unwrap();
+        std::fs::rename(dir.join("history/2"), dir.join("history/4294967295")).unwrap();
+        write(
+            &dir,
+            "history/4294967295/snapshot.json",
+            &record.replace("\"n\": 2,", "\"n\": 4294967295,"),
+        );
+        // Nothing changed: no number is needed.
+        assert_eq!(
+            store
+                .take_snapshot("w1", "settings-page", Take::AgentTurn, 3000)
+                .unwrap(),
+            None
+        );
+        write(&dir, "pages/index.html", "<p>third</p>");
+        let err = store
+            .take_snapshot("w1", "settings-page", Take::AgentTurn, 4000)
+            .unwrap_err();
+        assert_eq!(err.to_string(), "settings-page has no snapshot number left");
+        // A restore with nothing to keep first writes nothing either.
+        write(&dir, "pages/index.html", "<p>changed</p>");
+        let err = store
+            .restore_snapshot("w1", "settings-page", 1, Take::AgentTurn, 5000)
+            .unwrap_err();
+        assert_eq!(err.to_string(), "settings-page has no snapshot number left");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("pages/index.html")).unwrap(),
+            "<p>changed</p>"
+        );
+        let mut folders: Vec<String> = std::fs::read_dir(dir.join("history"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        folders.sort();
+        assert_eq!(folders, ["1", "4294967295"]);
     }
 
     #[test]
