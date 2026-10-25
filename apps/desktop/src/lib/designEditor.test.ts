@@ -227,6 +227,29 @@ describe("a design's undo when it is closed (X65)", () => {
   });
 });
 
+describe("a page's source read before an edit (X65)", () => {
+  it("is dropped when it comes back after the edit was saved, so the editor keeps the edit and the version its save gave", async () => {
+    await loadPageSource("local", WS, SLUG, "index");
+    const answer = answers["design.page"];
+    let late = (_: unknown) => {};
+    answers["design.page"] = () => new Promise((r) => (late = r));
+    // The canvas loads the page again; the read is on its way.
+    const read = loadPageSource("local", WS, SLUG, "index");
+    await new Promise((r) => setTimeout(r, 0));
+    answers["design.page"] = answer;
+    editPage("local", WS, SLUG, "index", { kind: "delete", mid: "m30" }, "m30");
+    await settleSaves();
+    late({ html: PAGE, version: "v1" });
+    await read;
+    const deleted = '<!doctype html>\n<body data-mid="m1">\n  <h2 data-mid="m25">Git</h2>\n</body>\n';
+    expect(sourceOf(useEditor.getState(), "local", WS, SLUG, "index")).toEqual({ html: deleted, version: "v2" });
+    editPage("local", WS, SLUG, "index", { kind: "text", mid: "m25", text: "Git and GitHub" }, "m25");
+    await settleSaves();
+    expect(disk.index).toEqual({ html: '<!doctype html>\n<body data-mid="m1">\n  <h2 data-mid="m25">Git and GitHub</h2>\n</body>\n', version: "v3" });
+    expect(unsavedOf(useEditor.getState(), "local", WS, SLUG)).toBeNull();
+  });
+});
+
 describe("a page's source read twice (X65)", () => {
   it("is the latest read's, whatever order the answers come back in", async () => {
     const answer = answers["design.page"];

@@ -41,12 +41,19 @@ const highest: Record<string, number> = {};
 /** The latest change of each page that a save took. */
 const savedStep: Record<string, number> = {};
 let nextStep = 1;
+/** Each page's generation: one more at every change of its source in the
+ *  editor, an edit's, an undo's, a save's or a read's. A read takes its
+ *  answer only while the page is at the generation it started at. */
+const gens: Record<string, number> = {};
+/** A page's source changed in the editor. */
+const touch = (key: string) => void (gens[key] = (gens[key] ?? 0) + 1);
 
 /** Forgets every page, change and edit (tests). */
 export function resetEditor() {
   useEditor.setState(EMPTY, true);
   saves = latestSends();
   for (const k of Object.keys(savedStep)) delete savedStep[k];
+  for (const k of Object.keys(gens)) delete gens[k];
   for (const k of Object.keys(highest)) delete highest[k];
   for (const k of Object.keys(clips)) delete clips[k];
 }
@@ -55,18 +62,29 @@ export function resetEditor() {
  *  it; not while a save of it is on its way, which has edits the text read
  *  may not and decides what is there. */
 export async function loadPageSource(host: string, workspace: string, slug: string, page: string): Promise<void> {
-  const key = pageKey(host, workspace, slug, page);
-  if (saves.busy(key)) return;
-  const latest = reads.start(key);
-  const text = await rpc<DesignPageText>(host, M.designPage, { workspace, slug, page });
-  // An older read coming back after a newer one is dropped.
-  if (latest() && !saves.busy(key)) setSource(key, text);
+  const text = await readPage(host, workspace, slug, page);
+  if (text) setSource(pageKey(host, workspace, slug, page), text);
 }
 
 /** The latest read of each page, so an older answer never lands last. */
 const reads = latestPerKey();
 
+/** A page's source and version on disk, as the editor may take it: null
+ *  when a save of the page is on its way, as it starts or as it comes
+ *  back, when a newer read started meanwhile, or when the page changed in
+ *  the editor since it started (an edit made meanwhile is newer than the
+ *  text read). */
+async function readPage(host: string, workspace: string, slug: string, page: string): Promise<DesignPageText | null> {
+  const key = pageKey(host, workspace, slug, page);
+  if (saves.busy(key)) return null;
+  const latest = reads.start(key);
+  const at = gens[key] ?? 0;
+  const text = await rpc<DesignPageText>(host, M.designPage, { workspace, slug, page });
+  return latest() && !saves.busy(key) && (gens[key] ?? 0) === at ? text : null;
+}
+
 function setSource(key: string, text: DesignPageText) {
+  touch(key);
   highest[key] = Math.max(highest[key] ?? 0, highestMid(text.html));
   useEditor.setState((s) => ({ sources: { ...s.sources, [key]: text } }));
 }
@@ -82,6 +100,7 @@ export function editPage(host: string, workspace: string, slug: string, page: st
   highest[key] = Math.max(highest[key] ?? 0, highestMid(edit.html));
   const step: Step = { id: nextStep++, page, before: source.html, after: edit.html, edit: { page, ...edit.change }, selectBefore: selected, selectAfter: edit.select };
   const design = itemKey(host, workspace, slug);
+  touch(key);
   useEditor.setState((s) => ({
     sources: { ...s.sources, [key]: { ...source, html: edit.html } },
     undo: { ...s.undo, [design]: pushStep(s.undo[design] ?? NO_UNDO, step) },
@@ -111,6 +130,7 @@ async function travel(host: string, workspace: string, slug: string, act: "undo"
   const key = pageKey(host, workspace, slug, step.page);
   const source = useEditor.getState().sources[key];
   if (!source) return null;
+  touch(key);
   useEditor.setState((s) => ({
     sources: { ...s.sources, [key]: { ...source, html: act === "undo" ? step.before : step.after } },
     undo: { ...s.undo, [design]: moved.undo },
@@ -143,6 +163,7 @@ function save(host: string, workspace: string, slug: string, page: string): Prom
       throw e;
     }
     savedStep[key] = step;
+    touch(key);
     useEditor.setState((st) => ({ sources: { ...st.sources, [key]: { html: st.sources[key]?.html ?? html, version: written.version } } }));
   });
 }
