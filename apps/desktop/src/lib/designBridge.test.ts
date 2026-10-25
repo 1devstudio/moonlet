@@ -157,11 +157,12 @@ describe("the bridge script in a page (X65)", () => {
   });
 
   it("reports C and Esc pressed in the page, but not C typed in a field", () => {
-    const { win, doc, of } = framed('<input data-mid="m5">');
+    const { win, doc, el, of } = framed('<input data-mid="m5"><div contenteditable data-mid="m6"><b data-mid="m7">Note</b></div>');
     const key = (on: Element, init: KeyboardEventInit) => on.dispatchEvent(new win.KeyboardEvent("keydown", { bubbles: true, ...init }));
     key(doc.body, { key: "c" });
     key(doc.body, { key: "c", metaKey: true });
     key(doc.querySelector("input")!, { key: "c" });
+    key(el("m7"), { key: "c" });
     key(doc.querySelector("input")!, { key: "Escape" });
     expect(of("key")).toEqual([
       { type: "key", key: "c" },

@@ -30,7 +30,7 @@ import {
 } from "../../lib/designStore";
 import { pageUrl } from "../../lib/designView";
 import { VIEWPORTS, canvasKey, canvasScale, canvasZoom, customViewports, fitBox, parseViewport, sizeOf, sizeText, viewportLabel, viewportText, withCustomViewport, type Size } from "../../lib/designViewport";
-import { canvasPage, modeHint, modeKey, writingPage, type CanvasMode } from "../../lib/designCanvas";
+import { canvasPage, isTyping, modeHint, modeKey, writingPage, type CanvasMode } from "../../lib/designCanvas";
 import { commentCards, isOrphaned, pageCounts, sendAll } from "../../lib/designComments";
 import { bridgeMessage, modeMessage, pinsMessage, type PickedElement, type Rect } from "../../lib/designBridge";
 import { pageFile, pagePath } from "../../lib/designPage";
@@ -101,8 +101,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
     const onKey = (e: KeyboardEvent) => {
       const { dialog, confirm, settingsPage } = useStore.getState();
       if (dialog || confirm || settingsPage) return;
-      const t = e.target as HTMLElement | null;
-      const typing = !!t?.closest?.("input, textarea, select, [contenteditable=''], [contenteditable='true'], .xterm");
+      const typing = isTyping(e.target instanceof Element ? e.target : null);
       const k = modeKey({ key: e.key, meta: e.metaKey, ctrl: e.ctrlKey, alt: e.altKey, shift: e.shiftKey, typing });
       if (k) onModeKey(k);
     };

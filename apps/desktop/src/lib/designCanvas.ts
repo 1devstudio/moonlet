@@ -72,3 +72,13 @@ export function modeKey(k: ModeKeyPress): "comment" | "escape" | null {
   if (k.meta || k.ctrl || k.alt || k.shift || k.typing) return null;
   return k.key === "c" ? "comment" : null;
 }
+
+/** Where a key is text: a field or an editable element. The bridge script
+ *  (`design_bridge.js`) asks the same of an element in a page. */
+export const TYPING_SELECTOR = 'input, textarea, select, [contenteditable]:not([contenteditable="false"])';
+
+/** Whether a key pressed on `el` is text, not a shortcut: in a field, an
+ *  editable element, or a terminal (which a page never has). */
+export function isTyping(el: Element | null): boolean {
+  return !!el?.closest(`${TYPING_SELECTOR}, .xterm`);
+}
