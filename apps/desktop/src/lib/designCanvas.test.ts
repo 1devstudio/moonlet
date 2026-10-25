@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { keyId } from "./runActions";
-import { breadcrumb, canvasPage, layerPick, chatAfter, editorStep, onReport, undoOpen, layerStep, modeEntered, canvasStep, changedPages, isTyping, modeHint, keyAct, reloadsPage, writingPage } from "./designCanvas";
+import { breadcrumb, dropHint, canvasPage, layerPick, chatAfter, editorStep, onReport, undoOpen, layerStep, modeEntered, canvasStep, changedPages, isTyping, modeHint, keyAct, reloadsPage, writingPage } from "./designCanvas";
 
 const change = (over: { system?: string | null; design?: string | null; paths: string[] }) => ({ workspace: "w1", system: null, design: null, ...over });
 
@@ -283,5 +283,26 @@ describe("the chat around Edit mode (X65)", () => {
     expect(chatAfter("edit", "view", { open: false, foldedForEdit: false })).toEqual({ open: false, foldedForEdit: false });
     expect(chatAfter("edit", "view", { open: true, foldedForEdit: true })).toEqual({ open: true, foldedForEdit: false });
     expect(chatAfter("view", "comment", open)).toEqual(open);
+  });
+});
+
+describe("a drag over the page (X65)", () => {
+  /** The settings page of the design export's edit mode board. */
+  const PAGE_LAYERS = [
+    { mid: "m1", tag: "body", depth: 0, text: "Settings General Theme System Git Branch prefix" },
+    { mid: "m20", tag: "main", depth: 1, text: "Settings General Theme System Git Branch prefix" },
+    { mid: "m22", tag: "section", depth: 2, text: "General Theme System" },
+    { mid: "m23", tag: "h2", depth: 3, text: "General" },
+    { mid: "m26", tag: "div", depth: 3, text: "Theme System" },
+    { mid: "m24", tag: "section", depth: 2, text: "Git Branch prefix" },
+    { mid: "m25", tag: "h2", depth: 3, text: "Git" },
+    { mid: "m40", tag: "footer", depth: 1, text: "" },
+  ];
+
+  it("says in the hint line where it would drop, naming the element by its first text", () => {
+    expect(dropHint(PAGE_LAYERS, { mid: "m24", place: { where: "above", ref: "m22" } })).toBe("Drop to move above General");
+    expect(dropHint(PAGE_LAYERS, { mid: "m24", place: { where: "into", ref: "m40" } })).toBe("Drop to move into footer m40");
+    expect(dropHint(PAGE_LAYERS, { mid: null, place: { where: "below", ref: "m25" } })).toBe("Drop to insert after Git");
+    expect(dropHint(PAGE_LAYERS, { mid: "m24", place: null })).toBeNull();
   });
 });
