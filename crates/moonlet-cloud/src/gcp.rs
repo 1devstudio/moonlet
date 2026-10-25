@@ -1312,4 +1312,31 @@ mod tests {
         });
         assert_eq!(check_field("key", &key.to_string()), Ok(()));
     }
+    #[test]
+    fn removes_at_the_times_in_the_per_second_examples() {
+        use crate::idle::{Activity, paid_end, removal_at};
+        let at = |h: u64, m: u64, s: u64| ((h * 60 + m) * 60 + s) * 1000;
+        let billing = info().billing;
+        // Made at 10:00:00, ready at 10:01:30, its command 10:02–10:05.
+        let created = at(10, 0, 0);
+        let idle = |minutes, end| {
+            let a = Activity {
+                ready_at: at(10, 1, 30),
+                runs: vec![(at(10, 2, 0), Some(end))],
+                waiting: false,
+            };
+            let idle_at = removal_at(&a, minutes).unwrap();
+            paid_end(idle_at, created, billing, 60_000)
+        };
+        assert_eq!(idle(15, at(10, 5, 0)), at(10, 20, 0));
+        assert_eq!(idle(0, at(10, 3, 0)), at(10, 3, 0));
+        // Within its first minute, which is paid in full, it stays until
+        // just before that minute ends.
+        assert_eq!(
+            paid_end(at(10, 0, 40), created, billing, 60_000),
+            at(10, 0, 59) + 800
+        );
+        // A machine that existed 40 s is booked as 60 s.
+        assert_eq!(billing.billed(40), 60);
+    }
 }
