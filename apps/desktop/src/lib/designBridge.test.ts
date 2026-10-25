@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { JSDOM, type DOMWindow } from "jsdom";
-import { bridgeMessage, modeMessage, pinsMessage } from "./designBridge";
+import { bridgeMessage, helloMessage, modeMessage, pinsMessage } from "./designBridge";
 import bridge from "../../src-tauri/src/design_bridge.js?raw";
 
 describe("the bridge's messages (X65)", () => {
@@ -36,6 +36,10 @@ describe("the bridge's messages (X65)", () => {
   it("tells the page its mode, and the pinned elements once each", () => {
     expect(modeMessage("comment")).toEqual({ type: "bridge.mode", mode: "comment" });
     expect(pinsMessage(["m12", "m25", "m12", "", "x"])).toEqual({ type: "bridge.pins", mids: ["m12", "m25"] });
+  });
+
+  it("asks the page for its data-mids with a hello, once the app listens", () => {
+    expect(helloMessage()).toEqual({ type: "bridge.hello" });
   });
 
   it("drops a message of an unknown type, or that is not an object", () => {
@@ -81,6 +85,19 @@ describe("the bridge script in a page (X65)", () => {
   it("reports the page's data-mids once it has loaded", async () => {
     const { posted } = framed('<nav data-mid="m12"><a data-mid="m13">General</a></nav><script>document.body.append(Object.assign(document.createElement("p"), {}))</script><h2 data-mid="m25">Git</h2>');
     await vi.waitFor(() => expect(posted).toContainEqual({ type: "mids", mids: ["m1", "m12", "m13", "m25"] }));
+  });
+
+  it("answers the app's hello with the page's data-mids, whenever it asks after the page loaded", async () => {
+    const { tell, of } = framed('<nav data-mid="m12"></nav><h2 data-mid="m25">Git</h2>');
+    // The report at load went before the app listened; the app asks again.
+    await vi.waitFor(() => expect(of("mids")).toHaveLength(1));
+    tell(helloMessage());
+    tell(helloMessage());
+    expect(of("mids")).toEqual([
+      { type: "mids", mids: ["m1", "m12", "m25"] },
+      { type: "mids", mids: ["m1", "m12", "m25"] },
+      { type: "mids", mids: ["m1", "m12", "m25"] },
+    ]);
   });
 
   const NAV = '<nav data-mid="m12"><a href="#git" data-mid="m13">General <b data-mid="m14">Appearance</b></a></nav><h2 data-mid="m25">Git</h2>';

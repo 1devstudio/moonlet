@@ -34,7 +34,7 @@ import { pageUrl } from "../../lib/designView";
 import { VIEWPORTS, canvasKey, canvasScale, canvasZoom, customViewports, fitBox, parseViewport, sizeOf, sizeText, viewportLabel, viewportText, withCustomViewport, type Size } from "../../lib/designViewport";
 import { canvasPage, canvasStep, isTyping, modeHint, modeKey, writingPage, type CanvasAct, type CanvasMode, type CanvasState } from "../../lib/designCanvas";
 import { chatCardLookup, commentCards, commentCardSelector, commentsTab, keepAction, openCommentsLabel, pageCounts, sendAll } from "../../lib/designComments";
-import { bridgeMessage, modeMessage, pinsMessage, type PickedElement, type Rect } from "../../lib/designBridge";
+import { bridgeMessage, helloMessage, modeMessage, pinsMessage, type PickedElement, type Rect } from "../../lib/designBridge";
 import { pageFile, pagePath } from "../../lib/designPage";
 import { barProblems, chatOpensOn, designBar, pageFixMessage, type Bar, type BarAction, type PageProblem } from "../../lib/designBars";
 import { claimKeys } from "../../lib/keys";
@@ -417,7 +417,8 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
  *  scripts but never reaches the app, on a host of its own (X64, X65), with
  *  the comment bridge: the open pins of the page over it, and the comment
  *  box pinned to its element. Each load reports the page's data-mids, and is
- *  told the mode and the pins again, so the pins follow a reload. */
+ *  told the mode and the pins again, so the pins follow a reload; once it
+ *  listens, the app asks for them too, in case the page reported first. */
 function PageFrame({
   host,
   workspace,
@@ -486,6 +487,8 @@ function PageFrame({
       }
     };
     window.addEventListener("message", onMessage);
+    // The page may have reported its ids before this listened: ask again.
+    tell(helloMessage());
     return () => window.removeEventListener("message", onMessage);
   }, [host, workspace, design.slug, page]);
 

@@ -102,3 +102,9 @@ export function modeMessage(mode: "view" | "comment"): { type: "bridge.mode"; mo
 export function pinsMessage(mids: string[]): { type: "bridge.pins"; mids: string[] } {
   return { type: "bridge.pins", mids: [...new Set(mids.filter(isMid))] };
 }
+
+/** Asks the page for its `data-mid`s, which it reports once loaded: sent
+ *  once the app listens, so a report sent before that is not lost. */
+export function helloMessage(): { type: "bridge.hello" } {
+  return { type: "bridge.hello" };
+}

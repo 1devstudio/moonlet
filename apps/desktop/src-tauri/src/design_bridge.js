@@ -5,7 +5,9 @@
 // talks to it only through postMessage (src/lib/designBridge.ts checks every
 // message it posts).
 //
-// It reports the page's data-mids once loaded; in Comment mode it outlines
+// It reports the page's data-mids once loaded, and again whenever the app
+// asks (bridge.hello), so a report sent before the app listened is not lost;
+// in Comment mode it outlines
 // the element under the pointer, inside the page, and reports a click's
 // element (⌥-click: its parent) instead of letting the page have the click;
 // it reports the boxes of the pinned elements when asked, and again on load,
@@ -85,7 +87,10 @@
     if (e.source !== app) return;
     const d = e.data;
     if (!d || typeof d !== "object") return;
-    if (d.type === "bridge.mode") {
+    if (d.type === "bridge.hello") {
+      // Before the page has loaded, its load's report answers.
+      if (document.readyState !== "loading") reportMids();
+    } else if (d.type === "bridge.mode") {
       mode = d.mode === "comment" ? "comment" : "view";
       if (mode !== "comment") draw(null);
     } else if (d.type === "bridge.pins" && Array.isArray(d.mids)) {
