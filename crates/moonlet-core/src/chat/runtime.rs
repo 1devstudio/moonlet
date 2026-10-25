@@ -38,6 +38,8 @@ pub struct ChatCreate {
     /// For a chat with no session, such as a design system's agent (X64):
     /// the workspace whose Claude profile it starts in.
     pub workspace: Option<String>,
+    /// A design system's sync agent (X64), marked so on its terminal.
+    pub design: bool,
 }
 
 /// What is persisted per chat.
@@ -204,6 +206,7 @@ impl ChatManager {
             alt_screen: false,
             chat: true,
             classic: false,
+            design: req.design,
             subagents: 0,
             created_at: now,
             last_output_at: now,
