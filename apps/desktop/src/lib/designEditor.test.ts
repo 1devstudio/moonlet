@@ -272,6 +272,35 @@ describe("edits by hand told to the agent (X65)", () => {
   });
 });
 
+describe("edits by hand told to the agent, once saved (X65)", () => {
+  it("wait for their pages' saves: one a save refused as stale is never told, and one whose save failed waits for a save that takes it", async () => {
+    answers["chat.send"] = () => true;
+    await loadPageSource("local", WS, SLUG, "index");
+    editPage("local", WS, SLUG, "index", { kind: "delete", mid: "m30" }, "m30");
+    await settleSaves();
+    disk.index = { html: '<!doctype html>\n<body data-mid="m1">\n  <h2 data-mid="m25">Git, by the agent</h2>\n</body>\n', version: "v9" };
+    editPage("local", WS, SLUG, "index", { kind: "text", mid: "m25", text: "Git and GitHub" }, "m25");
+    await sendWithEdits("local", WS, SLUG, 12, "Thanks", []);
+    disk.git = { html: '<!doctype html>\n<body data-mid="m1">\n  <p data-mid="m2">Rows</p>\n  <p data-mid="m3">Cards</p>\n</body>\n', version: "v1" };
+    await loadPageSource("local", WS, SLUG, "git");
+    const write = answers["design.write_page"];
+    answers["design.write_page"] = () => {
+      answers["design.write_page"] = write;
+      throw new DaemonError({ code: "failed", message: "disk full" });
+    };
+    editPage("local", WS, SLUG, "git", { kind: "delete", mid: "m3" }, "m3");
+    await sendWithEdits("local", WS, SLUG, 12, "And now?", []);
+    editPage("local", WS, SLUG, "git", { kind: "text", mid: "m2", text: "Rows only" }, "m2");
+    await sendWithEdits("local", WS, SLUG, 12, "Done", []);
+    expect(calls.filter((c) => c.method === "chat.send").map((c) => c.params.text)).toEqual([
+      "Edits by hand since your last turn:\nindex.html m30 p: deleted\n\nThanks",
+      "And now?",
+      "Edits by hand since your last turn:\ngit.html m3 p: deleted\ngit.html m2 p: text “Rows only”\n\nDone",
+    ]);
+    expect(disk.git.html).toBe('<!doctype html>\n<body data-mid="m1">\n  <p data-mid="m2">Rows only</p>\n</body>\n');
+  });
+});
+
 describe("edits by hand before the app's own messages to the agent (X65)", () => {
   it("go before a message of comments that Send sends, which keeps its comment lines after them", async () => {
     answers["chat.send"] = () => true;
