@@ -1322,7 +1322,9 @@ async function openInTerminal(host: string, info: TerminalInfo, st: ChatState) {
  *  with its brief (X65); `userText`: what a message of the user's shows when
  *  not its whole text (null keeps it), told whether it is the user's first;
  *  `userView`: a message of the user's shown its own way, such as a design's
- *  comments as Comment from the canvas cards (null shows it as a message). */
+ *  comments as Comment from the canvas cards (null shows it as a message);
+ *  `sendText`: sends what the user typed in place of `chat.send`, such as a
+ *  design's message with its edits by hand before it. */
 export function AgentView({
   host,
   id,
@@ -1332,6 +1334,7 @@ export function AgentView({
   lead,
   userText,
   userView,
+  sendText,
 }: {
   host: string;
   id: number;
@@ -1341,6 +1344,7 @@ export function AgentView({
   lead?: ReactNode;
   userText?: (text: string, first: boolean) => string | null;
   userView?: (text: string) => ReactNode | null;
+  sendText?: (text: string, images: ChatImage[]) => Promise<unknown>;
 }) {
   const info = useStore((s) => s.terminals[host]?.[id]);
   const st = useChat((s) => s.chats[chatKey(host, id)]);
@@ -1421,7 +1425,8 @@ export function AgentView({
       if (answer) void call(M.chatPermission, { ask: revise, ...answer });
       return;
     }
-    void call(M.chatSend, { text, images });
+    if (sendText) void sendText(text, images).catch(errorToast);
+    else void call(M.chatSend, { text, images });
   };
   const stop = () => void call(M.chatInterrupt, {});
   // Queued messages (X49): Send now, Ask aside, and the aside's card.

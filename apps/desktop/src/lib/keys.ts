@@ -66,11 +66,11 @@ function copyBlock(): boolean {
 
 /** Screens that take some ⌘ keys from the app while shown, newest first:
  *  the design screen's zoom and chat panel (X65). */
-const claims: ((id: string) => boolean)[] = [];
+const claims: ((id: string, e: KeyboardEvent) => boolean)[] = [];
 
 /** Gives `take` the ⌘ keys it says it took (true) before the app's own
- *  shortcuts; the returned function lets go. */
-export function claimKeys(take: (id: string) => boolean): () => void {
+ *  shortcuts, ⌘C too when it copies no block; the returned function lets go. */
+export function claimKeys(take: (id: string, e: KeyboardEvent) => boolean): () => void {
   claims.unshift(take);
   return () => {
     const at = claims.indexOf(take);
@@ -88,8 +88,8 @@ export function installShortcuts() {
     if (confirm || ((dialog || settingsPage) && id !== "cmd+k")) return;
     // A shortcut being recorded (X43) takes every key.
     if (document.querySelector("[data-recording-shortcut]")) return;
-    if (id === "cmd+c") {
-      if (copyBlock()) e.preventDefault();
+    if (id === "cmd+c" && copyBlock()) {
+      e.preventDefault();
       return;
     }
     // Text selected in the terminal wins over the block shortcuts (T8): they
@@ -116,7 +116,7 @@ export function installShortcuts() {
     const t = e.target as HTMLElement | null;
     const editable = t?.closest(".monaco-editor") || (t && /^(INPUT|TEXTAREA)$/.test(t.tagName) && !t.closest(".xterm"));
     if (editable && ["cmd+f", "cmd+d", "cmd+arrowup", "cmd+arrowdown", "shift+cmd+c"].includes(id)) return;
-    if (claims.some((take) => take(id))) {
+    if (claims.some((take) => take(id, e))) {
       e.preventDefault();
       e.stopPropagation();
       return;
