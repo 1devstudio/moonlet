@@ -104,6 +104,12 @@ pub const SKILL: &str = include_str!("skill/SKILL.md");
 
 /// Marks a skill file as ours, so uninstall never removes a user's own.
 const SKILL_MARKER: &str = "Installed by moonlet";
+/// A skill file's text without the line that holds its install mark: what an
+/// agent is given of it in a message, where the mark means nothing (X65).
+pub fn without_install_mark(text: &str) -> String {
+    text.split_inclusive('\n').filter(|l| !l.contains(SKILL_MARKER)).collect()
+}
+
 /// The same mark in the `jaunt` skill, installed before the rename (X27).
 const JAUNT_SKILL_MARKER: &str = "Installed by jaunt";
 
