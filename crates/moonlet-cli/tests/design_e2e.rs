@@ -407,10 +407,17 @@ async fn the_sync_agent_renders_its_cards_and_snaps_one_from_its_folder() {
 async fn without_the_app_render_and_snap_say_to_open_moonlet() {
     let d = Daemon::start().await;
     let dir = render_system(&d).await;
-    for args in [
-        vec!["design", "check", "--render"],
-        vec!["design", "snap", "components/buttons/button/button.html"],
-    ] {
+    // The check prints its problems, then fails with why nothing rendered.
+    let check = d.moonlet(&dir, &["design", "check", "--render"]);
+    assert_eq!(check.status.code(), Some(1));
+    let out: serde_json::Value = serde_json::from_str(&text(&check)).unwrap();
+    assert_eq!(out["problems"], serde_json::json!([]));
+    assert_eq!(out["render"], serde_json::Value::Null);
+    assert_eq!(
+        String::from_utf8_lossy(&check.stderr),
+        "moonlet: Open moonlet to render cards\n"
+    );
+    for args in [vec!["design", "snap", "components/buttons/button/button.html"]] {
         let out = d.moonlet(&dir, &args);
         assert!(!out.status.success(), "{args:?}");
         assert!(
