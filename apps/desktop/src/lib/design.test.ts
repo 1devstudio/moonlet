@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Design, DesignSystem } from "./protocol";
-import { briefShown, designAgentState, designOpenAction, designsEmpty, designSubtitle, designRow, designSlug, newDesignReady, newDesignSystem, systemSummary, picksInWorkspace, systemFolder, systemLabel } from "./design";
+import { briefShown, designAgentState, designOpenAction, workspaceDesigns, designsEmpty, designSubtitle, designRow, designSlug, newDesignReady, newDesignSystem, systemSummary, picksInWorkspace, systemFolder, systemLabel } from "./design";
 
 const NOW = 1_761_200_000_000;
 const DAY = 86_400_000;
@@ -192,6 +192,21 @@ describe("design.open in the app (X65)", () => {
       text: "Fix checkout button started the design Settings page",
     });
     expect(designOpenAction({ workspace: "w1", slug: "onboarding", name: "Onboarding", spawned_by: 9 }, sessions)).toEqual({ kind: "toast", text: "An agent started the design Onboarding" });
+  });
+
+  it("leaves a session design to its session's Design tab, never the design screen", () => {
+    expect(designOpenAction({ workspace: "w1", slug: "settings-page", name: "Settings page", session: "s1", kind: "session" }, sessions)).toEqual({ kind: "none" });
+  });
+});
+
+describe("the designs Design mode lists (X65)", () => {
+  it("are the workspace designs of design.list, its session and project designs left to their own places", () => {
+    const listed: Design[] = [
+      design({ slug: "settings-page", kind: "workspace" }),
+      design({ slug: "checkout", kind: "session", session: "s1", project: "p1" }),
+      design({ slug: "onboarding", kind: "project", project: "p1", path: "docs/design/onboarding" }),
+    ];
+    expect(workspaceDesigns(listed).map((d) => d.slug)).toEqual(["settings-page"]);
   });
 });
 

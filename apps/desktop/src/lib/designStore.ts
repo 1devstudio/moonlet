@@ -13,7 +13,7 @@ import { alertFor } from "./alerts";
 import { modeOf, setMode } from "./mode";
 import { latestPerKey } from "./prPoll";
 import { latestSends } from "./latestSend";
-import { designOpenAction } from "./design";
+import { designOpenAction, workspaceDesigns } from "./design";
 import { changedPages, reloadsPage } from "./designCanvas";
 import { pageOfPath } from "./designPage";
 import type { PageProblem } from "./designBars";
@@ -346,7 +346,7 @@ function listing(fetch: (host: string, workspace: string, key: string) => Promis
 }
 
 const designListing = listing(async (host, workspace, key) => {
-  const list = withPickedViewports(host, workspace, await rpc<Design[]>(host, M.designList, { workspace }));
+  const list = withPickedViewports(host, workspace, workspaceDesigns(await rpc<Design[]>(host, M.designList, { workspace })));
   useDesign.setState((s) => ({ designs: { ...s.designs, [key]: list } }));
 });
 
@@ -431,6 +431,7 @@ function onDesignChange(host: string, change: DesignChanged) {
 function onDesignOpen(host: string, ev: DesignOpen) {
   const action = designOpenAction(ev, useStore.getState().sessions[host] ?? []);
   const open = () => void openDesign(host, ev.workspace, ev.slug);
+  if (action.kind === "none") return;
   if (action.kind === "show") open();
   else {
     reloadDesigns(host, ev.workspace);
