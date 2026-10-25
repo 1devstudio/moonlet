@@ -13,7 +13,7 @@ import { AgentIcon, Button } from "../ui";
 function KindIcon({ kind }: { kind: HistoryRow["kind"] }) {
   return (
     <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-raised text-muted">
-      {kind === "agent_turn" ? <AgentIcon agent="claude" size={12} /> : kind === "edits_by_hand" ? <Pencil size={12} className="text-[#5b8def]" /> : <RotateCcw size={12} />}
+      {kind === "agent_turn" ? <AgentIcon agent="claude" size={12} /> : kind === "edits_by_hand" ? <Pencil size={12} className="text-preview" /> : <RotateCcw size={12} />}
     </span>
   );
 }
