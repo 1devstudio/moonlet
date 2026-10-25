@@ -133,8 +133,8 @@ export function designOpenAction(ev: DesignOpen, sessions: { id: string; name: s
  *  The chat shows that message (`first`) as the brief alone, under a note
  *  that says what went with it; null for any other message, a later one
  *  that starts with the brief included. */
-export function briefShown(text: string, brief: string, first: boolean): string | null {
-  const b = brief.trim();
+export function briefShown(text: string, brief: string | undefined, first: boolean): string | null {
+  const b = brief?.trim();
   return first && b && text.startsWith(`${b}\n\n---\nThis is the design "`) ? b : null;
 }
 

@@ -12,6 +12,10 @@ describe("the canvas's viewport (X65)", () => {
     for (const bad of ["phone", "0x844", "390x", "390x844x2", "-1x5", "1e3x800", ""]) expect(parseViewport(bad)).toBeNull();
   });
 
+  it("reads as none when an older daemon's design.list gives none", () => {
+    expect(parseViewport(undefined)).toBeNull();
+  });
+
   it("is read from the width and height the user types, in whole px", () => {
     expect(sizeOf("1024", "768")).toEqual([1024, 768]);
     for (const [w, h] of [["", "768"], ["1e3", "768"], ["0", "768"], ["10.5", "768"], ["1024", "-1"]]) expect(sizeOf(w, h)).toBeNull();
