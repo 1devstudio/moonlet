@@ -6,6 +6,10 @@ import type { DesignComment } from "./protocol";
 import { pageFile } from "./designPage";
 import { isMid, isTag } from "./designBridge";
 
+/** The file a design keeps its comments in (`design/comments.rs`'s
+ *  `COMMENTS_FILE`): a change to it lists them again. */
+export const COMMENTS_FILE = "comments.json";
+
 /** Text on one line: every run of spaces and line breaks one space. */
 const oneLine = (s: string) => s.replace(/\s+/g, " ").trim();
 
@@ -89,11 +93,24 @@ function unsentPins(pins: DesignComment[], mids: PageMids): DesignComment[] {
   return pins.filter((p) => p.state === "open" && p.sent_at === null && !isOrphaned(p, mids));
 }
 
+/** The one message **Send** and **Send all** add to the chat: the pins'
+ *  lines, one per pin. */
+export function commentsMessage(pins: CommentRef[]): string {
+  return pins.map(commentLine).join("\n");
+}
+
 /** What **Send all** sends: every open pin not sent yet whose element is
- *  there, as one message of their lines, and their numbers; null when none. */
-export function sendAll(pins: DesignComment[], mids: PageMids): { pins: number[]; text: string } | null {
-  const unsent = unsentPins(pins, mids);
-  return unsent.length ? { pins: unsent.map((p) => p.n), text: unsent.map(commentLine).join("\n") } : null;
+ *  there, by number. */
+export function sendAll(pins: DesignComment[], mids: PageMids): DesignComment[] {
+  return unsentPins(pins, mids);
+}
+
+/** `list` with `pins` the daemon gave back in place of their old selves,
+ *  new ones added, by number. */
+export function withPins(list: DesignComment[], pins: DesignComment[]): DesignComment[] {
+  const changed = new Map(pins.map((p) => [p.n, p]));
+  const kept = list.filter((p) => !changed.has(p.n));
+  return [...kept, ...pins].sort((a, b) => a.n - b.n);
 }
 
 /** Each page's open pins, by its name; a page with none is left out. */

@@ -1089,6 +1089,13 @@ export interface DesignComment {
   state: "open" | "resolved";
 }
 
+/** What `design.comment.put` does: pins a new comment, changes a pin's
+ *  comment (a changed one is not sent any more), or marks pins sent. */
+export type CommentChange =
+  | { new: { page: string; mid: string; tag: string; text: string; comment: string } }
+  | { edit: { n: number; comment: string } }
+  | { sent: { pins: number[] } };
+
 /** `design.create`'s answer: the design, and why its agent did not start. */
 export interface DesignCreated extends Design {
   agent_error: string | null;

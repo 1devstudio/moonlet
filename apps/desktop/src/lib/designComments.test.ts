@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DesignComment } from "./protocol";
-import { boxLabel, commentCards, footerLabel, pinLabel, sentLabel, commentLine, commentsTab, isOrphaned, pageCounts, parseCommentLine, sendAll } from "./designComments";
+import { boxLabel, commentCards, footerLabel, pinLabel, sentLabel, commentLine, commentsMessage, commentsTab, isOrphaned, pageCounts, parseCommentLine, sendAll, withPins } from "./designComments";
 
 const pin = (n: number, over: Partial<DesignComment> = {}): DesignComment => ({
   n,
@@ -107,11 +107,12 @@ describe("Send all (X65)", () => {
       pin(5, { page: "git-a", mid: "m7", tag: "section", text: "Git", comment: "Cards are too tall" }),
       pin(6, { mid: "m50", comment: "Done", state: "resolved" }),
     ];
-    expect(sendAll(pins, { index: ["m1", "m12", "m33"] })).toEqual({
-      pins: [3, 5],
-      text: 'Comment on index.html [data-mid=m33] (div "Warn before losing unpushed work"): Switch rows need more space between them\nComment on git-a.html [data-mid=m7] (section "Git"): Cards are too tall',
-    });
-    expect(sendAll([pin(1, { sent_at: 5 })], {})).toBeNull();
+    const all = sendAll(pins, { index: ["m1", "m12", "m33"] });
+    expect(all.map((p) => p.n)).toEqual([3, 5]);
+    expect(commentsMessage(all)).toBe(
+      'Comment on index.html [data-mid=m33] (div "Warn before losing unpushed work"): Switch rows need more space between them\nComment on git-a.html [data-mid=m7] (section "Git"): Cards are too tall',
+    );
+    expect(sendAll([pin(1, { sent_at: 5 })], {})).toEqual([]);
   });
 });
 
@@ -136,5 +137,16 @@ describe("how a pin is named (X65)", () => {
     expect(footerLabel(2)).toBe("2 not sent yet, one line each");
     expect(footerLabel(1)).toBe("1 not sent yet, one line each");
     expect(footerLabel(0)).toBe("All sent");
+  });
+});
+
+describe("pins the daemon gives back (X65)", () => {
+  it("take their old selves' places, and new ones are added by number", () => {
+    const list = [pin(1), pin(3)];
+    expect(withPins(list, [pin(3, { sent_at: 7 }), pin(2)]).map((p) => [p.n, p.sent_at])).toEqual([
+      [1, null],
+      [2, null],
+      [3, 7],
+    ]);
   });
 });

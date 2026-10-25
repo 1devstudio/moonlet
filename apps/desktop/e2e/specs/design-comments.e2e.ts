@@ -86,7 +86,7 @@ describe("A design's comments", () => {
   // through design.comment.put, as the bridge's pick would make it; the
   // pick itself is tested on the bridge script in jsdom (designBridge.test.ts).
   it("opens a pin's comment box over the page, and Send puts it in the chat as a Comment from the canvas card", async () => {
-    rpc(w, "design.comment.put", { workspace: workspaceId(), slug: "settings-page", page: "index", mid: "m12", tag: "nav", text: "General Appearance", comment: "Collapse it" });
+    rpc(w, "design.comment.put", { workspace: workspaceId(), slug: "settings-page", new: { page: "index", mid: "m12", tag: "nav", text: "General Appearance", comment: "Collapse it" } });
     // Its pin over the page, where the bridge reports its element.
     await $('//button[@aria-label="Comment 1"]').click();
     await expect(box()).toHaveText(expect.stringContaining('nav · m12 · "General Appearance"'));
@@ -107,8 +107,8 @@ describe("A design's comments", () => {
 
   it("lists kept pins as Not sent, and Send all sends them in one message, one line each", async () => {
     const ws = workspaceId();
-    rpc(w, "design.comment.put", { workspace: ws, slug: "settings-page", page: "index", mid: "m25", tag: "h2", text: "Git", comment: "Make Git the first section" });
-    rpc(w, "design.comment.put", { workspace: ws, slug: "settings-page", page: "index", mid: "m30", tag: "p", text: "Warn before losing unpushed work", comment: "More space between the rows" });
+    rpc(w, "design.comment.put", { workspace: ws, slug: "settings-page", new: { page: "index", mid: "m25", tag: "h2", text: "Git", comment: "Make Git the first section" } });
+    rpc(w, "design.comment.put", { workspace: ws, slug: "settings-page", new: { page: "index", mid: "m30", tag: "p", text: "Warn before losing unpushed work", comment: "More space between the rows" } });
     const second = rail().$('.//article[@aria-label="Comment 2"]');
     await expect(second).toHaveText(expect.stringContaining("Not sent"));
     await expect(rail()).toHaveText(expect.stringContaining("2 not sent yet, one line each"));

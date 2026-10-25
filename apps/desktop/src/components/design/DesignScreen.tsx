@@ -162,8 +162,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
       .catch(errorToast);
   };
   const onSendAll = () => {
-    const all = sendAll(comments, mids);
-    if (all) sendPins(comments.filter((p) => all.pins.includes(p.n)));
+    sendPins(sendAll(comments, mids));
   };
   // Show in chat: the chat opens, scrolled to the pin's last card.
   const showInChat = (pin: DesignComment) => {
