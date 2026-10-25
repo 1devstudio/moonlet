@@ -3647,6 +3647,57 @@ async fn edits_by_hand_go_with_the_turn_when_a_message_comes_while_the_agent_ask
     assert_eq!(std::fs::read_to_string(dir.join("history/2/pages/other.html")).unwrap(), "<p data-mid=\"m3\">whole</p>\n");
 }
 
+/// A design's agent that writes `pages/index.html`, "turn <n>", on each
+/// message, then ends the turn: a message saying `STOP-ME` waits for the
+/// chat's Stop (an interrupt), and one saying `FAIL-NOW` fails.
+const STOPPED_CLAUDE: &str = r#"#!/bin/sh
+n=0
+mkdir -p pages
+while IFS= read -r line; do
+  case "$line" in
+    *'"subtype":"initialize"'*) echo '{"type":"system","subtype":"init","session_id":"s1","model":"fake"}' ;;
+    *'"subtype":"interrupt"'*) echo '{"type":"result","subtype":"error_during_execution","is_error":true,"usage":{}}' ;;
+    *'"type":"user"'*) n=$((n+1)); printf '<p data-mid="m2">turn %s</p>\n' "$n" > pages/index.html
+      case "$line" in
+        *'STOP-ME'*) ;;
+        *'FAIL-NOW'*) echo '{"type":"result","subtype":"error_during_execution","is_error":true,"usage":{}}' ;;
+        *) echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}' ;;
+      esac ;;
+  esac
+done
+"#;
+
+/// X65: a turn of the design's agent ends also when it is stopped (the
+/// chat's Stop leaves it idle) or fails (error): either takes the turn's
+/// snapshot, labelled Agent turn, as one it ends itself does.
+#[tokio::test]
+async fn an_agent_turn_stopped_or_failed_takes_its_snapshot_too() {
+    let d = fake_claude_daemon(STOPPED_CLAUDE).await;
+    let mut c = d.client().await;
+    let ws = workspace_with_system(&d, &mut c).await;
+    let created: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    let agent = created["agent"].as_u64().unwrap();
+    history_of(&mut c, &ws, 1).await;
+    turn_over(&mut c, agent).await;
+    let dir = d.home.path().join(".moonlet/design").join(&ws).join("designs/settings-page");
+    let kept = |n: u64| std::fs::read_to_string(dir.join(format!("history/{n}/pages/index.html"))).unwrap();
+
+    let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": agent, "text": "STOP-ME"})).await.unwrap();
+    working(&mut c, agent).await;
+    let _: serde_json::Value = c.request(methods::CHAT_INTERRUPT, serde_json::json!({"id": agent})).await.unwrap();
+    let listed = history_of(&mut c, &ws, 2).await;
+    assert_eq!((&listed[0]["n"], &listed[0]["type"]), (&serde_json::json!(2), &serde_json::json!("agent_turn")));
+    assert_eq!(kept(2), "<p data-mid=\"m2\">turn 2</p>\n");
+
+    let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": agent, "text": "FAIL-NOW"})).await.unwrap();
+    let listed = history_of(&mut c, &ws, 3).await;
+    assert_eq!((&listed[0]["n"], &listed[0]["type"]), (&serde_json::json!(3), &serde_json::json!("agent_turn")));
+    assert_eq!(kept(3), "<p data-mid=\"m2\">turn 3</p>\n");
+}
+
 /// X65: a design removed while its edits by hand wait for quiet stays
 /// removed: its snapshot is never taken, and nothing of its folder comes
 /// back.

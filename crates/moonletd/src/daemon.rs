@@ -1712,8 +1712,8 @@ impl Daemon {
     /// agent starts working, the edits by hand not kept yet are kept, if
     /// `chat.send` did not keep them already (see
     /// [`Self::keep_before_message`]), so the turn's snapshot holds only
-    /// the agent's work; when it ends a turn (its `done`, which
-    /// `agent.attention` announces), the turn's snapshot is taken. Each is
+    /// the agent's work; when its turn ends, done, stopped (idle) or
+    /// failed (error), the turn's snapshot is taken. Each is
     /// taken in the order its event came, one after the other, without
     /// holding up the events. A turn that starts without `chat.send` keeps
     /// the edits only once the daemon hears the agent works, so its first
@@ -1731,6 +1731,9 @@ impl Daemon {
             }
         });
         tokio::spawn(async move {
+            // The design agents in a turn: from working until done, idle
+            // (stopped) or error; asking the user is still within it.
+            let mut in_turn = std::collections::HashSet::new();
             loop {
                 let message = match events.recv().await {
                     Ok(m) => m,
@@ -1738,19 +1741,14 @@ impl Daemon {
                     Err(_) => return,
                 };
                 let Message::Event { name, data } = message else { continue };
-                let (design, state) = if name == m::EV_AGENT_ATTENTION {
-                    let Ok(a) = serde_json::from_value::<m::Attention>(data) else { continue };
-                    (a.design, a.state)
-                } else if name == m::EV_TERMINAL_UPDATED {
-                    let Ok(t) = serde_json::from_value::<TerminalInfo>(data) else { continue };
-                    (t.design, t.agent_state)
-                } else {
+                if name != m::EV_TERMINAL_UPDATED {
                     continue;
-                };
-                let Some(design) = design.filter(|t| t.kind == DesignAgentKind::Design) else { continue };
-                let step = match state {
-                    AgentState::Working if name == m::EV_TERMINAL_UPDATED => AgentStep::Starts,
-                    AgentState::Done if name == m::EV_AGENT_ATTENTION => AgentStep::EndsTurn,
+                }
+                let Ok(t) = serde_json::from_value::<TerminalInfo>(data) else { continue };
+                let Some(design) = t.design.filter(|d| d.kind == DesignAgentKind::Design) else { continue };
+                let step = match t.agent_state {
+                    AgentState::Working if in_turn.insert(t.id) => AgentStep::Starts,
+                    AgentState::Done | AgentState::Idle | AgentState::Error if in_turn.remove(&t.id) => AgentStep::EndsTurn,
                     _ => continue,
                 };
                 if steps.send((design.workspace, design.slug, step)).is_err() {
