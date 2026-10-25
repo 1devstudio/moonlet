@@ -669,7 +669,7 @@ impl Store {
 
     /// `~/.moonlet/design/<workspace>`, refusing an id that is not one folder
     /// name, and a folder that is a link (it would take writes elsewhere).
-    fn workspace(&self, workspace: &str) -> Result<PathBuf> {
+    pub(super) fn workspace(&self, workspace: &str) -> Result<PathBuf> {
         if !is_name(workspace) {
             bail!("bad workspace id \"{workspace}\"");
         }
@@ -921,7 +921,7 @@ pub enum Settle {
 
 /// Refuses `dir` when it is there but not a folder of its own: a link
 /// (even to a folder) or a file.
-fn not_a_link(dir: &Path) -> Result<()> {
+pub(super) fn not_a_link(dir: &Path) -> Result<()> {
     match std::fs::symlink_metadata(dir) {
         Ok(m) if !m.is_dir() => bail!("{} is not a folder (a link is refused)", dir.display()),
         _ => Ok(()),
@@ -929,7 +929,7 @@ fn not_a_link(dir: &Path) -> Result<()> {
 }
 
 /// One folder name: not empty, not `.` or `..`, no separator.
-fn is_name(s: &str) -> bool {
+pub(super) fn is_name(s: &str) -> bool {
     !s.is_empty() && s != "." && s != ".." && !s.contains(['/', '\\'])
 }
 
@@ -1029,6 +1029,12 @@ pub const CONFIG: &str = "config.toml";
 
 /// `moonlet desktop` → `moonlet-desktop`.
 pub fn slug(name: &str) -> String {
+    slug_or(name, "design-system")
+}
+
+/// A folder name from `name`, lowercase letters and digits joined by dashes,
+/// or `fallback` when it has none.
+pub(super) fn slug_or(name: &str, fallback: &str) -> String {
     let mut out = String::new();
     for c in name.trim().to_lowercase().chars() {
         if c.is_ascii_alphanumeric() {
@@ -1039,7 +1045,7 @@ pub fn slug(name: &str) -> String {
     }
     let out = out.trim_end_matches('-').to_string();
     if out.is_empty() {
-        "design-system".into()
+        fallback.into()
     } else {
         out
     }
