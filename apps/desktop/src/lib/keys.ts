@@ -6,6 +6,7 @@ import { actionForKey, keyId } from "./runActions";
 import { errorToast, switchWorkspaceByIndex, toast, updateSettings, useStore } from "./store";
 import { defaultTermSettings, pickBlockForAgent } from "./terminals";
 import { stepFontSize } from "./uiScale";
+import { modeOf } from "./mode";
 
 type Handler = () => void;
 
@@ -120,7 +121,7 @@ export function installShortcuts() {
       e.stopPropagation();
       return;
     }
-    const action = actionForKey(id, useStore.getState().settings.shortcuts);
+    const action = actionForKey(id, useStore.getState().settings.shortcuts, modeOf(useStore.getState()));
     const h = action ? () => runAction(action) : bindings[id];
     if (h) {
       e.preventDefault();

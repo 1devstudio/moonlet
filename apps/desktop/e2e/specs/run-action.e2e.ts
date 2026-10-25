@@ -33,7 +33,7 @@ async function close() {
 describe("Run action", () => {
   it("opens with ⌘K and lists every action", async () => {
     await open();
-    await expect($(sel.text("28 actions"))).toBeDisplayed();
+    await expect($(sel.text("29 actions"))).toBeDisplayed();
     await expect($(query)).toBeFocused();
     await close();
   });

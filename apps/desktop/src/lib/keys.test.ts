@@ -1,5 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { claimKeys, installShortcuts } from "./keys";
+import { runAction } from "./actions";
 import { askConfirm } from "./confirm";
 import { useStore } from "./store";
 
@@ -86,6 +87,18 @@ describe("⇧⌘N (X54, X65)", () => {
     useStore.setState({ mode: { "local/personal": "design" } });
     shiftCmd("N");
     expect(useStore.getState().dialog).toEqual({ kind: "new-design", host: "local", workspace: "personal" });
+  });
+
+  it("New session… in the Run action modal opens the New session composer, also in Design mode", () => {
+    useStore.setState({ mode: { "local/personal": "design" } });
+    runAction("new-session");
+    expect(useStore.getState().dialog).toEqual({ kind: "new-session" });
+  });
+
+  it("New design… in the Run action modal opens New design for the shown workspace, in Design mode", () => {
+    runAction("new-design");
+    expect(useStore.getState().dialog).toEqual({ kind: "new-design", host: "local", workspace: "personal" });
+    expect(useStore.getState().mode).toEqual({ "local/personal": "design" });
   });
 });
 

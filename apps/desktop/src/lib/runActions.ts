@@ -1,12 +1,17 @@
 // The Run action modal's catalogue, matching and custom shortcuts (X19).
 // Pure: the store and the action handlers live elsewhere.
 
+import type { AppMode } from "./store";
+
 export interface ActionDef {
   id: string;
   label: string;
   group: string;
   /** Default shortcut as a key id (see keyId), "" for none. */
   keys: string;
+  /** The mode its key works in, where it wins over another action's same
+   *  key; none: every mode. New design takes ⇧⌘N in Design mode (X65). */
+  keyMode?: AppMode;
 }
 
 export const ACTIONS: ActionDef[] = [
@@ -36,9 +41,10 @@ export const ACTIONS: ActionDef[] = [
   ["history", "Show archived sessions", "Session", ""],
   ["tasks", "Switch between Sessions and Tasks", "App", "ctrl+cmd+t"],
   ["design", "Switch between Sessions and Design", "App", "ctrl+cmd+d"],
+  ["new-design", "New design…", "App", "shift+cmd+n", "design"],
   ["settings", "Settings…", "App", "cmd+,"],
   ["check-updates", "Check for updates…", "App", ""],
-].map(([id, label, group, keys]) => ({ id, label, group, keys }));
+].map(([id, label, group, keys, keyMode]) => ({ id, label, group, keys, ...(keyMode ? { keyMode: keyMode as AppMode } : {}) }));
 
 /** Scores `text` against `q`: a contiguous match ranks by position, letters
  * in order rank below, anything else is 0. `hits` are the matched indexes. */
@@ -133,10 +139,12 @@ export function effectiveKeys(custom: Shortcuts | undefined): Record<string, str
   return Object.fromEntries(ACTIONS.map((a) => [a.id, custom?.[a.id] ?? (taken.has(a.keys) ? "" : a.keys)]));
 }
 
-/** The action `key` runs, if any. */
-export function actionForKey(key: string, custom: Shortcuts | undefined): string | undefined {
+/** The action `key` runs in `mode`, if any: one whose key works only in
+ *  that mode wins over one whose key works in every mode. */
+export function actionForKey(key: string, custom: Shortcuts | undefined, mode?: AppMode): string | undefined {
   const keys = effectiveKeys(custom);
-  return ACTIONS.find((a) => keys[a.id] === key)?.id;
+  const hits = ACTIONS.filter((a) => keys[a.id] === key && (a.keyMode === undefined || a.keyMode === mode));
+  return (hits.find((a) => a.keyMode !== undefined) ?? hits[0])?.id;
 }
 
 /** Keys an action cannot take: editing and window keys, and the app's fixed shortcuts. */
@@ -185,8 +193,12 @@ export function recordKey(key: string, action: string, custom: Shortcuts | undef
   if (!key.split("+").includes("cmd")) return { kind: "error", message: "Include ⌘ so the key never reaches the terminal." };
   const reserved = reservedFor(key);
   if (reserved) return { kind: "error", message: `${keyLabel(key)} is reserved for ${reserved}.` };
-  const other = actionForKey(key, custom);
-  if (other && other !== action) return { kind: "conflict", keys: key, other };
+  // Only an action whose key works in the same modes takes it away: New
+  // design's ⇧⌘N in Design mode leaves New session's elsewhere.
+  const keys = effectiveKeys(custom);
+  const keyMode = ACTIONS.find((a) => a.id === action)?.keyMode;
+  const other = ACTIONS.find((a) => a.id !== action && keys[a.id] === key && a.keyMode === keyMode)?.id;
+  if (other) return { kind: "conflict", keys: key, other };
   return { kind: "ok", keys: key };
 }
 
