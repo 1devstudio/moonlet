@@ -360,8 +360,8 @@ fn css_comments(css: &str) -> Vec<std::ops::Range<usize>> {
     out
 }
 
-/// The comments of a page's `<style>` elements: elsewhere in a page `/*` is text.
-fn style_comments(html: &str) -> Vec<std::ops::Range<usize>> {
+/// The byte ranges of a page's `<style>` elements' text: the page's CSS.
+fn style_ranges(html: &str) -> Vec<std::ops::Range<usize>> {
     let styles = std::cell::RefCell::new(Vec::<std::ops::Range<usize>>::new());
     let settings =
         lol_html::Settings::new().append_element_content_handler(lol_html::text!("style", |t| {
@@ -377,8 +377,12 @@ fn style_comments(html: &str) -> Vec<std::ops::Range<usize>> {
     if lol_html::rewrite_str(html, settings).is_err() {
         return Vec::new();
     }
-    styles
-        .into_inner()
+    styles.into_inner()
+}
+
+/// The comments of a page's `<style>` elements: elsewhere in a page `/*` is text.
+fn style_comments(html: &str) -> Vec<std::ops::Range<usize>> {
+    style_ranges(html)
         .into_iter()
         .flat_map(|s| {
             css_comments(&html[s.clone()])
@@ -390,14 +394,22 @@ fn style_comments(html: &str) -> Vec<std::ops::Range<usize>> {
 
 /// Each `@import` in a page's `<style>`s, comments left out, as the line it
 /// starts on and its URL, which may be on a later line: what a design page's
-/// check holds against its design system's `styles.css` (X65).
+/// check holds against its design system's `styles.css` (X65). An `@import`
+/// anywhere else in the page, in its text or a script, is not CSS.
 pub(super) fn style_imports(html: &str) -> Vec<(usize, String)> {
-    let text = blank(html, &style_comments(html));
-    IMPORT
-        .captures_iter(&text)
-        .map(|c| {
-            let at = c.get(0).map_or(0, |m| m.start());
-            (text[..at].matches('\n').count() + 1, quoted(&c).to_string())
+    let line_of = |byte: usize| html[..byte].matches('\n').count() + 1;
+    style_ranges(html)
+        .into_iter()
+        .flat_map(|s| {
+            let css = &html[s.clone()];
+            let css = blank(css, &css_comments(css));
+            IMPORT
+                .captures_iter(&css)
+                .map(|c| {
+                    let at = c.get(0).map_or(0, |m| m.start());
+                    (line_of(s.start + at), quoted(&c).to_string())
+                })
+                .collect::<Vec<_>>()
         })
         .collect()
 }

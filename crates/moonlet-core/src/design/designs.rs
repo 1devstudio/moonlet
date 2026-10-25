@@ -836,4 +836,30 @@ created_at = 1761200000000
             )]
         );
     }
+
+    #[test]
+    fn an_import_written_as_text_outside_a_style_is_not_reported() {
+        let (home, store) = store_with_system();
+        store
+            .create_design("w1", "Settings page", "moonlet-desktop", "", 1)
+            .unwrap();
+        let pages = home.path().join("design/w1/designs/settings-page/pages");
+        std::fs::write(
+            pages.join("index.html"),
+            "<html><head>
+<link rel=\"stylesheet\" href=\"../../../systems/moonlet-desktop/styles.css\">
+<script>const tip = \"@import 'https://cdn.example.com/kit.css';\";</script>
+</head>
+<body data-mid=\"m1\">
+<p data-mid=\"m2\">Fonts load with @import url(https://fonts.example.com/inter.css).</p>
+<pre data-mid=\"m3\"><code data-mid=\"m4\">@import \"https://cdn.example.com/theme.css\";</code></pre>
+</body></html>
+",
+        )
+        .unwrap();
+        assert_eq!(
+            store.check_design("w1", "settings-page", false).unwrap(),
+            vec![]
+        );
+    }
 }
