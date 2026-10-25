@@ -132,9 +132,11 @@ export function rendersHere(host: string): boolean {
 
 const ZOOMS = [0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4];
 
-/** The next zoom step from `zoom`, up (1) or down (-1), within 25%–400%. */
-export function zoomStep(zoom: number, dir: 1 | -1): number {
-  const next = dir === 1 ? ZOOMS.find((z) => z > zoom + 1e-9) : [...ZOOMS].reverse().find((z) => z < zoom - 1e-9);
+/** The next zoom step from `zoom`, up (1) or down (-1), within 25% and
+ *  `max` (400% for a card, X64; 200% for a design's canvas, X65). */
+export function zoomStep(zoom: number, dir: 1 | -1, max = 4): number {
+  const steps = ZOOMS.filter((z) => z <= max);
+  const next = dir === 1 ? steps.find((z) => z > zoom + 1e-9) : [...steps].reverse().find((z) => z < zoom - 1e-9);
   return next ?? zoom;
 }
 
