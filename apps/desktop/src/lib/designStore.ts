@@ -14,6 +14,7 @@ import { modeOf, setMode } from "./mode";
 import { latestPerKey } from "./prPoll";
 import { designOpenAction } from "./design";
 import { changedPages, reloadsPage } from "./designCanvas";
+import { pageOfPath } from "./designPage";
 import type { PageProblem } from "./designBars";
 import { COMMENTS_FILE, commentsMessage, withMid, withPins, type PageMids } from "./designComments";
 
@@ -134,6 +135,21 @@ export function designsOf(s: DesignState, host: string, workspace: string): Desi
 export function shownDesign(s: DesignState, host: string, workspace: string): Design | null {
   const slug = s.designShown[wsKey(host, workspace)];
   return (slug && designsOf(s, host, workspace)?.find((d) => d.slug === slug)) || null;
+}
+
+/** Whether the editor takes a change of a page it has read, deciding
+ *  itself whether it loads again (set by designEditor.ts). */
+let pageOwner: (host: string, workspace: string, slug: string, page: string) => boolean = () => false;
+
+/** Gives the editor the changes of the pages it has read. */
+export function ownPages(owner: typeof pageOwner) {
+  pageOwner = owner;
+}
+
+/** Loads a design's page on the canvas again, as after a change. */
+export function reloadPage(host: string, workspace: string, slug: string, page: string) {
+  const key = pageKey(host, workspace, slug, page);
+  useDesign.setState((s) => ({ pageRevs: { ...s.pageRevs, [key]: (s.pageRevs[key] ?? 0) + 1 } }));
 }
 
 /** How many times a design's page changed since the app started. */
@@ -352,15 +368,22 @@ function onDesignChange(host: string, change: DesignChanged) {
   const st = useDesign.getState();
   const list = designsOf(st, host, change.workspace) ?? [];
   const revs: Record<string, number> = {};
-  const bump = (key: string) => (revs[key] ??= (st.pageRevs[key] ?? 0) + 1);
+  // A page the editor has read decides itself whether it loads again: not
+  // for the editor's own save (designEditor.ts). Only when nothing but
+  // pages changed: an asset changed loads every page.
+  const pagesOnly = change.design !== null && change.paths.every((p) => pageOfPath(p) !== null);
+  const owned = new Set(pagesOnly ? changedPages(change, change.design!).filter((page) => pageOwner(host, change.workspace, change.design!, page)) : []);
+  const bump = (key: string, design: string, page: string) => {
+    if (design !== change.design || !owned.has(page)) revs[key] ??= (st.pageRevs[key] ?? 0) + 1;
+  };
   for (const d of list) {
-    for (const p of d.pages) if (reloadsPage(change, { design: d.slug, system: d.system, page: p.name })) bump(pageKey(host, change.workspace, d.slug, p.name));
+    for (const p of d.pages) if (reloadsPage(change, { design: d.slug, system: d.system, page: p.name })) bump(pageKey(host, change.workspace, d.slug, p.name), d.slug, p.name);
   }
   if (change.design) {
     const key = itemKey(host, change.workspace, change.design);
     // A page not listed yet loads once it is: written again before that.
     const pages = changedPages(change, change.design);
-    for (const page of pages) bump(pageKey(host, change.workspace, change.design, page));
+    for (const page of pages) bump(pageKey(host, change.workspace, change.design, page), change.design, page);
     useDesign.setState((s) => ({ pageRevs: { ...s.pageRevs, ...revs }, latest: pages.length ? { ...s.latest, [key]: pages } : s.latest }));
     reloadDesigns(host, change.workspace);
     checkSoon(host, change.workspace, change.design);
