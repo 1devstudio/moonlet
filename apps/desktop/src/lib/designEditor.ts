@@ -269,17 +269,19 @@ export function unsavedOf(s: EditorState, host: string, workspace: string, slug:
 /** Checks of pages changed on disk, on their way. */
 const checking = new Set<Promise<void>>();
 
-/** A page the editor has read changed on disk: read again, it loads on
- *  the canvas again unless it is the version the editor has, its own save.
+/** A page the editor has read changed on disk: read again, the latest
+ *  check's answer only, it loads on the canvas again unless it is the
+ *  version the editor has, its own save.
  *  While a save is on its way that save decides: refused, it loads the
  *  page; else the change was that save. Another writer's page makes the
  *  page's changes forgotten, as undoing them would undo that writer's. */
 async function changedOnDisk(host: string, workspace: string, slug: string, page: string): Promise<void> {
   const key = pageKey(host, workspace, slug, page);
-  if (saves.busy(key)) return;
-  const text = await rpc<DesignPageText>(host, M.designPage, { workspace, slug, page });
+  // Read as the canvas reads it: an older check's answer coming back after
+  // a newer one's, or after an edit, is dropped.
+  const text = await readPage(host, workspace, slug, page);
   const now = useEditor.getState().sources[key];
-  if (saves.busy(key) || !now || text.version === now.version) return;
+  if (!text || !now || text.version === now.version) return;
   const design = itemKey(host, workspace, slug);
   setSource(key, text);
   useEditor.setState((s) => ({ undo: { ...s.undo, [design]: dropPage(s.undo[design] ?? NO_UNDO, page) } }));

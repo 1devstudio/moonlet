@@ -145,6 +145,31 @@ describe("a page the editor saved, changed on disk (X65)", () => {
     // Its earlier change is not undone over the other writer's page.
     expect(undoOf(useEditor.getState(), "local", WS, SLUG).done).toEqual([]);
   });
+
+  it("takes the latest of two checks of the page, whatever order their answers come back in", async () => {
+    answers["design.list"] = () => [{ slug: SLUG, name: "Settings page", kind: "workspace", system: "moonlet-desktop", path: "", brief: "", viewport: "1440x900", pages: [{ name: "index", label: null }], updated_at: 0, open_comments: 0, agent: null, agent_state: null, needs_you: null, error: null }];
+    answers["design.check"] = () => [];
+    await startDesign();
+    startEditor();
+    await loadDesigns("local", WS);
+    await loadPageSource("local", WS, SLUG, "index");
+    const before = rev();
+    const first = { html: '<!doctype html>\n<body data-mid="m1"><h2 data-mid="m25">Rows</h2></body>\n', version: "v5" };
+    const second = { html: '<!doctype html>\n<body data-mid="m1"><h2 data-mid="m25">Rows and cards</h2></body>\n', version: "v6" };
+    const answer = answers["design.page"];
+    let late = (_: unknown) => {};
+    answers["design.page"] = () => new Promise((r) => (late = r));
+    changed(["pages/index.html"]);
+    await new Promise((r) => setTimeout(r, 0));
+    answers["design.page"] = answer;
+    disk.index = second;
+    changed(["pages/index.html"]);
+    await new Promise((r) => setTimeout(r, 0));
+    late(first);
+    await settleChecks();
+    expect(sourceOf(useEditor.getState(), "local", WS, SLUG, "index")).toEqual(second);
+    expect(rev()).toBe(before + 1);
+  });
 });
 
 describe("undo and redo on a design (X65)", () => {
