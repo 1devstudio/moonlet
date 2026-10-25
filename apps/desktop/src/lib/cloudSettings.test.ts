@@ -142,6 +142,23 @@ describe("Settings › Cloud workers (X63)", () => {
     expect(cloudErrors(d)).toEqual({});
   });
 
+  it("limits the daemon can hold, and an auth key when that is the way machines join", () => {
+    const d = cloudDraft(info());
+    expect(cloudErrors({ ...d, max_machines: "5000000000", max_hours_month: "5000000000" })).toEqual({
+      max_machines: "At most 1000 machines.",
+      max_hours_month: "At most 1000000 hours.",
+    });
+    // Switched to an auth key, none saved or pasted: every machine would fail.
+    expect(cloudErrors({ ...d, tailscale: { ...d.tailscale, mode: "auth_key" } }, info())).toEqual({ auth_key: "Paste the auth key." });
+    expect(cloudErrors({ ...d, tailscale: { ...d.tailscale, mode: "auth_key", auth_key: "k" } }, info())).toEqual({});
+  });
+
+  it("sends a pasted provider token without spaces around it", () => {
+    const i = info({ providers: {} });
+    const d = cloudDraft(i);
+    expect(cloudChanges(i, { ...d, providers: { hetzner: { token: " hc-new\n" } } })).toEqual({ providers: { hetzner: { token: "hc-new" } } });
+  });
+
   it("a provider added without its secret cannot be saved", () => {
     const i = info({ providers: {} });
     const d = cloudDraft(i);
@@ -192,6 +209,9 @@ describe("Settings › Cloud workers (X63)", () => {
     expect(policyAddress({ port: 47428, listening: ["127.0.0.1:47428", "100.101.102.103:47428"] }, "studio-mini")).toBe("100.101.102.103:47428");
     expect(policyAddress({ port: 47428, listening: [] }, "studio-mini")).toBe("studio-mini:47428");
     expect(policyAddress({ port: 0, listening: [] }, "studio-mini")).toBe("studio-mini:47428");
+    // Only an IPv6 Tailscale address: in brackets, as the policy takes it.
+    expect(policyAddress({ port: 47428, listening: ["[fd7a:115c:a1e0::1]:47428"] }, "studio-mini")).toBe("[fd7a:115c:a1e0::1]:47428");
+    expect(policyAddress({ port: 47428, listening: ["[fd7a:115c:a1e0::1]:47428", "100.101.102.103:47428"] }, "studio-mini")).toBe("100.101.102.103:47428");
   });
 
   it("warns while the central host takes no tailnet connections", () => {

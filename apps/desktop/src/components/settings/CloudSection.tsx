@@ -29,6 +29,9 @@ export function useProjectCloud(host: string, identity: ProjectIdentity | null |
     [key],
   );
   useEffect(() => {
+    // Another project's draft never shows under this one's key.
+    setInfo(null);
+    setDraft(null);
     if (!central || !key) return;
     let live = true;
     setFailed(null);

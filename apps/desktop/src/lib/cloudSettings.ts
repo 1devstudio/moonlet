@@ -62,7 +62,12 @@ export function cloudChanges(info: CloudInfo, d: CloudDraft): CloudSet | null {
   const base = cloudDraft(info);
   const providers: NonNullable<CloudSet["providers"]> = {};
   for (const [id, fields] of Object.entries(d.providers)) {
-    const changed = Object.fromEntries(Object.entries(fields).filter(([k, v]) => v !== (base.providers[id]?.[k] ?? "")));
+    // A pasted token often brings a space or a newline along.
+    const changed = Object.fromEntries(
+      Object.entries(fields)
+        .map(([k, v]) => [k, v.trim()] as const)
+        .filter(([k, v]) => v !== (base.providers[id]?.[k] ?? "")),
+    );
     if (!base.providers[id] || Object.keys(changed).length) providers[id] = changed;
   }
   if (Object.keys(providers).length) out.providers = providers;
@@ -96,11 +101,15 @@ const lowerFirst = (s: string) => (/^[A-Z][a-z]/.test(s) ? s[0].toLowerCase() + 
 const TAG = /^tag:[A-Za-z0-9-]+$/;
 
 /** What is wrong with the draft, by field (a provider's as `<provider>.<field>`); empty when it can be saved. `info` is what is saved. */
-export function cloudErrors(d: CloudDraft, info?: CloudInfo): Partial<Record<"idle_minutes" | "max_machines" | "max_hours_month" | "tag" | `${string}.${string}`, string>> {
+export function cloudErrors(d: CloudDraft, info?: CloudInfo): Partial<Record<"idle_minutes" | "max_machines" | "max_hours_month" | "tag" | "auth_key" | `${string}.${string}`, string>> {
   const e: ReturnType<typeof cloudErrors> = {};
   if (!whole(d.idle_minutes) || Number(d.idle_minutes) > 1440) e.idle_minutes = "From 0 to 1440 minutes.";
   if (!whole(d.max_machines) || Number(d.max_machines) < 1) e.max_machines = "At least 1 machine.";
+  else if (Number(d.max_machines) > 1000) e.max_machines = "At most 1000 machines.";
   if (!whole(d.max_hours_month)) e.max_hours_month = "A whole number of hours.";
+  else if (Number(d.max_hours_month) > 1_000_000) e.max_hours_month = "At most 1000000 hours.";
+  // Joining with an auth key needs one.
+  if (d.tailscale.mode === "auth_key" && !d.tailscale.auth_key.trim() && info && !info.tailscale.has_auth_key) e.auth_key = "Paste the auth key.";
   if (!TAG.test(d.tailscale.tag.trim())) e.tag = "A tag is tag: then letters, digits and dashes, such as tag:moonlet-worker.";
   // A secret not saved yet must be typed: a provider without it makes no machine.
   for (const kind of info?.kinds ?? []) {
@@ -129,7 +138,10 @@ const tailnet = (ip: string) => {
 
 /** Where cloud machines reach the central host `host`: its Tailscale `ip:port` from `mobile.status`, else its name. */
 export function policyAddress(status: { port: number; listening: string[] }, host: string): string {
-  return status.listening.find((l) => tailnet(l.split(":")[0])) ?? `${host}:${status.port || DEFAULT_PORT}`;
+  // IPv4 first; an IPv6 one, `[fd7a:115c:a1e0::…]:port`, as the policy takes it.
+  const v4 = status.listening.find((l) => tailnet(l.split(":")[0]));
+  const v6 = status.listening.find((l) => /^\[fd7a:115c:a1e0:/i.test(l));
+  return v4 ?? v6 ?? `${host}:${status.port || DEFAULT_PORT}`;
 }
 
 /** The port moonletd listens on for phones, desktops and cloud machines. */

@@ -80,15 +80,18 @@ export function CloudPage() {
   const [checked, setChecked] = useState<true | string | null>(null);
   const [checking, setChecking] = useState(false);
   const check = async () => {
+    const asked = host;
     setChecking(true);
+    let result: true | string;
     try {
-      await rpc(host, M.cloudCheck);
-      setChecked(true);
+      await rpc(asked, M.cloudCheck);
+      result = true;
     } catch (e) {
-      setChecked(e instanceof Error ? e.message : String(e));
-    } finally {
-      setChecking(false);
+      result = e instanceof Error ? e.message : String(e);
     }
+    setChecking(false);
+    // An answer for a host no longer shown is dropped.
+    if (useCloud.getState().host === asked) setChecked(result);
   };
   // Re-renders the secret fields, so Replace closes after Save and Discard.
   const [generation, setGeneration] = useState(0);
@@ -99,8 +102,11 @@ export function CloudPage() {
     setGeneration((g) => g + 1);
   };
   useEffect(() => {
+    // Nothing of the last host's shows for this one.
     setInfo(null);
     setFailed(null);
+    setStatus(null);
+    setChecked(null);
     // A late answer for a host no longer shown is dropped: Save goes to `host`.
     let live = true;
     void rpc<CloudInfo>(host, M.cloudGet).then(
@@ -129,6 +135,8 @@ export function CloudPage() {
     setSaving(true);
     try {
       show(await rpc<CloudInfo>(host, M.cloudSet, changes));
+      // It tested the client saved before.
+      setChecked(null);
       toast("Saved cloud workers settings");
     } catch (e) {
       errorToast(e);
@@ -337,7 +345,7 @@ export function CloudPage() {
                 </Row>
               </>
             ) : (
-              <Row label="Auth key" hint="Reusable, ephemeral, pre-approved, with the tag below." htmlFor="cloud-ts-auth-key">
+              <Row label="Auth key" hint={hint("Reusable, ephemeral, pre-approved, with the tag below.", errors.auth_key)} htmlFor="cloud-ts-auth-key">
                 <SecretField
                   id="cloud-ts-auth-key"
                   label="Auth key"
