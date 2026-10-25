@@ -5,7 +5,7 @@
 
 import { create } from "zustand";
 import { onDaemonEvent, onHostStatus, rpc } from "./daemon";
-import { EV, M, type ChatState, type Design, type DesignCard, type DesignChanged, type DesignCover, type DesignCreated, type DesignOpen, type DesignSystem, type DesignSystemCreated } from "./protocol";
+import { EV, M, type ChatState, type Design, type DesignCard, type DesignComment, type DesignChanged, type DesignCover, type DesignCreated, type DesignOpen, type DesignSystem, type DesignSystemCreated } from "./protocol";
 import { parseWsKey, wsKey } from "./workspaces";
 import { syncNotice } from "./designSync";
 import { agentSeen, notify, registerAgentsElsewhere, shownWorkspace, switchWorkspace, toast, useStore } from "./store";
@@ -15,6 +15,7 @@ import { latestPerKey } from "./prPoll";
 import { designOpenAction } from "./design";
 import { changedPages, reloadsPage } from "./designCanvas";
 import type { PageProblem } from "./designBars";
+import { commentLine, type PageMids } from "./designComments";
 
 interface DesignState {
   /** By workspace (`wsKey(host, id)`), once listed. */
@@ -40,9 +41,14 @@ interface DesignState {
   /** Every design system's name ever listed (`wsKey/slug`), kept after it is
    *  removed, for the designs still on it. */
   systemNames: Record<string, string>;
+  /** Each design's comments (`wsKey/slug`), once listed. */
+  comments: Record<string, DesignComment[]>;
+  /** The `data-mid`s each page of a design (`wsKey/slug`) reported after it
+   *  last loaded on the canvas, by page. */
+  mids: Record<string, PageMids>;
 }
 
-export const useDesign = create<DesignState>(() => ({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, designs: {}, designShown: {}, pageRevs: {}, latest: {}, problems: {}, systemNames: {} }));
+export const useDesign = create<DesignState>(() => ({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, designs: {}, designShown: {}, pageRevs: {}, latest: {}, problems: {}, systemNames: {}, comments: {}, mids: {} }));
 
 /** A design system's or a design's key, `wsKey/slug`. */
 const itemKey = (host: string, workspace: string, slug: string) => `${wsKey(host, workspace)}/${slug}`;
@@ -125,6 +131,76 @@ export function problemsOf(s: DesignState, host: string, workspace: string, slug
 
 const NONE: string[] = [];
 const NO_PROBLEMS: PageProblem[] = [];
+const NO_COMMENTS: DesignComment[] = [];
+const NO_MIDS: PageMids = {};
+
+/** A design's comments, by number; none until listed. */
+export function commentsOf(s: DesignState, host: string, workspace: string, slug: string): DesignComment[] {
+  return s.comments[itemKey(host, workspace, slug)] ?? NO_COMMENTS;
+}
+
+/** The `data-mid`s of a design's pages, from their last load on the canvas. */
+export function midsOf(s: DesignState, host: string, workspace: string, slug: string): PageMids {
+  return s.mids[itemKey(host, workspace, slug)] ?? NO_MIDS;
+}
+
+/** Records the `data-mid`s a page reported after it loaded (the bridge's). */
+export function setPageMids(host: string, workspace: string, slug: string, page: string, mids: string[]) {
+  const key = itemKey(host, workspace, slug);
+  useDesign.setState((s) => ({ mids: { ...s.mids, [key]: { ...s.mids[key], [page]: mids } } }));
+}
+
+/** Designs whose comments were asked for: listed again when they change. */
+const commentsWanted = new Set<string>();
+/** The latest comments request per design, so an older answer never lands last. */
+const commentsAsked = latestPerKey();
+
+/** Lists a design's comments (X65). */
+export async function loadComments(host: string, workspace: string, slug: string): Promise<void> {
+  const key = itemKey(host, workspace, slug);
+  commentsWanted.add(key);
+  const latest = commentsAsked.start(key);
+  const list = await rpc<DesignComment[]>(host, M.designComments, { workspace, slug });
+  if (latest()) useDesign.setState((s) => ({ comments: { ...s.comments, [key]: list } }));
+}
+
+/** A new pin's element and comment. */
+export interface NewComment {
+  page: string;
+  mid: string;
+  tag: string;
+  text: string;
+  comment: string;
+}
+
+/** **Keep**: saves a new pin, not sent. */
+export async function keepComment(host: string, workspace: string, slug: string, c: NewComment): Promise<DesignComment> {
+  const pin = await rpc<DesignComment>(host, M.designCommentPut, { workspace, slug, ...c });
+  void loadComments(host, workspace, slug).catch(() => {});
+  return pin;
+}
+
+/** Changes a kept pin's comment, not sent. */
+export async function editComment(host: string, workspace: string, slug: string, n: number, comment: string): Promise<DesignComment> {
+  const pin = await rpc<DesignComment>(host, M.designCommentPut, { workspace, slug, n, comment });
+  void loadComments(host, workspace, slug).catch(() => {});
+  return pin;
+}
+
+/** **Send** and **Send all**: the pins' lines go to the design's agent as one
+ *  message, one line each, and only then are the pins marked sent. */
+export async function sendComments(host: string, workspace: string, slug: string, agent: number, pins: DesignComment[]): Promise<void> {
+  if (!pins.length) return;
+  await askAgent(host, agent, pins.map(commentLine).join("\n"));
+  for (const p of pins) await rpc(host, M.designCommentPut, { workspace, slug, n: p.n, comment: p.comment, sent: true });
+  void loadComments(host, workspace, slug).catch(() => {});
+}
+
+/** **Resolve**: the pin is done. */
+export async function resolveComment(host: string, workspace: string, slug: string, n: number): Promise<void> {
+  await rpc(host, M.designCommentResolve, { workspace, slug, n });
+  await loadComments(host, workspace, slug);
+}
 
 /** Shows a design as the design screen (X65), and its agent as seen. */
 export function showDesign(host: string, workspace: string, slug: string) {
@@ -232,6 +308,8 @@ function onDesignChange(host: string, change: DesignChanged) {
     useDesign.setState((s) => ({ pageRevs: { ...s.pageRevs, ...revs }, latest: pages.length ? { ...s.latest, [key]: pages } : s.latest }));
     reloadDesigns(host, change.workspace);
     checkSoon(host, change.workspace, change.design);
+    // Its comments, kept, sent or resolved here or written by its agent.
+    if (commentsWanted.has(key) && change.paths.includes("comments.json")) void loadComments(host, change.workspace, change.design).catch(() => {});
   } else if (Object.keys(revs).length) {
     useDesign.setState((s) => ({ pageRevs: { ...s.pageRevs, ...revs } }));
   }

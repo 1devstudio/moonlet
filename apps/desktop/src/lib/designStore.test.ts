@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Design, DesignSystem, TerminalInfo } from "./protocol";
+import type { Design, DesignComment, DesignSystem, TerminalInfo } from "./protocol";
 import { modeOf, setMode } from "./mode";
 import { agentOnScreen, goToAgent, useStore } from "./store";
+import { commentsOf, keepComment, loadComments, sendComments, resolveComment } from "./designStore";
 import { cardsOf, checkDesign, createFromNewDesign, createSystem, designsOf, detectStack, latestOf, loadCards, loadDesigns, loadSystems, openCard, saveViewport, pageRevOf, problemsOf, revOf, shownCard, shownDesign, shownSystem, showDesign, showSystem, startDesign, systemNameOf, systemsOf, useDesign } from "./designStore";
 
 const calls = vi.hoisted(() => [] as { host: string; method: string; params: unknown }[]);
@@ -55,7 +56,7 @@ const listed = () => calls.filter((c) => c.method === "design.systems");
 beforeEach(async () => {
   calls.length = 0;
   for (const k of Object.keys(answers)) delete answers[k];
-  useDesign.setState({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, designs: {}, designShown: {}, pageRevs: {}, latest: {}, problems: {}, systemNames: {} });
+  useDesign.setState({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, designs: {}, designShown: {}, pageRevs: {}, latest: {}, problems: {}, systemNames: {}, comments: {}, mids: {} });
   await startDesign();
 });
 
@@ -504,5 +505,65 @@ describe("a design's viewport picked in a row (X65)", () => {
     };
     await expect(saveViewport("local", "w-fails", "settings-page", "390x844")).rejects.toThrow("host offline");
     expect(designsOf(useDesign.getState(), "local", "w-fails")?.[0].viewport).toBe("390x844");
+  });
+});
+
+describe("a design's comments (X65)", () => {
+  const pin = (n: number, over: Partial<DesignComment> = {}): DesignComment => ({
+    n,
+    page: "index",
+    mid: "m12",
+    tag: "nav",
+    text: "General Appearance",
+    comment: "Collapse into a menu on phone",
+    sent_at: null,
+    state: "open",
+    ...over,
+  });
+  const ns = () => commentsOf(useDesign.getState(), "local", "w-1devstudio", "settings-page").map((p) => [p.n, p.state, p.sent_at]);
+
+  it("are listed from the daemon, and again when the design's comments.json changes", async () => {
+    answers["design.comments"] = () => [pin(1)];
+    await loadComments("local", "w-1devstudio", "settings-page");
+    expect(calls.filter((c) => c.method === "design.comments").map((c) => c.params)).toEqual([{ workspace: "w-1devstudio", slug: "settings-page" }]);
+    expect(ns()).toEqual([[1, "open", null]]);
+    answers["design.comments"] = () => [pin(1, { state: "resolved" })];
+    changed("w-1devstudio", { design: "settings-page", paths: ["comments.json"] });
+    await settle();
+    await settle();
+    expect(ns()).toEqual([[1, "resolved", null]]);
+  });
+
+  it("go to the design's agent as their lines in one message, and are then marked sent", async () => {
+    const kept = pin(3, { mid: "m33", tag: "div", text: "Warn", comment: "More space" });
+    answers["design.comment.put"] = (p) => ({ ...kept, sent_at: (p as { sent?: boolean }).sent ? 1 : null });
+    answers["design.comments"] = () => [];
+    answers["chat.send"] = () => true;
+    const made = await keepComment("local", "w-1devstudio", "settings-page", { page: "index", mid: "m33", tag: "div", text: "Warn", comment: "More space" });
+    expect(made.n).toBe(3);
+    await sendComments("local", "w-1devstudio", "settings-page", 12, [pin(1), made]);
+    const sent = calls.filter((c) => c.method === "chat.send" || c.method === "design.comment.put").map((c) => [c.method, c.params]);
+    expect(sent).toEqual([
+      ["design.comment.put", { workspace: "w-1devstudio", slug: "settings-page", page: "index", mid: "m33", tag: "div", text: "Warn", comment: "More space" }],
+      ["chat.send", { id: 12, text: 'Comment on index.html [data-mid=m12] (nav "General Appearance"): Collapse into a menu on phone\nComment on index.html [data-mid=m33] (div "Warn"): More space', images: [] }],
+      ["design.comment.put", { workspace: "w-1devstudio", slug: "settings-page", n: 1, comment: "Collapse into a menu on phone", sent: true }],
+      ["design.comment.put", { workspace: "w-1devstudio", slug: "settings-page", n: 3, comment: "More space", sent: true }],
+    ]);
+  });
+
+  it("stay not sent when the message cannot be sent", async () => {
+    answers["chat.send"] = () => {
+      throw new Error("the agent is gone");
+    };
+    await expect(sendComments("local", "w-1devstudio", "settings-page", 12, [pin(1)])).rejects.toThrow("the agent is gone");
+    expect(calls.filter((c) => c.method === "design.comment.put")).toEqual([]);
+  });
+
+  it("are resolved one at a time", async () => {
+    answers["design.comment.resolve"] = () => pin(1, { state: "resolved" });
+    answers["design.comments"] = () => [pin(1, { state: "resolved" })];
+    await resolveComment("local", "w-1devstudio", "settings-page", 1);
+    expect(calls.filter((c) => c.method === "design.comment.resolve").map((c) => c.params)).toEqual([{ workspace: "w-1devstudio", slug: "settings-page", n: 1 }]);
+    expect(ns()).toEqual([[1, "resolved", null]]);
   });
 });
