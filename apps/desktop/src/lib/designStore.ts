@@ -138,12 +138,16 @@ export function shownDesign(s: DesignState, host: string, workspace: string): De
   return (slug && designsOf(s, host, workspace)?.find((d) => d.slug === slug)) || null;
 }
 
-/** Whether the editor takes a change of a page it has read, deciding
- *  itself whether it loads again (set by designEditor.ts). */
-let pageOwner: (host: string, workspace: string, slug: string, page: string) => boolean = () => false;
+/** The visual editor's say over a page changed on disk: true when it
+ *  takes the change, deciding itself whether the page loads again. */
+export type PageOwner = (host: string, workspace: string, slug: string, page: string) => boolean;
 
-/** Gives the editor the changes of the pages it has read. */
-export function ownPages(owner: typeof pageOwner) {
+let pageOwner: PageOwner = () => false;
+
+/** The editor (designEditor.ts) says, once it starts, which changed pages
+ *  it takes; it is told through this, not imported, as it imports the
+ *  store, as Design mode tells the store where its agents are. */
+export function registerPageOwner(owner: PageOwner) {
   pageOwner = owner;
 }
 

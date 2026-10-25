@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { askWithEdits, closeDesign, copyElementOf, hasCopy, dismissUnsaved, editPage, pasteInto, sendCommentsWithEdits, sendWithEdits, redoEdit, undoEdit, loadPageSource, pendingOf, resetEditor, settleChecks, settleSaves, sourceOf, undoOf, unsavedOf, useEditor } from "./designEditor";
+import { askWithEdits, closeDesign, copyElementOf, hasCopy, dismissUnsaved, editPage, pasteInto, sendCommentsWithEdits, sendWithEdits, redoEdit, undoEdit, loadPageSource, pendingOf, resetEditor, startEditor, settleChecks, settleSaves, sourceOf, undoOf, unsavedOf, useEditor } from "./designEditor";
 import { loadDesigns, pageRevOf, startDesign, useDesign } from "./designStore";
 import { editLines } from "./designEdits";
 import { useStore } from "./store";
@@ -127,6 +127,7 @@ describe("a page the editor saved, changed on disk (X65)", () => {
     answers["design.list"] = () => [{ slug: SLUG, name: "Settings page", kind: "workspace", system: "moonlet-desktop", path: "", brief: "", viewport: "1440x900", pages: [{ name: "index", label: null }], updated_at: 0, open_comments: 0, agent: null, agent_state: null, needs_you: null, error: null }];
     answers["design.check"] = () => [];
     await startDesign();
+    startEditor();
     await loadDesigns("local", WS);
     await loadPageSource("local", WS, SLUG, "index");
     const before = rev();
