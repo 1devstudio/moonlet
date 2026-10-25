@@ -24,23 +24,56 @@ pub struct Fake {
 pub fn from_env() -> Option<Fake> {
     let dir = PathBuf::from(std::env::var_os("MOONLET_CLOUD_FAKE")?);
     Some(Fake {
-        next: AtomicU32::new(count(&dir)),
+        next: AtomicU32::new(highest(&dir)),
         dir,
     })
 }
 
-pub fn info() -> ProviderInfo {
+/// The fake provider. It bills by the second, or every started
+/// `<billing>` seconds when its folder has that file; with `tailnet-key`
+/// there, its machines need a Tailscale key, as Hetzner's do.
+pub fn info(billing: Option<u64>, tailnet_key: bool) -> ProviderInfo {
     ProviderInfo {
         id: "fake".into(),
         label: "Fake cloud".into(),
         fields: vec![],
         max_name: 63,
-        tailnet_key: false,
+        tailnet_key,
+        billing: moonlet_cloud::Billing {
+            unit_secs: billing.unwrap_or(1),
+            minimum_secs: 0,
+        },
     }
 }
 
-fn count(dir: &Path) -> u32 {
-    std::fs::read_dir(dir).map_or(0, |d| d.count() as u32)
+/// The highest `f<n>` machine in `dir`: the next one is above it, even
+/// with gaps left by destroyed ones.
+fn highest(dir: &Path) -> u32 {
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            e.file_name()
+                .to_str()?
+                .strip_prefix('f')?
+                .parse::<u32>()
+                .ok()
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+/// Whether `pid` is still a `moonletd`: a pid can be reused by anything.
+fn is_moonletd(pid: i32) -> bool {
+    std::process::Command::new("ps")
+        .args(["-o", "comm=", "-p", &pid.to_string()])
+        .output()
+        .is_ok_and(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .trim()
+                .ends_with("moonletd")
+        })
 }
 
 fn now_ms() -> u64 {
@@ -74,6 +107,19 @@ async fn boot(dir: PathBuf, user_data: String, join: bool) {
     let socket = home.join("run").join("d.sock");
     let setup_dir = dir.join("setup");
     let _ = std::fs::create_dir_all(&setup_dir);
+    // `tailscale` on the machine is a stub that notes its arguments in the
+    // fake's folder: the real one would log the test's own Mac out.
+    let stub = dir.join("tailscale");
+    let calls = dir.parent().unwrap_or(&dir).join("tailscale-calls");
+    // The path comes through the environment: no quoting can break it.
+    let _ = std::fs::write(
+        &stub,
+        "#!/bin/sh\necho \"$*\" >> \"$MOONLET_TAILSCALE_CALLS\"\n",
+    );
+    let _ = std::fs::set_permissions(&stub, std::os::unix::fs::PermissionsExt::from_mode(0o755));
+    // With a long home the daemon's own socket directory is elsewhere, so
+    // this one must exist, private, before it binds.
+    let _ = moonlet_core::paths::ensure_private_dir(socket.parent().unwrap_or(&home));
     let mut cmd = tokio::process::Command::new(&exe);
     cmd.arg("daemon")
         .env("MOONLET_HOME", &home)
@@ -82,6 +128,8 @@ async fn boot(dir: PathBuf, user_data: String, join: bool) {
         .env("SHELL", "/bin/sh")
         .env("MOONLET_MOBILE_ADDRS", "127.0.0.2")
         .env("MOONLET_MACHINE_SETUP_DIR", &setup_dir)
+        .env("MOONLET_TAILSCALE", &stub)
+        .env("MOONLET_TAILSCALE_CALLS", &calls)
         // A fresh machine: idle, whatever the central host's test load.
         .env("MOONLET_TEST_LOAD", "0.5")
         .env_remove("MOONLET_CLOUD_FAKE")
@@ -163,7 +211,10 @@ async fn boot(dir: PathBuf, user_data: String, join: bool) {
 #[async_trait::async_trait]
 impl Provider for Fake {
     fn info(&self) -> ProviderInfo {
-        info()
+        info(
+            self.steer("billing").and_then(|v| v.parse().ok()),
+            self.steer("tailnet-key").is_some(),
+        )
     }
 
     async fn machine_types(&self, _location: &str) -> Result<Vec<MachineType>, CloudError> {
@@ -180,7 +231,14 @@ impl Provider for Fake {
         let dir = self.machine(&id);
         std::fs::create_dir_all(&dir).map_err(|e| CloudError::Provider(format!("500 {e}")))?;
         let meta = json!({ "name": m.name, "labels": m.labels, "created_at": now_ms() });
-        let _ = std::fs::write(dir.join("meta.json"), meta.to_string());
+        // Whole or not at all, as a provider's record of a machine: a test
+        // may kill the daemon right after it shows.
+        // What a real machine would boot with, for tests to read.
+        let _ = std::fs::write(dir.join("user_data"), &m.user_data);
+        let tmp = dir.join("meta.json.tmp");
+        if std::fs::write(&tmp, meta.to_string()).is_ok() {
+            let _ = std::fs::rename(&tmp, dir.join("meta.json"));
+        }
         // Made, but slow to answer: what a crash in between leaves.
         if let Some(ms) = self
             .steer("slow-create")
@@ -249,6 +307,7 @@ impl Provider for Fake {
         if let Some(pid) = std::fs::read_to_string(dir.join("pid"))
             .ok()
             .and_then(|p| p.trim().parse::<i32>().ok())
+            && is_moonletd(pid)
         {
             let _ = nix::sys::signal::kill(
                 nix::unistd::Pid::from_raw(pid),

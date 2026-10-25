@@ -173,6 +173,8 @@ main() {
   fi
 
   if [ "$listen" = 0 ]; then
+    # Off, also when an earlier install turned it on.
+    "$bin/moonletd" tailnet off >/dev/null 2>&1 || true
     echo "Tailnet access stays off: this machine connects to its central host."
     return 0
   fi

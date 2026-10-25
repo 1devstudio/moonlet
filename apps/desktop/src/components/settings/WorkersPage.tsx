@@ -3,7 +3,7 @@
 // one was skipped. Read from the central host, every two seconds while open.
 
 import { useEffect, useState } from "react";
-import { Cpu, Laptop, LoaderCircle, Server } from "lucide-react";
+import { Check, Cloud, Cpu, Laptop, LoaderCircle, RotateCw, Server } from "lucide-react";
 import { askConfirm } from "../../lib/confirm";
 import { onDaemonEvent, rpc } from "../../lib/daemon";
 import { workerApproval } from "../../lib/heavyCommands";
@@ -11,7 +11,9 @@ import { EV, M, type ExecStatus, type HeavyInfo, type LinkInfo, type Project, ty
 import { goSettings } from "../../lib/settingsNavigation";
 import { errorToast, toast, useStore } from "../../lib/store";
 import { centralHostId } from "../../lib/workerLink";
-import { workerHost, workersPage, type WorkerRow } from "../../lib/workers";
+import { workerHost, workersPage, type CloudRow, type WorkerRow } from "../../lib/workers";
+import { cloudSummary } from "../../lib/cloudMachines";
+import { retryRemoval, useCloud } from "../../lib/cloudStore";
 import { readLinks } from "../../lib/heavyApproval";
 import { Button, cx } from "../ui";
 import { Card, PageHeading, Section } from "./controls";
@@ -78,6 +80,53 @@ function WorkerLine({ row, now, onApprove }: { row: WorkerRow; now: number; onAp
   );
 }
 
+const CLOUD_TONE = { done: "text-done", accent: "text-accent", muted: "text-muted", error: "text-error" } as const;
+const CLOUD_DOT = { done: "bg-done", accent: "bg-accent", muted: "bg-idle", error: "bg-error" } as const;
+
+function CloudLine({ row, now, host }: { row: CloudRow; now: number; host: string }) {
+  const remove = () => void rpc(host, M.cloudDown, { machine: row.id }).catch(errorToast);
+  return (
+    <div data-setting={`cloud-machine-${row.name}`} className={cx("flex flex-col gap-2 px-4 py-3.5", row.line.tone === "error" && "bg-[#1c1213]")}>
+      <div className="flex items-center gap-3.5">
+        <span aria-hidden="true" className={cx("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised", CLOUD_TONE[row.line.tone])}>
+          <Cloud size={16} />
+        </span>
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <span className="font-mono ui-text-13 font-medium">{row.name}</span>
+          <span className={cx("flex items-center gap-1.5 ui-text-12", row.line.tone === "error" ? "text-error" : "text-muted")}>
+            <span aria-hidden="true" className={cx("h-1.5 w-1.5 shrink-0 rounded-full", CLOUD_DOT[row.line.tone])} />
+            {row.line.text}
+          </span>
+        </div>
+        {row.line.action === "remove" && (
+          <Button size="sm" variant="ghost" onClick={remove}>
+            Remove now
+          </Button>
+        )}
+        {row.line.action === "retry" ? (
+          <Button size="sm" onClick={() => retryRemoval(host, row.id)}>
+            <RotateCw size={12} /> Retry
+          </Button>
+        ) : (
+          <>
+            <LoadBar load={row.load} />
+            <span className="w-[64px] font-mono ui-text-12 text-muted">{row.slots}</span>
+            <span className="w-[52px] text-right font-mono ui-text-12 text-muted">{row.rtt}</span>
+          </>
+        )}
+      </div>
+      {row.running.map((r, i) => (
+        <div key={i} className="ml-[46px] flex items-center gap-2 rounded-md bg-panel-2 px-3 py-1.5 ui-text-12">
+          <LoaderCircle size={12} className="animate-spin text-muted" />
+          <span className="text-muted">{r.session}</span>
+          <span className="min-w-0 flex-1 truncate font-mono">{r.command}</span>
+          <span className="font-mono text-muted">{elapsed(r.since, now)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function WorkersPage() {
   const hosts = useStore((s) => s.hosts);
   const [link, setLink] = useState<LinkInfo | null>(null);
@@ -111,7 +160,20 @@ export function WorkersPage() {
     };
   }, [target]);
   const names = Object.fromEntries((sessions ?? []).map((s) => [s.id, s.name]));
-  const page = data && workersPage({ workers: data.workers, status: data.status, me: link?.worker.id ?? null, sessions: names });
+  // The cloud machines of this central host (X63).
+  const cloud = useCloud((s) => (s.host === target ? s.machines : null));
+  const page =
+    data &&
+    workersPage({
+      workers: data.workers,
+      status: data.status,
+      me: link?.worker.id ?? null,
+      sessions: names,
+      cloud: cloud?.machines ?? [],
+      removed: cloud?.removed ?? [],
+      now,
+      cloudSessions: Object.fromEntries((sessions ?? []).map((s) => [s.id, { name: s.name, cloud: s.cloud }])),
+    });
   const approve = async (projectName: string, row: WorkerRow) => {
     const project = (projects ?? []).find((p: Project) => p.name === projectName);
     if (!project) return void toast(`${projectName} is not a project of ${name}`, "error");
@@ -140,6 +202,32 @@ export function WorkersPage() {
       Machines that run heavy commands for {name}'s sessions. A command goes to the free worker with the lowest load, and runs on {name} when none is free.
     </PageHeading>
   );
+  // The central host's cloud machines (X63), and those removed in the last hour.
+  const cloudSection = cloud && page && (page.cloud.length > 0 || page.removed.length > 0) && (
+    <Section
+      title="Cloud machines"
+      hint={
+        <>
+          {cloudSummary(cloud)} ·{" "}
+          <button type="button" className="text-accent hover:underline" onClick={() => void goSettings({ page: "cloud" })}>
+            Cloud workers settings
+          </button>
+        </>
+      }
+    >
+      <Card>
+        {page.cloud.map((r) => (
+          <CloudLine key={r.id} row={r} now={now} host={target} />
+        ))}
+        {page.removed.map((line) => (
+          <div key={line} className="flex items-center gap-2 px-4 py-2.5 font-mono ui-text-12 text-faint">
+            <Check size={12} />
+            {line}
+          </div>
+        ))}
+      </Card>
+    </Section>
+  );
   if (page?.empty)
     return (
       <>
@@ -154,6 +242,7 @@ export function WorkersPage() {
             <Server size={13} /> Open Hosts
           </Button>
         </div>
+        {cloudSection}
       </>
     );
   return (
@@ -174,6 +263,7 @@ export function WorkersPage() {
           {!page && <div className="px-4 py-3.5 ui-text-12.5 text-muted">Could not reach {name}.</div>}
         </Card>
       </Section>
+      {cloudSection}
     </>
   );
 }

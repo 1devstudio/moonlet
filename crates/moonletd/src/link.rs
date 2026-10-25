@@ -753,8 +753,15 @@ impl Requests for WorkerRequests {
             match method.as_str() {
                 m::WORKER_PING => Ok(serde_json::json!({ "load": load() })),
                 // The machine is being removed (X63): it leaves the tailnet.
+                // Only a cloud machine: a Mac or host paired as a worker stays.
                 m::WORKER_RETIRE => {
-                    let logout = tokio::process::Command::new("tailscale")
+                    if !link.as_ref().is_some_and(|l| l.info().worker.cloud) {
+                        return Err(RpcError::new("forbidden", "only a cloud machine retires"));
+                    }
+                    // The fake provider (X63) points this at a stub, so a test
+                    // never logs the machine running it out of its tailnet.
+                    let tailscale = std::env::var_os("MOONLET_TAILSCALE").unwrap_or_else(|| "tailscale".into());
+                    let logout = tokio::process::Command::new(tailscale)
                         .arg("logout")
                         .stdin(std::process::Stdio::null())
                         .stdout(std::process::Stdio::null())

@@ -698,6 +698,11 @@ impl Daemon {
                 self.machines.step(&machine, r);
                 ok(true)
             }
+            // It uses the OAuth client's secret: as cloud.set.
+            m::CLOUD_CHECK => {
+                self.app_or_paired_mac(conn, "cloud workers")?;
+                ok(self.machines.check_tailscale().await?)
+            }
             m::CLOUD_SET => {
                 // Tokens and limits: never an agent's CLI nor a phone.
                 self.app_or_paired_mac(conn, "cloud workers")?;
@@ -895,7 +900,21 @@ impl Daemon {
                     return Err(RpcError::new("forbidden", "only a worker keeps copies"));
                 }
                 match method {
-                    m::SYNC_OPEN => ok(self.sync.open(conn, params(p)?).await?),
+                    m::SYNC_OPEN => {
+                        let r: m::SyncOpen = params(p)?;
+                        // A cloud machine (X63) opens copies of its own project only.
+                        let machine = conn.phone.as_deref().and_then(|d| self.machines.machine_of(d));
+                        match machine {
+                            Some(machine) => self.machines.may_open(&machine, &r.session)?,
+                            // A cloud connection whose device is gone (its
+                            // machine is being removed) opens nothing.
+                            None if conn.cloud.load(std::sync::atomic::Ordering::Relaxed) => {
+                                return Err(RpcError::new("forbidden", "this machine is being removed"));
+                            }
+                            None => {}
+                        }
+                        ok(self.sync.open(conn, r).await?)
+                    }
                     m::SYNC_FETCH => ok(self.sync.fetch(conn, params(p)?).await?),
                     m::SYNC_CLOSE => {
                         let r: m::CopyRef = params(p)?;

@@ -4,7 +4,7 @@
 
 import type { ConfirmOptions } from "./confirmOptions";
 import { joinNames } from "./heavyCommands";
-import type { CloudInfo, CloudKind, CloudMachine, CloudSet, MachineType, ProjectIdentity } from "./protocol";
+import type { CloudInfo, CloudKind, CloudMachine, CloudSet, MachineType, ProjectIdentity, TailscaleMode } from "./protocol";
 
 export interface ProviderRow {
   name: string;
@@ -35,7 +35,7 @@ export function providerForm(kind: CloudKind, saved: Record<string, string | boo
 /** The page's form. Secrets start empty: typing one replaces the saved value. */
 export interface CloudDraft {
   providers: Record<string, Record<string, string>>;
-  tailscale: { client_id: string; client_secret: string; tag: string };
+  tailscale: { mode: TailscaleMode; client_id: string; client_secret: string; auth_key: string; tag: string };
   idle_minutes: string;
   max_machines: string;
   max_hours_month: string;
@@ -49,7 +49,7 @@ export function cloudDraft(info: CloudInfo): CloudDraft {
   }
   return {
     providers,
-    tailscale: { client_id: info.tailscale.client_id, client_secret: "", tag: info.tailscale.tag },
+    tailscale: { mode: info.tailscale.mode ?? "oauth", client_id: info.tailscale.client_id, client_secret: "", auth_key: "", tag: info.tailscale.tag },
     idle_minutes: String(info.idle_minutes),
     max_machines: String(info.max_machines),
     max_hours_month: String(info.max_hours_month),
@@ -62,11 +62,18 @@ export function cloudChanges(info: CloudInfo, d: CloudDraft): CloudSet | null {
   const base = cloudDraft(info);
   const providers: NonNullable<CloudSet["providers"]> = {};
   for (const [id, fields] of Object.entries(d.providers)) {
-    const changed = Object.fromEntries(Object.entries(fields).filter(([k, v]) => v !== (base.providers[id]?.[k] ?? "")));
+    // A pasted token often brings a space or a newline along.
+    const changed = Object.fromEntries(
+      Object.entries(fields)
+        .map(([k, v]) => [k, v.trim()] as const)
+        .filter(([k, v]) => v !== (base.providers[id]?.[k] ?? "")),
+    );
     if (!base.providers[id] || Object.keys(changed).length) providers[id] = changed;
   }
   if (Object.keys(providers).length) out.providers = providers;
   const ts: NonNullable<CloudSet["tailscale"]> = {};
+  if (d.tailscale.mode !== base.tailscale.mode) ts.mode = d.tailscale.mode;
+  if (d.tailscale.auth_key.trim()) ts.auth_key = d.tailscale.auth_key.trim();
   if (d.tailscale.client_id !== base.tailscale.client_id) ts.client_id = d.tailscale.client_id.trim();
   if (d.tailscale.client_secret) ts.client_secret = d.tailscale.client_secret.trim();
   if (d.tailscale.tag !== base.tailscale.tag) ts.tag = d.tailscale.tag.trim();
@@ -94,11 +101,15 @@ const lowerFirst = (s: string) => (/^[A-Z][a-z]/.test(s) ? s[0].toLowerCase() + 
 const TAG = /^tag:[A-Za-z0-9-]+$/;
 
 /** What is wrong with the draft, by field (a provider's as `<provider>.<field>`); empty when it can be saved. `info` is what is saved. */
-export function cloudErrors(d: CloudDraft, info?: CloudInfo): Partial<Record<"idle_minutes" | "max_machines" | "max_hours_month" | "tag" | `${string}.${string}`, string>> {
+export function cloudErrors(d: CloudDraft, info?: CloudInfo): Partial<Record<"idle_minutes" | "max_machines" | "max_hours_month" | "tag" | "auth_key" | `${string}.${string}`, string>> {
   const e: ReturnType<typeof cloudErrors> = {};
   if (!whole(d.idle_minutes) || Number(d.idle_minutes) > 1440) e.idle_minutes = "From 0 to 1440 minutes.";
   if (!whole(d.max_machines) || Number(d.max_machines) < 1) e.max_machines = "At least 1 machine.";
+  else if (Number(d.max_machines) > 1000) e.max_machines = "At most 1000 machines.";
   if (!whole(d.max_hours_month)) e.max_hours_month = "A whole number of hours.";
+  else if (Number(d.max_hours_month) > 1_000_000) e.max_hours_month = "At most 1000000 hours.";
+  // Joining with an auth key needs one.
+  if (d.tailscale.mode === "auth_key" && !d.tailscale.auth_key.trim() && info && !info.tailscale.has_auth_key) e.auth_key = "Paste the auth key.";
   if (!TAG.test(d.tailscale.tag.trim())) e.tag = "A tag is tag: then letters, digits and dashes, such as tag:moonlet-worker.";
   // A secret not saved yet must be typed: a provider without it makes no machine.
   for (const kind of info?.kinds ?? []) {
@@ -127,7 +138,10 @@ const tailnet = (ip: string) => {
 
 /** Where cloud machines reach the central host `host`: its Tailscale `ip:port` from `mobile.status`, else its name. */
 export function policyAddress(status: { port: number; listening: string[] }, host: string): string {
-  return status.listening.find((l) => tailnet(l.split(":")[0])) ?? `${host}:${status.port || DEFAULT_PORT}`;
+  // IPv4 first; an IPv6 one, `[fd7a:115c:a1e0::…]:port`, as the policy takes it.
+  const v4 = status.listening.find((l) => tailnet(l.split(":")[0]));
+  const v6 = status.listening.find((l) => /^\[fd7a:115c:a1e0:/i.test(l));
+  return v4 ?? v6 ?? `${host}:${status.port || DEFAULT_PORT}`;
 }
 
 /** The port moonletd listens on for phones, desktops and cloud machines. */
@@ -252,4 +266,52 @@ export function projectCloudErrors(d: ProjectCloudDraft): Partial<Record<"type" 
   if (!d.location.trim()) e.location = "Name a location, such as fsn1.";
   if (!d.image.trim()) e.image = "Name an image, such as ubuntu-24.04.";
   return e;
+}
+
+/** "hour", "2 hours", "10 minutes". */
+function unitText(secs: number): string {
+  if (secs % 3600 === 0) return secs === 3600 ? "hour" : `${secs / 3600} hours`;
+  return `${Math.round(secs / 60)} minutes`;
+}
+
+/** Under the idle time: providers in use that bill in units of 10 minutes or more keep an idle machine until the time paid for is about to end. */
+export function billingNote(kinds: CloudKind[], providers: CloudInfo["providers"]): string | null {
+  const long = kinds.filter((k) => providers[k.id] && (k.billing_unit_secs ?? 1) >= 600);
+  if (!long.length) return null;
+  const sameUnit = long.every((k) => k.billing_unit_secs === long[0].billing_unit_secs);
+  const who = sameUnit
+    ? `${joinNames(long.map((k) => k.label))} ${long.length === 1 ? "bills" : "bill"} every started ${unitText(long[0].billing_unit_secs ?? 3600)}`
+    : joinNames(long.map((k) => `${k.label} bills every started ${unitText(k.billing_unit_secs ?? 3600)}`));
+  return `${who}, so an idle machine stays until the time paid for is about to end.`;
+}
+
+/** A step of setting up Tailscale, with the page it happens on. */
+export interface Step {
+  text: string;
+  link?: string;
+}
+
+const POLICY = "https://login.tailscale.com/admin/acls/file";
+
+/** How to set up each way machines join the tailnet. */
+export function tailscaleSteps(mode: TailscaleMode, tag: string): Step[] {
+  const policy = { text: "Add the lines below to your tailnet policy.", link: POLICY };
+  if (mode === "auth_key")
+    return [
+      { text: "Open Tailscale's keys page.", link: "https://login.tailscale.com/admin/settings/keys" },
+      { text: `Generate an auth key that is reusable, ephemeral and pre-approved, with the tag ${tag}.` },
+      { text: "Paste it below. It works until it expires, at most 90 days: then paste a new one." },
+      policy,
+    ];
+  return [
+    { text: "Open Tailscale's OAuth clients page.", link: "https://login.tailscale.com/admin/settings/oauth" },
+    { text: `Generate a client with the Auth Keys scope (write) and the tag ${tag}.` },
+    { text: "Paste its ID and secret below, then Check." },
+    policy,
+  ];
+}
+
+/** The line after **Check**: `true`, or what went wrong. */
+export function checkLine(result: true | string): { tone: "done" | "error"; text: string } {
+  return result === true ? { tone: "done", text: "Tailscale made and revoked a test key: machines can join." } : { tone: "error", text: result };
 }

@@ -76,6 +76,10 @@ struct Record {
     #[serde(default)]
     call_started: Option<u64>,
     created_at: u64,
+    /// When the provider made it, as far as moonlet knows: its create call
+    /// answered. Billing counts from here.
+    #[serde(default)]
+    made_at: Option<u64>,
     #[serde(default)]
     ready_at: Option<u64>,
     #[serde(default)]
@@ -180,8 +184,14 @@ pub struct Machines {
     usage: Mutex<moonlet_cloud::usage::Usage>,
     /// Held while a machine is checked against the limits and recorded.
     making: Mutex<()>,
-    /// Wakes the removals waiting between destroy attempts: **Retry**.
-    retry: tokio::sync::Notify,
+    /// Wakes one machine's removal waiting between destroy attempts:
+    /// **Retry**. A wake while an attempt runs is kept for after it.
+    retry: Mutex<std::collections::HashMap<String, Arc<tokio::sync::Notify>>>,
+    /// Held while `machines.json` is written, so an older list never
+    /// replaces a newer one.
+    saving: Mutex<()>,
+    /// Held while a session's machine is found or started.
+    choosing: Mutex<()>,
     fake: Option<Arc<crate::cloud_fake::Fake>>,
     net: Arc<dyn Transport>,
     /// When `tailscale status` was last asked.
@@ -215,6 +225,9 @@ impl Machines {
         // it made.
         for r in &mut records {
             r.call_started = None;
+            // No command outlives the daemon either.
+            r.shown.running = 0;
+            r.waiting = 0;
         }
         let usage = std::fs::read(dir.join("usage.json"))
             .ok()
@@ -236,7 +249,9 @@ impl Machines {
             sessions,
             records: Mutex::new(records),
             usage: Mutex::new(usage),
-            retry: tokio::sync::Notify::new(),
+            retry: Mutex::default(),
+            saving: Mutex::new(()),
+            choosing: Mutex::new(()),
             making: Mutex::new(()),
             fake: crate::cloud_fake::from_env().map(Arc::new),
             net,
@@ -256,6 +271,25 @@ impl Machines {
 
     /// Starts the sweep and the watch over startup deadlines and links.
     pub fn start(self: &Arc<Self>) {
+        // Removals the daemon stopped during go on.
+        let removing: Vec<String> = self
+            .records
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.shown.state == "removing")
+            .map(|r| r.shown.id.clone())
+            .collect();
+        for id in removing {
+            let me = self.clone();
+            tokio::spawn(async move { me.removing(id).await });
+        }
+        // A provider whose machines went while the daemon was stopped.
+        for p in self.settings.removing() {
+            if !self.has_machines(&p) {
+                self.settings.drop_pending(&p);
+            }
+        }
         let weak = Arc::downgrade(self);
         tokio::spawn(async move {
             loop {
@@ -277,7 +311,17 @@ impl Machines {
 
     fn save(&self) {
         let _ = std::fs::create_dir_all(&self.dir);
-        let records = self.records.lock().unwrap().clone();
+        let _one = self.saving.lock().unwrap();
+        let now = now_ms();
+        // Removed machines are shown for an hour, then forgotten.
+        let records = {
+            let mut records = self.records.lock().unwrap();
+            records.retain(|r| {
+                r.removed_at
+                    .is_none_or(|t| now.saturating_sub(t) < 3_600_000)
+            });
+            records.clone()
+        };
         if let Ok(b) = serde_json::to_vec_pretty(&records) {
             let tmp = self.dir.join("machines.json.tmp");
             if std::fs::write(&tmp, b).is_ok() {
@@ -316,11 +360,25 @@ impl Machines {
             .cloned()
     }
 
+    /// How provider `id` bills; by the second when it is unknown.
+    fn billing(&self, id: &str) -> moonlet_cloud::Billing {
+        self.provider_infos()
+            .into_iter()
+            .find(|p| p.id == id)
+            .map_or(
+                moonlet_cloud::Billing {
+                    unit_secs: 1,
+                    minimum_secs: 0,
+                },
+                |p| p.billing,
+            )
+    }
+
     /// The providers on offer: the fake one only with its setting.
     pub fn provider_infos(&self) -> Vec<moonlet_cloud::ProviderInfo> {
         let mut out = moonlet_cloud::providers();
-        if self.fake.is_some() {
-            out.push(crate::cloud_fake::info());
+        if let Some(fake) = &self.fake {
+            out.push(fake.info());
         }
         out
     }
@@ -371,14 +429,21 @@ impl Machines {
             machines: machines
                 .into_iter()
                 .map(|r| {
-                    let until = idle_until(&r, f.idle_minutes);
+                    let until = idle_until(&r, f.idle_minutes, self.billing(&r.shown.provider));
                     let mut shown = r.shown;
                     shown.idle_until = until;
+                    shown.worker = r.worker;
                     shown
                 })
                 .collect(),
-            removed: removed.into_iter().map(|r| r.shown).collect(),
-            hours_this_month: moonlet_cloud::usage::hours(&self.usage.lock().unwrap(), now),
+            removed: removed
+                .into_iter()
+                .map(|r| CloudMachine {
+                    worker: r.worker,
+                    ..r.shown
+                })
+                .collect(),
+            hours_this_month: self.hours(&self.records.lock().unwrap(), now),
             max_hours_month: f.max_hours_month,
             max_machines: f.max_machines,
         }
@@ -399,6 +464,13 @@ impl Machines {
     /// `machine_setup` of the project in `folder`: its path and content.
     fn machine_setup(folder: &Path) -> Result<Option<(String, String)>, RpcError> {
         let config = moonlet_core::project_config::load(folder, String::new());
+        // A broken file would read as one without a machine setup.
+        if let Some(e) = &config.error {
+            return Err(RpcError::new(
+                "machine_setup",
+                format!(".moonlet/config.toml cannot be read: {e}"),
+            ));
+        }
         let Some(path) = config.config.heavy.machine_setup else {
             return Ok(None);
         };
@@ -443,15 +515,27 @@ impl Machines {
         let info = provider.info();
         // From the session's worktree, or the project's own folder.
         let folder = match &session {
-            Some(s) => PathBuf::from(
-                self.sessions
+            Some(s) => {
+                let s = self
+                    .sessions
                     .session(s)
-                    .map_err(|e| RpcError::new("not_found", e.to_string()))?
-                    .path,
-            ),
+                    .map_err(|e| RpcError::new("not_found", e.to_string()))?;
+                if s.project_id != p.id {
+                    return Err(RpcError::new(
+                        "invalid_params",
+                        format!("{} is not a session of {}", s.name, p.name),
+                    ));
+                }
+                PathBuf::from(s.path)
+            }
             None => PathBuf::from(&p.path),
         };
         let setup = Self::machine_setup(&folder)?;
+        // The machine pairs over the tailnet listener: without it, it would
+        // be billed until its deadline.
+        if !self.mobile.status().enabled {
+            return Err(self.no_listener());
+        }
         let id = format!("m{}", moonlet_cloud::machine::suffix());
         let name = moonlet_cloud::machine::machine_name(
             &p.name,
@@ -500,11 +584,13 @@ impl Machines {
                 error_since: None,
                 error_at: None,
                 reason: None,
+                worker: None,
             },
             image: setting.image.clone(),
             provider_id: None,
             call_started: Some(now),
             created_at: now,
+            made_at: None,
             ready_at: None,
             removed_at: None,
             device: None,
@@ -531,7 +617,7 @@ impl Machines {
                     ),
                 ));
             }
-            let used = moonlet_cloud::usage::hours(&self.usage.lock().unwrap(), now);
+            let used = self.hours(&records, now);
             if used >= f64::from(f.max_hours_month) {
                 return Err(RpcError::new(
                     "cloud_limit",
@@ -565,27 +651,64 @@ impl Machines {
         let started = now_ms();
         let f = self.settings.file();
         let key = if provider.info().tailnet_key {
-            let client = moonlet_cloud::tailscale::OAuthClient {
-                id: f.tailscale.client_id.clone(),
-                secret: f.tailscale.client_secret.clone(),
-                tag: f.tailscale.tag.clone(),
-            };
-            match moonlet_cloud::tailscale::machine_key(&client, &name, self.net.clone()).await {
-                Ok(k) => k,
-                Err(e) => return self.failed(&id, e.to_string()),
+            let t = &f.tailscale;
+            match t.mode {
+                // One reusable key, the same for every machine.
+                m::TailscaleMode::AuthKey if !t.auth_key.is_empty() => t.auth_key.clone(),
+                // A one-off key for this machine.
+                m::TailscaleMode::Oauth
+                    if !t.client_id.is_empty() && !t.client_secret.is_empty() =>
+                {
+                    let client = moonlet_cloud::tailscale::OAuthClient {
+                        id: t.client_id.clone(),
+                        secret: t.client_secret.clone(),
+                        tag: t.tag.clone(),
+                    };
+                    match moonlet_cloud::tailscale::machine_key(&client, &name, self.net.clone())
+                        .await
+                    {
+                        Ok(k) => k,
+                        Err(e) => return self.failed(&id, e.to_string()),
+                    }
+                }
+                _ => {
+                    return self.failed(
+                        &id,
+                        "Set a Tailscale OAuth client or auth key in Settings › Cloud workers."
+                            .into(),
+                    );
+                }
             }
         } else {
             String::new()
         };
+        // Turned on, but maybe not listening yet: the daemon may have just
+        // started. Past 10 s it could not bind.
+        let mut addrs = self.mobile.listening();
+        for _ in 0..40 {
+            if !addrs.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            addrs = self.mobile.listening();
+        }
+        if addrs.is_empty() {
+            return self.failed(&id, self.no_listener().message);
+        }
         let user_data = moonlet_cloud::cloud_init::render(&moonlet_cloud::cloud_init::CloudInit {
             name: name.clone(),
             tailscale_key: key,
             version: env!("CARGO_PKG_VERSION").into(),
-            addrs: self.mobile.listening(),
+            addrs,
             join_code: self.mobile.join_code(&id, &name),
             machine_setup: setup,
         });
         let labels = moonlet_cloud::machine::labels(&f.host_id, &id, &r.shown.project_key);
+        // Removed while the key was made or the listener awaited: nothing
+        // is rented.
+        if self.get(&id).is_none_or(|r| r.shown.state != "creating") {
+            return;
+        }
         let made = provider
             .create(&NewMachine {
                 name: name.clone(),
@@ -597,19 +720,100 @@ impl Machines {
             })
             .await;
         match made {
-            Ok(provider_id) => self.update(&id, |r| {
-                r.provider_id = Some(provider_id);
-                r.call_started = None;
-                r.set_state("starting");
-                r.step("created", "done", Some(now_ms() - started), None);
-            }),
+            Ok(provider_id) => {
+                // Starting, unless it was removed while the call ran: then
+                // what it made goes too. Checked and set in one step, so a
+                // removal never misses the provider's id.
+                let made = {
+                    let mut records = self.records.lock().unwrap();
+                    match records.iter_mut().find(|r| r.shown.id == id) {
+                        Some(r) => {
+                            r.provider_id = Some(provider_id.clone());
+                            r.made_at = Some(now_ms());
+                            r.call_started = None;
+                            let creating = r.shown.state == "creating";
+                            if creating {
+                                r.set_state("starting");
+                                r.step("created", "done", Some(now_ms() - started), None);
+                            }
+                            creating
+                        }
+                        None => false,
+                    }
+                };
+                self.changed();
+                if !made {
+                    let mut wait = destroy_backoff();
+                    for _ in 0..5 {
+                        if provider.destroy(&provider_id).await.is_ok() {
+                            return;
+                        }
+                        tokio::time::sleep(wait).await;
+                        wait *= 2;
+                    }
+                    // The sweep finds it by its labels.
+                    return;
+                }
+                // It may have paired before the provider answered.
+                self.ready_if_done(&id);
+            }
             Err(e) => self.failed(&id, e.to_string()),
         }
     }
 
+    /// `cloud.check`: the OAuth client makes a test key and revokes it.
+    pub async fn check_tailscale(&self) -> Result<bool, RpcError> {
+        let t = self.settings.file().tailscale;
+        if t.client_id.is_empty() || t.client_secret.is_empty() {
+            return Err(RpcError::new(
+                "invalid_params",
+                "Set the OAuth client's ID and secret first.",
+            ));
+        }
+        let client = moonlet_cloud::tailscale::OAuthClient {
+            id: t.client_id,
+            secret: t.client_secret,
+            tag: t.tag,
+        };
+        moonlet_cloud::tailscale::check(&client, self.net.clone())
+            .await
+            .map(|()| true)
+            .map_err(|e| RpcError::new("tailscale", e.to_string()))
+    }
+
+    fn no_listener(&self) -> RpcError {
+        RpcError::new(
+            "no_listener",
+            format!(
+                "{} takes no connections from your tailnet, so a cloud machine cannot pair with it. Turn on Allow connections from my tailnet in Hosts.",
+                self.link.info().worker.name
+            ),
+        )
+    }
+
+    /// This month's machine-hours: those booked, and the time of every
+    /// machine still rented, which counts from its create call.
+    fn hours(&self, records: &[Record], now: u64) -> f64 {
+        let mut usage = self.usage.lock().unwrap().clone();
+        for r in records.iter().filter(|r| counts(&r.shown.state)) {
+            moonlet_cloud::usage::add_billed(
+                &mut usage,
+                billed_from(r),
+                now,
+                self.billing(&r.shown.provider),
+            );
+        }
+        moonlet_cloud::usage::hours(&usage, now)
+    }
+
     /// A machine that could not be made: nothing to remove at the provider.
     fn failed(&self, id: &str, error: String) {
+        self.mobile.forget_join(id);
         self.update(id, |r| {
+            // A removal meanwhile already said why it went.
+            if r.shown.state != "creating" {
+                return;
+            }
             r.call_started = None;
             r.set_state("failed");
             r.shown.error = Some(error.clone());
@@ -637,6 +841,30 @@ impl Machines {
     /// The cloud machine of device `device`, when it is one.
     pub fn machine_of(&self, device: &str) -> Option<String> {
         self.mobile.cloud_machine(device)
+    }
+
+    /// Whether machine `machine` may open a copy of session `session`: one
+    /// of its own project's.
+    pub fn may_open(&self, machine: &str, session: &str) -> Result<(), RpcError> {
+        let refused = || {
+            RpcError::new(
+                "forbidden",
+                "a cloud machine opens copies of its own project only",
+            )
+        };
+        let key = self
+            .get(machine)
+            .map(|r| r.shown.project_key)
+            .ok_or_else(refused)?;
+        let project = self
+            .sessions
+            .session(session)
+            .map_err(|_| refused())?
+            .project_id;
+        match self.project_key(&project) {
+            Some(k) if k == key => Ok(()),
+            _ => Err(refused()),
+        }
     }
 
     /// Its worker registered.
@@ -669,6 +897,8 @@ impl Machines {
         self.update(&machine, |r| r.step("copy", "running", None, None));
         loop {
             let Some(conn) = self.workers.conn(&worker) else {
+                // Gone mid-copy: its next registration copies again.
+                self.update(&machine, |r| r.step("copy", "pending", None, None));
                 return;
             };
             let asked = conn
@@ -842,13 +1072,20 @@ impl Machines {
                     if r.shown.running > 0 {
                         continue;
                     }
+                    // `r` is a copy: a command may have started since, which
+                    // `retire` sees.
                     if let Some(reason) = r.down_after.clone() {
-                        self.remove(&r.shown.id, reason);
+                        self.retire(&r.shown.id, reason);
                         continue;
                     }
                     let idle = self.settings.file().idle_minutes;
-                    if idle_until(&r, idle).is_some_and(|until| now >= until) {
-                        self.remove(&r.shown.id, format!("removed after {idle} min idle"));
+                    let billing = self.billing(&r.shown.provider);
+                    if let Some(until) = idle_until(&r, idle, billing)
+                        && now >= until
+                    {
+                        // The idle time it was given: the setting, or more.
+                        let waited = (until - idle_since(&r)) / minute();
+                        self.retire(&r.shown.id, format!("removed after {waited} min idle"));
                     }
                 }
                 _ => {}
@@ -929,7 +1166,10 @@ impl Machines {
             .lock()
             .unwrap()
             .iter()
-            .filter(|r| r.shown.project_key == key && r.shown.state == "ready")
+            // One going down once its commands end takes no new one.
+            .filter(|r| {
+                r.shown.project_key == key && r.shown.state == "ready" && r.down_after.is_none()
+            })
             .filter_map(|r| r.worker.clone())
             .collect()
     }
@@ -981,6 +1221,8 @@ impl Machines {
         let key = self
             .project_key(project)
             .ok_or_else(|| RpcError::new("no_identity", "the project has no first commit"))?;
+        // Two first commands at once share the machine one of them starts.
+        let _one = self.choosing.lock().unwrap();
         let coming = self
             .records
             .lock()
@@ -989,6 +1231,7 @@ impl Machines {
             .find(|r| {
                 r.shown.project_key == key
                     && matches!(r.shown.state.as_str(), "creating" | "starting" | "ready")
+                    && r.down_after.is_none()
             })
             .map(|r| (r.shown.id.clone(), r.shown.name.clone()));
         match coming {
@@ -1045,7 +1288,7 @@ impl Machines {
             .cloned()
             .ok_or_else(|| RpcError::new("not_found", format!("no machine {machine}")))?;
         if r.shown.state == "removing" {
-            self.retry.notify_waiters();
+            self.retry_for(&r.shown.id).notify_one();
             return Ok(true);
         }
         self.retire(&r.shown.id, "removed on request".into());
@@ -1054,12 +1297,7 @@ impl Machines {
 
     /// Removes machine `id` now, or once its running commands end.
     fn retire(&self, id: &str, reason: String) {
-        let busy = self.get(id).is_some_and(|r| r.shown.running > 0);
-        if busy {
-            self.update(id, |r| r.down_after = Some(reason.clone()));
-        } else {
-            self.remove(id, reason);
-        }
+        self.take_down(id, reason, true);
     }
 
     /// Project `key` no longer uses cloud machines: they go once their
@@ -1105,14 +1343,36 @@ impl Machines {
     /// Removes machine `id`: it leaves the candidates, its device is
     /// revoked, its worker retires, and the provider destroys it.
     pub fn remove(&self, id: &str, reason: String) {
-        let Some(r) = self.get(id) else { return };
-        if matches!(r.shown.state.as_str(), "removing" | "removed" | "failed") {
+        self.take_down(id, reason, false);
+    }
+
+    /// Marks machine `id` removing and starts its removal. With
+    /// `after_runs`, a machine running a command goes once they end. Checked
+    /// and marked in one step, so a command claiming it meanwhile is seen.
+    fn take_down(&self, id: &str, reason: String, after_runs: bool) {
+        let start = {
+            let mut records = self.records.lock().unwrap();
+            let Some(r) = records.iter_mut().find(|r| r.shown.id == id) else {
+                return;
+            };
+            if matches!(r.shown.state.as_str(), "removing" | "removed" | "failed") {
+                return;
+            }
+            if after_runs && r.shown.running > 0 {
+                r.down_after = Some(reason);
+                false
+            } else {
+                // Not joined yet: its code would still pair it.
+                self.mobile.forget_join(id);
+                r.set_state("removing");
+                r.shown.reason = Some(reason);
+                true
+            }
+        };
+        self.changed();
+        if !start {
             return;
         }
-        self.update(id, |r| {
-            r.set_state("removing");
-            r.shown.reason = Some(reason.clone());
-        });
         let Some(me) = self.me.lock().unwrap().upgrade() else {
             return;
         };
@@ -1120,10 +1380,22 @@ impl Machines {
         tokio::spawn(async move { me.removing(id).await });
     }
 
+    /// Machine `id`'s Retry: a wake waits for its removal's next sleep.
+    fn retry_for(&self, id: &str) -> Arc<tokio::sync::Notify> {
+        self.retry
+            .lock()
+            .unwrap()
+            .entry(id.to_string())
+            .or_default()
+            .clone()
+    }
+
     async fn removing(self: Arc<Self>, id: String) {
         let Some(r) = self.get(&id) else { return };
+        let wake = self.retry_for(&id);
+        // The token stops working now; the connection stays for the retire.
         if let Some(device) = &r.device {
-            let _ = self.mobile.revoke(device);
+            let _ = self.mobile.forget_device(device);
         }
         if let Some(conn) = r.worker.as_ref().and_then(|w| self.workers.conn(w)) {
             let _ = conn
@@ -1134,20 +1406,25 @@ impl Machines {
                 )
                 .await;
         }
+        if let Some(device) = &r.device {
+            self.mobile.close_device(device);
+        }
         if let Some(provider_id) = r.provider_id.clone() {
-            let Ok(provider) = self.provider(&r.shown.provider) else {
-                return;
-            };
             let started = now_ms();
             let mut wait = destroy_backoff();
             let mut tries = 0;
             loop {
-                let gone = match provider.destroy(&provider_id).await {
-                    Ok(()) => provider
-                        .get(&provider_id)
-                        .await
-                        .map(|i| i.state == MachineState::Gone),
-                    Err(e) => Err(e),
+                // A provider without its token cannot destroy: the error
+                // shows, and Retry tries again once it is back.
+                let gone = match self.provider(&r.shown.provider) {
+                    Err(e) => Err(CloudError::Provider(e.message)),
+                    Ok(provider) => match provider.destroy(&provider_id).await {
+                        Ok(()) => provider
+                            .get(&provider_id)
+                            .await
+                            .map(|i| i.state == MachineState::Gone),
+                        Err(e) => Err(e),
+                    },
                 };
                 match gone {
                     Ok(true) => break,
@@ -1166,12 +1443,19 @@ impl Machines {
                 }
                 tokio::select! {
                     _ = tokio::time::sleep(wait) => wait = (wait * 2).min(Duration::from_secs(300)),
-                    _ = self.retry.notified() => wait = destroy_backoff(),
+                    _ = wake.notified() => wait = destroy_backoff(),
                 }
             }
         }
+        self.retry.lock().unwrap().remove(&id);
         let now = now_ms();
-        moonlet_cloud::usage::add(&mut self.usage.lock().unwrap(), r.created_at, now);
+        let billing = self.billing(&r.shown.provider);
+        moonlet_cloud::usage::add_billed(
+            &mut self.usage.lock().unwrap(),
+            billed_from(&r),
+            now,
+            billing,
+        );
         self.update(&id, |r| {
             r.set_state("removed");
             r.removed_at = Some(now);
@@ -1228,11 +1512,22 @@ impl Machines {
                 let _ = provider.destroy(&pid).await;
             }
             if !plan.drop.is_empty() {
-                self.records.lock().unwrap().retain(|r| {
-                    !(plan.drop.contains(&r.shown.id)
+                let now = now_ms();
+                let billing = self.billing(&id);
+                let mut records = self.records.lock().unwrap();
+                let mut usage = self.usage.lock().unwrap();
+                records.retain(|r| {
+                    // One being removed is its removal's to finish and book.
+                    let drop = plan.drop.contains(&r.shown.id)
                         && r.shown.provider == id
-                        && r.shown.state != "removed")
+                        && !matches!(r.shown.state.as_str(), "removed" | "removing");
+                    // Its time until now is billed, as a removal books it.
+                    if drop && counts(&r.shown.state) {
+                        moonlet_cloud::usage::add_billed(&mut usage, billed_from(r), now, billing);
+                    }
+                    !drop
                 });
+                drop((records, usage));
                 self.changed();
             }
         }
@@ -1242,15 +1537,40 @@ impl Machines {
 /// When ready machine `r` is removed for its idleness: after `idle`
 /// minutes from ready or from its last command's end. None while it runs a
 /// command, or before it ran one a command waits on.
-fn idle_until(r: &Record, idle: u32) -> Option<u64> {
+fn idle_until(r: &Record, idle: u32, billing: moonlet_cloud::Billing) -> Option<u64> {
     if r.shown.state != "ready" || r.shown.running > 0 || (r.waiting > 0 && r.last_end.is_none()) {
         return None;
     }
-    let since = r
-        .last_end
+    let at = idle_since(r) + u64::from(idle_for(r, idle)) * minute();
+    // Leaving before its paid time ends would save nothing.
+    Some(moonlet_cloud::idle::paid_end(
+        at,
+        billed_from(r),
+        billing,
+        minute(),
+    ))
+}
+
+/// When `r`'s billing started: when the provider made it, or, before its
+/// create call answered, when it was asked for.
+fn billed_from(r: &Record) -> u64 {
+    r.made_at.unwrap_or(r.created_at)
+}
+
+/// Since when ready machine `r` has been idle: ready, or its last command's end.
+fn idle_since(r: &Record) -> u64 {
+    r.last_end
         .unwrap_or(0)
-        .max(r.ready_at.unwrap_or(r.shown.since));
-    Some(since + u64::from(idle) * minute())
+        .max(r.ready_at.unwrap_or(r.shown.since))
+}
+
+/// The idle minutes machine `r` gets: `idle`, or a few more while it has
+/// run nothing yet, for the command it was made for.
+fn idle_for(r: &Record, idle: u32) -> u32 {
+    match r.last_end {
+        None => idle.max(moonlet_cloud::idle::FIRST_USE_MINUTES),
+        Some(_) => idle,
+    }
 }
 
 fn step(id: &str, label: String) -> CloudStep {

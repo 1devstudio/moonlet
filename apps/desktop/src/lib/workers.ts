@@ -2,7 +2,8 @@
 // commands, their load and slots, what they run now, and why one was
 // skipped. Pure: components/settings/WorkersPage.tsx renders it.
 
-import type { ExecStatus, LinkInfo, WorkerInfo } from "./protocol";
+import { machineLine, removedLine, type MachineLine } from "./cloudMachines";
+import type { CloudMachine, ExecStatus, LinkInfo, WorkerInfo } from "./protocol";
 
 export interface WorkerRow {
   id: string;
@@ -25,6 +26,24 @@ export interface WorkersInput {
   me: string | null;
   /** Session names by id. */
   sessions: Record<string, string>;
+  /** The central host's cloud machines (X63), from `cloud.machines`. */
+  cloud?: CloudMachine[];
+  /** Machines removed in the last hour. */
+  removed?: CloudMachine[];
+  now?: number;
+  /** Sessions by id, with whether they asked for the cloud. */
+  cloudSessions?: Record<string, { name: string; cloud?: boolean }>;
+}
+
+/** A cloud machine's row: its state line, and its worker's columns once it has one. */
+export interface CloudRow {
+  id: string;
+  name: string;
+  line: MachineLine;
+  load: WorkerRow["load"];
+  slots: string;
+  rtt: string;
+  running: WorkerRow["running"];
 }
 
 const osName = (os: string) => (os === "macos" ? "macOS" : os === "linux" ? "Linux" : os);
@@ -35,12 +54,15 @@ function load(value: number | null | undefined, cores: number): WorkerRow["load"
   return { text: `${value.toFixed(1)} / ${cores}`, fraction: Math.min(value / c, 1), busy: value >= 0.7 * c };
 }
 
-export function workersPage(input: WorkersInput): { rows: WorkerRow[]; summary: string; empty: boolean } {
+export function workersPage(input: WorkersInput): { rows: WorkerRow[]; cloud: CloudRow[]; removed: string[]; summary: string; empty: boolean } {
   const { status } = input;
   const runningOn = (name: string) =>
     status.running.filter((r) => r.worker === name).map((r) => ({ session: input.sessions[r.session] ?? r.session, command: r.command, since: r.started_at }));
   const linked = input.workers.filter((w) => w.heavy);
-  const rows: WorkerRow[] = linked.map((w) => {
+  const machines = input.cloud ?? [];
+  // A removed machine's worker may still be connected for a moment.
+  const cloudWorkers = new Set([...machines, ...(input.removed ?? [])].map((m) => m.worker).filter(Boolean));
+  const rows: WorkerRow[] = linked.filter((w) => !cloudWorkers.has(w.id)).map((w) => {
     const running = runningOn(w.name);
     const skip = status.skips.find((s) => s.worker === w.id);
     const basics = `${osName(w.os)} · ${w.cores} cores`;
@@ -74,12 +96,27 @@ export function workersPage(input: WorkersInput): { rows: WorkerRow[]; summary: 
     running: runningOn(h.name),
     approve: null,
   });
+  const cloud: CloudRow[] = machines.map((m) => {
+    const w = linked.find((x) => x.id === m.worker);
+    const running = w ? runningOn(w.name) : [];
+    return {
+      id: m.id,
+      name: m.name,
+      line: machineLine(m, input.now ?? 0, input.cloudSessions ?? {}),
+      load: w ? load(w.load, w.cores) : null,
+      slots: w ? `${running.length} of ${w.slots}` : "–",
+      rtt: w?.rtt_ms == null ? "–" : `${w.rtt_ms} ms`,
+      running,
+    };
+  });
   const n = status.running.length;
   const total = linked.reduce((sum, w) => sum + w.slots, h.slots);
   return {
     rows,
+    cloud,
+    removed: (input.removed ?? []).map(removedLine),
     summary: `${n} ${n === 1 ? "command" : "commands"} running · ${n} of ${total} slots in use`,
-    empty: linked.length === 0,
+    empty: linked.length === 0 && machines.length === 0,
   };
 }
 

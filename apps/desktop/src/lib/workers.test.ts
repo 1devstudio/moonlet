@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { workerHost, workersPage } from "./workers";
-import type { ExecStatus, LinkInfo, WorkerInfo } from "./protocol";
+import type { CloudMachine, ExecStatus, LinkInfo, WorkerInfo } from "./protocol";
 
 const worker = (id: string, name: string, extra: Partial<WorkerInfo> = {}): WorkerInfo => ({
   id,
@@ -96,5 +96,68 @@ describe("which host Approve on a worker's row goes to (X62)", () => {
     expect(workerHost("w2", links)).toBe("devbox-b");
     expect(workerHost("mac-1", links)).toBe("local");
     expect(workerHost("w9", links)).toBeNull();
+  });
+});
+
+describe("cloud machines on the Workers page (X63)", () => {
+  const machine = (patch: Partial<CloudMachine>): CloudMachine => ({
+    id: "m1",
+    name: "moonlet-shop-7k2q",
+    project: "shop",
+    project_key: "k",
+    provider: "hetzner",
+    type: "cpx41",
+    location: "fsn1",
+    state: "ready",
+    since: 0,
+    steps: [],
+    running: 1,
+    ...patch,
+  });
+
+  it("puts a cloud machine's worker in its own row, with the machine's state line", () => {
+    const page = workersPage({
+      workers: [worker("mbp", "Alex's MacBook Pro"), worker("w7", "moonlet-shop-7k2q", { os: "linux", cores: 8, load: 5.1, rtt_ms: 21 })],
+      status: status({ running: [{ job: "j1", session: "s2", command: "pnpm test", worker: "moonlet-shop-7k2q", started_at: 2000 }] }),
+      me: null,
+      sessions,
+      cloud: [machine({ worker: "w7" }), machine({ id: "m2", name: "moonlet-shop-m3x9", state: "starting", since: 0, running: 0 })],
+      now: 40_000,
+      cloudSessions: {},
+    });
+    expect(page.rows.map((r) => r.name)).toEqual(["Alex's MacBook Pro", "studio-mini"]);
+    expect(page.cloud).toEqual([
+      {
+        id: "m1",
+        name: "moonlet-shop-7k2q",
+        line: { tone: "done", text: "Running 1 · Hetzner cpx41 · fsn1 · shop", action: null },
+        load: { text: "5.1 / 8", fraction: 0.6375, busy: false },
+        slots: "1 of 2",
+        rtt: "21 ms",
+        running: [{ session: "add-search", command: "pnpm test", since: 2000 }],
+      },
+      { id: "m2", name: "moonlet-shop-m3x9", line: { tone: "accent", text: "Starting · 0:40", action: null }, load: null, slots: "–", rtt: "–", running: [] },
+    ]);
+    expect(page.summary).toBe("1 command running · 1 of 6 slots in use");
+  });
+
+  it("keeps a removed machine's line for the hour, under the empty page", () => {
+    const at = new Date(2026, 9, 22, 10, 42).getTime();
+    const gone = machine({ name: "moonlet-shop-4hn0", state: "removed", since: at, reason: "removed after 15 min idle" });
+    const page = workersPage({ workers: [], status: status(), me: null, sessions, cloud: [], removed: [gone], now: 0, cloudSessions: {} });
+    expect(page.removed).toEqual(["moonlet-shop-4hn0 removed after 15 min idle · 10:42"]);
+    // Only the central host runs heavy commands now; the line is history.
+    expect(page.empty).toBe(true);
+  });
+
+  it("a removed machine's worker, still connected, is no ordinary worker", () => {
+    const gone = machine({ state: "removed", worker: "w7", reason: "removed on request" });
+    const page = workersPage({ workers: [worker("w7", "moonlet-shop-7k2q", { os: "linux" })], status: status(), me: null, sessions, cloud: [], removed: [gone], now: 0, cloudSessions: {} });
+    expect(page.rows.map((r) => r.name)).toEqual(["studio-mini"]);
+  });
+
+  it("is not empty with only cloud machines", () => {
+    const page = workersPage({ workers: [], status: status(), me: null, sessions, cloud: [machine({ state: "starting" })], now: 0, cloudSessions: {} });
+    expect(page.empty).toBe(false);
   });
 });
