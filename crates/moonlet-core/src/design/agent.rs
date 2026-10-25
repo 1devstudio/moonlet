@@ -124,10 +124,8 @@ pub fn design_launch(
     ];
     let settings = serde_json::json!({ "permissions": { "allow": allow, "deny": deny } });
     // The rules as the skill installs them, without its install mark.
-    let rules = DESIGN_RULES
-        .split_once("-->\n")
-        .map_or(DESIGN_RULES, |(_, rest)| rest)
-        .trim_start();
+    let rules = crate::hooks::without_install_mark(DESIGN_RULES);
+    let rules = rules.trim_start();
     let prompt = format!(
         "{brief}\n\n---\nThis is the design \"{name}\" in this folder, on the design system \"{slug}\" at {system} (read only). Its README.md:\n\n{readme}\n\n{rules}\nRun moonlet's commands with this exact path:\n\
 - to check your pages: {bin} design check\n\
