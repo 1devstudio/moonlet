@@ -255,6 +255,7 @@ fn normalize(c: &ProjectConfig) -> ProjectConfig {
             },
         ),
         heavy: c.heavy.clone(),
+        design: c.design.clone(),
     }
 }
 

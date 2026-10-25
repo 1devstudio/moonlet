@@ -141,12 +141,17 @@ pub fn design_tag<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Desig
     })
 }
 
-/// Where a design lives (X65). Session and project designs come with entry 12.
+/// Where a design lives (X65).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DesignKind {
     /// In `~/.moonlet/design/<workspace>/designs/`, with its own agent.
     Workspace,
+    /// In a session's worktree, under the project's design folder; the
+    /// session's agent writes it.
+    Session,
+    /// A session design merged into a project's base branch: read only.
+    Project,
 }
 
 /// One page of a design: `pages/<name>.html` (X65).
@@ -299,6 +304,28 @@ pub struct DesignInfo {
     pub needs_you: Option<NeedsYou>,
     /// Why the design could not be read, when it could not.
     pub error: Option<String>,
+    /// A session design's session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+    /// A session design's or a project design's project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    /// A workspace design built in a session (Build it): that session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub built_in: Option<DesignBuiltIn>,
+    /// A session design whose design system was synced since it pinned its
+    /// copy: **Update** brings the new one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub system_updated: bool,
+}
+
+/// The session a workspace design is built in (X65), and its project while
+/// the session is there.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DesignBuiltIn {
+    pub session: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
 }
 
 /// `design.create`'s answer (X65): the design, and why its agent did not start.
@@ -474,6 +501,18 @@ pub struct ProjectConfig {
     /// Commands that may run on another machine, `[heavy]` (X62).
     #[serde(default)]
     pub heavy: HeavyConfig,
+    /// Where the project's session designs live, `[design]` (X65).
+    #[serde(default)]
+    pub design: ProjectDesign,
+}
+
+/// A project's `[design]` table (X65).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ProjectDesign {
+    /// The folder of its session designs in a worktree; `docs/design`
+    /// when not set.
+    #[serde(default)]
+    pub dir: Option<String>,
 }
 
 /// A project's heavy commands, the `[heavy]` table of its config (X62).

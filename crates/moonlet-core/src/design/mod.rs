@@ -17,6 +17,7 @@ pub mod pages;
 pub mod place;
 pub mod readme;
 pub mod render;
+pub mod session;
 pub mod stack;
 pub mod store;
 pub mod tokens;

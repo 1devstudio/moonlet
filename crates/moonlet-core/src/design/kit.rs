@@ -17,8 +17,11 @@ impl Store {
     /// left out.
     pub fn design_kit(&self, at: &DesignAt) -> Result<DesignKit> {
         let config = self.design_config(at)?;
-        let workspace = at.workspace.as_deref().unwrap_or_default();
-        let dir = self.system_dir(workspace, &config.system)?;
+        // A workspace design's live system; a session design's own copy.
+        let dir = match &at.workspace {
+            Some(workspace) => self.system_dir(workspace, &config.system)?,
+            None => super::session::system_copy(at)?,
+        };
         let tokens = tokens::read(&dir)
             .into_iter()
             .map(|t| DesignToken {

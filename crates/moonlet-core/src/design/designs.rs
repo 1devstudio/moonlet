@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use moonlet_proto::types::{DesignInfo, DesignKind, DesignPage};
+use moonlet_proto::types::{DesignBuiltIn, DesignInfo, DesignKind, DesignPage};
 
 use super::check::{Kind, Problem};
 use super::fsx;
@@ -39,6 +39,10 @@ pub struct DesignConfig {
     pub name: String,
     /// The design system's slug.
     pub system: String,
+    /// A session design's (X65): the design system's sync anchor its pinned
+    /// `system/` was copied at, the SHA-256 of its `_ds_sync.json` in hex.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<String>,
     /// What the user asked for when creating it: the agent's first prompt.
     #[serde(default)]
     pub brief: String,
@@ -56,7 +60,7 @@ pub struct DesignConfig {
 }
 
 /// The viewport a new design opens at: Desktop.
-fn desktop() -> String {
+pub(super) fn desktop() -> String {
     "1440x900".into()
 }
 
@@ -102,6 +106,7 @@ impl Store {
         let config = DesignConfig {
             name: name_n,
             system: system.to_string(),
+            anchor: None,
             brief: brief.to_string(),
             viewport: desktop(),
             created_at: now,
@@ -182,6 +187,10 @@ impl Store {
                     agent_state: None,
                     needs_you: None,
                     error: Some(format!("{err:#}")),
+                    session: None,
+                    project: None,
+                    built_in: None,
+                    system_updated: false,
                 },
             });
         }
@@ -344,14 +353,14 @@ fn parse_viewport(text: &str) -> Option<(u32, u32)> {
     Some((px(w)?, px(h)?))
 }
 
-fn read_design_config(at: &DesignAt) -> Result<DesignConfig> {
+pub(super) fn read_design_config(at: &DesignAt) -> Result<DesignConfig> {
     let bytes = fsx::read_file_inside(&at.root, &at.in_dir(DESIGN_FILE))?;
     toml::from_str(&String::from_utf8_lossy(&bytes))
         .with_context(|| format!("cannot read {DESIGN_FILE}"))
 }
 
 /// What the list shows of one design.
-fn summary(at: &DesignAt, config: &DesignConfig, agent: Option<u32>) -> DesignInfo {
+pub(super) fn summary(at: &DesignAt, config: &DesignConfig, agent: Option<u32>) -> DesignInfo {
     let pages = pages(at);
     DesignInfo {
         slug: at.slug.clone(),
@@ -382,6 +391,13 @@ fn summary(at: &DesignAt, config: &DesignConfig, agent: Option<u32>) -> DesignIn
         agent_state: None,
         needs_you: None,
         error: None,
+        session: None,
+        project: None,
+        built_in: config.session.clone().map(|session| DesignBuiltIn {
+            session,
+            project: None,
+        }),
+        system_updated: false,
     }
 }
 
@@ -414,10 +430,17 @@ fn pages(at: &DesignAt) -> Vec<(String, u64)> {
 
 /// How a page in `pages/` links its design system's `styles.css`: relative,
 /// so it loads from the host the page was framed on, whichever it is (X65).
+/// A workspace design's links the live system, a session or project
+/// design's its own pinned copy beside its pages.
 pub fn styles_link(at: &DesignAt, system: &str) -> String {
-    let _ = at;
-    format!("../../../systems/{system}/styles.css")
+    match at.kind {
+        DesignKind::Workspace => format!("../../../systems/{system}/styles.css"),
+        DesignKind::Session | DesignKind::Project => SESSION_STYLES.to_string(),
+    }
 }
+
+/// How a session or project design's page links its pinned styles.
+pub const SESSION_STYLES: &str = "../system/styles.css";
 
 /// Each stylesheet a page links, or imports in its `<style>`, that is not
 /// `styles` (X65).
@@ -619,6 +642,10 @@ created_at = 1761200000000
                     agent_state: None,
                     needs_you: None,
                     error: None,
+                    session: None,
+                    project: None,
+                    built_in: None,
+                    system_updated: false,
                 },
                 DesignInfo {
                     slug: "settings-page".into(),
@@ -639,6 +666,10 @@ created_at = 1761200000000
                     agent_state: None,
                     needs_you: None,
                     error: None,
+                    session: None,
+                    project: None,
+                    built_in: None,
+                    system_updated: false,
                 },
             ]
         );
@@ -886,6 +917,7 @@ label = \"rows\"
             DesignConfig {
                 name: "Pricing".into(),
                 system: "moonlet-desktop".into(),
+                anchor: None,
                 brief: String::new(),
                 viewport: "1440x900".into(),
                 created_at: 0,
