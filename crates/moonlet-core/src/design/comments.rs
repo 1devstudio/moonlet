@@ -99,7 +99,9 @@ impl Store {
         })
     }
 
-    /// Reads, changes and writes a design's `comments.json`, made when missing.
+    /// Reads, changes and writes a design's `comments.json` in one update: a
+    /// missing file is an empty list, made by the write. The daemon runs one
+    /// change of a design's comments at a time.
     fn update_comments<T>(
         &self,
         workspace: &str,
@@ -107,16 +109,11 @@ impl Store {
         mut change: impl FnMut(&mut Vec<DesignComment>) -> Result<T>,
     ) -> Result<T> {
         // An existing design, its folder no link.
-        let dir = self.design_dir(workspace, slug)?;
+        self.design_dir(workspace, slug)?;
         let designs = self.designs_dir(workspace, false)?;
         let rel = Path::new(slug).join(COMMENTS_FILE);
-        if std::fs::symlink_metadata(dir.join(COMMENTS_FILE))
-            .is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
-        {
-            fsx::write_inside(&designs, &designs.join(&rel), b"[]\n")?;
-        }
         let mut out = None;
-        fsx::update_inside(&designs, &rel, |text| {
+        fsx::update_or_create_inside(&designs, &rel, |text| {
             let mut pins = parse(text)?;
             out = Some(change(&mut pins)?);
             Ok(format!("{}\n", serde_json::to_string_pretty(&pins)?))

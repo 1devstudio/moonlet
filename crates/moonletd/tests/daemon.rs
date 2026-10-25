@@ -2462,6 +2462,59 @@ async fn a_designs_comments_are_put_sent_resolved_and_counted_in_its_listing() {
     assert_eq!(bad.unwrap_err().to_string(), "invalid_params: bad data-mid \"x\"]\"");
 }
 
+/// X65: comment changes that overlap, here the first pins of a design
+/// without a `comments.json` and then edits to them, each from its own
+/// client, keep every pin, numbered once each.
+#[tokio::test]
+async fn overlapping_comment_changes_keep_every_pin() {
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    let ws = workspace_with_system(&d, &mut c).await;
+    let _: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    const PINS: u64 = 12;
+    let mut clients = Vec::new();
+    for _ in 0..PINS {
+        clients.push(d.client().await);
+    }
+    // Each change on its own client, all at once.
+    let put_all = |clients: Vec<Client>, change: fn(u64) -> serde_json::Value| {
+        let runs: Vec<_> = clients
+            .into_iter()
+            .zip(1..)
+            .map(|(mut c, i)| {
+                let mut params = serde_json::json!({"workspace": ws, "slug": "settings-page"});
+                params.as_object_mut().unwrap().extend(change(i).as_object().unwrap().clone());
+                tokio::spawn(async move {
+                    c.request::<_, serde_json::Value>(methods::DESIGN_COMMENT_PUT, params).await.unwrap();
+                    c
+                })
+            })
+            .collect();
+        async move {
+            let mut back = Vec::new();
+            for run in runs {
+                back.push(run.await.unwrap());
+            }
+            back
+        }
+    };
+    let clients = put_all(clients, |i| serde_json::json!({"new": {"page": "index", "mid": format!("m{i}"), "tag": "p", "text": "", "comment": format!("comment {i}")}})).await;
+    let mut pins: serde_json::Value = c.request(methods::DESIGN_COMMENTS, serde_json::json!({"workspace": ws, "slug": "settings-page"})).await.unwrap();
+    let mut mids: Vec<String> = pins.as_array().unwrap().iter().map(|p| p["mid"].as_str().unwrap().to_string()).collect();
+    mids.sort();
+    let mut want: Vec<String> = (1..=PINS).map(|i| format!("m{i}")).collect();
+    want.sort();
+    assert_eq!(mids, want);
+    put_all(clients, |n| serde_json::json!({"edit": {"n": n, "comment": format!("edited {n}")}})).await;
+    pins = c.request(methods::DESIGN_COMMENTS, serde_json::json!({"workspace": ws, "slug": "settings-page"})).await.unwrap();
+    let got: Vec<(u64, &str)> = pins.as_array().unwrap().iter().map(|p| (p["n"].as_u64().unwrap(), p["comment"].as_str().unwrap())).collect();
+    let edited: Vec<String> = (1..=PINS).map(|n| format!("edited {n}")).collect();
+    assert_eq!(got, (1..=PINS).zip(edited.iter().map(String::as_str)).collect::<Vec<_>>());
+}
+
 /// X65: a design needs a design system its workspace has, and a session
 /// design is not made yet (entry 12).
 #[tokio::test]

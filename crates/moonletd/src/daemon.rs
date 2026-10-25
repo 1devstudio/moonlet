@@ -1304,10 +1304,14 @@ impl Daemon {
             }
             m::DESIGN_COMMENT_PUT => {
                 let r: m::DesignCommentPut = params(p)?;
+                let lock = self.comments_lock(&r.workspace, &r.slug);
+                let _held = lock.lock().await;
                 ok(blocking(move || store.put_comment(&r.workspace, &r.slug, &r.change, now_ms())).await?)
             }
             m::DESIGN_COMMENT_RESOLVE => {
                 let r: m::DesignCommentRef = params(p)?;
+                let lock = self.comments_lock(&r.workspace, &r.slug);
+                let _held = lock.lock().await;
                 ok(blocking(move || store.resolve_comment(&r.workspace, &r.slug, r.n)).await?)
             }
             m::DESIGN_SETTLE => {
@@ -1498,6 +1502,14 @@ impl Daemon {
     /// has no `/`.
     fn workspace_design_lock(&self, workspace: &str, slug: &str) -> Arc<tokio::sync::Mutex<()>> {
         self.design_lock(workspace, &format!("designs/{slug}"))
+    }
+
+    /// The lock of one workspace design's `comments.json` (X65): one change
+    /// of its comments at a time, so two never read the same pins and the
+    /// later write drops the earlier one's. Its own, not the design's agent
+    /// lock, so a comment never waits for an agent to start.
+    fn comments_lock(&self, workspace: &str, slug: &str) -> Arc<tokio::sync::Mutex<()>> {
+        self.design_lock(workspace, &format!("comments/{slug}"))
     }
 
     /// The chat of a design system's sync agent, while it still is that system's.
