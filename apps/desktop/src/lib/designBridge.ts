@@ -181,7 +181,9 @@ export type LiveEdit =
   | { op: "wrap"; mid: string; box: string }
   | { op: "unwrap"; mid: string }
   /** Its `style` attribute's new text; empty: none. */
-  | { op: "style"; mid: string; style: string };
+  | { op: "style"; mid: string; style: string }
+  /** Moved above or below element `ref`, or into it, last. */
+  | { op: "move"; mid: string; place: { where: "above" | "below" | "into"; ref: string } };
 
 /** Tells the page to make an edit on its live page. */
 export function editMessage(edit: LiveEdit): { type: "bridge.edit" } & LiveEdit {
