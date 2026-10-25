@@ -1,5 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { installShortcuts } from "./keys";
+import { claimKeys, installShortcuts } from "./keys";
 import { askConfirm } from "./confirm";
 import { useStore } from "./store";
 
@@ -125,6 +125,32 @@ describe("font size shortcuts (X37)", () => {
     expect(fontSize()).toBe(20);
     press("0");
     expect(fontSize()).toBe(20);
+  });
+});
+
+describe("keys a screen takes (X65)", () => {
+  const press = (key: string) => document.body.dispatchEvent(new KeyboardEvent("keydown", { key, metaKey: true, bubbles: true }));
+  const fontSize = () => useStore.getState().settings.term.fontSize;
+
+  beforeAll(() => installShortcuts());
+  beforeEach(() => {
+    useStore.setState((s) => ({ confirm: null, dialog: null, sidebarOpen: true, settings: { ...s.settings, term: { ...s.settings.term, fontSize: 13 } } }));
+  });
+
+  it("go to the design screen while it claims them, and back to the app once it lets go", () => {
+    const got: string[] = [];
+    const release = claimKeys((id) => (id === "cmd+=" || id === "cmd+0" ? (got.push(id), true) : false));
+    press("=");
+    press("0");
+    // A key it does not take is still the app's.
+    press("b");
+    expect(got).toEqual(["cmd+=", "cmd+0"]);
+    expect(fontSize()).toBe(13);
+    expect(useStore.getState().sidebarOpen).toBe(false);
+    release();
+    press("=");
+    expect(got).toEqual(["cmd+=", "cmd+0"]);
+    expect(fontSize()).toBe(14);
   });
 });
 
