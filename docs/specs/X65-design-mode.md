@@ -39,6 +39,8 @@ A design lives in one of three places:
    - a design system, with a line saying what it holds, such as "11 cards, 2 layouts, synced 3 days ago from moonlet"
    - a brief
 
+   The design system is the one the sidebar shows, else the first, also when the workspace's design systems are listed only after New design opened (`lib/design.test.ts` picks the shown design system, else the first, also when the list comes after it opened).
+
    **Create design** (⌘↵) starts the design's agent with the brief, and the design screen opens.
 3. The agent reads the design system and writes `pages/index.html`. A bar says "Claude is changing the design". The canvas shows "Claude is writing index.html" until the file exists, then reloads on every change.
 4. The user switches the viewport to Phone. In Comment mode (C) they click the nav, type "Collapse into a menu on phone" and press ⌘↵. The comment goes into the chat and stays on the canvas as pin 1.

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Design, DesignSystem } from "./protocol";
-import { briefShown, designAgentState, designOpenAction, designsEmpty, designSubtitle, designRow, designSlug, newDesignReady, systemSummary, picksInWorkspace, systemFolder, systemLabel } from "./design";
+import { briefShown, designAgentState, designOpenAction, designsEmpty, designSubtitle, designRow, designSlug, newDesignReady, newDesignSystem, systemSummary, picksInWorkspace, systemFolder, systemLabel } from "./design";
 
 const NOW = 1_761_200_000_000;
 const DAY = 86_400_000;
@@ -165,6 +165,17 @@ describe("the New design dialog (X65)", () => {
     expect(newDesignReady({ name: "Settings page", system: "", brief: "A left nav" }, [])).toEqual({ ready: false, why: "A design starts from a design system" });
     expect(newDesignReady({ name: "Settings page", system: "gone", brief: "A left nav" }, systems)).toEqual({ ready: false, why: "A design starts from a design system" });
     expect(newDesignReady({ name: "Settings page", system: "storefront", brief: "\n " }, systems)).toEqual({ ready: false, why: "Say what to design: the brief is Claude's first message" });
+  });
+
+  it("picks the shown design system, else the first, also when the list comes after it opened", () => {
+    // Opened with ⇧⌘N before design.systems answered: nothing to pick yet.
+    expect(newDesignSystem("", [], undefined)).toBe("");
+    // Then the list arrives.
+    expect(newDesignSystem("", ["moonlet-desktop", "storefront"], undefined)).toBe("moonlet-desktop");
+    expect(newDesignSystem("", ["moonlet-desktop", "storefront"], "storefront")).toBe("storefront");
+    // The user's pick stays, while the workspace has it.
+    expect(newDesignSystem("storefront", ["moonlet-desktop", "storefront"], "moonlet-desktop")).toBe("storefront");
+    expect(newDesignSystem("gone", ["moonlet-desktop", "storefront"], undefined)).toBe("moonlet-desktop");
   });
 });
 

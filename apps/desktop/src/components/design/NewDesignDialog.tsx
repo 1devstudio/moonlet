@@ -4,7 +4,7 @@
 import { useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { errorToast, toast, useStore } from "../../lib/store";
-import { newDesignReady, systemSummary } from "../../lib/design";
+import { newDesignReady, newDesignSystem, systemSummary } from "../../lib/design";
 import { createDesign, showDesign, systemsOf, useDesign } from "../../lib/designStore";
 import { workspaceProjects } from "../../lib/tasksStore";
 import { useNow } from "../../lib/useNow";
@@ -20,7 +20,8 @@ export function NewDesignDialog({ host, workspace }: { host: string; workspace: 
   const projectList = useStore(useShallow((s) => workspaceProjects(s, host, workspace)));
   const projects = useMemo(() => projectList.map((p) => ({ path: p.path, name: p.name })), [projectList]);
   const [name, setName] = useState("");
-  const [system, setSystem] = useState(() => systems.find((s) => s.slug === shownSlug)?.slug ?? systems[0]?.slug ?? "");
+  const [chosen, setSystem] = useState("");
+  const system = newDesignSystem(chosen, systems.map((s) => s.slug), shownSlug);
   const [brief, setBrief] = useState("");
   const [creating, setCreating] = useState(false);
   const now = useNow(true);
