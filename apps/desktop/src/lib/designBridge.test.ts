@@ -294,9 +294,18 @@ describe("the bridge script in a page (X65)", () => {
   });
 
   it("names each element of the tree by its text, its parts' texts apart", async () => {
-    const { of } = framed('<nav data-mid="m12"><a data-mid="m13">General</a><a data-mid="m14">Appearance</a></nav>');
+    // The settings page's nav, as the agent wrote it, which Layers names
+    // "General Appearance Terminal Git", as the design export's board does.
+    const { of } = framed('<nav data-mid="m3"><a class="on" data-mid="m4">General</a><a data-mid="m5">Appearance</a><a data-mid="m6">Terminal</a><a data-mid="m7">Git</a></nav>');
     await vi.waitFor(() => expect(of("tree")).toHaveLength(1));
-    expect((of("tree")[0] as { layers: { text: string }[] }).layers.map((l) => l.text)).toEqual(["General Appearance", "General Appearance", "General", "Appearance"]);
+    expect((of("tree")[0] as { layers: { mid: string; text: string }[] }).layers.map((l) => [l.mid, l.text])).toEqual([
+      ["m1", "General Appearance Terminal Git"],
+      ["m3", "General Appearance Terminal Git"],
+      ["m4", "General"],
+      ["m5", "Appearance"],
+      ["m6", "Terminal"],
+      ["m7", "Git"],
+    ]);
   });
 
   it("makes the app's edits on its live page, only well formed, and reports the tree again after each", async () => {
