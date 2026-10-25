@@ -4,6 +4,7 @@
 //! `moonlet ls`, `moonlet pane run` and `moonlet agent start`; agents open sessions
 //! in other projects with `moonlet session new` (X22).
 
+mod exec;
 mod hook;
 mod session;
 mod term;
@@ -259,6 +260,13 @@ fn main() {
         .build()
         .expect("runtime");
     if let Cmd::Exec { command } = &cli.cmd {
+        // In a session, the session's daemon runs it (X62); anything it
+        // refuses, or no daemon at all, runs here as without moonlet.
+        if let Ok(session) = std::env::var("MOONLET_SESSION") {
+            if let Some(status) = rt.block_on(exec::routed(&socket, &session, command)) {
+                std::process::exit(status);
+            }
+        }
         exec_here(command);
     }
     if let Cmd::Hook { agent, payload } = cli.cmd {

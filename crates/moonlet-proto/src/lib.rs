@@ -42,6 +42,8 @@ pub enum Frame {
     /// A chunk of a git pack (X60). A transfer is its chunks in order, then
     /// an empty one; the JSON message that uses it names its transfer id.
     Pack { transfer: u32, data: Vec<u8> },
+    /// Output of a routed command (X62): `stream` 1 is stdout, 2 stderr.
+    RunOutput { run: u32, stream: u8, data: Vec<u8> },
 }
 
 impl Frame {
@@ -54,6 +56,7 @@ pub(crate) const KIND_JSON: u8 = 1;
 pub(crate) const KIND_OUTPUT: u8 = 2;
 pub(crate) const KIND_INPUT: u8 = 3;
 pub(crate) const KIND_PACK: u8 = 4;
+pub(crate) const KIND_RUN_OUTPUT: u8 = 5;
 
 /// A pack travels in chunks of at most this many bytes, so a large one
 /// never holds up terminal output on the same connection.

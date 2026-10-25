@@ -161,6 +161,7 @@ This is ADR 0009's routing slice. It adds two things the ADR did not decide: an 
 - [ ] stdin is `/dev/null`.
 - [ ] The command runs with the worker's login environment, plus `MOONLET_ROUTED=1`, `MOONLET_SESSION` and the variables named in `[heavy] env`, taken from `moonlet exec`'s environment. No other variable crosses machines.
 - [ ] The worker runs the words as an argument list (no shell), from the call's working directory relative to the worktree.
+- [ ] `exec.run` checks the words again as the hook would have, because an agent can call `moonlet exec` itself: a command the hook would not route is refused with `not_routable` and its reason, and `moonlet exec` then runs it where it is, as without moonlet.
 - [ ] When `moonlet exec` gets SIGINT or SIGTERM (the Bash tool's timeout, or the user stopping the turn), the worker sends SIGTERM to the command's process group, then SIGKILL after 5 s. The run's changes still come back, and `moonlet exec` exits with 130 or 143.
 
 ### When a worker goes away
@@ -302,7 +303,7 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
 **Daemon, local and on the central host:**
 
 - `exec.route {session, command, cwd, tool_use_id}` returns `{route: bool, reason}`. `reason` says why a call stays where it is: `no_session` (unknown or archived), `outside_worktree`, `invalid_config`, `not_heavy`, `not_approved`, `env_not_approved` or `claude_rule`. The decision reads `[heavy]` from the session's own worktree, so an agent's edit there counts, and fails closed when it cannot be read or checked.
-- `exec.run {session, argv, cwd, env}` returns `{run}`, then:
+- `exec.run {session, argv, cwd, env}` returns `{run, host}`, then:
   - frames of kind 5, `Output`, with payload `[u32 BE run][u8 stream: 1 stdout, 2 stderr][bytes]`;
   - the event `exec.exited {run, status, worker, rerun, leftovers}`.
 - `exec.cancel {run}`.
@@ -383,6 +384,7 @@ Where the tests live:
 | The hook stays silent | `the_hook_prints_nothing_when_the_daemon_says_no`, `the_hook_prints_nothing_when_the_daemon_is_gone` |
 | The hook's rewrite | `the_hook_rewrites_a_captured_bash_call_to_moonlet_exec` |
 | `moonlet exec` without routing | `moonlet_exec_without_routing_runs_the_command_here` |
+| `moonlet exec` in a session, and `exec.run`'s own check | `moonlet_exec_in_a_session_runs_through_its_daemon`, `an_unapproved_moonlet_exec_is_refused` |
 | Candidates and `os` | `a_worker_on_another_os_is_skipped` |
 | Slots | `slots_default_to_two_and_link_set_changes_them`, `a_worker_with_no_free_slot_is_skipped`; Vitest "the run-at-most row" |
 | Busy | `reads_the_load_from_captured_macos_and_linux_output`, `a_worker_at_seven_tenths_of_its_cores_is_busy` |
@@ -404,7 +406,7 @@ Where the tests live:
 | stdin | `a_routed_command_reads_an_empty_stdin` |
 | Environment | `only_approved_env_names_reach_the_worker` |
 | No shell, same folder | `a_routed_command_runs_without_a_shell_from_the_same_folder` |
-| Cancelling | `cancelling_stops_the_command_and_brings_its_changes_back` |
+| Cancelling | `cancelling_stops_the_command_and_brings_its_changes_back`, `moonlet_exec_stops_the_command_when_it_is_stopped` |
 | A worker goes away | `a_worker_that_goes_away_mid_run_makes_the_command_run_again_on_the_central_host` |
 | Abandoned changes | `an_abandoned_runs_changes_never_reach_the_session` |
 | The central daemon stops | `a_stopped_central_daemon_ends_moonlet_exec_with_125` |

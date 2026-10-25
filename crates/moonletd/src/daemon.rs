@@ -50,6 +50,8 @@ pub struct Daemon {
     pub sync: Arc<crate::sync::LiveCopies>,
     /// Approved heavy commands and routing decisions (X62).
     heavy: Arc<crate::heavy::Heavy>,
+    /// Heavy commands running on this machine (X62).
+    runs: Arc<crate::exec::Runs>,
 }
 
 pub type HandlerResult = Result<Value, RpcError>;
@@ -186,6 +188,7 @@ impl Daemon {
         let heavy = crate::heavy::Heavy::new(&moonlet_core::paths::home(), sessions.clone());
         Arc::new(Self {
             heavy,
+            runs: Arc::default(),
             clones,
             terminals,
             chats,
@@ -564,6 +567,23 @@ impl Daemon {
             m::HEAVY_APPROVE => {
                 self.app_or_paired_mac(conn, "heavy commands")?;
                 ok(self.heavy.approve(params(p)?)?)
+            }
+            m::EXEC_RUN => {
+                let r: m::ExecRun = params(p)?;
+                let (cwd, passed) = self
+                    .heavy
+                    .check_run(&r.session, &r.argv, &r.cwd, &r.env)
+                    .map_err(crate::exec::refused)?;
+                let mut env = self.terminals.base_env().clone();
+                env.extend(passed);
+                env.insert("MOONLET_ROUTED".into(), "1".into());
+                env.insert("MOONLET_SESSION".into(), r.session.clone());
+                let cmd = crate::exec::Command { argv: r.argv, cwd, env };
+                ok(self.runs.start(conn.clone(), self.link.info().worker.name, cmd))
+            }
+            m::EXEC_CANCEL => {
+                let r: m::ExecCancel = params(p)?;
+                ok(self.runs.cancel(conn.id, r.run))
             }
             m::EXEC_ROUTE => {
                 let r: m::ExecRoute = params(p)?;
