@@ -528,7 +528,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
             </button>
           </nav>
         </div>
-        <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3 ui-text-12">
+        <div className="flex h-10 shrink-0 items-center gap-1.5 border-b border-border px-3 ui-text-12">
           <ViewportMenu viewport={viewport} onPick={setViewport} onCustom={() => setCustom(true)} />
           <ZoomBar scale={scale} fitted={zoom === null} max={2} keys onZoom={setZoom} />
           {chip && <EditsChip text={chip} />}
@@ -547,7 +547,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
                   disabled={locked || readOnly}
                   title={readOnly ? "A snapshot is read only: Back to current to comment or edit" : locked ? "Edit opens when Claude stops" : m === "comment" ? "Comment (C)" : m === "edit" ? "Edit (V)" : "View"}
                   onClick={() => step(m)}
-                  className={cx("flex h-full items-center gap-1.5 rounded px-2.5 disabled:text-faint", mode === m ? "bg-raised text-fg" : "text-muted hover:text-fg")}
+                  className={cx("flex h-full items-center gap-1.5 rounded px-2 disabled:text-faint", mode === m ? "bg-raised text-fg" : "text-muted hover:text-fg")}
                 >
                   {m === "comment" ? "Comment" : m === "edit" ? "Edit" : "View"}
                   {m === "comment" && <kbd className="font-mono ui-text-11 text-faint">C</kbd>}
@@ -640,14 +640,14 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
       </div>
       {railOpen && (
         <aside aria-label="Right rail" className="flex w-[300px] shrink-0 flex-col border-l border-border bg-panel">
-          <div role="tablist" className="flex h-[52px] shrink-0 items-end gap-4 border-b border-border px-4">
+          <div role="tablist" className="flex h-[52px] shrink-0 items-end gap-2 overflow-x-auto border-b border-border px-3">
             {RAIL_TABS.map(({ tab: t, label }) => (
               <button
                 key={t}
                 role="tab"
                 aria-selected={railTab === t}
                 onClick={() => setRailTab(t)}
-                className={cx("flex h-full items-center gap-1.5 border-b-2 ui-text-13", railTab === t ? "border-accent text-fg" : "border-transparent text-muted hover:text-fg")}
+                className={cx("flex h-full shrink-0 items-center gap-1 border-b-2 ui-text-12", railTab === t ? "border-accent text-fg" : "border-transparent text-muted hover:text-fg")}
               >
                 {label}
                 {t === "comments" && <span className="rounded bg-raised px-1 font-mono ui-text-11 text-muted">{onPage.open}</span>}
