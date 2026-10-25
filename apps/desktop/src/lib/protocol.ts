@@ -1044,12 +1044,14 @@ export interface DesignSystemCreated {
   agent_error: string | null;
 }
 
-/** `design.changed`: files changed in a workspace's design folder (X64). */
+/** `design.changed`: files changed in a workspace's design folder (X64, X65). */
 export interface DesignChanged {
   workspace: string;
   /** The design system they are in, if any. */
   system: string | null;
-  /** Relative to the workspace's design folder. */
+  /** The workspace design they are in, if any (X65). */
+  design?: string | null;
+  /** Relative to the design system's or the design's folder, else the workspace's. */
   paths: string[];
 }
 
