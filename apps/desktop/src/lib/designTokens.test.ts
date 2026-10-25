@@ -29,6 +29,19 @@ describe("a value's token (X65)", () => {
     expect(tokenOf(TOKENS, "var(--nowhere)", "spacing")).toBeNull();
   });
 
+  it("is the colour token of an rgb() in percentages, as the page computes its channels out of 255", () => {
+    const COLOURS: DesignToken[] = [
+      { name: "--color-accent", value: "#ff0000", family: "color" },
+      { name: "--color-mute", value: "#808080", family: "color" },
+      { name: "--color-wash", value: "rgba(255, 0, 0, 0.5)", family: "color" },
+    ];
+    expect(tokenOf(COLOURS, "rgb(100% 0% 0%)", "color")?.name).toBe("--color-accent");
+    expect(tokenOf(COLOURS, "rgb(100%, 0%, 0%)", "color")?.name).toBe("--color-accent");
+    expect(tokenOf(COLOURS, "rgb(50% 50% 50%)", "color")?.name).toBe("--color-mute");
+    expect(tokenOf(COLOURS, "rgb(100% 0% 0% / 50%)", "color")?.name).toBe("--color-wash");
+    expect(offSystem(COLOURS, [["color", "rgb(100% 0% 0%)"], ["background-color", "rgb(1% 0% 0%)"]])).toEqual(["background-color"]);
+  });
+
   it("is no token of the field when it names one of another family, which is off-system there", () => {
     expect(tokenOf(TOKENS, "var(--color-panel)", "spacing")).toBeNull();
     expect(tokenOf(TOKENS, "var(--color-panel)", "color")?.name).toBe("--color-panel");
