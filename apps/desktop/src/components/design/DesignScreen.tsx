@@ -626,8 +626,8 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
               tokens={tokens}
               off={selected && styles[selected] ? offSystem(tokens, styles[selected]) : []}
               locked={working}
-              onSet={(prop, value) => {
-                if (selected) editShown({ kind: "restyle", mid: selected, set: { [prop]: value } });
+              onSet={(set) => {
+                if (selected) editShown({ kind: "restyle", mid: selected, set });
               }}
             />
           ) : railTab === "palette" ? (

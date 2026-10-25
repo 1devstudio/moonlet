@@ -8,8 +8,8 @@
 import { ChevronDown, Search } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { DesignToken } from "../../lib/protocol";
-import type { Decl } from "../../lib/designStyle";
-import { fieldEntries, fieldInput, fieldShows, fieldValue, inspectorSections, pickToken, type Field } from "../../lib/designInspector";
+import type { Decl, StyleSet } from "../../lib/designStyle";
+import { fieldEntries, fieldInput, fieldSet, fieldShows, fieldValue, inspectorSections, pickToken, type Field } from "../../lib/designInspector";
 import { paletteGroups, type Snippet } from "../../lib/designPalette";
 import { cx } from "../../lib/cx";
 import { Menu } from "../Menu";
@@ -24,7 +24,7 @@ const box = "flex h-7 min-w-0 flex-1 items-center gap-2 rounded-md border border
 
 /** The Inspector of the selected element `tag` `mid`, with its inline
  *  style and the page's computed style of it; `off` the properties whose
- *  values match no token. `onSet` writes a property (null removes it). */
+ *  values match no token. `onSet` writes the properties a field sets. */
 export function InspectorTab({
   tag,
   mid,
@@ -42,7 +42,7 @@ export function InspectorTab({
   tokens: DesignToken[];
   off: string[];
   locked: boolean;
-  onSet: (prop: string, value: string | null) => void;
+  onSet: (set: StyleSet) => void;
 }) {
   const [open, setOpen] = useState<string | null>(null);
   useEffect(() => setOpen(null), [mid]);
@@ -74,7 +74,7 @@ export function InspectorTab({
               onOpen={(o) => setOpen(o ? f.prop : null)}
               onSet={(v) => {
                 setOpen(null);
-                onSet(f.prop, v);
+                onSet(fieldSet(f, inline, v));
               }}
             />
           ))}

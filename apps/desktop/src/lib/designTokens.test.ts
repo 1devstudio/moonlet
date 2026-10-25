@@ -94,6 +94,11 @@ describe("an off-system element (X65)", () => {
     expect(offSystem(TOKENS, [["border", "1px solid #ff0000"], ["box-shadow", "0 2px 4px black"]])).toEqual(["border", "box-shadow"]);
     expect(offSystem(TOKENS, [["padding", "16px 4px"]])).toEqual([]);
   });
+
+  it("checks only the colour of a background shorthand, not its image or its place", () => {
+    expect(offSystem(TOKENS, [["background", 'url("grain.png") no-repeat center #161616']])).toEqual([]);
+    expect(offSystem(TOKENS, [["background", 'url("grain.png") no-repeat #ff0000']])).toEqual(["background"]);
+  });
 });
 
 describe("a page's off-system elements (X65)", () => {

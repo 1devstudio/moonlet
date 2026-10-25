@@ -6,7 +6,7 @@
 // a stylesheet.
 
 import type { DesignToken } from "./protocol";
-import { BORDER_STYLES, valueParts, type Decl } from "./designStyle";
+import { colourParts, valueParts, type Decl } from "./designStyle";
 
 export type TokenFamily = DesignToken["family"];
 
@@ -173,8 +173,8 @@ type Rule = { family: TokenFamily; by: "parts" | "whole" | "colours" };
  *  display and opacity take none: they are never off-system. */
 export function propRule(prop: string): Rule | null {
   if (/^(padding|margin)(-(top|right|bottom|left|inline|block)(-(start|end))?)?$/.test(prop) || /^(row-|column-)?gap$/.test(prop)) return { family: "spacing", by: "parts" };
-  if (/^(color|background|background-color|border(-(top|right|bottom|left))?-color|outline-color|fill|stroke)$/.test(prop)) return { family: "color", by: "whole" };
-  if (/^(border(-(top|right|bottom|left))?|outline)$/.test(prop)) return { family: "color", by: "colours" };
+  if (/^(color|background-color|border(-(top|right|bottom|left))?-color|outline-color|fill|stroke)$/.test(prop)) return { family: "color", by: "whole" };
+  if (/^(border(-(top|right|bottom|left))?|outline|background)$/.test(prop)) return { family: "color", by: "colours" };
   if (/^border(-(top|bottom)-(left|right))?-radius$/.test(prop)) return { family: "radius", by: "parts" };
   if (prop === "box-shadow") return { family: "shadow", by: "whole" };
   if (/^(font-size|font-family|font-weight|line-height|letter-spacing)$/.test(prop)) return { family: "typography", by: "whole" };
@@ -183,9 +183,6 @@ export function propRule(prop: string): Rule | null {
 
 /** Values on any system: keywords that are no design choice. */
 const NEUTRAL = new Set(["0", "auto", "none", "inherit", "initial", "unset", "revert", "transparent", "currentcolor", "normal"]);
-
-/** A border's parts that are no colour: widths and styles. */
-const NOT_COLOUR = new RegExp(`^(-?[\\d.]+[a-z%]*|thin|medium|thick|${BORDER_STYLES.join("|")})$`);
 
 /** The properties of an inline style whose value matches no token, where
  *  the property takes tokens: they make the element off-system. */
@@ -196,7 +193,7 @@ export function offSystem(tokens: DesignToken[], style: Decl[]): string[] {
       const rule = propRule(prop);
       if (!rule) return false;
       if (rule.by === "whole") return !on(value, rule.family);
-      const each = valueParts(value).filter((p) => rule.by === "parts" || !(NEUTRAL.has(norm(p)) || NOT_COLOUR.test(norm(p))));
+      const each = rule.by === "parts" ? valueParts(value) : colourParts(value);
       return !each.every((p) => on(p, rule.family));
     })
     .map(([prop]) => prop);

@@ -11,7 +11,7 @@ import { parse, parseFragment } from "parse5";
 import type { DefaultTreeAdapterMap } from "parse5";
 import { pageFile, pageOfFile } from "./designPage";
 import type { DropPlace, LiveEdit } from "./designBridge";
-import { attrText, isStyleProp, isStyleValue, parseStyle, styleText, withStyle, type Decl, type StyleSet } from "./designStyle";
+import { attrText, isStyleProp, isStyleValue, parseStyle, styleText, valueParts, withStyle, type Decl, type StyleSet } from "./designStyle";
 
 type Node = DefaultTreeAdapterMap["node"];
 type Element = DefaultTreeAdapterMap["element"];
@@ -446,13 +446,18 @@ function into(html: string, el: Element, text: string): string {
  *  A property or value that is not one is refused. */
 function restyle(html: string, el: Element, set: StyleSet): Edit {
   inBody(el);
-  for (const [prop, value] of Object.entries(set)) {
-    if (!isStyleProp(prop)) throw new EditRefused(`${prop} is not a style property`);
-    if (value !== null && !isStyleValue(value)) throw new EditRefused(`${value} is not a value the editor writes`);
-  }
   const loc = el.sourceCodeLocation!;
   const old = el.attrs.find((a) => a.name === "style");
-  const text = styleText(withStyle(parseStyle(old?.value ?? ""), set));
+  const had = parseStyle(old?.value ?? "");
+  for (const [prop, value] of Object.entries(set)) {
+    if (!isStyleProp(prop)) throw new EditRefused(`${prop} is not a style property`);
+    // Parts the property's value already had (a background's image) stay
+    // as written; only what is new must be a value the editor writes.
+    const kept = valueParts(had.find(([p]) => p === prop)?.[1] ?? "");
+    const fresh = value === null ? [] : valueParts(value).filter((p) => !kept.includes(p));
+    if (value !== null && (fresh.length ? !isStyleValue(fresh.join(" ")) : !value.trim())) throw new EditRefused(`${value} is not a value the editor writes`);
+  }
+  const text = styleText(withStyle(had, set));
   const attr = text ? `style="${attrText(text)}"` : "";
   const at = loc.attrs?.style;
   let out: string;
