@@ -5,7 +5,7 @@
 // the window's snapshot when the daemon asked for a screenshot.
 
 import { invoke } from "@tauri-apps/api/core";
-import { type RenderJob, type Verdict, renderUrl, verdict } from "./lib/renderPage";
+import { type RenderJob, type Verdict, handBack, reason, renderUrl, verdict } from "./lib/renderPage";
 
 declare global {
   interface Window {
@@ -19,8 +19,14 @@ const LOAD_MS = 15_000;
 const frame = document.getElementById("card") as HTMLIFrameElement;
 let current: { id: number; timer: number } | null = null;
 
+/** Into the app's log: this page has no console anyone reads. */
+function log(message: string) {
+  console.error(message);
+  void invoke("log_js", { level: "error", message }).catch(() => {});
+}
+
 function answer(id: number, v: Verdict) {
-  void invoke("design_render_measured", { id, ...v }).catch(() => {});
+  void handBack(id, v, (cmd, args) => invoke(cmd, args), log);
 }
 
 window.moonletRender = (job) => {
@@ -48,4 +54,4 @@ window.addEventListener("message", (e) => {
 });
 
 // Ready for cards: the backend sends none before this.
-void invoke("design_render_page_ready").catch(() => {});
+void invoke("design_render_page_ready").catch((e) => log(`the render page could not say it is ready: ${reason(e)}`));
