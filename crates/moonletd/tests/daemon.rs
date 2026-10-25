@@ -2315,17 +2315,28 @@ async fn a_new_design_starts_its_agent_in_its_folder_on_its_design_system() {
     assert_eq!(list, serde_json::json!([]));
 }
 
-/// The next `design.open` event `c` gets, within 10 s.
-async fn next_design_open(c: &mut Client) -> serde_json::Value {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+/// The next event `event` that `c` gets and `wanted` takes, within 15 s.
+async fn next_event(c: &mut Client, event: &str, wanted: impl Fn(&serde_json::Value) -> bool) -> serde_json::Value {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     loop {
-        let f = tokio::time::timeout_at(deadline, c.next_frame()).await.expect("no design.open").unwrap().unwrap();
+        let f = tokio::time::timeout_at(deadline, c.next_frame()).await.unwrap_or_else(|_| panic!("no {event}")).unwrap().unwrap();
         if let Frame::Json(Message::Event { name, data }) = f
-            && name == methods::EV_DESIGN_OPEN
+            && name == event
+            && wanted(&data)
         {
             return data;
         }
     }
+}
+
+/// The next `design.open` event `c` gets.
+async fn next_design_open(c: &mut Client) -> serde_json::Value {
+    next_event(c, methods::EV_DESIGN_OPEN, |_| true).await
+}
+
+/// The next `design.changed` that names `path`.
+async fn next_change_of(c: &mut Client, path: &str) -> serde_json::Value {
+    next_event(c, methods::EV_DESIGN_CHANGED, |data| data["paths"].as_array().is_some_and(|p| p.iter().any(|x| x == path))).await
 }
 
 /// X65: `design.open` reaches every client as the event `design.open`, and
@@ -2650,17 +2661,8 @@ async fn a_file_written_in_a_design_system_is_announced() {
     let card = d.home.path().join("design").join(&ws.id).join("systems/storefront/components/buttons/button/button.html");
     std::fs::create_dir_all(card.parent().unwrap()).unwrap();
     std::fs::write(&card, "<!-- @dsCard group=\"Buttons\" -->\n").unwrap();
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
-    loop {
-        let f = tokio::time::timeout_at(deadline, listener.next_frame()).await.expect("no design.changed").unwrap().unwrap();
-        if let Frame::Json(Message::Event { name, data }) = f
-            && name == methods::EV_DESIGN_CHANGED
-            && data["paths"].as_array().is_some_and(|p| p.iter().any(|x| x == "components/buttons/button/button.html"))
-        {
-            assert_eq!((data["workspace"].as_str(), data["system"].as_str()), (Some(ws.id.as_str()), Some("storefront")));
-            break;
-        }
-    }
+    let data = next_change_of(&mut listener, "components/buttons/button/button.html").await;
+    assert_eq!((data["workspace"].as_str(), data["system"].as_str()), (Some(ws.id.as_str()), Some("storefront")));
 }
 
 /// X65: a page written in a workspace design reaches every client as
@@ -2677,20 +2679,11 @@ async fn a_page_written_in_a_design_is_announced() {
     let mut listener = d.client().await;
     let page = d.home.path().join(".moonlet/design").join(&ws).join("designs/settings-page/pages/index.html");
     std::fs::write(&page, "<body data-mid=\"m1\"></body>\n").unwrap();
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
-    loop {
-        let f = tokio::time::timeout_at(deadline, listener.next_frame()).await.expect("no design.changed").unwrap().unwrap();
-        if let Frame::Json(Message::Event { name, data }) = f
-            && name == methods::EV_DESIGN_CHANGED
-            && data["paths"].as_array().is_some_and(|p| p.iter().any(|x| x == "pages/index.html"))
-        {
-            assert_eq!(
-                (data["workspace"].as_str(), &data["system"], data["design"].as_str()),
-                (Some(ws.as_str()), &serde_json::Value::Null, Some("settings-page"))
-            );
-            break;
-        }
-    }
+    let data = next_change_of(&mut listener, "pages/index.html").await;
+    assert_eq!(
+        (data["workspace"].as_str(), &data["system"], data["design"].as_str()),
+        (Some(ws.as_str()), &serde_json::Value::Null, Some("settings-page"))
+    );
 }
 
 /// A design system with two cards for the render check (X64): a button
