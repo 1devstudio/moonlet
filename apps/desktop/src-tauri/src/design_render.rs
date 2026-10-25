@@ -175,23 +175,70 @@ fn window(app: &AppHandle, renderer: &Arc<Renderer>) -> Result<WebviewWindow, St
         .map_err(|e| format!("cannot open the render window: {e}"))
 }
 
-/// The render page is ready for cards. Only the render window may say so.
+/// Whether a call comes from the app's own render page: the window
+/// [`LABEL`], showing `render.html` from the app's bundle (`tauri://localhost`,
+/// or `http://tauri.localhost`), or from `dev_url` while developing.
+pub fn is_render_page(label: &str, url: &str, dev_url: Option<&str>) -> bool {
+    // `scheme://host[:port]`, written out: a custom scheme's origin is opaque.
+    let origin = |u: &tauri::Url| {
+        let port = u.port().map(|p| format!(":{p}")).unwrap_or_default();
+        format!(
+            "{}://{}{port}",
+            u.scheme(),
+            u.host_str().unwrap_or_default()
+        )
+    };
+    let Ok(page) = tauri::Url::parse(url) else {
+        return false;
+    };
+    let from_app = ["tauri://localhost", "http://tauri.localhost"]
+        .contains(&origin(&page).as_str())
+        || dev_url
+            .and_then(|d| tauri::Url::parse(d).ok())
+            .is_some_and(|d| origin(&d) == origin(&page));
+    label == LABEL
+        && from_app
+        && page.path() == "/render.html"
+        && page.query().is_none()
+        && page.fragment().is_none()
+}
+
+/// Refuses a call that does not come from the app's render page.
+fn from_render_page(window: &WebviewWindow) -> Result<(), RpcError> {
+    let url = window.url().map(|u| u.to_string()).unwrap_or_default();
+    // A dev server serves the page only in a development build.
+    let dev = tauri::is_dev()
+        .then(|| {
+            window
+                .config()
+                .build
+                .dev_url
+                .as_ref()
+                .map(|u| u.to_string())
+        })
+        .flatten();
+    if is_render_page(window.label(), &url, dev.as_deref()) {
+        Ok(())
+    } else {
+        Err(RpcError::new(
+            "forbidden",
+            "only the app's render page renders cards",
+        ))
+    }
+}
+
+/// The render page is ready for cards. Only that page may say so.
 #[tauri::command]
 pub fn design_render_page_ready(
     window: WebviewWindow,
     renderer: tauri::State<'_, Arc<Renderer>>,
 ) -> Result<(), RpcError> {
-    if window.label() != LABEL {
-        return Err(RpcError::new(
-            "forbidden",
-            "only the render window renders cards",
-        ));
-    }
+    from_render_page(&window)?;
     renderer.page_ready.send_replace(true);
     Ok(())
 }
 
-/// The render page's verdict on job `id`. Only the render window may give it.
+/// The render page's verdict on job `id`. Only that page may give it.
 #[tauri::command]
 pub fn design_render_measured(
     window: WebviewWindow,
@@ -200,12 +247,7 @@ pub fn design_render_measured(
     metrics: Option<Value>,
     error: Option<String>,
 ) -> Result<(), RpcError> {
-    if window.label() != LABEL {
-        return Err(RpcError::new(
-            "forbidden",
-            "only the render window measures cards",
-        ));
-    }
+    from_render_page(&window)?;
     if let Some(tx) = renderer.waiting.lock().unwrap().remove(&id) {
         let _ = tx.send(Measured { metrics, error });
     }
@@ -333,6 +375,45 @@ mod snap {
             let bytes: *const u8 = msg_send![data, bytes];
             let len: usize = msg_send![data, length];
             Ok(std::slice::from_raw_parts(bytes, len).to_vec())
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_the_render_window_showing_the_apps_render_page_may_answer() {
+        assert!(is_render_page(LABEL, "tauri://localhost/render.html", None));
+        assert!(is_render_page(
+            LABEL,
+            "http://tauri.localhost/render.html",
+            None
+        ));
+        assert!(is_render_page(
+            LABEL,
+            "http://localhost:1420/render.html",
+            Some("http://localhost:1420/")
+        ));
+        for (label, url, dev) in [
+            // The main window, even on the render page.
+            ("main", "tauri://localhost/render.html", None),
+            // The render window gone somewhere else.
+            (LABEL, "tauri://localhost/index.html", None),
+            (LABEL, "tauri://localhost/render.html?x=1", None),
+            (LABEL, "tauri://evil/render.html", None),
+            (LABEL, "moonlet-design://w1/systems/s/render.html", None),
+            (LABEL, "https://example.com/render.html", None),
+            // A dev server only while developing.
+            (LABEL, "http://localhost:1420/render.html", None),
+            (
+                LABEL,
+                "http://localhost:1421/render.html",
+                Some("http://localhost:1420/"),
+            ),
+        ] {
+            assert!(!is_render_page(label, url, dev), "{label} {url} {dev:?}");
         }
     }
 }
