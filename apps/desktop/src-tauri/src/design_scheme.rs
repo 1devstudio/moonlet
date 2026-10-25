@@ -62,27 +62,34 @@ pub fn measuring(url: &str) -> bool {
 /// `html` with `script` first in its `<head>`: after the `<head>` tag, else
 /// after `<html>`, else after the doctype (never before it, which would put
 /// the page in quirks mode), else at the start.
-pub fn with_script(html: &str, script: &str) -> String {
-    // Lowercased ASCII keeps every byte where it was.
+pub fn with_script(html: &[u8], script: &[u8]) -> Vec<u8> {
+    // Found in the bytes, so a card in another encoding is served as it is:
+    // lowercased ASCII keeps every byte where it was.
     let lower = html.to_ascii_lowercase();
+    let find = |from: usize, needle: &[u8]| {
+        lower
+            .get(from..)?
+            .windows(needle.len())
+            .position(|w| w == needle)
+            .map(|i| from + i)
+    };
     // Just after the `>` of the first `<tag` (followed by `>`, a space or `/`).
-    let after = |tag: &str| {
+    let after = |tag: &[u8]| {
         let mut from = 0;
-        while let Some(i) = lower[from..].find(tag) {
-            let start = from + i;
-            let next = lower.as_bytes().get(start + tag.len()).copied();
-            if matches!(next, Some(b'>' | b'/') | Some(b' ' | b'\t' | b'\n' | b'\r')) {
-                return lower[start..].find('>').map(|j| start + j + 1);
+        while let Some(start) = find(from, tag) {
+            let next = lower.get(start + tag.len()).copied();
+            if matches!(next, Some(b'>' | b'/' | b' ' | b'\t' | b'\n' | b'\r')) {
+                return find(start, b">").map(|j| j + 1);
             }
             from = start + tag.len();
         }
         None
     };
-    let at = after("<head")
-        .or_else(|| after("<html"))
-        .or_else(|| after("<!doctype"))
+    let at = after(b"<head")
+        .or_else(|| after(b"<html"))
+        .or_else(|| after(b"<!doctype"))
         .unwrap_or(0);
-    format!("{}{script}{}", &html[..at], &html[at..])
+    [&html[..at], script, &html[at..]].concat()
 }
 
 /// The headers of a served file.
@@ -140,11 +147,7 @@ pub async fn serve(app: &tauri::AppHandle, url: &str) -> tauri::http::Response<V
     };
     // The render page's card measures itself, in its own sandboxed frame.
     let body = if measuring(url) && content_type.starts_with("text/html") {
-        with_script(
-            &String::from_utf8_lossy(&body),
-            &format!("<script>{MEASURE}</script>"),
-        )
-        .into_bytes()
+        with_script(&body, format!("<script>{MEASURE}</script>").as_bytes())
     } else {
         body
     };
@@ -324,6 +327,9 @@ mod tests {
     #[test]
     fn the_measuring_script_goes_first_in_the_head_and_never_before_the_doctype() {
         let s = "<script>measure()</script>";
+        let with_script = |html: &str, script: &str| {
+            String::from_utf8(with_script(html.as_bytes(), script.as_bytes())).unwrap()
+        };
         assert_eq!(
             with_script(
                 "<!-- @dsCard group=\"Buttons\" -->\n<!doctype html>\n<html><HEAD lang=\"en\"><link rel=\"stylesheet\" href=\"../../../styles.css\"></head><body></body></html>\n",
@@ -349,6 +355,17 @@ mod tests {
         assert_eq!(
             with_script("<p>Run</p>", s),
             "<script>measure()</script><p>Run</p>"
+        );
+    }
+
+    #[test]
+    fn a_card_that_is_not_utf_8_keeps_its_bytes_around_the_script() {
+        // Latin-1 "Café": 0xE9 is not UTF-8.
+        let card =
+            b"<!doctype html><html><head><title>Caf\xe9</title></head><body>Caf\xe9</body></html>";
+        assert_eq!(
+            with_script(card, b"<script>measure()</script>"),
+            b"<!doctype html><html><head><script>measure()</script><title>Caf\xe9</title></head><body>Caf\xe9</body></html>".to_vec()
         );
     }
 }
