@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canvasPage, changedPages, isTyping, modeHint, modeKey, reloadsPage, writingPage } from "./designCanvas";
+import { canvasPage, canvasStep, changedPages, isTyping, modeHint, modeKey, reloadsPage, writingPage } from "./designCanvas";
 
 const change = (over: { system?: string | null; design?: string | null; paths: string[] }) => ({ workspace: "w1", system: null, design: null, ...over });
 
@@ -64,7 +64,7 @@ describe("the canvas's mode (X65)", () => {
   it("takes C to switch Comment on and off, and Esc to close the box or leave Comment, never while typing or with a modifier", () => {
     const key = (k: string, over: Partial<{ meta: boolean; ctrl: boolean; alt: boolean; shift: boolean; typing: boolean }> = {}) =>
       modeKey({ key: k, meta: false, ctrl: false, alt: false, shift: false, typing: false, ...over });
-    expect(key("c")).toBe("comment");
+    expect(key("c")).toBe("toggle");
     expect(key("C", { shift: true })).toBeNull();
     expect(key("c", { meta: true })).toBeNull();
     expect(key("c", { typing: true })).toBeNull();
@@ -80,5 +80,21 @@ describe("typing (X65)", () => {
     expect(["i", "t", "e", "x"].map(at)).toEqual([true, true, true, true]);
     expect(["f", "p"].map(at)).toEqual([false, false]);
     expect(isTyping(null)).toBe(false);
+  });
+});
+
+describe("the canvas's mode, box and rail (X65)", () => {
+  const view = { mode: "view" as const, box: false, rail: false };
+  it("shows the rail on entering Comment, by C or its button, and leaves it shown in View", () => {
+    expect(canvasStep(view, "toggle")).toEqual({ mode: "comment", box: false, rail: true });
+    expect(canvasStep(view, "comment")).toEqual({ mode: "comment", box: false, rail: true });
+    expect(canvasStep({ mode: "comment", box: false, rail: true }, "toggle")).toEqual({ mode: "view", box: false, rail: true });
+  });
+
+  it("closes the box on Esc, and on the next Esc goes back to View", () => {
+    const boxed = { mode: "comment" as const, box: true, rail: true };
+    expect(canvasStep(boxed, "escape")).toEqual({ mode: "comment", box: false, rail: true });
+    expect(canvasStep(canvasStep(boxed, "escape"), "escape")).toEqual({ mode: "view", box: false, rail: true });
+    expect(canvasStep(boxed, "view")).toEqual({ mode: "view", box: false, rail: true });
   });
 });
