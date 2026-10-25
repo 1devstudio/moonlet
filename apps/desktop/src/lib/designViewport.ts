@@ -16,10 +16,15 @@ export const VIEWPORTS: { name: string; size: Size }[] = [
 
 /** `WxH` as `design.toml` keeps it, or null when it is no size. */
 export function parseViewport(text: string): Size | null {
-  const m = /^(\d+)x(\d+)$/.exec(text);
-  if (!m) return null;
-  const [w, h] = [Number(m[1]), Number(m[2])];
-  return w > 0 && h > 0 ? [w, h] : null;
+  const [w, h, ...rest] = text.split("x");
+  return rest.length || h === undefined ? null : sizeOf(w, h);
+}
+
+/** A width and a height as typed, each whole px above 0, or null. */
+export function sizeOf(width: string, height: string): Size | null {
+  const px = (n: string) => (/^\d+$/.test(n) && Number(n) > 0 ? Number(n) : null);
+  const [w, h] = [px(width), px(height)];
+  return w !== null && h !== null ? [w, h] : null;
 }
 
 /** A size as `design.toml` keeps it, `WxH`. */
@@ -27,9 +32,41 @@ export function viewportText([w, h]: Size): string {
   return `${w}x${h}`;
 }
 
+/** The preset of a size, if it is one. */
+function presetOf([w, h]: Size): { name: string; size: Size } | undefined {
+  return VIEWPORTS.find((v) => v.size[0] === w && v.size[1] === h);
+}
+
+/** A size as the viewport menu shows it, `W×H`. */
+export function sizeText([w, h]: Size): string {
+  return `${w}×${h}`;
+}
+
 /** What the viewport menu shows: its preset's name, or Custom, and the size. */
-export function viewportLabel([w, h]: Size): { name: string; size: string } {
-  return { name: VIEWPORTS.find((v) => v.size[0] === w && v.size[1] === h)?.name ?? "Custom", size: `${w}×${h}` };
+export function viewportLabel(size: Size): { name: string; size: string } {
+  return { name: presetOf(size)?.name ?? "Custom", size: sizeText(size) };
+}
+
+/** How many custom sizes the settings keep. */
+const CUSTOM_KEPT = 5;
+
+/** The user's custom sizes, from the app's settings (`WxH`, newest first),
+ *  listed after the presets: a size that is none or a preset's is left out,
+ *  and settings from before they were kept list none. */
+export function customViewports(saved: string[] | undefined): Size[] {
+  return (saved ?? []).flatMap((text) => {
+    const size = parseViewport(text);
+    return size && !presetOf(size) ? [size] : [];
+  });
+}
+
+/** The custom sizes the settings keep after the user picks `size`: it first,
+ *  once; a preset's is not kept; at most five. */
+export function withCustomViewport(saved: string[] | undefined, size: Size): string[] {
+  const kept = customViewports(saved).map(viewportText);
+  if (presetOf(size)) return kept;
+  const text = viewportText(size);
+  return [text, ...kept.filter((t) => t !== text)].slice(0, CUSTOM_KEPT);
 }
 
 /** The canvas's scale: `zoom` once the user zoomed, else the viewport
