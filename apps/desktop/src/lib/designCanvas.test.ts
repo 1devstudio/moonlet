@@ -74,6 +74,14 @@ describe("the canvas's mode (X65)", () => {
 });
 
 describe("typing (X65)", () => {
+  it("leaves Esc typed in a field, such as the chat's composer, to that field, so it neither closes the comment box nor leaves Comment", () => {
+    document.body.innerHTML = '<section><textarea id="composer"></textarea></section><p id="page">text</p>';
+    const esc = (id: string) => modeKey({ key: "Escape", meta: false, ctrl: false, alt: false, shift: false, typing: isTyping(document.getElementById(id)) });
+    expect(esc("composer")).toBeNull();
+    expect(esc("page")).toBe("escape");
+  });
+
+
   it("is in a field, an editable element or a terminal, where C is text", () => {
     document.body.innerHTML = '<input id="i"><textarea id="t"></textarea><div contenteditable><b id="e">x</b></div><div contenteditable="false"><b id="f">x</b></div><div class="xterm"><span id="x">$</span></div><p id="p">text</p>';
     const at = (id: string) => isTyping(document.getElementById(id));
