@@ -125,6 +125,15 @@ describe("an edit by hand on a page's source (X65)", () => {
     expect(copyElement(PAGE, "m99")).toBeNull();
   });
 
+  it("gives the same edit for the live page, the copy's source with its fresh ids, and none for a text the page already shows", () => {
+    expect(applyEdit(PAGE, { kind: "delete", mid: "m33" }).live).toEqual({ op: "remove", mid: "m33" });
+    expect(applyEdit(PAGE, { kind: "duplicate", mid: "m31" }).live).toEqual({ op: "insert", after: "m31", html: '<span data-mid="m41">Branch prefix</span>' });
+    expect(applyEdit(PAGE, { kind: "wrap", mid: "m25" }).live).toEqual({ op: "wrap", mid: "m25", box: "m41" });
+    expect(applyEdit(PAGE, { kind: "unwrap", mid: "m30" }).live).toEqual({ op: "unwrap", mid: "m30" });
+    expect(applyEdit(PAGE, { kind: "paste", after: null, html: '<p data-mid="m9">Note</p>' }).live).toEqual({ op: "insert", after: "m20", html: '<p data-mid="m41">Note</p>' });
+    expect(applyEdit(PAGE, { kind: "text", mid: "m31", text: "Prefix" }).live).toBeNull();
+  });
+
   it("refuses an edit that would lose another element of the page, where an element's tags cross another's", () => {
     const tangled = '<!doctype html>\n<body data-mid="m1"><b data-mid="m2">bold<p data-mid="m3">para</b> tail</p></body>\n';
     expect(() => applyEdit(tangled, { kind: "delete", mid: "m2" })).toThrow(new EditRefused("The page's markup around m2 is tangled: ask the agent to fix it"));
