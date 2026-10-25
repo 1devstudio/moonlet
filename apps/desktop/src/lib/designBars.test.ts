@@ -54,7 +54,7 @@ describe("the bar over the canvas (X65)", () => {
     expect(designBar({ ...calm, systemRemoved: true })).toEqual({ tone: "grey", text: "Design system removed.", detail: "Pages show without moonlet-desktop's styles.", actions: [] });
   });
 
-  it("is blue with Back to current and Restore while a snapshot is previewed, Restore waiting for the agent", () => {
+  it("is blue with Back to current and Restore while a snapshot is previewed, and with Stop instead of Restore while the agent works", () => {
     const preview = { time: "10:33", type: "edits by hand" };
     expect(designBar({ ...calm, preview })).toEqual({
       tone: "blue",
@@ -66,14 +66,16 @@ describe("the bar over the canvas (X65)", () => {
       tone: "blue",
       text: "Previewing the snapshot from 10:33, edits by hand. Nothing changes until you restore it.",
       detail: "Restore opens when Claude stops.",
-      actions: ["back"],
+      actions: ["back", "stop"],
     });
   });
 
-  it("shows the preview's bar over every other, as the canvas shows the snapshot, not the current page", () => {
+  it("shows what the agent asks over the preview, and the preview over the agent at work, an edit not saved, the check and the design system", () => {
     const all: BarState = { working: true, needsYou: { kind: "question", text: "Which?" }, page: "index", problems: [problem("pages/index.html", "missing_mid", "<h1> has no data-mid")], system: "moonlet-desktop", systemRemoved: true, unsaved: "index.html m30 div: deleted", preview: { time: "09:58", type: "agent turn" } };
-    expect(designBar(all)?.tone).toBe("blue");
-    expect(designBar({ ...all, working: false, needsYou: null, unsaved: null })?.tone).toBe("blue");
+    expect(designBar(all)?.text).toBe("Claude asks…");
+    expect(designBar({ ...all, needsYou: { kind: "approval", text: "Bash: rm -rf assets" } })?.text).toBe("Claude needs your approval");
+    expect(designBar({ ...all, needsYou: null })?.tone).toBe("blue");
+    expect(designBar({ ...all, needsYou: null, working: false })?.tone).toBe("blue");
   });
 
   it("shows one bar at a time: the agent at work, then what it asks, then an edit not saved, then the check, then the design system", () => {

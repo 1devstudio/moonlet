@@ -5,6 +5,7 @@
 
 import { Pencil, RotateCcw } from "lucide-react";
 import { historyRows, type HistoryRow } from "../../lib/designHistory";
+import { RESTORE_WAITS } from "../../lib/designBars";
 import type { DesignSnapshot } from "../../lib/protocol";
 import { cx } from "../../lib/cx";
 import { AgentIcon, Button } from "../ui";
@@ -57,7 +58,7 @@ export function HistoryTab({
               </button>
               {shown && (
                 <div className="flex items-center gap-3 pb-3 pl-[50px]">
-                  <Button size="sm" variant="subtle" disabled={locked} title={locked ? "Restore opens when Claude stops" : undefined} onClick={() => onRestore(r.n)}>
+                  <Button size="sm" variant="subtle" disabled={locked} title={locked ? RESTORE_WAITS : undefined} onClick={() => onRestore(r.n)}>
                     Restore
                   </Button>
                   <button className="ui-text-12.5 text-muted hover:text-fg" onClick={onBack}>
