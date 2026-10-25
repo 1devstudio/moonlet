@@ -77,3 +77,10 @@ export function pageFixMessage(page: string, problems: PageProblem[]): string {
   const lines = problems.map((p) => `- line ${p.line}: ${p.message}`).join("\n");
   return `Fix the check problems of ${pagePath(page)}, then run the check again:\n${lines}`;
 }
+
+/** Whether the chat panel opens on what the agent asks: when the design goes
+ *  from not needing the user to needing them, never again while it still
+ *  does, so a panel the user folded stays folded. */
+export function chatOpensOn(before: BarState["needsYou"], now: BarState["needsYou"]): boolean {
+  return before === null && now !== null;
+}

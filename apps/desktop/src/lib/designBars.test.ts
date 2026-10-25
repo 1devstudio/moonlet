@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { designBar, pageFixMessage, type BarState } from "./designBars";
+import { chatOpensOn, designBar, pageFixMessage, type BarState } from "./designBars";
 
 const problem = (path: string, kind: string, message: string, line = 3) => ({ path, line, kind, message });
 const calm: BarState = { working: false, needsYou: null, page: "index", problems: [], system: "moonlet-desktop", systemRemoved: false };
@@ -58,5 +58,18 @@ describe("Ask the agent to fix (X65)", () => {
   it("sends the page's check problems by line, and asks for the check again", () => {
     const problems = [problem("pages/git-b.html", "missing_mid", "<h2> has no data-mid", 12), problem("pages/git-b.html", "duplicate_mid", '<p> repeats data-mid="m31"', 40)];
     expect(pageFixMessage("git-b", problems)).toBe('Fix the check problems of pages/git-b.html, then run the check again:\n- line 12: <h2> has no data-mid\n- line 40: <p> repeats data-mid="m31"');
+  });
+});
+
+describe("the design's chat panel on an ask (X65)", () => {
+  const ask = { kind: "question" as const, text: "Rows or cards?" };
+
+  it("opens when the agent starts to need the user, and not again while it still does", () => {
+    expect(chatOpensOn(null, ask)).toBe(true);
+    // The same ask listed again, or another while one waits: the user may have folded it.
+    expect(chatOpensOn(ask, { ...ask })).toBe(false);
+    expect(chatOpensOn(ask, { kind: "approval", text: "Bash: rm -rf assets" })).toBe(false);
+    expect(chatOpensOn(ask, null)).toBe(false);
+    expect(chatOpensOn(null, null)).toBe(false);
   });
 });
