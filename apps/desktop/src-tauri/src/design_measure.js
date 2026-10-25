@@ -39,16 +39,30 @@
     return ["Top", "Right", "Bottom", "Left"].some((side) => parseFloat(s[`border${side}Width`]) > 0 && s[`border${side}Style`] !== "none" && seen(s[`border${side}Color`]));
   }
 
-  // The tallest line box of the text under `root`; 0 when none shows.
-  function textHeight(root, skip) {
-    let max = 0;
+  // Never rendered: neither their elements nor their text count. A control
+  // draws its own options' and value's text, which has no line boxes.
+  const UNSEEN = "script,style,template,noscript,title,meta,link,base";
+  const DRAWN_TEXT = "select,option,optgroup,datalist,textarea";
+
+  // The text nodes under `root` that a reader is meant to see.
+  function texts(root, skip) {
+    const out = [];
     const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     for (let n = walk.nextNode(); n; n = walk.nextNode()) {
-      if (!n.data.trim() || (skip && skip.contains(n))) continue;
-      const range = document.createRange();
-      range.selectNodeContents(n);
-      for (const r of range.getClientRects()) max = Math.max(max, r.height);
+      const el = n.parentElement;
+      if (!n.data.trim() || (skip && skip.contains(n)) || !el || el.closest(UNSEEN) || el.closest(DRAWN_TEXT)) continue;
+      out.push(n);
     }
+    return out;
+  }
+
+  // A text node's tallest line box; 0 when it does not show.
+  function lineHeight(n) {
+    if (getComputedStyle(n.parentElement).visibility === "hidden") return 0;
+    const range = document.createRange();
+    range.selectNodeContents(n);
+    let max = 0;
+    for (const r of range.getClientRects()) max = Math.max(max, r.height);
     return max;
   }
 
@@ -62,21 +76,23 @@
   function measure() {
     const marker = [...document.childNodes].find((n) => n.nodeType === Node.COMMENT_NODE && n.data.includes("@dsCard"));
     const name = (marker && /\bname="([^"]*)"/.exec(marker.data)?.[1]) || null;
-    const all = cellsOf().filter((c) => getComputedStyle(c).display !== "none");
+    const every = cellsOf();
+    const all = every.filter((c) => getComputedStyle(c).display !== "none");
     const page = all.length === 0;
     const cells = (page ? [document.body] : all).map((cell) => {
       const mount = page ? cell : cell.querySelector(".ds-mount") || cell;
       // A cell without a mount is its own, but for its label.
       const label = mount === cell && !page ? cell.querySelector(":scope > h4") : null;
-      const text = squash([...mount.childNodes].filter((n) => n !== label).map((n) => n.textContent || "").join(" "));
-      const els = [...mount.querySelectorAll("*")].filter((el) => !(label && label.contains(el)));
+      const shown = texts(mount, label);
+      const text = squash(shown.map((n) => n.data).join(" "));
+      const els = [...mount.querySelectorAll("*")].filter((el) => !(label && label.contains(el)) && !el.closest(UNSEEN));
       const box = cell.getBoundingClientRect();
       return {
         snippet: page ? null : cell.getAttribute("data-snippet"),
         html: squash(label ? mount.innerHTML.replace(label.outerHTML, "") : mount.innerHTML),
         text,
         empty: els.length === 0 && text === "",
-        textHeight: textHeight(mount, label),
+        smallestText: shown.length ? Math.min(...shown.map(lineHeight)) : 0,
         painted: els.filter(paints).length,
         overflow680: 0,
         escaped: page
@@ -87,9 +103,15 @@
             }).length,
       };
     });
-    const fixedOutside = page
+    // What shows outside every cell, as a portal mounts it: an element that
+    // paints, or that holds text that shows, and holds no cell itself.
+    const outside = page
       ? 0
-      : [...document.body.querySelectorAll("*")].filter((el) => !all.some((c) => c.contains(el)) && getComputedStyle(el).position === "fixed").length;
+      : [...document.body.querySelectorAll("*")].filter((el) => {
+          if (el.closest(UNSEEN) || every.some((c) => c.contains(el) || el.contains(c))) return false;
+          const own = [...el.childNodes].filter((n) => n.nodeType === Node.TEXT_NODE && n.data.trim());
+          return paints(el) || own.some((n) => lineHeight(n) > 0);
+        }).length;
     // Grid overflow: the page 680 px wide, as design-sync measures it.
     if (!page) {
       const html = document.documentElement;
@@ -100,7 +122,7 @@
       });
       html.style.width = before;
     }
-    return { name, fallback: !!document.querySelector("[data-ds-fallback]"), errors, cells, fixedOutside };
+    return { name, fallback: !!document.querySelector("[data-ds-fallback]"), errors, cells, outside };
   }
 
   function send() {

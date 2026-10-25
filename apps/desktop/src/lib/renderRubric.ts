@@ -12,8 +12,10 @@ export interface CellMeasure {
   text: string;
   /** The mount holds no element and no text. */
   empty: boolean;
-  /** The tallest line box of its text, in px; 0 when none shows. */
-  textHeight: number;
+  /** How tall its least visible text is, in px: the smallest, over its text,
+   *  of each text's tallest line box; 0 when some text does not show. Text
+   *  never rendered (in `<script>`, `<style>`, `<template>`…) is not text. */
+  smallestText: number;
   /** Its elements that paint something: a background, a border, a shadow, an image or a control. */
   painted: number;
   /** How far its content overflows the cell when the page is 680 px wide, in px. */
@@ -30,8 +32,9 @@ export interface Measurements {
   /** Its page errors. */
   errors: string[];
   cells: CellMeasure[];
-  /** Fixed elements outside every cell. */
-  fixedOutside: number;
+  /** Visible elements outside every cell, fixed, absolute or in the flow,
+   *  as a portal mounts them. */
+  outside: number;
 }
 
 export type RenderFlag = "rootEmpty" | "errs" | "nameOnly" | "allHollow" | "collapsed" | "variantsIdentical" | "wide" | "escape" | "thin" | "bad";
@@ -44,7 +47,7 @@ const COLLAPSED_BELOW = 8;
  *  - `errs`: the page had errors
  *  - `nameOnly`: the only text is the card's name, repeated
  *  - `allHollow`: no text and nothing painted
- *  - `collapsed`: text under 8 px tall
+ *  - `collapsed`: text under 8 px tall, or text that does not show
  *  - `variantsIdentical`: every cell has the same markup
  *  - `wide`: a cell overflows at a 680 px grid; `escape`: fixed or portal content leaves its cell
  *  - `thin`: `nameOnly`, `allHollow` or `collapsed`, never on a floor card
@@ -59,10 +62,10 @@ export function rubric(m: Measurements): RenderFlag[] {
     if (name && texts.every((t) => t.toLowerCase().split(name).join("").trim() === "")) flags.add("nameOnly");
   }
   if (texts.length === 0 && m.cells.every((c) => c.painted === 0)) flags.add("allHollow");
-  if (m.cells.some((c) => c.text.trim() !== "" && c.textHeight < COLLAPSED_BELOW)) flags.add("collapsed");
+  if (m.cells.some((c) => c.text.trim() !== "" && c.smallestText < COLLAPSED_BELOW)) flags.add("collapsed");
   if (m.cells.length > 1 && m.cells.every((c) => c.html === m.cells[0].html)) flags.add("variantsIdentical");
   if (m.cells.some((c) => c.overflow680 > 1)) flags.add("wide");
-  if (m.fixedOutside > 0 || m.cells.some((c) => c.escaped > 0)) flags.add("escape");
+  if (m.outside > 0 || m.cells.some((c) => c.escaped > 0)) flags.add("escape");
   if (!m.fallback && (flags.has("nameOnly") || flags.has("allHollow") || flags.has("collapsed"))) flags.add("thin");
   if (flags.has("rootEmpty") || (flags.has("errs") && !m.fallback)) flags.add("bad");
   const order: RenderFlag[] = ["rootEmpty", "errs", "nameOnly", "allHollow", "collapsed", "variantsIdentical", "wide", "escape", "thin", "bad"];
@@ -76,17 +79,17 @@ function readCell(v: unknown): CellMeasure | null {
   if (typeof v !== "object" || v === null) return null;
   const c = v as Record<string, unknown>;
   if (!(c.snippet === null || isStr(c.snippet)) || !isStr(c.html) || !isStr(c.text) || typeof c.empty !== "boolean") return null;
-  if (!isNum(c.textHeight) || !isNum(c.painted) || !isNum(c.overflow680) || !isNum(c.escaped)) return null;
-  return { snippet: c.snippet, html: c.html, text: c.text, empty: c.empty, textHeight: c.textHeight, painted: c.painted, overflow680: c.overflow680, escaped: c.escaped };
+  if (!isNum(c.smallestText) || !isNum(c.painted) || !isNum(c.overflow680) || !isNum(c.escaped)) return null;
+  return { snippet: c.snippet, html: c.html, text: c.text, empty: c.empty, smallestText: c.smallestText, painted: c.painted, overflow680: c.overflow680, escaped: c.escaped };
 }
 
 /** What the measuring script posted, when it has the shape of `Measurements`; null otherwise. */
 export function readMeasurements(data: unknown): Measurements | null {
   if (typeof data !== "object" || data === null) return null;
   const d = data as Record<string, unknown>;
-  if (!(d.name === null || isStr(d.name)) || typeof d.fallback !== "boolean" || !isNum(d.fixedOutside)) return null;
+  if (!(d.name === null || isStr(d.name)) || typeof d.fallback !== "boolean" || !isNum(d.outside)) return null;
   if (!Array.isArray(d.errors) || !d.errors.every(isStr) || !Array.isArray(d.cells)) return null;
   const cells = d.cells.map(readCell);
   if (cells.some((c) => c === null)) return null;
-  return { name: d.name, fallback: d.fallback, errors: d.errors, cells: cells as CellMeasure[], fixedOutside: d.fixedOutside };
+  return { name: d.name, fallback: d.fallback, errors: d.errors, cells: cells as CellMeasure[], outside: d.outside };
 }

@@ -30,6 +30,18 @@ const FILES: [string, string][] = [
   ],
   // A mount the agent left empty: bad.
   ["components/forms/field/field.html", `<!-- @dsCard group="Forms" name="Field" source="README.md" -->\n${head}<body><div class="ds-grid">\n${cell("forms/field/default", "default", "")}\n</div></body></html>\n`],
+  // A label that does not show, beside one that does: collapsed.
+  [
+    "components/forms/email/email.html",
+    `<!-- @dsCard group="Forms" name="Email" source="README.md" -->\n${head}<body><div class="ds-grid">\n${cell("forms/email/default", "default", '<label>Email address</label> <span hidden>Required</span>')}\n</div></body></html>\n`,
+  ],
+  // A mount holding only a <style>: empty, whatever its CSS says.
+  ["components/data/tag/tag.html", `<!-- @dsCard group="Data" name="Tag" source="README.md" -->\n${head}<body><div class="ds-grid">\n${cell("data/tag/default", "default", "<style>.tag { color: red; }</style>")}\n</div></body></html>\n`],
+  // A menu shown outside every cell, as a portal mounts it: escape.
+  [
+    "components/menus/menu/menu.html",
+    `<!-- @dsCard group="Menus" name="Menu" source="README.md" -->\n${head}<body><div class="ds-grid">\n${cell("menus/menu/open", "open", '<button class="btn">Actions</button>')}\n</div>\n<div style="position:absolute;top:150px;left:24px;padding:8px;border:1px solid #ccc">Rename</div></body></html>\n`,
+  ],
 ];
 
 /** Width and height of a PNG, from its IHDR chunk. */
@@ -54,11 +66,14 @@ describe("Design card render check and snapshots", () => {
     const report = JSON.parse(readFileSync(join(dir(), ".cache", "render-check.json"), "utf8")) as { cards: { path: string; flags: string[] }[] };
     expect(report.cards).toEqual([
       { path: "components/buttons/button/button.html", flags: [] },
+      { path: "components/data/tag/tag.html", flags: ["rootEmpty", "allHollow", "thin", "bad"] },
+      { path: "components/forms/email/email.html", flags: ["collapsed", "thin"] },
       { path: "components/forms/field/field.html", flags: ["rootEmpty", "allHollow", "thin", "bad"] },
+      { path: "components/menus/menu/menu.html", flags: ["escape"] },
       // The Colours card moonlet writes from the tokens.
       { path: "foundations/colours/colours.html", flags: [] },
     ]);
-    expect(out.render).toEqual({ total: 3, bad: 1, thin: 1, variants_identical: 0 });
+    expect(out.render).toEqual({ total: 6, bad: 2, thin: 3, variants_identical: 0 });
   });
 
   it("snaps a card, and one of its variants, to a PNG at the card's viewport", () => {
