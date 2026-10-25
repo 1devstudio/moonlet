@@ -662,12 +662,11 @@ export function sessionNeedsYou(s: State, host: string, id: string): boolean {
   return sessionState(s, host, id) === "blocked" || sessionTerminals(s, host, id).some((t) => !!s.unread[termKey(host, t.id)]);
 }
 
-/** Shows an agent: its session's tab, or a design's agent's design (X65),
- *  through the `moonlet:open-design` event Design mode listens to. */
+/** Shows an agent: its session's tab, or a design's agent's design (X65). */
 export function goToAgent(host: string, terminal: number) {
   const info = get().terminals[host]?.[terminal];
   const design = info ? agentPlace(info, undefined).design : null;
-  if (design) window.dispatchEvent(new CustomEvent("moonlet:open-design", { detail: { host, ...design } }));
+  if (design) elsewhere.open(host, design);
   else focusTerminal(host, terminal);
 }
 
@@ -908,9 +907,22 @@ export async function notify(title: string, body: string) {
   }
 }
 
-/** Where agents without a session are on screen: Design mode tells whether
- *  a design's agent is, as its design screen shows it (X65). */
-export const agentsShownElsewhere: { shown: (host: string, terminal: number) => boolean } = { shown: () => false };
+/** Agents without a session, shown by another mode than Sessions: a
+ *  design's agent, on its design screen (X65). */
+export interface AgentsElsewhere {
+  /** Whether the agent's own screen is the one on screen. */
+  shown: (host: string, terminal: number) => boolean;
+  /** Shows a design's agent: its design. */
+  open: (host: string, design: { workspace: string; slug: string }) => void;
+}
+
+let elsewhere: AgentsElsewhere = { shown: () => false, open: () => {} };
+
+/** Design mode says where its agents are, once, when it starts; it is
+ *  told through this, not imported, as it imports the store. */
+export function registerAgentsElsewhere(a: AgentsElsewhere) {
+  elsewhere = a;
+}
 
 /** The user looked at an agent shown outside the sessions (a design's,
  *  X65): its unread mark goes, and its next "done" alerts again. */
@@ -927,10 +939,12 @@ export function agentSeen(host: string, terminal: number) {
   doneBursts.seen(key);
 }
 
-function isVisible(host: string, session: number): boolean {
+/** Whether an agent's tab, or for an agent without a session its own
+ *  screen (a design's, X65), is the one on screen. */
+export function agentOnScreen(host: string, session: number): boolean {
   const s = get();
   const info = s.terminals[host]?.[session];
-  if (info && !info.session_id) return agentsShownElsewhere.shown(host, session);
+  if (info && !info.session_id) return elsewhere.shown(host, session);
   if (!info?.session_id || !s.selected) return false;
   if (s.selected.host !== host || s.selected.session !== info.session_id) return false;
   const layout = s.layouts[sesKey(host, info.session_id)];
@@ -963,7 +977,7 @@ async function onAttention(host: string, a: Attention) {
     void refreshGit(host, a.session_id);
   }
   const focused = document.hasFocus();
-  const visible = focused && isVisible(host, a.terminal);
+  const visible = focused && agentOnScreen(host, a.terminal);
   const burstKey = a.session_id ? sesKey(host, a.session_id) : termKey(host, a.terminal);
   const alert = doneBursts.alert(burstKey, { state: a.state, focused, visible, settings: s.settings, now: Date.now() });
   if (alert.unread) {

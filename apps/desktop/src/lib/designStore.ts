@@ -8,7 +8,7 @@ import { onDaemonEvent, onHostStatus, rpc } from "./daemon";
 import { EV, M, type ChatState, type Design, type DesignCard, type DesignChanged, type DesignCover, type DesignCreated, type DesignOpen, type DesignSystem, type DesignSystemCreated } from "./protocol";
 import { parseWsKey, wsKey } from "./workspaces";
 import { syncNotice } from "./designSync";
-import { agentSeen, agentsShownElsewhere, notify, shownWorkspace, switchWorkspace, toast, useStore } from "./store";
+import { agentSeen, notify, registerAgentsElsewhere, shownWorkspace, switchWorkspace, toast, useStore } from "./store";
 import { alertFor } from "./alerts";
 import { modeOf, setMode } from "./mode";
 import { latestPerKey } from "./prPoll";
@@ -362,18 +362,17 @@ export async function startDesign() {
       }
     }
   };
-  // A notification or an approval of a design's agent opens its design.
-  window.addEventListener("moonlet:open-design", (e) => {
-    const d = (e as CustomEvent<{ host: string; workspace: string; slug: string }>).detail;
-    void openDesign(d.host, d.workspace, d.slug);
+  // A design's agent is on screen while its design screen is shown, and a
+  // notification or an approval of it opens its design.
+  registerAgentsElsewhere({
+    shown: (host, terminal) => {
+      const s = useStore.getState();
+      const ws = shownWorkspace(s);
+      if (!ws || ws.host !== host || modeOf(s) !== "design") return false;
+      return shownDesign(useDesign.getState(), host, ws.id)?.agent === terminal;
+    },
+    open: (host, d) => void openDesign(host, d.workspace, d.slug),
   });
-  // A design's agent is on screen while its design screen is shown.
-  agentsShownElsewhere.shown = (host, terminal) => {
-    const s = useStore.getState();
-    const ws = shownWorkspace(s);
-    if (!ws || ws.host !== host || modeOf(s) !== "design") return false;
-    return shownDesign(useDesign.getState(), host, ws.id)?.agent === terminal;
-  };
   useStore.subscribe((s, prev) => {
     if (s.hosts !== prev.hosts || s.workspaces !== prev.workspaces) listAll();
   });

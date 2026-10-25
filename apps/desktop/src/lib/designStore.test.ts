@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Design, DesignSystem } from "./protocol";
-import { useStore } from "./store";
-import { cardsOf, createSystem, designsOf, detectStack, latestOf, loadCards, loadDesigns, loadSystems, openCard, pageRevOf, revOf, shownCard, shownSystem, showSystem, startDesign, systemsOf, useDesign } from "./designStore";
+import type { Design, DesignSystem, TerminalInfo } from "./protocol";
+import { modeOf, setMode } from "./mode";
+import { agentOnScreen, goToAgent, useStore } from "./store";
+import { cardsOf, createSystem, designsOf, detectStack, latestOf, loadCards, loadDesigns, loadSystems, openCard, pageRevOf, revOf, shownCard, shownDesign, shownSystem, showDesign, showSystem, startDesign, systemsOf, useDesign } from "./designStore";
 
 const calls = vi.hoisted(() => [] as { host: string; method: string; params: unknown }[]);
 /** What the daemon answers, by method. */
@@ -375,5 +376,42 @@ describe("a workspace's designs (X65)", () => {
     await settle();
     expect(designsListed("w-busy")).toHaveLength(2);
     expect(designsOf(useDesign.getState(), "local", "w-busy")?.[0].open_comments).toBe(2);
+  });
+});
+
+describe("a design's agent outside the sessions (X65)", () => {
+  const host = { id: "local", label: "This Mac", remote: false, status: "connected" as const, message: null, daemon_version: null, hostname: null, home: null };
+  const tag = { kind: "design" as const, workspace: "w-1devstudio", slug: "settings-page", name: "Settings page" };
+  const given = async () => {
+    useStore.setState({
+      hosts: { local: host },
+      workspaces: { local: [{ id: "w-1devstudio", name: "1devstudio", color: "clay" as const, section_ids: [], created_at: 0 }] },
+      workspace: { host: "local", id: "w-1devstudio" },
+      mode: {},
+      terminals: { local: { 12: { id: 12, kind: "agent", title: "Design · Settings page", design: tag, chat: true } as unknown as TerminalInfo } },
+      unread: { "local:12": "done" },
+    });
+    answers["design.list"] = () => [design()];
+    answers["design.check"] = () => [];
+    await loadDesigns("local", "w-1devstudio");
+  };
+
+  it("opens its design on Go to", async () => {
+    await given();
+    goToAgent("local", 12);
+    await settle();
+    expect(modeOf(useStore.getState())).toBe("design");
+    expect(shownDesign(useDesign.getState(), "local", "w-1devstudio")?.slug).toBe("settings-page");
+  });
+
+  it("is on screen while its design screen is shown, which marks it seen", async () => {
+    await given();
+    expect(agentOnScreen("local", 12)).toBe(false);
+    setMode("design");
+    showDesign("local", "w-1devstudio", "settings-page");
+    expect(agentOnScreen("local", 12)).toBe(true);
+    expect(useStore.getState().unread["local:12"]).toBeUndefined();
+    showSystem("local", "w-1devstudio", "moonlet-desktop");
+    expect(agentOnScreen("local", 12)).toBe(false);
   });
 });
