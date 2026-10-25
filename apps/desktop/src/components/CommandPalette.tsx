@@ -2,7 +2,8 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Search } from "lucide-react";
 import { runAction } from "../lib/actions";
 import { ACTIONS, assignShortcut, effectiveKeys, filterActions, highlight, keyId, keyLabel, match, recordKey } from "../lib/runActions";
-import { focusTerminal, selectSession, toast, updateSettings, useStore } from "../lib/store";
+import { goToAgent, selectSession, toast, updateSettings, useStore } from "../lib/store";
+import { agentPlace } from "../lib/alerts";
 import { Button, Kbd, StateGlyph, cx } from "./ui";
 import type { AgentState } from "../lib/protocol";
 
@@ -44,12 +45,13 @@ export function CommandPalette() {
       for (const x of Object.values(terms)) {
         if (x.kind !== "agent" || x.exit || (x.agent_state !== "blocked" && x.agent_state !== "error")) continue;
         const ws = sessions[host]?.find((w) => w.id === x.session_id);
+        // A design's agent is `Design · <name>`, and opens its design (X65).
         out.push({
           id: `agent-${host}-${x.id}`,
-          label: `${ws?.name ?? x.title}: ${x.agent_message ?? (x.agent_state === "blocked" ? "needs input" : "failed")}`,
+          label: `${agentPlace(x, ws?.name).label}: ${x.agent_message ?? (x.agent_state === "blocked" ? "needs input" : "failed")}`,
           hint: host === "local" ? (x.agent ?? "") : `${x.agent} · ${host}`,
           state: x.agent_state,
-          run: () => focusTerminal(host, x.id),
+          run: () => goToAgent(host, x.id),
         });
       }
     }
