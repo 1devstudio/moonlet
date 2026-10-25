@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DesignComment } from "./protocol";
-import { boxLabel, boxPlace, keepAction, openCommentsLabel, commentCards, footerLabel, pinLabel, sentLabel, commentLine, commentsMessage, commentsTab, isOrphaned, pageCounts, parseCommentLine, sendAll, withPins } from "./designComments";
+import { boxLabel, boxPlace, chatCardLookup, keepAction, openCommentsLabel, commentCards, footerLabel, pinLabel, sentLabel, commentLine, commentsMessage, commentsTab, isOrphaned, pageCounts, parseCommentLine, sendAll, withPins } from "./designComments";
 
 const pin = (n: number, over: Partial<DesignComment> = {}): DesignComment => ({
   n,
@@ -173,5 +173,15 @@ describe("the comment box (X65)", () => {
 describe("a page's count in Overview (X65)", () => {
   it("says how many comments are open", () => {
     expect([openCommentsLabel(1), openCommentsLabel(3)]).toEqual(["1 open comment", "3 open comments"]);
+  });
+});
+
+describe("Show in chat (X65)", () => {
+  it("waits for the chat to load, at most 5 s, before saying the pin's message is not in it", () => {
+    expect(chatCardLookup({ found: false, loaded: false, waitedMs: 0 })).toBe("wait");
+    expect(chatCardLookup({ found: false, loaded: false, waitedMs: 4900 })).toBe("wait");
+    expect(chatCardLookup({ found: true, loaded: true, waitedMs: 300 })).toBe("found");
+    expect(chatCardLookup({ found: false, loaded: true, waitedMs: 300 })).toBe("missing");
+    expect(chatCardLookup({ found: false, loaded: false, waitedMs: 5000 })).toBe("missing");
   });
 });

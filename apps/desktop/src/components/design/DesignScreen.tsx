@@ -6,6 +6,7 @@
 import { ArrowRight, ChevronDown, LayoutGrid, Loader2, MessageSquare, MoreHorizontal, PanelLeftClose, PanelLeftOpen, PanelRight, SwatchBook, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { errorToast, toast, updateSettings, useStore } from "../../lib/store";
+import { chatKey, useChat } from "../../lib/chat";
 import type { Design, DesignComment } from "../../lib/protocol";
 import { briefShown, designSubtitle } from "../../lib/design";
 import {
@@ -32,7 +33,7 @@ import {
 import { pageUrl } from "../../lib/designView";
 import { VIEWPORTS, canvasKey, canvasScale, canvasZoom, customViewports, fitBox, parseViewport, sizeOf, sizeText, viewportLabel, viewportText, withCustomViewport, type Size } from "../../lib/designViewport";
 import { canvasPage, canvasStep, isTyping, modeHint, modeKey, writingPage, type CanvasAct, type CanvasMode, type CanvasState } from "../../lib/designCanvas";
-import { commentCards, commentCardSelector, commentsTab, keepAction, openCommentsLabel, pageCounts, sendAll } from "../../lib/designComments";
+import { chatCardLookup, commentCards, commentCardSelector, commentsTab, keepAction, openCommentsLabel, pageCounts, sendAll } from "../../lib/designComments";
 import { bridgeMessage, modeMessage, pinsMessage, type PickedElement, type Rect } from "../../lib/designBridge";
 import { pageFile, pagePath } from "../../lib/designPage";
 import { barProblems, chatOpensOn, designBar, pageFixMessage, type Bar, type BarAction, type PageProblem } from "../../lib/designBars";
@@ -168,28 +169,38 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
   const onSendAll = () => {
     sendPins(sendAll(comments, mids));
   };
-  // Show in chat: the chat opens, then scrolls to the pin's last card.
-  const [shownPin, setShownPin] = useState<{ n: number } | null>(null);
+  // Show in chat: the chat opens, then scrolls to the pin's last card, once
+  // its messages have loaded (chatCardLookup).
+  const [shownPin, setShownPin] = useState<{ n: number; at: number } | null>(null);
+  const chatLoaded = useChat((c) => agent !== null && !!c.chats[chatKey(host, agent)]);
   const showInChat = (pin: DesignComment) => {
     setChatOpen(true);
-    setShownPin({ n: pin.n });
+    setShownPin({ n: pin.n, at: Date.now() });
   };
   useEffect(() => {
     if (!shownPin || !chatOpen) return;
-    const cards = chatRef.current?.querySelectorAll<HTMLElement>(commentCardSelector(shownPin.n));
-    const card = cards?.[cards.length - 1];
-    if (!card) {
-      toast("Its message is not in the chat any more", "info");
-      return;
-    }
-    card.scrollIntoView({ block: "center" });
-    card.classList.add("ring-2", "ring-accent");
-    const done = setTimeout(() => card.classList.remove("ring-2", "ring-accent"), 1500);
-    return () => {
-      clearTimeout(done);
-      card.classList.remove("ring-2", "ring-accent");
+    let ringed: HTMLElement | null = null;
+    let done: ReturnType<typeof setTimeout> | undefined;
+    const look = () => {
+      const cards = chatRef.current?.querySelectorAll<HTMLElement>(commentCardSelector(shownPin.n));
+      const card = cards?.[cards.length - 1];
+      const step = chatCardLookup({ found: !!card, loaded: chatLoaded, waitedMs: Date.now() - shownPin.at });
+      if (step === "wait") return;
+      clearInterval(again);
+      if (!card) return toast("Its message is not in the chat any more", "info");
+      card.scrollIntoView({ block: "center" });
+      card.classList.add("ring-2", "ring-accent");
+      ringed = card;
+      done = setTimeout(() => card.classList.remove("ring-2", "ring-accent"), 1500);
     };
-  }, [shownPin, chatOpen]);
+    const again = setInterval(look, 100);
+    look();
+    return () => {
+      clearInterval(again);
+      clearTimeout(done);
+      ringed?.classList.remove("ring-2", "ring-accent");
+    };
+  }, [shownPin, chatOpen, chatLoaded]);
   // A pin picked in the rail: its page, with its box open.
   const openPin = (pin: DesignComment) => {
     if (!pin.page) return;
