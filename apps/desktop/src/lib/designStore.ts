@@ -138,22 +138,43 @@ export async function openDesign(host: string, workspace: string, slug: string) 
   const ws = shownWorkspace(s);
   if (ws?.host !== host || ws.id !== workspace) switchWorkspace({ host, id: workspace });
   setMode("design");
-  await loadDesigns(host, workspace).catch(() => {});
+  await loadDesigns(host, workspace, true).catch(() => {});
   showDesign(host, workspace, slug);
 }
 
-/** The latest designs request per workspace, so an older answer never lands last. */
-const designsAsked = latestPerKey();
-
-/** Lists a workspace's designs (X65). */
-export async function loadDesigns(host: string, workspace: string): Promise<void> {
-  const key = wsKey(host, workspace);
-  const latest = designsAsked.start(key);
-  const list = await rpc<Design[]>(host, M.designList, { workspace });
-  if (latest()) useDesign.setState((s) => ({ designs: { ...s.designs, [key]: list } }));
+/** A listing per workspace (`wsKey`), as the design systems' and the
+ *  designs' are: one request on its way at a time, shared by everyone asking
+ *  meanwhile; `fresh` (something just changed) follows one on its way with
+ *  one more, as it may have read before the change. `wanted` holds the
+ *  workspaces asked for, listed or not, so a failed listing is asked for
+ *  again when the host comes back or the folder changes. */
+function listing(fetch: (host: string, workspace: string, key: string) => Promise<void>) {
+  const onTheWay: Record<string, Promise<void>> = {};
+  const stale = new Set<string>();
+  const wanted = new Set<string>();
+  const load = (host: string, workspace: string, fresh = false): Promise<void> => {
+    const key = wsKey(host, workspace);
+    wanted.add(key);
+    if (fresh && key in onTheWay) stale.add(key);
+    return (onTheWay[key] ??= fetch(host, workspace, key).finally(() => {
+      delete onTheWay[key];
+      if (stale.delete(key)) void load(host, workspace, true).catch(() => {});
+    }));
+  };
+  return { load, wanted, reload: (host: string, workspace: string) => void load(host, workspace, true).catch(() => {}) };
 }
 
-const reloadDesigns = (host: string, workspace: string) => void loadDesigns(host, workspace).catch(() => {});
+const designListing = listing(async (host, workspace, key) => {
+  const list = await rpc<Design[]>(host, M.designList, { workspace });
+  useDesign.setState((s) => ({ designs: { ...s.designs, [key]: list } }));
+});
+
+/** Lists a workspace's designs (X65). `fresh`: something just changed. */
+export function loadDesigns(host: string, workspace: string, fresh = false): Promise<void> {
+  return designListing.load(host, workspace, fresh);
+}
+
+const reloadDesigns = designListing.reload;
 
 /** The latest check per design, so an older answer never lands last. */
 const checksAsked = latestPerKey();
@@ -223,7 +244,7 @@ function onDesignOpen(host: string, ev: DesignOpen) {
 /** **Create design**: makes the design and starts its agent with the brief (X65). */
 export async function createDesign(host: string, workspace: string, n: { name: string; system: string; brief: string }): Promise<DesignCreated> {
   const created = await rpc<DesignCreated>(host, M.designCreate, { workspace, name: n.name, system: n.system, brief: n.brief });
-  await loadDesigns(host, workspace).catch(() => {});
+  await loadDesigns(host, workspace, true).catch(() => {});
   return created;
 }
 
@@ -235,7 +256,7 @@ export async function removeDesign(host: string, workspace: string, slug: string
   const timer = itemKey(host, workspace, slug);
   clearTimeout(checkTimers[timer]);
   delete checkTimers[timer];
-  await loadDesigns(host, workspace).catch(() => {});
+  await loadDesigns(host, workspace, true).catch(() => {});
 }
 
 /** Saves the viewport a design was last shown at in its design.toml. */
@@ -253,33 +274,8 @@ export function systemsOf(s: DesignState, host: string, workspace: string): Desi
   return s.systems[wsKey(host, workspace)];
 }
 
-/** The latest request per workspace, so an older answer never lands last. */
-const asked: Record<string, number> = {};
-/** The listing on its way per workspace, shared by everyone asking meanwhile. */
-const onTheWay: Record<string, Promise<void>> = {};
-/** Workspaces whose systems were asked for, listed or not: a failed listing
- * is asked for again when its host comes back or its folder changes. */
-const wanted = new Set<string>();
-/** Workspaces where something changed while a listing was on its way, which
- * may have been read before it: they are listed once more after it. */
-const stale = new Set<string>();
-
-/** Lists a workspace's design systems. `fresh`: something just changed, so a
- * listing already on its way is followed by one more. */
-export function loadSystems(host: string, workspace: string, fresh = false): Promise<void> {
-  const key = wsKey(host, workspace);
-  wanted.add(key);
-  if (fresh && key in onTheWay) stale.add(key);
-  return (onTheWay[key] ??= fetchSystems(host, workspace, key).finally(() => {
-    delete onTheWay[key];
-    if (stale.delete(key)) reload(host, workspace);
-  }));
-}
-
-async function fetchSystems(host: string, workspace: string, key: string) {
-  const n = (asked[key] = (asked[key] ?? 0) + 1);
+const systemListing = listing(async (host, workspace, key) => {
   const list = await rpc<DesignSystem[]>(host, M.designSystems, { workspace });
-  if (asked[key] !== n) return;
   const before = useDesign.getState().systems[key];
   useDesign.setState((s) => ({ systems: { ...s.systems, [key]: list } }));
   // What a sync agent asks, also on a first listing (it still waits), or a
@@ -288,6 +284,12 @@ async function fetchSystems(host: string, workspace: string, key: string) {
     const notice = syncNotice(before ? (before.find((b) => b.slug === sys.slug) ?? null) : null, sys);
     if (notice && bannerFor(notice.state, host, workspace, sys.slug)) void notify(notice.title, notice.body);
   }
+});
+
+/** Lists a workspace's design systems. `fresh`: something just changed, so a
+ * listing already on its way is followed by one more. */
+export function loadSystems(host: string, workspace: string, fresh = false): Promise<void> {
+  return systemListing.load(host, workspace, fresh);
 }
 
 /** Whether a notification goes out, as a session's would (X47): by the
@@ -300,7 +302,7 @@ function bannerFor(state: "blocked" | "done", host: string, workspace: string, s
   return alertFor({ state, focused: document.hasFocus(), visible, settings: s.settings, now: Date.now() }).banner;
 }
 
-const reload = (host: string, workspace: string) => void loadSystems(host, workspace, true).catch(() => {});
+const reload = systemListing.reload;
 
 /** What each sync agent's chat (`host/id`) last waited for. */
 const waiting: Record<string, string> = {};
@@ -334,7 +336,7 @@ export async function startDesign() {
     else if (e.name === EV.designChanged) {
       const d = e.data as DesignChanged;
       onDesignChange(e.host, d);
-      if (wanted.has(wsKey(e.host, d.workspace))) reload(e.host, d.workspace);
+      if (systemListing.wanted.has(wsKey(e.host, d.workspace))) reload(e.host, d.workspace);
       if (d.system) {
         const key = itemKey(e.host, d.workspace, d.system);
         // Its frames load again, and its cards are listed again when asked for
@@ -355,9 +357,8 @@ export async function startDesign() {
     for (const [host, info] of Object.entries(s.hosts)) {
       if (info.status !== "connected") continue;
       for (const w of s.workspaces[host] ?? []) {
-        if (wanted.has(wsKey(host, w.id))) continue;
-        reload(host, w.id);
-        reloadDesigns(host, w.id);
+        if (!systemListing.wanted.has(wsKey(host, w.id))) reload(host, w.id);
+        if (!designListing.wanted.has(wsKey(host, w.id))) reloadDesigns(host, w.id);
       }
     }
   };
@@ -379,11 +380,10 @@ export async function startDesign() {
   listAll();
   await onHostStatus((h) => {
     if (h.status !== "connected") return;
-    for (const key of wanted) {
-      const ws = parseWsKey(key);
-      if (ws.host === h.id) {
-        reload(h.id, ws.id);
-        reloadDesigns(h.id, ws.id);
+    for (const { wanted, reload: again } of [systemListing, designListing]) {
+      for (const key of wanted) {
+        const ws = parseWsKey(key);
+        if (ws.host === h.id) again(h.id, ws.id);
       }
     }
   });

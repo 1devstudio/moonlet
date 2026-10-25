@@ -350,4 +350,30 @@ describe("a workspace's designs (X65)", () => {
     await settle();
     expect(designsOf(useDesign.getState(), "local", "w-1devstudio")?.[0].needs_you).toEqual({ kind: "approval", text: "Bash: rm -rf assets" });
   });
+
+  it("are asked for again after a listing failed, when the host comes back", async () => {
+    answers["design.list"] = () => {
+      throw new Error("host offline");
+    };
+    await expect(loadDesigns("local", "w-designs-only")).rejects.toThrow("host offline");
+    answers["design.list"] = () => [design()];
+    hostStatus.emit({ id: "local", status: "connected" });
+    await settle();
+    expect(designsOf(useDesign.getState(), "local", "w-designs-only")?.map((d) => d.slug)).toEqual(["settings-page"]);
+  });
+
+  it("are listed once more when something changes while a listing is on its way, so the last answer is the latest", async () => {
+    let release = (_list: Design[]) => {};
+    answers["design.list"] = () => new Promise<Design[]>((r) => (release = r));
+    const first = loadDesigns("local", "w-busy");
+    await settle();
+    answers["design.list"] = () => [design({ open_comments: 2 })];
+    changed("w-busy", { design: "settings-page", paths: ["comments.json"] });
+    release([design()]);
+    await first;
+    await settle();
+    await settle();
+    expect(designsListed("w-busy")).toHaveLength(2);
+    expect(designsOf(useDesign.getState(), "local", "w-busy")?.[0].open_comments).toBe(2);
+  });
 });
