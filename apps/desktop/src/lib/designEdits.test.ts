@@ -212,6 +212,11 @@ describe("an edit by hand on a page's source (X65)", () => {
     expect(() => applyEdit(PAGE, { kind: "move", mid: "m1", place: { where: "above", ref: "m22" } })).toThrow(new EditRefused("The page's body stays"));
   });
 
+  it("refuses a move or an insert the page would not keep where it goes, as a box into a paragraph, which the browser reads outside it", () => {
+    expect(() => applyEdit(PAGE, { kind: "move", mid: "m30", place: { where: "into", ref: "m33" } })).toThrow(new EditRefused("m30 cannot go into m33: the page would not keep its structure"));
+    expect(() => applyEdit(PAGE, { kind: "insert", place: { where: "into", ref: "m33" }, html: "<section><h3>Rows</h3></section>" })).toThrow(new EditRefused("The page would not keep its structure around m33"));
+  });
+
   it("inserts a snippet after the selection, every element of it with a fresh data-mid, which it selects", () => {
     const edit = applyEdit(PAGE, { kind: "insert", place: { where: "below", ref: "m25" }, html: '<button class="btn btn--primary">Save</button>' });
     expect(edit.html).toBe(withLines(19, 1, '      <h2 data-mid="m25">Git</h2>', '      <button data-mid="m41" class="btn btn--primary">Save</button>'));

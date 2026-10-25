@@ -244,7 +244,8 @@ export function applyEdit(html: string, op: EditOp, floor = 0): Edit {
   // save another page than the canvas shows.
   if (JSON.stringify(reshaped(doc, edit.live)) !== JSON.stringify(tree(after).top)) {
     if (op.kind === "wrap") throw new EditRefused(`A box cannot go around ${op.mid} inside <${tagOf(find(doc, op.mid).parentNode)}>`);
-    throw new EditRefused(`The page would not keep its structure around ${op.kind === "paste" ? (op.after ?? "the body") : op.mid}`);
+    if (op.kind === "move") throw new EditRefused(`${op.mid} cannot go ${op.place.where} ${op.place.ref}: the page would not keep its structure`);
+    throw new EditRefused(`The page would not keep its structure around ${op.kind === "paste" ? (op.after ?? "the body") : op.kind === "insert" ? (op.place?.ref ?? "the body") : op.mid}`);
   }
   return edit;
 }
@@ -289,9 +290,15 @@ function reshaped(doc: Node, live: LiveEdit | null): Shape[] {
     return [list, list.indexOf(t.own.get(el)!)];
   };
   if (!live) return t.top;
+  /** The list of element `mid`'s children. */
+  const inside = (mid: string): Shape[] => t.own.get(find(doc, mid))!.kids;
   if (live.op === "insert") {
     const added = tree(parseFragment(live.html)).top;
-    if (live.after !== null) {
+    if ("above" in live) {
+      const [list, i] = place(live.above);
+      list.splice(i, 0, ...added);
+    } else if ("into" in live) inside(live.into).push(...added);
+    else if (live.after !== null) {
       const [list, i] = place(live.after);
       list.splice(i + 1, 0, ...added);
     } else {
@@ -300,7 +307,18 @@ function reshaped(doc: Node, live: LiveEdit | null): Shape[] {
     }
     return t.top;
   }
+  if (live.op === "style") return t.top;
   const [list, i] = place(live.mid);
+  if (live.op === "move") {
+    const [moved] = list.splice(i, 1);
+    const { where, ref } = live.place;
+    if (where === "into") inside(ref).push(moved);
+    else {
+      const [to, j] = place(ref);
+      to.splice(where === "above" ? j : j + 1, 0, moved);
+    }
+    return t.top;
+  }
   if (live.op === "remove") list.splice(i, 1);
   if (live.op === "wrap") list.splice(i, 1, { tag: "div", mid: live.box, kids: [list[i]] });
   if (live.op === "unwrap") list.splice(i, 1, ...list[i].kids);
