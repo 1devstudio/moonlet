@@ -66,11 +66,13 @@ export function changedBanner(sys: DesignSystem, cards: DesignCard[]): string | 
  *  WebKit's site isolation gives each file its own web process and one that
  *  never stops running blocks no other (X64, X65). The key is the 64-bit
  *  FNV-1a hash, in hex, of `path`: the same file always gets the same host.
- *  `rev`, its changes so far, makes a frame load it again after one.
+ *  `rev`, its changes so far, makes a frame load it again after one;
+ *  `query` asks the scheme for more, such as the comment bridge.
  *  `design_scheme.rs` (`target`) parses it. */
-export function designUrl(workspace: string, path: string, rev = 0): string {
+export function designUrl(workspace: string, path: string, rev = 0, query: Record<string, string> = {}): string {
   const url = `moonlet-design://${fnv1a64(path)}.${encodeURIComponent(workspace)}/${path.split("/").map(encodeURIComponent).join("/")}`;
-  return rev ? `${url}?v=${rev}` : url;
+  const params = new URLSearchParams({ ...(rev ? { v: String(rev) } : {}), ...query }).toString();
+  return params ? `${url}?${params}` : url;
 }
 
 /** A design system's card (`path` in the system) on a host of its own (X64). */
@@ -82,8 +84,7 @@ export function cardUrl(workspace: string, slug: string, path: string, rev = 0):
  *  its own (X65). `bridge`: served with the comment bridge, which the canvas
  *  talks to (`design_scheme.rs` `bridging`). */
 export function pageUrl(workspace: string, design: string, page: string, rev = 0, bridge = false): string {
-  const url = designUrl(workspace, `designs/${design}/${pagePath(page)}`, rev);
-  return bridge ? `${url}${rev ? "&" : "?"}moonlet-bridge=1` : url;
+  return designUrl(workspace, `designs/${design}/${pagePath(page)}`, rev, bridge ? { "moonlet-bridge": "1" } : {});
 }
 
 /** The 64-bit FNV-1a hash of `text`'s UTF-8 bytes, as 16 lowercase hex digits. */
