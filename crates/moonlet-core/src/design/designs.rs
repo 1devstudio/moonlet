@@ -11,6 +11,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
+use moonlet_proto::types::{DesignInfo, DesignKind, DesignPage};
+
 use super::check::{Kind, Problem};
 use super::fsx;
 use super::store::Store;
@@ -57,44 +59,6 @@ fn desktop() -> String {
 pub struct PageConfig {
     #[serde(default)]
     pub label: String,
-}
-
-/// Where a design lives (X65). Session and project designs come with entry 12.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DesignKind {
-    /// In `~/.moonlet/design/<workspace>/designs/`, with its own agent.
-    Workspace,
-}
-
-/// One page of a design: `pages/<name>.html`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PageInfo {
-    pub name: String,
-    /// Its label in `design.toml`, when it has one.
-    pub label: Option<String>,
-}
-
-/// What Design mode shows of a design (`design.list`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DesignSummary {
-    pub slug: String,
-    pub name: String,
-    pub kind: DesignKind,
-    /// The design system's slug.
-    pub system: String,
-    /// The design's folder.
-    pub path: String,
-    /// Its pages, `index` first, then by name.
-    pub pages: Vec<PageInfo>,
-    /// The newest change under `pages/`, in ms; its creation before any page.
-    pub updated_at: u64,
-    /// Comments still open in `comments.json`.
-    pub open_comments: usize,
-    /// The chat of its agent, as recorded.
-    pub agent: Option<u32>,
-    /// Why the design could not be read, when it could not.
-    pub error: Option<String>,
 }
 
 /// What moonlet trusts about a design, outside its agent's folders: the agent
@@ -160,7 +124,7 @@ impl Store {
 
     /// The workspace's designs, by name. A design whose `design.toml` cannot
     /// be read still lists, with its error, so it never hides the others.
-    pub fn designs(&self, workspace: &str) -> Result<Vec<DesignSummary>> {
+    pub fn designs(&self, workspace: &str) -> Result<Vec<DesignInfo>> {
         let Ok(entries) = std::fs::read_dir(self.designs_dir(workspace, false)?) else {
             return Ok(Vec::new());
         };
@@ -178,7 +142,7 @@ impl Store {
                 .and_then(|r| r.agent);
             out.push(match read_design_config(&dir) {
                 Ok(config) => summary(&dir, slug, &config, agent),
-                Err(err) => DesignSummary {
+                Err(err) => DesignInfo {
                     name: slug.clone(),
                     slug,
                     kind: DesignKind::Workspace,
@@ -188,6 +152,8 @@ impl Store {
                     updated_at: 0,
                     open_comments: 0,
                     agent,
+                    agent_state: None,
+                    needs_you: None,
                     error: Some(format!("{err:#}")),
                 },
             });
@@ -232,7 +198,7 @@ impl Store {
     }
 
     /// One design as `design.list` shows it.
-    pub fn design(&self, workspace: &str, slug: &str) -> Result<DesignSummary> {
+    pub fn design(&self, workspace: &str, slug: &str) -> Result<DesignInfo> {
         let dir = self.design_dir(workspace, slug)?;
         let config = read_design_config(&dir)?;
         let agent = self.design_record(workspace, slug)?.agent;
@@ -308,9 +274,9 @@ fn read_design_config(dir: &Path) -> Result<DesignConfig> {
 }
 
 /// What the list shows of one design.
-fn summary(dir: &Path, slug: String, config: &DesignConfig, agent: Option<u32>) -> DesignSummary {
+fn summary(dir: &Path, slug: String, config: &DesignConfig, agent: Option<u32>) -> DesignInfo {
     let pages = pages(dir);
-    DesignSummary {
+    DesignInfo {
         slug,
         name: config.name.clone(),
         kind: DesignKind::Workspace,
@@ -323,7 +289,7 @@ fn summary(dir: &Path, slug: String, config: &DesignConfig, agent: Option<u32>) 
             .unwrap_or(config.created_at),
         pages: pages
             .into_iter()
-            .map(|(name, _)| PageInfo {
+            .map(|(name, _)| DesignPage {
                 label: config
                     .pages
                     .get(&name)
@@ -334,6 +300,8 @@ fn summary(dir: &Path, slug: String, config: &DesignConfig, agent: Option<u32>) 
             .collect(),
         open_comments: open_comments(dir),
         agent,
+        agent_state: None,
+        needs_you: None,
         error: None,
     }
 }
@@ -533,14 +501,14 @@ created_at = 1761200000000
             r#"[{"n": 1, "state": "open"}, {"n": 2, "state": "resolved"}, {"n": 3, "state": "open"}]"#,
         )
         .unwrap();
-        let page = |name: &str, label: Option<&str>| PageInfo {
+        let page = |name: &str, label: Option<&str>| DesignPage {
             name: name.into(),
             label: label.map(String::from),
         };
         assert_eq!(
             store.designs("w1").unwrap(),
             vec![
-                DesignSummary {
+                DesignInfo {
                     slug: "onboarding".into(),
                     name: "Onboarding".into(),
                     kind: DesignKind::Workspace,
@@ -554,9 +522,11 @@ created_at = 1761200000000
                     updated_at: 1_761_300_000_000,
                     open_comments: 0,
                     agent: None,
+                    agent_state: None,
+                    needs_you: None,
                     error: None,
                 },
-                DesignSummary {
+                DesignInfo {
                     slug: "settings-page".into(),
                     name: "Settings page".into(),
                     kind: DesignKind::Workspace,
@@ -570,6 +540,8 @@ created_at = 1761200000000
                     updated_at: 1_761_260_000_000,
                     open_comments: 2,
                     agent: None,
+                    agent_state: None,
+                    needs_you: None,
                     error: None,
                 },
             ]
