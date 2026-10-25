@@ -8,11 +8,11 @@ import { useShallow } from "zustand/react/shallow";
 import { errorToast, toast, useStore } from "../../lib/store";
 import { rpc } from "../../lib/daemon";
 import { M, type Design } from "../../lib/protocol";
-import { briefShown, newDesignReady, systemSummary } from "../../lib/design";
+import { briefShown, designSubtitle, newDesignReady, systemSummary } from "../../lib/design";
 import { createDesign, latestOf, systemNameOf, pageRevOf, problemsOf, removeDesign, saveViewport, showDesign, systemsOf, useDesign } from "../../lib/designStore";
 import { pageUrl } from "../../lib/designView";
 import { VIEWPORTS, canvasKey, canvasScale, canvasZoom, parseViewport, viewportLabel, viewportText, type Size } from "../../lib/designViewport";
-import { writingPage } from "../../lib/designCanvas";
+import { canvasPage, writingPage } from "../../lib/designCanvas";
 import { pageFile, pagePath } from "../../lib/designPage";
 import { barProblems, designBar, pageFixMessage, type Bar, type BarAction } from "../../lib/designBars";
 import { claimKeys } from "../../lib/keys";
@@ -48,7 +48,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
 
   const names = design.pages.map((p) => p.name);
   // A page that went away shows the first one; before any, index (being written).
-  const page = picked === null ? null : names.includes(picked) ? picked : (names[0] ?? "index");
+  const page = canvasPage(picked, names);
   const viewport = parseViewport(design.viewport) ?? DESKTOP;
   const fit: Size = [Math.max(cw - 96, 0), Math.max(ch - 96, 0)];
   const scale = canvasScale(zoom, viewport, fit);
@@ -93,8 +93,6 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
       void rpc(host, M.chatSend, { id: agent, text: pageFixMessage(check.page, check.problems), images: [] }).then(() => toast("Asked the agent to fix it"), errorToast);
     }
   };
-  const pages = design.pages.length;
-  const sub = `${system?.name ?? design.system} · ${pages === 0 ? "no pages yet" : `${pages} page${pages === 1 ? "" : "s"}`}`;
 
   return (
     <div className="flex min-h-0 flex-1">
@@ -103,7 +101,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
           <header data-tauri-drag-region className="drag flex h-[52px] shrink-0 items-center gap-1.5 border-b border-border bg-panel pr-2" style={{ paddingLeft: inset + 16 }}>
             <div className="min-w-0 flex-1">
               <h1 className="truncate ui-text-14 font-semibold text-fg">{design.name}</h1>
-              <p className="truncate ui-text-12 text-muted">{sub}</p>
+              <p className="truncate ui-text-12 text-muted">{designSubtitle(systemName, design.pages.length)}</p>
             </div>
             <span title="Build it comes with a later entry of Design mode: it starts a session with this design attached" className="no-drag">
               <Button size="sm" disabled>

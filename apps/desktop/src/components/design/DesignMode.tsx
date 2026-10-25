@@ -7,7 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { errorToast, shownWorkspace, toast, useStore } from "../../lib/store";
 import { type DesignCover } from "../../lib/protocol";
-import { designRow, picksInWorkspace, systemFolder, systemLabel } from "../../lib/design";
+import { designAgentState, designRow, designsEmpty, picksInWorkspace, systemFolder, systemLabel } from "../../lib/design";
 import { createSystem, designsOf, detectStack, loadDesigns, loadSystems, shownDesign, shownSystem, showDesign, showSystem, systemsOf, useDesign } from "../../lib/designStore";
 import { workspaceProjects } from "../../lib/tasksStore";
 import { tildePath } from "../../lib/profiles";
@@ -63,8 +63,9 @@ export function DesignSidebar() {
   const { ws, systems, shown, designs, design } = useWorkspaceSystems(true);
   const working = useStore(useShallow((s) => (ws ? (systems ?? []).map((sys) => agentWorking(s, ws.host, sys.agent)) : [])));
   // Each design's agent's live state, for its dot.
-  const states = useStore(useShallow((s) => (ws ? (designs ?? []).map((d) => (d.agent === null ? null : (s.terminals[ws.host]?.[d.agent]?.agent_state ?? d.agent_state))) : [])));
+  const states = useStore(useShallow((s) => (ws ? (designs ?? []).map((d) => designAgentState(d, d.agent === null ? undefined : s.terminals[ws.host]?.[d.agent]?.agent_state)) : [])));
   const now = useNow(true);
+  const empty = designsEmpty(designs, systems);
   const row = "flex h-[34px] w-full items-center gap-3 rounded-md px-3 text-left ui-text-14";
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -116,9 +117,7 @@ export function DesignSidebar() {
         </nav>
         <Heading label="Designs" />
         <nav aria-label="Designs" className="px-2">
-          {designs?.length === 0 || (!designs && systems?.length === 0) ? (
-            <p className="px-2 py-1 ui-text-12.5 text-faint">{systems?.length ? "No designs yet." : "A design starts from a design system."}</p>
-          ) : null}
+          {empty && <p className="px-2 py-1 ui-text-12.5 text-faint">{empty}</p>}
           {designs?.map((d, i) => {
             const label = designRow(d, now, states[i] ?? null);
             const current = d.slug === design?.slug;
