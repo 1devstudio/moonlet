@@ -42,7 +42,7 @@ import { VIEWPORTS, canvasKey, canvasScale, canvasZoom, customViewports, fitBox,
 import { breadcrumb, dragEdit, hintLine, pickEdit, canvasPage, canvasStep, chatAfter, editorStep, isTyping, keyAct, layerPick, modeEntered, onReport, undoOpen, writingPage, type CanvasAct, type CanvasMode, type CanvasState, type ChatPanel, type KeyAct, type RailTab } from "../../lib/designCanvas";
 import { keyId } from "../../lib/runActions";
 import { chatCardLookup, commentCardSelector, messageView, commentsTab, keepAction, openCommentsLabel, pageCounts, sendAll } from "../../lib/designComments";
-import { bridgeMessage, editMessage, helloMessage, modeMessage, paletteMessage, pinsMessage, scrollMessage, selectMessage, type DragResult, type DropPlace, type Layer, type PickedElement, type Rect } from "../../lib/designBridge";
+import { bridgeMessage, editMessage, helloMessage, modeMessage, paletteMessage, pinsMessage, scrollMessage, selectMessage, type DragOver, type DragResult, type Layer, type PickedElement, type Rect } from "../../lib/designBridge";
 import { pageFile, pagePath } from "../../lib/designPage";
 import { barProblems, chatOpensOn, designBar, pageFixMessage, type Bar, type BarAction, type PageProblem } from "../../lib/designBars";
 import { claimKeys } from "../../lib/keys";
@@ -98,7 +98,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
   // The selection's computed style, as the page reports it, for the Inspector.
   const [computed, setComputed] = useState<{ mid: string; style: Record<string, string> } | null>(null);
   // Where an element or a Palette snippet dragged over the page would drop.
-  const [dragging, setDragging] = useState<{ mid: string | null; place: DropPlace | null } | null>(null);
+  const [dragging, setDragging] = useState<DragOver | null>(null);
   // The snippet dragged from the Palette, until its drag ends.
   const snippetDrag = useRef(snippetDrags());
   // Talks to the shown page's bridge (PageFrame sets it).
@@ -702,7 +702,7 @@ function PageFrame({
   bridge: MutableRefObject<((message: unknown) => void) | null>;
   onTree: (layers: Layer[]) => void;
   onComputed: (mid: string, style: Record<string, string>) => void;
-  onDrag: (drag: { mid: string | null; place: DropPlace | null }) => void;
+  onDrag: (drag: DragOver) => void;
   onDragged: (r: DragResult) => void;
   onSelected: (mid: string | null) => void;
   onText: (mid: string, text: string) => void;
