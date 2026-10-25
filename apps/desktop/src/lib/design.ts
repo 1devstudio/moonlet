@@ -108,6 +108,16 @@ export function newDesignReady(d: NewDesign, systems: string[]): { ready: boolea
   return { ready: true, why: null };
 }
 
+/** The design system New design creates on (X65): the one the user picked
+ *  (`chosen`) while the workspace has it, else the one shown in the sidebar,
+ *  else the first. Worked out on each render, so a list that comes after the
+ *  dialog opened (⇧⌘N before `design.systems` answered) still gets one. */
+export function newDesignSystem(chosen: string, systems: string[], shown: string | undefined): string {
+  if (systems.includes(chosen)) return chosen;
+  if (shown !== undefined && systems.includes(shown)) return shown;
+  return systems[0] ?? "";
+}
+
 /** What the app does on `design.open` (X65): show the design the user asked
  *  for; one an agent started (`spawned_by`) is offered in a toast instead, and
  *  the focus stays where it is (as X22). */
