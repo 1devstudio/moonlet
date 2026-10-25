@@ -228,6 +228,7 @@ impl Daemon {
             sessions.clone(),
             move |m| emitter.emit(m),
         );
+        runs.set_machines(Arc::downgrade(&machines));
         link.set_runs(Arc::downgrade(&runs));
         Arc::new(Self {
             heavy,
@@ -653,10 +654,14 @@ impl Daemon {
                 env.insert("MOONLET_ROUTED".into(), "1".into());
                 env.insert("MOONLET_SESSION".into(), r.session.clone());
                 let me = self.link.info().worker;
+                let session = self.sessions.session(&r.session).ok();
                 let plan = crate::exec::Plan {
                     session: r.session,
                     worktree: checked.worktree.display().to_string(),
                     project: checked.project.clone(),
+                    project_id: session.as_ref().map(|s| s.project_id.clone()).unwrap_or_default(),
+                    session_name: session.as_ref().map(|s| s.name.clone()).unwrap_or_default(),
+                    cloud: session.as_ref().is_some_and(|s| s.cloud),
                     tool_use_id: r.tool_use_id.clone(),
                     argv: r.argv.clone(),
                     cwd_rel: checked.cwd_rel,
@@ -697,7 +702,30 @@ impl Daemon {
                 // Tokens and limits: never an agent's CLI nor a phone.
                 self.app_or_paired_mac(conn, "cloud workers")?;
                 let r: m::CloudSet = params(p)?;
-                ok(self.cloud.set(r, self.machines.provider_infos())?)
+                // Projects turned off and providers removed: their machines go.
+                let off: Vec<String> = r
+                    .projects
+                    .iter()
+                    .flatten()
+                    .filter(|(_, p)| p.is_none())
+                    .map(|(k, _)| k.clone())
+                    .collect();
+                let gone: Vec<String> = r
+                    .providers
+                    .iter()
+                    .flatten()
+                    .filter(|(_, p)| p.is_none())
+                    .map(|(k, _)| k.clone())
+                    .collect();
+                let machines = self.machines.clone();
+                let info = self.cloud.set(r, self.machines.provider_infos(), &|p| machines.has_machines(p))?;
+                for key in off {
+                    self.machines.project_off(&key);
+                }
+                for provider in gone {
+                    self.machines.provider_off(&provider);
+                }
+                ok(info)
             }
             m::EXEC_SETUPS => {
                 app_only(conn, "setup")?;
@@ -778,10 +806,7 @@ impl Daemon {
             m::JOB_RUN_HERE => {
                 jobs_reader(conn)?;
                 let r: m::JobRef = params(p)?;
-                match self.jobs.get(&r.job).map(|j| j.state) {
-                    None => Err(RpcError::new("not_found", "no such job")),
-                    Some(_) => Err(RpcError::new("not_waiting", "the job is not waiting for a machine")),
-                }
+                ok(self.runs.run_here(&r.job)?)
             }
             m::EXEC_ROUTE => {
                 let r: m::ExecRoute = params(p)?;

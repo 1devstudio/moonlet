@@ -103,6 +103,8 @@ fn kinds(providers: Vec<moonlet_cloud::ProviderInfo>) -> Vec<CloudKind> {
 pub struct CloudSettings {
     path: PathBuf,
     data: Mutex<CloudFile>,
+    /// Providers asked to be removed, kept until their machines are gone.
+    pending: Mutex<Vec<String>>,
 }
 
 impl CloudSettings {
@@ -116,6 +118,7 @@ impl CloudSettings {
         CloudSettings {
             path,
             data: Mutex::new(data),
+            pending: Mutex::default(),
         }
     }
 
@@ -168,10 +171,13 @@ impl CloudSettings {
     }
 
     /// `cloud.set`: applies `req` and writes the file.
+    /// `busy(provider)` says whether a provider still has machines: one
+    /// asked to be removed stays until they are gone.
     pub fn set(
         &self,
         req: CloudSet,
         providers: Vec<moonlet_cloud::ProviderInfo>,
+        busy: &dyn Fn(&str) -> bool,
     ) -> Result<CloudInfo, RpcError> {
         let invalid = |m: &str| RpcError::new("invalid_params", m.to_string());
         if req.idle_minutes.is_some_and(|n| n > 1440) {
@@ -192,6 +198,7 @@ impl CloudSettings {
             let mut f = self.data.lock().unwrap();
             for (id, fields) in req.providers.into_iter().flatten() {
                 match fields {
+                    None if busy(&id) => self.pending.lock().unwrap().push(id),
                     None => {
                         f.providers.remove(&id);
                     }
@@ -236,6 +243,20 @@ impl CloudSettings {
         self.save()
             .map_err(|e| RpcError::new("internal", format!("cannot write cloud.json: {e}")))?;
         Ok(self.info(providers))
+    }
+
+    /// Removes provider `id` if it waited for its machines to go.
+    pub fn drop_pending(&self, id: &str) {
+        let waited = {
+            let mut pending = self.pending.lock().unwrap();
+            let had = pending.iter().any(|p| p == id);
+            pending.retain(|p| p != id);
+            had
+        };
+        if waited {
+            self.data.lock().unwrap().providers.remove(id);
+            let _ = self.save();
+        }
     }
 
     fn save(&self) -> std::io::Result<()> {
