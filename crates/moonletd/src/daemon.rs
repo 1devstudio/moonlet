@@ -1322,8 +1322,7 @@ impl Daemon {
             }
             m::DESIGN_PAGE => {
                 let r: m::DesignPageRef = params(p)?;
-                let page = blocking(move || store.page(&r.workspace, &r.slug, &r.page)).await?;
-                ok(m::DesignPageText { html: page.html, version: page.version })
+                ok(blocking(move || store.page(&r.workspace, &r.slug, &r.page)).await?)
             }
             m::DESIGN_WRITE_PAGE => {
                 let r: m::DesignWritePage = params(p)?;
