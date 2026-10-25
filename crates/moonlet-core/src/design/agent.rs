@@ -7,6 +7,7 @@ use std::path::Path;
 use anyhow::{Result, bail};
 
 use super::anchor::CardStatus;
+use super::designs::DesignConfig;
 use super::store::SystemConfig;
 
 /// What the daemon starts the agent with.
@@ -43,16 +44,7 @@ pub fn sync_launch(
     bin: &Path,
     task: Task,
 ) -> Result<Launch> {
-    // Claude reads a rule's path as a glob: a folder named with `*?[]{}`
-    // would deny something else than itself, so it is refused.
-    if let Some(bad) = sources
-        .iter()
-        .find(|s| s.contains(['*', '?', '[', ']', '{', '}']))
-    {
-        bail!(
-            "{bad} has a character Claude's permission rules read as a pattern; move or rename the folder"
-        );
-    }
+    no_pattern(sources)?;
     let bin = bin.display();
     // `Edit(//abs/**)`: an absolute path, as Claude's rules write one. It
     // covers every tool that edits files; `--add-dir` alone would not.
@@ -101,6 +93,72 @@ pub fn sync_launch(
         mode: "acceptEdits".into(),
         prompt,
     })
+}
+
+/// The design rules (X65), as the `moonlet-design` skill installs them in
+/// `designs.md`: one text, which a design's first message also carries.
+pub const DESIGN_RULES: &str = include_str!("../skill/moonlet-design/designs.md");
+
+/// The launch of the agent of the workspace design in `dir` (X65): Claude Code
+/// in the design's folder, its design system's folder `system_dir` (a real
+/// path) added read only, allowed to check its pages without asking. Its first
+/// message is the brief, with the design system's `README.md` and the design
+/// rules.
+pub fn design_launch(
+    dir: &Path,
+    config: &DesignConfig,
+    system_dir: &Path,
+    readme: &str,
+    bin: &Path,
+) -> Result<Launch> {
+    let system = system_dir.display().to_string();
+    no_pattern(std::slice::from_ref(&system))?;
+    let bin = bin.display();
+    // Every Claude Code tool that edits files is denied in the design system;
+    // the design's own folder is covered by Accept edits.
+    let deny = [format!("Edit(/{system}/**)")];
+    // The check of this folder's design, and its fix, with no other arguments.
+    let allow = [
+        format!("Bash({bin} design check)"),
+        format!("Bash({bin} design check --fix)"),
+    ];
+    let settings = serde_json::json!({ "permissions": { "allow": allow, "deny": deny } });
+    // The rules as the skill installs them, without its install mark.
+    let rules = DESIGN_RULES
+        .split_once("-->\n")
+        .map_or(DESIGN_RULES, |(_, rest)| rest)
+        .trim_start();
+    let prompt = format!(
+        "{brief}\n\n---\nThis is the design \"{name}\" in this folder, on the design system \"{slug}\" at {system} (read only). Its README.md:\n\n{readme}\n\n{rules}\nRun moonlet's commands with this exact path:\n\
+- to check your pages: {bin} design check\n\
+- to give elements without an id, or with a repeated one, the next free ids: {bin} design check --fix\n",
+        brief = config.brief.trim(),
+        name = config.name,
+        slug = config.system,
+        readme = readme.trim_end(),
+    );
+    Ok(Launch {
+        cwd: dir.display().to_string(),
+        add_dirs: vec![system],
+        settings: settings.to_string(),
+        title: format!("Design · {}", config.name),
+        mode: "acceptEdits".into(),
+        prompt,
+    })
+}
+
+/// Claude reads a rule's path as a glob: a folder named with `*?[]{}` would
+/// deny something else than itself, so it is refused.
+fn no_pattern(folders: &[String]) -> Result<()> {
+    if let Some(bad) = folders
+        .iter()
+        .find(|s| s.contains(['*', '?', '[', ']', '{', '}']))
+    {
+        bail!(
+            "{bad} has a character Claude's permission rules read as a pattern; move or rename the folder"
+        );
+    }
+    Ok(())
 }
 
 /// The cards a re-sync covers, one line each.
@@ -333,5 +391,93 @@ Follow the moonlet-design skill's sync: rewrite only these cards, and leave a ca
                 text: "Bash: find src -name '*.tsx'".into()
             })
         );
+    }
+
+    #[test]
+    fn a_designs_agent_reads_its_design_system_and_may_only_check_its_pages() {
+        let config = DesignConfig {
+            name: "Settings page".into(),
+            system: "moonlet-desktop".into(),
+            brief: "A settings page with General and Git sections".into(),
+            viewport: "1440x900".into(),
+            created_at: 1,
+            session: None,
+            pages: BTreeMap::new(),
+        };
+        let launch = design_launch(
+            Path::new("/Users/alex/.moonlet/design/w1/designs/settings-page"),
+            &config,
+            Path::new("/Users/alex/.moonlet/design/w1/systems/moonlet-desktop"),
+            "# moonlet desktop\n\nLink styles.css.\n",
+            Path::new("/Applications/moonlet.app/Contents/MacOS/moonlet"),
+        )
+        .unwrap();
+        assert_eq!(
+            (launch.cwd.as_str(), launch.add_dirs.clone(), launch.title.as_str(), launch.mode.as_str()),
+            (
+                "/Users/alex/.moonlet/design/w1/designs/settings-page",
+                vec!["/Users/alex/.moonlet/design/w1/systems/moonlet-desktop".to_string()],
+                "Design · Settings page",
+                "acceptEdits"
+            )
+        );
+        assert_eq!(
+            launch.settings,
+            r#"{"permissions":{"allow":["Bash(/Applications/moonlet.app/Contents/MacOS/moonlet design check)","Bash(/Applications/moonlet.app/Contents/MacOS/moonlet design check --fix)"],"deny":["Edit(//Users/alex/.moonlet/design/w1/systems/moonlet-desktop/**)"]}}"#
+        );
+        // The brief first, then the design system's README and the rules.
+        assert!(
+            launch.prompt.starts_with(
+                "A settings page with General and Git sections
+
+---
+This is the design \"Settings page\" in this folder, on the design system \"moonlet-desktop\" at /Users/alex/.moonlet/design/w1/systems/moonlet-desktop (read only). Its README.md:
+
+# moonlet desktop
+
+Link styles.css.
+
+# Design rules
+"
+            ),
+            "{}",
+            launch.prompt
+        );
+        for rule in [
+            "- **Link only the design system's `styles.css`**, from a page in `pages/` as `<link rel=\"stylesheet\" href=\"../../../systems/<system>/styles.css\">`",
+            "- **Start from the design system**: its layouts in `ui_kits/`, the snippets in its cards",
+            "- **Read a component's `.prompt.md` before you use it**, and use its classes instead of raw elements",
+            "- **Keep `data-mid` on every element** of the body",
+            "- **Write one page per variant**: `pages/index.html` first",
+            "- **Run the check after each change**",
+        ] {
+            assert!(launch.prompt.contains(rule), "{rule}");
+        }
+        assert!(!launch.prompt.contains("Installed by moonlet"), "{}", launch.prompt);
+        assert!(
+            launch.prompt.ends_with(
+                "Run moonlet's commands with this exact path:
+- to check your pages: /Applications/moonlet.app/Contents/MacOS/moonlet design check
+- to give elements without an id, or with a repeated one, the next free ids: /Applications/moonlet.app/Contents/MacOS/moonlet design check --fix
+"
+            ),
+            "{}",
+            launch.prompt
+        );
+    }
+
+    #[test]
+    fn a_design_system_folder_with_glob_characters_is_refused_for_a_design() {
+        let config = DesignConfig {
+            name: "x".into(),
+            system: "s".into(),
+            brief: String::new(),
+            viewport: "1440x900".into(),
+            created_at: 1,
+            session: None,
+            pages: BTreeMap::new(),
+        };
+        let refused = design_launch(Path::new("/d"), &config, Path::new("/home/a[1]/s"), "", Path::new("/bin/moonlet"));
+        assert!(refused.is_err());
     }
 }

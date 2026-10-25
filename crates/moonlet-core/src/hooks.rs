@@ -107,11 +107,12 @@ const SKILL_MARKER: &str = "Installed by moonlet";
 /// The same mark in the `jaunt` skill, installed before the rename (X27).
 const JAUNT_SKILL_MARKER: &str = "Installed by jaunt";
 
-/// The moonlet-design skill (X64): its steps, and the card formats it reads
-/// in its Cards step.
-pub const DESIGN_SKILL_FILES: [(&str, &str); 2] = [
+/// The moonlet-design skill (X64): its steps, the card formats it reads in
+/// its Cards step, and the design rules a design's agent follows (X65).
+pub const DESIGN_SKILL_FILES: [(&str, &str); 3] = [
     ("SKILL.md", include_str!("skill/moonlet-design/SKILL.md")),
     ("cards.md", include_str!("skill/moonlet-design/cards.md")),
+    ("designs.md", crate::design::agent::DESIGN_RULES),
 ];
 
 /// Every file of moonlet's skills for one agent, given the `moonlet` skill's
@@ -583,6 +584,9 @@ mod tests {
             assert!(skill.starts_with("---\nname: moonlet-design\n"), "{skill}");
             let cards = std::fs::read_to_string(dir.path().join(agent).join("skills/moonlet-design/cards.md")).unwrap();
             assert!(cards.contains("# Cards, snippets and `.prompt.md`"), "{cards}");
+            // The design rules a design's agent follows (X65).
+            let rules = std::fs::read_to_string(dir.path().join(agent).join("skills/moonlet-design/designs.md")).unwrap();
+            assert!(rules.contains("# Design rules"), "{rules}");
         }
         // Without it, the skills are not current and an install is due.
         std::fs::remove_file(dir.path().join("claude/skills/moonlet-design/cards.md")).unwrap();
@@ -655,7 +659,11 @@ mod tests {
         let rewritten = refresh_skills(&p).unwrap();
         assert_eq!(
             rewritten,
-            vec![dir.path().join("claude/skills/moonlet-design/SKILL.md"), dir.path().join("claude/skills/moonlet-design/cards.md")]
+            vec![
+                dir.path().join("claude/skills/moonlet-design/SKILL.md"),
+                dir.path().join("claude/skills/moonlet-design/cards.md"),
+                dir.path().join("claude/skills/moonlet-design/designs.md")
+            ]
         );
         assert!(!dir.path().join("codex/skills/moonlet-design").exists(), "no moonlet skill there, nothing added");
         assert!(status(&p).unwrap().claude_skill);
@@ -687,7 +695,10 @@ mod tests {
         std::fs::write(&p.claude_skill, old).unwrap();
 
         let design = dir.path().join("claude/skills/moonlet-design");
-        assert_eq!(refresh_skills(&p).unwrap(), vec![p.claude_skill.clone(), design.join("SKILL.md"), design.join("cards.md")]);
+        assert_eq!(
+            refresh_skills(&p).unwrap(),
+            vec![p.claude_skill.clone(), design.join("SKILL.md"), design.join("cards.md"), design.join("designs.md")]
+        );
         let text = std::fs::read_to_string(&p.claude_skill).unwrap();
         assert!(text.contains(r#""$MOONLET_BIN" term read <id>"#), "{text}");
         assert!(!p.codex_skill.exists(), "a skill never installed stays absent");

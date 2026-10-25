@@ -1,6 +1,6 @@
 ---
 name: moonlet-design
-description: "Build or sync a moonlet design system: static HTML cards, tokens and layouts copied from a project's code, for moonlet's Design mode. Use when your first message asks you to build or sync a design system, or the user runs /moonlet-design."
+description: "Build or sync a moonlet design system: static HTML cards, tokens and layouts copied from a project's code, for moonlet's Design mode; and write a design's pages on one. Use when your first message asks you to build or sync a design system, when you work in a design's folder, or the user runs /moonlet-design."
 ---
 
 <!-- Installed by moonlet (`moonlet hooks install`); reinstalling overwrites this file. -->
@@ -13,6 +13,7 @@ A **design system** is a folder of static HTML and CSS that shows a project's UI
 
 - **You work in a session of a project** (the user ran `/moonlet-design sync`): run `"$MOONLET_BIN" design system ls`. If a design system is built from this project, run `"$MOONLET_BIN" design system sync --system <slug>`; otherwise `"$MOONLET_BIN" design system new "<name>" --from <this project's path>`. Tell the user its own agent now does the work in Design mode, and stop.
 - **You are the sync agent**: your working folder holds `config.toml`, and your first message names the source folders and the path of `moonlet`. On a **build**, do steps 1 to 4. On a **sync**, do the steps of [Sync](#sync).
+- **You are a design's agent**: your working folder holds `design.toml`, and your first message is the user's brief, with the design system's `README.md`. Follow [designs.md](designs.md), the design rules; the rest of this skill is for design systems.
 
 Run moonlet with the exact path your first message gives; it is written `moonlet` below. Its `design` commands in that message run without asking: `design system progress`, `design check` (also with `--render`), `design snap` and `design system synced`.
 
