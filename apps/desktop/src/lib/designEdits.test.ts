@@ -212,6 +212,27 @@ describe("an edit by hand on a page's source (X65)", () => {
     expect(() => applyEdit(PAGE, { kind: "move", mid: "m1", place: { where: "above", ref: "m22" } })).toThrow(new EditRefused("The page's body stays"));
   });
 
+  it("inserts a snippet after the selection, every element of it with a fresh data-mid, which it selects", () => {
+    const edit = applyEdit(PAGE, { kind: "insert", place: { where: "below", ref: "m25" }, html: '<button class="btn btn--primary">Save</button>' });
+    expect(edit.html).toBe(withLines(19, 1, '      <h2 data-mid="m25">Git</h2>', '      <button data-mid="m41" class="btn btn--primary">Save</button>'));
+    expect(edit.select).toBe("m41");
+    expect(edit.live).toEqual({ op: "insert", after: "m25", html: '<button data-mid="m41" class="btn btn--primary">Save</button>' });
+    expect(editLine({ page: "index", ...edit.change })).toBe("index.html m41 button: inserted after m25");
+  });
+
+  it("inserts a snippet of several elements in a box, above an element or into a container, its svg's drawing without ids", () => {
+    const snippet = '\n  <span class="switch"><svg viewBox="0 0 8 8"><path d="M0 0h8"/></svg></span>\n  <label>On</label>\n';
+    const into = applyEdit(PAGE, { kind: "insert", place: { where: "into", ref: "m22" }, html: snippet });
+    expect(into.html).toBe(
+      withLines(17, 1, '      <div data-mid="m41"><span data-mid="m42" class="switch"><svg data-mid="m43" viewBox="0 0 8 8"><path d="M0 0h8"/></svg></span>\n  <label data-mid="m44">On</label></div>', "    </section>"),
+    );
+    expect(editLine({ page: "index", ...into.change })).toBe("index.html m41 div: inserted into m22");
+    const above = applyEdit(PAGE, { kind: "insert", place: { where: "above", ref: "m22" }, html: "<hr>" });
+    expect(above.html).toBe(withLines(15, 1, '    <hr data-mid="m41">', '    <section data-mid="m22" class="card">'));
+    expect(editLine({ page: "index", ...above.change })).toBe("index.html m41 hr: inserted above m22");
+    expect(() => applyEdit(PAGE, { kind: "insert", place: null, html: "  just text  " })).toThrow(new EditRefused("The snippet has no element to insert"));
+  });
+
   it("restyles an element by its inline style, written as the style attribute after its others", () => {
     const edit = applyEdit(PAGE, { kind: "restyle", mid: "m24", set: { padding: "var(--space-4)" } });
     expect(edit.html).toBe(withLines(18, 1, '    <section data-mid="m24" class="card rows" style="padding: var(--space-4)">'));
