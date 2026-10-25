@@ -956,14 +956,20 @@ struct HomeDaemon {
     home: tempfile::TempDir,
     socket: PathBuf,
     path: Option<String>,
+    /// More environment it starts with, such as a test's seam.
+    env: Vec<(String, String)>,
     child: Child,
 }
 
 impl HomeDaemon {
     async fn start(home: tempfile::TempDir, path: Option<&str>) -> HomeDaemon {
+        Self::start_with(home, path, Vec::new()).await
+    }
+
+    async fn start_with(home: tempfile::TempDir, path: Option<&str>, env: Vec<(String, String)>) -> HomeDaemon {
         let socket = home.path().join(".moonlet/run/moonletd.sock");
-        let child = Self::spawn(home.path(), &socket, path).await;
-        HomeDaemon { home, socket, path: path.map(String::from), child }
+        let child = Self::spawn(home.path(), &socket, path, &env).await;
+        HomeDaemon { home, socket, path: path.map(String::from), env, child }
     }
 
     /// Kills the daemon and starts it again on the same home, as after a
@@ -981,11 +987,12 @@ impl HomeDaemon {
     }
 
     async fn start_again(&mut self) {
-        self.child = Self::spawn(self.home.path(), &self.socket, self.path.as_deref()).await;
+        self.child = Self::spawn(self.home.path(), &self.socket, self.path.as_deref(), &self.env).await;
     }
 
-    async fn spawn(home: &std::path::Path, socket: &std::path::Path, path: Option<&str>) -> Child {
+    async fn spawn(home: &std::path::Path, socket: &std::path::Path, path: Option<&str>, env: &[(String, String)]) -> Child {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_moonletd"));
+        cmd.envs(env.iter().map(|(k, v)| (k, v)));
         cmd.arg("daemon")
             .env("HOME", home)
             .env_remove("MOONLET_SOCK")
@@ -1019,6 +1026,11 @@ impl Drop for HomeDaemon {
 /// A daemon whose terminals and agents find `script` as `claude`: it is
 /// first on the login shell's PATH, which the rc files set.
 async fn fake_claude_daemon(script: &str) -> HomeDaemon {
+    fake_claude_daemon_with(script, Vec::new()).await
+}
+
+/// As [`fake_claude_daemon`], the daemon started with `env` too.
+async fn fake_claude_daemon_with(script: &str, env: Vec<(String, String)>) -> HomeDaemon {
     use std::os::unix::fs::PermissionsExt;
     let home = tempfile::tempdir().unwrap();
     let bin = home.path().join("bin");
@@ -1031,7 +1043,7 @@ async fn fake_claude_daemon(script: &str) -> HomeDaemon {
         std::fs::write(home.path().join(rc), &first).unwrap();
     }
     let path = format!("{}:/usr/bin:/bin", bin.display());
-    HomeDaemon::start(home, Some(&path)).await
+    HomeDaemon::start_with(home, Some(&path), env).await
 }
 
 const OLD_SKILL: &str = "---\nname: moonlet\n---\n<!-- Installed by moonlet -->\nold\n";
@@ -3239,4 +3251,160 @@ async fn a_render_waits_its_turn_without_its_clock_running() {
     // Neither card ran out of time: both were measured.
     assert_eq!(checked["render"], serde_json::json!({"total": 2, "bad": 0, "thin": 0, "variants_identical": 0}));
     assert_eq!(most.load(Ordering::SeqCst), 1);
+}
+
+/// A design's agent that writes `pages/index.html` on each turn, "turn <n>",
+/// and leaves a message that says `HANG-NOW` unanswered, so it keeps working.
+const WRITING_CLAUDE: &str = r#"#!/bin/sh
+n=0
+while IFS= read -r line; do
+  case "$line" in
+    *'"subtype":"initialize"'*) echo '{"type":"system","subtype":"init","session_id":"s1","model":"fake"}' ;;
+    *'HANG-NOW'*) ;;
+    *'"type":"user"'*) n=$((n+1)); mkdir -p pages
+      printf '<body data-mid="m1"><p data-mid="m2">turn %s</p></body>\n' "$n" > pages/index.html
+      echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}' ;;
+  esac
+done
+"#;
+
+/// `design.history` once it lists `n` snapshots, within 10 s.
+async fn history_of(c: &mut Client, ws: &str, n: usize) -> serde_json::Value {
+    for _ in 0..100 {
+        let listed: serde_json::Value = c.request(methods::DESIGN_HISTORY, serde_json::json!({"workspace": ws, "slug": "settings-page"})).await.unwrap();
+        if listed.as_array().is_some_and(|a| a.len() >= n) {
+            return listed;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("no {n} snapshots");
+}
+
+/// X65: when a design's agent ends a turn that changed its pages, the
+/// daemon takes a snapshot, which `design.history` lists with what the turn
+/// wrote, and `design.changed` announces.
+#[tokio::test]
+async fn an_agent_turn_that_changed_the_design_takes_a_snapshot() {
+    let d = fake_claude_daemon(WRITING_CLAUDE).await;
+    let mut c = d.client().await;
+    let ws = workspace_with_system(&d, &mut c).await;
+    let mut listener = d.client().await;
+    let created: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    let listed = history_of(&mut c, &ws, 1).await;
+    let first = &listed[0];
+    assert_eq!(
+        (&first["n"], &first["type"], &first["summary"], &first["pages"]),
+        (&serde_json::json!(1), &serde_json::json!("agent_turn"), &serde_json::json!("Wrote index.html · 1 page"), &serde_json::json!(["index"]))
+    );
+    let dir = d.home.path().join(".moonlet/design").join(&ws).join("designs/settings-page");
+    assert_eq!(std::fs::read_to_string(dir.join("history/1/pages/index.html")).unwrap(), "<body data-mid=\"m1\"><p data-mid=\"m2\">turn 1</p></body>\n");
+    next_change_of(&mut listener, "history/1/snapshot.json").await;
+
+    let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": created["agent"], "text": "Again"})).await.unwrap();
+    let listed = history_of(&mut c, &ws, 2).await;
+    assert_eq!((&listed[0]["n"], &listed[0]["type"]), (&serde_json::json!(2), &serde_json::json!("agent_turn")));
+    assert_eq!(std::fs::read_to_string(dir.join("history/2/pages/index.html")).unwrap(), "<body data-mid=\"m1\"><p data-mid=\"m2\">turn 2</p></body>\n");
+}
+
+/// X65: edits by hand, `design.write_page`'s saves, are kept in a snapshot
+/// once they stop for a while (10 s; 1 s here, through the daemon's
+/// `MOONLET_DESIGN_QUIET_MS`), summed up from what each save said its
+/// edits did.
+#[tokio::test]
+async fn edits_by_hand_take_a_snapshot_once_they_stop_for_a_while() {
+    let d = fake_claude_daemon_with(FAKE_CLAUDE, vec![("MOONLET_DESIGN_QUIET_MS".into(), "1000".into())]).await;
+    let mut c = d.client().await;
+    let ws = workspace_with_system(&d, &mut c).await;
+    let _: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    let file = d.home.path().join(".moonlet/design").join(&ws).join("designs/settings-page/pages/index.html");
+    std::fs::write(&file, "<body data-mid=\"m1\"></body>\n").unwrap();
+    let mut version: serde_json::Value = c.request(methods::DESIGN_PAGE, serde_json::json!({"workspace": ws, "slug": "settings-page", "page": "index"})).await.unwrap();
+    let mut save = async |html: &str, edits: &[&str]| {
+        let saved: serde_json::Value = c
+            .request(
+                methods::DESIGN_WRITE_PAGE,
+                serde_json::json!({"workspace": ws, "slug": "settings-page", "page": "index", "html": html, "base_version": version["version"], "edits": edits}),
+            )
+            .await
+            .unwrap();
+        version = saved;
+    };
+    save("<body data-mid=\"m1\"><p>1</p></body>\n", &["moved section m24", "restyled h2 m25"]).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let last = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+    save("<body data-mid=\"m1\"><p>2</p></body>\n", &["restyled h2 m25", "text of m30"]).await;
+    let edits = |listed: &serde_json::Value| listed.as_array().unwrap().iter().filter(|s| s["type"] == "edits_by_hand").cloned().collect::<Vec<_>>();
+    // Not while the edits go on.
+    let now: serde_json::Value = c.request(methods::DESIGN_HISTORY, serde_json::json!({"workspace": ws, "slug": "settings-page"})).await.unwrap();
+    assert_eq!(edits(&now), Vec::<serde_json::Value>::new());
+    let mut taken = Vec::new();
+    for _ in 0..100 {
+        let listed: serde_json::Value = c.request(methods::DESIGN_HISTORY, serde_json::json!({"workspace": ws, "slug": "settings-page"})).await.unwrap();
+        taken = edits(&listed);
+        if !taken.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(taken.len(), 1, "one snapshot for the burst");
+    assert_eq!(taken[0]["summary"], "Moved section m24, restyled h2 m25, text of m30");
+    assert!(taken[0]["time"].as_u64().unwrap() >= last + 1000, "taken {} after the last save at {last}", taken[0]["time"]);
+    let n = taken[0]["n"].as_u64().unwrap();
+    let kept = d.home.path().join(".moonlet/design").join(&ws).join(format!("designs/settings-page/history/{n}/pages/index.html"));
+    assert_eq!(std::fs::read_to_string(kept).unwrap(), "<body data-mid=\"m1\"><p>2</p></body>\n");
+}
+
+/// X65: `design.snapshot.restore` makes a snapshot the design's pages, after
+/// keeping what was not kept yet, and records a Restored snapshot entry;
+/// an unknown snapshot is a bad parameter, and it waits for the agent:
+/// refused as `busy` while it works.
+#[tokio::test]
+async fn a_snapshot_is_restored_over_rpc_but_never_while_the_agent_works() {
+    let d = fake_claude_daemon(WRITING_CLAUDE).await;
+    let mut c = d.client().await;
+    let ws = workspace_with_system(&d, &mut c).await;
+    let created: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    history_of(&mut c, &ws, 1).await;
+    let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": created["agent"], "text": "Again"})).await.unwrap();
+    let listed = history_of(&mut c, &ws, 2).await;
+    let file = d.home.path().join(".moonlet/design").join(&ws).join("designs/settings-page/pages/index.html");
+    // Changed by hand outside the editor, and not kept yet.
+    std::fs::write(&file, "<p>by hand</p>\n").unwrap();
+    let restore = |n: u32| serde_json::json!({"workspace": ws, "slug": "settings-page", "n": n});
+    let restored: serde_json::Value = c.request(methods::DESIGN_SNAPSHOT_RESTORE, restore(1)).await.unwrap();
+    assert_eq!(
+        (&restored["n"], &restored["type"], &restored["from"], &restored["summary"]),
+        (&serde_json::json!(4), &serde_json::json!("restored"), &serde_json::json!({"n": 1, "time": listed[1]["time"]}), &serde_json::json!(""))
+    );
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "<body data-mid=\"m1\"><p data-mid=\"m2\">turn 1</p></body>\n");
+    let listed: serde_json::Value = c.request(methods::DESIGN_HISTORY, serde_json::json!({"workspace": ws, "slug": "settings-page"})).await.unwrap();
+    let kinds: Vec<(u64, &str, &str)> = listed.as_array().unwrap().iter().map(|s| (s["n"].as_u64().unwrap(), s["type"].as_str().unwrap(), s["summary"].as_str().unwrap())).collect();
+    assert_eq!(
+        kinds,
+        [(4, "restored", ""), (3, "edits_by_hand", "Wrote index.html · 1 page"), (2, "agent_turn", "Wrote index.html · 1 page"), (1, "agent_turn", "Wrote index.html · 1 page")]
+    );
+    let unknown = c.request::<_, serde_json::Value>(methods::DESIGN_SNAPSHOT_RESTORE, restore(9)).await;
+    assert_eq!(unknown.unwrap_err().to_string(), "invalid_params: no snapshot 9");
+
+    let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": created["agent"], "text": "HANG-NOW"})).await.unwrap();
+    let mut busy = None;
+    for _ in 0..100 {
+        match c.request::<_, serde_json::Value>(methods::DESIGN_SNAPSHOT_RESTORE, restore(2)).await {
+            Err(e) => {
+                busy = Some(e.to_string());
+                break;
+            }
+            Ok(_) => tokio::time::sleep(Duration::from_millis(100)).await,
+        }
+    }
+    assert_eq!(busy.as_deref(), Some("busy: Claude is changing the design; restore once it stops"));
 }
