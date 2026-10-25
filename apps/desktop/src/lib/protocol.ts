@@ -1108,6 +1108,29 @@ export interface DesignPageWritten {
   version: string;
 }
 
+/** A design system's token (X64): `--space-4: 16px`, by family. */
+export interface DesignToken {
+  name: string;
+  value: string;
+  family: "color" | "spacing" | "typography" | "radius" | "shadow" | "other";
+}
+
+/** A card of a design system with its HTML, whose snippets the Palette inserts. */
+export interface DesignKitCard {
+  path: string;
+  group: string;
+  name: string;
+  html: string;
+}
+
+/** `design.kit`: what the visual editor builds a design with from its own
+ *  design system, its tokens and the cards that hold snippets (X65). */
+export interface DesignKit {
+  system: string;
+  tokens: DesignToken[];
+  cards: DesignKitCard[];
+}
+
 /** `design.create`'s answer: the design, and why its agent did not start. */
 export interface DesignCreated extends Design {
   agent_error: string | null;
@@ -1325,6 +1348,7 @@ export const M = {
   designCommentResolve: "design.comment.resolve",
   designPage: "design.page",
   designWritePage: "design.write_page",
+  designKit: "design.kit",
   designCreate: "design.create",
   designRemove: "design.remove",
   designOpen: "design.open",

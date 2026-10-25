@@ -20,6 +20,20 @@ pub enum Family {
     Other,
 }
 
+impl Family {
+    /// Its name, as it is serialized: `color`, `spacing`, …
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Family::Color => "color",
+            Family::Spacing => "spacing",
+            Family::Typography => "typography",
+            Family::Radius => "radius",
+            Family::Shadow => "shadow",
+            Family::Other => "other",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Token {
     pub name: String,
