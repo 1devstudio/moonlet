@@ -209,6 +209,9 @@ pub struct Pairing {
     code: String,
     expires_at: u64,
     attempts: u32,
+    /// What the code pairs: a phone (Settings › Phones) or a Mac (Settings ›
+    /// Machines › Hosts, `moonletd pair`).
+    kind: DeviceKind,
 }
 
 /// What a pairing code attempt did to the current code.
@@ -227,6 +230,7 @@ impl Pairing {
             code,
             expires_at: now + PAIR_TTL_MS,
             attempts: 0,
+            kind: DeviceKind::Phone,
         }
     }
 
@@ -508,7 +512,13 @@ impl Mobile {
         self.changed();
     }
 
-    pub fn pair_start(self: &Arc<Self>) -> Result<MobilePairing, RpcError> {
+    pub fn pair_start(self: &Arc<Self>, kind: DeviceKind) -> Result<MobilePairing, RpcError> {
+        if kind == DeviceKind::Cloud {
+            return Err(RpcError::new(
+                "invalid_params",
+                "a cloud machine pairs only with its join code",
+            ));
+        }
         if !self.data.lock().unwrap().enabled {
             return Err(RpcError::new("mobile_off", "phone access is off"));
         }
@@ -528,7 +538,10 @@ impl Mobile {
         }
         let code = new_code();
         let now = now_ms();
-        let pairing = Pairing::new(code.clone(), now);
+        let pairing = Pairing {
+            kind,
+            ..Pairing::new(code.clone(), now)
+        };
         let expires_at = pairing.expires_at;
         *self.pairing.lock().unwrap() = Some(pairing);
         // Say so when the code runs out unused.
@@ -723,7 +736,18 @@ impl Mobile {
                 })
             }
             (None, Some(code)) if route.is_none() => {
-                let check = claim(&mut self.pairing.lock().unwrap(), code, now_ms())?;
+                let (check, kind) = {
+                    let mut slot = self.pairing.lock().unwrap();
+                    // A device pairs as what its code was made for, never as
+                    // what it says it is: a phone saying "desktop" would get
+                    // a Mac's rights.
+                    let made_for = slot.as_ref()?.kind;
+                    if kind.unwrap_or_default() != made_for {
+                        tracing::info!("a device tried a code for a {made_for:?} as {kind:?}");
+                        return None;
+                    }
+                    (claim(&mut slot, code, now_ms())?, made_for)
+                };
                 match check {
                     (PairCheck::Paired, _) => {
                         let token = random_hex(32);
@@ -734,8 +758,7 @@ impl Mobile {
                             token_sha256: sha256_hex(token.as_bytes()),
                             created_at: now,
                             last_seen: Some(now),
-                            // A cloud device pairs only with a join code.
-                            kind: kind.filter(|k| *k != DeviceKind::Cloud).unwrap_or_default(),
+                            kind,
                             machine: None,
                         };
                         let device_id = dev.id.clone();

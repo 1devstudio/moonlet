@@ -1319,6 +1319,13 @@ pub struct MobileStatus {
     pub devices: Vec<MobileDevice>,
 }
 
+/// `mobile.pair_start` params: what the code pairs (a phone by default).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MobilePairStart {
+    #[serde(default)]
+    pub kind: DeviceKind,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MobilePairing {
     pub code: String,

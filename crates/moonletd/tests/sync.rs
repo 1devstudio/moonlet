@@ -327,7 +327,7 @@ async fn worker_as(origin: Option<&Path>, id: &str, name: &str) -> Daemon {
 /// Pairs `worker` with `central` and sets it as the central host, without
 /// turning on heavy commands: keeping a session in sync opens the link.
 async fn link(central: &Central, worker: &Daemon) {
-    let p: MobilePairing = central.daemon.call("mobile.pair_start", json!({})).await;
+    let p: MobilePairing = central.daemon.call("mobile.pair_start", json!({ "kind": "desktop" })).await;
     let token = moonlet_link::tailnet::pair(
         &[central.addr.clone()],
         &p.code,
@@ -2596,7 +2596,7 @@ async fn build_box() -> (Daemon, String) {
 
 /// Pairs `worker` with `central` as [`link`] does; returns the token.
 async fn pair_with(central: &Central) -> String {
-    let p: MobilePairing = central.daemon.call("mobile.pair_start", json!({})).await;
+    let p: MobilePairing = central.daemon.call("mobile.pair_start", json!({ "kind": "desktop" })).await;
     moonlet_link::tailnet::pair(
         &[central.addr.clone()],
         &p.code,
@@ -2621,7 +2621,7 @@ async fn a_copy_waits_while_another_host_is_the_central_host() {
         .await;
     let path = PathBuf::from(in_sync(&worker).await.path);
     let (other, addr) = build_box().await;
-    let p: MobilePairing = other.call("mobile.pair_start", json!({})).await;
+    let p: MobilePairing = other.call("mobile.pair_start", json!({ "kind": "desktop" })).await;
     let token = moonlet_link::tailnet::pair(
         &[addr.clone()],
         &p.code,
@@ -2682,7 +2682,7 @@ async fn a_copy_stopped_while_another_host_is_central_tells_its_own_host_later()
     assert_eq!(sync_refs(&session), format!("refs/moonlet/sync/{}", c.id));
 
     let (other, addr) = build_box().await;
-    let p: MobilePairing = other.call("mobile.pair_start", json!({})).await;
+    let p: MobilePairing = other.call("mobile.pair_start", json!({ "kind": "desktop" })).await;
     let token = moonlet_link::tailnet::pair(
         &[addr.clone()],
         &p.code,

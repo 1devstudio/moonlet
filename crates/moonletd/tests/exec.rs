@@ -420,7 +420,7 @@ async fn central_listening_with(config: &str, env: &[(&str, &str)]) -> (Central,
 }
 
 async fn pair(c: &Central, addr: &str, device: &str, kind: DeviceKind) -> String {
-    let p: MobilePairing = c.daemon.call("mobile.pair_start", json!({})).await;
+    let p: MobilePairing = c.daemon.call("mobile.pair_start", json!({ "kind": kind })).await;
     moonlet_link::tailnet::pair(&[addr.to_string()], &p.code, device, kind)
         .await
         .unwrap()
