@@ -1038,3 +1038,426 @@ async fn cloud_types_lists_the_providers_machine_types() {
     assert_eq!(types[0]["name"], json!("small"));
     assert_eq!(types[0]["cores"], json!(2));
 }
+
+const ROUTE_CONFIG: &str =
+    "[heavy]\ncommands = [\"sh run.sh\", \"sh -c\"]\nmachine_setup = \"ci.sh\"\n";
+
+/// What a run sent back: its stdout, its stderr and its exit status.
+#[derive(Debug)]
+struct Ran {
+    stdout: String,
+    stderr: String,
+    status: i32,
+}
+
+fn ran_on(r: &Ran) -> String {
+    r.stderr
+        .lines()
+        .filter_map(|l| l.strip_prefix("moonlet: running on "))
+        .last()
+        .unwrap_or("")
+        .to_string()
+}
+
+impl Cloud {
+    /// Approves the project's heavy commands on the central host.
+    async fn approve(&self) {
+        let info: Value = self
+            .d
+            .call("heavy.get", json!({ "project": self.project }))
+            .await;
+        let _: Value = self
+            .d
+            .call(
+                "heavy.approve",
+                json!({ "project": self.project, "commands": info["config"]["commands"], "env": info["config"]["env"] }),
+            )
+            .await;
+    }
+
+    async fn set_project(&self, patch: Value) {
+        let mut p = json!({ "overflow": false, "provider": "fake", "type": "small", "location": "here", "image": "none" });
+        for (k, v) in patch.as_object().unwrap() {
+            p[k] = v.clone();
+        }
+        let _: Value = self
+            .d
+            .call("cloud.set", json!({ "projects": { self.key.clone(): p } }))
+            .await;
+    }
+
+    async fn session(&self, name: &str, cloud: bool) -> Value {
+        self.d
+            .call(
+                "session.create",
+                json!({ "project_id": self.project, "name": name, "agent": "none", "cloud": cloud }),
+            )
+            .await
+    }
+
+    /// Starts `argv` routed for `session`; gives the client and the run.
+    async fn start(&self, session: &Value, argv: &[&str]) -> (Client, u32) {
+        let mut c = self.d.app().await;
+        let started: Value = c
+            .request(
+                "exec.run",
+                json!({ "session": session["id"], "argv": argv, "cwd": session["path"], "env": {} }),
+            )
+            .await
+            .unwrap();
+        (c, started["run"].as_u64().unwrap() as u32)
+    }
+
+    async fn run(&self, session: &Value, argv: &[&str]) -> Ran {
+        let (c, run) = self.start(session, argv).await;
+        collect(c, run).await
+    }
+}
+
+async fn collect(mut c: Client, run: u32) -> Ran {
+    let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+    loop {
+        let frame = tokio::time::timeout(Duration::from_secs(30), c.next_frame())
+            .await
+            .expect("the run never ended")
+            .unwrap()
+            .expect("the daemon closed the connection");
+        match frame {
+            Frame::RunOutput {
+                run: r,
+                stream,
+                data,
+            } if r == run => {
+                if stream == 1 {
+                    stdout.extend(data)
+                } else {
+                    stderr.extend(data)
+                }
+            }
+            Frame::Json(Message::Event { name, data })
+                if name == "exec.exited" && data["run"] == json!(run) =>
+            {
+                return Ran {
+                    stdout: String::from_utf8_lossy(&stdout).into(),
+                    stderr: String::from_utf8_lossy(&stderr).into(),
+                    status: data["status"].as_i64().unwrap() as i32,
+                };
+            }
+            _ => {}
+        }
+    }
+}
+
+/// A central host whose project routes `sh run.sh` and `sh -c`, approved.
+async fn routing(env: &[(&str, &str)]) -> Cloud {
+    let c = cloud_with(ROUTE_CONFIG, env).await;
+    c.approve().await;
+    c
+}
+
+#[tokio::test]
+async fn overflow_starts_a_machine_and_the_next_command_runs_there() {
+    // The central host is busy.
+    let c = routing(&[("MOONLET_TEST_LOAD", "100")]).await;
+    c.set_project(json!({ "overflow": true })).await;
+    let s = c.session("fix-cart", false).await;
+    // No worker is free: it runs here, and a machine starts.
+    let first = c.run(&s, &["sh", "run.sh"]).await;
+    assert_eq!(ran_on(&first), "studio-mini");
+    assert_eq!(first.stdout, "out\n");
+    let machines = c.machines().await;
+    let m = machines["machines"][0].clone();
+    assert_eq!(m["project"], json!("shop"));
+    let ready = c.until(m["id"].as_str().unwrap(), "ready").await;
+    let next = c.run(&s, &["sh", "run.sh"]).await;
+    assert_eq!(ran_on(&next), ready["name"].as_str().unwrap(), "{next:?}");
+    assert_eq!((next.stdout.as_str(), next.status), ("out\n", 0));
+}
+
+#[tokio::test]
+async fn overflow_starts_no_second_machine_while_one_is_starting() {
+    let c = routing(&[]).await;
+    c.set_project(json!({ "overflow": true })).await;
+    c.steer("slow-create", "5000");
+    let s = c.session("fix-cart", false).await;
+    c.run(&s, &["sh", "run.sh"]).await;
+    c.run(&s, &["sh", "run.sh"]).await;
+    assert_eq!(c.machines().await["machines"].as_array().unwrap().len(), 1);
+}
+
+impl Cloud {
+    async fn jobs(&self, session: &Value) -> Vec<Value> {
+        self.d
+            .call("job.list", json!({ "session": session["id"] }))
+            .await
+    }
+}
+
+#[tokio::test]
+async fn a_cloud_session_waits_for_its_machine_and_runs_there() {
+    let c = routing(&[]).await;
+    let s = c.session("big-refactor", true).await;
+    let ran = c.run(&s, &["sh", "run.sh"]).await;
+    let m = c.machines().await["machines"][0].clone();
+    let name = m["name"].as_str().unwrap();
+    assert!(
+        ran.stderr
+            .starts_with(&format!("moonlet: waiting for {name} to start (0:00)\n")),
+        "{ran:?}"
+    );
+    assert_eq!(ran_on(&ran), name, "{ran:?}");
+    assert_eq!((ran.stdout.as_str(), ran.status), ("out\n", 0));
+    assert_eq!(m["for_session"], s["id"]);
+}
+
+#[tokio::test]
+async fn a_cloud_session_runs_on_the_central_host_when_no_machine_can_start() {
+    let c = routing(&[("MOONLET_TEST_CLOUD_DEADLINE_MS", "1500")]).await;
+    c.steer("no-join", "");
+    let s = c.session("big-refactor", true).await;
+    let ran = c.run(&s, &["sh", "run.sh"]).await;
+    let line = ran
+        .stderr
+        .lines()
+        .find(|l| l.starts_with("moonlet: no cloud machine ("))
+        .unwrap_or_default()
+        .to_string();
+    assert!(line.ends_with(". Running on studio-mini."), "{ran:?}");
+    assert!(line.contains("did not come up in "), "{line}");
+    assert_eq!(ran_on(&ran), "studio-mini");
+    assert_eq!(ran.status, 0);
+    // At a limit, at once.
+    let month = String::from_utf8(
+        Command::new("date")
+            .args(["-u", "+%Y-%m"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    std::fs::write(
+        c.d.home.path().join("cloud/usage.json"),
+        json!({ month.trim(): 40 * 3600 }).to_string(),
+    )
+    .unwrap();
+    let mut c = c;
+    c.d.restart().await;
+    let ran = c.run(&s, &["sh", "run.sh"]).await;
+    assert!(
+        ran.stderr.starts_with(
+            "moonlet: no cloud machine (Cloud limit reached: 40 of 40 machine-hours this month). Running on studio-mini.\n"
+        ),
+        "{ran:?}"
+    );
+    assert_eq!(ran.status, 0);
+}
+
+#[tokio::test]
+async fn run_here_runs_a_job_waiting_for_a_cloud_machine_on_the_central_host() {
+    let c = routing(&[]).await;
+    c.steer("slow-create", "60000");
+    let s = c.session("big-refactor", true).await;
+    let (client, run) = c.start(&s, &["sh", "run.sh"]).await;
+    let mut job = Value::Null;
+    for _ in 0..100 {
+        job = c.jobs(&s).await[0].clone();
+        if job["state"]["kind"] == "waiting" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(job["state"]["kind"], json!("waiting"), "{job}");
+    let here: Value = c.d.call("job.run_here", json!({ "job": job["id"] })).await;
+    assert_eq!(here, json!(true));
+    let ran = collect(client, run).await;
+    assert!(
+        ran.stderr
+            .contains("moonlet: running on studio-mini instead, as asked from the Jobs panel\n"),
+        "{ran:?}"
+    );
+    assert_eq!((ran.stdout.as_str(), ran.status), ("out\n", 0));
+    // The machine keeps starting, for the next command.
+    let m = &c.machines().await["machines"][0];
+    assert_eq!(m["state"], json!("creating"));
+}
+
+/// The routing copies on the first fake machine.
+fn copies_on(c: &Cloud) -> Vec<PathBuf> {
+    let runs = c.fake_dirs()[0].join("home/runs");
+    let mut out = Vec::new();
+    for host in std::fs::read_dir(&runs).into_iter().flatten().flatten() {
+        // `repos` holds the routing copies' repositories, not copies.
+        if host.file_name() == "repos" {
+            continue;
+        }
+        for project in std::fs::read_dir(host.path())
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            for copy in std::fs::read_dir(project.path())
+                .into_iter()
+                .flatten()
+                .flatten()
+            {
+                out.push(copy.path());
+            }
+        }
+    }
+    out
+}
+
+#[tokio::test]
+async fn a_machine_made_for_a_session_is_ready_with_its_copy_and_setup() {
+    let config = format!("setup = \"echo set > setup-ran\"\n\n{ROUTE_CONFIG}");
+    let c = cloud_with(&config, &[]).await;
+    c.approve().await;
+    let s = c.session("big-refactor", false).await;
+    let m: Value =
+        c.d.call(
+            "cloud.up",
+            json!({ "project": c.project, "session": s["id"] }),
+        )
+        .await;
+    let ready = c.until(m["id"].as_str().unwrap(), "ready").await;
+    let last = ready["steps"].as_array().unwrap().last().cloned().unwrap();
+    assert_eq!(
+        last["label"],
+        json!("Copied big-refactor and ran echo set > setup-ran")
+    );
+    assert_eq!(last["state"], json!("done"));
+    let copies = copies_on(&c);
+    assert_eq!(copies.len(), 1, "{copies:?}");
+    assert!(
+        copies[0].join("setup-ran").exists(),
+        "setup did not run in {copies:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_machine_made_without_a_session_copies_on_its_first_command() {
+    let c = routing(&[]).await;
+    c.ready().await;
+    assert!(copies_on(&c).is_empty());
+    let s = c.session("fix-cart", true).await;
+    let ran = c.run(&s, &["sh", "run.sh"]).await;
+    let name = c.machines().await["machines"][0]["name"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        ran.stderr
+            .starts_with(&format!("moonlet: Copying fix-cart to {name}…\n")),
+        "{ran:?}"
+    );
+    assert_eq!(ran_on(&ran), name);
+    assert_eq!(copies_on(&c).len(), 1);
+}
+
+#[tokio::test]
+async fn an_idle_machine_is_removed_after_the_idle_time() {
+    // A minute lasts 200 ms here.
+    let c = routing(&[("MOONLET_TEST_CLOUD_MINUTE_MS", "200")]).await;
+    let _: Value = c.d.call("cloud.set", json!({ "idle_minutes": 5 })).await;
+    let s = c.session("fix-cart", true).await;
+    let ran = c.run(&s, &["sh", "-c", "sleep 1.5; echo done"]).await;
+    let m = c.machines().await["machines"][0].clone();
+    assert_eq!(ran_on(&ran), m["name"].as_str().unwrap());
+    // Idle from the command's end: removed 1 s later, not before.
+    assert!(m["idle_until"].is_u64(), "{m}");
+    let removed = c.until(m["id"].as_str().unwrap(), "removed").await;
+    assert_eq!(removed["reason"], json!("removed after 5 min idle"));
+}
+
+#[tokio::test]
+async fn with_idle_zero_a_machine_goes_when_its_command_ends() {
+    let c = routing(&[]).await;
+    let _: Value = c.d.call("cloud.set", json!({ "idle_minutes": 0 })).await;
+    let s = c.session("fix-cart", true).await;
+    let (client, run) = c.start(&s, &["sh", "-c", "sleep 1; echo done"]).await;
+    // While it runs, it stays.
+    let mut m = Value::Null;
+    for _ in 0..100 {
+        m = c.machines().await["machines"][0].clone();
+        if m["running"] == json!(1) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(m["state"], json!("ready"), "{m}");
+    collect(client, run).await;
+    let removed = c.until(m["id"].as_str().unwrap(), "removed").await;
+    assert_eq!(removed["reason"], json!("removed after 0 min idle"));
+}
+
+#[tokio::test]
+async fn cloud_down_waits_for_running_commands() {
+    let c = routing(&[]).await;
+    let s = c.session("fix-cart", true).await;
+    let (client, run) = c.start(&s, &["sh", "-c", "sleep 1.5; echo done"]).await;
+    let mut m = Value::Null;
+    for _ in 0..100 {
+        m = c.machines().await["machines"][0].clone();
+        if m["running"] == json!(1) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let _: Value =
+        c.d.call("cloud.down", json!({ "machine": m["name"] }))
+            .await;
+    let ran = collect(client, run).await;
+    assert_eq!((ran.stdout.as_str(), ran.status), ("done\n", 0), "{ran:?}");
+    // It ran to its end there, not again here.
+    assert_eq!(ran_on(&ran), m["name"].as_str().unwrap(), "{ran:?}");
+    let removed = c.until(m["id"].as_str().unwrap(), "removed").await;
+    assert_eq!(removed["reason"], json!("removed on request"));
+}
+
+#[tokio::test]
+async fn turning_a_projects_cloud_off_removes_its_machines_after_their_commands() {
+    let c = routing(&[]).await;
+    let m = c.ready().await;
+    let _: Value =
+        c.d.call("cloud.set", json!({ "projects": { c.key.clone(): null } }))
+            .await;
+    let removed = c.until(m["id"].as_str().unwrap(), "removed").await;
+    assert_eq!(
+        removed["reason"],
+        json!("shop no longer uses cloud machines")
+    );
+}
+
+#[tokio::test]
+async fn removing_a_provider_removes_its_machines_first() {
+    let c = routing(&[("MOONLET_TEST_CLOUD_BACKOFF_MS", "300")]).await;
+    let m = c.ready().await;
+    c.steer("fail-destroy", "2");
+    let info: Value =
+        c.d.call("cloud.set", json!({ "providers": { "fake": null } }))
+            .await;
+    // The setting stays until its machines are gone.
+    assert_eq!(info["providers"]["fake"], json!({}));
+    let removed = c.until(m["id"].as_str().unwrap(), "removed").await;
+    assert_eq!(removed["reason"], json!("its provider was removed"));
+    for _ in 0..50 {
+        let info: Value = c.d.call("cloud.get", json!({})).await;
+        if info["providers"].get("fake").is_none() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("the provider stayed");
+}
+
+#[tokio::test]
+async fn archiving_a_session_leaves_its_machine_to_the_idle_time() {
+    let c = routing(&[]).await;
+    let s = c.session("big-refactor", true).await;
+    c.run(&s, &["sh", "run.sh"]).await;
+    let _: Value =
+        c.d.call("session.archive", json!({ "id": s["id"], "force": true }))
+            .await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(c.machines().await["machines"][0]["state"], json!("ready"));
+}

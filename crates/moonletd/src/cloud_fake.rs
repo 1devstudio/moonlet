@@ -82,6 +82,8 @@ async fn boot(dir: PathBuf, user_data: String, join: bool) {
         .env("SHELL", "/bin/sh")
         .env("MOONLET_MOBILE_ADDRS", "127.0.0.2")
         .env("MOONLET_MACHINE_SETUP_DIR", &setup_dir)
+        // A fresh machine: idle, whatever the central host's test load.
+        .env("MOONLET_TEST_LOAD", "0.5")
         .env_remove("MOONLET_CLOUD_FAKE")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
