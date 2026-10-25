@@ -63,6 +63,20 @@ function copyBlock(): boolean {
   return !!text;
 }
 
+/** Screens that take some ⌘ keys from the app while shown, newest first:
+ *  the design screen's zoom and chat panel (X65). */
+const claims: ((id: string) => boolean)[] = [];
+
+/** Gives `take` the ⌘ keys it says it took (true) before the app's own
+ *  shortcuts; the returned function lets go. */
+export function claimKeys(take: (id: string) => boolean): () => void {
+  claims.unshift(take);
+  return () => {
+    const at = claims.indexOf(take);
+    if (at >= 0) claims.splice(at, 1);
+  };
+}
+
 export function installShortcuts() {
   const onKey = (e: KeyboardEvent) => {
     if (!e.metaKey) return;
@@ -101,6 +115,11 @@ export function installShortcuts() {
     const t = e.target as HTMLElement | null;
     const editable = t?.closest(".monaco-editor") || (t && /^(INPUT|TEXTAREA)$/.test(t.tagName) && !t.closest(".xterm"));
     if (editable && ["cmd+f", "cmd+d", "cmd+arrowup", "cmd+arrowdown", "shift+cmd+c"].includes(id)) return;
+    if (claims.some((take) => take(id))) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     const action = actionForKey(id, useStore.getState().settings.shortcuts);
     const h = action ? () => runAction(action) : bindings[id];
     if (h) {
