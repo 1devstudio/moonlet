@@ -153,11 +153,19 @@ impl CloudSettings {
         if path.exists() {
             let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
         }
-        CloudSettings {
+        let s = CloudSettings {
             path,
             data: Mutex::new(data),
             broken,
+        };
+        // The host id is made once: written now, not at the first change.
+        if s.broken.is_none() && !s.path.exists() {
+            let f = s.file();
+            if let Err(e) = s.write(&f) {
+                tracing::warn!("cannot write cloud.json: {e}");
+            }
         }
+        s
     }
 
     pub fn file(&self) -> CloudFile {
@@ -253,6 +261,21 @@ impl CloudSettings {
                 .find(|k| !kind.fields.iter().any(|f| &f.name == *k))
             {
                 return Err(invalid(format!("{id} has no field {k}")));
+            }
+            // A secret cleared while its machines run: none could be destroyed.
+            let clears = |f: &&moonlet_cloud::Field| {
+                f.secret
+                    && fields
+                        .get(&f.name)
+                        .is_some_and(|v| v.as_deref().is_none_or(|v| v.trim().is_empty()))
+            };
+            if let Some(f) = kind.fields.iter().find(clears)
+                && busy(id)
+            {
+                return Err(invalid(format!(
+                    "{} has machines: its {} stays until they are gone",
+                    kind.label, f.label
+                )));
             }
         }
         let mut f = self.data.lock().unwrap();
@@ -455,6 +478,41 @@ mod tests {
             .set(other, moonlet_cloud::providers(), &|_| false)
             .unwrap_err();
         assert_eq!(e.message, "no cloud provider aws");
+    }
+
+    #[test]
+    fn a_providers_secret_stays_while_it_has_machines() {
+        // Without it, its machines could not be destroyed.
+        let home = tempfile::tempdir().unwrap();
+        let s = CloudSettings::load(home.path());
+        s.set(set("hc-1"), moonlet_cloud::providers(), &|_| false)
+            .unwrap();
+        let cleared: CloudSet = serde_json::from_value(
+            serde_json::json!({ "providers": { "hetzner": { "token": null } } }),
+        )
+        .unwrap();
+        let e = s
+            .set(cleared.clone(), moonlet_cloud::providers(), &|_| true)
+            .unwrap_err();
+        assert_eq!(
+            e.message,
+            "Hetzner Cloud has machines: its API token stays until they are gone"
+        );
+        assert_eq!(s.file().providers["hetzner"]["token"], "hc-1");
+        // Replacing it is fine.
+        s.set(set("hc-2"), moonlet_cloud::providers(), &|_| true)
+            .unwrap();
+        s.set(cleared, moonlet_cloud::providers(), &|_| false)
+            .unwrap();
+    }
+
+    #[test]
+    fn the_host_id_is_made_once() {
+        // It labels this central host's machines: a restart keeps it.
+        let home = tempfile::tempdir().unwrap();
+        let first = CloudSettings::load(home.path()).file().host_id;
+        assert_eq!(CloudSettings::load(home.path()).file().host_id, first);
+        assert_eq!(mode(&home.path().join("cloud.json")), 0o600);
     }
 
     #[test]
