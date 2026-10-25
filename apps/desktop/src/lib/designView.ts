@@ -87,6 +87,16 @@ export function pageUrl(workspace: string, design: string, page: string, rev = 0
   return designUrl(workspace, `designs/${design}/${pagePath(page)}`, rev, bridge ? { "moonlet-bridge": "1" } : {});
 }
 
+/** Page `page` of design `design`'s snapshot `n`, read only: never with the
+ *  bridge, so nothing on it can be picked or edited. Its folder is
+ *  `designs/<design>@<n>/`, which the daemon serves from the snapshot
+ *  (`snapshot_file` in design/history.rs), as deep as the design's own, so
+ *  the page's relative links to its assets and its design system's
+ *  styles resolve as they do for the design's pages. */
+export function snapshotPageUrl(workspace: string, design: string, n: number, page: string): string {
+  return designUrl(workspace, `designs/${design}@${n}/${pagePath(page)}`);
+}
+
 /** The 64-bit FNV-1a hash of `text`'s UTF-8 bytes, as 16 lowercase hex digits. */
 function fnv1a64(text: string): string {
   let hash = 0xcbf29ce484222325n;

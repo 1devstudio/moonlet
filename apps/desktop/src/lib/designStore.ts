@@ -5,7 +5,7 @@
 
 import { create } from "zustand";
 import { onDaemonEvent, onHostStatus, rpc } from "./daemon";
-import { EV, M, type ChatState, type Design, type DesignCard, type CommentChange, type DesignComment, type DesignChanged, type DesignCover, type DesignCreated, type DesignOpen, type DesignSystem, type DesignSystemCreated } from "./protocol";
+import { EV, M, type ChatState, type Design, type DesignCard, type CommentChange, type DesignComment, type DesignChanged, type DesignSnapshot, type DesignCover, type DesignCreated, type DesignOpen, type DesignSystem, type DesignSystemCreated } from "./protocol";
 import { parseWsKey, wsKey } from "./workspaces";
 import { syncNotice } from "./designSync";
 import { agentSeen, notify, registerAgentsElsewhere, shownWorkspace, switchWorkspace, toast, useStore } from "./store";
@@ -50,9 +50,11 @@ interface DesignState {
   mids: Record<string, PageMids>;
   /** The pins of each design (`wsKey/slug`) a Send is on its way with, by number. */
   sending: Record<string, number[]>;
+  /** Each design's snapshots (`wsKey/slug`), newest first, once listed. */
+  histories: Record<string, DesignSnapshot[]>;
 }
 
-export const useDesign = create<DesignState>(() => ({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, designs: {}, designShown: {}, pageRevs: {}, latest: {}, problems: {}, systemNames: {}, comments: {}, mids: {}, sending: {} }));
+export const useDesign = create<DesignState>(() => ({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, designs: {}, designShown: {}, pageRevs: {}, latest: {}, problems: {}, systemNames: {}, comments: {}, mids: {}, sending: {}, histories: {} }));
 
 /** A design system's or a design's key, `wsKey/slug`. */
 export const itemKey = (host: string, workspace: string, slug: string) => `${wsKey(host, workspace)}/${slug}`;
@@ -86,7 +88,7 @@ export function revOf(s: DesignState, host: string, workspace: string, slug: str
  *  `wanted` holds those asked for, listed or not, to list again when they
  *  change. `changed` says the list changed here meanwhile: a listing on its
  *  way may have read before that change, so it is dropped and asked again. */
-function itemListing<K extends "cards" | "comments">(field: K, method: string) {
+function itemListing<K extends "cards" | "comments" | "histories">(field: K, method: string) {
   const wanted = new Set<string>();
   const asked = latestPerKey();
   const onTheWay: Record<string, number> = {};
@@ -178,6 +180,21 @@ const NO_COMMENTS: DesignComment[] = [];
 const NO_MIDS: PageMids = {};
 
 /** A design's comments, by number; none until listed. */
+/** A design's snapshots, newest first; undefined until listed. */
+export function historyOf(s: DesignState, host: string, workspace: string, slug: string): DesignSnapshot[] | undefined {
+  return s.histories[itemKey(host, workspace, slug)];
+}
+
+const historyListing = itemListing("histories", M.designHistory);
+
+/** Lists a design's snapshots (X65), and again as each is taken. */
+export function loadHistory(host: string, workspace: string, slug: string): Promise<void> {
+  return historyListing.load(host, workspace, slug);
+}
+
+/** A file of a design's snapshots: under `history/`. */
+const isHistoryPath = (path: string) => path.startsWith("history/");
+
 export function commentsOf(s: DesignState, host: string, workspace: string, slug: string): DesignComment[] {
   return s.comments[itemKey(host, workspace, slug)] ?? NO_COMMENTS;
 }
@@ -377,7 +394,8 @@ function onDesignChange(host: string, change: DesignChanged) {
   // A page the editor has read decides itself whether it loads again: not
   // for the editor's own save (designEditor.ts). Only when nothing but
   // pages changed: an asset changed loads every page.
-  const pagesOnly = change.design !== null && change.paths.every((p) => pageOfPath(p) !== null);
+  // A snapshot taken with the change (history/) is none of its pages.
+  const pagesOnly = change.design !== null && change.paths.filter((p) => !isHistoryPath(p)).every((p) => pageOfPath(p) !== null);
   const owned = new Set(pagesOnly ? changedPages(change, change.design!).filter((page) => pageOwner(host, change.workspace, change.design!, page)) : []);
   const bump = (key: string, design: string, page: string) => {
     if (design !== change.design || !owned.has(page)) revs[key] ??= (st.pageRevs[key] ?? 0) + 1;
@@ -395,6 +413,8 @@ function onDesignChange(host: string, change: DesignChanged) {
     checkSoon(host, change.workspace, change.design);
     // Its comments, kept, sent or resolved here or written by its agent.
     if (commentListing.wanted.has(key) && change.paths.includes(COMMENTS_FILE)) void loadComments(host, change.workspace, change.design).catch(() => {});
+    // Its snapshots, as the daemon takes or restores one.
+    if (historyListing.wanted.has(key) && change.paths.some(isHistoryPath)) void loadHistory(host, change.workspace, change.design).catch(() => {});
   } else if (Object.keys(revs).length) {
     useDesign.setState((s) => ({ pageRevs: { ...s.pageRevs, ...revs } }));
   }

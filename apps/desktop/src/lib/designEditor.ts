@@ -10,7 +10,7 @@ import { itemKey, pageKey, registerPageOwner, reloadPage, sendComments } from ".
 import { latestSends } from "./latestSend";
 import { errorToast } from "./store";
 import { latestPerKey } from "./prPoll";
-import { M, type DesignComment, type DesignKit, type DesignPageText, type DesignPageWritten } from "./protocol";
+import { M, type DesignComment, type DesignKit, type DesignPageText, type DesignPageWritten, type DesignSnapshot } from "./protocol";
 import type { ChatImage } from "./attachments";
 import { applyEdit, copyElement, EditRefused, editLine, editSaid, editsMessage, highestMid, type Edit, type EditOp } from "./designEdits";
 import { NO_UNDO, dropPage, pendingAfter, pushStep, redoStep, undoStep, type Pending, type Step, type Undo } from "./designUndo";
@@ -266,6 +266,33 @@ async function lost(host: string, workspace: string, slug: string, page: string)
 export function closeDesign(host: string, workspace: string, slug: string) {
   const design = itemKey(host, workspace, slug);
   useEditor.setState((s) => ({ undo: { ...s.undo, [design]: NO_UNDO } }));
+}
+
+/** **Restore** (X65): snapshot `n` made the design's current pages, after
+ *  the saves on their way. The design's changes, and its edits by hand not
+ *  told yet, were made on pages that are gone, so they are forgotten, as on
+ *  a stale save; each page the editor has read is read again (one the
+ *  snapshot has not is dropped) and loads again on the canvas. */
+export async function restoreSnapshot(host: string, workspace: string, slug: string, n: number): Promise<DesignSnapshot> {
+  await saves.settle();
+  const restored = await rpc<DesignSnapshot>(host, M.designSnapshotRestore, { workspace, slug, n });
+  const design = itemKey(host, workspace, slug);
+  useEditor.setState((s) => ({ undo: { ...s.undo, [design]: NO_UNDO }, pending: { ...s.pending, [design]: [] }, unsaved: { ...s.unsaved, [design]: null } }));
+  const prefix = `${design}/`;
+  const read = Object.keys(useEditor.getState().sources).filter((k) => k.startsWith(prefix));
+  await Promise.all(
+    read.map(async (key) => {
+      const page = key.slice(prefix.length);
+      const text = await rpc<DesignPageText>(host, M.designPage, { workspace, slug, page }).catch(() => null);
+      if (text) setSource(key, text);
+      else {
+        delete notSaved[key];
+        useEditor.setState((s) => ({ sources: Object.fromEntries(Object.entries(s.sources).filter(([k]) => k !== key)) }));
+      }
+      reloadPage(host, workspace, slug, page);
+    }),
+  );
+  return restored;
 }
 
 /** Puts the yellow bar away. */
