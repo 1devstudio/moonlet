@@ -217,8 +217,8 @@ export function CommentsTab({
         ))}
         {shown.orphaned.length > 0 && (
           <section aria-label="Orphaned" className="px-3.5 py-3">
-            <h3 className="mb-2 ui-text-11 font-semibold tracking-[0.12em] text-faint">
-              ORPHANED <span className="font-normal">{shown.orphaned.length}</span>
+            <h3 className="mb-2 ui-text-11 font-semibold uppercase tracking-[0.12em] text-faint">
+              Orphaned <span className="font-normal">{shown.orphaned.length}</span>
             </h3>
             {shown.orphaned.map((p) => (
               <article key={p.n} aria-label={`Comment ${p.n}`} className="mb-2 rounded-lg border border-dashed border-border-strong px-3 py-2.5">
