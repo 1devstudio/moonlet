@@ -145,7 +145,7 @@ async fn worker(id: &str, name: &str) -> Daemon {
 
 /// Pairs as a desktop with a fresh code from `central`; returns the token.
 async fn pair(central: &Daemon, addr: &str, device: &str) -> String {
-    let p: MobilePairing = central.call("mobile.pair_start", json!({})).await;
+    let p: MobilePairing = central.call("mobile.pair_start", json!({ "kind": "desktop" })).await;
     moonlet_link::tailnet::pair(&[addr.to_string()], &p.code, device, DeviceKind::Desktop)
         .await
         .unwrap()
@@ -1014,7 +1014,7 @@ async fn a_remote_host_pairs_with_the_central_host_and_links_as_a_worker() {
     let token = pair(&remote, &remote_addr, "Alex's MacBook Pro").await;
     let mut mac = raw(&remote_addr, &token, "moonlet-app").await;
 
-    let code: MobilePairing = central.call("mobile.pair_start", json!({})).await;
+    let code: MobilePairing = central.call("mobile.pair_start", json!({ "kind": "desktop" })).await;
     let info = answer(
         ask(
             &mut mac,
@@ -1052,7 +1052,7 @@ async fn a_remote_host_pairs_with_the_central_host_and_links_as_a_worker() {
 async fn a_paired_mac_sets_the_link_and_a_phone_or_the_cli_cannot() {
     let (central, central_addr) = central().await;
     let (remote, remote_addr) = remote_host().await;
-    let code: MobilePairing = central.call("mobile.pair_start", json!({})).await;
+    let code: MobilePairing = central.call("mobile.pair_start", json!({ "kind": "desktop" })).await;
     let pairing = json!({ "central": studio_mini(&central_addr), "code": code.code });
     let enable = json!({ "worker": { "enabled": true } });
 
@@ -1221,7 +1221,7 @@ async fn a_pairing_that_cannot_be_saved_says_how_to_undo_it() {
     // `link.json` is written through `link.json.tmp`: a folder there stops it.
     std::fs::create_dir(remote.home.path().join("link.json.tmp")).unwrap();
 
-    let code: MobilePairing = central.call("mobile.pair_start", json!({})).await;
+    let code: MobilePairing = central.call("mobile.pair_start", json!({ "kind": "desktop" })).await;
     let reply = ask(
         &mut mac,
         1,

@@ -44,7 +44,7 @@ pub async fn pair(socket: &Path, name: Option<String>) -> Result<i32> {
     // Registered before the code shows, so Ctrl-C always cancels it.
     let mut interrupt = signal(SignalKind::interrupt())?;
     let mut c = Client::connect(socket, "moonletd-pair").await?;
-    let p: MobilePairing = match c.request(m::MOBILE_PAIR_START, json!({})).await {
+    let p: MobilePairing = match c.request(m::MOBILE_PAIR_START, json!({ "kind": "desktop" })).await {
         Ok(p) => p,
         Err(e) => {
             eprintln!("{}", pair_error(&e));
