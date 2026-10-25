@@ -13,6 +13,20 @@ use crate::{
 
 pub const API: &str = "https://api.hetzner.cloud/v1";
 
+/// Whether server type `t` can be made at `location`. Its `locations` say
+/// so: a retired type keeps its price there but is not `available`, and
+/// a create call answers 422. An answer without them goes by the prices.
+fn made_at(t: &Value, location: &str) -> bool {
+    match t["locations"].as_array() {
+        Some(at) => at
+            .iter()
+            .any(|l| l["name"] == location && l["available"].as_bool().unwrap_or(false)),
+        None => t["prices"]
+            .as_array()
+            .is_some_and(|p| p.iter().any(|p| p["location"] == location)),
+    }
+}
+
 pub fn info() -> ProviderInfo {
     ProviderInfo {
         id: "hetzner".into(),
@@ -278,18 +292,13 @@ impl Provider for Hetzner {
                     None,
                 )
                 .await?;
-            // A type is offered at a location when it has a price there.
             out.extend(
                 v["server_types"]
                     .as_array()
                     .into_iter()
                     .flatten()
                     .filter(|t| !t["deprecated"].as_bool().unwrap_or(false))
-                    .filter(|t| {
-                        t["prices"]
-                            .as_array()
-                            .is_some_and(|p| p.iter().any(|p| p["location"] == location))
-                    })
+                    .filter(|t| made_at(t, location))
                     .map(|t| MachineType {
                         name: t["name"].as_str().unwrap_or_default().to_string(),
                         cores: t["cores"].as_u64().unwrap_or(0) as u32,
@@ -684,6 +693,21 @@ mod tests {
                 memory_gb: 16.0,
                 arch: "x86".into()
             }
+        );
+    }
+
+    #[tokio::test]
+    async fn offers_only_the_types_a_location_still_makes() {
+        // cpx11 to cpx51 still have prices in Falkenstein, but Hetzner stopped
+        // making them there: a create call answers 422.
+        let script = Script::new(vec![ok(include_str!("fixtures/hetzner/server_types.json"))]);
+        let types = hetzner(&script).machine_types("fsn1").await.unwrap();
+        assert_eq!(
+            types.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
+            [
+                "cax11", "cax21", "cax31", "cax41", "ccx13", "ccx23", "ccx33", "ccx43", "ccx53",
+                "ccx63", "cpx12", "cpx22", "cpx32", "cpx42", "cpx52", "cpx62", "cpx02"
+            ]
         );
     }
 
