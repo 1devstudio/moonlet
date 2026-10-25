@@ -50,6 +50,11 @@
   };
   const text = (el) => [...(el.textContent || "").replace(/\s+/g, " ").trim()].slice(0, TEXT_MAX).join("");
 
+  // What the bridge draws over the page: fixed, above it, never taking the
+  // pointer; the dashed box of the hover outline and of a drop into a box.
+  const OVER_CSS = "position:fixed;pointer-events:none;z-index:2147483647;box-sizing:border-box;";
+  const OUTLINE_CSS = `${OVER_CSS}border:1.5px dashed #4c8dff;background:rgba(76,141,255,0.06);border-radius:2px`;
+
   // The outline, drawn in the page over the element, outside its <body> so
   // it is never one of the page's elements.
   let outline = null;
@@ -61,7 +66,7 @@
     if (!outline) {
       outline = document.createElement("moonlet-outline");
       outline.setAttribute("data-moonlet-bridge", "");
-      outline.style.cssText = "position:fixed;pointer-events:none;z-index:2147483647;box-sizing:border-box;border:1.5px dashed #4c8dff;background:rgba(76,141,255,0.06);border-radius:2px";
+      outline.style.cssText = OUTLINE_CSS;
       document.documentElement.append(outline);
     }
     const r = box(el);
@@ -82,7 +87,11 @@
   };
   // The selection's computed style, the Inspector's properties of it; a
   // shorthand the browser leaves empty is made from its longhands.
-  const COMPUTED = ["display", "flex-direction", "gap", "align-items", "justify-content", "grid-template-columns", "padding", "margin", "width", "height", "background-color", "border", "border-radius", "box-shadow", "opacity", "position"];
+  // The app's COMPUTED_PROPS (src/lib/designBridge.ts), which a test checks.
+  const COMPUTED = ["display", "flex-direction", "gap", "align-items", "justify-content", "grid-template-columns", "padding", "margin", "width", "height", "background-color", "border", "border-radius", "box-shadow", "opacity"];
+  // The border styles that draw one: the app's BORDER_STYLES
+  // (src/lib/designStyle.ts) but none and hidden, which a test checks.
+  const DRAWN = /\b(dotted|dashed|solid|double|groove|ridge|inset|outset)\b/;
   const sides = (vals) => {
     const [t, r, b, l] = vals;
     if (!t) return "";
@@ -103,7 +112,7 @@
         if (each.every((x) => x === each[0])) v = each[0];
       }
       // No border and no fill read as such, not as their colours.
-      if (p === "border" && v && (!/\b(solid|dashed|dotted|double|groove|ridge|inset|outset)\b/.test(v) || /^0px\b/.test(v))) v = "none";
+      if (p === "border" && v && (!DRAWN.test(v) || /^0px\b/.test(v))) v = "none";
       if (p === "background-color" && /^rgba\(0, 0, 0, 0\)$/.test(v)) v = "transparent";
       if (v) style[p] = v.trim();
     }
@@ -117,7 +126,7 @@
     if (!selection) {
       selection = document.createElement("moonlet-selection");
       selection.setAttribute("data-moonlet-bridge", "selection");
-      selection.style.cssText = "position:fixed;pointer-events:none;z-index:2147483647;box-sizing:border-box;border:1.5px solid #5b9cff;border-radius:2px";
+      selection.style.cssText = `${OVER_CSS}border:1.5px solid #5b9cff;border-radius:2px`;
       const label = document.createElement("span");
       label.style.cssText = "position:absolute;left:-1.5px;bottom:100%;margin-bottom:2px;padding:1px 5px;border-radius:3px;background:#5b9cff;color:#0b1a33;font:600 10px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:nowrap";
       selection.append(label);
@@ -324,7 +333,8 @@
   // under it, by the side of the one nearest; beside an element that holds
   // only text, or near an edge of a container; into an empty container.
   const EDGE = 6;
-  const HOLDS_NONE = /^(area|base|br|col|embed|hr|img|input|link|meta|source|track|wbr|svg|math|select|option|textarea|script|style|template|noscript|iframe|object|video|audio|canvas)$/i;
+  // The app's HOLDS_NO_ELEMENTS (src/lib/designEdits.ts), which a test checks.
+  const HOLDS_NONE = /^(area|base|br|col|embed|hr|img|input|link|meta|source|track|wbr|svg|math|select|option|textarea|script|style|title|template|noscript|xmp|iframe|noembed|noframes|plaintext|object|video|audio|canvas)$/i;
   const holds = (el) => !HOLDS_NONE.test(el.tagName) && !(el.parentElement && el.parentElement.closest("svg, math"));
   const kidsOf = (el, skip) => [...el.children].filter((c) => c !== skip && MID.test(midOf(c)) && !QUIET.test(c.tagName));
   const inRow = (el) => {
@@ -383,10 +393,10 @@
     const r = box(ref);
     let at;
     if (p.where === "into") {
-      dropLine.style.cssText = "position:fixed;pointer-events:none;z-index:2147483647;box-sizing:border-box;border:1.5px dashed #5b9cff;background:rgba(91,156,255,0.08);border-radius:2px";
+      dropLine.style.cssText = OUTLINE_CSS;
       at = [r.x, r.y, r.w, r.h];
     } else {
-      dropLine.style.cssText = "position:fixed;pointer-events:none;z-index:2147483647;background:#5b9cff;border-radius:1px";
+      dropLine.style.cssText = `${OVER_CSS}background:#5b9cff;border-radius:1px`;
       const row = inRow(ref.parentElement);
       const edge = p.where === "above" ? (row ? r.x : r.y) : row ? r.x + r.w : r.y + r.h;
       at = row ? [edge - 1, r.y, 2, r.h] : [r.x, edge - 1, r.w, 2];

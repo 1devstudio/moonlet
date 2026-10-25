@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { JSDOM, type DOMWindow } from "jsdom";
-import { PAGE_KEYS, bridgeMessage, editMessage, helloMessage, modeMessage, paletteMessage, pinsMessage, scrollMessage, selectMessage } from "./designBridge";
+import { COMPUTED_PROPS, PAGE_KEYS, bridgeMessage, editMessage, helloMessage, modeMessage, paletteMessage, pinsMessage, scrollMessage, selectMessage } from "./designBridge";
 import bridge from "../../src-tauri/src/design_bridge.js?raw";
+import { HOLDS_NO_ELEMENTS } from "./designEdits";
+import { BORDER_STYLES } from "./designStyle";
+import { inspectorSections } from "./designInspector";
 
 describe("the bridge's messages (X65)", () => {
   it("takes a pick with its element's data-mid, tag, text and box", () => {
@@ -607,6 +610,43 @@ describe("the bridge script in a page (X65)", () => {
     tell(editMessage({ op: "style", mid: "m25", style: "" }));
     expect(doc.querySelector('[data-mid="m25"]')?.hasAttribute("style")).toBe(false);
     expect(of("tree")).toHaveLength(6);
+  });
+
+  it("reports of the selection's computed style exactly the Inspector's properties, the app's COMPUTED_PROPS", () => {
+    const props = [...new Set([...inspectorSections("flex"), ...inspectorSections("grid")].flatMap((s) => s.fields.map((f) => f.prop)))];
+    expect([...COMPUTED_PROPS].sort()).toEqual([...props].sort());
+    const style = "display: grid; flex-direction: column; gap: 4px; align-items: center; justify-content: center; grid-template-columns: 1fr 2fr; padding: 4px; margin: 8px; width: 320px; height: 40px; background-color: red; border: 1px solid red; border-radius: 4px; box-shadow: 0 1px 2px red; opacity: 0.5; position: absolute";
+    const { win, el, tell, of } = framed(`<section data-mid="m24" style="${style}">Git</section>`);
+    tell(modeMessage("edit"));
+    mouse(win, "click", el("m24"));
+    expect(Object.keys((of("computed")[0] as { style: object }).style).sort()).toEqual([...COMPUTED_PROPS].sort());
+  });
+
+  it("drops nothing into an element of the app's list of those that hold no elements, and into an empty box", () => {
+    const { win, doc, el, tell, of } = framed('<h2 data-mid="m25">Git</h2>');
+    tell(modeMessage("edit"));
+    tell(selectMessage("m25"));
+    for (const tag of [...HOLDS_NO_ELEMENTS, "div"]) {
+      doc.querySelector('[data-mid="m50"]')?.remove();
+      const box = doc.createElement(tag);
+      box.setAttribute("data-mid", "m50");
+      doc.body.append(box);
+      hits(doc, { m1: [0, 0, 390, 400], m25: [0, 0, 390, 40], m50: [0, 100, 390, 100] });
+      mouse(win, "mousedown", el("m25"), { clientX: 20, clientY: 20 });
+      mouse(win, "mousemove", el("m50"), { clientX: 200, clientY: 150 });
+      mouse(win, "mouseup", el("m50"), { clientX: 200, clientY: 150 });
+      const moved = of("move").at(-1) as { place: { where: string } } | undefined;
+      expect([tag, moved?.place.where === "into"]).toEqual([tag, tag === "div"]);
+    }
+  });
+
+  it("reads a border by the app's list of border styles: none and hidden draw none", () => {
+    for (const s of BORDER_STYLES) {
+      const { win, el, tell, of } = framed(`<p data-mid="m30" style="border: 2px ${s} red">x</p>`);
+      tell(modeMessage("edit"));
+      mouse(win, "click", el("m30"));
+      expect([s, (of("computed")[0] as { style: Record<string, string> }).style.border]).toEqual([s, s === "none" || s === "hidden" ? "none" : `2px ${s} rgb(255, 0, 0)`]);
+    }
   });
 
   it("reports the boxes of the pinned elements when asked, and again on scroll and resize", async () => {
