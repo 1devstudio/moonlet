@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use moonlet_proto::RpcError;
 use moonlet_proto::methods::{DESIGN_RENDER_DONE, DESIGN_RENDER_READY, DesignRender, RenderWant};
@@ -21,9 +21,67 @@ use tokio::sync::{oneshot, watch};
 /// The hidden window's label.
 pub const LABEL: &str = "design-render";
 
-/// How long the render page has to answer for one card; it gives up on a
-/// card itself after 15 s.
-const PAGE_ANSWER: Duration = Duration::from_secs(20);
+/// What the app gives one card, all told: the page being ready, its
+/// answer, the paint and the snapshot share it. It is under the daemon's
+/// [`moonlet_proto::methods::RENDER_TIMEOUT`], so the app gives up on a card,
+/// and says why, first. The render page gives up on a card that does not
+/// load itself, after 15 s.
+pub const CARD_BUDGET: Duration = Duration::from_secs(25);
+
+/// When a card's budget runs out.
+#[derive(Debug, Clone, Copy)]
+struct Deadline(Instant);
+
+impl Deadline {
+    fn at(start: Instant, budget: Duration) -> Self {
+        Deadline(start + budget)
+    }
+
+    /// What is left of the budget at `now`.
+    fn left_at(&self, now: Instant) -> Duration {
+        self.0.saturating_duration_since(now)
+    }
+
+    fn left(&self) -> Duration {
+        self.left_at(Instant::now())
+    }
+}
+
+/// Why a card was not rendered.
+#[derive(Debug, Clone, PartialEq)]
+enum Failure {
+    /// The render page never said it was ready for cards.
+    NotReady,
+    /// The page did not answer for the card: the card may run forever and
+    /// block it, or its web process died.
+    NoAnswer,
+    /// The snapshot did not come.
+    NoSnapshot(String),
+    /// Anything else, such as the window not opening.
+    Other(String),
+}
+
+impl std::fmt::Display for Failure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Failure::NotReady => f.write_str("the render page did not load"),
+            Failure::NoAnswer => write!(
+                f,
+                "the render page did not answer in {} s: the card may never stop running",
+                CARD_BUDGET.as_secs()
+            ),
+            Failure::NoSnapshot(why) | Failure::Other(why) => f.write_str(why),
+        }
+    }
+}
+
+impl Failure {
+    /// Whether the render page is left unusable, so the next card needs a
+    /// fresh window, with a fresh page and web process.
+    fn spoils_page(&self) -> bool {
+        !matches!(self, Failure::Other(_))
+    }
+}
 
 /// The card painted, from its frame's post until the snapshot.
 const PAINT: Duration = Duration::from_millis(300);
@@ -87,7 +145,7 @@ pub fn handle(app: &AppHandle, data: Value) {
         let id = ask.id;
         let done = match render(&app, ask).await {
             Ok(done) => done,
-            Err(e) => json!({"id": id, "error": e}),
+            Err(e) => json!({"id": id, "error": e.to_string()}),
         };
         let Some(hosts) = app.try_state::<Arc<crate::hosts::HostManager>>() else {
             return;
@@ -100,19 +158,42 @@ pub fn handle(app: &AppHandle, data: Value) {
     });
 }
 
-async fn render(app: &AppHandle, ask: DesignRender) -> Result<Value, String> {
+/// Renders one card, in [`CARD_BUDGET`]; a page left unusable is closed,
+/// so the next card starts on a fresh one.
+async fn render(app: &AppHandle, ask: DesignRender) -> Result<Value, Failure> {
     let renderer = app.state::<Arc<Renderer>>().inner().clone();
     let _turn = renderer.turn.lock().await;
-    let window = window(app, &renderer)?;
+    let deadline = Deadline::at(Instant::now(), CARD_BUDGET);
+    let result = render_card(app, &renderer, ask, deadline).await;
+    if let Err(f) = &result
+        && f.spoils_page()
+    {
+        tracing::warn!("closing the render window: {f}");
+        if let Some(w) = app.get_webview_window(LABEL) {
+            let _ = w.destroy();
+        }
+        renderer.page_ready.send_replace(false);
+        renderer.waiting.lock().unwrap().clear();
+    }
+    result
+}
+
+async fn render_card(
+    app: &AppHandle,
+    renderer: &Arc<Renderer>,
+    ask: DesignRender,
+    deadline: Deadline,
+) -> Result<Value, Failure> {
+    let window = window(app, renderer).map_err(Failure::Other)?;
     let mut ready = renderer.page_ready.subscribe();
-    tokio::time::timeout(PAGE_ANSWER, ready.wait_for(|r| *r))
-        .await
-        .map_err(|_| "the render page did not load".to_string())?
-        .map_err(|_| "the render page went away".to_string())?;
+    match tokio::time::timeout(deadline.left(), ready.wait_for(|r| *r)).await {
+        Ok(Ok(_)) => {}
+        _ => return Err(Failure::NotReady),
+    }
     let (w, h) = ask.viewport;
     window
         .set_size(LogicalSize::new(f64::from(w), f64::from(h)))
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| Failure::Other(e.to_string()))?;
     let (tx, rx) = oneshot::channel();
     renderer.waiting.lock().unwrap().insert(ask.id, tx);
     let job = json!({
@@ -123,25 +204,27 @@ async fn render(app: &AppHandle, ask: DesignRender) -> Result<Value, String> {
         "viewport": [w, h],
         "variant": ask.variant,
     });
-    if let Err(e) = window.eval(format!("window.moonletRender({job})")) {
+    if window.eval(format!("window.moonletRender({job})")).is_err() {
         renderer.waiting.lock().unwrap().remove(&ask.id);
-        return Err(e.to_string());
+        return Err(Failure::NotReady);
     }
-    let measured = match tokio::time::timeout(PAGE_ANSWER, rx).await {
+    let measured = match tokio::time::timeout(deadline.left(), rx).await {
         Ok(Ok(m)) => m,
         _ => {
             renderer.waiting.lock().unwrap().remove(&ask.id);
-            return Err("the render page did not answer".into());
+            return Err(Failure::NoAnswer);
         }
     };
     if ask.want == RenderWant::Metrics {
         return Ok(json!({"id": ask.id, "metrics": measured.metrics, "error": measured.error}));
     }
     if let Some(e) = measured.error {
-        return Err(e);
+        return Err(Failure::Other(e));
     }
-    tokio::time::sleep(PAINT).await;
-    let png = snapshot(&window, w).await?;
+    tokio::time::sleep(PAINT.min(deadline.left())).await;
+    let png = snapshot(&window, w, deadline)
+        .await
+        .map_err(Failure::NoSnapshot)?;
     use base64::Engine;
     Ok(json!({
         "id": ask.id,
@@ -164,6 +247,10 @@ fn window(app: &AppHandle, renderer: &Arc<Renderer>) -> Result<WebviewWindow, St
         .focused(false)
         .skip_taskbar(true)
         .resizable(false)
+        // Its own data store, so WebKit gives it its own web process: a card
+        // that never stops running blocks this window alone, never the main
+        // one, and a window made after it is closed starts on a fresh process.
+        .incognito(true)
         // The page says when it is ready (`design_render_page_ready`): a
         // finished load can come before its script has run.
         .on_page_load(move |_, p| {
@@ -256,7 +343,11 @@ pub fn design_render_measured(
 
 /// A PNG of what the window's WKWebView shows, `width` points wide, at 1×.
 #[cfg(target_os = "macos")]
-async fn snapshot(window: &WebviewWindow, width: u32) -> Result<Vec<u8>, String> {
+async fn snapshot(
+    window: &WebviewWindow,
+    width: u32,
+    deadline: Deadline,
+) -> Result<Vec<u8>, String> {
     let (tx, rx) = oneshot::channel();
     window
         .with_webview(move |webview| {
@@ -265,14 +356,18 @@ async fn snapshot(window: &WebviewWindow, width: u32) -> Result<Vec<u8>, String>
             unsafe { snap::take(webview.inner(), f64::from(width), tx) }
         })
         .map_err(|e| e.to_string())?;
-    tokio::time::timeout(PAGE_ANSWER, rx)
+    tokio::time::timeout(deadline.left(), rx)
         .await
         .map_err(|_| "the snapshot did not come".to_string())?
         .map_err(|_| "the snapshot did not come".to_string())?
 }
 
 #[cfg(not(target_os = "macos"))]
-async fn snapshot(_window: &WebviewWindow, _width: u32) -> Result<Vec<u8>, String> {
+async fn snapshot(
+    _window: &WebviewWindow,
+    _width: u32,
+    _deadline: Deadline,
+) -> Result<Vec<u8>, String> {
     Err("snapshots of cards need macOS".into())
 }
 
@@ -415,5 +510,31 @@ mod tests {
         ] {
             assert!(!is_render_page(label, url, dev), "{label} {url} {dev:?}");
         }
+    }
+    #[test]
+    fn a_card_has_one_budget_for_all_its_steps_under_the_daemons() {
+        let start = std::time::Instant::now();
+        let d = Deadline::at(start, Duration::from_secs(25));
+        assert_eq!(d.left_at(start), Duration::from_secs(25));
+        // Waiting for the page took 6 s: the answer has what is left.
+        assert_eq!(
+            d.left_at(start + Duration::from_secs(6)),
+            Duration::from_secs(19)
+        );
+        assert_eq!(d.left_at(start + Duration::from_secs(40)), Duration::ZERO);
+        // The app gives up on a card, and says why, before the daemon does.
+        assert!(CARD_BUDGET < moonlet_proto::methods::RENDER_TIMEOUT);
+    }
+
+    #[test]
+    fn a_page_that_stopped_answering_is_replaced_and_a_cards_own_error_is_not() {
+        assert_eq!(
+            Failure::NoAnswer.to_string(),
+            "the render page did not answer in 25 s: the card may never stop running"
+        );
+        assert!(Failure::NoAnswer.spoils_page());
+        assert!(Failure::NotReady.spoils_page());
+        assert!(Failure::NoSnapshot("WebKit took no snapshot".into()).spoils_page());
+        assert!(!Failure::Other("cannot open the render window".into()).spoils_page());
     }
 }
