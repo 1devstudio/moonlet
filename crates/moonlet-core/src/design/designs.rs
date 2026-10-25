@@ -6,7 +6,7 @@
 //! folders, so it cannot change it without the user approving the edit.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -15,6 +15,7 @@ use moonlet_proto::types::{DesignInfo, DesignKind, DesignPage};
 
 use super::check::{Kind, Problem};
 use super::fsx;
+use super::place::DesignAt;
 use super::store::Store;
 
 /// A design asked for on a design system the workspace does not have.
@@ -152,10 +153,19 @@ impl Store {
                 .design_record(workspace, &slug)
                 .context("cannot read the design's record");
             let agent = record.as_ref().ok().and_then(|r| r.agent);
-            out.push(match read_design_config(&dir) {
+            let at = DesignAt {
+                root: folder.clone(),
+                dir: PathBuf::from(&slug),
+                side: PathBuf::from(&slug),
+                slug: slug.clone(),
+                kind: DesignKind::Workspace,
+                workspace: Some(workspace.to_string()),
+                key: format!("w/{workspace}/{slug}"),
+            };
+            out.push(match read_design_config(&at) {
                 Ok(config) => DesignInfo {
                     error: record.err().map(|err| format!("{err:#}")),
-                    ..summary(&dir, slug, &config, agent)
+                    ..summary(&at, &config, agent)
                 },
                 Err(err) => DesignInfo {
                     name: slug.clone(),
@@ -195,12 +205,10 @@ impl Store {
             .join(format!("{slug}.toml")))
     }
 
-    /// The folder of an existing design.
+    /// The folder of an existing workspace design.
     pub fn design_dir(&self, workspace: &str, slug: &str) -> Result<PathBuf> {
         // `<slug>@<n>` names a snapshot's folder (X65), never a design.
-        if !super::store::is_name(slug) || slug.contains('@') {
-            bail!("bad design \"{slug}\"");
-        }
+        super::place::check_slug(slug)?;
         let dir = self.designs_dir(workspace, false)?.join(slug);
         super::store::not_a_link(&dir)?;
         // Its own file: a link, which would take reads elsewhere, is not one.
@@ -211,16 +219,19 @@ impl Store {
     }
 
     /// A design's `design.toml`.
-    pub fn design_config(&self, workspace: &str, slug: &str) -> Result<DesignConfig> {
-        read_design_config(&self.design_dir(workspace, slug)?)
+    pub fn design_config(&self, at: &DesignAt) -> Result<DesignConfig> {
+        read_design_config(at)
     }
 
-    /// One design as `design.list` shows it.
-    pub fn design(&self, workspace: &str, slug: &str) -> Result<DesignInfo> {
-        let dir = self.design_dir(workspace, slug)?;
-        let config = read_design_config(&dir)?;
-        let agent = self.design_record(workspace, slug)?.agent;
-        Ok(summary(&dir, slug.to_string(), &config, agent))
+    /// One design as `design.list` shows it; a workspace design with the
+    /// agent its record names.
+    pub fn design(&self, at: &DesignAt) -> Result<DesignInfo> {
+        let config = read_design_config(at)?;
+        let agent = match &at.workspace {
+            Some(workspace) => self.design_record(workspace, &at.slug)?.agent,
+            None => None,
+        };
+        Ok(summary(at, &config, agent))
     }
 
     /// Records the chat of the design's agent, which removing it stops.
@@ -253,13 +264,12 @@ impl Store {
     /// Saves the viewport the design was last shown at (`WxH`, in px) in its
     /// `design.toml`, leaving the rest of the file as the agent wrote it, also
     /// when the agent writes it while the viewport is saved.
-    pub fn set_design_viewport(&self, workspace: &str, slug: &str, viewport: &str) -> Result<()> {
+    pub fn set_design_viewport(&self, at: &DesignAt, viewport: &str) -> Result<()> {
         if parse_viewport(viewport).is_none() {
             return Err(BadViewport(viewport.to_string()).into());
         }
         // The agent may label a page meanwhile: its edit is kept.
-        let designs = self.designs_of(workspace, slug)?;
-        fsx::update_inside(&designs, &Path::new(slug).join(DESIGN_FILE), |text| {
+        fsx::update_inside(&at.root, &at.in_dir(DESIGN_FILE), |text| {
             let mut doc: toml_edit::DocumentMut = text
                 .parse()
                 .with_context(|| format!("cannot read {DESIGN_FILE}"))?;
@@ -268,18 +278,22 @@ impl Store {
         })
     }
 
-    /// Deletes a design: its folder and its record.
-    pub fn remove_design(&self, workspace: &str, slug: &str) -> Result<()> {
-        let dir = self.design_dir(workspace, slug)?;
-        let designs = self.designs_dir(workspace, false)?;
-        // Through handles opened from the designs folder, so a folder swapped
+    /// Deletes a design: its folder, its comments and history, and a
+    /// workspace design's record.
+    pub fn remove_design(&self, at: &DesignAt) -> Result<()> {
+        // Through handles opened from the design's root, so a folder swapped
         // for a link on the way is refused, not followed.
-        fsx::remove_dir_inside(&designs, &dir)
-            .with_context(|| format!("cannot remove {}", dir.display()))?;
-        let _ = fsx::remove_file_inside(
-            &self.workspace(workspace)?,
-            &self.design_record_path(workspace, slug)?,
-        );
+        for rel in [&at.dir, &at.side] {
+            let dir = at.root.join(rel);
+            fsx::remove_dir_inside(&at.root, &dir)
+                .with_context(|| format!("cannot remove {}", dir.display()))?;
+        }
+        if let Some(workspace) = &at.workspace {
+            let _ = fsx::remove_file_inside(
+                &self.workspace(workspace)?,
+                &self.design_record_path(workspace, &at.slug)?,
+            );
+        }
         Ok(())
     }
 
@@ -287,19 +301,21 @@ impl Store {
     /// a `data-mid` of its own, and each links no stylesheet but its design
     /// system's `styles.css`. With `fix`, the missing and repeated ids get
     /// the next free numbers first, and the pages are saved.
-    pub fn check_design(&self, workspace: &str, slug: &str, fix: bool) -> Result<Vec<Problem>> {
-        let dir = self.design_dir(workspace, slug)?;
-        let config = read_design_config(&dir)?;
-        let styles = styles_link(&config.system);
+    pub fn check_design(&self, at: &DesignAt, fix: bool) -> Result<Vec<Problem>> {
+        let config = read_design_config(at)?;
+        let styles = styles_link(at, &config.system);
         let mut problems = Vec::new();
-        for (name, _) in pages(&dir) {
+        for (name, _) in pages(at) {
             let file = format!("{name}.html");
-            let (rel, path) = (format!("pages/{file}"), dir.join("pages").join(&file));
-            let mut html = fsx::read_inside(&dir, &path)?;
+            let (rel, path) = (
+                format!("pages/{file}"),
+                at.root.join(at.in_dir("pages")).join(&file),
+            );
+            let mut html = fsx::read_inside(&at.root, &path)?;
             if fix {
                 let fixed = super::mid::fix_page(&html);
                 if fixed != html {
-                    fsx::write_inside(&dir, &path, fixed.as_bytes())?;
+                    fsx::write_inside(&at.root, &path, fixed.as_bytes())?;
                     html = fixed;
                 }
             }
@@ -308,15 +324,6 @@ impl Store {
         }
         problems.sort_by(|a, b| (&a.path, a.line).cmp(&(&b.path, b.line)));
         Ok(problems)
-    }
-
-    /// The designs folder of an existing design `slug`, its own folder no
-    /// link, for reading and writing its files through the designs folder
-    /// as a handle, so a design folder swapped for a link after the check
-    /// is never followed.
-    pub(super) fn designs_of(&self, workspace: &str, slug: &str) -> Result<PathBuf> {
-        self.design_dir(workspace, slug)?;
-        self.designs_dir(workspace, false)
     }
 
     /// `<workspace>/designs`, never through a link; with `create`, made
@@ -337,20 +344,21 @@ fn parse_viewport(text: &str) -> Option<(u32, u32)> {
     Some((px(w)?, px(h)?))
 }
 
-fn read_design_config(dir: &Path) -> Result<DesignConfig> {
-    let text = fsx::read_inside(dir, &dir.join(DESIGN_FILE))?;
-    toml::from_str(&text).with_context(|| format!("cannot read {DESIGN_FILE}"))
+fn read_design_config(at: &DesignAt) -> Result<DesignConfig> {
+    let bytes = fsx::read_file_inside(&at.root, &at.in_dir(DESIGN_FILE))?;
+    toml::from_str(&String::from_utf8_lossy(&bytes))
+        .with_context(|| format!("cannot read {DESIGN_FILE}"))
 }
 
 /// What the list shows of one design.
-fn summary(dir: &Path, slug: String, config: &DesignConfig, agent: Option<u32>) -> DesignInfo {
-    let pages = pages(dir);
+fn summary(at: &DesignAt, config: &DesignConfig, agent: Option<u32>) -> DesignInfo {
+    let pages = pages(at);
     DesignInfo {
-        slug,
+        slug: at.slug.clone(),
         name: config.name.clone(),
-        kind: DesignKind::Workspace,
+        kind: at.kind,
         system: config.system.clone(),
-        path: dir.display().to_string(),
+        path: at.folder().display().to_string(),
         brief: config.brief.clone(),
         viewport: config.viewport.clone(),
         updated_at: pages
@@ -369,7 +377,7 @@ fn summary(dir: &Path, slug: String, config: &DesignConfig, agent: Option<u32>) 
                 name,
             })
             .collect(),
-        open_comments: open_comments(dir),
+        open_comments: open_comments(at),
         agent,
         agent_state: None,
         needs_you: None,
@@ -379,8 +387,13 @@ fn summary(dir: &Path, slug: String, config: &DesignConfig, agent: Option<u32>) 
 
 /// A design's pages, `pages/<name>.html`, as their names and last changes in
 /// ms: `index` first, then by name, so tabs keep their places.
-fn pages(dir: &Path) -> Vec<(String, u64)> {
-    let mut pages: Vec<(String, u64)> = std::fs::read_dir(dir.join("pages"))
+fn pages(at: &DesignAt) -> Vec<(String, u64)> {
+    let folder = at.root.join(at.in_dir("pages"));
+    // A link is no pages folder: nothing is listed through it.
+    if std::fs::symlink_metadata(&folder).is_ok_and(|m| !m.is_dir()) {
+        return Vec::new();
+    }
+    let mut pages: Vec<(String, u64)> = std::fs::read_dir(folder)
         .into_iter()
         .flatten()
         .flatten()
@@ -401,7 +414,8 @@ fn pages(dir: &Path) -> Vec<(String, u64)> {
 
 /// How a page in `pages/` links its design system's `styles.css`: relative,
 /// so it loads from the host the page was framed on, whichever it is (X65).
-pub fn styles_link(system: &str) -> String {
+pub fn styles_link(at: &DesignAt, system: &str) -> String {
+    let _ = at;
     format!("../../../systems/{system}/styles.css")
 }
 
@@ -441,20 +455,24 @@ fn stylesheets(path_rel: &str, html: &str, styles: &str) -> Vec<Problem> {
 
 /// The pins of `comments.json` whose `state` is `open`, read as
 /// `design.comments` reads them; none when it cannot be read.
-fn open_comments(dir: &Path) -> usize {
-    fsx::read_inside(dir, &dir.join(super::comments::COMMENTS_FILE))
-        .ok()
-        .and_then(|t| super::comments::parse(&t).ok())
-        .map_or(0, |pins| {
-            pins.iter()
-                .filter(|p| p.state == moonlet_proto::types::CommentState::Open)
-                .count()
-        })
+fn open_comments(at: &DesignAt) -> usize {
+    fsx::read_inside(
+        &at.root,
+        &at.root.join(at.in_side(super::comments::COMMENTS_FILE)),
+    )
+    .ok()
+    .and_then(|t| super::comments::parse(&t).ok())
+    .map_or(0, |pins| {
+        pins.iter()
+            .filter(|p| p.state == moonlet_proto::types::CommentState::Open)
+            .count()
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     /// A workspace with one empty design system, `moonlet-desktop`.
     fn store_with_system() -> (tempfile::TempDir, Store) {
@@ -645,7 +663,10 @@ created_at = 1761200000000
         )
         .unwrap();
         store
-            .set_design_viewport("w1", "settings-page", "390x844")
+            .set_design_viewport(
+                &store.workspace_design("w1", "settings-page").unwrap(),
+                "390x844",
+            )
             .unwrap();
         assert_eq!(
             std::fs::read_to_string(&file).unwrap(),
@@ -669,12 +690,16 @@ label = \"rows\"
         for bad in ["phone", "0x844", "390x", "390x844x2", "-1x5"] {
             assert!(
                 store
-                    .set_design_viewport("w1", "settings-page", bad)
+                    .set_design_viewport(
+                        &store.workspace_design("w1", "settings-page").unwrap(),
+                        bad
+                    )
                     .is_err(),
                 "{bad}"
             );
         }
-        assert!(store.set_design_viewport("w1", "nope", "390x844").is_err());
+        // A design that is not there has no address.
+        assert!(store.workspace_design("w1", "nope").is_err());
     }
 
     #[test]
@@ -697,7 +722,10 @@ label = \"rows\"
             }))
         });
         store
-            .set_design_viewport("w1", "settings-page", "390x844")
+            .set_design_viewport(
+                &store.workspace_design("w1", "settings-page").unwrap(),
+                "390x844",
+            )
             .unwrap();
         let text = std::fs::read_to_string(&file).unwrap();
         assert!(text.contains("viewport = \"390x844\""), "{text}");
@@ -716,11 +744,7 @@ label = \"rows\"
         let designs = home.path().join("design/w1/designs");
         // A design folder that is a link is refused outright.
         std::os::unix::fs::symlink(outside.path(), designs.join("linked")).unwrap();
-        assert!(
-            store
-                .set_design_viewport("w1", "linked", "390x844")
-                .is_err()
-        );
+        assert!(store.workspace_design("w1", "linked").is_err());
         // One swapped for a link after the save found it is not followed.
         let (dir, target) = (designs.join("settings-page"), outside.path().to_path_buf());
         let moved = designs.join(".moved");
@@ -730,7 +754,10 @@ label = \"rows\"
                 std::os::unix::fs::symlink(&target, &dir).unwrap();
             }))
         });
-        let _ = store.set_design_viewport("w1", "settings-page", "390x844");
+        let _ = store.set_design_viewport(
+            &store.workspace_design("w1", "settings-page").unwrap(),
+            "390x844",
+        );
         assert_eq!(
             std::fs::read_to_string(outside.path().join("design.toml")).unwrap(),
             theirs
@@ -853,7 +880,9 @@ label = \"rows\"
             ("Pricing", "moonlet-desktop", &vec![], 0, &None)
         );
         assert_eq!(
-            store.design_config("w1", "pricing").unwrap(),
+            store
+                .design_config(&store.workspace_design("w1", "pricing").unwrap())
+                .unwrap(),
             DesignConfig {
                 name: "Pricing".into(),
                 system: "moonlet-desktop".into(),
@@ -890,7 +919,9 @@ label = \"rows\"
             store.design_record("w1", "settings-page").unwrap().agent,
             Some(7)
         );
-        store.remove_design("w1", "settings-page").unwrap();
+        store
+            .remove_design(&store.workspace_design("w1", "settings-page").unwrap())
+            .unwrap();
         assert!(!home.path().join("design/w1/designs/settings-page").exists());
         assert!(
             !home
@@ -906,8 +937,8 @@ label = \"rows\"
             .collect();
         assert_eq!(left, vec!["onboarding"]);
         // A design that is not there, or a name that is no folder's, is refused.
-        assert!(store.remove_design("w1", "settings-page").is_err());
-        assert!(store.remove_design("w1", "../systems").is_err());
+        assert!(store.workspace_design("w1", "settings-page").is_err());
+        assert!(store.workspace_design("w1", "../systems").is_err());
     }
 
     #[test]
@@ -944,7 +975,14 @@ label = \"rows\"
         };
         let other = "is not the design system's styles.css: link ../../../systems/moonlet-desktop/styles.css";
         assert_eq!(
-            seen(store.check_design("w1", "settings-page", false).unwrap()),
+            seen(
+                store
+                    .check_design(
+                        &store.workspace_design("w1", "settings-page").unwrap(),
+                        false
+                    )
+                    .unwrap()
+            ),
             vec![
                 (
                     "pages/git-a.html".into(),
@@ -980,7 +1018,14 @@ label = \"rows\"
                 .contains("m3")
         );
         assert_eq!(
-            seen(store.check_design("w1", "settings-page", true).unwrap()),
+            seen(
+                store
+                    .check_design(
+                        &store.workspace_design("w1", "settings-page").unwrap(),
+                        true
+                    )
+                    .unwrap()
+            ),
             vec![
                 (
                     "pages/git-a.html".into(),
@@ -1028,7 +1073,10 @@ label = \"rows\"
         )
         .unwrap();
         let got: Vec<(String, usize, Kind, String)> = store
-            .check_design("w1", "settings-page", false)
+            .check_design(
+                &store.workspace_design("w1", "settings-page").unwrap(),
+                false,
+            )
             .unwrap()
             .into_iter()
             .map(|p| (p.path, p.line, p.kind, p.message))
@@ -1065,7 +1113,10 @@ label = \"rows\"
         )
         .unwrap();
         let got: Vec<(String, usize, Kind, String)> = store
-            .check_design("w1", "settings-page", false)
+            .check_design(
+                &store.workspace_design("w1", "settings-page").unwrap(),
+                false,
+            )
             .unwrap()
             .into_iter()
             .map(|p| (p.path, p.line, p.kind, p.message))
@@ -1100,7 +1151,10 @@ label = \"rows\"
         )
         .unwrap();
         let got: Vec<(usize, String)> = store
-            .check_design("w1", "settings-page", false)
+            .check_design(
+                &store.workspace_design("w1", "settings-page").unwrap(),
+                false,
+            )
             .unwrap()
             .into_iter()
             .map(|p| (p.line, p.message))
@@ -1136,7 +1190,12 @@ label = \"rows\"
         )
         .unwrap();
         assert_eq!(
-            store.check_design("w1", "settings-page", false).unwrap(),
+            store
+                .check_design(
+                    &store.workspace_design("w1", "settings-page").unwrap(),
+                    false
+                )
+                .unwrap(),
             vec![]
         );
     }

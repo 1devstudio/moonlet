@@ -7,6 +7,7 @@ use anyhow::Result;
 
 use moonlet_proto::methods::{DesignKit, DesignKitCard, DesignToken};
 
+use super::place::DesignAt;
 use super::store::Store;
 use super::{fsx, manifest, tokens};
 
@@ -14,8 +15,9 @@ impl Store {
     /// The tokens and snippet cards of design `slug`'s design system. A
     /// card that cannot be read through the system's folder (a link) is
     /// left out.
-    pub fn design_kit(&self, workspace: &str, slug: &str) -> Result<DesignKit> {
-        let config = self.design_config(workspace, slug)?;
+    pub fn design_kit(&self, at: &DesignAt) -> Result<DesignKit> {
+        let config = self.design_config(at)?;
+        let workspace = at.workspace.as_deref().unwrap_or_default();
         let dir = self.system_dir(workspace, &config.system)?;
         let tokens = tokens::read(&dir)
             .into_iter()
@@ -115,7 +117,9 @@ mod tests {
             family,
         };
         assert_eq!(
-            store.design_kit("w1", "settings-page").unwrap(),
+            store
+                .design_kit(&store.workspace_design("w1", "settings-page").unwrap())
+                .unwrap(),
             DesignKit {
                 system: "moonlet-desktop".into(),
                 tokens: vec![
@@ -132,6 +136,6 @@ mod tests {
                 }],
             }
         );
-        assert!(store.design_kit("w1", "no-such-design").is_err());
+        assert!(store.workspace_design("w1", "no-such-design").is_err());
     }
 }
