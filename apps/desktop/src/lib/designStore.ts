@@ -182,16 +182,20 @@ const reloadDesigns = designListing.reload;
 /** The latest check per design, so an older answer never lands last. */
 const checksAsked = latestPerKey();
 
-/** Checks a design's pages (`design.check`), for the canvas's red bar. */
+/** Checks a design's pages (`design.check`), for the canvas's red bar. A
+ *  check that fails clears the earlier problems, which may no longer be the
+ *  pages': the bar has no colour for a check that could not run. */
 export async function checkDesign(host: string, workspace: string, slug: string): Promise<void> {
   const key = itemKey(host, workspace, slug);
   const latest = checksAsked.start(key);
+  let found: PageProblem[];
   try {
-    const found = await rpc<PageProblem[]>(host, M.designCheck, { workspace, design: slug });
-    if (latest()) useDesign.setState((s) => ({ problems: { ...s.problems, [key]: found } }));
+    found = await rpc<PageProblem[]>(host, M.designCheck, { workspace, design: slug });
   } catch {
     // A design removed meanwhile, or a page that cannot be read: no bar.
+    found = NO_PROBLEMS;
   }
+  if (latest()) useDesign.setState((s) => ({ problems: { ...s.problems, [key]: found } }));
 }
 
 /** How long a design's files stay unchanged before it is checked again: an
