@@ -89,7 +89,7 @@ describe("A design's comments", () => {
     rpc(w, "design.comment.put", { workspace: workspaceId(), slug: "settings-page", new: { page: "index", mid: "m12", tag: "nav", text: "General Appearance", comment: "Collapse it" } });
     // Its pin over the page, where the bridge reports its element.
     await $('//button[@aria-label="Comment 1"]').click();
-    await expect(box()).toHaveText(expect.stringContaining('nav · m12 · "General Appearance"'));
+    await expect(box()).toHaveText(expect.stringContaining('nav · m12 · "General Appe…"'));
     await expect(box()).toHaveText(expect.stringContaining("⌘↵ sends to the chat"));
     await fill('//div[@role="dialog"][@aria-label="Comment"]//textarea', "Collapse into a menu on phone");
     await box().$(inside("Send")).click();

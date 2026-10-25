@@ -125,7 +125,10 @@ describe("a page's comments in Overview (X65)", () => {
 
 describe("how a pin is named (X65)", () => {
   it("names the element in the comment box, and its page too in the Comments tab", () => {
-    expect(boxLabel({ tag: "nav", mid: "m12", text: "General Appearance" })).toBe('nav · m12 · "General Appearance"');
+    // The text cut to 12 characters, its closing quote kept.
+    expect(boxLabel({ tag: "nav", mid: "m12", text: "General Appearance" })).toBe('nav · m12 · "General Appe…"');
+    expect(boxLabel({ tag: "h2", mid: "m25", text: "Git" })).toBe('h2 · m25 · "Git"');
+    expect(boxLabel({ tag: "p", mid: "m30", text: "Branch prefi" })).toBe('p · m30 · "Branch prefi"');
     expect(boxLabel({ tag: "div", mid: "m40", text: "" })).toBe("div · m40");
     expect(pinLabel(pin(1))).toBe('index.html · m12 · nav "General Appearance Terminal Agents"');
   });
