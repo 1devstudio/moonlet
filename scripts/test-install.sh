@@ -103,7 +103,10 @@ pass "installs, starts the daemon and turns on tailnet access"
 # A damaged download changes nothing.
 bad="$work/bad"
 cp -R "$dist" "$bad"
-printf 'x' | dd of="$bad/moonlet-linux-x86_64.tar.gz" bs=1 seek=100 conv=notrunc 2>/dev/null
+# One byte changed: written as a fixed one, it may already be that byte.
+tgz="$bad/moonlet-linux-x86_64.tar.gz"
+byte=$(dd if="$tgz" bs=1 skip=100 count=1 2>/dev/null | od -An -tu1 | tr -d ' ')
+printf "\\$(printf '%03o' $(((byte + 1) % 256)))" | dd of="$tgz" bs=1 seek=100 conv=notrunc 2>/dev/null
 before=$(cksum <"$bin/moonletd")
 if out=$(PATH="$fake:$PATH" sh "$bad/install.sh" --from "$bad" --no-pair --force 2>&1); then
   fail "a damaged archive installed: $out"
