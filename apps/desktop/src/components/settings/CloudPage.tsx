@@ -23,6 +23,7 @@ import {
   providerForm,
   providerName,
   providerStatus,
+  providersLine,
   removalError,
   removeProviderPrompt,
   usageLine,
@@ -281,7 +282,7 @@ export function CloudPage() {
                   <Plus size={12} /> Add provider
                 </Button>
               )}
-              <span className="ui-text-12 text-muted">{info.kinds.length === 1 ? `${info.kinds[0].label} is the only provider so far.` : ""}</span>
+              <span className="ui-text-12 text-muted">{providersLine(info.kinds)}</span>
             </div>
           </Card>
         </Section>

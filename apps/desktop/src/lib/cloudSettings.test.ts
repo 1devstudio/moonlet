@@ -23,6 +23,7 @@ import {
   providerForm,
   providerName,
   providerStatus,
+  providersLine,
   removalError,
   removalToast,
   removeProviderPrompt,
@@ -242,6 +243,13 @@ describe("Settings › Cloud workers (X63)", () => {
     expect(usageLine(12.5, 40)).toEqual({ text: "12.5 of 40 machine-hours this month", fraction: 0.3125 });
     expect(usageLine(40, 40)).toEqual({ text: "40 of 40 machine-hours this month", fraction: 1 });
     expect(usageLine(0.04, 40).text).toBe("0 of 40 machine-hours this month");
+  });
+
+  it("names the providers on offer", () => {
+    const gcp: CloudKind = { id: "gcp", label: "Google Cloud", fields: [] };
+    expect(providersLine([hetzner])).toBe("Hetzner Cloud is the only provider so far.");
+    expect(providersLine([hetzner, gcp])).toBe("Hetzner Cloud and Google Cloud so far.");
+    expect(providersLine([])).toBe("");
   });
 
   it("a provider's status line", () => {
