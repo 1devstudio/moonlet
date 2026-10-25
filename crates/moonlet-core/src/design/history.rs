@@ -225,9 +225,11 @@ fn snapshot_rel(slug: &str, n: u32) -> PathBuf {
     history_rel(slug).join(n.to_string())
 }
 
-/// Digits only, at least one: a snapshot's number as its folder names it.
+/// A snapshot's number as its folder names it: digits only, at least one,
+/// with no leading zero (`0` only on its own) and within a `u32`, so each
+/// number has one folder, never `01` beside `1`.
 fn is_number(text: &str) -> bool {
-    !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit())
+    text.parse::<u32>().is_ok_and(|n| n.to_string() == text)
 }
 
 /// The design's `pages/` and `assets/` files, by their paths in its folder.
@@ -863,6 +865,50 @@ mod tests {
                 (51, SnapshotKind::EditsByHand, "Text of m1".to_string())
             ]
         );
+    }
+
+    #[test]
+    fn a_snapshot_folder_is_one_only_under_its_numbers_own_name() {
+        let (_home, store, dir) = store_with_design();
+        write(&dir, "pages/index.html", INDEX);
+        store
+            .take_snapshot("w1", "settings-page", Take::AgentTurn, 1000)
+            .unwrap()
+            .unwrap();
+        // The same snapshot again under names that also read as 1 and 0.
+        let record = std::fs::read_to_string(dir.join("history/1/snapshot.json")).unwrap();
+        for other in ["01", "001", "00"] {
+            write(&dir, &format!("history/{other}/pages/index.html"), INDEX);
+            write(&dir, &format!("history/{other}/snapshot.json"), &record);
+        }
+        let listed = |store: &Store| -> Vec<u32> {
+            store
+                .history("w1", "settings-page")
+                .unwrap()
+                .iter()
+                .map(|s| s.n)
+                .collect()
+        };
+        assert_eq!(listed(&store), [1]);
+        // Nor is it served as one.
+        assert!(
+            store
+                .resolve("w1", "designs/settings-page@01/pages/index.html")
+                .is_err()
+        );
+        // 50 more: snapshot 1 is rotated out, and the others are left alone.
+        for i in 2..=51u64 {
+            write(&dir, "pages/index.html", &format!("<p>{i}</p>"));
+            store
+                .take_snapshot("w1", "settings-page", Take::AgentTurn, i * 1000)
+                .unwrap()
+                .expect("a change");
+        }
+        assert_eq!(listed(&store), (2..=51).rev().collect::<Vec<u32>>());
+        assert!(!dir.join("history/1").exists());
+        for other in ["01", "001", "00"] {
+            assert!(dir.join("history").join(other).exists(), "{other}");
+        }
     }
 
     #[test]
