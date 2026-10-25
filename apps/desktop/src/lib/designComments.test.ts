@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { DesignComment } from "./protocol";
 import { editsMessage, type Untold } from "./designEdits";
-import { boxLabel, boxPlace, chatCardLookup, pinPlace, withMid, keepAction, openCommentsLabel, commentCards, footerLabel, pinLabel, sentLabel, commentLine, commentsMessage, commentsTab, isOrphaned, messageView, pageCounts, parseCommentLine, sendAll, withPins, type PageMids } from "./designComments";
+import { boxLabel, boxPlace, chatCardLookup, commentsRail, pinPlace, withMid, keepAction, openCommentsLabel, commentCards, footerLabel, pinLabel, sentLabel, commentLine, commentsMessage, commentsTab, isOrphaned, messageView, pageCounts, parseCommentLine, sendAll, withPins, type PageMids } from "./designComments";
 
 const pin = (n: number, over: Partial<DesignComment> = {}): DesignComment => ({
   n,
@@ -184,6 +184,17 @@ describe("the comment box (X65)", () => {
     expect(keepAction(null, "Collapse it")).toBe("new");
     expect(keepAction(pin(1), "Collapse into a menu on phone ")).toBe("unchanged");
     expect(keepAction(pin(1), "Collapse into a menu below 600 px")).toBe("edit");
+  });
+});
+
+describe("the Comments rail (X65)", () => {
+  it("is read only while a snapshot is previewed: no Send, Send all or Resolve, which would change the current design's comments", () => {
+    expect(commentsRail({ agent: true, readOnly: true })).toEqual({ send: false, resolve: false, why: "Previewing a snapshot: go back to current to send or resolve" });
+    expect(commentsRail({ agent: false, readOnly: true })).toEqual({ send: false, resolve: false, why: "Previewing a snapshot: go back to current to send or resolve" });
+  });
+  it("sends only while the design's agent runs, and resolves either way, on the current design", () => {
+    expect(commentsRail({ agent: true, readOnly: false })).toEqual({ send: true, resolve: true, why: null });
+    expect(commentsRail({ agent: false, readOnly: false })).toEqual({ send: false, resolve: true, why: "The design's agent is not running" });
   });
 });
 
