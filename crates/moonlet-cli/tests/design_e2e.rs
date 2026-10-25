@@ -101,6 +101,21 @@ done
     }
 }
 
+impl Daemon {
+    /// `moonlet <args>` in folder `cwd`, as an agent in terminal `terminal`
+    /// runs it.
+    fn moonlet_as(&self, cwd: &Path, terminal: u32, args: &[&str]) -> Output {
+        Command::new(env!("CARGO_BIN_EXE_moonlet"))
+            .args(args)
+            .current_dir(cwd)
+            .env("MOONLET_HOME", self.home.path())
+            .env("MOONLET_SOCK", &self.socket)
+            .env("MOONLET_TERMINAL_ID", terminal.to_string())
+            .output()
+            .unwrap()
+    }
+}
+
 impl Drop for Daemon {
     fn drop(&mut self) {
         let _ = self.child.kill();
@@ -615,4 +630,83 @@ async fn a_designs_agent_checks_and_fixes_its_pages_from_its_folder() {
     assert!(std::fs::read_to_string(dir.join("pages/index.html")).unwrap().contains("<h1 data-mid=\"m2\">Settings</h1>"));
     let named = d.moonlet(d.home.path(), &["design", "check", "settings-page", "--workspace", &ws]);
     assert_eq!(named.status.code(), Some(0), "{}", String::from_utf8_lossy(&named.stderr));
+}
+
+/// X65 entry 12: in a session, `moonlet design new --here` makes a session
+/// design in the session's worktree on the workspace's design system built
+/// from the session's project, prints it, and has the app show it in the
+/// session; when several design systems are built from the project it asks
+/// for `--system`. `design check --here` checks its pages.
+#[tokio::test]
+async fn a_sessions_agent_makes_a_session_design_with_design_new_here() {
+    use moonlet_proto::types::{Section, Session};
+    let d = Daemon::with_fake_claude().await;
+    let repo = d.home.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::write(repo.join("README.md"), "# moonlet\n").unwrap();
+    for args in [vec!["init", "-q", "-b", "main"], vec!["add", "-A"], vec!["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init"]] {
+        assert!(Command::new("git").args(&args).current_dir(&repo).output().unwrap().status.success());
+    }
+    let mut c = Client::connect(&d.socket, "test").await.unwrap();
+    let ws: Workspace = c.request(methods::WORKSPACE_CREATE, serde_json::json!({"name": "1devstudio", "color": "clay"})).await.unwrap();
+    let sec: Section = c.request(methods::SECTION_CREATE, serde_json::json!({"workspace_id": ws.id, "name": "Apps"})).await.unwrap();
+    let project: Project = c.request(methods::SECTION_ADD_PROJECT, serde_json::json!({"id": sec.id, "path": repo})).await.unwrap();
+    let system = |name: &str, sources: serde_json::Value| {
+        serde_json::json!({"workspace": ws.id, "name": name, "sources": sources, "agent": false})
+    };
+    let _: serde_json::Value = c.request(methods::DESIGN_SYSTEM_CREATE, system("moonlet desktop", serde_json::json!([{"project": project.id}]))).await.unwrap();
+    let _: serde_json::Value = c.request(methods::DESIGN_SYSTEM_CREATE, system("storefront", serde_json::json!([]))).await.unwrap();
+    let session: Session = c
+        .request(methods::SESSION_CREATE, serde_json::json!({"project_id": project.id, "name": "Settings", "agent": "none", "workspace_id": ws.id}))
+        .await
+        .unwrap();
+    let (worktree, terminal) = (PathBuf::from(&session.path), session.terminals[0]);
+
+    let mut app = Client::connect(&d.socket, "moonlet-app").await.unwrap();
+    let made = json(&d.moonlet_as(&worktree, terminal, &["design", "new", "--here", "Prototype the settings page"]));
+    let dir = worktree.join("docs/design/prototype-the-settings-page");
+    assert_eq!(
+        (&made["slug"], &made["kind"], &made["session"], &made["system"], &made["path"]),
+        (
+            &serde_json::json!("prototype-the-settings-page"),
+            &serde_json::json!("session"),
+            &serde_json::json!(session.id),
+            &serde_json::json!("moonlet-desktop"),
+            &serde_json::json!(dir)
+        )
+    );
+    assert_eq!(
+        next_event(&mut app, methods::EV_DESIGN_OPEN).await,
+        serde_json::json!({"workspace": ws.id, "slug": "prototype-the-settings-page", "name": "Prototype the settings page", "session": session.id, "kind": "session"})
+    );
+
+    std::fs::write(
+        dir.join("pages/index.html"),
+        "<link rel=\"stylesheet\" href=\"../system/styles.css\">\n<body data-mid=\"m1\">\n<h1>Settings</h1>\n</body>\n",
+    )
+    .unwrap();
+    let check = d.moonlet_as(&worktree, terminal, &["design", "check", "--here", "prototype-the-settings-page"]);
+    assert_eq!(check.status.code(), Some(1), "{}{}", text(&check), String::from_utf8_lossy(&check.stderr));
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&text(&check)).unwrap_or_else(|_| panic!("{}", String::from_utf8_lossy(&check.stderr))),
+        serde_json::json!([{"path": "pages/index.html", "line": 3, "kind": "missing_mid", "message": "<h1> has no data-mid"}])
+    );
+    let fixed = d.moonlet_as(&worktree, terminal, &["design", "check", "--here", "--fix", "prototype-the-settings-page"]);
+    assert_eq!(fixed.status.code(), Some(0), "{}", String::from_utf8_lossy(&fixed.stderr));
+
+    // A second design system built from the project: which one is asked.
+    let _: serde_json::Value = c.request(methods::DESIGN_SYSTEM_CREATE, system("moonlet web", serde_json::json!([{"project": project.id}]))).await.unwrap();
+    let asked = d.moonlet_as(&worktree, terminal, &["design", "new", "--here", "Checkout"]);
+    assert!(!asked.status.success());
+    assert!(
+        String::from_utf8_lossy(&asked.stderr)
+            .contains("several design systems are built from this project: moonlet-desktop, moonlet-web. Pick one with --system"),
+        "{}",
+        String::from_utf8_lossy(&asked.stderr)
+    );
+    let picked = json(&d.moonlet_as(&worktree, terminal, &["design", "new", "--here", "--system", "moonlet-web", "Checkout"]));
+    assert_eq!((&picked["slug"], &picked["system"]), (&serde_json::json!("checkout"), &serde_json::json!("moonlet-web")));
+    // Outside a session there is no here.
+    let nowhere = d.moonlet(&worktree, &["design", "new", "--here", "Checkout"]);
+    assert!(String::from_utf8_lossy(&nowhere.stderr).contains("--here runs in a moonlet session"), "{}", String::from_utf8_lossy(&nowhere.stderr));
 }
