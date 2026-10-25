@@ -43,3 +43,32 @@ export function canvasPage(picked: string | null, pages: string[]): string | nul
   if (picked === null) return null;
   return pages.includes(picked) ? picked : (pages[0] ?? "index");
 }
+
+/** What the canvas does with the pointer: View lets the page have it,
+ *  Comment outlines and pins elements (Edit comes with the editor). */
+export type CanvasMode = "view" | "comment";
+
+/** The hint line's text for a mode. */
+export function modeHint(mode: CanvasMode): string {
+  return mode === "comment" ? "Hover outlines elements · click pins a comment · ⌥-click picks the parent" : "View: the page runs as in a browser, so its links, menus and scripts work";
+}
+
+/** A key pressed on the design screen, outside the app's ⌘ shortcuts. */
+export interface ModeKeyPress {
+  key: string;
+  meta: boolean;
+  ctrl: boolean;
+  alt: boolean;
+  shift: boolean;
+  /** In a field, where the key is text. */
+  typing: boolean;
+}
+
+/** What a key does to the canvas's mode: C switches Comment on and off, Esc
+ *  closes the comment box or leaves Comment; null for any other key, and
+ *  for C while typing or with a modifier. */
+export function modeKey(k: ModeKeyPress): "comment" | "escape" | null {
+  if (k.key === "Escape") return "escape";
+  if (k.meta || k.ctrl || k.alt || k.shift || k.typing) return null;
+  return k.key === "c" ? "comment" : null;
+}
