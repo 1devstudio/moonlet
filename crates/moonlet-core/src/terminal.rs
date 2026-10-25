@@ -1150,9 +1150,11 @@ mod tests {
             })
             .unwrap();
         mgr.write(info.id, b"first\n".to_vec()).unwrap();
-        // Wait until the echo reaches the emulator.
+        // Wait until both copies reach the emulator: the tty's echo, then
+        // cat's own output, which would otherwise arrive after the attach.
+        let mut shown = 0;
         for _ in 0..200 {
-            if mgr
+            shown = mgr
                 .get(info.id)
                 .unwrap()
                 .state
@@ -1160,12 +1162,14 @@ mod tests {
                 .unwrap()
                 .term
                 .contents()
-                .contains("first")
-            {
+                .matches("first")
+                .count();
+            if shown == 2 {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
+        assert_eq!(shown, 2, "the echo and cat's output");
         let (tx, mut rx) = mpsc::unbounded_channel();
         let (_, snapshot) = mgr.attach(info.id, 1, tx, None).unwrap();
         assert!(String::from_utf8_lossy(&snapshot).contains("first"));
