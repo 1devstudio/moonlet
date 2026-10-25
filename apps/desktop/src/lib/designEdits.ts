@@ -16,9 +16,6 @@ import { attrText, isStyleProp, isStyleValue, parseStyle, styleText, valueParts,
 type Node = DefaultTreeAdapterMap["node"];
 type Element = DefaultTreeAdapterMap["element"];
 
-/** Where an element goes: above or below element `ref`, or into it, after
- *  its last child; as the bridge reports a drop. */
-export type Place = DropPlace;
 
 /** An operation of the visual editor on one element of a page. */
 export type EditOp = { kind: "text"; mid: string; text: string } | { kind: "delete"; mid: string } | { kind: "duplicate"; mid: string } | { kind: "wrap"; mid: string } | { kind: "unwrap"; mid: string }
@@ -28,9 +25,9 @@ export type EditOp = { kind: "text"; mid: string; text: string } | { kind: "dele
   /** Properties of its inline `style` set (a value) or removed (null). */
   | { kind: "restyle"; mid: string; set: StyleSet }
   /** Moved to `place` (drag to move). */
-  | { kind: "move"; mid: string; place: Place }
+  | { kind: "move"; mid: string; place: DropPlace }
   /** A design system's snippet put at `place`, or at the end of the body. */
-  | { kind: "insert"; place: Place | null; html: string };
+  | { kind: "insert"; place: DropPlace | null; html: string };
 
 /** What an edit did to its element, as the agent is told. */
 export type Change =
@@ -40,10 +37,10 @@ export type Change =
   | { kind: "wrapped"; box: string }
   | { kind: "unwrapped" }
   /** Pasted or inserted at `place`, or (null) at the end of the body. */
-  | { kind: "inserted"; place: Place | null }
+  | { kind: "inserted"; place: DropPlace | null }
   /** Its inline style's properties set, or (null) removed. */
   | { kind: "restyled"; set: StyleSet }
-  | { kind: "moved"; place: Place };
+  | { kind: "moved"; place: DropPlace };
 
 /** An edit by hand of one element of a page. */
 export interface HandEdit {
@@ -237,7 +234,7 @@ export function applyEdit(html: string, op: EditOp, floor = 0): Edit {
   for (const id of want) remove(added, id);
   const lost = want.filter((id) => !got.includes(id));
   if (lost.length || (added.length && !["duplicate", "wrap", "paste", "insert"].includes(op.kind))) {
-    throw new EditRefused(`The page's markup around ${op.kind === "paste" ? (op.after ?? "the body") : op.kind === "insert" ? (op.place?.ref ?? "the body") : op.mid} is tangled: ask the agent to fix it`);
+    throw new EditRefused(`The page's markup around ${around(op)} is tangled: ask the agent to fix it`);
   }
   // The page read back must be the tree the live page gets: a box the
   // parser moves out of a <p> or a table's row, or a paste it moves, would
@@ -245,9 +242,17 @@ export function applyEdit(html: string, op: EditOp, floor = 0): Edit {
   if (JSON.stringify(reshaped(doc, edit.live)) !== JSON.stringify(tree(after).top)) {
     if (op.kind === "wrap") throw new EditRefused(`A box cannot go around ${op.mid} inside <${tagOf(find(doc, op.mid).parentNode)}>`);
     if (op.kind === "move") throw new EditRefused(`${op.mid} cannot go ${op.place.where} ${op.place.ref}: the page would not keep its structure`);
-    throw new EditRefused(`The page would not keep its structure around ${op.kind === "paste" ? (op.after ?? "the body") : op.kind === "insert" ? (op.place?.ref ?? "the body") : op.mid}`);
+    throw new EditRefused(`The page would not keep its structure around ${around(op)}`);
   }
   return edit;
+}
+
+/** Where an edit is, as a refusal names it: its element, or where a paste
+ *  or an insert goes. */
+function around(op: EditOp): string {
+  if (op.kind === "paste") return op.after ?? "the body";
+  if (op.kind === "insert") return op.place?.ref ?? "the body";
+  return op.mid;
 }
 
 /** An element in a page's tree: its tag, its id and its child elements. */
@@ -290,18 +295,16 @@ function reshaped(doc: Node, live: LiveEdit | null): Shape[] {
     return [list, list.indexOf(t.own.get(el)!)];
   };
   if (!live) return t.top;
-  /** The list of element `mid`'s children. */
-  const inside = (mid: string): Shape[] => t.own.get(find(doc, mid))!.kids;
+  /** Shapes put above or below an element, or into it, last. */
+  const putAt = ({ where, ref }: DropPlace, shapes: Shape[]) => {
+    if (where === "into") return void t.own.get(find(doc, ref))!.kids.push(...shapes);
+    const [to, j] = place(ref);
+    to.splice(where === "above" ? j : j + 1, 0, ...shapes);
+  };
   if (live.op === "insert") {
     const added = tree(parseFragment(live.html)).top;
-    if ("above" in live) {
-      const [list, i] = place(live.above);
-      list.splice(i, 0, ...added);
-    } else if ("into" in live) inside(live.into).push(...added);
-    else if (live.after !== null) {
-      const [list, i] = place(live.after);
-      list.splice(i + 1, 0, ...added);
-    } else {
+    if (live.place) putAt(live.place, added);
+    else {
       const body = [...elements(doc)].find((e) => e.tagName === "body");
       if (body) t.kidsOf.get(body)!.unshift(...added);
     }
@@ -310,13 +313,7 @@ function reshaped(doc: Node, live: LiveEdit | null): Shape[] {
   if (live.op === "style") return t.top;
   const [list, i] = place(live.mid);
   if (live.op === "move") {
-    const [moved] = list.splice(i, 1);
-    const { where, ref } = live.place;
-    if (where === "into") inside(ref).push(moved);
-    else {
-      const [to, j] = place(ref);
-      to.splice(where === "above" ? j : j + 1, 0, moved);
-    }
+    putAt(live.place, list.splice(i, 1));
     return t.top;
   }
   if (live.op === "remove") list.splice(i, 1);
@@ -355,7 +352,7 @@ function edited(html: string, doc: Node, op: EditOp, floor: number): Edit {
       inBody(el);
       const ids = freshIds(html, floor);
       const copy = renumbered(html, el, ids);
-      return { html: after(html, outer(el), copy), select: ids.taken[0], change: { ...who(el), change: { kind: "duplicated", copy: ids.taken[0] } }, live: { op: "insert", after: op.mid, html: copy } };
+      return { html: after(html, outer(el), copy), select: ids.taken[0], change: { ...who(el), change: { kind: "duplicated", copy: ids.taken[0] } }, live: { op: "insert", place: { where: "below", ref: op.mid }, html: copy } };
     }
     case "wrap": {
       inBody(el);
@@ -387,7 +384,7 @@ const VOID = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input"
  *  child, on a line of its own indented as that child when the end tag has
  *  its line. Never into itself, into an element that holds no elements,
  *  or the body moved. */
-function move(html: string, doc: Node, el: Element, place: Place): Edit {
+function move(html: string, doc: Node, el: Element, place: DropPlace): Edit {
   inBody(el);
   const mid = midOf(el)!;
   const ref = find(doc, place.ref);
@@ -584,7 +581,7 @@ function paste(html: string, doc: Node, mid: string | null, copied: string, floo
 /** A design system's snippet inserted at `place`, else at the end of the
  *  body: one element as it is, several in a `div`, every element given a
  *  fresh id. */
-function insert(html: string, doc: Node, place: Place | null, snippet: string, floor: number): Edit {
+function insert(html: string, doc: Node, place: DropPlace | null, snippet: string, floor: number): Edit {
   const nodes = parseFragment(snippet, { sourceCodeLocationInfo: true }).childNodes.filter((n) => n.nodeName !== "#comment" && !(n.nodeName === "#text" && !/\S/.test((n as DefaultTreeAdapterMap["textNode"]).value)));
   if (!nodes.some(isElement)) throw new EditRefused("The snippet has no element to insert");
   const one = nodes.length === 1 ? (nodes[0] as Element) : null;
@@ -593,7 +590,7 @@ function insert(html: string, doc: Node, place: Place | null, snippet: string, f
 
 /** Element source `source` put at `place`, else after the body's last
  *  element with an id, else first in the body, with its ids fresh. */
-function placed(html: string, doc: Node, place: Place | null, source: string, floor: number): Edit {
+function placed(html: string, doc: Node, place: DropPlace | null, source: string, floor: number): Edit {
   const ids = freshIds(html, floor);
   const root = parseFragment(source, { sourceCodeLocationInfo: true }).childNodes.find(isElement)!;
   const text = renumbered(source, root, ids, true);
@@ -603,16 +600,16 @@ function placed(html: string, doc: Node, place: Place | null, source: string, fl
     const ref = find(doc, place.ref);
     if (place.where === "into") holds(ref);
     else inBody(ref);
-    if (place.where === "above") return { html: before(html, outer(ref), text), select, change, live: { op: "insert", above: place.ref, html: text } };
-    if (place.where === "into") return { html: into(html, ref, text), select, change, live: { op: "insert", into: place.ref, html: text } };
-    return { html: after(html, outer(ref), text), select, change, live: { op: "insert", after: place.ref, html: text } };
+    if (place.where === "above") return { html: before(html, outer(ref), text), select, change, live: { op: "insert", place, html: text } };
+    if (place.where === "into") return { html: into(html, ref, text), select, change, live: { op: "insert", place, html: text } };
+    return { html: after(html, outer(ref), text), select, change, live: { op: "insert", place, html: text } };
   }
   const body = [...elements(doc)].find((e) => e.tagName === "body");
   const last = body?.childNodes.filter(isElement).filter((e) => midOf(e) !== null && e.sourceCodeLocation).at(-1);
-  if (last) return { html: after(html, outer(last), text), select, change, live: { op: "insert", after: midOf(last), html: text } };
+  if (last) return { html: after(html, outer(last), text), select, change, live: { op: "insert", place: { where: "below", ref: midOf(last)! }, html: text } };
   const start = body?.sourceCodeLocation?.startTag?.endOffset;
   if (start === undefined) throw new EditRefused("The page has no body to paste into");
-  return { html: splice(html, [start, start], text), select, change, live: { op: "insert", after: null, html: text } };
+  return { html: splice(html, [start, start], text), select, change, live: { op: "insert", place: null, html: text } };
 }
 
 /** Elements that draw nothing of their own and get no id, as `moonlet

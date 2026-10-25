@@ -155,10 +155,10 @@ describe("an edit by hand on a page's source (X65)", () => {
 
   it("gives the same edit for the live page, the copy's source with its fresh ids, and none for a text the page already shows", () => {
     expect(applyEdit(PAGE, { kind: "delete", mid: "m33" }).live).toEqual({ op: "remove", mid: "m33" });
-    expect(applyEdit(PAGE, { kind: "duplicate", mid: "m31" }).live).toEqual({ op: "insert", after: "m31", html: '<span data-mid="m41">Branch prefix</span>' });
+    expect(applyEdit(PAGE, { kind: "duplicate", mid: "m31" }).live).toEqual({ op: "insert", place: { where: "below", ref: "m31" }, html: '<span data-mid="m41">Branch prefix</span>' });
     expect(applyEdit(PAGE, { kind: "wrap", mid: "m25" }).live).toEqual({ op: "wrap", mid: "m25", box: "m41" });
     expect(applyEdit(PAGE, { kind: "unwrap", mid: "m30" }).live).toEqual({ op: "unwrap", mid: "m30" });
-    expect(applyEdit(PAGE, { kind: "paste", after: null, html: '<p data-mid="m9">Note</p>' }).live).toEqual({ op: "insert", after: "m20", html: '<p data-mid="m41">Note</p>' });
+    expect(applyEdit(PAGE, { kind: "paste", after: null, html: '<p data-mid="m9">Note</p>' }).live).toEqual({ op: "insert", place: { where: "below", ref: "m20" }, html: '<p data-mid="m41">Note</p>' });
     expect(applyEdit(PAGE, { kind: "text", mid: "m31", text: "Prefix" }).live).toBeNull();
   });
 
@@ -221,7 +221,7 @@ describe("an edit by hand on a page's source (X65)", () => {
     const edit = applyEdit(PAGE, { kind: "insert", place: { where: "below", ref: "m25" }, html: '<button class="btn btn--primary">Save</button>' });
     expect(edit.html).toBe(withLines(19, 1, '      <h2 data-mid="m25">Git</h2>', '      <button data-mid="m41" class="btn btn--primary">Save</button>'));
     expect(edit.select).toBe("m41");
-    expect(edit.live).toEqual({ op: "insert", after: "m25", html: '<button data-mid="m41" class="btn btn--primary">Save</button>' });
+    expect(edit.live).toEqual({ op: "insert", place: { where: "below", ref: "m25" }, html: '<button data-mid="m41" class="btn btn--primary">Save</button>' });
     expect(editLine({ page: "index", ...edit.change })).toBe("index.html m41 button: inserted after m25");
   });
 

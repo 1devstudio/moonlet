@@ -168,28 +168,29 @@
   // An edit by hand made on the live page, as the app made it on the
   // page's source, so it shows at once. True when it was made.
   const byMid = (mid) => (typeof mid === "string" && MID.test(mid) ? document.querySelector(`[data-mid="${mid}"]`) : null);
+  // Nodes put above or below element `place.ref`, or into it, last.
+  const putAt = (place, nodes, moving) => {
+    const ref = place && typeof place === "object" ? byMid(place.ref) : null;
+    if (!ref || (moving && moving.contains(ref))) return false;
+    if (place.where === "above") ref.before(nodes);
+    else if (place.where === "below") ref.after(nodes);
+    else if (place.where === "into") ref.append(nodes);
+    else return false;
+    return true;
+  };
   const live = (d) => {
     if (d.op === "insert" && typeof d.html === "string") {
       const t = document.createElement("template");
       t.innerHTML = d.html;
-      if (typeof d.above === "string" && byMid(d.above)) byMid(d.above).before(t.content);
-      else if (typeof d.into === "string" && byMid(d.into)) byMid(d.into).append(t.content);
-      else if (d.above !== undefined || d.into !== undefined) return false;
-      else if (d.after === null && document.body) document.body.prepend(t.content);
-      else if (byMid(d.after)) byMid(d.after).after(t.content);
-      else return false;
+      if (d.place !== null) return putAt(d.place, t.content, null);
+      if (!document.body) return false;
+      document.body.prepend(t.content);
       return true;
     }
     const el = byMid(d.mid);
     if (!el || el === document.body) return false;
     if (d.op === "move") {
-      const p = d.place && typeof d.place === "object" ? d.place : {};
-      const ref = byMid(p.ref);
-      if (!ref || el.contains(ref)) return false;
-      if (p.where === "above") ref.before(el);
-      else if (p.where === "below") ref.after(el);
-      else if (p.where === "into") ref.append(el);
-      else return false;
+      if (!putAt(d.place, el, el)) return false;
     } else if (d.op === "style" && typeof d.style === "string") {
       if (d.style) el.setAttribute("style", d.style);
       else el.removeAttribute("style");
