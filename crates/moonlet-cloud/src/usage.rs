@@ -104,6 +104,10 @@ mod tests {
             per_second,
         );
         assert_eq!(u["2026-10"], 210);
+        // A machine just made has started its first hour.
+        let mut u = Usage::new();
+        add_billed(&mut u, ms("2026-10-22T10:00:00Z"), ms("2026-10-22T10:00:00Z"), hourly);
+        assert_eq!(u["2026-10"], 3600);
     }
 
     fn ms(rfc3339: &str) -> u64 {

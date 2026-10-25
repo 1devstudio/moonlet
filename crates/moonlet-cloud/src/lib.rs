@@ -100,10 +100,11 @@ pub struct Billing {
 }
 
 impl Billing {
-    /// The seconds billed for `secs` of machine time.
+    /// The seconds billed for `secs` of machine time. A machine that exists
+    /// has started its first unit, even within its first second.
     pub fn billed(&self, secs: u64) -> u64 {
         let unit = self.unit_secs.max(1);
-        secs.max(self.minimum_secs).div_ceil(unit) * unit
+        secs.max(1).max(self.minimum_secs).div_ceil(unit) * unit
     }
 }
 
