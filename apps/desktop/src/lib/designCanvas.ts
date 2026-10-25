@@ -35,3 +35,11 @@ export function reloadsPage(change: DesignChanged, shown: { design: string; syst
 function linkedBySystem(path: string): boolean {
   return path.endsWith(".css") || path.startsWith("tokens/") || path.startsWith("fonts/");
 }
+
+/** The page the canvas shows: the one picked (null for Overview); once the
+ *  picked page is gone, the first page, and before any page, index, which
+ *  the agent is writing. */
+export function canvasPage(picked: string | null, pages: string[]): string | null {
+  if (picked === null) return null;
+  return pages.includes(picked) ? picked : (pages[0] ?? "index");
+}

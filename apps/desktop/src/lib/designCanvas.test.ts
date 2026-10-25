@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { changedPages, reloadsPage, writingPage } from "./designCanvas";
+import { canvasPage, changedPages, reloadsPage, writingPage } from "./designCanvas";
 
 const change = (over: { system?: string | null; design?: string | null; paths: string[] }) => ({ workspace: "w1", system: null, design: null, ...over });
 
@@ -41,5 +41,16 @@ describe("the canvas's reload (X65)", () => {
     }
     expect(reloadsPage(change({ system: "storefront", paths: ["styles.css"] }), shown)).toBe(false);
     expect(reloadsPage(change({ design: "onboarding", paths: ["pages/index.html"] }), shown)).toBe(false);
+  });
+});
+
+describe("the page the canvas shows (X65)", () => {
+  it("is the one picked, or Overview, and the first page once the picked one is gone, or index before any", () => {
+    expect(canvasPage("git-a", ["index", "git-a"])).toBe("git-a");
+    expect(canvasPage(null, ["index", "git-a"])).toBeNull();
+    expect(canvasPage("git-b", ["index", "git-a"])).toBe("index");
+    expect(canvasPage("git-b", ["git-a"])).toBe("git-a");
+    expect(canvasPage("index", [])).toBe("index");
+    expect(canvasPage("git-b", [])).toBe("index");
   });
 });
