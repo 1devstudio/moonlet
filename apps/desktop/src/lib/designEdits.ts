@@ -31,7 +31,9 @@ export type EditOp = { kind: "text"; mid: string; text: string } | { kind: "dele
   /** Properties of its inline `style` set (a value) or removed (null). */
   | { kind: "restyle"; mid: string; set: StyleSet }
   /** Moved to `place` (drag to move). */
-  | { kind: "move"; mid: string; place: Place };
+  | { kind: "move"; mid: string; place: Place }
+  /** A design system's snippet put at `place`, or at the end of the body. */
+  | { kind: "insert"; place: Place | null; html: string };
 
 /** What an edit did to its element, as the agent is told. */
 export type Change =
@@ -40,8 +42,8 @@ export type Change =
   | { kind: "duplicated"; copy: string }
   | { kind: "wrapped"; box: string }
   | { kind: "unwrapped" }
-  /** Pasted after element `after`, or (null) at the end of the body. */
-  | { kind: "inserted"; after: string | null }
+  /** Pasted or inserted at `place`, or (null) at the end of the body. */
+  | { kind: "inserted"; place: Place | null }
   /** Its inline style's properties set, or (null) removed. */
   | { kind: "restyled"; set: StyleSet }
   | { kind: "moved"; place: Place };
@@ -80,7 +82,8 @@ function changeText(c: Change): string {
     case "wrapped":
       return `wrapped in div ${c.box}`;
     case "inserted":
-      return c.after === null ? "inserted at the end of the body" : `inserted after ${c.after}`;
+      if (c.place === null) return "inserted at the end of the body";
+      return `inserted ${c.place.where === "below" ? "after" : c.place.where} ${c.place.ref}`;
     case "moved":
       return `moved ${c.place.where} ${c.place.ref}`;
     case "restyled":
@@ -236,8 +239,8 @@ export function applyEdit(html: string, op: EditOp, floor = 0): Edit {
   const added = [...got];
   for (const id of want) remove(added, id);
   const lost = want.filter((id) => !got.includes(id));
-  if (lost.length || (added.length && !["duplicate", "wrap", "paste"].includes(op.kind))) {
-    throw new EditRefused(`The page's markup around ${op.kind === "paste" ? (op.after ?? "the body") : op.mid} is tangled: ask the agent to fix it`);
+  if (lost.length || (added.length && !["duplicate", "wrap", "paste", "insert"].includes(op.kind))) {
+    throw new EditRefused(`The page's markup around ${op.kind === "paste" ? (op.after ?? "the body") : op.kind === "insert" ? (op.place?.ref ?? "the body") : op.mid} is tangled: ask the agent to fix it`);
   }
   // The page read back must be the tree the live page gets: a box the
   // parser moves out of a <p> or a table's row, or a paste it moves, would
@@ -323,6 +326,7 @@ function remove(list: string[], id: string | null) {
 
 function edited(html: string, doc: Node, op: EditOp, floor: number): Edit {
   if (op.kind === "paste") return paste(html, doc, op.after, op.html, floor);
+  if (op.kind === "insert") return insert(html, doc, op.place, op.html, floor);
   const el = find(doc, op.mid);
   switch (op.kind) {
     case "text":
@@ -375,14 +379,20 @@ function move(html: string, doc: Node, el: Element, place: Place): Edit {
   for (let p: Node | null = ref; p && isElement(p); p = p.parentNode) if (p === el) throw new EditRefused(`${mid} cannot go inside itself`);
   if (place.where === "into") {
     if (ref.tagName !== "body") inBody(ref);
-    if (VOID.has(ref.tagName) || RAW.has(ref.tagName)) throw new EditRefused(`<${ref.tagName}> ${place.ref} holds no elements`);
-    for (let p = ref.parentNode; p && isElement(p); p = p.parentNode) if (p.tagName === "svg" || p.tagName === "math") throw new EditRefused(`<${ref.tagName}> ${place.ref} holds no elements`);
+    holds(ref);
   } else inBody(ref);
   const text = html.slice(...outer(el));
   const rest = splice(html, line(html, outer(el)), "");
   const target = find(parsed(rest), place.ref);
   const out = place.where === "above" ? before(rest, outer(target), text) : place.where === "below" ? after(rest, outer(target), text) : into(rest, target, text);
   return { html: out, select: mid, change: { ...who(el), change: { kind: "moved", place } }, live: { op: "move", mid, place } };
+}
+
+/** Refuses an element that holds no elements of the page. */
+function holds(ref: Element) {
+  const none = () => new EditRefused(`<${ref.tagName}> ${midOf(ref)} holds no elements`);
+  if (VOID.has(ref.tagName) || RAW.has(ref.tagName)) throw none();
+  for (let p = ref.parentNode; p && isElement(p); p = p.parentNode) if (p.tagName === "svg" || p.tagName === "math") throw none();
 }
 
 /** `html` with `text` put before `span`: on a line of its own, indented as
@@ -529,20 +539,75 @@ export function copyElement(html: string, mid: string): string | null {
 function paste(html: string, doc: Node, mid: string | null, copied: string, floor: number): Edit {
   const root = parseFragment(copied, { sourceCodeLocationInfo: true }).childNodes.find(isElement);
   if (!root?.sourceCodeLocation) throw new EditRefused("Nothing to paste");
+  return placed(html, doc, mid === null ? null : { where: "below", ref: mid }, copied.slice(...outer(root)), floor);
+}
+
+/** A design system's snippet inserted at `place`, else at the end of the
+ *  body: one element as it is, several in a `div`, every element given a
+ *  fresh id. */
+function insert(html: string, doc: Node, place: Place | null, snippet: string, floor: number): Edit {
+  const nodes = parseFragment(snippet, { sourceCodeLocationInfo: true }).childNodes.filter((n) => n.nodeName !== "#comment" && !(n.nodeName === "#text" && !/\S/.test((n as DefaultTreeAdapterMap["textNode"]).value)));
+  if (!nodes.some(isElement)) throw new EditRefused("The snippet has no element to insert");
+  const one = nodes.length === 1 ? (nodes[0] as Element) : null;
+  return placed(html, doc, place, one ? snippet.slice(...outer(one)) : `<div>${snippet.trim()}</div>`, floor);
+}
+
+/** Element source `source` put at `place`, else after the body's last
+ *  element with an id, else first in the body, with its ids fresh. */
+function placed(html: string, doc: Node, place: Place | null, source: string, floor: number): Edit {
   const ids = freshIds(html, floor);
-  const text = renumbered(copied, root, ids);
-  let at: Element | undefined;
-  if (mid !== null) {
-    at = find(doc, mid);
-    inBody(at);
+  const root = parseFragment(source, { sourceCodeLocationInfo: true }).childNodes.find(isElement)!;
+  const text = freshened(source, root, ids);
+  const change = { mid: ids.taken[0], tag: root.tagName, change: { kind: "inserted", place } as const };
+  const select = ids.taken[0];
+  if (place) {
+    const ref = find(doc, place.ref);
+    if (place.where === "into") holds(ref);
+    else inBody(ref);
+    if (place.where === "above") return { html: before(html, outer(ref), text), select, change, live: { op: "insert", above: place.ref, html: text } };
+    if (place.where === "into") return { html: into(html, ref, text), select, change, live: { op: "insert", into: place.ref, html: text } };
+    return { html: after(html, outer(ref), text), select, change, live: { op: "insert", after: place.ref, html: text } };
   }
   const body = [...elements(doc)].find((e) => e.tagName === "body");
-  at ??= body?.childNodes.filter(isElement).filter((e) => midOf(e) !== null && e.sourceCodeLocation).at(-1);
-  const change = { mid: ids.taken[0], tag: root.tagName, change: { kind: "inserted", after: mid } as const };
-  if (at) return { html: after(html, outer(at), text), select: ids.taken[0], change, live: { op: "insert", after: midOf(at), html: text } };
+  const last = body?.childNodes.filter(isElement).filter((e) => midOf(e) !== null && e.sourceCodeLocation).at(-1);
+  if (last) return { html: after(html, outer(last), text), select, change, live: { op: "insert", after: midOf(last), html: text } };
   const start = body?.sourceCodeLocation?.startTag?.endOffset;
   if (start === undefined) throw new EditRefused("The page has no body to paste into");
-  return { html: splice(html, [start, start], text), select: ids.taken[0], change, live: { op: "insert", after: null, html: text } };
+  return { html: splice(html, [start, start], text), select, change, live: { op: "insert", after: null, html: text } };
+}
+
+/** Elements that draw nothing of their own and get no id, as `moonlet
+ *  design check` takes them. */
+const NO_ID = new Set(["script", "style", "template", "noscript"]);
+
+/** The source of `root`, parsed from `source`, with fresh ids in document
+ *  order: an id it has gets the next, and every element that needs one and
+ *  has none (all but scripts, styles and the like, and an <svg>'s
+ *  drawing) gets one after its tag's name. */
+function freshened(source: string, root: Element, ids: ReturnType<typeof freshIds>): string {
+  const edits: { at: [number, number]; text: () => string }[] = [];
+  const visit = (el: Element, inSvg: boolean) => {
+    if (NO_ID.has(el.tagName)) return;
+    const loc = el.sourceCodeLocation;
+    const has = loc?.attrs?.["data-mid"];
+    if (has && midOf(el)) {
+      const value = source.lastIndexOf(midOf(el)!, has.endOffset);
+      edits.push({ at: [value, value + midOf(el)!.length], text: () => ids.take() });
+    } else if (!inSvg && loc?.startTag) {
+      const at = loc.startTag.startOffset + 1 + el.tagName.length;
+      edits.push({ at: [at, at], text: () => ` data-mid="${ids.take()}"` });
+    }
+    for (const c of el.childNodes) if (isElement(c)) visit(c, inSvg || el.tagName === "svg" || el.tagName === "math");
+  };
+  visit(root, false);
+  const [from, to] = outer(root);
+  let out = "";
+  let at = from;
+  for (const e of edits) {
+    out += source.slice(at, e.at[0]) + e.text();
+    at = e.at[1];
+  }
+  return out + source.slice(at, to);
 }
 
 /** Refuses the body and anything outside it: only the body's elements are edited. */
