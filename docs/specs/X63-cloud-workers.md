@@ -59,7 +59,7 @@ A cloud machine is a worker like any other in X62. It runs routed commands in a 
 - [x] The machine is recorded in `$MOONLET_HOME/cloud/machines.json` as `creating` before the create call, so a crash between the two is caught by the sweep. The limit check and the `creating` record are one step under one lock, so two `cloud.up` calls at once never pass the machine limit. Worked example: limit 2, one machine ready, two `cloud.up` calls at once → one machine is made, and the other call fails with "Cloud limit reached: 2 of 2 machines".
 - [x] Its `user_data` is a cloud-init script that:
   1. makes the user `moonlet`;
-  2. installs Tailscale and runs `tailscale up --auth-key=<key> --hostname=<name>`;
+  2. installs Tailscale and runs `tailscale up --auth-key=<key> --hostname=<name> --operator=moonlet`, so that moonletd, which runs as `moonlet`, may run `tailscale logout` when the machine is removed;
   3. runs the X58 install script of the central host's exact version, as `moonlet`, with `--no-pair --no-listen`;
   4. runs `moonletd join <central host addresses> <code> --name <name>` as `moonlet`;
   5. runs the project's `[heavy] machine_setup` as root. Its output goes to `/var/log/moonlet/machine-setup.log`, and its start and exit status to `/var/lib/moonlet/machine-setup.json`, which the worker reports.
