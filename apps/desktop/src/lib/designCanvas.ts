@@ -4,7 +4,7 @@
 
 import type { DesignChanged } from "./protocol";
 import { pageOfPath, pagePath } from "./designPage";
-import type { DragResult, DropPlace, Layer } from "./designBridge";
+import type { DragOver, DragResult, Layer } from "./designBridge";
 import type { EditOp } from "./designEdits";
 
 /** The pages (`index` for `pages/index.html`) a change to design `slug` wrote. */
@@ -276,7 +276,7 @@ function layerName(layers: Layer[], mid: string): string {
 /** The hint line while an element (`mid`) or a Palette snippet (null) is
  *  dragged over the page: "Drop to move above General", "Drop to insert
  *  after Git"; null while it would drop nowhere. */
-export function dropHint(layers: Layer[], drag: { mid: string | null; place: DropPlace | null }): string | null {
+export function dropHint(layers: Layer[], drag: DragOver): string | null {
   const p = drag.place;
   if (!p) return null;
   const where = drag.mid === null && p.where === "below" ? "after" : p.where;
@@ -285,7 +285,7 @@ export function dropHint(layers: Layer[], drag: { mid: string | null; place: Dro
 
 /** The hint line: where a drag over the page would drop while it would
  *  ({@link dropHint}), else what the mode does. */
-export function hintLine(mode: CanvasMode, layers: Layer[], drag: { mid: string | null; place: DropPlace | null } | null): string {
+export function hintLine(mode: CanvasMode, layers: Layer[], drag: DragOver | null): string {
   return (drag && dropHint(layers, drag)) ?? modeHint(mode);
 }
 

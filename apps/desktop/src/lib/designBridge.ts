@@ -45,6 +45,13 @@ export interface DropPlace {
  *  the Inspector's, of every section a flex or a grid element shows. */
 export const COMPUTED_PROPS: readonly string[] = [...new Set([...inspectorSections("flex"), ...inspectorSections("grid")].flatMap((sec) => sec.fields.map((f) => f.prop)))];
 
+/** Where the element dragged (`mid`), or (null) a snippet dragged from
+ *  the Palette, would drop now; `place` null: nowhere. */
+export interface DragOver {
+  mid: string | null;
+  place: DropPlace | null;
+}
+
 /** What a drag in the page ends with: an element dropped at a place, a
  *  size or place in px a handle or a drag gave, or a Palette snippet's
  *  drop at a place, or nowhere. */
@@ -68,7 +75,7 @@ export type BridgeMessage =
   | { type: "computed"; mid: string; style: Record<string, string> }
   /** Where the element dragged (`mid`), or (null) a snippet dragged from
    *  the Palette, would drop now; null: nowhere. */
-  | { type: "drag"; mid: string | null; place: DropPlace | null }
+  | ({ type: "drag" } & DragOver)
   /** A dragged element dropped at `place`. */
   | { type: "move"; mid: string; place: DropPlace }
   /** A size a handle gave, or the place an absolutely positioned element
