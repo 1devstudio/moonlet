@@ -254,9 +254,19 @@ export function projectCloudErrors(d: ProjectCloudDraft): Partial<Record<"type" 
   return e;
 }
 
-/** Under the idle time: providers in use that bill by the hour or longer keep an idle machine until its paid time is about to end. */
+/** "hour", "2 hours", "10 minutes". */
+function unitText(secs: number): string {
+  if (secs % 3600 === 0) return secs === 3600 ? "hour" : `${secs / 3600} hours`;
+  return `${Math.round(secs / 60)} minutes`;
+}
+
+/** Under the idle time: providers in use that bill in units of 10 minutes or more keep an idle machine until the time paid for is about to end. */
 export function billingNote(kinds: CloudKind[], providers: CloudInfo["providers"]): string | null {
-  const hourly = kinds.filter((k) => providers[k.id] && (k.billing_unit_secs ?? 1) >= 3600).map((k) => k.label);
-  if (!hourly.length) return null;
-  return `${joinNames(hourly)} ${hourly.length === 1 ? "bills" : "bill"} every started hour, so an idle machine stays until its hour is about to end.`;
+  const long = kinds.filter((k) => providers[k.id] && (k.billing_unit_secs ?? 1) >= 600);
+  if (!long.length) return null;
+  const sameUnit = long.every((k) => k.billing_unit_secs === long[0].billing_unit_secs);
+  const who = sameUnit
+    ? `${joinNames(long.map((k) => k.label))} ${long.length === 1 ? "bills" : "bill"} every started ${unitText(long[0].billing_unit_secs ?? 3600)}`
+    : joinNames(long.map((k) => `${k.label} bills every started ${unitText(k.billing_unit_secs ?? 3600)}`));
+  return `${who}, so an idle machine stays until the time paid for is about to end.`;
 }

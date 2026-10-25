@@ -127,10 +127,17 @@ describe("Settings › Cloud workers (X63)", () => {
     expect(afterRemoving(edited, two, "other").providers).toEqual({ hetzner: { token: "" }, other: {} });
   });
 
-  it("says which providers keep an idle machine until its paid hour ends", () => {
+  it("says which providers keep an idle machine until its paid time ends", () => {
     const hourly = { ...hetzner, billing_unit_secs: 3600 };
     expect(billingNote([hourly], { hetzner: { has_token: true } })).toBe(
-      "Hetzner Cloud bills every started hour, so an idle machine stays until its hour is about to end.",
+      "Hetzner Cloud bills every started hour, so an idle machine stays until the time paid for is about to end.",
+    );
+    // Its own unit, whatever it is.
+    expect(billingNote([{ ...hetzner, billing_unit_secs: 7200 }], { hetzner: {} })).toBe(
+      "Hetzner Cloud bills every started 2 hours, so an idle machine stays until the time paid for is about to end.",
+    );
+    expect(billingNote([{ ...hetzner, billing_unit_secs: 600 }], { hetzner: {} })).toBe(
+      "Hetzner Cloud bills every started 10 minutes, so an idle machine stays until the time paid for is about to end.",
     );
     // A provider billing by the second leaves at the idle time.
     expect(billingNote([{ ...hetzner, billing_unit_secs: 1 }], { hetzner: {} })).toBeNull();
