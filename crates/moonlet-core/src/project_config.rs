@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
 
 use anyhow::{Context, Result, bail};
-use moonlet_proto::types::{ProjectConfig, ProjectConfigFile};
+use moonlet_proto::types::{HeavyConfig, HeavyOs, ProjectConfig, ProjectConfigFile};
 use toml_edit::{DocumentMut, Item, Table, TableLike, Value};
 
 /// Agents moonlet knows without `[agents]`.
@@ -77,6 +77,34 @@ fn lock_for(p: &Path) -> Arc<Mutex<()>> {
 fn save_unlocked(repo: &Path, expected: &str, config: &ProjectConfig) -> Result<()> {
     let config = normalize(config);
     validate(&config)?;
+    edit_unlocked(repo, Some(expected), |doc| apply(doc, &config))
+}
+
+/// Writes `heavy` as the `[heavy]` table (X62) and leaves the rest of the
+/// file as it is. An empty `heavy` removes the table.
+pub fn set_heavy(repo: &Path, heavy: &HeavyConfig) -> Result<()> {
+    let trim = |v: &[String]| -> Vec<String> {
+        v.iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+    };
+    let heavy = HeavyConfig {
+        commands: trim(&heavy.commands),
+        os: heavy.os,
+        env: trim(&heavy.env),
+        outputs: heavy.outputs.iter().map(|s| s.trim().to_string()).collect(),
+    };
+    crate::heavy::check(&heavy).map_err(anyhow::Error::msg)?;
+    let lock = lock_for(&repo.join(".moonlet/config.toml"));
+    let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+    edit_unlocked(repo, None, |doc| apply_heavy(doc, &heavy))
+}
+
+/// Edits the file with `f`: only when it is still at version `expected`,
+/// if one is given.
+fn edit_unlocked(
+    repo: &Path,
+    expected: Option<&str>,
+    f: impl FnOnce(&mut DocumentMut),
+) -> Result<()> {
     // Reads jaunt's file while it is the only one, and always writes
     // moonlet's (X27).
     let src = path(repo);
@@ -98,7 +126,7 @@ fn save_unlocked(repo: &Path, expected: &str, config: &ProjectConfig) -> Result<
         Err(e) => return Err(e).with_context(|| format!("cannot read {}", src.display())),
     };
     let found = current.as_deref().map(version).unwrap_or_default();
-    if found != expected {
+    if expected.is_some_and(|e| e != found) {
         bail!(STALE);
     }
     let text = match &current {
@@ -111,7 +139,7 @@ fn save_unlocked(repo: &Path, expected: &str, config: &ProjectConfig) -> Result<
     let mut doc: DocumentMut = text
         .parse()
         .with_context(|| format!("{} is not valid TOML", src.display()))?;
-    apply(&mut doc, &config);
+    f(&mut doc);
     std::fs::create_dir_all(&dir)?;
     write_atomic(&p, &doc.to_string())?;
     if src != p {
@@ -363,6 +391,48 @@ fn set_trackers(doc: &mut DocumentMut, trackers: &[String]) {
     }
 }
 
+fn apply_heavy(doc: &mut DocumentMut, h: &HeavyConfig) {
+    let empty = h.commands.is_empty() && h.env.is_empty() && h.outputs.is_empty() && h.os == HeavyOs::Any;
+    if empty {
+        doc.remove("heavy");
+        return;
+    }
+    if !doc.get("heavy").is_some_and(|i| i.is_table()) {
+        doc.insert("heavy", Item::Table(Table::new()));
+    }
+    let Some(t) = doc.get_mut("heavy").and_then(|i| i.as_table_mut()) else {
+        return;
+    };
+    let os = match h.os {
+        HeavyOs::Any => None,
+        HeavyOs::Macos => Some("macos"),
+        HeavyOs::Linux => Some("linux"),
+    };
+    let lists = [("commands", &h.commands), ("env", &h.env), ("outputs", &h.outputs)];
+    for (key, list) in lists {
+        if key == "env" {
+            match os {
+                Some(os) => set(t, "os", Some(os)),
+                None => {
+                    t.remove("os");
+                }
+            }
+        }
+        if list.is_empty() {
+            t.remove(key);
+            continue;
+        }
+        let same = t
+            .get(key)
+            .and_then(|i| i.as_array())
+            .is_some_and(|a| a.iter().map(|v| v.as_str()).eq(list.iter().map(|s| Some(s.as_str()))));
+        if !same {
+            let array: toml_edit::Array = list.iter().map(String::as_str).collect();
+            t.insert(key, toml_edit::value(array));
+        }
+    }
+}
+
 /// FNV-1a over the file's bytes: stable across daemon restarts.
 fn version(bytes: &[u8]) -> String {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
@@ -422,6 +492,43 @@ mod tests {
         let mut c = ProjectConfig::default();
         f(&mut c);
         c
+    }
+
+    #[test]
+    fn heavy_set_writes_the_heavy_table_and_keeps_the_rest() {
+        use moonlet_proto::types::{HeavyConfig, HeavyOs};
+        let dir = repo_with(Some("# shop\nsetup = \"pnpm install\" # deps\n\n[agents]\nyolo = \"claude --x\"\n"));
+        let heavy = HeavyConfig {
+            commands: vec!["pnpm test".into(), "pnpm build".into()],
+            os: HeavyOs::Linux,
+            env: vec!["CI".into()],
+            outputs: vec!["coverage".into()],
+        };
+        set_heavy(dir.path(), &heavy).unwrap();
+        assert_eq!(
+            read(&dir),
+            "# shop\nsetup = \"pnpm install\" # deps\n\n[agents]\nyolo = \"claude --x\"\n\n[heavy]\ncommands = [\"pnpm test\", \"pnpm build\"]\nos = \"linux\"\nenv = [\"CI\"]\noutputs = [\"coverage\"]\n"
+        );
+        assert_eq!(load(dir.path(), "main".into()).config.heavy, heavy);
+
+        // The settings dialog (X8) knows nothing of [heavy] and keeps it.
+        let v = load(dir.path(), "main".into()).version;
+        save(dir.path(), &v, &cfg(|c| {
+            c.setup = Some("pnpm i".into());
+            c.agents.insert("yolo".into(), "claude --x".into());
+        }))
+        .unwrap();
+        assert_eq!(load(dir.path(), "main".into()).config.heavy, heavy);
+
+        // Any system is the default and is not written; an empty table goes.
+        set_heavy(dir.path(), &HeavyConfig { commands: vec!["pnpm test".into()], ..HeavyConfig::default() }).unwrap();
+        assert!(read(&dir).ends_with("[heavy]\ncommands = [\"pnpm test\"]\n"), "{}", read(&dir));
+        set_heavy(dir.path(), &HeavyConfig::default()).unwrap();
+        assert_eq!(read(&dir), "# shop\nsetup = \"pnpm i\" # deps\n\n[agents]\nyolo = \"claude --x\"\n");
+
+        // An invalid table is refused and the file stays as it was.
+        let bad = HeavyConfig { outputs: vec!["..".into()], ..HeavyConfig::default() };
+        assert_eq!(set_heavy(dir.path(), &bad).unwrap_err().to_string(), "outputs: `..` is outside the worktree");
     }
 
     #[test]

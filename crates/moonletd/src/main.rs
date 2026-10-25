@@ -8,6 +8,7 @@
 
 mod clones;
 mod daemon;
+mod heavy;
 mod launch;
 mod link;
 mod mobile;
