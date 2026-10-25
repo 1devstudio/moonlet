@@ -86,6 +86,29 @@ describe("an edit by hand saved (X65)", () => {
   });
 });
 
+describe("an edit by hand redone (X65)", () => {
+  it("is taken back when its save is refused, whatever was saved of another page meanwhile, and the yellow bar names it", async () => {
+    disk["git-a"] = { html: '<!doctype html>\n<body data-mid="m1">\n  <section data-mid="m3"><h3 data-mid="m4">Rows</h3></section>\n</body>\n', version: "v1" };
+    await loadPageSource("local", WS, SLUG, "index");
+    await loadPageSource("local", WS, SLUG, "git-a");
+    editPage("local", WS, SLUG, "index", { kind: "delete", mid: "m30" }, "m30");
+    await settleSaves();
+    editPage("local", WS, SLUG, "git-a", { kind: "delete", mid: "m4" }, "m4");
+    await settleSaves();
+    await undoEdit("local", WS, SLUG);
+    await undoEdit("local", WS, SLUG);
+    expect(disk.index.html).toBe(PAGE);
+    const agents = '<!doctype html>\n<body data-mid="m1">\n  <h2 data-mid="m25">Git, by the agent</h2>\n  <p data-mid="m30">Branch prefix</p>\n</body>\n';
+    disk.index = { html: agents, version: "v9" };
+    await redoEdit("local", WS, SLUG);
+    const st = useEditor.getState();
+    expect(disk.index.html).toBe(agents);
+    expect(sourceOf(st, "local", WS, SLUG, "index")).toEqual({ html: agents, version: "v9" });
+    expect(editLines(pendingOf(st, "local", WS, SLUG))).toEqual([]);
+    expect(unsavedOf(st, "local", WS, SLUG)).toBe("index.html m30 p: deleted");
+  });
+});
+
 describe("a page's source while a save is on its way (X65)", () => {
   it("is not read over the save, which has edits the text read may not have, so the next edit keeps them", async () => {
     await loadPageSource("local", WS, SLUG, "index");

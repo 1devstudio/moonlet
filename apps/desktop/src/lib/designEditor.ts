@@ -38,21 +38,29 @@ let saves = latestSends();
 /** The highest id number each page has had since it was first read: a new
  *  element never takes the id of one deleted since. */
 const highest: Record<string, number> = {};
-/** The latest change of each page that a save took. */
-const savedStep: Record<string, number> = {};
+/** The number of the next change, any page's: a change's identity. */
 let nextStep = 1;
 /** Each page's generation: one more at every change of its source in the
  *  editor, an edit's, an undo's, a save's or a read's. A read takes its
- *  answer only while the page is at the generation it started at. */
+ *  answer only while the page is at the generation it started at, and a
+ *  save takes the changes made up to the generation it sent. */
 const gens: Record<string, number> = {};
 /** A page's source changed in the editor. */
 const touch = (key: string) => void (gens[key] = (gens[key] ?? 0) + 1);
+/** Each page's changes, made, undone or redone, that no save took yet, with
+ *  the page's generation after each. */
+const unsaved: Record<string, { step: number; gen: number }[]> = {};
+/** Change `step` made, undone or redone on a page's source. */
+function changed(key: string, step: number) {
+  touch(key);
+  (unsaved[key] ??= []).push({ step, gen: gens[key] });
+}
 
 /** Forgets every page, change and edit (tests). */
 export function resetEditor() {
   useEditor.setState(EMPTY, true);
   saves = latestSends();
-  for (const k of Object.keys(savedStep)) delete savedStep[k];
+  for (const k of Object.keys(unsaved)) delete unsaved[k];
   for (const k of Object.keys(gens)) delete gens[k];
   for (const k of Object.keys(highest)) delete highest[k];
   for (const k of Object.keys(clips)) delete clips[k];
@@ -85,6 +93,8 @@ async function readPage(host: string, workspace: string, slug: string, page: str
 
 function setSource(key: string, text: DesignPageText) {
   touch(key);
+  // The page is as on disk: nothing in it is left to save.
+  delete unsaved[key];
   highest[key] = Math.max(highest[key] ?? 0, highestMid(text.html));
   useEditor.setState((s) => ({ sources: { ...s.sources, [key]: text } }));
 }
@@ -100,7 +110,7 @@ export function editPage(host: string, workspace: string, slug: string, page: st
   highest[key] = Math.max(highest[key] ?? 0, highestMid(edit.html));
   const step: Step = { id: nextStep++, page, before: source.html, after: edit.html, edit: { page, ...edit.change }, selectBefore: selected, selectAfter: edit.select };
   const design = itemKey(host, workspace, slug);
-  touch(key);
+  changed(key, step.id);
   useEditor.setState((s) => ({
     sources: { ...s.sources, [key]: { ...source, html: edit.html } },
     undo: { ...s.undo, [design]: pushStep(s.undo[design] ?? NO_UNDO, step) },
@@ -130,7 +140,7 @@ async function travel(host: string, workspace: string, slug: string, act: "undo"
   const key = pageKey(host, workspace, slug, step.page);
   const source = useEditor.getState().sources[key];
   if (!source) return null;
-  touch(key);
+  changed(key, step.id);
   useEditor.setState((s) => ({
     sources: { ...s.sources, [key]: { ...source, html: act === "undo" ? step.before : step.after } },
     undo: { ...s.undo, [design]: moved.undo },
@@ -151,7 +161,8 @@ function save(host: string, workspace: string, slug: string, page: string): Prom
     const source = useEditor.getState().sources[key];
     if (!source) return "stop";
     const html = source.html;
-    const step = nextStep - 1;
+    // The page's changes up to now are in `html`.
+    const at = gens[key] ?? 0;
     let written: DesignPageWritten;
     try {
       written = await rpc<DesignPageWritten>(host, M.designWritePage, { workspace, slug, page, html, base_version: source.version });
@@ -162,7 +173,7 @@ function save(host: string, workspace: string, slug: string, page: string): Prom
       }
       throw e;
     }
-    savedStep[key] = step;
+    unsaved[key] = (unsaved[key] ?? []).filter((c) => c.gen > at);
     touch(key);
     useEditor.setState((st) => ({ sources: { ...st.sources, [key]: { html: st.sources[key]?.html ?? html, version: written.version } } }));
   });
@@ -221,11 +232,10 @@ export function pasteInto(host: string, workspace: string, slug: string, page: s
 async function lost(host: string, workspace: string, slug: string, page: string): Promise<void> {
   const key = pageKey(host, workspace, slug, page);
   const design = itemKey(host, workspace, slug);
-  const saved = savedStep[key] ?? 0;
+  // The page's changes no save took: made, undone or redone since.
+  const ids = new Set((unsaved[key] ?? []).map((c) => c.step));
   const st = useEditor.getState();
-  const gone = (st.undo[design] ?? NO_UNDO).done.filter((step) => step.page === page && step.id > saved);
-  const ids = new Set(gone.map((step) => step.id));
-  const last = gone.at(-1);
+  const last = (st.undo[design] ?? NO_UNDO).done.filter((step) => step.page === page && ids.has(step.id)).at(-1);
   useEditor.setState((s) => ({
     undo: { ...s.undo, [design]: dropPage(s.undo[design] ?? NO_UNDO, page) },
     pending: { ...s.pending, [design]: (s.pending[design] ?? []).filter((p) => !ids.has(p.id)) },
