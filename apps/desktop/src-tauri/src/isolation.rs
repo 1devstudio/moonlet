@@ -25,29 +25,44 @@ const FEATURE: &str = "SiteIsolationEnabled";
 pub fn configuration() -> Result<Retained<WKWebViewConfiguration>, &'static str> {
     let mtm = MainThreadMarker::new().ok_or("not on the main thread")?;
     let class = AnyClass::get(c"WKPreferences").ok_or("no WKPreferences")?;
-    // SAFETY: plain Objective-C calls; each private selector is checked for
-    // first, so a WebKit without it is never sent it.
-    unsafe {
+    // SAFETY: `respondsToSelector:` is NSObject's; `_features` is sent only
+    // once the class says it answers it, and returns an array or nil.
+    let features: Option<Retained<NSArray<AnyObject>>> = unsafe {
         let listed: bool = msg_send![class, respondsToSelector: sel!(_features)];
         if !listed {
             return Err("WebKit lists no features");
         }
-        let features: Option<Retained<NSArray<AnyObject>>> = msg_send![class, _features];
-        let feature = features
-            .into_iter()
-            .flat_map(|all| all.to_vec())
-            .find(|f| {
-                let key: Option<Retained<NSString>> = msg_send![&**f, key];
-                key.is_some_and(|k| k.to_string() == FEATURE)
-            })
-            .ok_or("WebKit has no SiteIsolationEnabled feature")?;
-        let config = WKWebViewConfiguration::new(mtm);
-        let prefs = config.preferences();
+        msg_send![class, _features]
+    };
+    let feature = features
+        .into_iter()
+        .flat_map(|all| all.to_vec())
+        .find(|f| key(f).is_some_and(|k| k.to_string() == FEATURE))
+        .ok_or("WebKit has no SiteIsolationEnabled feature")?;
+    let config = unsafe { WKWebViewConfiguration::new(mtm) };
+    let prefs = unsafe { config.preferences() };
+    // SAFETY: `_setEnabled:forFeature:` is sent only once the preferences say
+    // they answer it, with a BOOL and one of the features WebKit listed.
+    unsafe {
         let settable: bool = msg_send![&*prefs, respondsToSelector: sel!(_setEnabled:forFeature:)];
         if !settable {
             return Err("WebKit cannot turn a feature on");
         }
         let _: () = msg_send![&*prefs, _setEnabled: Bool::YES, forFeature: &*feature];
-        Ok(config)
+    }
+    Ok(config)
+}
+
+/// A listed feature's key, or none when it has no `key` that is a string.
+fn key(feature: &AnyObject) -> Option<Retained<NSString>> {
+    // SAFETY: `key` is sent only once the feature says it answers it; what it
+    // returns is kept only if it is an NSString.
+    unsafe {
+        let has_key: bool = msg_send![feature, respondsToSelector: sel!(key)];
+        if !has_key {
+            return None;
+        }
+        let key: Option<Retained<AnyObject>> = msg_send![feature, key];
+        key?.downcast::<NSString>().ok()
     }
 }
