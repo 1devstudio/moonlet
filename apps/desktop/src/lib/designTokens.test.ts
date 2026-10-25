@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { fieldShown, offSystem, popoverTokens, tokenOf } from "./designTokens";
+import { fieldShown, offSystem, offSystemMids, popoverTokens, tokenOf } from "./designTokens";
+import { inlineStyles } from "./designEdits";
 import type { DesignToken } from "./protocol";
 
 /** A design system's tokens as design.kit gives them, from tokens/*.css. */
@@ -66,5 +67,33 @@ describe("an off-system element (X65)", () => {
     expect(offSystem(TOKENS, style)).toEqual(["padding", "border-radius"]);
     expect(offSystem(TOKENS, [["border", "1px solid #ff0000"], ["box-shadow", "0 2px 4px black"]])).toEqual(["border", "box-shadow"]);
     expect(offSystem(TOKENS, [["padding", "16px 4px"]])).toEqual([]);
+  });
+});
+
+describe("a page's off-system elements (X65)", () => {
+  it("are those whose inline style, as the page's source writes it, has a value that matches no token", () => {
+    const page = [
+      "<!doctype html>",
+      '<body data-mid="m1" style="margin: 0">',
+      '<section data-mid="m24" style="padding: 14px 24px; gap: var(--space-1)">',
+      "  <h2 data-mid='m25' style='color: #161616'>Git</h2>",
+      '  <p data-mid="m30" style="width: 320px; border-radius: 10px">Branch prefix</p>',
+      '  <p data-mid="m33" class="hint">Hint</p>',
+      "</section>",
+      "</body>",
+    ].join("\n");
+    expect(inlineStyles(page)).toEqual({
+      m1: [["margin", "0"]],
+      m24: [
+        ["padding", "14px 24px"],
+        ["gap", "var(--space-1)"],
+      ],
+      m25: [["color", "#161616"]],
+      m30: [
+        ["width", "320px"],
+        ["border-radius", "10px"],
+      ],
+    });
+    expect([...offSystemMids(TOKENS, inlineStyles(page))]).toEqual(["m24", "m30"]);
   });
 });
