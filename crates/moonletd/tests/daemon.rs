@@ -2081,19 +2081,7 @@ async fn design_systems_over_rpc() {
 #[tokio::test]
 async fn a_new_design_system_starts_its_sync_agent() {
     use moonlet_proto::types::{Project, Workspace};
-    let d = fake_claude_daemon(
-        r#"#!/bin/sh
-echo "$@" >> claude-args
-while IFS= read -r line; do
-  case "$line" in
-    *'"subtype":"initialize"'*) echo '{"type":"system","subtype":"init","session_id":"s1","model":"fake"}' ;;
-    *'"type":"user"'*) echo "$line" >> claude-user
-      echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}' ;;
-  esac
-done
-"#,
-    )
-    .await;
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
     let repo = d.home.path().join("repo");
     std::fs::create_dir_all(repo.join("src")).unwrap();
     std::fs::write(repo.join("src/ui.tsx"), "export const Button = () => null;\n").unwrap();
@@ -2211,7 +2199,7 @@ done
 #[tokio::test]
 async fn a_sync_agent_saved_as_design_true_comes_back_as_a_sync_agent() {
     use moonlet_proto::types::{DesignAgentKind, Workspace};
-    let mut d = fake_claude_daemon(FAKE_SYNC_CLAUDE).await;
+    let mut d = fake_claude_daemon(FAKE_CLAUDE).await;
     let mut c = d.client().await;
     let ws: Workspace = c.request(methods::WORKSPACE_CREATE, serde_json::json!({"name": "1devstudio", "color": "clay"})).await.unwrap();
     let created: serde_json::Value = c
@@ -2234,19 +2222,6 @@ async fn a_sync_agent_saved_as_design_true_comes_back_as_a_sync_agent() {
     assert!(terminals.iter().any(|t| t.id == agent), "the chat was not restored");
     assert_eq!(kind(&terminals), Some(DesignAgentKind::Sync));
 }
-
-/// A `claude` that records its arguments and every message in its folder,
-/// and answers each message at once.
-const RECORDING_CLAUDE: &str = r#"#!/bin/sh
-echo "$@" >> claude-args
-while IFS= read -r line; do
-  case "$line" in
-    *'"subtype":"initialize"'*) echo '{"type":"system","subtype":"init","session_id":"s1","model":"fake"}' ;;
-    *'"type":"user"'*) echo "$line" >> claude-user
-      echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}' ;;
-  esac
-done
-"#;
 
 /// A workspace with the design system `moonlet-desktop`, its README written,
 /// and no sync agent; returns the workspace's id.
@@ -2283,7 +2258,7 @@ async fn until_contains(read: impl Fn() -> String, needle: &str) -> String {
 #[tokio::test]
 async fn a_new_design_starts_its_agent_in_its_folder_on_its_design_system() {
     use moonlet_proto::types::{DesignAgent, DesignAgentKind};
-    let d = fake_claude_daemon(RECORDING_CLAUDE).await;
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
     let mut c = d.client().await;
     let ws = workspace_with_system(&d, &mut c).await;
     let created: serde_json::Value = c
@@ -2358,7 +2333,7 @@ async fn next_design_open(c: &mut Client) -> serde_json::Value {
 /// that agent's terminal and session, so the app shows a toast instead.
 #[tokio::test]
 async fn design_open_and_a_design_an_agent_starts_reach_the_app() {
-    let d = fake_claude_daemon(RECORDING_CLAUDE).await;
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
     let mut c = d.client().await;
     let ws = workspace_with_system(&d, &mut c).await;
     let mut app = d.client().await;
@@ -2399,7 +2374,7 @@ async fn design_open_and_a_design_an_agent_starts_reach_the_app() {
 /// design is not made yet (entry 12).
 #[tokio::test]
 async fn a_design_on_an_unknown_system_or_in_a_session_is_refused() {
-    let d = fake_claude_daemon(RECORDING_CLAUDE).await;
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
     let mut c = d.client().await;
     let ws = workspace_with_system(&d, &mut c).await;
     let unknown = c
@@ -2424,7 +2399,7 @@ async fn a_design_on_an_unknown_system_or_in_a_session_is_refused() {
 #[tokio::test]
 async fn a_designs_agent_comes_back_after_a_restart() {
     use moonlet_proto::types::DesignAgentKind;
-    let mut d = fake_claude_daemon(RECORDING_CLAUDE).await;
+    let mut d = fake_claude_daemon(FAKE_CLAUDE).await;
     let mut c = d.client().await;
     let ws = workspace_with_system(&d, &mut c).await;
     let created: serde_json::Value = c
@@ -2444,12 +2419,16 @@ async fn a_designs_agent_comes_back_after_a_restart() {
     assert_eq!(list[0]["agent"].as_u64(), Some(agent as u64), "{list}");
 }
 
-/// A `claude` that answers every message at once, for the design sync agent.
-const FAKE_SYNC_CLAUDE: &str = r#"#!/bin/sh
+/// A `claude` for Design mode's agents: it records its arguments
+/// (`claude-args`) and every message (`claude-user`) in its folder, and
+/// answers each message at once.
+const FAKE_CLAUDE: &str = r#"#!/bin/sh
+echo "$@" >> claude-args
 while IFS= read -r line; do
   case "$line" in
     *'"subtype":"initialize"'*) echo '{"type":"system","subtype":"init","session_id":"s1","model":"fake"}' ;;
-    *'"type":"user"'*) echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}' ;;
+    *'"type":"user"'*) echo "$line" >> claude-user
+      echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}' ;;
   esac
 done
 "#;
@@ -2460,7 +2439,7 @@ done
 #[tokio::test]
 async fn a_design_source_never_reaches_outside_its_project() {
     use moonlet_proto::types::{Project, Workspace};
-    let d = fake_claude_daemon(FAKE_SYNC_CLAUDE).await;
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
     let repo = d.home.path().join("repo");
     let outside = d.home.path().join("outside");
     std::fs::create_dir_all(repo.join("apps/mobile")).unwrap();
@@ -2502,7 +2481,7 @@ async fn a_design_source_never_reaches_outside_its_project() {
 #[tokio::test]
 async fn a_renamed_design_system_keeps_its_one_agent_and_removing_it_stops_that_agent() {
     use moonlet_proto::types::{Project, Workspace};
-    let d = fake_claude_daemon(FAKE_SYNC_CLAUDE).await;
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
     let repo = d.home.path().join("repo");
     std::fs::create_dir_all(repo.join("src")).unwrap();
     std::fs::write(repo.join("src/ui.tsx"), "export const Button = () => null;\n").unwrap();
@@ -2535,7 +2514,7 @@ async fn a_renamed_design_system_keeps_its_one_agent_and_removing_it_stops_that_
 #[tokio::test]
 async fn a_sync_recorded_while_its_agent_starts_keeps_both() {
     use moonlet_proto::types::{Project, Workspace};
-    let d = fake_claude_daemon(FAKE_SYNC_CLAUDE).await;
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
     let repo = d.home.path().join("repo");
     std::fs::create_dir_all(repo.join("src")).unwrap();
     std::fs::write(repo.join("src/ui.tsx"), "export const Button = () => null;\n").unwrap();
@@ -2577,7 +2556,7 @@ async fn a_sync_recorded_while_its_agent_starts_keeps_both() {
 #[tokio::test]
 async fn a_card_edited_by_hand_before_sync_is_not_changed_by_that_sync() {
     use moonlet_proto::types::{Project, Workspace};
-    let d = fake_claude_daemon(FAKE_SYNC_CLAUDE).await;
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
     let repo = d.home.path().join("repo");
     std::fs::create_dir_all(repo.join("src")).unwrap();
     std::fs::write(repo.join("src/ui.tsx"), "export const Button = () => null;\n").unwrap();
@@ -2688,7 +2667,7 @@ async fn a_file_written_in_a_design_system_is_announced() {
 /// design.changed, naming the design, so its canvas reloads.
 #[tokio::test]
 async fn a_page_written_in_a_design_is_announced() {
-    let d = fake_claude_daemon(FAKE_SYNC_CLAUDE).await;
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
     let mut c = d.client().await;
     let ws = workspace_with_system(&d, &mut c).await;
     let _: serde_json::Value = c
