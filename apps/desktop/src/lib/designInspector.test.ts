@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fieldEntries, fieldInput, fieldSet, fieldShows, fieldValue, inspectorSections, pickToken } from "./designInspector";
+import { displayOf, fieldEntries, fieldInput, fieldOff, fieldSet, fieldShows, fieldValue, inspectorSections, pickToken, selectionOf } from "./designInspector";
 
 const labels = (display: string) => inspectorSections(display).map((s) => `${s.title}: ${s.fields.map((f) => f.label).join(", ")}`);
 
@@ -101,5 +101,29 @@ describe("the Fill field (X65)", () => {
   it("writes any other field's property alone", () => {
     const [padding] = inspectorSections("block")[1].fields;
     expect(fieldSet(padding, [["background", "#161616"]], "4px")).toEqual({ padding: "4px" });
+  });
+});
+
+describe("the Inspector's selection (X65)", () => {
+  it("is the selected element's tag from the tree, its inline style from the source, and its properties off-system", () => {
+    const layers = [{ mid: "m1", tag: "body", depth: 0, text: "" }, { mid: "m24", tag: "section", depth: 1, text: "Git" }];
+    const tokens = [{ name: "--space-4", value: "16px", family: "spacing" as const }];
+    const styles = { m24: [["padding", "14px"], ["gap", "16px"], ["background", "#ff0000"]] as [string, string][] };
+    expect(selectionOf(layers, styles, tokens, "m24")).toEqual({ tag: "section", inline: styles.m24, off: ["padding", "background"] });
+    expect(selectionOf(layers, styles, tokens, "m1")).toEqual({ tag: "body", inline: [], off: [] });
+    expect(selectionOf(layers, styles, tokens, null)).toEqual({ tag: null, inline: [], off: [] });
+  });
+
+  it("is laid out by its display, inline else computed, else block", () => {
+    expect(displayOf([["display", "grid"]], { display: "flex" })).toBe("grid");
+    expect(displayOf([], { display: "flex" })).toBe("flex");
+    expect(displayOf([], {})).toBe("block");
+  });
+
+  it("marks a field off-system when its property is, or one it may be set with", () => {
+    const [fill, border] = inspectorSections("block")[3].fields;
+    expect(fieldOff(fill, ["background"])).toBe(true);
+    expect(fieldOff(fill, ["background-color"])).toBe(true);
+    expect(fieldOff(border, ["background"])).toBe(false);
   });
 });

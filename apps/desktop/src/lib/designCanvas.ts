@@ -4,7 +4,8 @@
 
 import type { DesignChanged } from "./protocol";
 import { pageOfPath, pagePath } from "./designPage";
-import type { DropPlace, Layer } from "./designBridge";
+import type { DragResult, DropPlace, Layer } from "./designBridge";
+import type { EditOp } from "./designEdits";
 
 /** The pages (`index` for `pages/index.html`) a change to design `slug` wrote. */
 export function changedPages(change: DesignChanged, slug: string): string[] {
@@ -280,4 +281,26 @@ export function dropHint(layers: Layer[], drag: { mid: string | null; place: Dro
   if (!p) return null;
   const where = drag.mid === null && p.where === "below" ? "after" : p.where;
   return `Drop to ${drag.mid === null ? "insert" : "move"} ${where} ${layerName(layers, p.ref)}`;
+}
+
+/** The hint line: where a drag over the page would drop while it would
+ *  ({@link dropHint}), else what the mode does. */
+export function hintLine(mode: CanvasMode, layers: Layer[], drag: { mid: string | null; place: DropPlace | null } | null): string {
+  return (drag && dropHint(layers, drag)) ?? modeHint(mode);
+}
+
+/** The edit a drag in the page makes: a move for an element dropped, a
+ *  restyle for a size or a place (the live page already shows it, so one
+ *  refused loads the page again), an insert of the Palette's snippet
+ *  `snippet` at its drop; null for a drop of none, or nowhere. */
+export function dragEdit(r: DragResult, snippet: string | null): { op: EditOp; reload: boolean } | null {
+  if (r.kind === "move") return { op: { kind: "move", mid: r.mid, place: r.place }, reload: false };
+  if (r.kind === "style") return { op: { kind: "restyle", mid: r.mid, set: r.set }, reload: true };
+  return snippet !== null && r.place ? { op: { kind: "insert", place: r.place, html: snippet }, reload: false } : null;
+}
+
+/** The edit a snippet picked in the Palette makes: inserted after the
+ *  selection, else at the end of the body. */
+export function pickEdit(selected: string | null, snippet: string): EditOp {
+  return { kind: "insert", place: selected ? { where: "below", ref: selected } : null, html: snippet };
 }

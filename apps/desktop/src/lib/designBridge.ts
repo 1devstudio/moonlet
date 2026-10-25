@@ -61,6 +61,11 @@ export const COMPUTED_PROPS = [
   "position",
 ] as const;
 
+/** What a drag in the page ends with: an element dropped at a place, a
+ *  size or place in px a handle or a drag gave, or a Palette snippet's
+ *  drop at a place, or nowhere. */
+export type DragResult = { kind: "move"; mid: string; place: DropPlace } | { kind: "style"; mid: string; set: Record<string, string> } | { kind: "drop"; place: DropPlace | null };
+
 /** What the page tells the app. */
 export type BridgeMessage =
   | { type: "mids"; mids: string[] }

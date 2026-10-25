@@ -72,3 +72,30 @@ export function paletteGroups(snippets: Snippet[], query: string): { group: stri
   }
   return groups;
 }
+
+/** How long after a Palette drag ends its drop may still be reported: the
+ *  drop happens in the page's own process, whose report comes later. */
+export const DROP_WAIT_MS = 2000;
+
+/** The snippet being dragged from the Palette: `start` and `end` the drag,
+ *  `take` it for a drop, while it is dragged or {@link DROP_WAIT_MS} after
+ *  the drag ended, once. Times are ms. */
+export function snippetDrags(waitMs = DROP_WAIT_MS) {
+  let dragged: Snippet | null = null;
+  let ended: number | null = null;
+  return {
+    start(s: Snippet) {
+      dragged = s;
+      ended = null;
+    },
+    end(now: number) {
+      if (dragged) ended = now;
+    },
+    take(now: number): Snippet | null {
+      const s = dragged && (ended === null || now - ended <= waitMs) ? dragged : null;
+      dragged = null;
+      ended = null;
+      return s;
+    },
+  };
+}
