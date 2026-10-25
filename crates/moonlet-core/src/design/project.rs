@@ -13,6 +13,14 @@ use super::designs::{DESIGN_FILE, DesignConfig};
 use super::store::Store;
 use crate::git;
 
+/// A project design asked for that the base branch does not have.
+#[derive(Debug, thiserror::Error)]
+#[error("no design at {path} on {base}")]
+pub struct NoProjectDesign {
+    pub path: String,
+    pub base: String,
+}
+
 /// One design in a listing of the base branch's tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TreeDesign {
@@ -184,7 +192,10 @@ pub async fn read_project_design(repo: &Path, base: &str, path: &str) -> Result<
     let found = tree_designs(&listing, dir)
         .into_iter()
         .find(|d| d.slug == slug)
-        .with_context(|| format!("no design at {path} on {base}"))?;
+        .ok_or_else(|| NoProjectDesign {
+            path: path.to_string(),
+            base: base.to_string(),
+        })?;
     let config: DesignConfig = toml::from_str(&String::from_utf8_lossy(
         &blob(repo, &found.files[DESIGN_FILE]).await?,
     ))
