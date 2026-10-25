@@ -1304,16 +1304,7 @@ impl Daemon {
             }
             m::DESIGN_COMMENT_PUT => {
                 let r: m::DesignCommentPut = params(p)?;
-                let put = moonlet_core::design::comments::CommentPut {
-                    n: r.n,
-                    page: r.page,
-                    mid: r.mid,
-                    tag: r.tag,
-                    text: r.text,
-                    comment: r.comment,
-                    sent: r.sent,
-                };
-                ok(blocking(move || store.put_comment(&r.workspace, &r.slug, put, now_ms())).await?)
+                ok(blocking(move || store.put_comment(&r.workspace, &r.slug, &r.change, now_ms())).await?)
             }
             m::DESIGN_COMMENT_RESOLVE => {
                 let r: m::DesignCommentRef = params(p)?;

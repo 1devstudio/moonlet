@@ -7,7 +7,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use moonlet_proto::types::{CommentState, DesignComment};
+use moonlet_proto::types::{CommentChange, CommentState, DesignComment};
 
 use super::fsx;
 use super::store::Store;
@@ -23,19 +23,6 @@ pub const TEXT_MAX: usize = 60;
 #[error("{0}")]
 pub struct BadComment(pub String);
 
-/// A comment to keep: a new pin (no `n`), or pin `n`'s comment changed.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct CommentPut {
-    pub n: Option<u32>,
-    pub page: String,
-    pub mid: String,
-    pub tag: String,
-    pub text: String,
-    pub comment: String,
-    /// Sent to the chat now.
-    pub sent: bool,
-}
-
 impl Store {
     /// A design's comments, by number; none before it has a `comments.json`.
     pub fn comments(&self, workspace: &str, slug: &str) -> Result<Vec<DesignComment>> {
@@ -48,69 +35,74 @@ impl Store {
         parse(&fsx::read_inside(&dir, &file)?)
     }
 
-    /// Keeps a comment and returns its pin: a new pin gets the number after
-    /// the highest so far; pin `n` gets its new comment. Sent, it records
+    /// Changes a design's comments and returns the pins changed: a new pin
+    /// gets the number after the highest so far; an edited pin its new
+    /// comment; sent pins record
     /// the time. Written through the designs folder as a handle, read again
     /// when the agent changed the file meanwhile, so its change is kept.
     pub fn put_comment(
         &self,
         workspace: &str,
         slug: &str,
-        put: CommentPut,
+        change: &CommentChange,
         now: u64,
-    ) -> Result<DesignComment> {
-        let comment = put.comment.trim().to_string();
-        if comment.is_empty() {
-            return Err(BadComment("a comment needs text".into()).into());
-        }
-        let new = match put.n {
-            Some(_) => None,
-            None => Some(new_pin(&put, comment.clone())?),
-        };
-        self.update_comments(workspace, slug, |pins| {
-            let pin = match (&new, put.n) {
-                (Some(pin), _) => {
+    ) -> Result<Vec<DesignComment>> {
+        match change {
+            CommentChange::New {
+                page,
+                mid,
+                tag,
+                text,
+                comment,
+            } => {
+                let pin = new_pin(page, mid, tag, text, comment_text(comment)?)?;
+                self.update_comments(workspace, slug, |pins| {
                     let mut pin = pin.clone();
                     pin.n = pins.iter().map(|p| p.n).max().unwrap_or(0) + 1;
-                    pins.push(pin);
-                    pins.last_mut().expect("just pushed")
-                }
-                (None, n) => {
-                    let n = n.unwrap_or_default();
-                    let pin = pins
-                        .iter_mut()
-                        .find(|p| p.n == n)
-                        .ok_or_else(|| BadComment(format!("no comment {n}")))?;
-                    pin.comment = comment.clone();
-                    pin
-                }
-            };
-            if put.sent {
-                pin.sent_at = Some(now);
+                    pins.push(pin.clone());
+                    Ok(vec![pin])
+                })
             }
-            Ok(pin.clone())
-        })
+            CommentChange::Edit { n, comment } => {
+                let comment = comment_text(comment)?;
+                self.update_comments(workspace, slug, |pins| {
+                    let pin = find(pins, *n)?;
+                    pin.comment = comment.clone();
+                    Ok(vec![pin.clone()])
+                })
+            }
+            CommentChange::Sent { pins: sent } => self.update_comments(workspace, slug, |pins| {
+                // Every pin is there before any is marked.
+                for n in sent {
+                    find(pins, *n)?;
+                }
+                let mut out = Vec::new();
+                for n in sent {
+                    let pin = find(pins, *n)?;
+                    pin.sent_at = Some(now);
+                    out.push(pin.clone());
+                }
+                Ok(out)
+            }),
+        }
     }
 
     /// Marks pin `n` resolved.
     pub fn resolve_comment(&self, workspace: &str, slug: &str, n: u32) -> Result<DesignComment> {
         self.update_comments(workspace, slug, |pins| {
-            let pin = pins
-                .iter_mut()
-                .find(|p| p.n == n)
-                .ok_or_else(|| BadComment(format!("no comment {n}")))?;
+            let pin = find(pins, n)?;
             pin.state = CommentState::Resolved;
             Ok(pin.clone())
         })
     }
 
     /// Reads, changes and writes a design's `comments.json`, made when missing.
-    fn update_comments(
+    fn update_comments<T>(
         &self,
         workspace: &str,
         slug: &str,
-        mut change: impl FnMut(&mut Vec<DesignComment>) -> Result<DesignComment>,
-    ) -> Result<DesignComment> {
+        mut change: impl FnMut(&mut Vec<DesignComment>) -> Result<T>,
+    ) -> Result<T> {
         // An existing design, its folder no link.
         let dir = self.design_dir(workspace, slug)?;
         let designs = self.designs_dir(workspace, false)?;
@@ -130,29 +122,44 @@ impl Store {
     }
 }
 
-/// A new pin of `put`, its element checked: the page a page's name, the
-/// `data-mid` `m` and digits, the tag a tag's name; the text squashed to
-/// one line and cut to [`TEXT_MAX`] characters.
-fn new_pin(put: &CommentPut, comment: String) -> Result<DesignComment> {
-    let page_ok =
-        !put.page.is_empty() && !put.page.starts_with('.') && !put.page.contains(['/', '\\', '\0']);
+/// Pin `n`, or why there is none.
+fn find(pins: &mut [DesignComment], n: u32) -> Result<&mut DesignComment> {
+    Ok(pins
+        .iter_mut()
+        .find(|p| p.n == n)
+        .ok_or_else(|| BadComment(format!("no comment {n}")))?)
+}
+
+/// A comment's text, trimmed; an empty one is refused.
+fn comment_text(comment: &str) -> Result<String> {
+    let comment = comment.trim();
+    if comment.is_empty() {
+        return Err(BadComment("a comment needs text".into()).into());
+    }
+    Ok(comment.to_string())
+}
+
+/// A new pin, its element checked: the page a page's name, the `data-mid`
+/// `m` and digits, the tag a tag's name; the text squashed to one line and
+/// cut to [`TEXT_MAX`] characters.
+fn new_pin(page: &str, mid: &str, tag: &str, text: &str, comment: String) -> Result<DesignComment> {
+    let page_ok = !page.is_empty() && !page.starts_with('.') && !page.contains(['/', '\\', '\0']);
     if !page_ok {
-        return Err(BadComment(format!("bad page \"{}\"", put.page)).into());
+        return Err(BadComment(format!("bad page \"{page}\"")).into());
     }
-    if !is_mid(&put.mid) {
-        return Err(BadComment(format!("bad data-mid \"{}\"", put.mid)).into());
+    if !is_mid(mid) {
+        return Err(BadComment(format!("bad data-mid \"{mid}\"")).into());
     }
-    let tag = put.tag.to_ascii_lowercase();
-    let tag_ok = tag.len() <= 32
-        && tag.starts_with(|c: char| c.is_ascii_lowercase())
-        && tag
+    let lower = tag.to_ascii_lowercase();
+    let tag_ok = lower.len() <= 32
+        && lower.starts_with(|c: char| c.is_ascii_lowercase())
+        && lower
             .chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
     if !tag_ok {
-        return Err(BadComment(format!("bad tag \"{}\"", put.tag)).into());
+        return Err(BadComment(format!("bad tag \"{tag}\"")).into());
     }
-    let text: String = put
-        .text
+    let text: String = text
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
@@ -161,9 +168,9 @@ fn new_pin(put: &CommentPut, comment: String) -> Result<DesignComment> {
         .collect();
     Ok(DesignComment {
         n: 0,
-        page: put.page.clone(),
-        mid: put.mid.clone(),
-        tag,
+        page: page.to_string(),
+        mid: mid.to_string(),
+        tag: lower,
         text,
         comment,
         sent_at: None,
@@ -211,38 +218,51 @@ mod tests {
         (home, store)
     }
 
-    fn nav() -> CommentPut {
-        CommentPut {
-            page: "index".into(),
-            mid: "m12".into(),
-            tag: "nav".into(),
-            text: "General Appearance Terminal Agents".into(),
-            comment: "Collapse into a menu on phone".into(),
-            ..CommentPut::default()
+    fn new(page: &str, mid: &str, tag: &str, text: &str, comment: &str) -> CommentChange {
+        CommentChange::New {
+            page: page.into(),
+            mid: mid.into(),
+            tag: tag.into(),
+            text: text.into(),
+            comment: comment.into(),
         }
+    }
+
+    fn nav() -> CommentChange {
+        new(
+            "index",
+            "m12",
+            "nav",
+            "General Appearance Terminal Agents",
+            "Collapse into a menu on phone",
+        )
+    }
+
+    fn edit(n: u32, comment: &str) -> CommentChange {
+        CommentChange::Edit {
+            n,
+            comment: comment.into(),
+        }
+    }
+
+    /// The one pin a change made or changed.
+    fn put(store: &Store, change: CommentChange, now: u64) -> DesignComment {
+        let mut pins = store
+            .put_comment("w1", "settings-page", &change, now)
+            .unwrap();
+        assert_eq!(pins.len(), 1);
+        pins.remove(0)
     }
 
     #[test]
     fn a_kept_comment_is_numbered_saved_in_comments_json_and_listed() {
         let (home, store) = store_with_design();
-        let first = store
-            .put_comment("w1", "settings-page", nav(), 1_761_200_000_000)
-            .unwrap();
-        let second = store
-            .put_comment(
-                "w1",
-                "settings-page",
-                CommentPut {
-                    page: "git-a".into(),
-                    mid: "m25".into(),
-                    tag: "h2".into(),
-                    text: "Git".into(),
-                    comment: "Make Git the first section".into(),
-                    ..CommentPut::default()
-                },
-                1_761_200_060_000,
-            )
-            .unwrap();
+        let first = put(&store, nav(), 1_761_200_000_000);
+        let second = put(
+            &store,
+            new("git-a", "m25", "h2", "Git", "Make Git the first section"),
+            1_761_200_060_000,
+        );
         assert_eq!((first.n, second.n), (1, 2));
         assert_eq!(
             store.comments("w1", "settings-page").unwrap(),
@@ -284,19 +304,9 @@ mod tests {
     #[test]
     fn a_sent_comment_records_when_and_a_resolved_one_no_longer_counts_as_open() {
         let (_home, store) = store_with_design();
-        store.put_comment("w1", "settings-page", nav(), 1).unwrap();
-        let kept = store
-            .put_comment(
-                "w1",
-                "settings-page",
-                CommentPut {
-                    n: Some(1),
-                    comment: "Collapse into a menu below 600 px".into(),
-                    ..CommentPut::default()
-                },
-                2,
-            )
-            .unwrap();
+        put(&store, nav(), 1);
+        put(&store, new("index", "m25", "h2", "Git", "Git first"), 1);
+        let kept = put(&store, edit(1, "Collapse into a menu below 600 px"), 2);
         assert_eq!(
             (kept.comment.as_str(), kept.sent_at, kept.mid.as_str()),
             ("Collapse into a menu below 600 px", None, "m12")
@@ -305,36 +315,40 @@ mod tests {
             .put_comment(
                 "w1",
                 "settings-page",
-                CommentPut {
-                    n: Some(1),
-                    comment: "Collapse into a menu below 600 px".into(),
-                    sent: true,
-                    ..CommentPut::default()
-                },
+                &CommentChange::Sent { pins: vec![1, 2] },
                 1_761_200_100_000,
             )
             .unwrap();
-        assert_eq!(sent.sent_at, Some(1_761_200_100_000));
+        assert_eq!(
+            sent.iter().map(|p| (p.n, p.sent_at)).collect::<Vec<_>>(),
+            vec![(1, Some(1_761_200_100_000)), (2, Some(1_761_200_100_000))]
+        );
         let resolved = store.resolve_comment("w1", "settings-page", 1).unwrap();
         assert_eq!(
             (resolved.state, resolved.sent_at),
             (CommentState::Resolved, Some(1_761_200_100_000))
         );
-        assert_eq!(store.designs("w1").unwrap()[0].open_comments, 0);
+        assert_eq!(store.designs("w1").unwrap()[0].open_comments, 1);
         // A number is never given again, though its pin is resolved.
-        assert_eq!(
-            store
-                .put_comment("w1", "settings-page", nav(), 3)
-                .unwrap()
-                .n,
-            2
-        );
+        assert_eq!(put(&store, nav(), 3).n, 3);
         assert_eq!(
             store
                 .resolve_comment("w1", "settings-page", 9)
                 .unwrap_err()
                 .to_string(),
             "no comment 9"
+        );
+        // A pin that is not there marks none of them sent.
+        let none = store.put_comment(
+            "w1",
+            "settings-page",
+            &CommentChange::Sent { pins: vec![3, 9] },
+            4,
+        );
+        assert_eq!(none.unwrap_err().to_string(), "no comment 9");
+        assert_eq!(
+            store.comments("w1", "settings-page").unwrap()[2].sent_at,
+            None
         );
     }
 
@@ -362,13 +376,7 @@ mod tests {
         assert_eq!(store.comments("w1", "settings-page").unwrap(), vec![]);
         std::fs::remove_file(&file).unwrap();
         assert_eq!(store.comments("w1", "settings-page").unwrap(), vec![]);
-        assert_eq!(
-            store
-                .put_comment("w1", "settings-page", nav(), 1)
-                .unwrap()
-                .n,
-            1
-        );
+        assert_eq!(put(&store, nav(), 1).n, 1);
         assert_eq!(store.comments("w1", "settings-page").unwrap().len(), 1);
     }
 
@@ -384,7 +392,7 @@ mod tests {
             format!("{err:#}").starts_with("cannot read comments.json"),
             "{err:#}"
         );
-        assert!(store.put_comment("w1", "settings-page", nav(), 1).is_err());
+        assert!(store.put_comment("w1", "settings-page", &nav(), 1).is_err());
         assert!(store.resolve_comment("w1", "settings-page", 1).is_err());
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "[{\"n\": 1,");
         assert_eq!(store.designs("w1").unwrap()[0].open_comments, 0);
@@ -393,18 +401,17 @@ mod tests {
     #[test]
     fn a_pin_names_a_page_and_an_element_and_keeps_60_characters_of_its_text() {
         let (_home, store) = store_with_design();
-        let pin = store
-            .put_comment(
-                "w1",
-                "settings-page",
-                CommentPut {
-                    tag: "NAV".into(),
-                    text: "  General\n  Appearance   Terminal Agents Git Notifications Shortcuts Advanced  ".into(),
-                    ..nav()
-                },
-                1,
-            )
-            .unwrap();
+        let pin = put(
+            &store,
+            new(
+                "index",
+                "m12",
+                "NAV",
+                "  General\n  Appearance   Terminal Agents Git Notifications Shortcuts Advanced  ",
+                "Collapse",
+            ),
+            1,
+        );
         assert_eq!(
             (pin.tag.as_str(), pin.text.as_str()),
             (
@@ -414,37 +421,23 @@ mod tests {
         );
         for (bad, message) in [
             (
-                CommentPut {
-                    page: "../index".into(),
-                    ..nav()
-                },
+                new("../index", "m12", "nav", "", "c"),
                 "bad page \"../index\"",
             ),
             (
-                CommentPut {
-                    mid: "m12\"]".into(),
-                    ..nav()
-                },
+                new("index", "m12\"]", "nav", "", "c"),
                 "bad data-mid \"m12\"]\"",
             ),
             (
-                CommentPut {
-                    tag: "nav onclick".into(),
-                    ..nav()
-                },
+                new("index", "m12", "nav onclick", "", "c"),
                 "bad tag \"nav onclick\"",
             ),
-            (
-                CommentPut {
-                    comment: "  ".into(),
-                    ..nav()
-                },
-                "a comment needs text",
-            ),
+            (new("index", "m12", "nav", "", "  "), "a comment needs text"),
+            (edit(1, ""), "a comment needs text"),
         ] {
             assert_eq!(
                 store
-                    .put_comment("w1", "settings-page", bad, 1)
+                    .put_comment("w1", "settings-page", &bad, 1)
                     .unwrap_err()
                     .to_string(),
                 message
