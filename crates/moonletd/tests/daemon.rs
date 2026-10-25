@@ -2233,6 +2233,160 @@ async fn a_sync_agent_saved_as_design_true_comes_back_as_a_sync_agent() {
     assert_eq!(t.design.as_ref().map(|tag| tag.kind), Some(DesignAgentKind::Sync));
 }
 
+/// A `claude` that records its arguments and every message in its folder,
+/// and answers each message at once.
+const RECORDING_CLAUDE: &str = r#"#!/bin/sh
+echo "$@" >> claude-args
+while IFS= read -r line; do
+  case "$line" in
+    *'"subtype":"initialize"'*) echo '{"type":"system","subtype":"init","session_id":"s1","model":"fake"}' ;;
+    *'"type":"user"'*) echo "$line" >> claude-user
+      echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}' ;;
+  esac
+done
+"#;
+
+/// A workspace with the design system `moonlet-desktop`, its README written,
+/// and no sync agent; returns the workspace's id.
+async fn workspace_with_system(d: &HomeDaemon, c: &mut Client) -> String {
+    let ws: moonlet_proto::types::Workspace =
+        c.request(methods::WORKSPACE_CREATE, serde_json::json!({"name": "1devstudio", "color": "clay"})).await.unwrap();
+    let _: serde_json::Value = c
+        .request(
+            methods::DESIGN_SYSTEM_CREATE,
+            serde_json::json!({"workspace": ws.id, "name": "moonlet desktop", "sources": [], "agent": false}),
+        )
+        .await
+        .unwrap();
+    let system = d.home.path().join(".moonlet/design").join(&ws.id).join("systems/moonlet-desktop");
+    std::fs::write(system.join("README.md"), "# moonlet desktop\n\nLink styles.css; buttons are .btn.\n").unwrap();
+    ws.id
+}
+
+/// Waits until `read` gives text that contains `needle`, for up to 10 s.
+async fn until_contains(read: impl Fn() -> String, needle: &str) -> String {
+    for _ in 0..100 {
+        if read().contains(needle) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    read()
+}
+
+/// X65: a new workspace design starts its agent: Claude Code in the design's
+/// folder, its design system's folder added read only and denied to every
+/// editing tool, with the brief, the README and the design rules as its first
+/// message. The list reports it, and removing the design stops it.
+#[tokio::test]
+async fn a_new_design_starts_its_agent_in_its_folder_on_its_design_system() {
+    use moonlet_proto::types::{DesignAgent, DesignAgentKind};
+    let d = fake_claude_daemon(RECORDING_CLAUDE).await;
+    let mut c = d.client().await;
+    let ws = workspace_with_system(&d, &mut c).await;
+    let created: serde_json::Value = c
+        .request(
+            methods::DESIGN_CREATE,
+            serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "A settings page with General and Git sections"}),
+        )
+        .await
+        .unwrap();
+    let dir = d.home.path().join(".moonlet/design").join(&ws).join("designs/settings-page");
+    let real_dir = dir.canonicalize().unwrap().display().to_string();
+    let real_system = d.home.path().join(".moonlet/design").join(&ws).join("systems/moonlet-desktop").canonicalize().unwrap().display().to_string();
+    assert_eq!(
+        (&created["slug"], &created["name"], &created["kind"], &created["system"], &created["agent_error"]),
+        (&serde_json::json!("settings-page"), &serde_json::json!("Settings page"), &serde_json::json!("workspace"), &serde_json::json!("moonlet-desktop"), &serde_json::Value::Null)
+    );
+    let agent = created["agent"].as_u64().expect("an agent") as u32;
+
+    let terminals: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
+    let t = terminals.iter().find(|t| t.id == agent).expect("the agent's chat");
+    let tag = DesignAgent { kind: DesignAgentKind::Design, workspace: ws.clone(), slug: "settings-page".into(), name: "Settings page".into() };
+    assert_eq!(
+        (t.title.as_str(), t.cwd.as_str(), t.session_id.as_deref(), t.chat, t.design.clone()),
+        ("Design · Settings page", real_dir.as_str(), None, true, Some(tag))
+    );
+
+    let file = |name: &str| {
+        let p = dir.join(name);
+        move || std::fs::read_to_string(&p).unwrap_or_default()
+    };
+    let user = until_contains(file("claude-user"), "A settings page with General and Git sections").await;
+    let args = file("claude-args")();
+    assert!(args.contains("--permission-mode acceptEdits"), "{args}");
+    assert!(args.contains(&format!("--add-dir {real_system}")), "{args}");
+    assert!(args.contains(&format!("\"deny\":[\"Edit(/{real_system}/**)\"]")), "{args}");
+    assert!(args.contains("design check)"), "{args}");
+    // The brief went with the design system's README and the design rules.
+    assert!(user.contains("Link styles.css; buttons are .btn."), "{user}");
+    assert!(user.contains("Keep `data-mid` on every element"), "{user}");
+
+    let list: serde_json::Value = c.request(methods::DESIGN_LIST, serde_json::json!({"workspace": ws})).await.unwrap();
+    assert_eq!(
+        (&list[0]["slug"], &list[0]["kind"], &list[0]["path"], list[0]["agent"].as_u64()),
+        (&serde_json::json!("settings-page"), &serde_json::json!("workspace"), &serde_json::json!(dir), Some(agent as u64))
+    );
+    assert!(list[0]["agent_state"].is_string(), "{list}");
+    assert_eq!(list[0]["open_comments"], 0);
+
+    let _: bool = c.request(methods::DESIGN_REMOVE, serde_json::json!({"workspace": ws, "slug": "settings-page"})).await.unwrap();
+    assert!(!dir.exists());
+    let terminals: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
+    assert!(!terminals.iter().any(|t| t.id == agent), "the agent of a removed design still runs");
+    let list: serde_json::Value = c.request(methods::DESIGN_LIST, serde_json::json!({"workspace": ws})).await.unwrap();
+    assert_eq!(list, serde_json::json!([]));
+}
+
+/// X65: a design needs a design system its workspace has, and a session
+/// design is not made yet (entry 12).
+#[tokio::test]
+async fn a_design_on_an_unknown_system_or_in_a_session_is_refused() {
+    let d = fake_claude_daemon(RECORDING_CLAUDE).await;
+    let mut c = d.client().await;
+    let ws = workspace_with_system(&d, &mut c).await;
+    let unknown = c
+        .request::<_, serde_json::Value>(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "x", "system": "storefront", "brief": "b"}))
+        .await;
+    assert_eq!(unknown.unwrap_err().to_string(), "invalid_params: no design system \"storefront\"");
+    let session = c
+        .request::<_, serde_json::Value>(
+            methods::DESIGN_CREATE,
+            serde_json::json!({"workspace": ws, "name": "x", "system": "moonlet-desktop", "brief": "b", "session": "s1"}),
+        )
+        .await;
+    assert_eq!(session.unwrap_err().to_string(), "not_yet: session designs are not made yet");
+    let list: serde_json::Value = c.request(methods::DESIGN_LIST, serde_json::json!({"workspace": ws})).await.unwrap();
+    assert_eq!(list, serde_json::json!([]));
+    let terminals: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
+    assert!(!terminals.iter().any(|t| t.chat), "an agent started for a design that was refused");
+}
+
+/// X65: a design's agent is owned by moonletd and comes back after a restart,
+/// still its design's, with its tag.
+#[tokio::test]
+async fn a_designs_agent_comes_back_after_a_restart() {
+    use moonlet_proto::types::DesignAgentKind;
+    let mut d = fake_claude_daemon(RECORDING_CLAUDE).await;
+    let mut c = d.client().await;
+    let ws = workspace_with_system(&d, &mut c).await;
+    let created: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    let agent = created["agent"].as_u64().expect("an agent") as u32;
+    d.restart().await;
+    let mut c = d.client().await;
+    let terminals: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
+    let t = terminals.iter().find(|t| t.id == agent).expect("the restored chat");
+    assert_eq!(
+        (t.chat, t.design.as_ref().map(|tag| (tag.kind, tag.slug.as_str()))),
+        (true, Some((DesignAgentKind::Design, "settings-page")))
+    );
+    let list: serde_json::Value = c.request(methods::DESIGN_LIST, serde_json::json!({"workspace": ws})).await.unwrap();
+    assert_eq!(list[0]["agent"].as_u64(), Some(agent as u64), "{list}");
+}
+
 /// A `claude` that answers every message at once, for the design sync agent.
 const FAKE_SYNC_CLAUDE: &str = r#"#!/bin/sh
 while IFS= read -r line; do

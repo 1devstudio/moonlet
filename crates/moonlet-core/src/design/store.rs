@@ -289,6 +289,16 @@ impl Store {
         read_config(&self.system_dir(workspace, slug)?)
     }
 
+    /// A design system's `README.md`, empty before its first check wrote one.
+    /// Read inside its folder: a link the agent left out of it is refused.
+    pub fn readme(&self, workspace: &str, slug: &str) -> Result<String> {
+        let dir = self.system_dir(workspace, slug)?;
+        if std::fs::symlink_metadata(dir.join("README.md")).is_err() {
+            return Ok(String::new());
+        }
+        fsx::read_inside(&dir, &dir.join("README.md"))
+    }
+
     /// Deletes a design system. Designs that use it keep their pages.
     pub fn remove_system(&self, workspace: &str, slug: &str) -> Result<()> {
         let dir = self.system_dir(workspace, slug)?;
