@@ -331,3 +331,16 @@ describe("what a drag or a pick does to the page (X65)", () => {
     expect(hintLine("edit", layers, null)).toBe("Click selects · double-click edits text · Esc selects the parent · Tab the next sibling");
   });
 });
+
+describe("a snapshot previewed (X65)", () => {
+  it("keeps the canvas in View, read only: no Comment, Edit or pick in Layers, no editor key and no undo", () => {
+    const shown = { mode: "view" as const, box: false, rail: true, readOnly: true };
+    for (const act of ["toggle", "comment", "toggleEdit", "edit", "escape", "view", "lock"] as const) expect(canvasStep(shown, act)).toEqual({ mode: "view", box: false, rail: true, readOnly: true });
+    expect(layerPick(shown, false)).toBeNull();
+    for (const k of ["toggle", "toggleEdit", "escape", "delete", "undo", "redo", "paste", "copy", "duplicate"] as const) {
+      expect(editorStep({ mode: "view", selected: null, layers: [], copied: true, locked: false, readOnly: true }, k)).toBeNull();
+    }
+    expect(undoOpen({ locked: false, changes: 3, readOnly: true })).toBe(false);
+    expect(undoOpen({ locked: false, changes: 3, readOnly: false })).toBe(true);
+  });
+});

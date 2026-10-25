@@ -123,6 +123,10 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
   const snapshots = useDesign((d) => historyOf(d, host, workspace, design.slug));
   const [preview, setPreview] = useState<Preview>(null);
   const previewed = (preview && snapshots?.find((s) => s.n === preview.n)) || null;
+  // A snapshot previewed is read only (canvasStep, editorStep, undoOpen,
+  // layerPick), and the Inspector and the Palette edit nothing then.
+  const readOnly = previewed !== null;
+  const editLocked = working || readOnly;
 
   const names = previewed ? previewed.pages : design.pages.map((p) => p.name);
   // A page that went away shows the first one; before any, index (being written).
@@ -159,29 +163,26 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
   useEffect(() => {
     if (snapshots) setPreview((p) => previewStep(p, { kind: "listed", snapshots }));
   }, [snapshots]);
-  // Another page or design: nothing selected, and its tree comes with it.
+  // Another page, design or snapshot: nothing selected, and its tree comes
+  // with it (a snapshot's page reports none).
   useEffect(() => {
     setSelected(null);
     setLayers(NO_LAYERS);
     setDragging(null);
-  }, [design.slug, page]);
+  }, [design.slug, page, readOnly]);
 
   // V, C, Esc and the mode buttons, as canvasStep decides; Edit is locked
   // while the agent works, and left when it starts. Entering Edit folds the
   // chat, and leaving it opens the chat again when that folded it.
-  const canvas = useRef<CanvasState>({ mode, box: box !== null, rail: railOpen });
-  canvas.current = { mode, box: box !== null, rail: railOpen };
+  const canvas = useRef<CanvasState>({ mode, box: box !== null, rail: railOpen, readOnly });
+  canvas.current = { mode, box: box !== null, rail: railOpen, readOnly };
   const workingRef = useRef(working);
   workingRef.current = working;
   const chat = useRef<ChatPanel>({ open: chatOpen, foldedForEdit: false });
   chat.current = { ...chat.current, open: chatOpen };
-  // A snapshot previewed is View only.
-  const previewing = useRef(false);
-  previewing.current = previewed !== null;
   const step = useCallback((act: CanvasAct) => {
     const before = canvas.current.mode;
     const next = canvasStep(canvas.current, act, workingRef.current);
-    if (previewing.current && next.mode !== "view") return;
     setMode(next.mode);
     setRailOpen(next.rail);
     if (!next.box) setBox(null);
@@ -215,10 +216,9 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
       else errorToast(e);
     }
   };
-  /** An edit of the shown page's source by `op`; none while a snapshot is
-   *  previewed, whose pages are not the ones edited. */
+  /** An edit of the shown page's source by `op`. */
   const editShown = (op: EditOp, reload = false) => {
-    if (page !== null && !previewed) edited(() => editPage(host, workspace, design.slug, page, op, selected), reload);
+    if (page !== null) edited(() => editPage(host, workspace, design.slug, page, op, selected), reload);
   };
   // A drag on the page, or a snippet picked in the Palette, as dragEdit
   // and pickEdit decide.
@@ -248,9 +248,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
   // A key on the canvas or in its page, as editorStep decides: true when
   // the canvas took it.
   const onKeyAct = (k: KeyAct | null): boolean => {
-    // A snapshot previewed is read only: no mode, edit or undo.
-    if (previewed) return false;
-    const s = editorStep({ mode, selected, layers, copied: hasCopy(host, workspace, design.slug), locked: working }, k);
+    const s = editorStep({ mode, selected, layers, copied: hasCopy(host, workspace, design.slug), locked: working, readOnly }, k);
     if (!s) return false;
     switch (s.kind) {
       case "canvas":
@@ -532,20 +530,20 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
           <ViewportMenu viewport={viewport} onPick={setViewport} onCustom={() => setCustom(true)} />
           <ZoomBar scale={scale} fitted={zoom === null} max={2} keys onZoom={setZoom} />
           {chip && <EditsChip text={chip} />}
-          <IconButton title="Undo (⌘Z)" className="ml-auto" disabled={!!previewed || !undoOpen({ locked: working, changes })} onClick={() => travel(true)}>
+          <IconButton title="Undo (⌘Z)" className="ml-auto" disabled={!undoOpen({ locked: working, changes, readOnly })} onClick={() => travel(true)}>
             <Undo2 size={14} />
           </IconButton>
+          {/* A snapshot previewed is View only, as the History board shows it: no switch. */}
+          {!readOnly && (
           <div role="group" aria-label="Canvas mode" className="flex h-7 items-center rounded-md border border-border-strong p-0.5">
             {(["view", "comment", "edit"] as const).map((m) => {
               const locked = m === "edit" && working;
-              // A snapshot previewed is View only.
-              const readOnly = !!previewed && m !== "view";
               return (
                 <button
                   key={m}
                   aria-pressed={mode === m}
-                  disabled={locked || readOnly}
-                  title={readOnly ? "A snapshot is read only: Back to current to comment or edit" : locked ? "Edit opens when Claude stops" : m === "comment" ? "Comment (C)" : m === "edit" ? "Edit (V)" : "View"}
+                  disabled={locked}
+                  title={locked ? "Edit opens when Claude stops" : m === "comment" ? "Comment (C)" : m === "edit" ? "Edit (V)" : "View"}
                   onClick={() => step(m)}
                   className={cx("flex h-full items-center gap-1.5 rounded px-2 disabled:text-faint", mode === m ? "bg-raised text-fg" : "text-muted hover:text-fg")}
                 >
@@ -556,6 +554,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
               );
             })}
           </div>
+          )}
           <IconButton title="History" aria-pressed={railOpen && railTab === "history"} onClick={openHistory}>
             <HistoryIcon size={14} />
           </IconButton>
@@ -656,11 +655,11 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
           </div>
           {railTab === "layers" ? (
             <LayersTab
-              layers={page === null || previewed ? NO_LAYERS : layers}
+              layers={page === null ? NO_LAYERS : layers}
               selected={selected}
               off={offMids}
               onSelect={(mid) => {
-                if (previewed || !layerPick(canvas.current, workingRef.current)) return;
+                if (!layerPick(canvas.current, workingRef.current)) return;
                 if (canvas.current.mode !== "edit") step("edit");
                 select(mid);
               }}
@@ -671,7 +670,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
               mid={selected}
               computed={(computed?.mid === selected && computed?.style) || {}}
               tokens={tokens}
-              locked={working}
+              locked={editLocked}
               onSet={(set) => {
                 if (selected) editShown({ kind: "restyle", mid: selected, set });
               }}
@@ -682,7 +681,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
             kitError && !kit ? (
               <p className="px-4 py-6 text-center ui-text-12.5 text-faint">The design system's snippets could not be read: {kitError}</p>
             ) : (
-              <PaletteTab snippets={snippets} selected={selected} locked={working} onPick={pickSnippet} onDrag={dragSnippet} />
+              <PaletteTab snippets={snippets} selected={selected} locked={editLocked} onPick={pickSnippet} onDrag={dragSnippet} />
             )
           ) : (
           <CommentsTab

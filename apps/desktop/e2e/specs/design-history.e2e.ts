@@ -89,7 +89,7 @@ describe("A design's History", () => {
     await diskShows(onDisk, (html) => html.includes("Turn 3"), "got the third turn");
   });
 
-  it("previews a snapshot read only under the blue bar, in View, and Back to current shows the current page", async () => {
+  it("previews a snapshot read only under the blue bar, with no mode switch, and Back to current shows the current page", async () => {
     await row(1).$(".//button").click();
     await expect(bar("blue")).toBeDisplayed();
     expect(await bar("blue").getText()).toMatch(/^Previewing the snapshot from \d\d:\d\d, agent turn\. Nothing changes until you restore it\./);
@@ -97,8 +97,8 @@ describe("A design's History", () => {
     await expect(frame).toBeExisting();
     expect(await frame.getAttribute("src")).toContain(`/designs/${SLUG}%401/pages/index.html`);
     expect(await frame.getAttribute("src")).not.toContain("moonlet-bridge");
-    await expect(canvasMode("Comment")).toBeDisabled();
-    await expect(canvasMode("Edit")).toBeDisabled();
+    // View only, as the board shows it: no mode switch.
+    await expect($('//div[@role="group"][@aria-label="Canvas mode"]')).not.toBeExisting();
     await expect($("//*[normalize-space()='read only' or contains(normalize-space(), '· read only')]")).toBeExisting();
     await barButton("Back to current").click();
     await expect(bar("blue")).not.toBeExisting();
