@@ -674,7 +674,11 @@ impl Daemon {
                 };
                 ok(self.runs.start(conn.clone(), plan, self.workers.clone(), self.sync.clone()))
             }
-            m::CLOUD_GET => ok(self.cloud.info(self.machines.provider_infos())),
+            m::CLOUD_GET => {
+                let mut info = self.cloud.info(self.machines.provider_infos());
+                info.listening = self.mobile.listening();
+                ok(info)
+            }
             m::CLOUD_TYPES => {
                 let r: m::CloudTypes = params(p)?;
                 ok(self.machines.types(&r.provider, &r.location).await?)

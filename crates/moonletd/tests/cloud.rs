@@ -182,6 +182,14 @@ fn settings() -> Value {
 }
 
 #[tokio::test]
+async fn cloud_get_names_where_machines_reach_the_central_host() {
+    // A paired Mac may not ask mobile.status, and its policy snippet needs the address.
+    let c = cloud().await;
+    let info: Value = c.d.call("cloud.get", json!({})).await;
+    assert_eq!(info["listening"], json!([c.addr]));
+}
+
+#[tokio::test]
 async fn cloud_get_returns_no_secrets() {
     let d = Daemon::start(tempfile::tempdir().unwrap(), &[]).await;
     let _: Value = d.call("cloud.set", settings()).await;

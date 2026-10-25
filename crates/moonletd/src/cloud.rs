@@ -215,6 +215,7 @@ impl CloudSettings {
             max_hours_month: f.max_hours_month,
             projects: f.projects,
             kinds,
+            listening: Vec::new(),
         }
     }
 
