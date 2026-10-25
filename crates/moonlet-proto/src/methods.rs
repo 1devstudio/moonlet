@@ -236,6 +236,9 @@ pub const DESIGN_CREATE: &str = "design.create";
 pub const DESIGN_REMOVE: &str = "design.remove";
 /// [`DesignRef`]: asks the app to show a design, as [`EV_DESIGN_OPEN`].
 pub const DESIGN_OPEN: &str = "design.open";
+/// [`DesignViewport`]: saves the viewport a design was last shown at in its
+/// `design.toml` (X65 entry 7).
+pub const DESIGN_VIEWPORT: &str = "design.viewport";
 
 // Phones (X39)
 /// Phone access, the Tailscale addresses and the paired phones: [`MobileStatus`].
@@ -1352,6 +1355,14 @@ pub struct DesignCreate {
 pub struct DesignRef {
     pub workspace: String,
     pub slug: String,
+}
+
+/// [`DESIGN_VIEWPORT`]'s params: the design and its viewport, `WxH` in px.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DesignViewport {
+    pub workspace: String,
+    pub slug: String,
+    pub viewport: String,
 }
 
 /// The event [`EV_DESIGN_OPEN`] (X65).
