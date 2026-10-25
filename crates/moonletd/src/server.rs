@@ -180,6 +180,11 @@ impl Conn {
         self.packs.lock().unwrap().take(transfer)
     }
 
+    /// The connection has ended.
+    pub fn is_gone(&self) -> bool {
+        self.gone.load(Ordering::Relaxed)
+    }
+
     /// Ends the connection, as if the client had closed it.
     pub fn close(&self) {
         self.closed.notify_one();
