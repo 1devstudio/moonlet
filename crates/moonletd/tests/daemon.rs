@@ -3319,10 +3319,12 @@ async fn edits_by_hand_take_a_snapshot_once_they_stop_for_a_while() {
     let d = fake_claude_daemon_with(FAKE_CLAUDE, vec![("MOONLET_DESIGN_QUIET_MS".into(), "1000".into())]).await;
     let mut c = d.client().await;
     let ws = workspace_with_system(&d, &mut c).await;
-    let _: serde_json::Value = c
+    let created: serde_json::Value = c
         .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
         .await
         .unwrap();
+    // Its first turn over: edits made during a turn go with the turn's snapshot.
+    turn_over(&mut c, created["agent"].as_u64().unwrap()).await;
     let file = d.home.path().join(".moonlet/design").join(&ws).join("designs/settings-page/pages/index.html");
     std::fs::write(&file, "<body data-mid=\"m1\"></body>\n").unwrap();
     let mut version: serde_json::Value = c.request(methods::DESIGN_PAGE, serde_json::json!({"workspace": ws, "slug": "settings-page", "page": "index"})).await.unwrap();
@@ -3405,6 +3407,18 @@ async fn a_snapshot_is_restored_over_rpc_but_never_while_the_agent_works() {
     std::fs::write(file.parent().unwrap().parent().unwrap().join("release"), "").unwrap();
 }
 
+/// Waits until chat `id`'s agent has ended its turn, within 10 s.
+async fn turn_over(c: &mut Client, id: u64) {
+    for _ in 0..100 {
+        let terminals: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
+        if terminals.iter().any(|t| u64::from(t.id) == id && t.agent_state == moonlet_proto::types::AgentState::Done) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("chat {id} never ended its turn");
+}
+
 /// Waits until chat `id`'s agent works, within 10 s.
 async fn working(c: &mut Client, id: u64) {
     for _ in 0..100 {
@@ -3415,4 +3429,42 @@ async fn working(c: &mut Client, id: u64) {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     panic!("chat {id} never worked");
+}
+
+/// The design `settings-page`'s page, saved by hand over the version on disk
+/// with what its edits did.
+async fn save_by_hand(c: &mut Client, ws: &str, html: &str, edits: &[&str]) {
+    let read: serde_json::Value = c.request(methods::DESIGN_PAGE, serde_json::json!({"workspace": ws, "slug": "settings-page", "page": "index"})).await.unwrap();
+    let _: serde_json::Value = c
+        .request(
+            methods::DESIGN_WRITE_PAGE,
+            serde_json::json!({"workspace": ws, "slug": "settings-page", "page": "index", "html": html, "base_version": read["version"], "edits": edits}),
+        )
+        .await
+        .unwrap();
+}
+
+/// X65: edits by hand not kept yet when the design's agent starts a turn
+/// are kept at once as their own snapshot, so the turn's snapshot holds
+/// only the agent's work.
+#[tokio::test]
+async fn edits_by_hand_are_kept_on_their_own_when_the_agent_starts_a_turn() {
+    let d = fake_claude_daemon_with(WRITING_CLAUDE, vec![("MOONLET_DESIGN_QUIET_MS".into(), "60000".into())]).await;
+    let mut c = d.client().await;
+    let ws = workspace_with_system(&d, &mut c).await;
+    let created: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    history_of(&mut c, &ws, 1).await;
+    save_by_hand(&mut c, &ws, "<p>by hand</p>\n", &["text of m2"]).await;
+    let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": created["agent"], "text": "HOLD-NOW"})).await.unwrap();
+    let listed = history_of(&mut c, &ws, 2).await;
+    assert_eq!((&listed[0]["n"], &listed[0]["type"], &listed[0]["summary"]), (&serde_json::json!(2), &serde_json::json!("edits_by_hand"), &serde_json::json!("Text of m2")));
+    let dir = d.home.path().join(".moonlet/design").join(&ws).join("designs/settings-page");
+    assert_eq!(std::fs::read_to_string(dir.join("history/2/pages/index.html")).unwrap(), "<p>by hand</p>\n");
+    std::fs::write(dir.join("release"), "").unwrap();
+    let listed = history_of(&mut c, &ws, 3).await;
+    assert_eq!((&listed[0]["n"], &listed[0]["type"]), (&serde_json::json!(3), &serde_json::json!("agent_turn")));
+    assert_eq!(std::fs::read_to_string(dir.join("history/3/pages/index.html")).unwrap(), "<body data-mid=\"m1\"><p data-mid=\"m2\">turn 2</p></body>\n");
 }

@@ -34,13 +34,13 @@ const KEPT: [&str; 2] = ["pages", "assets"];
 pub struct NoSnapshot(pub u32);
 
 /// What takes a snapshot.
-#[derive(Debug, Clone, Copy)]
-pub enum Take<'a> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Take {
     /// The design's agent ended a turn.
     AgentTurn,
     /// Edits by hand stopped for a while; what each did, as the app said
     /// with its saves (`moved section m24`).
-    EditsByHand(&'a [String]),
+    EditsByHand(Vec<String>),
 }
 
 /// `history/<n>/snapshot.json`: the snapshot as listed, and its files with
@@ -93,7 +93,7 @@ impl Store {
         if last.unwrap_or(&BTreeMap::new()) == &hashes {
             return Ok(None);
         }
-        let summary = match take {
+        let summary = match &take {
             Take::EditsByHand(edits) if !edits.is_empty() => edits_summary(edits),
             _ => files_summary(last, &hashes),
         };
@@ -510,7 +510,7 @@ mod tests {
         write(&dir, "pages/index.html", INDEX);
         assert_eq!(
             store
-                .take_snapshot("w1", "settings-page", Take::EditsByHand(&[]), 3500)
+                .take_snapshot("w1", "settings-page", Take::EditsByHand(vec![]), 3500)
                 .unwrap(),
             None
         );
@@ -602,13 +602,13 @@ mod tests {
         ]
         .map(String::from);
         assert_eq!(
-            summary(Take::EditsByHand(&edits), 4),
+            summary(Take::EditsByHand(edits.to_vec()), 4),
             "Moved section m24, restyled h2 m25, text of m30"
         );
         // An app that said nothing: the files changed.
         write(&dir, "pages/index.html", "<p>again</p>");
         assert_eq!(
-            summary(Take::EditsByHand(&[]), 5),
+            summary(Take::EditsByHand(vec![]), 5),
             "Wrote index.html · 2 pages"
         );
         write(&dir, "pages/index.html", "<p>many</p>");
@@ -623,7 +623,7 @@ mod tests {
         ]
         .map(String::from);
         assert_eq!(
-            summary(Take::EditsByHand(&many), 6),
+            summary(Take::EditsByHand(many.to_vec()), 6),
             "Deleted p m1, deleted p m2, deleted p m3, deleted p m4, deleted p m5 and 2 more"
         );
         let kinds: Vec<SnapshotKind> = store
@@ -663,7 +663,7 @@ mod tests {
             .unwrap();
 
         let restored = store
-            .restore_snapshot("w1", "settings-page", 1, Take::EditsByHand(&[]), 5000)
+            .restore_snapshot("w1", "settings-page", 1, Take::EditsByHand(vec![]), 5000)
             .unwrap();
         assert_eq!(
             restored,
@@ -708,7 +708,7 @@ mod tests {
             None
         );
         let err = store
-            .restore_snapshot("w1", "settings-page", 9, Take::EditsByHand(&[]), 7000)
+            .restore_snapshot("w1", "settings-page", 9, Take::EditsByHand(vec![]), 7000)
             .unwrap_err();
         assert!(err.is::<NoSnapshot>(), "{err:#}");
     }
@@ -739,7 +739,7 @@ mod tests {
         std::fs::remove_file(dir.join("pages/index.html")).unwrap();
         std::os::unix::fs::symlink(&secret, dir.join("pages/index.html")).unwrap();
         store
-            .restore_snapshot("w1", "settings-page", 1, Take::EditsByHand(&[]), 2000)
+            .restore_snapshot("w1", "settings-page", 1, Take::EditsByHand(vec![]), 2000)
             .unwrap();
         assert_eq!(std::fs::read_to_string(&secret).unwrap(), "secret");
         assert!(
@@ -823,7 +823,7 @@ mod tests {
         write(&dir, "pages/index.html", "<p>by hand</p>");
         let edits = ["text of m1".to_string()];
         let restored = store
-            .restore_snapshot("w1", "settings-page", 1, Take::EditsByHand(&edits), 60_000)
+            .restore_snapshot("w1", "settings-page", 1, Take::EditsByHand(edits.to_vec()), 60_000)
             .unwrap();
         assert_eq!(
             (restored.n, restored.from),
