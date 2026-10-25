@@ -72,6 +72,7 @@ The source projects stay read only. The sync agent works in the design system's 
   - Every window took a correct snapshot again after navigating to another page, and again after 15 s idle.
   - So a hidden window is enough: no off-screen placement, and nothing shows on the screen.
   - The snapshot is at 1× (900×700 px for a 900×700 window), which matches design-sync's captures. A `WKSnapshotConfiguration` can ask for a larger width if grading needs it.
+  - Built in X64's entry 6: on a Retina Mac the hidden window snapshots at 2×, so the app asks for a `snapshotWidth` of the page's width divided by the window's backing scale, which gives one pixel per point again. The window's page load can finish before the render page's script runs, so the page says when it is ready for cards. The daemon sends renders only to the app that said `design.render.ready` on its local connection.
   - The app's own CSP will need `moonlet-design:` in `frame-src` for the canvas.
 - A session design's pinned styles can fall behind the design system. The Design tab offers "Design system updated · Update", and the update is a commit like any other.
 - The layout stays close enough to Claude Design's that an upload could be added later.
