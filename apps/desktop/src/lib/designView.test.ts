@@ -169,6 +169,11 @@ describe("a design's page (X65)", () => {
     // After a change, a new address on the same host, so the frame loads it again.
     expect(pageUrl("w-1devstudio", "settings-page", "index", 4)).toBe("moonlet-design://77b546eb07dc1f7b.w-1devstudio/designs/settings-page/pages/index.html?v=4");
   });
+
+  it("asks for the comment bridge when the canvas frames it, on the same host", () => {
+    expect(pageUrl("w-1devstudio", "settings-page", "index", 0, true)).toBe("moonlet-design://77b546eb07dc1f7b.w-1devstudio/designs/settings-page/pages/index.html?moonlet-bridge=1");
+    expect(pageUrl("w-1devstudio", "settings-page", "index", 4, true)).toBe("moonlet-design://77b546eb07dc1f7b.w-1devstudio/designs/settings-page/pages/index.html?v=4&moonlet-bridge=1");
+  });
 });
 
 describe("a card (X64, X65)", () => {

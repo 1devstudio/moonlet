@@ -81,9 +81,24 @@ pub fn target(url: &str) -> Option<Target> {
 /// page asks for.
 const MEASURE: &str = include_str!("design_measure.js");
 
+/// The comment bridge (X65): put in a design's page the canvas asks for, so
+/// the page, cross-origin to the app, outlines and reports its elements.
+const BRIDGE: &str = include_str!("design_bridge.js");
+
 /// Whether the app's render page asks for `url` (`?moonlet-render=<job>`),
 /// so the card is served with the measuring script (X64).
 pub fn measuring(url: &str) -> bool {
+    asks(url, "moonlet-render")
+}
+
+/// Whether the design screen's canvas asks for `url` with the bridge
+/// (`?moonlet-bridge=1`, X65).
+pub fn bridging(url: &str) -> bool {
+    asks(url, "moonlet-bridge")
+}
+
+/// Whether `url`'s query has the parameter `name`.
+fn asks(url: &str, name: &str) -> bool {
     let query = url
         .split('#')
         .next()
@@ -91,7 +106,7 @@ pub fn measuring(url: &str) -> bool {
         .map_or("", |(_, q)| q);
     query
         .split('&')
-        .any(|pair| pair.split('=').next() == Some("moonlet-render"))
+        .any(|pair| pair.split('=').next() == Some(name))
 }
 
 /// `html` with `script` first in its `<head>`: after the `<head>` tag, else
@@ -188,6 +203,9 @@ pub async fn serve(app: &tauri::AppHandle, url: &str) -> tauri::http::Response<V
     // The render page's card measures itself, in its own sandboxed frame.
     let body = if measuring(url) && content_type.starts_with("text/html") {
         with_script(&body, format!("<script>{MEASURE}</script>").as_bytes())
+    } else if bridging(url) && content_type.starts_with("text/html") {
+        // The canvas's page outlines and reports its elements (X65).
+        with_script(&body, format!("<script>{BRIDGE}</script>").as_bytes())
     } else {
         body
     };
@@ -427,6 +445,25 @@ mod tests {
             "moonlet-design://w1/systems/s/x.html?not-moonlet-render=3",
         ] {
             assert!(!measuring(plain), "{plain}");
+        }
+    }
+
+    #[test]
+    fn the_bridge_is_served_only_when_the_canvas_asks() {
+        assert!(bridging(
+            "moonlet-design://0f3c2a1b4d5e6f70.w1/designs/settings-page/pages/index.html?moonlet-bridge=1"
+        ));
+        assert!(bridging(
+            "moonlet-design://0f3c2a1b4d5e6f70.w1/designs/settings-page/pages/index.html?v=3&moonlet-bridge=1"
+        ));
+        for plain in [
+            "moonlet-design://0f3c2a1b4d5e6f70.w1/designs/settings-page/pages/index.html",
+            "moonlet-design://0f3c2a1b4d5e6f70.w1/designs/settings-page/pages/index.html?v=3",
+            "moonlet-design://0f3c2a1b4d5e6f70.w1/designs/settings-page/pages/index.html#moonlet-bridge=1",
+            "moonlet-design://0f3c2a1b4d5e6f70.w1/designs/settings-page/pages/index.html?not-moonlet-bridge=1",
+            "moonlet-design://0f3c2a1b4d5e6f70.w1/systems/s/components/buttons/button/button.html?moonlet-render=3",
+        ] {
+            assert!(!bridging(plain), "{plain}");
         }
     }
 

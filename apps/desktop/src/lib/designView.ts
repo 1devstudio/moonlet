@@ -78,9 +78,12 @@ export function cardUrl(workspace: string, slug: string, path: string, rev = 0):
   return designUrl(workspace, `systems/${slug}/${path}`, rev);
 }
 
-/** A workspace design's page (`index` for `pages/index.html`) on a host of its own (X65). */
-export function pageUrl(workspace: string, design: string, page: string, rev = 0): string {
-  return designUrl(workspace, `designs/${design}/${pagePath(page)}`, rev);
+/** A workspace design's page (`index` for `pages/index.html`) on a host of
+ *  its own (X65). `bridge`: served with the comment bridge, which the canvas
+ *  talks to (`design_scheme.rs` `bridging`). */
+export function pageUrl(workspace: string, design: string, page: string, rev = 0, bridge = false): string {
+  const url = designUrl(workspace, `designs/${design}/${pagePath(page)}`, rev);
+  return bridge ? `${url}${rev ? "&" : "?"}moonlet-bridge=1` : url;
 }
 
 /** The 64-bit FNV-1a hash of `text`'s UTF-8 bytes, as 16 lowercase hex digits. */
