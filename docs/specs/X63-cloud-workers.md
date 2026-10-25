@@ -159,7 +159,7 @@ A cloud machine is a worker like any other in X62. It runs routed commands in a 
 The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and a screen differ, this section wins and the difference is listed under Open questions.
 
 - **Settings › Machines › Cloud workers** ([cloud-workers-page.png](design/x62-x63/cloud-workers-page.png)), a page of the central host: the title with a "studio-mini · Central host" badge, and "studio-mini rents machines for heavy commands when its workers are busy, and removes them once they sit idle. A cloud machine only runs commands: agents and sessions stay on studio-mini." Then:
-  - **Providers:** one card per provider. The card has the provider's name, a status line ("4 machines · used by shop") and **Remove**, then the adapter's fields. Secrets show "Saved" with **Replace**, and the token's help text is "It can create and delete anything in its Hetzner project, so use a project made for moonlet." A removal error row, in the error colour, has **Retry**. Under the cards: **Add provider** and "Hetzner Cloud is the only provider so far."
+  - **Providers:** one card per provider. The card has the provider's name, a status line ("4 machines · used by shop") and **Remove**, then the adapter's fields. Secrets show "Saved" with **Replace**, and the token's help text is "It can create and delete anything in its Hetzner project, so use a project made for moonlet." A removal error row, in the error colour, has **Retry**. Under the cards: **Add provider** and "Hetzner Cloud is the only provider so far." (since X67, a line naming every provider on offer).
   - **Tailscale:** **Machines join with** [OAuth client (recommended) | Auth key], then numbered steps, each with **Open** where it happens on Tailscale's site:
     - OAuth client: "Open Tailscale's OAuth clients page.", "Generate a client with the Auth Keys scope (write) and the tag tag:moonlet-worker.", "Paste its ID and secret below, then Check.", "Add the lines below to your tailnet policy." The fields are OAuth client ID ("Needs the Auth Keys scope and the tag below."), the secret (Saved / Replace) and Tag ("Every cloud machine gets it."), then **Check** ("Makes a test key with the saved client and revokes it at once."; after it, "Tailscale made and revoked a test key: machines can join." or what went wrong).
     - Auth key: "Open Tailscale's keys page.", "Generate an auth key that is reusable, ephemeral and pre-approved, with the tag tag:moonlet-worker.", "Paste it below. It works until it expires, at most 90 days: then paste a new one.", "Add the lines below to your tailnet policy." The fields are Auth key (Saved / Replace) and Tag.
@@ -258,7 +258,7 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
 
 ## Out of scope
 
-- Providers other than Hetzner. The adapter is the extension point.
+- Providers other than Hetzner. The adapter is the extension point; [X67](X67-google-cloud-workers.md) adds Google Cloud.
 - Whole sessions or agents on cloud machines (ADR 0012 rejected this).
 - Prices in the UI, spot or preemptible machines, GPUs, snapshots or custom images made by moonlet (a snapshot made in the provider's console is listed under **Image**).
 - Several projects sharing one machine.
