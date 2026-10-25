@@ -374,9 +374,12 @@ function edited(html: string, doc: Node, op: EditOp, floor: number): Edit {
   }
 }
 
-/** Elements that hold no elements of the page: void ones, and those whose
- *  inside is not the page's (scripts, styles, an <svg>'s drawing). */
-const VOID = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr", "svg", "math", "select", "option"]);
+/** Elements that hold no elements of the page: void ones, those whose
+ *  inside is not the page's (scripts, styles, raw text, an <svg>'s or
+ *  <math>'s drawing), form controls, and embedded content. The bridge
+ *  (`design_bridge.js`) keeps the same list, which a test checks. */
+export const HOLDS_NO_ELEMENTS = ["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr", "svg", "math", "select", "option", "textarea", "script", "style", "title", "template", "noscript", "xmp", "iframe", "noembed", "noframes", "plaintext", "object", "video", "audio", "canvas"] as const;
+const HOLDS_NONE = new Set<string>(HOLDS_NO_ELEMENTS);
 
 /** `el` moved to `place`: taken out with its line when it has the line to
  *  itself, and put above or below element `ref`, on a line of its own
@@ -403,7 +406,7 @@ function move(html: string, doc: Node, el: Element, place: DropPlace): Edit {
 /** Refuses an element that holds no elements of the page. */
 function holds(ref: Element) {
   const none = () => new EditRefused(`<${ref.tagName}> ${midOf(ref)} holds no elements`);
-  if (VOID.has(ref.tagName) || RAW.has(ref.tagName)) throw none();
+  if (HOLDS_NONE.has(ref.tagName)) throw none();
   for (let p = ref.parentNode; p && isElement(p); p = p.parentNode) if (p.tagName === "svg" || p.tagName === "math") throw none();
 }
 

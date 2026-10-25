@@ -5,6 +5,7 @@
 // own frame's window and only in a shape it knows.
 
 import { STYLE_VALUE_MAX } from "./designStyle";
+import { inspectorSections } from "./designInspector";
 
 /** A box in the page's viewport, in its CSS px. */
 export interface Rect {
@@ -40,26 +41,9 @@ export interface DropPlace {
   ref: string;
 }
 
-/** The properties of the selection's computed style the bridge reports,
- *  for the Inspector. */
-export const COMPUTED_PROPS = [
-  "display",
-  "flex-direction",
-  "gap",
-  "align-items",
-  "justify-content",
-  "grid-template-columns",
-  "padding",
-  "margin",
-  "width",
-  "height",
-  "background-color",
-  "border",
-  "border-radius",
-  "box-shadow",
-  "opacity",
-  "position",
-] as const;
+/** The properties of the selection's computed style the bridge reports:
+ *  the Inspector's, of every section a flex or a grid element shows. */
+export const COMPUTED_PROPS: readonly string[] = [...new Set([...inspectorSections("flex"), ...inspectorSections("grid")].flatMap((sec) => sec.fields.map((f) => f.prop)))];
 
 /** What a drag in the page ends with: an element dropped at a place, a
  *  size or place in px a handle or a drag gave, or a Palette snippet's
