@@ -464,6 +464,13 @@ impl Machines {
     /// `machine_setup` of the project in `folder`: its path and content.
     fn machine_setup(folder: &Path) -> Result<Option<(String, String)>, RpcError> {
         let config = moonlet_core::project_config::load(folder, String::new());
+        // A broken file would read as one without a machine setup.
+        if let Some(e) = &config.error {
+            return Err(RpcError::new(
+                "machine_setup",
+                format!(".moonlet/config.toml cannot be read: {e}"),
+            ));
+        }
         let Some(path) = config.config.heavy.machine_setup else {
             return Ok(None);
         };

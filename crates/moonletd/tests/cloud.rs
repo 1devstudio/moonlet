@@ -1295,6 +1295,19 @@ async fn a_missing_machine_setup_makes_no_machine() {
 }
 
 #[tokio::test]
+async fn a_project_config_that_cannot_be_read_makes_no_machine() {
+    // Its machine setup would be skipped without a word.
+    let c = cloud().await;
+    std::fs::write(c.repo().join(".moonlet/config.toml"), "[heavy\n").unwrap();
+    let e = c.d.fails("cloud.up", json!({ "project": c.project })).await;
+    assert!(
+        e.starts_with("machine_setup: .moonlet/config.toml cannot be read: "),
+        "{e}"
+    );
+    assert!(c.fake_dirs().is_empty());
+}
+
+#[tokio::test]
 async fn a_machine_without_machine_setup_skips_that_step() {
     let c = cloud_with("[heavy]\ncommands = [\"sh run.sh\"]\n", &[]).await;
     let ready = c.ready().await;
