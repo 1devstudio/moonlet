@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { askWithEdits, copyElementOf, dismissUnsaved, editPage, pasteInto, sendCommentsWithEdits, sendWithEdits, redoEdit, undoEdit, loadPageSource, pendingOf, resetEditor, settleChecks, settleSaves, sourceOf, undoOf, unsavedOf, useEditor } from "./designEditor";
+import { askWithEdits, closeDesign, copyElementOf, hasCopy, dismissUnsaved, editPage, pasteInto, sendCommentsWithEdits, sendWithEdits, redoEdit, undoEdit, loadPageSource, pendingOf, resetEditor, settleChecks, settleSaves, sourceOf, undoOf, unsavedOf, useEditor } from "./designEditor";
 import { loadDesigns, pageRevOf, startDesign, useDesign } from "./designStore";
 import { editLines } from "./designEdits";
 import { useStore } from "./store";
@@ -171,7 +171,9 @@ describe("copy and paste (X65)", () => {
     await loadPageSource("local", WS, SLUG, "index");
     await loadPageSource("local", WS, SLUG, "git-a");
     await loadPageSource("local", WS, "onboarding", "index");
+    expect(hasCopy("local", WS, SLUG)).toBe(false);
     expect(copyElementOf("local", WS, SLUG, "git-a", "m3")).toBe(true);
+    expect([hasCopy("local", WS, SLUG), hasCopy("local", WS, "onboarding")]).toEqual([true, false]);
     const pasted = pasteInto("local", WS, SLUG, "index", "m25");
     expect(pasted?.select).toBe("m31");
     await settleSaves();
@@ -209,6 +211,34 @@ describe("edits by hand before the app's own messages to the agent (X65)", () =>
       'Edits by hand since your last turn:\nindex.html m30 p: deleted\n\nComment on index.html [data-mid=m12] (nav "General"): Collapse it',
       "Fix the check problems of pages/index.html",
     ]);
+  });
+});
+
+describe("a design's undo when it is closed (X65)", () => {
+  it("forgets its changes, so the next time it opens there is nothing to undo or redo, and keeps the edits not told yet", async () => {
+    await loadPageSource("local", WS, SLUG, "index");
+    editPage("local", WS, SLUG, "index", { kind: "delete", mid: "m30" }, "m30");
+    await settleSaves();
+    closeDesign("local", WS, SLUG);
+    expect(undoOf(useEditor.getState(), "local", WS, SLUG)).toEqual({ done: [], undone: [] });
+    expect(await undoEdit("local", WS, SLUG)).toBeNull();
+    expect(editLines(pendingOf(useEditor.getState(), "local", WS, SLUG))).toEqual(["index.html m30 p: deleted"]);
+  });
+});
+
+describe("a page's source read twice (X65)", () => {
+  it("is the latest read's, whatever order the answers come back in", async () => {
+    const answer = answers["design.page"];
+    let first = (_: unknown) => {};
+    answers["design.page"] = () => new Promise((r) => (first = r));
+    const slow = loadPageSource("local", WS, SLUG, "index");
+    await new Promise((r) => setTimeout(r, 0));
+    answers["design.page"] = answer;
+    disk.index = { html: '<!doctype html>\n<body data-mid="m1"></body>\n', version: "v2" };
+    await loadPageSource("local", WS, SLUG, "index");
+    first({ html: PAGE, version: "v1" });
+    await slow;
+    expect(sourceOf(useEditor.getState(), "local", WS, SLUG, "index")?.version).toBe("v2");
   });
 });
 
