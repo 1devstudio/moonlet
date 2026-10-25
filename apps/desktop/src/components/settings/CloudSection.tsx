@@ -6,13 +6,25 @@
 import { useCallback, useEffect, useState } from "react";
 import { Play } from "lucide-react";
 import { rpc } from "../../lib/daemon";
-import { machineTypeLabel, projectCloudChange, projectCloudDraft, projectCloudErrors, projectCloudFooter, projectCloudKey, type ProjectCloudDraft } from "../../lib/cloudSettings";
+import { imageOptions, locationOptions, machineTypeLabel, projectCloudChange, projectCloudDraft, projectCloudErrors, projectCloudFooter, projectCloudKey, type ProjectCloudDraft } from "../../lib/cloudSettings";
 import { useCloud } from "../../lib/cloudStore";
-import { M, type CloudInfo, type MachineType, type ProjectIdentity } from "../../lib/protocol";
+import { M, type CloudImage, type CloudInfo, type CloudLocation, type MachineType, type ProjectIdentity } from "../../lib/protocol";
 import { goSettings } from "../../lib/settingsNavigation";
 import { errorToast, toast } from "../../lib/store";
 import { Button, cx } from "../ui";
 import { Card, Row, Section, Status, SwitchRow, fieldCls } from "./controls";
+
+/** A provider's list, or why it could not be read. */
+interface Listed<T> {
+  list: T[];
+  error?: string;
+}
+
+const listed = <T,>(host: string, method: string, params: object): Promise<Listed<T>> =>
+  rpc<T[]>(host, method, params).then(
+    (list) => ({ list }),
+    (e) => ({ list: [], error: e instanceof Error ? e.message : String(e) }),
+  );
 
 /** The section's state, kept by the project page for its Save. */
 export function useProjectCloud(host: string, identity: ProjectIdentity | null | undefined) {
@@ -71,26 +83,30 @@ export function useProjectCloud(host: string, identity: ProjectIdentity | null |
 export function CloudSection({ host, project, cloud, machineSetup }: { host: string; project: { id: string; name: string }; cloud: ReturnType<typeof useProjectCloud>; machineSetup?: string | null }) {
   const machines = useCloud((s) => s.machines);
   const { info, draft, setDraft } = cloud;
-  const [types, setTypes] = useState<{ list: MachineType[]; error?: string } | null>(null);
+  const [types, setTypes] = useState<Listed<MachineType> | null>(null);
+  const [locations, setLocations] = useState<Listed<CloudLocation> | null>(null);
+  const [images, setImages] = useState<Listed<CloudImage> | null>(null);
   const [starting, setStarting] = useState(false);
   const provider = draft?.provider ?? "";
   const location = draft?.location.trim() ?? "";
   useEffect(() => {
+    setLocations(null);
+    setImages(null);
+    if (!provider) return;
+    let live = true;
+    void listed<CloudLocation>(host, M.cloudLocations, { provider }).then((l) => live && setLocations(l));
+    void listed<CloudImage>(host, M.cloudImages, { provider }).then((l) => live && setImages(l));
+    return () => {
+      live = false;
+    };
+  }, [host, provider]);
+  useEffect(() => {
     setTypes(null);
     if (!provider || !location) return;
     let live = true;
-    // Typing a location asks once it settles.
-    const t = setTimeout(
-      () =>
-        void rpc<MachineType[]>(host, M.cloudTypes, { provider, location }).then(
-          (list) => live && setTypes({ list }),
-          (e) => live && setTypes({ list: [], error: e instanceof Error ? e.message : String(e) }),
-        ),
-      300,
-    );
+    void listed<MachineType>(host, M.cloudTypes, { provider, location }).then((l) => live && setTypes(l));
     return () => {
       live = false;
-      clearTimeout(t);
     };
   }, [host, provider, location]);
   if (cloud.failed)
@@ -125,6 +141,7 @@ export function CloudSection({ host, project, cloud, machineSetup }: { host: str
   // A type that is saved but not offered in this location stays listed.
   const typeOptions = types?.list.some((t) => t.name === draft.type) || !draft.type ? (types?.list ?? []) : [...(types?.list ?? []), { name: draft.type, cores: 0, memory_gb: 0, arch: "" }];
   const hint = (text: string, error?: string) => (error ? <span className="text-error">{error}</span> : text);
+  const arch = typeOptions.find((t) => t.name === draft.type)?.arch ?? "";
 
   return (
     <Section
@@ -162,12 +179,19 @@ export function CloudSection({ host, project, cloud, machineSetup }: { host: str
         </Row>
         {provider && (
           <>
-            <Row label="Location" htmlFor="project-cloud-location" hint={hint("Where the provider makes the machines, such as fsn1.", errors.location)}>
-              <input id="project-cloud-location" aria-invalid={!!errors.location} className={cx(fieldCls, "w-[260px] font-mono ui-text-12.5")} spellCheck={false} value={draft.location} onChange={(e) => set({ location: e.target.value })} />
+            <Row label="Location" htmlFor="project-cloud-location" hint={locations?.error ? <span className="text-error">{locations.error}</span> : hint("Where the provider makes the machines.", errors.location)}>
+              <select id="project-cloud-location" aria-invalid={!!errors.location} className={cx(fieldCls, "w-[260px]")} value={draft.location} onChange={(e) => set({ location: e.target.value })}>
+                <option value="">{locations ? "Pick a location…" : "Loading…"}</option>
+                {locationOptions(locations?.list ?? null, draft.location).map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
             </Row>
             <Row label="Machine type" htmlFor="project-cloud-type" hint={types?.error ? <span className="text-error">{types.error}</span> : hint(`${kind?.label ?? "The provider"}'s types in this location.`, errors.type)}>
               <select id="project-cloud-type" aria-invalid={!!errors.type} disabled={!location} className={cx(fieldCls, "w-[260px] font-mono ui-text-12.5")} value={draft.type} onChange={(e) => set({ type: e.target.value })}>
-                <option value="">{location ? (types ? "Pick a type…" : "Loading…") : "Name a location first"}</option>
+                <option value="">{location ? (types ? "Pick a type…" : "Loading…") : "Pick a location first"}</option>
                 {typeOptions.map((t) => (
                   <option key={t.name} value={t.name}>
                     {t.cores ? machineTypeLabel(t) : t.name}
@@ -175,8 +199,15 @@ export function CloudSection({ host, project, cloud, machineSetup }: { host: str
                 ))}
               </select>
             </Row>
-            <Row label="Image" htmlFor="project-cloud-image" hint={hint("An image name, or the id of an image in your provider project.", errors.image)}>
-              <input id="project-cloud-image" aria-invalid={!!errors.image} className={cx(fieldCls, "w-[260px] font-mono ui-text-12.5")} spellCheck={false} value={draft.image} onChange={(e) => set({ image: e.target.value })} />
+            <Row label="Image" htmlFor="project-cloud-image" hint={images?.error ? <span className="text-error">{images.error}</span> : hint(arch ? `The provider's images for ${arch} machines, and your project's snapshots.` : "The provider's images, and your project's snapshots.", errors.image)}>
+              <select id="project-cloud-image" aria-invalid={!!errors.image} className={cx(fieldCls, "w-[260px]")} value={draft.image} onChange={(e) => set({ image: e.target.value })}>
+                <option value="">{images ? "Pick an image…" : "Loading…"}</option>
+                {imageOptions(images?.list ?? null, arch, draft.image).map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
             </Row>
             <Row label="Machine setup" hint="From [heavy] machine_setup. Runs as root on each new machine, after moonlet pairs it.">
               <span className="font-mono ui-text-12.5 text-muted">{machineSetup || "None"}</span>

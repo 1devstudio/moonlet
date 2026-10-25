@@ -69,10 +69,13 @@ describe("cloud workers", () => {
     await $(sel.button("Project settings…")).click();
     await expect($(sel.navEntry(PROJECT, true))).toBeExisting();
     await choose(sel.settingsField("Provider"), "fake");
-    await fill(sel.settingsField("Location"), "here");
+    // Each list comes from the provider: pick once it is there.
+    await browser.waitUntil(() => $('//select[@id="project-cloud-location"]/option[@value="here"]').isExisting(), { timeoutMsg: "the fake's locations never came" });
+    await choose(sel.settingsField("Location"), "here");
     await browser.waitUntil(() => $('//select[@id="project-cloud-type"]/option[@value="small"]').isExisting(), { timeoutMsg: "the fake's machine types never came" });
     await choose(sel.settingsField("Machine type"), "small");
-    await fill(sel.settingsField("Image"), "none");
+    await browser.waitUntil(() => $('//select[@id="project-cloud-image"]/option[@value="none"]').isExisting(), { timeoutMsg: "the fake's images never came" });
+    await choose(sel.settingsField("Image"), "none");
     await $(sel.settingsSwitch("Use cloud machines when every worker is busy")).click();
     await $(sel.settingsButton("Save")).click();
     await browser.waitUntil(() => Object.values(cloudJson()?.projects ?? {}).length === 1, { timeoutMsg: "the project's setting never reached cloud.json" });

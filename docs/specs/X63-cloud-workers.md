@@ -29,7 +29,9 @@ A cloud machine is a worker like any other in X62. It runs routed commands in a 
 
 ### Providers
 
-- [x] A provider is an adapter with five operations:
+- [x] A provider is an adapter with seven operations:
+  - `locations()` returns `[{name, label}]`, such as `fsn1`, "Falkenstein, DE";
+  - `images()` returns `[{name, label, arch}]`: the provider's images and the account's own snapshots, for every architecture. Hetzner leaves out deprecated images, and a snapshot goes by its id;
   - `machine_types(location)` returns `[{name, cores, memory_gb, arch}]`;
   - `create({name, type, location, image, user_data, labels})` returns `{id}`;
   - `get(id)` returns `{state: starting | running | gone, ipv4}`;
@@ -176,9 +178,10 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
 - **Project page, Cloud workers** ([project-page.png](design/x62-x63/project-page.png)): "Machines studio-mini rents to run shop's heavy commands. Tokens and limits are in Settings › Machines › Cloud workers." Then:
   - **Use cloud machines when every worker is busy** ("The command still runs on studio-mini. A machine starts and takes the next one.");
   - **Provider**;
-  - **Machine type**, from `machine_types`, shown as "cpx41 · 8 cores · 16 GB · x86";
-  - **Location**;
-  - **Image** ("An image name, or the id of an image in your provider project.");
+  - **Location**, a dropdown from `locations`, shown as "Falkenstein, DE (fsn1)";
+  - **Machine type**, a dropdown from `machine_types` at that location, shown as "cpx41 · 8 cores · 16 GB · x86";
+  - **Image**, a dropdown from `images`, for the picked type's architecture, each name once, the provider's in name order and snapshots after, shown as "Ubuntu 24.04 (ubuntu-24.04)";
+  - a saved location, type or image that the provider no longer lists stays in its dropdown, so opening the page changes nothing;
   - **Machine setup**, read-only from `[heavy] machine_setup` ("Runs as root on each new machine, after moonlet pairs it.");
   - a footer, "4 machines for shop · 2 running commands · Workers", with **Start a machine**.
   - under the toggle, the note "Cloud machines get every tracked file of the session, and untracked files that are not ignored. Remove secrets from the files, not only from the history."
@@ -199,7 +202,7 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
 - `cloud.get` returns the settings, with `has_token: true` in place of each secret.
 - `cloud.set` updates the settings. It needs the app or a paired desktop.
 - `cloud.check` makes a test key with the saved OAuth client and revokes it. It needs the app or a paired desktop.
-- `cloud.types {provider, location}`.
+- `cloud.types {provider, location}`, `cloud.locations {provider}` and `cloud.images {provider}`.
 - `cloud.machines` returns `[{id, name, project, provider, type, location, state, since, steps: [{step, state, took}], deadline, idle_until, for_session, error, error_since}]` and the removed machines of the last hour, and the event `cloud.changed` fires on changes.
 - `cloud.up {project, session?}` returns the machine. `cloud.down {machine}` removes an idle machine at once, or a busy one once its commands end.
 - Worker to central host: `worker.step {step, state, took}`, for the machine setup step and the routing copy's setup.
@@ -253,7 +256,7 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
 
 - Providers other than Hetzner. The adapter is the extension point.
 - Whole sessions or agents on cloud machines (ADR 0012 rejected this).
-- Prices in the UI, spot or preemptible machines, GPUs, snapshots or custom images made by moonlet (a provider image id typed in **image** works).
+- Prices in the UI, spot or preemptible machines, GPUs, snapshots or custom images made by moonlet (a snapshot made in the provider's console is listed under **Image**).
 - Several projects sharing one machine.
 - Takeover (ADR 0009's last slice).
 
@@ -272,7 +275,7 @@ Where the tests live:
 | Criterion | Tests |
 |---|---|
 | The adapter and its settings description | Vitest "the form from an adapter's description" |
-| Hetzner calls | `creates_a_server_as_in_the_captured_request`, `reads_a_captured_server`, `lists_servers_by_label`, `a_404_means_gone`, `a_404_on_the_list_is_an_error_not_an_empty_list`, `reads_captured_server_types`, `reads_every_page_of_server_types` |
+| Hetzner calls | `creates_a_server_as_in_the_captured_request`, `reads_a_captured_server`, `lists_servers_by_label`, `a_404_means_gone`, `a_404_on_the_list_is_an_error_not_an_empty_list`, `reads_captured_server_types`, `reads_every_page_of_server_types`, `reads_captured_locations`, `reads_captured_images`, `a_snapshot_goes_by_its_id_and_a_deprecated_image_is_left_out` |
 | Provider errors | `a_401_says_the_token_was_refused`, `a_403_says_the_token_was_refused`, `a_429_waits_for_the_reset_time`, `a_429_without_a_reset_time_waits_five_seconds`, `a_429_resetting_later_than_a_minute_fails_instead_of_waiting`, `another_error_shows_the_providers_message`; Vitest "the last provider error with its time" |
 | The fake provider | `the_fake_provider_is_off_without_its_setting`, `a_slow_create_call_still_comes_up` |
 | Name and labels | `names_fit_the_providers_limit_and_characters`, `labels_carry_the_host_machine_and_project` |
@@ -301,9 +304,9 @@ Where the tests live:
 | Who changes the settings | `cloud_set_from_the_cli_or_a_phone_is_forbidden`, `a_phone_reaches_an_ssh_host_through_the_mac` (a routed phone), `cloud_get_returns_no_secrets`, `only_a_known_providers_fields_are_kept`, `a_tag_is_letters_digits_and_dashes`, `the_host_id_is_made_once`, `a_failed_write_changes_nothing`, `the_file_is_private_even_over_a_left_temporary_file_or_an_open_one`, `a_cloud_json_that_cannot_be_read_is_never_overwritten`; Vitest "a provider added without its secret cannot be saved" |
 | A cloud device's methods | `a_cloud_device_may_call_only_worker_methods`, `a_cloud_device_cannot_take_a_route_to_a_remote_host`, `a_cloud_device_opens_copies_of_its_own_project_only`, `a_machine_being_removed_opens_no_copy_over_its_open_connection` |
 | Cloud devices in the device list | `a_cloud_device_goes_away_with_its_machine` |
-| `cloud.types` | `cloud_types_lists_the_providers_machine_types` |
+| `cloud.types`, `cloud.locations`, `cloud.images` | `cloud_types_lists_the_providers_machine_types`, `cloud_locations_and_images_list_the_providers` |
 | Cloud workers page (UI) | Vitest "sends only what changed, and a secret only once typed", "says what is wrong with the limits", "limits the daemon can hold, and an auth key when that is the way machines join", "sends a pasted provider token without spaces around it", "the policy snippet with the tag and address", "puts the central host's Tailscale address in the policy", "warns while the central host takes no tailnet connections", "the usage line", "a provider's status line", "asks before removing a provider, naming its machines", "finds the Cloud workers page, its Tailscale client and its limits"; e2e "saving the Cloud workers settings" |
-| Project page, Cloud workers (UI) | Vitest "keys a project by its origin and root commit, as the central host does", "saves a project's cloud setting, and None removes it", "says what a project's cloud setting misses", "names a machine type as the design does", "the footer counts the project's machines and their commands"; e2e "saving a project's cloud setting" |
+| Project page, Cloud workers (UI) | Vitest "keys a project by its origin and root commit, as the central host does", "saves a project's cloud setting, and None removes it", "says what a project's cloud setting misses", "names a machine type as the design does", "offers the provider's locations, and keeps a saved one it no longer lists", "offers the images for the machine type's architecture, snapshots last", "the footer counts the project's machines and their commands"; e2e "saving a project's cloud setting" |
 | Workers page, cloud machines (UI) | `a_ready_machine_names_its_worker`; Vitest "the summary line", "the machine state lines", "a removed machine's line", "puts a cloud machine's worker in its own row, with the machine's state line", "keeps a removed machine's line for the hour, under the empty page", "is not empty with only cloud machines"; e2e "Start a machine shows Starting, then Ready" |
 | Composer (UI) | Vitest "is offered only for a project with a cloud setting" |
 
@@ -315,11 +318,11 @@ Where the tests live:
   - the design's checklist puts **Paired with studio-mini** after **Machine setup**. This spec pairs first, because the machine can report nothing before it pairs;
   - the design's policy snippet uses `"dst": ["studio-mini:47428"]`. A Tailscale policy takes a bare machine name only when it is defined under `hosts`, so the snippet uses the central host's Tailscale address;
   - the design shows "At most 4 machines". The default stays 2, and 4 is the example's own setting.
-  - on the project page, **Location** comes before **Machine type**, because the types offered depend on the location. **Location** is a text field: no provider call lists locations yet;
+  - on the project page, **Location** comes before **Machine type**, because the types offered depend on the location. **Location** and **Image** are dropdowns, as **Machine type** is;
   - the first startup step reads "Created at Hetzner Cloud", the adapter's label, where the design has "Created at Hetzner";
   - when the last cloud machine is gone and no other worker exists, the Workers page keeps its "Only studio-mini runs heavy commands" state, with the removed machines' lines under it.
 
-- **Provisional captures.** The Hetzner and Tailscale responses in `crates/moonlet-cloud/src/fixtures/` are written from the providers' API documentation. They are replaced by real, sanitised captures once a sandbox Hetzner token and a Tailscale OAuth client are available, before the manual test.
+- **Provisional captures.** The Hetzner server types, locations and images were captured from Hetzner's API on 2026-10-25. The other Hetzner and Tailscale responses in `crates/moonlet-cloud/src/fixtures/` are written from the providers' API documentation. They are replaced by real, sanitised captures once a sandbox Hetzner token and a Tailscale OAuth client are available, before the manual test.
 
 - **The Tailscale key API's field names** (`capabilities.devices.create.ephemeral`, `preauthorized`, `tags`, `expirySeconds`) are to be confirmed against a captured response when the adapter is built.
 

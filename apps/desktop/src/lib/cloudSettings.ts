@@ -4,7 +4,7 @@
 
 import type { ConfirmOptions } from "./confirmOptions";
 import { joinNames } from "./heavyCommands";
-import type { CloudInfo, CloudKind, CloudMachine, CloudSet, MachineType, ProjectIdentity, TailscaleMode } from "./protocol";
+import type { CloudImage, CloudInfo, CloudKind, CloudLocation, CloudMachine, CloudSet, MachineType, ProjectIdentity, TailscaleMode } from "./protocol";
 
 export interface ProviderRow {
   name: string;
@@ -205,6 +205,32 @@ export const removalToast = (m: CloudMachine, provider: string): string =>
   `Could not remove ${m.name} at ${provider}: ${m.error}. It is billed until removed.`;
 
 /** "cpx41 · 8 cores · 16 GB · x86" in the Machine type menu. */
+/** A dropdown's choice. */
+export interface Choice {
+  value: string;
+  label: string;
+}
+
+/** The project page's locations: the provider's, and a saved one it no longer
+ * lists (or has not listed yet). */
+export function locationOptions(list: CloudLocation[] | null, current: string): Choice[] {
+  const out = (list ?? []).map((l) => ({ value: l.name, label: `${l.label} (${l.name})` }));
+  return current && !out.some((o) => o.value === current) ? [...out, { value: current, label: current }] : out;
+}
+
+/** The project page's images: those for architecture `arch` (any, before a
+ * type is picked), each name once, the provider's in name order and the
+ * account's snapshots after; a saved image it does not offer stays. */
+export function imageOptions(list: CloudImage[] | null, arch: string, current: string): Choice[] {
+  const seen = new Set<string>();
+  const mine = (i: CloudImage) => i.label.startsWith("Snapshot: ");
+  const out = (list ?? [])
+    .filter((i) => (!arch || i.arch === arch) && !seen.has(i.name) && seen.add(i.name))
+    .sort((a, b) => Number(mine(a)) - Number(mine(b)) || a.label.localeCompare(b.label, undefined, { numeric: true }))
+    .map((i) => ({ value: i.name, label: `${i.label} (${i.name})` }));
+  return current && !out.some((o) => o.value === current) ? [...out, { value: current, label: current }] : out;
+}
+
 export const machineTypeLabel = (t: MachineType): string => `${t.name} · ${t.cores} cores · ${t.memory_gb} GB · ${t.arch}`;
 
 /** The line under a project's Cloud workers section: the machines of the
@@ -263,8 +289,8 @@ export function projectCloudErrors(d: ProjectCloudDraft): Partial<Record<"type" 
   if (!d.provider) return {};
   const e: ReturnType<typeof projectCloudErrors> = {};
   if (!d.type) e.type = "Pick a machine type.";
-  if (!d.location.trim()) e.location = "Name a location, such as fsn1.";
-  if (!d.image.trim()) e.image = "Name an image, such as ubuntu-24.04.";
+  if (!d.location.trim()) e.location = "Pick a location.";
+  if (!d.image.trim()) e.image = "Pick an image.";
   return e;
 }
 

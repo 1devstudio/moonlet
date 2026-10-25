@@ -6,6 +6,8 @@ import {
   cloudChanges,
   cloudDraft,
   cloudErrors,
+  imageOptions,
+  locationOptions,
   machineTypeLabel,
   newRemovalErrors,
   policyAddress,
@@ -294,11 +296,52 @@ describe("a project's cloud workers (X63)", () => {
     expect(projectCloudChange(saved, key, { ...shop, provider: "" })).toEqual({ projects: { [key]: null } });
   });
 
+  it("offers the provider's locations, and keeps a saved one it no longer lists", () => {
+    // From Hetzner's /locations, as cloud.locations gives them.
+    const hetznerLocations = [
+      { name: "fsn1", label: "Falkenstein, DE" },
+      { name: "ash", label: "Ashburn, VA, US" },
+    ];
+    expect(locationOptions(hetznerLocations, "")).toEqual([
+      { value: "fsn1", label: "Falkenstein, DE (fsn1)" },
+      { value: "ash", label: "Ashburn, VA, US (ash)" },
+    ]);
+    expect(locationOptions(hetznerLocations, "hel2")).toEqual([
+      { value: "fsn1", label: "Falkenstein, DE (fsn1)" },
+      { value: "ash", label: "Ashburn, VA, US (ash)" },
+      { value: "hel2", label: "hel2" },
+    ]);
+    // Not loaded yet: the saved one still shows.
+    expect(locationOptions(null, "fsn1")).toEqual([{ value: "fsn1", label: "fsn1" }]);
+  });
+
+  it("offers the images for the machine type's architecture, snapshots last", () => {
+    // cloud.images from Hetzner: each system image once per architecture, in its order.
+    const images = [
+      { name: "ubuntu-22.04", label: "Ubuntu 22.04", arch: "x86" },
+      { name: "ubuntu-22.04", label: "Ubuntu 22.04", arch: "arm" },
+      { name: "debian-12", label: "Debian 12", arch: "x86" },
+      { name: "401234567", label: "Snapshot: shop deps", arch: "arm" },
+      { name: "ubuntu-24.04", label: "Ubuntu 24.04", arch: "x86" },
+      { name: "ubuntu-24.04", label: "Ubuntu 24.04", arch: "arm" },
+    ];
+    expect(imageOptions(images, "arm", "ubuntu-24.04")).toEqual([
+      { value: "ubuntu-22.04", label: "Ubuntu 22.04 (ubuntu-22.04)" },
+      { value: "ubuntu-24.04", label: "Ubuntu 24.04 (ubuntu-24.04)" },
+      { value: "401234567", label: "Snapshot: shop deps (401234567)" },
+    ]);
+    // No type picked yet: every image, once.
+    expect(imageOptions(images, "", "").map((o) => o.value)).toEqual(["debian-12", "ubuntu-22.04", "ubuntu-24.04", "401234567"]);
+    // A saved image the list lacks, such as one for the other architecture, stays.
+    expect(imageOptions(images, "x86", "401234567").map((o) => o.value)).toEqual(["debian-12", "ubuntu-22.04", "ubuntu-24.04", "401234567"]);
+    expect(imageOptions(null, "x86", "ubuntu-24.04")).toEqual([{ value: "ubuntu-24.04", label: "ubuntu-24.04" }]);
+  });
+
   it("says what a project's cloud setting misses", () => {
     expect(projectCloudErrors({ overflow: true, provider: "hetzner", type: "", location: " ", image: "" })).toEqual({
       type: "Pick a machine type.",
-      location: "Name a location, such as fsn1.",
-      image: "Name an image, such as ubuntu-24.04.",
+      location: "Pick a location.",
+      image: "Pick an image.",
     });
     expect(projectCloudErrors({ overflow: false, provider: "", type: "", location: "", image: "" })).toEqual({});
   });
