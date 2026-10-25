@@ -490,6 +490,24 @@ async fn workspace_with_system(d: &Daemon) -> String {
     ws.id
 }
 
+/// The next event `event` that `c` gets, within 10 s.
+async fn next_event(c: &mut Client, event: &str) -> serde_json::Value {
+    use moonlet_proto::{Frame, Message};
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let f = tokio::time::timeout_at(deadline, c.next_frame())
+            .await
+            .unwrap_or_else(|_| panic!("no {event}"))
+            .unwrap()
+            .unwrap();
+        if let Frame::Json(Message::Event { name, data }) = f
+            && name == event
+        {
+            return data;
+        }
+    }
+}
+
 fn json(o: &Output) -> serde_json::Value {
     assert!(
         o.status.success(),
@@ -504,7 +522,6 @@ fn json(o: &Output) -> serde_json::Value {
 /// the folder the command runs in.
 #[tokio::test]
 async fn designs_are_made_listed_opened_and_removed_from_the_cli() {
-    use moonlet_proto::{Frame, Message};
     let d = Daemon::with_fake_claude().await;
     let ws = workspace_with_system(&d).await;
     let here = d.home.path().join("design").join(&ws);
@@ -545,16 +562,10 @@ async fn designs_are_made_listed_opened_and_removed_from_the_cli() {
     let mut app = Client::connect(&d.socket, "moonlet-app").await.unwrap();
     let opened = d.moonlet(&here, &["design", "open", "settings-page"]);
     assert!(opened.status.success(), "{}", String::from_utf8_lossy(&opened.stderr));
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    loop {
-        let f = tokio::time::timeout_at(deadline, app.next_frame()).await.expect("no design.open").unwrap().unwrap();
-        if let Frame::Json(Message::Event { name, data }) = f
-            && name == methods::EV_DESIGN_OPEN
-        {
-            assert_eq!(data, serde_json::json!({"workspace": ws, "slug": "settings-page", "name": "Settings page"}));
-            break;
-        }
-    }
+    assert_eq!(
+        next_event(&mut app, methods::EV_DESIGN_OPEN).await,
+        serde_json::json!({"workspace": ws, "slug": "settings-page", "name": "Settings page"})
+    );
 
     let removed = d.moonlet(&here, &["design", "rm", "settings-page"]);
     assert!(removed.status.success(), "{}", String::from_utf8_lossy(&removed.stderr));
