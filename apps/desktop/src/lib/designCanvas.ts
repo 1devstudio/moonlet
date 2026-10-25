@@ -55,49 +55,43 @@ export function modeHint(mode: CanvasMode): string {
   return mode === "comment" ? "Hover outlines elements · click pins a comment · ⌥-click picks the parent" : "View: the page runs as in a browser, so its links, menus and scripts work";
 }
 
-/** A key pressed on the design screen or in its page. */
-export interface ModeKeyPress {
-  key: string;
-  /** The key's place (`KeyG`): with ⌥ held, `key` is a composed character. */
-  code?: string;
-  meta: boolean;
-  ctrl: boolean;
-  alt: boolean;
-  shift: boolean;
-  /** In a field, where the key is text. */
-  typing: boolean;
-}
-
 /** What the editor does on a key in Edit mode. */
 export type EditKey = "next" | "prev" | "delete" | "duplicate" | "wrap" | "unwrap" | "copy" | "paste" | "undo" | "redo";
 
-/** What a key does on the canvas: C switches Comment on and off
- *  (`toggle`), V Edit (`toggleEdit`), Esc closes the comment box, selects
- *  the parent or leaves the mode; in Edit mode Tab, ⇧Tab, Delete, ⌘D,
- *  ⌥⌘G, ⇧⌥⌘G, ⌘C, ⌘V, ⌘Z and ⇧⌘Z are the editor's. Null for any other
- *  key, and for all but Esc while typing. */
-export function keyAct(k: ModeKeyPress): "toggle" | "toggleEdit" | "escape" | EditKey | null {
-  if (k.typing) return null;
-  if (k.key === "Escape") return "escape";
-  if (k.ctrl) return null;
-  const key = k.alt && k.code?.startsWith("Key") ? k.code.slice(3).toLowerCase() : k.key.length === 1 ? k.key.toLowerCase() : k.key;
-  const mods = `${k.shift ? "⇧" : ""}${k.alt ? "⌥" : ""}${k.meta ? "⌘" : ""}`;
-  const acts: Record<string, "toggle" | "toggleEdit" | EditKey> = {
-    c: "toggle",
-    v: "toggleEdit",
-    Tab: "next",
-    "⇧Tab": "prev",
-    Delete: "delete",
-    Backspace: "delete",
-    "⌘d": "duplicate",
-    "⌥⌘g": "wrap",
-    "⇧⌥⌘g": "unwrap",
-    "⌘c": "copy",
-    "⌘v": "paste",
-    "⌘z": "undo",
-    "⇧⌘z": "redo",
-  };
-  return acts[mods + key] ?? null;
+/** What a key does on the canvas. */
+export type KeyAct = "toggle" | "toggleEdit" | "escape" | EditKey;
+
+/** The canvas's keys by their ids (runActions' keyId). Delete is both
+ *  keys: a Mac keyboard's key labelled delete is Backspace. */
+const KEY_ACTS: Record<string, KeyAct> = {
+  c: "toggle",
+  v: "toggleEdit",
+  escape: "escape",
+  tab: "next",
+  "shift+tab": "prev",
+  delete: "delete",
+  backspace: "delete",
+  "cmd+d": "duplicate",
+  "alt+cmd+g": "wrap",
+  "shift+alt+cmd+g": "unwrap",
+  "cmd+c": "copy",
+  "cmd+v": "paste",
+  "cmd+z": "undo",
+  "shift+cmd+z": "redo",
+};
+
+/** What key `id` (runActions' keyId) does on the canvas: C switches
+ *  Comment on and off (`toggle`), V Edit (`toggleEdit`), Esc closes the
+ *  comment box, selects the parent or leaves the mode; in Edit mode Tab,
+ *  ⇧Tab, Delete, ⌘D, ⌥⌘G, ⇧⌥⌘G, ⌘C, ⌘V, ⌘Z and ⇧⌘Z are the editor's. Null
+ *  for any other key, and for every key while typing: Esc in a field such
+ *  as the chat's composer is that field's (it stops the agent), and the
+ *  comment box's own field closes the box itself; and ⌘C while text is
+ *  selected (`textSelected`), which copies the text. */
+export function keyAct(id: string, typing: boolean, textSelected = false): KeyAct | null {
+  // ⌘C with text selected in the app copies the text.
+  if (typing || (id === "cmd+c" && textSelected)) return null;
+  return KEY_ACTS[id] ?? null;
 }
 
 /** Where a key is text: a field or an editable element. The bridge script
@@ -148,13 +142,27 @@ export function canvasStep(s: CanvasState, act: CanvasAct, locked = false): Canv
 /** The right rail's tabs so far: Layers (Edit) and Comments. */
 export type RailTab = "layers" | "comments";
 
-/** What entering mode `after` from `before` does around the canvas: the
- *  rail's tab it shows (Layers for Edit, Comments for Comment), and whether
- *  the chat folds to its rail, as it does for Edit so the canvas has room. */
-export function modeEntered(before: CanvasMode, after: CanvasMode): { tab: RailTab | null; foldChat: boolean } {
-  if (before === after) return { tab: null, foldChat: false };
-  if (after === "edit") return { tab: "layers", foldChat: true };
-  return { tab: after === "comment" ? "comments" : null, foldChat: false };
+/** The rail's tab entering mode `after` from `before` shows: Layers for
+ *  Edit, Comments for Comment; null for none. */
+export function modeEntered(before: CanvasMode, after: CanvasMode): RailTab | null {
+  if (before === after) return null;
+  return after === "edit" ? "layers" : after === "comment" ? "comments" : null;
+}
+
+/** The chat panel, and whether entering Edit folded it. */
+export interface ChatPanel {
+  open: boolean;
+  foldedForEdit: boolean;
+}
+
+/** The chat after the mode goes from `before` to `after`: entering Edit
+ *  folds an open chat so the canvas has room, and leaving Edit opens it
+ *  again when that folded it; one the user folded, or opened meanwhile,
+ *  stays as they left it. */
+export function chatAfter(before: CanvasMode, after: CanvasMode, chat: ChatPanel): ChatPanel {
+  if (before !== "edit" && after === "edit") return chat.open ? { open: false, foldedForEdit: true } : chat;
+  if (before === "edit" && after !== "edit") return { open: chat.open || chat.foldedForEdit, foldedForEdit: false };
+  return chat;
 }
 
 /** The ancestors of element `mid`, from the body, and the element: the
@@ -182,4 +190,63 @@ export function layerStep(layers: Layer[], mid: string, to: "parent" | "next" | 
   const dir = to === "next" ? 1 : -1;
   for (let i = at + dir; i >= 0 && i < layers.length && layers[i].depth >= depth; i += dir) if (layers[i].depth === depth) return layers[i].mid;
   return mid;
+}
+
+/** What the editor has when a key comes: the mode, the selection and the
+ *  page's tree, whether an element was copied, and whether the agent works. */
+export interface EditorState {
+  mode: CanvasMode;
+  selected: string | null;
+  layers: Layer[];
+  copied: boolean;
+  locked: boolean;
+}
+
+/** What a key does: a step of the canvas's mode, a selection, an edit of
+ *  the selected element, a copy, a paste after it, undo or redo, something
+ *  to say, or `none`, an editor's key taken with nothing to do (so it never
+ *  reaches the app's own shortcut, as ⌘D's Split pane). Null: not the
+ *  canvas's key. */
+export type EditorStep =
+  | { kind: "canvas"; act: CanvasAct }
+  | { kind: "select"; mid: string | null }
+  | { kind: "edit"; op: "delete" | "duplicate" | "wrap" | "unwrap"; mid: string }
+  | { kind: "copy"; mid: string }
+  | { kind: "paste"; after: string | null }
+  | { kind: "undo" }
+  | { kind: "redo" }
+  | { kind: "say"; text: string }
+  | { kind: "none" };
+
+/** The step a key (keyAct) makes: Esc selects the parent in Edit mode,
+ *  nothing past the body, and with nothing selected leaves the mode; the
+ *  editor's keys work on the selection in Edit mode, and are taken with
+ *  nothing selected; ⌘V pastes once something was copied; ⌘Z and ⇧⌘Z wait
+ *  while the agent works. */
+export function editorStep(s: EditorState, act: KeyAct | null): EditorStep | null {
+  if (act === null) return null;
+  if (act === "toggle" || act === "toggleEdit") return { kind: "canvas", act };
+  if (act === "escape") return s.mode === "edit" && s.selected ? { kind: "select", mid: layerStep(s.layers, s.selected, "parent") } : { kind: "canvas", act };
+  if (s.mode !== "edit") return null;
+  if (act === "undo" || act === "redo") return s.locked ? { kind: "none" } : { kind: act };
+  if (act === "paste") return s.copied ? { kind: "paste", after: s.selected } : { kind: "say", text: "Copy an element with ⌘C first" };
+  if (!s.selected) return { kind: "none" };
+  if (act === "next" || act === "prev") return { kind: "select", mid: layerStep(s.layers, s.selected, act) };
+  if (act === "copy") return { kind: "copy", mid: s.selected };
+  return { kind: "edit", op: act, mid: s.selected };
+}
+
+/** Whether the toolbar's undo button works: a change to undo, and the
+ *  agent not at work, as ⌘Z. */
+export function undoOpen(s: { locked: boolean; changes: number }): boolean {
+  return !s.locked && s.changes > 0;
+}
+
+/** What the canvas tells a page when the bridge reports its ids: on the
+ *  first report of a load (`rev` not `reported` yet), where it was scrolled
+ *  (none at the top) and, in Edit mode, which element is selected; null on
+ *  the reports after, which the page's scripts set off. */
+export function onReport(s: { rev: number; reported: number; scrolled: { x: number; y: number }; mode: CanvasMode; selected: string | null }): { scroll: { x: number; y: number } | null; select: string | null | undefined } | null {
+  if (s.reported === s.rev) return null;
+  return { scroll: s.scrolled.x || s.scrolled.y ? s.scrolled : null, select: s.mode === "edit" ? s.selected : undefined };
 }

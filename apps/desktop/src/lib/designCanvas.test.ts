@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { breadcrumb, canvasPage, layerStep, modeEntered, canvasStep, changedPages, isTyping, modeHint, keyAct, reloadsPage, writingPage } from "./designCanvas";
+import { keyId } from "./runActions";
+import { breadcrumb, canvasPage, chatAfter, editorStep, onReport, undoOpen, layerStep, modeEntered, canvasStep, changedPages, isTyping, modeHint, keyAct, reloadsPage, writingPage } from "./designCanvas";
 
 const change = (over: { system?: string | null; design?: string | null; paths: string[] }) => ({ workspace: "w1", system: null, design: null, ...over });
 
@@ -63,7 +64,7 @@ describe("the canvas's mode (X65)", () => {
 
   it("takes C to switch Comment on and off, and Esc to close the box or leave Comment, never while typing or with a modifier", () => {
     const key = (k: string, over: Partial<{ meta: boolean; ctrl: boolean; alt: boolean; shift: boolean; typing: boolean }> = {}) =>
-      keyAct({ key: k, meta: false, ctrl: false, alt: false, shift: false, typing: false, ...over });
+      keyAct(keyId({ key: k, code: "", metaKey: !!over.meta, ctrlKey: !!over.ctrl, altKey: !!over.alt, shiftKey: !!over.shift }), !!over.typing);
     expect(key("c")).toBe("toggle");
     expect(key("C", { shift: true })).toBeNull();
     expect(key("c", { alt: true })).toBeNull();
@@ -75,7 +76,7 @@ describe("the canvas's mode (X65)", () => {
 
 describe("the editor's keys (X65)", () => {
   const key = (k: string, over: Partial<{ code: string; meta: boolean; alt: boolean; shift: boolean; typing: boolean }> = {}) =>
-    keyAct({ key: k, meta: false, ctrl: false, alt: false, shift: false, typing: false, ...over });
+    keyAct(keyId({ key: k, code: over.code ?? "", metaKey: !!over.meta, ctrlKey: false, altKey: !!over.alt, shiftKey: !!over.shift }), !!over.typing);
 
   it("are V for Edit, Tab and ⇧Tab, Delete, ⌘D, ⌥⌘G and ⇧⌥⌘G, ⌘C, ⌘V, ⌘Z and ⇧⌘Z, never while typing", () => {
     expect(key("v")).toBe("toggleEdit");
@@ -97,10 +98,18 @@ describe("the editor's keys (X65)", () => {
   });
 });
 
+describe("⌘C with text selected (X65)", () => {
+  it("is the text's copy, not the element's, and the editor's ⌘C otherwise", () => {
+    expect(keyAct("cmd+c", false, true)).toBeNull();
+    expect(keyAct("cmd+c", false, false)).toBe("copy");
+    expect(keyAct("cmd+d", false, true)).toBe("duplicate");
+  });
+});
+
 describe("typing (X65)", () => {
   it("leaves Esc typed in a field, such as the chat's composer, to that field, so it neither closes the comment box nor leaves Comment", () => {
     document.body.innerHTML = '<section><textarea id="composer"></textarea></section><p id="page">text</p>';
-    const esc = (id: string) => keyAct({ key: "Escape", meta: false, ctrl: false, alt: false, shift: false, typing: isTyping(document.getElementById(id)) });
+    const esc = (id: string) => keyAct("escape", isTyping(document.getElementById(id)));
     expect(esc("composer")).toBeNull();
     expect(esc("page")).toBe("escape");
   });
@@ -149,12 +158,12 @@ describe("Edit mode (X65)", () => {
     expect(canvasStep({ mode: "edit", box: false, rail: true }, "escape")).toEqual({ mode: "view", box: false, rail: true });
   });
 
-  it("folds the chat to its rail and shows Layers on entering it, and Comments on entering Comment", () => {
-    expect(modeEntered("view", "edit")).toEqual({ tab: "layers", foldChat: true });
-    expect(modeEntered("comment", "edit")).toEqual({ tab: "layers", foldChat: true });
-    expect(modeEntered("edit", "edit")).toEqual({ tab: null, foldChat: false });
-    expect(modeEntered("edit", "comment")).toEqual({ tab: "comments", foldChat: false });
-    expect(modeEntered("edit", "view")).toEqual({ tab: null, foldChat: false });
+  it("shows Layers on entering it, and Comments on entering Comment", () => {
+    expect(modeEntered("view", "edit")).toBe("layers");
+    expect(modeEntered("comment", "edit")).toBe("layers");
+    expect(modeEntered("edit", "edit")).toBeNull();
+    expect(modeEntered("edit", "comment")).toBe("comments");
+    expect(modeEntered("edit", "view")).toBeNull();
   });
 
   it("says what it does in the hint line", () => {
@@ -203,5 +212,68 @@ describe("the selection in Edit mode (X65)", () => {
     expect(layerStep(LAYERS, "m12", "prev")).toBe("m12");
     expect(layerStep(LAYERS, "m20", "next")).toBe("m40");
     expect(layerStep(LAYERS, "m99", "next")).toBeNull();
+  });
+});
+
+describe("the editor's step on a key (X65)", () => {
+  const edit = { mode: "edit" as const, selected: "m24", layers: LAYERS, copied: false, locked: false };
+
+  it("selects the parent on Esc, nothing past the body, and with nothing selected leaves Edit", () => {
+    expect(editorStep(edit, "escape")).toEqual({ kind: "select", mid: "m20" });
+    expect(editorStep({ ...edit, selected: "m1" }, "escape")).toEqual({ kind: "select", mid: null });
+    expect(editorStep({ ...edit, selected: null }, "escape")).toEqual({ kind: "canvas", act: "escape" });
+    expect(editorStep({ ...edit, mode: "comment" }, "escape")).toEqual({ kind: "canvas", act: "escape" });
+    expect(editorStep(edit, "toggleEdit")).toEqual({ kind: "canvas", act: "toggleEdit" });
+  });
+
+  it("edits, copies or moves the selection in Edit mode, pastes after it once something was copied, and takes the editor's keys with nothing selected, so ⌘D never splits a pane", () => {
+    expect(editorStep(edit, "duplicate")).toEqual({ kind: "edit", op: "duplicate", mid: "m24" });
+    expect(editorStep(edit, "unwrap")).toEqual({ kind: "edit", op: "unwrap", mid: "m24" });
+    expect(editorStep(edit, "copy")).toEqual({ kind: "copy", mid: "m24" });
+    expect(editorStep(edit, "prev")).toEqual({ kind: "select", mid: "m22" });
+    expect(editorStep(edit, "paste")).toEqual({ kind: "say", text: "Copy an element with ⌘C first" });
+    expect(editorStep({ ...edit, copied: true }, "paste")).toEqual({ kind: "paste", after: "m24" });
+    expect(editorStep({ ...edit, copied: true, selected: null }, "paste")).toEqual({ kind: "paste", after: null });
+    expect(editorStep({ ...edit, selected: null }, "duplicate")).toEqual({ kind: "none" });
+    expect(editorStep({ ...edit, selected: null }, "next")).toEqual({ kind: "none" });
+    // Outside Edit mode they are not the canvas's.
+    expect(editorStep({ ...edit, mode: "view" }, "duplicate")).toBeNull();
+    expect(editorStep(edit, null)).toBeNull();
+  });
+
+  it("undoes and redoes with ⌘Z, ⇧⌘Z and the toolbar's button, none of them while the agent works", () => {
+    expect(editorStep(edit, "undo")).toEqual({ kind: "undo" });
+    expect(editorStep(edit, "redo")).toEqual({ kind: "redo" });
+    expect(editorStep({ ...edit, locked: true }, "undo")).toEqual({ kind: "none" });
+    expect(editorStep({ ...edit, locked: true }, "redo")).toEqual({ kind: "none" });
+    expect(undoOpen({ locked: false, changes: 2 })).toBe(true);
+    expect(undoOpen({ locked: true, changes: 2 })).toBe(false);
+    expect(undoOpen({ locked: false, changes: 0 })).toBe(false);
+  });
+});
+
+
+describe("a page loaded again on the canvas (X65)", () => {
+  it("is told, on its first report of a load, where it was scrolled and in Edit mode its selection, and nothing on the reports after", () => {
+    const report = { rev: 3, reported: 2, scrolled: { x: 0, y: 1240 }, mode: "edit" as const, selected: "m24" };
+    expect(onReport(report)).toEqual({ scroll: { x: 0, y: 1240 }, select: "m24" });
+    expect(onReport({ ...report, reported: 3 })).toBeNull();
+    expect(onReport({ ...report, scrolled: { x: 0, y: 0 }, mode: "comment" })).toEqual({ scroll: null, select: undefined });
+    expect(onReport({ ...report, selected: null })).toEqual({ scroll: { x: 0, y: 1240 }, select: null });
+  });
+});
+
+describe("the chat around Edit mode (X65)", () => {
+  it("folds on entering Edit, and opens again on leaving it when entering folded it, not when the user folded it", () => {
+    const open = { open: true, foldedForEdit: false };
+    const folded = chatAfter("view", "edit", open);
+    expect(folded).toEqual({ open: false, foldedForEdit: true });
+    expect(chatAfter("edit", "view", folded)).toEqual({ open: true, foldedForEdit: false });
+    expect(chatAfter("edit", "comment", folded)).toEqual({ open: true, foldedForEdit: false });
+    // Folded by the user before Edit, or opened by them during it: as they left it.
+    expect(chatAfter("view", "edit", { open: false, foldedForEdit: false })).toEqual({ open: false, foldedForEdit: false });
+    expect(chatAfter("edit", "view", { open: false, foldedForEdit: false })).toEqual({ open: false, foldedForEdit: false });
+    expect(chatAfter("edit", "view", { open: true, foldedForEdit: true })).toEqual({ open: true, foldedForEdit: false });
+    expect(chatAfter("view", "comment", open)).toEqual(open);
   });
 });
