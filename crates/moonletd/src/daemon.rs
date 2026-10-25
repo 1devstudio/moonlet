@@ -162,7 +162,16 @@ fn folder_agent(terminals: &[moonlet_proto::types::TerminalInfo], recorded: Opti
 async fn blocking<T: Send + 'static>(
     f: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
 ) -> Result<T, RpcError> {
-    tokio::task::spawn_blocking(f).await.map_err(internal)?.map_err(internal)
+    tokio::task::spawn_blocking(f).await.map_err(internal)?.map_err(store_error)
+}
+
+/// What the design store's error means to the caller: a design system the
+/// workspace does not have is a bad parameter (X65); anything else failed.
+fn store_error(e: anyhow::Error) -> RpcError {
+    if e.is::<moonlet_core::design::designs::NoSystem>() {
+        return RpcError::new("invalid_params", e.to_string());
+    }
+    internal(e)
 }
 
 /// moonlet's hook and skill paths with Claude's in profile folder `dir` (X33).
@@ -1242,14 +1251,6 @@ impl Daemon {
                     },
                     None => None,
                 };
-                let (ws, system) = (r.workspace.clone(), r.system.clone());
-                let known = {
-                    let store = store.clone();
-                    tokio::task::spawn_blocking(move || store.system_dir(&ws, &system).is_ok()).await.map_err(internal)?
-                };
-                if !known {
-                    return Err(RpcError::new("invalid_params", format!("no design system \"{}\"", r.system)));
-                }
                 let slug = {
                     let (store, r) = (store.clone(), r.clone());
                     blocking(move || store.create_design(&r.workspace, &r.name, &r.system, &r.brief, now_ms())).await?
