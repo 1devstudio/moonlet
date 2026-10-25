@@ -1282,6 +1282,8 @@ pub struct DesignProgress {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DesignCheck {
+    /// The workspace; none for a session design, named by `session`.
+    #[serde(default)]
     pub workspace: String,
     /// The design system; empty when `design` names a design.
     #[serde(default)]
