@@ -1607,18 +1607,28 @@ impl Daemon {
     }
 
     /// The lock of one workspace design's history (X65): one snapshot or
-    /// restore at a time, so two never take the same number. A restore
-    /// takes the pages' lock first, then this one.
+    /// restore at a time, so two never take the same number. Whoever takes
+    /// it, a snapshot, a restore or a removal, takes the pages' lock first,
+    /// then this one, so no save falls in a snapshot and none of them waits
+    /// on another in turn.
     fn history_lock(&self, workspace: &str, slug: &str) -> Arc<tokio::sync::Mutex<()>> {
         self.design_lock(workspace, &format!("history/{slug}"))
     }
 
     /// Takes a snapshot of a design's pages and assets, if they changed
-    /// since its last (X65). A failure is logged: it never fails what took
-    /// it.
+    /// since its last (X65), under the locks of its pages and history, so
+    /// a save in progress ends first. A failure is logged: it never fails
+    /// what took it.
     async fn snapshot(&self, workspace: &str, slug: &str, take: Take) {
-        let lock = self.history_lock(workspace, slug);
-        let _held = lock.lock().await;
+        let (pages, history) = (self.pages_lock(workspace, slug), self.history_lock(workspace, slug));
+        let _pages = pages.lock().await;
+        let _history = history.lock().await;
+        self.snapshot_held(workspace, slug, take).await;
+    }
+
+    /// As [`Self::snapshot`], by one that holds the design's pages and
+    /// history locks.
+    async fn snapshot_held(&self, workspace: &str, slug: &str, take: Take) {
         let (store, ws, sl) = (self.design.clone(), workspace.to_string(), slug.to_string());
         if let Err(e) = blocking(move || store.take_snapshot(&ws, &sl, take, now_ms())).await {
             tracing::warn!("cannot take a snapshot of {workspace}/{slug}: {}", e.message);
@@ -1675,6 +1685,11 @@ impl Daemon {
         let (d, ws, sl, saves) = (self.clone(), workspace.to_string(), slug.to_string(), pending.saves);
         let quiet = tokio::spawn(async move {
             tokio::time::sleep(d.edits_quiet).await;
+            // As a save holds them: one in progress ends first, its edits
+            // with it, and the edits are read and taken only under them.
+            let (pages, history) = (d.pages_lock(&ws, &sl), d.history_lock(&ws, &sl));
+            let _pages = pages.lock().await;
+            let _history = history.lock().await;
             // The agent's pages may be half written: its turn keeps them.
             if d.design_agent_working(&ws, &sl).await.unwrap_or(false) {
                 return;
@@ -1687,7 +1702,7 @@ impl Daemon {
                 }
                 all.remove(&key).map(|e| e.edits).unwrap_or_default()
             };
-            d.snapshot(&ws, &sl, Take::EditsByHand(edits)).await;
+            d.snapshot_held(&ws, &sl, Take::EditsByHand(edits)).await;
         });
         pending.quiet = Some(quiet.abort_handle());
     }
