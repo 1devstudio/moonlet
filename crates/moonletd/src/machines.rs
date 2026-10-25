@@ -194,6 +194,8 @@ pub struct Machines {
     choosing: Mutex<()>,
     fake: Option<Arc<crate::cloud_fake::Fake>>,
     net: Arc<dyn Transport>,
+    /// Google Cloud's access tokens, kept across calls.
+    gcp_tokens: Arc<moonlet_cloud::gcp_auth::Tokens>,
     /// When `tailscale status` was last asked.
     tailnet_asked: Mutex<u64>,
     emit: Box<dyn Fn(Message) + Send + Sync>,
@@ -255,6 +257,7 @@ impl Machines {
             making: Mutex::new(()),
             fake: crate::cloud_fake::from_env().map(Arc::new),
             net,
+            gcp_tokens: Arc::default(),
             tailnet_asked: Mutex::new(0),
             emit: Box::new(emit),
             me: Mutex::new(Weak::new()),
@@ -406,6 +409,36 @@ impl Machines {
                     })?;
                 Ok(Arc::new(moonlet_cloud::hetzner::Hetzner::new(
                     token,
+                    self.net.clone(),
+                )))
+            }
+            "gcp" => {
+                let fields = self
+                    .settings
+                    .file()
+                    .providers
+                    .get("gcp")
+                    .cloned()
+                    .unwrap_or_default();
+                let key = fields
+                    .get("key")
+                    .filter(|k| !k.trim().is_empty())
+                    .ok_or_else(|| {
+                        RpcError::new(
+                            "no_provider",
+                            "Add a Google Cloud service-account key in Settings › Cloud workers.",
+                        )
+                    })?;
+                let key = moonlet_cloud::gcp_auth::read_key(key)
+                    .map_err(|e| RpcError::new("no_provider", e))?;
+                let hours = moonlet_cloud::gcp::max_hours(
+                    fields.get("max_hours").map_or("", String::as_str),
+                )
+                .map_err(|e| RpcError::new("no_provider", e))?;
+                Ok(Arc::new(moonlet_cloud::gcp::Gcp::new(
+                    key,
+                    hours,
+                    self.gcp_tokens.clone(),
                     self.net.clone(),
                 )))
             }
