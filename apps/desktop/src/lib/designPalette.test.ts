@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { paletteGroups, snippetsOf } from "./designPalette";
+import { paletteGroups, parseSnippetId, snippetsOf } from "./designPalette";
 import type { DesignKitCard } from "./protocol";
 
 /** Two cards as a sync agent writes them (X64): each variant a ds-cell
@@ -35,6 +35,14 @@ describe("the Palette's snippets (X65)", () => {
       { id: "buttons/button/ghost", group: "Buttons", card: "Button", variant: "ghost", html: '<button class="btn btn--ghost">Cancel</button>' },
       { id: "forms/switch/on", group: "Forms", card: "Switch", variant: "on", html: '<span class="switch is-on" role="switch" aria-checked="true"></span> <label>Notify me</label>' },
     ]);
+  });
+
+  it("have ids of a group, a name and a variant, and a cell whose id is not one has none", () => {
+    expect(parseSnippetId("buttons/button/primary")).toEqual({ group: "buttons", name: "button", variant: "primary" });
+    expect(parseSnippetId("buttons/primary")).toBeNull();
+    expect(parseSnippetId("buttons//primary")).toBeNull();
+    const loose: DesignKitCard = { ...SWITCH, html: '<section class="ds-cell" data-snippet="on"><h4>on</h4><div class="ds-mount"><span class="switch"></span></div></section>' };
+    expect(snippetsOf([loose])).toEqual([]);
   });
 
   it("are listed by group, and search keeps those whose card, variant or group has the words", () => {
