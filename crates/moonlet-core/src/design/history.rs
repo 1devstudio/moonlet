@@ -114,8 +114,9 @@ impl Store {
         Ok(Some(record.listed()))
     }
 
-    /// Makes snapshot `n` the design's `pages/` and `assets/`: its files
-    /// written exactly as kept, through the designs folder as a handle, and
+    /// Makes snapshot `n` the design's `pages/` and `assets/`, after keeping
+    /// what is not kept yet as `unkept` takes it: its files written exactly
+    /// as kept, through the designs folder as a handle, and
     /// every other file there that is not hidden removed (a link as a
     /// link). Then records a **Restored snapshot** entry holding them, so
     /// the next snapshot compares with what was restored. A snapshot whose
@@ -126,6 +127,7 @@ impl Store {
         workspace: &str,
         slug: &str,
         n: u32,
+        unkept: Take,
         now: u64,
     ) -> Result<DesignSnapshot> {
         let designs = self.designs_of(workspace, slug)?;
@@ -142,6 +144,9 @@ impl Store {
             }
             files.insert(path.clone(), bytes);
         }
+        // Snapshot n is read first: keeping what is not kept yet may rotate
+        // it out of the newest 50.
+        self.take_snapshot(workspace, slug, unkept, now)?;
         for folder in KEPT {
             let prefix = format!("{folder}/");
             let inside: BTreeMap<String, Vec<u8>> = files
@@ -658,7 +663,7 @@ mod tests {
             .unwrap();
 
         let restored = store
-            .restore_snapshot("w1", "settings-page", 1, 5000)
+            .restore_snapshot("w1", "settings-page", 1, Take::EditsByHand(&[]), 5000)
             .unwrap();
         assert_eq!(
             restored,
@@ -703,7 +708,7 @@ mod tests {
             None
         );
         let err = store
-            .restore_snapshot("w1", "settings-page", 9, 7000)
+            .restore_snapshot("w1", "settings-page", 9, Take::EditsByHand(&[]), 7000)
             .unwrap_err();
         assert!(err.is::<NoSnapshot>(), "{err:#}");
     }
@@ -734,7 +739,7 @@ mod tests {
         std::fs::remove_file(dir.join("pages/index.html")).unwrap();
         std::os::unix::fs::symlink(&secret, dir.join("pages/index.html")).unwrap();
         store
-            .restore_snapshot("w1", "settings-page", 1, 2000)
+            .restore_snapshot("w1", "settings-page", 1, Take::EditsByHand(&[]), 2000)
             .unwrap();
         assert_eq!(std::fs::read_to_string(&secret).unwrap(), "secret");
         assert!(
@@ -803,5 +808,47 @@ mod tests {
         ] {
             assert!(store.resolve("w1", bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn the_oldest_of_50_snapshots_is_restored_after_what_was_not_kept_is_kept() {
+        let (_home, store, dir) = store_with_design();
+        for i in 1..=50u64 {
+            write(&dir, "pages/index.html", &format!("<p>{i}</p>"));
+            store
+                .take_snapshot("w1", "settings-page", Take::AgentTurn, i * 1000)
+                .unwrap()
+                .expect("a change");
+        }
+        write(&dir, "pages/index.html", "<p>by hand</p>");
+        let edits = ["text of m1".to_string()];
+        let restored = store
+            .restore_snapshot("w1", "settings-page", 1, Take::EditsByHand(&edits), 60_000)
+            .unwrap();
+        assert_eq!(
+            (restored.n, restored.from),
+            (
+                52,
+                Some(moonlet_proto::types::SnapshotFrom { n: 1, time: 1000 })
+            )
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("pages/index.html")).unwrap(),
+            "<p>1</p>"
+        );
+        let listed: Vec<(u32, SnapshotKind, String)> = store
+            .history("w1", "settings-page")
+            .unwrap()
+            .into_iter()
+            .map(|s| (s.n, s.kind, s.summary))
+            .collect();
+        assert_eq!(listed.len(), 50);
+        assert_eq!(
+            listed[..2],
+            [
+                (52, SnapshotKind::Restored, String::new()),
+                (51, SnapshotKind::EditsByHand, "Text of m1".to_string())
+            ]
+        );
     }
 }
