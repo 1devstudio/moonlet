@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fieldInput, fieldShows, fieldValue, inspectorSections, pickToken } from "./designInspector";
+import { fieldEntries, fieldInput, fieldShows, fieldValue, inspectorSections, pickToken } from "./designInspector";
 
 const labels = (display: string) => inspectorSections(display).map((s) => `${s.title}: ${s.fields.map((f) => f.label).join(", ")}`);
 
@@ -66,5 +66,17 @@ describe("an Inspector field's token (X65)", () => {
     expect(fieldShows(border, tokens, "1px solid #ff0000")).toEqual({ token: null, value: "1px solid #ff0000" });
     expect(fieldShows(border, tokens, "none")).toEqual({ token: null, value: "none" });
     expect(fieldShows(padding, tokens, "16px")).toEqual({ token: "--space-4", value: "16px" });
+  });
+});
+
+describe("a size field (X65)", () => {
+  it("takes no token, as a design system has no size family: no popover tokens and no token shown", () => {
+    const tokens = [{ name: "--space-8", value: "32px", family: "spacing" as const }];
+    const [width, height] = inspectorSections("block")[2].fields;
+    const [padding] = inspectorSections("block")[1].fields;
+    expect(fieldEntries(width, tokens, "32px")).toEqual([]);
+    expect(fieldEntries(height, tokens, "")).toEqual([]);
+    expect(fieldShows(width, tokens, "32px")).toEqual({ token: null, value: "32px" });
+    expect(fieldEntries(padding, tokens, "32px")).toEqual([{ names: ["--space-8"], value: "32px" }]);
   });
 });

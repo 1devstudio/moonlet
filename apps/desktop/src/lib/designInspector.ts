@@ -5,7 +5,7 @@
 // are designTokens.ts; the write is a restyle edit (designEdits.ts).
 
 import { BORDER_STYLES, isStyleValue, valueParts, type Decl } from "./designStyle";
-import { fieldShown, resolveValue, tokenOf, tokenRef, tokenRefName, type TokenFamily } from "./designTokens";
+import { fieldShown, popoverEntries, resolveValue, tokenOf, tokenRef, tokenRefName, type PopoverEntry, type TokenFamily } from "./designTokens";
 import type { DesignToken } from "./protocol";
 
 /** One field: the property it writes, and how its value is typed. */
@@ -51,8 +51,9 @@ export function inspectorSections(display: string): Section[] {
     {
       title: "Size",
       fields: [
-        { label: "Width", prop: "width", kind: "size", family: "spacing" },
-        { label: "Height", prop: "height", kind: "size", family: "spacing" },
+        // No family: a design system's tokens have no sizes (X64).
+        { label: "Width", prop: "width", kind: "size" },
+        { label: "Height", prop: "height", kind: "size" },
       ],
     },
     {
@@ -124,11 +125,25 @@ export function pickToken(field: Field, current: string, names: string[]): strin
  *  colour's token (`1px solid --color-border`, `#2a2a2a`). Free text and
  *  keywords show no token. */
 export function fieldShows(field: Field, tokens: DesignToken[], value: string): { token: string | null; value: string } {
-  if (!field.family || field.kind === "text" || field.kind === "keyword" || field.kind === "opacity") return { token: null, value };
-  if (field.prop !== "border") return fieldShown(tokens, value, field.family);
+  const family = tokensOf(field);
+  if (!family) return { token: null, value };
+  if (field.prop !== "border") return fieldShown(tokens, value, family);
   const parts = valueParts(value);
   const at = parts.findIndex((p) => tokenOf(tokens, p, "color") !== null);
   if (at < 0) return { token: null, value };
   const t = tokenOf(tokens, parts[at], "color")!;
   return { token: parts.map((p, i) => (i === at ? t.name : p)).join(" "), value: resolveValue(tokens, t.value) };
+}
+
+/** The family of tokens a field takes; null for one that takes none (a
+ *  keyword, free text, a size or an opacity). */
+function tokensOf(field: Field): TokenFamily | null {
+  return field.kind === "token" && field.family ? field.family : null;
+}
+
+/** A field's popover entries (designTokens' popoverEntries); none for a
+ *  field that takes no tokens, whose popover has only the free value. */
+export function fieldEntries(field: Field, tokens: DesignToken[], value: string): PopoverEntry[] {
+  const family = tokensOf(field);
+  return family ? popoverEntries(tokens, value, family) : [];
 }

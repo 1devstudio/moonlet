@@ -9,8 +9,7 @@ import { ChevronDown, Search } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { DesignToken } from "../../lib/protocol";
 import type { Decl } from "../../lib/designStyle";
-import { fieldInput, fieldShows, fieldValue, inspectorSections, pickToken, type Field } from "../../lib/designInspector";
-import { popoverEntries } from "../../lib/designTokens";
+import { fieldEntries, fieldInput, fieldShows, fieldValue, inspectorSections, pickToken, type Field } from "../../lib/designInspector";
 import { paletteGroups, type Snippet } from "../../lib/designPalette";
 import { cx } from "../../lib/cx";
 import { Menu } from "../Menu";
@@ -186,7 +185,7 @@ function TokenPopover({
       window.removeEventListener("keydown", onKey, true);
     };
   }, [anchor, onClose]);
-  const list = field.family && field.kind !== "text" && field.kind !== "opacity" ? popoverEntries(tokens, value, field.family) : [];
+  const list = fieldEntries(field, tokens, value);
   const commit = () => {
     const got = fieldInput(field, text);
     if ("error" in got) return setError(got.error);
