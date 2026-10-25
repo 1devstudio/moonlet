@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>moonlet render</title>
+    <style>
+      html, body { margin: 0; padding: 0; overflow: hidden; background: #fff; }
+      iframe { position: fixed; left: 0; top: 0; border: 0; display: block; }
+    </style>
+  </head>
+  <body>
+    <!-- Cards are untrusted: scripts only, never same-origin, never the top frame (X64, X65). -->
+    <iframe id="card" title="card" sandbox="allow-scripts" width="900" height="700"></iframe>
+    <script type="module" src="/src/render.ts"></script>
+  </body>
+</html>
