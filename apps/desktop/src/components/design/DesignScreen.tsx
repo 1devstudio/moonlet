@@ -10,6 +10,7 @@ import { chatKey, useChat } from "../../lib/chat";
 import type { Design, DesignComment } from "../../lib/protocol";
 import { briefShown, designSubtitle } from "../../lib/design";
 import {
+  addPageMid,
   askAgent,
   commentsOf,
   editComment,
@@ -479,7 +480,10 @@ function PageFrame({
         tell(modeMessage(latest.current.mode));
         tell(pinsMessage(latest.current.wanted));
       } else if (m.type === "rects") setRects(Object.fromEntries(m.rects.map(({ mid, ...r }) => [mid, r])));
-      else if (m.type === "pick") latest.current.onPick(m.element);
+      else if (m.type === "pick") {
+        addPageMid(host, workspace, design.slug, page, m.element.mid);
+        latest.current.onPick(m.element);
+      }
       else {
         // A key pressed in the page, where the bridge already left out typing.
         const k = modeKey({ key: m.key, meta: false, ctrl: false, alt: false, shift: false, typing: false });

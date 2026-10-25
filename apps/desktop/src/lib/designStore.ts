@@ -15,7 +15,7 @@ import { latestPerKey } from "./prPoll";
 import { designOpenAction } from "./design";
 import { changedPages, reloadsPage } from "./designCanvas";
 import type { PageProblem } from "./designBars";
-import { COMMENTS_FILE, commentsMessage, withPins, type PageMids } from "./designComments";
+import { COMMENTS_FILE, commentsMessage, withMid, withPins, type PageMids } from "./designComments";
 
 interface DesignState {
   /** By workspace (`wsKey(host, id)`), once listed. */
@@ -178,6 +178,13 @@ export function sendingOf(s: DesignState, host: string, workspace: string, slug:
 export function setPageMids(host: string, workspace: string, slug: string, page: string, mids: string[]) {
   const key = itemKey(host, workspace, slug);
   useDesign.setState((s) => ({ mids: { ...s.mids, [key]: { ...s.mids[key], [page]: mids } } }));
+}
+
+/** Records an element the user picked on a page as there (withMid): the
+ *  page may have added it after its last report. */
+export function addPageMid(host: string, workspace: string, slug: string, page: string, mid: string) {
+  const key = itemKey(host, workspace, slug);
+  useDesign.setState((s) => ({ mids: { ...s.mids, [key]: { ...s.mids[key], [page]: withMid(s.mids[key]?.[page], mid) } } }));
 }
 
 const commentListing = itemListing("comments", M.designComments);

@@ -100,6 +100,27 @@ describe("the bridge script in a page (X65)", () => {
     ]);
   });
 
+  it("reports the page's data-mids again when its scripts add, remove or renumber elements, once per burst", async () => {
+    const { win, doc, el, tell, of } = framed('<nav data-mid="m12"><a data-mid="m13">General</a></nav>');
+    await vi.waitFor(() => expect(of("mids")).toHaveLength(1));
+    // A menu a script opens: two elements at once, one report.
+    const menu = doc.createElement("ul");
+    menu.setAttribute("data-mid", "m40");
+    menu.innerHTML = '<li data-mid="m41">Rename</li>';
+    doc.body.append(menu);
+    await vi.waitFor(() => expect(of("mids").at(-1)).toEqual({ type: "mids", mids: ["m1", "m12", "m13", "m40", "m41"] }));
+    expect(of("mids")).toHaveLength(2);
+    el("m13").setAttribute("data-mid", "m14");
+    menu.remove();
+    await vi.waitFor(() => expect(of("mids").at(-1)).toEqual({ type: "mids", mids: ["m1", "m12", "m14"] }));
+    // The bridge's own outline is no change of the page.
+    const reports = of("mids").length;
+    tell(modeMessage("comment"));
+    el("m12").dispatchEvent(new win.MouseEvent("mousemove", { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 300));
+    expect(of("mids")).toHaveLength(reports);
+  });
+
   const NAV = '<nav data-mid="m12"><a href="#git" data-mid="m13">General <b data-mid="m14">Appearance</b></a></nav><h2 data-mid="m25">Git</h2>';
   const mouse = (win: DOMWindow, type: string, on: Element, init: MouseEventInit = {}) => on.dispatchEvent(new win.MouseEvent(type, { bubbles: true, cancelable: true, ...init }));
 

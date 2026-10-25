@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DesignComment } from "./protocol";
-import { boxLabel, boxPlace, chatCardLookup, pinPlace, keepAction, openCommentsLabel, commentCards, footerLabel, pinLabel, sentLabel, commentLine, commentsMessage, commentsTab, isOrphaned, pageCounts, parseCommentLine, sendAll, withPins } from "./designComments";
+import { boxLabel, boxPlace, chatCardLookup, pinPlace, withMid, keepAction, openCommentsLabel, commentCards, footerLabel, pinLabel, sentLabel, commentLine, commentsMessage, commentsTab, isOrphaned, pageCounts, parseCommentLine, sendAll, withPins, type PageMids } from "./designComments";
 
 const pin = (n: number, over: Partial<DesignComment> = {}): DesignComment => ({
   n,
@@ -66,6 +66,22 @@ describe("an orphaned pin (X65)", () => {
     expect(isOrphaned(pin(3, { page: "git-a" }), mids)).toBe(false);
     // Kept in a comments.json from before pins had a page.
     expect(isOrphaned(pin(4, { page: "", mid: "" }), mids)).toBe(true);
+  });
+});
+
+describe("an element picked since the page's last report (X65)", () => {
+  it("counts as there, so its new pin is not orphaned, until a later report leaves it out", () => {
+    const menuItem = pin(4, { mid: "m41", tag: "li", text: "Rename" });
+    const reported: PageMids = { index: ["m1", "m12"] };
+    expect(isOrphaned(menuItem, reported)).toBe(true);
+    const picked: PageMids = { index: withMid(reported.index, "m41") };
+    expect(picked.index).toEqual(["m1", "m12", "m41"]);
+    expect(isOrphaned(menuItem, picked)).toBe(false);
+    expect(withMid(picked.index, "m41")).toEqual(["m1", "m12", "m41"]);
+    // A page not reported since the app started stays not known.
+    expect(withMid(undefined, "m41")).toBeUndefined();
+    // The next report is the page again.
+    expect(isOrphaned(menuItem, { index: ["m1", "m12"] })).toBe(true);
   });
 });
 
