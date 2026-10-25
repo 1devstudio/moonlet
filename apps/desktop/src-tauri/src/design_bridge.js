@@ -151,7 +151,7 @@
   const reportRects = () => {
     const rects = [];
     for (const mid of pinned) {
-      const el = document.querySelector(`[data-mid="${mid}"]`);
+      const el = byMid(mid);
       if (el) rects.push({ mid, ...box(el) });
     }
     post({ type: "bridge.rects", rects });
@@ -228,7 +228,7 @@
       draw(null);
       if (mode !== "edit") select(null);
     } else if (d.type === "bridge.select") {
-      const el = mode === "edit" && typeof d.mid === "string" && MID.test(d.mid) ? document.querySelector(`[data-mid="${d.mid}"]`) : null;
+      const el = mode === "edit" ? byMid(d.mid) : null;
       select(el);
       post(el ? { type: "bridge.selected", mid: midOf(el), rect: box(el) } : { type: "bridge.selected", mid: null });
     } else if (d.type === "bridge.scrollTo") {

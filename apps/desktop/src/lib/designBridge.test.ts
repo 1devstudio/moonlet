@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { JSDOM, type DOMWindow } from "jsdom";
-import { bridgeMessage, editMessage, helloMessage, modeMessage, pinsMessage, scrollMessage, selectMessage } from "./designBridge";
+import { PAGE_KEYS, bridgeMessage, editMessage, helloMessage, modeMessage, pinsMessage, scrollMessage, selectMessage } from "./designBridge";
 import bridge from "../../src-tauri/src/design_bridge.js?raw";
 
 describe("the bridge's messages (X65)", () => {
@@ -379,6 +379,15 @@ describe("the bridge script in a page (X65)", () => {
     expect(el("m25").getAttribute("contenteditable")).toBe("plaintext-only");
     expect(of("text")).toEqual([]);
     expect((doc.querySelector('[data-moonlet-bridge="selection"]') as HTMLElement).style.display).toBe("block");
+  });
+
+  it("sends the app only the keys the app takes from a page, and every one of them, whatever is pressed in Edit mode", () => {
+    const { win, doc, tell, of } = framed('<h2 data-mid="m25">Git</h2>');
+    tell(modeMessage("edit"));
+    const keys = [...PAGE_KEYS, ..."abefhijklmnopqrstuwxy", "Enter", "ArrowUp", "Space", "Home"];
+    const mods = [{}, { shiftKey: true }, { metaKey: true }, { altKey: true, metaKey: true }, { shiftKey: true, altKey: true, metaKey: true }, { shiftKey: true, metaKey: true }];
+    for (const key of keys) for (const m of mods) doc.body.dispatchEvent(new win.KeyboardEvent("keydown", { key, code: key.length === 1 ? `Key${key.toUpperCase()}` : key, bubbles: true, cancelable: true, ...m }));
+    expect(new Set(of("key").map((k) => (k as { key: string }).key))).toEqual(new Set(PAGE_KEYS));
   });
 
   it("reports the boxes of the pinned elements when asked, and again on scroll and resize", async () => {
