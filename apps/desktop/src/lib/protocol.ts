@@ -1281,6 +1281,7 @@ export const M = {
   designFile: "design.file",
   designSettle: "design.settle",
   designCards: "design.cards",
+  designCheck: "design.check",
   designList: "design.list",
   designCreate: "design.create",
   designRemove: "design.remove",
