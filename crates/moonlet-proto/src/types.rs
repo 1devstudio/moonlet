@@ -223,6 +223,44 @@ pub enum CommentState {
     Resolved,
 }
 
+/// What took a design's snapshot (X65): its agent's turn ending, edits by
+/// hand stopping for a while, or a restore of an earlier one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SnapshotKind {
+    AgentTurn,
+    EditsByHand,
+    Restored,
+}
+
+/// The snapshot a **Restored snapshot** entry made current: its number and
+/// when it was taken, in ms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SnapshotFrom {
+    pub n: u32,
+    pub time: u64,
+}
+
+/// A snapshot of a design's `pages/` and `assets/` (X65), as
+/// `design.history` lists it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DesignSnapshot {
+    /// Its number in the design, never given again.
+    pub n: u32,
+    /// When it was taken, in ms.
+    pub time: u64,
+    #[serde(rename = "type")]
+    pub kind: SnapshotKind,
+    /// What changed: "Wrote git-a.html and git-b.html · 3 pages", "Moved
+    /// section m24, restyled h2 m25"; empty for a restore, which `from` says.
+    pub summary: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<SnapshotFrom>,
+    /// Its pages (`index` for `pages/index.html`), `index` first, then by name.
+    #[serde(default)]
+    pub pages: Vec<String>,
+}
+
 /// What a design system's or a design's agent waits for from the user (X64, X65).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NeedsYou {
