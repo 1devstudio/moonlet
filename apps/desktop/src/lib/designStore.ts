@@ -11,6 +11,7 @@ import { syncNotice } from "./designSync";
 import { agentSeen, agentsShownElsewhere, notify, shownWorkspace, switchWorkspace, toast, useStore } from "./store";
 import { alertFor } from "./alerts";
 import { modeOf, setMode } from "./mode";
+import { latestPerKey } from "./prPoll";
 import { designOpenAction } from "./design";
 import { changedPages, reloadsPage } from "./designCanvas";
 import type { PageProblem } from "./designBars";
@@ -40,11 +41,15 @@ interface DesignState {
 
 export const useDesign = create<DesignState>(() => ({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, designs: {}, designShown: {}, pageRevs: {}, latest: {}, problems: {} }));
 
-const systemKey = (host: string, workspace: string, slug: string) => `${wsKey(host, workspace)}/${slug}`;
+/** A design system's or a design's key, `wsKey/slug`. */
+const itemKey = (host: string, workspace: string, slug: string) => `${wsKey(host, workspace)}/${slug}`;
+
+/** A design page's key, `wsKey/slug/page`. */
+const pageKey = (host: string, workspace: string, slug: string, page: string) => `${itemKey(host, workspace, slug)}/${page}`;
 
 /** A design system's cards; undefined until listed. */
 export function cardsOf(s: DesignState, host: string, workspace: string, slug: string): DesignCard[] | undefined {
-  return s.cards[systemKey(host, workspace, slug)];
+  return s.cards[itemKey(host, workspace, slug)];
 }
 
 /** The card of design system `slug` open as the card page, or null. */
@@ -60,21 +65,21 @@ export function openCard(host: string, workspace: string, slug: string, path: st
 
 /** How many times design system `slug` changed since the app started. */
 export function revOf(s: DesignState, host: string, workspace: string, slug: string): number {
-  return s.changes[systemKey(host, workspace, slug)] ?? 0;
+  return s.changes[itemKey(host, workspace, slug)] ?? 0;
 }
 
 /** Systems whose cards were asked for, listed or not: listed again when they change. */
 const cardsWanted = new Set<string>();
 
 /** The latest cards request per system, so an older answer never lands last. */
-const cardsAsked: Record<string, number> = {};
+const cardsAsked = latestPerKey();
 
 export async function loadCards(host: string, workspace: string, slug: string): Promise<void> {
-  const key = systemKey(host, workspace, slug);
+  const key = itemKey(host, workspace, slug);
   cardsWanted.add(key);
-  const n = (cardsAsked[key] = (cardsAsked[key] ?? 0) + 1);
+  const latest = cardsAsked.start(key);
   const list = await rpc<DesignCard[]>(host, M.designCards, { workspace, slug });
-  if (cardsAsked[key] === n) useDesign.setState((s) => ({ cards: { ...s.cards, [key]: list } }));
+  if (latest()) useDesign.setState((s) => ({ cards: { ...s.cards, [key]: list } }));
 }
 
 /** The design system open in a workspace: the one picked, else the first. */
@@ -89,8 +94,6 @@ export function showSystem(host: string, workspace: string, slug: string) {
   useDesign.setState((s) => ({ shown: { ...s.shown, [key]: slug }, opened: { ...s.opened, [key]: null }, designShown: { ...s.designShown, [key]: null } }));
 }
 
-const designKey = (host: string, workspace: string, slug: string) => `${wsKey(host, workspace)}/${slug}`;
-
 /** A workspace's designs; undefined until listed (X65). */
 export function designsOf(s: DesignState, host: string, workspace: string): Design[] | undefined {
   return s.designs[wsKey(host, workspace)];
@@ -104,17 +107,17 @@ export function shownDesign(s: DesignState, host: string, workspace: string): De
 
 /** How many times a design's page changed since the app started. */
 export function pageRevOf(s: DesignState, host: string, workspace: string, slug: string, page: string): number {
-  return s.pageRevs[`${designKey(host, workspace, slug)}/${page}`] ?? 0;
+  return s.pageRevs[pageKey(host, workspace, slug, page)] ?? 0;
 }
 
 /** The pages the latest change of a design wrote. */
 export function latestOf(s: DesignState, host: string, workspace: string, slug: string): string[] {
-  return s.latest[designKey(host, workspace, slug)] ?? NONE;
+  return s.latest[itemKey(host, workspace, slug)] ?? NONE;
 }
 
 /** A design's check problems, every page's. */
 export function problemsOf(s: DesignState, host: string, workspace: string, slug: string): PageProblem[] {
-  return s.problems[designKey(host, workspace, slug)] ?? NO_PROBLEMS;
+  return s.problems[itemKey(host, workspace, slug)] ?? NO_PROBLEMS;
 }
 
 const NONE: string[] = [];
@@ -140,40 +143,47 @@ export async function openDesign(host: string, workspace: string, slug: string) 
 }
 
 /** The latest designs request per workspace, so an older answer never lands last. */
-const designsAsked: Record<string, number> = {};
+const designsAsked = latestPerKey();
 
 /** Lists a workspace's designs (X65). */
 export async function loadDesigns(host: string, workspace: string): Promise<void> {
   const key = wsKey(host, workspace);
-  const n = (designsAsked[key] = (designsAsked[key] ?? 0) + 1);
+  const latest = designsAsked.start(key);
   const list = await rpc<Design[]>(host, M.designList, { workspace });
-  if (designsAsked[key] === n) useDesign.setState((s) => ({ designs: { ...s.designs, [key]: list } }));
+  if (latest()) useDesign.setState((s) => ({ designs: { ...s.designs, [key]: list } }));
 }
 
 const reloadDesigns = (host: string, workspace: string) => void loadDesigns(host, workspace).catch(() => {});
 
 /** The latest check per design, so an older answer never lands last. */
-const checksAsked: Record<string, number> = {};
+const checksAsked = latestPerKey();
 
 /** Checks a design's pages (`design.check`), for the canvas's red bar. */
 export async function checkDesign(host: string, workspace: string, slug: string): Promise<void> {
-  const key = designKey(host, workspace, slug);
-  const n = (checksAsked[key] = (checksAsked[key] ?? 0) + 1);
+  const key = itemKey(host, workspace, slug);
+  const latest = checksAsked.start(key);
   try {
     const found = await rpc<PageProblem[]>(host, M.designCheck, { workspace, design: slug });
-    if (checksAsked[key] === n) useDesign.setState((s) => ({ problems: { ...s.problems, [key]: found } }));
+    if (latest()) useDesign.setState((s) => ({ problems: { ...s.problems, [key]: found } }));
   } catch {
     // A design removed meanwhile, or a page that cannot be read: no bar.
   }
 }
 
+/** How long a design's files stay unchanged before it is checked again: an
+ *  agent writes a page in a burst of saves. */
+const CHECK_SETTLE_MS = 300;
+
 /** Checks waiting for a burst of changes to end, per design. */
 const checkTimers: Record<string, ReturnType<typeof setTimeout>> = {};
 
 function checkSoon(host: string, workspace: string, slug: string) {
-  const key = designKey(host, workspace, slug);
+  const key = itemKey(host, workspace, slug);
   clearTimeout(checkTimers[key]);
-  checkTimers[key] = setTimeout(() => void checkDesign(host, workspace, slug), 300);
+  checkTimers[key] = setTimeout(() => {
+    delete checkTimers[key];
+    void checkDesign(host, workspace, slug);
+  }, CHECK_SETTLE_MS);
 }
 
 /** A change in a workspace's design folder: the pages it reloads, the page
@@ -182,21 +192,15 @@ function onDesignChange(host: string, change: DesignChanged) {
   const st = useDesign.getState();
   const list = designsOf(st, host, change.workspace) ?? [];
   const revs: Record<string, number> = {};
+  const bump = (key: string) => (revs[key] ??= (st.pageRevs[key] ?? 0) + 1);
   for (const d of list) {
-    for (const p of d.pages) {
-      if (!reloadsPage(change, { design: d.slug, system: d.system, page: p.name })) continue;
-      const key = `${designKey(host, change.workspace, d.slug)}/${p.name}`;
-      revs[key] = (st.pageRevs[key] ?? 0) + 1;
-    }
+    for (const p of d.pages) if (reloadsPage(change, { design: d.slug, system: d.system, page: p.name })) bump(pageKey(host, change.workspace, d.slug, p.name));
   }
-  // A page new to the list loads once it is listed; one written again before.
   if (change.design) {
-    const key = designKey(host, change.workspace, change.design);
-    for (const page of changedPages(change, change.design)) {
-      const k = `${key}/${page}`;
-      revs[k] ??= (st.pageRevs[k] ?? 0) + 1;
-    }
+    const key = itemKey(host, change.workspace, change.design);
+    // A page not listed yet loads once it is: written again before that.
     const pages = changedPages(change, change.design);
+    for (const page of pages) bump(pageKey(host, change.workspace, change.design, page));
     useDesign.setState((s) => ({ pageRevs: { ...s.pageRevs, ...revs }, latest: pages.length ? { ...s.latest, [key]: pages } : s.latest }));
     reloadDesigns(host, change.workspace);
     checkSoon(host, change.workspace, change.design);
@@ -228,6 +232,9 @@ export async function removeDesign(host: string, workspace: string, slug: string
   await rpc(host, M.designRemove, { workspace, slug });
   const key = wsKey(host, workspace);
   useDesign.setState((s) => ({ designShown: s.designShown[key] === slug ? { ...s.designShown, [key]: null } : s.designShown }));
+  const timer = itemKey(host, workspace, slug);
+  clearTimeout(checkTimers[timer]);
+  delete checkTimers[timer];
   await loadDesigns(host, workspace).catch(() => {});
 }
 
@@ -303,14 +310,17 @@ function onChatState(host: string, id: number, state: ChatState) {
   const chat = `${host}/${id}`;
   if ((waiting[chat] ?? "") === asks) return;
   waiting[chat] = asks;
-  for (const [key, list] of Object.entries(useDesign.getState().systems)) {
-    const ws = parseWsKey(key);
-    if (ws.host === host && list.some((s) => s.agent === id)) reload(host, ws.id);
-  }
-  // A design's agent's question or approval: its row and bar (X65).
-  for (const [key, list] of Object.entries(useDesign.getState().designs)) {
-    const ws = parseWsKey(key);
-    if (ws.host === host && list.some((d) => d.agent === id)) reloadDesigns(host, ws.id);
+  // A sync agent's (X64) or a design's agent's (X65): its row, view and bar.
+  const { systems, designs } = useDesign.getState();
+  const lists: [Record<string, { agent: number | null }[]>, (host: string, workspace: string) => void][] = [
+    [systems, reload],
+    [designs, reloadDesigns],
+  ];
+  for (const [byWorkspace, again] of lists) {
+    for (const [key, list] of Object.entries(byWorkspace)) {
+      const ws = parseWsKey(key);
+      if (ws.host === host && list.some((x) => x.agent === id)) again(host, ws.id);
+    }
   }
 }
 
@@ -326,7 +336,7 @@ export async function startDesign() {
       onDesignChange(e.host, d);
       if (wanted.has(wsKey(e.host, d.workspace))) reload(e.host, d.workspace);
       if (d.system) {
-        const key = systemKey(e.host, d.workspace, d.system);
+        const key = itemKey(e.host, d.workspace, d.system);
         // Its frames load again, and its cards are listed again when asked for
         // (a newer request always lands last).
         useDesign.setState((s) => ({ changes: { ...s.changes, [key]: (s.changes[key] ?? 0) + 1 } }));
