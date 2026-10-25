@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { EditRefused, applyEdit, copyElement, highestMid, editLine, editsChip, editsMessage, inlineStyles, lineRead, readEditsMessage, type EditOp, type Untold } from "./designEdits";
+import { EditRefused, applyEdit, copyElement, highestMid, editLine, editLines, editsChip, editsMessage, inlineStyles, lineRead, readEditsMessage, type EditOp, type Untold } from "./designEdits";
 
 /** A page as a design's agent writes it (designs.md): the design system's
  *  styles.css, classes, a page script, an <svg> whose part holds an id, and
@@ -368,6 +368,20 @@ describe("edits by hand, as the agent is told them (X65)", () => {
       ["Edits by hand since your last turn:", "index.html m24 section: restyled with padding: var(--space-4); gap: 8px, wrapped in div m41, undid restyled with width: 320px", "", "Tighter"].join("\n"),
     );
     expect(editsChip(edits)).toBe("3 edits by hand · go with your next message");
+  });
+
+  it("say a restyle or a text after an undone change after it, not merged into the one before it", () => {
+    const m24 = (change: Untold["change"], undone?: boolean): Untold => ({ page: "index", mid: "m24", tag: "section", change, ...(undone ? { undone } : {}) });
+    const edits: Untold[] = [
+      m24({ kind: "restyled", set: { gap: "2px" } }),
+      m24({ kind: "text", text: "Git" }),
+      m24({ kind: "restyled", set: { padding: "4px" } }, true),
+      m24({ kind: "restyled", set: { padding: "8px" } }),
+      m24({ kind: "text", text: "Git and branches" }),
+      m24({ kind: "restyled", set: { gap: "4px" } }),
+    ];
+    expect(editLines(edits)).toEqual(["index.html m24 section: restyled with gap: 2px, text “Git”, undid restyled with padding: 4px, restyled with padding: 8px; gap: 4px, text “Git and branches”"]);
+    expect(editsChip(edits)).toBe("5 edits by hand · go with your next message");
   });
 
   it("are read back from a message as its lines and the user's text, and any other message has none", () => {
