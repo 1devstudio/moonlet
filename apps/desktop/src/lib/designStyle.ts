@@ -65,6 +65,29 @@ export function withStyle(decls: Decl[], set: StyleSet): Decl[] {
   return out;
 }
 
+/** The longest style value the editor writes, or takes from the page. */
+export const STYLE_VALUE_MAX = 200;
+
+/** A border's styles: `none` and `hidden` draw none. */
+export const BORDER_STYLES = ["none", "hidden", "dotted", "dashed", "solid", "double", "groove", "ridge", "inset", "outset"] as const;
+
+/** A value's parts, split on spaces outside parentheses: `14px 24px`,
+ *  `0 1px 3px rgb(0 0 0 / 0.3)` as four. */
+export function valueParts(value: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let cur = "";
+  for (const c of value.trim()) {
+    depth += c === "(" ? 1 : c === ")" ? -1 : 0;
+    if (/\s/.test(c) && depth === 0) {
+      if (cur) out.push(cur);
+      cur = "";
+    } else cur += c;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
 /** A property the editor writes: lowercase letters and `-`, as `padding`
  *  or `border-radius`. */
 export function isStyleProp(prop: string): boolean {
@@ -73,11 +96,11 @@ export function isStyleProp(prop: string): boolean {
 
 /** A value the editor writes into a `style` attribute: lengths, numbers,
  *  colours, keywords, `var(--token)` and functions such as `rgb()`, with
- *  balanced parentheses, at most 200 characters, and nothing that could
+ *  balanced parentheses, at most {@link STYLE_VALUE_MAX} characters, and nothing that could
  *  end the declaration or the attribute or load anything: no quotes, `;`,
  *  braces, angle brackets, backslash, `url(` or `@`. */
 export function isStyleValue(value: string): boolean {
-  if (!value.trim() || value.length > 200 || !/^[A-Za-z0-9\s#%.,()/+*!_-]+$/.test(value) || /url\s*\(|expression\s*\(/i.test(value)) return false;
+  if (!value.trim() || value.length > STYLE_VALUE_MAX || !/^[A-Za-z0-9\s#%.,()/+*!_-]+$/.test(value) || /url\s*\(|expression\s*\(/i.test(value)) return false;
   let depth = 0;
   for (const c of value) {
     depth += c === "(" ? 1 : c === ")" ? -1 : 0;

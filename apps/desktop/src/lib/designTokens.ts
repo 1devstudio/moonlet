@@ -6,23 +6,55 @@
 // a stylesheet.
 
 import type { DesignToken } from "./protocol";
-import type { Decl } from "./designStyle";
+import { BORDER_STYLES, valueParts, type Decl } from "./designStyle";
 
 export type TokenFamily = DesignToken["family"];
 
-const VAR = /var\(\s*(--[A-Za-z0-9_-]+)\s*(?:,([^()]*(?:\([^()]*\))?[^()]*))?\)/;
+/** A token as a style value: `var(--space-4)`. The one build of a token
+ *  reference; {@link varAt} its one parse. */
+export const tokenRef = (name: string) => `var(${name})`;
+
+/** The first `var(--name)` or `var(--name, fallback)` in `text` from
+ *  `from`: where it is, the name and the fallback; null for none. */
+export function varAt(text: string, from = 0): { start: number; end: number; name: string; fallback: string | null } | null {
+  const re = /var\(\s*(--[A-Za-z0-9_-]+)\s*/g;
+  re.lastIndex = from;
+  for (let m = re.exec(text); m; m = re.exec(text)) {
+    let i = m.index + m[0].length;
+    let fallback: string | null = null;
+    if (text[i] === ",") {
+      let depth = 0;
+      const begin = ++i;
+      for (; i < text.length && !(text[i] === ")" && depth === 0); i++) depth += text[i] === "(" ? 1 : text[i] === ")" ? -1 : 0;
+      fallback = text.slice(begin, i).trim();
+    }
+    if (text[i] === ")") return { start: m.index, end: i + 1, name: m[1], fallback };
+  }
+  return null;
+}
+
+/** The token a value names when it is just `var(--token)`; null otherwise. */
+export function tokenRefName(value: string): string | null {
+  const v = value.trim();
+  const at = varAt(v);
+  return at && at.start === 0 && at.end === v.length && at.fallback === null ? at.name : null;
+}
 
 /** `value` with each `var(--token)` in it replaced by the token's value,
  *  along aliases; a `var()` of no token by its fallback, else as it is. */
 export function resolveValue(tokens: DesignToken[], value: string): string {
   let out = value.trim();
+  let from = 0;
   for (let i = 0; i < 10; i++) {
-    const m = VAR.exec(out);
+    const m = varAt(out, from);
     if (!m) break;
-    const t = tokens.find((x) => x.name === m[1]);
-    const by = t ? t.value : m[2] !== undefined ? m[2].trim() : null;
-    if (by === null) break;
-    out = out.slice(0, m.index) + by + out.slice(m.index + m[0].length);
+    const t = tokens.find((x) => x.name === m.name);
+    const by = t ? t.value : m.fallback;
+    if (by === null) {
+      from = m.end;
+      continue;
+    }
+    out = out.slice(0, m.start) + by + out.slice(m.end);
   }
   return out;
 }
@@ -57,29 +89,11 @@ function norm(value: string): string {
     .replace(/(^|[\s(,])0px\b/g, "$10");
 }
 
-/** A value's parts, split on spaces outside parentheses: `14px 24px`. */
-function parts(value: string): string[] {
-  const out: string[] = [];
-  let depth = 0;
-  let cur = "";
-  for (const c of value.trim()) {
-    depth += c === "(" ? 1 : c === ")" ? -1 : 0;
-    if (/\s/.test(c) && depth === 0) {
-      if (cur) out.push(cur);
-      cur = "";
-    } else cur += c;
-  }
-  if (cur) out.push(cur);
-  return out;
-}
-
-const named = (value: string) => /^var\(\s*(--[A-Za-z0-9_-]+)\s*\)$/.exec(value.trim())?.[1] ?? null;
-
 /** The token `value` is: the token it names (`var(--space-4)`), else the
  *  first of `family` whose value, along aliases, is the same value; null
  *  for none. */
 export function tokenOf(tokens: DesignToken[], value: string, family?: TokenFamily): DesignToken | null {
-  const name = named(value);
+  const name = tokenRefName(value);
   if (name) return tokens.find((t) => t.name === name) ?? null;
   const want = norm(resolveValue(tokens, value));
   if (!want) return null;
@@ -92,7 +106,7 @@ export function tokenOf(tokens: DesignToken[], value: string, family?: TokenFami
 export function fieldShown(tokens: DesignToken[], value: string, family: TokenFamily): { token: string | null; value: string } {
   const whole = tokenOf(tokens, value, family);
   if (whole) return { token: whole.name, value: resolveValue(tokens, whole.value) };
-  const each = parts(value).map((p) => tokenOf(tokens, p, family));
+  const each = valueParts(value).map((p) => tokenOf(tokens, p, family));
   if (each.length > 1 && each.every((t) => t !== null)) return { token: each.map((t) => t!.name).join(" "), value: each.map((t) => resolveValue(tokens, t!.value)).join(" ") };
   return { token: null, value: resolveValue(tokens, value) };
 }
@@ -107,13 +121,13 @@ const numberOf = (tokens: DesignToken[], value: string) => parseFloat(/-?\d*\.?\
 export function popoverTokens(tokens: DesignToken[], value: string, family: TokenFamily): DesignToken[] {
   const fam = tokens.filter((t) => t.family === family);
   const first: DesignToken[] = [];
-  for (const p of parts(value)) {
+  for (const p of valueParts(value)) {
     const want = norm(resolveValue(tokens, p));
-    const name = named(p);
+    const name = tokenRefName(p);
     const same = fam.filter((t) => t.name === name || norm(resolveValue(tokens, t.value)) === want);
     for (const t of same.sort((a, b) => Number(b.name === name) - Number(a.name === name))) if (!first.includes(t)) first.push(t);
   }
-  const at = numberOf(tokens, parts(value)[0] ?? "");
+  const at = numberOf(tokens, valueParts(value)[0] ?? "");
   const rest = fam.filter((t) => !first.includes(t));
   if (!Number.isNaN(at)) {
     const d = (t: DesignToken) => Math.abs(numberOf(tokens, t.value) - at);
@@ -143,7 +157,7 @@ export function propRule(prop: string): Rule | null {
 const NEUTRAL = new Set(["0", "auto", "none", "inherit", "initial", "unset", "revert", "transparent", "currentcolor", "normal"]);
 
 /** A border's parts that are no colour: widths and styles. */
-const NOT_COLOUR = /^(-?[\d.]+[a-z%]*|thin|medium|thick|hidden|dotted|dashed|solid|double|groove|ridge|inset|outset)$/;
+const NOT_COLOUR = new RegExp(`^(-?[\\d.]+[a-z%]*|thin|medium|thick|${BORDER_STYLES.join("|")})$`);
 
 /** The properties of an inline style whose value matches no token, where
  *  the property takes tokens: they make the element off-system. */
@@ -154,7 +168,7 @@ export function offSystem(tokens: DesignToken[], style: Decl[]): string[] {
       const rule = propRule(prop);
       if (!rule) return false;
       if (rule.by === "whole") return !on(value, rule.family);
-      const each = parts(value).filter((p) => rule.by === "parts" || !(NEUTRAL.has(norm(p)) || NOT_COLOUR.test(norm(p))));
+      const each = valueParts(value).filter((p) => rule.by === "parts" || !(NEUTRAL.has(norm(p)) || NOT_COLOUR.test(norm(p))));
       return !each.every((p) => on(p, rule.family));
     })
     .map(([prop]) => prop);
@@ -165,6 +179,3 @@ export function offSystem(tokens: DesignToken[], style: Decl[]): string[] {
 export function offSystemMids(tokens: DesignToken[], styles: Record<string, Decl[]>): Set<string> {
   return new Set(Object.keys(styles).filter((mid) => offSystem(tokens, styles[mid]).length > 0));
 }
-
-/** A token as a style value: `var(--space-4)`. */
-export const tokenRef = (name: string) => `var(${name})`;

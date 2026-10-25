@@ -4,6 +4,8 @@
 // talk only through postMessage, and the app takes a message only from its
 // own frame's window and only in a shape it knows.
 
+import { STYLE_VALUE_MAX } from "./designStyle";
+
 /** A box in the page's viewport, in its CSS px. */
 export interface Rect {
   x: number;
@@ -191,7 +193,7 @@ export function bridgeMessage(data: unknown): BridgeMessage | null {
       const style: Record<string, string> = {};
       for (const p of COMPUTED_PROPS) {
         const v = got[p];
-        if (typeof v === "string" && v.length <= 200) style[p] = v;
+        if (typeof v === "string" && v.length <= STYLE_VALUE_MAX) style[p] = v;
       }
       return { type: "computed", mid: d.mid, style };
     }
