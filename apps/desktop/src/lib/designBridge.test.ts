@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { JSDOM, type DOMWindow } from "jsdom";
-import { PAGE_KEYS, bridgeMessage, editMessage, helloMessage, modeMessage, pinsMessage, scrollMessage, selectMessage } from "./designBridge";
+import { PAGE_KEYS, bridgeMessage, editMessage, helloMessage, modeMessage, paletteMessage, pinsMessage, scrollMessage, selectMessage } from "./designBridge";
 import bridge from "../../src-tauri/src/design_bridge.js?raw";
 
 describe("the bridge's messages (X65)", () => {
@@ -100,6 +100,41 @@ describe("the bridge's messages (X65)", () => {
     expect(bridgeMessage({ type: "bridge.scroll", x: 0, y: 1240.5 })).toEqual({ type: "scroll", x: 0, y: 1240.5 });
     expect(bridgeMessage({ type: "bridge.scroll", x: 0, y: NaN })).toBeNull();
     expect(scrollMessage(0, 1240.5)).toEqual({ type: "bridge.scrollTo", x: 0, y: 1240.5 });
+  });
+
+  it("takes the selection's computed style, only the Inspector's properties, and tells the page an off-system selection", () => {
+    expect(bridgeMessage({ type: "bridge.computed", mid: "m24", style: { display: "flex", "flex-direction": "column", padding: "14px 24px", "background-color": "rgb(22, 22, 22)", behavior: "url(x.htc)", opacity: 7 } })).toEqual({
+      type: "computed",
+      mid: "m24",
+      style: { display: "flex", "flex-direction": "column", padding: "14px 24px", "background-color": "rgb(22, 22, 22)" },
+    });
+    expect(bridgeMessage({ type: "bridge.computed", mid: "m24", style: { padding: "x".repeat(201) } })).toEqual({ type: "computed", mid: "m24", style: {} });
+    expect(bridgeMessage({ type: "bridge.computed", mid: "m24]", style: {} })).toBeNull();
+    expect(selectMessage("m24", true)).toEqual({ type: "bridge.select", mid: "m24", off: true });
+  });
+
+  it("takes where a drag would drop and the move on drop, the size or place a handle or a drag gives in px, and a snippet's drop", () => {
+    const place = { where: "above", ref: "m22" };
+    expect(bridgeMessage({ type: "bridge.drag", mid: "m24", place })).toEqual({ type: "drag", mid: "m24", place });
+    expect(bridgeMessage({ type: "bridge.drag", mid: null, place: null })).toEqual({ type: "drag", mid: null, place: null });
+    expect(bridgeMessage({ type: "bridge.move", mid: "m24", place: { where: "into", ref: "m30" } })).toEqual({ type: "move", mid: "m24", place: { where: "into", ref: "m30" } });
+    expect(bridgeMessage({ type: "bridge.move", mid: "m24", place: { where: "inside", ref: "m30" } })).toBeNull();
+    expect(bridgeMessage({ type: "bridge.move", mid: "m24", place: { where: "above", ref: 'm2"' } })).toBeNull();
+    expect(bridgeMessage({ type: "bridge.move", mid: "m24", place: null })).toBeNull();
+    expect(bridgeMessage({ type: "bridge.style", mid: "m24", set: { width: "320px", height: "180.5px" } })).toEqual({ type: "style", mid: "m24", set: { width: "320px", height: "180.5px" } });
+    expect(bridgeMessage({ type: "bridge.style", mid: "m24", set: { left: "-12px", top: "40px" } })).toEqual({ type: "style", mid: "m24", set: { left: "-12px", top: "40px" } });
+    expect(bridgeMessage({ type: "bridge.style", mid: "m24", set: { width: "320px; color: red" } })).toBeNull();
+    expect(bridgeMessage({ type: "bridge.style", mid: "m24", set: { color: "red" } })).toBeNull();
+    expect(bridgeMessage({ type: "bridge.style", mid: "m24", set: {} })).toBeNull();
+    expect(bridgeMessage({ type: "bridge.drop", place })).toEqual({ type: "drop", place });
+    expect(bridgeMessage({ type: "bridge.drop", place: null })).toEqual({ type: "drop", place: null });
+    expect(paletteMessage(true)).toEqual({ type: "bridge.palette", dragging: true });
+  });
+
+  it("tells the page the new edits to make on its live page: a style, a move, and an insert above or into an element", () => {
+    expect(editMessage({ op: "style", mid: "m24", style: "padding: var(--space-4)" })).toEqual({ type: "bridge.edit", op: "style", mid: "m24", style: "padding: var(--space-4)" });
+    expect(editMessage({ op: "move", mid: "m24", place: { where: "above", ref: "m22" } })).toEqual({ type: "bridge.edit", op: "move", mid: "m24", place: { where: "above", ref: "m22" } });
+    expect(editMessage({ op: "insert", into: "m22", html: '<hr data-mid="m41">' })).toEqual({ type: "bridge.edit", op: "insert", into: "m22", html: '<hr data-mid="m41">' });
   });
 
   it("drops a message of an unknown type, or that is not an object", () => {
