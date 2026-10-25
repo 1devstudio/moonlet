@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { renderUrl, verdict } from "./renderPage";
+import { handBack, renderUrl, verdict } from "./renderPage";
 
 const job = {
   id: 7,
@@ -44,5 +44,44 @@ describe("the render page (X64)", () => {
     expect(verdict({ type: "moonlet-render", job: "7", metrics: null, errors: ["the measuring script failed: TypeError"] }, 7)).toEqual({
       error: "the card could not be measured: the measuring script failed: TypeError",
     });
+  });
+});
+
+describe("handing a verdict back (X64)", () => {
+  const recorder = (refuse: number) => {
+    const sent: unknown[] = [];
+    const logged: string[] = [];
+    let calls = 0;
+    const send = async (cmd: string, args: Record<string, unknown>) => {
+      sent.push([cmd, args]);
+      calls += 1;
+      if (calls <= refuse) throw { code: "forbidden", message: "only the app's render page renders cards" };
+      return null;
+    };
+    return { sent, logged, send, log: (m: string) => logged.push(m) };
+  };
+
+  it("hands the verdict to the backend once when it takes it", async () => {
+    const r = recorder(0);
+    await handBack(7, { metrics: { flags: [], errors: [] } }, r.send, r.log);
+    expect(r.sent).toEqual([["design_render_measured", { id: 7, metrics: { flags: [], errors: [] } }]]);
+    expect(r.logged).toEqual([]);
+  });
+
+  it("hands back why when the backend refuses the verdict, and logs it", async () => {
+    const r = recorder(1);
+    await handBack(7, { metrics: { flags: ["bad"], errors: [] } }, r.send, r.log);
+    expect(r.sent[1]).toEqual(["design_render_measured", { id: 7, error: "the render page could not hand back its verdict: only the app's render page renders cards" }]);
+    expect(r.logged).toEqual(["the render page could not hand back card 7: only the app's render page renders cards"]);
+  });
+
+  it("logs both failures when the backend refuses the reason too", async () => {
+    const r = recorder(2);
+    await handBack(7, { error: "the card did not finish loading in 15 s" }, r.send, r.log);
+    expect(r.sent).toHaveLength(2);
+    expect(r.logged).toEqual([
+      "the render page could not hand back card 7: only the app's render page renders cards",
+      "the render page could not tell why either: only the app's render page renders cards",
+    ]);
   });
 });

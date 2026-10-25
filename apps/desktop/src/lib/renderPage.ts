@@ -38,3 +38,30 @@ export function verdict(data: unknown, job: number): Verdict | null {
   }
   return { metrics: { flags: rubric(m), errors: m.errors } };
 }
+
+/** Calls a backend command (Tauri's `invoke`). */
+export type Send = (cmd: string, args: Record<string, unknown>) => Promise<unknown>;
+
+/** Hands the verdict on job `id` to the backend; when the backend refuses it,
+ *  hands it why instead, so the daemon hears the reason rather than a
+ *  timeout. What fails is logged. */
+export async function handBack(id: number, v: Verdict, send: Send, log: (message: string) => void): Promise<void> {
+  try {
+    await send("design_render_measured", { id, ...v });
+    return;
+  } catch (e) {
+    log(`the render page could not hand back card ${id}: ${reason(e)}`);
+    try {
+      await send("design_render_measured", { id, error: `the render page could not hand back its verdict: ${reason(e)}` });
+    } catch (again) {
+      log(`the render page could not tell why either: ${reason(again)}`);
+    }
+  }
+}
+
+/** A failed command's message: Tauri rejects with the command's error. */
+export function reason(e: unknown): string {
+  if (typeof e === "string") return e;
+  if (typeof e === "object" && e !== null && typeof (e as { message?: unknown }).message === "string") return (e as { message: string }).message;
+  return String(e);
+}
