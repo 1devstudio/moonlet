@@ -30,11 +30,12 @@ import {
   systemsOf,
   useDesign,
 } from "../../lib/designStore";
-import { askWithEdits, sendCommentsWithEdits, copyElementOf, dismissUnsaved, editPage, loadPageSource, pasteInto, pendingOf, redoEdit, sendWithEdits, undoEdit, undoOf, unsavedOf, useEditor } from "../../lib/designEditor";
-import { EditRefused, editsChip, type EditOp } from "../../lib/designEdits";
+import { askWithEdits, closeDesign, hasCopy, sendCommentsWithEdits, copyElementOf, dismissUnsaved, editPage, loadPageSource, pasteInto, pendingOf, redoEdit, sendWithEdits, undoEdit, undoOf, unsavedOf, useEditor } from "../../lib/designEditor";
+import { EditRefused, editsChip, type Edit } from "../../lib/designEdits";
 import { pageUrl } from "../../lib/designView";
 import { VIEWPORTS, canvasKey, canvasScale, canvasZoom, customViewports, fitBox, parseViewport, sizeOf, sizeText, viewportLabel, viewportText, withCustomViewport, type Size } from "../../lib/designViewport";
-import { breadcrumb, canvasPage, canvasStep, isTyping, keyAct, layerStep, modeEntered, modeHint, writingPage, type CanvasAct, type CanvasMode, type CanvasState, type EditKey, type ModeKeyPress, type RailTab } from "../../lib/designCanvas";
+import { breadcrumb, canvasPage, canvasStep, chatAfter, editorStep, isTyping, keyAct, modeEntered, modeHint, onReport, undoOpen, writingPage, type CanvasAct, type CanvasMode, type CanvasState, type ChatPanel, type KeyAct, type RailTab } from "../../lib/designCanvas";
+import { keyId } from "../../lib/runActions";
 import { chatCardLookup, commentCardSelector, messageView, commentsTab, keepAction, openCommentsLabel, pageCounts, sendAll } from "../../lib/designComments";
 import { bridgeMessage, editMessage, helloMessage, modeMessage, pinsMessage, scrollMessage, selectMessage, type Layer, type PickedElement, type Rect } from "../../lib/designBridge";
 import { pageFile, pagePath } from "../../lib/designPage";
@@ -53,9 +54,6 @@ import { Breadcrumb, EditsChip, EditsMessage, LayersTab } from "./Editor";
 
 const NO_PINS: DesignComment[] = [];
 const NO_LAYERS: Layer[] = [];
-
-/** A key event as the canvas reads it. */
-const pressOf = (e: KeyboardEvent, typing: boolean): ModeKeyPress => ({ key: e.key, code: e.code, meta: e.metaKey, ctrl: e.ctrlKey, alt: e.altKey, shift: e.shiftKey, typing });
 
 /** A design's viewport until it has one: Desktop. */
 const DEFAULT_VIEWPORT = VIEWPORTS[0].size;
@@ -86,7 +84,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
   const bridge = useRef<((message: unknown) => void) | null>(null);
   const pending = useEditor((e) => pendingOf(e, host, workspace, design.slug));
   const unsaved = useEditor((e) => unsavedOf(e, host, workspace, design.slug));
-  const canUndo = useEditor((e) => undoOf(e, host, workspace, design.slug).done.length > 0);
+  const changes = useEditor((e) => undoOf(e, host, workspace, design.slug).done.length);
   // The comment box, pinned to an element of its page, shown with that page.
   const [box, setBox] = useState<(BoxTarget & { page: string }) | null>(null);
   const [canvasRef, [cw, ch]] = useSize<HTMLDivElement>();
@@ -114,39 +112,47 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
     setLayers(NO_LAYERS);
   }, [design.slug, page]);
 
-  // C, Esc and the mode buttons, as canvasStep decides.
   // V, C, Esc and the mode buttons, as canvasStep decides; Edit is locked
-  // while the agent works, and left when it starts.
+  // while the agent works, and left when it starts. Entering Edit folds the
+  // chat, and leaving it opens the chat again when that folded it.
   const canvas = useRef<CanvasState>({ mode, box: box !== null, rail: railOpen });
   canvas.current = { mode, box: box !== null, rail: railOpen };
   const workingRef = useRef(working);
   workingRef.current = working;
+  const chat = useRef<ChatPanel>({ open: chatOpen, foldedForEdit: false });
+  chat.current = { ...chat.current, open: chatOpen };
   const step = useCallback((act: CanvasAct) => {
     const before = canvas.current.mode;
     const next = canvasStep(canvas.current, act, workingRef.current);
     setMode(next.mode);
     setRailOpen(next.rail);
     if (!next.box) setBox(null);
-    const entered = modeEntered(before, next.mode);
-    if (entered.tab) setRailTab(entered.tab);
-    if (entered.foldChat) setChatOpen(false);
+    const tab = modeEntered(before, next.mode);
+    if (tab) setRailTab(tab);
+    chat.current = chatAfter(before, next.mode, chat.current);
+    setChatOpen(chat.current.open);
     if (next.mode !== "edit") setSelected(null);
   }, []);
   useEffect(() => {
     if (working) step("lock");
   }, [working, step]);
+  // The design's undo is since it was opened.
+  useEffect(() => () => closeDesign(host, workspace, design.slug), [host, workspace, design.slug]);
 
-  // The editor: the selection, and each edit by hand made on the page's
-  // source, saved, and made on the live page too so it shows at once.
-  // The page is told the selection once it is in Edit mode (PageFrame).
+  // The editor: the selection, told to the page in Edit mode (PageFrame),
+  // and each edit by hand made on the page's source, saved, and made on the
+  // live page too so it shows at once.
   const select = setSelected;
-  const runEdit = (op: EditOp) => {
-    if (page === null) return;
+  /** Runs an edit; one the page's source cannot take is said, and with
+   *  `reload` the page loads again to drop what the live page shows. */
+  const edited = (run: () => Edit | null, reload = false) => {
     try {
-      const edit = editPage(host, workspace, design.slug, page, op, selected);
+      const edit = run();
+      if (!edit) return;
       if (edit.live) bridge.current?.(editMessage(edit.live));
       select(edit.select);
     } catch (e) {
+      if (reload && page !== null) reloadPage(host, workspace, design.slug, page);
       if (e instanceof EditRefused) toast(e.message, "info");
       else errorToast(e);
     }
@@ -157,44 +163,35 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
       setPicked(to.page);
       select(to.select);
     }, errorToast);
-  // A key on the canvas or in its page: true when it did something.
-  const onKeyAct = (k: ReturnType<typeof keyAct>): boolean => {
-    if (k === null) return false;
-    if (k === "toggle" || k === "toggleEdit") {
-      step(k);
-      return true;
+  // A key on the canvas or in its page, as editorStep decides: true when
+  // the canvas took it.
+  const onKeyAct = (k: KeyAct | null): boolean => {
+    const s = editorStep({ mode, selected, layers, copied: hasCopy(host, workspace, design.slug), locked: working }, k);
+    if (!s) return false;
+    switch (s.kind) {
+      case "canvas":
+        step(s.act);
+        break;
+      case "select":
+        select(s.mid);
+        break;
+      case "undo":
+      case "redo":
+        travel(s.kind === "undo");
+        break;
+      case "say":
+        toast(s.text, "info");
+        break;
+      case "copy":
+        if (page !== null && copyElementOf(host, workspace, design.slug, page, s.mid)) toast(`Copied ${s.mid}; ⌘V pastes it on any page of ${design.name}`, "info");
+        break;
+      case "paste":
+        if (page !== null) edited(() => pasteInto(host, workspace, design.slug, page, s.after));
+        break;
+      case "edit":
+        if (page !== null) edited(() => editPage(host, workspace, design.slug, page, { kind: s.op, mid: s.mid }, selected));
+        break;
     }
-    if (k === "escape") {
-      // Esc selects the parent, and past the body nothing; else leaves the mode.
-      if (mode === "edit" && selected) select(layerStep(layers, selected, "parent"));
-      else step("escape");
-      return true;
-    }
-    if (mode !== "edit" || page === null) return false;
-    return editKey(k);
-  };
-  const editKey = (k: EditKey): boolean => {
-    if (k === "undo" || k === "redo") {
-      travel(k === "undo");
-      return true;
-    }
-    if (k === "paste") {
-      try {
-        const edit = pasteInto(host, workspace, design.slug, page!, selected);
-        if (!edit) return toast("Copy an element with ⌘C first", "info"), true;
-        if (edit.live) bridge.current?.(editMessage(edit.live));
-        select(edit.select);
-      } catch (e) {
-        if (e instanceof EditRefused) toast(e.message, "info");
-        else errorToast(e);
-      }
-      return true;
-    }
-    if (!selected) return false;
-    if (k === "next" || k === "prev") select(layerStep(layers, selected, k));
-    else if (k === "copy") {
-      if (copyElementOf(host, workspace, design.slug, page!, selected)) toast(`Copied ${selected}; ⌘V pastes it on any page of ${design.name}`, "info");
-    } else runEdit({ kind: k, mid: selected });
     return true;
   };
   const keyRef = useRef(onKeyAct);
@@ -202,23 +199,16 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
   // A text edited in place on the page; one the source cannot take is put
   // back by loading the page again.
   const onText = (mid: string, text: string) => {
-    if (page === null) return;
-    try {
-      editPage(host, workspace, design.slug, page, { kind: "text", mid, text }, selected);
-    } catch (e) {
-      reloadPage(host, workspace, design.slug, page);
-      if (e instanceof EditRefused) toast(e.message, "info");
-      else errorToast(e);
-    }
+    if (page !== null) edited(() => editPage(host, workspace, design.slug, page, { kind: "text", mid, text }, selected), true);
   };
   const textRef = useRef(onText);
   textRef.current = onText;
+  // Keys without ⌘ on the app; the ⌘ ones come through claimKeys below.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const { dialog, confirm, settingsPage } = useStore.getState();
       if (dialog || confirm || settingsPage || e.metaKey) return;
-      const typing = isTyping(e.target instanceof Element ? e.target : null);
-      if (keyRef.current(keyAct(pressOf(e, typing)))) e.preventDefault();
+      if (keyRef.current(keyAct(keyId(e), isTyping(e.target instanceof Element ? e.target : null)))) e.preventDefault();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -231,7 +221,8 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
     asked.current = design.needs_you;
   }, [design.needs_you]);
 
-  // ⌘0 fits, ⌘= and ⌘- zoom, ⌘\ folds the chat, while this screen is shown.
+  // ⌘0 fits, ⌘= and ⌘- zoom, ⌘\ folds the chat, and the editor's ⌘ keys,
+  // while this screen is shown.
   const scaleRef = useRef(scale);
   scaleRef.current = scale;
   useEffect(
@@ -242,11 +233,10 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
         else if (k === "in" || k === "out") setZoom(canvasZoom(scaleRef.current || 1, k === "in" ? 1 : -1));
         else if (k === "chat") setChatOpen((o) => !o);
         if (k !== null) return true;
-        // The editor's ⌘ keys; ⌘C copies text selected anywhere as usual.
         const { dialog, confirm, settingsPage } = useStore.getState();
         if (dialog || confirm || settingsPage) return false;
-        const typing = isTyping(e.target instanceof Element ? e.target : null) || (id === "cmd+c" && !(window.getSelection()?.isCollapsed ?? true));
-        return keyRef.current(keyAct(pressOf(e, typing)));
+        const textSelected = !(window.getSelection()?.isCollapsed ?? true);
+        return keyRef.current(keyAct(id, isTyping(e.target instanceof Element ? e.target : null), textSelected));
       }),
     [],
   );
@@ -442,7 +432,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
           <ViewportMenu viewport={viewport} onPick={setViewport} onCustom={() => setCustom(true)} />
           <ZoomBar scale={scale} fitted={zoom === null} max={2} keys onZoom={setZoom} />
           {chip && <EditsChip text={chip} />}
-          <IconButton title="Undo (⌘Z)" className="ml-auto" disabled={!canUndo} onClick={() => travel(true)}>
+          <IconButton title="Undo (⌘Z)" className="ml-auto" disabled={!undoOpen({ locked: working, changes })} onClick={() => travel(true)}>
             <Undo2 size={14} />
           </IconButton>
           <div role="group" aria-label="Canvas mode" className="flex h-7 items-center rounded-md border border-border-strong p-0.5">
@@ -642,7 +632,12 @@ function PageFrame({
   const latest = useRef({ mode, wanted, selected, rev, onPick, onKey, onTree, onSelected, onText });
   latest.current = { mode, wanted, selected, rev, onPick, onKey, onTree, onSelected, onText };
   const tell = (message: unknown) => frame.current?.contentWindow?.postMessage(message, "*");
-  bridge.current = tell;
+  useEffect(() => {
+    bridge.current = tell;
+    return () => {
+      if (bridge.current === tell) bridge.current = null;
+    };
+  });
   // Where the page was scrolled, and the load of it the bridge last
   // reported from: a reload comes back there, with the selection.
   const scrolled = useRef({ x: 0, y: 0 });
@@ -653,7 +648,8 @@ function PageFrame({
     scrolled.current = { x: 0, y: 0 };
   }, [page]);
   // The page's source for the editor, read as the frame loads it.
-  useEffect(() => void loadPageSource(host, workspace, design.slug, page).catch(() => {}), [host, workspace, design.slug, page, rev]);
+  // An older read coming back late is dropped by the store; a failed one is said.
+  useEffect(() => void loadPageSource(host, workspace, design.slug, page).catch(errorToast), [host, workspace, design.slug, page, rev]);
   useEffect(() => void tell(modeMessage(mode)), [mode]);
   useEffect(() => void tell(pinsMessage(wanted)), [wantedKey]);
   useEffect(() => {
@@ -672,10 +668,11 @@ function PageFrame({
         tell(pinsMessage(latest.current.wanted));
         // The first report of a load: back where it was scrolled, with the
         // selection, as before the reload.
-        if (reported.current !== latest.current.rev) {
+        const back = onReport({ rev: latest.current.rev, reported: reported.current, scrolled: scrolled.current, mode: latest.current.mode, selected: latest.current.selected });
+        if (back) {
           reported.current = latest.current.rev;
-          if (scrolled.current.x || scrolled.current.y) tell(scrollMessage(scrolled.current.x, scrolled.current.y));
-          if (latest.current.mode === "edit") tell(selectMessage(latest.current.selected));
+          if (back.scroll) tell(scrollMessage(back.scroll.x, back.scroll.y));
+          if (back.select !== undefined) tell(selectMessage(back.select));
         }
       } else if (m.type === "tree") latest.current.onTree(m.layers);
       else if (m.type === "scroll") scrolled.current = { x: m.x, y: m.y };
@@ -688,7 +685,7 @@ function PageFrame({
         latest.current.onPick(m.element);
       } else if (m.type === "key") {
         // A key pressed in the page, where the bridge already left out typing.
-        latest.current.onKey(keyAct({ key: m.key, meta: m.meta, ctrl: false, alt: m.alt, shift: m.shift, typing: false }));
+        latest.current.onKey(keyAct(keyId({ key: m.key, code: "", ctrlKey: false, shiftKey: m.shift, altKey: m.alt, metaKey: m.meta }), false));
       }
     };
     window.addEventListener("message", onMessage);
