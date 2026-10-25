@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DesignCard, DesignSystem } from "./protocol";
-import { cardGroups, cardUrl, changedBanner, fitScale, fixMessage, fixState, headerLine, listedCards, problemsLabel, rendersHere, statusLine, variantsLabel, visibleCards, zoomStep } from "./designView";
+import { cardGroups, cardUrl, pageUrl, changedBanner, fitScale, fixMessage, fixState, headerLine, listedCards, problemsLabel, rendersHere, statusLine, variantsLabel, visibleCards, zoomStep } from "./designView";
 
 const NOW = 1_761_200_000_000;
 const DAY = 86_400_000;
@@ -159,6 +159,15 @@ describe("the design system view's status (X64)", () => {
   it("renders cards only on this Mac, where their files are", () => {
     expect(rendersHere("local")).toBe(true);
     expect(rendersHere("studio-mini")).toBe(false);
+  });
+});
+
+describe("a design's page (X65)", () => {
+  it("is served from its design's pages, on a host of its own that another page never shares", () => {
+    expect(pageUrl("w-1devstudio", "settings-page", "index")).toBe("moonlet-design://77b546eb07dc1f7b.w-1devstudio/designs/settings-page/pages/index.html");
+    expect(pageUrl("w-1devstudio", "settings-page", "git-a")).toBe("moonlet-design://af289426c92839b1.w-1devstudio/designs/settings-page/pages/git-a.html");
+    // After a change, a new address on the same host, so the frame loads it again.
+    expect(pageUrl("w-1devstudio", "settings-page", "index", 4)).toBe("moonlet-design://77b546eb07dc1f7b.w-1devstudio/designs/settings-page/pages/index.html?v=4");
   });
 });
 
