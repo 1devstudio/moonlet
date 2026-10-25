@@ -36,7 +36,7 @@ A cloud machine is a worker like any other in X62. It runs routed commands in a 
   - `list(labels)` returns `[{id, name, labels, created_at}]`;
   - `destroy(id)` is done when the provider says the machine is gone.
 
-  Nothing else knows the provider. Each adapter describes its settings fields: names, which are secret, and help text. The settings form is built from that description.
+  Nothing else knows the provider. Each adapter describes its settings fields (names, which are secret, and help text) and how it bills: every started unit in full (Hetzner: every started hour) and a minimum. The settings form is built from that description; idle removal and machine-hours follow the billing.
 - [x] **Hetzner Cloud** calls `https://api.hetzner.cloud/v1` with `Authorization: Bearer <token>`:
   - create: `POST /servers` with `name`, `server_type`, `image`, `location`, `user_data`, `labels` and `start_after_create: true`;
   - `GET /servers/{id}`;
@@ -108,6 +108,14 @@ A cloud machine is a worker like any other in X62. It runs routed commands in a 
   | N = 0, ready 10:00, command 10:01–10:04 | 10:04 |
   | N = 0, `worker up` ready 10:00, nothing waiting | 10:05 |
 
+  These are for a provider that bills by the second. One that bills every started unit keeps an idle machine until 3 minutes before the time it has paid for ends (a fifth of a shorter unit), so the removal ends inside it: leaving earlier saves nothing, and a command meanwhile reuses the machine. **Remove now**, turning a project's cloud off and removing a provider still act at once. Worked examples for Hetzner (every started hour), created 10:00, ready 10:02, N = 15:
+
+  | Events | Removed at |
+  |---|---|
+  | nothing runs | 10:57 |
+  | command 10:40–11:05 | 11:57 |
+  | N = 0, command 10:50–10:58 | 10:58 |
+
 - [ ] **Removing:**
   1. The machine leaves the candidates.
   2. The central host revokes its device token. Its open connection stays for the next step, and closes after it.
@@ -131,7 +139,7 @@ A cloud machine is a worker like any other in X62. It runs routed commands in a 
 
 ### Limits
 
-- [x] **At most [N] machines** (default 2) counts machines that are creating, starting, ready or removing. **[H] machine-hours a month** (default 40) counts, for each machine, the time from the create call to the confirmed removal, in the current calendar month (UTC). The Cloud workers page shows "12.5 of 40 machine-hours this month".
+- [x] **At most [N] machines** (default 2) counts machines that are creating, starting, ready or removing. **[H] machine-hours a month** (default 40) counts, for each machine, the time its provider bills from the create call to the confirmed removal (every started hour in full for Hetzner), in the current calendar month (UTC); a machine still running counts its started unit. The Cloud workers page shows "12.5 of 40 machine-hours this month".
 - [x] At a limit, no machine is made. Overflow is skipped, and a requested machine fails with "Cloud limit reached: 40 of 40 machine-hours this month". Running machines keep their idle time.
 - [x] Tokens, the OAuth client and the limits change only from the Mac's app or a paired desktop. `cloud.set` from the `moonlet` CLI or a phone is refused with `forbidden`. The `moonlet` CLI may call `cloud.up`, `cloud.down` and `cloud.machines`.
 
@@ -155,7 +163,7 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
     ]
     ```
 
-  - **Idle time and limits:** "Agents can start machines with moonlet worker up, but only you can change these." The rows are "Remove a machine after [15] minutes idle" ("With 0, a machine goes as soon as its command ends. One that has run nothing stays 5 minutes."), "At most [2] machines" ("Counts machines that are being created, starting, ready or being removed.") and "Monthly limit [40] machine-hours" ("From each create call to its confirmed removal, per calendar month (UTC)."), with a usage bar and "12.5 of 40 machine-hours this month".
+  - **Idle time and limits:** "Agents can start machines with moonlet worker up, but only you can change these." The rows are "Remove a machine after [15] minutes idle" ("With 0, a machine goes as soon as its command ends. One that has run nothing stays 5 minutes.", followed, for providers in use that bill by the hour, by "Hetzner Cloud bills every started hour, so an idle machine stays until its hour is about to end."), "At most [2] machines" ("Counts machines that are being created, starting, ready or being removed.") and "Monthly limit [40] machine-hours" ("From each create call to its confirmed removal, per calendar month (UTC)."), with a usage bar and "12.5 of 40 machine-hours this month".
   - A save bar: "~/.moonlet/cloud.json on studio-mini", "Unsaved changes", **Discard** and **Save** (⌘↵).
 - **Project page, Cloud workers** ([project-page.png](design/x62-x63/project-page.png)): "Machines studio-mini rents to run shop's heavy commands. Tokens and limits are in Settings › Machines › Cloud workers." Then:
   - **Use cloud machines when every worker is busy** ("The command still runs on studio-mini. A machine starts and takes the next one.");
@@ -272,14 +280,14 @@ Where the tests live:
 | A session that asked for the cloud | `a_session_asks_for_the_cloud_when_it_is_made`, `two_first_commands_at_once_share_one_machine`, `a_cloud_session_waits_for_its_machine_and_runs_there`, `a_cloud_session_runs_on_the_central_host_when_no_machine_can_start`, `run_here_runs_a_job_waiting_for_a_cloud_machine_on_the_central_host`, `stop_ends_a_job_waiting_for_a_cloud_machine` |
 | `moonlet worker up`, `ls`, `down` | `worker_up_ls_and_down` |
 | Start a machine | e2e "Start a machine shows Starting, then Ready" |
-| Idle time (worked examples) | `removes_at_the_times_in_the_worked_examples`, `a_running_or_awaited_machine_is_not_removed`, `an_idle_machine_is_removed_after_the_idle_time`, `with_idle_zero_a_machine_goes_when_its_command_ends`, `with_idle_zero_an_unused_machine_stays_five_minutes` |
+| Idle time (worked examples) | `removes_at_the_times_in_the_worked_examples`, `a_running_or_awaited_machine_is_not_removed`, `an_idle_machine_is_removed_after_the_idle_time`, `with_idle_zero_a_machine_goes_when_its_command_ends`, `with_idle_zero_an_unused_machine_stays_five_minutes`, `an_idle_machine_stays_until_its_paid_time_ends`, `an_idle_machine_stays_until_its_paid_hour_ends`; Vitest "says which providers keep an idle machine until its paid hour ends" |
 | Removing | `removing_revokes_the_device_retires_and_destroys`, `removing_logs_the_machine_out_of_the_tailnet`, `a_failing_destroy_is_retried_and_reported_after_three_tries`, `retry_tries_a_failing_removal_again_at_once`, `retry_tries_only_its_own_machine_again`; Vitest "the removal toast", "toasts a removal error once, when it starts", "lists Cloud workers on the central host, with a dot while a machine is not removed (X63)" |
 | Remove now | `remove_now_removes_an_idle_machine_at_once`, `cloud_down_waits_for_running_commands` |
 | A link down for 10 minutes | `a_machine_whose_link_stays_down_is_removed` |
 | The sweep (worked examples) | `sweeps_as_in_the_worked_examples`, `a_create_call_running_over_five_minutes_counts_as_stuck`, `the_sweep_destroys_a_machine_moonlet_lost_track_of`, `the_sweep_books_the_time_of_a_machine_the_provider_lost`, `a_machine_left_creating_by_a_restart_is_destroyed` |
 | Turning off, removing a provider | `turning_a_projects_cloud_off_removes_its_machines_after_their_commands`, `removing_a_provider_removes_its_machines_first`, `a_provider_removed_while_busy_goes_later_even_after_a_restart_unless_added_again`; Vitest "removing a provider keeps the page's other unsaved edits" |
 | Archiving | `archiving_a_session_leaves_its_machine_to_the_idle_time` |
-| What the limits count | `a_creating_machine_counts_against_the_limit`, `counts_machine_hours_across_a_month_boundary`, `running_machines_count_toward_the_monthly_limit` |
+| What the limits count | `a_creating_machine_counts_against_the_limit`, `counts_machine_hours_across_a_month_boundary`, `counts_billed_time_by_the_providers_unit`, `usage_counts_every_started_hour`, `running_machines_count_toward_the_monthly_limit` |
 | At a limit | `a_limit_refuses_cloud_up_with_the_message` |
 | Who changes the settings | `cloud_set_from_the_cli_or_a_phone_is_forbidden`, `a_phone_reaches_an_ssh_host_through_the_mac` (a routed phone), `cloud_get_returns_no_secrets`, `only_a_known_providers_fields_are_kept`, `a_tag_is_letters_digits_and_dashes`, `a_failed_write_changes_nothing`, `the_file_is_private_even_over_a_left_temporary_file_or_an_open_one`, `a_cloud_json_that_cannot_be_read_is_never_overwritten`; Vitest "a provider added without its secret cannot be saved" |
 | A cloud device's methods | `a_cloud_device_may_call_only_worker_methods`, `a_cloud_device_cannot_take_a_route_to_a_remote_host`, `a_cloud_device_opens_copies_of_its_own_project_only` |
@@ -304,7 +312,6 @@ Where the tests live:
 
 - **Provisional captures.** The Hetzner and Tailscale responses in `crates/moonlet-cloud/src/fixtures/` are written from the providers' API documentation. They are replaced by real, sanitised captures once a sandbox Hetzner token and a Tailscale OAuth client are available, before the manual test.
 
-- **Hetzner's billing step** (per started hour or finer) decides whether a short idle time saves money. Check it against Hetzner's current pricing page before release. The default stays 15 minutes either way.
 - **The Tailscale key API's field names** (`capabilities.devices.create.ephemeral`, `preauthorized`, `tags`, `expirySeconds`) are to be confirmed against a captured response when the adapter is built.
 
 Decided by the user on 2026-10-22:
