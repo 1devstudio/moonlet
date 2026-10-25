@@ -1,30 +1,27 @@
 // A workspace design's screen (X65): its agent's chat on the left, and the
 // canvas with its page tabs, viewport, zoom, bar and the page in a sandboxed
-// frame on a host of its own; and the New design dialog.
+// frame on a host of its own.
 
-import { ArrowRight, ChevronDown, LayoutGrid, Loader2, Minus, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Plus, SwatchBook, Trash2 } from "lucide-react";
+import { ArrowRight, ChevronDown, LayoutGrid, Loader2, MoreHorizontal, PanelLeftClose, PanelLeftOpen, SwatchBook, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useShallow } from "zustand/react/shallow";
 import { errorToast, toast, updateSettings, useStore } from "../../lib/store";
-import { rpc } from "../../lib/daemon";
-import { M, type Design } from "../../lib/protocol";
-import { briefShown, designSubtitle, newDesignReady, systemSummary } from "../../lib/design";
-import { createDesign, latestOf, systemNameOf, pageRevOf, problemsOf, removeDesign, saveViewport, showDesign, systemsOf, useDesign } from "../../lib/designStore";
+import type { Design } from "../../lib/protocol";
+import { briefShown, designSubtitle } from "../../lib/design";
+import { askAgent, latestOf, pageRevOf, problemsOf, removeDesign, saveViewport, stopAgent, systemNameOf, systemsOf, useDesign } from "../../lib/designStore";
 import { pageUrl } from "../../lib/designView";
-import { VIEWPORTS, canvasKey, canvasScale, canvasZoom, customViewports, parseViewport, sizeOf, sizeText, viewportLabel, viewportText, withCustomViewport, type Size } from "../../lib/designViewport";
+import { VIEWPORTS, canvasKey, canvasScale, canvasZoom, customViewports, fitBox, parseViewport, sizeOf, sizeText, viewportLabel, viewportText, withCustomViewport, type Size } from "../../lib/designViewport";
 import { canvasPage, writingPage } from "../../lib/designCanvas";
 import { pageFile, pagePath } from "../../lib/designPage";
-import { barProblems, chatOpensOn, designBar, pageFixMessage, type Bar, type BarAction } from "../../lib/designBars";
+import { barProblems, chatOpensOn, designBar, pageFixMessage, type Bar, type BarAction, type PageProblem } from "../../lib/designBars";
 import { claimKeys } from "../../lib/keys";
 import { askConfirm } from "../../lib/confirm";
-import { workspaceProjects } from "../../lib/tasksStore";
-import { useNow } from "../../lib/useNow";
 import { NEAR_ROOT, useNear } from "../../lib/useNear";
 import { cx } from "../../lib/cx";
-import { AgentIcon, Button, Dialog, Field, IconButton, Kbd, inputCls, selectCls } from "../ui";
+import { AgentIcon, Button, Dialog, Field, IconButton, inputCls } from "../ui";
 import { Menu } from "../Menu";
 import { AgentView } from "../AgentView";
-import { CardFrame, useSize } from "./SystemView";
+import { useSize } from "../../lib/useSize";
+import { CardFrame, ZoomBar } from "./Frame";
 
 /** A design's viewport until it has one: Desktop. */
 const DEFAULT_VIEWPORT = VIEWPORTS[0].size;
@@ -37,7 +34,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
   const systemName = useDesign((d) => systemNameOf(d, host, workspace, design.system)) ?? design.system;
   const agent = useStore((s) => (design.agent !== null && s.terminals[host]?.[design.agent]?.chat ? design.agent : null));
   const working = useStore((s) => agent !== null && s.terminals[host]?.[agent]?.agent_state === "working" && !s.terminals[host]?.[agent]?.exit);
-  const latest = useDesign((d) => latestOf(d, host, workspace, design.slug));
+  const lastWritten = useDesign((d) => latestOf(d, host, workspace, design.slug));
   const problems = useDesign((d) => problemsOf(d, host, workspace, design.slug));
   const [chatOpen, setChatOpen] = useState(true);
   // The page shown, or null for Overview.
@@ -51,9 +48,8 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
   // A page that went away shows the first one; before any, index (being written).
   const page = canvasPage(picked, names);
   const viewport = parseViewport(design.viewport) ?? DEFAULT_VIEWPORT;
-  const fit: Size = [Math.max(cw - 96, 0), Math.max(ch - 96, 0)];
-  const scale = canvasScale(zoom, viewport, fit);
-  const writing = writingPage(latest, working);
+  const scale = canvasScale(zoom, viewport, fitBox([cw, ch]));
+  const writing = writingPage(lastWritten, working);
   const bar = designBar({ working, needsYou: design.needs_you, page, problems, system: systemName, systemRemoved: !!systems && !system });
 
   // The chat opens when the agent starts to ask; folded meanwhile, it stays so.
@@ -86,14 +82,14 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
     const ok = await askConfirm({ title: `Remove ${design.name}?`, message: `Its folder, designs/${design.slug}, its pages and its agent's chat are deleted.`, action: "Remove", variant: "danger" });
     if (ok) void removeDesign(host, workspace, design.slug).catch(errorToast);
   };
-  const act = (a: BarAction) => {
-    if (a === "stop" && agent !== null) void rpc(host, M.chatInterrupt, { id: agent }).catch(errorToast);
+  const onBarAction = (a: BarAction) => {
+    if (a === "stop" && agent !== null) void stopAgent(host, agent).catch(errorToast);
     else if (a === "details") setDetails(true);
     else if (a === "fix") {
       const check = barProblems(page, problems);
       if (!check) return;
       if (agent === null) return toast("The design's agent is not running", "error");
-      void rpc(host, M.chatSend, { id: agent, text: pageFixMessage(check.page, check.problems), images: [] }).then(() => toast("Asked the agent to fix it"), errorToast);
+      void askAgent(host, agent, pageFixMessage(check.page, check.problems)).then(() => toast("Asked the agent to fix it"), errorToast);
     }
   };
 
@@ -179,19 +175,9 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
         </div>
         <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3 ui-text-12">
           <ViewportMenu viewport={viewport} onPick={setViewport} onCustom={() => setCustom(true)} />
-          <span className="flex items-center gap-0.5">
-            <IconButton title="Zoom out (⌘-)" disabled={!scale} onClick={() => setZoom(canvasZoom(scale, -1))}>
-              <Minus size={13} />
-            </IconButton>
-            <button title="Fit (⌘0)" aria-pressed={zoom === null} className="w-12 rounded text-center font-mono text-faint hover:text-fg" onClick={() => setZoom(null)}>
-              {scale ? `${Math.round(scale * 100)}%` : ""}
-            </button>
-            <IconButton title="Zoom in (⌘=)" disabled={!scale} onClick={() => setZoom(canvasZoom(scale, 1))}>
-              <Plus size={13} />
-            </IconButton>
-          </span>
+          <ZoomBar scale={scale} fitted={zoom === null} max={2} keys onZoom={setZoom} />
         </div>
-        {bar && <BarView bar={bar} onAct={act} />}
+        {bar && <BarView bar={bar} onAct={onBarAction} />}
         <div className="flex h-9 shrink-0 items-center gap-2 px-4 ui-text-12">
           {page === null ? (
             <span className="text-muted">Every page at the same viewport. Click a page to open it.</span>
@@ -370,7 +356,7 @@ function CustomViewport({ viewport, onClose, onApply }: { viewport: Size; onClos
   );
 }
 
-function DetailsDialog({ page, problems, onClose }: { page: string | null; problems: { path: string; line: number; kind: string; message: string }[]; onClose: () => void }) {
+function DetailsDialog({ page, problems, onClose }: { page: string | null; problems: PageProblem[]; onClose: () => void }) {
   const check = barProblems(page, problems);
   return (
     <Dialog title="Check problems" width={560} onClose={onClose}>
@@ -389,91 +375,6 @@ function DetailsDialog({ page, problems, onClose }: { page: string | null; probl
       ) : (
         <p className="ui-text-13 text-muted">No problems.</p>
       )}
-    </Dialog>
-  );
-}
-
-/** New design (X65 journey A step 2): a name, a design system and a brief;
- *  Create design (⌘↵) starts its agent with the brief and opens it. */
-export function NewDesignDialog({ host, workspace }: { host: string; workspace: string }) {
-  const systems = useDesign((d) => systemsOf(d, host, workspace)) ?? [];
-  const shownSlug = useDesign((d) => d.shown[`${host}/${workspace}`]);
-  const projectList = useStore(useShallow((s) => workspaceProjects(s, host, workspace)));
-  const projects = useMemo(() => projectList.map((p) => ({ path: p.path, name: p.name })), [projectList]);
-  const [name, setName] = useState("");
-  const [system, setSystem] = useState(() => systems.find((s) => s.slug === shownSlug)?.slug ?? systems[0]?.slug ?? "");
-  const [brief, setBrief] = useState("");
-  const [creating, setCreating] = useState(false);
-  const now = useNow(true);
-  const close = () => useStore.setState({ dialog: null });
-  const picked = systems.find((s) => s.slug === system);
-  const check = newDesignReady({ name, system, brief }, systems.map((s) => s.slug));
-  const ready = check.ready && !creating;
-  const create = async () => {
-    if (!ready) return;
-    setCreating(true);
-    try {
-      const made = await createDesign(host, workspace, { name: name.trim(), system, brief: brief.trim() });
-      showDesign(host, workspace, made.slug);
-      close();
-      if (made.agent_error) toast(`${made.name} was made, but its agent did not start: ${made.agent_error}`, "error");
-    } catch (e) {
-      errorToast(e);
-      setCreating(false);
-    }
-  };
-  return (
-    <Dialog
-      title="New design"
-      width={560}
-      onClose={close}
-      footer={
-        <>
-          <span className="mr-auto flex items-center gap-1.5 self-center ui-text-12 text-faint">
-            <AgentIcon agent="claude" size={12} /> Claude Code · Accept edits in the design's folder
-          </span>
-          <Button variant="ghost" onClick={close}>
-            Cancel
-          </Button>
-          <Button variant="primary" disabled={!ready} title={check.why ?? undefined} onClick={() => void create()}>
-            Create design <Kbd>⌘↵</Kbd>
-          </Button>
-        </>
-      }
-    >
-      <div
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && e.metaKey) {
-            e.preventDefault();
-            void create();
-          }
-        }}
-      >
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Name">
-            <input autoFocus className={inputCls} value={name} placeholder="Settings page" onChange={(e) => setName(e.target.value)} />
-          </Field>
-          <Field label="Design system">
-            <select aria-label="Design system" className={selectCls} value={system} onChange={(e) => setSystem(e.target.value)}>
-              {systems.map((s) => (
-                <option key={s.slug} value={s.slug}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
-          </Field>
-        </div>
-        <p className="-mt-1.5 mb-3 ui-text-12 text-faint">{picked ? systemSummary(picked, projects, now) : "A design starts from a design system. Build one first."}</p>
-        <Field label="Brief" hint="Claude's first message. It also gets the design system's README.md and the design rules: snippets and tokens first, one page per variant.">
-          <textarea
-            aria-label="Brief"
-            className={cx(inputCls, "h-28 resize-none py-2 leading-relaxed")}
-            value={brief}
-            placeholder="Settings page with a left nav and a Git section…"
-            onChange={(e) => setBrief(e.target.value)}
-          />
-        </Field>
-      </div>
     </Dialog>
   );
 }

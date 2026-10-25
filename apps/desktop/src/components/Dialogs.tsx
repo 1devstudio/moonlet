@@ -14,7 +14,7 @@ import { githubRepo } from "../lib/tasks";
 import { rulesFor, trackersConfig, useTasks } from "../lib/tasksStore";
 import { NewWorkspaceDialog } from "./WorkspaceDialogs";
 import { NewDesignSystemDialog } from "./design/DesignMode";
-import { NewDesignDialog } from "./design/DesignScreen";
+import { NewDesignDialog } from "./design/NewDesignDialog";
 import { LinkTaskDialog } from "./tasks/SessionTask";
 
 const close = () => useStore.setState({ dialog: null });

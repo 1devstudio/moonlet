@@ -15,6 +15,7 @@ import { archivePrompt, askConfirm, unpushedPrompt } from "./confirm";
 import { archiveFlags, archivePlan, gitSettingsOf, unpushedParams, unpushedView } from "./gitSettings";
 import { goSettings } from "./settingsNavigation";
 import { modeOf, toggleMode } from "./mode";
+import { openNewDesign } from "./designStore";
 
 function current(): { host: string; ws: Session } | null {
   const s = useStore.getState();
@@ -402,7 +403,7 @@ export function copyOutput() {
 function newSessionOrDesign() {
   const s = useStore.getState();
   const ws = shownWorkspace(s);
-  if (ws && modeOf(s) === "design") useStore.setState({ dialog: { kind: "new-design", host: ws.host, workspace: ws.id } });
+  if (ws && modeOf(s) === "design") openNewDesign(ws);
   else useStore.setState({ dialog: { kind: "new-session" } });
 }
 

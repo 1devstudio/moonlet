@@ -8,7 +8,7 @@ import { useShallow } from "zustand/react/shallow";
 import { errorToast, shownWorkspace, toast, useStore } from "../../lib/store";
 import { type DesignCover } from "../../lib/protocol";
 import { designAgentState, designRow, designsEmpty, picksInWorkspace, systemFolder, systemLabel } from "../../lib/design";
-import { createSystem, designsOf, detectStack, loadDesigns, loadSystems, shownDesign, shownSystem, showDesign, showSystem, systemsOf, useDesign } from "../../lib/designStore";
+import { createSystem, designsOf, openNewDesign, detectStack, loadDesigns, loadSystems, shownDesign, shownSystem, showDesign, showSystem, systemsOf, useDesign } from "../../lib/designStore";
 import { workspaceProjects } from "../../lib/tasksStore";
 import { tildePath } from "../../lib/profiles";
 import { useNow } from "../../lib/useNow";
@@ -18,9 +18,10 @@ import { ProjectMark } from "../Sidebar";
 import { DesignSystemView, TONES } from "./SystemView";
 import { DesignScreen } from "./DesignScreen";
 
-/** The shown workspace and its design systems; `load` lists them when the
- * workspace is shown (the sidebar does, so a failure shows once). */
-function useWorkspaceSystems(load = false) {
+/** The shown workspace, its design systems and designs, and the ones shown;
+ * `load` lists them when the workspace is shown (the sidebar does, so a
+ * failure shows once). */
+function useWorkspaceDesign(load = false) {
   const ws = useStore((s) => shownWorkspace(s));
   const systems = useDesign((d) => (ws ? systemsOf(d, ws.host, ws.id) : undefined));
   const shown = useDesign((d) => (ws ? shownSystem(d, ws.host, ws.id) : null));
@@ -42,7 +43,6 @@ function agentWorking(s: ReturnType<typeof useStore.getState>, host: string, id:
 }
 
 const openNewSystem = (ws: { host: string; id: string } | null) => ws && useStore.setState({ dialog: { kind: "new-design-system", host: ws.host, workspace: ws.id } });
-const openNewDesign = (ws: { host: string; id: string } | null) => ws && useStore.setState({ dialog: { kind: "new-design", host: ws.host, workspace: ws.id } });
 
 
 function Heading({ label, add }: { label: string; add?: { title: string; run: () => void } }) {
@@ -60,7 +60,7 @@ function Heading({ label, add }: { label: string; add?: { title: string; run: ()
 
 /** The sidebar body in Design mode. */
 export function DesignSidebar() {
-  const { ws, systems, shown, designs, design } = useWorkspaceSystems(true);
+  const { ws, systems, shown, designs, design } = useWorkspaceDesign(true);
   const working = useStore(useShallow((s) => (ws ? (systems ?? []).map((sys) => agentWorking(s, ws.host, sys.agent)) : [])));
   // Each design's agent's live state, for its dot.
   const states = useStore(useShallow((s) => (ws ? (designs ?? []).map((d) => designAgentState(d, d.agent === null ? undefined : s.terminals[ws.host]?.[d.agent]?.agent_state)) : [])));
@@ -74,7 +74,7 @@ export function DesignSidebar() {
         <button
           disabled={!systems?.length}
           title={systems?.length ? undefined : "A design starts from a design system"}
-          onClick={() => openNewDesign(ws)}
+          onClick={() => ws && openNewDesign(ws)}
           className={cx(row, "no-drag", systems?.length ? "text-muted hover:bg-panel-2 hover:text-fg" : "text-muted opacity-60")}
         >
           <span className="flex w-4 justify-center">
@@ -146,7 +146,7 @@ export function DesignSidebar() {
 
 /** The main area in Design mode: the open design system, or how to start. */
 export function DesignMain() {
-  const { ws, systems, shown, design } = useWorkspaceSystems();
+  const { ws, systems, shown, design } = useWorkspaceDesign();
   const working = useStore((s) => !!ws && !!shown && agentWorking(s, ws.host, shown.agent));
   const sidebarOpen = useStore((s) => s.sidebarOpen);
   const now = useNow(true);

@@ -92,3 +92,12 @@ export function canvasKey(id: string): CanvasKey | null {
   if (id === "cmd+\\") return "chat";
   return null;
 }
+
+/** The room around a fitted frame, in px, on each side of the canvas together. */
+const FIT_MARGIN = 96;
+
+/** The box a card's or a page's viewport is fitted into: the canvas less
+ *  its margin, none when the canvas is smaller. */
+export function fitBox([w, h]: Size): Size {
+  return [Math.max(w - FIT_MARGIN, 0), Math.max(h - FIT_MARGIN, 0)];
+}
