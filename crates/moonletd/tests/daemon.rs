@@ -4043,3 +4043,63 @@ docs/design/settings-page/system/tokens/colors.css
     let in_session = list.as_array().unwrap().iter().find(|d| d["kind"] == "session").unwrap();
     assert_eq!((&in_session["slug"], &in_session["session"]), (&serde_json::json!("settings-page"), &serde_json::json!(session.id)));
 }
+
+/// X65 entry 12: once the design system syncs after a session design
+/// pinned it, `design.list` marks the design `system_updated`, and
+/// `design.system.update` replaces both its copies, records the new anchor
+/// and gives the cards that changed, for the chat.
+#[tokio::test]
+async fn a_session_design_is_marked_when_its_design_system_syncs_and_update_brings_the_new_one() {
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    let (ws, _, session) = workspace_with_session(&d, &mut c, &[]).await;
+    let _: serde_json::Value = c
+        .request(
+            methods::DESIGN_CREATE,
+            serde_json::json!({"workspace": ws, "session": session.id, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}),
+        )
+        .await
+        .unwrap();
+    let session_design = |list: &serde_json::Value| list.as_array().unwrap().iter().find(|d| d["kind"] == "session").unwrap().clone();
+    let list: serde_json::Value = c.request(methods::DESIGN_LIST, serde_json::json!({"workspace": ws})).await.unwrap();
+    assert_eq!(session_design(&list).get("system_updated"), None);
+
+    let system = d.home.path().join(".moonlet/design").join(&ws).join("systems/moonlet-desktop");
+    std::fs::write(system.join("tokens/colors.css"), ":root { --color-accent: #2563eb; }\n").unwrap();
+    std::fs::write(system.join("components/buttons/button/button.html"), "<!-- @dsCard group=\"Buttons\" -->\n<button class=\"btn\">Run tests</button>\n").unwrap();
+    std::fs::write(system.join("_ds_sync.json"), "{\"cards\":{\"components/buttons/button/button.html\":{}}}\n").unwrap();
+    let list: serde_json::Value = c.request(methods::DESIGN_LIST, serde_json::json!({"workspace": ws})).await.unwrap();
+    assert_eq!(session_design(&list)["system_updated"], true);
+
+    let updated: serde_json::Value = c
+        .request(methods::DESIGN_SYSTEM_UPDATE, serde_json::json!({"session": session.id, "slug": "settings-page"}))
+        .await
+        .unwrap();
+    assert_eq!(
+        updated,
+        serde_json::json!({
+            "anchor": "c8927a57a423efa36791952c3c820cb62eccbc94a69cb2f6d8be80b7663e7ba6",
+            "cards": [{"path": "components/buttons/button/button.html", "change": "changed"}]
+        })
+    );
+    let worktree = std::path::PathBuf::from(&session.path);
+    assert_eq!(
+        std::fs::read_to_string(worktree.join("docs/design/settings-page/system/tokens/colors.css")).unwrap(),
+        ":root { --color-accent: #2563eb; }\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(worktree.join(".moonlet/design/settings-page/system/components/buttons/button/button.html")).unwrap(),
+        "<!-- @dsCard group=\"Buttons\" -->\n<button class=\"btn\">Run tests</button>\n"
+    );
+    let list: serde_json::Value = c.request(methods::DESIGN_LIST, serde_json::json!({"workspace": ws})).await.unwrap();
+    assert_eq!(session_design(&list).get("system_updated"), None);
+    // A workspace design reads the live system: it has nothing to update.
+    let _: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Onboarding", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    let refused = c
+        .request::<_, serde_json::Value>(methods::DESIGN_SYSTEM_UPDATE, serde_json::json!({"workspace": ws, "slug": "onboarding"}))
+        .await;
+    assert_eq!(refused.unwrap_err().to_string(), "invalid_params: only a session design has a copy of its design system to update");
+}

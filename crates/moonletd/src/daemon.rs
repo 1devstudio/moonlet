@@ -1370,6 +1370,17 @@ impl Daemon {
                 }
                 ok(created)
             }
+            m::DESIGN_SYSTEM_UPDATE => {
+                let r: m::DesignRef = params(p)?;
+                let at = self.locate(&r).await?;
+                if at.session.is_none() {
+                    return Err(RpcError::new("invalid_params", "only a session design has a copy of its design system to update"));
+                }
+                // One update of its copies at a time.
+                let lock = self.lock_of(&at, "system");
+                let _held = lock.lock().await;
+                ok(blocking(move || store.update_session_system(&at, &workspace)).await?)
+            }
             m::DESIGN_COPY => {
                 let r: m::DesignCopy = params(p)?;
                 let Some(project) = self.workspace_projects(&r.workspace).into_iter().find(|p| p.id == r.from.project) else {
