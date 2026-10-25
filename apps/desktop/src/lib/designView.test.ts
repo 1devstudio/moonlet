@@ -178,8 +178,17 @@ describe("a design's page (X65)", () => {
 
 describe("a snapshot's page (X65)", () => {
   it("is served from its snapshot as deep as its design's pages, so its links resolve as theirs, on a host of its own, never with the bridge", () => {
-    expect(snapshotPageUrl("w-1devstudio", "settings-page", 3, "index")).toBe("moonlet-design://bde3977b4fe8bcc8.w-1devstudio/designs/settings-page%403/pages/index.html");
-    expect(snapshotPageUrl("w-1devstudio", "settings-page", 3, "git-a")).toBe("moonlet-design://d33e539a169502d6.w-1devstudio/designs/settings-page%403/pages/git-a.html");
+    expect(snapshotPageUrl("w-1devstudio", "settings-page", 3, "index")).toBe("moonlet-design://bde3977b4fe8bcc8sc159239263e42bb1.w-1devstudio/designs/settings-page%403/pages/index.html");
+    expect(snapshotPageUrl("w-1devstudio", "settings-page", 3, "git-a")).toBe("moonlet-design://d33e539a169502d6sc159239263e42bb1.w-1devstudio/designs/settings-page%403/pages/git-a.html");
+  });
+
+  it("is on a snapshot's host, its page's key then s and its folder's, so the scheme serves the frame only that snapshot's files, never the current page", () => {
+    const host = (url: string) => new URL(url.replace("moonlet-design:", "https:")).host;
+    // designs/settings-page@3 is the folder: every page of the snapshot names it.
+    expect(host(snapshotPageUrl("w-1devstudio", "settings-page", 3, "index"))).toBe("bde3977b4fe8bcc8sc159239263e42bb1.w-1devstudio");
+    expect(host(snapshotPageUrl("w-1devstudio", "settings-page", 3, "git-a"))).toBe("d33e539a169502d6sc159239263e42bb1.w-1devstudio");
+    // The current page's host has no s.
+    expect(host(pageUrl("w-1devstudio", "settings-page", "index"))).toBe("77b546eb07dc1f7b.w-1devstudio");
   });
 });
 
