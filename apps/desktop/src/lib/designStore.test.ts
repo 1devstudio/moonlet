@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { DesignSystem } from "./protocol";
+import type { Design, DesignSystem } from "./protocol";
 import { useStore } from "./store";
-import { cardsOf, createSystem, detectStack, loadCards, loadSystems, openCard, revOf, shownCard, shownSystem, showSystem, startDesign, systemsOf, useDesign } from "./designStore";
+import { cardsOf, createSystem, designsOf, detectStack, latestOf, loadCards, loadDesigns, loadSystems, openCard, pageRevOf, revOf, shownCard, shownSystem, showSystem, startDesign, systemsOf, useDesign } from "./designStore";
 
 const calls = vi.hoisted(() => [] as { host: string; method: string; params: unknown }[]);
 /** What the daemon answers, by method. */
@@ -54,7 +54,7 @@ const listed = () => calls.filter((c) => c.method === "design.systems");
 beforeEach(async () => {
   calls.length = 0;
   for (const k of Object.keys(answers)) delete answers[k];
-  useDesign.setState({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {} });
+  useDesign.setState({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, designs: {}, designShown: {}, pageRevs: {}, latest: {}, problems: {} });
   await startDesign();
 });
 
@@ -281,5 +281,73 @@ describe("the New design system dialog (X64)", () => {
     expect(await detectStack("local", "w-1devstudio", "/r/notes")).toBe("");
     delete answers["design.detect"];
     expect(await detectStack("local", "w-1devstudio", "/r/api")).toBe("");
+  });
+});
+
+const design = (over: Partial<Design> = {}): Design => ({
+  slug: "settings-page",
+  name: "Settings page",
+  kind: "workspace",
+  system: "moonlet-desktop",
+  path: "/Users/alex/.moonlet/design/w-1devstudio/designs/settings-page",
+  brief: "A left nav",
+  viewport: "1440x900",
+  pages: [
+    { name: "index", label: null },
+    { name: "git-a", label: "cards" },
+  ],
+  updated_at: 0,
+  open_comments: 0,
+  agent: 12,
+  agent_state: "working",
+  needs_you: null,
+  error: null,
+  ...over,
+});
+const designsListed = (ws: string) => calls.filter((c) => c.method === "design.list" && (c.params as { workspace: string }).workspace === ws);
+const changed = (workspace: string, over: { system?: string | null; design?: string | null; paths: string[] }) =>
+  events.emit({ host: "local", name: "design.changed", data: { workspace, system: null, design: null, ...over } });
+
+describe("a design's pages on a change (X65)", () => {
+  const revs = () => ["index", "git-a"].map((p) => pageRevOf(useDesign.getState(), "local", "w-1devstudio", "settings-page", p));
+
+  it("load again when they, the design's assets or its design system's styles change, and the latest written page is known", async () => {
+    answers["design.list"] = () => [design()];
+    answers["design.check"] = () => [];
+    await loadDesigns("local", "w-1devstudio");
+    expect(revs()).toEqual([0, 0]);
+    changed("w-1devstudio", { design: "settings-page", paths: ["pages/git-a.html"] });
+    expect(revs()).toEqual([0, 1]);
+    expect(latestOf(useDesign.getState(), "local", "w-1devstudio", "settings-page")).toEqual(["git-a"]);
+    changed("w-1devstudio", { design: "settings-page", paths: ["assets/logo.svg"] });
+    expect(revs()).toEqual([1, 2]);
+    changed("w-1devstudio", { system: "moonlet-desktop", paths: ["styles.css"] });
+    expect(revs()).toEqual([2, 3]);
+    // design.toml alone, another design system's styles, or another workspace's change: none.
+    changed("w-1devstudio", { design: "settings-page", paths: ["design.toml"] });
+    changed("w-1devstudio", { system: "storefront", paths: ["styles.css"] });
+    changed("w-acme", { design: "settings-page", paths: ["pages/index.html"] });
+    expect(revs()).toEqual([2, 3]);
+    expect(latestOf(useDesign.getState(), "local", "w-1devstudio", "settings-page")).toEqual(["git-a"]);
+  });
+
+  it("include a page not listed yet, which loads once it is", async () => {
+    answers["design.list"] = () => [design({ pages: [] })];
+    answers["design.check"] = () => [];
+    await loadDesigns("local", "w-1devstudio");
+    changed("w-1devstudio", { design: "settings-page", paths: ["pages/index.html"] });
+    expect(pageRevOf(useDesign.getState(), "local", "w-1devstudio", "settings-page", "index")).toBe(1);
+  });
+});
+
+describe("a workspace's designs (X65)", () => {
+  it("are listed again when a design's agent asks something, so its row and bar say so", async () => {
+    answers["design.list"] = () => [design()];
+    await loadDesigns("local", "w-1devstudio");
+    const ask = { id: "a2", tool: "Bash", summary: "rm -rf assets", input: null, reason: null, can_always: false };
+    answers["design.list"] = () => [design({ needs_you: { kind: "approval", text: "Bash: rm -rf assets" } })];
+    events.emit({ host: "local", name: "chat.state", data: { id: 12, state: { pending: [ask], status: "waiting" } } });
+    await settle();
+    expect(designsOf(useDesign.getState(), "local", "w-1devstudio")?.[0].needs_you).toEqual({ kind: "approval", text: "Bash: rm -rf assets" });
   });
 });
