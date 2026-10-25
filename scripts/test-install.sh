@@ -152,6 +152,17 @@ if [ "$systemd" = 0 ]; then
   pass "installs without Tailscale and says how to pair later"
 fi
 
+# A cloud machine (X63) connects out: tailnet access stays off.
+if [ "$systemd" = 0 ]; then
+  out=$(HOME="$work/home3" run_install --no-listen) || fail "install with --no-listen failed: $out"
+  has "$out" "Tailnet access stays off: this machine connects to its central host."
+  if grep -q '"enabled": *true' "$work/home3/.moonlet/mobile.json" 2>/dev/null; then
+    fail "tailnet access turned on: $(cat "$work/home3/.moonlet/mobile.json")"
+  fi
+  HOME="$work/home3" "$work/home3/.moonlet/bin/moonletd" stop >/dev/null 2>&1 || true
+  pass "leaves tailnet access off with --no-listen"
+fi
+
 # A machine without curl or wget is told which it needs.
 bare="$work/bare"
 mkdir -p "$bare"

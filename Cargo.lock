@@ -2698,6 +2698,8 @@ name = "moonletd"
 version = "0.1.29"
 dependencies = [
  "anyhow",
+ "async-trait",
+ "base64 0.22.1",
  "clap",
  "dirs 6.0.0",
  "libc",
@@ -2707,6 +2709,8 @@ dependencies = [
  "moonlet-proto",
  "nix",
  "qrcodegen",
+ "reqwest",
+ "rustls",
  "serde",
  "serde_json",
  "sha2",
@@ -3658,6 +3662,7 @@ dependencies = [
  "rustls-platform-verifier",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "sync_wrapper",
  "tokio",
  "tokio-rustls",

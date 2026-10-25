@@ -174,6 +174,9 @@ struct StoredDevice {
     last_seen: Option<u64>,
     #[serde(default)]
     kind: DeviceKind,
+    /// The cloud machine a `cloud` device is (X63).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    machine: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -256,6 +259,57 @@ pub fn claim(slot: &mut Option<Pairing>, code: &str, now: u64) -> Option<(PairCh
     Some((check, current))
 }
 
+/// How long a cloud machine's join code works (X63).
+pub const JOIN_TTL_MS: u64 = 30 * 60_000;
+
+/// One-use codes the central host makes for the cloud machines it creates
+/// (X63), each bound to its machine: its id and the name it joins with.
+#[derive(Debug, Default)]
+pub struct JoinCodes {
+    codes: Vec<JoinCode>,
+}
+
+#[derive(Debug, Clone)]
+struct JoinCode {
+    code: String,
+    machine: String,
+    name: String,
+    expires_at: u64,
+}
+
+impl JoinCodes {
+    /// A new code for machine `machine`, which joins as `name`.
+    pub fn mint(&mut self, machine: &str, name: &str, now: u64) -> String {
+        self.codes.retain(|c| c.expires_at > now);
+        let code = new_code();
+        self.codes.push(JoinCode {
+            code: code.clone(),
+            machine: machine.to_string(),
+            name: name.to_string(),
+            expires_at: now + JOIN_TTL_MS,
+        });
+        code
+    }
+
+    /// The machine a code joins `name` as, using the code up; None for a
+    /// code that is unknown, expired, used or for another machine.
+    pub fn redeem(&mut self, code: &str, name: &str, now: u64) -> Option<String> {
+        let code = normalize_code(code);
+        let i = self.codes.iter().position(|c| c.code == code)?;
+        let c = &self.codes[i];
+        if c.expires_at <= now || c.name != name {
+            return None;
+        }
+        Some(self.codes.remove(i).machine)
+    }
+
+    /// Whether `code` is a join code waiting to be used.
+    pub fn knows(&self, code: &str) -> bool {
+        let code = normalize_code(code);
+        self.codes.iter().any(|c| c.code == code)
+    }
+}
+
 /// An authenticated phone connection.
 pub struct Authed {
     pub device_id: String,
@@ -297,6 +351,10 @@ pub struct Mobile {
     /// Wakes the listener loop after a settings change.
     kick: Notify,
     emit: Box<dyn Fn(Message) + Send + Sync>,
+    /// Codes the central host made for its cloud machines (X63).
+    joins: Mutex<JoinCodes>,
+    /// Told `(machine, device)` when a cloud machine joins.
+    on_join: Mutex<Option<Box<dyn Fn(&str, &str) + Send + Sync>>>,
 }
 
 impl Mobile {
@@ -314,7 +372,36 @@ impl Mobile {
             listening: Mutex::new(Listening::default()),
             kick: Notify::new(),
             emit: Box::new(emit),
+            joins: Mutex::default(),
+            on_join: Mutex::new(None),
         }
+    }
+
+    /// A one-use code that pairs cloud machine `machine`, named `name`.
+    /// Only the central host makes them, for machines it creates.
+    pub fn join_code(&self, machine: &str, name: &str) -> String {
+        self.joins.lock().unwrap().mint(machine, name, now_ms())
+    }
+
+    /// Calls `f(machine, device)` when a cloud machine joins.
+    pub fn on_join(&self, f: impl Fn(&str, &str) + Send + Sync + 'static) {
+        *self.on_join.lock().unwrap() = Some(Box::new(f));
+    }
+
+    /// The cloud machine device `id` is, when it is one.
+    pub fn cloud_machine(&self, id: &str) -> Option<String> {
+        self.data
+            .lock()
+            .unwrap()
+            .devices
+            .iter()
+            .find(|d| d.id == id && d.kind == DeviceKind::Cloud)
+            .and_then(|d| d.machine.clone())
+    }
+
+    /// This host's tailnet addresses it listens on, `ip:port`.
+    pub fn listening(&self) -> Vec<String> {
+        self.listening.lock().unwrap().addrs.iter().map(|a| addr_text(*a)).collect()
     }
 
     pub fn default_file() -> PathBuf {
@@ -358,9 +445,11 @@ impl Mobile {
                 .map(|a| addr_text(*a))
                 .collect(),
             host: host_label(),
+            // A cloud machine's device shows under its machine (X63).
             devices: data
                 .devices
                 .iter()
+                .filter(|d| d.kind != DeviceKind::Cloud)
                 .map(|d| MobileDevice {
                     id: d.id.clone(),
                     name: d.name.clone(),
@@ -557,6 +646,35 @@ impl Mobile {
                     route,
                 })
             }
+            (None, Some(code)) if route.is_none() && self.joins.lock().unwrap().knows(code) => {
+                let name = device.unwrap_or_default();
+                let machine = self.joins.lock().unwrap().redeem(code, name, now_ms())?;
+                let token = random_hex(32);
+                let now = now_ms();
+                let dev = StoredDevice {
+                    id: random_hex(8),
+                    name: name.to_string(),
+                    token_sha256: sha256_hex(token.as_bytes()),
+                    created_at: now,
+                    last_seen: Some(now),
+                    kind: DeviceKind::Cloud,
+                    machine: Some(machine.clone()),
+                };
+                let device_id = dev.id.clone();
+                {
+                    let mut data = self.data.lock().unwrap();
+                    data.devices.push(dev);
+                    self.save(&data);
+                }
+                if let Some(f) = self.on_join.lock().unwrap().as_ref() {
+                    f(&machine, &device_id);
+                }
+                Some(Authed {
+                    device_id,
+                    token: Some(token),
+                    route: None,
+                })
+            }
             (None, Some(code)) if route.is_none() => {
                 let check = claim(&mut self.pairing.lock().unwrap(), code, now_ms())?;
                 match check {
@@ -569,7 +687,9 @@ impl Mobile {
                             token_sha256: sha256_hex(token.as_bytes()),
                             created_at: now,
                             last_seen: Some(now),
-                            kind: kind.unwrap_or_default(),
+                            // A cloud device pairs only with a join code.
+                            kind: kind.filter(|k| *k != DeviceKind::Cloud).unwrap_or_default(),
+                            machine: None,
                         };
                         let device_id = dev.id.clone();
                         {
@@ -665,6 +785,34 @@ pub(crate) fn write_private(path: &std::path::Path, bytes: &[u8]) -> Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_join_code_works_once() {
+        let mut j = JoinCodes::default();
+        let code = j.mint("m7k2q", "moonlet-shop-7k2q", 1_000);
+        assert_eq!(code.len(), 10);
+        assert_eq!(j.redeem(&code, "moonlet-shop-7k2q", 2_000).as_deref(), Some("m7k2q"));
+        assert_eq!(j.redeem(&code, "moonlet-shop-7k2q", 3_000), None);
+    }
+
+    #[test]
+    fn an_expired_join_code_is_refused() {
+        let mut j = JoinCodes::default();
+        let code = j.mint("m7k2q", "moonlet-shop-7k2q", 1_000);
+        assert_eq!(j.redeem(&code, "moonlet-shop-7k2q", 1_000 + 30 * 60_000), None);
+    }
+
+    #[test]
+    fn a_join_code_for_another_machine_is_refused() {
+        let mut j = JoinCodes::default();
+        let code = j.mint("m7k2q", "moonlet-shop-7k2q", 1_000);
+        assert_eq!(j.redeem(&code, "moonlet-shop-m3x9", 2_000), None);
+        // Typed as a pairing code: the same code, read the same way.
+        assert_eq!(
+            j.redeem(&code.to_lowercase(), "moonlet-shop-7k2q", 2_000).as_deref(),
+            Some("m7k2q")
+        );
+    }
 
     #[test]
     fn the_pairing_link_carries_the_host_every_address_and_the_code() {

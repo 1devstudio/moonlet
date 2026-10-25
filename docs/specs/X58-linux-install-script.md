@@ -70,6 +70,7 @@ Running it again updates moonlet without ending any session.
 - [x] It never uses `sudo` and never writes outside `~/.moonlet`, `~/.config/systemd/user` (or `$XDG_CONFIG_HOME/systemd/user`) and the temporary directory.
 - [x] Options: (`test-install.sh` uses `--from`, `--no-pair`, `--force` and `--uninstall`)
   - `--no-pair` skips pairing;
+  - `--no-listen` leaves tailnet access off and skips pairing, for a cloud machine that connects to its central host itself (X63; `test-install.sh`: "leaves tailnet access off with --no-listen");
   - `--uninstall` stops and removes the service and the binaries, keeps `~/.moonlet`'s data, and says how to delete it;
   - `--from <dir>` takes the archives and `SHA256SUMS` from a folder instead of the release, for tests and offline machines.
 

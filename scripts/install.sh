@@ -8,8 +8,10 @@
 # service, turns on tailnet access and starts pairing. Running it again
 # updates moonlet without ending any session. Never uses sudo.
 #
-# Options: --no-pair, --force (install even this version again),
-# --uninstall, --from <dir> (archives and SHA256SUMS from a folder).
+# Options: --no-pair, --no-listen (tailnet access stays off: a cloud
+# machine connects to its central host, X63), --force (install even this
+# version again), --uninstall, --from <dir> (archives and SHA256SUMS from a
+# folder).
 #
 # Everything runs from main(), called on the last line, so a download cut
 # off midway runs nothing.
@@ -87,14 +89,16 @@ uninstall() {
 main() {
   from=""
   pair=1
+  listen=1
   force=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --from) from=$2; shift 2 ;;
       --no-pair) pair=0; shift ;;
+      --no-listen) listen=0; shift ;;
       --force) force=1; shift ;;
       --uninstall) uninstall; return ;;
-      *) die "Unknown option $1. Options: --no-pair, --force, --uninstall, --from <dir>." ;;
+      *) die "Unknown option $1. Options: --no-pair, --no-listen, --force, --uninstall, --from <dir>." ;;
     esac
   done
 
@@ -168,6 +172,10 @@ main() {
     echo "moonletd is running, but nothing will start it after a reboot."
   fi
 
+  if [ "$listen" = 0 ]; then
+    echo "Tailnet access stays off: this machine connects to its central host."
+    return 0
+  fi
   status=$("$bin/moonletd" tailnet on)
   case "$status" in
     "Tailscale is not running"*)

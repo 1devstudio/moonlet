@@ -110,6 +110,26 @@ enum Cmd {
         #[command(subcommand)]
         action: TermAction,
     },
+    /// Cloud machines for heavy commands (X63), within the limits the
+    /// user set.
+    Worker {
+        #[command(subcommand)]
+        action: WorkerAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum WorkerAction {
+    /// Start a cloud machine and print its name.
+    Up {
+        /// The project, by name; your session's project by default.
+        #[arg(long)]
+        project: Option<String>,
+    },
+    /// List the cloud machines: name, state and project.
+    Ls,
+    /// Remove a cloud machine, once its running commands end.
+    Down { name: String },
 }
 
 #[derive(Subcommand)]
@@ -524,6 +544,48 @@ async fn run(cmd: Cmd, socket: PathBuf) -> Result<()> {
                 .await?;
             println!("{}", info.id);
         }
+        Cmd::Worker { action } => {
+            let mut c = connect(&socket).await?;
+            match action {
+                WorkerAction::Up { project } => {
+                    let projects: Vec<Project> = c.request(methods::PROJECT_LIST, ()).await?;
+                    let id = match project {
+                        Some(name) => projects
+                            .iter()
+                            .find(|p| p.name == name)
+                            .map(|p| p.id.clone())
+                            .with_context(|| format!("no project {name}"))?,
+                        None => {
+                            let session = std::env::var("MOONLET_SESSION")
+                                .context("give --project, or run it in a session")?;
+                            let sessions: Vec<moonlet_proto::types::Session> =
+                                c.request(methods::SESSION_LIST, ()).await?;
+                            sessions
+                                .into_iter()
+                                .find(|s| s.id == session)
+                                .map(|s| s.project_id)
+                                .context("this session is not on this host")?
+                        }
+                    };
+                    let up = methods::CloudUp {
+                        project: id,
+                        session: None,
+                    };
+                    let m: methods::CloudMachine = c.request(methods::CLOUD_UP, up).await.map_err(plain)?;
+                    println!("{}", m.name);
+                }
+                WorkerAction::Ls => {
+                    let all: methods::CloudMachines = c.request(methods::CLOUD_MACHINES, ()).await?;
+                    for m in all.machines {
+                        println!("{} {} {}", m.name, m.state, m.project);
+                    }
+                }
+                WorkerAction::Down { name } => {
+                    let down = methods::CloudDown { machine: name };
+                    let _: bool = c.request(methods::CLOUD_DOWN, down).await.map_err(plain)?;
+                }
+            }
+        }
         Cmd::Project {
             action: ProjectAction::Ls { json },
         } => {
@@ -700,6 +762,14 @@ fn terminal_from_env() -> Option<TerminalId> {
     ["MOONLET_TERMINAL_ID", "JAUNT_TERMINAL_ID", "JAUNT_SESSION_ID"]
         .iter()
         .find_map(|k| std::env::var(k).ok().and_then(|v| v.parse().ok()))
+}
+
+/// A daemon's refusal as the user reads it: its message, without its code.
+fn plain(e: anyhow::Error) -> anyhow::Error {
+    match e.downcast_ref::<moonlet_proto::RpcError>() {
+        Some(r) => anyhow::anyhow!(r.message.clone()),
+        None => e,
+    }
 }
 
 fn shell_quote(s: &str) -> String {

@@ -79,9 +79,9 @@ impl CloudFile {
     }
 }
 
-/// The providers on offer, for the app's forms.
-fn kinds() -> Vec<CloudKind> {
-    moonlet_cloud::providers()
+/// `providers` as the app's forms read them.
+fn kinds(providers: Vec<moonlet_cloud::ProviderInfo>) -> Vec<CloudKind> {
+    providers
         .into_iter()
         .map(|p| CloudKind {
             id: p.id,
@@ -124,9 +124,9 @@ impl CloudSettings {
     }
 
     /// `cloud.get`: the settings without their secrets.
-    pub fn info(&self) -> CloudInfo {
+    pub fn info(&self, providers: Vec<moonlet_cloud::ProviderInfo>) -> CloudInfo {
         let f = self.file();
-        let kinds = kinds();
+        let kinds = kinds(providers);
         let secret = |provider: &str, field: &str| {
             kinds
                 .iter()
@@ -168,7 +168,11 @@ impl CloudSettings {
     }
 
     /// `cloud.set`: applies `req` and writes the file.
-    pub fn set(&self, req: CloudSet) -> Result<CloudInfo, RpcError> {
+    pub fn set(
+        &self,
+        req: CloudSet,
+        providers: Vec<moonlet_cloud::ProviderInfo>,
+    ) -> Result<CloudInfo, RpcError> {
         let invalid = |m: &str| RpcError::new("invalid_params", m.to_string());
         if req.idle_minutes.is_some_and(|n| n > 1440) {
             return Err(invalid("the idle time is from 0 to 1440 minutes"));
@@ -231,7 +235,7 @@ impl CloudSettings {
         }
         self.save()
             .map_err(|e| RpcError::new("internal", format!("cannot write cloud.json: {e}")))?;
-        Ok(self.info())
+        Ok(self.info(providers))
     }
 
     fn save(&self) -> std::io::Result<()> {
