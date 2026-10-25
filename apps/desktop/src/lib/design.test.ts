@@ -146,6 +146,8 @@ describe("the New design dialog (X65)", () => {
     const projects = [{ path: "/Users/alex/Workspace/moonlet", name: "moonlet" }];
     expect(systemSummary(system({ cards: 11, layouts: 2 }), projects, NOW)).toBe("moonlet desktop: 11 cards, 2 layouts, synced 3 days ago from moonlet");
     expect(systemSummary(system({ cards: 1, layouts: 0, synced_at: null, sources: ["/Users/alex/Workspace/shop"] }), [], NOW)).toBe("moonlet desktop: 1 card, 0 layouts, not synced yet, from shop");
+    // A system built from no project yet says nothing of where it is from.
+    expect(systemSummary(system({ cards: 0, layouts: 0, synced_at: null, sources: [] }), [], NOW)).toBe("moonlet desktop: 0 cards, 0 layouts, not synced yet");
   });
 
   it("creates a design once it has a name, a design system the workspace has and a brief", () => {

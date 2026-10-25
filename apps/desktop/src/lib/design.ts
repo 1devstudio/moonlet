@@ -82,8 +82,8 @@ const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
  *  desktop: 11 cards, 2 layouts, synced 3 days ago from moonlet". */
 export function systemSummary(sys: DesignSystem, projects: { path: string; name: string }[], now: number): string {
   const from = sys.sources.map((p) => projects.find((x) => x.path === p)?.name ?? p.split("/").filter(Boolean).pop() ?? p).join(", ");
-  const synced = sys.synced_at === null ? "not synced yet," : `synced ${ago(now - sys.synced_at)}`;
-  return `${sys.name}: ${plural(sys.cards, "card")}, ${plural(sys.layouts, "layout")}, ${synced}${from ? ` from ${from}` : ""}`;
+  const synced = sys.synced_at === null ? `not synced yet${from ? `, from ${from}` : ""}` : `synced ${ago(now - sys.synced_at)}${from ? ` from ${from}` : ""}`;
+  return `${sys.name}: ${plural(sys.cards, "card")}, ${plural(sys.layouts, "layout")}, ${synced}`;
 }
 
 export interface NewDesign {
