@@ -7,6 +7,7 @@
 import { create } from "zustand";
 import { DaemonError, rpc } from "./daemon";
 import { ownPages, reloadPage } from "./designStore";
+import { errorToast } from "./store";
 import { M, type DesignPageText } from "./protocol";
 import type { ChatImage } from "./attachments";
 import { wsKey } from "./workspaces";
@@ -56,10 +57,17 @@ export function resetEditor() {
   for (const k of Object.keys(clips)) delete clips[k];
 }
 
-/** Reads a page's source and version (`design.page`), as the canvas loads it. */
+/** Reads a page's source and version (`design.page`), as the canvas loads
+ *  it; not while a save of it is on its way, which has edits the text read
+ *  may not and decides what is there. */
 export async function loadPageSource(host: string, workspace: string, slug: string, page: string): Promise<void> {
-  const text = await rpc<DesignPageText>(host, M.designPage, { workspace, slug, page });
   const key = pageKey(host, workspace, slug, page);
+  if (saving[key]?.busy) return;
+  const text = await rpc<DesignPageText>(host, M.designPage, { workspace, slug, page });
+  if (!saving[key]?.busy) setSource(key, text);
+}
+
+function setSource(key: string, text: DesignPageText) {
   highest[key] = Math.max(highest[key] ?? 0, highestMid(text.html));
   useEditor.setState((s) => ({ sources: { ...s.sources, [key]: text } }));
 }
@@ -80,7 +88,7 @@ export function editPage(host: string, workspace: string, slug: string, page: st
     undo: { ...s.undo, [design]: pushStep(s.undo[design] ?? NO_UNDO, step) },
     pending: { ...s.pending, [design]: pendingAfter(s.pending[design] ?? [], step, "do") },
   }));
-  save(host, workspace, slug, page);
+  void save(host, workspace, slug, page).catch(errorToast);
   return edit;
 }
 
@@ -195,7 +203,7 @@ async function lost(host: string, workspace: string, slug: string, page: string)
     pending: { ...s.pending, [design]: (s.pending[design] ?? []).filter((p) => !ids.has(p.id)) },
     unsaved: { ...s.unsaved, [design]: last ? editLine(last.edit) : (s.unsaved[design] ?? null) },
   }));
-  await loadPageSource(host, workspace, slug, page);
+  setSource(key, await rpc<DesignPageText>(host, M.designPage, { workspace, slug, page }));
   reloadPage(host, workspace, slug, page);
 }
 
@@ -237,8 +245,8 @@ async function changedOnDisk(host: string, workspace: string, slug: string, page
   const now = useEditor.getState().sources[key];
   if (saving[key]?.busy || !now || text.version === now.version) return;
   const design = itemKey(host, workspace, slug);
-  highest[key] = Math.max(highest[key] ?? 0, highestMid(text.html));
-  useEditor.setState((s) => ({ sources: { ...s.sources, [key]: text }, undo: { ...s.undo, [design]: dropPage(s.undo[design] ?? NO_UNDO, page) } }));
+  setSource(key, text);
+  useEditor.setState((s) => ({ undo: { ...s.undo, [design]: dropPage(s.undo[design] ?? NO_UNDO, page) } }));
   reloadPage(host, workspace, slug, page);
 }
 
