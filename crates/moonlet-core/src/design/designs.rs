@@ -197,7 +197,8 @@ impl Store {
 
     /// The folder of an existing design.
     pub fn design_dir(&self, workspace: &str, slug: &str) -> Result<PathBuf> {
-        if !super::store::is_name(slug) {
+        // `<slug>@<n>` names a snapshot's folder (X65), never a design.
+        if !super::store::is_name(slug) || slug.contains('@') {
             bail!("bad design \"{slug}\"");
         }
         let dir = self.designs_dir(workspace, false)?.join(slug);
