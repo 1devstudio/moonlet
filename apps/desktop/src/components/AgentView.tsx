@@ -1,4 +1,4 @@
-import { type Ref, createContext, memo, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, type Ref, createContext, memo, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -474,6 +474,12 @@ function ErrorItem({ item }: { item: ChatItem }) {
       {auth && signIn && <ClaudeAuthDialog host={host} profile={signIn.profile} onClose={() => setAuth(false)} />}
     </div>
   );
+}
+
+/** A user's message as `userText` shows it; any other item as it is. */
+function shownItem(item: ChatItem, userText: ((text: string) => string | null) | undefined): ChatItem {
+  const text = item.kind === "user" && userText ? userText(item.text) : null;
+  return text === null ? item : { ...item, text };
 }
 
 export const ChatItemView = memo(function Item({ item, cwd }: { item: ChatItem; cwd: string }) {
@@ -1317,7 +1323,26 @@ async function openInTerminal(host: string, info: TerminalInfo, st: ChatState) {
 /** A structured agent's chat. `wsId` is its session; "" for a chat with no
  * session, such as a design system's sync agent (X64), which has no pane
  * layout or file tabs to open. */
-export function AgentView({ host, id, wsId, focused, visible }: { host: string; id: number; wsId: string; focused: boolean; visible: boolean }) {
+/** `lead`: shown above the conversation, such as a design's note of what went
+ *  with its brief (X65); `userText`: what a message of the user's shows, when
+ *  not its whole text (null keeps it). */
+export function AgentView({
+  host,
+  id,
+  wsId,
+  focused,
+  visible,
+  lead,
+  userText,
+}: {
+  host: string;
+  id: number;
+  wsId: string;
+  focused: boolean;
+  visible: boolean;
+  lead?: ReactNode;
+  userText?: (text: string) => string | null;
+}) {
   const info = useStore((s) => s.terminals[host]?.[id]);
   const st = useChat((s) => s.chats[chatKey(host, id)]);
   const toolCalls = useStore((s) => s.settings.toolCalls);
@@ -1603,6 +1628,7 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
       >
         <FileLinks.Provider value={fileLinks}>
           <div className="flex flex-col gap-0.5 px-6 pb-4 pt-5">
+            {lead}
             {!st ? (
               <div className="py-10 text-center ui-text-13 text-faint">Loading conversation…</div>
             ) : st.items.length === 0 ? (
@@ -1617,7 +1643,7 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
                     ) : b.kind === "tools" ? (
                       <ToolGroup key={b.id} tools={b.tools} cwd={info?.cwd ?? ""} />
                     ) : (
-                      <ChatItemView key={b.item.id} item={b.item} cwd={info?.cwd ?? ""} />
+                      <ChatItemView key={b.item.id} item={shownItem(b.item, userText)} cwd={info?.cwd ?? ""} />
                     );
                   const ids = b.kind === "item" ? [b.item.id] : b.tools.map((t) => t.id);
                   const hasPlan = plan?.itemId && ids.includes(plan.itemId);
