@@ -238,6 +238,11 @@ describe("an edit by hand on a page's source (X65)", () => {
     expect(() => applyEdit(PAGE, { kind: "insert", place: null, html: "  just text  " })).toThrow(new EditRefused("The snippet has no element to insert"));
   });
 
+  it("gives a snippet's id written with an entity a fresh one where its attribute writes it", () => {
+    const edit = applyEdit(PAGE, { kind: "insert", place: { where: "below", ref: "m25" }, html: '<div data-mid="m&#51;" class="row"><span>x</span></div>' });
+    expect(edit.html).toBe(withLines(19, 1, '      <h2 data-mid="m25">Git</h2>', '      <div data-mid="m41" class="row"><span data-mid="m42">x</span></div>'));
+  });
+
   it("restyles an element by its inline style, written as the style attribute after its others", () => {
     const edit = applyEdit(PAGE, { kind: "restyle", mid: "m24", set: { padding: "var(--space-4)" } });
     expect(edit.html).toBe(withLines(18, 1, '    <section data-mid="m24" class="card rows" style="padding: var(--space-4)">'));

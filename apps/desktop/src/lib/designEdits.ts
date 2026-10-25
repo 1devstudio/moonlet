@@ -506,19 +506,25 @@ function freshIds(html: string, floor = 0) {
 
 /** The source of `el`, its own `data-mid` and every one inside it given a
  *  fresh id in document order; only the ids' values change. */
-function renumbered(html: string, el: Element, ids: ReturnType<typeof freshIds>): string {
+function renumbered(html: string, el: Element, ids: ReturnType<typeof freshIds>, addMissing = false): string {
   const [from, to] = outer(el);
-  const spans: [number, number][] = [];
+  // Each id's value where its attribute writes it; with `addMissing`, an
+  // element that needs an id and has none gets one after its tag's name.
+  const spans: { at: [number, number]; text: (id: string) => string }[] = [];
   for (const e of elements(el)) {
-    const at = e.sourceCodeLocation?.attrs?.["data-mid"];
-    if (!at || !midOf(e)) continue;
-    spans.push(attrValue(html, at));
+    const loc = e.sourceCodeLocation;
+    const at = loc?.attrs?.["data-mid"];
+    if (at && midOf(e)) spans.push({ at: attrValue(html, at), text: (id) => id });
+    else if (addMissing && loc?.startTag && needsId(e, el)) {
+      const end = loc.startTag.startOffset + 1 + e.tagName.length;
+      spans.push({ at: [end, end], text: (id) => ` data-mid="${id}"` });
+    }
   }
   let out = "";
   let at = from;
-  for (const [a, b] of spans.sort((x, y) => x[0] - y[0])) {
-    out += html.slice(at, a) + ids.take();
-    at = b;
+  for (const s of spans.sort((x, y) => x.at[0] - y.at[0])) {
+    out += html.slice(at, s.at[0]) + s.text(ids.take());
+    at = s.at[1];
   }
   return out + html.slice(at, to);
 }
@@ -585,7 +591,7 @@ function insert(html: string, doc: Node, place: Place | null, snippet: string, f
 function placed(html: string, doc: Node, place: Place | null, source: string, floor: number): Edit {
   const ids = freshIds(html, floor);
   const root = parseFragment(source, { sourceCodeLocationInfo: true }).childNodes.find(isElement)!;
-  const text = freshened(source, root, ids);
+  const text = renumbered(source, root, ids, true);
   const change = { mid: ids.taken[0], tag: root.tagName, change: { kind: "inserted", place } as const };
   const select = ids.taken[0];
   if (place) {
@@ -608,34 +614,15 @@ function placed(html: string, doc: Node, place: Place | null, source: string, fl
  *  design check` takes them. */
 const NO_ID = new Set(["script", "style", "template", "noscript"]);
 
-/** The source of `root`, parsed from `source`, with fresh ids in document
- *  order: an id it has gets the next, and every element that needs one and
- *  has none (all but scripts, styles and the like, and an <svg>'s
- *  drawing) gets one after its tag's name. */
-function freshened(source: string, root: Element, ids: ReturnType<typeof freshIds>): string {
-  const edits: { at: [number, number]; text: () => string }[] = [];
-  const visit = (el: Element, inSvg: boolean) => {
-    if (NO_ID.has(el.tagName)) return;
-    const loc = el.sourceCodeLocation;
-    const has = loc?.attrs?.["data-mid"];
-    if (has && midOf(el)) {
-      const value = source.lastIndexOf(midOf(el)!, has.endOffset);
-      edits.push({ at: [value, value + midOf(el)!.length], text: () => ids.take() });
-    } else if (!inSvg && loc?.startTag) {
-      const at = loc.startTag.startOffset + 1 + el.tagName.length;
-      edits.push({ at: [at, at], text: () => ` data-mid="${ids.take()}"` });
-    }
-    for (const c of el.childNodes) if (isElement(c)) visit(c, inSvg || el.tagName === "svg" || el.tagName === "math");
-  };
-  visit(root, false);
-  const [from, to] = outer(root);
-  let out = "";
-  let at = from;
-  for (const e of edits) {
-    out += source.slice(at, e.at[0]) + e.text();
-    at = e.at[1];
+/** Whether element `e` inside `root` needs an id: not one of {@link
+ *  NO_ID} or inside one, and not part of an <svg>'s or <math>'s drawing. */
+function needsId(e: Element, root: Element): boolean {
+  if (NO_ID.has(e.tagName)) return false;
+  for (let p = e.parentNode; p && isElement(p) && e !== root; p = p.parentNode) {
+    if (NO_ID.has(p.tagName) || p.tagName === "svg" || p.tagName === "math") return false;
+    if (p === root) break;
   }
-  return out + source.slice(at, to);
+  return true;
 }
 
 /** Refuses the body and anything outside it: only the body's elements are edited. */
