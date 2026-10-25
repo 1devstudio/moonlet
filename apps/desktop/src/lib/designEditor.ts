@@ -6,7 +6,7 @@
 
 import { create } from "zustand";
 import { DaemonError, rpc } from "./daemon";
-import { itemKey, pageKey, registerPageOwner, reloadPage, sendComments } from "./designStore";
+import { itemKey, pageKey, pageOfKey, registerPageOwner, reloadPage, sendComments } from "./designStore";
 import { latestSends } from "./latestSend";
 import { errorToast } from "./store";
 import { latestPerKey } from "./prPoll";
@@ -278,11 +278,12 @@ export async function restoreSnapshot(host: string, workspace: string, slug: str
   const restored = await rpc<DesignSnapshot>(host, M.designSnapshotRestore, { workspace, slug, n });
   const design = itemKey(host, workspace, slug);
   useEditor.setState((s) => ({ undo: { ...s.undo, [design]: NO_UNDO }, pending: { ...s.pending, [design]: [] }, unsaved: { ...s.unsaved, [design]: null } }));
-  const prefix = `${design}/`;
-  const read = Object.keys(useEditor.getState().sources).filter((k) => k.startsWith(prefix));
+  const read = Object.keys(useEditor.getState().sources).flatMap((key) => {
+    const page = pageOfKey(host, workspace, slug, key);
+    return page === null ? [] : [{ key, page }];
+  });
   await Promise.all(
-    read.map(async (key) => {
-      const page = key.slice(prefix.length);
+    read.map(async ({ key, page }) => {
       const text = await rpc<DesignPageText>(host, M.designPage, { workspace, slug, page }).catch(() => null);
       if (text) setSource(key, text);
       else {

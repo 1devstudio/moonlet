@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Design, DesignComment, DesignSystem, TerminalInfo } from "./protocol";
 import { modeOf, setMode } from "./mode";
 import { agentOnScreen, goToAgent, useStore } from "./store";
-import { commentsOf, historyOf, keepComment, loadComments, loadHistory, sendComments, sendingOf, resolveComment } from "./designStore";
+import { pageKey, pageOfKey, commentsOf, historyOf, keepComment, loadComments, loadHistory, sendComments, sendingOf, resolveComment } from "./designStore";
 import { cardsOf, checkDesign, createFromNewDesign, createSystem, designsOf, detectStack, latestOf, loadCards, loadDesigns, loadSystems, openCard, saveViewport, pageRevOf, problemsOf, revOf, shownCard, shownDesign, shownSystem, showDesign, showSystem, startDesign, systemNameOf, systemsOf, useDesign } from "./designStore";
 
 const calls = vi.hoisted(() => [] as { host: string; method: string; params: unknown }[]);
@@ -650,5 +650,13 @@ describe("a design's comments (X65)", () => {
     await resolveComment("local", "w-1devstudio", "settings-page", 1);
     expect(calls.filter((c) => c.method === "design.comment.resolve").map((c) => c.params)).toEqual([{ workspace: "w-1devstudio", slug: "settings-page", n: 1 }]);
     expect(ns()).toEqual([[1, "resolved", null]]);
+  });
+});
+
+describe("a design page's key (X65)", () => {
+  it("is read back as its page, only for its own design", () => {
+    expect(pageOfKey("local", "w-1devstudio", "settings-page", pageKey("local", "w-1devstudio", "settings-page", "git rows"))).toBe("git rows");
+    expect(pageOfKey("local", "w-1devstudio", "settings-page", pageKey("local", "w-1devstudio", "settings-page-2", "index"))).toBeNull();
+    expect(pageOfKey("local", "w-1devstudio", "settings-page", pageKey("mac-2", "w-1devstudio", "settings-page", "index"))).toBeNull();
   });
 });
