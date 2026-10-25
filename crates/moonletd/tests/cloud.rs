@@ -2080,27 +2080,29 @@ async fn usage_counts_every_started_hour() {
 
 #[tokio::test]
 async fn a_machine_that_goes_while_its_removal_retries_is_booked_once() {
+    // Tries at 0 s, 0.5 s, 1.5 s, 3.5 s.
     let c = cloud_with(
         SHOP_CONFIG,
         &[
-            ("MOONLET_TEST_CLOUD_SWEEP_MS", "300"),
-            ("MOONLET_TEST_CLOUD_BACKOFF_MS", "2000"),
+            ("MOONLET_TEST_CLOUD_SWEEP_MS", "200"),
+            ("MOONLET_TEST_CLOUD_BACKOFF_MS", "500"),
         ],
     )
     .await;
     c.steer("billing", "3600");
     let m = c.ready().await;
-    c.steer("fail-destroy", "1");
+    // Every destroy fails, the removal's and the sweep's.
+    c.steer("fail-destroy", "1000");
     let _: Value = c.d.call("cloud.down", json!({ "machine": m["id"] })).await;
     let fails_left = || std::fs::read_to_string(c.fake.path().join("fail-destroy")).unwrap();
     for _ in 0..100 {
-        if fails_left() == "0" {
+        if fails_left() != "1000" {
             break;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    assert_eq!(fails_left(), "0");
-    // Gone at the provider before the next try: sweeps see it missing.
+    assert_ne!(fails_left(), "1000");
+    // Gone at the provider anyway: sweeps see it missing.
     let dir = c.fake_dirs()[0].clone();
     let pid: i32 = std::fs::read_to_string(dir.join("pid"))
         .unwrap()
@@ -2112,11 +2114,18 @@ async fn a_machine_that_goes_while_its_removal_retries_is_booked_once() {
         nix::sys::signal::Signal::SIGKILL,
     );
     std::fs::remove_dir_all(&dir).unwrap();
-    // Past the next try, which finds it gone.
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    // The removal's next try finds it gone.
+    c.steer("fail-destroy", "0");
+    for _ in 0..100 {
+        if c.machines().await["removed"][0]["id"] == m["id"] {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
     let all = c.machines().await;
-    assert_eq!(all["machines"], json!([]), "{all}");
     assert_eq!(all["hours_this_month"], json!(1.0), "{all}");
+    assert_eq!(all["removed"][0]["id"], m["id"], "{all}");
 }
 
 #[tokio::test]
