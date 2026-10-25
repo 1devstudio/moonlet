@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { EditRefused, applyEdit, copyElement, highestMid, editLine, editsChip, editsMessage, readEditsMessage, type EditOp, type Untold } from "./designEdits";
+import { EditRefused, applyEdit, copyElement, highestMid, editLine, editsChip, editsMessage, lineRead, readEditsMessage, type EditOp, type Untold } from "./designEdits";
 
 /** A page as a design's agent writes it (designs.md): the design system's
  *  styles.css, classes, a page script, an <svg> whose part holds an id, and
@@ -192,6 +192,7 @@ describe("edits by hand, as the agent is told them (X65)", () => {
       ],
       text: "Two more variants\n\nof the Git section",
     });
+    expect(readEditsMessage(sent)?.edits.map(lineRead)).toEqual(["index.html m31 span: text “Prefix, for new branches”, wrapped in div m42", "git-a.html m31 p: deleted"]);
     expect(readEditsMessage("Edits by hand since your last turn:\nindex.html m31 span: deleted")).toEqual({ edits: [{ page: "index", mid: "m31", tag: "span", said: "deleted" }], text: "" });
     expect(readEditsMessage("Two more variants of the Git section")).toBeNull();
     expect(readEditsMessage("Edits by hand since your last turn:\nnot an edit\n\nHi")).toBeNull();

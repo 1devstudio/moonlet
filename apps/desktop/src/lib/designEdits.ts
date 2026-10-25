@@ -113,6 +113,11 @@ export interface EditLineRead {
   said: string;
 }
 
+/** An edit's line read back, as it was sent. */
+export function lineRead(e: EditLineRead): string {
+  return elementLine(e, [e.said]);
+}
+
 /** A message that starts with the edits by hand, read back as their lines
  *  and the user's text after them; null for any other message. The parse of
  *  {@link editsMessage}'s lines (`elementLine`). */
