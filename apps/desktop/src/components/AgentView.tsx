@@ -503,6 +503,11 @@ export const ChatItemView = memo(function Item({ item, cwd }: { item: ChatItem; 
   }
 });
 
+/** A message of the user's in its own view when it has one, else as a message. */
+function UserOwnView({ own, children }: { own: ReactNode | null; children: ReactNode }) {
+  return <>{own ?? children}</>;
+}
+
 /** An AskUserQuestion with questions we can render; anything else gets the plain card. */
 const isQuestion = (ask: PermissionAsk) => ask.tool === "AskUserQuestion" && askQuestions(ask.input).length > 0;
 
@@ -1320,7 +1325,9 @@ async function openInTerminal(host: string, info: TerminalInfo, st: ChatState) {
  * layout or file tabs to open. */
 /** `lead`: shown above the conversation, such as a design's note of what went
  *  with its brief (X65); `userText`: what a message of the user's shows when
- *  not its whole text (null keeps it), told whether it is the user's first. */
+ *  not its whole text (null keeps it), told whether it is the user's first;
+ *  `userView`: a message of the user's shown its own way, such as a design's
+ *  comments as Comment from the canvas cards (null shows it as a message). */
 export function AgentView({
   host,
   id,
@@ -1329,6 +1336,7 @@ export function AgentView({
   visible,
   lead,
   userText,
+  userView,
 }: {
   host: string;
   id: number;
@@ -1337,6 +1345,7 @@ export function AgentView({
   visible: boolean;
   lead?: ReactNode;
   userText?: (text: string, first: boolean) => string | null;
+  userView?: (text: string, first: boolean) => ReactNode | null;
 }) {
   const info = useStore((s) => s.terminals[host]?.[id]);
   const st = useChat((s) => s.chats[chatKey(host, id)]);
@@ -1640,7 +1649,9 @@ export function AgentView({
                     ) : b.kind === "tools" ? (
                       <ToolGroup key={b.id} tools={b.tools} cwd={info?.cwd ?? ""} />
                     ) : (
-                      <ChatItemView key={b.item.id} item={itemShown(b.item, userText, b.item.id === firstUser)} cwd={info?.cwd ?? ""} />
+                      <UserOwnView key={b.item.id} own={b.item.kind === "user" ? (userView?.(b.item.text, b.item.id === firstUser) ?? null) : null}>
+                        <ChatItemView item={itemShown(b.item, userText, b.item.id === firstUser)} cwd={info?.cwd ?? ""} />
+                      </UserOwnView>
                     );
                   const ids = b.kind === "item" ? [b.item.id] : b.tools.map((t) => t.id);
                   const hasPlan = plan?.itemId && ids.includes(plan.itemId);

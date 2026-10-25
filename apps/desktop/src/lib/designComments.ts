@@ -11,7 +11,7 @@ const oneLine = (s: string) => s.replace(/\s+/g, " ").trim();
 /** The line **Send** adds to the chat for a pin, on one line:
  *  `Comment on <page> [data-mid=<id>] (<tag> "<text>"): <comment>`.
  *  {@link parseCommentLine} reads it back. */
-export function commentLine(pin: DesignComment): string {
+export function commentLine(pin: CommentRef): string {
   return `Comment on ${pageFile(pin.page)} [data-mid=${pin.mid}] (${pin.tag} "${oneLine(pin.text)}"): ${oneLine(pin.comment)}`;
 }
 

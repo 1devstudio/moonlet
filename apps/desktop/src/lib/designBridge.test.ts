@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { JSDOM } from "jsdom";
+import { JSDOM, type DOMWindow } from "jsdom";
 import { bridgeMessage, modeMessage, pinsMessage } from "./designBridge";
 import bridge from "../../src-tauri/src/design_bridge.js?raw";
 
@@ -77,7 +77,7 @@ describe("the bridge script in a page (X65)", () => {
   });
 
   const NAV = '<nav data-mid="m12"><a href="#git" data-mid="m13">General <b data-mid="m14">Appearance</b></a></nav><h2 data-mid="m25">Git</h2>';
-  const mouse = (win: Window, type: string, on: Element, init: MouseEventInit = {}) => on.dispatchEvent(new (win as typeof window).MouseEvent(type, { bubbles: true, cancelable: true, ...init }));
+  const mouse = (win: DOMWindow, type: string, on: Element, init: MouseEventInit = {}) => on.dispatchEvent(new win.MouseEvent(type, { bubbles: true, cancelable: true, ...init }));
 
   it("in Comment mode, outlines the element under the pointer inside the page, and nothing in View", () => {
     const { win, doc, el, place, tell } = framed(NAV);
