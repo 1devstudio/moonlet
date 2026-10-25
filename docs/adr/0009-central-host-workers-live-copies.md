@@ -1,6 +1,7 @@
 # ADR 0009: A central host owns sessions; workers hold live copies and run heavy commands
 
 - **Status:** proposed (2026-10-13)
+- **Routing refined by:** [X62](../specs/X62-routed-commands.md) (2026-10-22). A routed command needs the user's approval of the project's heavy commands, because Claude Code checks permission rules against the rewritten command.
 - **Transport changed by:** [ADR 0011](0011-machines-connect-over-the-tailnet.md) (2026-10-20). Workers and the apps reach the central host over its tailnet listener with a device token, not over `ssh <alias> moonletd proxy`. The "Workers dial out" bullet below describes the original plan.
 - **Builds on:** [ADR 0008](0008-phone-link-over-tailscale.md) (the phone app and `moonlet-link`), [R1](../specs/R1-ssh-hosts.md)–[R3](../specs/R3-remote-sessions-reconnect.md) (remote hosts over SSH), [S3](../specs/S3-live-upgrade.md) (live upgrade).
 
@@ -53,8 +54,9 @@ The idle Mac mini outran the loaded MacBook, so load-aware placement is required
   - worker link and project identity ([X41](../specs/X41-worker-link-and-project-identity.md));
   - central host setup;
   - live copies (one way, then both ways), both in [X60](../specs/X60-keep-in-sync.md);
-  - routing;
-  - takeover and cloud workers.
+  - routing ([X62](../specs/X62-routed-commands.md));
+  - cloud workers ([ADR 0012](0012-cloud-workers.md), [X63](../specs/X63-cloud-workers.md));
+  - takeover.
 
   Phone access is ADR 0008's ([X39](../specs/X39-phone-pairing-and-link.md), [X40](../specs/X40-mobile-app.md)).
 
