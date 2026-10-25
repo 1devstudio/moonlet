@@ -162,6 +162,37 @@ describe("an edit by hand on a page's source (X65)", () => {
     expect(applyEdit(PAGE, { kind: "text", mid: "m31", text: "Prefix" }).live).toBeNull();
   });
 
+  it("restyles an element by its inline style, written as the style attribute after its others", () => {
+    const edit = applyEdit(PAGE, { kind: "restyle", mid: "m24", set: { padding: "var(--space-4)" } });
+    expect(edit.html).toBe(withLines(18, 1, '    <section data-mid="m24" class="card rows" style="padding: var(--space-4)">'));
+    expect(edit.select).toBe("m24");
+    expect(edit.live).toEqual({ op: "style", mid: "m24", style: "padding: var(--space-4)" });
+  });
+
+  it("keeps the inline style's other properties in their order, sets one in its place, removes one, and the attribute once it has none", () => {
+    const styled = withLines(21, 1, "      <p data-mid=\"m33\" style='color: #d97757;  margin:0 ; background: url(\"a;b.png\")' class=hint>Tom &amp; Jerry&nbsp;rules</p>");
+    expect(applyEdit(styled, { kind: "restyle", mid: "m33", set: { margin: "var(--space-2)", color: null, gap: "4px" } }).html).toBe(
+      withLines(21, 1, '      <p data-mid="m33" style="margin: var(--space-2); background: url(&quot;a;b.png&quot;); gap: 4px" class=hint>Tom &amp; Jerry&nbsp;rules</p>'),
+    );
+    const one = withLines(21, 1, '      <p data-mid="m33" class=hint style="color: red">Tom &amp; Jerry&nbsp;rules</p>');
+    const none = applyEdit(one, { kind: "restyle", mid: "m33", set: { color: null } });
+    expect(none.html).toBe(PAGE);
+    expect(none.live).toEqual({ op: "style", mid: "m33", style: "" });
+    // A void element written with a slash keeps it last.
+    const input = withLines(20, 1, '      <div data-mid="m30" class="row"><span data-mid="m31">Branch prefix</span><input data-mid="m32" class="field" value="marcin/" /></div>');
+    expect(applyEdit(input, { kind: "restyle", mid: "m32", set: { width: "320px" } }).html).toBe(
+      withLines(20, 1, '      <div data-mid="m30" class="row"><span data-mid="m31">Branch prefix</span><input data-mid="m32" class="field" value="marcin/" style="width: 320px" /></div>'),
+    );
+  });
+
+  it("refuses a style value that could end the declaration or the attribute, or a property that is not one", () => {
+    for (const value of ['4px" onclick="alert(1)', "4px; color: red", "4px</p><script>x</script>", "url(https://x.test/a.png)", "calc(4px", "\\34 px", "{}"]) {
+      expect(() => applyEdit(PAGE, { kind: "restyle", mid: "m24", set: { padding: value } })).toThrow(new EditRefused(`${value} is not a value the editor writes`));
+    }
+    expect(() => applyEdit(PAGE, { kind: "restyle", mid: "m24", set: { 'padding" x': "4px" } })).toThrow(new EditRefused('padding" x is not a style property'));
+    expect(() => applyEdit(PAGE, { kind: "restyle", mid: "m1", set: { padding: "4px" } })).toThrow(new EditRefused("The page's body stays"));
+  });
+
   it("refuses an edit that would lose another element of the page, where an element's tags cross another's", () => {
     const tangled = '<!doctype html>\n<body data-mid="m1"><b data-mid="m2">bold<p data-mid="m3">para</b> tail</p></body>\n';
     expect(() => applyEdit(tangled, { kind: "delete", mid: "m2" })).toThrow(new EditRefused("The page's markup around m2 is tangled: ask the agent to fix it"));
@@ -202,6 +233,16 @@ describe("edits by hand, as the agent is told them (X65)", () => {
       ].join("\n"),
     );
     expect(editsMessage([], "Two more variants")).toBe("Two more variants");
+  });
+
+  it("say a restyle as the properties set, and the restyles of one element as one change, each property at its latest", () => {
+    expect(editLine({ page: "index", ...applyEdit(PAGE, { kind: "restyle", mid: "m24", set: { padding: "var(--space-4)", width: null } }).change })).toBe("index.html m24 section: restyled with padding: var(--space-4); no width");
+    const m24 = (set: Record<string, string | null>, undone?: boolean): Untold => ({ page: "index", mid: "m24", tag: "section", change: { kind: "restyled", set }, ...(undone ? { undone } : {}) });
+    const edits: Untold[] = [m24({ padding: "14px 24px" }), { page: "index", mid: "m24", tag: "section", change: { kind: "wrapped", box: "m41" } }, m24({ gap: "8px", padding: "var(--space-4)" }), m24({ width: "320px" }, true)];
+    expect(editsMessage(edits, "Tighter")).toBe(
+      ["Edits by hand since your last turn:", "index.html m24 section: restyled with padding: var(--space-4); gap: 8px, wrapped in div m41, undid restyled with width: 320px", "", "Tighter"].join("\n"),
+    );
+    expect(editsChip(edits)).toBe("3 edits by hand · go with your next message");
   });
 
   it("are read back from a message as its lines and the user's text, and any other message has none", () => {
