@@ -94,12 +94,13 @@ export interface CanvasState {
 /** C (`toggle`), Esc, and the View and Comment buttons. */
 export type CanvasAct = "toggle" | "escape" | "view" | "comment";
 
-/** The canvas after `act`: entering Comment shows the rail; Esc closes the
- *  box, else goes back to View; the View button closes the box. */
+/** The canvas after `act`: entering Comment shows the rail; leaving it, by
+ *  C or the View button, closes the box; Esc closes the box, else goes
+ *  back to View. */
 export function canvasStep(s: CanvasState, act: CanvasAct): CanvasState {
   switch (act) {
     case "toggle":
-      return s.mode === "comment" ? { ...s, mode: "view" } : { ...s, mode: "comment", rail: true };
+      return s.mode === "comment" ? { ...s, mode: "view", box: false } : { ...s, mode: "comment", rail: true };
     case "comment":
       return { ...s, mode: "comment", rail: true };
     case "view":

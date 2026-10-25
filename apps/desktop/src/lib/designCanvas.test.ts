@@ -91,6 +91,13 @@ describe("the canvas's mode, box and rail (X65)", () => {
     expect(canvasStep({ mode: "comment", box: false, rail: true }, "toggle")).toEqual({ mode: "view", box: false, rail: true });
   });
 
+  it("closes the box whenever it leaves Comment, by C or the View button", () => {
+    const boxed = { mode: "comment" as const, box: true, rail: true };
+    expect(canvasStep(boxed, "toggle")).toEqual({ mode: "view", box: false, rail: true });
+    expect(canvasStep(boxed, "view")).toEqual({ mode: "view", box: false, rail: true });
+    expect(canvasStep(boxed, "comment")).toEqual(boxed);
+  });
+
   it("closes the box on Esc, and on the next Esc goes back to View", () => {
     const boxed = { mode: "comment" as const, box: true, rail: true };
     expect(canvasStep(boxed, "escape")).toEqual({ mode: "comment", box: false, rail: true });
