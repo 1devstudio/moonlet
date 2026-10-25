@@ -213,6 +213,8 @@ pub const DESIGN_SNAP: &str = "design.snap";
 pub const DESIGN_RENDER_READY: &str = "design.render.ready";
 /// [`DesignRenderDone`]: the app's answer to an [`EV_DESIGN_RENDER`] (X64).
 pub const DESIGN_RENDER_DONE: &str = "design.render.done";
+/// How long the app has for one card, from when the daemon sends it (X64).
+pub const RENDER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 /// [`DesignFile`] → `{path, content_type}` of a file under the workspace's design folder.
 pub const DESIGN_FILE: &str = "design.file";
 /// [`DesignDetect`] → what a folder's UI is built with, such as `["React", "Tailwind"]`.

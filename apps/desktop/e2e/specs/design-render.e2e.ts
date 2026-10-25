@@ -41,6 +41,9 @@ const FILES: [string, string][] = [
   ["components/data/note/note.html", `<!-- @dsCard group="Data" name="Note" source="README.md" -->\n${head}<body><div class="ds-grid">\n${cell("data/note/saved", "saved", '<p>Saved</p><p style="opacity:0"><span>Undo</span></p>')}\n</div></body></html>\n`],
   // A box under a wrapper at opacity 0 paints nothing: hollow.
   ["components/data/dot/dot.html", `<!-- @dsCard group="Data" name="Dot" source="README.md" -->\n${head}<body><div class="ds-grid">\n${cell("data/dot/default", "default", '<div style="opacity:0"><div style="width:40px;height:40px;background:#4f8de8"></div></div>')}\n</div></body></html>\n`],
+  // A card that never stops running: it blocks the render page, which is
+  // replaced, and the next card renders on a fresh one.
+  ["components/data/spin/spin.html", `<!-- @dsCard group="Data" name="Spin" source="README.md" -->\n${head}<body><div class="ds-grid">\n${cell("data/spin/default", "default", "<span>Loading</span><script>for (;;) {}</script>")}\n</div></body></html>\n`],
   // A grid track wider than 680 px, its cell growing with it: wide.
   [
     "components/data/table/table.html",
@@ -77,6 +80,7 @@ describe("Design card render check and snapshots", () => {
       { path: "components/buttons/button/button.html", flags: [] },
       { path: "components/data/dot/dot.html", flags: ["allHollow", "thin"] },
       { path: "components/data/note/note.html", flags: ["collapsed", "thin"] },
+      { path: "components/data/spin/spin.html", flags: ["bad"], error: "the render page did not answer in 25 s: the card may never stop running" },
       { path: "components/data/table/table.html", flags: ["wide"] },
       { path: "components/data/tag/tag.html", flags: ["rootEmpty", "allHollow", "thin", "bad"] },
       { path: "components/forms/email/email.html", flags: ["collapsed", "thin"] },
@@ -85,7 +89,7 @@ describe("Design card render check and snapshots", () => {
       // The Colours card moonlet writes from the tokens.
       { path: "foundations/colours/colours.html", flags: [] },
     ]);
-    expect(out.render).toEqual({ total: 9, bad: 2, thin: 5, variants_identical: 0 });
+    expect(out.render).toEqual({ total: 10, bad: 3, thin: 5, variants_identical: 0 });
   });
 
   it("snaps a card, and one of its variants, to a PNG at the card's viewport", () => {

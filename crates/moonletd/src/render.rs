@@ -11,17 +11,19 @@ use std::time::Duration;
 
 use moonlet_core::design::render::NO_APP;
 use moonlet_core::terminal::{ClientId, ClientTx};
-use moonlet_proto::methods::{DesignRender, DesignRenderDone, EV_DESIGN_RENDER, RenderWant};
+use moonlet_proto::methods::{
+    DesignRender, DesignRenderDone, EV_DESIGN_RENDER, RENDER_TIMEOUT, RenderWant,
+};
 use moonlet_proto::{Frame, Message, RpcError};
 use tokio::sync::oneshot;
 
-/// How long the app has for one card, from when it is sent: 30 s, or
-/// `MOONLET_RENDER_TIMEOUT_MS` (tests).
+/// How long the app has for one card, from when it is sent:
+/// [`RENDER_TIMEOUT`], or `MOONLET_RENDER_TIMEOUT_MS` (tests).
 fn per_card() -> Duration {
     std::env::var("MOONLET_RENDER_TIMEOUT_MS")
         .ok()
         .and_then(|ms| ms.parse().ok())
-        .map_or(Duration::from_secs(30), Duration::from_millis)
+        .map_or(RENDER_TIMEOUT, Duration::from_millis)
 }
 
 type Reply = oneshot::Sender<Result<DesignRenderDone, RenderError>>;
