@@ -49,18 +49,18 @@ const gens: Record<string, number> = {};
 const touch = (key: string) => void (gens[key] = (gens[key] ?? 0) + 1);
 /** Each page's changes, made, undone or redone, that no save took yet, with
  *  the page's generation after each. */
-const unsaved: Record<string, { step: number; gen: number }[]> = {};
+const notSaved: Record<string, { step: number; gen: number }[]> = {};
 /** Change `step` made, undone or redone on a page's source. */
 function changed(key: string, step: number) {
   touch(key);
-  (unsaved[key] ??= []).push({ step, gen: gens[key] });
+  (notSaved[key] ??= []).push({ step, gen: gens[key] });
 }
 
 /** Forgets every page, change and edit (tests). */
 export function resetEditor() {
   useEditor.setState(EMPTY, true);
   saves = latestSends();
-  for (const k of Object.keys(unsaved)) delete unsaved[k];
+  for (const k of Object.keys(notSaved)) delete notSaved[k];
   for (const k of Object.keys(gens)) delete gens[k];
   for (const k of Object.keys(highest)) delete highest[k];
   for (const k of Object.keys(clips)) delete clips[k];
@@ -94,7 +94,7 @@ async function readPage(host: string, workspace: string, slug: string, page: str
 function setSource(key: string, text: DesignPageText) {
   touch(key);
   // The page is as on disk: nothing in it is left to save.
-  delete unsaved[key];
+  delete notSaved[key];
   highest[key] = Math.max(highest[key] ?? 0, highestMid(text.html));
   useEditor.setState((s) => ({ sources: { ...s.sources, [key]: text } }));
 }
@@ -173,7 +173,7 @@ function save(host: string, workspace: string, slug: string, page: string): Prom
       }
       throw e;
     }
-    unsaved[key] = (unsaved[key] ?? []).filter((c) => c.gen > at);
+    notSaved[key] = (notSaved[key] ?? []).filter((c) => c.gen > at);
     touch(key);
     useEditor.setState((st) => ({ sources: { ...st.sources, [key]: { html: st.sources[key]?.html ?? html, version: written.version } } }));
   });
@@ -192,7 +192,7 @@ export async function sendWithEdits(host: string, workspace: string, slug: strin
     if (!busy.length) break;
     await Promise.all(busy.map((k) => saves.idle(k)));
   }
-  const told = (useEditor.getState().pending[design] ?? []).filter((p) => !unsaved[keyOf(p)]?.some((c) => c.step === p.id));
+  const told = (useEditor.getState().pending[design] ?? []).filter((p) => !notSaved[keyOf(p)]?.some((c) => c.step === p.id));
   await rpc(host, M.chatSend, { id: agent, text: editsMessage(told, text), images });
   useEditor.setState((s) => ({ pending: { ...s.pending, [design]: (s.pending[design] ?? []).filter((p) => !told.includes(p)) } }));
 }
@@ -244,7 +244,7 @@ async function lost(host: string, workspace: string, slug: string, page: string)
   const text = await rpc<DesignPageText>(host, M.designPage, { workspace, slug, page });
   // The page's changes no save took, made, undone or redone since, those
   // made while it was read again too: they were made on the page refused.
-  const ids = new Set((unsaved[key] ?? []).map((c) => c.step));
+  const ids = new Set((notSaved[key] ?? []).map((c) => c.step));
   const st = useEditor.getState();
   const last = (st.undo[design] ?? NO_UNDO).done.filter((step) => step.page === page && ids.has(step.id)).at(-1);
   useEditor.setState((s) => ({
