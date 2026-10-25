@@ -1,20 +1,22 @@
-// Design mode (X65): the sidebar's design systems and designs, the main area,
-// and the New design system dialog (X64).
+// Design mode (X65): the sidebar's design systems and designs, the main area
+// (a design system's view or a design's screen), and the New design system
+// dialog (X64).
 
-import { Command, Lock, Plus, SwatchBook } from "lucide-react";
+import { Command, Lock, MessageSquare, Plus, SwatchBook } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { errorToast, shownWorkspace, toast, useStore } from "../../lib/store";
 import { type DesignCover } from "../../lib/protocol";
-import { picksInWorkspace, systemFolder, systemLabel } from "../../lib/design";
-import { createSystem, detectStack, loadSystems, shownSystem, showSystem, systemsOf, useDesign } from "../../lib/designStore";
+import { designRow, picksInWorkspace, systemFolder, systemLabel } from "../../lib/design";
+import { createSystem, designsOf, detectStack, loadDesigns, loadSystems, shownDesign, shownSystem, showDesign, showSystem, systemsOf, useDesign } from "../../lib/designStore";
 import { workspaceProjects } from "../../lib/tasksStore";
 import { tildePath } from "../../lib/profiles";
 import { useNow } from "../../lib/useNow";
 import { cx } from "../../lib/cx";
-import { AgentIcon, Button, Dialog, Field, IconButton, Kbd, inputCls } from "../ui";
+import { AgentIcon, Button, Dialog, Field, IconButton, Kbd, StateGlyph, inputCls } from "../ui";
 import { ProjectMark } from "../Sidebar";
 import { DesignSystemView, TONES } from "./SystemView";
+import { DesignScreen } from "./DesignScreen";
 
 /** The shown workspace and its design systems; `load` lists them when the
  * workspace is shown (the sidebar does, so a failure shows once). */
@@ -22,10 +24,15 @@ function useWorkspaceSystems(load = false) {
   const ws = useStore((s) => shownWorkspace(s));
   const systems = useDesign((d) => (ws ? systemsOf(d, ws.host, ws.id) : undefined));
   const shown = useDesign((d) => (ws ? shownSystem(d, ws.host, ws.id) : null));
+  const designs = useDesign((d) => (ws ? designsOf(d, ws.host, ws.id) : undefined));
+  const design = useDesign((d) => (ws ? shownDesign(d, ws.host, ws.id) : null));
   useEffect(() => {
-    if (ws && load) void loadSystems(ws.host, ws.id).catch(errorToast);
+    if (ws && load) {
+      void loadSystems(ws.host, ws.id).catch(errorToast);
+      void loadDesigns(ws.host, ws.id).catch(errorToast);
+    }
   }, [ws, load]);
-  return { ws, systems, shown };
+  return { ws, systems, shown, designs, design };
 }
 
 /** Whether a sync agent's chat is at work now, so its system is syncing. */
@@ -35,6 +42,7 @@ function agentWorking(s: ReturnType<typeof useStore.getState>, host: string, id:
 }
 
 const openNewSystem = (ws: { host: string; id: string } | null) => ws && useStore.setState({ dialog: { kind: "new-design-system", host: ws.host, workspace: ws.id } });
+const openNewDesign = (ws: { host: string; id: string } | null) => ws && useStore.setState({ dialog: { kind: "new-design", host: ws.host, workspace: ws.id } });
 
 
 function Heading({ label, add }: { label: string; add?: { title: string; run: () => void } }) {
@@ -52,19 +60,27 @@ function Heading({ label, add }: { label: string; add?: { title: string; run: ()
 
 /** The sidebar body in Design mode. */
 export function DesignSidebar() {
-  const { ws, systems, shown } = useWorkspaceSystems(true);
+  const { ws, systems, shown, designs, design } = useWorkspaceSystems(true);
   const working = useStore(useShallow((s) => (ws ? (systems ?? []).map((sys) => agentWorking(s, ws.host, sys.agent)) : [])));
+  // Each design's agent's live state, for its dot.
+  const states = useStore(useShallow((s) => (ws ? (designs ?? []).map((d) => (d.agent === null ? null : (s.terminals[ws.host]?.[d.agent]?.agent_state ?? d.agent_state))) : [])));
   const now = useNow(true);
   const row = "flex h-[34px] w-full items-center gap-3 rounded-md px-3 text-left ui-text-14";
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <nav className="px-2">
-        {/* Designs come with a design system to start from (X65 entry 7). */}
-        <button disabled title="A design starts from a design system" className={cx(row, "text-muted opacity-60")}>
+        {/* A design starts from a design system (X65). */}
+        <button
+          disabled={!systems?.length}
+          title={systems?.length ? undefined : "A design starts from a design system"}
+          onClick={() => openNewDesign(ws)}
+          className={cx(row, "no-drag", systems?.length ? "text-muted hover:bg-panel-2 hover:text-fg" : "text-muted opacity-60")}
+        >
           <span className="flex w-4 justify-center">
             <Plus size={15} strokeWidth={1.75} />
           </span>
           <span className="flex-1">New design</span>
+          <Kbd>⇧⌘N</Kbd>
         </button>
         <button className={cx(row, "no-drag text-muted hover:bg-panel-2 hover:text-fg")} onClick={() => useStore.setState({ dialog: { kind: "palette" } })}>
           <span className="flex w-4 justify-center">
@@ -80,7 +96,7 @@ export function DesignSidebar() {
           {systems?.length === 0 && <p className="px-2 py-1 ui-text-12.5 text-faint">None yet. Build one from a project's code.</p>}
           {systems?.map((sys, i) => {
             const label = systemLabel(sys, now, !!working[i]);
-            const current = sys.slug === shown?.slug;
+            const current = !design && sys.slug === shown?.slug;
             return (
               <button
                 key={sys.slug}
@@ -99,7 +115,31 @@ export function DesignSidebar() {
           })}
         </nav>
         <Heading label="Designs" />
-        <p className="mx-2 px-2 py-1 ui-text-12.5 text-faint">{systems?.length ? "No designs yet." : "A design starts from a design system."}</p>
+        <nav aria-label="Designs" className="px-2">
+          {designs?.length === 0 || (!designs && systems?.length === 0) ? (
+            <p className="px-2 py-1 ui-text-12.5 text-faint">{systems?.length ? "No designs yet." : "A design starts from a design system."}</p>
+          ) : null}
+          {designs?.map((d, i) => {
+            const label = designRow(d, now, states[i] ?? null);
+            const current = d.slug === design?.slug;
+            return (
+              <button
+                key={d.slug}
+                aria-current={current ? "page" : undefined}
+                onClick={() => ws && showDesign(ws.host, ws.id, d.slug)}
+                className={cx("relative flex h-[30px] w-full items-center gap-2.5 rounded-md px-2 text-left ui-text-13 text-fg", current ? "bg-selected" : "hover:bg-panel-2")}
+              >
+                {current && <span className="absolute inset-y-0 left-0 w-[2px] bg-accent" />}
+                <span className="flex w-[14px] shrink-0 justify-center">{label.state ? <StateGlyph state={label.state} size={14} /> : <span className="h-1.5 w-1.5 rounded-full bg-idle" />}</span>
+                <span className="min-w-0 flex-1 truncate">{d.name}</span>
+                <span title={d.error ?? d.needs_you?.text} className={cx("flex shrink-0 items-center gap-1 ui-text-11.5 tabular-nums", TONES[label.tone])}>
+                  {label.comments && <MessageSquare size={11} />}
+                  {label.text}
+                </span>
+              </button>
+            );
+          })}
+        </nav>
       </div>
     </div>
   );
@@ -107,10 +147,17 @@ export function DesignSidebar() {
 
 /** The main area in Design mode: the open design system, or how to start. */
 export function DesignMain() {
-  const { ws, systems, shown } = useWorkspaceSystems();
+  const { ws, systems, shown, design } = useWorkspaceSystems();
   const working = useStore((s) => !!ws && !!shown && agentWorking(s, ws.host, shown.agent));
   const sidebarOpen = useStore((s) => s.sidebarOpen);
   const now = useNow(true);
+  if (design && ws) {
+    return (
+      <div className="flex h-full flex-col bg-bg">
+        <DesignScreen key={design.slug} host={ws.host} workspace={ws.id} design={design} inset={sidebarOpen ? 0 : 84} />
+      </div>
+    );
+  }
   if (shown && ws) {
     return (
       <div className="flex h-full flex-col bg-bg">
