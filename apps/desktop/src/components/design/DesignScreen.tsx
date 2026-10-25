@@ -136,7 +136,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
                 userText={(text) => briefShown(text, design.brief)}
               />
             ) : (
-              <p className="p-5 ui-text-13 text-muted">This design's agent is not running. Remove the design and make it again to start one.</p>
+              <p className="p-5 ui-text-13 text-muted">This design's agent is not running.</p>
             )}
           </div>
         </section>
