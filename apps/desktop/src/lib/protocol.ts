@@ -1044,6 +1044,44 @@ export interface DesignSystemCreated {
   agent_error: string | null;
 }
 
+/** One design of a workspace, from `design.list` (X65). Session and
+ * project designs come with entry 12. */
+export interface Design {
+  slug: string;
+  name: string;
+  kind: "workspace";
+  /** The design system's slug. */
+  system: string;
+  /** The design's folder. */
+  path: string;
+  /** `index` first, then by name; a label from `design.toml` when it has one. */
+  pages: { name: string; label: string | null }[];
+  /** The newest change under `pages/`, ms; its creation before any page. */
+  updated_at: number;
+  open_comments: number;
+  /** Its agent's chat while it is the design's, its state, and what it waits for. */
+  agent: number | null;
+  agent_state: AgentState | null;
+  needs_you: { kind: "question" | "approval"; text: string } | null;
+  /** Why the design could not be read. */
+  error: string | null;
+}
+
+/** `design.create`'s answer: the design, and why its agent did not start. */
+export interface DesignCreated extends Design {
+  agent_error: string | null;
+}
+
+/** `design.open`: show this design; with `spawned_by`, an agent started it,
+ * and the app shows a toast instead of moving the focus (X65). */
+export interface DesignOpen {
+  workspace: string;
+  slug: string;
+  name: string;
+  spawned_by?: number;
+  session?: string;
+}
+
 /** `design.changed`: files changed in a workspace's design folder (X64, X65). */
 export interface DesignChanged {
   workspace: string;
@@ -1239,6 +1277,10 @@ export const M = {
   designFile: "design.file",
   designSettle: "design.settle",
   designCards: "design.cards",
+  designList: "design.list",
+  designCreate: "design.create",
+  designRemove: "design.remove",
+  designOpen: "design.open",
 } as const;
 
 export const EV = {
@@ -1275,6 +1317,7 @@ export const EV = {
   cloudChanged: "cloud.changed",
   jobOutput: "job.output",
   designChanged: "design.changed",
+  designOpen: "design.open",
 } as const;
 
 /**
