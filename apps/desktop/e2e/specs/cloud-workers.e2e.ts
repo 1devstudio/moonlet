@@ -51,7 +51,7 @@ describe("cloud workers", () => {
     await browser.waitUntil(() => cloudJson()?.idle_minutes === 30, { timeoutMsg: "cloud.json never got the idle time" });
     const saved = cloudJson();
     expect(saved.providers).toEqual({ fake: {} });
-    expect(saved.tailscale).toEqual({ client_id: "kD3fQx7CNTRL", client_secret: "", tag: "tag:shop-worker" });
+    expect(saved.tailscale).toEqual({ mode: "oauth", client_id: "kD3fQx7CNTRL", client_secret: "", auth_key: "", tag: "tag:shop-worker" });
     await expect($(sel.text("No machines"))).toBeDisplayed();
     // Out of range: the field says so and Save waits.
     await fill(sel.settingsField("At most"), "0");
