@@ -141,12 +141,17 @@ impl Store {
             }
             let slug = e.file_name().to_string_lossy().into_owned();
             let dir = e.path();
-            let agent = self
+            // A record that cannot be read lists as the design's error, as a
+            // broken `design.toml` does, not as a design with no agent.
+            let record = self
                 .design_record(workspace, &slug)
-                .ok()
-                .and_then(|r| r.agent);
+                .context("cannot read the design's record");
+            let agent = record.as_ref().ok().and_then(|r| r.agent);
             out.push(match read_design_config(&dir) {
-                Ok(config) => summary(&dir, slug, &config, agent),
+                Ok(config) => DesignInfo {
+                    error: record.err().map(|err| format!("{err:#}")),
+                    ..summary(&dir, slug, &config, agent)
+                },
                 Err(err) => DesignInfo {
                     name: slug.clone(),
                     slug,
@@ -600,6 +605,44 @@ created_at = 1761200000000
                 .as_deref()
                 .unwrap()
                 .starts_with("cannot read design.toml"),
+            "{:?}",
+            list[0].error
+        );
+    }
+
+    #[test]
+    fn a_design_whose_record_cannot_be_read_lists_with_its_error_beside_the_others() {
+        let (home, store) = store_with_system();
+        store
+            .create_design("w1", "Settings page", "moonlet-desktop", "", 1)
+            .unwrap();
+        store
+            .create_design("w1", "Pricing", "moonlet-desktop", "", 2)
+            .unwrap();
+        store.set_design_agent("w1", "pricing", 7).unwrap();
+        std::fs::write(
+            home.path().join("design/w1/.records/designs/pricing.toml"),
+            "agent = \n",
+        )
+        .unwrap();
+        let list = store.designs("w1").unwrap();
+        let seen: Vec<(&str, &str, Option<u32>, bool)> = list
+            .iter()
+            .map(|d| (d.slug.as_str(), d.name.as_str(), d.agent, d.error.is_some()))
+            .collect();
+        assert_eq!(
+            seen,
+            vec![
+                ("pricing", "Pricing", None, true),
+                ("settings-page", "Settings page", None, false)
+            ]
+        );
+        assert!(
+            list[0]
+                .error
+                .as_deref()
+                .unwrap()
+                .starts_with("cannot read the design's record"),
             "{:?}",
             list[0].error
         );
