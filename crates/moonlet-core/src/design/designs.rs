@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
+use super::check::{Kind, Problem};
 use super::fsx;
 use super::store::Store;
 
@@ -283,6 +284,45 @@ impl Store {
         Ok(())
     }
 
+    /// Checks a design's pages (X65): every element of each page's body has
+    /// a `data-mid` of its own, and each links no stylesheet but its design
+    /// system's `styles.css`. With `fix`, the missing and repeated ids get
+    /// the next free numbers first, and the pages are saved.
+    pub fn check_design(&self, workspace: &str, slug: &str, fix: bool) -> Result<Vec<Problem>> {
+        let dir = self.design_dir(workspace, slug)?;
+        let config = read_design_config(&dir)?;
+        let styles = styles_link(&config.system);
+        let mut names: Vec<String> = std::fs::read_dir(dir.join("pages"))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+            .filter_map(|e| {
+                e.file_name()
+                    .to_str()
+                    .filter(|n| n.ends_with(".html"))
+                    .map(String::from)
+            })
+            .collect();
+        names.sort();
+        let mut problems = Vec::new();
+        for name in names {
+            let (rel, path) = (format!("pages/{name}"), dir.join("pages").join(&name));
+            let mut html = fsx::read_inside(&dir, &path)?;
+            if fix {
+                let fixed = super::mid::fix_page(&html);
+                if fixed != html {
+                    fsx::write_inside(&dir, &path, fixed.as_bytes())?;
+                    html = fixed;
+                }
+            }
+            problems.extend(stylesheets(&rel, &html, &styles));
+            problems.extend(super::mid::check_page(&rel, &html));
+        }
+        problems.sort_by(|a, b| (&a.path, a.line).cmp(&(&b.path, b.line)));
+        Ok(problems)
+    }
+
     /// `<workspace>/designs`, never through a link; with `create`, made
     /// (with the workspace's folder) when missing.
     fn designs_dir(&self, workspace: &str, create: bool) -> Result<PathBuf> {
@@ -353,6 +393,36 @@ fn summary(dir: &Path, slug: String, config: &DesignConfig, agent: Option<u32>) 
         agent,
         error: None,
     }
+}
+
+/// How a page in `pages/` links its design system's `styles.css`: relative,
+/// so it loads from the host the page was framed on, whichever it is (X65).
+pub fn styles_link(system: &str) -> String {
+    format!("../../../systems/{system}/styles.css")
+}
+
+/// Each stylesheet a page links that is not `styles` (X65).
+fn stylesheets(path_rel: &str, html: &str, styles: &str) -> Vec<Problem> {
+    let found = std::cell::RefCell::new(Vec::new());
+    let line_of = |byte: usize| html[..byte.min(html.len())].matches('\n').count() + 1;
+    let settings = lol_html::Settings::new().append_element_content_handler(lol_html::element!(
+        "link[rel][href]",
+        |el| {
+            let rel = el.get_attribute("rel").unwrap_or_default().to_lowercase();
+            let href = el.get_attribute("href").unwrap_or_default();
+            if rel.split_whitespace().any(|r| r == "stylesheet") && href != styles {
+                found.borrow_mut().push(Problem {
+                    path: path_rel.to_string(),
+                    line: line_of(el.source_location().bytes().start),
+                    kind: Kind::Stylesheet,
+                    message: format!("{href} is not the design system's styles.css: link {styles}"),
+                });
+            }
+            Ok(())
+        }
+    ));
+    let _ = lol_html::rewrite_str(html, settings);
+    found.into_inner()
 }
 
 /// The pins of `comments.json` whose `state` is `open`; none when it cannot be read.
@@ -647,5 +717,103 @@ created_at = 1761200000000
         // A design that is not there, or a name that is no folder's, is refused.
         assert!(store.remove_design("w1", "settings-page").is_err());
         assert!(store.remove_design("w1", "../systems").is_err());
+    }
+
+    #[test]
+    fn checking_a_design_reports_ids_and_stylesheets_and_fix_gives_the_missing_ids() {
+        let (home, store) = store_with_system();
+        store
+            .create_design("w1", "Settings page", "moonlet-desktop", "", 1)
+            .unwrap();
+        let pages = home.path().join("design/w1/designs/settings-page/pages");
+        std::fs::write(
+            pages.join("index.html"),
+            "<!doctype html>
+<html><head><link rel=\"stylesheet\" href=\"../../../systems/moonlet-desktop/styles.css\"></head>
+<body data-mid=\"m1\">
+<main data-mid=\"m2\"><h1>Settings</h1></main>
+</body></html>
+",
+        )
+        .unwrap();
+        std::fs::write(
+            pages.join("git-a.html"),
+            "<!doctype html>
+<html><head><link rel=\"stylesheet\" href=\"https://cdn.example.com/kit.css\">
+<link rel=\"stylesheet\" href=\"../../../systems/storefront/styles.css\"><link rel=\"icon\" href=\"x.png\"></head>
+<body data-mid=\"m1\"><p data-mid=\"m1\">Git</p></body></html>
+",
+        )
+        .unwrap();
+        let seen = |problems: Vec<Problem>| -> Vec<(String, usize, Kind, String)> {
+            problems
+                .into_iter()
+                .map(|p| (p.path, p.line, p.kind, p.message))
+                .collect()
+        };
+        let other = "is not the design system's styles.css: link ../../../systems/moonlet-desktop/styles.css";
+        assert_eq!(
+            seen(store.check_design("w1", "settings-page", false).unwrap()),
+            vec![
+                (
+                    "pages/git-a.html".into(),
+                    2,
+                    Kind::Stylesheet,
+                    format!("https://cdn.example.com/kit.css {other}")
+                ),
+                (
+                    "pages/git-a.html".into(),
+                    3,
+                    Kind::Stylesheet,
+                    format!("../../../systems/storefront/styles.css {other}")
+                ),
+                (
+                    "pages/git-a.html".into(),
+                    4,
+                    Kind::DuplicateMid,
+                    "<p> repeats data-mid=\"m1\"".into()
+                ),
+                (
+                    "pages/index.html".into(),
+                    4,
+                    Kind::MissingMid,
+                    "<h1> has no data-mid".into()
+                ),
+            ]
+        );
+        // The check alone changes nothing; the fix numbers the ids and leaves
+        // what it cannot fix.
+        assert!(
+            !std::fs::read_to_string(pages.join("index.html"))
+                .unwrap()
+                .contains("m3")
+        );
+        assert_eq!(
+            seen(store.check_design("w1", "settings-page", true).unwrap()),
+            vec![
+                (
+                    "pages/git-a.html".into(),
+                    2,
+                    Kind::Stylesheet,
+                    format!("https://cdn.example.com/kit.css {other}")
+                ),
+                (
+                    "pages/git-a.html".into(),
+                    3,
+                    Kind::Stylesheet,
+                    format!("../../../systems/storefront/styles.css {other}")
+                ),
+            ]
+        );
+        assert!(
+            std::fs::read_to_string(pages.join("index.html"))
+                .unwrap()
+                .contains("<main data-mid=\"m2\"><h1 data-mid=\"m3\">Settings</h1></main>")
+        );
+        assert!(
+            std::fs::read_to_string(pages.join("git-a.html"))
+                .unwrap()
+                .contains("<body data-mid=\"m1\"><p data-mid=\"m2\">Git</p></body>")
+        );
     }
 }
