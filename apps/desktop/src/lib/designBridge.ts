@@ -47,6 +47,7 @@ export const COMPUTED_PROPS = [
   "flex-direction",
   "gap",
   "align-items",
+  "justify-content",
   "grid-template-columns",
   "padding",
   "margin",

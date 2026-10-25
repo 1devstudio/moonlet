@@ -82,7 +82,7 @@
   };
   // The selection's computed style, the Inspector's properties of it; a
   // shorthand the browser leaves empty is made from its longhands.
-  const COMPUTED = ["display", "flex-direction", "gap", "align-items", "grid-template-columns", "padding", "margin", "width", "height", "background-color", "border", "border-radius", "box-shadow", "opacity", "position"];
+  const COMPUTED = ["display", "flex-direction", "gap", "align-items", "justify-content", "grid-template-columns", "padding", "margin", "width", "height", "background-color", "border", "border-radius", "box-shadow", "opacity", "position"];
   const sides = (vals) => {
     const [t, r, b, l] = vals;
     if (!t) return "";
