@@ -1618,6 +1618,10 @@ pub struct SyncFetched {
     pub head: String,
     pub too_big: Vec<String>,
     pub pack: Option<u32>,
+    /// The pack holds `head` without its parents: a cloud machine gets no
+    /// older history (X63).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub shallow: bool,
 }
 
 /// `sync.update`: the central host's files and commit, against the base

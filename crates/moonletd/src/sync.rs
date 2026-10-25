@@ -1008,6 +1008,23 @@ impl LiveCopies {
                 k.host
             )));
         }
+        // Its parents never come: git must know before it reads the pack.
+        // Only in a cloud machine's own routing repository, for a commit it
+        // does not have: never in a repository the user's copies use.
+        let known = !git_sync::present(&repo, std::slice::from_ref(&fetched.head))
+            .await
+            .unwrap_or_default()
+            .is_empty();
+        if honors_shallow(
+            fetched.shallow,
+            k.kind,
+            self.link.info().worker.cloud,
+            known,
+        ) {
+            git_sync::mark_shallow(&repo, &fetched.head)
+                .await
+                .map_err(|e| Stop::Paused(format!("{e:#}")))?;
+        }
         if let Some(t) = fetched.pack {
             let pack = host
                 .take_pack(t)
@@ -2581,6 +2598,7 @@ impl LiveCopies {
                 head: String::new(),
                 too_big: Vec::new(),
                 pack: None,
+                shallow: false,
             });
         }
         let lock = self.lock(&format!("session:{}", served.path));
@@ -2590,9 +2608,14 @@ impl LiveCopies {
         let head = git_sync::head(path).await.map_err(internal)?;
         let have = git_sync::present(path, &req.have).await.map_err(internal)?;
         let have: Vec<&str> = have.iter().map(String::as_str).collect();
-        let pack = git_sync::pack_objects(path, &[&snap.tree, &head], &have)
-            .await
-            .map_err(internal)?;
+        // A cloud machine gets the commit and the files, never older history.
+        let shallow = conn.cloud.load(std::sync::atomic::Ordering::Relaxed);
+        let pack = if shallow {
+            git_sync::pack_shallow(path, &head, &snap.tree).await
+        } else {
+            git_sync::pack_objects(path, &[&snap.tree, &head], &have).await
+        }
+        .map_err(internal)?;
         let pack = send_pack(&pack, |p| conn.send_pack(p))?;
         git_sync::set_base_ref(path, &req.copy, &snap.tree)
             .await
@@ -2603,6 +2626,7 @@ impl LiveCopies {
             head,
             too_big: snap.too_big,
             pack,
+            shallow,
         })
     }
 
@@ -3977,6 +4001,12 @@ impl Unsaved {
     }
 }
 
+/// Whether a fetch's `shallow` is taken: only a routing copy on a cloud
+/// machine starts without history (X63), and only from a commit it lacks.
+fn honors_shallow(shallow: bool, kind: CopyKind, cloud_machine: bool, known: bool) -> bool {
+    shallow && kind == CopyKind::Run && cloud_machine && !known
+}
+
 /// Routing copy `k`'s setup question, while it waits for the user.
 fn run_setup_ask(k: &Kept) -> Option<m::ExecSetup> {
     let setup = k
@@ -4191,6 +4221,18 @@ pub fn spawn(daemon: Arc<crate::daemon::Daemon>) {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn only_a_cloud_machines_routing_copy_starts_without_history() {
+        assert!(honors_shallow(true, CopyKind::Run, true, false));
+        // A central host cannot make a Mac's copies shallow.
+        assert!(!honors_shallow(true, CopyKind::Live, true, false));
+        assert!(!honors_shallow(true, CopyKind::Run, false, false));
+        // Nor hide the parents of a commit already here.
+        assert!(!honors_shallow(true, CopyKind::Run, true, true));
+        assert!(!honors_shallow(false, CopyKind::Run, true, false));
+    }
+
     use super::*;
 
     fn git(dir: &Path, args: &[&str]) -> String {

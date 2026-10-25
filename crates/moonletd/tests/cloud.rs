@@ -1461,3 +1461,95 @@ async fn archiving_a_session_leaves_its_machine_to_the_idle_time() {
     tokio::time::sleep(Duration::from_secs(1)).await;
     assert_eq!(c.machines().await["machines"][0]["state"], json!("ready"));
 }
+
+fn git_out(dir: &Path, args: &[&str]) -> String {
+    let out = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+/// A project whose first commit held a secret, removed and ignored since.
+async fn with_old_secret() -> (Cloud, String) {
+    let c = routing(&[]).await;
+    let repo = c.repo();
+    std::fs::write(repo.join("secret.txt"), "sk-live-123\n").unwrap();
+    git(&repo, &["add", "secret.txt"]);
+    git(&repo, &["commit", "-q", "-m", "add the key"]);
+    let blob = git_out(&repo, &["rev-parse", "HEAD:secret.txt"]);
+    git(&repo, &["rm", "-q", "--cached", "secret.txt"]);
+    std::fs::write(repo.join(".gitignore"), "secret.txt\n").unwrap();
+    git(&repo, &["add", ".gitignore"]);
+    git(&repo, &["commit", "-q", "-m", "drop the key"]);
+    (c, blob)
+}
+
+#[tokio::test]
+async fn a_cloud_machine_gets_no_older_history() {
+    let (c, _) = with_old_secret().await;
+    let s = c.session("big-refactor", true).await;
+    let ran = c.run(&s, &["sh", "-c", "git log --format=%s"]).await;
+    let name = c.machines().await["machines"][0]["name"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(ran_on(&ran), name, "{ran:?}");
+    assert_eq!(
+        (ran.stdout.as_str(), ran.status),
+        ("drop the key\n", 0),
+        "{ran:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_secret_removed_from_the_files_never_reaches_a_cloud_machine() {
+    let (c, blob) = with_old_secret().await;
+    let s = c.session("big-refactor", true).await;
+    let ran = c.run(&s, &["sh", "-c", "ls"]).await;
+    let name = c.machines().await["machines"][0]["name"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(ran_on(&ran), name, "{ran:?}");
+    assert!(!ran.stdout.contains("secret.txt"), "{ran:?}");
+    // Not in the machine's repository either.
+    let repos = c.fake_dirs()[0].join("home/runs/repos");
+    let mut found = false;
+    for host in std::fs::read_dir(&repos).unwrap().flatten() {
+        for repo in std::fs::read_dir(host.path()).unwrap().flatten() {
+            let out = Command::new("git")
+                .args(["cat-file", "-e", &blob])
+                .current_dir(repo.path())
+                .output()
+                .unwrap();
+            found |= out.status.success();
+        }
+    }
+    assert!(!found, "the old secret reached the machine");
+}
+
+#[tokio::test]
+async fn a_cloud_machine_never_contacts_origin() {
+    let c = routing(&[]).await;
+    // An origin no one can reach: the machine never asks it.
+    git(
+        &c.repo(),
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://git.invalid/acme/shop.git",
+        ],
+    );
+    let s = c.session("big-refactor", true).await;
+    let ran = c.run(&s, &["sh", "run.sh"]).await;
+    let name = c.machines().await["machines"][0]["name"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(ran_on(&ran), name, "{ran:?}");
+    assert_eq!((ran.stdout.as_str(), ran.status), ("out\n", 0));
+}
