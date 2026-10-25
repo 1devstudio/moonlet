@@ -34,7 +34,7 @@ import { askWithEdits, closeDesign, hasCopy, sendCommentsWithEdits, copyElementO
 import { EditRefused, editsChip, type Edit } from "../../lib/designEdits";
 import { pageUrl } from "../../lib/designView";
 import { VIEWPORTS, canvasKey, canvasScale, canvasZoom, customViewports, fitBox, parseViewport, sizeOf, sizeText, viewportLabel, viewportText, withCustomViewport, type Size } from "../../lib/designViewport";
-import { breadcrumb, canvasPage, canvasStep, chatAfter, editorStep, isTyping, keyAct, modeEntered, modeHint, onReport, undoOpen, writingPage, type CanvasAct, type CanvasMode, type CanvasState, type ChatPanel, type KeyAct, type RailTab } from "../../lib/designCanvas";
+import { breadcrumb, canvasPage, canvasStep, chatAfter, editorStep, isTyping, keyAct, layerPick, modeEntered, modeHint, onReport, undoOpen, writingPage, type CanvasAct, type CanvasMode, type CanvasState, type ChatPanel, type KeyAct, type RailTab } from "../../lib/designCanvas";
 import { keyId } from "../../lib/runActions";
 import { chatCardLookup, commentCardSelector, messageView, commentsTab, keepAction, openCommentsLabel, pageCounts, sendAll } from "../../lib/designComments";
 import { bridgeMessage, editMessage, helloMessage, modeMessage, pinsMessage, scrollMessage, selectMessage, type Layer, type PickedElement, type Rect } from "../../lib/designBridge";
@@ -534,6 +534,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
               layers={page === null ? NO_LAYERS : layers}
               selected={selected}
               onSelect={(mid) => {
+                if (!layerPick(canvas.current, workingRef.current)) return;
                 if (canvas.current.mode !== "edit") step("edit");
                 select(mid);
               }}
