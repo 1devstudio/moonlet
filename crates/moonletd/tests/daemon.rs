@@ -2613,6 +2613,39 @@ async fn overlapping_saves_of_a_page_over_one_version_save_one_and_refuse_the_ot
     }
 }
 
+/// X65 entry 10: the visual editor's tokens and snippets come from the
+/// design's own design system.
+#[tokio::test]
+async fn a_designs_kit_gives_its_systems_tokens_and_snippet_cards() {
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    let ws = workspace_with_system(&d, &mut c).await;
+    let _: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    let system = d.home.path().join(".moonlet/design").join(&ws).join("systems/moonlet-desktop");
+    std::fs::create_dir_all(system.join("tokens")).unwrap();
+    std::fs::write(system.join("styles.css"), "@import \"tokens/scale.css\";\n").unwrap();
+    std::fs::write(system.join("tokens/scale.css"), ":root { --space-4: 16px; }\n").unwrap();
+    let card = "<!-- @dsCard group=\"Forms\" name=\"Switch\" -->\n<section class=\"ds-cell\" data-snippet=\"forms/switch/on\"><h4>on</h4><div class=\"ds-mount\"><span class=\"switch is-on\"></span></div></section>\n";
+    let file = system.join("components/forms/Switch/Switch.html");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, card).unwrap();
+    let kit: serde_json::Value = c
+        .request(methods::DESIGN_KIT, serde_json::json!({"workspace": ws, "slug": "settings-page"}))
+        .await
+        .unwrap();
+    assert_eq!(
+        kit,
+        serde_json::json!({
+            "system": "moonlet-desktop",
+            "tokens": [{"name": "--space-4", "value": "16px", "family": "spacing"}],
+            "cards": [{"path": "components/forms/Switch/Switch.html", "group": "Forms", "name": "Switch", "html": card}],
+        })
+    );
+}
+
 /// X65: a design needs a design system its workspace has, and a session
 /// design is not made yet (entry 12).
 #[tokio::test]
