@@ -9,7 +9,7 @@ import { ChevronDown, Search } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { DesignToken } from "../../lib/protocol";
 import type { Decl, StyleSet } from "../../lib/designStyle";
-import { fieldEntries, fieldInput, fieldSet, fieldShows, fieldValue, inspectorSections, pickToken, type Field } from "../../lib/designInspector";
+import { displayOf, fieldEntries, fieldInput, fieldOff, fieldSet, fieldShows, fieldValue, inspectorSections, pickToken, type Field } from "../../lib/designInspector";
 import { paletteGroups, type Snippet } from "../../lib/designPalette";
 import { cx } from "../../lib/cx";
 import { Menu } from "../Menu";
@@ -47,7 +47,7 @@ export function InspectorTab({
   const [open, setOpen] = useState<string | null>(null);
   useEffect(() => setOpen(null), [mid]);
   if (!mid || !tag) return <p className="px-4 py-6 text-center ui-text-12.5 text-faint">{locked ? "Edit opens when Claude stops." : "Select an element in Edit mode (V) to inspect it."}</p>;
-  const display = fieldValue({ label: "Display", prop: "display", kind: "keyword" }, inline, computed).value || "block";
+  const display = displayOf(inline, computed);
   return (
     <div aria-label="Inspector" className="min-h-0 flex-1 overflow-y-auto">
       <div className="flex h-11 items-center gap-2 border-b border-border px-3.5">
@@ -68,7 +68,7 @@ export function InspectorTab({
               field={f}
               value={fieldValue(f, inline, computed)}
               tokens={tokens}
-              off={off.includes(f.prop) || (f.also ?? []).some((p) => off.includes(p))}
+              off={fieldOff(f, off)}
               open={open === f.prop}
               locked={locked}
               onOpen={(o) => setOpen(o ? f.prop : null)}

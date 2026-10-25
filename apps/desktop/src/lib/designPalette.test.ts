@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { paletteGroups, parseSnippetId, snippetsOf } from "./designPalette";
+import { paletteGroups, parseSnippetId, snippetDrags, snippetsOf } from "./designPalette";
 import type { DesignKitCard } from "./protocol";
 
 /** Two cards as a sync agent writes them (X64): each variant a ds-cell
@@ -54,5 +54,22 @@ describe("the Palette's snippets (X65)", () => {
     expect(paletteGroups(all, "  GHOST ").map((g) => [g.group, g.snippets.map((s) => s.id)])).toEqual([["Buttons", ["buttons/button/ghost"]]]);
     expect(paletteGroups(all, "forms on").map((g) => [g.group, g.snippets.map((s) => s.id)])).toEqual([["Forms", ["forms/switch/on"]]]);
     expect(paletteGroups(all, "tabs")).toEqual([]);
+  });
+});
+
+describe("a snippet dragged from the Palette (X65)", () => {
+  it("is the one dropped while it is dragged, and for 2 s after the drag ends, as the page's report of the drop comes later; then none, and once only", () => {
+    const [button, ghost] = snippetsOf([BUTTON]);
+    const drags = snippetDrags();
+    expect(drags.take(0)).toBeNull();
+    drags.start(button);
+    expect(drags.take(500)).toEqual(button);
+    expect(drags.take(500)).toBeNull();
+    drags.start(ghost);
+    drags.end(1_000);
+    expect(drags.take(2_900)).toEqual(ghost);
+    drags.start(button);
+    drags.end(10_000);
+    expect(drags.take(12_001)).toBeNull();
   });
 });

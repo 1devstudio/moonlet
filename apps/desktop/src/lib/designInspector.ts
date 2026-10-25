@@ -5,7 +5,8 @@
 // are designTokens.ts; the write is a restyle edit (designEdits.ts).
 
 import { BORDER_STYLES, colourParts, isStyleValue, valueParts, type Decl, type StyleSet } from "./designStyle";
-import { fieldShown, popoverEntries, resolveValue, tokenOf, tokenRef, tokenRefName, type PopoverEntry, type TokenFamily } from "./designTokens";
+import { fieldShown, offSystem, popoverEntries, resolveValue, tokenOf, tokenRef, tokenRefName, type PopoverEntry, type TokenFamily } from "./designTokens";
+import type { Layer } from "./designBridge";
 import type { DesignToken } from "./protocol";
 
 /** One field: the property it writes, and how its value is typed. */
@@ -162,4 +163,23 @@ export function fieldSet(field: Field, inline: Decl[], value: string | null): St
   const rest = valueParts(short[1]).filter((p) => !colourParts(short[1]).includes(p));
   if (!rest.length) return { [short[0]]: null, [field.prop]: value };
   return { [short[0]]: [...rest, ...(value === null ? [] : [value])].join(" "), [field.prop]: null };
+}
+
+/** The Inspector's element `mid`: its tag in the page's tree, its inline
+ *  style from the page's source (`inlineStyles`), and its properties whose
+ *  values match no token. */
+export function selectionOf(layers: Layer[], styles: Record<string, Decl[]>, tokens: DesignToken[], mid: string | null): { tag: string | null; inline: Decl[]; off: string[] } {
+  const inline = (mid !== null && styles[mid]) || [];
+  return { tag: (mid !== null && layers.find((l) => l.mid === mid)?.tag) || null, inline, off: offSystem(tokens, inline) };
+}
+
+/** The display the Inspector's Layout follows: inline, else computed, else block. */
+export function displayOf(inline: Decl[], computed: Record<string, string>): string {
+  return fieldValue(DISPLAY, inline, computed).value || "block";
+}
+
+/** Whether a field shows the off-system dot: its property, or one it may
+ *  be set with (Fill's `background`), is among `off`. */
+export function fieldOff(field: Field, off: string[]): boolean {
+  return off.includes(field.prop) || (field.also ?? []).some((p) => off.includes(p));
 }
