@@ -4,8 +4,8 @@
 // style value a field writes from what the user types or picks. Tokens
 // are designTokens.ts; the write is a restyle edit (designEdits.ts).
 
-import { isStyleValue, type Decl } from "./designStyle";
-import { fieldShown, resolveValue, tokenOf, tokenRef, type TokenFamily } from "./designTokens";
+import { BORDER_STYLES, isStyleValue, valueParts, type Decl } from "./designStyle";
+import { fieldShown, resolveValue, tokenOf, tokenRef, tokenRefName, type TokenFamily } from "./designTokens";
 import type { DesignToken } from "./protocol";
 
 /** One field: the property it writes, and how its value is typed. */
@@ -94,7 +94,7 @@ export function fieldInput(field: Field, typed: string): { set: string | null } 
   if (!text) return { set: null };
   if (field.kind === "size") {
     if (text === "fill") return { set: FILL };
-    if (text === "auto" || /^var\(--[A-Za-z0-9_-]+\)$/.test(text)) return { set: text };
+    if (text === "auto" || tokenRefName(text)) return { set: text };
     const m = /^(\d+(?:\.\d+)?)(px|%)?$/.exec(text);
     return m ? { set: `${m[1]}${m[2] ?? "px"}` } : { error: "A size is px, %, auto or fill" };
   }
@@ -110,9 +110,9 @@ export function fieldInput(field: Field, typed: string): { set: string | null } 
  *  in a border, its colour, keeping the width and style it has. */
 export function pickToken(field: Field, current: string, token: string): string {
   if (field.prop !== "border") return tokenRef(token);
-  const parts = current.trim().split(/\s+/).filter(Boolean);
+  const parts = valueParts(current);
   const width = parts.find((p) => /^-?[\d.]+[a-z]*$/.test(p) || /^(thin|medium|thick)$/.test(p)) ?? "1px";
-  const style = parts.find((p) => /^(none|hidden|dotted|dashed|solid|double|groove|ridge|inset|outset)$/.test(p)) ?? "solid";
+  const style = parts.find((p) => (BORDER_STYLES as readonly string[]).includes(p)) ?? "solid";
   return `${width} ${style} ${tokenRef(token)}`;
 }
 
@@ -123,7 +123,7 @@ export function pickToken(field: Field, current: string, token: string): string 
 export function fieldShows(field: Field, tokens: DesignToken[], value: string): { token: string | null; value: string } {
   if (!field.family || field.kind === "text" || field.kind === "keyword" || field.kind === "opacity") return { token: null, value };
   if (field.prop !== "border") return fieldShown(tokens, value, field.family);
-  const parts = value.trim().split(/\s+(?![^(]*\))/);
+  const parts = valueParts(value);
   const at = parts.findIndex((p) => tokenOf(tokens, p, "color") !== null);
   if (at < 0) return { token: null, value };
   const t = tokenOf(tokens, parts[at], "color")!;
