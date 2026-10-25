@@ -13,6 +13,7 @@ import {
   policyAddress,
   reachWarning,
   policySnippet,
+  policySteps,
   projectCloudFooter,
   projectCloudChange,
   projectCloudDraft,
@@ -208,10 +209,23 @@ describe("Settings › Cloud workers (X63)", () => {
     );
   });
 
+  it("says where each part of the policy goes", () => {
+    expect(policySteps("marcins-mac-mini", 47428)).toEqual([
+      { text: "Open your tailnet policy file in Tailscale's admin console.", link: "https://login.tailscale.com/admin/acls/file" },
+      { text: 'Under "tagOwners", add the tag\'s line. A policy without "tagOwners" gets the whole line.' },
+      { text: 'Under "acls", add the rule. A policy without "acls", such as one with only "grants", gets the whole list: the two work side by side.' },
+      {
+        text: 'If a rule still lets everything reach everything, such as the first policy\'s { "action": "accept", "src": ["*"], "dst": ["*:*"] }, cloud machines can reach your whole tailnet too. Narrow its "src", for example to ["autogroup:member"].',
+      },
+      { text: "Save. Cloud machines then reach only marcins-mac-mini's port 47428." },
+    ]);
+  });
+
   it("puts the central host's Tailscale address in the policy", () => {
     expect(policyAddress({ port: 47428, listening: ["127.0.0.1:47428", "100.101.102.103:47428"] }, "studio-mini")).toBe("100.101.102.103:47428");
-    expect(policyAddress({ port: 47428, listening: [] }, "studio-mini")).toBe("studio-mini:47428");
-    expect(policyAddress({ port: 0, listening: [] }, "studio-mini")).toBe("studio-mini:47428");
+    // Not listening on the tailnet: a placeholder to fill in, since a policy takes no bare machine name.
+    expect(policyAddress({ port: 47428, listening: [] }, "studio-mini")).toBe("<studio-mini's Tailscale IP>:47428");
+    expect(policyAddress({ port: 0, listening: [] }, "studio-mini")).toBe("<studio-mini's Tailscale IP>:47428");
     // Only an IPv6 Tailscale address: in brackets, as the policy takes it.
     expect(policyAddress({ port: 47428, listening: ["[fd7a:115c:a1e0::1]:47428"] }, "studio-mini")).toBe("[fd7a:115c:a1e0::1]:47428");
     expect(policyAddress({ port: 47428, listening: ["[fd7a:115c:a1e0::1]:47428", "100.101.102.103:47428"] }, "studio-mini")).toBe("100.101.102.103:47428");

@@ -11,12 +11,14 @@ import {
   afterRemoving,
   checkLine,
   tailscaleSteps,
+  type Step,
   billingNote,
   cloudChanges,
   cloudDraft,
   cloudErrors,
   policyAddress,
   policySnippet,
+  policySteps,
   reachWarning,
   providerForm,
   providerName,
@@ -29,7 +31,7 @@ import {
 import { loadCloud, retryRemoval, useCloud } from "../../lib/cloudStore";
 import { saveBarStatus } from "../../lib/projectSettings";
 import { goSettings } from "../../lib/settingsNavigation";
-import { M, type CloudInfo, type MobileStatus } from "../../lib/protocol";
+import { M, type CloudInfo } from "../../lib/protocol";
 import { errorToast, toast, useStore } from "../../lib/store";
 import { Button, cx } from "../ui";
 import { Card, PageBody, PageHeading, Row, SaveBar, Section, Segmented, Status, fieldCls } from "./controls";
@@ -73,7 +75,6 @@ export function CloudPage() {
   const hostLabel = useStore((s) => s.hosts[host]?.label);
   const [info, setInfo] = useState<CloudInfo | null>(null);
   const [draft, setDraft] = useState<CloudDraft | null>(null);
-  const [status, setStatus] = useState<MobileStatus | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   // The last Check: true, or what went wrong.
@@ -105,7 +106,6 @@ export function CloudPage() {
     // Nothing of the last host's shows for this one.
     setInfo(null);
     setFailed(null);
-    setStatus(null);
     setChecked(null);
     // A late answer for a host no longer shown is dropped: Save goes to `host`.
     let live = true;
@@ -113,17 +113,13 @@ export function CloudPage() {
       (i) => live && show(i),
       (e) => live && setFailed(e instanceof Error ? e.message : String(e)),
     );
-    void rpc<MobileStatus>(host, M.mobileStatus).then(
-      (st) => live && setStatus(st),
-      () => live && setStatus(null),
-    );
     loadCloud();
     return () => {
       live = false;
     };
   }, [host]);
 
-  const name = status?.host || hostLabel || host;
+  const name = hostLabel || host;
   const changes = info && draft ? cloudChanges(info, draft) : null;
   const errors = draft ? cloudErrors(draft, info ?? undefined) : {};
   const errorCount = Object.keys(errors).length;
@@ -191,10 +187,12 @@ export function CloudPage() {
 
   const addable = info.kinds.filter((k) => !draft.providers[k.id]);
   const usage = usageLine(machines?.hours_this_month ?? 0, info.max_hours_month);
-  const addr = policyAddress(status ?? { port: 47428, listening: [] }, name);
+  // A daemon before 0.1.31 does not say where it listens.
+  const listening = info?.listening;
+  const addr = policyAddress({ port: 47428, listening: listening ?? [] }, name);
   const snippet = policySnippet(draft.tailscale.tag.trim() || info.tailscale.tag, addr);
   const port = addr.split(":").pop();
-  const unreachable = status && reachWarning(status, name);
+  const unreachable = listening && reachWarning({ listening }, name);
   const bar = saveBarStatus({ dirty, errors: errorCount });
 
   return (
@@ -311,24 +309,7 @@ export function CloudPage() {
                 }}
               />
             </Row>
-            <ol data-setting="cloud-ts-steps" className="m-0 flex list-none flex-col gap-1.5 px-4 py-3.5">
-              {tailscaleSteps(draft.tailscale.mode, draft.tailscale.tag.trim() || info.tailscale.tag).map((step, i) => (
-                <li key={i} className="flex items-baseline gap-2.5 ui-text-12.5 text-muted">
-                  <span className="w-4 shrink-0 text-right font-mono text-faint">{i + 1}.</span>
-                  <span className="flex-1">
-                    {step.text}
-                    {step.link && (
-                      <>
-                        {" "}
-                        <button type="button" className="text-accent hover:underline" onClick={() => void openUrl(step.link!).catch(errorToast)}>
-                          Open
-                        </button>
-                      </>
-                    )}
-                  </span>
-                </li>
-              ))}
-            </ol>
+            <Steps setting="cloud-ts-steps" steps={tailscaleSteps(draft.tailscale.mode, draft.tailscale.tag.trim() || info.tailscale.tag)} />
             {draft.tailscale.mode === "oauth" ? (
               <>
                 <Row label="OAuth client ID" hint="Needs the Auth Keys scope and the tag below." htmlFor="cloud-ts-id">
@@ -388,14 +369,13 @@ export function CloudPage() {
                 </span>
               )}
               <span className="flex items-center gap-2 ui-text-12.5 text-muted">
-                <span className="flex-1">
-                  Add this to your tailnet policy, so the tag reaches {name}'s port {port} and nothing else.
-                </span>
+                <span className="flex-1">Your tailnet policy lets machines with the tag reach {name}'s port {port}:</span>
                 <Button size="sm" variant="ghost" aria-label="Copy the policy" onClick={() => void navigator.clipboard.writeText(snippet).then(() => toast("Copied the policy"))}>
                   <Copy size={12} />
                 </Button>
               </span>
-              <pre className="m-0 overflow-x-auto rounded-md border border-border bg-panel-2 px-3 py-2.5 font-mono ui-text-12">{snippet}</pre>
+              <pre className="m-0 whitespace-pre-wrap break-all rounded-md border border-border bg-panel-2 px-3 py-2.5 font-mono ui-text-12">{snippet}</pre>
+              <Steps setting="cloud-policy-steps" steps={policySteps(name, Number(port) || 47428)} />
             </div>
           </Card>
         </Section>
@@ -429,5 +409,29 @@ export function CloudPage() {
         </Section>
       </fieldset>
     </PageBody>
+  );
+}
+
+/** Numbered steps, with **Open** for a step's page. */
+function Steps({ setting, steps }: { setting: string; steps: Step[] }) {
+  return (
+    <ol data-setting={setting} className="m-0 flex list-none flex-col gap-1.5 px-4 py-3.5">
+      {steps.map((step, i) => (
+        <li key={i} className="flex items-baseline gap-2.5 ui-text-12.5 text-muted">
+          <span className="w-4 shrink-0 text-right font-mono text-faint">{i + 1}.</span>
+          <span className="flex-1">
+            {step.text}
+            {step.link && (
+              <>
+                {" "}
+                <button type="button" className="text-accent hover:underline" onClick={() => void openUrl(step.link!).catch(errorToast)}>
+                  Open
+                </button>
+              </>
+            )}
+          </span>
+        </li>
+      ))}
+    </ol>
   );
 }
