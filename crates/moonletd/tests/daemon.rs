@@ -3468,3 +3468,33 @@ async fn edits_by_hand_are_kept_on_their_own_when_the_agent_starts_a_turn() {
     assert_eq!((&listed[0]["n"], &listed[0]["type"]), (&serde_json::json!(3), &serde_json::json!("agent_turn")));
     assert_eq!(std::fs::read_to_string(dir.join("history/3/pages/index.html")).unwrap(), "<body data-mid=\"m1\"><p data-mid=\"m2\">turn 2</p></body>\n");
 }
+
+/// X65: while the design's agent works, the wait for edits by hand to stop
+/// takes no snapshot, which could hold the agent's half-written pages:
+/// edits saved during the turn go with the turn's snapshot.
+#[tokio::test]
+async fn edits_by_hand_saved_while_the_agent_works_go_with_its_turn() {
+    let d = fake_claude_daemon_with(WRITING_CLAUDE, vec![("MOONLET_DESIGN_QUIET_MS".into(), "300".into())]).await;
+    let mut c = d.client().await;
+    let ws = workspace_with_system(&d, &mut c).await;
+    let created: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    history_of(&mut c, &ws, 1).await;
+    let agent = created["agent"].as_u64().unwrap();
+    let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": agent, "text": "HOLD-NOW"})).await.unwrap();
+    working(&mut c, agent).await;
+    save_by_hand(&mut c, &ws, "<p>by hand, while the agent works</p>\n", &["text of m2"]).await;
+    // Well past the quiet: still only the first turn's snapshot.
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    let listed: serde_json::Value = c.request(methods::DESIGN_HISTORY, serde_json::json!({"workspace": ws, "slug": "settings-page"})).await.unwrap();
+    assert_eq!(listed.as_array().unwrap().len(), 1, "{listed}");
+    let dir = d.home.path().join(".moonlet/design").join(&ws).join("designs/settings-page");
+    std::fs::write(dir.join("release"), "").unwrap();
+    let listed = history_of(&mut c, &ws, 2).await;
+    assert_eq!((&listed[0]["n"], &listed[0]["type"]), (&serde_json::json!(2), &serde_json::json!("agent_turn")));
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    let listed: serde_json::Value = c.request(methods::DESIGN_HISTORY, serde_json::json!({"workspace": ws, "slug": "settings-page"})).await.unwrap();
+    assert_eq!(listed.as_array().unwrap().len(), 2, "{listed}");
+}
