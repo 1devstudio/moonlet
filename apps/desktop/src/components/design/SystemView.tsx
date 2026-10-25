@@ -12,6 +12,7 @@ import { cardGroups, cardUrl, changedBanner, fitScale, fixMessage, fixState, hea
 import { cardsOf, loadCards, openCard, revOf, shownCard, useDesign } from "../../lib/designStore";
 import { workspaceProjects } from "../../lib/tasksStore";
 import { useNow } from "../../lib/useNow";
+import { NEAR_ROOT, useNear } from "../../lib/useNear";
 import { cx } from "../../lib/cx";
 import { AgentIcon, Button, IconButton } from "../ui";
 import { Menu } from "../Menu";
@@ -26,18 +27,19 @@ import { useShallow } from "zustand/react/shallow";
 export const TONES: Record<RowLabel["tone"], string> = { attention: "text-blocked", changed: "text-accent", error: "text-error", muted: "text-faint" };
 
 /** A card rendered at `scale`: its viewport, in a frame that may run its own
- *  scripts but never reach the app (no `allow-same-origin`). */
-function CardFrame({ url, title, viewport, scale, interactive = false }: { url: string; title: string; viewport: [number, number]; scale: number; interactive?: boolean }) {
+ *  scripts but never reach the app (no `allow-same-origin`). Not `live`, the
+ *  same box without the frame, so its web process (X64) is not started. */
+function CardFrame({ url, title, viewport, scale, interactive = false, live = true }: { url: string; title: string; viewport: [number, number]; scale: number; interactive?: boolean; live?: boolean }) {
   const [w, h] = viewport;
   return (
     <div className="relative overflow-hidden" style={{ width: w * scale, height: h * scale }}>
-      <iframe
+      {live && <iframe
         title={title}
         src={url}
         sandbox="allow-scripts"
         className={cx("absolute left-0 top-0 border-0 bg-transparent", !interactive && "pointer-events-none")}
         style={{ width: w, height: h, transform: `scale(${scale})`, transformOrigin: "0 0" }}
-      />
+      />}
     </div>
   );
 }
@@ -60,6 +62,7 @@ function useSize<T extends HTMLElement>(): [React.RefObject<T | null>, [number, 
 
 function CardTile({ workspace, slug, rev, card, rewriting, onOpen }: { workspace: string; slug: string; rev: number; card: DesignCard; rewriting: boolean; onOpen: () => void }) {
   const [ref, [width]] = useSize<HTMLDivElement>();
+  const near = useNear(ref);
   const problems = card.problems.length;
   // At card scale: the tile's width, never larger than the card itself.
   const scale = width ? Math.min(width / card.viewport[0], 1) : 0;
@@ -84,7 +87,7 @@ function CardTile({ workspace, slug, rev, card, rewriting, onOpen }: { workspace
         )}
       </div>
       <div ref={ref} className="max-h-[320px] w-full overflow-hidden">
-        {scale > 0 && <CardFrame url={cardUrl(workspace, slug, card.path, rev)} title={card.name} viewport={card.viewport} scale={scale} />}
+        {scale > 0 && <CardFrame url={cardUrl(workspace, slug, card.path, rev)} title={card.name} viewport={card.viewport} scale={scale} live={near} />}
       </div>
     </button>
   );
@@ -216,7 +219,7 @@ export function DesignSystemView({ host, workspace, sys, label, working, inset }
                     </button>
                   ))}
                 </nav>
-                <div className="min-w-0 flex-1 overflow-y-auto p-6">
+                <div {...{ [NEAR_ROOT]: "" }} className="min-w-0 flex-1 overflow-y-auto p-6">
                   {cards?.length === 0 && <p className="ui-text-13 text-muted">No cards yet. The sync agent writes them in the Cards step.</p>}
                   {!syncing && cards && (
                     <>

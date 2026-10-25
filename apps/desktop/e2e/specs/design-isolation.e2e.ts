@@ -92,3 +92,49 @@ describe("A design card that never stops running", () => {
     await expect(mode("Sessions")).toHaveAttribute("aria-pressed", "true");
   });
 });
+
+// Each card's own process costs memory, so only the cards on screen or near
+// it have a frame: a system of many cards starts a few processes, not one each.
+describe("A design system with more cards than a screen shows", () => {
+  const MANY = "many-kit";
+  const N = 40;
+  const name = (i: number) => `Card ${String(i).padStart(2, "0")}`;
+  const frame = (i: number) => $(`//iframe[@title="${name(i)}"]`);
+  const frames = () => browser.execute(() => document.querySelectorAll('section[aria-label="Custom"] iframe').length);
+
+  before(async () => {
+    if (await mode("Sessions").isExisting()) await mode("Sessions").click();
+    const ws = workspaceId();
+    rpc(w, "design.system.create", { workspace: ws, name: "Many kit", sources: [{ project: projectId(w) }], agent: false });
+    const dir = join(w.home, "design", ws, "systems", MANY);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "styles.css"), ".c { color: #e6e6e6; }\n");
+    for (let i = 1; i <= N; i++) {
+      const slug = `card-${i}`;
+      const path = join(dir, "components", "custom", slug, `${slug}.html`);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, `<!-- @dsCard group="Custom" name="${name(i)}" viewport="400x300" -->\n${head}<body><section data-snippet="custom/${slug}/default"><p class="c">${name(i)}</p></section></body></html>\n`);
+    }
+  });
+
+  after(async () => {
+    rpc(w, "design.system.remove", { workspace: workspaceId(), slug: MANY });
+    if (await mode("Sessions").isExisting()) await mode("Sessions").click();
+  });
+
+  it("frames only the cards on screen or near it", async () => {
+    await mode("Design").click();
+    await $('//nav[@aria-label="Design systems"]//button[.//span[normalize-space()="Many kit"]]').click();
+    await expect($(`//button[@aria-label="${name(N)}"]`)).toBeExisting();
+    await expect(frame(1)).toBeExisting();
+    expect(await frames()).toBeGreaterThan(0);
+    expect(await frames()).toBeLessThan(N);
+  });
+
+  it("frames a card once it is scrolled to, and lets go of one scrolled far away", async () => {
+    await browser.execute((last: string) => document.querySelector(`button[aria-label="${last}"]`)?.scrollIntoView({ block: "end" }), name(N));
+    await expect(frame(N)).toBeExisting();
+    await expect(frame(1)).not.toBeExisting();
+    expect(await frames()).toBeLessThan(N);
+  });
+});
