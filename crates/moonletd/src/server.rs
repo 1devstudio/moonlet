@@ -279,11 +279,18 @@ where
     // The text an agent asks to read is for the app alone, not for the
     // agent's own `moonlet` connections (X31).
     let is_cli = conn.client == crate::daemon::CLI_CLIENT;
+    // A job's output is for the app and paired devices, as `job.output` is
+    // (X62): neither an agent's CLI nor a worker hears it.
+    let no_jobs = is_cli || conn.client == crate::link::WORKER_CLIENT;
     let event_task = tokio::spawn(async move {
         loop {
             match events.recv().await {
                 Ok(Message::Event { name, .. })
                     if is_cli && name == moonlet_proto::methods::EV_TERMINAL_READ_REQUEST => {}
+                Ok(Message::Event { name, .. })
+                    if no_jobs
+                        && (name == moonlet_proto::methods::EV_JOB_OUTPUT
+                            || name == moonlet_proto::methods::EV_JOB_CHANGED) => {}
                 Ok(m) => {
                     if !ev_tx.send(Frame::Json(m)) {
                         break;

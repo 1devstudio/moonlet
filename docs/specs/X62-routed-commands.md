@@ -80,7 +80,7 @@ This is ADR 0009's routing slice. It adds two things the ADR did not decide: an 
       "permissionDecision": "allow",
       "permissionDecisionReason": "moonlet: an approved heavy command; it runs on whichever machine is free",
       "updatedInput": {
-        "command": "'/Applications/moonlet.app/Contents/MacOS/moonlet' exec -- pnpm test",
+        "command": "'/Applications/moonlet.app/Contents/MacOS/moonlet' exec --tool-use toolu_012ftuDv3XBoqpcogRjeHhqb -- pnpm test",
         "description": "Run the tests",
         "timeout": 600000
       }
@@ -88,7 +88,7 @@ This is ADR 0009's routing slice. It adds two things the ADR did not decide: an 
   }
   ```
 
-  `updatedInput` repeats every field of the call's `tool_input` and changes only `command`: the original command text, unchanged, after the `moonlet` binary's own path in single quotes and `exec -- `. Agents do not have `moonlet` on their `PATH`, so the path is spelled out. Claude Code still applies the user's deny and ask rules to the rewritten command.
+  `updatedInput` repeats every field of the call's `tool_input` and changes only `command`: the original command text, unchanged, after the `moonlet` binary's own path in single quotes, `exec`, the tool call's id as `--tool-use <id>` (so the job is found from the chat's row) and `--`. Agents do not have `moonlet` on their `PATH`, so the path is spelled out. Claude Code still applies the user's deny and ask rules to the rewritten command.
 - [ ] `moonlet exec` started anywhere without a central host's routing (no daemon, or `MOONLET_SESSION` not set) runs the command where it is, so a rewritten command always runs. A command it cannot start exits with 127 and "moonlet: cannot run <command>: <reason>", as a shell would.
 
 ### Picking a worker
@@ -222,6 +222,7 @@ This is ADR 0009's routing slice. It adds two things the ADR did not decide: an 
   | `Done in 2.1s` | 0 | (none) |
 
   The summary ends the job tab's state line ("… · run by Claude in fix-cart · 457 tests passed"). A row's second line adds it only for a job that did not exit 0 ("studio-mini · exit 1 · Type error in src/cart.ts:41").
+- [ ] Jobs hold commands' output, so only the app and paired devices list, read and stop them. An agent's `moonlet` CLI and a worker are refused with `forbidden`, as the CLI is for another terminal's output without the user's approval (X31).
 - [ ] **Stop** on a running or waiting job cancels it as `exec.cancel` does (SIGTERM, then SIGKILL after 5 s). The agent gets exit 143 and the line "moonlet: stopped from the Jobs panel". Changes the job made so far still come back. **Stop all** stops every running and waiting job of the session.
 - [ ] **Run on studio-mini now**, on a job waiting for a cloud machine, runs it on the central host at once, with the line "moonlet: running on studio-mini instead, as asked from the Jobs panel". The machine keeps starting, and takes the next command.
 - [ ] The Jobs tab's count is the number of the session's jobs in the history, whatever their state.
@@ -308,8 +309,8 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
   - the event `exec.exited {run, status, worker, rerun, leftovers}`.
 - `exec.cancel {run}`.
 - `job.list {session}` returns the session's jobs, newest first, with state, phases, timeline, worker, what came back, env names and `summary`.
-- `job.output {job, from}` replays the stored output as `Output` frames from byte `from`, then follows the live stream when the job is running.
-- `job.stop {job}`, `job.stop_all {session}`, and `job.run_here {job}` (a job waiting for a cloud machine).
+- `job.output {job, from}` → `{chunks: [{stream, text}], next, more}`: the stored output from byte `from` of its file, up to 1 MiB at a time. A running job's new output also comes as the event `job.output {job, session, chunks}`, so the app needs no frames to follow it.
+- `job.stop {job}` → `true`/`false`, `job.stop_all {session}` → how many it stopped, and `job.run_here {job}` (a job waiting for a cloud machine; until X63, every job answers `not_waiting`).
 - The event `job.changed {job}`.
 - `exec.route` and `exec.run` take the tool call's id (`tool_use_id` from the hook payload), so the chat can match its row to the job.
 - `heavy.get {project}` returns `{config, approved, error}`: the `[heavy]` table of the project's folder, the approved `{commands, env}` or `null`, and why the table cannot be used, if it cannot. The app works out each entry's state and the machines that approved it from these and the workers' answers.
@@ -413,14 +414,15 @@ Where the tests live:
 | Workers screen | Vitest "a worker's row from worker.list and job.list"; e2e "the Workers page lists the running command" |
 | Skip reasons | Vitest "skip reasons for a project" |
 | Workers summary line | Vitest "the summary line counts running jobs and slots" |
-| Jobs history | `jobs_outlive_a_daemon_restart_and_keep_the_last_fifty`, `archiving_the_session_removes_its_jobs` |
+| Who reads and stops jobs | `an_agents_cli_neither_reads_nor_stops_jobs` |
+| Jobs history | `jobs_outlive_a_daemon_restart_and_keep_the_last_fifty`, `archiving_the_session_removes_its_jobs`, `a_job_going_on_when_the_daemon_stops_is_lost`, `a_job_knows_its_tool_call` |
 | Job states | Vitest "the state line for each state" |
 | Phases and timeline | `a_jobs_phases_and_timeline_after_a_rerun`; Vitest "the phase checklist", "the rerun timeline" |
 | What came back | `a_job_lists_what_came_back_and_the_env_names_only` |
 | Stored output | `output_over_ten_mib_keeps_its_start_and_end`, `a_rerun_keeps_both_runs_output_with_a_separator` |
 | Output summary | `summarises_as_in_the_worked_examples`, `summarises_captured_runs_of_each_tool` (captured vitest, jest, `cargo test` over two crates, pytest, `tsc` plain and `--pretty`, `cargo build` with a type error) |
 | Stop and Stop all | `stopping_a_job_gives_exit_143_and_brings_its_changes_back`, `stop_all_stops_every_running_and_waiting_job`; e2e "Stop ends a running job" |
-| Run on the central host now | `run_here_runs_a_job_waiting_for_a_cloud_machine_on_the_central_host` |
+| Run on the central host now | `job_run_here_needs_a_waiting_job`; `run_here_runs_a_job_waiting_for_a_cloud_machine_on_the_central_host` comes with X63, which makes jobs that wait |
 | Jobs tab count | Vitest "the tab counts every job" |
 | Jobs summary (worked examples) | Vitest "the summary line, as in the worked examples" |
 | Row second line (worked examples) | Vitest "a row's second line, as in the worked examples" |

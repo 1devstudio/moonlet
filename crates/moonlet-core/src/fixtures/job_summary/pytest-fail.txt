@@ -1,0 +1,19 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.9.6, pytest-8.4.2, pluggy-1.6.0
+rootdir: /Users/alex/src/shop
+collected 3 items
+
+test_cart.py ..F                                                         [100%]
+
+=================================== FAILURES ===================================
+_________________________________ test_rounds __________________________________
+
+    def test_rounds():
+>       assert round(2.5) == 3
+E       assert 2 == 3
+E        +  where 2 = round(2.5)
+
+test_cart.py:6: AssertionError
+=========================== short test summary info ============================
+FAILED test_cart.py::test_rounds - assert 2 == 3
+========================= 1 failed, 2 passed in 0.01s ==========================

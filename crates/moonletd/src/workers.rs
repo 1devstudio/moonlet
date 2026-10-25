@@ -32,6 +32,9 @@ pub struct Workers {
     /// The paired device each worker id first registered from, since this
     /// daemon started: another device may not take that id over.
     owners: Mutex<HashMap<String, String>>,
+    /// Connections dropped because their worker stopped answering pings,
+    /// so a job can say why its worker went away (X62).
+    missed: Mutex<std::collections::HashSet<u64>>,
     ping_every: Duration,
     emit: Box<dyn Fn(Message) + Send + Sync>,
 }
@@ -46,6 +49,7 @@ impl Workers {
         Workers {
             list: Mutex::new(HashMap::new()),
             owners: Mutex::new(HashMap::new()),
+            missed: Mutex::default(),
             ping_every,
             emit: Box::new(emit),
         }
@@ -159,6 +163,11 @@ impl Workers {
         self.list.lock().unwrap().get(id).map(|e| e.conn.clone())
     }
 
+    /// Whether connection `conn` was dropped for missed pings.
+    pub fn missed_pings(&self, conn: u64) -> bool {
+        self.missed.lock().unwrap().contains(&conn)
+    }
+
     /// The id of the worker linked on connection `conn` (X60).
     pub fn worker_on(&self, conn: u64) -> Option<String> {
         self.list
@@ -211,6 +220,9 @@ async fn ping_loop(workers: std::sync::Weak<Workers>, id: String, conn: Arc<Conn
                 tracing::debug!(worker = %id, missed, "worker.ping failed: {}", e.message);
                 if missed >= MISSES {
                     tracing::info!(worker = %id, "the worker stopped answering; dropping it");
+                    if let Some(w) = workers.upgrade() {
+                        w.missed.lock().unwrap().insert(conn.id);
+                    }
                     conn.close();
                     if let Some(w) = workers.upgrade() {
                         w.disconnected(conn.id);

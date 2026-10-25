@@ -10,6 +10,7 @@ mod clones;
 mod daemon;
 mod exec;
 mod heavy;
+mod jobs;
 mod launch;
 mod link;
 mod mobile;
