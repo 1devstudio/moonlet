@@ -80,18 +80,28 @@ export function revOf(s: DesignState, host: string, workspace: string, slug: str
 /** A list per design system or design (`itemKey`) in `field`, from the
  *  daemon's `method`: the latest answer lands, never an older one, and
  *  `wanted` holds those asked for, listed or not, to list again when they
- *  change. */
+ *  change. `changed` says the list changed here meanwhile: a listing on its
+ *  way may have read before that change, so it is dropped and asked again. */
 function itemListing<K extends "cards" | "comments">(field: K, method: string) {
   const wanted = new Set<string>();
   const asked = latestPerKey();
+  const onTheWay: Record<string, number> = {};
   const load = async (host: string, workspace: string, slug: string): Promise<void> => {
     const key = itemKey(host, workspace, slug);
     wanted.add(key);
     const latest = asked.start(key);
-    const list = await rpc<DesignState[K][string]>(host, method, { workspace, slug });
-    if (latest()) useDesign.setState((s) => ({ [field]: { ...s[field], [key]: list } }) as Partial<DesignState>);
+    onTheWay[key] = (onTheWay[key] ?? 0) + 1;
+    try {
+      const list = await rpc<DesignState[K][string]>(host, method, { workspace, slug });
+      if (latest()) useDesign.setState((s) => ({ [field]: { ...s[field], [key]: list } }) as Partial<DesignState>);
+    } finally {
+      onTheWay[key] -= 1;
+    }
   };
-  return { load, wanted };
+  const changed = (host: string, workspace: string, slug: string) => {
+    if (onTheWay[itemKey(host, workspace, slug)]) void load(host, workspace, slug).catch(() => {});
+  };
+  return { load, wanted, changed };
 }
 
 const cardListing = itemListing("cards", M.designCards);
@@ -169,10 +179,13 @@ export function loadComments(host: string, workspace: string, slug: string): Pro
 
 /** Puts the pins the daemon gave back in the design's list at once, so the
  *  box, the pins and the tab follow without waiting: the change's
- *  design.changed, which lists them all again, comes 150 ms or more later. */
+ *  design.changed, which lists them all again, comes 150 ms or more later.
+ *  A listing still on its way may have read before the change, so it is
+ *  asked again, never left to land over the change. */
 function mergePins(host: string, workspace: string, slug: string, pins: DesignComment[]) {
   const key = itemKey(host, workspace, slug);
   useDesign.setState((s) => ({ comments: { ...s.comments, [key]: withPins(s.comments[key] ?? [], pins) } }));
+  commentListing.changed(host, workspace, slug);
 }
 
 /** `design.comment.put` with one change, its pins merged at once. */
