@@ -232,7 +232,9 @@ export function pasteInto(host: string, workspace: string, slug: string, page: s
 async function lost(host: string, workspace: string, slug: string, page: string): Promise<void> {
   const key = pageKey(host, workspace, slug, page);
   const design = itemKey(host, workspace, slug);
-  // The page's changes no save took: made, undone or redone since.
+  const text = await rpc<DesignPageText>(host, M.designPage, { workspace, slug, page });
+  // The page's changes no save took, made, undone or redone since, those
+  // made while it was read again too: they were made on the page refused.
   const ids = new Set((unsaved[key] ?? []).map((c) => c.step));
   const st = useEditor.getState();
   const last = (st.undo[design] ?? NO_UNDO).done.filter((step) => step.page === page && ids.has(step.id)).at(-1);
@@ -241,7 +243,7 @@ async function lost(host: string, workspace: string, slug: string, page: string)
     pending: { ...s.pending, [design]: (s.pending[design] ?? []).filter((p) => !ids.has(p.id)) },
     unsaved: { ...s.unsaved, [design]: last ? editLine(last.edit) : (s.unsaved[design] ?? null) },
   }));
-  setSource(key, await rpc<DesignPageText>(host, M.designPage, { workspace, slug, page }));
+  setSource(key, text);
   reloadPage(host, workspace, slug, page);
 }
 
