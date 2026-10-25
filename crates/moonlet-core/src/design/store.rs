@@ -486,6 +486,10 @@ impl Store {
         let record = self.record(workspace, slug)?;
         let mut problems = check::check(&dir)?;
         let status = anchor::status(&dir, &source_roots(&record), &config.exceptions())?;
+        let files: BTreeSet<String> = check::files(&dir)
+            .iter()
+            .map(|f| check::rel(&dir, f))
+            .collect();
         let mut out = Vec::new();
         for file in check::html_files(&dir) {
             let path = check::rel(&dir, &file);
@@ -518,11 +522,18 @@ impl Store {
                 .into_iter()
                 .partition(|p| p.path == path || own.contains(&p.path));
             problems = rest;
-            let changed_sources = status
+            let st = status.iter().find(|s| s.path == path);
+            let changed_sources = st.map(|s| s.changed_sources.clone()).unwrap_or_default();
+            // The sync's version of each of its files, beside it.
+            let base = &path[..path.len() - ".html".len()];
+            let mut proposals: Vec<String> = PROPOSED
                 .iter()
-                .find(|s| s.path == path)
-                .map(|s| s.changed_sources.clone())
-                .unwrap_or_default();
+                .map(|ext| format!("{base}.proposed.{ext}"))
+                .filter(|p| files.contains(p))
+                .collect();
+            proposals.sort();
+            let orphaned = st.is_some_and(|s| s.orphaned);
+            let kept = orphaned && record.kept.contains(&path);
             out.push(CardInfo {
                 group,
                 name,
@@ -533,6 +544,10 @@ impl Store {
                 marker: text.lines().next().unwrap_or_default().to_string(),
                 problems: mine,
                 changed_sources,
+                proposals,
+                edited_by_hand: st.is_some_and(|s| s.edited_by_hand),
+                orphaned,
+                kept,
             });
         }
         out.sort_by(|a, b| (&a.group, &a.name).cmp(&(&b.group, &b.name)));
@@ -796,6 +811,15 @@ pub struct CardInfo {
     pub problems: Vec<check::Problem>,
     /// Its sources changed since the last sync.
     pub changed_sources: Vec<String>,
+    /// The sync's proposals beside it (`<name>.proposed.html`, `.css`,
+    /// `.prompt.md`), relative to the design system's folder, sorted.
+    pub proposals: Vec<String>,
+    /// Its HTML, `.css` or `.prompt.md` changed since the sync.
+    pub edited_by_hand: bool,
+    /// Every one of its source files is gone.
+    pub orphaned: bool,
+    /// Orphaned, and kept for now: it waits for no choice.
+    pub kept: bool,
 }
 
 /// What the list shows of one design system.
@@ -2626,6 +2650,120 @@ root = \"9c1e0a2\"
         assert_eq!(
             cards[0].marker,
             "<!-- @dsCard group=\"Buttons\" name=\"Button\" source=\"src/ui.tsx\" viewport=\"320x140\" -->"
+        );
+    }
+
+    #[test]
+    fn a_systems_cards_say_what_each_waits_for_its_proposals_an_edit_by_hand_or_an_orphan_kept() {
+        let home = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        put(
+            project.path(),
+            &[
+                ("src/Row.tsx", "row\n"),
+                ("src/Chip.tsx", "chip\n"),
+                ("src/ui.tsx", "button\n"),
+                ("src/form.tsx", "input\n"),
+            ],
+        );
+        let store = Store::new(home.path());
+        let mut src = source();
+        src.path = project.path().display().to_string();
+        let slug = store
+            .create_system("w1", "storefront", vec![src], Cover::Core, 1)
+            .unwrap();
+        let dir = home.path().join("design/w1/systems").join(&slug);
+        put(
+            &dir,
+            &[
+                (
+                    "components/custom/row/row.html",
+                    "<!-- @dsCard group=\"Custom\" name=\"Row\" source=\"src/Row.tsx\" -->\n<div>row</div>\n",
+                ),
+                (
+                    "components/custom/chip/chip.html",
+                    "<!-- @dsCard group=\"Custom\" name=\"Chip\" source=\"src/Chip.tsx\" -->\n<span>chip</span>\n",
+                ),
+                (
+                    "components/buttons/button/button.html",
+                    "<!-- @dsCard group=\"Buttons\" name=\"Button\" source=\"src/ui.tsx\" -->\n<button>Run</button>\n",
+                ),
+                (
+                    "components/forms/field/field.html",
+                    "<!-- @dsCard group=\"Forms\" name=\"Field\" source=\"src/form.tsx\" -->\n<input>\n",
+                ),
+            ],
+        );
+        store.synced("w1", &slug, &[], 2).unwrap();
+        // The user edits the row; the next sync proposes its HTML and CSS.
+        put(
+            &dir,
+            &[
+                (
+                    "components/custom/row/row.html",
+                    "<!-- @dsCard group=\"Custom\" name=\"Row\" source=\"src/Row.tsx\" -->\n<div>mine</div>\n",
+                ),
+                (
+                    "components/custom/row/row.proposed.html",
+                    "<!-- @dsCard group=\"Custom\" name=\"Row\" source=\"src/Row.tsx\" -->\n<div>synced</div>\n",
+                ),
+                ("components/custom/row/row.proposed.css", ".row {}\n"),
+            ],
+        );
+        // The chip's and the button's sources go; the chip is kept for now.
+        std::fs::remove_file(project.path().join("src/Chip.tsx")).unwrap();
+        std::fs::remove_file(project.path().join("src/ui.tsx")).unwrap();
+        store
+            .settle(
+                "w1",
+                &slug,
+                "components/custom/chip/chip.html",
+                Settle::Keep,
+            )
+            .unwrap();
+
+        let got: Vec<_> = store
+            .cards("w1", &slug)
+            .unwrap()
+            .into_iter()
+            .map(|c| (c.path, c.proposals, c.edited_by_hand, c.orphaned, c.kept))
+            .collect();
+        let s = |v: &[&str]| v.iter().map(|p| p.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            got,
+            vec![
+                (
+                    "components/buttons/button/button.html".to_string(),
+                    vec![],
+                    false,
+                    true,
+                    false
+                ),
+                (
+                    "components/custom/chip/chip.html".to_string(),
+                    vec![],
+                    false,
+                    true,
+                    true
+                ),
+                (
+                    "components/custom/row/row.html".to_string(),
+                    s(&[
+                        "components/custom/row/row.proposed.css",
+                        "components/custom/row/row.proposed.html"
+                    ]),
+                    true,
+                    false,
+                    false
+                ),
+                (
+                    "components/forms/field/field.html".to_string(),
+                    vec![],
+                    false,
+                    false,
+                    false
+                ),
+            ]
         );
     }
 
