@@ -1,0 +1,15 @@
+{
+  "kind": "compute#operation",
+  "id": "5550000000000000001",
+  "name": "operation-1761400000000-6420a1b2c3d4e-5f6a7b8c-9d0e1f2a",
+  "zone": "https://www.googleapis.com/compute/v1/projects/acme-moonlet/zones/europe-west4-a",
+  "operationType": "insert",
+  "targetLink": "https://www.googleapis.com/compute/v1/projects/acme-moonlet/zones/europe-west4-a/instances/moonlet-shop-7k2q",
+  "targetId": "8461234567890123456",
+  "status": "RUNNING",
+  "user": "moonlet@acme-moonlet.iam.gserviceaccount.com",
+  "progress": 0,
+  "insertTime": "2026-10-25T10:00:00.120-07:00",
+  "startTime": "2026-10-25T10:00:00.130-07:00",
+  "selfLink": "https://www.googleapis.com/compute/v1/projects/acme-moonlet/zones/europe-west4-a/operations/operation-1761400000000-6420a1b2c3d4e-5f6a7b8c-9d0e1f2a"
+}

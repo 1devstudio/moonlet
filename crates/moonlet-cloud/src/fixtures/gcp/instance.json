@@ -1,0 +1,39 @@
+{
+  "kind": "compute#instance",
+  "id": "8461234567890123456",
+  "creationTimestamp": "2026-10-25T10:00:00.140-07:00",
+  "name": "moonlet-shop-7k2q",
+  "tags": {"fingerprint": "42WmSpB8rSM="},
+  "machineType": "https://www.googleapis.com/compute/v1/projects/acme-moonlet/zones/europe-west4-a/machineTypes/c4-standard-8",
+  "status": "RUNNING",
+  "zone": "https://www.googleapis.com/compute/v1/projects/acme-moonlet/zones/europe-west4-a",
+  "canIpForward": false,
+  "networkInterfaces": [
+    {
+      "kind": "compute#networkInterface",
+      "network": "https://www.googleapis.com/compute/v1/projects/acme-moonlet/global/networks/default",
+      "subnetwork": "https://www.googleapis.com/compute/v1/projects/acme-moonlet/regions/europe-west4/subnetworks/default",
+      "networkIP": "10.164.0.7",
+      "name": "nic0",
+      "accessConfigs": [
+        {"kind": "compute#accessConfig", "type": "ONE_TO_ONE_NAT", "name": "External NAT", "natIP": "34.90.211.17", "networkTier": "PREMIUM"}
+      ],
+      "fingerprint": "wE3iHpVb5qQ=",
+      "stackType": "IPV4_ONLY"
+    }
+  ],
+  "disks": [
+    {"kind": "compute#attachedDisk", "type": "PERSISTENT", "mode": "READ_WRITE", "source": "https://www.googleapis.com/compute/v1/projects/acme-moonlet/zones/europe-west4-a/disks/moonlet-shop-7k2q", "deviceName": "persistent-disk-0", "index": 0, "boot": true, "autoDelete": true, "interface": "NVME", "diskSizeGb": "50", "architecture": "X86_64"}
+  ],
+  "metadata": {"kind": "compute#metadata", "fingerprint": "Xe7cM3cKpTo=", "items": [{"key": "block-project-ssh-keys", "value": "TRUE"}]},
+  "selfLink": "https://www.googleapis.com/compute/v1/projects/acme-moonlet/zones/europe-west4-a/instances/moonlet-shop-7k2q",
+  "scheduling": {"onHostMaintenance": "MIGRATE", "automaticRestart": true, "preemptible": false, "provisioningModel": "STANDARD", "instanceTerminationAction": "DELETE", "maxRunDuration": {"seconds": "43200"}, "terminationTime": "2026-10-25T22:00:20.000-07:00"},
+  "cpuPlatform": "Intel Emerald Rapids",
+  "labels": {"moonlet-host": "c3f1a9e2b7d04c55", "moonlet-machine": "m7k2q", "moonlet-project": "9f86d081884c"},
+  "labelFingerprint": "p2x1W0bJp6k=",
+  "startRestricted": false,
+  "deletionProtection": false,
+  "fingerprint": "kYd2nGkVqxA=",
+  "lastStartTimestamp": "2026-10-25T10:00:20.051-07:00",
+  "satisfiesPzi": true
+}

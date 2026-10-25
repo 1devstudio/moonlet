@@ -1,0 +1,19 @@
+{
+  "kind": "compute#operation",
+  "id": "5550000000000000001",
+  "name": "operation-1761400000000-6420a1b2c3d4e-5f6a7b8c-9d0e1f2a",
+  "zone": "https://www.googleapis.com/compute/v1/projects/acme-moonlet/zones/europe-west4-a",
+  "operationType": "insert",
+  "targetLink": "https://www.googleapis.com/compute/v1/projects/acme-moonlet/zones/europe-west4-a/instances/moonlet-shop-7k2q",
+  "targetId": "8461234567890123456",
+  "status": "DONE",
+  "user": "moonlet@acme-moonlet.iam.gserviceaccount.com",
+  "progress": 100,
+  "insertTime": "2026-10-25T10:00:00.120-07:00",
+  "startTime": "2026-10-25T10:00:00.130-07:00",
+  "endTime": "2026-10-25T10:00:04.410-07:00",
+  "error": {"errors": [{"code": "ZONE_RESOURCE_POOL_EXHAUSTED", "message": "The zone 'projects/acme-moonlet/zones/europe-west4-a' does not have enough resources available to fulfill the request.  Try a different zone, or try again later."}]},
+  "httpErrorStatusCode": 503,
+  "httpErrorMessage": "SERVICE UNAVAILABLE",
+  "selfLink": "https://www.googleapis.com/compute/v1/projects/acme-moonlet/zones/europe-west4-a/operations/operation-1761400000000-6420a1b2c3d4e-5f6a7b8c-9d0e1f2a"
+}

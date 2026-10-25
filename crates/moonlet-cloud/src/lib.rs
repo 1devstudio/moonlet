@@ -11,6 +11,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 pub mod cloud_init;
+pub mod gcp;
 pub mod gcp_auth;
 pub mod hetzner;
 pub mod idle;
