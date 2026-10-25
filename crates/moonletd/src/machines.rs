@@ -757,11 +757,7 @@ impl Machines {
                 // It may have paired before the provider answered.
                 self.ready_if_done(&id);
             }
-            // A removal meanwhile already said why it went.
-            Err(e) if self.get(&id).is_some_and(|r| r.shown.state == "creating") => {
-                self.failed(&id, e.to_string())
-            }
-            Err(_) => {}
+            Err(e) => self.failed(&id, e.to_string()),
         }
     }
 
@@ -814,6 +810,10 @@ impl Machines {
     fn failed(&self, id: &str, error: String) {
         self.mobile.forget_join(id);
         self.update(id, |r| {
+            // A removal meanwhile already said why it went.
+            if r.shown.state != "creating" {
+                return;
+            }
             r.call_started = None;
             r.set_state("failed");
             r.shown.error = Some(error.clone());

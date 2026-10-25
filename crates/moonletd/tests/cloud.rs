@@ -1081,6 +1081,22 @@ async fn retry_tries_a_failing_removal_again_at_once() {
 }
 
 #[tokio::test]
+async fn a_machine_removed_while_it_waits_for_the_listener_stays_removed() {
+    // Tailnet access is on, but nothing can listen on this address.
+    let c = cloud_with(SHOP_CONFIG, &[("MOONLET_MOBILE_ADDRS", "192.0.2.1")]).await;
+    let m = c.up().await;
+    let id = m["id"].as_str().unwrap();
+    let _: Value = c.d.call("cloud.down", json!({ "machine": id })).await;
+    // Past the create step's 10 s wait for the listener.
+    tokio::time::sleep(Duration::from_secs(11)).await;
+    let all = c.machines().await;
+    assert_eq!(all["removed"][0]["id"], id, "{all}");
+    assert_eq!(all["removed"][0]["state"], "removed", "{all}");
+    assert_eq!(all["removed"][0]["reason"], "removed on request", "{all}");
+    assert!(c.fake_dirs().is_empty());
+}
+
+#[tokio::test]
 async fn a_machine_that_never_joins_is_removed_at_the_deadline() {
     let c = cloud_with(SHOP_CONFIG, &[("MOONLET_TEST_CLOUD_DEADLINE_MS", "1500")]).await;
     c.steer("no-join", "");
