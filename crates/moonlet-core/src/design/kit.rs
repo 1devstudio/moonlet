@@ -22,7 +22,7 @@ impl Store {
             .map(|t| DesignToken {
                 name: t.name,
                 value: t.value,
-                family: t.family.as_str().to_string(),
+                family: t.family,
             })
             .collect();
         let cards = manifest::build(&dir)?
@@ -50,6 +50,8 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use moonlet_proto::methods::{DesignKitCard, DesignToken};
+
+    use super::super::tokens::Family;
 
     use super::*;
 
@@ -107,20 +109,20 @@ mod tests {
         std::fs::create_dir_all(other.parent().unwrap()).unwrap();
         std::fs::write(&other, BUTTON.replace("Buttons", "Cart")).unwrap();
 
-        let t = |name: &str, value: &str, family: &str| DesignToken {
+        let t = |name: &str, value: &str, family: Family| DesignToken {
             name: name.into(),
             value: value.into(),
-            family: family.into(),
+            family,
         };
         assert_eq!(
             store.design_kit("w1", "settings-page").unwrap(),
             DesignKit {
                 system: "moonlet-desktop".into(),
                 tokens: vec![
-                    t("--space-1", "4px", "spacing"),
-                    t("--space-4", "16px", "spacing"),
-                    t("--color-panel", "#161616", "color"),
-                    t("--radius-xl", "12px", "radius"),
+                    t("--space-1", "4px", Family::Spacing),
+                    t("--space-4", "16px", Family::Spacing),
+                    t("--color-panel", "#161616", Family::Color),
+                    t("--radius-xl", "12px", Family::Radius),
                 ],
                 cards: vec![DesignKitCard {
                     path: "components/buttons/Button/Button.html".into(),

@@ -1444,8 +1444,20 @@ pub struct DesignKit {
 pub struct DesignToken {
     pub name: String,
     pub value: String,
-    /// `color`, `spacing`, `typography`, `radius`, `shadow` or `other`.
-    pub family: String,
+    pub family: TokenFamily,
+}
+
+/// A design system token's family (X64), as design-sync's README groups
+/// them: by its name first, then by what its value looks like.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TokenFamily {
+    Color,
+    Spacing,
+    Typography,
+    Radius,
+    Shadow,
+    Other,
 }
 
 /// A card of a design system with its HTML, whose snippets the palette inserts.
