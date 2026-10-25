@@ -95,12 +95,12 @@ function norm(value: string): string {
     .replace(/(^|[\s(,])0px\b/g, "$10");
 }
 
-/** The token `value` is: the token it names (`var(--space-4)`), else the
- *  first of `family` whose value, along aliases, is the same value; null
- *  for none. */
+/** The token `value` is: the token of `family` it names (`var(--space-4)`),
+ *  none when it names one of another family, else the first of `family`
+ *  whose value, along aliases, is the same value; null for none. */
 export function tokenOf(tokens: DesignToken[], value: string, family?: TokenFamily): DesignToken | null {
   const name = tokenRefName(value);
-  if (name) return tokens.find((t) => t.name === name) ?? null;
+  if (name) return tokens.find((t) => t.name === name && (!family || t.family === family)) ?? null;
   const want = norm(resolveValue(tokens, value));
   if (!want) return null;
   return tokens.find((t) => (!family || t.family === family) && norm(resolveValue(tokens, t.value)) === want) ?? null;
