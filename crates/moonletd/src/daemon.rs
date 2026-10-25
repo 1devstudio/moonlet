@@ -1354,10 +1354,10 @@ impl Daemon {
             slug: slug.to_string(),
             name,
         };
-        let id = self.agent_chat(&launch, tag)?;
-        self.design.set_agent(workspace, slug, id, &fingerprint)?;
-        self.chats.send(id, &launch.prompt, &[])?;
-        Ok(id)
+        self.agent_chat(&launch, tag, |id| match id {
+            Some(id) => self.design.set_agent(workspace, slug, id, &fingerprint),
+            None => self.design.clear_agent(workspace, slug),
+        })
     }
 
     /// A design as `design.list` gives it (X65): its agent only while that
@@ -1396,16 +1396,20 @@ impl Daemon {
         .await
         .map_err(|e| anyhow::anyhow!("{}", e.message))?;
         let tag = DesignAgent { kind: DesignAgentKind::Design, workspace: workspace.to_string(), slug: slug.to_string(), name };
-        let id = self.agent_chat(&launch, tag)?;
-        self.design.set_design_agent(workspace, slug, id)?;
-        self.chats.send(id, &launch.prompt, &[])?;
-        Ok(id)
+        self.agent_chat(&launch, tag, |id| match id {
+            Some(id) => self.design.set_design_agent(workspace, slug, id),
+            None => self.design.clear_design_agent(workspace, slug),
+        })
     }
 
-    /// The chat of a Design mode agent (X64, X65): Claude Code, with no
-    /// session, in the Claude profile of the workspace its tag names, started
-    /// as `launch` says and tagged so; its first message is the caller's.
-    fn agent_chat(&self, launch: &moonlet_core::design::agent::Launch, tag: moonlet_proto::types::DesignAgent) -> anyhow::Result<u32> {
+    /// Starts the chat of a Design mode agent (X64, X65): Claude Code, with
+    /// no session, in the Claude profile of the workspace its tag names,
+    /// started as `launch` says and tagged so. `record` saves the chat as its
+    /// system's or design's agent (`Some`), or forgets it (`None`); then the
+    /// chat gets `launch.prompt` as its first message. When saving the record
+    /// or sending that message fails, the chat is stopped and removed and the
+    /// record forgotten, so a failed start leaves no agent behind.
+    fn agent_chat(&self, launch: &moonlet_core::design::agent::Launch, tag: moonlet_proto::types::DesignAgent, record: impl Fn(Option<u32>) -> anyhow::Result<()>) -> anyhow::Result<u32> {
         let info = self.chats.create(ChatCreate {
             cwd: launch.cwd.clone(),
             agent: "claude".into(),
@@ -1421,7 +1425,16 @@ impl Daemon {
             workspace: Some(tag.workspace.clone()),
             design: Some(tag),
         })?;
-        Ok(info.id)
+        let id = info.id;
+        let started = record(Some(id)).and_then(|()| {
+            self.chats.send(id, &launch.prompt, &[]).inspect_err(|_| {
+                let _ = record(None);
+            })
+        });
+        if started.is_err() {
+            let _ = self.terminals.kill(id, true);
+        }
+        started.map(|()| id)
     }
 
     /// Has the app render every card of a design system, one at a time, and

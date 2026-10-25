@@ -333,6 +333,15 @@ impl Store {
         self.write_record(workspace, slug, &record)
     }
 
+    /// Forgets the system's sync agent: one whose start failed.
+    pub fn clear_agent(&self, workspace: &str, slug: &str) -> Result<()> {
+        self.system_dir(workspace, slug)?;
+        let mut record = self.record(workspace, slug)?;
+        record.agent = None;
+        record.agent_launch = None;
+        self.write_record(workspace, slug, &record)
+    }
+
     pub fn agent(&self, workspace: &str, slug: &str) -> Result<Option<u32>> {
         Ok(self.record(workspace, slug)?.agent)
     }

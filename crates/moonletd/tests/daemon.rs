@@ -2405,6 +2405,55 @@ async fn a_design_on_an_unknown_system_or_in_a_session_is_refused() {
     assert!(!terminals.iter().any(|t| t.chat), "an agent started for a design that was refused");
 }
 
+/// X64, X65: a Design mode agent whose first message cannot reach Claude Code
+/// (here a `claude` whose interpreter is missing, so it never starts) leaves
+/// no chat behind: the design or system is made, with why its agent did not start.
+#[tokio::test]
+async fn a_design_mode_agent_that_cannot_take_its_first_message_leaves_no_chat_behind() {
+    let d = fake_claude_daemon("#!/nonexistent/interpreter\n").await;
+    let mut c = d.client().await;
+    let ws = workspace_with_system(&d, &mut c).await;
+    let created: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    assert_eq!(created["agent"], serde_json::Value::Null);
+    assert!(created["agent_error"].is_string(), "{created}");
+    let terminals: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
+    assert!(!terminals.iter().any(|t| t.chat), "a design's agent that never started is left behind");
+
+    let system: serde_json::Value = c
+        .request(methods::DESIGN_SYSTEM_CREATE, serde_json::json!({"workspace": ws, "name": "storefront", "sources": []}))
+        .await
+        .unwrap();
+    assert_eq!((&system["slug"], &system["agent"]), (&serde_json::json!("storefront"), &serde_json::Value::Null));
+    assert!(system["agent_error"].is_string(), "{system}");
+    let terminals: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
+    assert!(!terminals.iter().any(|t| t.chat), "a sync agent that never started is left behind");
+}
+
+/// X65: a design's agent whose ownership record cannot be saved leaves no
+/// chat behind that no design owns.
+#[tokio::test]
+async fn a_designs_agent_whose_record_cannot_be_saved_leaves_no_chat_behind() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    let ws = workspace_with_system(&d, &mut c).await;
+    let records = d.home.path().join(".moonlet/design").join(&ws).join(".records/designs");
+    std::fs::create_dir_all(&records).unwrap();
+    std::fs::set_permissions(&records, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let created: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    std::fs::set_permissions(&records, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(created["agent"], serde_json::Value::Null);
+    assert!(created["agent_error"].is_string(), "{created}");
+    let terminals: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
+    assert!(!terminals.iter().any(|t| t.chat), "a chat no design owns is left behind");
+}
+
 /// X65: a design's agent is owned by moonletd and comes back after a restart,
 /// still its design's, with its tag.
 #[tokio::test]
