@@ -20,11 +20,18 @@ export function writingPage(latest: string[], working: boolean): string | null {
   return working ? (latest[0] ?? null) : null;
 }
 
-/** Whether a change loads the shown page again: the page itself, the
- *  design's assets, or a file of its design system other than a card (its
- *  styles.css and what that imports, its fonts). */
+/** Whether a change loads the shown page again: the shown page, or a file
+ *  it links. Those are the design's `assets/`, and of its design system any
+ *  `.css` file (`styles.css` and what it imports) and what is in `tokens/`
+ *  and `fonts/`; not its cards, `README.md`, `.prompt.md` files or the
+ *  sync's own files (`_ds_sync.json`, `_ds_manifest.json`). */
 export function reloadsPage(change: DesignChanged, shown: { design: string; system: string; page: string }): boolean {
   if (change.design === shown.design) return change.paths.some((p) => p === pagePath(shown.page) || p.startsWith("assets/"));
-  if (change.system === shown.system) return change.paths.some((p) => !p.endsWith(".html"));
+  if (change.system === shown.system) return change.paths.some(linkedBySystem);
   return false;
+}
+
+/** A design system's file a page may link: a stylesheet, a token or a font. */
+function linkedBySystem(path: string): boolean {
+  return path.endsWith(".css") || path.startsWith("tokens/") || path.startsWith("fonts/");
 }

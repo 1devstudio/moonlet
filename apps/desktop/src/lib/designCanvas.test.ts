@@ -32,6 +32,13 @@ describe("the canvas's reload (X65)", () => {
     expect(reloadsPage(change({ system: "moonlet-desktop", paths: ["tokens/colors.css"] }), shown)).toBe(true);
     // A card is no file a page loads.
     expect(reloadsPage(change({ system: "moonlet-desktop", paths: ["components/buttons/button/button.html"] }), shown)).toBe(false);
+    expect(reloadsPage(change({ system: "moonlet-desktop", paths: ["components.css"] }), shown)).toBe(true);
+    expect(reloadsPage(change({ system: "moonlet-desktop", paths: ["fonts/inter.woff2"] }), shown)).toBe(true);
+    expect(reloadsPage(change({ system: "moonlet-desktop", paths: ["tokens/colors.json"] }), shown)).toBe(true);
+    // Nor are what a sync writes for the agent and moonlet.
+    for (const other of ["README.md", "components/buttons/button/button.prompt.md", "_ds_sync.json", "_ds_manifest.json", "config.toml", ".cache/progress.toml"]) {
+      expect(reloadsPage(change({ system: "moonlet-desktop", paths: [other] }), shown)).toBe(false);
+    }
     expect(reloadsPage(change({ system: "storefront", paths: ["styles.css"] }), shown)).toBe(false);
     expect(reloadsPage(change({ design: "onboarding", paths: ["pages/index.html"] }), shown)).toBe(false);
   });
