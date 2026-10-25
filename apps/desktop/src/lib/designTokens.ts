@@ -142,6 +142,28 @@ export function popoverTokens(tokens: DesignToken[], value: string, family: Toke
   return [...first, ...rest];
 }
 
+/** An entry of the token popover: the tokens it writes, one per part of
+ *  the value, and their values. */
+export interface PopoverEntry {
+  names: string[];
+  value: string;
+}
+
+/** The token popover's entries: for a value of two to four parts (a
+ *  padding or margin shorthand), first a token per part, the one each part
+ *  is, else the nearest of the family; then each token of the family, in
+ *  {@link popoverTokens}' order. */
+export function popoverEntries(tokens: DesignToken[], value: string, family: TokenFamily): PopoverEntry[] {
+  const single = (t: DesignToken): PopoverEntry => ({ names: [t.name], value: resolveValue(tokens, t.value) });
+  const singles = popoverTokens(tokens, value, family).map(single);
+  const each = valueParts(value);
+  if (each.length < 2 || each.length > 4) return singles;
+  const per = each.map((p) => tokenOf(tokens, p, family) ?? popoverTokens(tokens, p, family)[0] ?? null);
+  if (per.some((t) => t === null)) return singles;
+  const pair = per.map((t) => single(t!));
+  return [{ names: pair.flatMap((e) => e.names), value: pair.map((e) => e.value).join(" ") }, ...singles];
+}
+
 /** What a property's value must match to be on the system: each part a
  *  token of the family (`parts`), the whole value one (`whole`), or each
  *  colour part a colour token (`colours`), as in `border`. */

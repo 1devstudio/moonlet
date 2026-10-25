@@ -43,12 +43,13 @@ describe("the Inspector (X65)", () => {
     expect(fieldValue(fill, [["background", "#161616"]], {})).toEqual({ value: "#161616", inline: true });
   });
 
-  it("writes a token picked in the popover as var(--token), into a border's colour keeping its width and style", () => {
+  it("writes a token picked in the popover as var(--token), a token per part as their var()s, into a border's colour keeping its width and style", () => {
     const [, border] = inspectorSections("block")[3].fields;
     const [padding] = inspectorSections("block")[1].fields;
-    expect(pickToken(padding, "14px 24px", "--space-4")).toBe("var(--space-4)");
-    expect(pickToken(border, "2px dashed #ff0000", "--color-border")).toBe("2px dashed var(--color-border)");
-    expect(pickToken(border, "", "--color-border")).toBe("1px solid var(--color-border)");
+    expect(pickToken(padding, "14px 24px", ["--space-4"])).toBe("var(--space-4)");
+    expect(pickToken(padding, "14px 24px", ["--space-4", "--space-6"])).toBe("var(--space-4) var(--space-6)");
+    expect(pickToken(border, "2px dashed #ff0000", ["--color-border"])).toBe("2px dashed var(--color-border)");
+    expect(pickToken(border, "", ["--color-border"])).toBe("1px solid var(--color-border)");
   });
 });
 

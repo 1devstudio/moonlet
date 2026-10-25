@@ -10,7 +10,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "re
 import type { DesignToken } from "../../lib/protocol";
 import type { Decl } from "../../lib/designStyle";
 import { fieldInput, fieldShows, fieldValue, inspectorSections, pickToken, type Field } from "../../lib/designInspector";
-import { popoverTokens } from "../../lib/designTokens";
+import { popoverEntries } from "../../lib/designTokens";
 import { paletteGroups, type Snippet } from "../../lib/designPalette";
 import { cx } from "../../lib/cx";
 import { Menu } from "../Menu";
@@ -186,7 +186,7 @@ function TokenPopover({
       window.removeEventListener("keydown", onKey, true);
     };
   }, [anchor, onClose]);
-  const list = field.family && field.kind !== "text" && field.kind !== "opacity" ? popoverTokens(tokens, value, field.family) : [];
+  const list = field.family && field.kind !== "text" && field.kind !== "opacity" ? popoverEntries(tokens, value, field.family) : [];
   const commit = () => {
     const got = fieldInput(field, text);
     if ("error" in got) return setError(got.error);
@@ -205,10 +205,10 @@ function TokenPopover({
       </h4>
       {list.length > 0 && (
         <div className="max-h-[200px] overflow-y-auto px-1">
-          {list.map((t) => (
-            <button key={t.name} role="option" aria-selected={false} aria-label={t.name} className="flex h-7 w-full items-center gap-2 rounded-md px-2 text-left font-mono ui-text-12 text-fg hover:bg-panel-2" onClick={() => onSet(pickToken(field, value, t.name))}>
-              <span className="min-w-0 flex-1 truncate">{t.name}</span>
-              <span className="shrink-0 text-faint">{t.value}</span>
+          {list.map((e) => (
+            <button key={e.names.join(" ")} role="option" aria-selected={false} aria-label={e.names.join(" ")} className="flex h-7 w-full items-center gap-2 rounded-md px-2 text-left font-mono ui-text-12 text-fg hover:bg-panel-2" onClick={() => onSet(pickToken(field, value, e.names))}>
+              <span className="min-w-0 flex-1 truncate">{e.names.join(" ")}</span>
+              <span className="shrink-0 text-faint">{e.value}</span>
             </button>
           ))}
         </div>
