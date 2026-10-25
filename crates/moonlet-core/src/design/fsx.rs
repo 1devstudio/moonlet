@@ -13,6 +13,22 @@ use cap_std::fs::{Dir, OpenOptions};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
+#[cfg(test)]
+thread_local! {
+    /// A test's other writer, run once between reading a file and replacing
+    /// it, so a change made in between can be tested deterministically.
+    pub(crate) static BEFORE_REPLACE: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+}
+
+/// Runs the test's other writer, if one is set; nothing outside tests.
+pub(crate) fn before_replace() {
+    #[cfg(test)]
+    if let Some(other) = BEFORE_REPLACE.with(|h| h.borrow_mut().take()) {
+        other();
+    }
+}
+
 /// The folder `root` as a handle all paths are resolved inside.
 fn open_root(root: &Path) -> Result<Dir> {
     Dir::open_ambient_dir(root, ambient_authority())
@@ -55,6 +71,33 @@ pub(crate) fn write_inside(root: &Path, path: &Path, bytes: &[u8]) -> Result<()>
         let _ = dir.remove_file(&tmp);
     })?;
     Ok(())
+}
+
+/// How many times an update reads the file again after another writer
+/// changed it before giving up.
+const UPDATE_TRIES: usize = 8;
+
+/// Rewrites the file `rel` inside `root` with `edit` of its text, which must
+/// leave the rest of the file as it is. When another writer, such as the
+/// design's agent, changed the file after it was read, it is read again and
+/// edited from there, so that writer's change is kept.
+pub(crate) fn update_inside(
+    root: &Path,
+    rel: &Path,
+    mut edit: impl FnMut(&str) -> Result<String>,
+) -> Result<()> {
+    let path = root.join(rel);
+    for _ in 0..UPDATE_TRIES {
+        let before = read_inside(root, &path)?;
+        let after = edit(&before)?;
+        before_replace();
+        // Changed since it was read: start again from the newest text.
+        if read_inside(root, &path)? != before {
+            continue;
+        }
+        return write_inside(root, &path, after.as_bytes());
+    }
+    anyhow::bail!("{} kept changing while it was saved", rel.display())
 }
 
 /// Reads `path`, which must be inside `root`; a link out of it is refused.

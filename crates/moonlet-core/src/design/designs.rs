@@ -250,18 +250,21 @@ impl Store {
     }
 
     /// Saves the viewport the design was last shown at (`WxH`, in px) in its
-    /// `design.toml`, leaving the rest of the file as the agent wrote it.
+    /// `design.toml`, leaving the rest of the file as the agent wrote it, also
+    /// when the agent writes it while the viewport is saved.
     pub fn set_design_viewport(&self, workspace: &str, slug: &str, viewport: &str) -> Result<()> {
         if parse_viewport(viewport).is_none() {
             return Err(BadViewport(viewport.to_string()).into());
         }
         let dir = self.design_dir(workspace, slug)?;
-        let path = dir.join(DESIGN_FILE);
-        let mut doc: toml_edit::DocumentMut = fsx::read_inside(&dir, &path)?
-            .parse()
-            .with_context(|| format!("cannot read {DESIGN_FILE}"))?;
-        doc["viewport"] = toml_edit::value(viewport);
-        fsx::write_inside(&dir, &path, doc.to_string().as_bytes())
+        // The agent may label a page meanwhile: its edit is kept.
+        fsx::update_inside(&dir, Path::new(DESIGN_FILE), |text| {
+            let mut doc: toml_edit::DocumentMut = text
+                .parse()
+                .with_context(|| format!("cannot read {DESIGN_FILE}"))?;
+            doc["viewport"] = toml_edit::value(viewport);
+            Ok(doc.to_string())
+        })
     }
 
     /// Deletes a design: its folder and its record.
@@ -659,6 +662,33 @@ label = \"rows\"
             );
         }
         assert!(store.set_design_viewport("w1", "nope", "390x844").is_err());
+    }
+
+    #[test]
+    fn a_label_the_agent_writes_while_the_viewport_is_saved_is_kept() {
+        let (home, store) = store_with_system();
+        store
+            .create_design("w1", "Settings page", "moonlet-desktop", "", 1)
+            .unwrap();
+        let file = home
+            .path()
+            .join("design/w1/designs/settings-page/design.toml");
+        // The agent labels a page after the save read the file, before it
+        // replaced it.
+        let agent = file.clone();
+        fsx::BEFORE_REPLACE.with(|h| {
+            *h.borrow_mut() = Some(Box::new(move || {
+                let text = std::fs::read_to_string(&agent).unwrap();
+                std::fs::write(&agent, format!("{text}\n[pages.index]\nlabel = \"rows\"\n"))
+                    .unwrap();
+            }))
+        });
+        store
+            .set_design_viewport("w1", "settings-page", "390x844")
+            .unwrap();
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(text.contains("viewport = \"390x844\""), "{text}");
+        assert!(text.contains("[pages.index]\nlabel = \"rows\""), "{text}");
     }
 
     #[test]
