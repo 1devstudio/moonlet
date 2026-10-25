@@ -62,6 +62,13 @@ export const itemKey = (host: string, workspace: string, slug: string) => `${wsK
 /** A design page's key, `wsKey/slug/page`. */
 export const pageKey = (host: string, workspace: string, slug: string, page: string) => `${itemKey(host, workspace, slug)}/${page}`;
 
+/** The page a key of {@link pageKey} names in design `slug`, or null for
+ *  another design's or host's key: its parse. */
+export function pageOfKey(host: string, workspace: string, slug: string, key: string): string | null {
+  const prefix = `${itemKey(host, workspace, slug)}/`;
+  return key.startsWith(prefix) ? key.slice(prefix.length) : null;
+}
+
 /** A design system's cards; undefined until listed. */
 export function cardsOf(s: DesignState, host: string, workspace: string, slug: string): DesignCard[] | undefined {
   return s.cards[itemKey(host, workspace, slug)];
