@@ -109,7 +109,9 @@ export const EDITS_HEADER = "Edits by hand since your last turn:";
 
 /** Each element edited, in the order first edited, with its changes in
  *  order: a text change only as its latest, and its restyles as one, in
- *  the place of the first, each property at its latest value. */
+ *  the place of the first, each property at its latest value, each since
+ *  the element's last undone change, so one made after an undo is said
+ *  after it. */
 function byElement(edits: Untold[]): { head: HandEdit; changes: string[] }[] {
   const out = new Map<string, { head: HandEdit; changes: string[]; text: number | null; style: { at: number; set: StyleSet } | null }>();
   for (const e of edits) {
@@ -124,7 +126,10 @@ function byElement(edits: Untold[]): { head: HandEdit; changes: string[] }[] {
       const text = changeText({ kind: "restyled", set });
       if (el.style) el.changes[el.style.at] = text;
       el.style = { at: el.style ? el.style.at : el.changes.push(text) - 1, set };
-    } else el.changes.push(said);
+    } else {
+      el.changes.push(said);
+      if (e.undone) el.text = el.style = null;
+    }
   }
   return [...out.values()];
 }
