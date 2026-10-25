@@ -11,14 +11,52 @@ use std::time::Duration;
 
 use moonlet_core::design::render::NO_APP;
 use moonlet_core::terminal::{ClientId, ClientTx};
-use moonlet_proto::methods::{DesignRender, DesignRenderDone, EV_DESIGN_RENDER};
+use moonlet_proto::methods::{DesignRender, DesignRenderDone, EV_DESIGN_RENDER, RenderWant};
 use moonlet_proto::{Frame, Message, RpcError};
 use tokio::sync::oneshot;
 
 /// How long the app has for one card.
 const PER_CARD: Duration = Duration::from_secs(30);
 
-type Reply = oneshot::Sender<Result<DesignRenderDone, RpcError>>;
+type Reply = oneshot::Sender<Result<DesignRenderDone, RenderError>>;
+
+/// Why a card was not rendered.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RenderError {
+    /// No app renders cards: "Open moonlet to render cards".
+    NoApp,
+    /// The app did not answer in time.
+    Timeout(String),
+}
+
+impl From<RenderError> for RpcError {
+    fn from(e: RenderError) -> Self {
+        match e {
+            RenderError::NoApp => no_app(),
+            RenderError::Timeout(why) => RpcError::new("timeout", why),
+        }
+    }
+}
+
+impl std::fmt::Display for RenderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RenderError::NoApp => f.write_str(NO_APP),
+            RenderError::Timeout(why) => f.write_str(why),
+        }
+    }
+}
+
+/// A card to ask the app for.
+pub struct Ask {
+    pub workspace: String,
+    pub slug: String,
+    /// The card's path in the system.
+    pub path: String,
+    pub viewport: (u32, u32),
+    pub variant: Option<String>,
+    pub want: RenderWant,
+}
 
 #[derive(Default)]
 pub struct Renders {
@@ -56,7 +94,7 @@ impl Renders {
             .collect();
         for id in gone {
             if let Some((_, reply)) = waiting.remove(&id) {
-                let _ = reply.send(Err(no_app()));
+                let _ = reply.send(Err(RenderError::NoApp));
             }
         }
     }
@@ -66,33 +104,38 @@ impl Renders {
         self.app.lock().unwrap().is_some()
     }
 
-    /// Asks the app to render `ask` (its `id` is set here) and waits for
-    /// its answer: `no_app` without one, `timeout` after [`PER_CARD`].
-    pub async fn render(&self, mut ask: DesignRender) -> Result<DesignRenderDone, RpcError> {
+    /// Asks the app to render `ask` and waits for its answer: `NoApp`
+    /// without one, `Timeout` after [`PER_CARD`].
+    pub async fn render(&self, ask: Ask) -> Result<DesignRenderDone, RenderError> {
         let Some((client, tx)) = self.app.lock().unwrap().clone() else {
-            return Err(no_app());
+            return Err(RenderError::NoApp);
         };
-        ask.id = self.next.fetch_add(1, Ordering::Relaxed) + 1;
-        let id = ask.id;
+        let id = self.next.fetch_add(1, Ordering::Relaxed) + 1;
+        let ask = DesignRender {
+            id,
+            workspace: ask.workspace,
+            slug: ask.slug,
+            path: ask.path,
+            viewport: ask.viewport,
+            variant: ask.variant,
+            want: ask.want,
+        };
         let (reply, rx) = oneshot::channel();
         self.waiting.lock().unwrap().insert(id, (client, reply));
         if !tx.send(Frame::Json(Message::event(EV_DESIGN_RENDER, &ask))) {
             self.waiting.lock().unwrap().remove(&id);
-            return Err(no_app());
+            return Err(RenderError::NoApp);
         }
         match tokio::time::timeout(PER_CARD, rx).await {
             Ok(Ok(done)) => done,
-            Ok(Err(_)) => Err(no_app()),
+            Ok(Err(_)) => Err(RenderError::NoApp),
             Err(_) => {
                 self.waiting.lock().unwrap().remove(&id);
-                Err(RpcError::new(
-                    "timeout",
-                    format!(
-                        "the app did not render {} in {} s",
-                        ask.path,
-                        PER_CARD.as_secs()
-                    ),
-                ))
+                Err(RenderError::Timeout(format!(
+                    "the app did not render {} in {} s",
+                    ask.path,
+                    PER_CARD.as_secs()
+                )))
             }
         }
     }

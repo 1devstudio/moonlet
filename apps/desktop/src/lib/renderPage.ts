@@ -1,13 +1,16 @@
 // The app's hidden render page (X64): which URL it frames for a job from the
 // daemon, and which message from the frame answers it.
 
+import { cardUrl } from "./designView";
 import { readMeasurements, rubric } from "./renderRubric";
 
 /** A card to render, as the app's backend hands it to the page. */
 export interface RenderJob {
   id: number;
   workspace: string;
-  /** Relative to the workspace's design folder: `systems/<slug>/components/…`. */
+  /** The design system. */
+  slug: string;
+  /** The card's path in the system: `components/…`. */
   path: string;
   viewport: [number, number];
   /** The snippet shown alone, by its full id. */
@@ -19,9 +22,8 @@ export type Verdict = { metrics: { flags: string[]; errors: string[] } } | { err
 
 /** The card's URL on the `moonlet-design://` scheme, asking for the measuring script. */
 export function renderUrl(job: RenderJob): string {
-  const path = job.path.split("/").map(encodeURIComponent).join("/");
   const variant = job.variant ? `&variant=${encodeURIComponent(job.variant)}` : "";
-  return `moonlet-design://${encodeURIComponent(job.workspace)}/${path}?moonlet-render=${job.id}${variant}`;
+  return `${cardUrl(job.workspace, job.slug, job.path)}?moonlet-render=${job.id}${variant}`;
 }
 
 /** The verdict a message from the card's frame gives on job `job`; null when it is not about it. */

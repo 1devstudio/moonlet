@@ -2484,16 +2484,16 @@ async fn the_app_renders_each_card_for_the_render_check_and_its_flags_are_kept()
         .unwrap();
     assert_eq!(out["render"], serde_json::json!({"total": 2, "bad": 1, "thin": 0, "variants_identical": 0}));
     assert!(out["problems"].is_array(), "{out}");
-    // Each card was asked of the app, by its path in the workspace's design folder.
+    // Each card was asked of the app, by its system and its path in it.
     let mut asked = Vec::new();
     while let Ok(a) = seen.try_recv() {
-        asked.push((a["path"].as_str().unwrap().to_string(), a["viewport"].clone(), a["want"].clone(), a["workspace"].clone()));
+        asked.push((a["slug"].clone(), a["path"].as_str().unwrap().to_string(), a["viewport"].clone(), a["want"].clone(), a["workspace"].clone()));
     }
     assert_eq!(
         asked,
         vec![
-            ("systems/storefront/components/buttons/button/button.html".into(), serde_json::json!([320, 140]), serde_json::json!("metrics"), serde_json::json!(w)),
-            ("systems/storefront/components/forms/field/field.html".into(), serde_json::json!([900, 700]), serde_json::json!("metrics"), serde_json::json!(w)),
+            (serde_json::json!("storefront"), "components/buttons/button/button.html".into(), serde_json::json!([320, 140]), serde_json::json!("metrics"), serde_json::json!(w)),
+            (serde_json::json!("storefront"), "components/forms/field/field.html".into(), serde_json::json!([900, 700]), serde_json::json!("metrics"), serde_json::json!(w)),
         ]
     );
     let report: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join(".cache/render-check.json")).unwrap()).unwrap();

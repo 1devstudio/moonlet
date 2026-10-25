@@ -6,6 +6,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Result, bail};
+use moonlet_proto::methods::RenderMetrics;
 use serde::{Deserialize, Serialize};
 
 use super::store::Store;
@@ -22,7 +23,7 @@ pub const REPORT: &str = ".cache/render-check.json";
 
 /// One card as the app rendered it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CardRender {
+pub struct RenderResult {
     /// Relative to the design system's folder.
     pub path: String,
     /// The rubric's flags it raised (`rootEmpty`, `errs`, …, `thin`, `bad`).
@@ -35,6 +36,27 @@ pub struct CardRender {
     pub error: Option<String>,
 }
 
+impl RenderResult {
+    /// The card at `path` as the app judged it, or, when the app could not
+    /// render it, `bad` with why.
+    pub fn new(path: String, answer: Result<RenderMetrics, String>) -> Self {
+        match answer {
+            Ok(m) => RenderResult {
+                path,
+                flags: m.flags,
+                errors: m.errors,
+                error: None,
+            },
+            Err(why) => RenderResult {
+                path,
+                flags: vec!["bad".into()],
+                errors: Vec::new(),
+                error: Some(why),
+            },
+        }
+    }
+}
+
 /// The counts `design check --render` prints.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RenderCounts {
@@ -44,9 +66,9 @@ pub struct RenderCounts {
     pub variants_identical: usize,
 }
 
-/// A card to render: its path in the system and its viewport.
+/// A card the render check loads: its path in the system and its viewport.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RenderCard {
+pub struct RenderJob {
     pub path: String,
     pub viewport: (u32, u32),
 }
@@ -64,12 +86,12 @@ pub struct SnapTarget {
 struct Report<'a> {
     #[serde(flatten)]
     counts: RenderCounts,
-    cards: &'a [CardRender],
+    cards: &'a [RenderResult],
 }
 
 /// The counts of `cards`.
-pub fn counts(cards: &[CardRender]) -> RenderCounts {
-    let has = |c: &CardRender, f: &str| c.flags.iter().any(|x| x == f);
+pub fn counts(cards: &[RenderResult]) -> RenderCounts {
+    let has = |c: &RenderResult, f: &str| c.flags.iter().any(|x| x == f);
     RenderCounts {
         total: cards.len(),
         bad: cards.iter().filter(|c| has(c, "bad")).count(),
@@ -117,7 +139,7 @@ impl Store {
     /// The cards the render check loads: every card of the system, a
     /// proposal waiting to be settled left out, with the viewport its
     /// marker names (900×700 without one).
-    pub fn render_cards(&self, workspace: &str, slug: &str) -> Result<Vec<RenderCard>> {
+    pub fn render_cards(&self, workspace: &str, slug: &str) -> Result<Vec<RenderJob>> {
         let dir = self.system_dir(workspace, slug)?;
         let mut out = Vec::new();
         for file in check::html_files(&dir) {
@@ -126,8 +148,8 @@ impl Store {
                 continue;
             }
             let text = fsx::read_inside(&dir, &file)?;
-            let viewport = card::parse_marker(&text).map_or((900, 700), |m| m.viewport);
-            out.push(RenderCard { path, viewport });
+            let viewport = card::parse_marker(&text).map_or(card::DEFAULT_VIEWPORT, |m| m.viewport);
+            out.push(RenderJob { path, viewport });
         }
         Ok(out)
     }
@@ -163,8 +185,9 @@ impl Store {
                 }
             }
         };
-        let viewport = viewport
-            .unwrap_or_else(|| card::parse_marker(&text).map_or((900, 700), |m| m.viewport));
+        let viewport = viewport.unwrap_or_else(|| {
+            card::parse_marker(&text).map_or(card::DEFAULT_VIEWPORT, |m| m.viewport)
+        });
         Ok(SnapTarget {
             path: path.to_string(),
             viewport,
@@ -178,7 +201,7 @@ impl Store {
         &self,
         workspace: &str,
         slug: &str,
-        cards: &[CardRender],
+        cards: &[RenderResult],
     ) -> Result<RenderCounts> {
         let dir = self.system_dir(workspace, slug)?;
         let counts = counts(cards);
@@ -216,8 +239,8 @@ mod tests {
         }
     }
 
-    fn card(path: &str, flags: &[&str]) -> CardRender {
-        CardRender {
+    fn card(path: &str, flags: &[&str]) -> RenderResult {
+        RenderResult {
             path: path.into(),
             flags: flags.iter().map(|f| f.to_string()).collect(),
             errors: Vec::new(),
@@ -419,15 +442,15 @@ mod tests {
         assert_eq!(
             store.render_cards("w1", &slug).unwrap(),
             vec![
-                RenderCard {
+                RenderJob {
                     path: "components/buttons/button/button.html".into(),
                     viewport: (320, 140)
                 },
-                RenderCard {
+                RenderJob {
                     path: "foundations/colours/colours.html".into(),
-                    viewport: (900, 700)
+                    viewport: card::DEFAULT_VIEWPORT
                 },
-                RenderCard {
+                RenderJob {
                     path: "ui_kits/app/main.html".into(),
                     viewport: (1440, 900)
                 },
@@ -458,5 +481,35 @@ mod tests {
         let _ = store.write_render_check("w1", &slug, &[]);
         let _ = store.write_screenshot("w1", &slug, &target, b"png");
         assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn a_card_the_app_could_not_render_is_bad_with_why() {
+        let path = "components/menus/menu/menu.html".to_string();
+        assert_eq!(
+            RenderResult::new(
+                path.clone(),
+                Err("the card did not finish loading in 15 s".into())
+            ),
+            RenderResult {
+                path: path.clone(),
+                flags: vec!["bad".into()],
+                errors: vec![],
+                error: Some("the card did not finish loading in 15 s".into()),
+            }
+        );
+        let measured = moonlet_proto::methods::RenderMetrics {
+            flags: vec!["errs".into(), "bad".into()],
+            errors: vec!["img did not load: hero.png".into()],
+        };
+        assert_eq!(
+            RenderResult::new(path.clone(), Ok(measured)),
+            RenderResult {
+                path,
+                flags: vec!["errs".into(), "bad".into()],
+                errors: vec!["img did not load: hero.png".into()],
+                error: None,
+            }
+        );
     }
 }

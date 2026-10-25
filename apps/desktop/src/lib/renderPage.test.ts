@@ -4,7 +4,8 @@ import { renderUrl, verdict } from "./renderPage";
 const job = {
   id: 7,
   workspace: "w-1devstudio",
-  path: "systems/storefront kit/components/buttons/button/button.html",
+  slug: "storefront kit",
+  path: "components/buttons/button/button.html",
   viewport: [320, 140] as [number, number],
   variant: null,
 };

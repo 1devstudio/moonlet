@@ -515,7 +515,12 @@ impl Store {
                 .to_string();
             let (group, name, viewport, source) = match card::parse_marker(&text) {
                 Ok(m) => (m.group, m.name.unwrap_or(stem), m.viewport, m.source),
-                Err(_) => ("Without a marker".to_string(), stem, (900, 700), Vec::new()),
+                Err(_) => (
+                    "Without a marker".to_string(),
+                    stem,
+                    card::DEFAULT_VIEWPORT,
+                    Vec::new(),
+                ),
             };
             // A component card's own `.css` and `.prompt.md`, beside it, are
             // its files too; nothing else in its folder is.

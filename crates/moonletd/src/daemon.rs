@@ -1168,13 +1168,13 @@ impl Daemon {
                 };
                 let done = self
                     .renders
-                    .render(m::DesignRender {
-                        id: 0,
+                    .render(crate::render::Ask {
                         workspace: r.workspace.clone(),
-                        path: format!("systems/{}/{}", r.slug, target.path),
+                        slug: r.slug.clone(),
+                        path: target.path.clone(),
                         viewport: target.viewport,
                         variant: target.variant.clone(),
-                        want: "png".into(),
+                        want: m::RenderWant::Png,
                     })
                     .await?;
                 if let Some(e) = done.error {
@@ -1282,7 +1282,8 @@ impl Daemon {
     /// app could not render is `bad`, with why; without the app, nothing is
     /// written and it fails with "Open moonlet to render cards".
     async fn render_check(&self, workspace: &str, slug: &str) -> Result<moonlet_core::design::render::RenderCounts, RpcError> {
-        use moonlet_core::design::render::CardRender;
+        use crate::render::{Ask, RenderError};
+        use moonlet_core::design::render::RenderResult;
         if !self.renders.has_app() {
             return Err(crate::render::no_app());
         }
@@ -1290,23 +1291,20 @@ impl Daemon {
         let cards = blocking(move || store.render_cards(&ws, &sl)).await?;
         let mut results = Vec::new();
         for card in cards {
-            let ask = m::DesignRender {
-                id: 0,
+            let ask = Ask {
                 workspace: workspace.to_string(),
-                path: format!("systems/{slug}/{}", card.path),
+                slug: slug.to_string(),
+                path: card.path.clone(),
                 viewport: card.viewport,
                 variant: None,
-                want: "metrics".into(),
+                want: m::RenderWant::Metrics,
             };
-            let result = match self.renders.render(ask).await {
-                Ok(done) => match (done.error, done.metrics) {
-                    (None, Some(metrics)) => CardRender { path: card.path, flags: metrics.flags, errors: metrics.errors, error: None },
-                    (error, _) => CardRender { path: card.path, flags: vec!["bad".into()], errors: Vec::new(), error: Some(error.unwrap_or_else(|| "the app measured nothing".into())) },
-                },
-                Err(e) if e.code == "no_app" => return Err(e),
-                Err(e) => CardRender { path: card.path, flags: vec!["bad".into()], errors: Vec::new(), error: Some(e.message) },
+            let answer = match self.renders.render(ask).await {
+                Ok(done) => done.metrics(),
+                Err(RenderError::NoApp) => return Err(RenderError::NoApp.into()),
+                Err(e) => Err(e.to_string()),
             };
-            results.push(result);
+            results.push(RenderResult::new(card.path, answer));
         }
         let (store, ws, sl) = (self.design.clone(), workspace.to_string(), slug.to_string());
         blocking(move || store.write_render_check(&ws, &sl, &results)).await
