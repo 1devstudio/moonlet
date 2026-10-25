@@ -59,8 +59,13 @@ pub struct Problem {
 
 /// CSS keywords and functions are case-insensitive: `@IMPORT` and `URL(` count.
 /// A quoted URL runs to its closing quote and may hold spaces; see [`quoted`].
+/// A quote or `url(` may follow `@import` with no space, as minifiers write
+/// it (`@import"kit.css";`); a bare URL needs one, or it is part of the name.
 static IMPORT: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?i)@import\s+(?:url\(\s*)?(?:"([^"]*)"|'([^']*)'|([^"')\s;]+))"#).unwrap()
+    Regex::new(
+        r#"(?i)@import(?:\s*(?:url\(\s*)?(?:"([^"]*)"|'([^']*)')|\s*url\(\s*([^"')\s]+)|\s+([^"')\s;]+))"#,
+    )
+    .unwrap()
 });
 static DEFINITION: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(--[A-Za-z0-9_-]+)\s*:").unwrap());
@@ -95,7 +100,7 @@ static URL: LazyLock<Regex> =
 
 /// The URL an [`IMPORT`] or [`URL`] match took: double-quoted, single-quoted or bare.
 fn quoted<'t>(c: &regex::Captures<'t>) -> &'t str {
-    (1..=3).find_map(|i| c.get(i)).map_or("", |m| m.as_str())
+    c.iter().skip(1).flatten().next().map_or("", |m| m.as_str())
 }
 
 /// Checks the design system in `root`.
@@ -1150,6 +1155,26 @@ mod tests {
                     "https://cdn.example.com/bg.png leaves the design system".into()
                 ),
             ]
+        );
+    }
+
+    #[test]
+    fn an_import_with_no_space_before_its_url_is_checked() {
+        let dir = system(&[
+            (
+                "styles.css",
+                "@import\"tokens/colors.css\";@import'https://fonts.example.com/inter.css';\n",
+            ),
+            ("tokens/colors.css", COLORS),
+        ]);
+        assert_eq!(
+            check(dir.path()).unwrap(),
+            vec![Problem {
+                path: "styles.css".into(),
+                line: 1,
+                kind: Kind::ExternalUrl,
+                message: "https://fonts.example.com/inter.css leaves the design system".into(),
+            }]
         );
     }
 
