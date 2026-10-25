@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { centralHostButton, centralHostId, heavyHostIds, linkLine, linkRetries, pairThenLink, pickCentral, remoteLinkAction, remoteLinkError, remoteLinkLine, remoteSwitchOn, turnOnNeeds, watchLink } from "./workerLink";
+import { centralHostButton, centralHostId, clampSlots, heavyHostIds, linkLine, linkRetries, pairThenLink, pickCentral, remoteLinkAction, remoteLinkError, remoteLinkLine, remoteSwitchOn, slotsHint, turnOnNeeds, watchLink, withRunning } from "./workerLink";
 import { DaemonError } from "./daemon";
 import type { HostInfo, LinkInfo, LinkState } from "./protocol";
 
@@ -240,5 +240,18 @@ describe("pairing a remote host with the central host (X61)", () => {
     const r = await pairThenLink(fails("link.set", "internal", "cannot write link.json"), central, "7KQ2MX9PDA");
     expect(r.paired).toBe(true);
     expect((r.error as Error).message).toBe("cannot write link.json");
+  });
+});
+
+describe("the run-at-most row (X62)", () => {
+  it("says how many commands run here, and keeps slots from 1 to 64", () => {
+    const since = new Date(2026, 9, 21, 9, 2).getTime();
+    const line = linkLine(info({ kind: "connected", since }));
+    expect(withRunning(line, 1)).toEqual({ tone: "done", text: "Linked to studio-mini since 09:02 · 1 running" });
+    expect(withRunning(line, 0)).toEqual(line);
+    expect(withRunning(linkLine(info({ kind: "off" }, null)), 2)).toEqual({ tone: "muted", text: "Not linked" });
+    expect(slotsHint(null)).toBe("Routed commands side by side. 1 suits a laptop on battery.");
+    expect(slotsHint("devbox")).toBe("Saved on devbox.");
+    expect([0, 1, 2, 64, 65].map(clampSlots)).toEqual([1, 1, 2, 64, 64]);
   });
 });

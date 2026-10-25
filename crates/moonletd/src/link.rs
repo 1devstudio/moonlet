@@ -355,16 +355,22 @@ impl WorkerLink {
         }
         // The central host learns a new name, slots or heavy commands now,
         // not at the next link.
-        if renamed
-            && !moved
-            && matches!(*self.state.lock().unwrap(), LinkState::Connected { .. })
-            && let Some(host) = self.host.lock().unwrap().clone()
-        {
-            tokio::spawn(self.clone().register(host));
+        if renamed && !moved {
+            self.register_again();
         }
         self.quiet.store(false, Ordering::SeqCst);
         self.changed();
         Ok(self.info())
+    }
+
+    /// Tells the central host this worker's details again, now, when the
+    /// link is up: what it lists of the worker changed.
+    pub fn register_again(self: &Arc<Self>) {
+        if matches!(*self.state.lock().unwrap(), LinkState::Connected { .. })
+            && let Some(host) = self.host.lock().unwrap().clone()
+        {
+            tokio::spawn(self.clone().register(host));
+        }
     }
 
     /// `link.pair` (X61): pairs this machine with the central host using a

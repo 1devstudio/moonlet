@@ -329,6 +329,58 @@ export interface ProjectConfig {
   agents: Record<string, string>;
   /** Tracker projects this project's sessions start from, `<connection>/<key>` (X44). */
   trackers?: string[];
+  /** Commands that may run on another machine, `[heavy]` (X62). */
+  heavy?: HeavyConfig;
+}
+
+/** Which workers may take a project's heavy commands (X62). */
+export type HeavyOs = "any" | "macos" | "linux";
+
+/** A project's `[heavy]` table (X62). */
+export interface HeavyConfig {
+  commands: string[];
+  os: HeavyOs;
+  env: string[];
+  outputs: string[];
+}
+
+/** What the user approved of a project's heavy commands: both lists, together. */
+export interface HeavyApproval {
+  commands: string[];
+  env: string[];
+}
+
+/** `heavy.get`: the project's `[heavy]` table and its approval. */
+export interface HeavyInfo {
+  config: HeavyConfig;
+  approved: HeavyApproval | null;
+  /** Why the table cannot be used; nothing is routed then. */
+  error: string | null;
+}
+
+/** A worker linked to the central host, from `worker.list` (X41, X62). */
+export interface WorkerInfo {
+  id: string;
+  name: string;
+  os: string;
+  arch: string;
+  cores: number;
+  version: string;
+  slots: number;
+  /** It takes heavy commands. */
+  heavy: boolean;
+  connected_since: number;
+  rtt_ms?: number | null;
+  load?: number | null;
+}
+
+/** `exec.status` (X62): this machine, the routed commands going on, and why workers were skipped. */
+export interface ExecStatus {
+  host: { name: string; os: string; cores: number; load: number | null; slots: number; used: number };
+  running: { job: string; session: string; command: string; worker: string; started_at: number }[];
+  skips: { worker: string; project: string; reason: string; detail?: string | null }[];
+  /** Commands this machine runs for its central host. */
+  routed: number;
 }
 
 /** `.moonlet/config.toml` as the Project settings dialog edits it (X8). */
@@ -708,7 +760,8 @@ export type LinkState =
 
 export interface LinkInfo {
   central: { name: string; addrs: string[] } | null;
-  worker: { id: string; name: string; enabled: boolean };
+  /** `slots`: how many routed commands it runs at once (X62). */
+  worker: { id: string; name: string; enabled: boolean; slots?: number };
   state: LinkState;
 }
 
@@ -906,6 +959,16 @@ export const M = {
   syncProjectGet: "sync.project_get",
   syncProjectSet: "sync.project_set",
   syncDecline: "sync.decline",
+  heavyGet: "heavy.get",
+  heavySet: "heavy.set",
+  heavyApprove: "heavy.approve",
+  workerList: "worker.list",
+  execStatus: "exec.status",
+  jobList: "job.list",
+  jobOutput: "job.output",
+  jobStop: "job.stop",
+  jobStopAll: "job.stop_all",
+  jobRunHere: "job.run_here",
 } as const;
 
 export const EV = {
@@ -936,6 +999,9 @@ export const EV = {
   mobilePairEnded: "mobile.pair_ended",
   linkChanged: "link.changed",
   syncChanged: "sync.changed",
+  workersChanged: "workers.changed",
+  jobChanged: "job.changed",
+  jobOutput: "job.output",
 } as const;
 
 /**

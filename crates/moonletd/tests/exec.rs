@@ -1974,3 +1974,86 @@ async fn an_agents_cli_neither_reads_nor_stops_jobs() {
         }
     }
 }
+
+#[tokio::test]
+async fn approving_on_a_worker_clears_its_not_approved_line() {
+    let (c, mac) = linked_with(RUN_CONFIG, &[], false).await;
+    assert_eq!(ran_on(&c.run(&["sh", "run.sh"]).await), "studio-mini");
+    let status: Value = c.daemon.call("exec.status", json!({})).await;
+    assert_eq!(
+        status["skips"][0]["reason"],
+        json!("not_approved"),
+        "{status}"
+    );
+    approve_on(&c, &mac).await;
+    for _ in 0..100 {
+        let status: Value = c.daemon.call("exec.status", json!({})).await;
+        if status["skips"] == json!([]) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("the central host still says the Mac has not approved");
+}
+
+#[tokio::test]
+async fn exec_status_lists_the_central_host_its_runs_and_why_workers_were_skipped() {
+    let (c, _mac) = linked_with(RUN_CONFIG, &[], false).await;
+    // Not approved on the Mac: it is skipped, and the command runs here.
+    let (mut client, run) = c
+        .start(
+            &["sh", "-c", "echo started; sleep 30"],
+            &c.worktree.clone(),
+            json!({}),
+        )
+        .await;
+    loop {
+        if let Frame::RunOutput {
+            stream: 1, data, ..
+        } = client.next_frame().await.unwrap().unwrap()
+            && data.starts_with(b"started")
+        {
+            break;
+        }
+    }
+    let status: Value = c.daemon.call("exec.status", json!({})).await;
+    assert_eq!(status["host"]["name"], json!("studio-mini"));
+    assert_eq!(status["host"]["slots"], json!(2));
+    assert_eq!(status["host"]["load"], json!(0.5));
+    let running = status["running"].as_array().unwrap();
+    assert_eq!(running.len(), 1);
+    assert_eq!(running[0]["worker"], json!("studio-mini"));
+    assert_eq!(
+        running[0]["command"],
+        json!("sh -c 'echo started; sleep 30'")
+    );
+    assert_eq!(running[0]["session"], json!(c.session));
+    assert_eq!(
+        status["skips"],
+        json!([{
+            "worker": MAC_ID,
+            "project": "shop",
+            "reason": "not_approved",
+            "detail": "this machine has not approved the project's heavy commands",
+        }])
+    );
+    let _: bool = client
+        .request("exec.cancel", json!({ "run": run }))
+        .await
+        .unwrap();
+    collect(client, run).await;
+    let status: Value = c.daemon.call("exec.status", json!({})).await;
+    assert_eq!(status["running"], json!([]));
+    // Other sessions' commands are not for an agent's CLI.
+    let mut cli = Client::connect(&c.daemon.socket, "moonlet-cli")
+        .await
+        .unwrap();
+    let e = cli
+        .request::<_, Value>("exec.status", json!({}))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        e.to_string(),
+        "forbidden: only the moonlet app manages jobs"
+    );
+}

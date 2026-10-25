@@ -157,6 +157,8 @@ function index(c: SearchContext): Entry[] {
     app("hosts", "Machines › Hosts", undefined, "Remote hosts", n(c.remoteHosts, "host"), "ssh helper"),
     app("hosts", "Machines › Hosts", "tailnet", "Allow connections from my tailnet", "", "pair Mac Tailscale"),
     app("hosts", "Machines › Hosts", "heavy-commands", "Use this Mac for heavy commands", "", "central host worker link"),
+    app("hosts", "Machines › Hosts", "heavy-slots", "Run at most", "", "slots at once routed"),
+    app("workers", "Machines › Workers", undefined, "Workers", "", "central host load slots routed running"),
     app("phones", "Machines › Phones", "phones", "Allow connections from my tailnet", "", "mobile phone pair Tailscale"),
     ...c.workspaces.flatMap((w): Entry[] => {
       const route: SettingsRoute = { page: "workspace", host: w.host, id: w.id };
@@ -183,6 +185,7 @@ function index(c: SearchContext): Entry[] {
         { label: "Custom agents", path, route, setting: "project-agents", value: cfg ? (agents ? n(agents, "agent") : "None") : "" },
         { label: "Base branch", path, route, setting: "project-base", value: cfg?.base_branch?.trim() || p.base_branch },
         { label: "Branch prefix", path, route, setting: "project-branch-prefix", value: cfg?.branch_prefix?.trim() ?? "", also: "git" },
+        { label: "Heavy commands", path, route, setting: "project-heavy", value: cfg ? n(cfg.heavy?.commands.length ?? 0, "command") : "", also: "routed workers approve" },
       ];
     }),
   ];
