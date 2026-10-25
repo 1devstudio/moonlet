@@ -67,7 +67,11 @@ A cloud machine is a worker like any other in X62. It runs routed commands in a 
   The machine pairs before its setup runs, so the central host can show the setup's progress.
 
   The rendered script for a fixed input equals a literal in the test.
-- [x] The Tailscale key is minted for each machine with the user's OAuth client: one-off, ephemeral, preauthorized, tagged with the configured tag, expiring in 1 hour. The OAuth secret never leaves the central host. (Provisional: tested against responses written from Tailscale's API documentation until an OAuth client captures real ones.)
+- [x] Each machine joins the tailnet in one of two ways, the user's choice:
+  - **OAuth client (recommended, the default):** a key minted for each machine with the user's OAuth client: one-off, ephemeral, preauthorized, tagged with the configured tag, expiring in 1 hour. The OAuth secret never leaves the central host. `cloud.check` makes a test key with the saved client and revokes it at once, so a wrong scope or a missing tag shows before a machine fails.
+  - **Auth key (the quick start):** a reusable, ephemeral, pre-approved, tagged key the user pasted, the same for every machine. It works until it expires (at most 90 days), and anyone holding it could add devices with that tag until then.
+
+  Without either, a machine fails with "Set a Tailscale OAuth client or auth key in Settings › Cloud workers.", before any call to Tailscale. (Provisional: tested against responses written from Tailscale's API documentation until an OAuth client captures real ones.)
 - [x] `machine_setup` is a path in the repository. It is read when the machine is made, and embedded in `user_data`. It is read from the worktree of the session the machine is made for, or, for a machine made without a session (`moonlet worker up` without `--session`, **Start a machine**), from the project's own folder on the central host. A script over 16 KiB, a path outside that folder (including through a symbolic link), or a missing file fails with that reason, and no machine is made.
 - [x] **Joining:**
   - The central host makes a **join code** for the machine: one use, valid 30 minutes, bound to the machine id, device kind `cloud`.
@@ -154,7 +158,11 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
 
 - **Settings › Machines › Cloud workers** ([cloud-workers-page.png](design/x62-x63/cloud-workers-page.png)), a page of the central host: the title with a "studio-mini · Central host" badge, and "studio-mini rents machines for heavy commands when its workers are busy, and removes them once they sit idle. A cloud machine only runs commands: agents and sessions stay on studio-mini." Then:
   - **Providers:** one card per provider. The card has the provider's name, a status line ("4 machines · used by shop") and **Remove**, then the adapter's fields. Secrets show "Saved" with **Replace**, and the token's help text is "It can create and delete anything in its Hetzner project, so use a project made for moonlet." A removal error row, in the error colour, has **Retry**. Under the cards: **Add provider** and "Hetzner Cloud is the only provider so far."
-  - **Tailscale:** "Each machine joins your tailnet with a one-off key that studio-mini makes from this OAuth client. The secret never leaves studio-mini." The fields are OAuth client ID ("Needs the auth_keys scope and the tag below."), the secret (Saved / Replace) and Tag ("Every cloud machine gets it."). Then the policy snippet, with a copy button, filled in with the tag and the central host's Tailscale address:
+  - **Tailscale:** **Machines join with** [OAuth client (recommended) | Auth key], then numbered steps, each with **Open** where it happens on Tailscale's site:
+    - OAuth client: "Open Tailscale's OAuth clients page.", "Generate a client with the Auth Keys scope (write) and the tag tag:moonlet-worker.", "Paste its ID and secret below, then Check.", "Add the lines below to your tailnet policy." The fields are OAuth client ID ("Needs the Auth Keys scope and the tag below."), the secret (Saved / Replace) and Tag ("Every cloud machine gets it."), then **Check** ("Makes a test key with the saved client and revokes it at once."; after it, "Tailscale made and revoked a test key: machines can join." or what went wrong).
+    - Auth key: "Open Tailscale's keys page.", "Generate an auth key that is reusable, ephemeral and pre-approved, with the tag tag:moonlet-worker.", "Paste it below. It works until it expires, at most 90 days: then paste a new one.", "Add the lines below to your tailnet policy." The fields are Auth key (Saved / Replace) and Tag.
+
+    Then the policy snippet, with a copy button, filled in with the tag and the central host's Tailscale address:
 
     ```json
     "tagOwners": { "tag:moonlet-worker": ["autogroup:admin"] },
@@ -190,6 +198,7 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
 
 - `cloud.get` returns the settings, with `has_token: true` in place of each secret.
 - `cloud.set` updates the settings. It needs the app or a paired desktop.
+- `cloud.check` makes a test key with the saved OAuth client and revokes it. It needs the app or a paired desktop.
 - `cloud.types {provider, location}`.
 - `cloud.machines` returns `[{id, name, project, provider, type, location, state, since, steps: [{step, state, took}], deadline, idle_until, for_session, error, error_since}]` and the removed machines of the last hour, and the event `cloud.changed` fires on changes.
 - `cloud.up {project, session?}` returns the machine. `cloud.down {machine}` removes an idle machine at once, or a busy one once its commands end.
@@ -210,7 +219,7 @@ The screens are in [`design/x62-x63/`](design/x62-x63/). Where this section and 
   {
     "host_id": "c3f1a9e2b7d04c55",
     "providers": { "hetzner": { "token": "…" } },
-    "tailscale": { "client_id": "…", "client_secret": "…", "tag": "tag:moonlet-worker" },
+    "tailscale": { "mode": "oauth", "client_id": "…", "client_secret": "…", "auth_key": "", "tag": "tag:moonlet-worker" },
     "idle_minutes": 15,
     "max_machines": 2,
     "max_hours_month": 40,
@@ -269,7 +278,7 @@ Where the tests live:
 | Name and labels | `names_fit_the_providers_limit_and_characters`, `labels_carry_the_host_machine_and_project` |
 | Recorded before creating, limit under a lock | `a_machine_is_recorded_before_the_create_call`, `two_cloud_up_calls_at_once_never_pass_the_limit`, `a_machine_removed_during_its_create_call_is_destroyed_when_it_returns`, `cloud_up_needs_the_central_host_to_take_tailnet_connections` |
 | `user_data` | `renders_the_worked_cloud_init_script`, `a_machine_without_machine_setup_runs_none` |
-| The Tailscale key | `asks_for_a_one_off_ephemeral_tagged_key_as_captured`, `a_refused_client_or_tag_says_so`, `an_outage_is_not_a_refused_client`, `a_machine_has_joined_once_tailscale_lists_its_peer` |
+| The Tailscale key | `asks_for_a_one_off_ephemeral_tagged_key_as_captured`, `a_refused_client_or_tag_says_so`, `an_outage_is_not_a_refused_client`, `check_makes_a_test_key_and_revokes_it`, `cloud_check_needs_an_oauth_client`, `a_machine_joins_the_tailnet_with_the_pasted_auth_key`, `without_a_tailscale_credential_a_machine_fails_and_says_why`, `cloud_get_shows_the_tailscale_mode_and_never_the_auth_key`; Vitest "switches to a pasted auth key, sent only once typed", "the steps for each way of joining the tailnet", "the line after Check"; `a_machine_has_joined_once_tailscale_lists_its_peer` |
 | `machine_setup` | `machine_setup_comes_from_the_sessions_worktree`, `cloud_up_takes_only_a_session_of_its_project`, `machine_setup_without_a_session_comes_from_the_projects_folder`, `a_machine_setup_over_16_kib_makes_no_machine`, `a_machine_setup_outside_the_folder_makes_no_machine`, `a_missing_machine_setup_makes_no_machine`, `a_machine_without_machine_setup_skips_that_step` |
 | Joining | `a_join_code_works_once`, `an_expired_join_code_is_refused`, `a_join_code_for_another_machine_is_refused` |
 | Ready | `a_machine_made_for_a_session_is_ready_with_its_copy_and_setup`, `a_machine_made_without_a_session_copies_on_its_first_command` |
