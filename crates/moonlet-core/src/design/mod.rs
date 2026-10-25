@@ -15,6 +15,7 @@ pub mod manifest;
 pub mod mid;
 pub mod pages;
 pub mod place;
+pub mod project;
 pub mod readme;
 pub mod render;
 pub mod session;
