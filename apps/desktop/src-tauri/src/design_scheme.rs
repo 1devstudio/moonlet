@@ -4,10 +4,14 @@
 //! that workspace's design folder; this Mac's daemon resolves it
 //! (`design.file`), never outside the folder.
 
-/// Every file is served with it: a page may load only design files, inline
-/// styles and scripts, and `data:`/`blob:` URLs; it cannot fetch, post or
-/// frame anything.
-pub const CSP: &str = "default-src moonlet-design: data: blob: 'unsafe-inline'; connect-src 'none'; form-action 'none'; frame-src 'none'";
+/// The policy every file of `workspace` is served with: a page may load only
+/// that workspace's design files, inline styles and scripts, and
+/// `data:`/`blob:` URLs; it cannot fetch, post or frame anything.
+pub fn csp(workspace: &str) -> String {
+    format!(
+        "default-src moonlet-design://{workspace} data: blob: 'unsafe-inline'; connect-src 'none'; form-action 'none'; frame-src 'none'"
+    )
+}
 
 /// The workspace and the path (decoded, relative to its design folder) a URL
 /// names, or `None` for anything else: another scheme, no workspace, no
@@ -27,14 +31,22 @@ pub fn target(url: &str) -> Option<(String, String)> {
         }
         parts.push(part);
     }
-    Some((decode(workspace)?, parts.join("/")))
+    // A workspace is an id, never another folder of the design root.
+    let workspace = decode(workspace)?;
+    if !workspace
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return None;
+    }
+    Some((workspace, parts.join("/")))
 }
 
 /// The headers of a served file.
-pub fn headers(content_type: &str) -> [(&'static str, String); 4] {
+pub fn headers(content_type: &str, workspace: &str) -> [(&'static str, String); 4] {
     [
         ("Content-Type", content_type.to_string()),
-        ("Content-Security-Policy", CSP.to_string()),
+        ("Content-Security-Policy", csp(workspace)),
         ("X-Content-Type-Options", "nosniff".to_string()),
         // The canvas reloads on every change.
         ("Cache-Control", "no-store".to_string()),
@@ -77,13 +89,13 @@ pub async fn serve(app: &tauri::AppHandle, url: &str) -> tauri::http::Response<V
     };
     // Checked against the file actually opened, so a link put in its place
     // after the daemon resolved it leads nowhere outside the design folder.
-    let root = moonlet_core::paths::home().join("design");
+    let root = moonlet_core::paths::home().join("design").join(&workspace);
     let real = std::path::PathBuf::from(real);
     let Ok(Ok(body)) = tokio::task::spawn_blocking(move || read_inside(&root, &real)).await else {
         return reply(404, "no such design file");
     };
     let mut res = tauri::http::Response::builder().status(200);
-    for (name, value) in headers(content_type) {
+    for (name, value) in headers(content_type, &workspace) {
         res = res.header(name, value);
     }
     res.body(body).unwrap_or_default()
@@ -184,6 +196,9 @@ mod tests {
             "moonlet-design://w1/systems/a%2f..%2fb",
             "moonlet-design://w1/systems//s",
             "moonlet-design://w1/systems/%zz",
+            // A workspace is an id: no other folder of the design root.
+            "moonlet-design://%2e%2e/w2/systems/s/styles.css",
+            "moonlet-design://w1%2fx/systems/s/styles.css",
         ] {
             assert_eq!(target(bad), None, "{bad}");
         }
@@ -210,17 +225,14 @@ mod tests {
     }
 
     #[test]
-    fn every_file_is_served_with_the_no_network_policy() {
-        let h = headers("text/html; charset=utf-8");
+    fn every_file_is_served_with_the_no_network_policy_of_its_workspace() {
+        let h = headers("text/html; charset=utf-8", "w-1devstudio");
+        let get = |name: &str| h.iter().find(|(n, _)| *n == name).map(|(_, v)| v.as_str());
+        assert_eq!(get("Content-Type"), Some("text/html; charset=utf-8"));
         assert_eq!(
-            h[0],
-            ("Content-Type", "text/html; charset=utf-8".to_string())
-        );
-        assert_eq!(
-            h[1],
-            (
-                "Content-Security-Policy",
-                "default-src moonlet-design: data: blob: 'unsafe-inline'; connect-src 'none'; form-action 'none'; frame-src 'none'".to_string()
+            get("Content-Security-Policy"),
+            Some(
+                "default-src moonlet-design://w-1devstudio data: blob: 'unsafe-inline'; connect-src 'none'; form-action 'none'; frame-src 'none'"
             )
         );
     }
