@@ -197,6 +197,15 @@ fn folder_agent(terminals: &[moonlet_proto::types::TerminalInfo], recorded: Opti
         .then_some(id)
 }
 
+/// A session's structured agent: the chat its session design's
+/// edits and snapshots wait for (X65).
+fn session_agent(terminals: &[moonlet_proto::types::TerminalInfo], session: &str) -> Option<u32> {
+    terminals
+        .iter()
+        .find(|t| t.chat && t.kind == moonlet_proto::types::TerminalKind::Agent && t.session_id.as_deref() == Some(session))
+        .map(|t| t.id)
+}
+
 /// Runs synchronous filesystem work off the async workers, so a large
 /// directory walk does not stall other connections.
 async fn blocking<T: Send + 'static>(
@@ -1110,8 +1119,13 @@ impl Daemon {
             _ => {}
         }
         let store = self.design.clone();
-        // Design folders belong to a moonlet workspace (ADR 0013).
-        let workspace = p.get("workspace").and_then(Value::as_str).unwrap_or_default();
+        // Design folders belong to a moonlet workspace (ADR 0013): the one
+        // named, or a session design's session's (X65).
+        let workspace = match (p.get("workspace").and_then(Value::as_str), p.get("session").and_then(Value::as_str)) {
+            (Some(w), _) => w.to_string(),
+            (None, Some(session)) => self.design_session(session)?.0.workspace_id.unwrap_or_default(),
+            (None, None) => String::new(),
+        };
         if !self.sessions.list_workspaces().iter().any(|w| w.id == workspace) {
             return Err(RpcError::new("invalid_params", format!("no workspace \"{workspace}\"")));
         }
@@ -1222,7 +1236,10 @@ impl Daemon {
                     if r.render {
                         return Err(RpcError::new("invalid_params", "render checks a design system's cards"));
                     }
-                    let at = self.locate(&m::DesignRef { workspace: r.workspace.clone(), slug: design }).await?;
+                    let at = match r.session.clone() {
+                        Some(session) => self.locate(&m::DesignRef::Session { session, slug: design }).await?,
+                        None => self.locate(&m::DesignRef::Workspace { workspace: r.workspace.clone(), slug: design }).await?,
+                    };
                     // `--fix` saves pages: never between a save's check of
                     // its version and its replace.
                     let lock = self.lock_of(&at, "pages");
@@ -1293,14 +1310,34 @@ impl Daemon {
             }
             m::DESIGN_LIST => {
                 let r: m::DesignWorkspace = params(p)?;
-                let designs = blocking(move || store.designs(&r.workspace)).await?;
+                let ws = r.workspace.clone();
+                let mut designs = blocking(move || store.designs(&ws)).await?;
+                // A workspace design built in a session: that session's project.
+                for d in &mut designs {
+                    if let Some(built) = &mut d.built_in {
+                        built.project = self.sessions.session(&built.session).ok().map(|s| s.project_id);
+                    }
+                }
+                designs.extend(self.session_designs_of_workspace(&r.workspace).await);
+                designs.extend(self.project_designs_of_workspace(&r.workspace).await);
                 let terminals = self.terminals.list();
                 ok(designs.into_iter().map(|d| self.design_info(d, &terminals)).collect::<Vec<_>>())
             }
             m::DESIGN_CREATE => {
                 let r: m::DesignCreate = params(p)?;
-                if r.session.is_some() {
-                    return Err(RpcError::new("not_yet", "session designs are not made yet"));
+                // A session design: the session's agent writes it (X65).
+                if let Some(session) = r.session.clone() {
+                    let (s, folder) = self.design_session(&session)?;
+                    if s.workspace_id.as_deref() != Some(r.workspace.as_str()) {
+                        return Err(RpcError::new("invalid_params", format!("session \"{session}\" is not in workspace \"{}\"", r.workspace)));
+                    }
+                    let (made, r) = (store.clone(), r.clone());
+                    let at = blocking(move || {
+                        made.create_session_design(&r.workspace, &r.system, &session, Path::new(&s.path), &folder, &r.name, &r.brief, now_ms())
+                    })
+                    .await?;
+                    let design = self.session_design_info(at).await?;
+                    return ok(moonlet_proto::types::DesignCreated { design, agent_error: None });
                 }
                 // The agent that asked for it (X22), and its session.
                 let spawner = match r.spawned_by {
@@ -1314,7 +1351,7 @@ impl Daemon {
                     let (store, r) = (store.clone(), r.clone());
                     blocking(move || store.create_design(&r.workspace, &r.name, &r.system, &r.brief, now_ms())).await?
                 };
-                let at = self.locate(&m::DesignRef { workspace: r.workspace.clone(), slug: slug.clone() }).await?;
+                let at = self.locate(&m::DesignRef::Workspace { workspace: r.workspace.clone(), slug: slug.clone() }).await?;
                 // The design exists either way; the app shows why its agent did not start.
                 let agent_error = self.start_design_agent(&at).await.err().map(|e| format!("{e:#}"));
                 let design = blocking(move || store.design(&at)).await?;
@@ -1322,7 +1359,7 @@ impl Daemon {
                 let created = moonlet_proto::types::DesignCreated { design: self.design_info(design, &self.terminals.list()), agent_error };
                 // An agent's `design new`: the app shows a toast, the focus stays (X22).
                 if let Some((t, session)) = spawner {
-                    let opened = m::DesignOpened { workspace: r.workspace, slug, name, spawned_by: Some(t), session };
+                    let opened = m::DesignOpened { workspace: r.workspace, slug, name, spawned_by: Some(t), session, kind: None };
                     self.terminals.emit(Message::event(m::EV_DESIGN_OPEN, opened));
                 }
                 ok(created)
@@ -1339,7 +1376,10 @@ impl Daemon {
                 let history = self.lock_of(&at, "history");
                 let _history = history.lock().await;
                 self.take_hand_edits(&at);
-                if let Some(agent) = self.design_agent(&at).await? {
+                // A session design's agent is the session's: it stays.
+                if at.kind == moonlet_proto::types::DesignKind::Workspace
+                    && let Some(agent) = self.design_agent(&at).await?
+                {
                     let _ = self.terminals.kill(agent.id, true);
                 }
                 blocking(move || store.remove_design(&at)).await?;
@@ -1348,14 +1388,15 @@ impl Daemon {
             m::DESIGN_OPEN => {
                 let r: m::DesignRef = params(p)?;
                 let at = self.locate(&r).await?;
+                let (session, kind) = (at.session.clone(), at.session.as_ref().map(|_| at.kind));
                 let config = blocking(move || store.design_config(&at)).await?;
-                let opened = m::DesignOpened { workspace: r.workspace, slug: r.slug, name: config.name, spawned_by: None, session: None };
+                let opened = m::DesignOpened { workspace, slug: r.slug().to_string(), name: config.name, spawned_by: None, session, kind };
                 self.terminals.emit(Message::event(m::EV_DESIGN_OPEN, opened));
                 ok(true)
             }
             m::DESIGN_VIEWPORT => {
                 let r: m::DesignViewport = params(p)?;
-                let at = self.locate(&m::DesignRef { workspace: r.workspace.clone(), slug: r.slug.clone() }).await?;
+                let at = self.locate(&r.design).await?;
                 blocking(move || store.set_design_viewport(&at, &r.viewport)).await?;
                 ok(true)
             }
@@ -1365,26 +1406,26 @@ impl Daemon {
             }
             m::DESIGN_COMMENT_PUT => {
                 let r: m::DesignCommentPut = params(p)?;
-                let at = self.locate(&m::DesignRef { workspace: r.workspace.clone(), slug: r.slug.clone() }).await?;
+                let at = self.locate(&r.design).await?;
                 let lock = self.lock_of(&at, "comments");
                 let _held = lock.lock().await;
                 ok(blocking(move || store.put_comment(&at, &r.change, now_ms())).await?)
             }
             m::DESIGN_COMMENT_RESOLVE => {
                 let r: m::DesignCommentRef = params(p)?;
-                let at = self.locate(&m::DesignRef { workspace: r.workspace.clone(), slug: r.slug.clone() }).await?;
+                let at = self.locate(&r.design).await?;
                 let lock = self.lock_of(&at, "comments");
                 let _held = lock.lock().await;
                 ok(blocking(move || store.resolve_comment(&at, r.n)).await?)
             }
             m::DESIGN_PAGE => {
                 let r: m::DesignPageRef = params(p)?;
-                let at = self.locate(&m::DesignRef { workspace: r.workspace.clone(), slug: r.slug.clone() }).await?;
+                let at = self.locate(&r.design).await?;
                 ok(blocking(move || store.page(&at, &r.page)).await?)
             }
             m::DESIGN_WRITE_PAGE => {
                 let r: m::DesignWritePage = params(p)?;
-                let at = self.locate(&m::DesignRef { workspace: r.workspace.clone(), slug: r.slug.clone() }).await?;
+                let at = self.locate(&r.design).await?;
                 let lock = self.lock_of(&at, "pages");
                 let _held = lock.lock().await;
                 let (written, edits) = (at.clone(), r.edits.clone());
@@ -1404,7 +1445,7 @@ impl Daemon {
             }
             m::DESIGN_SNAPSHOT_RESTORE => {
                 let r: m::DesignSnapshotRef = params(p)?;
-                let at = self.locate(&m::DesignRef { workspace: r.workspace.clone(), slug: r.slug.clone() }).await?;
+                let at = self.locate(&r.design).await?;
                 // No save of a page, and no other snapshot, meanwhile.
                 let pages = self.lock_of(&at, "pages");
                 let _pages = pages.lock().await;
@@ -1495,7 +1536,13 @@ impl Daemon {
     /// chat is still its design's, with the agent's state and what it waits
     /// for from the user.
     fn design_info(&self, mut d: moonlet_proto::types::DesignInfo, terminals: &[moonlet_proto::types::TerminalInfo]) -> moonlet_proto::types::DesignInfo {
-        d.agent = folder_agent(terminals, d.agent, Path::new(&d.path));
+        use moonlet_proto::types::DesignKind;
+        d.agent = match d.kind {
+            DesignKind::Workspace => folder_agent(terminals, d.agent, Path::new(&d.path)),
+            // A session design's agent is its session's (X65).
+            DesignKind::Session => d.session.as_deref().and_then(|s| session_agent(terminals, s)),
+            DesignKind::Project => None,
+        };
         d.agent_state = d.agent.and_then(|id| terminals.iter().find(|t| t.id == id)).map(|t| t.agent_state);
         d.needs_you = d
             .agent
@@ -1628,8 +1675,100 @@ impl Daemon {
     /// Finds a design (X65): the one resolver every design RPC goes
     /// through, which gives its folders and its key.
     async fn locate(&self, r: &m::DesignRef) -> Result<DesignAt, RpcError> {
-        let (store, ws, slug) = (self.design.clone(), r.workspace.clone(), r.slug.clone());
-        blocking(move || store.workspace_design(&ws, &slug)).await
+        let store = self.design.clone();
+        match r.clone() {
+            m::DesignRef::Workspace { workspace, slug } => blocking(move || store.workspace_design(&workspace, &slug)).await,
+            m::DesignRef::Session { session, slug } => {
+                let (s, folder) = self.design_session(&session)?;
+                blocking(move || moonlet_core::design::session::session_design(&session, Path::new(&s.path), &folder, &slug)).await
+            }
+        }
+    }
+
+    /// A session that may hold session designs (X65), and the folder of
+    /// its project's session designs, from the worktree's own config.
+    fn design_session(&self, id: &str) -> Result<(moonlet_proto::types::Session, String), RpcError> {
+        let s = self.sessions.session(id).map_err(|_| RpcError::new("invalid_params", format!("no session \"{id}\"")))?;
+        let config = moonlet_core::session::read_config(Path::new(&s.path));
+        let folder = moonlet_core::design::session::design_folder(&config).map_err(|e| RpcError::new("invalid_params", format!("{e:#}")))?;
+        Ok((s, folder))
+    }
+
+    /// A session design as `design.list` gives it: with its session and
+    /// project, and whether its design system was synced since it pinned it.
+    async fn session_design_info(&self, at: DesignAt) -> Result<moonlet_proto::types::DesignInfo, RpcError> {
+        let session = at.session.clone().unwrap_or_default();
+        let s = self.sessions.session(&session).map_err(internal)?;
+        let (store, ws) = (self.design.clone(), s.workspace_id.clone().unwrap_or_default());
+        let mut d = blocking(move || {
+            let mut d = store.design(&at)?;
+            d.system_updated = store.session_system_updated(&at, &ws).unwrap_or(false);
+            Ok(d)
+        })
+        .await?;
+        d.session = Some(session);
+        d.project = Some(s.project_id);
+        Ok(self.design_info(d, &self.terminals.list()))
+    }
+
+    /// The session designs of a workspace's open sessions (X65). A session
+    /// whose designs cannot be listed is left out, and logged.
+    async fn session_designs_of_workspace(&self, workspace: &str) -> Vec<moonlet_proto::types::DesignInfo> {
+        let mut out = Vec::new();
+        for s in self.sessions.list_sessions() {
+            if s.archived || s.workspace_id.as_deref() != Some(workspace) {
+                continue;
+            }
+            let Ok((_, folder)) = self.design_session(&s.id) else { continue };
+            let id = s.id.clone();
+            let (store, ws) = (self.design.clone(), workspace.to_string());
+            let listed = blocking(move || {
+                let worktree = Path::new(&s.path);
+                let mut out = store.session_designs(&s.id, worktree, &folder)?;
+                for d in &mut out {
+                    d.project = Some(s.project_id.clone());
+                    if let Ok(at) = moonlet_core::design::session::session_design(&s.id, worktree, &folder, &d.slug) {
+                        d.system_updated = store.session_system_updated(&at, &ws).unwrap_or(false);
+                    }
+                }
+                Ok(out)
+            })
+            .await;
+            match listed {
+                Ok(list) => out.extend(list),
+                Err(e) => tracing::warn!("cannot list the designs of session {id}: {}", e.message),
+            }
+        }
+        out
+    }
+
+    /// The projects in a workspace's sections, each once.
+    fn workspace_projects(&self, workspace: &str) -> Vec<moonlet_proto::types::Project> {
+        let Some(ws) = self.sessions.list_workspaces().into_iter().find(|w| w.id == workspace) else { return Vec::new() };
+        let ids: std::collections::BTreeSet<String> = self
+            .sessions
+            .list_sections()
+            .into_iter()
+            .filter(|s| ws.section_ids.contains(&s.id))
+            .flat_map(|s| s.project_ids)
+            .collect();
+        self.sessions.list_projects().into_iter().filter(|p| ids.contains(&p.id)).collect()
+    }
+
+    /// The project designs of a workspace's projects (X65): their session
+    /// designs merged into their base branches, read from git's objects. A
+    /// project whose designs cannot be read is left out, and logged.
+    async fn project_designs_of_workspace(&self, workspace: &str) -> Vec<moonlet_proto::types::DesignInfo> {
+        let mut out = Vec::new();
+        for p in self.workspace_projects(workspace) {
+            let repo = Path::new(&p.path);
+            let Ok(folder) = moonlet_core::design::session::design_folder(&moonlet_core::session::read_config(repo)) else { continue };
+            match moonlet_core::design::project::project_designs(repo, &p.base_branch, &folder, &p.id).await {
+                Ok(list) => out.extend(list),
+                Err(e) => tracing::debug!("no designs of project {}: {e:#}", p.id),
+            }
+        }
+        out
     }
 
     /// Takes a snapshot of a design's pages and assets, if they changed
@@ -1646,6 +1785,11 @@ impl Daemon {
     /// The terminal of a workspace design's agent, while that chat is
     /// still the design's (X65).
     async fn design_agent(&self, at: &DesignAt) -> Result<Option<moonlet_proto::types::TerminalInfo>, RpcError> {
+        // A session design's agent is its session's (X65).
+        if let Some(session) = &at.session {
+            let terminals = self.terminals.list();
+            return Ok(session_agent(&terminals, session).and_then(|id| terminals.into_iter().find(|t| t.id == id)));
+        }
         let (store, design) = (self.design.clone(), at.clone());
         let recorded = blocking(move || Ok(store.design_record(design.workspace.as_deref().unwrap_or_default(), &design.slug)?.agent)).await?;
         let terminals = self.terminals.list();

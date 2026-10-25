@@ -360,6 +360,7 @@ fn session_at(session: &str, worktree: &Path, folder: &str, slug: &str) -> Desig
         slug: slug.to_string(),
         kind: DesignKind::Session,
         workspace: None,
+        session: Some(session.to_string()),
         key: format!("s/{session}/{slug}"),
     }
 }
