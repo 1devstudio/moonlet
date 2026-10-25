@@ -86,7 +86,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
   const viewport = parseViewport(design.viewport) ?? DEFAULT_VIEWPORT;
   const scale = canvasScale(zoom, viewport, fitBox([cw, ch]));
   const writing = writingPage(lastWritten, working);
-  const bar = designBar({ working, needsYou: design.needs_you, page, problems, system: systemName, systemRemoved: !!systems && !system });
+  const bar = designBar({ working, needsYou: design.needs_you, page, problems, system: systemName, systemRemoved: !!systems && !system, unsaved: null });
 
   useEffect(() => {
     void loadComments(host, workspace, design.slug).catch(() => {});
@@ -572,10 +572,11 @@ function OverviewTile({
 const BAR_TONES: Record<Bar["tone"], { box: string; dot: string }> = {
   orange: { box: "bg-accent/[0.08]", dot: "bg-accent" },
   red: { box: "bg-error/[0.08]", dot: "bg-error" },
+  yellow: { box: "bg-[rgba(242,201,76,0.10)]", dot: "bg-[#f2c94c]" },
   grey: { box: "bg-panel-2", dot: "bg-idle" },
 };
 
-const BAR_ACTIONS: Record<BarAction, string> = { stop: "Stop", details: "Details", fix: "Ask the agent to fix" };
+const BAR_ACTIONS: Record<BarAction, string> = { stop: "Stop", details: "Details", fix: "Ask the agent to fix", dismiss: "Dismiss" };
 
 function BarView({ bar, onAct }: { bar: Bar; onAct: (a: BarAction) => void }) {
   const tone = BAR_TONES[bar.tone];

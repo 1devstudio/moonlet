@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { chatOpensOn, designBar, pageFixMessage, type BarState } from "./designBars";
 
 const problem = (path: string, kind: string, message: string, line = 3) => ({ path, line, kind, message });
-const calm: BarState = { working: false, needsYou: null, page: "index", problems: [], system: "moonlet-desktop", systemRemoved: false };
+const calm: BarState = { working: false, needsYou: null, page: "index", problems: [], system: "moonlet-desktop", systemRemoved: false, unsaved: null };
 
 describe("the bar over the canvas (X65)", () => {
   it("shows none while nothing needs saying", () => {
@@ -41,16 +41,26 @@ describe("the bar over the canvas (X65)", () => {
     expect(designBar({ ...calm, page: null, problems })?.text).toBe("git-b.html has check problems:");
   });
 
+  it("is yellow with Dismiss when a save raced a change on disk, naming the edit not saved", () => {
+    expect(designBar({ ...calm, unsaved: "index.html m30 div: deleted" })).toEqual({
+      tone: "yellow",
+      text: "The page changed; your last edit was not saved.",
+      detail: "index.html m30 div: deleted",
+      actions: ["dismiss"],
+    });
+  });
+
   it("is grey when the design system was removed", () => {
     expect(designBar({ ...calm, systemRemoved: true })).toEqual({ tone: "grey", text: "Design system removed.", detail: "Pages show without moonlet-desktop's styles.", actions: [] });
   });
 
-  it("shows one bar at a time: the agent at work, then what it asks, then the check, then the design system", () => {
-    const all: BarState = { working: true, needsYou: { kind: "question", text: "Which?" }, page: "index", problems: [problem("pages/index.html", "missing_mid", "<h1> has no data-mid")], system: "moonlet-desktop", systemRemoved: true };
+  it("shows one bar at a time: the agent at work, then what it asks, then an edit not saved, then the check, then the design system", () => {
+    const all: BarState = { working: true, needsYou: { kind: "question", text: "Which?" }, page: "index", problems: [problem("pages/index.html", "missing_mid", "<h1> has no data-mid")], system: "moonlet-desktop", systemRemoved: true, unsaved: "index.html m30 div: deleted" };
     expect(designBar(all)?.text).toBe("Claude is changing the design. Edit mode opens when it stops; comments still work");
     expect(designBar({ ...all, working: false })?.text).toBe("Claude asks…");
-    expect(designBar({ ...all, working: false, needsYou: null })?.text).toBe("index.html has check problems:");
-    expect(designBar({ ...all, working: false, needsYou: null, problems: [] })?.text).toBe("Design system removed.");
+    expect(designBar({ ...all, working: false, needsYou: null })?.text).toBe("The page changed; your last edit was not saved.");
+    expect(designBar({ ...all, working: false, needsYou: null, unsaved: null })?.text).toBe("index.html has check problems:");
+    expect(designBar({ ...all, working: false, needsYou: null, unsaved: null, problems: [] })?.text).toBe("Design system removed.");
   });
 });
 
