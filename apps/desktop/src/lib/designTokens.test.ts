@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fieldShown, offSystem, offSystemMids, popoverTokens, tokenOf } from "./designTokens";
+import { fieldShown, offSystem, offSystemMids, popoverEntries, popoverTokens, tokenOf } from "./designTokens";
 import { inlineStyles } from "./designEdits";
 import type { DesignToken } from "./protocol";
 
@@ -61,6 +61,16 @@ describe("the token popover (X65)", () => {
     expect(popoverTokens(TOKENS, "14px 24px", "spacing").map((t) => t.name)).toEqual(["--space-6", "--space-4", "--space-5", "--space-1", "--space-8"]);
     expect(popoverTokens(TOKENS, "var(--color-line)", "color").map((t) => t.name)).toEqual(["--color-line", "--color-border", "--color-panel"]);
     expect(popoverTokens(TOKENS, "", "radius").map((t) => t.name)).toEqual(["--radius-xl"]);
+  });
+});
+
+describe("the token popover of a value of several parts (X65)", () => {
+  it("offers first a token per part, the one each part is, else the nearest, then the single tokens", () => {
+    const names = (value: string) => popoverEntries(TOKENS, value, "spacing").map((e) => `${e.names.join(" ")} ${e.value}`);
+    expect(names("14px 24px")).toEqual(["--space-4 --space-6 16px 24px", "--space-6 24px", "--space-4 16px", "--space-5 20px", "--space-1 4px", "--space-8 32px"]);
+    expect(names("20px 24px 4px 24px")[0]).toBe("--space-5 --space-6 --space-1 --space-6 20px 24px 4px 24px");
+    expect(names("16px")[0]).toBe("--space-4 16px");
+    expect(names("16px")).toHaveLength(5);
   });
 });
 

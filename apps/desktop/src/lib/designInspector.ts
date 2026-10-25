@@ -106,10 +106,12 @@ export function fieldInput(field: Field, typed: string): { set: string | null } 
   return isStyleValue(text) ? { set: text } : { error: "Not a value the editor writes" };
 }
 
-/** The value a token picked in a field's popover writes: `var(--token)`;
+/** The value tokens picked in a field's popover write: `var(--token)`,
+ *  one per part of the value for several (`var(--space-4) var(--space-6)`);
  *  in a border, its colour, keeping the width and style it has. */
-export function pickToken(field: Field, current: string, token: string): string {
-  if (field.prop !== "border") return tokenRef(token);
+export function pickToken(field: Field, current: string, names: string[]): string {
+  if (field.prop !== "border") return names.map(tokenRef).join(" ");
+  const token = names[0];
   const parts = valueParts(current);
   const width = parts.find((p) => /^-?[\d.]+[a-z]*$/.test(p) || /^(thin|medium|thick)$/.test(p)) ?? "1px";
   const style = parts.find((p) => (BORDER_STYLES as readonly string[]).includes(p)) ?? "solid";
