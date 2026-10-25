@@ -287,7 +287,9 @@ fn next_n(designs: &Path, slug: &str) -> Result<u32> {
     }
 }
 
-/// The snapshots whose record can be read, oldest first.
+/// The snapshots whose record can be read, oldest first. The folder's
+/// number is the snapshot's: a record naming another is damaged, and left
+/// out as one that cannot be read is.
 fn records(designs: &Path, slug: &str) -> Result<Vec<Record>> {
     let mut out = Vec::new();
     for n in numbers(designs, slug)? {
@@ -295,8 +297,9 @@ fn records(designs: &Path, slug: &str) -> Result<Vec<Record>> {
         let Ok(text) = fsx::read_file_inside(designs, &rel) else {
             continue;
         };
-        if let Ok(record) = serde_json::from_slice::<Record>(&text) {
-            out.push(record);
+        match serde_json::from_slice::<Record>(&text) {
+            Ok(record) if record.n == n => out.push(record),
+            _ => {}
         }
     }
     Ok(out)
@@ -968,6 +971,43 @@ mod tests {
             .collect();
         folders.sort();
         assert_eq!(folders, ["1", "4294967295"]);
+    }
+
+    #[test]
+    fn a_record_naming_another_number_than_its_folders_is_not_listed() {
+        let (_home, store, dir) = store_with_design();
+        write(&dir, "pages/index.html", INDEX);
+        store
+            .take_snapshot("w1", "settings-page", Take::AgentTurn, 1000)
+            .unwrap()
+            .unwrap();
+        write(&dir, "pages/index.html", "<p>two</p>");
+        store
+            .take_snapshot("w1", "settings-page", Take::AgentTurn, 2000)
+            .unwrap()
+            .unwrap();
+        // Snapshot 2's record, damaged, says it is snapshot 1.
+        let record = std::fs::read_to_string(dir.join("history/2/snapshot.json")).unwrap();
+        write(
+            &dir,
+            "history/2/snapshot.json",
+            &record.replace("\"n\": 2,", "\"n\": 1,"),
+        );
+        let listed: Vec<(u32, u64)> = store
+            .history("w1", "settings-page")
+            .unwrap()
+            .iter()
+            .map(|s| (s.n, s.time))
+            .collect();
+        assert_eq!(listed, [(1, 1000)]);
+        // Restoring 1 restores folder 1's files.
+        store
+            .restore_snapshot("w1", "settings-page", 1, Take::AgentTurn, 3000)
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join("pages/index.html")).unwrap(),
+            INDEX
+        );
     }
 
     #[test]
