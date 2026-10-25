@@ -8,7 +8,7 @@ import { askConfirm } from "../../lib/confirm";
 import { hostsApi, onDaemonEvent, onHostStatus, rpc } from "../../lib/daemon";
 import { countdown, deviceLine, devicesOfKind, pairEndedText } from "../../lib/mobile";
 import { addHostReady, displayCode, readAddHostInput } from "../../lib/addHost";
-import { EV, M, type ExecStatus, type HostInfo, type LinkInfo, type MobilePairing, type MobileStatus } from "../../lib/protocol";
+import { EV, M, type DeviceKind, type ExecStatus, type HostInfo, type LinkInfo, type MobilePairing, type MobileStatus } from "../../lib/protocol";
 import { errorToast, toast, useStore } from "../../lib/store";
 import { hostActions, hostLine, phoneAccessLine, removeAsks, updateCommand } from "../../lib/settingsPage";
 import { Button, Dialog, Field, IconButton, cx, inputCls } from "../ui";
@@ -140,8 +140,9 @@ function AddHostDialog({ name: initialName, onClose }: { name: string; onClose: 
   );
 }
 
-/** Follows pairing on this Mac's daemon: the code shown, and how it ended. */
-function usePairing() {
+/** Follows pairing on this Mac's daemon: the code shown, and how it ended.
+ * The code pairs only a device of `kind`. */
+function usePairing(kind: DeviceKind) {
   const [pairing, setPairing] = useState<MobilePairing | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
@@ -171,7 +172,7 @@ function usePairing() {
   const start = async () => {
     setNote(null);
     try {
-      setPairing(await rpc<MobilePairing>(HOST, M.mobilePairStart));
+      setPairing(await rpc<MobilePairing>(HOST, M.mobilePairStart, { kind }));
     } catch (e) {
       errorToast(e);
     }
@@ -467,7 +468,7 @@ export function HostsPage({ status }: { status: MobileStatus | null }) {
   const sessions = useStore((s) => s.sessions);
   const [busy, setBusy] = useState<string | null>(null);
   const [adding, setAdding] = useState<{ name: string } | null>(null);
-  const { pairing, note, now, start, cancel } = usePairing();
+  const { pairing, note, now, start, cancel } = usePairing("desktop");
   const link = useLink();
   const central = centralHostId(Object.values(hosts), link);
   const pickCentralHost = (next: string | null) => void changeCentral(next);
@@ -623,7 +624,7 @@ export function useMobileStatus(): MobileStatus | null {
 }
 
 export function PhonesPage({ status }: { status: MobileStatus | null }) {
-  const { pairing, note, now, start, cancel } = usePairing();
+  const { pairing, note, now, start, cancel } = usePairing("phone");
   const phones = status ? devicesOfKind(status, "phone") : [];
   const canPair = !!status?.enabled && status.listening.length > 0;
   return (

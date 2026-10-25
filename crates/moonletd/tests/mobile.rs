@@ -320,7 +320,7 @@ async fn a_mac_pairs_as_a_desktop() {
     let addr = mac.allow_phones().await;
     let token = mac.pair(&addr).await;
     let mut app = mac.app().await;
-    let p: MobilePairing = app.request("mobile.pair_start", json!({})).await.unwrap();
+    let p: MobilePairing = app.request("mobile.pair_start", json!({ "kind": "desktop" })).await.unwrap();
     let (_, reply) = auth(
         &addr,
         json!({ "pair": p.code, "device": "Alex's MacBook Pro", "kind": "desktop" }),
@@ -349,11 +349,54 @@ async fn a_mac_pairs_as_a_desktop() {
 }
 
 #[tokio::test]
+async fn a_device_pairs_only_as_the_kind_its_code_was_made_for() {
+    let mac = Mac::start(None).await;
+    let addr = mac.allow_phones().await;
+    let mut app = mac.app().await;
+
+    // A code from Settings › Phones, used by something that says it is a Mac.
+    let p: MobilePairing = app.request("mobile.pair_start", json!({})).await.unwrap();
+    let (_, reply) = auth(
+        &addr,
+        json!({ "pair": p.code, "device": "Not a MacBook", "kind": "desktop" }),
+    )
+    .await;
+    assert!(unauthorized(&reply), "{reply:?}");
+
+    // A code for a Mac, used by a phone, which says no kind.
+    let p: MobilePairing = app
+        .request("mobile.pair_start", json!({ "kind": "desktop" }))
+        .await
+        .unwrap();
+    let (_, reply) = auth(&addr, json!({ "pair": p.code, "device": "Alex's iPhone" })).await;
+    assert!(unauthorized(&reply), "{reply:?}");
+    // The code still pairs the Mac it was made for.
+    let (_, reply) = auth(
+        &addr,
+        json!({ "pair": p.code, "device": "Alex's MacBook Pro", "kind": "desktop" }),
+    )
+    .await;
+    assert!(
+        matches!(reply, Some(Message::Authed { token: Some(_), .. })),
+        "{reply:?}"
+    );
+
+    let st: Value = app.request("mobile.status", json!({})).await.unwrap();
+    let kinds: Vec<(&str, &str)> = st["devices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| (d["name"].as_str().unwrap(), d["kind"].as_str().unwrap()))
+        .collect();
+    assert_eq!(kinds, [("Alex's MacBook Pro", "desktop")]);
+}
+
+#[tokio::test]
 async fn a_paired_mac_can_remove_itself_but_manage_nothing_else() {
     let mac = Mac::start(None).await;
     let addr = mac.allow_phones().await;
     let mut app = mac.app().await;
-    let p: MobilePairing = app.request("mobile.pair_start", json!({})).await.unwrap();
+    let p: MobilePairing = app.request("mobile.pair_start", json!({ "kind": "desktop" })).await.unwrap();
     let (_, reply) = auth(
         &addr,
         json!({ "pair": p.code, "device": "Alex's MacBook Pro", "kind": "desktop" }),
@@ -440,7 +483,7 @@ async fn a_mac_pairs_and_connects_through_the_shared_tailnet_connector() {
     let mac = Mac::start(None).await;
     let addr = mac.allow_phones().await;
     let mut app = mac.app().await;
-    let p: MobilePairing = app.request("mobile.pair_start", json!({})).await.unwrap();
+    let p: MobilePairing = app.request("mobile.pair_start", json!({ "kind": "desktop" })).await.unwrap();
     let paired = pair(
         std::slice::from_ref(&addr),
         &p.code,

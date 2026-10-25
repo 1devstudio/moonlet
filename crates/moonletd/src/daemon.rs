@@ -947,7 +947,10 @@ impl Daemon {
                 self.mobile.set_enabled(r.enabled);
                 ok(self.mobile.status())
             }
-            m::MOBILE_PAIR_START => ok(self.mobile.pair_start()?),
+            m::MOBILE_PAIR_START => {
+                let r = params::<Option<m::MobilePairStart>>(p)?.unwrap_or_default();
+                ok(self.mobile.pair_start(r.kind)?)
+            }
             m::MOBILE_PAIR_CANCEL => {
                 self.mobile.pair_cancel();
                 ok(true)
