@@ -45,7 +45,7 @@ import { previewBar, previewStep, snapshotTime, type Preview } from "../../lib/d
 import { VIEWPORTS, canvasKey, canvasScale, canvasZoom, customViewports, fitBox, parseViewport, sizeOf, sizeText, viewportLabel, viewportText, withCustomViewport, type Size } from "../../lib/designViewport";
 import { breadcrumb, dragEdit, hintLine, pickEdit, canvasPage, canvasStep, chatAfter, editorStep, isTyping, keyAct, layerPick, modeEntered, onReport, undoOpen, writingPage, type CanvasAct, type CanvasMode, type CanvasState, type ChatPanel, type KeyAct, type RailTab } from "../../lib/designCanvas";
 import { keyId } from "../../lib/runActions";
-import { chatCardLookup, commentCardSelector, messageView, commentsTab, keepAction, openCommentsLabel, pageCounts, sendAll } from "../../lib/designComments";
+import { chatCardLookup, commentCardSelector, commentsRail, messageView, commentsTab, keepAction, openCommentsLabel, pageCounts, sendAll } from "../../lib/designComments";
 import { bridgeMessage, editMessage, helloMessage, modeMessage, paletteMessage, pinsMessage, scrollMessage, selectMessage, type DragOver, type DragResult, type Layer, type PickedElement, type Rect } from "../../lib/designBridge";
 import { pageFile, pagePath } from "../../lib/designPage";
 import { barProblems, chatOpensOn, designBar, pageFixMessage, type Bar, type BarAction, type PageProblem } from "../../lib/designBars";
@@ -689,7 +689,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
             mids={mids}
             pages={names}
             sending={sending}
-            canSend={agent !== null}
+            rail={commentsRail({ agent: agent !== null, readOnly })}
             onSend={(p) => sendPins([p])}
             onSendAll={onSendAll}
             onResolve={(p) => void resolveComment(host, workspace, design.slug, p.n).catch(errorToast)}
