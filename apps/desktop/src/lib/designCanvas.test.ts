@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { keyId } from "./runActions";
-import { breadcrumb, canvasPage, chatAfter, editorStep, onReport, undoOpen, layerStep, modeEntered, canvasStep, changedPages, isTyping, modeHint, keyAct, reloadsPage, writingPage } from "./designCanvas";
+import { breadcrumb, canvasPage, layerPick, chatAfter, editorStep, onReport, undoOpen, layerStep, modeEntered, canvasStep, changedPages, isTyping, modeHint, keyAct, reloadsPage, writingPage } from "./designCanvas";
 
 const change = (over: { system?: string | null; design?: string | null; paths: string[] }) => ({ workspace: "w1", system: null, design: null, ...over });
 
@@ -177,6 +177,14 @@ describe("Edit mode (X65)", () => {
     expect(canvasStep({ mode: "comment", box: true, rail: true }, "lock")).toEqual({ mode: "comment", box: true, rail: true });
     // Comments still work.
     expect(canvasStep(view, "toggle", true)).toEqual({ mode: "comment", box: false, rail: true });
+  });
+
+  it("is entered by a click on a layer, which selects it, and while the agent works the click selects nothing", () => {
+    expect(layerPick(view, false)).toEqual({ mode: "edit", box: false, rail: true });
+    expect(layerPick({ mode: "comment", box: true, rail: true }, false)).toEqual({ mode: "edit", box: false, rail: true });
+    expect(layerPick({ mode: "edit", box: false, rail: true }, false)).toEqual({ mode: "edit", box: false, rail: true });
+    expect(layerPick(view, true)).toBeNull();
+    expect(layerPick({ mode: "comment", box: false, rail: true }, true)).toBeNull();
   });
 });
 

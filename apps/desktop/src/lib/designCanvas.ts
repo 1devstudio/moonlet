@@ -139,6 +139,13 @@ export function canvasStep(s: CanvasState, act: CanvasAct, locked = false): Canv
       return s.box ? { ...s, box: false } : { ...s, mode: "view" };
   }
 }
+/** A click on a layer in Layers: the canvas in Edit, entered if need be,
+ *  where the layer is selected; null while the agent works and Edit is
+ *  locked, so the click selects nothing the page would not show. */
+export function layerPick(s: CanvasState, locked: boolean): CanvasState | null {
+  return locked ? null : canvasStep(s, "edit");
+}
+
 /** The right rail's tabs so far: Layers (Edit) and Comments. */
 export type RailTab = "layers" | "comments";
 
