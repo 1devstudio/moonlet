@@ -301,9 +301,8 @@ async fn a_machine_joins_after_the_central_host_restarts() {
 #[tokio::test]
 async fn cloud_get_shows_the_tailscale_mode_and_never_the_auth_key() {
     let c = cloud().await;
-    let info: Value = c
-        .d
-        .call(
+    let info: Value =
+        c.d.call(
             "cloud.set",
             json!({ "tailscale": { "mode": "auth_key", "auth_key": "fake-tailscale-pasted-key" } }),
         )
@@ -320,9 +319,8 @@ async fn a_machine_joins_the_tailnet_with_the_pasted_auth_key() {
     let c = cloud().await;
     // A provider whose machines need a Tailscale key, as Hetzner's do.
     c.steer("tailnet-key", "");
-    let _: Value = c
-        .d
-        .call(
+    let _: Value =
+        c.d.call(
             "cloud.set",
             json!({ "tailscale": { "mode": "auth_key", "auth_key": "fake-tailscale-pasted-key" } }),
         )
@@ -1139,7 +1137,8 @@ async fn retry_tries_a_failing_removal_again_after_the_central_host_restarts() {
     let mut c = cloud_with(SHOP_CONFIG, &[("MOONLET_TEST_CLOUD_BACKOFF_MS", "60000")]).await;
     let m = c.ready().await;
     let id = m["id"].as_str().unwrap().to_string();
-    let fails_left = |c: &Cloud| std::fs::read_to_string(c.fake.path().join("fail-destroy")).unwrap();
+    let fails_left =
+        |c: &Cloud| std::fs::read_to_string(c.fake.path().join("fail-destroy")).unwrap();
     c.steer("fail-destroy", "2");
     let _: Value = c.d.call("cloud.down", json!({ "machine": id })).await;
     for _ in 0..100 {
