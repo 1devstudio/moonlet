@@ -37,9 +37,12 @@ interface DesignState {
   latest: Record<string, string[]>;
   /** Each design's check problems (`wsKey/slug`), once checked. */
   problems: Record<string, PageProblem[]>;
+  /** Every design system's name ever listed (`wsKey/slug`), kept after it is
+   *  removed, for the designs still on it. */
+  systemNames: Record<string, string>;
 }
 
-export const useDesign = create<DesignState>(() => ({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, designs: {}, designShown: {}, pageRevs: {}, latest: {}, problems: {} }));
+export const useDesign = create<DesignState>(() => ({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, designs: {}, designShown: {}, pageRevs: {}, latest: {}, problems: {}, systemNames: {} }));
 
 /** A design system's or a design's key, `wsKey/slug`. */
 const itemKey = (host: string, workspace: string, slug: string) => `${wsKey(host, workspace)}/${slug}`;
@@ -269,6 +272,11 @@ export async function saveViewport(host: string, workspace: string, slug: string
   });
 }
 
+/** A design system's name, also after it was removed; null when never listed. */
+export function systemNameOf(s: DesignState, host: string, workspace: string, slug: string): string | null {
+  return s.systemNames[itemKey(host, workspace, slug)] ?? null;
+}
+
 /** A workspace's design systems; undefined until listed. */
 export function systemsOf(s: DesignState, host: string, workspace: string): DesignSystem[] | undefined {
   return s.systems[wsKey(host, workspace)];
@@ -277,7 +285,10 @@ export function systemsOf(s: DesignState, host: string, workspace: string): Desi
 const systemListing = listing(async (host, workspace, key) => {
   const list = await rpc<DesignSystem[]>(host, M.designSystems, { workspace });
   const before = useDesign.getState().systems[key];
-  useDesign.setState((s) => ({ systems: { ...s.systems, [key]: list } }));
+  useDesign.setState((s) => ({
+    systems: { ...s.systems, [key]: list },
+    systemNames: { ...s.systemNames, ...Object.fromEntries(list.map((x) => [itemKey(host, workspace, x.slug), x.name])) },
+  }));
   // What a sync agent asks, also on a first listing (it still waits), or a
   // sync recorded since the last listing (X65).
   for (const sys of list) {

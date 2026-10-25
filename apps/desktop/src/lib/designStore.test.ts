@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Design, DesignSystem, TerminalInfo } from "./protocol";
 import { modeOf, setMode } from "./mode";
 import { agentOnScreen, goToAgent, useStore } from "./store";
-import { cardsOf, createSystem, designsOf, detectStack, latestOf, loadCards, loadDesigns, loadSystems, openCard, pageRevOf, revOf, shownCard, shownDesign, shownSystem, showDesign, showSystem, startDesign, systemsOf, useDesign } from "./designStore";
+import { cardsOf, createSystem, designsOf, detectStack, latestOf, loadCards, loadDesigns, loadSystems, openCard, pageRevOf, revOf, shownCard, shownDesign, shownSystem, showDesign, showSystem, startDesign, systemNameOf, systemsOf, useDesign } from "./designStore";
 
 const calls = vi.hoisted(() => [] as { host: string; method: string; params: unknown }[]);
 /** What the daemon answers, by method. */
@@ -55,7 +55,7 @@ const listed = () => calls.filter((c) => c.method === "design.systems");
 beforeEach(async () => {
   calls.length = 0;
   for (const k of Object.keys(answers)) delete answers[k];
-  useDesign.setState({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, designs: {}, designShown: {}, pageRevs: {}, latest: {}, problems: {} });
+  useDesign.setState({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, designs: {}, designShown: {}, pageRevs: {}, latest: {}, problems: {}, systemNames: {} });
   await startDesign();
 });
 
@@ -144,6 +144,18 @@ describe("a workspace's design systems (X64, X65)", () => {
     hostStatus.emit({ id: "local", status: "connected" });
     await settle();
     expect(listed().filter((c) => (c.params as { workspace: string }).workspace === "w-1devstudio")).toHaveLength(2);
+  });
+});
+
+describe("a removed design system's name (X65)", () => {
+  it("is kept from before it was removed, for the designs on it", async () => {
+    answers["design.systems"] = () => [system({ slug: "screen-kit", name: "Screen kit" })];
+    await loadSystems("local", "w-names");
+    answers["design.systems"] = () => [];
+    await loadSystems("local", "w-names", true);
+    expect(systemsOf(useDesign.getState(), "local", "w-names")).toEqual([]);
+    expect(systemNameOf(useDesign.getState(), "local", "w-names", "screen-kit")).toBe("Screen kit");
+    expect(systemNameOf(useDesign.getState(), "local", "w-names", "never-listed")).toBeNull();
   });
 });
 

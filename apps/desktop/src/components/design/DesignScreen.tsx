@@ -9,7 +9,7 @@ import { errorToast, toast, useStore } from "../../lib/store";
 import { rpc } from "../../lib/daemon";
 import { M, type Design } from "../../lib/protocol";
 import { briefShown, newDesignReady, systemSummary } from "../../lib/design";
-import { createDesign, latestOf, pageRevOf, problemsOf, removeDesign, saveViewport, showDesign, systemsOf, useDesign } from "../../lib/designStore";
+import { createDesign, latestOf, systemNameOf, pageRevOf, problemsOf, removeDesign, saveViewport, showDesign, systemsOf, useDesign } from "../../lib/designStore";
 import { pageUrl } from "../../lib/designView";
 import { VIEWPORTS, canvasKey, canvasScale, canvasZoom, parseViewport, viewportLabel, viewportText, type Size } from "../../lib/designViewport";
 import { writingPage } from "../../lib/designCanvas";
@@ -32,6 +32,8 @@ const DESKTOP: Size = [1440, 900];
 export function DesignScreen({ host, workspace, design, inset }: { host: string; workspace: string; design: Design; inset: number }) {
   const systems = useDesign((d) => systemsOf(d, host, workspace));
   const system = systems?.find((s) => s.slug === design.system);
+  // Its name, also once it was removed; its slug when never listed.
+  const systemName = useDesign((d) => systemNameOf(d, host, workspace, design.system)) ?? design.system;
   const agent = useStore((s) => (design.agent !== null && s.terminals[host]?.[design.agent]?.chat ? design.agent : null));
   const working = useStore((s) => agent !== null && s.terminals[host]?.[agent]?.agent_state === "working" && !s.terminals[host]?.[agent]?.exit);
   const latest = useDesign((d) => latestOf(d, host, workspace, design.slug));
@@ -51,7 +53,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
   const fit: Size = [Math.max(cw - 96, 0), Math.max(ch - 96, 0)];
   const scale = canvasScale(zoom, viewport, fit);
   const writing = writingPage(latest, working);
-  const bar = designBar({ working, needsYou: design.needs_you, page, problems, system: system?.name ?? design.system, systemRemoved: !!systems && !system });
+  const bar = designBar({ working, needsYou: design.needs_you, page, problems, system: systemName, systemRemoved: !!systems && !system });
 
   // The chat opens on what the agent asks.
   useEffect(() => {
