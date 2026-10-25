@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   activeToken,
+  itemShown,
   commandOptions,
   withCompletion,
   joinDraft,
@@ -357,5 +358,21 @@ describe("context window card (X34)", () => {
 
   it("says when auto-compact is off", () => {
     expect(contextView({ ...usage, auto_compact_at: null }).autoCompact).toBe("Auto-compact is off");
+  });
+});
+
+describe("a message as a chat shows it (X65)", () => {
+  const user = { id: "u1", kind: "user" as const, text: "A left nav\n\n---\nIts README.md: …", ts: 1 };
+  const reply = { id: "a1", kind: "assistant" as const, text: "A left nav\n\n---\nIts README.md: …", ts: 2 };
+  const briefOnly = (text: string) => (text.startsWith("A left nav\n") ? "A left nav" : null);
+
+  it("is the user's text as the chat's own reading gives it, else as sent", () => {
+    expect(itemShown(user, briefOnly)).toEqual({ ...user, text: "A left nav" });
+    expect(itemShown({ ...user, text: "Two more variants" }, briefOnly)).toEqual({ ...user, text: "Two more variants" });
+    expect(itemShown(user, undefined)).toEqual(user);
+  });
+
+  it("leaves the agent's own messages as they are", () => {
+    expect(itemShown(reply, briefOnly)).toEqual(reply);
   });
 });

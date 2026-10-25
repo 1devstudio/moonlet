@@ -65,6 +65,7 @@ import {
   turnFooter,
   turnRunning,
   useChat,
+  itemShown,
 } from "../lib/chat";
 import { diffRows } from "../lib/codeHighlight";
 import { type OutputView, type Tone, toolOutputView } from "../lib/toolOutput";
@@ -474,12 +475,6 @@ function ErrorItem({ item }: { item: ChatItem }) {
       {auth && signIn && <ClaudeAuthDialog host={host} profile={signIn.profile} onClose={() => setAuth(false)} />}
     </div>
   );
-}
-
-/** A user's message as `userText` shows it; any other item as it is. */
-function shownItem(item: ChatItem, userText: ((text: string) => string | null) | undefined): ChatItem {
-  const text = item.kind === "user" && userText ? userText(item.text) : null;
-  return text === null ? item : { ...item, text };
 }
 
 export const ChatItemView = memo(function Item({ item, cwd }: { item: ChatItem; cwd: string }) {
@@ -1643,7 +1638,7 @@ export function AgentView({
                     ) : b.kind === "tools" ? (
                       <ToolGroup key={b.id} tools={b.tools} cwd={info?.cwd ?? ""} />
                     ) : (
-                      <ChatItemView key={b.item.id} item={shownItem(b.item, userText)} cwd={info?.cwd ?? ""} />
+                      <ChatItemView key={b.item.id} item={itemShown(b.item, userText)} cwd={info?.cwd ?? ""} />
                     );
                   const ids = b.kind === "item" ? [b.item.id] : b.tools.map((t) => t.id);
                   const hasPlan = plan?.itemId && ids.includes(plan.itemId);
