@@ -241,8 +241,9 @@ pub const DESIGN_OPEN: &str = "design.open";
 pub const DESIGN_VIEWPORT: &str = "design.viewport";
 /// [`DesignRef`] → the design's comments, by number (X65 entry 8).
 pub const DESIGN_COMMENTS: &str = "design.comments";
-/// [`DesignCommentPut`] → the pin: a new one numbered after the highest, or
-/// pin `n`'s comment changed; with `sent`, the time it was sent recorded.
+/// [`DesignCommentPut`] → the pins it changed: a new one numbered after the
+/// highest, pin `n`'s comment (not sent any more when it changed), or the
+/// pins sent now.
 pub const DESIGN_COMMENT_PUT: &str = "design.comment.put";
 /// [`DesignCommentRef`] → the pin, resolved.
 pub const DESIGN_COMMENT_RESOLVE: &str = "design.comment.resolve";
@@ -1372,26 +1373,14 @@ pub struct DesignViewport {
     pub viewport: String,
 }
 
-/// [`DESIGN_COMMENT_PUT`]'s params: a new pin's page and element, or the
-/// number of the pin whose comment changes (X65).
+/// [`DESIGN_COMMENT_PUT`]'s params: the design, and what to change, as
+/// `new`, `edit` or `sent` beside them (X65).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DesignCommentPut {
     pub workspace: String,
     pub slug: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub n: Option<u32>,
-    #[serde(default)]
-    pub page: String,
-    #[serde(default)]
-    pub mid: String,
-    #[serde(default)]
-    pub tag: String,
-    #[serde(default)]
-    pub text: String,
-    pub comment: String,
-    /// Sent to the chat now.
-    #[serde(default)]
-    pub sent: bool,
+    #[serde(flatten)]
+    pub change: crate::types::CommentChange,
 }
 
 /// One pin of a design (X65).

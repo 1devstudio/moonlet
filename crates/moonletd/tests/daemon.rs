@@ -2424,13 +2424,13 @@ async fn a_designs_comments_are_put_sent_resolved_and_counted_in_its_listing() {
     let pin: serde_json::Value = c
         .request(
             methods::DESIGN_COMMENT_PUT,
-            serde_json::json!({"workspace": ws, "slug": "settings-page", "page": "index", "mid": "m12", "tag": "nav", "text": "General Appearance", "comment": "Collapse into a menu on phone"}),
+            serde_json::json!({"workspace": ws, "slug": "settings-page", "new": {"page": "index", "mid": "m12", "tag": "nav", "text": "General Appearance", "comment": "Collapse into a menu on phone"}}),
         )
         .await
         .unwrap();
     assert_eq!(
         pin,
-        serde_json::json!({"n": 1, "page": "index", "mid": "m12", "tag": "nav", "text": "General Appearance", "comment": "Collapse into a menu on phone", "sent_at": null, "state": "open"})
+        serde_json::json!([{"n": 1, "page": "index", "mid": "m12", "tag": "nav", "text": "General Appearance", "comment": "Collapse into a menu on phone", "sent_at": null, "state": "open"}])
     );
     let data = next_change_of(&mut listener, "comments.json").await;
     assert_eq!(data["design"], "settings-page");
@@ -2439,11 +2439,11 @@ async fn a_designs_comments_are_put_sent_resolved_and_counted_in_its_listing() {
     let sent: serde_json::Value = c
         .request(
             methods::DESIGN_COMMENT_PUT,
-            serde_json::json!({"workspace": ws, "slug": "settings-page", "n": 1, "comment": "Collapse into a menu on phone", "sent": true}),
+            serde_json::json!({"workspace": ws, "slug": "settings-page", "sent": {"pins": [1]}}),
         )
         .await
         .unwrap();
-    assert!(sent["sent_at"].as_u64().is_some(), "{sent}");
+    assert!(sent[0]["sent_at"].as_u64().is_some(), "{sent}");
     let resolved: serde_json::Value = c
         .request(methods::DESIGN_COMMENT_RESOLVE, serde_json::json!({"workspace": ws, "slug": "settings-page", "n": 1}))
         .await
@@ -2456,7 +2456,7 @@ async fn a_designs_comments_are_put_sent_resolved_and_counted_in_its_listing() {
     let bad = c
         .request::<_, serde_json::Value>(
             methods::DESIGN_COMMENT_PUT,
-            serde_json::json!({"workspace": ws, "slug": "settings-page", "page": "index", "mid": "x\"]", "tag": "nav", "text": "", "comment": "c"}),
+            serde_json::json!({"workspace": ws, "slug": "settings-page", "new": {"page": "index", "mid": "x\"]", "tag": "nav", "text": "", "comment": "c"}}),
         )
         .await;
     assert_eq!(bad.unwrap_err().to_string(), "invalid_params: bad data-mid \"x\"]\"");

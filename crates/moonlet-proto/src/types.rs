@@ -185,6 +185,26 @@ pub struct DesignComment {
     pub state: CommentState,
 }
 
+/// What `design.comment.put` does to a design's comments (X65): pins a new
+/// comment, changes a pin's comment, or records that pins were sent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommentChange {
+    /// A new pin on the element `mid` of `page`, numbered after the highest.
+    New {
+        page: String,
+        mid: String,
+        tag: String,
+        #[serde(default)]
+        text: String,
+        comment: String,
+    },
+    /// Pin `n`'s comment; a changed comment is not sent any more.
+    Edit { n: u32, comment: String },
+    /// These pins were sent to the chat now.
+    Sent { pins: Vec<u32> },
+}
+
 /// Whether a comment still needs doing (X65).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
