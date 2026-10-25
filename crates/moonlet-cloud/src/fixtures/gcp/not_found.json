@@ -1,0 +1,9 @@
+{
+  "error": {
+    "code": 404,
+    "message": "The resource 'projects/acme-moonlet/zones/europe-west4-a/instances/moonlet-shop-7k2q' was not found",
+    "errors": [
+      {"message": "The resource 'projects/acme-moonlet/zones/europe-west4-a/instances/moonlet-shop-7k2q' was not found", "domain": "global", "reason": "notFound"}
+    ]
+  }
+}

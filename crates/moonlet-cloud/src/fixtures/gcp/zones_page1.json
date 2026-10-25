@@ -1,0 +1,31 @@
+{
+  "kind": "compute#zoneList",
+  "id": "projects/acme-moonlet/zones",
+  "items": [
+    {
+      "kind": "compute#zone",
+      "id": "2410",
+      "creationTimestamp": "1969-12-31T16:00:00.000-08:00",
+      "name": "europe-west4-a",
+      "description": "europe-west4-a",
+      "status": "UP",
+      "region": "https://www.googleapis.com/compute/v1/projects/acme-moonlet/regions/europe-west4",
+      "selfLink": "https://www.googleapis.com/compute/v1/projects/acme-moonlet/zones/europe-west4-a",
+      "availableCpuPlatforms": ["Intel Emerald Rapids", "Intel Sapphire Rapids", "AMD Genoa", "Google Axion"],
+      "supportsPzs": false
+    },
+    {
+      "kind": "compute#zone",
+      "id": "2411",
+      "creationTimestamp": "1969-12-31T16:00:00.000-08:00",
+      "name": "europe-west4-b",
+      "description": "europe-west4-b",
+      "status": "DOWN",
+      "region": "https://www.googleapis.com/compute/v1/projects/acme-moonlet/regions/europe-west4",
+      "selfLink": "https://www.googleapis.com/compute/v1/projects/acme-moonlet/zones/europe-west4-b",
+      "supportsPzs": false
+    }
+  ],
+  "selfLink": "https://www.googleapis.com/compute/v1/projects/acme-moonlet/zones",
+  "nextPageToken": "Cg5ldXJvcGUtd2VzdDQtYg=="
+}

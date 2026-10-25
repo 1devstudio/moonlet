@@ -1,0 +1,29 @@
+{
+  "kind": "compute#zoneList",
+  "id": "projects/acme-moonlet/zones",
+  "items": [
+    {
+      "kind": "compute#zone",
+      "id": "2231",
+      "creationTimestamp": "1969-12-31T16:00:00.000-08:00",
+      "name": "us-central1-a",
+      "description": "us-central1-a",
+      "status": "UP",
+      "region": "https://www.googleapis.com/compute/v1/projects/acme-moonlet/regions/us-central1",
+      "selfLink": "https://www.googleapis.com/compute/v1/projects/acme-moonlet/zones/us-central1-a",
+      "supportsPzs": false
+    },
+    {
+      "kind": "compute#zone",
+      "id": "2990",
+      "creationTimestamp": "2026-09-01T00:00:00.000-07:00",
+      "name": "europe-north9-a",
+      "description": "europe-north9-a",
+      "status": "UP",
+      "region": "https://www.googleapis.com/compute/v1/projects/acme-moonlet/regions/europe-north9",
+      "selfLink": "https://www.googleapis.com/compute/v1/projects/acme-moonlet/zones/europe-north9-a",
+      "supportsPzs": false
+    }
+  ],
+  "selfLink": "https://www.googleapis.com/compute/v1/projects/acme-moonlet/zones"
+}

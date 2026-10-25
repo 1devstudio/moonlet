@@ -1,0 +1,9 @@
+{
+  "error": {
+    "code": 400,
+    "message": "Invalid value for field 'resource.machineType': 'zones/europe-west4-a/machineTypes/c9-standard-8'. Machine type with name 'c9-standard-8' does not exist in zone 'europe-west4-a'.",
+    "errors": [
+      {"message": "Invalid value for field 'resource.machineType': 'zones/europe-west4-a/machineTypes/c9-standard-8'. Machine type with name 'c9-standard-8' does not exist in zone 'europe-west4-a'.", "domain": "global", "reason": "invalid"}
+    ]
+  }
+}
