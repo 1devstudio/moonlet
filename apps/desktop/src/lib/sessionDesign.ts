@@ -54,10 +54,11 @@ const DESIGN_FORMS: SlashRow[] = [
  *  start of the message matches it, over the footer naming the design
  *  system it will use, once that is known (`session.footer`). */
 export function slashMenu(commands: readonly string[], text: string, token: { start: number; query: string }, session: { footer: string | null } | null): { rows: SlashRow[]; footer: string | null } {
-  if (session === null) return { rows: commandOptions(commands, text, token).map((value) => ({ value, hint: null })), footer: null };
-  const others = commandOptions(commands.filter((c) => c !== "moonlet-design"), text, token).map((value) => ({ value, hint: null }));
   const atStart = text.slice(0, token.start).trim() === "";
-  const design = atStart && fuzzyScore("moonlet-design", token.query) !== null;
+  const design = session !== null && atStart && fuzzyScore("moonlet-design", token.query) !== null;
+  // Mid-message, or outside a session, the agent's commands as they are.
+  const own = design ? commands.filter((c) => c !== "moonlet-design") : commands;
+  const others = commandOptions(own, text, token).map((value) => ({ value, hint: null }));
   return design ? { rows: [...DESIGN_FORMS, ...others], footer: session.footer } : { rows: others, footer: null };
 }
 
