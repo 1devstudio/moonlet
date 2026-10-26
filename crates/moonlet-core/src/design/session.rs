@@ -274,7 +274,8 @@ impl Store {
     /// design of session `session` (Build it): the pages in `pages` (each
     /// must be one of its pages) with their labels, linking the copy's
     /// pinned styles, all of `assets/`, and its design system copied as a
-    /// new session design's is. Returns the session design.
+    /// new session design's is. Returns the session design. `from` records
+    /// the session only once it is saved, with [`Store::record_build`].
     #[allow(clippy::too_many_arguments)]
     pub fn copy_to_session(
         &self,
@@ -316,27 +317,25 @@ impl Store {
         };
         // Its own slug, which Build it's attachments name before the copy.
         let slug = Some(from.slug.as_str());
-        let at =
-            self.make_session_design(workspace, copy, session, worktree, folder, slug, |at| {
-                for (path, text) in &kept {
-                    fsx::write_inside(&at.root, &at.root.join(at.in_dir(path)), text)?;
-                }
-                fsx::write_tree(&at.root, &at.dir, Path::new("assets"), &assets, true)
-            })?;
-        // The design it came from records where it is built; a copy it
-        // cannot record is not kept.
-        let recorded = fsx::update_inside(&from.root, &from.in_dir(DESIGN_FILE), |text| {
+        self.make_session_design(workspace, copy, session, worktree, folder, slug, |at| {
+            for (path, text) in &kept {
+                fsx::write_inside(&at.root, &at.root.join(at.in_dir(path)), text)?;
+            }
+            fsx::write_tree(&at.root, &at.dir, Path::new("assets"), &assets, true)
+        })
+    }
+
+    /// Records in the workspace design `from` the session it is built in,
+    /// `session` in its `design.toml` (the rest of it as it was): once that
+    /// session is saved, so it never names one that was not made.
+    pub fn record_build(&self, from: &DesignAt, session: &str) -> Result<()> {
+        fsx::update_inside(&from.root, &from.in_dir(DESIGN_FILE), |text| {
             let mut doc: toml_edit::DocumentMut = text
                 .parse()
                 .with_context(|| format!("cannot read {DESIGN_FILE}"))?;
             doc["session"] = toml_edit::value(session);
             Ok(doc.to_string())
-        });
-        if let Err(e) = recorded {
-            let _ = self.remove_design(&at);
-            return Err(e);
-        }
-        Ok(at)
+        })
     }
 
     /// Refuses pages a design does not have, by their names (`index`).
@@ -1112,7 +1111,10 @@ label = \"cards\"
                 .join(".moonlet/design/settings-page/system/README.md")
                 .is_file()
         );
-        // The workspace design records the session it is built in.
+        // The workspace design records the session it is built in, once
+        // that session is saved.
+        assert_eq!(store.design_config(&from).unwrap().session, None);
+        store.record_build(&from, "s1").unwrap();
         assert_eq!(
             store.design_config(&from).unwrap().session.as_deref(),
             Some("s1")

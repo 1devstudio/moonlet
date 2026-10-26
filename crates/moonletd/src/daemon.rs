@@ -2434,18 +2434,24 @@ impl Daemon {
                 }
                 let (store, checked, pages) = (self.design.clone(), from.clone(), pick.pages.clone());
                 blocking(move || store.has_pages(&checked, &pages)).await?;
-                // …then copied into the worktree before its agent starts, and
-                // recorded as built there.
-                let store = self.design.clone();
+                // …then copied into the worktree before its agent starts…
+                let (store, copied) = (self.design.clone(), from.clone());
                 let made = w
                     .create_session_prepared(req, move |s| async move {
                         let folder = moonlet_core::design::session::design_folder(&moonlet_core::session::read_config(Path::new(&s.path)))?;
-                        blocking(move || store.copy_to_session(&from, &pick.pages, &s.id, Path::new(&s.path), &folder, now_ms())).await?;
+                        blocking(move || store.copy_to_session(&copied, &pick.pages, &s.id, Path::new(&s.path), &folder, now_ms())).await?;
                         Ok(())
                     })
                     .await;
                 // The copy's own refusal as it said it; anything else failed.
                 let made = made.map_err(|e| e.downcast::<RpcError>().unwrap_or_else(store_error))?;
+                // …and recorded as built there once the session is saved, so
+                // the design never names a session that was not made. The
+                // session is made either way: what cannot be recorded is logged.
+                let (store, id) = (self.design.clone(), made.id.clone());
+                if let Err(e) = blocking(move || store.record_build(&from, &id)).await {
+                    tracing::warn!("cannot record session {} in the design it builds: {}", made.id, e.message);
+                }
                 // Its design folder is there now: watch it.
                 let _ = self.design_session(&made.id);
                 ok(made)

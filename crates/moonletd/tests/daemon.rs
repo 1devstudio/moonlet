@@ -3961,6 +3961,43 @@ async fn a_project_design_on_the_base_branch_is_listed_and_copied_into_a_new_wor
     assert_eq!(missing.unwrap_err().to_string(), "invalid_params: no design at docs/design/nope on main");
 }
 
+/// X65 entry 12, Build it: a session whose state cannot be saved is not
+/// made, and the workspace design it was to build records no session, so
+/// `design.list` gives it no `built_in`; the worktree made for it goes too.
+#[tokio::test]
+async fn a_session_that_cannot_be_saved_leaves_the_design_it_was_to_build_with_no_link_to_it() {
+    use moonlet_proto::types::Session;
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    let (ws, project, _) = workspace_with_session(&d, &mut c, &[]).await;
+    let _: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    let design = d.home.path().join(".moonlet/design").join(&ws).join("designs/settings-page");
+    std::fs::write(design.join("pages/index.html"), "<body data-mid=\"m1\">rows</body>\n").unwrap();
+    // The sessions' state cannot be written: its temporary file is a folder.
+    let blocker = d.home.path().join(".moonlet/state.json.tmp");
+    std::fs::create_dir(&blocker).unwrap();
+    let refused = c
+        .request::<_, Session>(
+            methods::SESSION_CREATE,
+            serde_json::json!({
+                "project_id": project.id, "name": "Implement settings page", "workspace_id": ws, "agent": "none",
+                "design": {"workspace": ws, "slug": "settings-page", "pages": ["index"]}
+            }),
+        )
+        .await;
+    std::fs::remove_dir(&blocker).unwrap();
+    assert!(refused.is_err(), "{refused:?}");
+    let toml = std::fs::read_to_string(design.join("design.toml")).unwrap();
+    assert!(!toml.contains("session"), "{toml}");
+    let list: serde_json::Value = c.request(methods::DESIGN_LIST, serde_json::json!({"workspace": ws})).await.unwrap();
+    let found = list.as_array().unwrap().iter().find(|d| d["kind"] == "workspace" && d["slug"] == "settings-page").expect("the design");
+    assert_eq!(found["built_in"], serde_json::Value::Null);
+    assert!(!d.home.path().join(".moonlet/worktrees/repo/implement-settings-page").exists(), "its worktree is left");
+}
+
 /// X65 entry 12: `design.copy` copies only a design the project's listing
 /// gives, a folder of its design folder, `<design dir>/<slug>`: a folder
 /// elsewhere on the base branch that holds a `design.toml` is none, and no
