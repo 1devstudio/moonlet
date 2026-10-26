@@ -1373,6 +1373,28 @@ impl Daemon {
             }
             m::DESIGN_FILE => {
                 let r: m::DesignFile = params(p)?;
+                // A project design's (X65 entry 12c): its bytes from the base
+                // branch, as there is no file on disk.
+                if let Some(id) = r.project {
+                    if r.workspace.is_some() || r.session.is_some() {
+                        return Err(RpcError::new("invalid_params", "name a design file by its project alone"));
+                    }
+                    let Some(project) = self.sessions.list_projects().into_iter().find(|p| p.id == id) else {
+                        return Err(RpcError::new("invalid_params", format!("no project \"{id}\"")));
+                    };
+                    let repo = Path::new(&project.path);
+                    let folder = moonlet_core::design::session::design_folder(&moonlet_core::session::read_config(repo))
+                        .map_err(|e| RpcError::new("invalid_params", format!("{e:#}")))?;
+                    let bytes = moonlet_core::design::project::project_file(repo, &project.base_branch, &folder, &r.path)
+                        .await
+                        .map_err(|e| match e.downcast_ref::<moonlet_core::design::project::NoProjectFile>() {
+                            Some(no) => RpcError::new("invalid_params", no.to_string()),
+                            None => store_error(e),
+                        })?;
+                    use base64::Engine;
+                    let content = base64::engine::general_purpose::STANDARD.encode(bytes);
+                    return ok(serde_json::json!({"content": content, "content_type": store::content_type(Path::new(&r.path))}));
+                }
                 match (r.workspace, r.session) {
                     (Some(workspace), None) => {
                         self.workspace_exists(&workspace)?;
