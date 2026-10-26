@@ -23,6 +23,7 @@ import {
   MessageCircleQuestionMark,
   MessageSquareDashed,
   MoreHorizontal,
+  Play,
   Search,
   ShieldAlert,
   Square,
@@ -33,7 +34,7 @@ import {
   X,
 } from "lucide-react";
 import { rpc } from "../lib/daemon";
-import { slashMenu, type SlashRow } from "../lib/sessionDesign";
+import { slashMenu, type SlashRow, type SuggestedReply } from "../lib/sessionDesign";
 import { BYPASS_MODE, CLAUDE_MODELS, CLAUDE_MODES, DEFAULT_MODE, EFFORTS, type PlanApproveMode, agentLabel, nextMode, resolvePlanMode } from "../lib/agents";
 import {
   type QuestionPick,
@@ -1341,7 +1342,10 @@ async function openInTerminal(host: string, info: TerminalInfo, st: ChatState) {
  *  shown after a tool call's group, such as a session's "Design view
  *  opened" after its agent made a session design (X65); `designSlash`: in
  *  a session's chat, /moonlet-design's forms in the slash menu, with the
- *  design system it will use once known (X65). */
+ *  design system it will use once known (X65); `replies`: suggested replies
+ *  above the input once the agent's turn ended, such as the
+ *  spec-from-design replies (X65): one with a message sends it as the user
+ *  would, any other goes to `onReply`. */
 export function AgentView({
   host,
   id,
@@ -1354,6 +1358,8 @@ export function AgentView({
   sendText,
   toolNote,
   designSlash = null,
+  replies = null,
+  onReply,
 }: {
   host: string;
   id: number;
@@ -1366,6 +1372,8 @@ export function AgentView({
   sendText?: (text: string, images: ChatImage[]) => Promise<unknown>;
   toolNote?: (tool: ChatItem) => ReactNode | null;
   designSlash?: { footer: string | null } | null;
+  replies?: SuggestedReply[] | null;
+  onReply?: (reply: SuggestedReply) => void;
 }) {
   const info = useStore((s) => s.terminals[host]?.[id]);
   const st = useChat((s) => s.chats[chatKey(host, id)]);
@@ -1741,6 +1749,23 @@ export function AgentView({
         </FileLinks.Provider>
       </div>
       <section ref={column} aria-label="Chat input" className={cx("w-full shrink-0 pb-3", PAD_X[layout.padX])}>
+        {replies && !working && (
+          <div role="group" aria-label="Suggested replies" className="mb-2 flex flex-wrap items-center gap-1.5">
+            {replies.map((r, i) => (
+              <button
+                key={r.label}
+                onClick={() => (r.send !== null ? send(r.send, []) : onReply?.(r))}
+                className={cx(
+                  "flex h-[26px] items-center gap-1.5 rounded-full border px-2.5 ui-text-12.5",
+                  i === 0 ? "border-accent/60 bg-accent/10 text-fg hover:bg-accent/20" : "border-border-strong text-muted hover:bg-hover hover:text-fg",
+                )}
+              >
+                {i === 0 && <Play size={10} className="text-accent" />}
+                {r.label}
+              </button>
+            ))}
+          </div>
+        )}
         {st?.status === "working" ? (
           <StatusLine inset={layout.insetX} className="text-muted" onStop={stop}>
             <Loader2 size={12} className="spin shrink-0 text-accent" />

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { Design, DesignSystem, ToolCall } from "./protocol";
-import { designMark, designPanelWidth, designSystemFooter, designTab, opensDesignView, slashMenu, worktreeFile } from "./sessionDesign";
+import type { ChatItem, Design, DesignSystem, ToolCall } from "./protocol";
+import { designMark, designPanelWidth, designSystemFooter, designTab, opensDesignView, slashMenu, specReplies, worktreeFile } from "./sessionDesign";
 
 const design = (over: Partial<Design> = {}): Design => ({
   slug: "settings-page",
@@ -130,5 +130,36 @@ describe("a session's Design tab in its right panel (X65)", () => {
   it("widens the right panel to 55% of the window until the user drags it", () => {
     expect(designPanelWidth(null, 1440)).toBe(792);
     expect(designPanelWidth(640, 1440)).toBe(640);
+  });
+});
+
+describe("the spec-from-design replies (X65)", () => {
+  const wt = "/Users/alex/.moonlet/worktrees/moonlet/settings-page";
+  let n = 0;
+  const item = (kind: ChatItem["kind"], text: string, tool: ToolCall | null = null): ChatItem => ({ id: `i${++n}`, kind, text, tool, ts: n });
+  const write = (name: string, path: string, status: ToolCall["status"] = "ok") => item("tool", "", { name, summary: path, input: { file_path: path, content: "# X66" }, status });
+  const asked = item("user", "Write the spec from the design");
+  const wrote = [
+    asked,
+    write("Write", `${wt}/docs/specs/X66-settings-page.md`),
+    write("Edit", `${wt}/docs/specs/README.md`),
+    item("assistant", "Spec X66 is written. Implement it, or go back to the design?"),
+  ];
+
+  it("offers Implement it, which asks for the spec the turn wrote, and Back to the design, once the agent wrote a spec in a session with a design", () => {
+    expect(specReplies(wrote, "idle", wt, true)).toEqual([
+      { label: "Implement it", send: "Implement the spec docs/specs/X66-settings-page.md" },
+      { label: "Back to the design", send: null },
+    ]);
+  });
+
+  it("offers none while the agent works or waits, after the user wrote again, without a design, or for a write that failed or is no spec", () => {
+    expect(specReplies(wrote, "working", wt, true)).toBeNull();
+    expect(specReplies(wrote, "blocked", wt, true)).toBeNull();
+    expect(specReplies([...wrote, item("user", "Make the Git section first")], "idle", wt, true)).toBeNull();
+    expect(specReplies(wrote, "idle", wt, false)).toBeNull();
+    expect(specReplies([asked, write("Write", `${wt}/docs/specs/X66-settings-page.md`, "denied")], "idle", wt, true)).toBeNull();
+    expect(specReplies([asked, write("Write", `${wt}/docs/design/settings-page/pages/index.html`), write("Edit", `${wt}/docs/specs/README.md`)], "idle", wt, true)).toBeNull();
+    expect(specReplies([asked, write("Read", `${wt}/docs/specs/X66-settings-page.md`)], "idle", wt, true)).toBeNull();
   });
 });
