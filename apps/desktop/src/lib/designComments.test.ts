@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { DesignComment } from "./protocol";
 import { editsMessage, type Untold } from "./designEdits";
-import { boxLabel, boxPlace, chatCardLookup, commentCardTitle, commentsRail, pinPlace, withMid, keepAction, openCommentsLabel, commentCards, footerLabel, pinLabel, sentLabel, commentLine, commentsMessage, commentsTab, isOrphaned, messageView, pageCounts, parseCommentLine, sendAll, withPins, type PageMids } from "./designComments";
+import { boxLabel, boxPlace, chatCardLookup, commentCardAttrs, commentCardSelector, commentCardTitle, commentsRail, pinPlace, withMid, keepAction, openCommentsLabel, commentCards, footerLabel, pinLabel, sentLabel, commentLine, commentsMessage, commentsTab, isOrphaned, messageView, pageCounts, parseCommentLine, sendAll, withPins, type PageMids } from "./designComments";
 
 const pin = (n: number, over: Partial<DesignComment> = {}): DesignComment => ({
   n,
@@ -218,6 +218,28 @@ describe("Show in chat (X65)", () => {
     expect(chatCardLookup({ found: true, loaded: true, waitedMs: 300 })).toBe("found");
     expect(chatCardLookup({ found: false, loaded: true, waitedMs: 300 })).toBe("missing");
     expect(chatCardLookup({ found: false, loaded: false, waitedMs: 5000 })).toBe("missing");
+  });
+
+  it("finds a card by its design's folder and its pin's number, as two designs of a session can each have a pin 1", () => {
+    document.body.innerHTML = "";
+    const card = (n: number, folder: string | null) => {
+      const el = document.createElement("div");
+      for (const [k, v] of Object.entries(commentCardAttrs({ n, folder }))) if (v !== undefined) el.setAttribute(k, String(v));
+      el.textContent = `${folder ?? "workspace"} #${n}`;
+      document.body.append(el);
+    };
+    card(1, "docs/design/settings-page");
+    card(2, "docs/design/settings-page");
+    // The other design's pin 1, sent later, lower in the chat.
+    card(1, "docs/design/onboarding");
+    const found = (n: number, folder: string | null) => [...document.querySelectorAll(commentCardSelector(n, folder))].map((el) => el.textContent);
+    expect(found(1, "docs/design/settings-page")).toEqual(["docs/design/settings-page #1"]);
+    expect(found(1, "docs/design/onboarding")).toEqual(["docs/design/onboarding #1"]);
+    // A workspace design's chat names no folder: its cards by number alone.
+    document.body.innerHTML = "";
+    card(1, null);
+    card(1, null);
+    expect(found(1, null)).toEqual(["workspace #1", "workspace #1"]);
   });
 });
 

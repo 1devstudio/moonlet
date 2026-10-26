@@ -182,9 +182,23 @@ export function footerLabel(unsent: number): string {
  *  chat looks for. */
 export const COMMENT_PIN_ATTR = "data-comment-pin";
 
-/** The chat cards of pin `n`. */
-export function commentCardSelector(n: number): string {
-  return `[${COMMENT_PIN_ATTR}="${n}"]`;
+/** The attribute a session's chat card carries with its design's folder in
+ *  the worktree, the one its line names (X65): two designs of a session can
+ *  each have a pin 1. */
+const COMMENT_FOLDER_ATTR = "data-comment-folder";
+
+/** The attributes of a comment's chat card: its pin's number, and in a
+ *  session's chat the folder of the design its line names, as `PinsOf`
+ *  reads it against that design's pins. */
+export function commentCardAttrs(card: { n: number | null; folder?: string | null }): Record<string, string | number | undefined> {
+  return { [COMMENT_PIN_ATTR]: card.n ?? undefined, [COMMENT_FOLDER_ATTR]: card.folder ?? undefined };
+}
+
+/** The chat cards of pin `n` of the design whose lines name `folder` (a
+ *  session design's), or of a design whose lines name none. */
+export function commentCardSelector(n: number, folder: string | null): string {
+  const pin = `[${COMMENT_PIN_ATTR}="${n}"]`;
+  return folder === null ? `${pin}:not([${COMMENT_FOLDER_ATTR}])` : `${pin}[${COMMENT_FOLDER_ATTR}="${folder.replace(/["\\]/g, "\\$&")}"]`;
 }
 
 /** How long Show in chat waits for its chat to load. */

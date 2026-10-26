@@ -220,11 +220,18 @@ export async function sendWithEdits(host: string, place: DesignPlace, slug: stri
   }));
 }
 
+/** The folder the agent's messages name design `slug`'s pages under, as
+ *  `peers` give it: a session design's path in the worktree; null names
+ *  them by file alone. Its comments' lines and their chat cards carry it. */
+export function toldFolder(peers: ToldDesign[] | undefined, slug: string): string | null {
+  return peers?.find((d) => d.slug === slug)?.folder ?? null;
+}
+
 /** **Send** and **Send all** of comments, the edits by hand not told yet
  *  before their lines; `peers` as {@link sendWithEdits}, the design's own
  *  folder naming the comments' pages. */
 export function sendCommentsWithEdits(host: string, place: DesignPlace, slug: string, agent: number, pins: DesignComment[], peers?: ToldDesign[]): Promise<void> {
-  const folder = peers?.find((d) => d.slug === slug)?.folder ?? null;
+  const folder = toldFolder(peers, slug);
   return sendComments(host, place, slug, agent, pins, (text) => sendWithEdits(host, place, slug, agent, text, [], peers), folder);
 }
 
