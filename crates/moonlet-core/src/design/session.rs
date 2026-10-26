@@ -110,15 +110,15 @@ impl Store {
         Ok(at)
     }
 
-    /// The session designs in a worktree's design folder `folder`, by name,
-    /// each with its session; one whose `design.toml` cannot be read lists
-    /// with its error. A worktree without the folder has none.
-    pub fn session_designs(
+    /// The session designs in a worktree's design folder `folder`: each
+    /// folder of its own with a `design.toml`, by its address. A worktree
+    /// without the folder has none.
+    pub fn session_design_ats(
         &self,
         session: &str,
         worktree: &Path,
         folder: &str,
-    ) -> Result<Vec<DesignInfo>> {
+    ) -> Result<Vec<DesignAt>> {
         check_folder(folder)?;
         if !fsx::is_dir_inside(worktree, Path::new(folder))? {
             return Ok(Vec::new());
@@ -135,35 +135,51 @@ impl Store {
             }
             let at = session_at(session, worktree, folder, &slug);
             // Only a folder with a design.toml is a design.
-            if std::fs::symlink_metadata(at.root.join(at.in_dir(DESIGN_FILE))).is_err() {
-                continue;
+            if std::fs::symlink_metadata(at.root.join(at.in_dir(DESIGN_FILE))).is_ok() {
+                out.push(at);
             }
-            let mut info = match super::designs::read_design_config(&at) {
-                Ok(config) => super::designs::summary(&at, &config, None),
-                Err(err) => DesignInfo {
-                    name: slug.clone(),
-                    slug,
-                    kind: DesignKind::Session,
-                    system: String::new(),
-                    path: at.folder().display().to_string(),
-                    brief: String::new(),
-                    viewport: String::new(),
-                    pages: Vec::new(),
-                    updated_at: 0,
-                    open_comments: 0,
-                    agent: None,
-                    agent_state: None,
-                    needs_you: None,
-                    error: Some(format!("{err:#}")),
-                    session: None,
-                    project: None,
-                    built_in: None,
-                    system_updated: false,
-                },
-            };
-            info.session = Some(session.to_string());
-            out.push(info);
         }
+        Ok(out)
+    }
+
+    /// A session design as `design.list` gives it, with its session and
+    /// whether the workspace's design system was synced since it pinned
+    /// it; one whose `design.toml` cannot be read lists with its error.
+    pub fn session_design_info(&self, at: &DesignAt, workspace: &str) -> DesignInfo {
+        match self.design(at) {
+            Ok(info) => DesignInfo {
+                system_updated: self.session_system_updated(at, workspace).unwrap_or(false),
+                ..info
+            },
+            Err(err) => DesignInfo {
+                session: match &at.place {
+                    Place::Session(s) => Some(s.clone()),
+                    Place::Workspace(_) => None,
+                },
+                ..DesignInfo::unreadable(
+                    &at.slug,
+                    DesignKind::Session,
+                    at.folder().display().to_string(),
+                    format!("{err:#}"),
+                )
+            },
+        }
+    }
+
+    /// The session designs in a worktree's design folder, by name, as
+    /// `design.list` gives them (see [`Store::session_design_info`]).
+    pub fn session_designs(
+        &self,
+        session: &str,
+        worktree: &Path,
+        folder: &str,
+        workspace: &str,
+    ) -> Result<Vec<DesignInfo>> {
+        let mut out: Vec<DesignInfo> = self
+            .session_design_ats(session, worktree, folder)?
+            .iter()
+            .map(|at| self.session_design_info(at, workspace))
+            .collect();
         out.sort_by_key(|d| (d.name.to_lowercase(), d.slug.clone()));
         Ok(out)
     }
