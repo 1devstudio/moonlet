@@ -17,10 +17,10 @@ Session records, settings, devices and secrets join the account state in later s
 ## User journey
 
 1. The MacBook is linked to `studio-mini` (X41). Both have had moonlet for a while: the MacBook has the workspaces "Personal" and "Acme", `studio-mini` has "Personal".
-2. The MacBook's app shows a one-time notice: "Workspaces are now shared with studio-mini". The switcher lists "Personal", "Personal" and "Acme" once each, with no host headers; each "Personal" row says which host it came from.
-3. The user picks **Merge with…** on the second "Personal" and chooses the first. One "Personal" remains, holding the sections of both.
+2. The switcher lists "Personal", "Personal" and "Acme" once each, with no host headers; the two "Personal" rows differ in their summaries. Sessions running on `studio-mini` show in the MacBook's sidebar, marked "on studio-mini".
+3. With the second "Personal" shown, the user picks **Merge with…** in the switcher, chooses the first, and confirms. One "Personal" remains, holding the sections of both, on both Macs.
 4. On the MacBook the user renames section "Side projects" to "Experiments". A few seconds later the phone, connected to `studio-mini`, shows "Experiments".
-5. On a train, offline, the user adds project `shop` to section "1devstudio" on the MacBook. At home, when the MacBook links again, `studio-mini` shows `shop` in "1devstudio" as well, marked "Not on studio-mini" if it has no clone of it.
+5. On a train, offline, the user adds project `shop` to section "1devstudio" on the MacBook. At home, when the MacBook links again, `studio-mini` shows `shop` in "1devstudio" as well, marked "not on studio-mini" if it has no clone of it and the MacBook is not connected.
 
 ## Behaviour and acceptance criteria
 
@@ -68,17 +68,18 @@ Session records, settings, devices and secrets join the account state in later s
 
 ### The app
 
-- [ ] Each workspace shows once in the switcher, whichever connected members list it, without host headers. Sessions of a workspace come from every connected member that lists it, and a session row from another member names it ("on studio-mini").
-- [ ] A section lists its projects from every connected member, once per identity. A project that only some members have is shown on the members that have it; one that the shown member does not have is marked "Not on <host>".
-- [ ] Two workspaces with the same name on different members are both shown until the user merges them. **Merge with…** in a workspace's menu moves its sections into the chosen workspace and deletes it.
-- [ ] Members that are not linked to the same central host (a remote host added over SSH, a host with no central host) keep their own workspaces and show under a host header, as today.
+- [x] Each workspace shows once in the switcher, whichever connected members list it, with the sessions of all of them in its summary. Hosts outside the account keep their own workspaces under their name, and the headers show only when more than one host has rows of its own. (`switcherRows across the members of an account` in `workspaces.test.ts`)
+- [x] A workspace is shown on every host that lists it, so the composer offers the projects of every member holding it, and the shown workspace stays while any member lists it. (`shows a shared workspace on every member that lists it`, `keeps showing a shared workspace while another member lists it`)
+- [x] Each section of the shown workspace shows once, from the shown member first, with the sessions of every member holding it. A project's sessions from several members are one group, matched by identity; a project only another member has shows there, marked "on studio-mini", as are session rows from another member; a project no connected member has is marked "not on <shown host>". A section several members hold has no `@host` tag. (`arrangeShared` and `shownSections` in `sidebar.test.ts`)
+- [x] Two workspaces with the same name on different members are both shown until the user merges them. **Merge with…** in the switcher lists the other workspaces of the same account, asks first, and merges with `workspace.merge`. (`merges a workspace only into another of the same account`, `asks before merging, saying what moves and what goes`)
+- [x] A Mac whose central host is removed keeps the workspaces it got while it was a member, as every member keeps the whole account. They can be merged or deleted like any other. The e2e specs that link the app's daemon remove them afterwards, so later specs see only their own (`accountSnapshot`, `restoreAccount` in `e2e/fixtures.ts`).
+- [x] A section's project filter lists project ids, which are each member's own, so a filter applies on the member where it was set.
 
 ## UI
 
-- Switcher: one list. A workspace that came from only one member before a merge shows that member under its name ("from studio-mini") until merged. Hosts that are not members keep their headers below.
-- Workspace menu: **Merge with…**, a list of the other workspaces.
-- Section: a project missing on the shown member has a dotted avatar and "Not on studio-mini"; clicking it says that adding it there comes in a later slice.
-- The first time the app sees a member's workspaces shared, it shows the notice "Workspaces are now shared with <central host>" once.
+- Switcher: one list for the account's workspaces, no host headers; a host outside the account keeps its header and its workspaces below. Two workspaces of one name are told apart by their summaries (sections, sessions, profile).
+- Switcher menu: **Merge with…** under Workspace settings…, which opens the list of the account's other workspaces; picking one asks "Move the 1 section of this Personal, with its sessions, into the other Personal, and delete this one? Every Mac sharing them gets the change."
+- Section: one block per shared section. Rows and project groups from another member end with "on studio-mini" in the faint mono style of the old `@host` tag; a project no connected member has shows a dashed square for its mark and "not on <host>".
 
 ## Protocol and RPCs
 
@@ -114,6 +115,8 @@ Session records, settings, devices and secrets join the account state in later s
 - Cloning a project that a member does not have.
 - Settings, paired devices and secrets in the account state.
 - Merging workspaces automatically by name.
+- A notice the first time workspaces are shared, and naming which member a workspace came from: neither is recorded yet.
+- Adding a project that another member has on this one (a clone from its origin).
 - Shortening the log. It grows with every change; compaction comes once it matters.
 
 ## Test plan
