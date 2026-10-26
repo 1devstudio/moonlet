@@ -194,8 +194,16 @@ describe("design.open in the app (X65)", () => {
     expect(designOpenAction({ workspace: "w1", slug: "onboarding", name: "Onboarding", spawned_by: 9 }, sessions)).toEqual({ kind: "toast", text: "An agent started the design Onboarding" });
   });
 
-  it("leaves a session design to its session's Design tab, never the design screen", () => {
-    expect(designOpenAction({ workspace: "w1", slug: "settings-page", name: "Settings page", session: "s1", kind: "session" }, sessions)).toEqual({ kind: "none" });
+  it("opens a session design in its session's Design tab while that session is shown, never the design screen", () => {
+    expect(designOpenAction({ workspace: "w1", slug: "settings-page", name: "Settings page", session: "s1", kind: "session" }, sessions, "s1")).toEqual({ kind: "tab", session: "s1" });
+  });
+
+  it("offers a session design in a toast while another session or mode is shown, leaving the focus where it is", () => {
+    expect(designOpenAction({ workspace: "w1", slug: "settings-page", name: "Settings page", session: "s1", kind: "session" }, sessions, null)).toEqual({
+      kind: "toast",
+      text: "Fix checkout button started the design Settings page",
+    });
+    expect(designOpenAction({ workspace: "w1", slug: "settings-page", name: "Settings page", session: "s1", kind: "session" }, sessions, "s2")?.kind).toBe("toast");
   });
 });
 

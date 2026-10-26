@@ -120,12 +120,16 @@ export function newDesignSystem(chosen: string, systems: string[], shown: string
 
 /** What the app does on `design.open` (X65): show the design the user asked
  *  for; one an agent started (`spawned_by`) is offered in a toast instead, and
- *  the focus stays where it is (as X22). */
-export function designOpenAction(ev: DesignOpen, sessions: { id: string; name: string }[]): { kind: "show" } | { kind: "toast"; text: string } | { kind: "none" } {
-  // A session design shows in its session's Design tab (X65 entry 12b).
-  if (ev.kind === "session") return { kind: "none" };
-  if (ev.spawned_by === undefined || ev.spawned_by === null) return { kind: "show" };
+ *  the focus stays where it is (as X22). A session design (`design new
+ *  --here`) opens in its session's Design tab while that session is the
+ *  one shown (`shown`), else it is offered in a toast too. */
+export function designOpenAction(ev: DesignOpen, sessions: { id: string; name: string }[], shown: string | null = null): { kind: "show" } | { kind: "tab"; session: string } | { kind: "toast"; text: string } | { kind: "none" } {
   const by = sessions.find((s) => s.id === ev.session)?.name ?? "An agent";
+  if (ev.kind === "session") {
+    if (!ev.session) return { kind: "none" };
+    return ev.session === shown ? { kind: "tab", session: ev.session } : { kind: "toast", text: `${by} started the design ${ev.name}` };
+  }
+  if (ev.spawned_by === undefined || ev.spawned_by === null) return { kind: "show" };
   return { kind: "toast", text: `${by} started the design ${ev.name}` };
 }
 

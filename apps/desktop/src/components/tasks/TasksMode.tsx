@@ -59,6 +59,7 @@ import { Menu, type MenuItem } from "../Menu";
 import { goSettings } from "../../lib/settingsNavigation";
 import { ago } from "../../lib/mobile";
 import { NewIssue } from "./NewIssue";
+import { unseenOf, useDesign } from "../../lib/designStore";
 
 
 /** The Columns button's glyph: four upright lines, as the design draws it. */
@@ -769,7 +770,9 @@ export function ModeSwitch() {
   useEffect(() => (ws ? pollTasks(ws.host, ws.id) : undefined), [ws]);
   // The switch's shortcuts as the user has them (Settings › Shortcuts).
   const keys = effectiveKeys(useStore((s) => s.settings.shortcuts));
-  const m = modeSwitch({ tasks: keyLabel(keys.tasks ?? ""), design: keyLabel(keys.design ?? "") }, mode, board ? outOfSync(board).length : 0);
+  // Designs an agent started from a session, not seen yet (X65).
+  const unseen = useDesign((d) => (ws ? unseenOf(d, ws.host, ws.id) : 0));
+  const m = modeSwitch({ tasks: keyLabel(keys.tasks ?? ""), design: keyLabel(keys.design ?? "") }, mode, board ? outOfSync(board).length : 0, unseen);
   const item = (on: boolean) => cx("no-drag relative flex h-[26px] w-[26px] items-center justify-center rounded-[5px]", on ? "bg-raised text-fg" : "text-muted hover:text-fg");
   return (
     <div role="group" aria-label="Mode" className="ml-auto flex shrink-0 items-center gap-0.5 rounded-md bg-panel-2 p-0.5">
@@ -780,8 +783,9 @@ export function ModeSwitch() {
         <TaskGlyph column="in_progress" size={14} />
         {m.dot && <span aria-hidden="true" className="absolute right-[3px] top-[3px] h-[6px] w-[6px] rounded-full bg-accent" />}
       </button>
-      <button aria-label="Design" aria-pressed={mode === "design"} title={m.design} onClick={() => setMode("design")} className={item(mode === "design")}>
+      <button aria-label={m.designLabel} aria-pressed={mode === "design"} title={m.design} onClick={() => setMode("design")} className={item(mode === "design")}>
         <PenTool size={14} />
+        {m.designDot && <span aria-hidden="true" className="absolute right-[3px] top-[3px] h-[6px] w-[6px] rounded-full bg-accent" />}
       </button>
     </div>
   );
