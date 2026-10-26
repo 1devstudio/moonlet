@@ -3540,6 +3540,108 @@ async fn edits_by_hand_saved_once_the_agent_works_go_with_its_turn_though_its_st
     assert_eq!(kinds, [(2, "agent_turn"), (1, "agent_turn")], "{listed}");
 }
 
+/// A design's agent like [`WRITING_CLAUDE`] that reads a message sent
+/// during its turn, `QUEUED`, only once a `go` file is in its folder, says
+/// it started it, which starts the next turn with no `chat.send`, and holds
+/// that turn until `release`.
+const QUEUEING_CLAUDE: &str = r#"#!/bin/sh
+n=0
+while IFS= read -r line; do
+  case "$line" in
+    *'"subtype":"initialize"'*) echo '{"type":"system","subtype":"init","session_id":"s1","model":"fake"}' ;;
+    *'"type":"user"'*) case "$line" in
+        *'QUEUED'*) while [ ! -f go ]; do sleep 0.05; done; rm -f go
+          uuid=${line#*'"uuid":"'}; uuid=${uuid%%'"'*}
+          echo "{\"type\":\"command_lifecycle\",\"command_uuid\":\"$uuid\",\"state\":\"started\",\"session_id\":\"s1\"}"
+          while [ ! -f release ]; do sleep 0.05; done; rm -f release ;;
+        *'HOLD-NOW'*) while [ ! -f release ]; do sleep 0.05; done; rm -f release ;;
+      esac
+      n=$((n+1)); mkdir -p pages
+      printf '<body data-mid="m1"><p data-mid="m2">turn %s</p></body>\n' "$n" > pages/index.html
+      echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}' ;;
+  esac
+done
+"#;
+
+/// X65: when the daemon hears a design's agent start only after edits by
+/// hand saved before it worked and others saved once it works, the edits
+/// from before still get their own Edits by hand snapshot as it starts;
+/// only those saved during the turn go with it. Here the turn starts from a
+/// message queued during the last one, with no `chat.send` to keep the
+/// edits first, and its start waits in line behind another design's turn,
+/// whose snapshot waits for a `check --fix` of a long page.
+#[tokio::test]
+async fn edits_by_hand_saved_before_a_start_heard_late_keep_their_own_snapshot() {
+    let d = fake_claude_daemon_with(QUEUEING_CLAUDE, vec![("MOONLET_DESIGN_QUIET_MS".into(), "60000".into())]).await;
+    let mut c = d.client().await;
+    let mut checker = d.client().await;
+    let ws = workspace_with_system(&d, &mut c).await;
+    let create = |name: &str| serde_json::json!({"workspace": ws, "name": name, "system": "moonlet-desktop", "brief": "b"});
+    let created: serde_json::Value = c.request(methods::DESIGN_CREATE, create("Settings page")).await.unwrap();
+    let other: serde_json::Value = c.request(methods::DESIGN_CREATE, create("Other page")).await.unwrap();
+    let (agent, other_agent) = (created["agent"].as_u64().unwrap(), other["agent"].as_u64().unwrap());
+    history_of(&mut c, &ws, 1).await;
+    turn_over(&mut c, agent).await;
+    turn_over(&mut c, other_agent).await;
+    let designs = d.home.path().join(".moonlet/design").join(&ws).join("designs");
+    // This design's agent holds a turn, and a message is queued during it.
+    let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": agent, "text": "HOLD-NOW"})).await.unwrap();
+    working(&mut c, agent).await;
+    let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": agent, "text": "QUEUED"})).await.unwrap();
+    std::fs::write(designs.join("settings-page/release"), "").unwrap();
+    turn_over(&mut c, agent).await;
+    history_of(&mut c, &ws, 2).await;
+    // The other design's agent holds its turn; a check numbers a long page
+    // of that design, holding its pages, when the turn ends.
+    let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": other_agent, "text": "HOLD-NOW"})).await.unwrap();
+    working(&mut c, other_agent).await;
+    std::fs::write(designs.join("other-page/pages/long.html"), format!("<body>{}</body>\n", "<p>row</p>".repeat(60_000))).unwrap();
+    let fix = serde_json::json!({"design": {"workspace": ws, "slug": "other-page"}, "fix": true});
+    let check = tokio::spawn(async move { checker.request::<_, serde_json::Value>(methods::DESIGN_CHECK, fix).await.unwrap() });
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    std::fs::write(designs.join("other-page/release"), "").unwrap();
+    turn_over(&mut c, other_agent).await;
+    // Saved before the agent works, then the queued message starts its
+    // turn, heard only after that snapshot, and a save during it.
+    save_by_hand(&mut c, &ws, "<p>by hand, before the agent works</p>\n", &["text of m2"]).await;
+    std::fs::write(designs.join("settings-page/go"), "").unwrap();
+    working(&mut c, agent).await;
+    save_by_hand(&mut c, &ws, "<p>by hand, while the agent works</p>\n", &["style of m1"]).await;
+    assert!(!check.is_finished(), "the check still holds the other design's pages");
+    assert!(check.await.unwrap().is_array());
+    // The start is heard now: the agent's turn is released only once what
+    // it keeps is kept, if anything, within 5 s.
+    for _ in 0..50 {
+        let listed: serde_json::Value = c.request(methods::DESIGN_HISTORY, serde_json::json!({"workspace": ws, "slug": "settings-page"})).await.unwrap();
+        if listed.as_array().is_some_and(|a| a.len() >= 3) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    std::fs::write(designs.join("settings-page/release"), "").unwrap();
+    turn_over(&mut c, agent).await;
+    let mut listed = history_of(&mut c, &ws, 3).await;
+    for _ in 0..50 {
+        if listed[0]["type"] == "agent_turn" && listed[0]["n"].as_u64() >= Some(3) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        listed = history_of(&mut c, &ws, 3).await;
+    }
+    let kinds: Vec<(u64, &str, &str)> =
+        listed.as_array().unwrap().iter().map(|s| (s["n"].as_u64().unwrap(), s["type"].as_str().unwrap(), s["summary"].as_str().unwrap())).collect();
+    assert_eq!(
+        kinds,
+        [
+            (4, "agent_turn", "Wrote index.html · 1 page"),
+            (3, "edits_by_hand", "Text of m2"),
+            (2, "agent_turn", "Wrote index.html · 1 page"),
+            (1, "agent_turn", "Wrote index.html · 1 page")
+        ],
+        "{listed}"
+    );
+}
+
 /// X65: a restore that fails, of a snapshot the design does not have,
 /// leaves the edits by hand not kept yet waiting: they are kept once they
 /// stop, as without the restore.

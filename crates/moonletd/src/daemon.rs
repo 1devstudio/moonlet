@@ -88,15 +88,24 @@ const EDITS_QUIET: std::time::Duration = std::time::Duration::from_secs(10);
 /// A design's edits by hand saved since its last snapshot (X65).
 #[derive(Default)]
 struct HandEdits {
-    /// What each did, as the app said with its saves.
-    edits: Vec<String>,
+    /// What each save made while the design's agent did not work did, as
+    /// the app said with it; `None` when there was none.
+    before: Option<Vec<String>>,
+    /// What each save made while the design's agent worked did, `None`
+    /// when there was none: they go with its turn, also when the daemon
+    /// hears it start only after them.
+    in_turn: Option<Vec<String>>,
     /// Saves so far: a wait that ends after a later save takes nothing.
     saves: u64,
     /// The wait for them to stop, the latest save's: a later save cancels it.
     quiet: Option<tokio::task::AbortHandle>,
-    /// One was saved while the design's agent worked: they go with its
-    /// turn, also when the daemon hears it start only after them.
-    in_turn: bool,
+}
+
+impl HandEdits {
+    /// What all of them did, in the order they were saved in each batch.
+    fn all(&self) -> Vec<String> {
+        self.before.iter().chain(&self.in_turn).flatten().cloned().collect()
+    }
 }
 
 /// A design's locks (X65), each guarding one thing.
@@ -2031,28 +2040,36 @@ impl Daemon {
     /// What a design's edits by hand not kept yet did, leaving them and
     /// their wait in place.
     fn pending_hand_edits(&self, at: &DesignAt) -> Vec<String> {
-        self.hand_edits.lock().unwrap().get(&at.key()).map(|e| e.edits.clone()).unwrap_or_default()
+        self.hand_edits.lock().unwrap().get(&at.key()).map(HandEdits::all).unwrap_or_default()
     }
 
     /// Takes a design's edits by hand not kept yet, with what they did, and
     /// cancels the wait for them to stop; `None` when there are none.
     fn take_hand_edits(&self, at: &DesignAt) -> Option<Vec<String>> {
         let taken = self.hand_edits.lock().unwrap().remove(&at.key())?;
-        if let Some(quiet) = taken.quiet {
+        if let Some(quiet) = &taken.quiet {
             quiet.abort();
         }
-        Some(taken.edits)
+        Some(taken.all())
     }
 
-    /// Takes a design's edits by hand not kept yet, as its agent starts a
-    /// turn, unless one was saved while the agent worked: the daemon heard
-    /// it start after them, and they go with the turn, left waiting for
-    /// its snapshot.
+    /// Takes the edits by hand a design's agent did not work during, as it
+    /// starts a turn; `None` when there are none. Those saved while it
+    /// worked stay, with their wait: the daemon heard it start after them,
+    /// and they go with the turn's snapshot.
     fn take_hand_edits_before_turn(&self, at: &DesignAt) -> Option<Vec<String>> {
-        if self.hand_edits.lock().unwrap().get(&at.key()).is_some_and(|e| e.in_turn) {
-            return None;
+        let key = at.key();
+        let mut all = self.hand_edits.lock().unwrap();
+        let pending = all.get_mut(&key)?;
+        if pending.in_turn.is_some() {
+            return pending.before.take();
         }
-        self.take_hand_edits(at)
+        pending.before.as_ref()?;
+        let taken = all.remove(&key)?;
+        if let Some(quiet) = &taken.quiet {
+            quiet.abort();
+        }
+        Some(taken.all())
     }
 
     /// A design's page saved by its editor (X65): what its edits did is
@@ -2068,8 +2085,10 @@ impl Daemon {
         let key = at.key();
         let mut all = self.hand_edits.lock().unwrap();
         let pending = all.entry(key.clone()).or_default();
-        pending.edits.extend(edits);
-        pending.in_turn |= in_turn;
+        match in_turn {
+            true => pending.in_turn.get_or_insert_default().extend(edits),
+            false => pending.before.get_or_insert_default().extend(edits),
+        }
         pending.saves += 1;
         if let Some(quiet) = pending.quiet.take() {
             quiet.abort();
@@ -2092,7 +2111,7 @@ impl Daemon {
                 if all.get(&key).is_none_or(|e| e.saves != saves) {
                     return;
                 }
-                all.remove(&key).map(|e| e.edits).unwrap_or_default()
+                all.remove(&key).map(|e| e.all()).unwrap_or_default()
             };
             d.snapshot(&at, Take::EditsByHand(edits)).await;
         });
@@ -2164,9 +2183,9 @@ impl Daemon {
     /// The snapshot a step of a design's agent takes (X65), under the
     /// locks of the design's pages and history, so the edits by hand not
     /// kept yet are read and taken only under them: as it starts, they are
-    /// kept on their own, if there are any and none was saved while it
-    /// worked; as it ends a turn, everything since is kept, edits saved
-    /// during the turn with it.
+    /// kept on their own, those saved while it did not work, if there are
+    /// any; as it ends a turn, everything since is kept, edits saved while
+    /// it worked with it.
     async fn agent_snapshot(&self, at: &DesignAt, step: AgentStep) {
         let (pages, history) = (self.lock_of(at, DesignLock::Pages), self.lock_of(at, DesignLock::History));
         let _pages = pages.lock().await;
