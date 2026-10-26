@@ -3,7 +3,7 @@ import type { Design, DesignComment, DesignSystem, TerminalInfo } from "./protoc
 import { modeOf, setMode } from "./mode";
 import { agentOnScreen, goToAgent, useStore } from "./store";
 import { designCanvasKey, pageKey, pageOfKey, commentsOf, historyOf, keepComment, loadComments, loadHistory, sendComments, sendingOf, resolveComment, sessionDesignsOf, shownSessionDesign, showSessionDesign, unseenOf, updateSystem, justOpened, tookOpened, pickDesignTab, kitRevOf, builtRevOf } from "./designStore";
-import { startFromProjectDesign } from "./designStore";
+import { pageRevReader, startFromProjectDesign } from "./designStore";
 import { cardsOf, checkDesign, createFromNewDesign, createSystem, designsOf, detectStack, latestOf, loadCards, loadDesigns, loadSystems, openCard, saveViewport, pageRevOf, problemsOf, revOf, shownCard, shownDesign, shownSystem, showDesign, showSystem, startDesign, systemNameOf, systemsOf, useDesign } from "./designStore";
 
 const calls = vi.hoisted(() => [] as { host: string; method: string; params: unknown }[]);
@@ -325,6 +325,17 @@ const changed = (workspace: string, over: { system?: string | null; design?: str
 
 describe("a design's pages on a change (X65)", () => {
   const revs = () => ["index", "git-a"].map((p) => pageRevOf(useDesign.getState(), "local", "w-1devstudio", "settings-page", p));
+
+  it("give the Designs index each page's revision on its host, read from the revisions the store keeps", async () => {
+    answers["design.list"] = () => [design()];
+    answers["design.check"] = () => [];
+    await loadDesigns("local", "w-1devstudio");
+    changed("w-1devstudio", { design: "settings-page", paths: ["pages/index.html"] });
+    changed("w-1devstudio", { design: "settings-page", paths: ["pages/index.html"] });
+    const rev = pageRevReader(useDesign.getState().pageRevs, "local");
+    expect([rev("w-1devstudio", "settings-page", "index"), rev("w-1devstudio", "settings-page", "git-a"), rev({ session: "w-1devstudio" }, "settings-page", "index")]).toEqual([2, 0, 0]);
+    expect(pageRevReader(useDesign.getState().pageRevs, "studio-mac")("w-1devstudio", "settings-page", "index")).toBe(0);
+  });
 
   it("load again when they, the design's assets or its design system's styles change, and the latest written page is known", async () => {
     answers["design.list"] = () => [design()];

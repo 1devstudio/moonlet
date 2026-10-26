@@ -335,7 +335,13 @@ export function reloadPage(host: string, place: DesignPlace, slug: string, page:
 
 /** How many times a design's page changed since the app started. */
 export function pageRevOf(s: DesignState, host: string, place: DesignPlace, slug: string, page: string): number {
-  return s.pageRevs[pageKey(host, place, slug, page)] ?? 0;
+  return pageRevReader(s.pageRevs, host)(place, slug, page);
+}
+
+/** Each page's revision on `host`, from the store's `pageRevs`, as the
+ *  Designs index's thumbnails carry it (X65). */
+export function pageRevReader(pageRevs: DesignState["pageRevs"], host: string): (place: DesignPlace, slug: string, page: string) => number {
+  return (place, slug, page) => pageRevs[pageKey(host, place, slug, page)] ?? 0;
 }
 
 /** The pages the latest change of a design wrote. */

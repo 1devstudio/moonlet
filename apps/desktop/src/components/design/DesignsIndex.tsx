@@ -8,10 +8,9 @@ import { Loader2, Plus } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { Design, DesignSystem } from "../../lib/protocol";
-import type { DesignPlace } from "../../lib/designPlace";
 import { designsEmpty, shortAge } from "../../lib/design";
 import { designsIndex, type CardAction, type IndexCard } from "../../lib/designsIndex";
-import { designsOf, openNewDesign, openSessionDesign, pageRevOf, projectDesignsIn, sessionDesignsIn, showDesign, startFromProjectDesign, useDesign } from "../../lib/designStore";
+import { designsOf, openNewDesign, openSessionDesign, pageRevReader, projectDesignsIn, sessionDesignsIn, showDesign, startFromProjectDesign, useDesign } from "../../lib/designStore";
 import { viewportOf } from "../../lib/designViewport";
 import { errorToast, useStore } from "../../lib/store";
 import { NEAR_ROOT, useNear } from "../../lib/useNear";
@@ -32,11 +31,10 @@ export function DesignsIndex({ host, workspace, name, systems, inset }: { host: 
   const list = useMemo(() => (own ? [...inSessions, ...own, ...inProjects] : undefined), [own, inSessions, inProjects]);
   // A changed first page is framed again: its thumbnail's address carries its revision.
   const pageRevs = useDesign((d) => d.pageRevs);
-  const groups = useMemo(() => {
-    const now = { ...useDesign.getState(), pageRevs };
-    const pageRev = (place: DesignPlace, slug: string, page: string) => pageRevOf(now, host, place, slug, page);
-    return designsIndex(list ?? [], { workspace, sessions: sessions ?? [], projects, systems: systems ?? [], pageRev });
-  }, [list, workspace, sessions, projects, systems, pageRevs, host]);
+  const groups = useMemo(
+    () => designsIndex(list ?? [], { workspace, sessions: sessions ?? [], projects, systems: systems ?? [], pageRev: pageRevReader(pageRevs, host) }),
+    [list, workspace, sessions, projects, systems, pageRevs, host],
+  );
   const empty = designsEmpty(list, systems);
   const now = useNow(true);
   const [starting, setStarting] = useState<string | null>(null);
