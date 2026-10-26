@@ -8,7 +8,7 @@ import { rpc } from "../../lib/daemon";
 import { M, type DesignCard, type DesignSystem } from "../../lib/protocol";
 import { afterSyncLine, afterSyncShown, base, changedRows, needsYou, orphanLine, proposalLabel, type NeedsYouItem, type StepCell } from "../../lib/designSync";
 import { cardUrl } from "../../lib/designView";
-import { loadCards, loadSystems, openCard } from "../../lib/designStore";
+import { cardRev, loadCards, loadSystems, openCard, type CardRevs } from "../../lib/designStore";
 import { cx } from "../../lib/cx";
 import { useNear } from "../../lib/useNear";
 import { Button } from "../ui";
@@ -92,7 +92,7 @@ function Preview({ url, title, viewport, width }: { url: string; title: string; 
 }
 
 /** **Needs you**: a card edited by hand beside the sync's version, and an orphan. */
-export function NeedsYouSection({ host, workspace, sys, cards, rev }: { host: string; workspace: string; sys: DesignSystem; cards: DesignCard[]; rev: number }) {
+export function NeedsYouSection({ host, workspace, sys, cards, revs }: { host: string; workspace: string; sys: DesignSystem; cards: DesignCard[]; revs: CardRevs }) {
   const items = needsYou(cards);
   const [busy, setBusy] = useState<string | null>(null);
   if (items.length === 0) return null;
@@ -131,12 +131,12 @@ export function NeedsYouSection({ host, workspace, sys, cards, rev }: { host: st
               <div className="grid grid-cols-2 divide-x divide-border">
                 <div className="min-w-0 p-3">
                   <p className="mb-2 font-mono ui-text-11.5 text-muted">{base(item.card.path)} · yours</p>
-                  <Preview url={cardUrl(workspace, sys.slug, item.card.path, rev)} title={`${item.card.name}, yours`} viewport={item.card.viewport} width={420} />
+                  <Preview url={cardUrl(workspace, sys.slug, item.card.path, cardRev(revs, item.card.path))} title={`${item.card.name}, yours`} viewport={item.card.viewport} width={420} />
                 </div>
                 <div className="min-w-0 p-3">
                   <p className="mb-2 font-mono ui-text-11.5 text-accent">{proposalLabel(item)} · synced</p>
                   {item.proposal ? (
-                    <Preview url={cardUrl(workspace, sys.slug, item.proposal, rev)} title={`${item.card.name}, synced`} viewport={item.card.viewport} width={420} />
+                    <Preview url={cardUrl(workspace, sys.slug, item.proposal, cardRev(revs, item.proposal))} title={`${item.card.name}, synced`} viewport={item.card.viewport} width={420} />
                   ) : (
                     <p className="ui-text-12.5 text-muted">The sync changed {proposalLabel(item)}; your HTML stays.</p>
                   )}

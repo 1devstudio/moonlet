@@ -19,6 +19,7 @@ import { changesBuilt } from "./designBuild";
 import { pageOfPath } from "./designPage";
 import type { PageProblem } from "./designBars";
 import { COMMENTS_FILE, commentsMessage, withMid, withPins, type PageMids } from "./designComments";
+import { cardsReloaded } from "./designView";
 import { changePlace, designRef, isSession, placeOfDesign, type DesignPlace } from "./designPlace";
 
 interface DesignState {
@@ -30,10 +31,13 @@ interface DesignState {
   cards: Record<string, DesignCard[]>;
   /** The card open as the card page in each workspace: its system and path. */
   opened: Record<string, { slug: string; path: string } | null>;
-  /** How many times each design system (`wsKey/slug`) changed, so its frames
-   *  load again, and each session design's own copy of its design system
-   *  (`itemKey`), so its kit is read again (X65). */
+  /** How many times each design system (`wsKey/slug`) changed, and each
+   *  session design's own copy of its design system (`itemKey`), so a
+   *  design's kit is read again (X65). */
   changes: Record<string, number>;
+  /** How many times each design system's cards (`wsKey/slug`) loaded again:
+   *  all of them, and each one by its path (X64). */
+  cardRevs: Record<string, { all: number; cards: Record<string, number> }>;
   /** Each workspace's designs, once listed (X65): its workspace designs,
    *  which Design mode shows. */
   designs: Record<string, Design[]>;
@@ -78,7 +82,7 @@ interface DesignState {
   histories: Record<string, DesignSnapshot[]>;
 }
 
-export const useDesign = create<DesignState>(() => ({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, designs: {}, sessionDesigns: {}, projectDesigns: {}, indexShown: {}, builtRevs: {}, sessionShown: {}, tabOpened: [], unseen: [], designShown: {}, pageRevs: {}, latest: {}, problems: {}, systemNames: {}, comments: {}, mids: {}, sending: {}, histories: {} }));
+export const useDesign = create<DesignState>(() => ({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, cardRevs: {}, designs: {}, sessionDesigns: {}, projectDesigns: {}, indexShown: {}, builtRevs: {}, sessionShown: {}, tabOpened: [], unseen: [], designShown: {}, pageRevs: {}, latest: {}, problems: {}, systemNames: {}, comments: {}, mids: {}, sending: {}, histories: {} }));
 
 /** A place's key: a workspace's `wsKey`, a session's `host/s:<session>`,
  *  so a session design never shares a workspace design's state (X65). */
@@ -127,6 +131,24 @@ export function openCard(host: string, workspace: string, slug: string, path: st
 /** How many times design system `slug` changed since the app started. */
 export function revOf(s: DesignState, host: string, workspace: string, slug: string): number {
   return s.changes[itemKey(host, workspace, slug)] ?? 0;
+}
+
+/** How many times card `path` of design system `slug` was to load again:
+ *  after a change to what every card loads, or to its own page (X64). */
+export function cardRevOf(s: DesignState, host: string, workspace: string, slug: string, path: string): number {
+  return cardRev(cardRevsOf(s, host, workspace, slug), path);
+}
+
+/** How many times design system `slug`'s cards were to load again, as the
+ *  store keeps it: one object until the next time (for a selector). */
+export type CardRevs = DesignState["cardRevs"][string] | undefined;
+export function cardRevsOf(s: DesignState, host: string, workspace: string, slug: string): CardRevs {
+  return s.cardRevs[itemKey(host, workspace, slug)];
+}
+
+/** Card `path`'s count in `revs`. */
+export function cardRev(revs: CardRevs, path: string): number {
+  return revs ? revs.all + (revs.cards[path] ?? 0) : 0;
 }
 
 /** How many times the design system a design's kit is read from changed:
@@ -835,9 +857,19 @@ export async function startDesign() {
       if (systemListing.wanted.has(wsKey(e.host, d.workspace))) reload(e.host, d.workspace);
       if (d.system) {
         const key = itemKey(e.host, d.workspace, d.system);
-        // Its frames load again, and its cards are listed again when asked for
-        // (a newer request always lands last).
-        useDesign.setState((s) => ({ changes: { ...s.changes, [key]: (s.changes[key] ?? 0) + 1 } }));
+        // Its cards are listed again when asked for (a newer request always
+        // lands last).
+        // Its cards load again only for what they load (X64).
+        const reload = cardsReloaded(d.paths);
+        useDesign.setState((s) => {
+          const revs = s.cardRevs[key] ?? { all: 0, cards: {} };
+          const cards = { ...revs.cards };
+          for (const path of reload.cards) cards[path] = (cards[path] ?? 0) + 1;
+          return {
+            changes: { ...s.changes, [key]: (s.changes[key] ?? 0) + 1 },
+            cardRevs: reload.all || reload.cards.length ? { ...s.cardRevs, [key]: { all: revs.all + (reload.all ? 1 : 0), cards } } : s.cardRevs,
+          };
+        });
         if (cardListing.wanted.has(key)) void loadCards(e.host, d.workspace, d.system).catch(() => {});
         // A session design on it may now be pinned to an older sync (X65).
         if (designListing.wanted.has(wsKey(e.host, d.workspace))) reloadDesigns(e.host, d.workspace);

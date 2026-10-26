@@ -12,7 +12,7 @@ import { cardGroups, cardUrl, changedBanner, fixMessage, fixState, headerLine, l
 import { canvasScale, fitBox, sizeText } from "../../lib/designViewport";
 import { useSize } from "../../lib/useSize";
 import { CardFrame, ZoomBar } from "./Frame";
-import { askAgent, cardsOf, loadCards, openCard, revOf, shownCard, stopAgent, useDesign } from "../../lib/designStore";
+import { askAgent, cardRev, cardRevsOf, cardsOf, loadCards, openCard, shownCard, stopAgent, useDesign } from "../../lib/designStore";
 import { workspaceProjects } from "../../lib/tasksStore";
 import { useNow } from "../../lib/useNow";
 import { NEAR_ROOT, useNear } from "../../lib/useNear";
@@ -66,7 +66,7 @@ function CardTile({ workspace, slug, rev, card, rewriting, onOpen }: { workspace
 export function DesignSystemView({ host, workspace, sys, label, working, inset }: { host: string; workspace: string; sys: DesignSystem; label: RowLabel; working: boolean; inset: number }) {
   const cards = listedCards(sys, useDesign((d) => cardsOf(d, host, workspace, sys.slug)));
   const open = useDesign((d) => shownCard(d, host, workspace, sys.slug));
-  const rev = useDesign((d) => revOf(d, host, workspace, sys.slug));
+  const revs = useDesign((d) => cardRevsOf(d, host, workspace, sys.slug));
   const projectList = useStore(useShallow((s) => workspaceProjects(s, host, workspace)));
   const projects = useMemo(() => projectList.map((p) => ({ path: p.path, name: p.name })), [projectList]);
   const agent = useStore((s) => (sys.agent !== null && s.terminals[host]?.[sys.agent]?.chat ? sys.agent : null));
@@ -111,7 +111,7 @@ export function DesignSystemView({ host, workspace, sys, label, working, inset }
     <div className="flex min-h-0 flex-1">
       <div className="flex min-w-0 flex-1 flex-col">
         {card ? (
-          <CardPage host={host} workspace={workspace} sys={sys} rev={rev} card={card} agent={agent} inset={inset} />
+          <CardPage host={host} workspace={workspace} sys={sys} rev={cardRev(revs, card.path)} card={card} agent={agent} inset={inset} />
         ) : (
           <>
             <header data-tauri-drag-region className="drag flex h-[52px] shrink-0 items-center gap-2 border-b border-border bg-panel pr-3" style={{ paddingLeft: inset + 20 }}>
@@ -192,7 +192,7 @@ export function DesignSystemView({ host, workspace, sys, label, working, inset }
                   {cards?.length === 0 && <p className="ui-text-13 text-muted">No cards yet. The sync agent writes them in the Cards step.</p>}
                   {!syncing && cards && (
                     <>
-                      <NeedsYouSection host={host} workspace={workspace} sys={sys} cards={cards} rev={rev} />
+                      <NeedsYouSection host={host} workspace={workspace} sys={sys} cards={cards} revs={revs} />
                       <ChangedSection host={host} workspace={workspace} sys={sys} cards={cards} />
                     </>
                   )}
@@ -206,7 +206,7 @@ export function DesignSystemView({ host, workspace, sys, label, working, inset }
                           {shown
                             .filter((c) => c.group === g.key)
                             .map((c) => (
-                              <CardTile key={c.path} workspace={workspace} slug={sys.slug} rev={rev} card={c} rewriting={c.path === rewriting} onOpen={() => openCard(host, workspace, sys.slug, c.path)} />
+                              <CardTile key={c.path} workspace={workspace} slug={sys.slug} rev={cardRev(revs, c.path)} card={c} rewriting={c.path === rewriting} onOpen={() => openCard(host, workspace, sys.slug, c.path)} />
                             ))}
                         </div>
                       </section>
