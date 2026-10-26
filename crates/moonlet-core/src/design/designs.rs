@@ -139,10 +139,8 @@ impl Store {
     /// but cannot be read fails the listing with the reason.
     pub fn designs(&self, workspace: &str) -> Result<Vec<DesignInfo>> {
         let folder = self.designs_dir(workspace, false)?;
-        let entries = match std::fs::read_dir(&folder) {
-            Ok(entries) => entries,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(e) => return Err(e).with_context(|| format!("cannot read {}", folder.display())),
+        let Some(entries) = fsx::read_dir_if_there(&folder)? else {
+            return Ok(Vec::new());
         };
         let mut out = Vec::new();
         for e in entries.flatten() {
