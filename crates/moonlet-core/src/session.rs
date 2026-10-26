@@ -24,6 +24,8 @@ use crate::paths::now_ms;
 use crate::pty::user_shell;
 use crate::terminal::{TerminalManager, expand_home};
 
+mod account;
+
 const STATE_VERSION: u32 = 3;
 /// The workspace every install starts with, and that X5's workspaces are
 /// migrated into (X32).
@@ -321,6 +323,7 @@ fn new_section(name: &str) -> Section {
         project_ids: Vec::new(),
         view: SectionView::default(),
         created_at: now_ms(),
+        missing: Vec::new(),
     }
 }
 
@@ -338,6 +341,9 @@ pub struct SessionManager {
     /// archived, so an archive never runs between a creation's look at the
     /// session and its terminals starting (X65).
     lifecycles: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// The account state this member shares (X68), once the daemon has
+    /// attached it; tests without it keep the state to themselves.
+    account: Mutex<Option<account::Account>>,
 }
 
 fn new_id() -> String {
@@ -462,6 +468,7 @@ impl SessionManager {
             chats: std::sync::OnceLock::new(),
             save_blocked,
             lifecycles: Mutex::new(HashMap::new()),
+            account: Mutex::new(None),
         });
         tokio::spawn(track_removed_sessions(Arc::downgrade(&mgr)));
         mgr
@@ -500,8 +507,25 @@ impl SessionManager {
         let mut st = self.state.lock().unwrap();
         let mut next = st.clone();
         let out = f(&mut next)?;
+        // The account's changes are saved first: a state saved without
+        // them would never reach the other members.
+        let mut account = self.account.lock().unwrap();
+        let recorded = match account.as_ref() {
+            Some(a) => Some(a.record(&st, &next)?),
+            None => None,
+        };
         self.save(&next)?;
         *st = next;
+        let changes = recorded.and_then(|(log, changes)| {
+            let a = account.as_mut()?;
+            a.log = log;
+            Some(changes)
+        });
+        drop(account);
+        drop(st);
+        if let Some(changes) = changes.filter(|c| !c.is_empty()) {
+            self.account_changed(changes);
+        }
         Ok(out)
     }
 
