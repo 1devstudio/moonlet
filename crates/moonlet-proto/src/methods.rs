@@ -57,6 +57,9 @@ pub const WORKSPACE_CREATE: &str = "workspace.create";
 pub const WORKSPACE_LIST: &str = "workspace.list";
 pub const WORKSPACE_UPDATE: &str = "workspace.update";
 pub const WORKSPACE_DELETE: &str = "workspace.delete";
+/// [`WorkspaceMerge`] → `true`: moves a workspace's sections and sessions
+/// into another, and deletes it (X68).
+pub const WORKSPACE_MERGE: &str = "workspace.merge";
 pub const PROFILE_LIST: &str = "profile.list";
 pub const PROFILE_CREATE: &str = "profile.create";
 pub const PROFILE_UPDATE: &str = "profile.update";
@@ -904,6 +907,12 @@ pub struct WorkspaceCreate {
     /// The Claude profile its sessions use (X33); absent for the default.
     #[serde(default)]
     pub claude_profile: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceMerge {
+    pub id: String,
+    pub into: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -263,6 +263,35 @@ async fn a_rename_on_one_member_reaches_the_others_within_three_seconds() {
 }
 
 #[tokio::test]
+async fn workspaces_merged_on_one_member_are_one_on_the_others() {
+    let (mini, addr) = central().await;
+    let book = mac(BOOK, "Alex's MacBook Pro").await;
+    link(&book, &mini, &addr, "Alex's MacBook Pro").await;
+    within(
+        Duration::from_secs(10),
+        "both Personal on the MacBook",
+        || async { book.names().await.len() == 2 },
+    )
+    .await;
+    let books = book.workspaces().await;
+    let _: Value = book
+        .call(
+            "workspace.merge",
+            json!({ "id": books[1].id, "into": books[0].id }),
+        )
+        .await;
+    within(
+        Duration::from_secs(3),
+        "one Personal on studio-mini",
+        || async {
+            let ws = mini.workspaces().await;
+            ws.len() == 1 && ws[0].id == books[0].id && ws[0].section_ids.len() == 2
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn changes_made_apart_meet_when_a_member_links_again() {
     let (mini, addr) = central().await;
     let book = mac(BOOK, "Alex's MacBook Pro").await;

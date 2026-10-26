@@ -1207,6 +1207,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_merged_workspace_hands_its_sections_and_sessions_to_the_chosen_one_on_every_member()
+    {
+        let shop = crate::git::tests::repo().await;
+        let (_h1, book) = member("book").await;
+        let (_h2, mini) = member("mini").await;
+        let minis = mini.list_workspaces()[0].clone();
+        let mini_section = mini.list_sections()[0].clone();
+        let p = mini
+            .section_add_project(&mini_section.id, &shop.path().display().to_string())
+            .await
+            .unwrap();
+        let req = SessionCreate {
+            name: Some("Fix cart".into()),
+            agent: Some("none".into()),
+            workspace_id: Some(minis.id.clone()),
+            cols: 80,
+            rows: 24,
+            ..SessionCreate::new(&p.id)
+        };
+        let session = mini.create_session(req).await.unwrap();
+        let books = book.list_workspaces()[0].clone();
+        let book_section = book.list_sections()[0].clone();
+        sync(&book, &mini);
+
+        // On the MacBook: studio-mini's "Personal" into its own.
+        book.merge_workspace(&minis.id, &books.id).unwrap();
+        sync(&book, &mini);
+        for m in [&book, &mini] {
+            let ws = m.list_workspaces();
+            assert_eq!(
+                ws.iter().map(|w| w.id.clone()).collect::<Vec<_>>(),
+                [books.id.clone()]
+            );
+            assert_eq!(
+                ws[0].section_ids,
+                [book_section.id.clone(), mini_section.id.clone()]
+            );
+        }
+        let moved = mini
+            .list_sessions()
+            .into_iter()
+            .find(|s| s.id == session.id)
+            .unwrap();
+        assert_eq!(moved.workspace_id, Some(books.id.clone()));
+    }
+
+    #[tokio::test]
+    async fn a_workspace_merges_only_into_another_existing_one() {
+        let (_h1, book) = member("book").await;
+        let ws = book.list_workspaces()[0].clone();
+        assert!(book.merge_workspace(&ws.id, &ws.id).is_err());
+        assert!(book.merge_workspace(&ws.id, "nowhere").is_err());
+        assert!(book.merge_workspace("nowhere", &ws.id).is_err());
+        assert_eq!(book.list_workspaces().len(), 1);
+    }
+
+    #[tokio::test]
     async fn a_change_stamped_more_than_a_day_ahead_is_refused() {
         use moonlet_proto::types::{ChangeOp, Stamp};
         let (_h1, book) = member("book").await;
