@@ -41,8 +41,8 @@ export type LoadEvent =
   /** The window shows again, or no longer does. */
   | { kind: "visible" }
   | { kind: "hidden" }
-  /** The wait for the `asked`th hello's answer is over. */
-  | { kind: "timeout"; asked: number }
+  /** The wait for an answer to the hello `token` names is over. */
+  | { kind: "timeout"; token: number }
   /** The scheme could not serve the page (or the page says so). */
   | { kind: "refused" }
   /** The page is framed again: written again, or another page. */
@@ -51,6 +51,12 @@ export type LoadEvent =
 export const LOADING: PageLoad = { phase: "loading", asked: 0 };
 
 const ask = (s: PageLoad): PageLoad => ({ phase: "waiting", asked: s.asked + 1 });
+
+/** What names the hello the canvas asks now, for its wait's timeout: the
+ *  timeout of an earlier ask does nothing. */
+export function waitToken(s: PageLoad): number {
+  return s.asked;
+}
 
 /** The load after `e`. A hello is asked each time it goes to `waiting`;
  *  the count tells a timer of an earlier ask, which does nothing. Only the
@@ -72,7 +78,7 @@ export function loadStep(s: PageLoad, e: LoadEvent): PageLoad {
     case "hidden":
       return s.phase === "waiting" ? { phase: "hidden", asked: s.asked } : s;
     case "timeout":
-      return s.phase === "waiting" && e.asked === s.asked ? { phase: "failed", asked: s.asked, refused: false } : s;
+      return s.phase === "waiting" && e.token === s.asked ? { phase: "failed", asked: s.asked, refused: false } : s;
   }
 }
 

@@ -1,51 +1,62 @@
 import { describe, expect, it } from "vitest";
-import { LOADING, loadStep, notLoadedOf, readFailureNote, wantsParseError, type LoadEvent, type PageLoad } from "./designLoad";
+import { LOADING, loadStep, notLoadedOf, readFailureNote, waitToken, wantsParseError, type LoadEvent, type PageLoad } from "./designLoad";
 import { bridgeMessage } from "./designBridge";
 import { designBar, loadFixMessage } from "./designBars";
 
 const run = (events: LoadEvent[], from: PageLoad = LOADING) => events.reduce(loadStep, from);
+/** The wait for the hello the canvas asks now is over. */
+const timeout = (s: PageLoad): LoadEvent => ({ kind: "timeout", token: waitToken(s) });
+/** `events`, then the end of the wait for the hello asked by then. */
+const thenTimeout = (events: LoadEvent[], from: PageLoad = LOADING) => {
+  const s = run(events, from);
+  return loadStep(s, timeout(s));
+};
 
 describe("whether the canvas's page loaded (X65)", () => {
   it("asks the bridge once the frame loads in a visible window, and fails the page when it does not answer in time", () => {
-    expect(run([{ kind: "load", visible: true }])).toEqual({ phase: "waiting", asked: 1 });
-    expect(run([{ kind: "load", visible: true }, { kind: "timeout", asked: 1 }])).toEqual({ phase: "failed", asked: 1, refused: false });
+    expect(run([{ kind: "load", visible: true }]).phase).toBe("waiting");
+    expect(thenTimeout([{ kind: "load", visible: true }]).phase).toBe("failed");
   });
 
   it("has loaded once the bridge answers, before or after the frame's load", () => {
-    expect(run([{ kind: "answer" }, { kind: "load", visible: true }])).toEqual({ phase: "loaded", asked: 0 });
-    expect(run([{ kind: "load", visible: true }, { kind: "answer" }, { kind: "timeout", asked: 1 }])).toEqual({ phase: "loaded", asked: 1 });
+    expect(run([{ kind: "answer" }, { kind: "load", visible: true }]).phase).toBe("loaded");
+    expect(thenTimeout([{ kind: "load", visible: true }, { kind: "answer" }]).phase).toBe("loaded");
   });
 
   it("waits for a hidden window to show before it asks, asks again when the window hides while it waits, and ignores the wait of an earlier ask", () => {
     const hidden = run([{ kind: "load", visible: false }]);
-    expect(hidden).toEqual({ phase: "hidden", asked: 0 });
+    expect(hidden.phase).toBe("hidden");
     // However long it stays hidden: a suspended frame answers nothing.
-    expect(run([{ kind: "timeout", asked: 0 }], hidden)).toEqual({ phase: "hidden", asked: 0 });
-    expect(run([{ kind: "visible" }], hidden)).toEqual({ phase: "waiting", asked: 1 });
-    expect(run([{ kind: "visible" }, { kind: "answer" }], hidden)).toEqual({ phase: "loaded", asked: 1 });
-    const again = run([{ kind: "visible" }, { kind: "hidden" }, { kind: "timeout", asked: 1 }, { kind: "visible" }], hidden);
-    expect(again).toEqual({ phase: "waiting", asked: 2 });
-    expect(run([{ kind: "timeout", asked: 2 }], again)).toEqual({ phase: "failed", asked: 2, refused: false });
+    expect(loadStep(hidden, timeout(hidden)).phase).toBe("hidden");
+    expect(run([{ kind: "visible" }], hidden).phase).toBe("waiting");
+    expect(run([{ kind: "visible" }, { kind: "answer" }], hidden).phase).toBe("loaded");
+    const first = run([{ kind: "visible" }], hidden);
+    const again = run([{ kind: "hidden" }, timeout(first), { kind: "visible" }], first);
+    expect(again.phase).toBe("waiting");
+    // The first ask's wait ends after the second ask: nothing happens.
+    expect(loadStep(again, timeout(first)).phase).toBe("waiting");
+    expect(loadStep(again, timeout(again)).phase).toBe("failed");
   });
 
   it("takes a late answer: a page said not to load that answers after all has loaded", () => {
-    expect(run([{ kind: "load", visible: true }, { kind: "timeout", asked: 1 }, { kind: "answer" }])).toEqual({ phase: "loaded", asked: 1 });
+    expect(run([{ kind: "answer" }], thenTimeout([{ kind: "load", visible: true }])).phase).toBe("loaded");
   });
 
   it("starts again on a reload, where the wait of the load before does nothing", () => {
-    const failed = run([{ kind: "load", visible: true }, { kind: "timeout", asked: 1 }]);
-    expect(run([{ kind: "reload" }], failed)).toEqual({ phase: "loading", asked: 1 });
-    expect(run([{ kind: "reload" }, { kind: "load", visible: true }, { kind: "timeout", asked: 1 }], failed)).toEqual({ phase: "waiting", asked: 2 });
-    expect(run([{ kind: "reload" }, { kind: "load", visible: true }, { kind: "answer" }], failed)).toEqual({ phase: "loaded", asked: 2 });
+    const waiting = run([{ kind: "load", visible: true }]);
+    const failed = loadStep(waiting, timeout(waiting));
+    expect(run([{ kind: "reload" }], failed).phase).toBe("loading");
+    expect(run([{ kind: "reload" }, { kind: "load", visible: true }, timeout(waiting)], failed).phase).toBe("waiting");
+    expect(run([{ kind: "reload" }, { kind: "load", visible: true }, { kind: "answer" }], failed).phase).toBe("loaded");
   });
 
   it("fails a page the scheme could not serve at once, in a hidden window too", () => {
-    expect(run([{ kind: "refused" }, { kind: "load", visible: false }])).toEqual({ phase: "failed", asked: 0, refused: true });
-    expect(run([{ kind: "load", visible: true }, { kind: "refused" }, { kind: "timeout", asked: 1 }])).toEqual({ phase: "failed", asked: 1, refused: true });
+    expect(run([{ kind: "refused" }, { kind: "load", visible: false }]).phase).toBe("failed");
+    expect(thenTimeout([{ kind: "load", visible: true }, { kind: "refused" }]).phase).toBe("failed");
   });
 
   it("stays loaded when a link in the page loads its frame again, with no bridge", () => {
-    expect(run([{ kind: "answer" }, { kind: "load", visible: true }, { kind: "load", visible: true }, { kind: "timeout", asked: 0 }])).toEqual({ phase: "loaded", asked: 0 });
+    expect(thenTimeout([{ kind: "answer" }, { kind: "load", visible: true }, { kind: "load", visible: true }]).phase).toBe("loaded");
   });
 });
 
@@ -53,14 +64,15 @@ describe("why the canvas's page did not load (X65)", () => {
   const quote = { line: 3, message: "an attribute's quote is never closed" };
 
   it("is the page's first parse error when its bridge was silent, why the daemon could not read it when the scheme refused it, and nothing for a page that loads or loaded", () => {
-    expect(notLoadedOf({ phase: "failed", asked: 1, refused: false }, null, quote)).toEqual({ kind: "silent", parse: quote });
-    expect(notLoadedOf({ phase: "failed", asked: 1, refused: false }, null, null)).toEqual({ kind: "silent" });
+    const silent = thenTimeout([{ kind: "load", visible: true }]);
+    expect(notLoadedOf(silent, null, quote)).toEqual({ kind: "silent", parse: quote });
+    expect(notLoadedOf(silent, null, null)).toEqual({ kind: "silent" });
     // A page not served has no text of its own: a parse error read before is not its.
-    expect(notLoadedOf({ phase: "failed", asked: 0, refused: true }, "the file cannot be read", quote)).toEqual({ kind: "refused", reason: "the file cannot be read" });
+    expect(notLoadedOf(run([{ kind: "refused" }]), "the file cannot be read", quote)).toEqual({ kind: "refused", reason: "the file cannot be read" });
     // A page that loaded never shows its parse errors: a browser recovers from them.
-    expect(notLoadedOf({ phase: "loaded", asked: 1 }, null, quote)).toBeNull();
-    expect(notLoadedOf({ phase: "waiting", asked: 1 }, null, quote)).toBeNull();
-    expect(notLoadedOf({ phase: "hidden", asked: 0 }, null, quote)).toBeNull();
+    expect(notLoadedOf(run([{ kind: "answer" }]), null, quote)).toBeNull();
+    expect(notLoadedOf(run([{ kind: "load", visible: true }]), null, quote)).toBeNull();
+    expect(notLoadedOf(run([{ kind: "load", visible: false }]), null, quote)).toBeNull();
   });
 });
 
@@ -91,7 +103,7 @@ describe("a page that loaded but the daemon could not read (X65)", () => {
 
 describe("asking where a page's markup swallows the bridge (X65)", () => {
   it("is done only for a page whose bridge was silent, never for one that loads, loaded or the scheme refused", () => {
-    expect(wantsParseError(run([{ kind: "load", visible: true }, { kind: "timeout", asked: 1 }]))).toBe(true);
+    expect(wantsParseError(thenTimeout([{ kind: "load", visible: true }]))).toBe(true);
     expect(wantsParseError(run([{ kind: "refused" }]))).toBe(false);
     expect(wantsParseError(run([{ kind: "answer" }]))).toBe(false);
     expect(wantsParseError(run([{ kind: "load", visible: true }]))).toBe(false);
