@@ -39,6 +39,9 @@ interface DesignState {
   sessionDesigns: Record<string, Design[]>;
   /** The design each session's Design tab shows (its place key), by slug. */
   sessionShown: Record<string, string>;
+  /** The sessions (place keys) whose Design tab the app just opened itself,
+   *  until the tab's canvas takes it: its keys work at once. */
+  tabOpened: string[];
   /** The designs an agent started from a session that the user has not
    *  seen yet (`itemKey`), for the Design button's accent dot (X65). */
   unseen: string[];
@@ -64,7 +67,7 @@ interface DesignState {
   histories: Record<string, DesignSnapshot[]>;
 }
 
-export const useDesign = create<DesignState>(() => ({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, designs: {}, sessionDesigns: {}, sessionShown: {}, unseen: [], designShown: {}, pageRevs: {}, latest: {}, problems: {}, systemNames: {}, comments: {}, mids: {}, sending: {}, histories: {} }));
+export const useDesign = create<DesignState>(() => ({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, designs: {}, sessionDesigns: {}, sessionShown: {}, tabOpened: [], unseen: [], designShown: {}, pageRevs: {}, latest: {}, problems: {}, systemNames: {}, comments: {}, mids: {}, sending: {}, histories: {} }));
 
 /** A place's key: a workspace's `wsKey`, a session's `host/s:<session>`,
  *  so a session design never shares a workspace design's state (X65). */
@@ -203,8 +206,21 @@ export function showSessionDesign(host: string, session: string, slug: string) {
 export async function openSessionDesign(host: string, workspace: string, session: string, slug: string, select: boolean) {
   if (select) selectSession(host, session);
   showSessionDesign(host, session, slug);
+  const key = placeKey(host, { session });
+  useDesign.setState((s) => (s.tabOpened.includes(key) ? {} : { tabOpened: [...s.tabOpened, key] }));
   useStore.setState({ rightTab: "design", rightOpen: true });
   await loadDesigns(host, workspace, true).catch(() => {});
+}
+
+/** Whether the app just opened this session's Design tab itself. */
+export function justOpened(s: DesignState, host: string, session: string): boolean {
+  return s.tabOpened.includes(placeKey(host, { session }));
+}
+
+/** The session's Design tab's canvas took the app's opening. */
+export function tookOpened(host: string, session: string) {
+  const key = placeKey(host, { session });
+  useDesign.setState((s) => ({ tabOpened: s.tabOpened.filter((k) => k !== key) }));
 }
 
 /** How many designs of a workspace an agent started that are unseen. */

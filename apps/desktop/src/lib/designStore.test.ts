@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Design, DesignComment, DesignSystem, TerminalInfo } from "./protocol";
 import { modeOf, setMode } from "./mode";
 import { agentOnScreen, goToAgent, useStore } from "./store";
-import { pageKey, pageOfKey, commentsOf, historyOf, keepComment, loadComments, loadHistory, sendComments, sendingOf, resolveComment, sessionDesignsOf, shownSessionDesign, showSessionDesign, unseenOf, updateSystem } from "./designStore";
+import { pageKey, pageOfKey, commentsOf, historyOf, keepComment, loadComments, loadHistory, sendComments, sendingOf, resolveComment, sessionDesignsOf, shownSessionDesign, showSessionDesign, unseenOf, updateSystem, justOpened, tookOpened } from "./designStore";
 import { cardsOf, checkDesign, createFromNewDesign, createSystem, designsOf, detectStack, latestOf, loadCards, loadDesigns, loadSystems, openCard, saveViewport, pageRevOf, problemsOf, revOf, shownCard, shownDesign, shownSystem, showDesign, showSystem, startDesign, systemNameOf, systemsOf, useDesign } from "./designStore";
 
 const calls = vi.hoisted(() => [] as { host: string; method: string; params: unknown }[]);
@@ -56,7 +56,7 @@ const listed = () => calls.filter((c) => c.method === "design.systems");
 beforeEach(async () => {
   calls.length = 0;
   for (const k of Object.keys(answers)) delete answers[k];
-  useDesign.setState({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, designs: {}, sessionDesigns: {}, sessionShown: {}, unseen: [], designShown: {}, pageRevs: {}, latest: {}, problems: {}, systemNames: {}, comments: {}, mids: {}, sending: {}, histories: {} });
+  useDesign.setState({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, designs: {}, sessionDesigns: {}, sessionShown: {}, tabOpened: [], unseen: [], designShown: {}, pageRevs: {}, latest: {}, problems: {}, systemNames: {}, comments: {}, mids: {}, sending: {}, histories: {} });
   await startDesign();
 });
 
@@ -803,6 +803,15 @@ describe("design.open of a design an agent made (X65)", () => {
     expect(useStore.getState()).toMatchObject({ rightTab: "design", rightOpen: true });
     expect(shownSessionDesign(useDesign.getState(), "local", "4f2a9c1e7b3d")?.slug).toBe("settings-page");
     expect(toasts()).toEqual([]);
+  });
+
+  it("marks the tab as opened by the app until its canvas takes that, so its keys work at once", async () => {
+    opened({ slug: "settings-page", session: "4f2a9c1e7b3d", kind: "session" });
+    await settle();
+    expect(justOpened(useDesign.getState(), "local", "4f2a9c1e7b3d")).toBe(true);
+    expect(justOpened(useDesign.getState(), "mac-2", "4f2a9c1e7b3d")).toBe(false);
+    tookOpened("local", "4f2a9c1e7b3d");
+    expect(justOpened(useDesign.getState(), "local", "4f2a9c1e7b3d")).toBe(false);
   });
 
   it("offers a session design in a toast while another session is shown, and Open shows its session's Design tab", async () => {

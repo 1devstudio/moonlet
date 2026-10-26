@@ -311,3 +311,22 @@ export function dragEdit(r: DragResult, snippet: string | null): { op: EditOp; r
 export function pickEdit(selected: string | null, snippet: string): EditOp {
   return { kind: "insert", place: selected ? { where: "below", ref: selected } : null, html: snippet };
 }
+
+/** What last told whether the user is in a session's Design tab: a press
+ *  or a focus, in it or elsewhere (WebKit focuses no button on a click,
+ *  so a press counts as much as a focus), or the app opening the tab
+ *  itself, on `design.open` or a toast's Open (X65). */
+export type TabKeysEvent = { kind: "pointer" | "focus"; inside: boolean } | { kind: "opened" };
+
+/** Whether the user is in a session's Design tab after `e`. */
+export function inTabAfter(e: TabKeysEvent): boolean {
+  return e.kind === "opened" || e.inside;
+}
+
+/** Whether a canvas takes its keys (C, V, Esc, the editor's, ⌘0, ⌘= and
+ *  ⌘-): the design screen's whenever it is shown, a session's Design tab's
+ *  while the user is in it (`inTab`), so the session's terminals and chat
+ *  beside it keep theirs. */
+export function canvasTakesKeys(session: boolean, inTab: boolean): boolean {
+  return !session || inTab;
+}
