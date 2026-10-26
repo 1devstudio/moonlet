@@ -38,7 +38,12 @@ export function placeOfDesign(d: Design, workspace: string): DesignPlace {
 }
 
 /** The place's label in a `moonlet-design://` host: the workspace's id,
- *  or `s-<session>`, which `target` in design_scheme.rs parses. */
+ *  or `s-<session>`, which `target` in design_scheme.rs parses. A workspace
+ *  id is twelve hex digits (`new_id` in moonlet-core's session.rs), so it
+ *  never starts with `s-`; one that did would be read as a session's, and
+ *  is refused. */
 export function placeHost(place: DesignPlace): string {
-  return isSession(place) ? `s-${encodeURIComponent(place.session)}` : encodeURIComponent(place);
+  if (isSession(place)) return `s-${encodeURIComponent(place.session)}`;
+  if (place.startsWith("s-")) throw new Error("a workspace id never starts with s-, which names a session's design folder");
+  return encodeURIComponent(place);
 }
