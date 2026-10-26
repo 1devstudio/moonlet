@@ -16,6 +16,61 @@ use super::store::Store;
 #[error("{0} changed since it was read")]
 pub struct Stale(pub String);
 
+/// A page whose file is not there or cannot be read, said as the canvas's
+/// did-not-load bar says it (X65): plainly, with no path, as it goes to the
+/// bar and the design's agent. It is the context of the error it comes
+/// from, which keeps the cause for the daemon's log.
+#[derive(Debug, thiserror::Error)]
+pub enum Unreadable {
+    #[error("the file is missing")]
+    Missing,
+    #[error("the file is a link out of the design")]
+    LinkOut,
+    #[error("the file is not valid UTF-8")]
+    NotUtf8,
+    #[error("the file cannot be read")]
+    Denied,
+}
+
+impl Unreadable {
+    /// What a failed read of `rel` in `root` is: a link out of the design
+    /// when the file, or a folder on its way, is a link that leads out of
+    /// `root`; missing when it is not there; not UTF-8 when its bytes are
+    /// not text; else it cannot be read (no permission, a folder, …).
+    fn of(e: &anyhow::Error, root: &std::path::Path, rel: &std::path::Path) -> Self {
+        let io = |kind: std::io::ErrorKind| {
+            e.chain().any(|c| {
+                c.downcast_ref::<std::io::Error>()
+                    .is_some_and(|io| io.kind() == kind)
+            })
+        };
+        if leads_out(root, rel) {
+            Self::LinkOut
+        } else if io(std::io::ErrorKind::NotFound) {
+            Self::Missing
+        } else if io(std::io::ErrorKind::InvalidData) {
+            Self::NotUtf8
+        } else {
+            Self::Denied
+        }
+    }
+}
+
+/// Whether `rel` in `root`, or a folder on its way, is a link whose target
+/// is outside `root`: only to say why a read failed, never to allow one.
+fn leads_out(root: &std::path::Path, rel: &std::path::Path) -> bool {
+    let Ok(root) = root.canonicalize() else {
+        return false;
+    };
+    let mut at = root.clone();
+    rel.components().any(|part| {
+        at.push(part);
+        at.symlink_metadata()
+            .is_ok_and(|m| m.file_type().is_symlink())
+            && !at.canonicalize().is_ok_and(|real| real.starts_with(&root))
+    })
+}
+
 /// A page name that names no page of a design.
 #[derive(Debug, thiserror::Error)]
 #[error("bad page \"{0}\"")]
@@ -65,12 +120,23 @@ fn page_rel(at: &DesignAt, page: &str) -> Result<std::path::PathBuf> {
 }
 
 impl Store {
-    /// A design's page, `pages/<page>.html`, with its version.
-    pub fn page(&self, at: &DesignAt, page: &str) -> Result<DesignPageText> {
+    /// A design's page, `pages/<page>.html`, with its version, and when
+    /// `parse` asks for it, where its markup swallows the editor bridge, if
+    /// it does: what the canvas asks of a page whose bridge was silent,
+    /// never on the editor's reads on every change.
+    pub fn page(&self, at: &DesignAt, page: &str, parse: bool) -> Result<DesignPageText> {
         let rel = page_rel(at, page)?;
-        let html = fsx::read_inside(&at.root, &at.root.join(rel))?;
+        let html = fsx::read_inside(&at.root, &at.root.join(&rel)).map_err(|e| {
+            let why = Unreadable::of(&e, &at.root, &rel);
+            e.context(why)
+        })?;
         Ok(DesignPageText {
             version: version_of(&html),
+            parse_error: if parse {
+                super::parse::first_parse_error(&html)
+            } else {
+                None
+            },
             html,
         })
     }
@@ -137,6 +203,7 @@ mod tests {
             .page(
                 &store.workspace_design("w1", "settings-page").unwrap(),
                 "index",
+                false,
             )
             .unwrap();
         assert_eq!(read.html, INDEX);
@@ -162,12 +229,14 @@ mod tests {
             store
                 .page(
                     &store.workspace_design("w1", "settings-page").unwrap(),
-                    "index"
+                    "index",
+                    false
                 )
                 .unwrap(),
             DesignPageText {
                 html: edited.into(),
-                version: version.clone()
+                version: version.clone(),
+                parse_error: None,
             }
         );
         // A second edit goes over the version the first one gave.
@@ -192,6 +261,7 @@ mod tests {
             .page(
                 &store.workspace_design("w1", "settings-page").unwrap(),
                 "index",
+                false,
             )
             .unwrap();
         let agents = "<!doctype html>\n<body data-mid=\"m1\"><h1 data-mid=\"m2\">Settings, by the agent</h1></body>\n";
@@ -215,6 +285,7 @@ mod tests {
             .page(
                 &store.workspace_design("w1", "settings-page").unwrap(),
                 "index",
+                false,
             )
             .unwrap();
         let theirs = file.clone();
@@ -248,6 +319,7 @@ mod tests {
             .page(
                 &store.workspace_design("w1", "settings-page").unwrap(),
                 "index",
+                false,
             )
             .unwrap();
         // A pages folder swapped for a link to a folder outside.
@@ -258,7 +330,8 @@ mod tests {
             store
                 .page(
                     &store.workspace_design("w1", "settings-page").unwrap(),
-                    "index"
+                    "index",
+                    false
                 )
                 .is_err()
         );
@@ -298,5 +371,72 @@ mod tests {
                 .unwrap_err();
             assert!(err.is::<BadPage>(), "{bad}: {err:#}");
         }
+    }
+
+    #[test]
+    fn a_page_is_read_with_the_first_place_it_goes_wrong_as_html_only_when_asked() {
+        let (home, store) = store_with_page();
+        let at = store.workspace_design("w1", "settings-page").unwrap();
+        assert_eq!(store.page(&at, "index", true).unwrap().parse_error, None);
+        std::fs::write(
+            home.path()
+                .join("design/w1/designs/settings-page/pages/index.html"),
+            "<!doctype html>\n<body data-mid=\"m1\">\n<html lang=\"en>\n<head><title>x</title></head>\n<h1 data-mid=m2>Settings</h1>\n",
+        )
+        .unwrap();
+        assert_eq!(
+            store.page(&at, "index", true).unwrap().parse_error,
+            Some(moonlet_proto::methods::DesignParseError {
+                line: 3,
+                message: "an attribute's quote is never closed".into()
+            })
+        );
+        // The editor's reads, on every change, read no further than the text.
+        assert_eq!(store.page(&at, "index", false).unwrap().parse_error, None);
+    }
+
+    #[test]
+    fn a_page_that_is_missing_or_cannot_be_read_says_so_plainly() {
+        use std::os::unix::fs::PermissionsExt;
+        let (home, store) = store_with_page();
+        let at = store.workspace_design("w1", "settings-page").unwrap();
+        assert_eq!(
+            store.page(&at, "gone", false).unwrap_err().to_string(),
+            "the file is missing"
+        );
+        // Root reads a file whatever its mode: no case to make there.
+        if nix::unistd::geteuid().is_root() {
+            return;
+        }
+        let file = home
+            .path()
+            .join("design/w1/designs/settings-page/pages/index.html");
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let read = store.page(&at, "index", false);
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(read.unwrap_err().to_string(), "the file cannot be read");
+    }
+
+    #[test]
+    fn a_page_that_is_not_utf_8_or_a_link_out_of_the_design_says_so_and_keeps_its_cause() {
+        let (home, store) = store_with_page();
+        let at = store.workspace_design("w1", "settings-page").unwrap();
+        let pages = home.path().join("design/w1/designs/settings-page/pages");
+        std::fs::write(pages.join("latin.html"), b"<p>caf\xe9</p>\n").unwrap();
+        let latin = store.page(&at, "latin", false).unwrap_err();
+        assert_eq!(latin.to_string(), "the file is not valid UTF-8");
+        // The cause stays in the chain, for the daemon's log, never in what is said.
+        assert!(
+            latin.chain().any(|c| c
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|io| io.kind() == std::io::ErrorKind::InvalidData)),
+            "{latin:#}"
+        );
+        std::fs::write(home.path().join("outside.html"), "<p>out</p>\n").unwrap();
+        std::os::unix::fs::symlink(home.path().join("outside.html"), pages.join("out.html"))
+            .unwrap();
+        let out = store.page(&at, "out", false).unwrap_err();
+        assert_eq!(out.to_string(), "the file is a link out of the design");
+        assert!(out.chain().count() > 1, "{out:#}");
     }
 }

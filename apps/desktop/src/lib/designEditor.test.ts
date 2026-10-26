@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { askWithEdits, updateAndTell, restoreSnapshot, kitOf, loadKit, closeDesign, copyElementOf, hasCopy, dismissUnsaved, editPage, pasteInto, sendCommentsWithEdits, sendWithEdits, redoEdit, undoEdit, loadPageSource, pendingOf, resetEditor, startEditor, settleChecks, settleSaves, sourceOf, undoOf, unsavedOf, useEditor } from "./designEditor";
+import { askWithEdits, updateAndTell, restoreSnapshot, kitOf, loadKit, closeDesign, copyElementOf, hasCopy, dismissUnsaved, editPage, pasteInto, sendCommentsWithEdits, sendWithEdits, redoEdit, undoEdit, loadPageSource, loadParseError, parseErrorOf, pendingOf, readErrorOf, resetEditor, startEditor, settleChecks, settleSaves, sourceOf, undoOf, unsavedOf, useEditor } from "./designEditor";
 import { loadDesigns, pageRevOf, startDesign, useDesign } from "./designStore";
 import { editLines } from "./designEdits";
 import { useStore } from "./store";
@@ -556,3 +556,53 @@ describe("a session's designs, which share its agent (X65)", () => {
     expect(pendingOf(useEditor.getState(), "local", S, "onboarding")).toEqual([]);
   });
 });
+
+describe("a page the daemon could not read (X65)", () => {
+  it("keeps why, as the daemon said it, until a read of the page succeeds", async () => {
+    answers["design.page"] = () => {
+      throw new DaemonError({ code: "unreadable", message: "the file cannot be read" });
+    };
+    await expect(loadPageSource("local", WS, SLUG, "index")).rejects.toThrow("the file cannot be read");
+    expect(readErrorOf(useEditor.getState(), "local", WS, SLUG, "index")).toBe("the file cannot be read");
+    expect(readErrorOf(useEditor.getState(), "local", WS, SLUG, "git-b")).toBeNull();
+    answers["design.page"] = (p) => disk[p.page as string];
+    await loadPageSource("local", WS, SLUG, "index");
+    expect(readErrorOf(useEditor.getState(), "local", WS, SLUG, "index")).toBeNull();
+  });
+});
+
+describe("a page whose bridge was silent (X65)", () => {
+  it("asks the daemon for where its markup swallows the bridge, which the editor's reads never do, and keeps it for the page", async () => {
+    const quote = { line: 2, message: "an attribute's quote is never closed" };
+    answers["design.page"] = (p) => ({ ...disk[p.page as string], parse_error: p.parse ? quote : null });
+    await loadPageSource("local", WS, SLUG, "index");
+    expect(calls.filter((c) => c.method === "design.page").map((c) => c.params.parse ?? false)).toEqual([false]);
+    expect(parseErrorOf(useEditor.getState(), "local", WS, SLUG, "index", "index@1")).toBeNull();
+    await loadParseError("local", WS, SLUG, "index", "index@1");
+    expect(calls.filter((c) => c.method === "design.page").map((c) => c.params.parse ?? false)).toEqual([false, true]);
+    expect(parseErrorOf(useEditor.getState(), "local", WS, SLUG, "index", "index@1")).toEqual(quote);
+  });
+
+  it("keeps it for the framing it was asked for: the page framed again has none until asked, and an older framing's answer that comes last is dropped", async () => {
+    const quote = { line: 2, message: "an attribute's quote is never closed" };
+    const comment = { line: 4, message: "a comment is never closed" };
+    const asked: ((e: typeof quote) => void)[] = [];
+    answers["design.page"] = (p) => new Promise((resolve) => asked.push((e) => resolve({ ...disk[p.page as string], parse_error: e })));
+    const first = loadParseError("local", WS, SLUG, "index", "index@1");
+    await vi.waitFor(() => expect(asked).toHaveLength(1));
+    asked[0](quote);
+    await first;
+    // Written again, the page is framed again: the error read before is not its.
+    expect(parseErrorOf(useEditor.getState(), "local", WS, SLUG, "index", "index@2")).toBeNull();
+    const older = loadParseError("local", WS, SLUG, "index", "index@2");
+    const newer = loadParseError("local", WS, SLUG, "index", "index@3");
+    await vi.waitFor(() => expect(asked).toHaveLength(3));
+    asked[2](comment);
+    await newer;
+    asked[1](quote);
+    await older;
+    expect(parseErrorOf(useEditor.getState(), "local", WS, SLUG, "index", "index@3")).toEqual(comment);
+    expect(parseErrorOf(useEditor.getState(), "local", WS, SLUG, "index", "index@2")).toBeNull();
+  });
+});
+

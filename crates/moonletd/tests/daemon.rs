@@ -2548,7 +2548,7 @@ async fn a_page_is_read_with_its_version_saved_as_sent_and_a_stale_save_is_refus
         .unwrap();
     assert_eq!(
         page,
-        serde_json::json!({"html": "<!doctype html>\r\n<body data-mid=\"m1\">\r\n<h1 data-mid=m2>Settings</h1>\r\n</body>\r\n", "version": "481faada599299fe4a62df14441b3ede9a8a2d0a53b1c90e93902910d05ec0e4"})
+        serde_json::json!({"html": "<!doctype html>\r\n<body data-mid=\"m1\">\r\n<h1 data-mid=m2>Settings</h1>\r\n</body>\r\n", "version": "481faada599299fe4a62df14441b3ede9a8a2d0a53b1c90e93902910d05ec0e4", "parse_error": null})
     );
     let mut listener = d.client().await;
     let edited = "<!doctype html>\r\n<body data-mid=\"m1\">\r\n<h1 data-mid=m2>Settings &amp; more</h1>\r\n</body>\r\n";

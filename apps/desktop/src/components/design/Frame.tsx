@@ -10,7 +10,8 @@ import { IconButton } from "../ui";
 /** A card or a page rendered at `scale`: its viewport, in a frame that may
  *  run its own scripts but never reach the app (no `allow-same-origin`). Not
  *  `live`, the same box without the frame, so its web process (X64) is not
- *  started. `frameRef`: the frame, for a page's bridge (X65). */
+ *  started. `frameRef`: the frame, for a page's bridge (X65); `onLoad`: its
+ *  load, which tells whether the page loaded (X65 entry 13). */
 export function CardFrame({
   url,
   title,
@@ -19,6 +20,7 @@ export function CardFrame({
   interactive = false,
   live = true,
   frameRef,
+  onLoad,
 }: {
   url: string;
   title: string;
@@ -27,6 +29,7 @@ export function CardFrame({
   interactive?: boolean;
   live?: boolean;
   frameRef?: Ref<HTMLIFrameElement>;
+  onLoad?: () => void;
 }) {
   const [w, h] = viewport;
   return (
@@ -37,6 +40,7 @@ export function CardFrame({
           title={title}
           src={url}
           sandbox="allow-scripts"
+          onLoad={onLoad}
           className={cx("absolute left-0 top-0 border-0 bg-transparent", !interactive && "pointer-events-none")}
           style={{ width: w, height: h, transform: `scale(${scale})`, transformOrigin: "0 0" }}
         />

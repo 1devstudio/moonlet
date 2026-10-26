@@ -1143,6 +1143,15 @@ export type CommentChange =
 export interface DesignPageText {
   html: string;
   version: string;
+  /** Where the page's markup swallows the editor bridge, given only when
+   *  asked with `parse` (X65 entry 13). Missing from an older daemon. */
+  parse_error?: DesignParseError | null;
+}
+
+/** A page's first parse error: its line, 1-based, and what is wrong. */
+export interface DesignParseError {
+  line: number;
+  message: string;
 }
 
 /** What took a design's snapshot (X65). */
