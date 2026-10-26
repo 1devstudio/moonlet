@@ -223,7 +223,11 @@ describe("Build it and the Designs index", () => {
     await expect(group("In projects")).toHaveText(expect.stringContaining("Merged to main: found under docs/design/. Read only; reuse them as a start"));
     const merged = group("In projects").$('.//article[@aria-label="Checkout flow"]');
     await expect(merged).toHaveText(expect.stringContaining(`${PROJECT} · docs/design/checkout-flow`));
-    await expect(merged).toHaveText(expect.stringContaining("No preview: its pages are read from the base branch, not checked out"));
+    // Its first page, read from the base branch, on a project design's own host.
+    expect(await merged.$(".//iframe").getAttribute("src")).toMatch(/^moonlet-design:\/\/[0-9a-f]{16}s[0-9a-f]{16}\.p-[^/]+\/checkout-flow\/pages\/index\.html$/);
+    // A design merged on the base branch is the project's only, never the session's made from it.
+    await expect(group("In sessions").$('.//article[@aria-label="Checkout flow"]')).not.toBeExisting();
+    await expect($('//nav[@aria-label="Designs"]//button[.//span[normalize-space()="Checkout flow"]]')).not.toBeExisting();
   });
 
   it("makes a workspace design from a project design with Use as a start, and opens it", async () => {
