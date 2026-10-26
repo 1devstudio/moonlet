@@ -4333,3 +4333,39 @@ async fn building_a_design_whose_slug_the_base_branch_has_makes_no_session_and_l
     let sessions: Vec<Session> = c.request(methods::SESSION_LIST, ()).await.unwrap();
     assert_eq!(sessions.len(), 1);
 }
+
+/// X65 entry 12: `design.file` finds a session design's file for the
+/// canvas by its session and its path in the worktree's design folder, a
+/// snapshot's at the design's depth, with the folder it must be inside,
+/// and never one outside it.
+#[tokio::test]
+async fn a_session_designs_files_are_found_for_the_canvas_by_its_session() {
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    let (ws, _, session) = workspace_with_session(&d, &mut c, &[]).await;
+    let _: serde_json::Value = c
+        .request(
+            methods::DESIGN_CREATE,
+            serde_json::json!({"workspace": ws, "session": session.id, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}),
+        )
+        .await
+        .unwrap();
+    let dir = std::path::PathBuf::from(&session.path).canonicalize().unwrap().join("docs/design/settings-page");
+    std::fs::write(dir.join("pages/index.html"), "<body data-mid=\"m1\"></body>\n").unwrap();
+    let found: serde_json::Value = c
+        .request(methods::DESIGN_FILE, serde_json::json!({"session": session.id, "path": "settings-page/pages/index.html"}))
+        .await
+        .unwrap();
+    assert_eq!(
+        found,
+        serde_json::json!({"path": dir.join("pages/index.html"), "content_type": "text/html; charset=utf-8", "root": dir})
+    );
+    let outside = c
+        .request::<_, serde_json::Value>(methods::DESIGN_FILE, serde_json::json!({"session": session.id, "path": "settings-page/../../../../README.md"}))
+        .await;
+    assert_eq!(outside.unwrap_err().to_string(), "invalid_params: settings-page/../../../../README.md is no file of a session design");
+    let both = c
+        .request::<_, serde_json::Value>(methods::DESIGN_FILE, serde_json::json!({"workspace": ws, "session": session.id, "path": "settings-page/pages/index.html"}))
+        .await;
+    assert_eq!(both.unwrap_err().to_string(), "invalid_params: name a design file by its workspace or by its session, not both");
+}

@@ -410,6 +410,60 @@ pub fn session_design(
     Ok(at)
 }
 
+/// The file of a worktree's session designs the canvas asks for
+/// (`design.file`), by its path in the design folder `folder`:
+/// `<slug>/<file>` a file of that design's folder, and a snapshot's
+/// `<slug>@<n>/pages/…` or `assets/…`, kept in
+/// `.moonlet/design/<slug>/history/<n>/`, at the design's own depth, so its
+/// `../system/styles.css` (`<slug>@<n>/system/…`) is the design's pinned
+/// copy, as its pages' is. No part is empty, `.` or `..`; and the file, its
+/// links followed, must be inside that folder: never elsewhere in the
+/// worktree, nor outside it. Returns the file and the folder it is in, as
+/// real paths, for the opened file to be checked against again.
+pub fn session_file(
+    worktree: &Path,
+    folder: &str,
+    rel: &str,
+) -> Result<(std::path::PathBuf, std::path::PathBuf)> {
+    check_folder(folder)?;
+    let no_file = || anyhow::anyhow!("{rel} is no file of a session design");
+    let parts: Vec<&str> = rel.split('/').collect();
+    let [first, rest @ ..] = parts.as_slice() else {
+        return Err(no_file());
+    };
+    if rest.is_empty()
+        || !rest
+            .iter()
+            .all(|p| !p.is_empty() && *p != "." && *p != "..")
+    {
+        return Err(no_file());
+    }
+    let (slug, snapshot) = match first.split_once('@') {
+        Some((slug, n)) if super::history::is_number(n) => (slug, Some(n)),
+        Some(_) => return Err(no_file()),
+        None => (*first, None),
+    };
+    super::place::check_slug(slug).map_err(|_| no_file())?;
+    let design = Path::new(folder).join(slug);
+    let base = match (snapshot, rest[0]) {
+        (None, _) | (Some(_), "system") => design,
+        (Some(n), "pages" | "assets") => Path::new(SIDE_DIR)
+            .join(slug)
+            .join(super::history::HISTORY_DIR)
+            .join(n),
+        _ => return Err(no_file()),
+    };
+    let base = worktree.join(base).canonicalize().map_err(|_| no_file())?;
+    let file = base
+        .join(rest.join("/"))
+        .canonicalize()
+        .map_err(|_| no_file())?;
+    if !file.starts_with(&base) || !file.is_file() {
+        return Err(no_file());
+    }
+    Ok((file, base))
+}
+
 /// A session design's address: `<folder>/<slug>/` in the worktree, its
 /// comments and history in `.moonlet/design/<slug>/`.
 fn session_at(session: &str, worktree: &Path, folder: &str, slug: &str) -> DesignAt {
@@ -1104,5 +1158,67 @@ label = \"cards\"
             "name = \"Settings page\"\nsystem = \"moonlet-desktop\"\n"
         );
         assert_eq!(store.design_config(&from).unwrap().session, None);
+    }
+
+    #[test]
+    fn a_session_designs_files_are_served_from_its_worktree_its_snapshots_at_its_depth_and_never_outside()
+     {
+        use super::super::history::Take;
+        let (_home, store) = store_with_synced_system();
+        let worktree = tempfile::tempdir().unwrap();
+        let wt = worktree.path().canonicalize().unwrap();
+        let at = store
+            .create_session_design(
+                "w1",
+                "moonlet-desktop",
+                "s1",
+                &wt,
+                "docs/design",
+                "Settings page",
+                "",
+                1,
+            )
+            .unwrap();
+        let dir = wt.join("docs/design/settings-page");
+        std::fs::write(
+            dir.join("pages/index.html"),
+            "<body data-mid=\"m1\"></body>\n",
+        )
+        .unwrap();
+        store.take_snapshot(&at, Take::AgentTurn, 5).unwrap();
+        let file = |rel: &str| session_file(&wt, "docs/design", rel).map(|(file, _)| file);
+        assert_eq!(
+            file("settings-page/pages/index.html").unwrap(),
+            dir.join("pages/index.html")
+        );
+        assert_eq!(
+            file("settings-page/system/styles.css").unwrap(),
+            dir.join("system/styles.css")
+        );
+        // A snapshot's page at the design's depth, and its styles link to the
+        // design's pinned copy beside it.
+        assert_eq!(
+            file("settings-page@1/pages/index.html").unwrap(),
+            wt.join(".moonlet/design/settings-page/history/1/pages/index.html")
+        );
+        assert_eq!(
+            file("settings-page@1/system/styles.css").unwrap(),
+            dir.join("system/styles.css")
+        );
+        std::os::unix::fs::symlink("/etc/hosts", dir.join("pages/hosts.html")).unwrap();
+        for bad in [
+            "settings-page/../../../README.md",
+            "../settings-page/pages/index.html",
+            "settings-page/./pages/index.html",
+            "settings-page//pages/index.html",
+            "settings-page",
+            "settings-page@1/snapshot.json",
+            "settings-page@01/pages/index.html",
+            "settings-page@x/pages/index.html",
+            "settings-page/pages/hosts.html",
+            "nope/pages/index.html",
+        ] {
+            assert!(file(bad).is_err(), "{bad}");
+        }
     }
 }

@@ -1376,8 +1376,15 @@ impl DesignRenderDone {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DesignFile {
-    pub workspace: String,
-    /// Relative to the workspace's design folder, such as `systems/<slug>/styles.css`.
+    /// A file of this workspace's design folder; or, with `session`, of
+    /// that session's worktree's design folder (X65).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+    /// Relative to the workspace's design folder, such as
+    /// `systems/<slug>/styles.css`; or to the worktree's, such as
+    /// `settings-page/pages/index.html`.
     pub path: String,
 }
 
