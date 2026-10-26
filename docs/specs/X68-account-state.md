@@ -93,7 +93,7 @@ Session records, settings, devices and secrets join the account state in later s
 
 - `$MOONLET_HOME/account.json`: `{member, changes: [Change]}`, mode 0600. The clock and this member's count are worked out again from the changes when it loads, so they never disagree with them.
 - `state.json` keeps its workspaces and sections, written from the account state on every change, so an older daemon reads the current ones.
-- Each log has its own id, named after X41's worker id from `link.json` with a random suffix (`7d3f1c2a-….k3x9q2`). A log made again, after the file was lost or unreadable, gets a new one, so it never numbers its changes as the lost log did.
+- Each log has its own id, named after X41's worker id from `link.json` with a random suffix (`7d3f1c2a-….k3x9q2`). A log made again, after the file was lost or unreadable, gets a new one, so it never numbers its changes as the lost log did. A log named after another worker id, as when `link.json` was made again, goes on under a new name after the current one, keeping its earlier changes under their old name, since the central host takes changes only under the sender's worker id (`a_log_named_after_an_older_worker_id_goes_on_under_the_new_one`, `a_central_host_whose_worker_id_changed_goes_on_under_the_new_one_and_keeps_its_history`).
 
 ## Security considerations
 

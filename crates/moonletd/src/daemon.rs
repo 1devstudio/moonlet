@@ -1087,7 +1087,8 @@ impl Daemon {
                 // log has every member's work in its state already.
                 // Names are matched whole, `<worker id>.<6 letters or digits>`,
                 // and none is this host's own: its worker id is no secret, as
-                // its log is named after it.
+                // its log is named after it, under its current worker id
+                // even when link.json was made again.
                 let sent = r.changes.len();
                 let ours = worker == self.link.info().worker.id;
                 let prefix = format!("{worker}.");
