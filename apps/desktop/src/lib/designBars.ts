@@ -2,7 +2,7 @@
 // has to act. Pure: the screen is components/design/DesignScreen.tsx.
 
 import { pageFile, pageOfPath, pagePath } from "./designPage";
-import type { DesignSystemUpdated } from "./protocol";
+import type { DesignParseError, DesignSystemUpdated } from "./protocol";
 import { sideFolder } from "./designPlace";
 
 /** One problem of `design.check` for a design. */
@@ -37,9 +37,20 @@ export interface BarState {
   /** A session design whose design system was synced since it pinned it
    *  (`design.list`'s `system_updated`). */
   systemUpdated?: boolean;
+  /** The shown page did not load (lib/designLoad.ts); null while it loads
+   *  or did. */
+  notLoaded?: NotLoaded | null;
 }
 
-export type BarAction = "stop" | "details" | "fix" | "dismiss" | "back" | "restore" | "update";
+/** Why the shown page did not load: the scheme's reason when it could not
+ *  serve it, else the page's first parse error from `design.page`, if it
+ *  has one. */
+export interface NotLoaded {
+  reason: string | null;
+  parse: DesignParseError | null;
+}
+
+export type BarAction = "stop" | "details" | "fix" | "fix-load" | "dismiss" | "back" | "restore" | "update";
 
 export interface Bar {
   tone: "orange" | "red" | "yellow" | "grey" | "blue";
@@ -73,6 +84,14 @@ function summary(problems: PageProblem[]): string {
   return [...known, ...(rest > 0 ? [count(rest, "other problem", "other problems")] : [])].join(", ");
 }
 
+/** What the bar says of a page that did not load: why the scheme could
+ *  not serve it, else its first parse error and line. A page that loaded
+ *  never shows its parse errors: a browser recovers from them. */
+function notLoadedDetail(n: NotLoaded): string {
+  if (n.reason) return n.reason;
+  return n.parse ? `${n.parse.message} at line ${n.parse.line}` : "the canvas got no answer from it";
+}
+
 /** Why Restore waits while the design's agent works, said by the blue bar
  *  and History's Restore. */
 export const RESTORE_WAITS = "Restore opens when Claude stops.";
@@ -80,7 +99,8 @@ export const RESTORE_WAITS = "Restore opens when Claude stops.";
 /** The bar to show, or null: the agent at work, then what it asks, then an
  *  edit by hand a save lost to a change on disk, then a session design's
  *  design system synced since it pinned it, with **Update** (an older pin
- *  may be what fails the check), then the page's check problems, then a
+ *  may be what fails the check), then a page that did not load, then the
+ *  page's check problems, then a
  *  removed design system. A snapshot previewed
  *  comes right after what the agent asks, above the rest, as the canvas
  *  then shows it and not the current pages they are about; while the agent
@@ -96,6 +116,8 @@ export function designBar(s: BarState): Bar | null {
   if (s.unsaved) return { tone: "yellow", text: "The page changed; your last edit was not saved.", detail: s.unsaved, actions: ["dismiss"] };
   // Over the check: a pin of an older sync may be what fails it.
   if (s.systemUpdated) return { tone: "grey", text: "Design system updated.", detail: `${s.system} was synced since this design copied it.`, actions: ["update"] };
+  // Over the check: the page shows nothing.
+  if (s.page !== null && s.notLoaded) return { tone: "red", text: `${pageFile(s.page)} did not load.`, detail: notLoadedDetail(s.notLoaded), actions: ["fix-load"] };
   const check = barProblems(s.page, s.problems);
   if (check) return { tone: "red", text: `${pageFile(check.page)} has check problems:`, detail: summary(check.problems), actions: ["details", "fix"] };
   if (s.systemRemoved) return { tone: "grey", text: "Design system removed.", detail: `Pages show without ${s.system}'s styles.`, actions: [] };
@@ -106,6 +128,12 @@ export function designBar(s: BarState): Bar | null {
 export function pageFixMessage(page: string, problems: PageProblem[]): string {
   const lines = problems.map((p) => `- line ${p.line}: ${p.message}`).join("\n");
   return `Fix the check problems of ${pagePath(page)}, then run the check again:\n${lines}`;
+}
+
+/** What the did-not-load bar's **Ask the agent to fix** sends the design's
+ *  agent: the page, and its parse error and line or why it was not served. */
+export function loadFixMessage(page: string, notLoaded: NotLoaded): string {
+  return `${pagePath(page)} did not load in the canvas: ${notLoadedDetail(notLoaded)}. Fix the page so it loads, then run the check again.`;
 }
 
 /** What **Update** tells a session design's agent once both copies of its
