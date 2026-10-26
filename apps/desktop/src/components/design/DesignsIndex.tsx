@@ -13,7 +13,7 @@ import { designsEmpty, shortAge } from "../../lib/design";
 import { designsIndex, type IndexCard } from "../../lib/designsIndex";
 import { designsOf, openNewDesign, openSessionDesign, projectDesignsIn, sessionDesignsIn, showDesign, startFromProjectDesign, useDesign } from "../../lib/designStore";
 import { pageUrl } from "../../lib/designView";
-import { parseViewport } from "../../lib/designViewport";
+import { viewportOf } from "../../lib/designViewport";
 import { pageFile } from "../../lib/designPage";
 import { errorToast, useStore } from "../../lib/store";
 import { NEAR_ROOT, useNear } from "../../lib/useNear";
@@ -24,7 +24,6 @@ import { cx } from "../../lib/cx";
 import { Button } from "../ui";
 import { CardFrame } from "./Frame";
 
-const DESKTOP: [number, number] = [1440, 900];
 const NO_DESIGNS: Design[] = [];
 
 export function DesignsIndex({ host, workspace, name, systems, inset }: { host: string; workspace: string; name: string; systems: DesignSystem[] | undefined; inset: number }) {
@@ -74,7 +73,7 @@ export function DesignsIndex({ host, workspace, name, systems, inset }: { host: 
             </h2>
             <div className="grid grid-cols-[repeat(auto-fill,minmax(260px,300px))] gap-4">
               {g.cards.map((c) => (
-                <IndexCardView key={c.key} card={c} viewport={parseViewport(byKey.get(c.key)?.viewport) ?? DESKTOP} now={now} busy={starting === c.key} onAct={() => act(c)} />
+                <IndexCardView key={c.key} card={c} viewport={viewportOf(byKey.get(c.key) ?? {})} now={now} busy={starting === c.key} onAct={() => act(c)} />
               ))}
             </div>
           </section>

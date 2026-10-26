@@ -47,7 +47,7 @@ import { selectionOf } from "../../lib/designInspector";
 import { snippetDrags, snippetsOf, type Snippet } from "../../lib/designPalette";
 import { pageUrl, snapshotPageUrl } from "../../lib/designView";
 import { previewBar, previewStep, snapshotTime, type Preview } from "../../lib/designHistory";
-import { VIEWPORTS, canvasKey, canvasScale, canvasZoom, customViewports, fitBox, parseViewport, sizeOf, sizeText, viewportLabel, viewportText, withCustomViewport, type Size } from "../../lib/designViewport";
+import { VIEWPORTS, canvasKey, canvasScale, canvasZoom, customViewports, fitBox, sizeOf, sizeText, viewportLabel, viewportOf, viewportText, withCustomViewport, type Size } from "../../lib/designViewport";
 import { canvasTakesKeys, inTabAfter, breadcrumb, dragEdit, hintLine, pickEdit, canvasPage, canvasStep, chatAfter, editorStep, isTyping, keyAct, layerPick, modeEntered, onReport, undoOpen, writingPage, type CanvasAct, type CanvasMode, type CanvasState, type ChatPanel, type KeyAct, type RailTab } from "../../lib/designCanvas";
 import { keyId } from "../../lib/runActions";
 import { chatCardLookup, commentCardSelector, commentsRail, commentsTab, keepAction, openCommentsLabel, pageCounts, sendAll } from "../../lib/designComments";
@@ -84,8 +84,6 @@ const RAIL_TABS: { tab: RailTab; label: string }[] = [
   { tab: "history", label: "History" },
 ];
 
-/** A design's viewport until it has one: Desktop. */
-const DEFAULT_VIEWPORT = VIEWPORTS[0].size;
 
 /** What a design's chat and canvas both show of it: its agent while it is
  *  running in a structured chat, else null (a session design's is its
@@ -313,7 +311,7 @@ export function DesignCanvas({
   const names = previewed ? previewed.pages : design.pages.map((p) => p.name);
   // A page that went away shows the first one; before any, index (being written).
   const page = canvasPage(picked, names);
-  const viewport = parseViewport(design.viewport) ?? DEFAULT_VIEWPORT;
+  const viewport = viewportOf(design);
   const scale = canvasScale(zoom, viewport, fitBox([cw, ch]));
   const writing = writingPage(lastWritten, working);
   const bar = designBar({ working, needsYou: design.needs_you, page, problems, system: systemName, systemRemoved: !!systems && !system, unsaved, preview: previewed ? previewBar(previewed, Date.now()) : null, session, systemUpdated: !!design.system_updated });

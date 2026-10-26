@@ -5,7 +5,7 @@
 
 import type { Design } from "./protocol";
 import { worktreeFile } from "./sessionDesign";
-import { parseViewport } from "./designViewport";
+import { viewportOf } from "./designViewport";
 
 /** A page's built screenshot as `design.file {session, path}` names it, in
  *  the worktree's design folder's terms: `<slug>@built/<page>.png`. */
@@ -29,7 +29,7 @@ export interface BuildRow {
  *  `worktree`; `found` says which pages' screenshots are there, by page,
  *  once looked for. */
 export function designBuild(d: Design, worktree: string, found: Record<string, boolean>): { title: string; line: string; viewport: [number, number]; rows: BuildRow[] } {
-  const viewport = parseViewport(d.viewport) ?? [1440, 900];
+  const viewport = viewportOf(d);
   return {
     title: "Design and build",
     line: `each page beside the built screen, at ${viewport[0]}×${viewport[1]}`,
