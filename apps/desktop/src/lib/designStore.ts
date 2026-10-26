@@ -18,6 +18,7 @@ import { changedPages, reloadsPage } from "./designCanvas";
 import { pageOfPath } from "./designPage";
 import type { PageProblem } from "./designBars";
 import { COMMENTS_FILE, commentsMessage, withMid, withPins, type PageMids } from "./designComments";
+import { designRef, type DesignPlace } from "./designPlace";
 
 interface DesignState {
   /** By workspace (`wsKey(host, id)`), once listed. */
@@ -30,8 +31,12 @@ interface DesignState {
   opened: Record<string, { slug: string; path: string } | null>;
   /** How many times each design system (`wsKey/slug`) changed, so its frames load again. */
   changes: Record<string, number>;
-  /** Each workspace's designs, once listed (X65). */
+  /** Each workspace's designs, once listed (X65): its workspace designs,
+   *  which Design mode shows. */
   designs: Record<string, Design[]>;
+  /** Each workspace's session designs (`wsKey`), once listed (X65), which
+   *  their sessions' Design tabs show. */
+  sessionDesigns: Record<string, Design[]>;
   /** The design shown as the design screen in each workspace, by slug; else its design system. */
   designShown: Record<string, string | null>;
   /** How many times each design page (`wsKey/slug/page`) changed, so its frame loads again. */
@@ -54,18 +59,23 @@ interface DesignState {
   histories: Record<string, DesignSnapshot[]>;
 }
 
-export const useDesign = create<DesignState>(() => ({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, designs: {}, designShown: {}, pageRevs: {}, latest: {}, problems: {}, systemNames: {}, comments: {}, mids: {}, sending: {}, histories: {} }));
+export const useDesign = create<DesignState>(() => ({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, designs: {}, sessionDesigns: {}, designShown: {}, pageRevs: {}, latest: {}, problems: {}, systemNames: {}, comments: {}, mids: {}, sending: {}, histories: {} }));
 
-/** A design system's or a design's key, `wsKey/slug`. */
-export const itemKey = (host: string, workspace: string, slug: string) => `${wsKey(host, workspace)}/${slug}`;
+/** A place's key: a workspace's `wsKey`, a session's `host/s:<session>`,
+ *  so a session design never shares a workspace design's state (X65). */
+const placeKey = (host: string, place: DesignPlace) => (typeof place === "string" ? wsKey(host, place) : `${host}/s:${place.session}`);
 
-/** A design page's key, `wsKey/slug/page`. */
-export const pageKey = (host: string, workspace: string, slug: string, page: string) => `${itemKey(host, workspace, slug)}/${page}`;
+/** A design system's or a design's key, `<place key>/slug`: a design
+ *  system's place is its workspace. */
+export const itemKey = (host: string, place: DesignPlace, slug: string) => `${placeKey(host, place)}/${slug}`;
+
+/** A design page's key, `<place key>/slug/page`. */
+export const pageKey = (host: string, place: DesignPlace, slug: string, page: string) => `${itemKey(host, place, slug)}/${page}`;
 
 /** The page a key of {@link pageKey} names in design `slug`, or null for
  *  another design's or host's key: its parse. */
-export function pageOfKey(host: string, workspace: string, slug: string, key: string): string | null {
-  const prefix = `${itemKey(host, workspace, slug)}/`;
+export function pageOfKey(host: string, place: DesignPlace, slug: string, key: string): string | null {
+  const prefix = `${itemKey(host, place, slug)}/`;
   return key.startsWith(prefix) ? key.slice(prefix.length) : null;
 }
 
@@ -99,20 +109,20 @@ function itemListing<K extends "cards" | "comments" | "histories">(field: K, met
   const wanted = new Set<string>();
   const asked = latestPerKey();
   const onTheWay: Record<string, number> = {};
-  const load = async (host: string, workspace: string, slug: string): Promise<void> => {
-    const key = itemKey(host, workspace, slug);
+  const load = async (host: string, place: DesignPlace, slug: string): Promise<void> => {
+    const key = itemKey(host, place, slug);
     wanted.add(key);
     const latest = asked.start(key);
     onTheWay[key] = (onTheWay[key] ?? 0) + 1;
     try {
-      const list = await rpc<DesignState[K][string]>(host, method, { workspace, slug });
+      const list = await rpc<DesignState[K][string]>(host, method, designRef(place, slug));
       if (latest()) useDesign.setState((s) => ({ [field]: { ...s[field], [key]: list } }) as Partial<DesignState>);
     } finally {
       onTheWay[key] -= 1;
     }
   };
-  const changed = (host: string, workspace: string, slug: string) => {
-    if (onTheWay[itemKey(host, workspace, slug)]) void load(host, workspace, slug).catch(() => {});
+  const changed = (host: string, place: DesignPlace, slug: string) => {
+    if (onTheWay[itemKey(host, place, slug)]) void load(host, place, slug).catch(() => {});
   };
   return { load, wanted, changed };
 }
@@ -141,6 +151,26 @@ export function designsOf(s: DesignState, host: string, workspace: string): Desi
   return s.designs[wsKey(host, workspace)];
 }
 
+const NO_DESIGNS: Design[] = [];
+/** Each listing of session designs by session, so a session's list is the
+ *  same array until the next listing. */
+const bySession = new WeakMap<Design[], Record<string, Design[]>>();
+
+/** A session's designs (X65), none until its workspace's are listed. */
+export function sessionDesignsOf(s: DesignState, host: string, session: string): Design[] {
+  for (const [key, list] of Object.entries(s.sessionDesigns)) {
+    if (parseWsKey(key).host !== host) continue;
+    let groups = bySession.get(list);
+    if (!groups) {
+      groups = {};
+      for (const d of list) if (d.session) (groups[d.session] ??= []).push(d);
+      bySession.set(list, groups);
+    }
+    if (groups[session]) return groups[session];
+  }
+  return NO_DESIGNS;
+}
+
 /** The design shown as the design screen in a workspace, or null. */
 export function shownDesign(s: DesignState, host: string, workspace: string): Design | null {
   const slug = s.designShown[wsKey(host, workspace)];
@@ -149,7 +179,7 @@ export function shownDesign(s: DesignState, host: string, workspace: string): De
 
 /** The visual editor's say over a page changed on disk: true when it
  *  takes the change, deciding itself whether the page loads again. */
-export type PageOwner = (host: string, workspace: string, slug: string, page: string) => boolean;
+export type PageOwner = (host: string, place: DesignPlace, slug: string, page: string) => boolean;
 
 let pageOwner: PageOwner = () => false;
 
@@ -161,24 +191,24 @@ export function registerPageOwner(owner: PageOwner) {
 }
 
 /** Loads a design's page on the canvas again, as after a change. */
-export function reloadPage(host: string, workspace: string, slug: string, page: string) {
-  const key = pageKey(host, workspace, slug, page);
+export function reloadPage(host: string, place: DesignPlace, slug: string, page: string) {
+  const key = pageKey(host, place, slug, page);
   useDesign.setState((s) => ({ pageRevs: { ...s.pageRevs, [key]: (s.pageRevs[key] ?? 0) + 1 } }));
 }
 
 /** How many times a design's page changed since the app started. */
-export function pageRevOf(s: DesignState, host: string, workspace: string, slug: string, page: string): number {
-  return s.pageRevs[pageKey(host, workspace, slug, page)] ?? 0;
+export function pageRevOf(s: DesignState, host: string, place: DesignPlace, slug: string, page: string): number {
+  return s.pageRevs[pageKey(host, place, slug, page)] ?? 0;
 }
 
 /** The pages the latest change of a design wrote. */
-export function latestOf(s: DesignState, host: string, workspace: string, slug: string): string[] {
-  return s.latest[itemKey(host, workspace, slug)] ?? NONE;
+export function latestOf(s: DesignState, host: string, place: DesignPlace, slug: string): string[] {
+  return s.latest[itemKey(host, place, slug)] ?? NONE;
 }
 
 /** A design's check problems, every page's. */
-export function problemsOf(s: DesignState, host: string, workspace: string, slug: string): PageProblem[] {
-  return s.problems[itemKey(host, workspace, slug)] ?? NO_PROBLEMS;
+export function problemsOf(s: DesignState, host: string, place: DesignPlace, slug: string): PageProblem[] {
+  return s.problems[itemKey(host, place, slug)] ?? NO_PROBLEMS;
 }
 
 const NONE: string[] = [];
@@ -187,56 +217,56 @@ const NO_COMMENTS: DesignComment[] = [];
 const NO_MIDS: PageMids = {};
 
 /** A design's snapshots, newest first; undefined until listed. */
-export function historyOf(s: DesignState, host: string, workspace: string, slug: string): DesignSnapshot[] | undefined {
-  return s.histories[itemKey(host, workspace, slug)];
+export function historyOf(s: DesignState, host: string, place: DesignPlace, slug: string): DesignSnapshot[] | undefined {
+  return s.histories[itemKey(host, place, slug)];
 }
 
 const historyListing = itemListing("histories", M.designHistory);
 
 /** Lists a design's snapshots (X65), and again as each is taken. */
-export function loadHistory(host: string, workspace: string, slug: string): Promise<void> {
-  return historyListing.load(host, workspace, slug);
+export function loadHistory(host: string, place: DesignPlace, slug: string): Promise<void> {
+  return historyListing.load(host, place, slug);
 }
 
 /** A file of a design's snapshots: under `history/`. */
 const isHistoryPath = (path: string) => path.startsWith("history/");
 
 /** A design's comments, by number; none until listed. */
-export function commentsOf(s: DesignState, host: string, workspace: string, slug: string): DesignComment[] {
-  return s.comments[itemKey(host, workspace, slug)] ?? NO_COMMENTS;
+export function commentsOf(s: DesignState, host: string, place: DesignPlace, slug: string): DesignComment[] {
+  return s.comments[itemKey(host, place, slug)] ?? NO_COMMENTS;
 }
 
 /** The `data-mid`s of a design's pages, from their last load on the canvas. */
-export function midsOf(s: DesignState, host: string, workspace: string, slug: string): PageMids {
-  return s.mids[itemKey(host, workspace, slug)] ?? NO_MIDS;
+export function midsOf(s: DesignState, host: string, place: DesignPlace, slug: string): PageMids {
+  return s.mids[itemKey(host, place, slug)] ?? NO_MIDS;
 }
 
 const NOT_SENDING: number[] = [];
 
 /** The pins of a design a Send is on its way with, by number: their Send
  *  is off until it is done. */
-export function sendingOf(s: DesignState, host: string, workspace: string, slug: string): number[] {
-  return s.sending[itemKey(host, workspace, slug)] ?? NOT_SENDING;
+export function sendingOf(s: DesignState, host: string, place: DesignPlace, slug: string): number[] {
+  return s.sending[itemKey(host, place, slug)] ?? NOT_SENDING;
 }
 
 /** Records the `data-mid`s a page reported after it loaded (the bridge's). */
-export function setPageMids(host: string, workspace: string, slug: string, page: string, mids: string[]) {
-  const key = itemKey(host, workspace, slug);
+export function setPageMids(host: string, place: DesignPlace, slug: string, page: string, mids: string[]) {
+  const key = itemKey(host, place, slug);
   useDesign.setState((s) => ({ mids: { ...s.mids, [key]: { ...s.mids[key], [page]: mids } } }));
 }
 
 /** Records an element the user picked on a page as there (withMid): the
  *  page may have added it after its last report. */
-export function addPageMid(host: string, workspace: string, slug: string, page: string, mid: string) {
-  const key = itemKey(host, workspace, slug);
+export function addPageMid(host: string, place: DesignPlace, slug: string, page: string, mid: string) {
+  const key = itemKey(host, place, slug);
   useDesign.setState((s) => ({ mids: { ...s.mids, [key]: { ...s.mids[key], [page]: withMid(s.mids[key]?.[page], mid) } } }));
 }
 
 const commentListing = itemListing("comments", M.designComments);
 
 /** Lists a design's comments (X65). */
-export function loadComments(host: string, workspace: string, slug: string): Promise<void> {
-  return commentListing.load(host, workspace, slug);
+export function loadComments(host: string, place: DesignPlace, slug: string): Promise<void> {
+  return commentListing.load(host, place, slug);
 }
 
 /** Puts the pins the daemon gave back in the design's list at once, so the
@@ -244,16 +274,16 @@ export function loadComments(host: string, workspace: string, slug: string): Pro
  *  design.changed, which lists them all again, comes 150 ms or more later.
  *  A listing still on its way may have read before the change, so it is
  *  asked again, never left to land over the change. */
-function mergePins(host: string, workspace: string, slug: string, pins: DesignComment[]) {
-  const key = itemKey(host, workspace, slug);
+function mergePins(host: string, place: DesignPlace, slug: string, pins: DesignComment[]) {
+  const key = itemKey(host, place, slug);
   useDesign.setState((s) => ({ comments: { ...s.comments, [key]: withPins(s.comments[key] ?? [], pins) } }));
-  commentListing.changed(host, workspace, slug);
+  commentListing.changed(host, place, slug);
 }
 
 /** `design.comment.put` with one change, its pins merged at once. */
-async function changeComments(host: string, workspace: string, slug: string, change: CommentChange): Promise<DesignComment[]> {
-  const pins = await rpc<DesignComment[]>(host, M.designCommentPut, { workspace, slug, ...change });
-  mergePins(host, workspace, slug, pins);
+async function changeComments(host: string, place: DesignPlace, slug: string, change: CommentChange): Promise<DesignComment[]> {
+  const pins = await rpc<DesignComment[]>(host, M.designCommentPut, { ...designRef(place, slug), ...change });
+  mergePins(host, place, slug, pins);
   return pins;
 }
 
@@ -267,14 +297,14 @@ export interface NewComment {
 }
 
 /** **Keep**: saves a new pin, not sent. */
-export async function keepComment(host: string, workspace: string, slug: string, c: NewComment): Promise<DesignComment> {
-  const [pin] = await changeComments(host, workspace, slug, { new: c });
+export async function keepComment(host: string, place: DesignPlace, slug: string, c: NewComment): Promise<DesignComment> {
+  const [pin] = await changeComments(host, place, slug, { new: c });
   return pin;
 }
 
 /** Changes a kept pin's comment; a changed one is not sent any more. */
-export async function editComment(host: string, workspace: string, slug: string, n: number, comment: string): Promise<DesignComment> {
-  const [pin] = await changeComments(host, workspace, slug, { edit: { n, comment } });
+export async function editComment(host: string, place: DesignPlace, slug: string, n: number, comment: string): Promise<DesignComment> {
+  const [pin] = await changeComments(host, place, slug, { edit: { n, comment } });
   return pin;
 }
 
@@ -283,9 +313,9 @@ export async function editComment(host: string, workspace: string, slug: string,
  *  only then are they marked sent. A pin a
  *  Send is already on its way with is left out, so a second click never
  *  sends it twice. */
-export async function sendComments(host: string, workspace: string, slug: string, agent: number, pins: DesignComment[], ask: (text: string) => Promise<void> = (text) => askAgent(host, agent, text)): Promise<void> {
-  const key = itemKey(host, workspace, slug);
-  const busy = new Set(sendingOf(useDesign.getState(), host, workspace, slug));
+export async function sendComments(host: string, place: DesignPlace, slug: string, agent: number, pins: DesignComment[], ask: (text: string) => Promise<void> = (text) => askAgent(host, agent, text)): Promise<void> {
+  const key = itemKey(host, place, slug);
+  const busy = new Set(sendingOf(useDesign.getState(), host, place, slug));
   const going = pins.filter((p) => !busy.has(p.n));
   if (!going.length) return;
   const ns = going.map((p) => p.n);
@@ -293,15 +323,15 @@ export async function sendComments(host: string, workspace: string, slug: string
   try {
     await ask(commentsMessage(going));
     // Each with the comment sent: one edited meanwhile is not marked sent.
-    await changeComments(host, workspace, slug, { sent: { pins: going.map((p) => ({ n: p.n, comment: p.comment })) } });
+    await changeComments(host, place, slug, { sent: { pins: going.map((p) => ({ n: p.n, comment: p.comment })) } });
   } finally {
     useDesign.setState((s) => ({ sending: { ...s.sending, [key]: (s.sending[key] ?? []).filter((n) => !ns.includes(n)) } }));
   }
 }
 
 /** **Resolve**: the pin is done. */
-export async function resolveComment(host: string, workspace: string, slug: string, n: number): Promise<void> {
-  mergePins(host, workspace, slug, [await rpc<DesignComment>(host, M.designCommentResolve, { workspace, slug, n })]);
+export async function resolveComment(host: string, place: DesignPlace, slug: string, n: number): Promise<void> {
+  mergePins(host, place, slug, [await rpc<DesignComment>(host, M.designCommentResolve, { ...designRef(place, slug), n })]);
 }
 
 /** Shows a design as the design screen (X65), and its agent as seen. */
@@ -346,8 +376,8 @@ function listing(fetch: (host: string, workspace: string, key: string) => Promis
 }
 
 const designListing = listing(async (host, workspace, key) => {
-  const list = withPickedViewports(host, workspace, workspaceDesigns(await rpc<Design[]>(host, M.designList, { workspace })));
-  useDesign.setState((s) => ({ designs: { ...s.designs, [key]: list } }));
+  const list = withPickedViewports(host, workspace, await rpc<Design[]>(host, M.designList, { workspace }));
+  useDesign.setState((s) => ({ designs: { ...s.designs, [key]: workspaceDesigns(list) }, sessionDesigns: { ...s.sessionDesigns, [key]: list.filter((d) => d.kind === "session") } }));
 });
 
 /** Lists a workspace's designs (X65). `fresh`: something just changed. */
@@ -363,12 +393,12 @@ const checksAsked = latestPerKey();
 /** Checks a design's pages (`design.check`), for the canvas's red bar. A
  *  check that fails clears the earlier problems, which may no longer be the
  *  pages': the bar has no colour for a check that could not run. */
-export async function checkDesign(host: string, workspace: string, slug: string): Promise<void> {
-  const key = itemKey(host, workspace, slug);
+export async function checkDesign(host: string, place: DesignPlace, slug: string): Promise<void> {
+  const key = itemKey(host, place, slug);
   const latest = checksAsked.start(key);
   let found: PageProblem[];
   try {
-    found = await rpc<PageProblem[]>(host, M.designCheck, { design: { workspace, slug } });
+    found = await rpc<PageProblem[]>(host, M.designCheck, { design: designRef(place, slug) });
   } catch {
     // A design removed meanwhile, or a page that cannot be read: no bar.
     found = NO_PROBLEMS;
@@ -383,45 +413,47 @@ const CHECK_SETTLE_MS = 300;
 /** Checks waiting for a burst of changes to end, per design. */
 const checkTimers: Record<string, ReturnType<typeof setTimeout>> = {};
 
-function checkSoon(host: string, workspace: string, slug: string) {
-  const key = itemKey(host, workspace, slug);
+function checkSoon(host: string, place: DesignPlace, slug: string) {
+  const key = itemKey(host, place, slug);
   clearTimeout(checkTimers[key]);
   checkTimers[key] = setTimeout(() => {
     delete checkTimers[key];
-    void checkDesign(host, workspace, slug);
+    void checkDesign(host, place, slug);
   }, CHECK_SETTLE_MS);
 }
 
-/** A change in a workspace's design folder: the pages it reloads, the page
- *  a design's agent is writing, and the design's check again. */
+/** A change in a workspace's design folder, or in a session design's
+ *  folders (with its session): the pages it reloads, the page a design's
+ *  agent is writing, and the design's check again. */
 function onDesignChange(host: string, change: DesignChanged) {
   const st = useDesign.getState();
-  const list = designsOf(st, host, change.workspace) ?? [];
+  const place: DesignPlace = change.session ? { session: change.session } : change.workspace;
+  const list = change.session ? sessionDesignsOf(st, host, change.session) : (designsOf(st, host, change.workspace) ?? []);
   const revs: Record<string, number> = {};
   // A page the editor has read decides itself whether it loads again: not
   // for the editor's own save (designEditor.ts). Only when nothing but
   // pages changed: an asset changed loads every page.
   // A snapshot taken with the change (history/) is none of its pages.
   const pagesOnly = change.design !== null && change.paths.filter((p) => !isHistoryPath(p)).every((p) => pageOfPath(p) !== null);
-  const owned = new Set(pagesOnly ? changedPages(change, change.design!).filter((page) => pageOwner(host, change.workspace, change.design!, page)) : []);
+  const owned = new Set(pagesOnly ? changedPages(change, change.design!).filter((page) => pageOwner(host, place, change.design!, page)) : []);
   const bump = (key: string, design: string, page: string) => {
     if (design !== change.design || !owned.has(page)) revs[key] ??= (st.pageRevs[key] ?? 0) + 1;
   };
   for (const d of list) {
-    for (const p of d.pages) if (reloadsPage(change, { design: d.slug, system: d.system, page: p.name })) bump(pageKey(host, change.workspace, d.slug, p.name), d.slug, p.name);
+    for (const p of d.pages) if (reloadsPage(change, { design: d.slug, system: d.system, page: p.name })) bump(pageKey(host, place, d.slug, p.name), d.slug, p.name);
   }
   if (change.design) {
-    const key = itemKey(host, change.workspace, change.design);
+    const key = itemKey(host, place, change.design);
     // A page not listed yet loads once it is: written again before that.
     const pages = changedPages(change, change.design);
-    for (const page of pages) bump(pageKey(host, change.workspace, change.design, page), change.design, page);
+    for (const page of pages) bump(pageKey(host, place, change.design, page), change.design, page);
     useDesign.setState((s) => ({ pageRevs: { ...s.pageRevs, ...revs }, latest: pages.length ? { ...s.latest, [key]: pages } : s.latest }));
     reloadDesigns(host, change.workspace);
-    checkSoon(host, change.workspace, change.design);
+    checkSoon(host, place, change.design);
     // Its comments, kept, sent or resolved here or written by its agent.
-    if (commentListing.wanted.has(key) && change.paths.includes(COMMENTS_FILE)) void loadComments(host, change.workspace, change.design).catch(() => {});
+    if (commentListing.wanted.has(key) && change.paths.includes(COMMENTS_FILE)) void loadComments(host, place, change.design).catch(() => {});
     // Its snapshots, as the daemon takes or restores one.
-    if (historyListing.wanted.has(key) && change.paths.some(isHistoryPath)) void loadHistory(host, change.workspace, change.design).catch(() => {});
+    if (historyListing.wanted.has(key) && change.paths.some(isHistoryPath)) void loadHistory(host, place, change.design).catch(() => {});
   } else if (Object.keys(revs).length) {
     useDesign.setState((s) => ({ pageRevs: { ...s.pageRevs, ...revs } }));
   }
@@ -465,7 +497,7 @@ export async function createFromNewDesign(host: string, workspace: string, n: { 
 
 /** Removes a design and stops its agent. */
 export async function removeDesign(host: string, workspace: string, slug: string): Promise<void> {
-  await rpc(host, M.designRemove, { workspace, slug });
+  await rpc(host, M.designRemove, designRef(workspace, slug));
   const key = wsKey(host, workspace);
   useDesign.setState((s) => ({ designShown: s.designShown[key] === slug ? { ...s.designShown, [key]: null } : s.designShown }));
   const timer = itemKey(host, workspace, slug);
@@ -495,19 +527,21 @@ const pickedViewports: Record<string, string> = {};
 /** The viewport saves of each design, one at a time, the latest pick last. */
 const viewportSaves = latestSends();
 
+/** A listed design's place: its session's for a session design. */
+const placeOf = (d: Design, workspace: string): DesignPlace => (d.kind === "session" && d.session ? { session: d.session } : workspace);
+
 /** Shows `viewport` as the design's, in its listing. */
-function showViewport(host: string, workspace: string, slug: string, viewport: string) {
-  useDesign.setState((s) => {
-    const key = wsKey(host, workspace);
-    const list = s.designs[key];
-    return list ? { designs: { ...s.designs, [key]: list.map((d) => (d.slug === slug ? { ...d, viewport } : d)) } } : {};
-  });
+function showViewport(host: string, place: DesignPlace, slug: string, viewport: string) {
+  const mine = (d: Design, workspace: string) => d.slug === slug && itemKey(host, placeOf(d, workspace), d.slug) === itemKey(host, place, slug);
+  const shown = (byWorkspace: Record<string, Design[]>) =>
+    Object.fromEntries(Object.entries(byWorkspace).map(([key, list]) => [key, list.some((d) => mine(d, parseWsKey(key).id)) ? list.map((d) => (mine(d, parseWsKey(key).id) ? { ...d, viewport } : d)) : list]));
+  useDesign.setState((s) => ({ designs: shown(s.designs), sessionDesigns: shown(s.sessionDesigns) }));
 }
 
 /** A listing with each design's picked, not yet saved, viewport. */
 function withPickedViewports(host: string, workspace: string, list: Design[]): Design[] {
   return list.map((d) => {
-    const picked = pickedViewports[itemKey(host, workspace, d.slug)];
+    const picked = pickedViewports[itemKey(host, placeOf(d, workspace), d.slug)];
     return picked ? { ...d, viewport: picked } : d;
   });
 }
@@ -516,14 +550,14 @@ function withPickedViewports(host: string, workspace: string, list: Design[]): D
  *  shows at once; saves of one design go one at a time, and a pick made
  *  while one is on its way is saved after it, so the latest pick is what
  *  shows and what is kept. A failed save leaves the pick shown. */
-export async function saveViewport(host: string, workspace: string, slug: string, viewport: string): Promise<void> {
-  const key = itemKey(host, workspace, slug);
+export async function saveViewport(host: string, place: DesignPlace, slug: string, viewport: string): Promise<void> {
+  const key = itemKey(host, place, slug);
   pickedViewports[key] = viewport;
-  showViewport(host, workspace, slug, viewport);
+  showViewport(host, place, slug, viewport);
   let sent = viewport;
   await viewportSaves.send(key, async () => {
     sent = pickedViewports[key];
-    await rpc(host, M.designViewport, { workspace, slug, viewport: sent });
+    await rpc(host, M.designViewport, { ...designRef(place, slug), viewport: sent });
   });
   if (!viewportSaves.busy(key) && pickedViewports[key] === sent) delete pickedViewports[key];
 }
@@ -580,10 +614,11 @@ function onChatState(host: string, id: number, state: ChatState) {
   if ((waiting[chat] ?? "") === asks) return;
   waiting[chat] = asks;
   // A sync agent's (X64) or a design's agent's (X65): its row, view and bar.
-  const { systems, designs } = useDesign.getState();
+  const { systems, designs, sessionDesigns } = useDesign.getState();
   const lists: [Record<string, { agent: number | null }[]>, (host: string, workspace: string) => void][] = [
     [systems, reload],
     [designs, reloadDesigns],
+    [sessionDesigns, reloadDesigns],
   ];
   for (const [byWorkspace, again] of lists) {
     for (const [key, list] of Object.entries(byWorkspace)) {
@@ -600,7 +635,8 @@ export async function startDesign() {
   started = true;
   await onDaemonEvent((e) => {
     if (e.name === EV.designOpen) onDesignOpen(e.host, e.data as DesignOpen);
-    else if (e.name === EV.designChanged && isDesignModeChange(e.data as DesignChanged)) {
+    else if (e.name === EV.designChanged && !isDesignModeChange(e.data as DesignChanged)) onDesignChange(e.host, e.data as DesignChanged);
+    else if (e.name === EV.designChanged) {
       const d = e.data as DesignChanged;
       onDesignChange(e.host, d);
       if (systemListing.wanted.has(wsKey(e.host, d.workspace))) reload(e.host, d.workspace);

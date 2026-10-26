@@ -8,6 +8,7 @@ import { create } from "zustand";
 import { DaemonError, rpc } from "./daemon";
 import { itemKey, pageKey, pageOfKey, registerPageOwner, reloadPage, sendComments } from "./designStore";
 import { latestSends } from "./latestSend";
+import { designRef, type DesignPlace } from "./designPlace";
 import { errorToast } from "./store";
 import { latestPerKey } from "./prPoll";
 import { M, type DesignComment, type DesignKit, type DesignPageText, type DesignPageWritten, type DesignSnapshot } from "./protocol";
@@ -16,10 +17,11 @@ import { applyEdit, copyElement, EditRefused, editLine, editSaid, editsMessage, 
 import { NO_UNDO, dropPage, pendingAfter, pushStep, redoStep, undoStep, type Pending, type Step, type Undo } from "./designUndo";
 
 interface EditorState {
-  /** Each page's source (`wsKey/slug/page`) and the version on disk it was
+  /** Each page's source (`pageKey`) and the version on disk it was
    *  read or last saved at. */
   sources: Record<string, DesignPageText>;
-  /** Each design's (`wsKey/slug`) changes since it was opened. */
+  /** Each design's (`itemKey`, a workspace design's or a session
+   *  design's) changes since it was opened. */
   undo: Record<string, Undo>;
   /** Each design's edits by hand not told to its agent yet. */
   pending: Record<string, Pending[]>;
@@ -72,9 +74,9 @@ export function resetEditor() {
 /** Reads a page's source and version (`design.page`), as the canvas loads
  *  it; not while a save of it is on its way, which has edits the text read
  *  may not and decides what is there. */
-export async function loadPageSource(host: string, workspace: string, slug: string, page: string): Promise<void> {
-  const text = await readPage(host, workspace, slug, page);
-  if (text) setSource(pageKey(host, workspace, slug, page), text);
+export async function loadPageSource(host: string, place: DesignPlace, slug: string, page: string): Promise<void> {
+  const text = await readPage(host, place, slug, page);
+  if (text) setSource(pageKey(host, place, slug, page), text);
 }
 
 /** The latest read of each page, so an older answer never lands last. */
@@ -85,12 +87,12 @@ const reads = latestPerKey();
  *  back, when a newer read started meanwhile, or when the page changed in
  *  the editor since it started (an edit made meanwhile is newer than the
  *  text read). */
-async function readPage(host: string, workspace: string, slug: string, page: string): Promise<DesignPageText | null> {
-  const key = pageKey(host, workspace, slug, page);
+async function readPage(host: string, place: DesignPlace, slug: string, page: string): Promise<DesignPageText | null> {
+  const key = pageKey(host, place, slug, page);
   if (saves.busy(key)) return null;
   const latest = reads.start(key);
   const at = gens[key] ?? 0;
-  const text = await rpc<DesignPageText>(host, M.designPage, { workspace, slug, page });
+  const text = await rpc<DesignPageText>(host, M.designPage, { ...designRef(place, slug), page });
   return latest() && !saves.busy(key) && (gens[key] ?? 0) === at ? text : null;
 }
 
@@ -105,42 +107,42 @@ function setSource(key: string, text: DesignPageText) {
 /** `op` made on a page's source, which is saved: the change can be undone,
  *  and its edit by hand goes with the next message. `selected` is the
  *  element selected before it. {@link EditRefused} when it cannot be made. */
-export function editPage(host: string, workspace: string, slug: string, page: string, op: EditOp, selected: string | null): Edit {
-  const key = pageKey(host, workspace, slug, page);
+export function editPage(host: string, place: DesignPlace, slug: string, page: string, op: EditOp, selected: string | null): Edit {
+  const key = pageKey(host, place, slug, page);
   const source = useEditor.getState().sources[key];
   if (!source) throw new EditRefused("The page is still loading");
   const edit = applyEdit(source.html, op, highest[key] ?? 0);
   highest[key] = Math.max(highest[key] ?? 0, highestMid(edit.html));
   const step: Step = { id: nextStep++, page, before: source.html, after: edit.html, edit: { page, ...edit.change }, selectBefore: selected, selectAfter: edit.select };
-  const design = itemKey(host, workspace, slug);
+  const design = itemKey(host, place, slug);
   changed(key, step.id, editSaid(step.edit));
   useEditor.setState((s) => ({
     sources: { ...s.sources, [key]: { ...source, html: edit.html } },
     undo: { ...s.undo, [design]: pushStep(s.undo[design] ?? NO_UNDO, step) },
     pending: { ...s.pending, [design]: pendingAfter(s.pending[design] ?? [], step, "do") },
   }));
-  void save(host, workspace, slug, page).catch(errorToast);
+  void save(host, place, slug, page).catch(errorToast);
   return edit;
 }
 
 /** ⌘Z: the design's latest change undone, its page saved as it was
  *  before and loaded again on the canvas; the page and the element to
  *  select, or null when there is nothing to undo. */
-export function undoEdit(host: string, workspace: string, slug: string): Promise<{ page: string; select: string | null } | null> {
-  return travel(host, workspace, slug, "undo");
+export function undoEdit(host: string, place: DesignPlace, slug: string): Promise<{ page: string; select: string | null } | null> {
+  return travel(host, place, slug, "undo");
 }
 
 /** ⇧⌘Z: the latest change undone made again. */
-export function redoEdit(host: string, workspace: string, slug: string): Promise<{ page: string; select: string | null } | null> {
-  return travel(host, workspace, slug, "redo");
+export function redoEdit(host: string, place: DesignPlace, slug: string): Promise<{ page: string; select: string | null } | null> {
+  return travel(host, place, slug, "redo");
 }
 
-async function travel(host: string, workspace: string, slug: string, act: "undo" | "redo"): Promise<{ page: string; select: string | null } | null> {
-  const design = itemKey(host, workspace, slug);
+async function travel(host: string, place: DesignPlace, slug: string, act: "undo" | "redo"): Promise<{ page: string; select: string | null } | null> {
+  const design = itemKey(host, place, slug);
   const moved = (act === "undo" ? undoStep : redoStep)(useEditor.getState().undo[design] ?? NO_UNDO);
   if (!moved) return null;
   const { step } = moved;
-  const key = pageKey(host, workspace, slug, step.page);
+  const key = pageKey(host, place, slug, step.page);
   const source = useEditor.getState().sources[key];
   if (!source) return null;
   changed(key, step.id, editSaid({ ...step.edit, undone: act === "undo" }));
@@ -149,17 +151,17 @@ async function travel(host: string, workspace: string, slug: string, act: "undo"
     undo: { ...s.undo, [design]: moved.undo },
     pending: { ...s.pending, [design]: pendingAfter(s.pending[design] ?? [], step, act) },
   }));
-  await save(host, workspace, slug, step.page);
+  await save(host, place, slug, step.page);
   // The live page cannot take an edit back: it loads again, as saved.
-  if (useEditor.getState().sources[key]?.html === (act === "undo" ? step.before : step.after)) reloadPage(host, workspace, slug, step.page);
+  if (useEditor.getState().sources[key]?.html === (act === "undo" ? step.before : step.after)) reloadPage(host, place, slug, step.page);
   return { page: step.page, select: act === "undo" ? step.selectBefore : step.selectAfter };
 }
 
 /** Saves a page's latest source over the version it was read at: at once
  *  when no save of it is on its way, else once that one is back, with
  *  every change made meanwhile, so saves keep their order. */
-function save(host: string, workspace: string, slug: string, page: string): Promise<void> {
-  const key = pageKey(host, workspace, slug, page);
+function save(host: string, place: DesignPlace, slug: string, page: string): Promise<void> {
+  const key = pageKey(host, place, slug, page);
   return saves.send(key, async () => {
     const source = useEditor.getState().sources[key];
     if (!source) return "stop";
@@ -169,10 +171,10 @@ function save(host: string, workspace: string, slug: string, page: string): Prom
     const edits = (notSaved[key] ?? []).filter((c) => c.gen <= at).map((c) => c.said);
     let written: DesignPageWritten;
     try {
-      written = await rpc<DesignPageWritten>(host, M.designWritePage, { workspace, slug, page, html, base_version: source.version, edits });
+      written = await rpc<DesignPageWritten>(host, M.designWritePage, { ...designRef(place, slug), page, html, base_version: source.version, edits });
     } catch (e) {
       if (e instanceof DaemonError && e.code === "stale") {
-        await lost(host, workspace, slug, page);
+        await lost(host, place, slug, page);
         return "stop";
       }
       throw e;
@@ -188,9 +190,9 @@ function save(host: string, workspace: string, slug: string, page: string): Prom
  *  edits a save took are told. One a save refused as stale was taken back
  *  meanwhile; one whose save failed waits for a save that takes it. Once
  *  the message is sent, those are told. */
-export async function sendWithEdits(host: string, workspace: string, slug: string, agent: number, text: string, images: ChatImage[]): Promise<void> {
-  const design = itemKey(host, workspace, slug);
-  const keyOf = (p: Pending) => pageKey(host, workspace, slug, p.page);
+export async function sendWithEdits(host: string, place: DesignPlace, slug: string, agent: number, text: string, images: ChatImage[]): Promise<void> {
+  const design = itemKey(host, place, slug);
+  const keyOf = (p: Pending) => pageKey(host, place, slug, p.page);
   for (;;) {
     const busy = [...new Set((useEditor.getState().pending[design] ?? []).map(keyOf))].filter((k) => saves.busy(k));
     if (!busy.length) break;
@@ -203,14 +205,14 @@ export async function sendWithEdits(host: string, workspace: string, slug: strin
 
 /** **Send** and **Send all** of comments, the edits by hand not told yet
  *  before their lines. */
-export function sendCommentsWithEdits(host: string, workspace: string, slug: string, agent: number, pins: DesignComment[]): Promise<void> {
-  return sendComments(host, workspace, slug, agent, pins, (text) => sendWithEdits(host, workspace, slug, agent, text, []));
+export function sendCommentsWithEdits(host: string, place: DesignPlace, slug: string, agent: number, pins: DesignComment[]): Promise<void> {
+  return sendComments(host, place, slug, agent, pins, (text) => sendWithEdits(host, place, slug, agent, text, []));
 }
 
 /** A message the app sends the design's agent, such as **Ask the agent to
  *  fix**, the edits by hand not told yet before it. */
-export function askWithEdits(host: string, workspace: string, slug: string, agent: number, text: string): Promise<void> {
-  return sendWithEdits(host, workspace, slug, agent, text, []);
+export function askWithEdits(host: string, place: DesignPlace, slug: string, agent: number, text: string): Promise<void> {
+  return sendWithEdits(host, place, slug, agent, text, []);
 }
 
 /** The element copied with ⌘C in each design, as its source: ⌘V pastes
@@ -218,34 +220,34 @@ export function askWithEdits(host: string, workspace: string, slug: string, agen
 const clips: Record<string, string> = {};
 
 /** ⌘C: copies element `mid` of a page; false when the page has none. */
-export function copyElementOf(host: string, workspace: string, slug: string, page: string, mid: string): boolean {
-  const source = useEditor.getState().sources[pageKey(host, workspace, slug, page)];
+export function copyElementOf(host: string, place: DesignPlace, slug: string, page: string, mid: string): boolean {
+  const source = useEditor.getState().sources[pageKey(host, place, slug, page)];
   const copied = source ? copyElement(source.html, mid) : null;
   if (copied === null) return false;
-  clips[itemKey(host, workspace, slug)] = copied;
+  clips[itemKey(host, place, slug)] = copied;
   return true;
 }
 
 /** Whether an element of the design was copied, for ⌘V. */
-export function hasCopy(host: string, workspace: string, slug: string): boolean {
-  return itemKey(host, workspace, slug) in clips;
+export function hasCopy(host: string, place: DesignPlace, slug: string): boolean {
+  return itemKey(host, place, slug) in clips;
 }
 
 /** ⌘V: the design's copied element pasted into a page after element
  *  `after`, or at the end of its body; null when nothing was copied. */
-export function pasteInto(host: string, workspace: string, slug: string, page: string, after: string | null): Edit | null {
-  const copied = clips[itemKey(host, workspace, slug)];
-  return copied === undefined ? null : editPage(host, workspace, slug, page, { kind: "paste", after, html: copied }, after);
+export function pasteInto(host: string, place: DesignPlace, slug: string, page: string, after: string | null): Edit | null {
+  const copied = clips[itemKey(host, place, slug)];
+  return copied === undefined ? null : editPage(host, place, slug, page, { kind: "paste", after, html: copied }, after);
 }
 
 /** A save refused because the page changed on disk since it was read:
  *  the page is read and loaded again, its changes forgotten (undoing them
  *  would undo the other writer's), the edits by hand the save lost taken
  *  back, and the yellow bar names the last of them. */
-async function lost(host: string, workspace: string, slug: string, page: string): Promise<void> {
-  const key = pageKey(host, workspace, slug, page);
-  const design = itemKey(host, workspace, slug);
-  const text = await rpc<DesignPageText>(host, M.designPage, { workspace, slug, page });
+async function lost(host: string, place: DesignPlace, slug: string, page: string): Promise<void> {
+  const key = pageKey(host, place, slug, page);
+  const design = itemKey(host, place, slug);
+  const text = await rpc<DesignPageText>(host, M.designPage, { ...designRef(place, slug), page });
   // The page's changes no save took, made, undone or redone since, those
   // made while it was read again too: they were made on the page refused.
   const ids = new Set((notSaved[key] ?? []).map((c) => c.step));
@@ -257,14 +259,14 @@ async function lost(host: string, workspace: string, slug: string, page: string)
     unsaved: { ...s.unsaved, [design]: last ? editLine(last.edit) : (s.unsaved[design] ?? null) },
   }));
   setSource(key, text);
-  reloadPage(host, workspace, slug, page);
+  reloadPage(host, place, slug, page);
 }
 
 /** A design closed, or another opened: its changes can no longer be
  *  undone or redone ("since the design was opened"); its edits by hand not
  *  told yet still go with the next message. */
-export function closeDesign(host: string, workspace: string, slug: string) {
-  const design = itemKey(host, workspace, slug);
+export function closeDesign(host: string, place: DesignPlace, slug: string) {
+  const design = itemKey(host, place, slug);
   useEditor.setState((s) => ({ undo: { ...s.undo, [design]: NO_UNDO } }));
 }
 
@@ -273,50 +275,50 @@ export function closeDesign(host: string, workspace: string, slug: string) {
  *  told yet, were made on pages that are gone, so they are forgotten, as on
  *  a stale save; each page the editor has read is read again (one the
  *  snapshot has not is dropped) and loads again on the canvas. */
-export async function restoreSnapshot(host: string, workspace: string, slug: string, n: number): Promise<DesignSnapshot> {
+export async function restoreSnapshot(host: string, place: DesignPlace, slug: string, n: number): Promise<DesignSnapshot> {
   await saves.settle();
-  const restored = await rpc<DesignSnapshot>(host, M.designSnapshotRestore, { workspace, slug, n });
-  const design = itemKey(host, workspace, slug);
+  const restored = await rpc<DesignSnapshot>(host, M.designSnapshotRestore, { ...designRef(place, slug), n });
+  const design = itemKey(host, place, slug);
   useEditor.setState((s) => ({ undo: { ...s.undo, [design]: NO_UNDO }, pending: { ...s.pending, [design]: [] }, unsaved: { ...s.unsaved, [design]: null } }));
   const read = Object.keys(useEditor.getState().sources).flatMap((key) => {
-    const page = pageOfKey(host, workspace, slug, key);
+    const page = pageOfKey(host, place, slug, key);
     return page === null ? [] : [{ key, page }];
   });
   await Promise.all(
     read.map(async ({ key, page }) => {
-      const text = await rpc<DesignPageText>(host, M.designPage, { workspace, slug, page }).catch(() => null);
+      const text = await rpc<DesignPageText>(host, M.designPage, { ...designRef(place, slug), page }).catch(() => null);
       if (text) setSource(key, text);
       else {
         delete notSaved[key];
         useEditor.setState((s) => ({ sources: Object.fromEntries(Object.entries(s.sources).filter(([k]) => k !== key)) }));
       }
-      reloadPage(host, workspace, slug, page);
+      reloadPage(host, place, slug, page);
     }),
   );
   return restored;
 }
 
 /** Puts the yellow bar away. */
-export function dismissUnsaved(host: string, workspace: string, slug: string) {
-  const design = itemKey(host, workspace, slug);
+export function dismissUnsaved(host: string, place: DesignPlace, slug: string) {
+  const design = itemKey(host, place, slug);
   useEditor.setState((s) => ({ unsaved: { ...s.unsaved, [design]: null } }));
 }
 
 /** A page's source as the editor has it, and its version; undefined until read. */
-export function sourceOf(s: EditorState, host: string, workspace: string, slug: string, page: string): DesignPageText | undefined {
-  return s.sources[pageKey(host, workspace, slug, page)];
+export function sourceOf(s: EditorState, host: string, place: DesignPlace, slug: string, page: string): DesignPageText | undefined {
+  return s.sources[pageKey(host, place, slug, page)];
 }
 
 const NONE_PENDING: Pending[] = [];
 
 /** A design's edits by hand not told to its agent yet. */
-export function pendingOf(s: EditorState, host: string, workspace: string, slug: string): Pending[] {
-  return s.pending[itemKey(host, workspace, slug)] ?? NONE_PENDING;
+export function pendingOf(s: EditorState, host: string, place: DesignPlace, slug: string): Pending[] {
+  return s.pending[itemKey(host, place, slug)] ?? NONE_PENDING;
 }
 
 /** The edit a save lost to a change on disk, for the yellow bar; or null. */
-export function unsavedOf(s: EditorState, host: string, workspace: string, slug: string): string | null {
-  return s.unsaved[itemKey(host, workspace, slug)] ?? null;
+export function unsavedOf(s: EditorState, host: string, place: DesignPlace, slug: string): string | null {
+  return s.unsaved[itemKey(host, place, slug)] ?? null;
 }
 
 /** Checks of pages changed on disk, on their way. */
@@ -328,26 +330,26 @@ const checking = new Set<Promise<void>>();
  *  While a save is on its way that save decides: refused, it loads the
  *  page; else the change was that save. Another writer's page makes the
  *  page's changes forgotten, as undoing them would undo that writer's. */
-async function changedOnDisk(host: string, workspace: string, slug: string, page: string): Promise<void> {
-  const key = pageKey(host, workspace, slug, page);
+async function changedOnDisk(host: string, place: DesignPlace, slug: string, page: string): Promise<void> {
+  const key = pageKey(host, place, slug, page);
   // Read as the canvas reads it: an older check's answer coming back after
   // a newer one's, or after an edit, is dropped.
-  const text = await readPage(host, workspace, slug, page);
+  const text = await readPage(host, place, slug, page);
   const now = useEditor.getState().sources[key];
   if (!text || !now || text.version === now.version) return;
-  const design = itemKey(host, workspace, slug);
+  const design = itemKey(host, place, slug);
   setSource(key, text);
   useEditor.setState((s) => ({ undo: { ...s.undo, [design]: dropPage(s.undo[design] ?? NO_UNDO, page) } }));
-  reloadPage(host, workspace, slug, page);
+  reloadPage(host, place, slug, page);
 }
 
 /** Starts the editor: it takes the changes on disk of the pages it has
  *  read (changedOnDisk). */
 export function startEditor() {
-  registerPageOwner((host, workspace, slug, page) => {
-    if (!useEditor.getState().sources[pageKey(host, workspace, slug, page)]) return false;
-    const check: Promise<void> = changedOnDisk(host, workspace, slug, page)
-      .catch(() => reloadPage(host, workspace, slug, page))
+  registerPageOwner((host, place, slug, page) => {
+    if (!useEditor.getState().sources[pageKey(host, place, slug, page)]) return false;
+    const check: Promise<void> = changedOnDisk(host, place, slug, page)
+      .catch(() => reloadPage(host, place, slug, page))
       .finally(() => checking.delete(check));
     checking.add(check);
     return true;
@@ -370,19 +372,19 @@ const kitReads = latestPerKey();
 /** Reads what the Inspector and the Palette build a design with from its
  *  own design system (`design.kit`); an older read coming back after a
  *  newer one is dropped. */
-export async function loadKit(host: string, workspace: string, slug: string): Promise<void> {
-  const design = itemKey(host, workspace, slug);
+export async function loadKit(host: string, place: DesignPlace, slug: string): Promise<void> {
+  const design = itemKey(host, place, slug);
   const latest = kitReads.start(design);
-  const kit = await rpc<DesignKit>(host, M.designKit, { workspace, slug });
+  const kit = await rpc<DesignKit>(host, M.designKit, designRef(place, slug));
   if (latest()) useEditor.setState((s) => ({ kits: { ...s.kits, [design]: kit } }));
 }
 
 /** A design's kit; undefined until read. */
-export function kitOf(s: EditorState, host: string, workspace: string, slug: string): DesignKit | undefined {
-  return s.kits[itemKey(host, workspace, slug)];
+export function kitOf(s: EditorState, host: string, place: DesignPlace, slug: string): DesignKit | undefined {
+  return s.kits[itemKey(host, place, slug)];
 }
 
 /** The changes of a design that can be undone and redone. */
-export function undoOf(s: EditorState, host: string, workspace: string, slug: string): Undo {
-  return s.undo[itemKey(host, workspace, slug)] ?? NO_UNDO;
+export function undoOf(s: EditorState, host: string, place: DesignPlace, slug: string): Undo {
+  return s.undo[itemKey(host, place, slug)] ?? NO_UNDO;
 }

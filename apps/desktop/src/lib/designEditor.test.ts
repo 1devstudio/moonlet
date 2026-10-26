@@ -462,3 +462,22 @@ describe("a style, a move and a snippet edited by hand (X65)", () => {
     expect(disk.index.html).toBe(PAGE);
   });
 });
+
+describe("a session design's edits by hand (X65)", () => {
+  it("are read and saved by its session and slug, and go before the next message to the session's agent", async () => {
+    const S = { session: "4f2a9c1e7b3d" };
+    answers["chat.send"] = () => null;
+    await loadPageSource("local", S, SLUG, "index");
+    editPage("local", S, SLUG, "index", { kind: "delete", mid: "m30" }, "m30");
+    await settleSaves();
+    await sendWithEdits("local", S, SLUG, 31, "Tighter, please", []);
+    expect(calls.map((c) => [c.method, c.params])).toEqual([
+      ["design.page", { session: "4f2a9c1e7b3d", slug: SLUG, page: "index" }],
+      ["design.write_page", { session: "4f2a9c1e7b3d", slug: SLUG, page: "index", html: '<!doctype html>\n<body data-mid="m1">\n  <h2 data-mid="m25">Git</h2>\n</body>\n', base_version: "v1", edits: ["deleted p m30"] }],
+      ["chat.send", { id: 31, text: "Edits by hand since your last turn:\nindex.html m30 p: deleted\n\nTighter, please", images: [] }],
+    ]);
+    // A workspace design of the same slug has none of them.
+    expect(pendingOf(useEditor.getState(), "local", WS, SLUG)).toEqual([]);
+    expect(sourceOf(useEditor.getState(), "local", WS, SLUG, "index")).toBeUndefined();
+  });
+});

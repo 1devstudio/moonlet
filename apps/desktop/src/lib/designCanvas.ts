@@ -26,9 +26,10 @@ export function writingPage(latest: string[], working: boolean): string | null {
  *  it links. Those are the design's `assets/`, and of its design system any
  *  `.css` file (`styles.css` and what it imports) and what is in `tokens/`
  *  and `fonts/`; not its cards, `README.md`, `.prompt.md` files or the
- *  sync's own files (`_ds_sync.json`, `_ds_manifest.json`). */
+ *  sync's own files (`_ds_sync.json`, `_ds_manifest.json`). A session
+ *  design's design system is its pinned copy, its own `system/` (X65). */
 export function reloadsPage(change: DesignChanged, shown: { design: string; system: string; page: string }): boolean {
-  if (change.design === shown.design) return change.paths.some((p) => p === pagePath(shown.page) || p.startsWith("assets/"));
+  if (change.design === shown.design) return change.paths.some((p) => p === pagePath(shown.page) || p.startsWith("assets/") || (p.startsWith("system/") && linkedBySystem(p.slice("system/".length))));
   if (change.system === shown.system) return change.paths.some(linkedBySystem);
   return false;
 }

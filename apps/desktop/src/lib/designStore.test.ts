@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Design, DesignComment, DesignSystem, TerminalInfo } from "./protocol";
 import { modeOf, setMode } from "./mode";
 import { agentOnScreen, goToAgent, useStore } from "./store";
-import { pageKey, pageOfKey, commentsOf, historyOf, keepComment, loadComments, loadHistory, sendComments, sendingOf, resolveComment } from "./designStore";
+import { pageKey, pageOfKey, commentsOf, historyOf, keepComment, loadComments, loadHistory, sendComments, sendingOf, resolveComment, sessionDesignsOf } from "./designStore";
 import { cardsOf, checkDesign, createFromNewDesign, createSystem, designsOf, detectStack, latestOf, loadCards, loadDesigns, loadSystems, openCard, saveViewport, pageRevOf, problemsOf, revOf, shownCard, shownDesign, shownSystem, showDesign, showSystem, startDesign, systemNameOf, systemsOf, useDesign } from "./designStore";
 
 const calls = vi.hoisted(() => [] as { host: string; method: string; params: unknown }[]);
@@ -56,7 +56,7 @@ const listed = () => calls.filter((c) => c.method === "design.systems");
 beforeEach(async () => {
   calls.length = 0;
   for (const k of Object.keys(answers)) delete answers[k];
-  useDesign.setState({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, designs: {}, designShown: {}, pageRevs: {}, latest: {}, problems: {}, systemNames: {}, comments: {}, mids: {}, sending: {}, histories: {} });
+  useDesign.setState({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, designs: {}, sessionDesigns: {}, designShown: {}, pageRevs: {}, latest: {}, problems: {}, systemNames: {}, comments: {}, mids: {}, sending: {}, histories: {} });
   await startDesign();
 });
 
@@ -658,5 +658,68 @@ describe("a design page's key (X65)", () => {
     expect(pageOfKey("local", "w-1devstudio", "settings-page", pageKey("local", "w-1devstudio", "settings-page", "git rows"))).toBe("git rows");
     expect(pageOfKey("local", "w-1devstudio", "settings-page", pageKey("local", "w-1devstudio", "settings-page-2", "index"))).toBeNull();
     expect(pageOfKey("local", "w-1devstudio", "settings-page", pageKey("mac-2", "w-1devstudio", "settings-page", "index"))).toBeNull();
+  });
+});
+
+describe("a session design's state (X65)", () => {
+  const S = { session: "4f2a9c1e7b3d" };
+  const pin = (n: number, comment: string): DesignComment => ({ n, page: "index", mid: "m12", tag: "nav", text: "General", comment, sent_at: null, state: "open" });
+  const sessionChanged = (paths: string[]) =>
+    events.emit({ host: "local", name: "design.changed", data: { workspace: "w-1devstudio", system: null, design: "settings-page", session: "4f2a9c1e7b3d", paths } });
+
+  it("is read by its session and slug, apart from a workspace design of the same slug", async () => {
+    answers["design.comments"] = (p) => ("session" in (p as object) ? [pin(1, "In the session")] : [pin(1, "In the workspace")]);
+    await loadComments("local", S, "settings-page");
+    await loadComments("local", "w-1devstudio", "settings-page");
+    expect(calls.filter((c) => c.method === "design.comments").map((c) => c.params)).toEqual([
+      { session: "4f2a9c1e7b3d", slug: "settings-page" },
+      { workspace: "w-1devstudio", slug: "settings-page" },
+    ]);
+    expect(commentsOf(useDesign.getState(), "local", S, "settings-page").map((p) => p.comment)).toEqual(["In the session"]);
+    expect(commentsOf(useDesign.getState(), "local", "w-1devstudio", "settings-page").map((p) => p.comment)).toEqual(["In the workspace"]);
+  });
+
+  it("loads its pages, comments and snapshots again when its session's design.changed names them, never a workspace design's of the same slug", async () => {
+    answers["design.check"] = () => [];
+    answers["design.comments"] = () => [pin(1, "Collapse it")];
+    answers["design.history"] = () => [];
+    await loadComments("local", S, "settings-page");
+    await loadHistory("local", S, "settings-page");
+    calls.length = 0;
+    sessionChanged(["pages/index.html", "comments.json", "history/2/snapshot.json"]);
+    await settle();
+    await settle();
+    expect(pageRevOf(useDesign.getState(), "local", S, "settings-page", "index")).toBe(1);
+    expect(pageRevOf(useDesign.getState(), "local", "w-1devstudio", "settings-page", "index")).toBe(0);
+    expect(latestOf(useDesign.getState(), "local", S, "settings-page")).toEqual(["index"]);
+    expect(calls.filter((c) => c.method === "design.comments" || c.method === "design.history").map((c) => [c.method, c.params])).toEqual([
+      ["design.comments", { session: "4f2a9c1e7b3d", slug: "settings-page" }],
+      ["design.history", { session: "4f2a9c1e7b3d", slug: "settings-page" }],
+    ]);
+  });
+
+  it("loads every page of the design again when its pinned styles or assets change", async () => {
+    answers["design.list"] = () => [design({ kind: "session", session: "4f2a9c1e7b3d", path: "/wt/settings-page/docs/design/settings-page", agent: 31 })];
+    answers["design.check"] = () => [];
+    await loadDesigns("local", "w-1devstudio");
+    sessionChanged(["system/styles.css"]);
+    sessionChanged(["assets/logo.svg"]);
+    expect(["index", "git-a"].map((p) => pageRevOf(useDesign.getState(), "local", S, "settings-page", p))).toEqual([2, 2]);
+  });
+
+  it("is listed with its session's designs, never with Design mode's workspace designs", async () => {
+    answers["design.list"] = () => [design(), design({ slug: "onboarding", name: "Onboarding", kind: "session", session: "4f2a9c1e7b3d", path: "/wt/s/docs/design/onboarding", agent: 31 })];
+    await loadDesigns("local", "w-1devstudio");
+    expect(designsOf(useDesign.getState(), "local", "w-1devstudio")?.map((d) => d.slug)).toEqual(["settings-page"]);
+    expect(sessionDesignsOf(useDesign.getState(), "local", "4f2a9c1e7b3d").map((d) => d.slug)).toEqual(["onboarding"]);
+    expect(sessionDesignsOf(useDesign.getState(), "local", "9c9c9c9c9c9c")).toEqual([]);
+  });
+
+  it("is checked by its session and slug", async () => {
+    answers["design.check"] = () => [{ path: "pages/index.html", line: 3, kind: "missing_mid", message: "<p> has no data-mid" }];
+    await checkDesign("local", S, "settings-page");
+    expect(calls.filter((c) => c.method === "design.check").map((c) => c.params)).toEqual([{ design: { session: "4f2a9c1e7b3d", slug: "settings-page" } }]);
+    expect(problemsOf(useDesign.getState(), "local", S, "settings-page").map((p) => p.line)).toEqual([3]);
+    expect(problemsOf(useDesign.getState(), "local", "w-1devstudio", "settings-page")).toEqual([]);
   });
 });
