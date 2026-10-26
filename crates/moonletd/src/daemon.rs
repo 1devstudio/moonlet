@@ -2414,6 +2414,11 @@ impl Daemon {
                 w.delete_workspace(&r.id).map_err(internal)?;
                 ok(true)
             }
+            m::WORKSPACE_MERGE => {
+                let r: m::WorkspaceMerge = params(p)?;
+                w.merge_workspace(&r.id, &r.into).map_err(internal)?;
+                ok(true)
+            }
             m::SECTION_LIST => ok(w.list_sections()),
             m::SECTION_CREATE => {
                 let r: m::SectionCreate = params(p)?;

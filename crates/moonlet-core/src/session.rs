@@ -693,6 +693,32 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Merges workspace `id` into `into` (X68): its sections move in after
+    /// `into`'s own, with every session of `id`, and `id` is deleted.
+    pub fn merge_workspace(&self, id: &str, into: &str) -> Result<()> {
+        if id == into {
+            bail!("a workspace cannot merge into itself");
+        }
+        self.mutate(|st| {
+            st.workspace_mut(into)?;
+            let sections = st.workspaces.iter().find(|w| w.id == id).context("no such workspace")?.section_ids.clone();
+            for s in &sections {
+                st.move_section(s, into)?;
+            }
+            // Archived sessions, and those of projects held elsewhere too.
+            for s in &mut st.sessions {
+                if s.workspace_id.as_deref() == Some(id) {
+                    s.workspace_id = Some(into.to_string());
+                }
+            }
+            st.workspaces.retain(|w| w.id != id);
+            st.ensure();
+            Ok(())
+        })?;
+        self.emit_all();
+        Ok(())
+    }
+
     pub fn create_section(&self, workspace_id: &str, name: &str) -> Result<Section> {
         let name = name.trim();
         if name.is_empty() {

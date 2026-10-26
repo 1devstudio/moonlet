@@ -1324,6 +1324,7 @@ export const M = {
   workspaceCreate: "workspace.create",
   workspaceUpdate: "workspace.update",
   workspaceDelete: "workspace.delete",
+  workspaceMerge: "workspace.merge",
   profileList: "profile.list",
   profileCreate: "profile.create",
   profileUpdate: "profile.update",
