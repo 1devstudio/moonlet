@@ -232,10 +232,12 @@ export function tookOpened(host: string, session: string) {
   useDesign.setState((s) => ({ tabOpened: s.tabOpened.filter((k) => k !== key) }));
 }
 
-/** How many designs of a workspace an agent started that are unseen. */
+/** How many designs of a workspace an agent started that are unseen: once
+ *  its designs are listed, only those still listed. */
 export function unseenOf(s: DesignState, host: string, workspace: string): number {
   const place = placeKey(host, workspace);
-  return s.unseen.filter((k) => placeKeyOfItem(k) === place).length;
+  const listed = designsOf(s, host, workspace);
+  return s.unseen.filter((k) => placeKeyOfItem(k) === place && (!listed || listed.some((d) => itemKey(host, workspace, d.slug) === k))).length;
 }
 
 /** The design shown as the design screen in a workspace, or null. */
@@ -444,8 +446,17 @@ function listing(fetch: (host: string, workspace: string, key: string) => Promis
 }
 
 const designListing = listing(async (host, workspace, key) => {
+  // An unseen design of the workspace, unseen before this listing was asked
+  // and not in it, was removed: it is unseen no more (X65).
+  const asked = useDesign.getState().unseen.filter((k) => placeKeyOfItem(k) === key);
   const list = withPickedViewports(host, workspace, await rpc<Design[]>(host, M.designList, { workspace }));
-  useDesign.setState((s) => ({ designs: { ...s.designs, [key]: workspaceDesigns(list) }, sessionDesigns: { ...s.sessionDesigns, [key]: list.filter((d) => d.kind === "session") } }));
+  const designs = workspaceDesigns(list);
+  const gone = new Set(asked.filter((k) => !designs.some((d) => itemKey(host, workspace, d.slug) === k)));
+  useDesign.setState((s) => ({
+    designs: { ...s.designs, [key]: designs },
+    sessionDesigns: { ...s.sessionDesigns, [key]: list.filter((d) => d.kind === "session") },
+    unseen: gone.size ? s.unseen.filter((k) => !gone.has(k)) : s.unseen,
+  }));
 });
 
 /** Lists a workspace's designs (X65). `fresh`: something just changed. */

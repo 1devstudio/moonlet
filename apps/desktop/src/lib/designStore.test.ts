@@ -852,4 +852,23 @@ describe("design.open of a design an agent made (X65)", () => {
     showDesign("local", "w-1devstudio", "onboarding");
     expect(unseenOf(useDesign.getState(), "local", "w-1devstudio")).toBe(0);
   });
+
+  it("is no longer unseen once a listing of its workspace drops it, removed before anyone saw it, so the Design button's dot goes, while another workspace's stays", async () => {
+    const onboarding = design({ slug: "onboarding", name: "Onboarding" });
+    let removed = false;
+    answers["design.list"] = (p) => ((p as { workspace: string }).workspace === "w-acme" || !removed ? [onboarding] : []);
+    opened({ slug: "onboarding", name: "Onboarding", spawned_by: 4, session: "4f2a9c1e7b3d" });
+    events.emit({ host: "local", name: "design.open", data: { workspace: "w-acme", slug: "onboarding", name: "Onboarding", spawned_by: 4, session: "4f2a9c1e7b3d" } });
+    await settle();
+    await settle();
+    expect(unseenOf(useDesign.getState(), "local", "w-1devstudio")).toBe(1);
+    removed = true;
+    await loadDesigns("local", "w-1devstudio", true);
+    expect(unseenOf(useDesign.getState(), "local", "w-1devstudio")).toBe(0);
+    expect(unseenOf(useDesign.getState(), "local", "w-acme")).toBe(1);
+    // Made again under the same slug, it is no longer the one an agent started from the session.
+    removed = false;
+    await loadDesigns("local", "w-1devstudio", true);
+    expect(unseenOf(useDesign.getState(), "local", "w-1devstudio")).toBe(0);
+  });
 });
