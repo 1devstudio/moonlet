@@ -3998,6 +3998,41 @@ async fn a_session_that_cannot_be_saved_leaves_the_design_it_was_to_build_with_n
     assert!(!d.home.path().join(".moonlet/worktrees/repo/implement-settings-page").exists(), "its worktree is left");
 }
 
+/// X65 entry 12, Build it: a session saved whose agent then cannot start
+/// (here a folder it is to add that is not there) is still the session the
+/// design was copied into, so the workspace design records it and
+/// `design.list` gives it `built_in`.
+#[tokio::test]
+async fn a_saved_session_whose_agent_cannot_start_is_recorded_in_the_design_it_builds() {
+    use moonlet_proto::types::Session;
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    let (ws, project, _) = workspace_with_session(&d, &mut c, &[]).await;
+    let _: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    let design = d.home.path().join(".moonlet/design").join(&ws).join("designs/settings-page");
+    std::fs::write(design.join("pages/index.html"), "<body data-mid=\"m1\">rows</body>\n").unwrap();
+    let made = c
+        .request::<_, Session>(
+            methods::SESSION_CREATE,
+            serde_json::json!({
+                "project_id": project.id, "name": "Implement settings page", "workspace_id": ws, "agent": "claude",
+                "add_dirs": [d.home.path().join("gone").display().to_string()],
+                "design": {"workspace": ws, "slug": "settings-page", "pages": ["index"]}
+            }),
+        )
+        .await;
+    assert!(made.is_err(), "the agent started: {made:?}");
+    let sessions: Vec<Session> = c.request(methods::SESSION_LIST, ()).await.unwrap();
+    let saved = sessions.iter().find(|s| s.name == "Implement settings page").unwrap_or_else(|| panic!("no session saved: {made:?}"));
+    assert!(std::path::Path::new(&saved.path).join("docs/design/settings-page/design.toml").is_file());
+    let list: serde_json::Value = c.request(methods::DESIGN_LIST, serde_json::json!({"workspace": ws})).await.unwrap();
+    let found = list.as_array().unwrap().iter().find(|d| d["kind"] == "workspace" && d["slug"] == "settings-page").expect("the design");
+    assert_eq!(found["built_in"], serde_json::json!({"session": saved.id, "project": project.id}), "{made:?}");
+}
+
 /// X65 entry 12: `design.copy` copies only a design the project's listing
 /// gives, a folder of its design folder, `<design dir>/<slug>`: a folder
 /// elsewhere on the base branch that holds a `design.toml` is none, and no
