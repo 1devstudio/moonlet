@@ -153,18 +153,33 @@ pub struct ProjectDesign {
 }
 
 /// Reads the project design at `path` (`docs/design/settings-page`) on the
-/// branch `base` of the repository at `repo`, from git's objects.
-pub async fn read_project_design(repo: &Path, base: &str, path: &str) -> Result<ProjectDesign> {
+/// branch `base` of the repository at `repo`, from git's objects. It must
+/// be one [`project_designs`] lists: a folder right in the project's design
+/// folder `dir`, `<dir>/<slug>`; any other is no design.
+pub async fn read_project_design(
+    repo: &Path,
+    base: &str,
+    dir: &str,
+    path: &str,
+) -> Result<ProjectDesign> {
     let path = path.trim_end_matches('/');
-    let (dir, slug) = path.rsplit_once('/').unwrap_or(("", path));
+    let no_design = || NoProjectDesign {
+        path: path.to_string(),
+        base: base.to_string(),
+    };
+    let dir = dir.trim_end_matches('/');
+    let Some(slug) = path
+        .strip_prefix(dir)
+        .and_then(|rest| rest.strip_prefix('/'))
+        .filter(|slug| super::place::check_slug(slug).is_ok())
+    else {
+        return Err(no_design().into());
+    };
     let listing = ls_tree(repo, base, path).await?;
     let found = tree_designs(&listing, dir)
         .into_iter()
         .find(|d| d.slug == slug)
-        .ok_or_else(|| NoProjectDesign {
-            path: path.to_string(),
-            base: base.to_string(),
-        })?;
+        .ok_or_else(no_design)?;
     let config: DesignConfig = toml::from_str(&String::from_utf8_lossy(
         &blob(repo, &found.files[DESIGN_FILE]).await?,
     ))
