@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildComposer, buildPick, designAttachments } from "./buildIt";
+import { buildComposer, buildPick, buildingIn, designAttachments } from "./buildIt";
 import { firstMessage } from "./composer";
 
 const settings = {
@@ -82,5 +82,19 @@ describe("designAttachments (X65 Build it)", () => {
     const [index, , , styles] = designAttachments(settings, { systemName: "moonlet desktop", dir: "docs/design", left: [] });
     expect([index.body, index.page]).toEqual(["docs/design/settings-page/pages/index.html · Settings page, rows", "index"]);
     expect([styles.body, styles.page]).toEqual(["docs/design/settings-page/system/styles.css · moonlet desktop styles", undefined]);
+  });
+});
+
+describe("buildingIn (X65 Build it)", () => {
+  const sessions = [{ id: "s7", name: "implement-settings-page", project_id: "p-moon" }];
+  const projects = [{ id: "p-moon", name: "moonlet" }];
+
+  it("says where a workspace design is building once its session is made, and which session opens", () => {
+    expect(buildingIn({ built_in: { session: "s7", project: "p-moon" } }, sessions, projects)).toEqual({ text: "Building in moonlet · implement-settings-page", session: "s7" });
+  });
+
+  it("says nothing for a design never built, or built in a session moonlet no longer has, which Build it may start again", () => {
+    expect(buildingIn({}, sessions, projects)).toBeNull();
+    expect(buildingIn({ built_in: { session: "s9" } }, sessions, projects)).toBeNull();
   });
 });

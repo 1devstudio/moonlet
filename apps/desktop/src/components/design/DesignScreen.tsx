@@ -34,6 +34,7 @@ import {
   systemNameOf,
   systemsOf,
   justOpened,
+  openSessionDesign,
   tookOpened,
   useDesign,
   designCanvasKey,
@@ -58,7 +59,7 @@ import { askConfirm } from "../../lib/confirm";
 import { NEAR_ROOT, useNear } from "../../lib/useNear";
 import { useShallow } from "zustand/react/shallow";
 import { workspaceProjects } from "../../lib/tasksStore";
-import { buildComposer } from "../../lib/buildIt";
+import { buildComposer, buildingIn } from "../../lib/buildIt";
 import { cx } from "../../lib/cx";
 import { AgentIcon, Button, Dialog, Field, IconButton, inputCls } from "../ui";
 import { Menu } from "../Menu";
@@ -106,6 +107,9 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
   // Build it (X65): the New session composer, in the design system's first source.
   const systems = useDesign((d) => systemsOf(d, host, workspace));
   const projects = useStore(useShallow((s) => workspaceProjects(s, host, workspace)));
+  const sessions = useStore((s) => s.sessions[host]);
+  const allProjects = useStore((s) => s.projects[host]);
+  const building = buildingIn(design, sessions ?? [], allProjects ?? []);
   const buildIt = () => {
     const sources = systems?.find((x) => x.slug === design.system)?.sources ?? [];
     const { project } = buildComposer(design, { sources, projects, prefix: "" });
@@ -125,11 +129,22 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
               <h1 className="truncate ui-text-14 font-semibold text-fg">{design.name}</h1>
               <p className="truncate ui-text-12 text-muted">{designSubtitle(systemName, design.pages.length)}</p>
             </div>
-            <span title="A session in the design system's first source project, with this design attached" className="no-drag">
-              <Button size="sm" onClick={buildIt}>
-                Build it <ArrowRight size={12} />
-              </Button>
-            </span>
+            {building ? (
+              // Built (X65): its session design is the one that changes now.
+              <button
+                title="Open the session it is building in"
+                className="no-drag min-w-0 max-w-[150px] shrink truncate rounded-md px-1.5 py-1 text-left ui-text-12 text-muted hover:bg-panel-2 hover:text-fg"
+                onClick={() => void openSessionDesign(host, workspace, building.session, design.slug, true)}
+              >
+                {building.text}
+              </button>
+            ) : (
+              <span title="A session in the design system's first source project, with this design attached" className="no-drag">
+                <Button size="sm" onClick={buildIt}>
+                  Build it <ArrowRight size={12} />
+                </Button>
+              </span>
+            )}
             <Menu
               align="right"
               trigger={(open) => (

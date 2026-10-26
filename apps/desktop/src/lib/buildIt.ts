@@ -78,3 +78,19 @@ export function designAttachments(d: Pick<BuildDesign, "slug" | "name" | "pages"
 export function buildPick(d: Pick<BuildDesign, "workspace" | "slug" | "pages">, left: string[]): { workspace: string; slug: string; pages: string[] } {
   return { workspace: d.workspace, slug: d.slug, pages: inOrder(d.pages).map((p) => p.name).filter((p) => !left.includes(p)) };
 }
+
+/** A built workspace design's header (X65): "Building in <project> ·
+ *  <session>", and the session a click opens; null while it was never
+ *  built, or once its session is gone, when Build it shows again. The
+ *  session's project is its own, else `built_in`'s. */
+export function buildingIn(
+  d: { built_in?: { session: string; project?: string } },
+  sessions: { id: string; name: string; project_id: string }[],
+  projects: { id: string; name: string }[],
+): { text: string; session: string } | null {
+  const built = d.built_in;
+  const session = built && sessions.find((s) => s.id === built.session);
+  if (!session) return null;
+  const project = projects.find((p) => p.id === session.project_id) ?? projects.find((p) => p.id === built.project);
+  return { text: `Building in ${project ? `${project.name} · ` : ""}${session.name}`, session: session.id };
+}
