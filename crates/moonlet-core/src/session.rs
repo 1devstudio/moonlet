@@ -1227,19 +1227,22 @@ impl SessionManager {
     }
 
     pub async fn create_session(&self, req: SessionCreate) -> Result<Session> {
-        self.create_session_prepared(req, |_| Ok(())).await
+        self.create_session_prepared(req, |_| async { Ok(()) }).await
     }
 
     /// [`Self::create_session`], with `prepare` run on the new session
     /// once its worktree is there and before anything starts in it, such
     /// as the design a session builds copied into it (X65). When `prepare`
     /// fails, the session is not made: a worktree and branch made for it
-    /// are removed again.
-    pub async fn create_session_prepared(
+    /// are removed again, and a worktree it adopted is left to its owner.
+    pub async fn create_session_prepared<F>(
         &self,
         req: SessionCreate,
-        prepare: impl FnOnce(&Session) -> Result<()>,
-    ) -> Result<Session> {
+        prepare: impl FnOnce(Session) -> F,
+    ) -> Result<Session>
+    where
+        F: std::future::Future<Output = Result<()>>,
+    {
         let mut req = req;
         crate::chat::check_mode(req.mode.as_deref())?;
         // Directories widen what the agent may write (X29): only the user
@@ -1400,11 +1403,15 @@ impl SessionManager {
             layout: serde_json::Value::Null,
             restore: vec![],
         };
-        if let Err(e) = prepare(&ws) {
+        if let Err(e) = prepare(ws.clone()).await {
             if adopted.is_none() {
-                let _ = git::worktree_remove(&repo_path, &dir).await;
-                if !req.existing_branch {
-                    let _ = git::delete_branch(&repo_path, &ws.branch).await;
+                if let Err(gone) = git::worktree_remove(&repo_path, &dir).await {
+                    tracing::warn!("cannot remove the worktree {} of a session not made: {gone:#}", dir.display());
+                }
+                if !req.existing_branch
+                    && let Err(gone) = git::delete_branch(&repo_path, &ws.branch).await
+                {
+                    tracing::warn!("cannot delete the branch {} of a session not made: {gone:#}", ws.branch);
                 }
             }
             return Err(e);

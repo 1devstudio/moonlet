@@ -4001,10 +4001,15 @@ async fn session_create_with_a_design_copies_it_into_the_worktree_before_the_age
             "design": {"workspace": ws, "slug": "settings-page", "pages": pages}
         })
     };
+    let repo = d.home.path().join("repo");
+    let branches = || String::from_utf8(Command::new("git").args(["branch", "--list"]).current_dir(&repo).output().unwrap().stdout).unwrap();
+    let before = branches();
     let refused = c.request::<_, Session>(methods::SESSION_CREATE, create(&["index", "nope"])).await;
-    assert!(refused.is_err(), "{refused:?}");
+    assert_eq!(refused.unwrap_err().to_string(), "invalid_params: bad page \"nope\"");
     let sessions: Vec<Session> = c.request(methods::SESSION_LIST, ()).await.unwrap();
     assert_eq!(sessions.len(), 1, "a session made for a page the design does not have");
+    assert!(!d.home.path().join(".moonlet/worktrees/repo/implement-settings-page").exists(), "its worktree is left");
+    assert_eq!(branches(), before, "its branch is left");
 
     let session: Session = c.request(methods::SESSION_CREATE, create(&["index", "git-a"])).await.unwrap();
     let worktree = std::path::PathBuf::from(&session.path);
@@ -4272,4 +4277,53 @@ async fn a_design_is_named_by_its_workspace_or_its_session_never_both() {
     // The viewport was never saved through the other workspace's call.
     let toml = std::fs::read_to_string(std::path::PathBuf::from(&session.path).join("docs/design/settings-page/design.toml")).unwrap();
     assert!(toml.contains("viewport = \"1440x900\""), "{toml}");
+}
+
+/// X65 entry 12: Build it's session design keeps the workspace design's
+/// slug, which its attachments name before the session is made; when the
+/// project's base branch has a design of that slug already, `session.create`
+/// is refused and leaves nothing: the worktree and branch it made are
+/// removed, and a worktree it adopted is left as it was.
+#[tokio::test]
+async fn building_a_design_whose_slug_the_base_branch_has_makes_no_session_and_leaves_nothing() {
+    use moonlet_proto::types::Session;
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    let (ws, project, _) = workspace_with_session(&d, &mut c, &MERGED_DESIGN).await;
+    let _: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    let repo = d.home.path().join("repo");
+    let branches = || String::from_utf8(Command::new("git").args(["branch", "--list"]).current_dir(&repo).output().unwrap().stdout).unwrap();
+    let before = branches();
+    let worktrees = d.home.path().join(".moonlet/worktrees/repo");
+    let listed = || std::fs::read_dir(&worktrees).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect::<Vec<_>>();
+    let made_before = listed();
+    let create = serde_json::json!({
+        "project_id": project.id, "name": "Implement settings page", "workspace_id": ws, "agent": "none",
+        "design": {"workspace": ws, "slug": "settings-page", "pages": []}
+    });
+    let refused = c.request::<_, Session>(methods::SESSION_CREATE, create.clone()).await;
+    assert_eq!(
+        refused.unwrap_err().to_string(),
+        "invalid_params: docs/design/settings-page is in the worktree already: rename the design before building it"
+    );
+    assert_eq!(listed(), made_before, "the worktree made for it is still there");
+    assert_eq!(branches(), before, "the branch made for it is still there");
+
+    // A worktree made outside moonlet, adopted for it, stays as it was.
+    let outside = d.home.path().join("outside");
+    let adopted = add_worktree(&repo, &["-b", "outside"], &outside);
+    let mut adopt = create.clone();
+    adopt["worktree"] = adopted.clone().into();
+    let refused = c.request::<_, Session>(methods::SESSION_CREATE, adopt).await;
+    assert!(refused.is_err());
+    assert_eq!(
+        std::fs::read_to_string(outside.join("docs/design/settings-page/pages/index.html")).unwrap(),
+        "<link rel=\"stylesheet\" href=\"../system/styles.css\">\n<body data-mid=\"m1\">rows</body>\n"
+    );
+    assert!(!outside.join(".moonlet").exists(), "the copy wrote into the adopted worktree");
+    let sessions: Vec<Session> = c.request(methods::SESSION_LIST, ()).await.unwrap();
+    assert_eq!(sessions.len(), 1);
 }
