@@ -1101,8 +1101,10 @@ impl Daemon {
                 ok(m::AccountSynced {
                     changes: self.sessions.account_changes_for(&r.version),
                     version: self.sessions.account_version(),
+                    account: Some(self.link.account_info().account),
                 })
             }
+            m::ACCOUNT_GET => ok(self.link.account_info()),
             m::WORKER_REGISTER => {
                 // Only a worker's daemon, over the tailnet with a paired
                 // device's token, registers.

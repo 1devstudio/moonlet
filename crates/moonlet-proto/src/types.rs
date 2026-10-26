@@ -665,6 +665,10 @@ pub struct Workspace {
     #[serde(default)]
     pub claude_profile: Option<String>,
     pub created_at: u64,
+    /// The member of the account that made it, by the name it gives
+    /// itself (X68); `None` when not shared or not known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub made_by: Option<String>,
 }
 
 /// A Claude Code config folder, passed to Claude as `CLAUDE_CONFIG_DIR` (X33).

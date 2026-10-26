@@ -26,6 +26,9 @@ pub struct LogFile {
     /// The names this member's logs had before, newest last (X68).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub former: Vec<String>,
+    /// The account this member shares, as its central host named it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
 }
 
 /// One member's copy of the account state: every change it has seen.
@@ -41,6 +44,8 @@ pub struct Log {
     changes: BTreeMap<(String, u64), Change>,
     /// The names this machine's logs had before this one.
     former: Vec<String>,
+    /// The account it shares, as its central host named it.
+    account: Option<String>,
 }
 
 impl Log {
@@ -51,6 +56,7 @@ impl Log {
             seq: 0,
             changes: BTreeMap::new(),
             former: Vec::new(),
+            account: None,
         }
     }
 
@@ -58,7 +64,17 @@ impl Log {
         let mut log = Log::new(&file.member);
         log.apply(file.changes);
         log.former = file.former;
+        log.account = file.account;
         log
+    }
+
+    /// The account this member shares, as its central host named it.
+    pub fn account(&self) -> Option<&str> {
+        self.account.as_deref()
+    }
+
+    pub fn set_account(&mut self, account: Option<String>) {
+        self.account = account;
     }
 
     /// This log's name.
@@ -77,11 +93,19 @@ impl Log {
     /// member's changes only under its current name. `old` becomes a former
     /// name.
     pub fn adopt(&mut self, old: &str) {
-        let theirs: Vec<Change> = self.changes.values().filter(|c| c.stamp.member == old).cloned().collect();
+        let theirs: Vec<Change> = self
+            .changes
+            .values()
+            .filter(|c| c.stamp.member == old)
+            .cloned()
+            .collect();
         for c in theirs {
             self.seq = self.seq.saturating_add(1);
             let mine = Change {
-                stamp: Stamp { member: self.member.clone(), ..c.stamp },
+                stamp: Stamp {
+                    member: self.member.clone(),
+                    ..c.stamp
+                },
                 seq: self.seq,
                 ..c
             };
@@ -95,6 +119,7 @@ impl Log {
             member: self.member.clone(),
             changes: self.changes.values().cloned().collect(),
             former: self.former.clone(),
+            account: self.account.clone(),
         }
     }
 
@@ -191,6 +216,14 @@ impl Log {
     /// Whether this log holds change `seq` of log `member`.
     pub fn has(&self, member: &str, seq: u64) -> bool {
         self.changes.contains_key(&(member.to_string(), seq))
+    }
+
+    /// The earliest change to record `id` of `kind`: the one that made it.
+    pub fn first_change(&self, kind: &str, id: &str) -> Option<&Change> {
+        self.changes
+            .values()
+            .filter(|c| c.kind == kind && c.id == id)
+            .min_by(|a, b| a.stamp.cmp(&b.stamp))
     }
 
     /// Whether record `id` of `kind` was deleted: it never comes back.
