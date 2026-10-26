@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { attachments, branchRow, firstMessage, linkMenu, pickerBranches, pickerHint, pickerSearch, newBranch, placeholder, sessionName, showsLinkSlot, suggestedTask } from "./composer";
+import { afterCreate, attachments, branchRow, firstMessage, linkMenu, pickerBranches, pickerHint, pickerSearch, newBranch, placeholder, sessionName, showsLinkSlot, suggestedTask } from "./composer";
 import type { Task } from "./tasks";
 
 const facts = { base: "main", task: null, taskBranch: null, from: null, worktree: null, pr: null, checkbox: false };
@@ -167,6 +167,18 @@ describe("newBranch (X65 Build it)", () => {
     expect(newBranch({ taskBranch: "web-279-x", build: { branch: "moonlet/implement-settings-page" } })).toBe("web-279-x");
     expect(newBranch({ taskBranch: null, build: { branch: "moonlet/implement-settings-page" } })).toBe("moonlet/implement-settings-page");
     expect(newBranch({ taskBranch: null, build: null })).toBeNull();
+  });
+});
+
+describe("afterCreate (X65 Build it)", () => {
+  const box = (value: boolean | null) => ({ shown: true, value, touched: true });
+  it("keeps or declines the session's sync as the Keep in sync checkbox says, for Build it's session too", () => {
+    expect(afterCreate({ building: true, box: box(true) })).toEqual({ sync: "keep", designs: true, select: false });
+    expect(afterCreate({ building: true, box: box(false) })).toEqual({ sync: "decline", designs: true, select: false });
+    expect(afterCreate({ building: false, box: box(true) })).toEqual({ sync: "keep", designs: false, select: true });
+    // No checkbox, or the project's choice not known: nothing is said.
+    expect(afterCreate({ building: true, box: { shown: false, value: true, touched: false } })).toEqual({ sync: null, designs: true, select: false });
+    expect(afterCreate({ building: true, box: box(null) })).toEqual({ sync: null, designs: true, select: false });
   });
 });
 

@@ -2,6 +2,7 @@
 // the attachments it sends before the user's text.
 
 import { withoutComments } from "./markdown";
+import { composerSync } from "./sync";
 import type { IssueRef } from "./protocol";
 import { linkChoices } from "./taskLinking";
 import { githubRepo, prPointsAt, type Task } from "./tasks";
@@ -156,6 +157,26 @@ export function sessionName(f: Picks & { build?: { name: string } | null }): str
  *  it's (X65); null lets the daemon name it after the prompt. */
 export function newBranch(f: { taskBranch: string | null; build: { branch: string } | null }): string | null {
   return f.taskBranch ?? f.build?.branch ?? null;
+}
+
+/** What Create does once `session.create` made the session. */
+export interface AfterCreate {
+  /** The Keep in sync checkbox's choice for it (`composerSync`). */
+  sync: "keep" | "decline" | null;
+  /** Lists the design's workspace's designs again, so its header says
+   *  Building in (X65 Build it). */
+  designs: boolean;
+  /** Selects the session in Sessions mode. */
+  select: boolean;
+}
+
+/** What Create does once the session is made: the Keep in sync checkbox
+ *  decides for every session, Build it's too, before this Mac's daemon
+ *  would keep it for a project that keeps new sessions in sync; then Build
+ *  it lists its design's workspace's designs again and stays in Design
+ *  mode, and any other create selects the session. */
+export function afterCreate(f: { building: boolean; box: { shown: boolean; value: boolean | null; touched: boolean } }): AfterCreate {
+  return { sync: composerSync(f.box), designs: f.building, select: !f.building };
 }
 
 /** A branch by its first two parts: `web-279-remove-…` is `web-279-…`. */
