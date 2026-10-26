@@ -390,6 +390,67 @@ async fn sync_refused(s: &mut tokio::net::TcpStream) -> Option<String> {
     }
 }
 
+/// Sends request `id` on `s` and returns its reply.
+async fn ask(s: &mut tokio::net::TcpStream, id: u64, method: &str, params: Value) -> Message {
+    use moonlet_proto::{read_frame, write_frame};
+    let req = Message::Request {
+        id,
+        method: method.into(),
+        params,
+    };
+    write_frame(s, &Frame::Json(req)).await.unwrap();
+    loop {
+        match tokio::time::timeout(Duration::from_secs(10), read_frame(s))
+            .await
+            .expect("no reply")
+        {
+            Ok(Some(Frame::Json(m @ Message::Response { id: rid, .. }))) if rid == id => return m,
+            Ok(Some(_)) => {}
+            other => panic!("the connection ended: {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_member_sends_only_its_own_changes() {
+    let (mini, addr) = central().await;
+    let token = pair(&mini, &addr, "Alex's MacBook Pro", DeviceKind::Desktop).await;
+    let mut s = raw(&addr, &token, "moonletd-worker").await;
+    let reg = json!({ "id": BOOK, "name": "Alex's MacBook Pro", "os": "macos", "arch": "arm64", "cores": 10, "version": "0.1.32", "projects": [] });
+    assert!(matches!(
+        ask(&mut s, 1, "worker.register", reg).await,
+        Message::Response { error: None, .. }
+    ));
+    let w = mini.workspaces().await[0].clone();
+    // Stamped now, so it is the latest change to the name.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let rename = |member: &str, name: &str| json!({ "stamp": { "ms": now, "n": 0, "member": member }, "seq": 1, "kind": "workspace", "id": w.id, "op": { "set": { "field": "name", "value": name } } });
+    // Stamped as another member: dropped, so it cannot take that member's
+    // numbers before it does.
+    let other = format!("{AIR}.a1b2c3");
+    ask(
+        &mut s,
+        2,
+        "account.sync",
+        json!({ "version": {}, "changes": [rename(&other, "Forged")] }),
+    )
+    .await;
+    assert_eq!(mini.names().await, ["Personal"]);
+    // Its own change is taken.
+    let own = format!("{BOOK}.k3x9q2");
+    ask(
+        &mut s,
+        3,
+        "account.sync",
+        json!({ "version": {}, "changes": [rename(&own, "Home")] }),
+    )
+    .await;
+    assert_eq!(mini.names().await, ["Home"]);
+}
+
 #[tokio::test]
 async fn only_a_linked_mac_syncs_the_account() {
     let (mini, addr) = central().await;

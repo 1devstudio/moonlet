@@ -1074,13 +1074,22 @@ impl Daemon {
                     .devices
                     .iter()
                     .any(|d| d.id == device && d.kind == m::DeviceKind::Desktop);
-                if !mac || self.workers.worker_on(conn.id).is_none() {
+                let Some(worker) = self.workers.worker_on(conn.id).filter(|_| mac) else {
                     return Err(refused());
-                }
+                };
                 if !self.sessions.has_account() {
                     return Err(RpcError::new("no_account", "this host shares no account"));
                 }
-                let r: m::AccountSync = params(p)?;
+                let mut r: m::AccountSync = params(p)?;
+                // A member sends the changes it made, whose logs are named
+                // after its worker id: never another member's, whose numbers
+                // it could otherwise take first. A central host that lost its
+                // log has every member's work in its state already.
+                let sent = r.changes.len();
+                r.changes.retain(|c| c.stamp.member.split_once('.').is_some_and(|(id, _)| id == worker));
+                if r.changes.len() < sent {
+                    tracing::warn!(worker = %worker, "dropped {} account changes stamped as another member", sent - r.changes.len());
+                }
                 // The other members take what this host newly kept from
                 // here; the one that sent them already has them.
                 let taken = self.sessions.apply_account(r.changes);

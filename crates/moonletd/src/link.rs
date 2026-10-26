@@ -740,7 +740,11 @@ impl WorkerLink {
     /// host lacks, by the version it gave.
     async fn sync_account(&self, host: &Arc<Host>) -> Result<(), RpcError> {
         let version = self.send_account(host, Vec::new()).await?;
-        let lacks = self.sessions.account_changes_for(&version);
+        // Only this machine's own changes: the central host takes no other
+        // member's from it.
+        let own = format!("{}.", self.info().worker.id);
+        let mut lacks = self.sessions.account_changes_for(&version);
+        lacks.retain(|c| c.stamp.member.starts_with(&own));
         if !lacks.is_empty() {
             self.send_account(host, lacks).await?;
         }
