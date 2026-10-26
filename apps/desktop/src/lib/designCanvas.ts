@@ -34,6 +34,13 @@ export function reloadsPage(change: DesignChanged, shown: { design: string; syst
   return false;
 }
 
+/** Whether a change to a session design is to its own copy of its design
+ *  system (`system/`), as **Update** writes it: its kit, the Inspector's
+ *  tokens and the Palette's snippets, is read again (X65). */
+export function changesOwnSystem(change: DesignChanged): boolean {
+  return change.design !== null && change.paths.some((p) => p.startsWith("system/"));
+}
+
 /** A design system's file a page may link: a stylesheet, a token or a font. */
 function linkedBySystem(path: string): boolean {
   return path.endsWith(".css") || path.startsWith("tokens/") || path.startsWith("fonts/");

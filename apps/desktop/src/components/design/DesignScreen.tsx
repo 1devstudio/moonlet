@@ -25,7 +25,7 @@ import {
   problemsOf,
   reloadPage,
   removeDesign,
-  revOf,
+  kitRevOf,
   resolveComment,
   saveViewport,
   sendingOf,
@@ -287,16 +287,17 @@ export function DesignCanvas({
   const writing = writingPage(lastWritten, working);
   const bar = designBar({ working, needsYou: design.needs_you, page, problems, system: systemName, systemRemoved: !!systems && !system, unsaved, preview: previewed ? previewBar(previewed, Date.now()) : null, session, systemUpdated: !!design.system_updated });
   const chip = editsChip(pending);
-  // The design system's tokens and snippets, read again when it changes.
+  // The design system's tokens and snippets, read again when it changes: a
+  // session design's own copy of it, as Update writes it.
   const kit = useEditor((e) => kitOf(e, host, place, design.slug));
   const [kitError, setKitError] = useState<string | null>(null);
-  const systemRev = useDesign((d) => revOf(d, host, workspace, design.system));
+  const kitRev = useDesign((d) => kitRevOf(d, host, place, design.slug, design.system));
   useEffect(() => {
     void loadKit(host, place, design.slug).then(
       () => setKitError(null),
       (e: unknown) => setKitError(e instanceof Error ? e.message : String(e)),
     );
-  }, [host, place, design.slug, systemRev]);
+  }, [host, place, design.slug, kitRev]);
   const tokens = kit?.tokens ?? NO_TOKENS;
   const snippets = useMemo(() => (kit ? snippetsOf(kit.cards) : null), [kit]);
   // The page's inline styles, from its source, and its off-system elements.

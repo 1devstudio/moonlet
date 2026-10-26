@@ -14,7 +14,7 @@ import { modeOf, setMode } from "./mode";
 import { latestPerKey } from "./prPoll";
 import { latestSends } from "./latestSend";
 import { designOpenAction, isDesignModeChange, workspaceDesigns } from "./design";
-import { changedPages, reloadsPage } from "./designCanvas";
+import { changedPages, changesOwnSystem, reloadsPage } from "./designCanvas";
 import { pageOfPath } from "./designPage";
 import type { PageProblem } from "./designBars";
 import { COMMENTS_FILE, commentsMessage, withMid, withPins, type PageMids } from "./designComments";
@@ -29,7 +29,9 @@ interface DesignState {
   cards: Record<string, DesignCard[]>;
   /** The card open as the card page in each workspace: its system and path. */
   opened: Record<string, { slug: string; path: string } | null>;
-  /** How many times each design system (`wsKey/slug`) changed, so its frames load again. */
+  /** How many times each design system (`wsKey/slug`) changed, so its frames
+   *  load again, and each session design's own copy of its design system
+   *  (`itemKey`), so its kit is read again (X65). */
   changes: Record<string, number>;
   /** Each workspace's designs, once listed (X65): its workspace designs,
    *  which Design mode shows. */
@@ -110,6 +112,13 @@ export function openCard(host: string, workspace: string, slug: string, path: st
 /** How many times design system `slug` changed since the app started. */
 export function revOf(s: DesignState, host: string, workspace: string, slug: string): number {
   return s.changes[itemKey(host, workspace, slug)] ?? 0;
+}
+
+/** How many times the design system a design's kit is read from changed:
+ *  a workspace design's, design system `system`; a session design's, its
+ *  own copy (X65). */
+export function kitRevOf(s: DesignState, host: string, place: DesignPlace, slug: string, system: string): number {
+  return isSession(place) ? (s.changes[itemKey(host, place, slug)] ?? 0) : revOf(s, host, place, system);
 }
 
 /** A list per design system or design (`itemKey`) in `field`, from the
@@ -526,7 +535,13 @@ function onDesignChange(host: string, change: DesignChanged) {
     // A page not listed yet loads once it is: written again before that.
     const pages = changedPages(change, change.design);
     for (const page of pages) bump(pageKey(host, place, change.design, page), change.design, page);
-    useDesign.setState((s) => ({ pageRevs: { ...s.pageRevs, ...revs }, latest: pages.length ? { ...s.latest, [key]: pages } : s.latest }));
+    // A session design's own copy of its design system: its kit is read again.
+    const own = isSession(place) && changesOwnSystem(change);
+    useDesign.setState((s) => ({
+      pageRevs: { ...s.pageRevs, ...revs },
+      latest: pages.length ? { ...s.latest, [key]: pages } : s.latest,
+      changes: own ? { ...s.changes, [key]: (s.changes[key] ?? 0) + 1 } : s.changes,
+    }));
     reloadDesigns(host, change.workspace);
     checkSoon(host, place, change.design);
     // Its comments, kept, sent or resolved here or written by its agent.
