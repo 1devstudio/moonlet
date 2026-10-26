@@ -1459,7 +1459,7 @@ pub struct NamedItem {
 /// When an account change was made (X68): a hybrid logical clock and the
 /// member that made it. Ordered by time, then counter, then member, so
 /// every member orders changes the same way.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Stamp {
     pub ms: u64,
     pub n: u32,
@@ -1477,10 +1477,14 @@ pub struct Change {
     pub op: ChangeOp,
 }
 
+/// What a [`Change`] does to its record (X68).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ChangeOp {
+    /// Sets one field; the change with the latest stamp gives the field
+    /// its value.
     Set { field: String, value: serde_json::Value },
+    /// Deletes the record, for good: later changes to it are ignored.
     Delete,
 }
 

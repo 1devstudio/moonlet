@@ -4,7 +4,7 @@
 //! members that have seen the same changes agree, in whatever order the
 //! changes came.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use moonlet_proto::types::{Change, ChangeOp, Stamp};
 use serde::{Deserialize, Serialize};
@@ -74,7 +74,7 @@ impl Log {
 
     /// Sets a field of a record here, at wall time `now_ms`.
     pub fn set(&mut self, now_ms: u64, kind: &str, id: &str, field: &str, value: Value) -> Change {
-        self.make(
+        self.stamped(
             now_ms,
             kind,
             id,
@@ -87,19 +87,23 @@ impl Log {
 
     /// Deletes a record here, at wall time `now_ms`.
     pub fn delete(&mut self, now_ms: u64, kind: &str, id: &str) -> Change {
-        self.make(now_ms, kind, id, ChangeOp::Delete)
+        self.stamped(now_ms, kind, id, ChangeOp::Delete)
     }
 
     /// A change stamped later than every change seen, even when this
     /// machine's clock is behind another member's.
-    fn make(&mut self, now_ms: u64, kind: &str, id: &str, op: ChangeOp) -> Change {
+    fn stamped(&mut self, now_ms: u64, kind: &str, id: &str, op: ChangeOp) -> Change {
         let (ms, n) = self.clock;
         self.clock = if now_ms > ms {
             (now_ms, 0)
+        } else if n == u32::MAX {
+            // A counter at its limit, from a change received: the next
+            // millisecond instead.
+            (ms + 1, 0)
         } else {
             (ms, n + 1)
         };
-        self.seq += 1;
+        self.seq = self.seq.saturating_add(1);
         let c = Change {
             stamp: Stamp {
                 ms: self.clock.0,
@@ -153,7 +157,7 @@ impl Log {
         }
         // A delete is final: nothing brings a deleted record back, so two
         // members never disagree on whether it exists.
-        let deleted: std::collections::BTreeSet<&str> = self
+        let deleted: BTreeSet<&str> = self
             .changes
             .values()
             .filter(|c| c.kind == kind && c.op == ChangeOp::Delete)
@@ -180,7 +184,11 @@ const DIGITS: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
 /// base-36 fraction (`"i"` is one half), and two members placing items at
 /// once never move each other's. Keys never end in `0`, so there is always
 /// room before one.
+///
+/// Two members placing an item at once can give two items the same key,
+/// so `b` may equal `a` or even come first: the key is then after `a`.
 pub fn key_between(a: Option<&str>, b: Option<&str>) -> String {
+    let b = b.filter(|b| a.is_none_or(|a| a < *b));
     midpoint(a.unwrap_or("").as_bytes(), b.map(str::as_bytes))
 }
 
@@ -199,19 +207,19 @@ fn midpoint(a: &[u8], b: Option<&[u8]>) -> String {
             return format!("{}{rest}", String::from_utf8_lossy(&b[..n]));
         }
     }
-    let da = a.first().map_or(0, |&d| digit(d));
-    let db = b
+    let low = a.first().map_or(0, |&d| digit(d));
+    let high = b
         .and_then(|b| b.first())
         .map_or(DIGITS.len(), |&d| digit(d));
-    if db - da > 1 {
-        return (DIGITS[(da + db) / 2] as char).to_string();
+    if high - low > 1 {
+        return (DIGITS[(low + high) / 2] as char).to_string();
     }
     match b {
         // `b` goes on past its first digit, which alone is then between.
         Some(b) if b.len() > 1 => (b[0] as char).to_string(),
         _ => format!(
             "{}{}",
-            DIGITS[da] as char,
+            DIGITS[low] as char,
             midpoint(a.get(1..).unwrap_or(&[]), None)
         ),
     }
@@ -220,7 +228,6 @@ fn midpoint(a: &[u8], b: Option<&[u8]>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use moonlet_proto::types::{Change, ChangeOp, Stamp};
     use serde_json::json;
 
     fn set(
@@ -247,6 +254,13 @@ mod tests {
         }
     }
 
+    fn delete(ms: u64, member: &str, seq: u64, id: &str) -> Change {
+        Change {
+            op: ChangeOp::Delete,
+            ..set(ms, member, seq, id, "", json!(null))
+        }
+    }
+
     #[test]
     fn a_field_takes_the_latest_change_whatever_order_the_changes_come_in() {
         let older = set(1_000, "mini", 1, "w1", "name", json!("Personal"));
@@ -262,10 +276,7 @@ mod tests {
     #[test]
     fn a_deleted_record_stays_deleted_whatever_changes_it_later() {
         let made = set(1_000, "mini", 1, "w1", "name", json!("Acme"));
-        let deleted = Change {
-            op: ChangeOp::Delete,
-            ..set(2_000, "book", 1, "w1", "", json!(null))
-        };
+        let deleted = delete(2_000, "book", 1, "w1");
         let renamed_later = set(3_000, "mini", 2, "w1", "name", json!("Acme Inc"));
         let mut log = Log::new("a");
         log.apply(vec![renamed_later, deleted, made]);
@@ -402,6 +413,74 @@ mod tests {
     }
 
     #[test]
+    fn a_key_between_keys_that_leave_little_room_stays_between_them() {
+        // Qodo's case: a key at most one digit longer than its bounds.
+        let k = key_between(Some("i"), Some("i0i"));
+        assert!(
+            "i" < k.as_str() && k.as_str() < "i0i" && !k.ends_with('0'),
+            "{k}"
+        );
+        let again = key_between(Some("i"), Some(&k));
+        assert!(
+            "i" < again.as_str() && again < k && !again.ends_with('0'),
+            "{again}"
+        );
+        // Two members that placed a section at once got the same key, or
+        // keys came in the wrong order: a key after the first, never a panic.
+        assert_eq!(key_between(Some("r"), Some("r")), "v");
+        assert_eq!(key_between(Some("r"), Some("i")), "v");
+    }
+
+    #[test]
+    fn changes_stamped_at_the_same_time_are_ordered_by_member() {
+        let a = set(1_000, "air.a1b2c3", 1, "w1", "name", json!("Air"));
+        let b = set(1_000, "book.k3x9q2", 1, "w1", "name", json!("Book"));
+        for order in [vec![a.clone(), b.clone()], vec![b, a]] {
+            let mut log = Log::new("mini.f0e1d2");
+            log.apply(order);
+            assert_eq!(log.records("workspace")["w1"]["name"], json!("Book"));
+        }
+    }
+
+    #[test]
+    fn a_change_reads_and_writes_as_the_protocol_says() {
+        let wire = r#"[{"stamp":{"ms":1793000000000,"n":2,"member":"book.k3x9q2"},"seq":7,"kind":"section","id":"s1","op":{"set":{"field":"name","value":"Clients"}}},{"stamp":{"ms":1793000000001,"n":0,"member":"book.k3x9q2"},"seq":8,"kind":"section","id":"s1","op":"delete"}]"#;
+        let changes: Vec<Change> = serde_json::from_str(wire).unwrap();
+        assert_eq!(
+            changes[0].op,
+            ChangeOp::Set {
+                field: "name".into(),
+                value: json!("Clients")
+            }
+        );
+        assert_eq!(changes[1].op, ChangeOp::Delete);
+        assert_eq!(serde_json::to_string(&changes).unwrap(), wire);
+    }
+
+    #[test]
+    fn a_counter_at_its_limit_moves_the_clock_on_instead_of_overflowing() {
+        let mut log = Log::new("book.k3x9q2");
+        log.apply(vec![Change {
+            stamp: Stamp {
+                ms: 5_000,
+                n: u32::MAX,
+                member: "mini.a1b2c3".into(),
+            },
+            ..set(5_000, "mini.a1b2c3", 1, "w1", "name", json!("Personal"))
+        }]);
+        let c = log.set(1_000, "workspace", "w1", "name", json!("Home"));
+        assert_eq!(
+            c.stamp,
+            Stamp {
+                ms: 5_001,
+                n: 0,
+                member: "book.k3x9q2".into()
+            }
+        );
+        assert_eq!(log.records("workspace")["w1"]["name"], json!("Home"));
+    }
+
+    #[test]
     fn a_saved_log_reloads_with_its_changes_and_goes_on_counting() {
         let mut book = Log::new("book");
         book.apply(vec![set(9_000, "mini", 1, "w1", "name", json!("Personal"))]);
@@ -410,7 +489,13 @@ mod tests {
         let text = serde_json::to_string(&book.to_file()).unwrap();
 
         let mut again = Log::from_file(serde_json::from_str(&text).unwrap());
-        assert_eq!(again.records("workspace"), book.records("workspace"));
+        assert_eq!(
+            again.records("workspace")["w1"],
+            Record::from([
+                ("name".into(), json!("Home")),
+                ("color".into(), json!("blue"))
+            ])
+        );
         assert_eq!(
             again.version(),
             BTreeMap::from([("book".to_string(), 2), ("mini".to_string(), 1)])
