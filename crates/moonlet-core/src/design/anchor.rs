@@ -40,14 +40,24 @@ pub struct Anchor {
 
 /// Writes `_ds_sync.json` for the design system in `root`, made from the
 /// projects at `sources` (a card's source path is looked up in each, in order).
-pub fn write(root: &Path, sources: &[PathBuf]) -> Result<()> {
-    let json = serde_json::to_string_pretty(&compute(root, sources)?)?;
+pub fn write(
+    root: &Path,
+    sources: &[PathBuf],
+    exceptions: &BTreeMap<String, String>,
+) -> Result<()> {
+    let json = serde_json::to_string_pretty(&compute(root, sources, exceptions)?)?;
     std::fs::write(root.join(FILE), json + "\n")?;
     Ok(())
 }
 
 /// The anchor as it would be written now.
-pub fn compute(root: &Path, sources: &[PathBuf]) -> Result<Anchor> {
+/// `exceptions` holds each card's settings in `config.toml`, by card path:
+/// a change to them changes the card's `source_key`.
+pub fn compute(
+    root: &Path,
+    sources: &[PathBuf],
+    exceptions: &BTreeMap<String, String>,
+) -> Result<Anchor> {
     let mut cards = BTreeMap::new();
     for path in html_files(root) {
         let rel_path = rel(root, &path);
@@ -66,10 +76,11 @@ pub fn compute(root: &Path, sources: &[PathBuf]) -> Result<Anchor> {
             .iter()
             .map(|s| (s.clone(), source_hash(sources, s).unwrap_or_default()))
             .collect();
+        let key = source_key(&files, exceptions.get(&rel_path).map(String::as_str));
         cards.insert(
             rel_path,
             CardAnchor {
-                source_key: source_key(&files),
+                source_key: key,
                 render_hash: render_hash(&text),
                 sources: files,
             },
@@ -146,11 +157,17 @@ pub struct CardStatus {
     pub orphaned: bool,
     /// The anchor does not know it.
     pub new: bool,
+    /// Its settings in `config.toml` changed: it is out of date too.
+    pub exceptions_changed: bool,
 }
 
 /// The cards that changed since `_ds_sync.json` was written, by path. With no
 /// anchor every card is new; one that cannot be read or parsed is an error.
-pub fn status(root: &Path, sources: &[PathBuf]) -> Result<Vec<CardStatus>> {
+pub fn status(
+    root: &Path,
+    sources: &[PathBuf],
+    exceptions: &BTreeMap<String, String>,
+) -> Result<Vec<CardStatus>> {
     let path = root.join(FILE);
     let anchored: Anchor = match std::fs::read_to_string(&path) {
         Ok(text) => {
@@ -167,13 +184,14 @@ pub fn status(root: &Path, sources: &[PathBuf]) -> Result<Vec<CardStatus>> {
         },
     };
     let mut out = Vec::new();
-    for (path, now) in compute(root, sources)?.cards {
+    for (path, now) in compute(root, sources, exceptions)?.cards {
         let mut st = CardStatus {
             path: path.clone(),
             changed_sources: Vec::new(),
             edited_by_hand: false,
             orphaned: false,
             new: false,
+            exceptions_changed: false,
         };
         match anchored.cards.get(&path) {
             None => st.new = true,
@@ -195,6 +213,9 @@ pub fn status(root: &Path, sources: &[PathBuf]) -> Result<Vec<CardStatus>> {
                 changed.sort();
                 st.changed_sources = changed;
                 st.edited_by_hand = now.render_hash != then.render_hash;
+                st.exceptions_changed = st.changed_sources.is_empty()
+                    && now.sources == then.sources
+                    && now.source_key != then.source_key;
                 // A card whose marker broke names no sources now: the ones
                 // it had at the sync tell whether it is orphaned.
                 let named: Vec<&String> = if now.sources.is_empty() {
@@ -206,7 +227,12 @@ pub fn status(root: &Path, sources: &[PathBuf]) -> Result<Vec<CardStatus>> {
                     !named.is_empty() && named.iter().all(|p| source_hash(sources, p).is_none());
             }
         }
-        if !st.changed_sources.is_empty() || st.edited_by_hand || st.orphaned || st.new {
+        if !st.changed_sources.is_empty()
+            || st.edited_by_hand
+            || st.orphaned
+            || st.new
+            || st.exceptions_changed
+        {
             out.push(st);
         }
     }
@@ -235,8 +261,11 @@ fn render_hash(html: &str) -> String {
     )
 }
 
-fn source_key(files: &BTreeMap<String, String>) -> String {
-    let lines: String = files.iter().map(|(p, h)| format!("{p} {h}\n")).collect();
+fn source_key(files: &BTreeMap<String, String>, exceptions: Option<&str>) -> String {
+    let mut lines: String = files.iter().map(|(p, h)| format!("{p} {h}\n")).collect();
+    if let Some(e) = exceptions {
+        lines.push_str(&format!("exceptions {e}\n"));
+    }
     sha16(lines.as_bytes())
 }
 
@@ -271,7 +300,12 @@ mod tests {
             &[("components/buttons/button/button.html", CARD)],
         );
         files(project.path(), &[("src/ui.tsx", UI)]);
-        write(system.path(), &[project.path().to_path_buf()]).unwrap();
+        write(
+            system.path(),
+            &[project.path().to_path_buf()],
+            &BTreeMap::new(),
+        )
+        .unwrap();
         let json: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(system.path().join("_ds_sync.json")).unwrap(),
         )
@@ -327,8 +361,11 @@ mod tests {
             ],
         );
         let sources = [project.path().to_path_buf()];
-        write(system.path(), &sources).unwrap();
-        assert_eq!(status(system.path(), &sources).unwrap(), vec![]);
+        write(system.path(), &sources, &BTreeMap::new()).unwrap();
+        assert_eq!(
+            status(system.path(), &sources, &BTreeMap::new()).unwrap(),
+            vec![]
+        );
 
         // The source of Button changed; Session row was edited by hand;
         // Toolbar's source is gone; Field moved to another group (only its
@@ -367,9 +404,10 @@ mod tests {
                 edited_by_hand: edited,
                 orphaned,
                 new,
+                exceptions_changed: false,
             };
         assert_eq!(
-            status(system.path(), &sources).unwrap(),
+            status(system.path(), &sources, &BTreeMap::new()).unwrap(),
             vec![
                 s(
                     "components/buttons/button/button.html",
@@ -411,7 +449,7 @@ mod tests {
         );
         files(project.path(), &[("src/ui.tsx", UI)]);
         let sources = [project.path().to_path_buf()];
-        write(system.path(), &sources).unwrap();
+        write(system.path(), &sources, &BTreeMap::new()).unwrap();
         let json: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(system.path().join("_ds_sync.json")).unwrap(),
         )
@@ -435,10 +473,15 @@ mod tests {
             &[("components.css", ".btn { color: blue; }\n")],
         );
         assert_ne!(
-            compute(system.path(), &sources).unwrap().style_sha,
+            compute(system.path(), &sources, &BTreeMap::new())
+                .unwrap()
+                .style_sha,
             "f9da201cb900b445"
         );
-        assert_eq!(status(system.path(), &sources).unwrap(), vec![]);
+        assert_eq!(
+            status(system.path(), &sources, &BTreeMap::new()).unwrap(),
+            vec![]
+        );
     }
 
     #[test]
@@ -468,9 +511,9 @@ mod tests {
         // A folder that links back to the system: scans must not loop through it.
         std::os::unix::fs::symlink(system.path(), system.path().join("components/loop")).unwrap();
         let sources = [project.path().to_path_buf()];
-        write(system.path(), &sources).unwrap();
+        write(system.path(), &sources, &BTreeMap::new()).unwrap();
         assert!(
-            !compute(system.path(), &sources)
+            !compute(system.path(), &sources, &BTreeMap::new())
                 .unwrap()
                 .files
                 .keys()
@@ -490,11 +533,12 @@ mod tests {
                 ),
             ],
         );
-        let got: Vec<(String, Vec<String>, bool)> = status(system.path(), &sources)
-            .unwrap()
-            .into_iter()
-            .map(|s| (s.path, s.changed_sources, s.edited_by_hand))
-            .collect();
+        let got: Vec<(String, Vec<String>, bool)> =
+            status(system.path(), &sources, &BTreeMap::new())
+                .unwrap()
+                .into_iter()
+                .map(|s| (s.path, s.changed_sources, s.edited_by_hand))
+                .collect();
         assert_eq!(
             got,
             vec![
@@ -521,7 +565,7 @@ mod tests {
         );
         files(project.path(), &[("src/ui.tsx", UI)]);
         let sources = [project.path().to_path_buf()];
-        write(system.path(), &sources).unwrap();
+        write(system.path(), &sources, &BTreeMap::new()).unwrap();
 
         files(
             system.path(),
@@ -532,13 +576,14 @@ mod tests {
         );
         std::fs::remove_file(project.path().join("src/ui.tsx")).unwrap();
         assert_eq!(
-            status(system.path(), &sources).unwrap(),
+            status(system.path(), &sources, &BTreeMap::new()).unwrap(),
             vec![CardStatus {
                 path: "components/buttons/button/button.html".into(),
                 changed_sources: vec!["src/ui.tsx".into()],
                 edited_by_hand: false,
                 orphaned: true,
                 new: false,
+                exceptions_changed: false,
             }]
         );
     }
@@ -553,22 +598,54 @@ mod tests {
         files(project.path(), &[("src/ui.tsx", UI)]);
         let sources = [project.path().to_path_buf()];
         assert_eq!(
-            status(system.path(), &sources).unwrap(),
+            status(system.path(), &sources, &BTreeMap::new()).unwrap(),
             vec![CardStatus {
                 path: "components/buttons/button/button.html".into(),
                 changed_sources: vec![],
                 edited_by_hand: false,
                 orphaned: false,
                 new: true,
+                exceptions_changed: false,
             }]
         );
 
         // An anchor that cannot be read is not one that was never written.
         std::fs::create_dir(system.path().join("_ds_sync.json")).unwrap();
-        assert!(status(system.path(), &sources).is_err());
+        assert!(status(system.path(), &sources, &BTreeMap::new()).is_err());
 
         std::fs::remove_dir(system.path().join("_ds_sync.json")).unwrap();
         files(system.path(), &[("_ds_sync.json", "{\"cards\": ")]);
-        assert!(status(system.path(), &sources).is_err());
+        assert!(status(system.path(), &sources, &BTreeMap::new()).is_err());
+    }
+
+    #[test]
+    fn a_changed_card_exception_makes_the_card_out_of_date() {
+        let (system, project) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        files(
+            system.path(),
+            &[("components/buttons/button/button.html", CARD)],
+        );
+        files(project.path(), &[("src/ui.tsx", UI)]);
+        let sources = [project.path().to_path_buf()];
+        let card = "components/buttons/button/button.html".to_string();
+        let before = BTreeMap::from([(card.clone(), "mode = \"column\"".to_string())]);
+        write(system.path(), &sources, &before).unwrap();
+        assert_eq!(status(system.path(), &sources, &before).unwrap(), vec![]);
+        let after = BTreeMap::from([(card.clone(), "mode = \"single\"".to_string())]);
+        let got = status(system.path(), &sources, &after).unwrap();
+        assert_eq!(got.len(), 1);
+        assert!(
+            got[0].exceptions_changed
+                && got[0].changed_sources.is_empty()
+                && !got[0].edited_by_hand
+        );
+        // With no exception at all, the key is the one `shasum` gave for the sources alone.
+        assert_eq!(
+            compute(system.path(), &sources, &BTreeMap::new())
+                .unwrap()
+                .cards[&card]
+                .source_key,
+            "5ced44ca6deea951"
+        );
     }
 }

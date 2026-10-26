@@ -77,7 +77,7 @@ A design system belongs to a moonlet workspace, so every project and design in t
 
 ### Folder
 
-- [ ] A design system lives in `~/.moonlet/design/<workspace id>/systems/<slug>/`. Its slug comes from its name, and a name already in use gets a ` 2` suffix. The folder holds:
+- [ ] A design system lives in `~/.moonlet/design/<workspace id>/systems/<slug>/`, for a workspace that exists. Its slug comes from its name, and a name already in use gets a ` 2` suffix. (`design/store.rs` a_new_design_system_gets_a_folder_and_a_config_and_a_used_name_gets_a_number; `moonletd/tests/daemon.rs` design_systems_over_rpc) The folder holds:
 
   ```
   README.md                          the design agent's doc: conventions header + generated index
@@ -105,8 +105,8 @@ A design system belongs to a moonlet workspace, so every project and design in t
   - the scope: the components covered
   - per-card exceptions: `skip`, `mode` and `viewport`
 
-  A setting at its default is not written. Config describes conventions and exceptions, never lists of everything.
-- [ ] A workspace lists its design systems in Design mode. Deleting one asks first and leaves the designs that use it. Those designs show the grey "Design system removed" bar (X65).
+  A setting at its default is not written. Config describes conventions and exceptions, never lists of everything. A card's settings join its `source_key`, so changing them makes it out of date (`design/anchor.rs` a_changed_card_exception_makes_the_card_out_of_date).
+- [ ] A workspace lists its design systems in Design mode (`design/store.rs` a_workspace_lists_its_design_systems_with_their_cards_and_what_needs_the_user). Deleting one asks first and leaves the designs that use it (`design/store.rs` removing_a_system_deletes_its_folder_and_files_resolve_only_inside_the_workspace). Those designs show the grey "Design system removed" bar (X65).
 
 ### Styles and tokens
 
@@ -119,7 +119,7 @@ A design system belongs to a moonlet workspace, so every project and design in t
 
 - [ ] A card's first line is `<!-- @dsCard group="<Group>" name="<Name>" source="<path>[,<path>…]" viewport="<w>x<h>" -->`.
   - `group` is required, as in design-sync.
-  - `source` lists the source files, relative to the source project, that the card was made from. A path that is absolute or climbs out with `..` makes the marker malformed, so nothing outside a project is ever read (`design/card.rs` a_source_outside_the_project_is_malformed).
+  - `source` lists the source files the card was made from, relative to its source's folder: the repository, or the sub-folder the source names, such as `apps/mobile` (`design/store.rs` a_source_with_a_subfolder_reads_card_sources_inside_it). A path that is absolute or climbs out with `..` makes the marker malformed, so nothing outside a project is ever read (`design/card.rs` a_source_outside_the_project_is_malformed).
   - `viewport` defaults to 900x700.
   - The folder name is the group's slug.
 
@@ -213,7 +213,7 @@ A design system belongs to a moonlet workspace, so every project and design in t
 
   Grades go to `.cache/grades/<Name>.json`. The step is done when nothing is `bad` and every card in scope is `good` or `match`.
 - [ ] **Layouts.** The agent writes `ui_kits/`, then `conventions.md`, and runs the check, which rebuilds the README.
-- [ ] The agent reports each step with `"$MOONLET_BIN" design system progress <system> <step> [<summary>]`. When it is done, `"$MOONLET_BIN" design system synced <system>` writes `_ds_sync.json` (last) and records each source's `HEAD` in `config.toml`.
+- [ ] The agent reports each step with `"$MOONLET_BIN" design system progress <step> [<summary>]`. When it is done, `"$MOONLET_BIN" design system synced` writes `_ds_sync.json` (last) and records each source's short `HEAD` in `config.toml`. In the design system's folder neither needs `--system` or `--workspace`; elsewhere the workspace comes from the agent's session. (`design/store.rs` sync_progress_shows_in_the_list_until_the_sync_is_recorded; `moonlet-cli/tests/design_e2e.rs` the_sync_agent_reports_checks_and_records_from_its_folder; `moonlet-cli/src/design.rs` a_folder_of_a_design_system_names_its_workspace_and_system, an_agents_terminal_names_its_sessions_workspace)
 - [ ] `_ds_sync.json` holds, per card (components and layouts; the foundation cards are moonlet's and are rewritten from the tokens):
   - `sources`: each source file and its hash, looked up in the source projects in order
   - `source_key`: a hash of `sources`. The card's exceptions in `config.toml` join it with entry 3, which reads `config.toml`.
@@ -255,7 +255,7 @@ A design system belongs to a moonlet workspace, so every project and design in t
   - keep the project's own names
   - put fixes in the files the next sync reads, never in generated ones
 - [ ] `/moonlet-design sync` in a session of a project makes the agent run `design system sync <system>`, or `design system new --from <that project>` when there is none. The design system opens in Design mode with a toast, and the user's focus does not move.
-- [ ] CLI, each printing JSON like the other `moonlet` commands (A6):
+- [ ] CLI, each printing JSON like the other `moonlet` commands (A6). `system ls|new|rm|progress|synced` and `check` came with entry 3a, `sync` with 3b, `--render` and `snap` with entry 6:
   - `moonlet design system ls|new|sync|progress|synced|rm`
   - `moonlet design check [--render]`
   - `moonlet design snap <card> | --url <url>`
@@ -270,16 +270,18 @@ The boards of the design export are the reference.
 
 ## Protocol and RPCs
 
-- `design.systems {workspace}` → `[{slug, name, sources, synced_at, synced_commit, cards, layouts, changed_sources: [path], check_problems, to_settle, step}]`
-- `design.system.create {workspace, name, sources: [{project, subdir?}]}` → the system. Starts the sync agent.
-- `design.system.sync {workspace, slug}` starts the sync agent on an existing system.
+Every call names an existing moonlet workspace, or fails with `invalid_params` (`moonletd/tests/daemon.rs` design_systems_over_rpc). The app and the agents' `moonlet` CLI may call them; a paired phone gets `forbidden` (`moonletd/tests/mobile.rs` phones_cannot_reach_design_systems).
+
+- `design.systems {workspace}` → `[{slug, name, sources, synced_at, synced_commit, cards, layouts, changed_sources: [path], check_problems, to_settle, step, step_summary, error}]`. A system that cannot be read still lists, with its `error`, beside the others (`design/store.rs` one_broken_system_still_lists_with_its_error_beside_the_others).
+- `design.system.create {workspace, name, sources: [{project, subdir?}]}` → the slug. With entry 3b it also starts the sync agent.
+- `design.system.sync {workspace, slug}` starts the sync agent on an existing system (entry 3b).
 - `design.system.progress {workspace, slug, step, summary?}`
-- `design.system.synced {workspace, slug}` writes the anchor.
+- `design.system.synced {workspace, slug}` writes the anchor, then records each source's short `HEAD` (none when it cannot be read) and the time. When the anchor cannot be written, nothing is recorded and the progress stays (`design/store.rs` a_sync_whose_anchor_cannot_be_written_stays_unfinished_and_a_lost_head_is_cleared).
 - `design.system.remove {workspace, slug}`
-- `design.check {workspace, path, render?: bool}` → `{files: [{path, problems: [{line, kind, message}]}], render?: {total, bad, thin, variants_identical}}`
-- `design.snap {workspace, path, viewport?, variant?}` → the PNG path. The app renders it.
-- `design.file {workspace, path}` → bytes and content type. The app's `moonlet-design://` scheme (X65) is served from it.
-- `design.settle {workspace, path, choice: "mine" | "synced" | "remove" | "keep"}`
+- `design.check {workspace, slug}` → `[{path, line, kind, message}]`, after rewriting the generated files. Entry 6 adds `render?: bool` and the render counts.
+- `design.snap {workspace, path, viewport?, variant?}` → the PNG path. The app renders it (entry 6).
+- `design.file {workspace, path}` → `{path, content_type}`. The app's `moonlet-design://` scheme (X65) reads the file itself: designs are local only (ADR 0013), so no bytes cross the socket.
+- `design.settle {workspace, slug, card, choice: "mine" | "synced" | "remove" | "keep"}`. `card` is `components/<group>/<name>/<name>.html` or `ui_kits/<kit>/<screen>.html`, with no `.` or `..` and reached through no symlink (`design/store.rs` settling_a_card_keeps_mine_uses_the_synced_one_or_removes_it, settling_never_touches_files_outside_the_system_through_a_link_or_dots)
 - Event `design.changed {workspace, paths}` when files under a workspace's design folder change.
 - Event `design.render {request id, path, viewport, variant}`, sent to the app, which answers with the DOM metrics or a PNG.
 
