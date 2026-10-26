@@ -838,7 +838,13 @@ mod tests {
         let req = SessionCreate {
             name: Some("Keep me".into()),
             agent: Some("none".into()),
-            workspace_id: Some(book.list_workspaces()[0].id.clone()),
+            // The workspace holding the shared section, whichever member's
+            // "Personal" lists first.
+            workspace_id: mini
+                .list_workspaces()
+                .into_iter()
+                .find(|w| w.section_ids.contains(&work.id))
+                .map(|w| w.id),
             cols: 80,
             rows: 24,
             ..SessionCreate::new(&mini_shop.id)
