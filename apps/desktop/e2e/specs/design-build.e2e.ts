@@ -183,6 +183,16 @@ describe("Build it and the Designs index", () => {
     await expect(panel().$('.//iframe[@title="index.html"]')).toBeExisting();
   });
 
+  it("shows Design and build in the PR's Review tab too, each page beside its built screenshot", async () => {
+    await tab("Review").click();
+    const section = panel().$('.//section[@aria-label="Design and build · Settings page"]');
+    await expect(section).toBeDisplayed({ wait: 20_000 });
+    const shot = section.$('.//article[@aria-label="index design and build"]//img[@alt="index built"]');
+    await browser.waitUntil(async () => (await shot.isExisting()) && (await shot.getProperty("naturalWidth")) === 1, { timeoutMsg: "the built screenshot never showed in the Review tab" });
+    await expect(section.$('.//article[@aria-label="git-b design and build"]')).toHaveText(expect.stringContaining("Not built yet"));
+    await tab("Design").click();
+  });
+
   it("offers Implement it and Back to the design once the session's agent wrote the spec from the design", async () => {
     const input = '//main//section[@aria-label="Chat input"]//textarea';
     await expect($(input)).toBeDisplayed({ wait: 20_000 });
