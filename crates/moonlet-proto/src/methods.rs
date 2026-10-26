@@ -248,7 +248,8 @@ pub const DESIGN_COMMENT_PUT: &str = "design.comment.put";
 /// [`DesignCommentRef`] → the pin, resolved.
 pub const DESIGN_COMMENT_RESOLVE: &str = "design.comment.resolve";
 /// [`DesignPageRef`] → [`DesignPageText`]: a design's page and its version,
-/// for the visual editor (X65 entry 9).
+/// for the visual editor (X65 entry 9), and its first parse error, for the
+/// canvas's "did not load" bar (entry 13).
 pub const DESIGN_PAGE: &str = "design.page";
 /// [`DesignWritePage`] → [`DesignPageWritten`]: the page replaced with the
 /// editor's text, only over `base_version`; else the error `stale`.
@@ -1486,6 +1487,19 @@ pub struct DesignPageRef {
 pub struct DesignPageText {
     pub html: String,
     pub version: String,
+    /// Where the page first goes wrong as HTML, if it does: what the canvas
+    /// says of a page that did not load (X65). A browser recovers from it
+    /// and reports nothing, so the app shows it only for a page that did
+    /// not load, never for one that did.
+    #[serde(default)]
+    pub parse_error: Option<DesignParseError>,
+}
+
+/// A page's first parse error: its line, 1-based, and what is wrong.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DesignParseError {
+    pub line: u32,
+    pub message: String,
 }
 
 /// [`DESIGN_WRITE_PAGE`]'s params: the page's new text, and the version it

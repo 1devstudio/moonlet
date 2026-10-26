@@ -14,6 +14,7 @@ pub mod kit;
 pub mod manifest;
 pub mod mid;
 pub mod pages;
+pub mod parse;
 pub mod place;
 pub mod project;
 pub mod readme;

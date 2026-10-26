@@ -29,6 +29,9 @@ lol_html = "3"
 # Where a stylesheet's comments are, read as a browser reads them; the
 # version lol_html already builds.
 cssparser = "0.36"
+# Where a design's page that did not load first goes wrong as HTML (X65):
+# lol_html reports no parse errors; html5ever's tokenizer does, by line.
+html5ever = "0.39"
 # Writes in a design system's folder through directory handles, never
 # through a symlink out of it, with no check-then-use gap (X64).
 cap-std = "4"
