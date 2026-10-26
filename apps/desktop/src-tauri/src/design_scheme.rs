@@ -26,6 +26,8 @@
 #[derive(Debug, PartialEq, Eq)]
 pub struct Target {
     pub host: String,
+    /// The card's or the page's key, the host's first label, if it has one.
+    pub key: Option<String>,
     pub place: Place,
     pub path: String,
 }
@@ -51,7 +53,7 @@ pub fn csp(host: &str) -> String {
 /// What `url` names, or `None` for anything else: another scheme, no
 /// workspace, no path, a path with an empty, `.` or `..` part, or a host
 /// that is neither `<workspace>` nor `<card key>.<workspace>`, nor a
-/// session's `<page key>.s-<session>` (X65).
+/// session's `<page key>.s-<session>` (X65), which always has its key.
 pub fn target(url: &str) -> Option<Target> {
     let rest = url.strip_prefix("moonlet-design://")?;
     let rest = rest.split(['?', '#']).next().unwrap_or_default();
@@ -69,15 +71,15 @@ pub fn target(url: &str) -> Option<Target> {
     }
     // A card's or a page's key is a DNS label: lowercase letters and
     // digits, 1 to 63.
-    let place = match host.split('.').collect::<Vec<_>>()[..] {
-        [place] => place,
+    let (key, place) = match host.split('.').collect::<Vec<_>>()[..] {
+        [place] => (None, place),
         [key, place]
             if (1..=63).contains(&key.len())
                 && key
                     .bytes()
                     .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit()) =>
         {
-            place
+            (Some(key.to_string()), place)
         }
         _ => return None,
     };
@@ -91,11 +93,13 @@ pub fn target(url: &str) -> Option<Target> {
         ok.then_some(id)
     };
     let place = match place.strip_prefix("s-") {
+        Some(_) if key.is_none() => return None,
         Some(session) => Place::Session(id(session)?),
         None => Place::Workspace(id(place)?),
     };
     Some(Target {
         host: host.to_string(),
+        key,
         place,
         path: parts.join("/"),
     })
@@ -108,10 +112,9 @@ pub fn target(url: &str) -> Option<Target> {
 /// design its design systems' (the page's styles; a session design's are in
 /// the snapshot's `system/`), are served. No other key has an `s`, being
 /// hex; one with an `s` naming no folder serves nothing.
-pub fn serves(host: &str, path: &str) -> bool {
-    let (key, place) = match host.split('.').collect::<Vec<_>>()[..] {
-        [key, place] => (key, place),
-        _ => return true,
+pub fn serves(t: &Target) -> bool {
+    let (Some(key), path) = (&t.key, t.path.as_str()) else {
+        return true;
     };
     let Some((page, folder)) = key.split_once('s') else {
         return true;
@@ -120,7 +123,7 @@ pub fn serves(host: &str, path: &str) -> bool {
     if !hex(page) || !hex(folder) {
         return false;
     }
-    if place.starts_with("s-") {
+    if let Place::Session(_) = t.place {
         let named = path.split('/').next().unwrap_or_default();
         return named.contains('@') && fnv1a64(named) == folder;
     }
@@ -234,13 +237,14 @@ pub async fn serve(app: &tauri::AppHandle, url: &str) -> tauri::http::Response<V
             .body(body.as_bytes().to_vec())
             .unwrap_or_default()
     };
-    let Some(Target { host, place, path }) = target(url) else {
+    let Some(t) = target(url) else {
         return reply(400, "not a design file");
     };
     // A snapshot's frame, led away by a link in its page, shows no other.
-    if !serves(&host, &path) {
+    if !serves(&t) {
         return reply(403, "a snapshot's preview shows only its own files");
     }
+    let Target { host, place, path, .. } = t;
     let hosts = app.state::<Arc<crate::hosts::HostManager>>();
     let Ok(local) = hosts.get("local") else {
         return reply(404, "the daemon is not running");
@@ -376,11 +380,18 @@ fn decode(s: &str) -> Option<String> {
 mod tests {
     use super::*;
 
+    /// Whether `path` is served on `host`, as `serve` asks for the target
+    /// the URL names; a URL that names none is not.
+    fn serves_at(host: &str, path: &str) -> bool {
+        target(&format!("moonlet-design://{host}/{path}")).is_some_and(|t| serves(&t))
+    }
+
     #[test]
     fn a_url_names_a_workspace_and_a_file_of_its_design_folder() {
         let t = |w: &str, p: &str| {
             Some(Target {
                 host: w.to_string(),
+                key: None,
                 place: Place::Workspace(w.to_string()),
                 path: p.to_string(),
             })
@@ -412,6 +423,7 @@ mod tests {
             ),
             Some(Target {
                 host: "5a1c3e0f9b2d4c67.w-1devstudio".to_string(),
+                key: Some("5a1c3e0f9b2d4c67".to_string()),
                 place: Place::Workspace("w-1devstudio".to_string()),
                 path: "systems/storefront/components/buttons/button/button.html".to_string(),
             })
@@ -421,6 +433,7 @@ mod tests {
             target("moonlet-design://5a1c3e0f9b2d4c67.w1/systems/s/styles.css"),
             Some(Target {
                 host: "5a1c3e0f9b2d4c67.w1".to_string(),
+                key: Some("5a1c3e0f9b2d4c67".to_string()),
                 place: Place::Workspace("w1".to_string()),
                 path: "systems/s/styles.css".to_string(),
             })
@@ -477,7 +490,7 @@ mod tests {
                 "designs/settings-page@3/assets/logo.svg",
                 "systems/moonlet-desktop/styles.css",
             ] {
-                assert!(serves(host, path), "{host} {path}");
+                assert!(serves_at(host, path), "{host} {path}");
             }
             // The current design's page, which a link in the snapshot's page
             // could lead the frame to, another snapshot, or another design.
@@ -489,7 +502,7 @@ mod tests {
                 "designs/billing@3/pages/index.html",
                 "comments.json",
             ] {
-                assert!(!serves(host, path), "{host} {path}");
+                assert!(!serves_at(host, path), "{host} {path}");
             }
         }
         // A design's own page, a card, and a workspace's host serve as they did.
@@ -508,7 +521,7 @@ mod tests {
             ),
             ("w-1devstudio", "designs/settings-page/pages/index.html"),
         ] {
-            assert!(serves(host, path), "{host} {path}");
+            assert!(serves_at(host, path), "{host} {path}");
         }
         // A key with an s that names no snapshot's folder serves nothing.
         for host in [
@@ -518,7 +531,7 @@ mod tests {
             "bde3977b4fe8bcc8sc159239263e42bb1s.w1",
         ] {
             assert!(
-                !serves(host, "systems/moonlet-desktop/styles.css"),
+                !serves_at(host, "systems/moonlet-desktop/styles.css"),
                 "{host}"
             );
         }
@@ -533,6 +546,7 @@ mod tests {
             ),
             Some(Target {
                 host: "19a1c555a197e847.s-4f2a9c1e7b3d".to_string(),
+                key: Some("19a1c555a197e847".to_string()),
                 place: Place::Session("4f2a9c1e7b3d".to_string()),
                 path: "settings-page/pages/index.html".to_string(),
             })
@@ -542,6 +556,7 @@ mod tests {
             target("moonlet-design://19a1c555a197e847.s-4f2a9c1e7b3d/settings-page/system/styles.css"),
             Some(Target {
                 host: "19a1c555a197e847.s-4f2a9c1e7b3d".to_string(),
+                key: Some("19a1c555a197e847".to_string()),
                 place: Place::Session("4f2a9c1e7b3d".to_string()),
                 path: "settings-page/system/styles.css".to_string(),
             })
@@ -553,11 +568,14 @@ mod tests {
             ),
             Some(Target {
                 host: "315894b4a2cd5984saa0232c623a69ded.s-4f2a9c1e7b3d".to_string(),
+                key: Some("315894b4a2cd5984saa0232c623a69ded".to_string()),
                 place: Place::Session("4f2a9c1e7b3d".to_string()),
                 path: "settings-page@3/pages/index.html".to_string(),
             })
         );
         for bad in [
+            // A session's host always has its page's key.
+            "moonlet-design://s-4f2a9c1e7b3d/settings-page/pages/index.html",
             // No session, or one that is not an id.
             "moonlet-design://19a1c555a197e847.s-/settings-page/pages/index.html",
             "moonlet-design://19a1c555a197e847.s-4f2a%2fx/settings-page/pages/index.html",
@@ -594,7 +612,7 @@ mod tests {
                 "settings-page@3/assets/logo.svg",
                 "settings-page@3/system/styles.css",
             ] {
-                assert!(serves(host, path), "{host} {path}");
+                assert!(serves_at(host, path), "{host} {path}");
             }
             for path in [
                 "settings-page/pages/index.html",
@@ -603,11 +621,11 @@ mod tests {
                 "billing@3/pages/index.html",
                 "systems/moonlet-desktop/styles.css",
             ] {
-                assert!(!serves(host, path), "{host} {path}");
+                assert!(!serves_at(host, path), "{host} {path}");
             }
         }
         // A session design's own page serves as a workspace design's does.
-        assert!(serves("19a1c555a197e847.s-4f2a9c1e7b3d", "settings-page/pages/index.html"));
+        assert!(serves_at("19a1c555a197e847.s-4f2a9c1e7b3d", "settings-page/pages/index.html"));
     }
 
     #[test]
