@@ -219,10 +219,22 @@ export function DesignCanvas({
   const problems = useDesign((d) => problemsOf(d, host, place, design.slug));
   const { open: chatOpen, setOpen: setChatOpen, root: chatRef } = chatPanel;
   const session = frame === "tab";
-  // The tab's keys work while the focus is in it, never in the session's
+  // The tab's keys work while the user is in it, last pressed or focused
+  // there (WebKit focuses no button on a click), never in the session's
   // terminals or chat beside it; the screen's whenever it is shown.
   const own = useRef<HTMLDivElement>(null);
-  const keysHere = () => !session || !!own.current?.contains(document.activeElement);
+  const inTab = useRef(false);
+  useEffect(() => {
+    if (!session) return;
+    const at = (e: Event) => void (inTab.current = e.target instanceof Node && !!own.current?.contains(e.target));
+    window.addEventListener("pointerdown", at, true);
+    window.addEventListener("focusin", at, true);
+    return () => {
+      window.removeEventListener("pointerdown", at, true);
+      window.removeEventListener("focusin", at, true);
+    };
+  }, [session]);
+  const keysHere = () => !session || inTab.current;
   // The page shown, or null for Overview.
   const [picked, setPicked] = useState<string | null>("index");
   const [zoom, setZoom] = useState<number | null>(null);
