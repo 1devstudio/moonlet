@@ -130,13 +130,7 @@ pub fn check(root: &Path) -> Result<Vec<Problem>> {
         .collect();
     for (path, text) in &texts {
         let path_rel = rel(root, path);
-        imports(
-            root,
-            &path_rel,
-            path,
-            &blank(text, &css_comments(text)),
-            &mut problems,
-        );
+        css_problems(root, &path_rel, path, text, &[0..text.len()], &mut problems);
         unknown_tokens(&path_rel, text, &defined, &mut problems);
         fonts(&path_rel, text, &faces, &mut problems);
     }
@@ -194,12 +188,13 @@ pub fn check(root: &Path) -> Result<Vec<Problem>> {
         let mut known = defined.clone();
         known.extend(definitions(&text));
         unknown_tokens(&path_rel, &text, &known, &mut problems);
-        // A card's <style> may @import like a stylesheet.
-        imports(
+        // A card's <style> may @import like a stylesheet; its text is not CSS.
+        css_problems(
             root,
             &path_rel,
             &path,
-            &blank(&text, &style_comments(&text)),
+            &text,
+            &style_ranges(&text),
             &mut problems,
         );
         fonts(&path_rel, &text, &faces, &mut problems);
@@ -236,9 +231,8 @@ pub(super) fn styles_closure(root: &Path) -> Vec<PathBuf> {
         };
         let dir = file.parent().unwrap_or(root).to_path_buf();
         seen.push(file);
-        let text = blank(&text, &css_comments(&text));
-        for c in IMPORT.captures_iter(&text) {
-            if let Target::Fine(Some(next)) = target(root, &dir, quoted(&c))
+        for r in css_refs(&text).into_iter().filter(|r| r.import) {
+            if let Target::Fine(Some(next)) = target(root, &dir, &r.url)
                 && !is_proposal(&next)
             {
                 visit(next, root, seen);
@@ -385,38 +379,63 @@ fn style_ranges(html: &str) -> Vec<std::ops::Range<usize>> {
     styles.into_inner()
 }
 
-/// The comments of a page's `<style>` elements: elsewhere in a page `/*` is text.
-fn style_comments(html: &str) -> Vec<std::ops::Range<usize>> {
-    style_ranges(html)
-        .into_iter()
-        .flat_map(|s| {
-            css_comments(&html[s.clone()])
-                .into_iter()
-                .map(move |c| s.start + c.start..s.start + c.end)
-        })
-        .collect()
-}
-
 /// Each `@import` in a page's `<style>`s, comments left out, as the line it
 /// starts on and its URL, which may be on a later line: what a design page's
 /// check holds against its design system's `styles.css` (X65). An `@import`
 /// anywhere else in the page, in its text or a script, is not CSS.
 pub(super) fn style_imports(html: &str) -> Vec<(usize, String)> {
-    let line_of = |byte: usize| html[..byte].matches('\n').count() + 1;
     style_ranges(html)
         .into_iter()
         .flat_map(|s| {
-            let css = &html[s.clone()];
-            let css = blank(css, &css_comments(css));
-            IMPORT
-                .captures_iter(&css)
-                .map(|c| {
-                    let at = c.get(0).map_or(0, |m| m.start());
-                    (line_of(s.start + at), quoted(&c).to_string())
-                })
-                .collect::<Vec<_>>()
+            css_refs(&html[s.clone()])
+                .into_iter()
+                .filter(|r| r.import)
+                .map(move |r| (line_of(html, s.start + r.at), r.url))
         })
         .collect()
+}
+
+/// A URL that CSS names: an `@import`'s, or a `url()` elsewhere.
+struct CssRef {
+    /// Where it starts in the CSS, in bytes.
+    at: usize,
+    url: String,
+    import: bool,
+}
+
+/// Each `@import` and `url()` of `css`, comments left out, in order. One may
+/// span lines (`@import` with its URL on the next); an `@import url(…)` is
+/// one `@import`, not a `url()` too.
+fn css_refs(css: &str) -> Vec<CssRef> {
+    let css = blank(css, &css_comments(css));
+    let mut refs = Vec::new();
+    let mut taken = Vec::new();
+    for c in IMPORT.captures_iter(&css) {
+        let m = c.get(0).map_or(0..0, |m| m.range());
+        refs.push(CssRef {
+            at: m.start,
+            url: quoted(&c).to_string(),
+            import: true,
+        });
+        taken.push(m);
+    }
+    for c in URL.captures_iter(&css) {
+        let at = c.get(0).map_or(0, |m| m.start());
+        if !taken.iter().any(|r| r.contains(&at)) {
+            refs.push(CssRef {
+                at,
+                url: quoted(&c).to_string(),
+                import: false,
+            });
+        }
+    }
+    refs.sort_by_key(|r| r.at);
+    refs
+}
+
+/// The 1-based line of the byte at `byte` in `text`.
+fn line_of(text: &str, byte: usize) -> usize {
+    text[..byte.min(text.len())].matches('\n').count() + 1
 }
 
 /// `text` with every byte in `ranges` but line breaks made a space, so lines
@@ -456,83 +475,59 @@ fn unknown_tokens(path: &str, text: &str, known: &BTreeSet<String>, problems: &m
     }
 }
 
-/// Each `@import` that leaves the design system or names no file, and the
-/// other `url()`s of the file: a stylesheet or a card.
-fn imports(root: &Path, path_rel: &str, path: &Path, text: &str, problems: &mut Vec<Problem>) {
+/// Each `@import` and `url()` in the CSS of a file, the `css` ranges of
+/// `text` (a stylesheet's whole text, a card's `<style>`s), that leaves the
+/// design system or names no file.
+fn css_problems(
+    root: &Path,
+    path_rel: &str,
+    path: &Path,
+    text: &str,
+    css: &[std::ops::Range<usize>],
+    problems: &mut Vec<Problem>,
+) {
     let dir = path.parent().unwrap_or(root);
-    for (i, line) in text.lines().enumerate() {
-        let mut taken = Vec::new();
-        for c in IMPORT.captures_iter(line) {
-            taken.push(c.get(0).map_or(0..0, |m| m.range()));
-            let url = quoted(&c);
-            let (kind, message) = match target(root, dir, url) {
-                Target::Leaves => (Kind::ExternalUrl, format!("{url} leaves the design system")),
-                Target::Missing => (
-                    Kind::Unresolved,
-                    format!("@import \"{url}\" does not resolve"),
-                ),
-                Target::Script => (
-                    Kind::Script,
-                    "a javascript: URL is not allowed in a card".into(),
-                ),
-                Target::Fine(Some(file)) if is_proposal(&file) => {
-                    let live = file
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .replace(".proposed.", ".");
-                    (
-                        Kind::Unresolved,
-                        format!(
-                            "@import \"{url}\" is a proposal waiting to be settled; import {live}"
-                        ),
-                    )
-                }
-                Target::Fine(_) => continue,
-            };
-            problems.push(Problem {
-                path: path_rel.to_string(),
-                line: i + 1,
-                kind,
-                message,
-            });
+    for range in css {
+        for r in css_refs(&text[range.clone()]) {
+            if let Some((kind, message)) = css_problem(root, dir, &r) {
+                problems.push(Problem {
+                    path: path_rel.to_string(),
+                    line: line_of(text, range.start + r.at),
+                    kind,
+                    message,
+                });
+            }
         }
-        css_urls_in_line(root, dir, path_rel, i + 1, line, &taken, problems);
     }
 }
 
-/// The `url()`s of a line, but those inside the ranges an `@import` took.
-fn css_urls_in_line(
-    root: &Path,
-    dir: &Path,
-    path_rel: &str,
-    line: usize,
-    text: &str,
-    taken: &[std::ops::Range<usize>],
-    problems: &mut Vec<Problem>,
-) {
-    for c in URL.captures_iter(text) {
-        let at = c.get(0).map_or(0, |m| m.start());
-        if taken.iter().any(|r| r.contains(&at)) {
-            continue;
+/// What is wrong with a URL that CSS in `dir` names, if anything.
+fn css_problem(root: &Path, dir: &Path, r: &CssRef) -> Option<(Kind, String)> {
+    let url = &r.url;
+    Some(match target(root, dir, url) {
+        Target::Leaves => (Kind::ExternalUrl, format!("{url} leaves the design system")),
+        Target::Missing if r.import => (
+            Kind::Unresolved,
+            format!("@import \"{url}\" does not resolve"),
+        ),
+        Target::Missing => (Kind::Unresolved, format!("url({url}) does not resolve")),
+        Target::Script => (
+            Kind::Script,
+            "a javascript: URL is not allowed in a card".into(),
+        ),
+        Target::Fine(Some(file)) if r.import && is_proposal(&file) => {
+            let live = file
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .replace(".proposed.", ".");
+            (
+                Kind::Unresolved,
+                format!("@import \"{url}\" is a proposal waiting to be settled; import {live}"),
+            )
         }
-        let url = quoted(&c);
-        let (kind, message) = match target(root, dir, url) {
-            Target::Leaves => (Kind::ExternalUrl, format!("{url} leaves the design system")),
-            Target::Missing => (Kind::Unresolved, format!("url({url}) does not resolve")),
-            Target::Script => (
-                Kind::Script,
-                "a javascript: URL is not allowed in a card".into(),
-            ),
-            Target::Fine(_) => continue,
-        };
-        problems.push(Problem {
-            path: path_rel.to_string(),
-            line,
-            kind,
-            message,
-        });
-    }
+        Target::Fine(_) => return None,
+    })
 }
 
 static FONT_FACE_BLOCK: LazyLock<Regex> =
@@ -574,8 +569,8 @@ fn fonts(path_rel: &str, text: &str, faces: &BTreeSet<String>, problems: &mut Ve
     }
 }
 
-/// Scripts, `on*` attributes, and `href`/`src`/`srcset` URLs that leave the
-/// system or name no file. Returns the snippet ids (`data-snippet`) with
+/// Scripts, `on*` attributes, and `href`/`src`/`srcset` URLs and a `style`
+/// attribute's `url()`s that leave the system or name no file. Returns the snippet ids (`data-snippet`) with
 /// their lines.
 fn elements(
     root: &Path,
@@ -587,10 +582,9 @@ fn elements(
     let dir = path.parent().unwrap_or(root);
     let found = std::cell::RefCell::new(Vec::new());
     let snippet_ids = std::cell::RefCell::new(Vec::new());
-    let line_of = |byte: usize| text[..byte.min(text.len())].matches('\n').count() + 1;
     let settings =
         lol_html::Settings::new().append_element_content_handler(lol_html::element!("*", |el| {
-            let line = line_of(el.source_location().bytes().start);
+            let line = line_of(text, el.source_location().bytes().start);
             let tag = el.tag_name();
             let mut found = found.borrow_mut();
             if let Some(id) = el.get_attribute("data-snippet") {
@@ -611,6 +605,15 @@ fn elements(
                         Kind::Script,
                         format!("{name}=\"…\" is not allowed in a card"),
                     ));
+                    continue;
+                }
+                if name == "style" {
+                    // A declaration list: its url()s, never an @import.
+                    for r in css_refs(&value).iter().filter(|r| !r.import) {
+                        if let Some((kind, message)) = css_problem(root, dir, r) {
+                            found.push((line, kind, message));
+                        }
+                    }
                     continue;
                 }
                 let urls = match name.as_str() {
@@ -1337,6 +1340,78 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn an_import_whose_url_is_on_the_next_line_of_a_stylesheet_is_checked() {
+        let styles = "@import \"tokens/colors.css\";\n\
+@import\n\
+  \"https://fonts.example.com/inter.css\";\n\
+@import url(\n\
+  missing.css);\n";
+        let dir = system(&[("styles.css", styles), ("tokens/colors.css", COLORS)]);
+        let got: Vec<(String, usize, Kind, String)> = check(dir.path())
+            .unwrap()
+            .into_iter()
+            .map(|p| (p.path, p.line, p.kind, p.message))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (
+                    "styles.css".into(),
+                    2,
+                    Kind::ExternalUrl,
+                    "https://fonts.example.com/inter.css leaves the design system".into()
+                ),
+                (
+                    "styles.css".into(),
+                    4,
+                    Kind::Unresolved,
+                    "@import \"missing.css\" does not resolve".into()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_import_whose_url_is_on_the_next_line_of_a_cards_style_is_checked() {
+        let card = "<!-- @dsCard group=\"Buttons\" -->\n\
+<!doctype html>\n\
+<style>\n\
+@import\n\
+  \"https://example.com/theme.css\";\n\
+</style>\n";
+        let dir = system(&[
+            ("styles.css", STYLES),
+            ("tokens/colors.css", COLORS),
+            ("components.css", COMPONENTS),
+            ("components/buttons/button/button.html", card),
+        ]);
+        assert_eq!(
+            check(dir.path()).unwrap(),
+            vec![Problem {
+                path: "components/buttons/button/button.html".into(),
+                line: 4,
+                kind: Kind::ExternalUrl,
+                message: "https://example.com/theme.css leaves the design system".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn an_import_written_in_a_cards_text_and_not_its_style_is_not_checked() {
+        let card = "<!-- @dsCard group=\"Buttons\" -->\n\
+<!doctype html>\n\
+<pre>@import \"https://example.com/theme.css\";</pre>\n\
+<p>Put @import url(missing.css); at the top of a stylesheet.</p>\n";
+        let dir = system(&[
+            ("styles.css", STYLES),
+            ("tokens/colors.css", COLORS),
+            ("components.css", COMPONENTS),
+            ("components/buttons/button/button.html", card),
+        ]);
+        assert_eq!(check(dir.path()).unwrap(), vec![]);
     }
 
     #[test]
