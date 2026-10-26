@@ -1152,7 +1152,7 @@ mod tests {
             "name = \"x\"\nsystem = \"moonlet-desktop\"\n",
         )
         .unwrap();
-        assert!(store.design_dir("w1", "settings-page@1").is_err());
+        assert!(store.workspace_design("w1", "settings-page@1").is_err());
         for climbing in [
             "designs/settings-page@1/pages/../../snapshot.json",
             "designs/settings-page@1/assets/../pages/index.html",
