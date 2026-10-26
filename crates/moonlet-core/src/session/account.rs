@@ -2,69 +2,130 @@
 //! made here is found by comparing the state before and after it, so X32's
 //! rules stay where they are; changes from other members are laid back onto
 //! this member's state, mapping project identities to its own projects.
+//!
+//! A section's projects are one field each, `project:<origin>|<root>`, set
+//! to the identity with its sort key or to `null` once removed, so two
+//! members adding projects to one section at once both keep theirs.
+
+use std::collections::BTreeMap as Map;
 
 use moonlet_proto::types::{Change, ProjectIdentity};
 use serde_json::{Value, json};
 
 use super::*;
-use crate::account::{Log, LogFile, Record, Version, key_between};
+use crate::account::{Log, LogFile, Record, Version, key_between, new_log_name};
 use crate::identity::same_project;
 
 const WORKSPACE: &str = "workspace";
-/// The id of the workspace every member makes when changes from several
-/// members together left none, so they all make the same one.
-const DEFAULT_ID: &str = "default";
 const SECTION: &str = "section";
+/// The prefix of a section's project fields.
+const PROJECT: &str = "project:";
+/// The ids of the workspace and the section every member makes when changes
+/// from several members together left none, so they all make the same
+/// ones. A deleted one stays deleted, so the next is `default-2` and so on.
+const DEFAULT_WORKSPACE_ID: &str = "default";
+const DEFAULT_SECTION_ID: &str = "default-section";
 
 type Listener = Arc<dyn Fn(Vec<Change>) + Send + Sync>;
 
 pub(super) struct Account {
-    pub(super) log: Log,
+    log: Log,
     path: PathBuf,
     listener: Option<Listener>,
 }
 
+/// A log with the changes of one request, written beside the log until the
+/// state that goes with them is saved: a state that cannot be saved leaves
+/// the log as it was, so the edit does not come back after a restart.
+pub(super) struct Staged {
+    log: Log,
+    pub(super) changes: Vec<Change>,
+    file: Option<PathBuf>,
+}
+
 impl Account {
-    /// The log with the changes that turn `old` into `new`, and those
-    /// changes; the log is saved, the account itself left as it is.
-    pub(super) fn record(&self, old: &State, new: &State) -> Result<(Log, Vec<Change>)> {
+    /// The changes that turn `old` into `new`, staged.
+    pub(super) fn stage(&self, old: &State, new: &State) -> Result<Staged> {
         let mut log = self.log.clone();
         let changes = diff(old, new, &mut log, now_ms());
-        if !changes.is_empty() {
-            save_log(&self.path, &log)?;
+        let file = if changes.is_empty() {
+            None
+        } else {
+            let staged = self.path.with_extension("json.staged");
+            write_private(&staged, &log)?;
+            Some(staged)
+        };
+        Ok(Staged { log, changes, file })
+    }
+
+    /// The account after the state was saved: the staged log becomes the
+    /// log. One that cannot be moved into place is said in the log and kept
+    /// in memory, so the next save writes it.
+    pub(super) fn commit(&mut self, staged: Staged) -> Vec<Change> {
+        if let Some(file) = &staged.file
+            && let Err(e) = std::fs::rename(file, &self.path)
+        {
+            tracing::warn!("cannot save the account's changes: {e}");
         }
-        Ok((log, changes))
+        self.log = staged.log;
+        staged.changes
     }
 }
 
-fn save_log(path: &Path, log: &Log) -> Result<()> {
+impl Staged {
+    /// Forgets the staged changes: the state they went with was not saved.
+    pub(super) fn discard(self) {
+        if let Some(file) = self.file {
+            let _ = std::fs::remove_file(file);
+        }
+    }
+
+    pub(super) fn log(&self) -> &Log {
+        &self.log
+    }
+}
+
+/// Writes `log` to `path` through a temporary file, readable only by the
+/// user, as it names the user's projects and the machines they work on.
+fn write_private(path: &Path, log: &Log) -> Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
     if let Some(dir) = path.parent() {
         crate::paths::ensure_private_dir(dir)?;
     }
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, serde_json::to_vec(&log.to_file())?)?;
+    let tmp = path.with_extension("tmp");
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&tmp)?;
+    f.write_all(&serde_json::to_vec(&log.to_file())?)?;
     std::fs::rename(&tmp, path)?;
     Ok(())
 }
 
 impl SessionManager {
     /// Shares this member's workspaces and sections (X68). The first time,
-    /// they become the changes of a new log, keeping their ids; a log that
-    /// cannot be read is kept aside and made again the same way. Each new
-    /// log is named after `member` with a suffix of its own, so a log made
-    /// again never numbers its changes as the lost one did.
+    /// they become the changes of a new log named after `member`, keeping
+    /// their ids. A log that cannot be read is kept aside, each time under a
+    /// name of its own, and made again from the state the same way; its
+    /// changes are stamped as old as can be, so they give way to every
+    /// change the other members made.
     pub fn attach_account(&self, path: PathBuf, member: &str) -> Result<()> {
+        let mut lost = false;
         let file = match std::fs::read(&path) {
             Ok(bytes) => match serde_json::from_slice::<LogFile>(&bytes) {
                 Ok(f) => Some(f),
                 Err(e) => {
-                    let bad = path.with_extension("json.bad");
+                    let bad = path.with_extension(format!("json.{}.bad", now_ms()));
                     tracing::warn!(
                         "cannot read {} ({e}); kept it as {}",
                         path.display(),
                         bad.display()
                     );
                     std::fs::rename(&path, &bad)?;
+                    lost = true;
                     None
                 }
             },
@@ -83,9 +144,14 @@ impl SessionManager {
                 log
             }
             None => {
-                let mut log = Log::new(&format!("{member}.{}", &new_id()[..6]));
-                diff(&State::default(), &st, &mut log, now_ms());
-                save_log(&path, &log)?;
+                let mut log = Log::new(&new_log_name(member));
+                diff(
+                    &State::default(),
+                    &st,
+                    &mut log,
+                    if lost { 0 } else { now_ms() },
+                );
+                write_private(&path, &log)?;
                 log
             }
         };
@@ -116,24 +182,23 @@ impl SessionManager {
         }
     }
 
-    /// What this member has seen of the account; empty without one.
-    pub fn account_version(&self) -> Version {
+    fn with_log<T: Default>(&self, f: impl FnOnce(&Log) -> T) -> T {
         self.account
             .lock()
             .unwrap()
             .as_ref()
-            .map(|a| a.log.version())
+            .map(|a| f(&a.log))
             .unwrap_or_default()
+    }
+
+    /// What this member has seen of the account; empty without one.
+    pub fn account_version(&self) -> Version {
+        self.with_log(Log::version)
     }
 
     /// The changes a member at `version` lacks.
     pub fn account_changes_for(&self, version: &Version) -> Vec<Change> {
-        self.account
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map(|a| a.log.missing_for(version))
-            .unwrap_or_default()
+        self.with_log(|log| log.missing_for(version))
     }
 
     /// Takes in changes from other members, and shows what they change.
@@ -153,8 +218,7 @@ impl SessionManager {
             } else {
                 let mut next = st.clone();
                 lay_onto(&mut next, &log);
-                let saved = save_log(&a.path, &log).and_then(|()| self.save(&next));
-                match saved {
+                match write_private(&a.path, &log).and_then(|()| self.save(&next)) {
                     Ok(()) => {
                         a.log = log;
                         *st = next;
@@ -190,17 +254,8 @@ fn workspace_fields(st: &State, w: &Workspace) -> Record {
     ])
 }
 
-/// A section as account fields, its projects by identity: this member's
-/// own that have one, then those it does not have.
+/// A section as account fields, but for its projects (see `diff_projects`).
 fn section_fields(st: &State, s: &Section) -> Record {
-    let mut projects: Vec<Value> = s
-        .project_ids
-        .iter()
-        .filter_map(|id| st.projects.iter().find(|p| &p.id == id))
-        .filter(|p| p.identity.root.is_some())
-        .map(|p| json!(p.identity))
-        .collect();
-    projects.extend(s.missing.iter().map(|i| json!(i)));
     let workspace = st
         .workspace_of_section(&s.id)
         .map(|i| json!(st.workspaces[i].id))
@@ -209,9 +264,30 @@ fn section_fields(st: &State, s: &Section) -> Record {
         ("workspace".into(), workspace),
         ("name".into(), json!(s.name)),
         ("view".into(), json!(s.view)),
-        ("projects".into(), Value::Array(projects)),
         ("created_at".into(), json!(s.created_at)),
     ])
+}
+
+/// The key of a project identity in a section's fields; `None` for a
+/// project without a root, which is this member's alone.
+fn identity_key(i: &ProjectIdentity) -> Option<String> {
+    Some(format!(
+        "{}|{}",
+        i.origin.as_deref().unwrap_or(""),
+        i.root.as_deref()?
+    ))
+}
+
+/// A section's projects by identity, in its order: this member's own that
+/// have one, then those it does not have.
+fn section_identities(st: &State, s: &Section) -> Vec<(String, ProjectIdentity)> {
+    s.project_ids
+        .iter()
+        .filter_map(|id| st.projects.iter().find(|p| &p.id == id))
+        .map(|p| p.identity.clone())
+        .chain(s.missing.iter().cloned())
+        .filter_map(|i| Some((identity_key(&i)?, i)))
+        .collect()
 }
 
 /// Records in `log` the changes that turn `old` into `new`.
@@ -241,20 +317,20 @@ fn diff(old: &State, new: &State, log: &mut Log, now: u64) -> Vec<Change> {
         out.push(log.delete(now, WORKSPACE, &w.id));
     }
     for s in &new.sections {
-        let before = old
-            .sections
-            .iter()
-            .find(|o| o.id == s.id)
-            .map(|o| section_fields(old, o));
+        let before = old.sections.iter().find(|o| o.id == s.id);
         set_changed(
             log,
             now,
             SECTION,
             &s.id,
-            before,
+            before.map(|o| section_fields(old, o)),
             section_fields(new, s),
             &mut out,
         );
+        let had = before
+            .map(|o| section_identities(old, o))
+            .unwrap_or_default();
+        diff_projects(log, now, &s.id, &had, &section_identities(new, s), &mut out);
     }
     for s in old
         .sections
@@ -285,21 +361,15 @@ fn set_changed(
     }
 }
 
-/// Gives the sections of `w` sort keys in its order: only those without a
-/// key in it yet, unless the others' keys are out of order, when all of
-/// them get new ones.
-fn order_sections(log: &mut Log, now: u64, w: &Workspace, out: &mut Vec<Change>) {
-    let records = log.records(SECTION);
-    let key = |id: &str| -> Option<String> {
-        let r = records.get(id)?;
-        (r.get("workspace") == Some(&json!(w.id)))
-            .then(|| r.get("order")?.as_str().map(String::from))?
-    };
-    let mut keys: Vec<Option<String>> = w.section_ids.iter().map(|id| key(id)).collect();
+/// Sort keys for a list whose items have `keys` so far: the indexes of the
+/// items that need one, with it. Only items without one get one, unless the
+/// others' keys are out of order, when all of them get new ones.
+fn place(mut keys: Vec<Option<String>>) -> Vec<(usize, String)> {
     let kept: Vec<&String> = keys.iter().flatten().collect();
     if kept.windows(2).any(|p| p[0] >= p[1]) {
         keys = vec![None; keys.len()];
     }
+    let mut out = Vec::new();
     for i in 0..keys.len() {
         if keys[i].is_some() {
             continue;
@@ -307,15 +377,86 @@ fn order_sections(log: &mut Log, now: u64, w: &Workspace, out: &mut Vec<Change>)
         let before = keys[..i].iter().rev().flatten().next().cloned();
         let after = keys[i + 1..].iter().flatten().next().cloned();
         let k = key_between(before.as_deref(), after.as_deref());
-        out.push(log.set(now, SECTION, &w.section_ids[i], "order", json!(k)));
+        out.push((i, k.clone()));
         keys[i] = Some(k);
     }
+    out
+}
+
+/// Gives the sections of `w` sort keys in its order.
+fn order_sections(log: &mut Log, now: u64, w: &Workspace, out: &mut Vec<Change>) {
+    let records = log.records(SECTION);
+    let key = |id: &str| -> Option<String> {
+        let r = records.get(id)?;
+        (r.get("workspace") == Some(&json!(w.id)))
+            .then(|| r.get("order")?.as_str().map(String::from))?
+    };
+    for (i, k) in place(w.section_ids.iter().map(|id| key(id)).collect()) {
+        out.push(log.set(now, SECTION, &w.section_ids[i], "order", json!(k)));
+    }
+}
+
+/// Records the projects section `id` gained or lost: one field each, so a
+/// change touches only the projects it is about.
+fn diff_projects(
+    log: &mut Log,
+    now: u64,
+    id: &str,
+    had: &[(String, ProjectIdentity)],
+    has: &[(String, ProjectIdentity)],
+    out: &mut Vec<Change>,
+) {
+    for (key, _) in had.iter().filter(|(k, _)| !has.iter().any(|(h, _)| h == k)) {
+        out.push(log.set(now, SECTION, id, &format!("{PROJECT}{key}"), Value::Null));
+    }
+    let record = log.records(SECTION).remove(id).unwrap_or_default();
+    let order = |key: &str| -> Option<String> {
+        had.iter().any(|(k, _)| k == key).then(|| {
+            record
+                .get(&format!("{PROJECT}{key}"))?
+                .get("order")?
+                .as_str()
+                .map(String::from)
+        })?
+    };
+    for (i, k) in place(has.iter().map(|(key, _)| order(key)).collect()) {
+        let (key, identity) = &has[i];
+        let value = json!({ "origin": identity.origin, "root": identity.root, "order": k });
+        out.push(log.set(now, SECTION, id, &format!("{PROJECT}{key}"), value));
+    }
+}
+
+/// The first of `base`, `base-2`, `base-3`… that `log` has not deleted.
+fn repair_id(log: &Log, kind: &str, base: &str) -> String {
+    (1..)
+        .map(|n| {
+            if n == 1 {
+                base.to_string()
+            } else {
+                format!("{base}-{n}")
+            }
+        })
+        .find(|id| !log.is_deleted(kind, id))
+        .unwrap()
+}
+
+/// Field `f` of `r` as a `T`, when it is one.
+fn parsed<T: serde::de::DeserializeOwned>(r: &Record, f: &str) -> Option<T> {
+    r.get(f)
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+}
+
+/// A section of the account, with where it goes.
+struct Placed {
+    workspace: String,
+    order: String,
+    section: Section,
 }
 
 /// Lays the account's workspaces and sections onto this member's state.
 /// A field whose value does not fit takes its default, and the state is
 /// made whole the same way on every member.
-fn lay_onto(st: &mut State, log: &Log) {
+pub(super) fn lay_onto(st: &mut State, log: &Log) {
     let text = |r: &Record, f: &str, default: &str| -> String {
         let s: String = r
             .get(f)
@@ -333,15 +474,14 @@ fn lay_onto(st: &mut State, log: &Log) {
     };
     let number = |r: &Record, f: &str| r.get(f).and_then(Value::as_u64).unwrap_or(0);
 
+    let sections: Map<String, Record> = log.records(SECTION);
+    let default_workspace = repair_id(log, WORKSPACE, DEFAULT_WORKSPACE_ID);
     let mut workspaces: Vec<Workspace> = log
         .records(WORKSPACE)
         .into_iter()
         .map(|(id, r)| Workspace {
             name: text(&r, "name", DEFAULT_WORKSPACE),
-            color: r
-                .get("color")
-                .and_then(|c| serde_json::from_value(c.clone()).ok())
-                .unwrap_or(DEFAULT_COLOR),
+            color: parsed(&r, "color").unwrap_or(DEFAULT_COLOR),
             claude_profile: r
                 .get("claude_profile")
                 .and_then(Value::as_str)
@@ -352,23 +492,39 @@ fn lay_onto(st: &mut State, log: &Log) {
             id,
         })
         .collect();
-    workspaces.sort_by(|a, b| (a.created_at, &a.id).cmp(&(b.created_at, &b.id)));
-    if workspaces.is_empty() {
+    // The repair workspace, made on every member alike: with none left, or
+    // while sections made in it are about and it has no fields yet.
+    let wanted = workspaces.is_empty()
+        || sections
+            .values()
+            .any(|r| r.get("workspace") == Some(&json!(default_workspace)));
+    if wanted && !workspaces.iter().any(|w| w.id == default_workspace) {
         let mut w = new_workspace(DEFAULT_WORKSPACE, DEFAULT_COLOR);
-        w.id = DEFAULT_ID.into();
+        w.id = default_workspace;
         w.created_at = 0;
         workspaces.push(w);
     }
+    workspaces.sort_by(|a, b| (a.created_at, &a.id).cmp(&(b.created_at, &b.id)));
 
-    let mut placed: Vec<(String, String, Section)> = Vec::new();
-    for (id, r) in log.records(SECTION) {
-        let identities: Vec<ProjectIdentity> = r
-            .get("projects")
-            .and_then(|p| serde_json::from_value(p.clone()).ok())
-            .unwrap_or_default();
+    let mut placed: Vec<Placed> = Vec::new();
+    for (id, r) in &sections {
+        let mut projects: Vec<(String, String, ProjectIdentity)> = r
+            .iter()
+            .filter_map(|(f, v)| {
+                let key = f.strip_prefix(PROJECT)?;
+                let identity: ProjectIdentity = serde_json::from_value(v.clone()).ok()?;
+                identity.root.as_ref()?;
+                Some((
+                    v.get("order")?.as_str().unwrap_or("").to_string(),
+                    key.to_string(),
+                    identity,
+                ))
+            })
+            .collect();
+        projects.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
         let mut project_ids = Vec::new();
         let mut missing = Vec::new();
-        for i in identities {
+        for (_, _, i) in projects {
             match st.projects.iter().find(|p| same_project(&p.identity, &i)) {
                 Some(p) if !project_ids.contains(&p.id) => project_ids.push(p.id.clone()),
                 Some(_) => {}
@@ -377,7 +533,7 @@ fn lay_onto(st: &mut State, log: &Log) {
         }
         // Projects without an identity are this member's alone, and stay
         // in the section that had them.
-        if let Some(old) = st.sections.iter().find(|s| s.id == id) {
+        if let Some(old) = st.sections.iter().find(|s| &s.id == id) {
             for p in &old.project_ids {
                 let unshared = st
                     .projects
@@ -388,38 +544,49 @@ fn lay_onto(st: &mut State, log: &Log) {
                 }
             }
         }
-        let owner = r
+        let workspace = r
             .get("workspace")
             .and_then(Value::as_str)
             .filter(|w| workspaces.iter().any(|x| x.id == *w))
             .unwrap_or(&workspaces[0].id)
             .to_string();
-        let order = r
-            .get("order")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
         let section = Section {
-            name: text(&r, "name", DEFAULT_SECTION),
-            view: r
-                .get("view")
-                .and_then(|v| serde_json::from_value(v.clone()).ok())
-                .unwrap_or_default(),
-            created_at: number(&r, "created_at"),
+            name: text(r, "name", DEFAULT_SECTION),
+            view: parsed(r, "view").unwrap_or_default(),
+            created_at: number(r, "created_at"),
             project_ids,
             missing,
             id: id.clone(),
         };
-        placed.push((owner, order, section));
+        placed.push(Placed {
+            workspace,
+            order: r
+                .get("order")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            section,
+        });
     }
-    placed.sort_by(|a, b| (&a.1, &a.2.id).cmp(&(&b.1, &b.2.id)));
-    for (owner, _, s) in &placed {
-        if let Some(w) = workspaces.iter_mut().find(|w| &w.id == owner) {
-            w.section_ids.push(s.id.clone());
+    // The repair section, made on every member alike when none is left.
+    if placed.is_empty() {
+        let mut section = new_section(DEFAULT_SECTION);
+        section.id = repair_id(log, SECTION, DEFAULT_SECTION_ID);
+        section.created_at = 0;
+        placed.push(Placed {
+            workspace: workspaces[0].id.clone(),
+            order: String::new(),
+            section,
+        });
+    }
+    placed.sort_by(|a, b| (&a.order, &a.section.id).cmp(&(&b.order, &b.section.id)));
+    for p in &placed {
+        if let Some(w) = workspaces.iter_mut().find(|w| w.id == p.workspace) {
+            w.section_ids.push(p.section.id.clone());
         }
     }
     st.workspaces = workspaces;
-    st.sections = placed.into_iter().map(|(_, _, s)| s).collect();
+    st.sections = placed.into_iter().map(|p| p.section).collect();
 
     // A shared project no section holds any more was removed on another
     // member, and goes here too, unless it still has live sessions here.
@@ -852,10 +1019,13 @@ mod tests {
         drop(mini);
         std::fs::write(h2.path().join("account.json"), "{ not json").unwrap();
         let mini = reload(h2.path(), "mini");
-        assert_eq!(
-            std::fs::read_to_string(h2.path().join("account.json.bad")).unwrap(),
-            "{ not json"
-        );
+        let bad: Vec<String> = std::fs::read_dir(h2.path())
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.to_string_lossy().ends_with(".bad"))
+            .map(|p| std::fs::read_to_string(p).unwrap())
+            .collect();
+        assert_eq!(bad, ["{ not json"]);
         // The new log counts its changes apart from the lost one, so no
         // member takes one of them for a change it already has.
         let logs = |m: &SessionManager| {
@@ -903,7 +1073,405 @@ mod tests {
                 .all(|c| c.stamp.member.starts_with("mini.") && c.kind == "section"),
             "{sent:?}"
         );
-        // Exactly what another member lacks.
-        assert_eq!(sent, mini.account_changes_for(&book.account_version()));
+        // The new section, field by field, and nothing else.
+        let mut fields: Vec<String> = sent
+            .iter()
+            .map(|c| match &c.op {
+                moonlet_proto::types::ChangeOp::Set { field, .. } => field.clone(),
+                moonlet_proto::types::ChangeOp::Delete => "delete".into(),
+            })
+            .collect();
+        fields.sort();
+        assert_eq!(fields, ["created_at", "name", "order", "view", "workspace"]);
+    }
+
+    /// A repository whose origin is `github.com/acme/<name>`: test
+    /// repositories share their first commit, so the origin tells them apart.
+    async fn repo_named(name: &str) -> tempfile::TempDir {
+        let repo = crate::git::tests::repo().await;
+        let url = format!("https://github.com/acme/{name}.git");
+        crate::git::git(repo.path(), &["remote", "add", "origin", &url])
+            .await
+            .unwrap();
+        repo
+    }
+
+    /// A clone of `repo` with the same origin, as another Mac has it.
+    async fn clone_of(repo: &tempfile::TempDir) -> tempfile::TempDir {
+        let url = crate::git::git_text(repo.path(), &["remote", "get-url", "origin"])
+            .await
+            .unwrap();
+        let clone = tempfile::tempdir().unwrap();
+        crate::git::git(
+            clone.path(),
+            &["clone", "-q", &repo.path().display().to_string(), "."],
+        )
+        .await
+        .unwrap();
+        crate::git::git(clone.path(), &["remote", "set-url", "origin", &url])
+            .await
+            .unwrap();
+        clone
+    }
+
+    fn holds(mgr: &SessionManager, section: &str) -> Vec<String> {
+        let projects = mgr.list_projects();
+        let s = mgr
+            .list_sections()
+            .into_iter()
+            .find(|s| s.id == section)
+            .unwrap();
+        let mut names: Vec<String> = s
+            .project_ids
+            .iter()
+            .map(|id| {
+                projects
+                    .iter()
+                    .find(|p| &p.id == id)
+                    .unwrap()
+                    .identity
+                    .origin
+                    .clone()
+                    .unwrap_or_default()
+            })
+            .chain(
+                s.missing
+                    .iter()
+                    .map(|i| format!("missing {}", i.origin.clone().unwrap_or_default())),
+            )
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[tokio::test]
+    async fn projects_two_members_add_to_one_section_at_once_are_both_kept() {
+        let (shop, blog) = (repo_named("shop").await, repo_named("blog").await);
+        let (_h1, book) = member("book").await;
+        let (_h2, mini) = member("mini").await;
+        let ws = book.list_workspaces()[0].clone();
+        let work = book.create_section(&ws.id, "1devstudio").unwrap();
+        sync(&book, &mini);
+        // Apart: each adds a project to the same section.
+        book.section_add_project(&work.id, &shop.path().display().to_string())
+            .await
+            .unwrap();
+        mini.section_add_project(&work.id, &blog.path().display().to_string())
+            .await
+            .unwrap();
+        sync(&book, &mini);
+        assert_eq!(
+            holds(&book, &work.id),
+            ["github.com/acme/shop", "missing github.com/acme/blog"]
+        );
+        assert_eq!(
+            holds(&mini, &work.id),
+            ["github.com/acme/blog", "missing github.com/acme/shop"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_section_deleted_with_projects_this_member_lacks_hands_them_on() {
+        let shop = repo_named("shop").await;
+        let (_h1, book) = member("book").await;
+        let (_h2, mini) = member("mini").await;
+        let ws = book.list_workspaces()[0].clone();
+        let first = book.list_sections()[0].clone();
+        let work = book.create_section(&ws.id, "1devstudio").unwrap();
+        book.section_add_project(&work.id, &shop.path().display().to_string())
+            .await
+            .unwrap();
+        sync(&book, &mini);
+        // studio-mini has no clone of shop, and deletes the section.
+        mini.delete_section(&work.id).unwrap();
+        sync(&book, &mini);
+        assert_eq!(holds(&book, &first.id), ["github.com/acme/shop"]);
+        assert_eq!(book.list_projects().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_project_kept_here_for_its_sessions_does_not_come_back_on_the_other_member() {
+        let (_dirs, book, mini, work) = shared_project().await;
+        let mini_shop = mini.list_projects()[0].clone();
+        let req = SessionCreate {
+            name: Some("Keep me".into()),
+            agent: Some("none".into()),
+            workspace_id: mini
+                .list_workspaces()
+                .into_iter()
+                .find(|w| w.section_ids.contains(&work.id))
+                .map(|w| w.id),
+            cols: 80,
+            rows: 24,
+            ..SessionCreate::new(&mini_shop.id)
+        };
+        mini.create_session(req).await.unwrap();
+        let shop = book.list_projects()[0].clone();
+        book.section_remove_project(&work.id, &shop.id).unwrap();
+        sync(&book, &mini);
+        // studio-mini then adds another project to the same section.
+        let blog = repo_named("blog").await;
+        mini.section_add_project(&work.id, &blog.path().display().to_string())
+            .await
+            .unwrap();
+        sync(&book, &mini);
+        assert_eq!(holds(&book, &work.id), ["missing github.com/acme/blog"]);
+    }
+
+    #[tokio::test]
+    async fn a_clone_added_here_is_no_longer_missing() {
+        let shop = repo_named("shop").await;
+        let (_h1, book) = member("book").await;
+        let (_h2, mini) = member("mini").await;
+        let ws = book.list_workspaces()[0].clone();
+        let work = book.create_section(&ws.id, "1devstudio").unwrap();
+        book.section_add_project(&work.id, &shop.path().display().to_string())
+            .await
+            .unwrap();
+        sync(&book, &mini);
+        assert_eq!(holds(&mini, &work.id), ["missing github.com/acme/shop"]);
+        let clone = clone_of(&shop).await;
+        mini.section_add_project(&work.id, &clone.path().display().to_string())
+            .await
+            .unwrap();
+        assert_eq!(holds(&mini, &work.id), ["github.com/acme/shop"]);
+    }
+
+    #[tokio::test]
+    async fn the_log_is_readable_only_by_the_user() {
+        use std::os::unix::fs::PermissionsExt;
+        let (home, _book) = member("book").await;
+        let mode = std::fs::metadata(home.path().join("account.json"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    #[tokio::test]
+    async fn an_edit_whose_state_could_not_be_saved_does_not_come_back_after_a_restart() {
+        use std::os::unix::fs::PermissionsExt;
+        let state = tempfile::tempdir().unwrap();
+        let logs = tempfile::tempdir().unwrap();
+        let env: BTreeMap<String, String> = std::env::vars().collect();
+        let load = || {
+            let mgr = SessionManager::load(
+                state.path().join("state.json"),
+                state.path().join("worktrees"),
+                TerminalManager::new(logs.path().join("s.sock"), env.clone()),
+            );
+            mgr.attach_account(logs.path().join("account.json"), "book")
+                .unwrap();
+            mgr
+        };
+        let book = load();
+        let ws = book.list_workspaces()[0].clone();
+        // The state's folder cannot be written: the rename fails.
+        std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
+        let failed = book.update_workspace(WorkspaceUpdate {
+            id: ws.id.clone(),
+            name: Some("Home".into()),
+            color: None,
+            section_ids: None,
+            claude_profile: None,
+        });
+        std::fs::set_permissions(state.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(failed.is_err());
+        drop(book);
+        assert_eq!(load().list_workspaces()[0].name, "Personal");
+    }
+
+    #[tokio::test]
+    async fn members_that_deleted_the_last_workspaces_apart_make_the_same_one_and_fill_it_alike() {
+        let (_h1, book) = member("book").await;
+        let (_h2, mini) = member("mini").await;
+        sync(&book, &mini);
+        // Apart, each deletes one of the two "Personal" workspaces, with its
+        // section: together they leave none.
+        let ids: Vec<String> = book.list_workspaces().into_iter().map(|w| w.id).collect();
+        for (m, id) in [(&book, &ids[0]), (&mini, &ids[1])] {
+            let w = m
+                .list_workspaces()
+                .into_iter()
+                .find(|w| &w.id == id)
+                .unwrap();
+            for s in &w.section_ids {
+                m.delete_section(s).unwrap();
+            }
+            m.delete_workspace(id).unwrap();
+        }
+        sync(&book, &mini);
+        let names = |m: &SessionManager| {
+            m.list_workspaces()
+                .into_iter()
+                .map(|w| (w.id, w.name))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            names(&book),
+            [("default".to_string(), "Personal".to_string())]
+        );
+        assert_eq!(names(&mini), names(&book));
+        // A section made in it on one member is in it on the other.
+        book.create_section("default", "Clients").unwrap();
+        book.update_workspace(WorkspaceUpdate {
+            id: "default".into(),
+            name: Some("Home".into()),
+            color: None,
+            section_ids: None,
+            claude_profile: None,
+        })
+        .unwrap();
+        sync(&book, &mini);
+        let clients = |m: &SessionManager| {
+            let all = m.list_sections();
+            m.list_workspaces()
+                .into_iter()
+                .map(|w| {
+                    (
+                        w.name.clone(),
+                        w.section_ids
+                            .iter()
+                            .map(|id| all.iter().find(|s| &s.id == id).unwrap().name.clone())
+                            .collect::<Vec<_>>(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let both = [(
+            "Home".to_string(),
+            vec!["My projects".to_string(), "Clients".to_string()],
+        )];
+        assert_eq!(clients(&mini), both);
+        assert_eq!(clients(&book), both);
+    }
+
+    #[tokio::test]
+    async fn a_field_that_does_not_fit_takes_its_default() {
+        use moonlet_proto::types::{ChangeOp, Stamp};
+        let (_h1, book) = member("book").await;
+        let at = |seq: u64, field: &str, value: serde_json::Value| Change {
+            stamp: Stamp {
+                ms: now_ms() + seq,
+                n: 0,
+                member: "mini.a1b2c3".into(),
+            },
+            seq,
+            kind: "workspace".into(),
+            id: "w9".into(),
+            op: ChangeOp::Set {
+                field: field.into(),
+                value,
+            },
+        };
+        book.apply_account(vec![
+            at(1, "name", serde_json::json!("  Acme\u{7}\n ")),
+            at(2, "color", serde_json::json!("purple")),
+            at(3, "created_at", serde_json::json!(1)),
+        ]);
+        let w = book
+            .list_workspaces()
+            .into_iter()
+            .find(|w| w.id == "w9")
+            .unwrap();
+        assert_eq!((w.name.as_str(), w.color), ("Acme", WorkspaceColor::Clay));
+        book.apply_account(vec![at(4, "name", serde_json::json!(42))]);
+        let w = book
+            .list_workspaces()
+            .into_iter()
+            .find(|w| w.id == "w9")
+            .unwrap();
+        assert_eq!(w.name, "Personal");
+    }
+
+    #[tokio::test]
+    async fn a_state_from_before_the_account_becomes_its_changes_with_the_same_ids() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::write(
+            home.path().join("state.json"),
+            r#"{"version":3,"workspaces":[{"id":"7c1e2a9b0d44","name":"Acme","color":"blue","section_ids":["3f6b8c2d1e90"],"claude_profile":null,"created_at":1790000000000}],"sections":[{"id":"3f6b8c2d1e90","name":"Clients","project_ids":[],"view":{"group_by":"status","sort_by":"name","filter":[]},"created_at":1790000000001}],"profiles":[],"projects":[],"sessions":[]}"#,
+        )
+        .unwrap();
+        let env: BTreeMap<String, String> = std::env::vars().collect();
+        let book = SessionManager::load(
+            home.path().join("state.json"),
+            home.path().join("worktrees"),
+            TerminalManager::new(home.path().join("s.sock"), env),
+        );
+        book.attach_account(home.path().join("account.json"), "book")
+            .unwrap();
+        let (_h2, mini) = member("mini").await;
+        sync(&book, &mini);
+        let acme = mini
+            .list_workspaces()
+            .into_iter()
+            .find(|w| w.id == "7c1e2a9b0d44")
+            .unwrap();
+        assert_eq!(
+            (acme.name.as_str(), acme.color, acme.section_ids.as_slice()),
+            (
+                "Acme",
+                WorkspaceColor::Blue,
+                ["3f6b8c2d1e90".to_string()].as_slice()
+            )
+        );
+        let clients = mini
+            .list_sections()
+            .into_iter()
+            .find(|s| s.id == "3f6b8c2d1e90")
+            .unwrap();
+        assert_eq!(
+            (
+                clients.name.as_str(),
+                clients.view.group_by.as_str(),
+                clients.view.sort_by.as_str()
+            ),
+            ("Clients", "status", "name")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_log_made_again_gives_way_to_changes_it_had_not_seen_and_keeps_every_bad_file() {
+        let (_h1, book) = member("book").await;
+        let (h2, mini) = member("mini").await;
+        sync(&book, &mini);
+        drop(mini);
+        let w = book.list_workspaces()[0].clone();
+        // A rename studio-mini has not seen when its log is lost, twice.
+        book.update_workspace(WorkspaceUpdate {
+            id: w.id.clone(),
+            name: Some("Home".into()),
+            color: None,
+            section_ids: None,
+            claude_profile: None,
+        })
+        .unwrap();
+        for _ in 0..2 {
+            std::fs::write(h2.path().join("account.json"), "{ not json").unwrap();
+            drop(reload(h2.path(), "mini"));
+        }
+        let bad = std::fs::read_dir(h2.path())
+            .unwrap()
+            .filter(|e| {
+                e.as_ref()
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .ends_with(".bad")
+            })
+            .count();
+        assert_eq!(bad, 2);
+        let mini = reload(h2.path(), "mini");
+        sync(&book, &mini);
+        assert!(
+            names(&mini).contains(&"Home".to_string()),
+            "{:?}",
+            names(&mini)
+        );
+        assert!(
+            names(&book).contains(&"Home".to_string()),
+            "{:?}",
+            names(&book)
+        );
     }
 }

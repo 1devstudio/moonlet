@@ -144,6 +144,13 @@ impl Log {
             .collect()
     }
 
+    /// Whether record `id` of `kind` was deleted: it never comes back.
+    pub fn is_deleted(&self, kind: &str, id: &str) -> bool {
+        self.changes
+            .values()
+            .any(|c| c.kind == kind && c.id == id && c.op == ChangeOp::Delete)
+    }
+
     /// The records of `kind` by id, each field at its latest change.
     pub fn records(&self, kind: &str) -> BTreeMap<String, Record> {
         let mut latest: BTreeMap<(&str, &str), &Change> = BTreeMap::new();
@@ -176,6 +183,25 @@ impl Log {
         }
         out
     }
+}
+
+/// The name of a new log of worker `worker`, `<worker id>.<6 letters or
+/// digits>`: a log made again gets a name of its own, so it never numbers
+/// its changes as an earlier one did.
+pub fn new_log_name(worker: &str) -> String {
+    format!(
+        "{worker}.{}",
+        &uuid::Uuid::new_v4().simple().to_string()[..6]
+    )
+}
+
+/// The worker a log belongs to, from the log's name, when it is one.
+pub fn log_owner(name: &str) -> Option<&str> {
+    let (worker, suffix) = name.rsplit_once('.')?;
+    let fits = !worker.is_empty()
+        && suffix.len() == 6
+        && suffix.bytes().all(|b| b.is_ascii_alphanumeric());
+    fits.then_some(worker)
 }
 
 const DIGITS: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
@@ -484,6 +510,27 @@ mod tests {
             }
         );
         assert_eq!(log.records("workspace")["w1"]["name"], json!("Home"));
+    }
+
+    #[test]
+    fn a_log_name_is_its_worker_id_and_six_letters_or_digits() {
+        let name = new_log_name("7d3f1c2a-5b8e-4e61-9a0f-2c4d6e8b1f37");
+        assert_eq!(
+            log_owner(&name),
+            Some("7d3f1c2a-5b8e-4e61-9a0f-2c4d6e8b1f37")
+        );
+        assert_ne!(name, new_log_name("7d3f1c2a-5b8e-4e61-9a0f-2c4d6e8b1f37"));
+        assert_eq!(log_owner("a.b.k3x9q2"), Some("a.b"));
+        for not in [
+            "book",
+            "book.",
+            ".k3x9q2",
+            "book.k3x9q",
+            "book.k3x9q2z",
+            "book.k3x9-2",
+        ] {
+            assert_eq!(log_owner(not), None, "{not}");
+        }
     }
 
     #[test]
