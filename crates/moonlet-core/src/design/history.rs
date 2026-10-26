@@ -222,7 +222,7 @@ fn snapshot_rel(at: &DesignAt, n: u32) -> PathBuf {
 /// A snapshot's number as its folder names it: digits only, at least one,
 /// with no leading zero (`0` only on its own) and within a `u32`, so each
 /// number has one folder, never `01` beside `1`.
-fn is_number(text: &str) -> bool {
+pub(super) fn is_number(text: &str) -> bool {
     text.parse::<u32>().is_ok_and(|n| n.to_string() == text)
 }
 

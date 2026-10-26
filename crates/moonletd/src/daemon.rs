@@ -1187,7 +1187,9 @@ impl Daemon {
         // that names a design is let through by the design it names, which
         // `locate` finds once: a session design's workspace is its
         // session's, never one the call claims (X65).
-        let addressed = DESIGN_ADDRESSED.contains(&method) || (method == m::DESIGN_CHECK && p.get("design").is_some());
+        let addressed = DESIGN_ADDRESSED.contains(&method)
+            || (method == m::DESIGN_CHECK && p.get("design").is_some())
+            || (method == m::DESIGN_FILE && p.get("session").is_some());
         let workspace = p.get("workspace").and_then(Value::as_str).unwrap_or_default().to_string();
         if !addressed {
             self.workspace_exists(&workspace)?;
@@ -1361,8 +1363,24 @@ impl Daemon {
             }
             m::DESIGN_FILE => {
                 let r: m::DesignFile = params(p)?;
-                let path = blocking(move || store.resolve(&r.workspace, &r.path)).await?;
-                ok(serde_json::json!({"path": path, "content_type": store::content_type(&path)}))
+                match (r.workspace, r.session) {
+                    (Some(workspace), None) => {
+                        let path = blocking(move || store.resolve(&workspace, &r.path)).await?;
+                        ok(serde_json::json!({"path": path, "content_type": store::content_type(&path)}))
+                    }
+                    // A session design's (X65): with the folder the file
+                    // must still be inside once it is opened.
+                    (None, Some(session)) => {
+                        let (s, folder) = self.design_session(&session)?;
+                        self.workspace_exists(s.workspace_id.as_deref().unwrap_or_default())?;
+                        let rel = r.path.clone();
+                        let (path, root) = blocking(move || moonlet_core::design::session::session_file(Path::new(&s.path), &folder, &rel))
+                            .await
+                            .map_err(|_| RpcError::new("invalid_params", format!("{} is no file of a session design", r.path)))?;
+                        ok(serde_json::json!({"path": path, "content_type": store::content_type(&path), "root": root}))
+                    }
+                    _ => Err(RpcError::new("invalid_params", "name a design file by its workspace or by its session, not both")),
+                }
             }
             m::DESIGN_DETECT => {
                 let r: m::DesignDetect = params(p)?;
