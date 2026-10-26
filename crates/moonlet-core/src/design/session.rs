@@ -41,27 +41,6 @@ const SYSTEM_DIR: &str = "system";
 /// [`SIDE_DIR`] (X65), for the PR's Design and build.
 pub const BUILT_DIR: &str = "built";
 
-#[cfg(test)]
-thread_local! {
-    /// A test's failure, run before each write of a design system's update
-    /// to a session design (`pinned` and `side`, its two copies, and
-    /// `anchor`),
-    /// so a step that fails can be tested deterministically.
-    pub(crate) static UPDATE_STEP: std::cell::RefCell<Option<Box<dyn FnMut(&str) -> Result<()>>>> =
-        std::cell::RefCell::new(None);
-}
-
-/// Runs the test's failure for `step`, if one is set; nothing outside tests.
-fn update_step(_step: &str) -> Result<()> {
-    #[cfg(test)]
-    return UPDATE_STEP.with(|h| match h.borrow_mut().as_mut() {
-        Some(fail) => fail(_step),
-        None => Ok(()),
-    });
-    #[cfg(not(test))]
-    Ok(())
-}
-
 impl Store {
     /// Makes a session design named `name` on the workspace's design system
     /// `system` in the worktree's design folder `folder`, and returns it:
@@ -292,13 +271,10 @@ impl Store {
             format!(".{SYSTEM_DIR}-old.moonlet-{}-{n}", std::process::id()),
         );
         let folder = |base: &Path, name: &str| at.root.join(base).join(name);
-        let copies = [(at.dir.as_path(), &styles, "pinned"), (at.side.as_path(), &all, "side")];
-        let staged = copies.iter().try_for_each(|(base, files, step)| {
-            update_step(step)?;
-            fsx::write_tree(&at.root, base, Path::new(&new), files, true)
-        });
+        let copies = [(at.dir.as_path(), &styles), (at.side.as_path(), &all)];
+        let staged = copies.iter().try_for_each(|(base, files)| fsx::write_tree(&at.root, base, Path::new(&new), files, true));
         if let Err(e) = staged {
-            for (base, _, _) in &copies {
+            for (base, _) in &copies {
                 let _ = fsx::remove_dir_inside(&at.root, &folder(base, &new));
             }
             return Err(e);
@@ -306,7 +282,7 @@ impl Store {
         // Each swapped copy, and whether it replaced one (kept as `old`).
         let mut swapped: Vec<(&Path, bool)> = Vec::new();
         let done = (|| -> Result<()> {
-            for (base, _, _) in &copies {
+            for (base, _) in &copies {
                 let had = fsx::rename_inside(&at.root, &folder(base, SYSTEM_DIR), &folder(base, &old))?;
                 if let Err(e) = fsx::rename_inside(&at.root, &folder(base, &new), &folder(base, SYSTEM_DIR)) {
                     if had {
@@ -316,7 +292,6 @@ impl Store {
                 }
                 swapped.push((base, had));
             }
-            update_step("anchor")?;
             fsx::update_inside(&at.root, &at.in_dir(DESIGN_FILE), |text| {
                 let mut doc: toml_edit::DocumentMut = text
                     .parse()
@@ -337,12 +312,12 @@ impl Store {
                     let _ = fsx::rename_inside(&at.root, &folder(base, &old), &folder(base, SYSTEM_DIR));
                 }
             }
-            for (base, _, _) in &copies {
+            for (base, _) in &copies {
                 let _ = fsx::remove_dir_inside(&at.root, &folder(base, &new));
             }
             return Err(e);
         }
-        for (base, _, _) in &copies {
+        for (base, _) in &copies {
             let _ = fsx::remove_dir_inside(&at.root, &folder(base, &old));
         }
         Ok(DesignSystemUpdated { anchor, cards })
@@ -1153,10 +1128,10 @@ created_at = 1
         assert!(!store.session_system_updated(&at, "w1").unwrap());
     }
 
-    /// X65: an update of a session design's system that fails partway,
-    /// writing the agent's copy or recording the anchor, leaves both copies
-    /// and `design.toml` as they were, so a retry lists the cards that
-    /// changed since the anchor recorded.
+    /// X65: an update of a session design's system that fails partway, a
+    /// write into the agent's copy or into `design.toml` failing, leaves
+    /// both copies and `design.toml` as they were, so a retry lists the
+    /// cards that changed since the anchor recorded.
     #[test]
     fn a_session_designs_system_update_that_fails_partway_changes_nothing_and_a_retry_lists_the_changed_cards()
      {
@@ -1190,12 +1165,17 @@ created_at = 1
         )
         .unwrap();
         std::fs::write(system.join("_ds_sync.json"), "{\"cards\":{\"components/buttons/button/button.html\":{}}}\n").unwrap();
-        for failing in ["side", "anchor"] {
-            UPDATE_STEP.set(Some(Box::new(move |step| if step == failing { bail!("disk full") } else { Ok(()) })));
+        let side = worktree.path().join(".moonlet/design/settings-page");
+        let toml = worktree.path().join("docs/design/settings-page/design.toml");
+        type Fails = Box<dyn Fn(&Path) -> bool>;
+        let failing: [(&str, Fails); 2] =
+            [("the agent's copy", Box::new(move |p: &Path| p.starts_with(&side))), ("design.toml", Box::new(move |p: &Path| p == toml))];
+        for (what, fails) in failing {
+            fsx::BEFORE_WRITE.set(Some(Box::new(move |p| if fails(p) { bail!("disk full") } else { Ok(()) })));
             let failed = store.update_session_system(&at, "w1");
-            UPDATE_STEP.set(None);
-            assert_eq!(failed.map_err(|e| e.to_string()), Err("disk full".to_string()), "{failing}");
-            assert!(both() == before, "an update failing at {failing} left the design changed");
+            fsx::BEFORE_WRITE.set(None);
+            assert_eq!(failed.map_err(|e| e.to_string()), Err("disk full".to_string()), "{what}");
+            assert!(both() == before, "an update whose write of {what} failed left the design changed");
             assert!(store.session_system_updated(&at, "w1").unwrap());
         }
         let updated = store.update_session_system(&at, "w1").unwrap();

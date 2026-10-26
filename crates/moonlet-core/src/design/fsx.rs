@@ -29,6 +29,31 @@ pub(crate) fn before_replace() {
     }
 }
 
+/// A test's disk: see [`BEFORE_WRITE`].
+#[cfg(test)]
+type Disk = Option<Box<dyn FnMut(&Path) -> Result<()>>>;
+
+#[cfg(test)]
+thread_local! {
+    /// A test's disk, told the path of each file about to be written and
+    /// failing the write when it fails, so a write that fails, or a stop in
+    /// the middle, can be tested deterministically.
+    pub(crate) static BEFORE_WRITE: std::cell::RefCell<Disk> =
+        std::cell::RefCell::new(None);
+}
+
+/// Runs the test's disk for the file `path` about to be written, if one is
+/// set; nothing outside tests.
+fn before_write(_path: &Path) -> Result<()> {
+    #[cfg(test)]
+    return BEFORE_WRITE.with(|h| match h.borrow_mut().as_mut() {
+        Some(disk) => disk(_path),
+        None => Ok(()),
+    });
+    #[cfg(not(test))]
+    Ok(())
+}
+
 /// The entries of `folder`: none while it is not there, and an error with
 /// the reason when it is there but cannot be read.
 pub(crate) fn read_dir_if_there(folder: &Path) -> Result<Option<std::fs::ReadDir>> {
@@ -48,6 +73,7 @@ fn open_root(root: &Path) -> Result<Dir> {
 /// Writes `path`, which must be inside `root`, replacing what is there. A
 /// symlink at `path` is replaced, never followed.
 pub(crate) fn write_inside(root: &Path, path: &Path, bytes: &[u8]) -> Result<()> {
+    before_write(path)?;
     let rel = path
         .strip_prefix(root)
         .with_context(|| format!("{} is outside {}", path.display(), root.display()))?;
@@ -143,6 +169,7 @@ fn update(
     mut edit: impl FnMut(&str) -> Result<String>,
 ) -> Result<()> {
     let name = rel.file_name().context("a file needs a name")?;
+    before_write(&root.join(rel))?;
     let root_dir = open_root(root)?;
     let dir = match rel.parent().filter(|p| !p.as_os_str().is_empty()) {
         Some(parent) => {
@@ -399,6 +426,7 @@ pub(crate) fn write_tree(
         .with_context(|| format!("no {} in {}", base.display(), root.display()))?;
     let dir = open_under(base_dir, rel, true)?.context("a folder went away")?;
     for (path, bytes) in files {
+        before_write(&root.join(base).join(rel).join(path))?;
         let (at, name) = parent_of(&dir, path)?;
         replace_in(&at, name, bytes)?;
     }
