@@ -8,7 +8,7 @@ import { useShallow } from "zustand/react/shallow";
 import { errorToast, shownWorkspace, toast, useStore } from "../../lib/store";
 import { type DesignCover } from "../../lib/protocol";
 import { designAgentState, designRow, designsEmpty, picksInWorkspace, systemFolder, systemLabel } from "../../lib/design";
-import { createSystem, designsOf, openNewDesign, openSessionDesign, sessionDesignsIn, detectStack, loadDesigns, loadSystems, shownDesign, shownSystem, showDesign, showSystem, systemsOf, useDesign } from "../../lib/designStore";
+import { designCanvasKey, createSystem, designsOf, openNewDesign, openSessionDesign, sessionDesignsIn, detectStack, loadDesigns, loadSystems, shownDesign, shownSystem, showDesign, showSystem, systemsOf, useDesign } from "../../lib/designStore";
 import { workspaceProjects } from "../../lib/tasksStore";
 import { tildePath } from "../../lib/profiles";
 import { useNow } from "../../lib/useNow";
@@ -158,7 +158,7 @@ export function DesignMain() {
   if (design && ws) {
     return (
       <div className="flex h-full flex-col bg-bg">
-        <DesignScreen key={design.slug} host={ws.host} workspace={ws.id} design={design} inset={sidebarOpen ? 0 : 84} />
+        <DesignScreen key={designCanvasKey(ws.host, ws.id, design.slug)} host={ws.host} workspace={ws.id} design={design} inset={sidebarOpen ? 0 : 84} />
       </div>
     );
   }

@@ -36,6 +36,7 @@ import {
   justOpened,
   tookOpened,
   useDesign,
+  designCanvasKey,
 } from "../../lib/designStore";
 import { isSession, type DesignPlace } from "../../lib/designPlace";
 import { askWithEdits, updateAndTell, toldFolder, type ToldDesign, restoreSnapshot, closeDesign, hasCopy, kitOf, loadKit, sendCommentsWithEdits, copyElementOf, dismissUnsaved, editPage, loadPageSource, pasteInto, pendingOf, redoEdit, sendWithEdits, sourceOf, undoEdit, undoOf, unsavedOf, useEditor } from "../../lib/designEditor";
@@ -309,9 +310,12 @@ export function DesignCanvas({
     void loadComments(host, place, design.slug).catch(() => {});
     void loadHistory(host, place, design.slug).catch(() => {});
   }, [host, place, design.slug]);
-  useEffect(() => setBox(null), [design.slug]);
+  // Another design, or the same slug in another place, has its own
+  // comments, snapshots and elements.
+  const shown = designCanvasKey(host, place, design.slug);
+  useEffect(() => setBox(null), [shown]);
   // Another design shows its current pages; a snapshot no longer listed too.
-  useEffect(() => setPreview(null), [design.slug]);
+  useEffect(() => setPreview(null), [shown]);
   useEffect(() => {
     if (snapshots) setPreview((p) => previewStep(p, { kind: "listed", snapshots }));
   }, [snapshots]);
@@ -321,7 +325,7 @@ export function DesignCanvas({
     setSelected(null);
     setLayers(NO_LAYERS);
     setDragging(null);
-  }, [design.slug, page, readOnly]);
+  }, [shown, page, readOnly]);
 
   // V, C, Esc and the mode buttons, as canvasStep decides; Edit is locked
   // while the agent works, and left when it starts. Entering Edit folds the
