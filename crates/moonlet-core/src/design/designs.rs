@@ -22,6 +22,11 @@ use super::store::Store;
 #[error("no design system \"{0}\"")]
 pub struct NoSystem(pub String);
 
+/// A viewport that is not a width and a height in px.
+#[derive(Debug, thiserror::Error)]
+#[error("bad viewport \"{0}\": give a width and a height in px, such as 390x844")]
+pub struct BadViewport(pub String);
+
 /// A design's settings file.
 pub const DESIGN_FILE: &str = "design.toml";
 
@@ -158,6 +163,8 @@ impl Store {
                     kind: DesignKind::Workspace,
                     system: String::new(),
                     path: dir.display().to_string(),
+                    brief: String::new(),
+                    viewport: String::new(),
                     pages: Vec::new(),
                     updated_at: 0,
                     open_comments: 0,
@@ -242,6 +249,28 @@ impl Store {
         )
     }
 
+    /// Saves the viewport the design was last shown at (`WxH`, in px) in its
+    /// `design.toml`, leaving the rest of the file as the agent wrote it, also
+    /// when the agent writes it while the viewport is saved.
+    pub fn set_design_viewport(&self, workspace: &str, slug: &str, viewport: &str) -> Result<()> {
+        if parse_viewport(viewport).is_none() {
+            return Err(BadViewport(viewport.to_string()).into());
+        }
+        // An existing design, its folder no link.
+        self.design_dir(workspace, slug)?;
+        // Through the designs folder, so a design folder swapped for a link
+        // after that check is not followed; and the agent may label a page
+        // meanwhile: its edit is kept.
+        let designs = self.designs_dir(workspace, false)?;
+        fsx::update_inside(&designs, &Path::new(slug).join(DESIGN_FILE), |text| {
+            let mut doc: toml_edit::DocumentMut = text
+                .parse()
+                .with_context(|| format!("cannot read {DESIGN_FILE}"))?;
+            doc["viewport"] = toml_edit::value(viewport);
+            Ok(doc.to_string())
+        })
+    }
+
     /// Deletes a design: its folder and its record.
     pub fn remove_design(&self, workspace: &str, slug: &str) -> Result<()> {
         let dir = self.design_dir(workspace, slug)?;
@@ -291,6 +320,17 @@ impl Store {
     }
 }
 
+/// `WxH`, both whole px above 0.
+fn parse_viewport(text: &str) -> Option<(u32, u32)> {
+    let (w, h) = text.split_once('x')?;
+    let px = |n: &str| {
+        n.parse::<u32>()
+            .ok()
+            .filter(|v| *v > 0 && n.bytes().all(|b| b.is_ascii_digit()))
+    };
+    Some((px(w)?, px(h)?))
+}
+
 fn read_design_config(dir: &Path) -> Result<DesignConfig> {
     let text = fsx::read_inside(dir, &dir.join(DESIGN_FILE))?;
     toml::from_str(&text).with_context(|| format!("cannot read {DESIGN_FILE}"))
@@ -305,6 +345,8 @@ fn summary(dir: &Path, slug: String, config: &DesignConfig, agent: Option<u32>) 
         kind: DesignKind::Workspace,
         system: config.system.clone(),
         path: dir.display().to_string(),
+        brief: config.brief.clone(),
+        viewport: config.viewport.clone(),
         updated_at: pages
             .iter()
             .map(|(_, ms)| *ms)
@@ -541,6 +583,8 @@ created_at = 1761200000000
                         .join("design/w1/designs/onboarding")
                         .display()
                         .to_string(),
+                    brief: "Welcome".into(),
+                    viewport: "1440x900".into(),
                     pages: vec![],
                     updated_at: 1_761_300_000_000,
                     open_comments: 0,
@@ -555,6 +599,8 @@ created_at = 1761200000000
                     kind: DesignKind::Workspace,
                     system: "moonlet-desktop".into(),
                     path: dir.display().to_string(),
+                    brief: "Settings".into(),
+                    viewport: "1440x900".into(),
                     pages: vec![
                         page("index", Some("rows")),
                         page("git-a", Some("cards")),
@@ -571,6 +617,115 @@ created_at = 1761200000000
         );
         // A workspace with no designs yet lists none.
         assert_eq!(store.designs("w2").unwrap(), vec![]);
+    }
+
+    #[test]
+    fn a_designs_viewport_is_saved_in_its_design_toml_and_listed_with_its_brief() {
+        let (home, store) = store_with_system();
+        store
+            .create_design("w1", "Settings page", "moonlet-desktop", "A left nav", 1)
+            .unwrap();
+        let file = home
+            .path()
+            .join("design/w1/designs/settings-page/design.toml");
+        // The agent labelled a page, with a comment of its own.
+        let text = std::fs::read_to_string(&file).unwrap();
+        std::fs::write(
+            &file,
+            format!("{text}\n# variants\n[pages.index]\nlabel = \"rows\"\n"),
+        )
+        .unwrap();
+        store
+            .set_design_viewport("w1", "settings-page", "390x844")
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "name = \"Settings page\"
+system = \"moonlet-desktop\"
+brief = \"A left nav\"
+viewport = \"390x844\"
+created_at = 1
+
+# variants
+[pages.index]
+label = \"rows\"
+"
+        );
+        let listed = &store.designs("w1").unwrap()[0];
+        assert_eq!(
+            (listed.brief.as_str(), listed.viewport.as_str()),
+            ("A left nav", "390x844")
+        );
+        // Only a width and a height in px are a viewport.
+        for bad in ["phone", "0x844", "390x", "390x844x2", "-1x5"] {
+            assert!(
+                store
+                    .set_design_viewport("w1", "settings-page", bad)
+                    .is_err(),
+                "{bad}"
+            );
+        }
+        assert!(store.set_design_viewport("w1", "nope", "390x844").is_err());
+    }
+
+    #[test]
+    fn a_label_the_agent_writes_while_the_viewport_is_saved_is_kept() {
+        let (home, store) = store_with_system();
+        store
+            .create_design("w1", "Settings page", "moonlet-desktop", "", 1)
+            .unwrap();
+        let file = home
+            .path()
+            .join("design/w1/designs/settings-page/design.toml");
+        // The agent labels a page after the save read the file, before it
+        // replaced it.
+        let agent = file.clone();
+        fsx::BEFORE_REPLACE.with(|h| {
+            *h.borrow_mut() = Some(Box::new(move || {
+                let text = std::fs::read_to_string(&agent).unwrap();
+                std::fs::write(&agent, format!("{text}\n[pages.index]\nlabel = \"rows\"\n"))
+                    .unwrap();
+            }))
+        });
+        store
+            .set_design_viewport("w1", "settings-page", "390x844")
+            .unwrap();
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(text.contains("viewport = \"390x844\""), "{text}");
+        assert!(text.contains("[pages.index]\nlabel = \"rows\""), "{text}");
+    }
+
+    #[test]
+    fn a_viewport_save_never_writes_through_a_design_folder_swapped_for_a_link() {
+        let (home, store) = store_with_system();
+        store
+            .create_design("w1", "Settings page", "moonlet-desktop", "", 1)
+            .unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let theirs = "name = \"Theirs\"\nsystem = \"x\"\nviewport = \"1440x900\"\n";
+        std::fs::write(outside.path().join("design.toml"), theirs).unwrap();
+        let designs = home.path().join("design/w1/designs");
+        // A design folder that is a link is refused outright.
+        std::os::unix::fs::symlink(outside.path(), designs.join("linked")).unwrap();
+        assert!(
+            store
+                .set_design_viewport("w1", "linked", "390x844")
+                .is_err()
+        );
+        // One swapped for a link after the save found it is not followed.
+        let (dir, target) = (designs.join("settings-page"), outside.path().to_path_buf());
+        let moved = designs.join(".moved");
+        fsx::BEFORE_REPLACE.with(|h| {
+            *h.borrow_mut() = Some(Box::new(move || {
+                std::fs::rename(&dir, &moved).unwrap();
+                std::os::unix::fs::symlink(&target, &dir).unwrap();
+            }))
+        });
+        let _ = store.set_design_viewport("w1", "settings-page", "390x844");
+        assert_eq!(
+            std::fs::read_to_string(outside.path().join("design.toml")).unwrap(),
+            theirs
+        );
     }
 
     #[test]

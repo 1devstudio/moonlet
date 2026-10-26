@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { DesignSystem } from "./protocol";
-import { useStore } from "./store";
-import { cardsOf, createSystem, detectStack, loadCards, loadSystems, openCard, revOf, shownCard, shownSystem, showSystem, startDesign, systemsOf, useDesign } from "./designStore";
+import type { Design, DesignSystem, TerminalInfo } from "./protocol";
+import { modeOf, setMode } from "./mode";
+import { agentOnScreen, goToAgent, useStore } from "./store";
+import { cardsOf, checkDesign, createFromNewDesign, createSystem, designsOf, detectStack, latestOf, loadCards, loadDesigns, loadSystems, openCard, saveViewport, pageRevOf, problemsOf, revOf, shownCard, shownDesign, shownSystem, showDesign, showSystem, startDesign, systemNameOf, systemsOf, useDesign } from "./designStore";
 
 const calls = vi.hoisted(() => [] as { host: string; method: string; params: unknown }[]);
 /** What the daemon answers, by method. */
@@ -54,7 +55,7 @@ const listed = () => calls.filter((c) => c.method === "design.systems");
 beforeEach(async () => {
   calls.length = 0;
   for (const k of Object.keys(answers)) delete answers[k];
-  useDesign.setState({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {} });
+  useDesign.setState({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, designs: {}, designShown: {}, pageRevs: {}, latest: {}, problems: {}, systemNames: {} });
   await startDesign();
 });
 
@@ -143,6 +144,18 @@ describe("a workspace's design systems (X64, X65)", () => {
     hostStatus.emit({ id: "local", status: "connected" });
     await settle();
     expect(listed().filter((c) => (c.params as { workspace: string }).workspace === "w-1devstudio")).toHaveLength(2);
+  });
+});
+
+describe("a removed design system's name (X65)", () => {
+  it("is kept from before it was removed, for the designs on it", async () => {
+    answers["design.systems"] = () => [system({ slug: "screen-kit", name: "Screen kit" })];
+    await loadSystems("local", "w-names");
+    answers["design.systems"] = () => [];
+    await loadSystems("local", "w-names", true);
+    expect(systemsOf(useDesign.getState(), "local", "w-names")).toEqual([]);
+    expect(systemNameOf(useDesign.getState(), "local", "w-names", "screen-kit")).toBe("Screen kit");
+    expect(systemNameOf(useDesign.getState(), "local", "w-names", "never-listed")).toBeNull();
   });
 });
 
@@ -281,5 +294,215 @@ describe("the New design system dialog (X64)", () => {
     expect(await detectStack("local", "w-1devstudio", "/r/notes")).toBe("");
     delete answers["design.detect"];
     expect(await detectStack("local", "w-1devstudio", "/r/api")).toBe("");
+  });
+});
+
+const design = (over: Partial<Design> = {}): Design => ({
+  slug: "settings-page",
+  name: "Settings page",
+  kind: "workspace",
+  system: "moonlet-desktop",
+  path: "/Users/alex/.moonlet/design/w-1devstudio/designs/settings-page",
+  brief: "A left nav",
+  viewport: "1440x900",
+  pages: [
+    { name: "index", label: null },
+    { name: "git-a", label: "cards" },
+  ],
+  updated_at: 0,
+  open_comments: 0,
+  agent: 12,
+  agent_state: "working",
+  needs_you: null,
+  error: null,
+  ...over,
+});
+const designsListed = (ws: string) => calls.filter((c) => c.method === "design.list" && (c.params as { workspace: string }).workspace === ws);
+const changed = (workspace: string, over: { system?: string | null; design?: string | null; paths: string[] }) =>
+  events.emit({ host: "local", name: "design.changed", data: { workspace, system: null, design: null, ...over } });
+
+describe("a design's pages on a change (X65)", () => {
+  const revs = () => ["index", "git-a"].map((p) => pageRevOf(useDesign.getState(), "local", "w-1devstudio", "settings-page", p));
+
+  it("load again when they, the design's assets or its design system's styles change, and the latest written page is known", async () => {
+    answers["design.list"] = () => [design()];
+    answers["design.check"] = () => [];
+    await loadDesigns("local", "w-1devstudio");
+    expect(revs()).toEqual([0, 0]);
+    changed("w-1devstudio", { design: "settings-page", paths: ["pages/git-a.html"] });
+    expect(revs()).toEqual([0, 1]);
+    expect(latestOf(useDesign.getState(), "local", "w-1devstudio", "settings-page")).toEqual(["git-a"]);
+    changed("w-1devstudio", { design: "settings-page", paths: ["assets/logo.svg"] });
+    expect(revs()).toEqual([1, 2]);
+    changed("w-1devstudio", { system: "moonlet-desktop", paths: ["styles.css"] });
+    expect(revs()).toEqual([2, 3]);
+    // design.toml alone, another design system's styles, or another workspace's change: none.
+    changed("w-1devstudio", { design: "settings-page", paths: ["design.toml"] });
+    changed("w-1devstudio", { system: "storefront", paths: ["styles.css"] });
+    changed("w-acme", { design: "settings-page", paths: ["pages/index.html"] });
+    expect(revs()).toEqual([2, 3]);
+    expect(latestOf(useDesign.getState(), "local", "w-1devstudio", "settings-page")).toEqual(["git-a"]);
+  });
+
+  it("include a page not listed yet, which loads once it is", async () => {
+    answers["design.list"] = () => [design({ pages: [] })];
+    answers["design.check"] = () => [];
+    await loadDesigns("local", "w-1devstudio");
+    changed("w-1devstudio", { design: "settings-page", paths: ["pages/index.html"] });
+    expect(pageRevOf(useDesign.getState(), "local", "w-1devstudio", "settings-page", "index")).toBe(1);
+  });
+});
+
+describe("a design's check (X65)", () => {
+  const problems = () => problemsOf(useDesign.getState(), "local", "w-1devstudio", "settings-page");
+
+  it("keeps no earlier problems once a check fails, so the bar never shows them as the page's", async () => {
+    answers["design.check"] = () => [{ path: "pages/index.html", line: 4, kind: "missing_mid", message: "<p> has no data-mid" }];
+    await checkDesign("local", "w-1devstudio", "settings-page");
+    expect(problems()).toEqual([{ path: "pages/index.html", line: 4, kind: "missing_mid", message: "<p> has no data-mid" }]);
+    answers["design.check"] = () => {
+      throw new Error("cannot read pages/index.html");
+    };
+    await checkDesign("local", "w-1devstudio", "settings-page");
+    expect(problems()).toEqual([]);
+  });
+});
+
+describe("Create design in the New design dialog (X65)", () => {
+  const brief = { name: "Settings page", system: "moonlet-desktop", brief: "A left nav" };
+  const toasts = () => useStore.getState().toasts.map((t) => [t.text, t.action?.label ?? null]);
+  beforeEach(() => {
+    useStore.setState({ toasts: [], dialog: { kind: "new-design", host: "local", workspace: "w-1devstudio" } });
+    answers["design.list"] = () => [design()];
+    answers["design.check"] = () => [];
+  });
+
+  it("shows the design and closes the dialog while it is still open", async () => {
+    answers["design.create"] = () => ({ ...design(), agent_error: null });
+    await createFromNewDesign("local", "w-1devstudio", brief);
+    expect(useStore.getState().dialog).toBeNull();
+    expect(shownDesign(useDesign.getState(), "local", "w-1devstudio")?.slug).toBe("settings-page");
+    expect(toasts()).toEqual([]);
+  });
+
+  it("leaves the view and another dialog opened meanwhile as they are, and offers the design in a toast", async () => {
+    let made = (_: unknown) => {};
+    answers["design.create"] = () => new Promise((r) => (made = r));
+    const creating = createFromNewDesign("local", "w-1devstudio", brief);
+    await settle();
+    useStore.setState({ dialog: { kind: "new-design-system", host: "local", workspace: "w-1devstudio" } });
+    made({ ...design(), agent_error: null });
+    await creating;
+    expect(useStore.getState().dialog).toEqual({ kind: "new-design-system", host: "local", workspace: "w-1devstudio" });
+    expect(shownDesign(useDesign.getState(), "local", "w-1devstudio")).toBeNull();
+    expect(toasts()).toEqual([["Settings page was made", "Open"]]);
+  });
+});
+
+describe("a workspace's designs (X65)", () => {
+  it("are listed again when a design's agent asks something, so its row and bar say so", async () => {
+    answers["design.list"] = () => [design()];
+    await loadDesigns("local", "w-1devstudio");
+    const ask = { id: "a2", tool: "Bash", summary: "rm -rf assets", input: null, reason: null, can_always: false };
+    answers["design.list"] = () => [design({ needs_you: { kind: "approval", text: "Bash: rm -rf assets" } })];
+    events.emit({ host: "local", name: "chat.state", data: { id: 12, state: { pending: [ask], status: "waiting" } } });
+    await settle();
+    expect(designsOf(useDesign.getState(), "local", "w-1devstudio")?.[0].needs_you).toEqual({ kind: "approval", text: "Bash: rm -rf assets" });
+  });
+
+  it("are asked for again after a listing failed, when the host comes back", async () => {
+    answers["design.list"] = () => {
+      throw new Error("host offline");
+    };
+    await expect(loadDesigns("local", "w-designs-only")).rejects.toThrow("host offline");
+    answers["design.list"] = () => [design()];
+    hostStatus.emit({ id: "local", status: "connected" });
+    await settle();
+    expect(designsOf(useDesign.getState(), "local", "w-designs-only")?.map((d) => d.slug)).toEqual(["settings-page"]);
+  });
+
+  it("are listed once more when something changes while a listing is on its way, so the last answer is the latest", async () => {
+    let release = (_list: Design[]) => {};
+    answers["design.list"] = () => new Promise<Design[]>((r) => (release = r));
+    const first = loadDesigns("local", "w-busy");
+    await settle();
+    answers["design.list"] = () => [design({ open_comments: 2 })];
+    changed("w-busy", { design: "settings-page", paths: ["comments.json"] });
+    release([design()]);
+    await first;
+    await settle();
+    await settle();
+    expect(designsListed("w-busy")).toHaveLength(2);
+    expect(designsOf(useDesign.getState(), "local", "w-busy")?.[0].open_comments).toBe(2);
+  });
+});
+
+describe("a design's agent outside the sessions (X65)", () => {
+  const host = { id: "local", label: "This Mac", remote: false, status: "connected" as const, message: null, daemon_version: null, hostname: null, home: null };
+  const tag = { kind: "design" as const, workspace: "w-1devstudio", slug: "settings-page", name: "Settings page" };
+  const given = async () => {
+    useStore.setState({
+      hosts: { local: host },
+      workspaces: { local: [{ id: "w-1devstudio", name: "1devstudio", color: "clay" as const, section_ids: [], created_at: 0 }] },
+      workspace: { host: "local", id: "w-1devstudio" },
+      mode: {},
+      terminals: { local: { 12: { id: 12, kind: "agent", title: "Design · Settings page", design: tag, chat: true } as unknown as TerminalInfo } },
+      unread: { "local:12": "done" },
+    });
+    answers["design.list"] = () => [design()];
+    answers["design.check"] = () => [];
+    await loadDesigns("local", "w-1devstudio");
+  };
+
+  it("opens its design on Go to", async () => {
+    await given();
+    goToAgent("local", 12);
+    await settle();
+    expect(modeOf(useStore.getState())).toBe("design");
+    expect(shownDesign(useDesign.getState(), "local", "w-1devstudio")?.slug).toBe("settings-page");
+  });
+
+  it("is on screen while its design screen is shown, which marks it seen", async () => {
+    await given();
+    expect(agentOnScreen("local", 12)).toBe(false);
+    setMode("design");
+    showDesign("local", "w-1devstudio", "settings-page");
+    expect(agentOnScreen("local", 12)).toBe(true);
+    expect(useStore.getState().unread["local:12"]).toBeUndefined();
+    showSystem("local", "w-1devstudio", "moonlet-desktop");
+    expect(agentOnScreen("local", 12)).toBe(false);
+  });
+});
+
+describe("a design's viewport picked in a row (X65)", () => {
+  it("shows and keeps the latest pick, whatever order the saves come back in", async () => {
+    answers["design.list"] = () => [design()];
+    await loadDesigns("local", "w-picks");
+    const pending: (() => void)[] = [];
+    answers["design.viewport"] = () => new Promise<boolean>((r) => pending.push(() => r(true)));
+    const first = saveViewport("local", "w-picks", "settings-page", "390x844");
+    const second = saveViewport("local", "w-picks", "settings-page", "834x1112");
+    await settle();
+    const shown = () => designsOf(useDesign.getState(), "local", "w-picks")?.[0].viewport;
+    expect(shown()).toBe("834x1112");
+    // Each round, the later save comes back first, then the earlier one.
+    for (let i = 0; i < 5; i++) {
+      pending.splice(0).reverse().forEach((done) => done());
+      await settle();
+    }
+    await Promise.all([first, second]);
+    expect(shown()).toBe("834x1112");
+    // The last size the daemon was asked to save is the latest pick.
+    expect(calls.filter((c) => c.method === "design.viewport").at(-1)?.params).toEqual({ workspace: "w-picks", slug: "settings-page", viewport: "834x1112" });
+  });
+
+  it("stays the latest pick when its save fails", async () => {
+    answers["design.list"] = () => [design()];
+    await loadDesigns("local", "w-fails");
+    answers["design.viewport"] = () => {
+      throw new Error("host offline");
+    };
+    await expect(saveViewport("local", "w-fails", "settings-page", "390x844")).rejects.toThrow("host offline");
+    expect(designsOf(useDesign.getState(), "local", "w-fails")?.[0].viewport).toBe("390x844");
   });
 });

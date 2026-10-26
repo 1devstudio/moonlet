@@ -175,6 +175,12 @@ pub struct DesignInfo {
     pub system: String,
     /// The design's folder.
     pub path: String,
+    /// What the user asked for when creating it.
+    #[serde(default)]
+    pub brief: String,
+    /// The viewport last used, `WxH` in px.
+    #[serde(default)]
+    pub viewport: String,
     /// Its pages, `index` first, then by name.
     pub pages: Vec<DesignPage>,
     /// The newest change under `pages/`, in ms; its creation before any page.

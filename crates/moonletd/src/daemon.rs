@@ -166,9 +166,10 @@ async fn blocking<T: Send + 'static>(
 }
 
 /// What the design store's error means to the caller: a design system the
-/// workspace does not have is a bad parameter (X65); anything else failed.
+/// workspace does not have, or a viewport that is none, is a bad parameter
+/// (X65); anything else failed.
 fn store_error(e: anyhow::Error) -> RpcError {
-    if e.is::<moonlet_core::design::designs::NoSystem>() {
+    if e.is::<moonlet_core::design::designs::NoSystem>() || e.is::<moonlet_core::design::designs::BadViewport>() {
         return RpcError::new("invalid_params", e.to_string());
     }
     internal(e)
@@ -1306,6 +1307,11 @@ impl Daemon {
                 let config = blocking(move || store.design_config(&ws, &sl)).await?;
                 let opened = m::DesignOpened { workspace: r.workspace, slug: r.slug, name: config.name, spawned_by: None, session: None };
                 self.terminals.emit(Message::event(m::EV_DESIGN_OPEN, opened));
+                ok(true)
+            }
+            m::DESIGN_VIEWPORT => {
+                let r: m::DesignViewport = params(p)?;
+                blocking(move || store.set_design_viewport(&r.workspace, &r.slug, &r.viewport)).await?;
                 ok(true)
             }
             m::DESIGN_SETTLE => {

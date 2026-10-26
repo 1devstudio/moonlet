@@ -14,7 +14,8 @@ import { ARCHIVE_FOLD_MS, ARCHIVE_MIN_MS, type Archiving, pickLoader } from "./a
 import { archivePrompt, askConfirm, unpushedPrompt } from "./confirm";
 import { archiveFlags, archivePlan, gitSettingsOf, unpushedParams, unpushedView } from "./gitSettings";
 import { goSettings } from "./settingsNavigation";
-import { toggleMode } from "./mode";
+import { setMode, toggleMode } from "./mode";
+import { openNewDesign } from "./designStore";
 
 function current(): { host: string; ws: Session } | null {
   const s = useStore.getState();
@@ -398,9 +399,19 @@ export function copyOutput() {
   else if (message) toast(message);
 }
 
+/** New design… (⇧⌘N in Design mode): New design for the shown workspace,
+ *  in Design mode, where the design it makes shows (X65). */
+function newDesign() {
+  const ws = shownWorkspace(useStore.getState());
+  if (!ws) return;
+  setMode("design");
+  openNewDesign(ws);
+}
+
 /** Handlers of the Run action modal's actions, by id (X19). */
 const RUN: Record<string, () => void> = {
   "new-session": () => useStore.setState({ dialog: { kind: "new-session" } }),
+  "new-design": newDesign,
   "new-ws": () => useStore.setState({ dialog: { kind: "new-workspace" } }),
   "new-section": () => useStore.setState({ dialog: { kind: "new-section" } }),
   "add-project": () => useStore.setState({ dialog: { kind: "add-project" } }),

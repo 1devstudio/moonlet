@@ -41,6 +41,15 @@ export function fileMention(root: string, path: string): string {
   return `@${path.startsWith(prefix) ? path.slice(prefix.length) : path}`;
 }
 
+/** An item as a chat shows it: a message of the user's as `userText` reads
+ *  it (null keeps it), told whether it is the user's first message, such as
+ *  a design's first message as its brief alone (X65); any other item as it
+ *  is. */
+export function itemShown(item: ChatItem, userText: ((text: string, first: boolean) => string | null) | undefined, first: boolean): ChatItem {
+  const text = item.kind === "user" && userText ? userText(item.text, first) : null;
+  return text === null ? item : { ...item, text };
+}
+
 export function mergeItem(items: ChatItem[], item: ChatItem): ChatItem[] {
   const i = items.findIndex((x) => x.id === item.id);
   if (i < 0) return [...items, item];

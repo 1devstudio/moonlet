@@ -13,6 +13,22 @@ use cap_std::fs::{Dir, OpenOptions};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
+#[cfg(test)]
+thread_local! {
+    /// A test's other writer, run once between reading a file and replacing
+    /// it, so a change made in between can be tested deterministically.
+    pub(crate) static BEFORE_REPLACE: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+}
+
+/// Runs the test's other writer, if one is set; nothing outside tests.
+pub(crate) fn before_replace() {
+    #[cfg(test)]
+    if let Some(other) = BEFORE_REPLACE.with(|h| h.borrow_mut().take()) {
+        other();
+    }
+}
+
 /// The folder `root` as a handle all paths are resolved inside.
 fn open_root(root: &Path) -> Result<Dir> {
     Dir::open_ambient_dir(root, ambient_authority())
@@ -38,6 +54,12 @@ pub(crate) fn write_inside(root: &Path, path: &Path, bytes: &[u8]) -> Result<()>
         }
         None => root_dir,
     };
+    replace_in(&dir, name, bytes)
+}
+
+/// Replaces the file `name` in the folder `dir` with `bytes`, through a
+/// temporary file renamed over it within that folder.
+fn replace_in(dir: &Dir, name: &std::ffi::OsStr, bytes: &[u8]) -> Result<()> {
     let tmp = format!(
         ".{}.moonlet-{}-{}",
         name.to_string_lossy(),
@@ -51,10 +73,61 @@ pub(crate) fn write_inside(root: &Path, path: &Path, bytes: &[u8]) -> Result<()>
         f.write_all(bytes)?;
     }
     // A rename replaces the entry at `name`, a link included, never its target.
-    dir.rename(&tmp, &dir, name).inspect_err(|_| {
+    dir.rename(&tmp, dir, name).inspect_err(|_| {
         let _ = dir.remove_file(&tmp);
     })?;
     Ok(())
+}
+
+/// How many times an update reads the file again after another writer
+/// changed it before giving up.
+const UPDATE_TRIES: usize = 8;
+
+/// Rewrites the file `rel` inside `root` with `edit` of its text, which must
+/// leave the rest of the file as it is. Its folder is found from `root`
+/// once, as a handle, and must be a folder, not a link: every read and the
+/// replace go through that handle, so a folder swapped for a link meanwhile
+/// is never followed. When another writer, such as the design's agent,
+/// changed the file after it was read, it is read again and edited from
+/// there, so that writer's change is kept.
+pub(crate) fn update_inside(
+    root: &Path,
+    rel: &Path,
+    mut edit: impl FnMut(&str) -> Result<String>,
+) -> Result<()> {
+    let name = rel.file_name().context("a file needs a name")?;
+    let root_dir = open_root(root)?;
+    let dir = match rel.parent().filter(|p| !p.as_os_str().is_empty()) {
+        Some(parent) => {
+            let meta = root_dir.symlink_metadata(parent).with_context(|| {
+                format!("cannot reach {} in {}", parent.display(), root.display())
+            })?;
+            if !meta.is_dir() {
+                anyhow::bail!("{} in {} is not a folder", parent.display(), root.display());
+            }
+            // Within `root` whatever happens to the path: the handle is the
+            // folder itself.
+            root_dir.open_dir(parent).with_context(|| {
+                format!("cannot open {} in {}", parent.display(), root.display())
+            })?
+        }
+        None => root_dir,
+    };
+    let read = |dir: &Dir| {
+        dir.read_to_string(name)
+            .with_context(|| format!("cannot read {} in {}", rel.display(), root.display()))
+    };
+    for _ in 0..UPDATE_TRIES {
+        let before = read(&dir)?;
+        let after = edit(&before)?;
+        before_replace();
+        // Changed since it was read: start again from the newest text.
+        if read(&dir)? != before {
+            continue;
+        }
+        return replace_in(&dir, name, after.as_bytes());
+    }
+    anyhow::bail!("{} kept changing while it was saved", rel.display())
 }
 
 /// Reads `path`, which must be inside `root`; a link out of it is refused.

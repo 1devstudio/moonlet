@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { DesignSystem } from "./protocol";
-import { designSlug, picksInWorkspace, systemFolder, systemLabel } from "./design";
+import type { Design, DesignSystem } from "./protocol";
+import { briefShown, designAgentState, designOpenAction, designsEmpty, designSubtitle, designRow, designSlug, newDesignReady, newDesignSystem, systemSummary, picksInWorkspace, systemFolder, systemLabel } from "./design";
 
 const NOW = 1_761_200_000_000;
 const DAY = 86_400_000;
@@ -95,5 +95,145 @@ describe("the projects a design system is built from (X64)", () => {
   it("are only the picked ones still in the workspace", () => {
     expect(picksInWorkspace(["p-web", "p-api", "p-gone"], ["p-api", "p-web", "p-docs"])).toEqual(["p-web", "p-api"]);
     expect(picksInWorkspace(["p-gone"], ["p-web"])).toEqual([]);
+  });
+});
+
+const design = (over: Partial<Design>): Design => ({
+  slug: "settings-page",
+  name: "Settings page",
+  kind: "workspace",
+  system: "moonlet-desktop",
+  path: "/Users/alex/.moonlet/design/w1/designs/settings-page",
+  brief: "A left nav",
+  viewport: "1440x900",
+  pages: [{ name: "index", label: null }],
+  updated_at: NOW - 2 * DAY,
+  open_comments: 0,
+  agent: 12,
+  agent_state: "idle",
+  needs_you: null,
+  error: null,
+  ...over,
+});
+
+describe("a design's agent's state (X65)", () => {
+  it("is its chat's live state, else the one design.list gave, and none without an agent", () => {
+    expect(designAgentState(design({ agent_state: "idle" }), "working")).toBe("working");
+    expect(designAgentState(design({ agent_state: "idle" }), undefined)).toBe("idle");
+    expect(designAgentState(design({ agent: null, agent_state: null }), "working")).toBeNull();
+  });
+});
+
+describe("a design's sidebar row (X65)", () => {
+  it("shows its agent's state and its age", () => {
+    expect(designRow(design({}), NOW, "done")).toEqual({ state: "done", text: "2d", tone: "muted", comments: false });
+    expect(designRow(design({ updated_at: NOW - 30_000 }), NOW, "working")).toEqual({ state: "working", text: "now", tone: "muted", comments: false });
+  });
+
+  it("counts its open comments in place of its age", () => {
+    expect(designRow(design({ open_comments: 3 }), NOW, "idle")).toEqual({ state: "idle", text: "3", tone: "muted", comments: true });
+  });
+
+  it("says needs you while its agent asks a question or waits for an approval", () => {
+    expect(designRow(design({ open_comments: 3, needs_you: { kind: "approval", text: "Bash: rm -rf assets" } }), NOW, "blocked")).toEqual({
+      state: "blocked",
+      text: "needs you",
+      tone: "attention",
+      comments: false,
+    });
+  });
+
+  it("has no dot without an agent, and says unreadable when its design.toml could not be read", () => {
+    expect(designRow(design({ agent: null, agent_state: null }), NOW, null)).toEqual({ state: null, text: "2d", tone: "muted", comments: false });
+    expect(designRow(design({ error: "cannot read design.toml" }), NOW, null)).toEqual({ state: null, text: "unreadable", tone: "error", comments: false });
+  });
+});
+
+describe("the New design dialog (X65)", () => {
+  it("says what the picked design system holds, when it was synced and from where", () => {
+    const projects = [{ path: "/Users/alex/Workspace/moonlet", name: "moonlet" }];
+    expect(systemSummary(system({ cards: 11, layouts: 2 }), projects, NOW)).toBe("moonlet desktop: 11 cards, 2 layouts, synced 3 days ago from moonlet");
+    expect(systemSummary(system({ cards: 1, layouts: 0, synced_at: null, sources: ["/Users/alex/Workspace/shop"] }), [], NOW)).toBe("moonlet desktop: 1 card, 0 layouts, not synced yet, from shop");
+    // A system built from no project yet says nothing of where it is from.
+    expect(systemSummary(system({ cards: 0, layouts: 0, synced_at: null, sources: [] }), [], NOW)).toBe("moonlet desktop: 0 cards, 0 layouts, not synced yet");
+  });
+
+  it("creates a design once it has a name, a design system the workspace has and a brief", () => {
+    const systems = ["moonlet-desktop", "storefront"];
+    expect(newDesignReady({ name: "Settings page", system: "storefront", brief: "A left nav" }, systems)).toEqual({ ready: true, why: null });
+    expect(newDesignReady({ name: "  ", system: "storefront", brief: "A left nav" }, systems)).toEqual({ ready: false, why: "Name the design" });
+    expect(newDesignReady({ name: "Settings page", system: "", brief: "A left nav" }, [])).toEqual({ ready: false, why: "A design starts from a design system" });
+    expect(newDesignReady({ name: "Settings page", system: "gone", brief: "A left nav" }, systems)).toEqual({ ready: false, why: "A design starts from a design system" });
+    expect(newDesignReady({ name: "Settings page", system: "storefront", brief: "\n " }, systems)).toEqual({ ready: false, why: "Say what to design: the brief is Claude's first message" });
+  });
+
+  it("picks the shown design system, else the first, also when the list comes after it opened", () => {
+    // Opened with ⇧⌘N before design.systems answered: nothing to pick yet.
+    expect(newDesignSystem("", [], undefined)).toBe("");
+    // Then the list arrives.
+    expect(newDesignSystem("", ["moonlet-desktop", "storefront"], undefined)).toBe("moonlet-desktop");
+    expect(newDesignSystem("", ["moonlet-desktop", "storefront"], "storefront")).toBe("storefront");
+    // The user's pick stays, while the workspace has it.
+    expect(newDesignSystem("storefront", ["moonlet-desktop", "storefront"], "moonlet-desktop")).toBe("storefront");
+    expect(newDesignSystem("gone", ["moonlet-desktop", "storefront"], undefined)).toBe("moonlet-desktop");
+  });
+});
+
+describe("design.open in the app (X65)", () => {
+  const sessions = [{ id: "s1", name: "Fix checkout button" }];
+
+  it("shows the design when the user asked for it", () => {
+    expect(designOpenAction({ workspace: "w1", slug: "settings-page", name: "Settings page" }, sessions)).toEqual({ kind: "show" });
+  });
+
+  it("offers it in a toast, and leaves the focus where it is, when an agent started it", () => {
+    expect(designOpenAction({ workspace: "w1", slug: "settings-page", name: "Settings page", spawned_by: 4, session: "s1" }, sessions)).toEqual({
+      kind: "toast",
+      text: "Fix checkout button started the design Settings page",
+    });
+    expect(designOpenAction({ workspace: "w1", slug: "onboarding", name: "Onboarding", spawned_by: 9 }, sessions)).toEqual({ kind: "toast", text: "An agent started the design Onboarding" });
+  });
+});
+
+describe("the design's chat (X65)", () => {
+  it("shows the first message as the brief alone, since the README and the design rules went with it", () => {
+    const sent = "A left nav and a Git section\n\n---\nThis is the design \"Settings page\" in this folder. Its README.md:\n\n# moonlet desktop";
+    expect(briefShown(sent, "A left nav and a Git section", true)).toBe("A left nav and a Git section");
+    // Any other message shows as it was sent.
+    expect(briefShown("Two more variants", "A left nav and a Git section", true)).toBeNull();
+    expect(briefShown("A left nav and a Git section", "A left nav and a Git section", true)).toBeNull();
+    expect(briefShown("anything", "", true)).toBeNull();
+  });
+
+  it("keeps a later message that starts with the brief, or a first one not as the daemon sends it, whole", () => {
+    const sent = "A left nav and a Git section\n\n---\nThis is the design \"Settings page\" in this folder. Its README.md:\n\n# moonlet desktop";
+    expect(briefShown(sent, "A left nav and a Git section", false)).toBeNull();
+    expect(briefShown("A left nav and a Git section, and a search field", "A left nav and a Git section", true)).toBeNull();
+    expect(briefShown("A left nav and a Git section\n\n---\nmy own notes", "A left nav and a Git section", true)).toBeNull();
+  });
+
+  it("shows the first message whole when an older daemon's design.list gives no brief", () => {
+    const sent = "A left nav and a Git section\n\n---\nThis is the design \"Settings page\" in this folder. Its README.md:\n\n# moonlet desktop";
+    expect(briefShown(sent, undefined, true)).toBeNull();
+  });
+});
+
+describe("the design screen's header (X65)", () => {
+  it("names the design system and counts the pages, or says there are none yet", () => {
+    expect(designSubtitle("moonlet desktop", 3)).toBe("moonlet desktop · 3 pages");
+    expect(designSubtitle("moonlet desktop", 1)).toBe("moonlet desktop · 1 page");
+    expect(designSubtitle("moonlet desktop", 0)).toBe("moonlet desktop · no pages yet");
+  });
+});
+
+describe("the sidebar's Designs when it has none (X65)", () => {
+  it("says a design starts from a design system, or that there are no designs yet, once listed", () => {
+    expect(designsEmpty([], [])).toBe("A design starts from a design system.");
+    expect(designsEmpty(undefined, [])).toBe("A design starts from a design system.");
+    expect(designsEmpty([], [system({})])).toBe("No designs yet.");
+    expect(designsEmpty([design({})], [system({})])).toBeNull();
+    // Nothing before either is listed.
+    expect(designsEmpty(undefined, undefined)).toBeNull();
+    expect(designsEmpty(undefined, [system({})])).toBeNull();
   });
 });

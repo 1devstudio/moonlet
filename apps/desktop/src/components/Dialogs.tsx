@@ -14,6 +14,7 @@ import { githubRepo } from "../lib/tasks";
 import { rulesFor, trackersConfig, useTasks } from "../lib/tasksStore";
 import { NewWorkspaceDialog } from "./WorkspaceDialogs";
 import { NewDesignSystemDialog } from "./design/DesignMode";
+import { NewDesignDialog } from "./design/NewDesignDialog";
 import { LinkTaskDialog } from "./tasks/SessionTask";
 
 const close = () => useStore.setState({ dialog: null });
@@ -211,6 +212,8 @@ export function Dialogs() {
       return <CreatePrDialog />;
     case "new-design-system":
       return <NewDesignSystemDialog host={dialog.host} workspace={dialog.workspace} />;
+    case "new-design":
+      return <NewDesignDialog host={dialog.host} workspace={dialog.workspace} />;
     case "sync-compare":
       return <SyncCompare host={dialog.host} session={dialog.session} path={dialog.path} />;
     case "job-compare":
