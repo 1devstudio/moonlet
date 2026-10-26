@@ -328,13 +328,12 @@ fn rotate(at: &DesignAt, keep: usize) -> Result<()> {
 
 /// The pages among a snapshot's files (`pages/<page>.html`), `index` first,
 /// then by name.
-fn page_names<'a>(paths: impl Iterator<Item = &'a String>) -> Vec<String> {
+pub(super) fn page_names<'a>(paths: impl Iterator<Item = &'a String>) -> Vec<String> {
     let mut pages: Vec<String> = paths
-        .filter_map(|p| p.strip_prefix("pages/")?.strip_suffix(".html"))
-        .filter(|p| super::pages::is_page_name(p))
+        .filter_map(|p| super::pages::page_of(p))
         .map(String::from)
         .collect();
-    pages.sort_by(|a, b| (a != "index", a).cmp(&(b != "index", b)));
+    super::pages::sort_pages(&mut pages);
     pages
 }
 

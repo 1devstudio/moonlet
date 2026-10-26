@@ -102,18 +102,6 @@ async fn blob(repo: &Path, id: &str) -> Result<Vec<u8>> {
     git::git(repo, &["cat-file", "blob", id]).await
 }
 
-/// The pages among a design's files, `index` first, then by name.
-fn page_names(files: &BTreeMap<String, String>) -> Vec<String> {
-    let mut pages: Vec<String> = files
-        .keys()
-        .filter_map(|p| p.strip_prefix("pages/")?.strip_suffix(".html"))
-        .filter(|p| super::pages::is_page_name(p))
-        .map(String::from)
-        .collect();
-    pages.sort_by(|a, b| (a != "index", a).cmp(&(b != "index", b)));
-    pages
-}
-
 /// The project `project`'s designs on its base branch `base`, in its
 /// design folder `dir`, read from git's objects (X65). One whose
 /// `design.toml` cannot be read lists with its error.
@@ -130,7 +118,7 @@ pub async fn project_designs(
             toml::from_str::<DesignConfig>(&String::from_utf8_lossy(&bytes))
                 .with_context(|| format!("cannot read {DESIGN_FILE}"))
         });
-        let pages = page_names(&design.files);
+        let pages = super::history::page_names(design.files.keys());
         let (name, system, brief, viewport, labels, error) = match config {
             Ok(c) => (c.name, c.system, c.brief, c.viewport, c.pages, None),
             Err(e) => (
@@ -202,11 +190,7 @@ pub async fn read_project_design(repo: &Path, base: &str, path: &str) -> Result<
     .with_context(|| format!("cannot read {DESIGN_FILE}"))?;
     let mut files = BTreeMap::new();
     for (rel, id) in &found.files {
-        let page = rel
-            .strip_prefix("pages/")
-            .and_then(|p| p.strip_suffix(".html"))
-            .is_some_and(super::pages::is_page_name);
-        if page || rel.starts_with("assets/") {
+        if super::pages::page_of(rel).is_some() || rel.starts_with("assets/") {
             files.insert(rel.clone(), blob(repo, id).await?);
         }
     }
@@ -230,18 +214,17 @@ impl Store {
         let made = (|| -> Result<()> {
             let at = self.workspace_design(workspace, &slug)?;
             let link = super::designs::styles_link(&at, system);
-            let mut pages = BTreeMap::new();
             let mut assets = BTreeMap::new();
             for (rel, bytes) in &from.files {
-                if let Some(page) = rel.strip_prefix("pages/") {
+                if let Some(page) = super::pages::page_of(rel) {
                     let text = String::from_utf8_lossy(bytes)
                         .replace(super::designs::SESSION_STYLES, &link);
-                    pages.insert(page.to_string(), text.into_bytes());
+                    let path = at.root.join(at.in_dir(super::pages::page_path(page)?));
+                    super::fsx::write_inside(&at.root, &path, text.as_bytes())?;
                 } else if let Some(asset) = rel.strip_prefix("assets/") {
                     assets.insert(asset.to_string(), bytes.clone());
                 }
             }
-            super::fsx::write_tree(&at.root, &at.dir, Path::new("pages"), &pages, false)?;
             super::fsx::write_tree(&at.root, &at.dir, Path::new("assets"), &assets, false)?;
             super::fsx::update_inside(&at.root, &at.in_dir(DESIGN_FILE), |text| {
                 let mut config: DesignConfig = toml::from_str(text)?;
