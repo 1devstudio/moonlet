@@ -2,7 +2,7 @@
   "name": "@moonlet/desktop",
   "private": true,
   "license": "MIT OR Apache-2.0",
-  "version": "0.1.31",
+  "version": "0.1.32",
   "type": "module",
   "scripts": {
     "dev": "vite",
