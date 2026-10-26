@@ -857,19 +857,19 @@ export async function startDesign() {
       if (systemListing.wanted.has(wsKey(e.host, d.workspace))) reload(e.host, d.workspace);
       if (d.system) {
         const key = itemKey(e.host, d.workspace, d.system);
-        // Its cards are listed again when asked for (a newer request always
-        // lands last).
-        // Its cards load again only for what they load (X64).
-        const reload = cardsReloaded(d.paths);
+        // Its cards load again only for what they show (X64).
+        const toLoad = cardsReloaded(d);
         useDesign.setState((s) => {
           const revs = s.cardRevs[key] ?? { all: 0, cards: {} };
           const cards = { ...revs.cards };
-          for (const path of reload.cards) cards[path] = (cards[path] ?? 0) + 1;
+          for (const path of toLoad.cards) cards[path] = (cards[path] ?? 0) + 1;
           return {
             changes: { ...s.changes, [key]: (s.changes[key] ?? 0) + 1 },
-            cardRevs: reload.all || reload.cards.length ? { ...s.cardRevs, [key]: { all: revs.all + (reload.all ? 1 : 0), cards } } : s.cardRevs,
+            cardRevs: toLoad.all || toLoad.cards.length ? { ...s.cardRevs, [key]: { all: revs.all + (toLoad.all ? 1 : 0), cards } } : s.cardRevs,
           };
         });
+        // Its cards are listed again when asked for (a newer request always
+        // lands last).
         if (cardListing.wanted.has(key)) void loadCards(e.host, d.workspace, d.system).catch(() => {});
         // A session design on it may now be pinned to an older sync (X65).
         if (designListing.wanted.has(wsKey(e.host, d.workspace))) reloadDesigns(e.host, d.workspace);

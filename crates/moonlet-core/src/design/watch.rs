@@ -16,6 +16,10 @@ pub struct Change {
     /// Relative to the system's or the design's folder (or the
     /// workspace's), sorted, each once.
     pub paths: Vec<String>,
+    /// The system's or the design's folder itself changed: made, removed,
+    /// or reported whole. Told apart from a change to its record alone,
+    /// which has no paths either.
+    pub whole: bool,
 }
 
 /// Groups changed paths under `root` (`~/.moonlet/design`), by design system
@@ -24,7 +28,7 @@ pub struct Change {
 /// moonlet's own temporary files are left out.
 pub fn group(root: &Path, paths: &[PathBuf]) -> Vec<Change> {
     use std::collections::{BTreeMap, BTreeSet};
-    let mut by: BTreeMap<(String, Option<String>, Option<String>), BTreeSet<String>> =
+    let mut by: BTreeMap<(String, Option<String>, Option<String>), (BTreeSet<String>, bool)> =
         BTreeMap::new();
     for p in paths {
         let Ok(rel) = p.strip_prefix(root) else {
@@ -61,17 +65,21 @@ pub fn group(root: &Path, paths: &[PathBuf]) -> Vec<Change> {
             ),
             _ => (None, None, rest.join("/")),
         };
-        let paths = by.entry((workspace.clone(), system, design)).or_default();
+        // The folder itself, not its record (`.records/`).
+        let whole = path.is_empty() && rest.first().is_some_and(|k| k != ".records");
+        let (paths, folder) = by.entry((workspace.clone(), system, design)).or_default();
+        *folder |= whole;
         if !path.is_empty() {
             paths.insert(path);
         }
     }
     by.into_iter()
-        .map(|((workspace, system, design), paths)| Change {
+        .map(|((workspace, system, design), (paths, whole))| Change {
             workspace,
             system,
             design,
             paths: paths.into_iter().collect(),
+            whole,
         })
         .collect()
 }
@@ -363,6 +371,7 @@ mod tests {
         .map(|p| root.join(p))
         .collect();
         let change = |w: &str, s: Option<&str>, p: &[&str]| Change {
+            whole: false,
             workspace: w.into(),
             system: s.map(String::from),
             design: None,
@@ -381,6 +390,7 @@ mod tests {
                     ]
                 ),
                 Change {
+                    whole: false,
                     workspace: "w2".into(),
                     system: None,
                     design: Some("settings-page".into()),
@@ -404,7 +414,8 @@ mod tests {
         .iter()
         .map(|p| root.join(p))
         .collect();
-        let design = |d: &str, p: &[&str]| Change {
+        let design = |d: &str, p: &[&str], whole: bool| Change {
+            whole,
             workspace: "w1".into(),
             system: None,
             design: Some(d.into()),
@@ -413,10 +424,12 @@ mod tests {
         assert_eq!(
             group(root, &paths),
             vec![
-                design("onboarding", &[]),
-                design("settings-page", &["design.toml", "pages/git-a.html"]),
+                // Its folder made, with its record.
+                design("onboarding", &[], true),
+                design("settings-page", &["design.toml", "pages/git-a.html"], false),
                 // A system and a design of one name stay apart.
                 Change {
+                    whole: false,
                     workspace: "w1".into(),
                     system: Some("settings-page".into()),
                     design: None,
@@ -441,12 +454,28 @@ mod tests {
         assert_eq!(
             group(root, &paths),
             vec![Change {
+                whole: true,
                 workspace: "w1".into(),
                 system: Some("pricing".into()),
                 design: None,
                 paths: vec!["my.moonlet-notes.md".into()]
             }]
         );
+    }
+
+    #[test]
+    fn a_system_folder_changed_whole_is_told_apart_from_its_record_alone() {
+        let root = Path::new("/d");
+        let group_of = |p: &str| group(root, &[root.join(p)]);
+        let change = |whole: bool| Change {
+            whole,
+            workspace: "w1".into(),
+            system: Some("pricing".into()),
+            design: None,
+            paths: vec![],
+        };
+        assert_eq!(group_of("w1/systems/pricing"), vec![change(true)]);
+        assert_eq!(group_of("w1/.records/pricing.toml"), vec![change(false)]);
     }
 
     #[test]

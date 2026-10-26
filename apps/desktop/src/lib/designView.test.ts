@@ -298,21 +298,25 @@ describe("the cards a change in their design system loads again (X64)", () => {
       "conventions.md",
       "guidelines/layout.md",
     ];
-    expect(cardsReloaded(paths)).toEqual({ all: false, cards: [] });
-    expect(cardsReloaded([])).toEqual({ all: false, cards: [] });
+    expect(cardsReloaded({ paths })).toEqual({ all: false, cards: [] });
+    // Its record alone changed.
+    expect(cardsReloaded({ paths: [] })).toEqual({ all: false, cards: [] });
   });
 
   it("are the cards whose page changed, alone", () => {
-    expect(cardsReloaded(["components/buttons/button/button.html", "NOTES.md", "ui_kits/session/session.html"])).toEqual({
+    expect(cardsReloaded({ paths: ["components/buttons/button/button.html", "NOTES.md", "ui_kits/session/session.html"] })).toEqual({
       all: false,
       cards: ["components/buttons/button/button.html", "ui_kits/session/session.html"],
     });
   });
 
-  it("are all of them for a change to what every card loads: a stylesheet, a font, an image, or a folder", () => {
-    expect(cardsReloaded(["tokens/tokens.css", "NOTES.md"])).toEqual({ all: true, cards: [] });
-    expect(cardsReloaded(["components/buttons/button/button.css"])).toEqual({ all: true, cards: [] });
-    expect(cardsReloaded(["fonts/inter-latin-400-normal.woff2"])).toEqual({ all: true, cards: [] });
-    expect(cardsReloaded(["components/forms/field"])).toEqual({ all: true, cards: [] });
+  it("are all of them for a change to what every card loads: a stylesheet, a font, an image, a folder, or the system's folder itself", () => {
+    expect(cardsReloaded({ paths: ["tokens/tokens.css", "NOTES.md"] })).toEqual({ all: true, cards: [] });
+    expect(cardsReloaded({ paths: ["components/buttons/button/button.css"] })).toEqual({ all: true, cards: [] });
+    expect(cardsReloaded({ paths: ["fonts/inter-latin-400-normal.woff2"] })).toEqual({ all: true, cards: [] });
+    expect(cardsReloaded({ paths: ["components/forms/field"] })).toEqual({ all: true, cards: [] });
+    // Its folder itself: made again, removed, or reported whole.
+    expect(cardsReloaded({ paths: [], whole: true })).toEqual({ all: true, cards: [] });
+    expect(cardsReloaded({ paths: ["NOTES.md"], whole: true })).toEqual({ all: true, cards: [] });
   });
 });

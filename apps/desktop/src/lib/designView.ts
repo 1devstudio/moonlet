@@ -45,14 +45,15 @@ export function visibleCards(cards: DesignCard[], f: CardFilters): { cards: Desi
 /** The cards a change in their design system loads again (`paths`, as
  *  `design.changed` names them, relative to the system's folder): a card
  *  whose page changed, alone; all of them for anything a card may load (a
- *  stylesheet, a font, an image) or a folder; none for what is never
- *  loaded, such as the sync's notes, grades, records and screenshots, so
- *  the cards stay as they are while its agent writes those. */
-export function cardsReloaded(paths: string[]): { all: boolean; cards: string[] } {
+ *  stylesheet, a font, an image), a folder, or the system's folder itself
+ *  (`whole`); none for what is never loaded, such as the sync's notes,
+ *  grades, records, screenshots and settings, so the cards stay as they
+ *  are while its agent writes those. */
+export function cardsReloaded(change: { paths: string[]; whole?: boolean }): { all: boolean; cards: string[] } {
   const unread = (p: string) => p.split("/").some((part) => part.startsWith(".")) || /\.(md|json|toml)$/.test(p);
-  const read = paths.filter((p) => !unread(p));
+  const read = change.paths.filter((p) => !unread(p));
   const pages = read.filter((p) => p.endsWith(".html"));
-  return pages.length < read.length ? { all: true, cards: [] } : { all: false, cards: pages };
+  return change.whole || pages.length < read.length ? { all: true, cards: [] } : { all: false, cards: pages };
 }
 
 const base = (path: string) => path.split("/").filter(Boolean).pop() ?? path;

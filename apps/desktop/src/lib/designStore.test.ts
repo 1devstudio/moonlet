@@ -3,6 +3,7 @@ import type { Design, DesignComment, DesignSystem, TerminalInfo } from "./protoc
 import { modeOf, setMode } from "./mode";
 import { agentOnScreen, goToAgent, useStore } from "./store";
 import { designCanvasKey, pageKey, pageOfKey, commentsOf, historyOf, keepComment, loadComments, loadHistory, sendComments, sendingOf, resolveComment, sessionDesignsOf, shownSessionDesign, showSessionDesign, unseenOf, updateSystem, justOpened, tookOpened, pickDesignTab, kitRevOf, builtRevOf } from "./designStore";
+import { cardUrl } from "./designView";
 import { pageRevReader, startFromProjectDesign } from "./designStore";
 import { cardRevOf, cardsOf, checkDesign, createFromNewDesign, createSystem, designsOf, detectStack, latestOf, loadCards, loadDesigns, loadSystems, openCard, saveViewport, pageRevOf, problemsOf, shownCard, shownDesign, shownSystem, showDesign, showSystem, startDesign, systemNameOf, systemsOf, useDesign } from "./designStore";
 
@@ -222,20 +223,23 @@ describe("a design system's cards (X64)", () => {
     expect(cardsOf(useDesign.getState(), "local", "w-1devstudio", "moonlet-desktop")?.map((c) => c.name)).toEqual(["Button", "Icon button"]);
   });
 
-  it("are rendered again after a change to what they load, each after a change to its own page, and never for the sync's notes", () => {
+  it("are rendered again after a change to what they load, each after a change to its own page, and never for the sync's notes or its record", () => {
     const [button, kbd] = ["components/buttons/button/button.html", "components/buttons/kbd/kbd.html"];
-    const revs = () => [button, kbd].map((path) => cardRevOf(useDesign.getState(), "local", "w-1devstudio", "moonlet-desktop", path));
-    const change = (system: string, paths: string[]) => events.emit({ host: "local", name: "design.changed", data: { workspace: "w-1devstudio", system, paths } });
-    expect(revs()).toEqual([0, 0]);
-    change("moonlet-desktop", ["components.css"]);
-    change("storefront", ["components.css"]);
-    expect(revs()).toEqual([1, 1]);
-    change("moonlet-desktop", [button]);
-    expect(revs()).toEqual([2, 1]);
-    change("moonlet-desktop", ["NOTES.md", ".cache/grades/Button.json", "_ds_sync.json"]);
-    expect(revs()).toEqual([2, 1]);
-    change("moonlet-desktop", ["tokens/tokens.css"]);
-    expect(revs()).toEqual([3, 2]);
+    const urls = () => [button, kbd].map((path) => cardUrl("w-1devstudio", "moonlet-desktop", path, cardRevOf(useDesign.getState(), "local", "w-1devstudio", "moonlet-desktop", path)));
+    /** Which of the two cards a change gives a new address, so its frame loads again. */
+    const reloads = (system: string, paths: string[], whole?: boolean) => {
+      const before = urls();
+      events.emit({ host: "local", name: "design.changed", data: { workspace: "w-1devstudio", system, paths, whole } });
+      return urls().map((url, i) => url !== before[i]);
+    };
+    expect(reloads("moonlet-desktop", ["components.css"])).toEqual([true, true]);
+    expect(reloads("storefront", ["components.css"])).toEqual([false, false]);
+    expect(reloads("moonlet-desktop", [button])).toEqual([true, false]);
+    expect(reloads("moonlet-desktop", ["NOTES.md", ".cache/grades/Button.json", "_ds_sync.json"])).toEqual([false, false]);
+    expect(reloads("moonlet-desktop", ["tokens/tokens.css"])).toEqual([true, true]);
+    // Its record alone, then its folder made again.
+    expect(reloads("moonlet-desktop", [])).toEqual([false, false]);
+    expect(reloads("moonlet-desktop", [], true)).toEqual([true, true]);
   });
 });
 
