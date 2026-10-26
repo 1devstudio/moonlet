@@ -214,10 +214,15 @@ export interface ShortcutRow {
   keys: string;
   /** The user changed or cleared the default (not: another action took it). */
   custom: boolean;
+  /** Where the key works, when that is one mode only: "in Design mode". */
+  mode?: string;
 }
 
+const MODE_NAME: Record<AppMode, string> = { sessions: "Sessions", tasks: "Tasks", design: "Design" };
+
 /** Settings › Keyboard shortcuts (X43): every action by group, in catalogue
- * order, matching `q` in its name or its key. Empty groups are left out. */
+ * order, matching `q` in its name or its key. Empty groups are left out. A
+ * key that works in one mode only says so, as New design's ⇧⌘N (X65). */
 export function shortcutGroups(custom: Shortcuts | undefined, q: string): { name: string; rows: ShortcutRow[] }[] {
   const keys = effectiveKeys(custom);
   const query = q.trim().toLowerCase();
@@ -227,7 +232,13 @@ export function shortcutGroups(custom: Shortcuts | undefined, q: string): { name
     if (query && !a.label.toLowerCase().includes(query) && !shown.toLowerCase().includes(query)) continue;
     let g = groups.find((x) => x.name === a.group);
     if (!g) groups.push((g = { name: a.group, rows: [] }));
-    g.rows.push({ id: a.id, label: a.label, keys: shown, custom: custom?.[a.id] !== undefined && custom[a.id] !== a.keys });
+    g.rows.push({
+      id: a.id,
+      label: a.label,
+      keys: shown,
+      custom: custom?.[a.id] !== undefined && custom[a.id] !== a.keys,
+      ...(shown && a.keyMode ? { mode: `in ${MODE_NAME[a.keyMode]} mode` } : {}),
+    });
   }
   return groups;
 }
