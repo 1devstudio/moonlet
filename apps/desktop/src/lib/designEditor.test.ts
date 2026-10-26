@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { askWithEdits, closeDesign, copyElementOf, hasCopy, dismissUnsaved, editPage, pasteInto, sendCommentsWithEdits, sendWithEdits, redoEdit, undoEdit, loadPageSource, pendingOf, resetEditor, startEditor, settleChecks, settleSaves, sourceOf, undoOf, unsavedOf, useEditor } from "./designEditor";
+import { askWithEdits, kitOf, loadKit, closeDesign, copyElementOf, hasCopy, dismissUnsaved, editPage, pasteInto, sendCommentsWithEdits, sendWithEdits, redoEdit, undoEdit, loadPageSource, pendingOf, resetEditor, startEditor, settleChecks, settleSaves, sourceOf, undoOf, unsavedOf, useEditor } from "./designEditor";
 import { loadDesigns, pageRevOf, startDesign, useDesign } from "./designStore";
 import { editLines } from "./designEdits";
 import { useStore } from "./store";
@@ -368,3 +368,43 @@ describe("a page's source read twice (X65)", () => {
   });
 });
 
+
+describe("a design's kit (X65)", () => {
+  it("is read with design.kit for the design, the latest read's, whatever order the answers come back in", async () => {
+    const kit = (value: string) => ({ system: "moonlet-desktop", tokens: [{ name: "--space-4", value, family: "spacing" }], cards: [] });
+    let first = (_: unknown) => {};
+    answers["design.kit"] = () => new Promise((r) => (first = r));
+    const slow = loadKit("local", WS, SLUG);
+    await new Promise((r) => setTimeout(r, 0));
+    answers["design.kit"] = () => kit("18px");
+    await loadKit("local", WS, SLUG);
+    first(kit("16px"));
+    await slow;
+    expect(kitOf(useEditor.getState(), "local", WS, SLUG)?.tokens).toEqual([{ name: "--space-4", value: "18px", family: "spacing" }]);
+    expect(calls.filter((c) => c.method === "design.kit").map((c) => c.params)).toEqual([
+      { workspace: WS, slug: SLUG },
+      { workspace: WS, slug: SLUG },
+    ]);
+  });
+});
+
+describe("a style, a move and a snippet edited by hand (X65)", () => {
+  it("are saved as the page's new source, go with the next message, and undo as any edit", async () => {
+    await loadPageSource("local", WS, SLUG, "index");
+    editPage("local", WS, SLUG, "index", { kind: "restyle", mid: "m25", set: { padding: "var(--space-4)" } }, "m25");
+    editPage("local", WS, SLUG, "index", { kind: "move", mid: "m30", place: { where: "above", ref: "m25" } }, "m30");
+    editPage("local", WS, SLUG, "index", { kind: "insert", place: { where: "below", ref: "m30" }, html: '<button class="btn">Save</button>' }, "m30");
+    await settleSaves();
+    expect(disk.index.html).toBe('<!doctype html>\n<body data-mid="m1">\n  <p data-mid="m30">Branch prefix</p>\n  <button data-mid="m31" class="btn">Save</button>\n  <h2 data-mid="m25" style="padding: var(--space-4)">Git</h2>\n</body>\n');
+    expect(editLines(pendingOf(useEditor.getState(), "local", WS, SLUG))).toEqual([
+      "index.html m25 h2: restyled with padding: var(--space-4)",
+      "index.html m30 p: moved above m25",
+      "index.html m31 button: inserted after m30",
+    ]);
+    await undoEdit("local", WS, SLUG);
+    await undoEdit("local", WS, SLUG);
+    await undoEdit("local", WS, SLUG);
+    await settleSaves();
+    expect(disk.index.html).toBe(PAGE);
+  });
+});

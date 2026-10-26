@@ -1351,6 +1351,10 @@ impl Daemon {
                 let version = blocking(move || store.write_page(&r.workspace, &r.slug, &r.page, &r.html, &r.base_version)).await?;
                 ok(m::DesignPageWritten { version })
             }
+            m::DESIGN_KIT => {
+                let r: m::DesignRef = params(p)?;
+                ok(blocking(move || store.design_kit(&r.workspace, &r.slug)).await?)
+            }
             m::DESIGN_SETTLE => {
                 let r: m::DesignSettle = params(p)?;
                 let choice: Settle = serde_json::from_value(Value::String(r.choice.clone()))

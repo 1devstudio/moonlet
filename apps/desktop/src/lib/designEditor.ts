@@ -10,7 +10,7 @@ import { itemKey, pageKey, registerPageOwner, reloadPage, sendComments } from ".
 import { latestSends } from "./latestSend";
 import { errorToast } from "./store";
 import { latestPerKey } from "./prPoll";
-import { M, type DesignComment, type DesignPageText, type DesignPageWritten } from "./protocol";
+import { M, type DesignComment, type DesignKit, type DesignPageText, type DesignPageWritten } from "./protocol";
 import type { ChatImage } from "./attachments";
 import { applyEdit, copyElement, EditRefused, editLine, editsMessage, highestMid, type Edit, type EditOp } from "./designEdits";
 import { NO_UNDO, dropPage, pendingAfter, pushStep, redoStep, undoStep, type Pending, type Step, type Undo } from "./designUndo";
@@ -26,9 +26,11 @@ interface EditorState {
   /** The edit by hand a save lost to a change on disk, per design, as its
    *  line says it; null once dismissed. */
   unsaved: Record<string, string | null>;
+  /** Each design's kit: its design system's tokens and snippet cards. */
+  kits: Record<string, DesignKit>;
 }
 
-const EMPTY: EditorState = { sources: {}, undo: {}, pending: {}, unsaved: {} };
+const EMPTY: EditorState = { sources: {}, undo: {}, pending: {}, unsaved: {}, kits: {} };
 
 export const useEditor = create<EditorState>(() => EMPTY);
 
@@ -330,6 +332,24 @@ export async function settleChecks(): Promise<void> {
 /** Waits for every save on its way. */
 export function settleSaves(): Promise<void> {
   return saves.settle();
+}
+
+/** The latest read of each design's kit. */
+const kitReads = latestPerKey();
+
+/** Reads what the Inspector and the Palette build a design with from its
+ *  own design system (`design.kit`); an older read coming back after a
+ *  newer one is dropped. */
+export async function loadKit(host: string, workspace: string, slug: string): Promise<void> {
+  const design = itemKey(host, workspace, slug);
+  const latest = kitReads.start(design);
+  const kit = await rpc<DesignKit>(host, M.designKit, { workspace, slug });
+  if (latest()) useEditor.setState((s) => ({ kits: { ...s.kits, [design]: kit } }));
+}
+
+/** A design's kit; undefined until read. */
+export function kitOf(s: EditorState, host: string, workspace: string, slug: string): DesignKit | undefined {
+  return s.kits[itemKey(host, workspace, slug)];
 }
 
 /** The changes of a design that can be undone and redone. */

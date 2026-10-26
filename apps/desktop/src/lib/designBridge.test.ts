@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { JSDOM, type DOMWindow } from "jsdom";
-import { PAGE_KEYS, bridgeMessage, editMessage, helloMessage, modeMessage, pinsMessage, scrollMessage, selectMessage } from "./designBridge";
+import { COMPUTED_PROPS, PAGE_KEYS, bridgeMessage, editMessage, helloMessage, modeMessage, paletteMessage, pinsMessage, scrollMessage, selectMessage } from "./designBridge";
 import bridge from "../../src-tauri/src/design_bridge.js?raw";
+import { HOLDS_NO_ELEMENTS } from "./designEdits";
+import { BORDER_STYLES } from "./designStyle";
+import { inspectorSections } from "./designInspector";
 
 describe("the bridge's messages (X65)", () => {
   it("takes a pick with its element's data-mid, tag, text and box", () => {
@@ -84,7 +87,7 @@ describe("the bridge's messages (X65)", () => {
 
   it("tells the page an edit to make on its live page", () => {
     expect(editMessage({ op: "remove", mid: "m33" })).toEqual({ type: "bridge.edit", op: "remove", mid: "m33" });
-    expect(editMessage({ op: "insert", after: "m30", html: '<div data-mid="m41">Copy</div>' })).toEqual({ type: "bridge.edit", op: "insert", after: "m30", html: '<div data-mid="m41">Copy</div>' });
+    expect(editMessage({ op: "insert", place: { where: "below", ref: "m30" }, html: '<div data-mid="m41">Copy</div>' })).toEqual({ type: "bridge.edit", op: "insert", place: { where: "below", ref: "m30" }, html: '<div data-mid="m41">Copy</div>' });
     expect(editMessage({ op: "wrap", mid: "m25", box: "m41" })).toEqual({ type: "bridge.edit", op: "wrap", mid: "m25", box: "m41" });
     expect(editMessage({ op: "unwrap", mid: "m30" })).toEqual({ type: "bridge.edit", op: "unwrap", mid: "m30" });
   });
@@ -100,6 +103,41 @@ describe("the bridge's messages (X65)", () => {
     expect(bridgeMessage({ type: "bridge.scroll", x: 0, y: 1240.5 })).toEqual({ type: "scroll", x: 0, y: 1240.5 });
     expect(bridgeMessage({ type: "bridge.scroll", x: 0, y: NaN })).toBeNull();
     expect(scrollMessage(0, 1240.5)).toEqual({ type: "bridge.scrollTo", x: 0, y: 1240.5 });
+  });
+
+  it("takes the selection's computed style, only the Inspector's properties, and tells the page an off-system selection", () => {
+    expect(bridgeMessage({ type: "bridge.computed", mid: "m24", style: { display: "flex", "flex-direction": "column", padding: "14px 24px", "background-color": "rgb(22, 22, 22)", behavior: "url(x.htc)", opacity: 7 } })).toEqual({
+      type: "computed",
+      mid: "m24",
+      style: { display: "flex", "flex-direction": "column", padding: "14px 24px", "background-color": "rgb(22, 22, 22)" },
+    });
+    expect(bridgeMessage({ type: "bridge.computed", mid: "m24", style: { padding: "x".repeat(201) } })).toEqual({ type: "computed", mid: "m24", style: {} });
+    expect(bridgeMessage({ type: "bridge.computed", mid: "m24]", style: {} })).toBeNull();
+    expect(selectMessage("m24", true)).toEqual({ type: "bridge.select", mid: "m24", off: true });
+  });
+
+  it("takes where a drag would drop and the move on drop, the size or place a handle or a drag gives in px, and a snippet's drop", () => {
+    const place = { where: "above", ref: "m22" };
+    expect(bridgeMessage({ type: "bridge.drag", mid: "m24", place })).toEqual({ type: "drag", mid: "m24", place });
+    expect(bridgeMessage({ type: "bridge.drag", mid: null, place: null })).toEqual({ type: "drag", mid: null, place: null });
+    expect(bridgeMessage({ type: "bridge.move", mid: "m24", place: { where: "into", ref: "m30" } })).toEqual({ type: "move", mid: "m24", place: { where: "into", ref: "m30" } });
+    expect(bridgeMessage({ type: "bridge.move", mid: "m24", place: { where: "inside", ref: "m30" } })).toBeNull();
+    expect(bridgeMessage({ type: "bridge.move", mid: "m24", place: { where: "above", ref: 'm2"' } })).toBeNull();
+    expect(bridgeMessage({ type: "bridge.move", mid: "m24", place: null })).toBeNull();
+    expect(bridgeMessage({ type: "bridge.style", mid: "m24", set: { width: "320px", height: "180.5px" } })).toEqual({ type: "style", mid: "m24", set: { width: "320px", height: "180.5px" } });
+    expect(bridgeMessage({ type: "bridge.style", mid: "m24", set: { left: "-12px", top: "40px" } })).toEqual({ type: "style", mid: "m24", set: { left: "-12px", top: "40px" } });
+    expect(bridgeMessage({ type: "bridge.style", mid: "m24", set: { width: "320px; color: red" } })).toBeNull();
+    expect(bridgeMessage({ type: "bridge.style", mid: "m24", set: { color: "red" } })).toBeNull();
+    expect(bridgeMessage({ type: "bridge.style", mid: "m24", set: {} })).toBeNull();
+    expect(bridgeMessage({ type: "bridge.drop", place })).toEqual({ type: "drop", place });
+    expect(bridgeMessage({ type: "bridge.drop", place: null })).toEqual({ type: "drop", place: null });
+    expect(paletteMessage(true)).toEqual({ type: "bridge.palette", dragging: true });
+  });
+
+  it("tells the page the new edits to make on its live page: a style, a move, and an insert above or into an element", () => {
+    expect(editMessage({ op: "style", mid: "m24", style: "padding: var(--space-4)" })).toEqual({ type: "bridge.edit", op: "style", mid: "m24", style: "padding: var(--space-4)" });
+    expect(editMessage({ op: "move", mid: "m24", place: { where: "above", ref: "m22" } })).toEqual({ type: "bridge.edit", op: "move", mid: "m24", place: { where: "above", ref: "m22" } });
+    expect(editMessage({ op: "insert", place: { where: "into", ref: "m22" }, html: '<hr data-mid="m41">' })).toEqual({ type: "bridge.edit", op: "insert", place: { where: "into", ref: "m22" }, html: '<hr data-mid="m41">' });
   });
 
   it("drops a message of an unknown type, or that is not an object", () => {
@@ -327,7 +365,7 @@ describe("the bridge script in a page (X65)", () => {
     const { doc, tell, of } = framed('<section data-mid="m24"><h2 data-mid="m25">Git</h2><div data-mid="m30"><span data-mid="m31">Prefix</span></div></section>');
     await vi.waitFor(() => expect(of("tree")).toHaveLength(1));
     const body = () => doc.body.innerHTML;
-    tell(editMessage({ op: "insert", after: "m30", html: '<div data-mid="m41"><span data-mid="m42">Prefix</span></div>' }));
+    tell(editMessage({ op: "insert", place: { where: "below", ref: "m30" }, html: '<div data-mid="m41"><span data-mid="m42">Prefix</span></div>' }));
     tell(editMessage({ op: "wrap", mid: "m25", box: "m43" }));
     tell(editMessage({ op: "unwrap", mid: "m30" }));
     tell(editMessage({ op: "remove", mid: "m41" }));
@@ -347,7 +385,7 @@ describe("the bridge script in a page (X65)", () => {
     tell({ type: "bridge.edit", op: "remove", mid: '[data-mid="m24"]' });
     tell({ type: "bridge.edit", op: "wrap", mid: "m25", box: 'x" onclick="' });
     tell({ type: "bridge.edit", op: "replace", mid: "m24" });
-    tell(editMessage({ op: "insert", after: null, html: '<p data-mid="m44">First</p>' }));
+    tell(editMessage({ op: "insert", place: null, html: '<p data-mid="m44">First</p>' }));
     expect(body()).toBe('<p data-mid="m44">First</p><section data-mid="m24"><div data-mid="m43"><h2 data-mid="m25">Git</h2></div><span data-mid="m31">Prefix</span></section>');
   });
 
@@ -422,6 +460,228 @@ describe("the bridge script in a page (X65)", () => {
     const mods = [{}, { shiftKey: true }, { metaKey: true }, { altKey: true, metaKey: true }, { shiftKey: true, altKey: true, metaKey: true }, { shiftKey: true, metaKey: true }];
     for (const key of keys) for (const m of mods) doc.body.dispatchEvent(new win.KeyboardEvent("keydown", { key, code: key.length === 1 ? `Key${key.toUpperCase()}` : key, bubbles: true, cancelable: true, ...m }));
     expect(new Set(of("key").map((k) => (k as { key: string }).key))).toEqual(new Set(PAGE_KEYS));
+  });
+
+  /** Gives the page a hit test over the placed elements: the deepest one
+   *  whose box holds the point, as a browser's elementFromPoint. */
+  const hits = (doc: Document, boxes: Record<string, [number, number, number, number]>) => {
+    for (const [mid, [x, y, w, h]] of Object.entries(boxes)) {
+      (doc.querySelector(`[data-mid="${mid}"]`) as HTMLElement).getBoundingClientRect = () => ({ x, y, left: x, top: y, width: w, height: h, right: x + w, bottom: y + h, toJSON: () => ({}) }) as DOMRect;
+    }
+    doc.elementFromPoint = (px: number, py: number) => {
+      let found: Element | null = null;
+      for (const e of doc.querySelectorAll("[data-mid]")) {
+        const b = boxes[e.getAttribute("data-mid")!];
+        if (b && px >= b[0] && px < b[0] + b[2] && py >= b[1] && py < b[1] + b[3]) found = e;
+      }
+      return found;
+    };
+  };
+  const line = (doc: Document) => doc.querySelector('[data-moonlet-bridge="drop"]') as HTMLElement | null;
+  const lineAt = (doc: Document) => [line(doc)?.style.display, line(doc)?.style.left, line(doc)?.style.top, line(doc)?.style.width, line(doc)?.style.height];
+
+  it("in Edit mode, dragging the selected element shows an insertion line where it would land, and reports the move on drop, not the click after it", () => {
+    const { win, doc, el, tell, of } = framed('<section data-mid="m24"><h2 data-mid="m25">Git</h2><p data-mid="m30">Branch prefix</p><p data-mid="m33">Hint</p></section>');
+    hits(doc, { m1: [0, 0, 390, 400], m24: [0, 40, 390, 180], m25: [0, 40, 390, 40], m30: [0, 100, 390, 40], m33: [0, 160, 390, 40] });
+    tell(modeMessage("edit"));
+    mouse(win, "click", el("m33"), { clientX: 20, clientY: 170 });
+    // A press that hardly moves is a click, not a drag.
+    mouse(win, "mousedown", el("m33"), { clientX: 20, clientY: 170 });
+    mouse(win, "mousemove", el("m33"), { clientX: 22, clientY: 172 });
+    mouse(win, "mouseup", el("m33"), { clientX: 22, clientY: 172 });
+    expect(of("drag")).toEqual([]);
+    mouse(win, "mousedown", el("m33"), { clientX: 20, clientY: 170 });
+    mouse(win, "mousemove", el("m30"), { clientX: 20, clientY: 110 });
+    expect(of("drag")).toEqual([{ type: "drag", mid: "m33", place: { where: "above", ref: "m30" } }]);
+    expect(lineAt(doc)).toEqual(["block", "0px", "99px", "390px", "2px"]);
+    expect(doc.body.contains(line(doc))).toBe(false);
+    mouse(win, "mousemove", el("m25"), { clientX: 20, clientY: 50 });
+    expect(of("drag").at(-1)).toEqual({ type: "drag", mid: "m33", place: { where: "above", ref: "m25" } });
+    mouse(win, "mouseup", el("m25"), { clientX: 20, clientY: 50 });
+    mouse(win, "click", el("m25"), { clientX: 20, clientY: 50 });
+    expect(of("move")).toEqual([{ type: "move", mid: "m33", place: { where: "above", ref: "m25" } }]);
+    expect(of("drag").at(-1)).toEqual({ type: "drag", mid: "m33", place: null });
+    expect(line(doc)?.style.display).toBe("none");
+    expect(of("pick").map((p) => (p as { element: { mid: string } }).element.mid)).toEqual(["m33"]);
+  });
+
+  it("drops beside an element in a row by the pointer's side, into an empty box, nowhere where it already is, and Esc cancels a drag", () => {
+    const { win, doc, el, tell, of } = framed('<nav data-mid="m12" style="display: flex"><a data-mid="m13">General</a><a data-mid="m14">Git</a></nav><div data-mid="m50"></div>');
+    hits(doc, { m1: [0, 0, 390, 400], m12: [0, 0, 390, 40], m13: [0, 0, 100, 40], m14: [100, 0, 100, 40], m50: [0, 100, 390, 100] });
+    const key = (k: string) => doc.body.dispatchEvent(new win.KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true }));
+    tell(modeMessage("edit"));
+    mouse(win, "click", el("m14"), { clientX: 150, clientY: 20 });
+    mouse(win, "mousedown", el("m14"), { clientX: 150, clientY: 20 });
+    mouse(win, "mousemove", el("m13"), { clientX: 30, clientY: 20 });
+    expect(of("drag").at(-1)).toEqual({ type: "drag", mid: "m14", place: { where: "above", ref: "m13" } });
+    expect(lineAt(doc)).toEqual(["block", "-1px", "0px", "2px", "40px"]);
+    mouse(win, "mousemove", el("m13"), { clientX: 80, clientY: 20 });
+    expect(of("drag").at(-1)).toEqual({ type: "drag", mid: "m14", place: null });
+    mouse(win, "mousemove", el("m50"), { clientX: 200, clientY: 150 });
+    expect(of("drag").at(-1)).toEqual({ type: "drag", mid: "m14", place: { where: "into", ref: "m50" } });
+    key("Escape");
+    expect(of("drag").at(-1)).toEqual({ type: "drag", mid: "m14", place: null });
+    mouse(win, "mouseup", el("m50"), { clientX: 200, clientY: 150 });
+    expect(of("move")).toEqual([]);
+    expect(of("key")).toEqual([]);
+  });
+
+  it("in Edit mode, drags an absolutely positioned selection by its left and top, shown at once and reported as the style to write", () => {
+    const { win, doc, el, tell, of } = framed('<div data-mid="m60" style="position: absolute; left: 40px; top: 10px">New</div>');
+    hits(doc, { m1: [0, 0, 390, 400], m60: [40, 10, 60, 20] });
+    tell(modeMessage("edit"));
+    mouse(win, "click", el("m60"), { clientX: 50, clientY: 20 });
+    mouse(win, "mousedown", el("m60"), { clientX: 50, clientY: 20 });
+    mouse(win, "mousemove", el("m60"), { clientX: 75, clientY: 50 });
+    expect([el("m60").style.left, el("m60").style.top]).toEqual(["65px", "40px"]);
+    mouse(win, "mouseup", el("m60"), { clientX: 75, clientY: 50 });
+    expect(of("style")).toEqual([{ type: "style", mid: "m60", set: { left: "65px", top: "40px" } }]);
+    expect(of("move")).toEqual([]);
+  });
+
+  /** The handles the selection shows, by their edge. */
+  const shownHandles = (doc: Document) => [...doc.querySelectorAll<HTMLElement>("[data-moonlet-handle]")].filter((h) => h.style.display !== "none").map((h) => h.getAttribute("data-moonlet-handle"));
+
+  it("in Edit mode, resizes an absolutely positioned selection from its west and north edges by its left and top too, so the opposite edges stay, and one in flow only from its east and south", () => {
+    const { win, doc, el, tell, of } = framed('<div data-mid="m60" style="position: absolute; left: 40px; top: 10px">New</div><h2 data-mid="m25">Git</h2>');
+    hits(doc, { m1: [0, 0, 390, 400], m60: [40, 10, 60, 20], m25: [0, 40, 390, 40] });
+    tell(modeMessage("edit"));
+    tell(selectMessage("m60"));
+    const handle = (edge: string) => doc.querySelector(`[data-moonlet-handle="${edge}"]`)!;
+    expect(shownHandles(doc)).toEqual(["nw", "n", "ne", "e", "se", "s", "sw", "w"]);
+    mouse(win, "mousedown", handle("nw"), { clientX: 40, clientY: 10 });
+    mouse(win, "mousemove", handle("nw"), { clientX: 30, clientY: 4 });
+    expect([el("m60").style.left, el("m60").style.top, el("m60").style.width, el("m60").style.height]).toEqual(["30px", "4px", "70px", "26px"]);
+    mouse(win, "mouseup", handle("nw"), { clientX: 30, clientY: 4 });
+    hits(doc, { m60: [30, 4, 70, 26] });
+    mouse(win, "mousedown", handle("e"), { clientX: 100, clientY: 20 });
+    mouse(win, "mousemove", handle("e"), { clientX: 110, clientY: 20 });
+    mouse(win, "mouseup", handle("e"), { clientX: 110, clientY: 20 });
+    mouse(win, "mousedown", handle("sw"), { clientX: 40, clientY: 30 });
+    mouse(win, "mousemove", handle("sw"), { clientX: 50, clientY: 40 });
+    doc.body.dispatchEvent(new win.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    mouse(win, "mouseup", handle("sw"), { clientX: 50, clientY: 40 });
+    expect([el("m60").style.left, el("m60").style.top, el("m60").style.width, el("m60").style.height]).toEqual(["30px", "4px", "80px", "26px"]);
+    tell(selectMessage("m25"));
+    expect(shownHandles(doc)).toEqual(["e", "se", "s"]);
+    mouse(win, "mousedown", handle("w"), { clientX: 0, clientY: 60 });
+    mouse(win, "mousemove", handle("w"), { clientX: 20, clientY: 60 });
+    mouse(win, "mouseup", handle("w"), { clientX: 20, clientY: 60 });
+    expect(el("m25").style.width).toBe("");
+    expect(of("style")).toEqual([
+      { type: "style", mid: "m60", set: { width: "70px", height: "26px", left: "30px", top: "4px" } },
+      { type: "style", mid: "m60", set: { width: "80px", height: "26px" } },
+    ]);
+  });
+
+  it("in Edit mode, resizes the selection by its handles in px, ⇧ keeping its aspect ratio, and Esc puts the size back", () => {
+    const { win, doc, el, tell, of } = framed('<h2 data-mid="m25">Git</h2>');
+    hits(doc, { m1: [0, 0, 390, 400], m25: [0, 40, 390, 40] });
+    tell(modeMessage("edit"));
+    tell(selectMessage("m25"));
+    const handle = (edge: string) => doc.querySelector(`[data-moonlet-handle="${edge}"]`)!;
+    expect(shownHandles(doc)).toEqual(["e", "se", "s"]);
+    expect(doc.body.contains(handle("se"))).toBe(false);
+    mouse(win, "mousedown", handle("se"), { clientX: 390, clientY: 80 });
+    mouse(win, "mousemove", handle("se"), { clientX: 300, clientY: 100 });
+    expect([el("m25").style.width, el("m25").style.height]).toEqual(["300px", "60px"]);
+    mouse(win, "mouseup", handle("se"), { clientX: 300, clientY: 100 });
+    mouse(win, "mousedown", handle("se"), { clientX: 390, clientY: 80 });
+    mouse(win, "mousemove", handle("se"), { clientX: 195, clientY: 80, shiftKey: true });
+    mouse(win, "mouseup", handle("se"), { clientX: 195, clientY: 80, shiftKey: true });
+    mouse(win, "mousedown", handle("e"), { clientX: 390, clientY: 60 });
+    mouse(win, "mousemove", handle("e"), { clientX: 420, clientY: 90 });
+    doc.body.dispatchEvent(new win.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    mouse(win, "mouseup", handle("e"), { clientX: 420, clientY: 90 });
+    expect(of("style")).toEqual([
+      { type: "style", mid: "m25", set: { width: "300px", height: "60px" } },
+      { type: "style", mid: "m25", set: { width: "195px", height: "20px" } },
+    ]);
+    expect([el("m25").style.width, el("m25").style.height]).toEqual(["195px", "20px"]);
+    expect(of("pick")).toEqual([]);
+  });
+
+  it("reports the selection's computed style, and labels it off-system when the app says so", () => {
+    const { win, doc, el, tell, of } = framed('<section data-mid="m24" style="display: flex; flex-direction: column; gap: 4px; padding: 14px 24px; border-radius: 12px; opacity: 0.5">Git</section>');
+    tell(modeMessage("edit"));
+    mouse(win, "click", el("m24"));
+    expect(of("computed")).toEqual([
+      { type: "computed", mid: "m24", style: { display: "flex", "flex-direction": "column", gap: "4px", padding: "14px 24px", "background-color": "transparent", border: "none", "border-radius": "12px", opacity: "0.5" } },
+    ]);
+    tell(selectMessage("m24", true));
+    expect(doc.querySelector('[data-moonlet-bridge="selection"]')?.firstChild?.textContent).toBe("section · m24 · off-system");
+    tell(selectMessage("m24"));
+    expect(doc.querySelector('[data-moonlet-bridge="selection"]')?.firstChild?.textContent).toBe("section · m24");
+  });
+
+  it("shows where a snippet dragged from the Palette would drop, once the app says one is dragged, and reports the drop", () => {
+    const { win, doc, el, tell, of } = framed('<section data-mid="m24"><h2 data-mid="m25">Git</h2><p data-mid="m30">Branch prefix</p></section>');
+    hits(doc, { m1: [0, 0, 390, 400], m24: [0, 40, 390, 120], m25: [0, 40, 390, 40], m30: [0, 100, 390, 40] });
+    const drag = (type: string, x: number, y: number, on: Element) => on.dispatchEvent(new win.MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y }));
+    tell(modeMessage("edit"));
+    drag("dragover", 20, 130, el("m30"));
+    expect(of("drag")).toEqual([]);
+    tell(paletteMessage(true));
+    drag("dragover", 20, 130, el("m30"));
+    expect(of("drag")).toEqual([{ type: "drag", mid: null, place: { where: "below", ref: "m30" } }]);
+    expect(lineAt(doc)).toEqual(["block", "0px", "139px", "390px", "2px"]);
+    drag("drop", 20, 130, el("m30"));
+    expect(of("drop")).toEqual([{ type: "drop", place: { where: "below", ref: "m30" } }]);
+    expect(line(doc)?.style.display).toBe("none");
+    tell(paletteMessage(false));
+    drag("drop", 20, 130, el("m30"));
+    expect(of("drop")).toHaveLength(1);
+  });
+
+  it("makes the app's moves, styles and inserts above or into an element on its live page", async () => {
+    const { doc, tell, of } = framed('<section data-mid="m22"><h2 data-mid="m23">General</h2></section><section data-mid="m24"><h2 data-mid="m25">Git</h2></section>');
+    await vi.waitFor(() => expect(of("tree")).toHaveLength(1));
+    tell(editMessage({ op: "move", mid: "m24", place: { where: "above", ref: "m22" } }));
+    tell(editMessage({ op: "style", mid: "m25", style: "padding: var(--space-4)" }));
+    tell(editMessage({ op: "insert", place: { where: "above", ref: "m23" }, html: '<hr data-mid="m41">' }));
+    tell(editMessage({ op: "insert", place: { where: "into", ref: "m22" }, html: '<p data-mid="m42">New</p>' }));
+    tell(editMessage({ op: "move", mid: "m22", place: { where: "into", ref: "m23" } }));
+    expect(doc.body.innerHTML).toBe('<section data-mid="m24"><h2 data-mid="m25" style="padding: var(--space-4)">Git</h2></section><section data-mid="m22"><hr data-mid="m41"><h2 data-mid="m23">General</h2><p data-mid="m42">New</p></section>');
+    tell(editMessage({ op: "style", mid: "m25", style: "" }));
+    expect(doc.querySelector('[data-mid="m25"]')?.hasAttribute("style")).toBe(false);
+    expect(of("tree")).toHaveLength(6);
+  });
+
+  it("reports of the selection's computed style exactly the Inspector's properties, the app's COMPUTED_PROPS", () => {
+    const props = [...new Set([...inspectorSections("flex"), ...inspectorSections("grid")].flatMap((s) => s.fields.map((f) => f.prop)))];
+    expect([...COMPUTED_PROPS].sort()).toEqual([...props].sort());
+    const style = "display: grid; flex-direction: column; gap: 4px; align-items: center; justify-content: center; grid-template-columns: 1fr 2fr; padding: 4px; margin: 8px; width: 320px; height: 40px; background-color: red; border: 1px solid red; border-radius: 4px; box-shadow: 0 1px 2px red; opacity: 0.5; position: absolute";
+    const { win, el, tell, of } = framed(`<section data-mid="m24" style="${style}">Git</section>`);
+    tell(modeMessage("edit"));
+    mouse(win, "click", el("m24"));
+    expect(Object.keys((of("computed")[0] as { style: object }).style).sort()).toEqual([...COMPUTED_PROPS].sort());
+  });
+
+  it("drops nothing into an element of the app's list of those that hold no elements, and into an empty box", () => {
+    const { win, doc, el, tell, of } = framed('<h2 data-mid="m25">Git</h2>');
+    tell(modeMessage("edit"));
+    tell(selectMessage("m25"));
+    for (const tag of [...HOLDS_NO_ELEMENTS, "div"]) {
+      doc.querySelector('[data-mid="m50"]')?.remove();
+      const box = doc.createElement(tag);
+      box.setAttribute("data-mid", "m50");
+      doc.body.append(box);
+      hits(doc, { m1: [0, 0, 390, 400], m25: [0, 0, 390, 40], m50: [0, 100, 390, 100] });
+      mouse(win, "mousedown", el("m25"), { clientX: 20, clientY: 20 });
+      mouse(win, "mousemove", el("m50"), { clientX: 200, clientY: 150 });
+      mouse(win, "mouseup", el("m50"), { clientX: 200, clientY: 150 });
+      const moved = of("move").at(-1) as { place: { where: string } } | undefined;
+      expect([tag, moved?.place.where === "into"]).toEqual([tag, tag === "div"]);
+    }
+  });
+
+  it("reads a border by the app's list of border styles: none and hidden draw none", () => {
+    for (const s of BORDER_STYLES) {
+      const { win, el, tell, of } = framed(`<p data-mid="m30" style="border: 2px ${s} red">x</p>`);
+      tell(modeMessage("edit"));
+      mouse(win, "click", el("m30"));
+      expect([s, (of("computed")[0] as { style: Record<string, string> }).style.border]).toEqual([s, s === "none" || s === "hidden" ? "none" : `2px ${s} rgb(255, 0, 0)`]);
+    }
   });
 
   it("reports the boxes of the pinned elements when asked, and again on scroll and resize", async () => {
