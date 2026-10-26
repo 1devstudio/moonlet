@@ -56,6 +56,9 @@ import { barProblems, chatOpensOn, designBar, pageFixMessage, type Bar, type Bar
 import { claimKeys } from "../../lib/keys";
 import { askConfirm } from "../../lib/confirm";
 import { NEAR_ROOT, useNear } from "../../lib/useNear";
+import { useShallow } from "zustand/react/shallow";
+import { workspaceProjects } from "../../lib/tasksStore";
+import { buildComposer } from "../../lib/buildIt";
 import { cx } from "../../lib/cx";
 import { AgentIcon, Button, Dialog, Field, IconButton, inputCls } from "../ui";
 import { Menu } from "../Menu";
@@ -100,6 +103,15 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
   const comments = useDesign((d) => commentsOf(d, host, workspace, design.slug));
   const [chatOpen, setChatOpen] = useState(true);
   const chatRef = useRef<HTMLElement>(null);
+  // Build it (X65): the New session composer, in the design system's first source.
+  const systems = useDesign((d) => systemsOf(d, host, workspace));
+  const projects = useStore(useShallow((s) => workspaceProjects(s, host, workspace)));
+  const buildIt = () => {
+    const sources = systems?.find((x) => x.slug === design.system)?.sources ?? [];
+    const { project } = buildComposer(design, { sources, projects, prefix: "" });
+    const build = { workspace, slug: design.slug, name: design.name, system: design.system, pages: design.pages, systemName, viewport: design.viewport };
+    useStore.setState({ dialog: { kind: "new-session", host, workspace, project: project ?? undefined, design: build } });
+  };
   const remove = async () => {
     const ok = await askConfirm({ title: `Remove ${design.name}?`, message: `Its folder, designs/${design.slug}, its pages and its agent's chat are deleted.`, action: "Remove", variant: "danger" });
     if (ok) void removeDesign(host, workspace, design.slug).catch(errorToast);
@@ -113,8 +125,8 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
               <h1 className="truncate ui-text-14 font-semibold text-fg">{design.name}</h1>
               <p className="truncate ui-text-12 text-muted">{designSubtitle(systemName, design.pages.length)}</p>
             </div>
-            <span title="Build it comes with a later entry of Design mode: it starts a session with this design attached" className="no-drag">
-              <Button size="sm" disabled>
+            <span title="A session in the design system's first source project, with this design attached" className="no-drag">
+              <Button size="sm" onClick={buildIt}>
                 Build it <ArrowRight size={12} />
               </Button>
             </span>
