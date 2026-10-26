@@ -137,19 +137,24 @@ describe("the spec-from-design replies (X65)", () => {
   const wt = "/Users/alex/.moonlet/worktrees/moonlet/settings-page";
   let n = 0;
   const item = (kind: ChatItem["kind"], text: string, tool: ToolCall | null = null): ChatItem => ({ id: `i${++n}`, kind, text, tool, ts: n });
-  const write = (name: string, path: string, status: ToolCall["status"] = "ok") => item("tool", "", { name, summary: path, input: { file_path: path, content: "# X66" }, status });
+  // Write's result as Claude Code gives it (captured in moonlet-core's
+  // chat/fixtures/claude-perm.jsonl, its path the spec's).
+  const created = (path: string) => `File created successfully at: ${path} (file state is current in your context \u2014 no need to Read it back)`;
+  const write = (path: string, status: ToolCall["status"] = "ok", output: string | null = created(path)): ChatItem =>
+    item("tool", "", { name: "Write", summary: path, input: { file_path: path, content: "# X66 Settings page\n\n- **Design:** docs/design/settings-page\n" }, output, status });
+  const edit = (path: string, old_string: string, new_string: string): ChatItem => item("tool", "", { name: "Edit", summary: path, input: { file_path: path, old_string, new_string }, output: `The file ${path} has been updated successfully.`, status: "ok" });
   const asked = item("user", "Write the spec from the design");
-  const wrote = [
-    asked,
-    write("Write", `${wt}/docs/specs/X66-settings-page.md`),
-    write("Edit", `${wt}/docs/specs/README.md`),
-    item("assistant", "Spec X66 is written. Implement it, or go back to the design?"),
-  ];
+  const wrote = [asked, write(`${wt}/docs/specs/X66-settings-page.md`), edit(`${wt}/docs/specs/README.md`, "| X65 |", "| X65 |\n| X66 |"), item("assistant", "Spec X66 is written. Implement it, or go back to the design?")];
 
   it("offers Implement it, which asks for the spec the turn wrote, and Back to the design, once the agent wrote a spec in a session with a design", () => {
     expect(specReplies(wrote, "idle", wt, true)).toEqual([
-      { label: "Implement it", send: "Implement the spec docs/specs/X66-settings-page.md" },
-      { label: "Back to the design", send: null },
+      { label: "Implement it", kind: "send", text: "Implement the spec docs/specs/X66-settings-page.md" },
+      { label: "Back to the design", kind: "design" },
+    ]);
+    // An existing spec that gets the Design line the skill writes from a design.
+    expect(specReplies([asked, edit(`${wt}/docs/specs/X12-e2e-tests.md`, "- **Status:** draft", "- **Status:** draft\n- **Design:** docs/design/settings-page")], "idle", wt, true)).toEqual([
+      { label: "Implement it", kind: "send", text: "Implement the spec docs/specs/X12-e2e-tests.md" },
+      { label: "Back to the design", kind: "design" },
     ]);
   });
 
@@ -158,8 +163,13 @@ describe("the spec-from-design replies (X65)", () => {
     expect(specReplies(wrote, "blocked", wt, true)).toBeNull();
     expect(specReplies([...wrote, item("user", "Make the Git section first")], "idle", wt, true)).toBeNull();
     expect(specReplies(wrote, "idle", wt, false)).toBeNull();
-    expect(specReplies([asked, write("Write", `${wt}/docs/specs/X66-settings-page.md`, "denied")], "idle", wt, true)).toBeNull();
-    expect(specReplies([asked, write("Write", `${wt}/docs/design/settings-page/pages/index.html`), write("Edit", `${wt}/docs/specs/README.md`)], "idle", wt, true)).toBeNull();
-    expect(specReplies([asked, write("Read", `${wt}/docs/specs/X66-settings-page.md`)], "idle", wt, true)).toBeNull();
+    expect(specReplies([asked, write(`${wt}/docs/specs/X66-settings-page.md`, "denied", null)], "idle", wt, true)).toBeNull();
+    expect(specReplies([asked, write(`${wt}/docs/design/settings-page/pages/index.html`), edit(`${wt}/docs/specs/README.md`, "a", "b")], "idle", wt, true)).toBeNull();
+  });
+
+  it("offers none for an edit of a spec that adds no Design line, such as a typo fixed, nor for a Write over a spec already there", () => {
+    expect(specReplies([asked, edit(`${wt}/docs/specs/X66-settings-page.md`, "recieve", "receive")], "idle", wt, true)).toBeNull();
+    const over = write(`${wt}/docs/specs/X66-settings-page.md`, "ok", `The file ${wt}/docs/specs/X66-settings-page.md has been updated successfully.`);
+    expect(specReplies([asked, over], "idle", wt, true)).toBeNull();
   });
 });

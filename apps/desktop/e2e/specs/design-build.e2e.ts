@@ -48,7 +48,7 @@ while IFS= read -r line; do
       printf '%s\n' "$line" >> "$0.log"
       mkdir -p docs/specs && printf '# X66 Settings page\n' > docs/specs/X66-settings-page.md
       out "{\"type\":\"assistant\",\"message\":{\"id\":\"w1\",\"content\":[{\"type\":\"tool_use\",\"id\":\"tw1\",\"name\":\"Write\",\"input\":{\"file_path\":\"$PWD/docs/specs/X66-settings-page.md\",\"content\":\"# X66\"}}]}}"
-      out '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tw1","content":"File created"}]}}'
+      out "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"tw1\",\"content\":\"File created successfully at: $PWD/docs/specs/X66-settings-page.md\"}]}}"
       out '{"type":"assistant","message":{"id":"w2","content":[{"type":"text","text":"Spec X66 is written."}]}}'
       out '{"type":"result","subtype":"success","is_error":false,"usage":{}}' ;;
     *'"type":"user"'*)

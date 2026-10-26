@@ -413,6 +413,11 @@ export function toolFile(tool: ToolCall): string | null {
   return typeof file === "string" ? file : null;
 }
 
+/** A suggested reply above a chat's input (X65): one that sends `text` as
+ *  the user would, or one that opens the session's Design tab (Back to
+ *  the design). */
+export type SuggestedReply = { label: string; kind: "send"; text: string } | { label: string; kind: "design" };
+
 /** One question from Claude's `AskUserQuestion` tool input. */
 export interface Question {
   question: string;
