@@ -532,7 +532,8 @@ function onDesignOpen(host: string, ev: DesignOpen) {
   else if (action.kind === "tab") void openSessionDesign(host, ev.workspace, action.session, ev.slug, false);
   else {
     reloadDesigns(host, ev.workspace);
-    if (!session) {
+    // A workspace design started from a session (/moonlet-design new).
+    if (!session && ev.session) {
       const item = itemKey(host, ev.workspace, ev.slug);
       useDesign.setState((s) => (s.unseen.includes(item) ? {} : { unseen: [...s.unseen, item] }));
     }

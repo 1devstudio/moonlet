@@ -825,6 +825,12 @@ describe("design.open of a design an agent made (X65)", () => {
     expect(useStore.getState()).toMatchObject({ selected: { host: "local", session: "4f2a9c1e7b3d" }, rightTab: "design", rightOpen: true });
   });
 
+  it("is not unseen when an agent outside any session started it, as only /moonlet-design new from a session marks the Design button", async () => {
+    opened({ slug: "onboarding", name: "Onboarding", spawned_by: 4 });
+    expect(toasts()).toEqual([["An agent started the design Onboarding", "Open"]]);
+    expect(unseenOf(useDesign.getState(), "local", "w-1devstudio")).toBe(0);
+  });
+
   it("is unseen from the toast of /moonlet-design new until its design screen shows it, for the Design button's dot", async () => {
     opened({ slug: "onboarding", name: "Onboarding", spawned_by: 4, session: "4f2a9c1e7b3d" });
     expect(toasts()).toEqual([["settings-page started the design Onboarding", "Open"]]);
