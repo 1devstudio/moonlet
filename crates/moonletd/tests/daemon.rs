@@ -4402,3 +4402,36 @@ async fn a_design_file_is_found_only_through_a_workspace_or_a_session_moonlet_ha
         assert_eq!(refused.map_err(|e| e.to_string()), Err(refusal), "{call}");
     }
 }
+
+/// X65 entry 12: a file written in a session design, in the worktree's
+/// design folder or its `.moonlet/design/`, is announced as `design.changed`
+/// with the design, its session and its workspace.
+#[tokio::test]
+async fn a_file_written_in_a_session_design_is_announced_with_its_session() {
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    let (ws, _, session) = workspace_with_session(&d, &mut c, &[]).await;
+    let _: serde_json::Value = c
+        .request(
+            methods::DESIGN_CREATE,
+            serde_json::json!({"workspace": ws, "session": session.id, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}),
+        )
+        .await
+        .unwrap();
+    let mut listener = d.client().await;
+    std::fs::write(std::path::PathBuf::from(&session.path).join("docs/design/settings-page/pages/index.html"), "<p>agent</p>\n").unwrap();
+    let changed = next_change_of(&mut listener, "pages/index.html").await;
+    assert_eq!(
+        changed,
+        serde_json::json!({"workspace": ws, "system": null, "design": "settings-page", "session": session.id, "paths": ["pages/index.html"]})
+    );
+    let _: serde_json::Value = c
+        .request(
+            methods::DESIGN_COMMENT_PUT,
+            serde_json::json!({"session": session.id, "slug": "settings-page", "new": {"page": "index", "mid": "m1", "tag": "p", "comment": "Bigger"}}),
+        )
+        .await
+        .unwrap();
+    let changed = next_change_of(&mut listener, "comments.json").await;
+    assert_eq!((&changed["design"], &changed["session"]), (&serde_json::json!("settings-page"), &serde_json::json!(session.id)));
+}

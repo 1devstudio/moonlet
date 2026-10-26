@@ -13,7 +13,7 @@ import { alertFor } from "./alerts";
 import { modeOf, setMode } from "./mode";
 import { latestPerKey } from "./prPoll";
 import { latestSends } from "./latestSend";
-import { designOpenAction, workspaceDesigns } from "./design";
+import { designOpenAction, isDesignModeChange, workspaceDesigns } from "./design";
 import { changedPages, reloadsPage } from "./designCanvas";
 import { pageOfPath } from "./designPage";
 import type { PageProblem } from "./designBars";
@@ -600,7 +600,7 @@ export async function startDesign() {
   started = true;
   await onDaemonEvent((e) => {
     if (e.name === EV.designOpen) onDesignOpen(e.host, e.data as DesignOpen);
-    else if (e.name === EV.designChanged) {
+    else if (e.name === EV.designChanged && isDesignModeChange(e.data as DesignChanged)) {
       const d = e.data as DesignChanged;
       onDesignChange(e.host, d);
       if (systemListing.wanted.has(wsKey(e.host, d.workspace))) reload(e.host, d.workspace);
