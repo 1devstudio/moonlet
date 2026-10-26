@@ -371,7 +371,7 @@ export async function editComment(host: string, place: DesignPlace, slug: string
  *  only then are they marked sent. A pin a
  *  Send is already on its way with is left out, so a second click never
  *  sends it twice. */
-export async function sendComments(host: string, place: DesignPlace, slug: string, agent: number, pins: DesignComment[], ask: (text: string) => Promise<void> = (text) => askAgent(host, agent, text)): Promise<void> {
+export async function sendComments(host: string, place: DesignPlace, slug: string, agent: number, pins: DesignComment[], ask: (text: string) => Promise<void> = (text) => askAgent(host, agent, text), folder: string | null = null): Promise<void> {
   const key = itemKey(host, place, slug);
   const busy = new Set(sendingOf(useDesign.getState(), host, place, slug));
   const going = pins.filter((p) => !busy.has(p.n));
@@ -379,7 +379,7 @@ export async function sendComments(host: string, place: DesignPlace, slug: strin
   const ns = going.map((p) => p.n);
   useDesign.setState((s) => ({ sending: { ...s.sending, [key]: [...(s.sending[key] ?? []), ...ns].sort((a, b) => a - b) } }));
   try {
-    await ask(commentsMessage(going));
+    await ask(commentsMessage(going, folder));
     // Each with the comment sent: one edited meanwhile is not marked sent.
     await changeComments(host, place, slug, { sent: { pins: going.map((p) => ({ n: p.n, comment: p.comment })) } });
   } finally {

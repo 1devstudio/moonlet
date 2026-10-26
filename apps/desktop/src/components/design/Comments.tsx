@@ -7,7 +7,7 @@ import { ChevronDown, X } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import type { DesignComment } from "../../lib/protocol";
 import type { Rect } from "../../lib/designBridge";
-import { BOX_SIZE, COMMENT_PIN_ATTR, boxLabel, commentCardTitle, boxPlace, commentLine, pinPlace, commentsTab, footerLabel, messageView, pinLabel, sentLabel, type CommentRef, type PageMids } from "../../lib/designComments";
+import { BOX_SIZE, COMMENT_PIN_ATTR, boxLabel, commentCardTitle, boxPlace, commentLine, pinPlace, commentsTab, footerLabel, messageView, pinLabel, sentLabel, type CommentRef, type PageMids, type PinsOf } from "../../lib/designComments";
 import { pageFile } from "../../lib/designPage";
 import { cx } from "../../lib/cx";
 import { Button } from "../ui";
@@ -258,7 +258,7 @@ export function CommentsTab({
  *  hand as their block and its comments as cards (Comment from the Design
  *  view in a session's chat), read against `pins`; null shows it as any
  *  other message. The workspace design's chat and the session's share it. */
-export function designMessage(text: string, pins: DesignComment[], session: boolean): ReactNode | null {
+export function designMessage(text: string, pins: PinsOf, session: boolean): ReactNode | null {
   const view = messageView(text, pins);
   if (!view) return null;
   const cards = view.cards && <CommentCards cards={view.cards} session={session} />;

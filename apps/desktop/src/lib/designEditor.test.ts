@@ -509,3 +509,33 @@ describe("Update of a session design's design system (X65)", () => {
     expect(calls.map((c) => c.method)).toEqual(["design.system.update"]);
   });
 });
+
+describe("a session's designs, which share its agent (X65)", () => {
+  it("each tell their edits by hand with the next message to the session's agent, their pages named by their paths in the worktree", async () => {
+    const S = { session: "4f2a9c1e7b3d" };
+    answers["chat.send"] = () => null;
+    // Each design's own index.html.
+    const files: Record<string, { html: string; version: string }> = { [SLUG]: { html: PAGE, version: "v1" }, onboarding: { html: PAGE, version: "v1" } };
+    answers["design.page"] = (p) => files[p.slug as string];
+    answers["design.write_page"] = (p) => {
+      files[p.slug as string] = { html: p.html as string, version: "v2" };
+      return { version: "v2" };
+    };
+    await loadPageSource("local", S, SLUG, "index");
+    await loadPageSource("local", S, "onboarding", "index");
+    editPage("local", S, SLUG, "index", { kind: "delete", mid: "m30" }, "m30");
+    editPage("local", S, "onboarding", "index", { kind: "text", mid: "m25", text: "Welcome" }, "m25");
+    await settleSaves();
+    const peers = [
+      { place: S, slug: SLUG, folder: "docs/design/settings-page" },
+      { place: S, slug: "onboarding", folder: "docs/design/onboarding" },
+    ];
+    await sendWithEdits("local", S, SLUG, 31, "Tighter, please", [], peers);
+    expect(calls.filter((c) => c.method === "chat.send").map((c) => c.params.text)).toEqual([
+      "Edits by hand since your last turn:\ndocs/design/settings-page/pages/index.html m30 p: deleted\ndocs/design/onboarding/pages/index.html m25 h2: text “Welcome”\n\nTighter, please",
+    ]);
+    // Both are told.
+    expect(pendingOf(useEditor.getState(), "local", S, SLUG)).toEqual([]);
+    expect(pendingOf(useEditor.getState(), "local", S, "onboarding")).toEqual([]);
+  });
+});

@@ -28,3 +28,23 @@ export function pageOfFile(file: string): string | null {
 export function pageOfPath(path: string): string | null {
   return path.startsWith("pages/") ? pageOfFile(path.slice("pages/".length)) : null;
 }
+
+/** A page as a line of a message to the design's agent names it (X65):
+ *  `<page>.html`, or, for a session design, whose designs share the
+ *  session's agent, its path in the worktree, `<folder>/pages/<page>.html`. */
+export function linePage(page: string, folder: string | null): string {
+  return folder ? `${folder}/${pagePath(page)}` : pageFile(page);
+}
+
+/** The page and folder {@link linePage} wrote, read back; null for
+ *  anything else. */
+export function pageOfLine(text: string): { page: string; folder: string | null } | null {
+  const at = text.lastIndexOf("/pages/");
+  if (at < 0) {
+    const page = pageOfFile(text);
+    return page === null ? null : { page, folder: null };
+  }
+  const page = pageOfFile(text.slice(at + "/pages/".length));
+  const folder = text.slice(0, at);
+  return page === null || folder === "" ? null : { page, folder };
+}

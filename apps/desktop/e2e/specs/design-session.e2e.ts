@@ -139,7 +139,7 @@ describe("A session's Design tab", () => {
     await box.$('.//button[normalize-space()="Send"]').click();
     await expect(card(1)).toBeDisplayed();
     await expect(card(1)).toHaveText(expect.stringContaining("Comment from the Design view"));
-    await expect(card(1)).toHaveText(expect.stringContaining('Comment on index.html [data-mid=m12] (nav "General Appearance"): Collapse into a menu on phone'));
+    await expect(card(1)).toHaveText(expect.stringContaining(`Comment on docs/design/${SLUG}/pages/index.html [data-mid=m12] (nav "General Appearance"): Collapse into a menu on phone`));
     await browser.waitUntil(() => said().includes("Collapse into a menu on phone"), { timeoutMsg: "the session's agent never got the comment" });
   });
 
@@ -161,8 +161,8 @@ describe("A session's Design tab", () => {
     await browser.execute(() => document.querySelector<HTMLButtonElement>('main button[title="Send (↵)"]')?.click());
     const block = chat().$('.//*[@aria-label="Edits by hand since your last turn"]');
     await expect(block).toBeDisplayed();
-    await expect(block).toHaveText(expect.stringContaining("index.html m30 p: deleted"));
-    await browser.waitUntil(() => said().includes("index.html m30 p: deleted"), { timeoutMsg: "the session's agent never got the edit" });
+    await expect(block).toHaveText(expect.stringContaining(`docs/design/${SLUG}/pages/index.html m30 p: deleted`));
+    await browser.waitUntil(() => said().includes(`docs/design/${SLUG}/pages/index.html m30 p: deleted`), { timeoutMsg: "the session's agent never got the edit" });
     await expect(panel().$('.//*[@aria-label="Edits by hand"]')).not.toBeExisting();
   });
 
