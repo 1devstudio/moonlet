@@ -38,7 +38,7 @@ import {
   useDesign,
 } from "../../lib/designStore";
 import { isSession, type DesignPlace } from "../../lib/designPlace";
-import { askWithEdits, updateAndTell, type ToldDesign, restoreSnapshot, closeDesign, hasCopy, kitOf, loadKit, sendCommentsWithEdits, copyElementOf, dismissUnsaved, editPage, loadPageSource, pasteInto, pendingOf, redoEdit, sendWithEdits, sourceOf, undoEdit, undoOf, unsavedOf, useEditor } from "../../lib/designEditor";
+import { askWithEdits, updateAndTell, toldFolder, type ToldDesign, restoreSnapshot, closeDesign, hasCopy, kitOf, loadKit, sendCommentsWithEdits, copyElementOf, dismissUnsaved, editPage, loadPageSource, pasteInto, pendingOf, redoEdit, sendWithEdits, sourceOf, undoEdit, undoOf, unsavedOf, useEditor } from "../../lib/designEditor";
 import { EditRefused, editsChip, inlineStyles, type Edit, type EditOp } from "../../lib/designEdits";
 import { offSystemMids } from "../../lib/designTokens";
 import { selectionOf } from "../../lib/designInspector";
@@ -508,20 +508,22 @@ export function DesignCanvas({
   const onSendAll = () => {
     sendPins(sendAll(comments, mids));
   };
-  // Show in chat: the chat opens, then scrolls to the pin's last card, once
-  // its messages have loaded (chatCardLookup).
-  const [shownPin, setShownPin] = useState<{ n: number; at: number } | null>(null);
+  // Show in chat: the chat opens, then scrolls to the pin's last card, its
+  // design's (commentCardSelector), once its messages have loaded
+  // (chatCardLookup).
+  const [shownPin, setShownPin] = useState<{ n: number; folder: string | null; at: number } | null>(null);
   const chatLoaded = useChat((c) => agent !== null && !!c.chats[chatKey(host, agent)]);
   const showInChat = (pin: DesignComment) => {
     setChatOpen(true);
-    setShownPin({ n: pin.n, at: Date.now() });
+    // Its design's card: a session's chat has every design's comments.
+    setShownPin({ n: pin.n, folder: toldFolder(peers, design.slug), at: Date.now() });
   };
   useEffect(() => {
     if (!shownPin || !chatOpen) return;
     let ringed: HTMLElement | null = null;
     let done: ReturnType<typeof setTimeout> | undefined;
     const look = () => {
-      const cards = chatRef.current?.querySelectorAll<HTMLElement>(commentCardSelector(shownPin.n));
+      const cards = chatRef.current?.querySelectorAll<HTMLElement>(commentCardSelector(shownPin.n, shownPin.folder));
       const card = cards?.[cards.length - 1];
       const step = chatCardLookup({ found: !!card, loaded: chatLoaded, waitedMs: Date.now() - shownPin.at });
       if (step === "wait") return;

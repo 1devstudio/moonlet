@@ -7,7 +7,7 @@ import { ChevronDown, X } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import type { DesignComment } from "../../lib/protocol";
 import type { Rect } from "../../lib/designBridge";
-import { BOX_SIZE, COMMENT_PIN_ATTR, boxLabel, commentCardTitle, boxPlace, commentLine, pinPlace, commentsTab, footerLabel, messageView, pinLabel, sentLabel, type CommentRef, type PageMids, type PinsOf } from "../../lib/designComments";
+import { BOX_SIZE, boxLabel, commentCardAttrs, commentCardTitle, boxPlace, commentLine, pinPlace, commentsTab, footerLabel, messageView, pinLabel, sentLabel, type CommentRef, type PageMids, type PinsOf } from "../../lib/designComments";
 import { pageFile } from "../../lib/designPage";
 import { cx } from "../../lib/cx";
 import { Button } from "../ui";
@@ -277,7 +277,7 @@ export function CommentCards({ cards, session = false }: { cards: (CommentRef & 
   return (
     <div className="flex flex-col items-end gap-1.5 py-1">
       {cards.map((c, i) => (
-        <div key={i} {...{ [COMMENT_PIN_ATTR]: c.n ?? undefined }} className="max-w-[85%] rounded-2xl rounded-br-md bg-raised px-3.5 py-2.5 transition-shadow">
+        <div key={i} {...commentCardAttrs(c)} className="max-w-[85%] rounded-2xl rounded-br-md bg-raised px-3.5 py-2.5 transition-shadow">
           <p className="mb-1 flex items-center gap-2 ui-text-12 text-muted">
             <PinBadge n={c.n} />
             {commentCardTitle(session)}
