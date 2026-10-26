@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { arrange, compact, groupHeading, holdsProject, hostSections, projectRemoval, sessionBadge, sessionMenu, workspaceSections } from "./sidebar";
+import { arrange, arrangeShared, compact, shownSections, groupHeading, holdsProject, hostSections, projectRemoval, sessionBadge, sessionMenu, workspaceSections } from "./sidebar";
 import type { Project, Section, Session, Workspace } from "./protocol";
 
 const p = (id: string, name: string): Project => ({ id, name, path: `/${name}`, base_branch: "main" });
@@ -75,6 +75,63 @@ describe("sidebar arrange", () => {
     expect(compact(41)).toBe("41");
     expect(compact(5512)).toBe("5.5k");
     expect(compact(12400)).toBe("12k");
+  });
+});
+
+describe("arrangeShared (a section on every member of an account, X68)", () => {
+  const id = (name: string) => ({ origin: `github.com/acme/${name}`, root: `${name}-root` });
+  const shop = (pid: string): Project => ({ ...p(pid, "shop"), identity: id("shop") });
+  // This Mac has shop; studio-mini has shop under another id, and blog.
+  const here = { host: "local", sec: sec({}, { project_ids: ["a"], missing: [id("blog"), id("docs")] }), projects: [shop("a")], sessions: [s("s1", "a"), s("s4", "a")] };
+  const mini = {
+    host: "studio-mini",
+    sec: sec({}, { project_ids: ["x", "y"], missing: [id("docs")] }),
+    projects: [shop("x"), { ...p("y", "blog"), identity: id("blog") }],
+    sessions: [s("s3", "x"), s("s2", "y")],
+  };
+  const none = { stateOf: () => null, activeAt: () => 0, archiving: () => false, taskOf: () => null };
+
+  it("shows each project once with every member's sessions, newest first, and says where the rest are", () => {
+    const g = arrangeShared("personal", [here, mini], none);
+    expect(g.map((x) => [x.label, x.host, x.projectId ?? null, x.on, x.sessions.map((e) => `${e.host}:${e.session.id}`)])).toEqual([
+      ["shop", "local", "a", null, ["local:s4", "studio-mini:s3", "local:s1"]],
+      // Only on studio-mini: its sessions, and its project row, are there.
+      ["blog", "studio-mini", "y", "studio-mini", ["studio-mini:s2"]],
+      // On no connected member: named from its origin.
+      ["docs", "local", null, "missing", []],
+    ]);
+  });
+
+  it("merges status groups across members in their usual order", () => {
+    const state = (host: string, x: Session) => (host === "studio-mini" && x.id === "s3" ? "blocked" : "idle");
+    const g = arrangeShared("personal", [{ ...here, sec: { ...here.sec, view: { ...here.sec.view, group_by: "status" } } }, mini], { ...none, stateOf: state });
+    expect(g.map((x) => [x.label, x.sessions.map((e) => e.session.id)])).toEqual([
+      ["Needs input", ["s3"]],
+      ["Idle", ["s4", "s2", "s1"]],
+    ]);
+  });
+});
+
+describe("shownSections (X68)", () => {
+  const ws = (section_ids: string[]): Workspace => ({ id: "W", name: "Personal", color: "clay", section_ids, claude_profile: null, created_at: 0 });
+  const named = (id: string, name: string) => sec({}, { id, name });
+
+  it("lists the shown workspace's sections once, from the shown member first, with every member holding each", () => {
+    const hosts = [
+      { host: "local", workspaces: [ws(["a", "c"])], sections: [named("a", "1devstudio"), named("c", "Clients")] },
+      // studio-mini has not heard of "Clients" yet.
+      { host: "studio-mini", workspaces: [ws(["a"])], sections: [named("a", "1devstudio")] },
+      { host: "devbox", workspaces: [], sections: [] },
+    ];
+    expect(shownSections({ host: "local", id: "W" }, hosts).map((x) => [x.ws.id, x.sec.name, x.hosts])).toEqual([
+      ["W", "1devstudio", ["local", "studio-mini"]],
+      ["W", "Clients", ["local"]],
+    ]);
+    // Shown from studio-mini, its sections lead.
+    expect(shownSections({ host: "studio-mini", id: "W" }, hosts).map((x) => [x.sec.name, x.hosts])).toEqual([
+      ["1devstudio", ["studio-mini", "local"]],
+      ["Clients", ["local"]],
+    ]);
   });
 });
 

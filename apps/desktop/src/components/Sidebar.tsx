@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState, type R
 import { Archive, ArrowDown, ArrowLeftRight, Bell, BellOff, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, Command, Download, FolderPlus, History, Link2, Loader2, MoreHorizontal, PenTool, Plus, RotateCcw, RotateCw, Settings, ShieldAlert, X } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { M, type Copy, type HostInfo, type Project, type Section, type SectionView, type Session, type Workspace } from "../lib/protocol";
-import { arrange, groupHeading, hostSections, lastActive, projectRemoval, sessionBadge, sessionMenu, type Group } from "../lib/sidebar";
+import { arrangeShared, groupHeading, lastActive, projectRemoval, sessionBadge, sessionMenu, shownSections, type SectionPart, type SharedGroup } from "../lib/sidebar";
 import { closeClaudeUpdate, errorToast, projKey, pullBase, selectSession, updateActions, updateClaude, sesKey, sessionState, sessionTerminals, shownWorkspace, termKey, toast, updateSettings, useStore } from "../lib/store";
 import { hostNotice } from "../lib/settingsPage";
 import { gitSettingsOf } from "../lib/gitSettings";
@@ -24,7 +24,6 @@ import { modeOf } from "../lib/mode";
 import { DesignSidebar } from "./design/DesignMode";
 import { sessionDesignsOf, useDesign } from "../lib/designStore";
 import { designMark } from "../lib/sessionDesign";
-import { isShown } from "../lib/workspaces";
 import { ProfileFooter } from "./Profiles";
 import { movingSessions, runningClaudeAgents, switchConfirm } from "../lib/profiles";
 import { AgentIcon, Button, IconButton, Kbd, StateGlyph, cx, prTone } from "./ui";
@@ -365,7 +364,7 @@ function TaskGroupList({ tasks, row }: { tasks: TaskGroup[]; row: (id: string) =
 /** Style A's cell for one row, or none. */
 const cellOf = (column: ReturnType<typeof numberColumn> | null, id: string) => (column ? { ...column.cells[id], width: column.width } : undefined);
 
-function SessionRow({ host, s, onMenu, cell, nested }: { host: string; s: Session; onMenu: (e: React.MouseEvent) => void; cell?: { text: string; outOfSync: boolean; width: number }; nested?: boolean }) {
+function SessionRow({ host, s, onMenu, cell, nested, on }: { host: string; s: Session; onMenu: (e: React.MouseEvent) => void; cell?: { text: string; outOfSync: boolean; width: number }; nested?: boolean; on?: string }) {
   const selected = useStore((st) => !st.showHistory && st.selected?.host === host && st.selected.session === s.id);
   const state = useStore((st) => sessionState(st, host, s.id));
   const git = useStore((st) => st.git[sesKey(host, s.id)]);
@@ -422,6 +421,8 @@ function SessionRow({ host, s, onMenu, cell, nested }: { host: string; s: Sessio
                 <PenTool size={12} />
               </span>
             )}
+            {/* A session of a shared workspace on another member (X68). */}
+            {on && <span className="shrink-0 font-mono ui-text-11 text-faint">on {on}</span>}
             <SyncMark host={host} s={s} />
           </>
         )
@@ -492,27 +493,32 @@ function ArchivingRow({ name, a }: { name: string; a: Archiving }) {
   );
 }
 
-function GroupBlock({ host, workspaceId, sec, g, onRowMenu }: { host: string; workspaceId: string; sec: Section; g: Group; onRowMenu: (target: { session?: Session; projectId?: string }, e: React.MouseEvent) => void }) {
+function GroupBlock({ primary, workspaceId, sec, g, onRowMenu }: { primary: string; workspaceId: string; sec: Section; g: SharedGroup; onRowMenu: (target: { host: string; session?: Session; projectId?: string }, e: React.MouseEvent) => void }) {
+  // The group's project row acts on the member that has the project (X68).
+  const host = g.host;
   // Keyed by the section id, which X32 kept from the X5 workspace it was, so
   // collapse state carries over.
-  const key = `${host}/${sec.id}/${g.key}`;
+  const key = `${primary}/${sec.id}/${g.key}`;
+  const hosts = useStore((s) => s.hosts);
+  const labelOf = (h: string) => hosts[h]?.label ?? h;
   const collapsed = useStore((s) => !!s.collapsed[key]);
   const toggle = () => useStore.setState((s) => ({ collapsed: { ...s.collapsed, [key]: !collapsed } }));
   const heading = groupHeading(g);
   // How rows show their task (X48): A, a number column; B, task lines.
   const style = useStore((s) => rowStyle(s.settings.sessionRows));
   const { lines, sources } = useContext(TaskLines);
-  const ids = g.sessions.map((s) => s.id);
+  const ids = g.sessions.map((e) => e.session.id);
   const column = style === "number" && sources ? numberColumn(ids, lines, { heading: heading === "project" }) : null;
   const tasks = style === "task" ? taskGroups(ids, lines, { sources, groupedByTask: g.kind === "task" }) : null;
-  const row = (s: Session, nested?: boolean) => (
-    <SessionRow key={s.id} host={host} s={s} nested={nested} cell={cellOf(column, s.id)} onMenu={(e) => onRowMenu({ session: s }, e)} />
+  const row = ({ host: h, session: s }: { host: string; session: Session }, nested?: boolean) => (
+    <SessionRow key={`${h}/${s.id}`} host={h} s={s} nested={nested} on={h !== primary ? labelOf(h) : undefined} cell={cellOf(column, s.id)} onMenu={(e) => onRowMenu({ host: h, session: s }, e)} />
   );
   const header =
     heading === "project" ? (
       <>
-        <ProjectMark host={host} projectId={g.projectId!} />
-        <span className="truncate ui-text-14 font-semibold text-[#d6d6d6]">{g.label}</span>
+        {g.projectId ? <ProjectMark host={host} projectId={g.projectId} /> : <span aria-hidden className="h-[18px] w-[18px] shrink-0 rounded-[5px] border border-dashed border-border-strong" />}
+        <span className={cx("truncate ui-text-14 font-semibold", g.projectId ? "text-[#d6d6d6]" : "text-faint")}>{g.label}</span>
+        {g.on && <span className="shrink-0 font-mono ui-text-11 text-faint">{g.on === "missing" ? `not on ${labelOf(primary)}` : `on ${labelOf(g.on)}`}</span>}
         {column?.prefix && <span className="shrink-0 font-mono ui-text-11.5 text-faint">{column.prefix}</span>}
       </>
     ) : heading === "label" ? (
@@ -524,48 +530,53 @@ function GroupBlock({ host, workspaceId, sec, g, onRowMenu }: { host: string; wo
         <div
           className="group flex h-[38px] items-center gap-2 pl-4 pr-3"
           onContextMenu={(e) => {
-            if (g.kind !== "project") return;
+            if (g.kind !== "project" || !g.projectId) return;
             e.preventDefault();
-            onRowMenu({ projectId: g.projectId }, e);
+            onRowMenu({ host, projectId: g.projectId }, e);
           }}
         >
           <button onClick={toggle} className={cx("flex min-w-0 items-center gap-2 text-left", g.kind !== "project" && "flex-1")}>
             {header}
             {collapsed && <ChevronRight size={12} className="text-faint" />}
           </button>
-          {g.kind === "project" && (
+          {g.kind === "project" && g.projectId && (
             <>
-              <BasePullChip host={host} projectId={g.projectId!} />
+              <BasePullChip host={host} projectId={g.projectId} />
               {/* The rest of the row still collapses the project. */}
               <div aria-hidden className="h-full min-w-0 flex-1" onClick={toggle} />
             </>
           )}
-          {g.kind === "project" && (
+          {g.kind === "project" && g.projectId && (
             <IconButton title="Project settings" className="h-7 w-7 opacity-0 group-hover:opacity-100 focus-visible:opacity-100" onClick={() => openProjectSettings({ host, project: g.projectId! })}>
               <Settings size={15} />
             </IconButton>
           )}
-          {g.kind === "project" && (
+          {g.kind === "project" && g.projectId && (
             <IconButton title="New session" className="h-7 w-7" onClick={() => useStore.setState({ dialog: { kind: "new-session", host, project: g.projectId, workspace: workspaceId } })}>
               <Plus size={16} />
             </IconButton>
           )}
         </div>
       )}
-      {!collapsed && !tasks && g.sessions.map((s) => row(s))}
-      {!collapsed && tasks && <TaskGroupList tasks={tasks} row={(id) => row(g.sessions.find((s) => s.id === id)!, true)} />}
+      {!collapsed && !tasks && g.sessions.map((e) => row(e))}
+      {!collapsed && tasks && <TaskGroupList tasks={tasks} row={(id) => row(g.sessions.find((e) => e.session.id === id)!, true)} />}
     </div>
   );
 }
 
-function SectionBlock({ host, ws, sec, onRowMenu }: { host: string; ws: Workspace; sec: Section; onRowMenu: (m: RowMenuState) => void }) {
+function SectionBlock({ hosts: holding, ws, sec, onRowMenu }: { hosts: string[]; ws: Workspace; sec: Section; onRowMenu: (m: RowMenuState) => void }) {
+  // The shown member: the section's own settings and actions go to it, and
+  // the other members holding it add their sessions (X68).
+  const host = holding[0];
   // The X5 workspace's key: the section kept its id (X32).
   const key = `ws:${host}/${sec.id}`;
   const collapsed = useStore((s) => !!s.collapsed[key]);
-  const projects = useStore((s) => s.projects[host] ?? []);
-  const sessions = useStore((s) => s.sessions[host] ?? []);
-  const terminals = useStore((s) => s.terminals[host]);
+  const allSections = useStore((s) => s.sections);
+  const allProjects = useStore((s) => s.projects);
+  const allSessions = useStore((s) => s.sessions);
+  const terminals = useStore((s) => s.terminals);
   const archiving = useStore((s) => s.archiving);
+  const projects = allProjects[host] ?? [];
   // Select the stored array and filter outside: a selector returning a new
   // array on every call makes zustand re-render forever.
   const allWorkspaces = useStore((s) => s.workspaces[host]);
@@ -573,22 +584,22 @@ function SectionBlock({ host, ws, sec, onRowMenu }: { host: string; ws: Workspac
   const multiHost = useStore((s) => Object.keys(s.hosts).length > 1);
   const [renaming, setRenaming] = useState(false);
   const { lines } = useContext(TaskLines);
-  const groups = useMemo(
-    () =>
-      arrange(
-        ws.id,
-        sec,
-        projects,
-        sessions,
-        (s) => sessionState(useStore.getState(), host, s.id),
-        (s) => activeAt(host, s),
-        (s) => !!archiving[sesKey(host, s.id)],
-        (s) => lines[s.id] ?? null,
-      ),
+  const groups = useMemo(() => {
+    const parts: SectionPart[] = holding.map((h) => ({
+      host: h,
+      sec: h === host ? sec : ((allSections[h] ?? []).find((x) => x.id === sec.id) ?? sec),
+      projects: allProjects[h] ?? [],
+      sessions: allSessions[h] ?? [],
+    }));
+    return arrangeShared(ws.id, parts, {
+      stateOf: (h, s) => sessionState(useStore.getState(), h, s.id),
+      activeAt: (h, s) => activeAt(h, s),
+      archiving: (h, s) => !!archiving[sesKey(h, s.id)],
+      taskOf: (_h, s) => lines[s.id] ?? null,
+    });
     // `terminals` changes agent states and activity times.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [ws.id, sec, projects, sessions, terminals, archiving, host, lines],
-  );
+  }, [ws.id, sec, holding.join("\n"), allSections, allProjects, allSessions, terminals, archiving, host, lines]);
   const v = sec.view;
   const setView = (patch: Partial<SectionView>) => void updateSection(host, sec.id, { view: { ...v, ...patch } });
   const secProjects = sec.project_ids.map((id) => projects.find((p) => p.id === id)).filter((p): p is Project => !!p);
@@ -673,7 +684,8 @@ function SectionBlock({ host, ws, sec, onRowMenu }: { host: string; ws: Workspac
         ) : (
           <button className="flex min-w-0 flex-1 items-center gap-1.5 text-left" onClick={() => useStore.setState((s) => ({ collapsed: { ...s.collapsed, [key]: !collapsed } }))}>
             <span className="truncate ui-text-14 font-semibold text-muted group-hover:text-fg">{sec.name}</span>
-            {multiHost && host !== "local" && <span className="truncate font-mono ui-text-11 text-faint">@{host}</span>}
+            {/* A section several members share is no one host's (X68). */}
+            {multiHost && host !== "local" && holding.length === 1 && <span className="truncate font-mono ui-text-11 text-faint">@{host}</span>}
             {collapsed ? <ChevronRight size={13} className="text-faint" /> : <ChevronDown size={13} className="text-faint opacity-0 group-hover:opacity-100" />}
           </button>
         )}
@@ -689,7 +701,7 @@ function SectionBlock({ host, ws, sec, onRowMenu }: { host: string; ws: Workspac
       {!collapsed && (
         <div className="pt-1">
           {groups.map((g) => (
-            <GroupBlock key={g.key} host={host} workspaceId={ws.id} sec={sec} g={g} onRowMenu={(target, e) => onRowMenu({ x: e.clientX, y: e.clientY, host, section: sec, ...target })} />
+            <GroupBlock key={g.key} primary={host} workspaceId={ws.id} sec={sec} g={g} onRowMenu={(target, e) => onRowMenu({ x: e.clientX, y: e.clientY, section: sec, ...target })} />
           ))}
           {secProjects.length === 0 && (
             <button
@@ -893,17 +905,18 @@ export function Sidebar() {
         {showHistory ? (
           <HistoryList />
         ) : (
-          ordered.map((h) => (
-            <div key={h.id}>
-              <HostNotice host={h} />
-              {hostSections(
-                (workspaces[h.id] ?? []).filter((ws) => isShown(shown, h.id, ws.id)),
-                sections[h.id] ?? [],
-              ).map(({ ws, sec }) => (
-                <SectionBlock key={sec.id} host={h.id} ws={ws} sec={sec} onRowMenu={setRowMenu} />
-              ))}
-            </div>
-          ))
+          <>
+            {ordered.map((h) => (
+              <HostNotice key={h.id} host={h} />
+            ))}
+            {/* Each section once, from every host holding it (X68). */}
+            {shownSections(
+              shown,
+              ordered.map((h) => ({ host: h.id, workspaces: workspaces[h.id] ?? [], sections: sections[h.id] ?? [] })),
+            ).map(({ ws, sec, hosts: holding }) => (
+              <SectionBlock key={sec.id} hosts={holding} ws={ws} sec={sec} onRowMenu={setRowMenu} />
+            ))}
+          </>
         )}
         {!showHistory && (
           <div className="mx-2">

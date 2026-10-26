@@ -1,7 +1,7 @@
 // How a section's sessions are grouped, filtered and sorted in the sidebar
 // (X5, X32). Pure, so it is unit-tested.
 
-import type { AgentState, Project, Section, Session, Workspace } from "./protocol";
+import type { AgentState, Project, ProjectIdentity, Section, Session, Workspace } from "./protocol";
 import { agentCount } from "./subagents";
 
 export interface Group {
@@ -14,7 +14,7 @@ export interface Group {
 
 /** How a group is headed: a project row (mark, settings, new session), a
  * plain label (status, task), or nothing for the ungrouped list. */
-export function groupHeading(g: Group): "project" | "label" | null {
+export function groupHeading(g: Pick<Group, "kind">): "project" | "label" | null {
   return g.kind === "project" ? "project" : g.kind === "all" ? null : "label";
 }
 
@@ -79,6 +79,127 @@ export function arrange(
     groups.push({ key: "all", kind: "all", label: "All sessions", sessions: rest });
   }
   return groups;
+}
+
+/** One member's side of a section shared by the members of an account (X68). */
+export interface SectionPart {
+  host: string;
+  sec: Section;
+  projects: Project[];
+  sessions: Session[];
+}
+
+/** A group of a shared section: each session with the host it is on. */
+export interface SharedGroup {
+  key: string;
+  kind: Group["kind"];
+  label: string;
+  /** The host of the project row (its mark, settings, new session). */
+  host: string;
+  projectId?: string;
+  /** Where the project is when it is not on the first member: another
+   * member's name, or "missing" when no connected member has it. */
+  on: string | null;
+  sessions: { host: string; session: Session }[];
+}
+
+const identityKey = (i: ProjectIdentity | undefined) => (i?.root ? `${i.origin ?? ""}|${i.root}` : null);
+
+/** A project's name from its identity: the last part of its origin. */
+const identityName = (i: ProjectIdentity) => i.origin?.split("/").pop() ?? i.root?.slice(0, 7) ?? "project";
+
+/**
+ * A section shared by the members of an account, as one list (X68): each
+ * part is `arrange`d on its own, then a project's groups meet by identity
+ * and other groups by key, with every member's sessions sorted together.
+ * The first part, the shown member's, decides the order and the view.
+ */
+export function arrangeShared(
+  workspaceId: string,
+  parts: SectionPart[],
+  o: {
+    stateOf: (host: string, s: Session) => AgentState | null;
+    activeAt: (host: string, s: Session) => number;
+    archiving: (host: string, s: Session) => boolean;
+    taskOf: (host: string, s: Session) => { key: string; title: string } | null;
+  },
+): SharedGroup[] {
+  if (!parts.length) return [];
+  const view = parts[0].sec.view;
+  const out: SharedGroup[] = [];
+  const byKey = new Map<string, SharedGroup>();
+  parts.forEach((part, i) => {
+    const groups = arrange(
+      workspaceId,
+      { ...part.sec, view: { ...view, filter: part.sec.view.filter } },
+      part.projects,
+      part.sessions,
+      (s) => o.stateOf(part.host, s),
+      (s) => o.activeAt(part.host, s),
+      (s) => o.archiving(part.host, s),
+      (s) => o.taskOf(part.host, s),
+    );
+    for (const g of groups) {
+      const project = g.projectId ? part.projects.find((p) => p.id === g.projectId) : undefined;
+      const key = g.kind === "project" ? (identityKey(project?.identity) ?? `${part.host}/${g.key}`) : g.key;
+      let shared = byKey.get(key);
+      if (!shared) {
+        // The shown member's project groups keep their key, and with it
+        // their collapse state.
+        shared = { key: g.kind === "project" && i > 0 ? `proj:${key}` : g.key, kind: g.kind, label: g.label, host: part.host, projectId: g.projectId, on: i > 0 && g.kind === "project" ? part.host : null, sessions: [] };
+        byKey.set(key, shared);
+        out.push(shared);
+      }
+      shared.sessions.push(...g.sessions.map((session) => ({ host: part.host, session })));
+    }
+  });
+  // The first member's projects that no connected member has, as rows of
+  // their own while grouped by project.
+  for (const i of view.group_by === "project" ? (parts[0].sec.missing ?? []) : []) {
+    const key = identityKey(i);
+    if (!key || byKey.has(key)) continue;
+    const g: SharedGroup = { key: `proj:${key}`, kind: "project", label: identityName(i), host: parts[0].host, on: "missing", sessions: [] };
+    byKey.set(key, g);
+    out.push(g);
+  }
+  const rank = (e: { host: string; session: Session }) =>
+    view.sort_by === "name" ? 0 : view.sort_by === "created" ? e.session.created_at : o.activeAt(e.host, e.session) || e.session.created_at;
+  for (const g of out) {
+    g.sessions.sort((a, b) => (view.sort_by === "name" ? a.session.name.localeCompare(b.session.name) : rank(b) - rank(a) || b.session.created_at - a.session.created_at));
+  }
+  if (view.group_by === "status") {
+    const order = STATUS_ORDER.map((x) => x.label);
+    out.sort((a, b) => order.indexOf(a.label) - order.indexOf(b.label));
+  } else if (view.group_by === "task") {
+    // Tasks by their newest session, sessions without one last.
+    const newest = (g: SharedGroup) => (g.key === "task:none" ? -Infinity : Math.max(...g.sessions.map(rank)));
+    out.sort((a, b) => newest(b) - newest(a));
+  }
+  return out;
+}
+
+/**
+ * The sections the sidebar shows for workspace `shown`, each once, with the
+ * hosts holding it (X68): the shown host's first, in its order, then those
+ * only other members list yet.
+ */
+export function shownSections(
+  shown: { host: string; id: string } | null,
+  hosts: { host: string; workspaces: Workspace[]; sections: Section[] }[],
+): { ws: Workspace; sec: Section; hosts: string[] }[] {
+  if (!shown) return [];
+  const listing = hosts.filter((h) => h.workspaces.some((w) => w.id === shown.id));
+  listing.sort((a, b) => Number(b.host === shown.host) - Number(a.host === shown.host));
+  const out: { ws: Workspace; sec: Section; hosts: string[] }[] = [];
+  for (const h of listing) {
+    const ws = h.workspaces.find((w) => w.id === shown.id)!;
+    for (const sec of workspaceSections(ws, h.sections)) {
+      const seen = out.find((x) => x.sec.id === sec.id);
+      if (seen) seen.hosts.push(h.host);
+      else out.push({ ws, sec, hosts: [h.host] });
+    }
+  }
+  return out;
 }
 
 /** A workspace's sections in its order (X32). */

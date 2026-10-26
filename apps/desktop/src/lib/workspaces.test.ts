@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseWsKey, wsKey, composerOptions, composerPick, composerProjects, composerTarget, createRequest, newSectionWorkspace, currentWorkspace, deleteBlocked, sessionToRestore, switcherRows, workspaceDirty, workspaceInitial, sectionRows, syncWorkspaceForm, workspaceCanSave, workspacesNeedingYou, workspaceSummary } from "./workspaces";
+import { isShown, mergePrompt, mergeTargets, parseWsKey, wsKey, composerOptions, composerPick, composerProjects, composerTarget, createRequest, newSectionWorkspace, currentWorkspace, deleteBlocked, sessionToRestore, switcherRows, workspaceDirty, workspaceInitial, sectionRows, syncWorkspaceForm, workspaceCanSave, workspacesNeedingYou, workspaceSummary } from "./workspaces";
 import type { Section, Session, Workspace } from "./protocol";
 
 const w = (id: string, name: string, section_ids: string[], color: Workspace["color"] = "clay", claude_profile: string | null = null): Workspace => ({ id, name, color, section_ids, claude_profile, created_at: 0 });
@@ -54,6 +54,63 @@ describe("switcherRows", () => {
       ["devbox", "Lab", "⌃⌘2"],
     ]);
     expect(rows[1].summary).toBe("0 sections · 0 sessions · Default");
+  });
+});
+
+describe("switcherRows across the members of an account (X68)", () => {
+  // Both Macs list both "Personal" workspaces: the MacBook's and studio-mini's.
+  const book = w("b1", "Personal", ["a"]);
+  const mini = w("m1", "Personal", ["c"], "blue");
+  const shared = [sec("a"), sec("c")];
+
+  it("lists a workspace once whichever members list it, with every member's sessions", () => {
+    const rows = switcherRows([
+      { host: "local", label: "This Mac", workspaces: [book, mini], sections: shared, sessions: [s("1", "b1")], profiles: [] },
+      { host: "studio-mini", label: "studio-mini", workspaces: [book, mini], sections: shared, sessions: [s("2", "b1"), s("3", "m1")], profiles: [] },
+      { host: "devbox", label: "devbox", workspaces: [w("lab", "Lab", [])], sections: [], sessions: [], profiles: [] },
+    ]);
+    expect(rows.map((r) => [r.hostLabel, r.ws.id, r.summary, r.kbd])).toEqual([
+      ["This Mac", "b1", "1 section · 2 sessions · Default", "⌃⌘1"],
+      [null, "m1", "1 section · 1 session · Default", "⌃⌘2"],
+      // A host outside the account keeps its own workspaces, under its name.
+      ["devbox", "lab", "0 sections · 0 sessions · Default", "⌃⌘3"],
+    ]);
+    expect(rows.map((r) => r.hosts)).toEqual([["local", "studio-mini"], ["local", "studio-mini"], ["devbox"]]);
+  });
+  const members = [
+    { host: "local", label: "This Mac", workspaces: [book, mini], sections: shared, sessions: [], profiles: [] },
+    { host: "studio-mini", label: "studio-mini", workspaces: [book, mini], sections: shared, sessions: [], profiles: [] },
+  ];
+
+  it("shows a shared workspace on every member that lists it", () => {
+    const shown = { host: "local", id: "b1" };
+    expect(isShown(shown, "studio-mini", "b1")).toBe(true);
+    expect(isShown(shown, "studio-mini", "m1")).toBe(false);
+    expect(newSectionWorkspace(shown, "studio-mini", [mini, book])).toBe("b1");
+  });
+
+  it("merges a workspace only into another of the same account, never a host's outside it", () => {
+    const rows = switcherRows([...members, { host: "devbox", label: "devbox", workspaces: [w("lab", "Lab", [])], sections: [], sessions: [], profiles: [] }]);
+    const cur = rows.find((r) => r.ws.id === "m1")!;
+    expect(mergeTargets(rows, cur).map((r) => r.ws.id)).toEqual(["b1"]);
+    expect(mergeTargets([rows[2]], rows[2])).toEqual([]);
+  });
+
+  it("asks before merging, saying what moves and what goes", () => {
+    expect(mergePrompt(mini, book)).toEqual({
+      title: "Merge workspaces",
+      message: "Move the 1 section of this Personal, with its sessions, into the other Personal, and delete this one? Every Mac sharing them gets the change.",
+      action: "Merge",
+    });
+    expect(mergePrompt(w("acme", "Acme", ["x", "y"]), book).message).toBe(
+      "Move the 2 sections of Acme, with their sessions, into Personal, and delete Acme? Every Mac sharing them gets the change.",
+    );
+  });
+
+  it("keeps showing a shared workspace while another member lists it", () => {
+    // This Mac's daemon restarts, and lists nothing for a moment.
+    const hosts = [{ ...members[0], workspaces: [] }, members[1]];
+    expect(currentWorkspace({ host: "local", id: "m1" }, hosts)).toEqual({ host: "local", id: "m1" });
   });
 });
 

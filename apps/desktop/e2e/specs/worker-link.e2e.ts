@@ -8,7 +8,7 @@ import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { $, browser, expect } from "@wdio/globals";
-import { BIN_DIR, closeSettings, fill, openSettings, rpc, sel, socketRpc, world } from "../fixtures";
+import { accountSnapshot, BIN_DIR, closeSettings, fill, openSettings, rpc, restoreAccount, sel, socketRpc, world } from "../fixtures";
 
 const w = world();
 const home = join(w.root, "central-home");
@@ -41,9 +41,12 @@ function startPairing(): { proc: ChildProcess; link: Promise<string> } {
 describe("worker link", () => {
   let pairing: ChildProcess | undefined;
   let name = "";
+  // What the app's daemon shared while linked goes again (X68).
+  let shared = { workspaces: [] as string[], sections: [] as string[] };
   const row = () => `//*[@data-setting="host-${name}"]`;
 
   before(() => {
+    shared = accountSnapshot(w);
     mkdirSync(home, { recursive: true });
     writeFileSync(join(home, "mobile.json"), '{ "enabled": true, "port": 0 }\n');
     execFileSync(join(BIN_DIR, "moonletd"), ["start"], { env, stdio: "pipe" });
@@ -62,6 +65,7 @@ describe("worker link", () => {
       // Already gone.
     }
     if (await $(sel.settings).isExisting()) await closeSettings();
+    restoreAccount(w, shared);
   });
 
   it("marks a paired tailnet host as the central host", async () => {

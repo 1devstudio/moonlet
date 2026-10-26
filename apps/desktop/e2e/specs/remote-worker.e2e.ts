@@ -9,7 +9,7 @@ import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { $, browser, expect } from "@wdio/globals";
-import { BIN_DIR, closeSettings, fill, openSettings, sel, socketRpc, world } from "../fixtures";
+import { accountSnapshot, BIN_DIR, closeSettings, fill, openSettings, restoreAccount, sel, socketRpc, world } from "../fixtures";
 
 const w = world();
 const dialog = (label: string) => `//div[@role="dialog"][@aria-label="${label}"]`;
@@ -74,7 +74,10 @@ const heavy = '//*[@data-setting="heavy-commands-build-box"]';
 const heavySwitch = `${heavy}//button[@role="switch"]`;
 
 describe("remote worker", () => {
+  // What the app's daemon shared while linked goes again (X68).
+  let shared = { workspaces: [] as string[], sections: [] as string[] };
   before(() => {
+    shared = accountSnapshot(w);
     central.start();
     remote.start();
   });
@@ -92,6 +95,7 @@ describe("remote worker", () => {
     central.stop();
     remote.stop();
     if (await $(sel.settings).isExisting()) await closeSettings();
+    restoreAccount(w, shared);
   });
 
   it("offers the switch on a connected tailnet host, not on the central host", async () => {
@@ -124,22 +128,31 @@ describe("remote worker", () => {
 
     await $(`${heavy}//*[starts-with(normalize-space(), "Linked to studio-mini since ")]`).waitForExist({ timeout: 20000 });
     await expect($(heavySwitch)).toHaveAttribute("aria-checked", "true");
-    await browser.waitUntil(async () => (await central.rpc<{ name: string }[]>("worker.list")).length === 1, {
+    // This Mac is linked too, as a member of the account without heavy
+    // commands (X68): the remote host is the one worker taking them.
+    await browser.waitUntil(async () => (await central.rpc<{ heavy: boolean }[]>("worker.list")).filter((x) => x.heavy).length === 1, {
       timeout: 10000,
-      timeoutMsg: "the central host does not list the remote host",
+      timeoutMsg: "the central host does not list the remote host for heavy commands",
     });
   });
 
   it("turns off, and on again without a code", async () => {
+    // Off, it stays linked as a member of the account (X68), and takes no
+    // heavy commands.
     await $(heavySwitch).click();
-    await $(`${heavy}//*[normalize-space()="Not linked"]`).waitForExist({ timeout: 10000 });
-    await browser.waitUntil(async () => (await central.rpc<unknown[]>("worker.list")).length === 0, {
+    await expect($(heavySwitch)).toHaveAttribute("aria-checked", "false", { wait: 10000 });
+    await expect($(`${heavy}//*[starts-with(normalize-space(), "Linked to studio-mini since ")]`)).toExist();
+    await browser.waitUntil(async () => (await central.rpc<{ heavy: boolean }[]>("worker.list")).every((x) => !x.heavy), {
       timeout: 10000,
-      timeoutMsg: "the central host still lists the remote host",
+      timeoutMsg: "the central host still sends the remote host heavy commands",
     });
 
     await $(heavySwitch).click();
-    await $(`${heavy}//*[starts-with(normalize-space(), "Linked to studio-mini since ")]`).waitForExist({ timeout: 20000 });
+    await expect($(heavySwitch)).toHaveAttribute("aria-checked", "true", { wait: 10000 });
     await expect($(dialog("Pair build-box with studio-mini"))).not.toExist();
+    await browser.waitUntil(async () => (await central.rpc<{ heavy: boolean }[]>("worker.list")).filter((x) => x.heavy).length === 1, {
+      timeout: 10000,
+      timeoutMsg: "the central host does not list the remote host for heavy commands again",
+    });
   });
 });
