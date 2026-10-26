@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { JSDOM, type DOMWindow } from "jsdom";
 import { COMPUTED_PROPS, PAGE_KEYS, bridgeMessage, editMessage, helloMessage, modeMessage, paletteMessage, pinsMessage, scrollMessage, selectMessage } from "./designBridge";
 import bridge from "../../src-tauri/src/design_bridge.js?raw";
+import refused from "../../src-tauri/src/design_refused.js?raw";
 import { HOLDS_NO_ELEMENTS } from "./designEdits";
 import { BORDER_STYLES } from "./designStyle";
 import { inspectorSections } from "./designInspector";
@@ -742,5 +743,40 @@ describe("the bridge script in a page (X65)", () => {
       { type: "key", key: "c", shift: false, alt: false, meta: false },
       { type: "key", key: "Escape", shift: false, alt: false, meta: false },
     ]);
+  });
+});
+
+describe("the page the scheme serves for a page it cannot serve (X65)", () => {
+  /** That page as design_scheme.rs's refused_page builds it, in a frame
+   *  whose parent is the app's window. */
+  function refusedFrame(reason: string) {
+    const posted: unknown[] = [];
+    const app = new JSDOM("").window;
+    app.postMessage = ((m: unknown) => void posted.push(bridgeMessage(JSON.parse(JSON.stringify(m))) ?? { dropped: m })) as typeof app.postMessage;
+    const dom = new JSDOM(`<!doctype html><html><head><meta charset="utf-8"><meta name="moonlet-refused" content="${reason}"><script>${refused}</script></head><body></body></html>`, {
+      runScripts: "dangerously",
+      beforeParse: (w) => void Object.defineProperty(w, "parent", { value: app }),
+    });
+    const tell = (data: unknown, from: unknown = app) => dom.window.dispatchEvent(new dom.window.MessageEvent("message", { data, source: from as Window }));
+    return { posted, tell };
+  }
+
+  it("tells the canvas why at once, and again on each hello from the app, never on another window's", () => {
+    const { posted, tell } = refusedFrame("the file cannot be read");
+    expect(posted).toEqual([{ type: "failed", reason: "the file cannot be read" }]);
+    tell(helloMessage());
+    tell(helloMessage(), new JSDOM("").window);
+    expect(posted).toEqual([
+      { type: "failed", reason: "the file cannot be read" },
+      { type: "failed", reason: "the file cannot be read" },
+    ]);
+  });
+
+  it("is taken with its reason cut to 200 characters, and dropped without one", () => {
+    expect(bridgeMessage({ type: "bridge.failed", reason: "the file is missing" })).toEqual({ type: "failed", reason: "the file is missing" });
+    expect(bridgeMessage({ type: "bridge.failed", reason: "x".repeat(201) })).toEqual({ type: "failed", reason: "x".repeat(200) });
+    expect(bridgeMessage({ type: "bridge.failed" })).toBeNull();
+    expect(bridgeMessage({ type: "bridge.failed", reason: " " })).toBeNull();
+    expect(bridgeMessage({ type: "bridge.failed", reason: 404 })).toBeNull();
   });
 });
