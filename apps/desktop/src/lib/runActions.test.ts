@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ACTIONS, actionForKey, assignShortcut, effectiveKeys, filterActions, highlight, keyId, keyLabel, keyParts, recordKey, resetShortcut, shortcutGroups } from "./runActions";
+import { ACTIONS, actionForKey, assignShortcut, effectiveKeys, filterActions, highlight, keyId, keyLabel, keyParts, recordKey, resetShortcut, shortcutGroups, shortcutModeNote } from "./runActions";
 
 describe("filtering", () => {
   it("lists all 29 actions in catalogue order for an empty query", () => {
@@ -220,6 +220,14 @@ describe("the Keyboard shortcuts page (X43)", () => {
     ]);
     // With no key, there is nothing for the mode to qualify.
     expect(shortcutGroups({ "new-design": "" }, "new design").flatMap((g) => g.rows)).toEqual([{ id: "new-design", label: "New design…", keys: "", custom: true }]);
+  });
+
+  it("says a row's mode beside its key, and not while its key is recorded, as \"Press a shortcut…\" takes the key's place (X65)", () => {
+    const row = { id: "new-design", label: "New design…", keys: "⇧⌘N", custom: false, mode: "in Design mode" };
+    expect(shortcutModeNote(row, null)).toBe("in Design mode");
+    expect(shortcutModeNote(row, "commit")).toBe("in Design mode");
+    expect(shortcutModeNote(row, "new-design")).toBeNull();
+    expect(shortcutModeNote({ id: "new-session", label: "New session…", keys: "⇧⌘N", custom: false }, null)).toBeNull();
   });
 
   it("puts one action's default key back, or every one", () => {
