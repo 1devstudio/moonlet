@@ -2068,6 +2068,11 @@ root = \"9c1e0a2\"
     fn no_systems_folder_lists_none_and_one_that_cannot_be_read_fails_the_listing_with_its_reason()
     {
         use std::os::unix::fs::PermissionsExt;
+        // Root reads a folder whatever its mode, so chmod 000 refuses it
+        // nothing: the test has no case to make there.
+        if nix::unistd::geteuid().is_root() {
+            return;
+        }
         let home = tempfile::tempdir().unwrap();
         let store = Store::new(home.path());
         assert_eq!(store.systems("w1").unwrap().len(), 0);
