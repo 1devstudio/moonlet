@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { Design, ToolCall } from "./protocol";
-import { designMark, opensDesignView, worktreeFile } from "./sessionDesign";
+import type { Design, DesignSystem, ToolCall } from "./protocol";
+import { designMark, designSystemFooter, opensDesignView, slashMenu, worktreeFile } from "./sessionDesign";
 
 const design = (over: Partial<Design> = {}): Design => ({
   slug: "settings-page",
@@ -51,5 +51,58 @@ describe("the chat's note that the Design view opened (X65)", () => {
     expect(opensDesignView(bash('"$MOONLET_BIN" design new --here "Settings page"', "error"))).toBe(false);
     expect(opensDesignView(bash('"$MOONLET_BIN" design new --here "Settings page"', "running"))).toBe(false);
     expect(opensDesignView({ name: "Read", summary: "docs/design/settings-page/design.toml", input: { file_path: "docs/design/settings-page/design.toml" }, status: "ok" })).toBe(false);
+  });
+});
+
+describe("the chat input's slash menu in a session (X65)", () => {
+  const footer = "Uses moonlet desktop, the design system built from this project";
+  const forms = [
+    { value: "/moonlet-design", hint: "Prototype it here, in this session's Design view" },
+    { value: "/moonlet-design new", hint: "A separate design in Design mode, with its own agent" },
+    { value: "/moonlet-design sync", hint: "Sync the design system built from this project" },
+  ];
+
+  it("lists /moonlet-design, /moonlet-design new and /moonlet-design sync, each with what it does, and a footer naming the design system", () => {
+    expect(slashMenu(["compact", "review", "moonlet-design"], "/moon", { start: 0, query: "moon" }, footer)).toEqual({ rows: forms, footer });
+    // The agent's other commands follow, as they match.
+    expect(slashMenu(["compact", "moonlet-design"], "/", { start: 0, query: "" }, footer)).toEqual({ rows: [...forms, { value: "/compact", hint: null }], footer });
+  });
+
+  it("is the agent's commands alone outside a session, mid-message, or when the query is another command's", () => {
+    expect(slashMenu(["compact", "moonlet-design"], "/moon", { start: 0, query: "moon" }, null)).toEqual({ rows: [{ value: "/moonlet-design", hint: null }], footer: null });
+    expect(slashMenu(["compact", "moonlet-design"], "then /moon", { start: 5, query: "moon" }, footer)).toEqual({ rows: [], footer: null });
+    expect(slashMenu(["compact", "moonlet-design"], "/comp", { start: 0, query: "comp" }, footer)).toEqual({ rows: [{ value: "/compact", hint: null }], footer: null });
+  });
+});
+
+describe("the design system /moonlet-design will use (X65)", () => {
+  const system = (slug: string, name: string, sources: string[]): DesignSystem => ({
+    slug,
+    name,
+    sources,
+    synced_at: null,
+    synced_commit: null,
+    cards: 0,
+    layouts: 0,
+    changed_sources: [],
+    check_problems: 0,
+    to_settle: 0,
+    step: null,
+    step_summary: null,
+    error: null,
+    agent: null,
+    last_sync: [],
+    needs_you: null,
+    steps: [],
+    sync_running: false,
+  });
+
+  it("is the one built from the session's project, as design new --here picks it, or which to pick, or how to make one", () => {
+    const desktop = system("moonlet-desktop", "moonlet desktop", ["/Users/alex/Workspace/moonlet"]);
+    const mobile = system("moonlet-mobile", "moonlet mobile", ["/Users/alex/Workspace/moonlet"]);
+    const shop = system("storefront", "storefront", ["/Users/alex/Workspace/shop"]);
+    expect(designSystemFooter([desktop, shop], "/Users/alex/Workspace/moonlet")).toBe("Uses moonlet desktop, the design system built from this project");
+    expect(designSystemFooter([desktop, mobile, shop], "/Users/alex/Workspace/moonlet")).toBe("Asks which design system to use: moonlet desktop or moonlet mobile, both built from this project");
+    expect(designSystemFooter([shop], "/Users/alex/Workspace/moonlet")).toBe("No design system is built from this project yet: /moonlet-design sync builds one");
   });
 });
