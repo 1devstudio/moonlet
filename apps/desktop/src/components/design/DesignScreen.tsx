@@ -60,7 +60,7 @@ import { askConfirm } from "../../lib/confirm";
 import { NEAR_ROOT, useNear } from "../../lib/useNear";
 import { useShallow } from "zustand/react/shallow";
 import { workspaceProjects } from "../../lib/tasksStore";
-import { buildProject, buildingIn, type BuildDesign } from "../../lib/buildIt";
+import { buildItTarget, buildingIn, type BuildDesign } from "../../lib/buildIt";
 import { cx } from "../../lib/cx";
 import { AgentIcon, Button, Dialog, Field, IconButton, inputCls } from "../ui";
 import { Menu } from "../Menu";
@@ -109,11 +109,11 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
   const sessions = useStore((s) => s.sessions[host]);
   const allProjects = useStore((s) => s.projects[host]);
   const building = buildingIn(design, sessions ?? [], allProjects ?? []);
+  const target = buildItTarget(systems?.find((x) => x.slug === design.system)?.sources ?? [], projects);
   const buildIt = () => {
-    const sources = systems?.find((x) => x.slug === design.system)?.sources ?? [];
-    const project = buildProject(sources, projects);
+    if (!("project" in target)) return;
     const build: BuildDesign = { workspace, slug: design.slug, name: design.name, system: design.system, pages: design.pages, systemName, viewport: design.viewport };
-    useStore.setState({ dialog: { kind: "new-session", host, workspace, project: project ?? undefined, design: build } });
+    useStore.setState({ dialog: { kind: "new-session", host, workspace, project: target.project, design: build } });
   };
   const remove = async () => {
     const ok = await askConfirm({ title: `Remove ${design.name}?`, message: `Its folder, designs/${design.slug}, its pages and its agent's chat are deleted.`, action: "Remove", variant: "danger" });
@@ -129,8 +129,8 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
               <p className="truncate ui-text-12 text-muted">{designSubtitle(systemName, design.pages.length)}</p>
             </div>
             {!building && (
-              <span title="A session in the design system's first source project, with this design attached" className="no-drag">
-                <Button size="sm" onClick={buildIt}>
+              <span title={"unavailable" in target ? target.unavailable : "A session in the design system's first source project, with this design attached"} className="no-drag">
+                <Button size="sm" disabled={"unavailable" in target} onClick={buildIt}>
                   Build it <ArrowRight size={12} />
                 </Button>
               </span>

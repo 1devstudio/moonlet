@@ -8,7 +8,7 @@ import { onDaemonEvent, onHostStatus, rpc } from "./daemon";
 import { EV, M, type ChatState, type Design, type DesignCard, type CommentChange, type DesignComment, type DesignChanged, type DesignSnapshot, type DesignCover, type DesignCreated, type DesignOpen, type DesignSystem, type DesignSystemCreated, type DesignSystemUpdated } from "./protocol";
 import { parseWsKey, wsKey } from "./workspaces";
 import { syncNotice } from "./designSync";
-import { agentSeen, notify, registerAgentsElsewhere, selectSession, shownWorkspace, switchWorkspace, toast, useStore } from "./store";
+import { agentSeen, errorMessage, notify, registerAgentsElsewhere, selectSession, shownWorkspace, switchWorkspace, toast, useStore } from "./store";
 import { alertFor } from "./alerts";
 import { modeOf, setMode } from "./mode";
 import { latestPerKey } from "./prPoll";
@@ -206,11 +206,22 @@ export function projectDesignsIn(s: DesignState, host: string, workspace: string
 
 /** **Use as a start** (X65): a project design copied into a new workspace
  *  design, under its name (numbered by the daemon when taken), which then
- *  shows. */
+ *  shows, from `design.copy`'s answer: it shows also when the designs
+ *  cannot be listed again after it, which a toast says. */
 export async function startFromProjectDesign(host: string, workspace: string, d: Design): Promise<DesignCreated> {
   const made = await rpc<DesignCreated>(host, M.designCopy, { workspace, from: { project: d.project, path: d.path }, name: d.name });
-  await loadDesigns(host, workspace, true).catch(() => {});
+  const unlisted = await loadDesigns(host, workspace, true).then(
+    () => null,
+    (e: unknown) => e,
+  );
+  const { agent_error: _, ...copied } = made;
+  const key = wsKey(host, workspace);
+  useDesign.setState((s) => {
+    const list = s.designs[key] ?? [];
+    return list.some((x) => x.slug === made.slug) ? {} : { designs: { ...s.designs, [key]: [...list, copied] } };
+  });
   showDesign(host, workspace, made.slug);
+  if (unlisted) toast(`The designs could not be listed again: ${errorMessage(unlisted)}`, "error");
   if (made.agent_error) toast(`${made.name} was made, but its agent did not start: ${made.agent_error}`, "error");
   return made;
 }
@@ -324,7 +335,13 @@ export function reloadPage(host: string, place: DesignPlace, slug: string, page:
 
 /** How many times a design's page changed since the app started. */
 export function pageRevOf(s: DesignState, host: string, place: DesignPlace, slug: string, page: string): number {
-  return s.pageRevs[pageKey(host, place, slug, page)] ?? 0;
+  return pageRevReader(s.pageRevs, host)(place, slug, page);
+}
+
+/** Each page's revision on `host`, from the store's `pageRevs`, as the
+ *  Designs index's thumbnails carry it (X65). */
+export function pageRevReader(pageRevs: DesignState["pageRevs"], host: string): (place: DesignPlace, slug: string, page: string) => number {
+  return (place, slug, page) => pageRevs[pageKey(host, place, slug, page)] ?? 0;
 }
 
 /** The pages the latest change of a design wrote. */

@@ -46,6 +46,10 @@ pub struct Daemon {
     /// How long edits by hand stop before their snapshot is taken: 10 s, or
     /// `MOONLET_DESIGN_QUIET_MS` (tests).
     edits_quiet: std::time::Duration,
+    /// Tests only, `MOONLET_DESIGN_TURNS_HELD`: while the file it names is
+    /// there, the snapshots of design agents' steps wait in line, as one
+    /// waits behind another design's slow snapshot, so a start is heard late.
+    turns_held: Option<PathBuf>,
     /// The app that renders design cards, and the cards it is rendering (X64).
     renders: crate::render::Renders,
     reads: TerminalReads,
@@ -88,15 +92,26 @@ const EDITS_QUIET: std::time::Duration = std::time::Duration::from_secs(10);
 /// A design's edits by hand saved since its last snapshot (X65).
 #[derive(Default)]
 struct HandEdits {
-    /// What each did, as the app said with its saves.
-    edits: Vec<String>,
+    /// What each save did, as the app said with it, in the order they were
+    /// saved, each with whether the design's agent worked as it was saved:
+    /// those go with its turn, also when the daemon hears it start only
+    /// after them.
+    edits: Vec<(bool, String)>,
+    /// One was saved while the agent did not work.
+    before: bool,
+    /// One was saved while the agent worked.
+    in_turn: bool,
     /// Saves so far: a wait that ends after a later save takes nothing.
     saves: u64,
     /// The wait for them to stop, the latest save's: a later save cancels it.
     quiet: Option<tokio::task::AbortHandle>,
-    /// One was saved while the design's agent worked: they go with its
-    /// turn, also when the daemon hears it start only after them.
-    in_turn: bool,
+}
+
+impl HandEdits {
+    /// What all of them did, in the order they were saved.
+    fn all(&self) -> Vec<String> {
+        self.edits.iter().map(|(_, e)| e.clone()).collect()
+    }
 }
 
 /// A design's locks (X65), each guarding one thing.
@@ -444,6 +459,7 @@ impl Daemon {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .map_or(EDITS_QUIET, std::time::Duration::from_millis),
+            turns_held: std::env::var_os("MOONLET_DESIGN_TURNS_HELD").map(PathBuf::from),
             renders: Default::default(),
             reads,
             watchers,
@@ -1611,8 +1627,8 @@ impl Daemon {
                 let _held = lock.lock().await;
                 let (written, edits) = (at.clone(), r.edits.clone());
                 let version = blocking(move || store.write_page(&written, &r.page, &r.html, &r.base_version)).await?;
-                // Saved while the agent works: within its turn.
-                let in_turn = self.design_agent_working(&at).await.unwrap_or(false);
+                // Saved while the agent works, or asks the user: within its turn.
+                let in_turn = self.design_agent_in_turn(&at).await.unwrap_or(false);
                 self.edited_by_hand(&at, edits, in_turn);
                 ok(m::DesignPageWritten { version })
             }
@@ -1632,8 +1648,9 @@ impl Daemon {
                 let _pages = pages.lock().await;
                 let history = self.lock_of(&at, DesignLock::History);
                 let _history = history.lock().await;
-                // Never while the agent writes the pages it would replace.
-                if self.design_agent_working(&at).await? {
+                // Never within the agent's turn, at work or asking the user,
+                // its pages maybe half written.
+                if self.design_agent_in_turn(&at).await? {
                     return Err(RpcError::new("busy", "Claude is changing the design; restore once it stops"));
                 }
                 // What is not kept yet is kept first, as edits by hand. They
@@ -1892,16 +1909,24 @@ impl Daemon {
     }
 
     /// Watches an open session's worktree for its session designs'
-    /// changes, once it has a design folder, and announces them as
-    /// `design.changed` with the design, its session and its workspace
-    /// (X65). Every design call that reaches a session's designs, and their
-    /// listing, starts it, so after a restart, or once the session is
-    /// unarchived, it starts again as the app lists the designs. An archived
+    /// changes, and announces them as `design.changed` with the design, its
+    /// session and its workspace (X65). A design folder not there yet is
+    /// watched for from the nearest folder above it, so a design another
+    /// tool makes there later is announced too. Every design call that reaches a session's designs, and their
+    /// listing, starts it, so once the session is unarchived it starts
+    /// again as the app lists the designs; after a restart the daemon starts
+    /// it (see `watch_saved_session_designs`). An archived
     /// session's designs are not watched (see `prune_session_watches`).
     fn watch_session_designs(&self, s: &moonlet_proto::types::Session, folder: &str) {
         let worktree = Path::new(&s.path);
+        let roots = [worktree.join(folder), worktree.join(moonlet_core::design::session::SIDE_DIR)];
         let mut watches = self.session_watches.lock().unwrap();
-        if s.archived || watches.contains_key(&s.id) || !worktree.join(folder).is_dir() {
+        // A watch started while a folder was not there arms it only once
+        // the watch hears it made; a design call coming once both are there
+        // while it has not armed them yet starts the watch again, armed on
+        // them before it returns.
+        let there = roots.iter().all(|r| r.is_dir());
+        if s.archived || watches.get(&s.id).is_some_and(|w| !there || roots.iter().all(|r| w.watches_whole(r))) {
             return;
         }
         let (terminals, workspace, session) = (self.terminals.clone(), s.workspace_id.clone(), s.id.clone());
@@ -1912,10 +1937,24 @@ impl Daemon {
             }
         });
         match watching {
-            Ok(w) => {
-                watches.insert(s.id.clone(), w);
+            Ok(watching) => {
+                watches.insert(s.id.clone(), watching);
             }
             Err(e) => tracing::warn!("cannot watch the designs of session {}: {e:#}", s.id),
+        }
+    }
+
+    /// Watches the designs of every open session that has session designs,
+    /// a `.moonlet/design/` in its worktree (X65), as the daemon starts, so
+    /// after a restart their edits are announced before any design call.
+    pub fn watch_saved_session_designs(&self) {
+        for s in self.sessions.list_sessions() {
+            if !s.archived
+                && Path::new(&s.path).join(moonlet_core::design::session::SIDE_DIR).is_dir()
+                && let Err(e) = self.design_session(&s.id)
+            {
+                tracing::warn!("cannot watch the designs of session {}: {}", s.id, e.message);
+            }
         }
     }
 
@@ -2023,44 +2062,59 @@ impl Daemon {
         Ok(agent.and_then(|id| terminals.into_iter().find(|t| t.id == id)))
     }
 
-    /// Whether a design's agent is at work (X65).
-    async fn design_agent_working(&self, at: &DesignAt) -> Result<bool, RpcError> {
-        Ok(self.design_agent(at).await?.is_some_and(|t| t.agent_state == moonlet_proto::types::AgentState::Working))
+    /// Whether a design's agent is within a turn: at work, or asking the
+    /// user, as the snapshots' watch counts a turn (X65).
+    async fn design_agent_in_turn(&self, at: &DesignAt) -> Result<bool, RpcError> {
+        use moonlet_proto::types::AgentState;
+        Ok(self.design_agent(at).await?.is_some_and(|t| matches!(t.agent_state, AgentState::Working | AgentState::Blocked)))
     }
 
     /// What a design's edits by hand not kept yet did, leaving them and
     /// their wait in place.
     fn pending_hand_edits(&self, at: &DesignAt) -> Vec<String> {
-        self.hand_edits.lock().unwrap().get(&at.key()).map(|e| e.edits.clone()).unwrap_or_default()
+        self.hand_edits.lock().unwrap().get(&at.key()).map(HandEdits::all).unwrap_or_default()
     }
 
     /// Takes a design's edits by hand not kept yet, with what they did, and
     /// cancels the wait for them to stop; `None` when there are none.
     fn take_hand_edits(&self, at: &DesignAt) -> Option<Vec<String>> {
         let taken = self.hand_edits.lock().unwrap().remove(&at.key())?;
-        if let Some(quiet) = taken.quiet {
+        if let Some(quiet) = &taken.quiet {
             quiet.abort();
         }
-        Some(taken.edits)
+        Some(taken.all())
     }
 
-    /// Takes a design's edits by hand not kept yet, as its agent starts a
-    /// turn, unless one was saved while the agent worked: the daemon heard
-    /// it start after them, and they go with the turn, left waiting for
-    /// its snapshot.
+    /// Takes the edits by hand a design's agent did not work during, as it
+    /// starts a turn; `None` when there are none. Those saved while it
+    /// worked stay, with their wait: the daemon heard it start after them,
+    /// and they go with the turn's snapshot.
     fn take_hand_edits_before_turn(&self, at: &DesignAt) -> Option<Vec<String>> {
-        if self.hand_edits.lock().unwrap().get(&at.key()).is_some_and(|e| e.in_turn) {
+        let key = at.key();
+        let mut all = self.hand_edits.lock().unwrap();
+        let pending = all.get_mut(&key)?;
+        if !pending.before {
             return None;
         }
-        self.take_hand_edits(at)
+        if pending.in_turn {
+            let (during, before): (Vec<_>, Vec<_>) = std::mem::take(&mut pending.edits).into_iter().partition(|(in_turn, _)| *in_turn);
+            pending.edits = during;
+            pending.before = false;
+            return Some(before.into_iter().map(|(_, e)| e).collect());
+        }
+        let taken = all.remove(&key)?;
+        if let Some(quiet) = &taken.quiet {
+            quiet.abort();
+        }
+        Some(taken.all())
     }
 
     /// A design's page saved by its editor (X65): what its edits did is
     /// kept for the snapshot, taken once its saves stop for
     /// [`EDITS_QUIET`], each save's wait cancelling the one before. The
     /// daemon sees every save, so the snapshot comes also when the app
-    /// closes meanwhile. While the design's agent works the wait takes
-    /// nothing: the edits were kept as the agent started (see
+    /// closes meanwhile. While the design's agent is within a turn, at work
+    /// or asking the user, the wait takes nothing: the edits were kept as the agent started (see
     /// [`Self::snapshot_agent_turns`]), and any made since go with the
     /// turn's own snapshot, `in_turn`, even when the daemon hears the
     /// agent start only after them.
@@ -2068,8 +2122,11 @@ impl Daemon {
         let key = at.key();
         let mut all = self.hand_edits.lock().unwrap();
         let pending = all.entry(key.clone()).or_default();
-        pending.edits.extend(edits);
-        pending.in_turn |= in_turn;
+        pending.edits.extend(edits.into_iter().map(|e| (in_turn, e)));
+        match in_turn {
+            true => pending.in_turn = true,
+            false => pending.before = true,
+        }
         pending.saves += 1;
         if let Some(quiet) = pending.quiet.take() {
             quiet.abort();
@@ -2082,8 +2139,9 @@ impl Daemon {
             let (pages, history) = (d.lock_of(&at, DesignLock::Pages), d.lock_of(&at, DesignLock::History));
             let _pages = pages.lock().await;
             let _history = history.lock().await;
-            // The agent's pages may be half written: its turn keeps them.
-            if d.design_agent_working(&at).await.unwrap_or(false) {
+            // Within the agent's turn, at work or asking the user, its pages
+            // may be half written: the turn keeps them.
+            if d.design_agent_in_turn(&at).await.unwrap_or(false) {
                 return;
             }
             let edits = {
@@ -2092,7 +2150,7 @@ impl Daemon {
                 if all.get(&key).is_none_or(|e| e.saves != saves) {
                     return;
                 }
-                all.remove(&key).map(|e| e.edits).unwrap_or_default()
+                all.remove(&key).map(|e| e.all()).unwrap_or_default()
             };
             d.snapshot(&at, Take::EditsByHand(edits)).await;
         });
@@ -2119,15 +2177,26 @@ impl Daemon {
         let d = self.clone();
         tokio::spawn(async move {
             while let Some((of, step)) = todo.recv().await {
+                while d.turns_held.as_deref().is_some_and(Path::exists) {
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
                 for at in d.designs_of_turn(&of).await {
                     d.agent_snapshot(&at, step).await;
                 }
             }
         });
+        // The agents in a turn: from working until done, idle (stopped) or
+        // error; asking the user is still within it. One already at work or
+        // asking as the watch starts, such as a question kept through a
+        // restart, is in its turn, as is one first heard asking.
+        let mut in_turn: std::collections::HashSet<_> = self
+            .terminals
+            .list()
+            .into_iter()
+            .filter(|t| turn_of(t).is_some() && matches!(t.agent_state, AgentState::Working | AgentState::Blocked))
+            .map(|t| t.id)
+            .collect();
         tokio::spawn(async move {
-            // The agents in a turn: from working until done, idle
-            // (stopped) or error; asking the user is still within it.
-            let mut in_turn = std::collections::HashSet::new();
             loop {
                 let message = match events.recv().await {
                     Ok(m) => m,
@@ -2142,6 +2211,10 @@ impl Daemon {
                 let Some(of) = turn_of(&t) else { continue };
                 let step = match t.agent_state {
                     AgentState::Working if in_turn.insert(t.id) => AgentStep::Starts,
+                    AgentState::Blocked => {
+                        in_turn.insert(t.id);
+                        continue;
+                    }
                     AgentState::Done | AgentState::Idle | AgentState::Error if in_turn.remove(&t.id) => AgentStep::EndsTurn,
                     _ => continue,
                 };
@@ -2164,9 +2237,9 @@ impl Daemon {
     /// The snapshot a step of a design's agent takes (X65), under the
     /// locks of the design's pages and history, so the edits by hand not
     /// kept yet are read and taken only under them: as it starts, they are
-    /// kept on their own, if there are any and none was saved while it
-    /// worked; as it ends a turn, everything since is kept, edits saved
-    /// during the turn with it.
+    /// kept on their own, those saved while it did not work, if there are
+    /// any; as it ends a turn, everything since is kept, edits saved while
+    /// it worked with it.
     async fn agent_snapshot(&self, at: &DesignAt, step: AgentStep) {
         let (pages, history) = (self.lock_of(at, DesignLock::Pages), self.lock_of(at, DesignLock::History));
         let _pages = pages.lock().await;

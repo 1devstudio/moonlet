@@ -120,6 +120,7 @@ pub fn group_session(worktree: &Path, folder: &str, paths: &[PathBuf]) -> Vec<Se
         let beside = rest.is_empty() && std::fs::symlink_metadata(p).is_ok_and(|m| m.is_file());
         if super::place::check_slug(slug).is_err()
             || beside
+            || (!in_folder && rest.first().is_some_and(|name| super::session::is_update_folder(name)))
             || parts.last().is_some_and(|name| is_temp(name))
             || (in_folder && !super::session::made_here(worktree, slug))
         {
@@ -331,7 +332,15 @@ pub fn start(root: &Path, emit: impl Fn(Vec<Change>) + Send + 'static) -> anyhow
 }
 
 /// A running watch of the design folder; dropping it stops the watch.
-pub struct Watching(#[allow(dead_code)] std::sync::Arc<std::sync::Mutex<Armed>>);
+pub struct Watching(std::sync::Arc<std::sync::Mutex<Armed>>);
+
+impl Watching {
+    /// Whether the watch is on the folder `dir` whole, with its folders, as
+    /// it is once a folder it watches for is made and armed.
+    pub fn watches_whole(&self, dir: &Path) -> bool {
+        self.0.lock().unwrap().on.get(dir) == Some(&true)
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -508,6 +517,29 @@ mod tests {
         );
     }
 
+    /// X65: what an Update writes aside before swapping a session design's
+    /// copies of its design system into place is none of the design's
+    /// changes; its copies in place still are.
+    #[test]
+    fn an_updates_folders_beside_a_session_designs_copies_are_none_of_its_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let worktree = dir.path();
+        std::fs::create_dir_all(worktree.join(".moonlet/design/settings-page")).unwrap();
+        let paths: Vec<PathBuf> = [
+            ".moonlet/design/settings-page/.update-system",
+            ".moonlet/design/settings-page/.update-system/styles.css",
+            ".moonlet/design/settings-page/.update-pinned/tokens/colors.css",
+            ".moonlet/design/settings-page/system/styles.css",
+        ]
+        .iter()
+        .map(|p| worktree.join(p))
+        .collect();
+        assert_eq!(
+            group_session(worktree, "docs/design", &paths),
+            vec![SessionChange { design: "settings-page".into(), paths: vec!["system/styles.css".into()] }]
+        );
+    }
+
     #[test]
     fn a_change_in_a_design_merged_on_the_base_branch_is_none_of_the_sessions_designs() {
         let dir = tempfile::tempdir().unwrap();
@@ -572,6 +604,33 @@ mod tests {
                 change("onboarding.v2", &["pages/index.html"]),
             ]
         );
+    }
+
+    /// X65: a session's watch started before its design folder and
+    /// `.moonlet/design/` are there says it watches them whole only once it
+    /// has armed them, which it does as they are made, so the daemon starts
+    /// it again only while it has not.
+    #[test]
+    fn a_session_watch_says_it_watches_its_folders_whole_once_it_armed_them() {
+        let worktree = tempfile::tempdir().unwrap();
+        let wt = worktree.path();
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<SessionChange>>();
+        let watching = start_session(wt, "docs/design", move |changes| {
+            let _ = tx.send(changes);
+        })
+        .unwrap();
+        let (folder, side) = (wt.join("docs/design"), wt.join(super::super::session::SIDE_DIR));
+        assert_eq!((watching.watches_whole(&folder), watching.watches_whole(&side)), (false, false));
+        std::fs::create_dir_all(folder.join("settings-page/pages")).unwrap();
+        std::fs::create_dir_all(side.join("settings-page")).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            std::fs::write(folder.join("settings-page/pages/index.html"), "<p>x</p>\n").unwrap();
+            if rx.recv_timeout(std::time::Duration::from_millis(300)).is_ok() && watching.watches_whole(&folder) && watching.watches_whole(&side) {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "the folders made after the watch started were never armed whole");
+        }
     }
 
     #[test]
