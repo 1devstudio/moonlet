@@ -234,8 +234,8 @@ pub(super) fn styles_closure(root: &Path) -> Vec<PathBuf> {
         };
         let dir = file.parent().unwrap_or(root).to_path_buf();
         seen.push(file);
-        for r in css_refs(&text).into_iter().filter(|r| r.import) {
-            if let Target::Fine(Some(next)) = target(root, &dir, &r.url)
+        for (_, url) in css_refs(&text).imports {
+            if let Target::Fine(Some(next)) = target(root, &dir, &url)
                 && !is_proposal(&next)
             {
                 visit(next, root, seen);
@@ -431,49 +431,39 @@ pub(super) fn style_imports(html: &str) -> Vec<(usize, String)> {
         .into_iter()
         .flat_map(|s| {
             css_refs(&html[s.clone()])
+                .imports
                 .into_iter()
-                .filter(|r| r.import)
-                .map(move |r| (line_of(html, s.start + r.at), r.url))
+                .map(move |(at, url)| (line_of(html, s.start + at), url))
         })
         .collect()
 }
 
-/// A URL that CSS names: an `@import`'s, or a `url()` elsewhere.
-struct CssRef {
-    /// Where it starts in the CSS, in bytes.
-    at: usize,
-    url: String,
-    import: bool,
+/// The URLs that CSS names, each with the byte it starts at, in order.
+struct CssRefs {
+    /// The `@import`s'.
+    imports: Vec<(usize, String)>,
+    /// The `url()`s not in an `@import`.
+    urls: Vec<(usize, String)>,
 }
 
-/// Each `@import` and `url()` of `css`, comments left out, in order. One may
-/// span lines (`@import` with its URL on the next); an `@import url(…)` is
-/// one `@import`, not a `url()` too.
-fn css_refs(css: &str) -> Vec<CssRef> {
+/// Each `@import` and `url()` of `css`, comments left out. One may span
+/// lines (`@import` with its URL on the next); an `@import url(…)` is one
+/// `@import`, not a `url()` too.
+fn css_refs(css: &str) -> CssRefs {
     let css = blank(css, &css_comments(css));
-    let mut refs = Vec::new();
+    let mut imports = Vec::new();
     let mut taken = Vec::new();
     for c in IMPORT.captures_iter(&css) {
         let m = c.get(0).map_or(0..0, |m| m.range());
-        refs.push(CssRef {
-            at: m.start,
-            url: quoted(&c).to_string(),
-            import: true,
-        });
+        imports.push((m.start, quoted(&c).to_string()));
         taken.push(m);
     }
-    for c in URL.captures_iter(&css) {
-        let at = c.get(0).map_or(0, |m| m.start());
-        if !taken.iter().any(|r| r.contains(&at)) {
-            refs.push(CssRef {
-                at,
-                url: quoted(&c).to_string(),
-                import: false,
-            });
-        }
-    }
-    refs.sort_by_key(|r| r.at);
-    refs
+    let urls = URL
+        .captures_iter(&css)
+        .map(|c| (c.get(0).map_or(0, |m| m.start()), quoted(&c).to_string()))
+        .filter(|(at, _)| !taken.iter().any(|r| r.contains(at)))
+        .collect();
+    CssRefs { imports, urls }
 }
 
 /// The 1-based line of the byte at `byte` in `text`.
@@ -532,11 +522,20 @@ fn css_problems(
 ) {
     let dir = path.parent().unwrap_or(root);
     for range in css {
-        for r in css_refs(&text[range.clone()]) {
-            if let Some((kind, message)) = css_problem(root, dir, &r) {
+        let refs = css_refs(&text[range.clone()]);
+        let imports = refs
+            .imports
+            .iter()
+            .map(|(at, url)| (at, import_problem(url, target(root, dir, url))));
+        let urls = refs
+            .urls
+            .iter()
+            .map(|(at, url)| (at, url_problem(url, target(root, dir, url))));
+        for (at, found) in imports.chain(urls) {
+            if let Some((kind, message)) = found {
                 problems.push(Problem {
                     path: path_rel.to_string(),
-                    line: line_of(text, range.start + r.at),
+                    line: line_of(text, range.start + at),
                     kind,
                     message,
                 });
@@ -545,33 +544,40 @@ fn css_problems(
     }
 }
 
-/// What is wrong with a URL that CSS in `dir` names, if anything.
-fn css_problem(root: &Path, dir: &Path, r: &CssRef) -> Option<(Kind, String)> {
-    let url = &r.url;
-    Some(match target(root, dir, url) {
+/// What is wrong with a CSS `url()` whose target is `t`, if anything.
+fn url_problem(url: &str, t: Target) -> Option<(Kind, String)> {
+    Some(match t {
         Target::Leaves => (Kind::ExternalUrl, format!("{url} leaves the design system")),
-        Target::Missing if r.import => (
-            Kind::Unresolved,
-            format!("@import \"{url}\" does not resolve"),
-        ),
         Target::Missing => (Kind::Unresolved, format!("url({url}) does not resolve")),
         Target::Script => (
             Kind::Script,
             "a javascript: URL is not allowed in a card".into(),
         ),
-        Target::Fine(Some(file)) if r.import && is_proposal(&file) => {
+        Target::Fine(_) => return None,
+    })
+}
+
+/// What is wrong with an `@import` whose target is `t`, if anything: what
+/// is wrong with a `url()`, and also a proposal imported.
+fn import_problem(url: &str, t: Target) -> Option<(Kind, String)> {
+    match t {
+        Target::Missing => Some((
+            Kind::Unresolved,
+            format!("@import \"{url}\" does not resolve"),
+        )),
+        Target::Fine(Some(file)) if is_proposal(&file) => {
             let live = file
                 .file_name()
                 .unwrap_or_default()
                 .to_string_lossy()
                 .replace(".proposed.", ".");
-            (
+            Some((
                 Kind::Unresolved,
                 format!("@import \"{url}\" is a proposal waiting to be settled; import {live}"),
-            )
+            ))
         }
-        Target::Fine(_) => return None,
-    })
+        t => url_problem(url, t),
+    }
 }
 
 static FONT_FACE_BLOCK: LazyLock<Regex> =
@@ -672,9 +678,9 @@ fn elements(
                     let first = a
                         .value_source_location()
                         .map_or(line, |l| line_of(text, l.bytes().start));
-                    for r in css_refs(&value).iter().filter(|r| !r.import) {
-                        if let Some((kind, message)) = css_problem(root, dir, r) {
-                            found.push((first + line_of(&value, r.at) - 1, kind, message));
+                    for (at, url) in css_refs(&value).urls {
+                        if let Some((kind, message)) = url_problem(&url, target(root, dir, &url)) {
+                            found.push((first + line_of(&value, at) - 1, kind, message));
                         }
                     }
                     continue;
