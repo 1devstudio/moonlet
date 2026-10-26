@@ -172,8 +172,11 @@ describe("Build it and the Designs index", () => {
     const built = join(session!.path, ".moonlet", "design", SLUG, "built");
     mkdirSync(built, { recursive: true });
     writeFileSync(join(built, "index.png"), PNG);
-    await expect(index.$('.//iframe[@title="index built"]')).toBeExisting({ wait: 20_000 });
-    expect(await index.$('.//iframe[@title="index built"]').getAttribute("src")).toMatch(new RegExp(`^moonlet-design://[0-9a-f]{16}\\.s-${session!.id}/${SLUG}%40built/index\\.png`));
+    const shot = index.$('.//img[@alt="index built"]');
+    await expect(shot).toBeExisting({ wait: 20_000 });
+    // Loaded through the scheme: an image the CSP or the scheme refused has no width.
+    await browser.waitUntil(async () => (await shot.getProperty("naturalWidth")) === 1, { timeoutMsg: "the built screenshot never loaded" });
+    expect(await shot.getAttribute("src")).toMatch(new RegExp(`^moonlet-design://[0-9a-f]{16}\\.s-${session!.id}/${SLUG}%40built/index\\.png`));
     await expect(index).toHaveText(expect.stringContaining(`.moonlet/design/${SLUG}/built/index.png`));
     await expect(view.$('.//article[@aria-label="git-b design and build"]')).toHaveText(expect.stringContaining("Not built yet"));
     await panel().$(sel.button("Canvas").replace(/^\/\//, ".//")).click();
