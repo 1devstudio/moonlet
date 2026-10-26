@@ -6,7 +6,7 @@
 // previewed on the canvas, read only.
 
 import { ArrowRight, ChevronDown, GitBranch, History as HistoryIcon, LayoutGrid, Loader2, Lock, MessageSquare, MoreHorizontal, PanelLeftClose, PanelLeftOpen, PanelRight, SwatchBook, Trash2, Undo2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type Dispatch, type MutableRefObject, type ReactNode, type RefObject, type SetStateAction } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type Dispatch, type MutableRefObject, type ReactNode, type RefObject, type SetStateAction } from "react";
 import { errorToast, toast, updateSettings, useStore } from "../../lib/store";
 import { chatKey, useChat } from "../../lib/chat";
 import type { Design, DesignComment, DesignSnapshot, DesignToken } from "../../lib/protocol";
@@ -54,7 +54,7 @@ import { chatCardLookup, commentCardSelector, commentsRail, commentsTab, keepAct
 import { bridgeMessage, editMessage, helloMessage, modeMessage, paletteMessage, pinsMessage, scrollMessage, selectMessage, type DragOver, type DragResult, type Layer, type PickedElement, type Rect } from "../../lib/designBridge";
 import { pageFile, pagePath } from "../../lib/designPage";
 import { barProblems, chatOpensOn, designBar, loadFixMessage, pageFixMessage, type Bar, type BarAction, type PageProblem } from "../../lib/designBars";
-import { LOAD_WAIT_MS, LOADING, framesWithBridge, loadStep, notLoadedOf, readFailureNote, shownLoad, waitToken, wantsParseError, type LoadEvent, type LoadSignal, type PageLoad } from "../../lib/designLoad";
+import { LOAD_WAIT_MS, LOADING, framesWithBridge, fromFraming, loadStep, notLoadedOf, readFailureNote, shownLoad, waitToken, wantsParseError, type LoadEvent, type LoadSignal, type PageLoad } from "../../lib/designLoad";
 import { claimKeys } from "../../lib/keys";
 import { askConfirm } from "../../lib/confirm";
 import { NEAR_ROOT, useNear } from "../../lib/useNear";
@@ -941,11 +941,21 @@ function PageFrame({
   onCloseBox: () => void;
 }) {
   const rev = useDesign((d) => pageRevOf(d, host, place, design.slug, page));
-  // A signal of the frame framed now (lib/designLoad.ts).
-  const framedNow = useRef(frameKey);
-  framedNow.current = frameKey;
-  const signal = useCallback((e: LoadSignal) => onLoadEvent({ ...e, frame: framedNow.current }), [onLoadEvent]);
   const frame = useRef<HTMLIFrameElement>(null);
+  // The framing whose frame is mounted: its key is set as the frame for it
+  // is, each framing having a frame of its own (keyed below).
+  const framedNow = useRef(frameKey);
+  useLayoutEffect(() => {
+    framedNow.current = frameKey;
+  }, [frameKey]);
+  // A signal of the framing framed now, the window's visibility.
+  const signal = useCallback((e: LoadSignal) => onLoadEvent({ ...e, frame: framedNow.current }), [onLoadEvent]);
+  // A signal the page sent, credited only to the framing whose own frame's
+  // window sent it (lib/designLoad.ts fromFraming).
+  const pageSignal = (e: LoadSignal, source: unknown) => {
+    const event = fromFraming(e, source, { frame: framedNow.current, window: frame.current?.contentWindow ?? null });
+    if (event) onLoadEvent(event);
+  };
   const [rects, setRects] = useState<Record<string, Rect>>({});
   // The elements whose boxes the page reports: the pins', and the open box's.
   const wanted = useMemo(() => [...pins.map((p) => p.mid), ...(box ? [box.element.mid] : [])], [pins, box]);
@@ -985,9 +995,9 @@ function PageFrame({
       if (!win || e.source !== win) return;
       const m = bridgeMessage(e.data);
       if (!m) return;
-      if (m.type === "failed") return signal({ kind: "refused" });
+      if (m.type === "failed") return pageSignal({ kind: "refused" }, e.source);
       if (m.type === "mids") {
-        signal({ kind: "answer" });
+        pageSignal({ kind: "answer" }, e.source);
         setPageMids(host, place, design.slug, page, m.mids);
         tell(modeMessage(latest.current.mode));
         tell(pinsMessage(latest.current.wanted));
@@ -1043,7 +1053,9 @@ function PageFrame({
 
   return (
     <div className="relative m-auto shrink-0 rounded-md border border-border-strong shadow-2xl">
-      <CardFrame url={pageUrl(place, design.slug, page, rev, true)} title={pageFile(page)} viewport={viewport} scale={scale} interactive frameRef={frame} onLoad={() => signal({ kind: "load", visible: document.visibilityState === "visible" })} />
+      {/* A frame of its own for each framing, so an earlier framing's page
+          (its load, its bridge's messages) is never taken for this one's. */}
+      <CardFrame key={frameKey} url={pageUrl(place, design.slug, page, rev, true)} title={pageFile(page)} viewport={viewport} scale={scale} interactive frameRef={frame} onLoad={() => onLoadEvent({ kind: "load", visible: document.visibilityState === "visible", frame: frameKey })} />
       <PinLayer pins={pins} rects={rects} scale={scale} size={[viewport[0] * scale, viewport[1] * scale]} open={box?.pin?.n ?? null} onOpen={onOpenPin} />
       {box && (
         <CommentBox

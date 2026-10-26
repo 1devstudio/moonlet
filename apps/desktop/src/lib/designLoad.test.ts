@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { LOADING, framesWithBridge, loadStep, notLoadedOf, readFailureNote, shownLoad, waitToken, wantsParseError, type LoadEvent, type LoadSignal, type PageLoad } from "./designLoad";
+import { LOADING, framesWithBridge, fromFraming, loadStep, notLoadedOf, readFailureNote, shownLoad, waitToken, wantsParseError, type LoadEvent, type LoadSignal, type PageLoad } from "./designLoad";
 import { bridgeMessage } from "./designBridge";
 import { designBar, loadFixMessage } from "./designBars";
 
@@ -126,6 +126,22 @@ describe("the load of the page shown (X65)", () => {
     expect(shownLoad(b, "b@1").phase).toBe("loading");
     expect(shownLoad(step(b, { kind: "answer", frame: "a@1" }), "b@1").phase).toBe("loading");
     expect(shownLoad(step(b, { kind: "answer", frame: "b@1" }), "b@1").phase).toBe("loaded");
+  });
+
+  it("credits a page's signal to the framing whose own frame's window sent it, never one an earlier framing's window sent that comes after the page is framed again", () => {
+    // Each framing mounts a frame of its own: its window is its own.
+    const before = { name: "index@1's window" };
+    const now = { name: "index@2's window" };
+    const framed = { frame: "index@2", window: now };
+    expect(fromFraming({ kind: "answer" }, now, framed)).toEqual({ kind: "answer", frame: "index@2" });
+    expect(fromFraming({ kind: "answer" }, before, framed)).toBeNull();
+    expect(fromFraming({ kind: "refused" }, before, framed)).toBeNull();
+    // Before its frame has a window, nothing is its.
+    expect(fromFraming({ kind: "answer" }, null, { frame: "index@2", window: null })).toBeNull();
+    // Written again, a page swallowing its bridge stays failed whatever the page before said.
+    const again = thenTimeout([{ kind: "frame", frame: "index@2" }, { kind: "load", visible: true, frame: "index@2" }]);
+    const late = fromFraming({ kind: "answer" }, before, framed);
+    expect((late ? step(again, late) : again).phase).toBe("failed");
   });
 });
 
