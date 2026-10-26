@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { VIEWPORTS, canvasKey, fitBox, sizeOf, customViewports, withCustomViewport, canvasScale, canvasZoom, parseViewport, viewportLabel, viewportText } from "./designViewport";
+import { VIEWPORTS, canvasKey, fitBox, sizeOf, customViewports, withCustomViewport, canvasScale, canvasZoom, parseViewport, viewportLabel, viewportOf, viewportText } from "./designViewport";
 
 describe("the canvas's viewport (X65)", () => {
   it("is Desktop, Laptop, Tablet or Phone, at their sizes", () => {
@@ -71,5 +71,13 @@ describe("the user's custom viewports (X65)", () => {
     expect(withCustomViewport(undefined, [1024, 768])).toEqual(["1024x768"]);
     expect(withCustomViewport(["1024x768"], [390, 844])).toEqual(["1024x768"]);
     expect(withCustomViewport(["1x1", "2x2", "3x3", "4x4", "5x5"], [6, 6])).toEqual(["6x6", "1x1", "2x2", "3x3", "4x4"]);
+  });
+});
+
+describe("viewportOf (X65)", () => {
+  it("is the viewport a design was last shown at, else Desktop", () => {
+    expect(viewportOf({ viewport: "390x844" })).toEqual([390, 844]);
+    expect(viewportOf({})).toEqual([1440, 900]);
+    expect(viewportOf({ viewport: "wide" })).toEqual([1440, 900]);
   });
 });

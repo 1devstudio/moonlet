@@ -25,7 +25,7 @@ import { defaultStartLabel, gitSettingsOf } from "../lib/gitSettings";
 import { buildComposer, buildPick, designAttachments, designDir, type BuildDesign } from "../lib/buildIt";
 import { loadDesigns } from "../lib/designStore";
 import { pageUrl } from "../lib/designView";
-import { parseViewport } from "../lib/designViewport";
+import { viewportOf } from "../lib/designViewport";
 import { CardFrame } from "./design/Frame";
 
 
@@ -599,7 +599,7 @@ export function Composer({
   const built = design ? buildComposer(design, { sources: [], projects: [], prefix }) : null;
   const designSent = design ? designAttachments(design, { systemName: design.systemName, dir: designDir(config), left }) : [];
   const sent = [...designSent, ...attachments({ task, pr: pr && prSend ? pr : null, prContext })];
-  const thumbs = design ? { workspace: design.workspace, slug: design.slug, viewport: parseViewport(design.viewport ?? "") ?? ([1440, 900] as [number, number]) } : undefined;
+  const thumbs = design ? { workspace: design.workspace, slug: design.slug, viewport: viewportOf(design) } : undefined;
   const row = branchRow({
     base: current?.project.base_branch ?? "base",
     task,
