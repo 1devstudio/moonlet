@@ -130,24 +130,51 @@ pub fn group_session(worktree: &Path, folder: &str, paths: &[PathBuf]) -> Vec<Se
 }
 
 /// Watches a worktree's session designs, its design folder `folder` and
-/// `.moonlet/design/`, whichever are there, and calls `emit` with their
-/// changes, gathered over 150 ms. Watching stops when the returned watcher
-/// is dropped.
+/// `.moonlet/design/`, and calls `emit` with their changes, gathered over
+/// 150 ms. Either folder may come later, as the first session design makes
+/// `.moonlet/design/`: until it is there, the nearest folder above it in
+/// the worktree is watched for it, and once it is, it is watched whole, the
+/// designs already in it reported as changed. Watching stops when the
+/// returned watcher is dropped.
 pub fn start_session(
     worktree: &Path,
     folder: &str,
     emit: impl Fn(Vec<SessionChange>) + Send + 'static,
 ) -> anyhow::Result<Watching> {
     let (worktree, folder) = (worktree.to_path_buf(), folder.to_string());
-    let roots: Vec<PathBuf> = [
+    let real = worktree.canonicalize()?;
+    let roots = [
         worktree.join(&folder),
         worktree.join(super::session::SIDE_DIR),
-    ]
-    .into_iter()
-    .filter(|r| r.is_dir())
-    .collect();
-    let real = worktree.canonicalize()?;
-    watch_roots(&roots, move |batch| {
+    ];
+    let top = worktree.clone();
+    let arm = move |armed: &mut Armed| -> anyhow::Result<Vec<PathBuf>> {
+        let mut made = Vec::new();
+        for root in &roots {
+            if root.is_dir() {
+                if armed.watch(root, true)? {
+                    // What it has came before its watch: count it.
+                    for e in std::fs::read_dir(root)?.flatten() {
+                        made.push(e.path());
+                    }
+                }
+                continue;
+            }
+            // Gone, or not made yet: watched for from the nearest folder
+            // above it, the worktree at the top.
+            armed.unwatch(root);
+            if let Some(above) = root
+                .ancestors()
+                .skip(1)
+                .take_while(|a| a.starts_with(&top))
+                .find(|a| a.is_dir())
+            {
+                armed.watch(above, false)?;
+            }
+        }
+        Ok(made)
+    };
+    watch_with(arm, move |batch| {
         // Each path as under the worktree as given, also when the watch
         // reports it with its links resolved.
         let batch: Vec<PathBuf> = batch
@@ -161,24 +188,66 @@ pub fn start_session(
     })
 }
 
-/// Watches `roots`, and calls `on` with each batch of changed paths,
-/// gathered over 150 ms.
-fn watch_roots(
-    roots: &[PathBuf],
+/// A watcher and the folders it is on, each whole or only its own entries.
+struct Armed {
+    watcher: notify::RecommendedWatcher,
+    on: std::collections::BTreeMap<PathBuf, bool>,
+}
+
+impl Armed {
+    /// Watches `dir`, whole (`recursive`) or only its own entries; true
+    /// when it was not watched so before.
+    fn watch(&mut self, dir: &Path, recursive: bool) -> notify::Result<bool> {
+        use notify::Watcher;
+        if self.on.get(dir) == Some(&recursive) {
+            return Ok(false);
+        }
+        self.unwatch(dir);
+        let mode = if recursive {
+            notify::RecursiveMode::Recursive
+        } else {
+            notify::RecursiveMode::NonRecursive
+        };
+        self.watcher.watch(dir, mode)?;
+        self.on.insert(dir.to_path_buf(), recursive);
+        Ok(true)
+    }
+
+    /// Stops watching `dir`, if it was.
+    fn unwatch(&mut self, dir: &Path) {
+        use notify::Watcher;
+        if self.on.remove(dir).is_some() {
+            let _ = self.watcher.unwatch(dir);
+        }
+    }
+}
+
+/// Watches what `arm` puts the watcher on, and calls `on` with each batch
+/// of changed paths, gathered over 150 ms. `arm` runs first, and again
+/// before each batch, so a folder made meanwhile is watched from then on;
+/// the paths it gives (what a folder it newly watches has) join the batch,
+/// but for its first run's.
+fn watch_with(
+    mut arm: impl FnMut(&mut Armed) -> anyhow::Result<Vec<PathBuf>> + Send + 'static,
     on: impl Fn(Vec<PathBuf>) + Send + 'static,
 ) -> anyhow::Result<Watching> {
-    use notify::Watcher;
     let (tx, rx) = std::sync::mpsc::channel::<PathBuf>();
-    let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+    let watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         if let Ok(ev) = res {
             for p in ev.paths {
                 let _ = tx.send(p);
             }
         }
     })?;
-    for root in roots {
-        watcher.watch(root, notify::RecursiveMode::Recursive)?;
-    }
+    let mut armed = Armed {
+        watcher,
+        on: Default::default(),
+    };
+    arm(&mut armed)?;
+    let armed = std::sync::Arc::new(std::sync::Mutex::new(armed));
+    // Only the returned watcher keeps it: once that is dropped, so is the
+    // watch's sender, and this thread ends.
+    let weak = std::sync::Arc::downgrade(&armed);
     std::thread::spawn(move || {
         while let Ok(first) = rx.recv() {
             let mut batch = vec![first];
@@ -190,10 +259,16 @@ fn watch_roots(
                     Err(_) => return,
                 }
             }
+            let Some(armed) = weak.upgrade() else { return };
+            match arm(&mut armed.lock().unwrap()) {
+                Ok(made) => batch.extend(made),
+                Err(e) => tracing::warn!("cannot watch a design folder: {e:#}"),
+            }
+            drop(armed);
             on(batch);
         }
     });
-    Ok(Watching(watcher))
+    Ok(Watching(armed))
 }
 
 /// moonlet's own temporary files: `.<name>.moonlet-<pid>-<n>` (design
@@ -227,7 +302,14 @@ pub fn start(root: &Path, emit: impl Fn(Vec<Change>) + Send + 'static) -> anyhow
     // Events may arrive with the path as given or with its symlinks resolved
     // (`/private/var` for `/var` on macOS, a linked home on Linux): both count.
     let (given, real) = (root.to_path_buf(), root.canonicalize()?);
-    watch_roots(std::slice::from_ref(&given.clone()), move |batch| {
+    let watched = given.clone();
+    let arm = move |armed: &mut Armed| {
+        armed
+            .watch(&watched, true)
+            .map(|_| Vec::new())
+            .map_err(Into::into)
+    };
+    watch_with(arm, move |batch| {
         let batch: Vec<PathBuf> = batch
             .iter()
             .filter_map(|p| under(&[&given, &real], p))
@@ -240,7 +322,7 @@ pub fn start(root: &Path, emit: impl Fn(Vec<Change>) + Send + 'static) -> anyhow
 }
 
 /// A running watch of the design folder; dropping it stops the watch.
-pub struct Watching(#[allow(dead_code)] notify::RecommendedWatcher);
+pub struct Watching(#[allow(dead_code)] std::sync::Arc<std::sync::Mutex<Armed>>);
 
 #[cfg(test)]
 mod tests {
@@ -403,5 +485,41 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn a_side_folder_made_after_the_watch_started_has_its_changes_reported() {
+        let worktree = tempfile::tempdir().unwrap();
+        let wt = worktree.path();
+        // The base branch's designs: the design folder is there, and no
+        // `.moonlet/design/` yet.
+        std::fs::create_dir_all(wt.join("docs/design/onboarding/pages")).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<SessionChange>>();
+        let _watching = start_session(wt, "docs/design", move |changes| {
+            let _ = tx.send(changes);
+        })
+        .unwrap();
+        // The first session design made here makes `.moonlet/design/`.
+        std::fs::create_dir_all(wt.join(".moonlet/design/settings-page")).unwrap();
+        let comments = |c: &SessionChange| {
+            c.design == "settings-page" && c.paths.iter().any(|p| p == "comments.json")
+        };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            std::fs::write(
+                wt.join(".moonlet/design/settings-page/comments.json"),
+                "[]\n",
+            )
+            .unwrap();
+            if let Ok(changes) = rx.recv_timeout(std::time::Duration::from_millis(300))
+                && changes.iter().any(comments)
+            {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "comments.json in a .moonlet/design/ made after the watch started was never reported"
+            );
+        }
     }
 }
