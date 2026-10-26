@@ -219,6 +219,14 @@ export interface ShortcutRow {
   mode?: string;
 }
 
+/** What a row of Settings › Keyboard shortcuts says beside its key about
+ *  where it works (X65): its mode, none for a key that works in every mode,
+ *  and none while `recording` is its id, as "Press a shortcut…" then
+ *  stands where the key was. */
+export function shortcutModeNote(row: ShortcutRow, recording: string | null): string | null {
+  return row.mode && recording !== row.id ? row.mode : null;
+}
+
 /** Settings › Keyboard shortcuts (X43): every action by group, in catalogue
  * order, matching `q` in its name or its key. Empty groups are left out. A
  * key that works in one mode only says so, as New design's ⇧⌘N (X65). */
