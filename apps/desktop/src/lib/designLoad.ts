@@ -97,6 +97,17 @@ export function shownLoad(s: PageLoad, frame: string): PageLoad {
   return s.frame === frame ? s : { frame, phase: "loading", asked: s.asked };
 }
 
+/** A signal the window `source` sent, as an event of the framing framed
+ *  now (`framed`: its key, `<page>@<rev>`, and its frame's window), or
+ *  null when `source` is not that window. The canvas mounts a frame of its
+ *  own for each framing, so a page's window is its framing's: a bridge's
+ *  report or a refusal an earlier framing's page posted, delivered after
+ *  the page was framed again, comes from a window no longer framed and is
+ *  never credited to the new framing. */
+export function fromFraming(signal: LoadSignal, source: unknown, framed: { frame: string; window: unknown }): LoadEvent | null {
+  return source != null && source === framed.window ? { ...signal, frame: framed.frame } : null;
+}
+
 /** Whether the canvas frames `page` with the bridge, the one frame whose
  *  load the did-not-load bar is about: the shown page once written
  *  (`written`), never Overview's frames (`page` null) nor a snapshot's
