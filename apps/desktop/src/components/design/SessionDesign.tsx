@@ -6,10 +6,11 @@
 import { useMemo, type RefObject } from "react";
 import { ChevronDown, PenTool } from "lucide-react";
 import type { Session } from "../../lib/protocol";
-import { commentsOf, sessionDesignsOf, showSessionDesign, shownSessionDesign, useDesign } from "../../lib/designStore";
+import { commentsOf, sessionDesignsOf, showSessionDesign, shownSessionDesign, systemsOf, useDesign } from "../../lib/designStore";
+import { projectOf, useStore } from "../../lib/store";
 import { sendWithEdits } from "../../lib/designEditor";
 import { messageView } from "../../lib/designComments";
-import { opensDesignView, worktreeFile } from "../../lib/sessionDesign";
+import { designSystemFooter, opensDesignView, worktreeFile } from "../../lib/sessionDesign";
 import { Empty } from "../ui";
 import { Menu } from "../Menu";
 import { AgentView } from "../AgentView";
@@ -86,12 +87,17 @@ function DesignOpenedNote() {
  *  Comment from the Design view cards and its edits by hand as their block,
  *  and what the user types goes with the edits by hand not told yet before
  *  it; after the agent made a session design, a note says the Design view
- *  opened. */
+ *  opened. Its slash menu names the design system /moonlet-design will use,
+ *  once the workspace's are listed. */
 export function SessionChat({ host, id, wsId, focused, visible }: { host: string; id: number; wsId: string; focused: boolean; visible: boolean }) {
   const design = useDesign((d) => shownSessionDesign(d, host, wsId));
   const own = design !== null && design.agent === id ? design : null;
   const place = useMemo(() => ({ session: wsId }), [wsId]);
   const comments = useDesign((d) => commentsOf(d, host, place, own?.slug ?? ""));
+  const session = useStore((s) => s.sessions[host]?.find((x) => x.id === wsId));
+  const project = useStore((s) => (session ? projectOf(s, host, session)?.path : undefined));
+  const systems = useDesign((d) => (session?.workspace_id ? systemsOf(d, host, session.workspace_id) : undefined));
+  const footer = useMemo(() => (systems && project ? designSystemFooter(systems, project) : null), [systems, project]);
   return (
     <AgentView
       host={host}
@@ -100,6 +106,7 @@ export function SessionChat({ host, id, wsId, focused, visible }: { host: string
       focused={focused}
       visible={visible}
       toolNote={(t) => (t.tool && opensDesignView(t.tool) ? <DesignOpenedNote /> : null)}
+      slashFooter={footer}
       userView={
         own
           ? (text) => {

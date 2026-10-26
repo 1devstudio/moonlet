@@ -27,16 +27,17 @@ import {
   ShieldAlert,
   Square,
   SquareTerminal,
+  SwatchBook,
   Terminal,
   Wrench,
   X,
 } from "lucide-react";
 import { rpc } from "../lib/daemon";
+import { slashMenu, type SlashRow } from "../lib/sessionDesign";
 import { BYPASS_MODE, CLAUDE_MODELS, CLAUDE_MODES, DEFAULT_MODE, EFFORTS, type PlanApproveMode, agentLabel, nextMode, resolvePlanMode } from "../lib/agents";
 import {
   type QuestionPick,
   activeToken,
-  commandOptions,
   withCompletion,
   askQuestions,
   chatBlocks,
@@ -895,6 +896,7 @@ function ChatEditor({
   handle,
   top,
   layout,
+  slashFooter = null,
 }: {
   host: string;
   /** The chat terminal, whose unsent text survives a session switch. */
@@ -926,6 +928,9 @@ function ChatEditor({
   handle?: Ref<EditorHandle>;
   /** What fits at the chat column's width (X51). */
   layout: InputLayout;
+  /** In a session's chat, the design system /moonlet-design will use: the
+   *  slash menu lists its three forms with this footer (X65). */
+  slashFooter?: string | null;
 }) {
   const [text, setTextState] = useState(() => chatDraft(host, id));
   const setText = (v: string) => {
@@ -981,11 +986,12 @@ function ChatEditor({
     if (token?.kind === "@" && files === null) void projectFiles(host, root).then(setFiles);
   }, [token?.kind, files, host, root]);
 
-  const options = useMemo(() => {
-    if (!token || dismissed === token.start) return [];
-    if (token.kind === "/") return commandOptions(commands, text, token);
-    return fuzzyFilter(files ?? [], token.query, 8).map((f) => "@" + f);
-  }, [token, dismissed, commands, files, text]);
+  const menu = useMemo((): { rows: SlashRow[]; footer: string | null } => {
+    if (!token || dismissed === token.start) return { rows: [], footer: null };
+    if (token.kind === "/") return slashMenu(commands, text, token, slashFooter);
+    return { rows: fuzzyFilter(files ?? [], token.query, 8).map((f) => ({ value: "@" + f, hint: null })), footer: null };
+  }, [token, dismissed, commands, files, text, slashFooter]);
+  const options = menu.rows;
   useEffect(() => setSel(0), [options.length, token?.query]);
 
   const ghost = !options.length && walk === null && !text.includes("\n") ? suggest(history, text) : null;
@@ -1039,7 +1045,7 @@ function ChatEditor({
       }
       if ((e.key === "Tab" && !e.shiftKey) || (e.key === "Enter" && !e.shiftKey)) {
         e.preventDefault();
-        accept(options[sel]);
+        accept(options[sel].value);
         return;
       }
       if (e.key === "Escape") {
@@ -1103,17 +1109,23 @@ function ChatEditor({
         <div className="absolute bottom-full left-0 z-30 mb-2 w-full max-w-[520px] overflow-hidden rounded-xl border border-border-strong bg-[#232323] p-1 shadow-2xl">
           {options.map((o, i) => (
             <button
-              key={o}
+              key={o.value}
               className={cx("flex w-full items-center gap-2 truncate rounded-md px-2.5 py-1.5 text-left font-mono ui-text-12.5", i === sel ? "bg-hover text-fg" : "text-muted")}
               onMouseDown={(e) => {
                 e.preventDefault();
-                accept(o);
+                accept(o.value);
               }}
             >
-              {o.startsWith("@") ? <FileText size={13} className="shrink-0 text-faint" /> : <SquareTerminal size={13} className="shrink-0 text-faint" />}
-              <span className="truncate">{o}</span>
+              {o.value.startsWith("@") ? <FileText size={13} className="shrink-0 text-faint" /> : <SquareTerminal size={13} className="shrink-0 text-faint" />}
+              <span className={cx("truncate", o.hint && "w-[170px] shrink-0")}>{o.value}</span>
+              {o.hint && <span className="min-w-0 truncate font-sans text-muted">{o.hint}</span>}
             </button>
           ))}
+          {menu.footer && (
+            <p className="mt-1 flex items-center gap-2 border-t border-border px-2.5 pb-1 pt-2 ui-text-12 text-faint">
+              <SwatchBook size={12} className="shrink-0" /> {menu.footer}
+            </p>
+          )}
         </div>
       )}
       {images.length > 0 && (
@@ -1326,7 +1338,9 @@ async function openInTerminal(host: string, info: TerminalInfo, st: ChatState) {
  *  `sendText`: sends what the user typed in place of `chat.send`, such as a
  *  design's message with its edits by hand before it; `toolNote`: a note
  *  shown after a tool call's group, such as a session's "Design view
- *  opened" after its agent made a session design (X65). */
+ *  opened" after its agent made a session design (X65); `slashFooter`: in
+ *  a session's chat, the design system /moonlet-design will use, which the
+ *  slash menu names under /moonlet-design's forms (X65). */
 export function AgentView({
   host,
   id,
@@ -1338,6 +1352,7 @@ export function AgentView({
   userView,
   sendText,
   toolNote,
+  slashFooter = null,
 }: {
   host: string;
   id: number;
@@ -1349,6 +1364,7 @@ export function AgentView({
   userView?: (text: string) => ReactNode | null;
   sendText?: (text: string, images: ChatImage[]) => Promise<unknown>;
   toolNote?: (tool: ChatItem) => ReactNode | null;
+  slashFooter?: string | null;
 }) {
   const info = useStore((s) => s.terminals[host]?.[id]);
   const st = useChat((s) => s.chats[chatKey(host, id)]);
@@ -1758,6 +1774,7 @@ export function AgentView({
           handle={editor}
           top={st && <AgentsStrip host={host} id={id} st={st} onSend={(text) => send(text, [])} />}
           layout={layout}
+          slashFooter={slashFooter}
         />
         {/* Under the input (X29, X34, X51): +, context ring and cost on the left, settings on the right; narrower chats drop the extras. */}
         <div className="mt-1.5 flex h-[34px] items-center justify-between gap-2 whitespace-nowrap ui-text-12.5 text-muted">
