@@ -2661,7 +2661,7 @@ async fn a_designs_kit_gives_its_systems_tokens_and_snippet_cards() {
 /// X65: a design needs a design system its workspace has, and a session
 /// design a session moonlet has.
 #[tokio::test]
-async fn a_design_on_an_unknown_system_or_in_a_session_is_refused() {
+async fn a_design_on_an_unknown_system_or_in_an_unknown_session_is_refused() {
     let d = fake_claude_daemon(FAKE_CLAUDE).await;
     let mut c = d.client().await;
     let ws = workspace_with_system(&d, &mut c).await;
@@ -3806,7 +3806,12 @@ async fn workspace_with_session(d: &HomeDaemon, c: &mut Client, files: &[(&str, 
 async fn a_session_design_is_made_in_its_worktree_and_reached_by_its_session_and_slug() {
     let d = fake_claude_daemon(FAKE_CLAUDE).await;
     let mut c = d.client().await;
-    let (ws, project, session) = workspace_with_session(&d, &mut c, &[]).await;
+    let (ws, project, _) = workspace_with_session(&d, &mut c, &[]).await;
+    let session: moonlet_proto::types::Session = c
+        .request(methods::SESSION_CREATE, serde_json::json!({"project_id": project.id, "name": "Settings page", "agent": "claude", "workspace_id": ws}))
+        .await
+        .unwrap();
+    let agent = session.terminals[0];
     let worktree = std::path::PathBuf::from(&session.path);
     let created: serde_json::Value = c
         .request(
@@ -3824,7 +3829,7 @@ async fn a_session_design_is_made_in_its_worktree_and_reached_by_its_session_and
             &serde_json::json!(session.id),
             &serde_json::json!(project.id),
             &serde_json::json!(dir),
-            &serde_json::Value::Null,
+            &serde_json::json!(agent),
             &serde_json::Value::Null
         )
     );
@@ -3832,7 +3837,8 @@ async fn a_session_design_is_made_in_its_worktree_and_reached_by_its_session_and
     assert_eq!(std::fs::read_to_string(worktree.join(".moonlet/design/.gitignore")).unwrap(), "*\n");
     // The session's agent writes it: no agent of its own.
     let terminals: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
-    assert!(!terminals.iter().any(|t| t.chat), "{terminals:?}");
+    let chats: Vec<u32> = terminals.iter().filter(|t| t.chat).map(|t| t.id).collect();
+    assert_eq!(chats, [agent], "{terminals:?}");
 
     let at = |more: serde_json::Value| {
         let mut v = serde_json::json!({"session": session.id, "slug": "settings-page"});
@@ -3866,8 +3872,8 @@ async fn a_session_design_is_made_in_its_worktree_and_reached_by_its_session_and
     let list: serde_json::Value = c.request(methods::DESIGN_LIST, serde_json::json!({"workspace": ws})).await.unwrap();
     let found = list.as_array().unwrap().iter().find(|d| d["kind"] == "session").expect("the session design");
     assert_eq!(
-        (&found["slug"], &found["session"], &found["project"], &found["viewport"], &found["open_comments"]),
-        (&serde_json::json!("settings-page"), &serde_json::json!(session.id), &serde_json::json!(project.id), &serde_json::json!("390x844"), &serde_json::json!(1))
+        (&found["slug"], &found["session"], &found["project"], &found["viewport"], &found["open_comments"], &found["agent"]),
+        (&serde_json::json!("settings-page"), &serde_json::json!(session.id), &serde_json::json!(project.id), &serde_json::json!("390x844"), &serde_json::json!(1), &serde_json::json!(agent))
     );
     // A session of no workspace's, or of another, makes nothing.
     let unknown = c
