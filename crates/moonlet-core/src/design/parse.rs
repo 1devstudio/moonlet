@@ -3,9 +3,10 @@
 //!
 //! Only what can swallow the rest of the page counts: a quote, a comment,
 //! a tag or a `<script>`, `<style>` or `<title>` never closed, so the page
-//! ends inside it. And only when it opens before the bridge, which the
-//! scheme puts first in the page's `<head>` (`with_script` in the app's
-//! design_scheme.rs): one that opens after it leaves the bridge running,
+//! ends inside it. And only when it is open at the byte where the scheme
+//! puts the bridge, first in the page's `<head>` (`with_script` in the
+//! app's design_scheme.rs), found by reading the page up to that byte: one
+//! that opens after it, on the same line too, leaves the bridge running,
 //! and the page loads. The tokenizer's other errors (a stray `<` or quote
 //! in a tag, no space after a quoted value, an attribute given twice) and
 //! the tree builder's (an unclosed `<p>`, a stray `</div>`, no doctype)
@@ -23,6 +24,16 @@ use moonlet_proto::methods::DesignParseError;
 /// where what swallows it starts, so a quote never closed is found where it
 /// opened, not at the end of the page.
 pub fn first_parse_error(html: &str) -> Option<DesignParseError> {
+    // What is open where the bridge goes in, the page read up to that byte,
+    let at_bridge = open_at_end(&html[..bridge_at(html)])?;
+    // and still open where the page ends.
+    (open_at_end(html).as_ref() == Some(&at_bridge)).then_some(at_bridge)
+}
+
+/// What `html` ends inside of, a quote, a comment, a tag, the doctype or a
+/// raw-text element, with the line where it opens; none when it ends in
+/// the page's text.
+fn open_at_end(html: &str) -> Option<DesignParseError> {
     let sink = Sink {
         first: RefCell::new(None),
         last_line: Cell::new(1),
@@ -33,14 +44,13 @@ pub fn first_parse_error(html: &str) -> Option<DesignParseError> {
     input.push_back(html.into());
     let _ = tokenizer.feed(&input);
     tokenizer.end();
-    let swallowed = tokenizer.sink.first.take()?;
-    (swallowed.line as usize <= bridge_line(html)).then_some(swallowed)
+    tokenizer.sink.first.take()
 }
 
-/// The line the scheme puts the bridge on: just after the `>` of the first
-/// `<head`, else of `<html`, else of the doctype, else the first line, as
+/// The byte the scheme puts the bridge at: just after the `>` of the first
+/// `<head`, else of `<html`, else of the doctype, else the start, as
 /// `with_script` finds them, in the bytes.
-fn bridge_line(html: &str) -> usize {
+fn bridge_at(html: &str) -> usize {
     let lower = html.to_ascii_lowercase();
     let after = |tag: &str| {
         let mut from = 0;
@@ -53,11 +63,10 @@ fn bridge_line(html: &str) -> usize {
         }
         None
     };
-    let at = after("<head")
+    after("<head")
         .or_else(|| after("<html"))
         .or_else(|| after("<!doctype"))
-        .unwrap_or(0);
-    html[..at].matches('\n').count() + 1
+        .unwrap_or(0)
 }
 
 struct Sink {
@@ -206,6 +215,15 @@ mod tests {
         let comment = "<!doctype html>\n<html><head><title>x</title></head>\n<body>\n<!-- the nav\n<nav>x</nav>\n</body>\n";
         assert_eq!(first_parse_error(comment), None);
         let script = "<!doctype html>\n<head><title>x</title>\n<script>\nlet a = 1;\n</head>\n<body><p>x</p>\n";
+        assert_eq!(first_parse_error(script), None);
+    }
+
+    #[test]
+    fn a_comment_or_a_script_opened_after_the_bridge_on_its_line_is_not_reported() {
+        // The bridge goes in just after <head>, before what opens later on its line.
+        let comment = "<!doctype html>\n<html><head><!-- the head\n<title>x</title>\n";
+        assert_eq!(first_parse_error(comment), None);
+        let script = "<!doctype html>\n<html><head><script>\nlet a = 1;\n</head>\n<body><p>x</p>\n";
         assert_eq!(first_parse_error(script), None);
     }
 
