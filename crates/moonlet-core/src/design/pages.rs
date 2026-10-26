@@ -334,7 +334,7 @@ mod tests {
         std::fs::write(
             home.path()
                 .join("design/w1/designs/settings-page/pages/index.html"),
-            "<!doctype html>\n<body data-mid=\"m1\">\n<h1 data-mid=\"m2>Settings</h1>\n</body>\n",
+            "<!doctype html>\n<body data-mid=\"m1\">\n<html lang=\"en>\n<head><title>x</title></head>\n<h1 data-mid=m2>Settings</h1>\n",
         )
         .unwrap();
         assert_eq!(

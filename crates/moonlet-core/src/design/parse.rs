@@ -1,11 +1,15 @@
 //! A design's page read as HTML, for the canvas's red "did not load" bar
-//! (X65): the first place where the page goes wrong as HTML, and its line.
+//! (X65): where the page's markup swallows the editor bridge, and its line.
 //!
-//! Only the tokenizer's errors count: a quote, a comment or a `<script>`
-//! never closed, a stray `<` or quote in a tag. They are the ones that can
-//! swallow the rest of a page, the editor bridge with it. The tree
-//! builder's (an unclosed `<p>`, a stray `</div>`, no doctype) are left
-//! out: browsers fix them silently, and every real page has some.
+//! Only what can swallow the rest of the page counts: a quote, a comment,
+//! a tag or a `<script>`, `<style>` or `<title>` never closed, so the page
+//! ends inside it. And only when it opens before the bridge, which the
+//! scheme puts first in the page's `<head>` (`with_script` in the app's
+//! design_scheme.rs): one that opens after it leaves the bridge running,
+//! and the page loads. The tokenizer's other errors (a stray `<` or quote
+//! in a tag, no space after a quoted value, an attribute given twice) and
+//! the tree builder's (an unclosed `<p>`, a stray `</div>`, no doctype)
+//! are left out: browsers recover from them, and every real page has some.
 
 use std::cell::{Cell, RefCell};
 
@@ -15,9 +19,9 @@ use html5ever::tokenizer::{
 };
 use moonlet_proto::methods::DesignParseError;
 
-/// The page's first parse error, or none. An error inside a tag, a comment
-/// or the doctype is on the line where that starts, so a quote never closed
-/// is found where it opened, not at the end of the page.
+/// Where the page's markup swallows the bridge, or none. It is on the line
+/// where what swallows it starts, so a quote never closed is found where it
+/// opened, not at the end of the page.
 pub fn first_parse_error(html: &str) -> Option<DesignParseError> {
     let sink = Sink {
         first: RefCell::new(None),
@@ -29,7 +33,31 @@ pub fn first_parse_error(html: &str) -> Option<DesignParseError> {
     input.push_back(html.into());
     let _ = tokenizer.feed(&input);
     tokenizer.end();
-    tokenizer.sink.first.take()
+    let swallowed = tokenizer.sink.first.take()?;
+    (swallowed.line as usize <= bridge_line(html)).then_some(swallowed)
+}
+
+/// The line the scheme puts the bridge on: just after the `>` of the first
+/// `<head`, else of `<html`, else of the doctype, else the first line, as
+/// `with_script` finds them, in the bytes.
+fn bridge_line(html: &str) -> usize {
+    let lower = html.to_ascii_lowercase();
+    let after = |tag: &str| {
+        let mut from = 0;
+        while let Some(i) = lower[from..].find(tag).map(|i| from + i) {
+            let next = lower.as_bytes().get(i + tag.len()).copied();
+            if matches!(next, Some(b'>' | b'/' | b' ' | b'\t' | b'\n' | b'\r')) {
+                return lower[i..].find('>').map(|j| i + j + 1);
+            }
+            from = i + tag.len();
+        }
+        None
+    };
+    let at = after("<head")
+        .or_else(|| after("<html"))
+        .or_else(|| after("<!doctype"))
+        .unwrap_or(0);
+    html[..at].matches('\n').count() + 1
 }
 
 struct Sink {
@@ -59,8 +87,10 @@ impl TokenSink for Sink {
     fn process_token(&self, token: Token, line: u64) -> TokenSinkResult<()> {
         match token {
             Token::ParseError(e) => {
-                let (message, in_tag) = plain(&e);
-                self.found(if in_tag { self.last_line.get() } else { line }, message);
+                // Where what swallows the page starts: the last token's line.
+                if let Some(message) = swallowed_by(&e) {
+                    self.found(self.last_line.get(), message.into());
+                }
                 return TokenSinkResult::Continue;
             }
             Token::TagToken(tag) => {
@@ -100,43 +130,25 @@ fn raw_kind(name: &str) -> Option<RawKind> {
     }
 }
 
-/// html5ever's error said plainly, and whether it is inside a tag, a
-/// comment or the doctype. Its errors read "Saw <what> in state <state>".
-fn plain(error: &str) -> (String, bool) {
-    if error == "Duplicate attribute" {
-        return ("an attribute given twice".into(), false);
-    }
-    let Some((saw, state)) = error
-        .strip_prefix("Saw ")
-        .and_then(|r| r.split_once(" in state "))
-    else {
-        return (error.to_string(), false);
-    };
+/// What swallows the rest of the page, said plainly, when html5ever's
+/// error is that the page ends inside a tag, a quote, a comment or the
+/// doctype; none for any other error, a browser recovering from those.
+/// html5ever gives its errors as text only, "Saw EOF in state <state>"; its
+/// text is never shown as it is.
+fn swallowed_by(error: &str) -> Option<&'static str> {
+    let state = error.strip_prefix("Saw EOF in state ")?;
     let in_text = ["Data", "Plaintext", "Raw", "ScriptData", "Cdata"]
         .iter()
         .any(|s| state.starts_with(s));
-    let unquoted = state == "AttributeValue(Unquoted)";
-    let in_name = matches!(
-        state,
-        "BeforeAttributeName" | "AttributeName" | "AfterAttributeName"
-    ) || unquoted;
-    let message = match saw {
-        "EOF" if state.starts_with("AttributeValue") && !unquoted => {
-            "an attribute's quote is never closed".to_string()
+    Some(match state {
+        _ if in_text => return None,
+        "AttributeValue(DoubleQuoted)" | "AttributeValue(SingleQuoted)" => {
+            "an attribute's quote is never closed"
         }
-        "EOF" if state.contains("Comment") || state == "MarkupDeclarationOpen" => {
-            "a comment is never closed".into()
-        }
-        "EOF" if state.contains("Doctype") => "the doctype is never closed".into(),
-        "EOF" if !in_text => "a tag is never closed".into(),
-        "<" if in_name => "a stray < inside a tag".into(),
-        q @ ("\"" | "'") if in_name => format!("a stray {q} inside a tag"),
-        _ if state == "AfterAttributeValueQuoted" => {
-            "no space after an attribute's quoted value".into()
-        }
-        _ => error.to_string(),
-    };
-    (message, !in_text)
+        s if s.contains("Comment") || s == "MarkupDeclarationOpen" => "a comment is never closed",
+        s if s.contains("Doctype") => "the doctype is never closed",
+        _ => "a tag is never closed",
+    })
 }
 
 #[cfg(test)]
@@ -151,41 +163,50 @@ mod tests {
     }
 
     #[test]
-    fn an_attribute_quote_never_closed_is_reported_on_the_line_of_its_tag() {
-        let page = "<!doctype html>\n<html>\n<body>\n<p>Hi\n<div class=\"x\n<p>more</p>\n</body>\n</html>\n";
+    fn an_attribute_quote_never_closed_before_the_bridge_is_reported_on_the_line_of_its_tag() {
+        // The bridge goes in after <head>, here inside the quote.
+        let page = "<!doctype html>\n<html lang=\"en>\n<head><title>Settings</title></head>\n<body><h1>Settings</h1></body>\n</html>\n";
         assert_eq!(
             first_parse_error(page),
-            error(5, "an attribute's quote is never closed")
+            error(2, "an attribute's quote is never closed")
         );
     }
 
     #[test]
-    fn a_stray_lt_in_a_tag_is_reported_on_the_line_its_tag_starts() {
-        let page = "<!doctype html>\n<body>\n<div\n  class=\"a\"\n  <span>x</span>\n</body>\n";
-        assert_eq!(first_parse_error(page), error(3, "a stray < inside a tag"));
+    fn a_slip_a_browser_recovers_from_in_a_tag_is_not_reported() {
+        for page in [
+            // A stray < in a tag.
+            "<!doctype html>\n<html><head></head>\n<body><div\n  class=\"a\"\n  <span>x</span></body>\n",
+            // No space after a quoted value, and an attribute given twice.
+            "<!doctype html>\n<html><head></head>\n<body><p class=\"a\"title=\"b\" id=x id=y>x</p></body>\n",
+            // A quote closed lines later, by the next quote in the page.
+            "<!doctype html>\n<html lang=\"en>\n<head>\n<meta charset=\"utf-8\">\n</head>\n<body><p>Hi</p></body>\n",
+        ] {
+            assert_eq!(first_parse_error(page), None, "{page}");
+        }
     }
 
     #[test]
-    fn a_quote_closed_lines_later_is_reported_on_the_line_of_its_tag() {
-        let page = "<!doctype html>\n<html lang=\"en>\n<head>\n<meta charset=\"utf-8\">\n<title>x</title>\n</head>\n<body><p>Hi</p></body>\n</html>\n";
-        assert_eq!(
-            first_parse_error(page),
-            error(2, "no space after an attribute's quoted value")
-        );
-    }
-
-    #[test]
-    fn a_comment_or_a_script_never_closed_is_reported_where_it_opens() {
-        let comment = "<!doctype html>\n<body>\n<!-- the nav\n<nav>x</nav>\n</body>\n";
+    fn a_comment_or_a_script_never_closed_before_the_bridge_is_reported_where_it_opens() {
+        let comment = "<!doctype html>\n<!-- the head\n<html><head><title>x</title></head>\n<body><nav>x</nav></body>\n";
         assert_eq!(
             first_parse_error(comment),
-            error(3, "a comment is never closed")
+            error(2, "a comment is never closed")
         );
-        let script = "<!doctype html>\n<head><title>x</title>\n<script>\nlet a = 1;\n</head>\n<body><p>x</p>\n";
+        let script = "<!doctype html>\n<script>\nlet a = 1;\n<head><title>x</title></head>\n<body><p>x</p>\n";
         assert_eq!(
             first_parse_error(script),
-            error(3, "<script> is never closed")
+            error(2, "<script> is never closed")
         );
+    }
+
+    #[test]
+    fn a_comment_or_a_script_never_closed_after_the_bridge_is_not_reported() {
+        // The bridge, first in <head>, runs: the page loads, whatever its body swallows.
+        let comment = "<!doctype html>\n<html><head><title>x</title></head>\n<body>\n<!-- the nav\n<nav>x</nav>\n</body>\n";
+        assert_eq!(first_parse_error(comment), None);
+        let script = "<!doctype html>\n<head><title>x</title>\n<script>\nlet a = 1;\n</head>\n<body><p>x</p>\n";
+        assert_eq!(first_parse_error(script), None);
     }
 
     #[test]

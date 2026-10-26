@@ -103,8 +103,9 @@ describe("A design's page that does not load", () => {
 
   it("shows a page whose markup swallows the bridge as not loaded, with its first parse error and line, when the window shows", async function () {
     if ((await browser.execute(() => document.visibilityState)) !== "visible") return this.skip();
-    writeFileSync(pageFile("swallowed"), '<!doctype html>\n<html lang="en><head><meta charset="utf-8">\n<body data-mid="m1"><h1 data-mid="m2">Swallowed</h1></body></html>\n');
+    // A quote never closed, opened before the <head> the bridge goes in.
+    writeFileSync(pageFile("swallowed"), "<!doctype html>\n<html lang=\"en>\n<head><meta charset=utf-8></head>\n<body data-mid=m1><h1 data-mid=m2>Swallowed</h1></body></html>\n");
     await tab("swallowed").click();
-    await expect(bar()).toHaveText(expect.stringContaining("swallowed.html did not load. no space after an attribute's quoted value at line 2"), { wait: 10_000 });
+    await expect(bar()).toHaveText(expect.stringContaining("swallowed.html did not load. an attribute's quote is never closed at line 2"), { wait: 10_000 });
   });
 });
