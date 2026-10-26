@@ -279,14 +279,16 @@ fn identity_key(i: &ProjectIdentity) -> Option<String> {
 }
 
 /// A section's projects by identity, in its order: this member's own that
-/// have one, then those it does not have.
-fn section_identities(st: &State, s: &Section) -> Vec<(String, ProjectIdentity)> {
-    s.project_ids
+/// have one, then those it does not have; each says whether it is this
+/// member's own.
+fn section_identities(st: &State, s: &Section) -> Vec<(String, ProjectIdentity, bool)> {
+    let own = s
+        .project_ids
         .iter()
         .filter_map(|id| st.projects.iter().find(|p| &p.id == id))
-        .map(|p| p.identity.clone())
-        .chain(s.missing.iter().cloned())
-        .filter_map(|i| Some((identity_key(&i)?, i)))
+        .map(|p| (p.identity.clone(), true));
+    own.chain(s.missing.iter().map(|i| (i.clone(), false)))
+        .filter_map(|(i, mine)| Some((identity_key(&i)?, i, mine)))
         .collect()
 }
 
@@ -397,32 +399,62 @@ fn order_sections(log: &mut Log, now: u64, w: &Workspace, out: &mut Vec<Change>)
 }
 
 /// Records the projects section `id` gained or lost: one field each, so a
-/// change touches only the projects it is about.
+/// change touches only the projects it is about. A project added goes after
+/// the last one. Only when this member puts its own projects in another
+/// order do they all get new keys, in the new order: the projects it lacks
+/// come after its own in `has`, which is no order of the account's.
 fn diff_projects(
     log: &mut Log,
     now: u64,
     id: &str,
-    had: &[(String, ProjectIdentity)],
-    has: &[(String, ProjectIdentity)],
+    had: &[(String, ProjectIdentity, bool)],
+    has: &[(String, ProjectIdentity, bool)],
     out: &mut Vec<Change>,
 ) {
-    for (key, _) in had.iter().filter(|(k, _)| !has.iter().any(|(h, _)| h == k)) {
+    let held =
+        |list: &[(String, ProjectIdentity, bool)], key: &str| list.iter().any(|(k, _, _)| k == key);
+    for (key, _, _) in had.iter().filter(|(k, _, _)| !held(has, k)) {
         out.push(log.set(now, SECTION, id, &format!("{PROJECT}{key}"), Value::Null));
     }
-    let record = log.records(SECTION).remove(id).unwrap_or_default();
-    let order = |key: &str| -> Option<String> {
-        had.iter().any(|(k, _)| k == key).then(|| {
-            record
-                .get(&format!("{PROJECT}{key}"))?
-                .get("order")?
-                .as_str()
-                .map(String::from)
-        })?
+    let own_order = |list: &[(String, ProjectIdentity, bool)],
+                     other: &[(String, ProjectIdentity, bool)]|
+     -> Vec<String> {
+        list.iter()
+            .filter(|(k, _, mine)| *mine && held(other, k))
+            .map(|(k, _, _)| k.clone())
+            .collect()
     };
-    for (i, k) in place(has.iter().map(|(key, _)| order(key)).collect()) {
-        let (key, identity) = &has[i];
-        let value = json!({ "origin": identity.origin, "root": identity.root, "order": k });
-        out.push(log.set(now, SECTION, id, &format!("{PROJECT}{key}"), value));
+    let reordered = own_order(had, has) != own_order(has, had);
+    let value = |identity: &ProjectIdentity, order: &str| json!({ "origin": identity.origin, "root": identity.root, "order": order });
+    if reordered {
+        for (i, k) in place(vec![None; has.len()]) {
+            let (key, identity, _) = &has[i];
+            out.push(log.set(
+                now,
+                SECTION,
+                id,
+                &format!("{PROJECT}{key}"),
+                value(identity, &k),
+            ));
+        }
+        return;
+    }
+    let record = log.records(SECTION).remove(id).unwrap_or_default();
+    let mut last: Option<String> = record
+        .iter()
+        .filter(|(f, v)| f.starts_with(PROJECT) && !v.is_null())
+        .filter_map(|(_, v)| v.get("order")?.as_str().map(String::from))
+        .max();
+    for (key, identity, _) in has.iter().filter(|(k, _, _)| !held(had, k)) {
+        let k = key_between(last.as_deref(), None);
+        out.push(log.set(
+            now,
+            SECTION,
+            id,
+            &format!("{PROJECT}{key}"),
+            value(identity, &k),
+        ));
+        last = Some(k);
     }
 }
 
@@ -1479,5 +1511,79 @@ mod tests {
             "{:?}",
             names(&book)
         );
+    }
+
+    #[tokio::test]
+    async fn another_members_section_keeps_its_project_order_through_this_members_changes() {
+        let (shop, blog) = (repo_named("shop").await, repo_named("blog").await);
+        let (_h1, book) = member("book").await;
+        let (_h2, mini) = member("mini").await;
+        let first = book.list_sections()[0].clone();
+        book.section_add_project(&first.id, &blog.path().display().to_string())
+            .await
+            .unwrap();
+        book.section_add_project(&first.id, &shop.path().display().to_string())
+            .await
+            .unwrap();
+        // studio-mini has shop only.
+        let clone = clone_of(&shop).await;
+        mini.add_project(&clone.path().display().to_string())
+            .await
+            .unwrap();
+        sync(&book, &mini);
+        let before = book.account_version();
+        // Any change on studio-mini, not about that section.
+        let minis = mini
+            .list_workspaces()
+            .into_iter()
+            .find(|w| {
+                !book
+                    .list_sections()
+                    .iter()
+                    .any(|s| w.section_ids.contains(&s.id) && s.id == first.id)
+            })
+            .unwrap();
+        mini.update_workspace(WorkspaceUpdate {
+            id: minis.id,
+            name: Some("Studio".into()),
+            color: None,
+            section_ids: None,
+            claude_profile: None,
+        })
+        .unwrap();
+        let sent: Vec<String> = mini
+            .account_changes_for(&before)
+            .into_iter()
+            .filter(|c| c.id == first.id)
+            .map(|c| format!("{:?}", c.op))
+            .collect();
+        assert!(sent.is_empty(), "{sent:?}");
+        sync(&book, &mini);
+        assert_eq!(
+            holds_in_order(&book, &first.id),
+            ["github.com/acme/blog", "github.com/acme/shop"]
+        );
+    }
+
+    fn holds_in_order(mgr: &SessionManager, section: &str) -> Vec<String> {
+        let projects = mgr.list_projects();
+        let s = mgr
+            .list_sections()
+            .into_iter()
+            .find(|s| s.id == section)
+            .unwrap();
+        s.project_ids
+            .iter()
+            .map(|id| {
+                projects
+                    .iter()
+                    .find(|p| &p.id == id)
+                    .unwrap()
+                    .identity
+                    .origin
+                    .clone()
+                    .unwrap_or_default()
+            })
+            .collect()
     }
 }
