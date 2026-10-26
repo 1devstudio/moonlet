@@ -331,7 +331,15 @@ pub fn start(root: &Path, emit: impl Fn(Vec<Change>) + Send + 'static) -> anyhow
 }
 
 /// A running watch of the design folder; dropping it stops the watch.
-pub struct Watching(#[allow(dead_code)] std::sync::Arc<std::sync::Mutex<Armed>>);
+pub struct Watching(std::sync::Arc<std::sync::Mutex<Armed>>);
+
+impl Watching {
+    /// Whether the watch is on the folder `dir` whole, with its folders, as
+    /// it is once a folder it watches for is made and armed.
+    pub fn watches_whole(&self, dir: &Path) -> bool {
+        self.0.lock().unwrap().on.get(dir) == Some(&true)
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -572,6 +580,33 @@ mod tests {
                 change("onboarding.v2", &["pages/index.html"]),
             ]
         );
+    }
+
+    /// X65: a session's watch started before its design folder and
+    /// `.moonlet/design/` are there says it watches them whole only once it
+    /// has armed them, which it does as they are made, so the daemon starts
+    /// it again only while it has not.
+    #[test]
+    fn a_session_watch_says_it_watches_its_folders_whole_once_it_armed_them() {
+        let worktree = tempfile::tempdir().unwrap();
+        let wt = worktree.path();
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<SessionChange>>();
+        let watching = start_session(wt, "docs/design", move |changes| {
+            let _ = tx.send(changes);
+        })
+        .unwrap();
+        let (folder, side) = (wt.join("docs/design"), wt.join(super::super::session::SIDE_DIR));
+        assert_eq!((watching.watches_whole(&folder), watching.watches_whole(&side)), (false, false));
+        std::fs::create_dir_all(folder.join("settings-page/pages")).unwrap();
+        std::fs::create_dir_all(side.join("settings-page")).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            std::fs::write(folder.join("settings-page/pages/index.html"), "<p>x</p>\n").unwrap();
+            if rx.recv_timeout(std::time::Duration::from_millis(300)).is_ok() && watching.watches_whole(&folder) && watching.watches_whole(&side) {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "the folders made after the watch started were never armed whole");
+        }
     }
 
     #[test]
