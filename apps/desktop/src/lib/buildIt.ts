@@ -36,9 +36,19 @@ export function buildComposer(
     chip: `Design · ${d.name}`,
     name,
     branch: `${at.prefix}${name}`,
-    prompt: `Implement the ${d.name} design`,
+    prompt: buildPrompt(d),
     note: BUILD_NOTE,
   };
+}
+
+/** The prompt Build it opens the composer with. */
+const buildPrompt = (d: Pick<BuildDesign, "name">) => `Implement the ${d.name} design`;
+
+/** The prompt after the chip's × (Build it dropped): the one Build it set
+ *  goes, so the composer is a plain one again; one the user changed stays.
+ *  The design's attachments and branch go with the design. */
+export function promptAfterDrop(prompt: string, d: Pick<BuildDesign, "name">): string {
+  return prompt === buildPrompt(d) ? "" : prompt;
 }
 
 /** The project's design folder for session designs, `[design] dir` of its
