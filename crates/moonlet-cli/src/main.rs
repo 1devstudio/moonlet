@@ -959,7 +959,7 @@ async fn design_cmd(socket: &std::path::Path, action: DesignAction) -> Result<()
         DesignAction::Check { design: Some(slug), here: true, fix, .. } => {
             let (session, _) = here_session(&mut c).await?;
             let out: serde_json::Value = c
-                .request(methods::DESIGN_CHECK, serde_json::json!({"session": session.id, "design": slug, "fix": fix}))
+                .request(methods::DESIGN_CHECK, serde_json::json!({"design": {"session": session.id, "slug": slug}, "fix": fix}))
                 .await?;
             println!("{}", serde_json::to_string_pretty(&out)?);
             if out.as_array().is_some_and(|p| !p.is_empty()) {
@@ -974,7 +974,7 @@ async fn design_cmd(socket: &std::path::Path, action: DesignAction) -> Result<()
             let design = design.or_else(|| if named_system || s.is_some() { None } else { here()?.design });
             if let Some(d) = design {
                 let out: serde_json::Value = c
-                    .request(methods::DESIGN_CHECK, serde_json::json!({"workspace": w, "design": d, "fix": fix, "render": render}))
+                    .request(methods::DESIGN_CHECK, serde_json::json!({"design": {"workspace": w, "slug": d}, "fix": fix, "render": render}))
                     .await?;
                 println!("{}", serde_json::to_string_pretty(&out)?);
                 if out.as_array().is_some_and(|p| !p.is_empty()) {

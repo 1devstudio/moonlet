@@ -368,7 +368,7 @@ export async function checkDesign(host: string, workspace: string, slug: string)
   const latest = checksAsked.start(key);
   let found: PageProblem[];
   try {
-    found = await rpc<PageProblem[]>(host, M.designCheck, { workspace, design: slug });
+    found = await rpc<PageProblem[]>(host, M.designCheck, { design: { workspace, slug } });
   } catch {
     // A design removed meanwhile, or a page that cannot be read: no bar.
     found = NO_PROBLEMS;
