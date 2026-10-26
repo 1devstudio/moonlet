@@ -324,12 +324,13 @@ export function DesignCanvas({
   const [loads, onLoadEvent] = useReducer(loadStep, LOADING);
   const load = shownLoad(loads, frameKey);
   const framed = framesWithBridge(page, !!previewed, names);
-  const parseError = useEditor((e) => (page === null ? null : parseErrorOf(e, host, place, design.slug, page)));
-  // Only a page whose bridge was silent is read as HTML, for the bar.
+  const parseError = useEditor((e) => (page === null ? null : parseErrorOf(e, host, place, design.slug, page, frameKey)));
+  // Only a page whose bridge was silent is read as HTML, for the bar, in
+  // the framing it was silent in.
   const silent = framed && wantsParseError(load);
   useEffect(() => {
-    if (silent && page !== null) void loadParseError(host, place, design.slug, page).catch(() => {});
-  }, [silent, host, place, design.slug, page]);
+    if (silent && page !== null) void loadParseError(host, place, design.slug, page, frameKey).catch(() => {});
+  }, [silent, host, place, design.slug, page, frameKey]);
   const readError = useEditor((e) => (page === null ? null : readErrorOf(e, host, place, design.slug, page)));
   const notLoaded = framed ? notLoadedOf(load, readError, parseError) : null;
   // A page that loaded but cannot be read for the editor: said once.

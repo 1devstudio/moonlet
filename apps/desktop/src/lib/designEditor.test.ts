@@ -577,10 +577,32 @@ describe("a page whose bridge was silent (X65)", () => {
     answers["design.page"] = (p) => ({ ...disk[p.page as string], parse_error: p.parse ? quote : null });
     await loadPageSource("local", WS, SLUG, "index");
     expect(calls.filter((c) => c.method === "design.page").map((c) => c.params.parse ?? false)).toEqual([false]);
-    expect(parseErrorOf(useEditor.getState(), "local", WS, SLUG, "index")).toBeNull();
-    await loadParseError("local", WS, SLUG, "index");
+    expect(parseErrorOf(useEditor.getState(), "local", WS, SLUG, "index", "index@1")).toBeNull();
+    await loadParseError("local", WS, SLUG, "index", "index@1");
     expect(calls.filter((c) => c.method === "design.page").map((c) => c.params.parse ?? false)).toEqual([false, true]);
-    expect(parseErrorOf(useEditor.getState(), "local", WS, SLUG, "index")).toEqual(quote);
+    expect(parseErrorOf(useEditor.getState(), "local", WS, SLUG, "index", "index@1")).toEqual(quote);
+  });
+
+  it("keeps it for the framing it was asked for: the page framed again has none until asked, and an older framing's answer that comes last is dropped", async () => {
+    const quote = { line: 2, message: "an attribute's quote is never closed" };
+    const comment = { line: 4, message: "a comment is never closed" };
+    const asked: ((e: typeof quote) => void)[] = [];
+    answers["design.page"] = (p) => new Promise((resolve) => asked.push((e) => resolve({ ...disk[p.page as string], parse_error: e })));
+    const first = loadParseError("local", WS, SLUG, "index", "index@1");
+    await vi.waitFor(() => expect(asked).toHaveLength(1));
+    asked[0](quote);
+    await first;
+    // Written again, the page is framed again: the error read before is not its.
+    expect(parseErrorOf(useEditor.getState(), "local", WS, SLUG, "index", "index@2")).toBeNull();
+    const older = loadParseError("local", WS, SLUG, "index", "index@2");
+    const newer = loadParseError("local", WS, SLUG, "index", "index@3");
+    await vi.waitFor(() => expect(asked).toHaveLength(3));
+    asked[2](comment);
+    await newer;
+    asked[1](quote);
+    await older;
+    expect(parseErrorOf(useEditor.getState(), "local", WS, SLUG, "index", "index@3")).toEqual(comment);
+    expect(parseErrorOf(useEditor.getState(), "local", WS, SLUG, "index", "index@2")).toBeNull();
   });
 });
 
