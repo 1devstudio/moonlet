@@ -396,6 +396,13 @@ async fn only_a_linked_mac_syncs_the_account() {
     let phone = pair(&mini, &addr, "iPhone", DeviceKind::Phone).await;
     let mut s = raw(&addr, &phone, "moonlet-mobile").await;
     assert_eq!(sync_refused(&mut s).await.as_deref(), Some("forbidden"));
+    // Saying it is a worker's daemon is not enough: a phone is no member.
+    let mut s = raw(&addr, &phone, "moonletd-worker").await;
+    assert_eq!(sync_refused(&mut s).await.as_deref(), Some("forbidden"));
+    // Nor a Mac's connection that never registered as a worker.
+    let mac = pair(&mini, &addr, "Alex's MacBook Pro", DeviceKind::Desktop).await;
+    let mut s = raw(&addr, &mac, "moonletd-worker").await;
+    assert_eq!(sync_refused(&mut s).await.as_deref(), Some("forbidden"));
     let mut cli = Client::connect(&mini.socket, "moonlet-cli").await.unwrap();
     let e = cli
         .request::<_, Value>("account.sync", json!({ "version": {}, "changes": [] }))
