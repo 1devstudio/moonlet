@@ -66,6 +66,13 @@ describe("keyboard shortcuts page", () => {
     await expect(keyButton("Re-run last command")).toHaveText("Not set");
   });
 
+  it("says New design's ⇧⌘N works in Design mode only, beside New session's (X65)", async () => {
+    await expect(keyButton("New session…")).toHaveText("⇧⌘N");
+    await expect(keyButton("New design…")).toHaveText("⇧⌘N");
+    await expect($('[data-setting="shortcut-new-design"] [data-shortcut-mode]')).toHaveText("in Design mode");
+    await expect($('[data-setting="shortcut-new-session"] [data-shortcut-mode]')).not.toBeExisting();
+  });
+
   it("filters by key", async () => {
     await fill('//input[@aria-label="Filter shortcuts"]', "⇧⌘P");
     await expect(keyButton("Create pull request…")).toBeDisplayed();

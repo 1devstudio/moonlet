@@ -4,7 +4,7 @@
 import { useEffect, useState } from "react";
 import { Search, Undo2 } from "lucide-react";
 import { askConfirm } from "../../lib/confirm";
-import { ACTIONS, assignShortcut, effectiveKeys, keyId, keyLabel, keyParts, recordKey, resetShortcut, shortcutGroups } from "../../lib/runActions";
+import { ACTIONS, assignShortcut, effectiveKeys, keyId, keyLabel, keyParts, recordKey, resetShortcut, shortcutGroups, shortcutModeNote } from "../../lib/runActions";
 import { updateSettings, useStore } from "../../lib/store";
 import { Button, IconButton, cx } from "../ui";
 import { Card, PageHeading, Section } from "./controls";
@@ -95,6 +95,7 @@ export function ShortcutsPage() {
           <Card>
             {g.rows.map((r) => {
               const rec = recording === r.id;
+              const note = shortcutModeNote(r, recording);
               return (
                 <div key={r.id} data-setting={`shortcut-${r.id}`} className="flex flex-col">
                   <div className="flex h-10 items-center gap-2.5 pl-4 pr-2">
@@ -106,6 +107,11 @@ export function ShortcutsPage() {
                           <Undo2 size={12} />
                         </IconButton>
                       </>
+                    )}
+                    {note && (
+                      <span data-shortcut-mode className="ui-text-11.5 text-faint">
+                        {note}
+                      </span>
                     )}
                     <button
                       type="button"

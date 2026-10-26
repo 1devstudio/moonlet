@@ -29,6 +29,16 @@ pub(crate) fn before_replace() {
     }
 }
 
+/// The entries of `folder`: none while it is not there, and an error with
+/// the reason when it is there but cannot be read.
+pub(crate) fn read_dir_if_there(folder: &Path) -> Result<Option<std::fs::ReadDir>> {
+    match std::fs::read_dir(folder) {
+        Ok(entries) => Ok(Some(entries)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e).with_context(|| format!("cannot read {}", folder.display())),
+    }
+}
+
 /// The folder `root` as a handle all paths are resolved inside.
 fn open_root(root: &Path) -> Result<Dir> {
     Dir::open_ambient_dir(root, ambient_authority())

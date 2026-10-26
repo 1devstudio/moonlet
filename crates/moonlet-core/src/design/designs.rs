@@ -139,10 +139,8 @@ impl Store {
     /// but cannot be read fails the listing with the reason.
     pub fn designs(&self, workspace: &str) -> Result<Vec<DesignInfo>> {
         let folder = self.designs_dir(workspace, false)?;
-        let entries = match std::fs::read_dir(&folder) {
-            Ok(entries) => entries,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(e) => return Err(e).with_context(|| format!("cannot read {}", folder.display())),
+        let Some(entries) = fsx::read_dir_if_there(&folder)? else {
+            return Ok(Vec::new());
         };
         let mut out = Vec::new();
         for e in entries.flatten() {
@@ -836,6 +834,11 @@ label = \"rows\"
     #[test]
     fn a_designs_folder_that_cannot_be_read_fails_the_listing_with_its_reason() {
         use std::os::unix::fs::PermissionsExt;
+        // Root reads a folder whatever its mode, so chmod 000 refuses it
+        // nothing: the test has no case to make there.
+        if nix::unistd::geteuid().is_root() {
+            return;
+        }
         let (home, store) = store_with_system();
         store
             .create_design("w1", "Settings page", "moonlet-desktop", "", 1)
