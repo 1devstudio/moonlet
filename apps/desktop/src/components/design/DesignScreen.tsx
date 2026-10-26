@@ -1028,9 +1028,9 @@ function PageFrame({
   // shows (lib/designLoad.ts).
   useEffect(() => onLoadEvent({ kind: "frame", frame: frameKey }), [frameKey, onLoadEvent]);
   useEffect(() => {
-    const seen = () => signal({ kind: document.visibilityState === "visible" ? "visible" : "hidden" });
-    document.addEventListener("visibilitychange", seen);
-    return () => document.removeEventListener("visibilitychange", seen);
+    const onVisibility = () => signal({ kind: document.visibilityState === "visible" ? "visible" : "hidden" });
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
   }, [signal]);
   const token = waitToken(load);
   useEffect(() => {
