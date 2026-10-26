@@ -19,6 +19,8 @@ pub struct ServiceAccountKey {
     pub client_email: String,
     pub private_key_id: String,
     private_key: Arc<RsaKeyPair>,
+    /// The sha256 of the private key, so a replaced key gets its own token.
+    fingerprint: String,
 }
 
 impl std::fmt::Debug for ServiceAccountKey {
@@ -52,13 +54,21 @@ pub fn read_key(json: &str) -> Result<ServiceAccountKey, String> {
         field("client_email")?,
         field("private_key_id")?,
     );
-    let private_key =
-        rsa_key(&field("private_key")?).ok_or_else(|| not("its private_key is not an RSA key"))?;
+    let pem = field("private_key")?;
+    let fingerprint = {
+        use sha2::{Digest, Sha256};
+        Sha256::digest(pem.as_bytes())
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    };
+    let private_key = rsa_key(&pem).ok_or_else(|| not("its private_key is not an RSA key"))?;
     Ok(ServiceAccountKey {
         project_id,
         client_email,
         private_key_id,
         private_key: Arc::new(private_key),
+        fingerprint,
     })
 }
 
@@ -173,7 +183,10 @@ const REUSE_MARGIN_SECS: u64 = 300;
 
 /// A new key for the same account gets its own token.
 fn cache_id(key: &ServiceAccountKey) -> String {
-    format!("{} {}", key.client_email, key.private_key_id)
+    format!(
+        "{} {} {}",
+        key.client_email, key.private_key_id, key.fingerprint
+    )
 }
 
 /// A PKCS #8 PEM RSA private key.
@@ -372,5 +385,21 @@ mod tests {
                 "Google Cloud refused the service-account key: Invalid JWT Signature. Check it in Settings › Cloud workers.".into()
             ))
         );
+    }
+    #[tokio::test]
+    async fn a_new_private_key_gets_its_own_token() {
+        // The same account and key id, but another private key: the old
+        // key's token is not reused.
+        let mut v: Value = serde_json::from_str(&key_json()).unwrap();
+        v["private_key"] = include_str!("fixtures/gcp/test_key_2.pem").into();
+        let first = read_key(&key_json()).unwrap();
+        let second = read_key(&v.to_string()).unwrap();
+        const SECOND: &str =
+            r#"{"access_token":"ya29.c.second","expires_in":3599,"token_type":"Bearer"}"#;
+        let script = Script::new(vec![(200, TOKEN), (200, SECOND)]);
+        let t: Arc<dyn Transport> = script.clone();
+        let tokens = Tokens::default();
+        assert_eq!(tokens.token(&first, &t).await.unwrap(), "ya29.c.first");
+        assert_eq!(tokens.token(&second, &t).await.unwrap(), "ya29.c.second");
     }
 }
