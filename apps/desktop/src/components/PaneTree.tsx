@@ -3,7 +3,7 @@ import { type PaneNode, setSizes } from "../lib/layout";
 import { getLayout, setLayout } from "../lib/store";
 import { Splitter } from "./Splitter";
 import { TerminalPane } from "./TerminalPane";
-import { AgentView } from "./AgentView";
+import { SessionChat } from "./design/SessionDesign";
 import { useStore } from "../lib/store";
 
 const FileEditor = lazy(() => import("./FileEditor"));
@@ -35,7 +35,7 @@ export function PaneTree({ host, wsId, tabId, node, path, focused, visible }: Pr
       </Suspense>
     );
   if (node.type === "leaf") {
-    if (chat) return <AgentView host={host} id={node.session} wsId={wsId} focused={focused === node.session} visible={visible} />;
+    if (chat) return <SessionChat host={host} id={node.session} wsId={wsId} focused={focused === node.session} visible={visible} />;
     return <TerminalPane host={host} session={node.session} wsId={wsId} focused={focused === node.session} visible={visible} />;
   }
   const row = node.dir === "row";

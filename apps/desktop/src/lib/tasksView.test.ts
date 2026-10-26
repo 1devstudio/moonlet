@@ -63,10 +63,16 @@ describe("sessionTaskLines (X46 sidebar)", () => {
 describe("modeSwitch (X45, X65 mode switch)", () => {
   const keys = { tasks: "⌃⌘T", design: "⌃⌘D" };
   it("titles each button with the shortcut as bound, and names what is out of sync", () => {
-    expect(modeSwitch(keys, "sessions", 0)).toEqual({ sessions: "Sessions", tasks: "Tasks ⌃⌘T", design: "Design ⌃⌘D", label: "Tasks", dot: false });
+    expect(modeSwitch(keys, "sessions", 0)).toEqual({ sessions: "Sessions", tasks: "Tasks ⌃⌘T", design: "Design ⌃⌘D", label: "Tasks", dot: false, designLabel: "Design", designDot: false });
     expect(modeSwitch({ tasks: "⌥T", design: "⌃⌘D" }, "sessions", 3)).toMatchObject({ tasks: "Tasks ⌥T", label: "Tasks, 3 out of sync", dot: true });
     // Unbound in Settings › Shortcuts: no key in the titles.
     expect(modeSwitch({ tasks: "", design: "" }, "sessions", 0)).toMatchObject({ tasks: "Tasks", design: "Design" });
+  });
+
+  it("puts an accent dot on Design while a design an agent started from a session is unseen", () => {
+    expect(modeSwitch(keys, "sessions", 0, 1)).toMatchObject({ designLabel: "Design, 1 new design", designDot: true });
+    expect(modeSwitch(keys, "tasks", 0, 2)).toMatchObject({ designLabel: "Design, 2 new designs", designDot: true });
+    expect(modeSwitch(keys, "sessions", 0, 0)).toMatchObject({ designLabel: "Design", designDot: false });
   });
 
   it("titles Sessions with the key that goes back to it: the shown mode's", () => {

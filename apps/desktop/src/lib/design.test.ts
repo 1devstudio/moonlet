@@ -143,6 +143,13 @@ describe("a design's sidebar row (X65)", () => {
     });
   });
 
+  it("says session for a session design, its dot its session's agent's, needs you and unreadable before it", () => {
+    const inSession = design({ kind: "session", session: "s1", open_comments: 2 });
+    expect(designRow(inSession, NOW, "working")).toEqual({ state: "working", text: "session", tone: "muted", comments: false });
+    expect(designRow({ ...inSession, needs_you: { kind: "question", text: "Rows or cards?" } }, NOW, "blocked").text).toBe("needs you");
+    expect(designRow({ ...inSession, error: "cannot read design.toml" }, NOW, null).text).toBe("unreadable");
+  });
+
   it("has no dot without an agent, and says unreadable when its design.toml could not be read", () => {
     expect(designRow(design({ agent: null, agent_state: null }), NOW, null)).toEqual({ state: null, text: "2d", tone: "muted", comments: false });
     expect(designRow(design({ error: "cannot read design.toml" }), NOW, null)).toEqual({ state: null, text: "unreadable", tone: "error", comments: false });
@@ -194,8 +201,16 @@ describe("design.open in the app (X65)", () => {
     expect(designOpenAction({ workspace: "w1", slug: "onboarding", name: "Onboarding", spawned_by: 9 }, sessions)).toEqual({ kind: "toast", text: "An agent started the design Onboarding" });
   });
 
-  it("leaves a session design to its session's Design tab, never the design screen", () => {
-    expect(designOpenAction({ workspace: "w1", slug: "settings-page", name: "Settings page", session: "s1", kind: "session" }, sessions)).toEqual({ kind: "none" });
+  it("opens a session design in its session's Design tab while that session is shown, never the design screen", () => {
+    expect(designOpenAction({ workspace: "w1", slug: "settings-page", name: "Settings page", session: "s1", kind: "session" }, sessions, "s1")).toEqual({ kind: "tab", session: "s1" });
+  });
+
+  it("offers a session design in a toast while another session or mode is shown, leaving the focus where it is", () => {
+    expect(designOpenAction({ workspace: "w1", slug: "settings-page", name: "Settings page", session: "s1", kind: "session" }, sessions, null)).toEqual({
+      kind: "toast",
+      text: "Fix checkout button started the design Settings page",
+    });
+    expect(designOpenAction({ workspace: "w1", slug: "settings-page", name: "Settings page", session: "s1", kind: "session" }, sessions, "s2")?.kind).toBe("toast");
   });
 });
 

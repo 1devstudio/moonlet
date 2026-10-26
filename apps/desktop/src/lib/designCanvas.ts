@@ -26,11 +26,19 @@ export function writingPage(latest: string[], working: boolean): string | null {
  *  it links. Those are the design's `assets/`, and of its design system any
  *  `.css` file (`styles.css` and what it imports) and what is in `tokens/`
  *  and `fonts/`; not its cards, `README.md`, `.prompt.md` files or the
- *  sync's own files (`_ds_sync.json`, `_ds_manifest.json`). */
+ *  sync's own files (`_ds_sync.json`, `_ds_manifest.json`). A session
+ *  design's design system is its pinned copy, its own `system/` (X65). */
 export function reloadsPage(change: DesignChanged, shown: { design: string; system: string; page: string }): boolean {
-  if (change.design === shown.design) return change.paths.some((p) => p === pagePath(shown.page) || p.startsWith("assets/"));
+  if (change.design === shown.design) return change.paths.some((p) => p === pagePath(shown.page) || p.startsWith("assets/") || (p.startsWith("system/") && linkedBySystem(p.slice("system/".length))));
   if (change.system === shown.system) return change.paths.some(linkedBySystem);
   return false;
+}
+
+/** Whether a change to a session design is to its own copy of its design
+ *  system (`system/`), as **Update** writes it: its kit, the Inspector's
+ *  tokens and the Palette's snippets, is read again (X65). */
+export function changesOwnSystem(change: DesignChanged): boolean {
+  return change.design !== null && change.paths.some((p) => p.startsWith("system/"));
 }
 
 /** A design system's file a page may link: a stylesheet, a token or a font. */
@@ -309,4 +317,24 @@ export function dragEdit(r: DragResult, snippet: string | null): { op: EditOp; r
  *  selection, else at the end of the body. */
 export function pickEdit(selected: string | null, snippet: string): EditOp {
   return { kind: "insert", place: selected ? { where: "below", ref: selected } : null, html: snippet };
+}
+
+/** What last told whether the user is in a session's Design tab: a press
+ *  or a focus, in it or elsewhere (WebKit focuses no button on a click,
+ *  so a press counts as much as a focus), or the tab opened: by the app
+ *  itself, on `design.open` or a toast's Open, or by the user picking it,
+ *  whose button is outside the canvas (X65). */
+export type TabKeysEvent = { kind: "pointer" | "focus"; inside: boolean } | { kind: "opened" };
+
+/** Whether the user is in a session's Design tab after `e`. */
+export function inTabAfter(e: TabKeysEvent): boolean {
+  return e.kind === "opened" || e.inside;
+}
+
+/** Whether a canvas takes its keys (C, V, Esc, the editor's, ⌘0, ⌘= and
+ *  ⌘-): the design screen's whenever it is shown, a session's Design tab's
+ *  while the user is in it (`inTab`), so the session's terminals and chat
+ *  beside it keep theirs. */
+export function canvasTakesKeys(session: boolean, inTab: boolean): boolean {
+  return !session || inTab;
 }

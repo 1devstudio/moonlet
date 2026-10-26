@@ -427,14 +427,11 @@ pub fn session_design(
 /// file is in (the design's, or the snapshot's) is reached from the
 /// worktree through folders of its own, never a link, so it is inside the
 /// worktree; and the file, its links followed, must be inside that folder:
-/// never elsewhere in the worktree, nor outside it. Returns the file and the
-/// folder it is in, as real paths, for the opened file to be checked against
-/// again.
-pub fn session_file(
-    worktree: &Path,
-    folder: &str,
-    rel: &str,
-) -> Result<(std::path::PathBuf, std::path::PathBuf)> {
+/// never elsewhere in the worktree, nor outside it. Returns the file's
+/// bytes, read through that folder opened once as a handle, so a folder
+/// swapped for a link meanwhile is never followed: no path is resolved
+/// again after the checks.
+pub fn session_file(worktree: &Path, folder: &str, rel: &str) -> Result<Vec<u8>> {
     check_folder(folder)?;
     let no_file = || anyhow::anyhow!("{rel} is no file of a session design");
     let parts: Vec<&str> = rel.split('/').collect();
@@ -470,20 +467,9 @@ pub fn session_file(
             .join(n),
         _ => return Err(no_file()),
     };
-    // No link on the way from the worktree, so the worktree's real path
-    // joined with it is the folder's real path, inside the worktree.
-    if !fsx::is_dir_inside(worktree, &base).map_err(|_| no_file())? {
-        return Err(no_file());
-    }
-    let base = worktree.canonicalize().map_err(|_| no_file())?.join(base);
-    let file = base
-        .join(rest.join("/"))
-        .canonicalize()
-        .map_err(|_| no_file())?;
-    if !file.starts_with(&base) || !file.is_file() {
-        return Err(no_file());
-    }
-    Ok((file, base))
+    // The folder reached with no link on the way from the worktree, and the
+    // file read through it, never through a path resolved again.
+    fsx::read_beneath(worktree, &base, Path::new(&rest.join("/"))).map_err(|_| no_file())
 }
 
 /// Whether the design `slug` of a worktree's design folder was made in that
@@ -1266,25 +1252,21 @@ label = \"cards\"
         )
         .unwrap();
         store.take_snapshot(&at, Take::AgentTurn, 5).unwrap();
-        let file = |rel: &str| session_file(&wt, "docs/design", rel).map(|(file, _)| file);
+        let file = |rel: &str| session_file(&wt, "docs/design", rel);
+        let styles = std::fs::read(dir.join("system/styles.css")).unwrap();
         assert_eq!(
             file("settings-page/pages/index.html").unwrap(),
-            dir.join("pages/index.html")
+            b"<body data-mid=\"m1\"></body>\n"
         );
-        assert_eq!(
-            file("settings-page/system/styles.css").unwrap(),
-            dir.join("system/styles.css")
-        );
+        assert_eq!(file("settings-page/system/styles.css").unwrap(), styles);
         // A snapshot's page at the design's depth, and its styles link to the
         // design's pinned copy beside it.
+        std::fs::write(dir.join("pages/index.html"), "<p>changed</p>\n").unwrap();
         assert_eq!(
             file("settings-page@1/pages/index.html").unwrap(),
-            wt.join(".moonlet/design/settings-page/history/1/pages/index.html")
+            b"<body data-mid=\"m1\"></body>\n"
         );
-        assert_eq!(
-            file("settings-page@1/system/styles.css").unwrap(),
-            dir.join("system/styles.css")
-        );
+        assert_eq!(file("settings-page@1/system/styles.css").unwrap(), styles);
         std::os::unix::fs::symlink("/etc/hosts", dir.join("pages/hosts.html")).unwrap();
         for bad in [
             "settings-page/../../../README.md",
@@ -1300,6 +1282,47 @@ label = \"cards\"
         ] {
             assert!(file(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn a_session_designs_file_is_read_from_the_folder_it_was_found_in_never_through_a_link_swapped_in_meanwhile()
+     {
+        let (_home, store) = store_with_synced_system();
+        let worktree = tempfile::tempdir().unwrap();
+        let wt = worktree.path().canonicalize().unwrap();
+        store
+            .create_session_design(
+                "w1",
+                "moonlet-desktop",
+                "s1",
+                &wt,
+                "docs/design",
+                "Settings page",
+                "",
+                1,
+            )
+            .unwrap();
+        let dir = wt.join("docs/design/settings-page");
+        std::fs::write(dir.join("pages/index.html"), "<p>page</p>\n").unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let out = outside.path().join("settings-page");
+        std::fs::create_dir_all(out.join("pages")).unwrap();
+        std::fs::write(out.join("pages/index.html"), "secret\n").unwrap();
+        // The design's folder swapped for a link out once it was found, as
+        // its writable worktree lets any process do.
+        let (from, to) = (dir.clone(), out.clone());
+        super::fsx::FOLDER_OPENED.with(|h| {
+            *h.borrow_mut() = Some(Box::new(move || {
+                std::fs::rename(&from, from.with_file_name("old")).unwrap();
+                std::os::unix::fs::symlink(&to, &from).unwrap();
+            }))
+        });
+        assert_eq!(
+            session_file(&wt, "docs/design", "settings-page/pages/index.html").unwrap(),
+            b"<p>page</p>\n"
+        );
+        // The link, there now, is never followed.
+        assert!(session_file(&wt, "docs/design", "settings-page/pages/index.html").is_err());
     }
 
     #[test]

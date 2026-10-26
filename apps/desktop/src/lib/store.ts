@@ -53,8 +53,8 @@ import type { SettingsRoute } from "./settingsPage";
 import { readStored, writeStored } from "./storage";
 import { disposeEntry, findEntry, reattachHost, setTermSettings, type TermSettings, defaultTermSettings } from "./terminals";
 
-/** Right panel tabs, in order (X24 added Plan, X42 Agents, X46 Task for a linked session). */
-export const RIGHT_TABS = ["task", "plan", "agents", "jobs", "files", "changes", "review"] as const;
+/** Right panel tabs, in order (X24 added Plan, X42 Agents, X46 Task for a linked session, X65 Design for a session with a design). */
+export const RIGHT_TABS = ["task", "plan", "agents", "jobs", "files", "changes", "review", "design"] as const;
 export type RightTab = (typeof RIGHT_TABS)[number];
 
 export interface Selection {

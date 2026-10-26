@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { keyId } from "./runActions";
-import { breadcrumb, dragEdit, hintLine, pickEdit, dropHint, canvasPage, layerPick, chatAfter, editorStep, onReport, undoOpen, layerStep, modeEntered, canvasStep, changedPages, isTyping, modeHint, keyAct, reloadsPage, writingPage } from "./designCanvas";
+import { canvasTakesKeys, inTabAfter, breadcrumb, dragEdit, hintLine, pickEdit, dropHint, canvasPage, layerPick, chatAfter, editorStep, onReport, undoOpen, layerStep, modeEntered, canvasStep, changedPages, isTyping, modeHint, keyAct, reloadsPage, writingPage } from "./designCanvas";
 
 const change = (over: { system?: string | null; design?: string | null; paths: string[] }) => ({ workspace: "w1", system: null, design: null, ...over });
 
@@ -342,5 +342,23 @@ describe("a snapshot previewed (X65)", () => {
     }
     expect(undoOpen({ locked: false, changes: 3, readOnly: true })).toBe(false);
     expect(undoOpen({ locked: false, changes: 3, readOnly: false })).toBe(true);
+  });
+});
+
+describe("a canvas's keys (X65)", () => {
+  it("are the design screen's whenever it is shown, whatever the user last pressed", () => {
+    expect(canvasTakesKeys(false, false)).toBe(true);
+    expect(canvasTakesKeys(false, true)).toBe(true);
+  });
+
+  it("are a session's Design tab's while the user last pressed or focused in it, never in the session's terminals or chat beside it", () => {
+    expect(canvasTakesKeys(true, inTabAfter({ kind: "pointer", inside: true }))).toBe(true);
+    expect(canvasTakesKeys(true, inTabAfter({ kind: "focus", inside: true }))).toBe(true);
+    expect(canvasTakesKeys(true, inTabAfter({ kind: "pointer", inside: false }))).toBe(false);
+    expect(canvasTakesKeys(true, inTabAfter({ kind: "focus", inside: false }))).toBe(false);
+  });
+
+  it("are a session's Design tab's at once when the app opened it, on design.open or a toast's Open", () => {
+    expect(canvasTakesKeys(true, inTabAfter({ kind: "opened" }))).toBe(true);
   });
 });

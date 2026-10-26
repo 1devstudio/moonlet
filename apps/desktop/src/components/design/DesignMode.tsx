@@ -8,7 +8,7 @@ import { useShallow } from "zustand/react/shallow";
 import { errorToast, shownWorkspace, toast, useStore } from "../../lib/store";
 import { type DesignCover } from "../../lib/protocol";
 import { designAgentState, designRow, designsEmpty, picksInWorkspace, systemFolder, systemLabel } from "../../lib/design";
-import { createSystem, designsOf, openNewDesign, detectStack, loadDesigns, loadSystems, shownDesign, shownSystem, showDesign, showSystem, systemsOf, useDesign } from "../../lib/designStore";
+import { designCanvasKey, createSystem, designsOf, openNewDesign, openSessionDesign, sessionDesignsIn, detectStack, loadDesigns, loadSystems, shownDesign, shownSystem, showDesign, showSystem, systemsOf, useDesign } from "../../lib/designStore";
 import { workspaceProjects } from "../../lib/tasksStore";
 import { tildePath } from "../../lib/profiles";
 import { useNow } from "../../lib/useNow";
@@ -26,6 +26,7 @@ function useWorkspaceDesign(load = false) {
   const systems = useDesign((d) => (ws ? systemsOf(d, ws.host, ws.id) : undefined));
   const shown = useDesign((d) => (ws ? shownSystem(d, ws.host, ws.id) : null));
   const designs = useDesign((d) => (ws ? designsOf(d, ws.host, ws.id) : undefined));
+  const inSessions = useDesign((d) => (ws ? sessionDesignsIn(d, ws.host, ws.id) : undefined));
   const design = useDesign((d) => (ws ? shownDesign(d, ws.host, ws.id) : null));
   useEffect(() => {
     if (ws && load) {
@@ -33,7 +34,7 @@ function useWorkspaceDesign(load = false) {
       void loadDesigns(ws.host, ws.id).catch(errorToast);
     }
   }, [ws, load]);
-  return { ws, systems, shown, designs, design };
+  return { ws, systems, shown, designs, inSessions, design };
 }
 
 /** Whether a sync agent's chat is at work now, so its system is syncing. */
@@ -60,7 +61,9 @@ function Heading({ label, add }: { label: string; add?: { title: string; run: ()
 
 /** The sidebar body in Design mode. */
 export function DesignSidebar() {
-  const { ws, systems, shown, designs, design } = useWorkspaceDesign(true);
+  const { ws, systems, shown, designs: own, inSessions, design } = useWorkspaceDesign(true);
+  // The workspace designs, then the session designs, which open in their sessions (X65).
+  const designs = useMemo(() => own && [...own, ...(inSessions ?? [])], [own, inSessions]);
   const working = useStore(useShallow((s) => (ws ? (systems ?? []).map((sys) => agentWorking(s, ws.host, sys.agent)) : [])));
   // Each design's agent's live state, for its dot.
   const states = useStore(useShallow((s) => (ws ? (designs ?? []).map((d) => designAgentState(d, d.agent === null ? undefined : s.terminals[ws.host]?.[d.agent]?.agent_state)) : [])));
@@ -120,12 +123,14 @@ export function DesignSidebar() {
           {empty && <p className="px-2 py-1 ui-text-12.5 text-faint">{empty}</p>}
           {designs?.map((d, i) => {
             const label = designRow(d, now, states[i] ?? null);
-            const current = d.slug === design?.slug;
+            const session = d.kind === "session" ? d.session : undefined;
+            const current = !session && d.slug === design?.slug;
             return (
               <button
-                key={d.slug}
+                key={`${session ?? ""}/${d.slug}`}
                 aria-current={current ? "page" : undefined}
-                onClick={() => ws && showDesign(ws.host, ws.id, d.slug)}
+                title={session ? "Its pages live in the session's branch; this opens the session" : undefined}
+                onClick={() => ws && (session ? void openSessionDesign(ws.host, ws.id, session, d.slug, true) : showDesign(ws.host, ws.id, d.slug))}
                 className={cx("relative flex h-[30px] w-full items-center gap-2.5 rounded-md px-2 text-left ui-text-13 text-fg", current ? "bg-selected" : "hover:bg-panel-2")}
               >
                 {current && <span className="absolute inset-y-0 left-0 w-[2px] bg-accent" />}
@@ -153,7 +158,7 @@ export function DesignMain() {
   if (design && ws) {
     return (
       <div className="flex h-full flex-col bg-bg">
-        <DesignScreen key={design.slug} host={ws.host} workspace={ws.id} design={design} inset={sidebarOpen ? 0 : 84} />
+        <DesignScreen key={designCanvasKey(ws.host, ws.id, design.slug)} host={ws.host} workspace={ws.id} design={design} inset={sidebarOpen ? 0 : 84} />
       </div>
     );
   }

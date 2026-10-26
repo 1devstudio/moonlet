@@ -1,0 +1,89 @@
+// A session's designs (X65): what its Design tab, its row in Sessions mode,
+// its chat and its chat's slash menu show of them. Pure: the state is
+// designStore.ts, the tab components/design/SessionDesign.tsx.
+
+import { pagePath } from "./designPage";
+import { commandOptions, fuzzyScore, toolCommand } from "./chat";
+import type { Design, DesignSystem, ToolCall } from "./protocol";
+
+/** `path` relative to the worktree it is in (`worktree`, with or without a
+ *  trailing `/`); as it is when outside it. */
+export function inWorktree(worktree: string, path: string): string {
+  const root = `${worktree.replace(/\/+$/, "")}/`;
+  return path.startsWith(root) ? path.slice(root.length) : path;
+}
+
+/** The file above a session design's page: its path in the worktree, such
+ *  as `docs/design/settings-page/pages/index.html`. */
+export function worktreeFile(worktree: string, design: Design, page: string): string {
+  return `${inWorktree(worktree, design.path)}/${pagePath(page)}`;
+}
+
+/** The pen icon on a session's row in Sessions mode, titled with its
+ *  designs, while it has one; null without. */
+export function designMark(designs: Design[]): string | null {
+  if (!designs.length) return null;
+  return `${designs.length === 1 ? "Design" : "Designs"}: ${designs.map((d) => d.name).join(", ")}`;
+}
+
+/** The note "Design view opened. The design system is copied into the
+ *  session for Claude to read" follows a tool call of the session's agent
+ *  when it is its `design new --here` that ran: the call that made the
+ *  session design and opened its Design tab. */
+export function opensDesignView(tool: ToolCall): boolean {
+  const command = toolCommand(tool);
+  return tool.status === "ok" && command !== null && /\bdesign\s+new\b[^\n]*\s--here\b/.test(command);
+}
+
+/** A row of the chat input's slash menu: the command, and what it does. */
+export interface SlashRow {
+  value: string;
+  hint: string | null;
+}
+
+/** `/moonlet-design`'s three forms, as the skill takes them (X65). */
+const DESIGN_FORMS: SlashRow[] = [
+  { value: "/moonlet-design", hint: "Prototype it here, in this session's Design view" },
+  { value: "/moonlet-design new", hint: "A separate design in Design mode, with its own agent" },
+  { value: "/moonlet-design sync", hint: "Sync the design system built from this project" },
+];
+
+/** The chat input's slash menu for a `/token` (X65): the agent's commands
+ *  (`commandOptions`); in a session's chat (`session`) `/moonlet-design` is
+ *  its three forms, each with what it does, first while the token at the
+ *  start of the message matches it, over the footer naming the design
+ *  system it will use, once that is known (`session.footer`). */
+export function slashMenu(commands: readonly string[], text: string, token: { start: number; query: string }, session: { footer: string | null } | null): { rows: SlashRow[]; footer: string | null } {
+  const atStart = text.slice(0, token.start).trim() === "";
+  const design = session !== null && atStart && fuzzyScore("moonlet-design", token.query) !== null;
+  // Mid-message, or outside a session, the agent's commands as they are.
+  const own = design ? commands.filter((c) => c !== "moonlet-design") : commands;
+  const others = commandOptions(own, text, token).map((value) => ({ value, hint: null }));
+  return design ? { rows: [...DESIGN_FORMS, ...others], footer: session.footer } : { rows: others, footer: null };
+}
+
+/** The slash menu's footer in a session: the design system `/moonlet-design`
+ *  will use, as `design new --here` picks it (`pick_system` in
+ *  moonlet-cli's design.rs): the workspace's one built from the session's
+ *  project (`project`, its path), which to pick when several are, or how
+ *  to make one. */
+export function designSystemFooter(systems: DesignSystem[], project: string): string {
+  const built = systems.filter((s) => s.sources.includes(project)).map((s) => s.name);
+  if (built.length === 1) return `Uses ${built[0]}, the design system built from this project`;
+  if (built.length > 1) return `Asks which design system to use: ${built.slice(0, -1).join(", ")} or ${built.at(-1)}, ${built.length === 2 ? "both" : "all"} built from this project`;
+  return "No design system is built from this project yet: /moonlet-design sync builds one";
+}
+
+/** A session's Design tab in its right panel (X65): there while the
+ *  session has a design, with the open comments of its designs, as
+ *  `design.list` counts them; null without one. */
+export function designTab(designs: Design[]): { count: number } | null {
+  return designs.length ? { count: designs.reduce((n, d) => n + d.open_comments, 0) } : null;
+}
+
+/** The right panel's width while a session's Design tab shows it: the
+ *  width the user dragged it to (`dragged`), else 55% of the window, so the
+ *  canvas gets the room beside the session's chat. */
+export function designPanelWidth(dragged: number | null, windowWidth: number): number {
+  return dragged ?? Math.round(windowWidth * 0.55);
+}

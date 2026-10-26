@@ -36,12 +36,13 @@ export function designAgentState(d: Design, live: AgentState | undefined): Agent
 }
 
 /** A design's sidebar row (X65): its agent's state (`state`, the agent's
- *  live state, which the caller knows), then needs you, else its open
- *  comments, else its age. */
+ *  live state, which the caller knows), then needs you, else `session` for
+ *  a session design, else its open comments, else its age. */
 export function designRow(d: Design, now: number, state: AgentState | null): DesignRowLabel {
   const dot = d.agent === null ? null : state;
   if (d.error) return { state: dot, text: "unreadable", tone: "error", comments: false };
   if (d.needs_you) return { state: dot, text: "needs you", tone: "attention", comments: false };
+  if (d.kind === "session") return { state: dot, text: "session", tone: "muted", comments: false };
   if (d.open_comments > 0) return { state: dot, text: String(d.open_comments), tone: "muted", comments: true };
   return { state: dot, text: shortAge(now - d.updated_at), tone: "muted", comments: false };
 }
@@ -120,13 +121,16 @@ export function newDesignSystem(chosen: string, systems: string[], shown: string
 
 /** What the app does on `design.open` (X65): show the design the user asked
  *  for; one an agent started (`spawned_by`) is offered in a toast instead, and
- *  the focus stays where it is (as X22). */
-export function designOpenAction(ev: DesignOpen, sessions: { id: string; name: string }[]): { kind: "show" } | { kind: "toast"; text: string } | { kind: "none" } {
-  // A session design shows in its session's Design tab (X65 entry 12b).
-  if (ev.kind === "session") return { kind: "none" };
-  if (ev.spawned_by === undefined || ev.spawned_by === null) return { kind: "show" };
-  const by = sessions.find((s) => s.id === ev.session)?.name ?? "An agent";
-  return { kind: "toast", text: `${by} started the design ${ev.name}` };
+ *  the focus stays where it is (as X22). A session design (`design new
+ *  --here`) opens in its session's Design tab while that session is the
+ *  one shown (`shown`), else it is offered in a toast too. */
+export function designOpenAction(ev: DesignOpen, sessions: { id: string; name: string }[], shown: string | null = null): { kind: "show" } | { kind: "tab"; session: string } | { kind: "toast"; text: string } | { kind: "none" } {
+  const toast = { kind: "toast" as const, text: `${sessions.find((s) => s.id === ev.session)?.name ?? "An agent"} started the design ${ev.name}` };
+  if (ev.kind === "session") {
+    if (!ev.session) return { kind: "none" };
+    return ev.session === shown ? { kind: "tab", session: ev.session } : toast;
+  }
+  return ev.spawned_by === undefined || ev.spawned_by === null ? { kind: "show" } : toast;
 }
 
 /** The designs Design mode lists and opens on its design screen: the

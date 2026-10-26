@@ -414,6 +414,45 @@ pub(crate) fn read_file_inside(root: &Path, rel: &Path) -> Result<Vec<u8>> {
     read_file(&dir, name)
 }
 
+/// The bytes of the file `rel` in the folder `folder` inside `root`: the
+/// folder is reached through folders of its own, never a link, and opened
+/// once, as a handle; the file is opened through that handle, its links
+/// followed only while they stay inside the folder. A folder swapped for a
+/// link after it was opened is never followed: the file is read from the
+/// folder that was opened, or not at all.
+pub(crate) fn read_beneath(root: &Path, folder: &Path, rel: &Path) -> Result<Vec<u8>> {
+    use std::io::Read;
+    let dir = open_path(root, folder, false)?
+        .with_context(|| format!("no {} in {}", folder.display(), root.display()))?;
+    folder_opened();
+    let mut file = dir
+        .open(rel)
+        .with_context(|| format!("cannot open {} in {}", rel.display(), folder.display()))?;
+    if !file.metadata()?.is_file() {
+        anyhow::bail!("{} is not a file", rel.display());
+    }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A test's swap, run once after [`read_beneath`] opened its folder and
+    /// before it opens the file, so a folder swapped for a link in between
+    /// can be tested deterministically.
+    pub(crate) static FOLDER_OPENED: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+}
+
+/// Runs the test's swap, if one is set; nothing outside tests.
+fn folder_opened() {
+    #[cfg(test)]
+    if let Some(swap) = FOLDER_OPENED.with(|h| h.borrow_mut().take()) {
+        swap();
+    }
+}
+
 /// Makes the folder `rel` inside `root` and those on its way, each one of
 /// its own: a link on the way is refused, never followed.
 pub(crate) fn make_dirs_inside(root: &Path, rel: &Path) -> Result<()> {

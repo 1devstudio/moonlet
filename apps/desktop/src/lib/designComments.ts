@@ -4,7 +4,7 @@
 
 import { readEditsMessage, type EditLineRead } from "./designEdits";
 import type { DesignComment } from "./protocol";
-import { pageFile } from "./designPage";
+import { linePage, pageFile, pageOfLine } from "./designPage";
 import { isMid, isTag } from "./designBridge";
 
 /** The file a design keeps its comments in (`design/comments.rs`'s
@@ -18,12 +18,15 @@ const oneLine = (s: string) => s.replace(/\s+/g, " ").trim();
  *  `Comment on <page> [data-mid=<id>] (<tag> "<text>"): <comment>`.
  *  {@link parseCommentLine} reads it back. */
 export function commentLine(pin: CommentRef): string {
-  return `Comment on ${pageFile(pin.page)} [data-mid=${pin.mid}] (${pin.tag} "${oneLine(pin.text)}"): ${oneLine(pin.comment)}`;
+  return `Comment on ${linePage(pin.page, pin.folder ?? null)} [data-mid=${pin.mid}] (${pin.tag} "${oneLine(pin.text)}"): ${oneLine(pin.comment)}`;
 }
 
 /** A comment's line read back: its page, element and comment. */
 export interface CommentRef {
   page: string;
+  /** A session design's folder in the worktree, which names the page in
+   *  the line (X65); none names it by file alone. */
+  folder?: string | null;
   mid: string;
   tag: string;
   text: string;
@@ -32,20 +35,26 @@ export interface CommentRef {
 
 /** The line {@link commentLine} writes, read back; null for any other line. */
 export function parseCommentLine(line: string): CommentRef | null {
-  const m = /^Comment on (.+)\.html \[data-mid=([^\]]*)\] \((\S*) "(.*?)"\): (.+)$/.exec(line);
-  return m && isMid(m[2]) && isTag(m[3]) ? { page: m[1], mid: m[2], tag: m[3], text: m[4], comment: m[5] } : null;
+  const m = /^Comment on (.+?\.html) \[data-mid=([^\]]*)\] \((\S*) "(.*?)"\): (.+)$/.exec(line);
+  const named = m ? pageOfLine(m[1]) : null;
+  if (!m || !named || !isMid(m[2]) || !isTag(m[3])) return null;
+  return { page: named.page, ...(named.folder ? { folder: named.folder } : {}), mid: m[2], tag: m[3], text: m[4], comment: m[5] };
 }
+
+/** The pins a comment's card is read against: the design's, or, in a
+ *  session's chat, those of the design its line's folder names (X65). */
+export type PinsOf = DesignComment[] | ((folder: string | null) => DesignComment[]);
 
 /** A user's message in the design's chat as **Comment from the canvas**
  *  cards, one per line, each numbered like its pin (null when no open or
  *  resolved pin has that comment any more); null when not every line of it
  *  is a comment's, so it shows as it is. */
-export function commentCards(text: string, pins: DesignComment[]): (CommentRef & { n: number | null })[] | null {
+export function commentCards(text: string, pins: PinsOf): (CommentRef & { n: number | null })[] | null {
   const lines = text.split("\n").filter((l) => l.trim());
   const refs = lines.map(parseCommentLine);
   if (!refs.length || refs.some((r) => r === null)) return null;
   return (refs as CommentRef[]).map((r) => ({
-    n: pins.find((p) => p.page === r.page && p.mid === r.mid && oneLine(p.comment) === r.comment)?.n ?? null,
+    n: (typeof pins === "function" ? pins(r.folder ?? null) : pins).find((p) => p.page === r.page && p.mid === r.mid && oneLine(p.comment) === r.comment)?.n ?? null,
     ...r,
   }));
 }
@@ -54,7 +63,7 @@ export function commentCards(text: string, pins: DesignComment[]): (CommentRef &
  *  edits by hand first (readEditsMessage), then its comments as Comment
  *  from the canvas cards when every line after the edits is a comment's,
  *  else the rest as text; null for a message with neither. */
-export function messageView(message: string, pins: DesignComment[]): { edits: EditLineRead[] | null; cards: (CommentRef & { n: number | null })[] | null; text: string } | null {
+export function messageView(message: string, pins: PinsOf): { edits: EditLineRead[] | null; cards: (CommentRef & { n: number | null })[] | null; text: string } | null {
   const read = readEditsMessage(message);
   const rest = read ? read.text : message;
   const cards = commentCards(rest, pins);
@@ -115,8 +124,8 @@ function unsentPins(pins: DesignComment[], mids: PageMids): DesignComment[] {
 
 /** The one message **Send** and **Send all** add to the chat: the pins'
  *  lines, one per pin. */
-export function commentsMessage(pins: CommentRef[]): string {
-  return pins.map(commentLine).join("\n");
+export function commentsMessage(pins: CommentRef[], folder: string | null = null): string {
+  return pins.map((p) => commentLine({ ...p, folder })).join("\n");
 }
 
 /** What **Send all** sends: every open pin not sent yet whose element is
@@ -173,9 +182,23 @@ export function footerLabel(unsent: number): string {
  *  chat looks for. */
 export const COMMENT_PIN_ATTR = "data-comment-pin";
 
-/** The chat cards of pin `n`. */
-export function commentCardSelector(n: number): string {
-  return `[${COMMENT_PIN_ATTR}="${n}"]`;
+/** The attribute a session's chat card carries with its design's folder in
+ *  the worktree, the one its line names (X65): two designs of a session can
+ *  each have a pin 1. */
+const COMMENT_FOLDER_ATTR = "data-comment-folder";
+
+/** The attributes of a comment's chat card: its pin's number, and in a
+ *  session's chat the folder of the design its line names, as `PinsOf`
+ *  reads it against that design's pins. */
+export function commentCardAttrs(card: { n: number | null; folder?: string | null }): Record<string, string | number | undefined> {
+  return { [COMMENT_PIN_ATTR]: card.n ?? undefined, [COMMENT_FOLDER_ATTR]: card.folder ?? undefined };
+}
+
+/** The chat cards of pin `n` of the design whose lines name `folder` (a
+ *  session design's), or of a design whose lines name none. */
+export function commentCardSelector(n: number, folder: string | null): string {
+  const pin = `[${COMMENT_PIN_ATTR}="${n}"]`;
+  return folder === null ? `${pin}:not([${COMMENT_FOLDER_ATTR}])` : `${pin}[${COMMENT_FOLDER_ATTR}="${folder.replace(/["\\]/g, "\\$&")}"]`;
 }
 
 /** How long Show in chat waits for its chat to load. */
@@ -196,6 +219,13 @@ export function chatCardLookup(l: { found: boolean; loaded: boolean; waitedMs: n
 export function commentsRail(s: { agent: boolean; readOnly: boolean }): { send: boolean; resolve: boolean; why: string | null } {
   if (s.readOnly) return { send: false, resolve: false, why: "Previewing a snapshot: go back to current to send or resolve" };
   return s.agent ? { send: true, resolve: true, why: null } : { send: false, resolve: true, why: "The design's agent is not running" };
+}
+
+/** The title of a comment's card in the chat: **Comment from the canvas**
+ *  in a workspace design's chat, **Comment from the Design view** in a
+ *  session's, whose Design tab the comment came from (X65). */
+export function commentCardTitle(session: boolean): string {
+  return session ? "Comment from the Design view" : "Comment from the canvas";
 }
 
 /** "1 open comment", "3 open comments". */

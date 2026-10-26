@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Archive, ArrowDown, ArrowLeftRight, Bell, BellOff, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, Command, Download, FolderPlus, History, Link2, Loader2, MoreHorizontal, Plus, RotateCcw, RotateCw, Settings, ShieldAlert, X } from "lucide-react";
+import { Archive, ArrowDown, ArrowLeftRight, Bell, BellOff, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, Command, Download, FolderPlus, History, Link2, Loader2, MoreHorizontal, PenTool, Plus, RotateCcw, RotateCw, Settings, ShieldAlert, X } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { M, type Copy, type HostInfo, type Project, type Section, type SectionView, type Session, type Workspace } from "../lib/protocol";
 import { arrange, groupHeading, hostSections, lastActive, projectRemoval, sessionBadge, sessionMenu, type Group } from "../lib/sidebar";
@@ -22,6 +22,8 @@ import { sessionTaskLines, type SessionTaskLine } from "../lib/tasksView";
 import { numberColumn, rowStyle, taskGroups, type RowStyle, type TaskGroup } from "../lib/sessionRows";
 import { modeOf } from "../lib/mode";
 import { DesignSidebar } from "./design/DesignMode";
+import { sessionDesignsOf, useDesign } from "../lib/designStore";
+import { designMark } from "../lib/sessionDesign";
 import { isShown } from "../lib/workspaces";
 import { ProfileFooter } from "./Profiles";
 import { movingSessions, runningClaudeAgents, switchConfirm } from "../lib/profiles";
@@ -375,6 +377,8 @@ function SessionRow({ host, s, onMenu, cell, nested }: { host: string; s: Sessio
   // Running subagents of the session's chats (X42).
   const agents = useStore((st) => sessionTerminals(st, host, s.id).reduce((n, x) => n + (x.subagents ?? 0), 0));
   const badge = sessionBadge({ creating, state, merged: pr?.state === "merged", git, agents });
+  // The pen icon while the session has a design (X65).
+  const mark = designMark(useDesign((d) => sessionDesignsOf(d, host, s.id)));
   const { lines } = useContext(TaskLines);
   const line = lines[s.id];
   const [renaming, setRenaming] = useState(false);
@@ -413,6 +417,11 @@ function SessionRow({ host, s, onMenu, cell, nested }: { host: string; s: Sessio
         ) : (
           <>
             <span className={cx("min-w-0 flex-1 truncate ui-text-14", selected || unread ? "text-fg" : "text-[#cfcfcf]", unread && "font-semibold")}>{s.name}</span>
+            {mark && (
+              <span title={mark} aria-label={mark} className="flex shrink-0 text-muted">
+                <PenTool size={12} />
+              </span>
+            )}
             <SyncMark host={host} s={s} />
           </>
         )

@@ -3,6 +3,7 @@
 
 import { ago } from "./mobile";
 import { pagePath } from "./designPage";
+import { designFolder, placeHost, type DesignPlace } from "./designPlace";
 import type { DesignCard, DesignSystem } from "./protocol";
 
 export interface CardGroup {
@@ -61,16 +62,17 @@ export function changedBanner(sys: DesignSystem, cards: DesignCard[]): string | 
   return `${plural(n, "source")} changed since sync · ${sys.changed_sources.map(base).join(", ")}. ${rewrites}`;
 }
 
-/** A file of a workspace's design folder (`path`, relative to it) on the
- *  `moonlet-design://` scheme, on a host of its own, `<key>.<workspace>`, so
- *  WebKit's site isolation gives each file its own web process and one that
- *  never stops running blocks no other (X64, X65). The key is the 64-bit
- *  FNV-1a hash, in hex, of `path`: the same file always gets the same host.
- *  `rev`, its changes so far, makes a frame load it again after one;
- *  `query` asks the scheme for more, such as the comment bridge.
+/** A file of a workspace's design folder, or of a session's worktree's
+ *  design folder (`path`, relative to it), on the `moonlet-design://`
+ *  scheme, on a host of its own, `<key>.<workspace>` or `<key>.s-<session>`
+ *  (X65), so WebKit's site isolation gives each file its own web process
+ *  and one that never stops running blocks no other (X64, X65). The key is
+ *  the 64-bit FNV-1a hash, in hex, of `path`: the same file always gets the
+ *  same host. `rev`, its changes so far, makes a frame load it again after
+ *  one; `query` asks the scheme for more, such as the comment bridge.
  *  `design_scheme.rs` (`target`) parses it. */
-export function designUrl(workspace: string, path: string, rev = 0, query: Record<string, string> = {}, key = fnv1a64(path)): string {
-  const url = `moonlet-design://${key}.${encodeURIComponent(workspace)}/${path.split("/").map(encodeURIComponent).join("/")}`;
+export function designUrl(place: DesignPlace, path: string, rev = 0, query: Record<string, string> = {}, key = fnv1a64(path)): string {
+  const url = `moonlet-design://${key}.${placeHost(place)}/${path.split("/").map(encodeURIComponent).join("/")}`;
   const params = new URLSearchParams({ ...(rev ? { v: String(rev) } : {}), ...query }).toString();
   return params ? `${url}?${params}` : url;
 }
@@ -80,26 +82,28 @@ export function cardUrl(workspace: string, slug: string, path: string, rev = 0):
   return designUrl(workspace, `systems/${slug}/${path}`, rev);
 }
 
-/** A workspace design's page (`index` for `pages/index.html`) on a host of
- *  its own (X65). `bridge`: served with the comment bridge, which the canvas
- *  talks to (`design_scheme.rs` `bridging`). */
-export function pageUrl(workspace: string, design: string, page: string, rev = 0, bridge = false): string {
-  return designUrl(workspace, `designs/${design}/${pagePath(page)}`, rev, bridge ? { "moonlet-bridge": "1" } : {});
+/** A design's page (`index` for `pages/index.html`) on a host of its own
+ *  (X65), a workspace design's or a session design's. `bridge`: served
+ *  with the comment bridge, which the canvas talks to (`design_scheme.rs`
+ *  `bridging`). */
+export function pageUrl(place: DesignPlace, design: string, page: string, rev = 0, bridge = false): string {
+  return designUrl(place, `${designFolder(place, design)}/${pagePath(page)}`, rev, bridge ? { "moonlet-bridge": "1" } : {});
 }
 
 /** Page `page` of design `design`'s snapshot `n`, read only: never with the
  *  bridge, so nothing on it can be picked or edited. Its folder is
- *  `designs/<design>@<n>/`, which the daemon serves from the snapshot
- *  (`snapshot_file` in design/history.rs), as deep as the design's own, so
+ *  `designs/<design>@<n>/` (a session design's `<design>@<n>/`), which the
+ *  daemon serves from the snapshot (`snapshot_file` in design/history.rs,
+ *  `session_file` in design/session.rs), as deep as the design's own, so
  *  the page's relative links to its assets and its design system's
  *  styles resolve as they do for the design's pages. Its host's key is the
  *  page's, an `s`, then the folder's, on which the scheme serves only that
  *  snapshot's files and design systems' (`serves` in design_scheme.rs): a
  *  link in the page never shows the current page in the preview. */
-export function snapshotPageUrl(workspace: string, design: string, n: number, page: string): string {
-  const folder = `designs/${design}@${n}`;
+export function snapshotPageUrl(place: DesignPlace, design: string, n: number, page: string): string {
+  const folder = designFolder(place, `${design}@${n}`);
   const path = `${folder}/${pagePath(page)}`;
-  return designUrl(workspace, path, 0, {}, `${fnv1a64(path)}s${fnv1a64(folder)}`);
+  return designUrl(place, path, 0, {}, `${fnv1a64(path)}s${fnv1a64(folder)}`);
 }
 
 /** The 64-bit FNV-1a hash of `text`'s UTF-8 bytes, as 16 lowercase hex digits. */
