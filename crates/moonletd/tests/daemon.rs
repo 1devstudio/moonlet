@@ -4546,7 +4546,10 @@ async fn an_archived_sessions_designs_are_no_longer_watched_and_are_again_once_i
     write(&archived, "archived");
     tokio::time::sleep(Duration::from_millis(800)).await;
     write(&live, "live");
-    // Every announcement up to the live session's write.
+    // Every announcement of the archived session's new page up to the live
+    // session's write. FSEvents may deliver an earlier batch again (the open
+    // session's page), so only the archived session's page counts.
+    let archived_page = names(&archived, "archived");
     let mut heard = Vec::new();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     loop {
@@ -4557,7 +4560,9 @@ async fn an_archived_sessions_designs_are_no_longer_watched_and_are_again_once_i
             if names(&live, "live")(&data) {
                 break;
             }
-            heard.push(data);
+            if archived_page(&data) {
+                heard.push(data);
+            }
         }
     }
     assert_eq!(heard, Vec::<serde_json::Value>::new(), "an archived session's design was announced");
