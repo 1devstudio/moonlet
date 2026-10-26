@@ -13,15 +13,29 @@
 //! snapshot: there only that snapshot's files and design systems' are
 //! served ([`serves`]), so a link in a snapshot's page never shows the
 //! current page in its preview.
+//!
+//! A session design's files (X65) are in its session's worktree, asked on
+//! `moonlet-design://<page key>.s-<session>/<path>`, `path` relative to the
+//! worktree's design folder (`<slug>/pages/index.html`), and served through
+//! `design.file {session, path}`, never outside the folder it names. A
+//! workspace id never starts with `s-` (it is hex), so the two never meet.
 
 /// What a `moonlet-design://` URL names: the host it was asked on (the
-/// workspace, or a card's key and the workspace), the workspace, and the path
-/// (decoded, relative to the workspace's design folder).
+/// workspace, or a card's key and the workspace), the design folder it is
+/// in, and the path (decoded, relative to that folder).
 #[derive(Debug, PartialEq, Eq)]
 pub struct Target {
     pub host: String,
-    pub workspace: String,
+    pub place: Place,
     pub path: String,
+}
+
+/// Whose design folder a URL names: a workspace's, under the design root,
+/// or a session's worktree's (X65).
+#[derive(Debug, PartialEq, Eq)]
+pub enum Place {
+    Workspace(String),
+    Session(String),
 }
 
 /// The policy every file asked on `host` is served with: a page may load
@@ -36,7 +50,8 @@ pub fn csp(host: &str) -> String {
 
 /// What `url` names, or `None` for anything else: another scheme, no
 /// workspace, no path, a path with an empty, `.` or `..` part, or a host
-/// that is neither `<workspace>` nor `<card key>.<workspace>`.
+/// that is neither `<workspace>` nor `<card key>.<workspace>`, nor a
+/// session's `<page key>.s-<session>` (X65).
 pub fn target(url: &str) -> Option<Target> {
     let rest = url.strip_prefix("moonlet-design://")?;
     let rest = rest.split(['?', '#']).next().unwrap_or_default();
@@ -52,44 +67,50 @@ pub fn target(url: &str) -> Option<Target> {
         }
         parts.push(part);
     }
-    // A card's key is a DNS label: lowercase letters and digits, 1 to 63.
-    let workspace = match host.split('.').collect::<Vec<_>>()[..] {
-        [workspace] => workspace,
-        [key, workspace]
+    // A card's or a page's key is a DNS label: lowercase letters and
+    // digits, 1 to 63.
+    let place = match host.split('.').collect::<Vec<_>>()[..] {
+        [place] => place,
+        [key, place]
             if (1..=63).contains(&key.len())
                 && key
                     .bytes()
                     .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit()) =>
         {
-            workspace
+            place
         }
         _ => return None,
     };
-    // A workspace is an id, never another folder of the design root.
-    let workspace = decode(workspace)?;
-    if workspace.is_empty()
-        || !workspace
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-    {
-        return None;
-    }
+    // A workspace or a session is an id, never another folder.
+    let id = |id: &str| {
+        let id = decode(id)?;
+        let ok = !id.is_empty()
+            && id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+        ok.then_some(id)
+    };
+    let place = match place.strip_prefix("s-") {
+        Some(session) => Place::Session(id(session)?),
+        None => Place::Workspace(id(place)?),
+    };
     Some(Target {
         host: host.to_string(),
-        workspace,
+        place,
         path: parts.join("/"),
     })
 }
 
 /// Whether a file of `path` is served on `host` (X65): any is, but on a
 /// snapshot's host, whose key is its page's key, an `s`, and its folder's,
-/// `designs/<slug>@<n>`, as the 64-bit FNV-1a hash in hex: there only that
-/// folder's files, and design systems' (the page's styles), are served.
-/// No other key has an `s`, being hex; one with an `s` naming no folder
-/// serves nothing.
+/// `designs/<slug>@<n>` (a session design's `<slug>@<n>`), as the 64-bit
+/// FNV-1a hash in hex: there only that folder's files, and for a workspace
+/// design its design systems' (the page's styles; a session design's are in
+/// the snapshot's `system/`), are served. No other key has an `s`, being
+/// hex; one with an `s` naming no folder serves nothing.
 pub fn serves(host: &str, path: &str) -> bool {
-    let key = match host.split('.').collect::<Vec<_>>()[..] {
-        [key, _] => key,
+    let (key, place) = match host.split('.').collect::<Vec<_>>()[..] {
+        [key, place] => (key, place),
         _ => return true,
     };
     let Some((page, folder)) = key.split_once('s') else {
@@ -98,6 +119,10 @@ pub fn serves(host: &str, path: &str) -> bool {
     let hex = |k: &str| k.len() == 16 && k.bytes().all(|b| b.is_ascii_hexdigit());
     if !hex(page) || !hex(folder) {
         return false;
+    }
+    if place.starts_with("s-") {
+        let named = path.split('/').next().unwrap_or_default();
+        return named.contains('@') && fnv1a64(named) == folder;
     }
     if path.starts_with("systems/") {
         return true;
@@ -209,12 +234,7 @@ pub async fn serve(app: &tauri::AppHandle, url: &str) -> tauri::http::Response<V
             .body(body.as_bytes().to_vec())
             .unwrap_or_default()
     };
-    let Some(Target {
-        host,
-        workspace,
-        path,
-    }) = target(url)
-    else {
+    let Some(Target { host, place, path }) = target(url) else {
         return reply(400, "not a design file");
     };
     // A snapshot's frame, led away by a link in its page, shows no other.
@@ -225,11 +245,12 @@ pub async fn serve(app: &tauri::AppHandle, url: &str) -> tauri::http::Response<V
     let Ok(local) = hosts.get("local") else {
         return reply(404, "the daemon is not running");
     };
+    let params = match &place {
+        Place::Workspace(workspace) => serde_json::json!({ "workspace": workspace, "path": path }),
+        Place::Session(session) => serde_json::json!({ "session": session, "path": path }),
+    };
     let file = match local
-        .request(
-            moonlet_proto::methods::DESIGN_FILE,
-            serde_json::json!({ "workspace": workspace, "path": path }),
-        )
+        .request(moonlet_proto::methods::DESIGN_FILE, params)
         .await
     {
         Ok(f) => f,
@@ -240,11 +261,23 @@ pub async fn serve(app: &tauri::AppHandle, url: &str) -> tauri::http::Response<V
         return reply(404, "no such design file");
     };
     // Checked against the file actually opened, so a link put in its place
-    // after the daemon resolved it leads nowhere outside the workspace's folder.
-    let design = moonlet_core::paths::home().join("design");
-    let (real, ws) = (std::path::PathBuf::from(real), workspace.clone());
-    let Ok(Ok(body)) = tokio::task::spawn_blocking(move || read_inside(&design, &ws, &real)).await
-    else {
+    // after the daemon resolved it leads nowhere outside the workspace's
+    // folder, or the folder a session design's file must be inside, which
+    // the daemon gives as `root`.
+    let real = std::path::PathBuf::from(real);
+    let read = match place {
+        Place::Workspace(ws) => {
+            let design = moonlet_core::paths::home().join("design");
+            tokio::task::spawn_blocking(move || read_inside(&design, &ws, &real)).await
+        }
+        Place::Session(_) => {
+            let Some(root) = file["root"].as_str().map(std::path::PathBuf::from) else {
+                return reply(404, "no such design file");
+            };
+            tokio::task::spawn_blocking(move || read_within(&root, &real)).await
+        }
+    };
+    let Ok(Ok(body)) = read else {
         return reply(404, "no such design file");
     };
     // The render page's card measures itself, in its own sandboxed frame.
@@ -272,13 +305,26 @@ pub fn read_inside(
     workspace: &str,
     path: &std::path::Path,
 ) -> std::io::Result<Vec<u8>> {
+    read_opened(&std::fs::canonicalize(design)?.join(workspace), path)
+}
+
+/// The bytes of `path`, opened first and then checked: the file opened must
+/// be inside `root`, measured from its real path, as `read_inside` does for
+/// a workspace's folder. A session design's file is checked so against the
+/// folder `design.file` gives as its `root` (X65).
+pub fn read_within(root: &std::path::Path, path: &std::path::Path) -> std::io::Result<Vec<u8>> {
+    read_opened(&std::fs::canonicalize(root)?, path)
+}
+
+/// The bytes of `path` once opened, when the file opened is inside `root`
+/// (a real path).
+fn read_opened(root: &std::path::Path, path: &std::path::Path) -> std::io::Result<Vec<u8>> {
     use std::io::Read;
-    let root = std::fs::canonicalize(design)?.join(workspace);
     let mut file = std::fs::File::open(path)?;
-    if !opened_path(&file)?.starts_with(&root) {
+    if !opened_path(&file)?.starts_with(root) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
-            "outside the workspace's design folder",
+            "outside the design's folder",
         ));
     }
     let mut bytes = Vec::new();
@@ -335,7 +381,7 @@ mod tests {
         let t = |w: &str, p: &str| {
             Some(Target {
                 host: w.to_string(),
-                workspace: w.to_string(),
+                place: Place::Workspace(w.to_string()),
                 path: p.to_string(),
             })
         };
@@ -366,7 +412,7 @@ mod tests {
             ),
             Some(Target {
                 host: "5a1c3e0f9b2d4c67.w-1devstudio".to_string(),
-                workspace: "w-1devstudio".to_string(),
+                place: Place::Workspace("w-1devstudio".to_string()),
                 path: "systems/storefront/components/buttons/button/button.html".to_string(),
             })
         );
@@ -375,7 +421,7 @@ mod tests {
             target("moonlet-design://5a1c3e0f9b2d4c67.w1/systems/s/styles.css"),
             Some(Target {
                 host: "5a1c3e0f9b2d4c67.w1".to_string(),
-                workspace: "w1".to_string(),
+                place: Place::Workspace("w1".to_string()),
                 path: "systems/s/styles.css".to_string(),
             })
         );
@@ -476,6 +522,113 @@ mod tests {
                 "{host}"
             );
         }
+    }
+
+    #[test]
+    fn a_session_designs_own_host_names_its_key_and_its_session() {
+        // As `pageUrl({session}, …)` asks for a session design's page.
+        assert_eq!(
+            target(
+                "moonlet-design://19a1c555a197e847.s-4f2a9c1e7b3d/settings-page/pages/index.html?v=4&moonlet-bridge=1"
+            ),
+            Some(Target {
+                host: "19a1c555a197e847.s-4f2a9c1e7b3d".to_string(),
+                place: Place::Session("4f2a9c1e7b3d".to_string()),
+                path: "settings-page/pages/index.html".to_string(),
+            })
+        );
+        // Its pinned styles, asked on the page's host.
+        assert_eq!(
+            target("moonlet-design://19a1c555a197e847.s-4f2a9c1e7b3d/settings-page/system/styles.css"),
+            Some(Target {
+                host: "19a1c555a197e847.s-4f2a9c1e7b3d".to_string(),
+                place: Place::Session("4f2a9c1e7b3d".to_string()),
+                path: "settings-page/system/styles.css".to_string(),
+            })
+        );
+        // A snapshot's page.
+        assert_eq!(
+            target(
+                "moonlet-design://315894b4a2cd5984saa0232c623a69ded.s-4f2a9c1e7b3d/settings-page%403/pages/index.html"
+            ),
+            Some(Target {
+                host: "315894b4a2cd5984saa0232c623a69ded.s-4f2a9c1e7b3d".to_string(),
+                place: Place::Session("4f2a9c1e7b3d".to_string()),
+                path: "settings-page@3/pages/index.html".to_string(),
+            })
+        );
+        for bad in [
+            // No session, or one that is not an id.
+            "moonlet-design://19a1c555a197e847.s-/settings-page/pages/index.html",
+            "moonlet-design://19a1c555a197e847.s-4f2a%2fx/settings-page/pages/index.html",
+            "moonlet-design://19a1c555a197e847.s-%2e%2e/settings-page/pages/index.html",
+            // A session's page leaves its design folder no more than a workspace's.
+            "moonlet-design://19a1c555a197e847.s-4f2a9c1e7b3d/settings-page/../../.git/config",
+        ] {
+            assert_eq!(target(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_session_designs_page_may_load_only_its_hosts_files() {
+        let h = headers("text/html; charset=utf-8", "19a1c555a197e847.s-4f2a9c1e7b3d");
+        let get = |name: &str| h.iter().find(|(n, _)| *n == name).map(|(_, v)| v.as_str());
+        assert_eq!(
+            get("Content-Security-Policy"),
+            Some(
+                "default-src moonlet-design://19a1c555a197e847.s-4f2a9c1e7b3d data: blob: 'unsafe-inline'; connect-src 'none'; form-action 'none'; frame-src 'none'"
+            )
+        );
+    }
+
+    #[test]
+    fn a_session_designs_snapshot_host_serves_only_that_snapshots_files() {
+        // As `snapshotPageUrl({session}, …)` asks for snapshot 3's pages of settings-page.
+        for host in [
+            "315894b4a2cd5984saa0232c623a69ded.s-4f2a9c1e7b3d",
+            "509b21765e7e6062saa0232c623a69ded.s-4f2a9c1e7b3d",
+        ] {
+            for path in [
+                "settings-page@3/pages/index.html",
+                "settings-page@3/pages/git-a.html",
+                "settings-page@3/assets/logo.svg",
+                "settings-page@3/system/styles.css",
+            ] {
+                assert!(serves(host, path), "{host} {path}");
+            }
+            for path in [
+                "settings-page/pages/index.html",
+                "settings-page/system/styles.css",
+                "settings-page@2/pages/index.html",
+                "billing@3/pages/index.html",
+                "systems/moonlet-desktop/styles.css",
+            ] {
+                assert!(!serves(host, path), "{host} {path}");
+            }
+        }
+        // A session design's own page serves as a workspace design's does.
+        assert!(serves("19a1c555a197e847.s-4f2a9c1e7b3d", "settings-page/pages/index.html"));
+    }
+
+    #[test]
+    fn only_a_file_inside_the_root_design_file_gives_when_opened_is_read() {
+        let worktree = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let design = worktree.path().join("docs/design");
+        std::fs::create_dir_all(design.join("settings-page/pages")).unwrap();
+        std::fs::write(design.join("settings-page/pages/index.html"), "<p>page</p>").unwrap();
+        std::fs::write(worktree.path().join("secret.txt"), "secret").unwrap();
+        std::fs::write(outside.path().join("secret.txt"), "secret").unwrap();
+        // A link swapped in after the daemon resolved the file.
+        std::os::unix::fs::symlink(outside.path().join("secret.txt"), design.join("settings-page/pages/link.html")).unwrap();
+        std::os::unix::fs::symlink(worktree.path().join("secret.txt"), design.join("settings-page/pages/up.html")).unwrap();
+        assert_eq!(
+            read_within(&design, &design.join("settings-page/pages/index.html")).unwrap(),
+            b"<p>page</p>"
+        );
+        assert!(read_within(&design, &design.join("settings-page/pages/link.html")).is_err());
+        assert!(read_within(&design, &design.join("settings-page/pages/up.html")).is_err());
+        assert!(read_within(&design, &worktree.path().join("secret.txt")).is_err());
     }
 
     #[test]
