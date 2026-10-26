@@ -265,13 +265,33 @@ pub(crate) fn rename_inside(root: &Path, from: &Path, to: &Path) -> Result<bool>
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// A test's filesystem that cannot swap two folders in one step, as
+    /// some cannot, so what is done in its place can be tested.
+    pub(crate) static NO_SWAP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether the test's filesystem cannot swap; never outside tests.
+fn no_swap() -> bool {
+    #[cfg(test)]
+    return NO_SWAP.get();
+    #[cfg(not(test))]
+    false
+}
+
 /// Swaps the folders `a` and `b`, both inside `root`, in one step: each
 /// takes the other's place, so neither path is ever missing, whenever the
 /// process stops. Their parents are reached from `root` as handles, never
 /// through a link, and the swap goes through those handles (macOS's
 /// `renameatx_np` with `RENAME_SWAP`, Linux's `renameat2` with
-/// `RENAME_EXCHANGE`).
-pub(crate) fn swap_inside(root: &Path, a: &Path, b: &Path) -> Result<()> {
+/// `RENAME_EXCHANGE`). False, with nothing changed, where the system or the
+/// filesystem cannot swap folders (`EINVAL`, `ENOTSUP`, `ENOSYS`, or
+/// another system).
+pub(crate) fn swap_inside(root: &Path, a: &Path, b: &Path) -> Result<bool> {
+    if no_swap() {
+        return Ok(false);
+    }
     use std::os::fd::{AsFd, AsRawFd};
     let parent = |rel: &Path| -> Result<(Dir, std::ffi::CString)> {
         let name = rel.file_name().context("a folder needs a name")?;
@@ -290,13 +310,16 @@ pub(crate) fn swap_inside(root: &Path, a: &Path, b: &Path) -> Result<()> {
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     let done: i32 = {
         let _ = (from_fd, to_fd, from, to);
-        anyhow::bail!("folders cannot be swapped in one step here")
+        return Ok(false);
     };
     if done != 0 {
-        return Err(std::io::Error::last_os_error())
-            .with_context(|| format!("cannot swap {} and {} in {}", a.display(), b.display(), root.display()));
+        let e = std::io::Error::last_os_error();
+        if matches!(e.raw_os_error(), Some(libc::EINVAL | libc::ENOTSUP | libc::ENOSYS)) {
+            return Ok(false);
+        }
+        return Err(e).with_context(|| format!("cannot swap {} and {} in {}", a.display(), b.display(), root.display()));
     }
-    Ok(())
+    Ok(true)
 }
 
 /// Whether the entry `name` of `dir` and the handle `opened` are one file:

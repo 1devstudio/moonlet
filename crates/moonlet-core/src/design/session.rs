@@ -250,8 +250,10 @@ impl Store {
     /// anchor recorded. Each copy is written whole in a folder of its own
     /// under the design's folder in [`SIDE_DIR`], which git ignores, then
     /// swapped with the copy in place in one step ([`fsx::swap_inside`]), so
-    /// neither copy is ever missing; the anchor is recorded last. A step
-    /// that fails swaps back what was swapped. An update stopped between its
+    /// neither copy is ever missing; where the filesystem cannot swap, the
+    /// copy in place is moved aside and the new one in, two renames. The
+    /// anchor is recorded last. A step that fails puts back what was
+    /// swapped or moved. An update stopped between its
     /// swaps and the anchor leaves the copies it replaced in those folders:
     /// the next update reads the cards that changed from them, as they are
     /// the system the recorded anchor names, and removes them.
@@ -267,18 +269,22 @@ impl Store {
         let anchor = self.system_anchor(workspace, &config.system)?;
         let (styles, all) = system_copies(&system_dir)?;
         let staged = [at.in_side(STAGED_PINNED), at.in_side(STAGED_SIDE)];
+        let aside = [at.in_side(ASIDE_PINNED), at.in_side(ASIDE_SIDE)];
         // The system as the recorded anchor names it: the agent's copy, or
-        // the copy an update stopped before its anchor swapped out.
+        // the copy an update stopped before its anchor swapped or moved out.
         let mut before = fsx::read_tree(&at.root, &at.in_side(SYSTEM_DIR))?;
         if anchor_of(&before) != config.anchor {
-            let swapped_out = fsx::read_tree(&at.root, &staged[1])?;
-            if !swapped_out.is_empty() && anchor_of(&swapped_out) == config.anchor {
-                before = swapped_out;
+            for out in [&staged[1], &aside[1]] {
+                let replaced = fsx::read_tree(&at.root, out)?;
+                if !replaced.is_empty() && anchor_of(&replaced) == config.anchor {
+                    before = replaced;
+                    break;
+                }
             }
         }
         let cards = changed_cards(&before, &all);
         let clear = || {
-            for folder in &staged {
+            for folder in staged.iter().chain(&aside) {
                 if let Err(e) = fsx::remove_dir_inside(&at.root, &at.root.join(folder)) {
                     tracing::warn!("cannot remove {}: {e:#}", at.root.join(folder).display());
                 }
@@ -292,13 +298,28 @@ impl Store {
             return Err(e);
         }
         let places = [at.in_dir(SYSTEM_DIR), at.in_side(SYSTEM_DIR)];
-        let mut swapped = 0;
+        // Each copy put in place, and whether it was swapped in one step
+        // (else moved, its old copy aside).
+        let mut swapped: Vec<bool> = Vec::new();
         let done = (|| -> Result<()> {
-            for (place, new) in places.iter().zip(&staged) {
+            for ((place, new), old) in places.iter().zip(&staged).zip(&aside) {
                 // A copy missing from its place swaps with an empty folder.
                 fsx::make_dirs_inside(&at.root, place)?;
-                fsx::swap_inside(&at.root, place, new)?;
-                swapped += 1;
+                if fsx::swap_inside(&at.root, place, new)? {
+                    swapped.push(true);
+                    continue;
+                }
+                // The filesystem cannot swap: two renames, the place empty
+                // between them.
+                tracing::info!("{} cannot be swapped in one step: moving it aside", at.root.join(place).display());
+                fsx::rename_inside(&at.root, &at.root.join(place), &at.root.join(old))?;
+                if let Err(e) = fsx::rename_inside(&at.root, &at.root.join(new), &at.root.join(place)) {
+                    if let Err(back) = fsx::rename_inside(&at.root, &at.root.join(old), &at.root.join(place)) {
+                        tracing::warn!("cannot put back {} after a failed update: {back:#}", at.root.join(place).display());
+                    }
+                    return Err(e);
+                }
+                swapped.push(false);
             }
             fsx::update_inside(&at.root, &at.in_dir(DESIGN_FILE), |text| {
                 let mut doc: toml_edit::DocumentMut = text
@@ -314,8 +335,13 @@ impl Store {
             })
         })();
         if let Err(e) = done {
-            for (place, new) in places.iter().zip(&staged).take(swapped).rev() {
-                if let Err(back) = fsx::swap_inside(&at.root, place, new) {
+            for (((place, new), old), in_one) in places.iter().zip(&staged).zip(&aside).zip(swapped).rev() {
+                let back = match in_one {
+                    true => fsx::swap_inside(&at.root, place, new).and_then(|done| if done { Ok(()) } else { Err(anyhow::anyhow!("the swap was refused")) }),
+                    false => fsx::remove_dir_inside(&at.root, &at.root.join(place))
+                        .and_then(|()| fsx::rename_inside(&at.root, &at.root.join(old), &at.root.join(place)).map(|_| ())),
+                };
+                if let Err(back) = back {
                     tracing::warn!("cannot put back {} after a failed update: {back:#}", at.root.join(place).display());
                 }
             }
@@ -332,6 +358,11 @@ impl Store {
 /// the design's own folder under [`SIDE_DIR`], which git ignores.
 const STAGED_PINNED: &str = ".update-pinned";
 const STAGED_SIDE: &str = ".update-system";
+
+/// Where an update moves the copies it replaces where the filesystem cannot
+/// swap two folders in one step, beside [`STAGED_PINNED`] and [`STAGED_SIDE`].
+const ASIDE_PINNED: &str = ".update-old-pinned";
+const ASIDE_SIDE: &str = ".update-old-system";
 
 /// Whether `name`, in a session design's folder under [`SIDE_DIR`], is a
 /// folder an Update writes aside ([`STAGED_PINNED`], [`STAGED_SIDE`], or
@@ -1267,6 +1298,44 @@ created_at = 1
         };
         assert_eq!(hidden(&worktree.path().join("docs/design/settings-page")), Vec::<String>::new());
         assert_eq!(hidden(&worktree.path().join(".moonlet/design/settings-page")), Vec::<String>::new());
+    }
+
+    /// X65: where the filesystem cannot swap two folders in one step, an
+    /// Update moves each copy in place aside and the new one in, two renames,
+    /// and still lists the cards that changed, leaving nothing of its own.
+    #[test]
+    fn a_session_designs_system_update_where_folders_cannot_be_swapped_still_replaces_both_copies() {
+        let (home, store) = store_with_synced_system();
+        let worktree = tempfile::tempdir().unwrap();
+        let at = store
+            .create_session_design("w1", "moonlet-desktop", "s1", worktree.path(), "docs/design", "Settings page", "b", 1)
+            .unwrap();
+        let system = home.path().join("design/w1/systems/moonlet-desktop");
+        std::fs::write(system.join("tokens/colors.css"), ":root { --color-accent: #2563eb; }\n").unwrap();
+        std::fs::write(
+            system.join("components/buttons/button/button.html"),
+            "<!-- @dsCard group=\"Buttons\" -->\n<button class=\"btn\">Run tests</button>\n",
+        )
+        .unwrap();
+        std::fs::write(system.join("_ds_sync.json"), "{\"cards\":{\"components/buttons/button/button.html\":{}}}\n").unwrap();
+        fsx::NO_SWAP.set(true);
+        let updated = store.update_session_system(&at, "w1");
+        fsx::NO_SWAP.set(false);
+        assert_eq!(
+            updated.map(|u| u.cards).map_err(|e| e.to_string()),
+            Ok(vec![DesignCardChange { path: "components/buttons/button/button.html".into(), change: CardChange::Changed }])
+        );
+        assert!(!store.session_system_updated(&at, "w1").unwrap());
+        for copy in ["docs/design/settings-page/system/tokens/colors.css", ".moonlet/design/settings-page/system/tokens/colors.css"] {
+            assert_eq!(std::fs::read_to_string(worktree.path().join(copy)).unwrap(), ":root { --color-accent: #2563eb; }\n", "{copy}");
+        }
+        let hidden: Vec<String> = std::fs::read_dir(worktree.path().join(".moonlet/design/settings-page"))
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with('.'))
+            .collect();
+        assert_eq!(hidden, Vec::<String>::new());
     }
 
     #[test]
