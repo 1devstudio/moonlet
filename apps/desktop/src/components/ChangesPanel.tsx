@@ -9,6 +9,8 @@ import { editorOptions, monaco, useEditorLanguage } from "../lib/monaco";
 import { rpc } from "../lib/daemon";
 import { commentPrompt, hunkPatch, parseFileDiff, type FileDiff as ParsedDiff } from "../lib/patch";
 import { changeCount, changeList, changeTree, type ChangeNode } from "../lib/changes";
+import { NOT_COMMITTED, changesGroups } from "../lib/changesGroups";
+import { sessionDesignsOf, useDesign } from "../lib/designStore";
 import { M, type FileChange, type FileVersions, type GitStatus, type Session } from "../lib/protocol";
 import { errorToast, refreshGit, toast, useStore, sesKey } from "../lib/store";
 import { sendToAgent } from "../lib/actions";
@@ -190,6 +192,31 @@ function CommentBar({ file, line, snippet, onDone }: { file: string; line: numbe
   );
 }
 
+/** A session's changed files as Design, Spec and Code (X65), each group
+ *  folding, in the panel's list or tree, then why comments and snapshots
+ *  are not among them. */
+function GroupedChanges({ groups, view, onSelect, onAction }: { groups: NonNullable<ReturnType<typeof changesGroups>>; view: "tree" | "list"; onSelect: (path: string) => void; onAction: (f: FileChange, a: FileAction) => void }) {
+  const [folded, setFolded] = useState<Record<string, boolean>>({});
+  return (
+    <div className="py-1">
+      {groups.map((g) => (
+        <section key={g.name} aria-label={g.name}>
+          <button
+            className="mx-2 mt-1 flex h-[30px] w-[calc(100%-16px)] items-center gap-1.5 rounded-md px-2 text-left ui-text-11.5 uppercase tracking-[0.08em] text-faint hover:bg-raised hover:text-fg"
+            onClick={() => setFolded((f) => ({ ...f, [g.name]: !f[g.name] }))}
+          >
+            {folded[g.name] ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+            <span className="flex-1">{g.name}</span>
+            <span className="font-mono tabular-nums normal-case tracking-normal">{g.files.length}</span>
+          </button>
+          {!folded[g.name] && (view === "tree" ? <ChangeTreeView files={g.files} onSelect={onSelect} onAction={onAction} /> : <ChangeListView files={g.files} onSelect={onSelect} onAction={onAction} />)}
+        </section>
+      ))}
+      <p className="mx-4 mb-2 mt-1 ui-text-12 text-faint">{NOT_COMMITTED}</p>
+    </div>
+  );
+}
+
 export default function ChangesPanel({ host, ws }: { host: string; ws: Session }) {
   const status = useStore((s) => s.git[sesKey(host, ws.id)]);
   const fontSize = useStore((s) => s.settings.term.fontSize);
@@ -322,6 +349,9 @@ export default function ChangesPanel({ host, ws }: { host: string; ws: Session }
   const current = useMemo(() => files.find((f) => f.path === selected), [files, selected]);
   const language = useEditorLanguage(selected);
   const total = mode === "base" ? status : headStatus;
+  // A session with a design groups its files as Design, Spec and Code (X65).
+  const designs = useDesign((d) => sessionDesignsOf(d, host, ws.id));
+  const groups = useMemo(() => changesGroups(files, ws.path, designs), [files, ws.path, designs]);
 
   return (
     <div className="flex h-full flex-col">
@@ -360,7 +390,9 @@ export default function ChangesPanel({ host, ws }: { host: string; ws: Session }
       ) : !selected ? (
         <div className="min-h-0 flex-1 overflow-y-auto">
           {total && <SummaryLine status={total} />}
-          {view === "tree" ? (
+          {groups ? (
+            <GroupedChanges groups={groups} view={view} onSelect={setSelected} onAction={(f, a) => void fileAction(f, a)} />
+          ) : view === "tree" ? (
             <ChangeTreeView files={files} onSelect={setSelected} onAction={(f, a) => void fileAction(f, a)} />
           ) : (
             <ChangeListView files={files} onSelect={setSelected} onAction={(f, a) => void fileAction(f, a)} />
