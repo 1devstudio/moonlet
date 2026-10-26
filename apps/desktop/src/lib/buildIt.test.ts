@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildComposer, buildPick, buildingIn, designAttachments } from "./buildIt";
+import { buildComposer, buildPick, buildingIn, designAttachments, promptAfterDrop } from "./buildIt";
 import { firstMessage } from "./composer";
 
 const settings = {
@@ -104,5 +104,13 @@ describe("buildingIn (X65 Build it)", () => {
   it("says nothing for a design never built, or built in a session moonlet no longer has, which Build it may start again", () => {
     expect(buildingIn({}, sessions, projects)).toBeNull();
     expect(buildingIn({ built_in: { session: "s9" } }, sessions, projects)).toBeNull();
+  });
+});
+
+describe("promptAfterDrop (X65 Build it)", () => {
+  it("leaves the composer plain after the chip's ×: the prompt Build it set goes, one the user changed stays", () => {
+    expect(promptAfterDrop("Implement the Settings page design", settings)).toBe("");
+    expect(promptAfterDrop("Implement the Settings page design, rows first", settings)).toBe("Implement the Settings page design, rows first");
+    expect(promptAfterDrop("", settings)).toBe("");
   });
 });

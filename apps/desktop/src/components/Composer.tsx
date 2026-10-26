@@ -22,7 +22,7 @@ import { Markdown } from "./AgentView";
 import { fileMention } from "../lib/plusMenu";
 import { fromOtherDialog } from "../lib/modal";
 import { defaultStartLabel, gitSettingsOf } from "../lib/gitSettings";
-import { buildComposer, buildPick, designAttachments, designDir, type BuildDesign } from "../lib/buildIt";
+import { buildComposer, buildPick, designAttachments, designDir, promptAfterDrop, type BuildDesign } from "../lib/buildIt";
 import { loadDesigns } from "../lib/designStore";
 import { pageUrl } from "../lib/designView";
 import { viewportOf } from "../lib/designViewport";
@@ -660,7 +660,7 @@ export function Composer({
               <PenTool size={13} className="shrink-0 text-accent" />
               <span className="min-w-0 truncate">{built.chip}</span>
               <span className="flex-1" />
-              <IconButton title="Don’t build the design" className="shrink-0" onClick={() => (setDesign(null), setRefused(null))}>
+              <IconButton title="Don’t build the design" className="shrink-0" onClick={() => (setPrompt((p) => promptAfterDrop(p, design)), setDesign(null), setRefused(null))}>
                 <X size={12} />
               </IconButton>
             </span>
