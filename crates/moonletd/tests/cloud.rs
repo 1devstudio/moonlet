@@ -708,6 +708,13 @@ async fn cloud_set_refuses_a_bad_google_cloud_key() {
         json!({ "gcp": { "has_key": true, "max_hours": "24" } })
     );
     assert!(!got.to_string().contains("PRIVATE KEY"), "{got}");
+    // A key of spaces is no key: never shown as saved.
+    let d2 = Daemon::start(tempfile::tempdir().unwrap(), &[]).await;
+    let _: Value = d2
+        .call("cloud.set", json!({ "providers": { "gcp": { "key": "   " } } }))
+        .await;
+    let got2: Value = d2.call("cloud.get", json!({})).await;
+    assert_eq!(got2["providers"], json!({ "gcp": {} }));
     // An empty max_hours is 12, and keeps the saved key.
     let _: Value = d
         .call("cloud.set", json!({ "providers": { "gcp": { "max_hours": "" } } }))

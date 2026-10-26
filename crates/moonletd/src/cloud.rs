@@ -303,7 +303,9 @@ impl CloudSettings {
                     next.removing.retain(|p| p != &id);
                     let p = next.providers.entry(id).or_default();
                     for (k, v) in fields {
-                        match v {
+                        // Spaces alone are no value: cloud.get would show
+                        // such a secret as saved.
+                        match v.map(|v| v.trim().to_string()).filter(|v| !v.is_empty()) {
                             Some(v) => p.insert(k, v),
                             None => p.remove(&k),
                         };
