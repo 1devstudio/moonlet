@@ -834,6 +834,10 @@ pub struct Section {
     #[serde(default)]
     pub view: SectionView,
     pub created_at: u64,
+    /// Projects the section holds on other members of the account that
+    /// this host has no project for (X68).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub missing: Vec<ProjectIdentity>,
 }
 
 /// Sidebar presentation of a section, persisted with it.
