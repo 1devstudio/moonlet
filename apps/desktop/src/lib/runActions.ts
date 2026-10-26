@@ -2,6 +2,7 @@
 // Pure: the store and the action handlers live elsewhere.
 
 import type { AppMode } from "./store";
+import { MODE_NAMES } from "./tasksView";
 
 export interface ActionDef {
   id: string;
@@ -218,8 +219,6 @@ export interface ShortcutRow {
   mode?: string;
 }
 
-const MODE_NAME: Record<AppMode, string> = { sessions: "Sessions", tasks: "Tasks", design: "Design" };
-
 /** Settings › Keyboard shortcuts (X43): every action by group, in catalogue
  * order, matching `q` in its name or its key. Empty groups are left out. A
  * key that works in one mode only says so, as New design's ⇧⌘N (X65). */
@@ -237,7 +236,7 @@ export function shortcutGroups(custom: Shortcuts | undefined, q: string): { name
       label: a.label,
       keys: shown,
       custom: custom?.[a.id] !== undefined && custom[a.id] !== a.keys,
-      ...(shown && a.keyMode ? { mode: `in ${MODE_NAME[a.keyMode]} mode` } : {}),
+      ...(shown && a.keyMode ? { mode: `in ${MODE_NAMES[a.keyMode]} mode` } : {}),
     });
   }
   return groups;

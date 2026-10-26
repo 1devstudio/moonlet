@@ -37,6 +37,10 @@ export function sessionTaskLines(board: Board): Record<string, SessionTaskLine> 
   return out;
 }
 
+/** Each sidebar mode's name, as the mode switch and Settings › Keyboard
+ *  shortcuts say it. */
+export const MODE_NAMES: Record<AppMode, string> = { sessions: "Sessions", tasks: "Tasks", design: "Design" };
+
 /** The mode switch's titles, with the shortcuts as bound, the Tasks
  * button's label and dot (X45, X65), and the Design button's: an accent dot
  * while a design an agent started from a session (`/moonlet-design new`)
@@ -50,9 +54,9 @@ export function modeSwitch(
 ): { sessions: string; tasks: string; design: string; label: string; dot: boolean; designLabel: string; designDot: boolean } {
   const titled = (name: string, key: string) => (key ? `${name} ${key}` : name);
   return {
-    sessions: mode === "sessions" ? "Sessions" : titled("Sessions", keys[mode]),
-    tasks: titled("Tasks", keys.tasks),
-    design: titled("Design", keys.design),
+    sessions: mode === "sessions" ? MODE_NAMES.sessions : titled(MODE_NAMES.sessions, keys[mode]),
+    tasks: titled(MODE_NAMES.tasks, keys.tasks),
+    design: titled(MODE_NAMES.design, keys.design),
     label: outOfSync ? `Tasks, ${outOfSync} out of sync` : "Tasks",
     dot: outOfSync > 0,
     designLabel: unseen ? `Design, ${unseen} new design${unseen === 1 ? "" : "s"}` : "Design",
