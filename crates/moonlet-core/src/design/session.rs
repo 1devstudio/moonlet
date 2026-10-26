@@ -16,7 +16,7 @@ use moonlet_proto::types::{DesignInfo, DesignKind};
 
 use super::designs::{DESIGN_FILE, DesignConfig, NoSystem};
 use super::fsx;
-use super::place::DesignAt;
+use super::place::{DesignAt, Place};
 use super::store::Store;
 
 /// Where a project's session designs live when its config names no folder.
@@ -242,10 +242,9 @@ impl Store {
         folder: &str,
         now: u64,
     ) -> Result<DesignAt> {
-        let workspace = from
-            .workspace
-            .as_deref()
-            .context("only a workspace design is copied into a session")?;
+        let Place::Workspace(workspace) = &from.place else {
+            bail!("only a workspace design is copied into a session");
+        };
         let config = self.design_config(from)?;
         // Its pages read first: one it does not have refuses the copy before
         // anything is made.
@@ -353,16 +352,7 @@ pub fn session_design(
 /// A session design's address: `<folder>/<slug>/` in the worktree, its
 /// comments and history in `.moonlet/design/<slug>/`.
 fn session_at(session: &str, worktree: &Path, folder: &str, slug: &str) -> DesignAt {
-    DesignAt {
-        root: worktree.to_path_buf(),
-        dir: Path::new(folder).join(slug),
-        side: Path::new(SIDE_DIR).join(slug),
-        slug: slug.to_string(),
-        kind: DesignKind::Session,
-        workspace: None,
-        session: Some(session.to_string()),
-        key: format!("s/{session}/{slug}"),
-    }
+    DesignAt::of_session(worktree, folder, SIDE_DIR, session, slug)
 }
 
 /// A session design's whole copy of its design system, in its folder under

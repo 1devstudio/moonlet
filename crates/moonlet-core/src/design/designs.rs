@@ -15,7 +15,7 @@ use moonlet_proto::types::{DesignBuiltIn, DesignInfo, DesignKind, DesignPage};
 
 use super::check::{Kind, Problem};
 use super::fsx;
-use super::place::DesignAt;
+use super::place::{DesignAt, Place};
 use super::store::Store;
 
 /// A design asked for on a design system the workspace does not have.
@@ -152,22 +152,13 @@ impl Store {
             }
             let slug = e.file_name().to_string_lossy().into_owned();
             let dir = e.path();
+            let at = DesignAt::of_workspace(folder.clone(), workspace, &slug);
             // A record that cannot be read lists as the design's error, as a
             // broken `design.toml` does, not as a design with no agent.
             let record = self
-                .design_record(workspace, &slug)
+                .design_record(&at)
                 .context("cannot read the design's record");
             let agent = record.as_ref().ok().and_then(|r| r.agent);
-            let at = DesignAt {
-                root: folder.clone(),
-                dir: PathBuf::from(&slug),
-                side: PathBuf::from(&slug),
-                slug: slug.clone(),
-                kind: DesignKind::Workspace,
-                workspace: Some(workspace.to_string()),
-                session: None,
-                key: format!("w/{workspace}/{slug}"),
-            };
             out.push(match read_design_config(&at) {
                 Ok(config) => DesignInfo {
                     error: record.err().map(|err| format!("{err:#}")),
@@ -200,9 +191,16 @@ impl Store {
         Ok(out)
     }
 
-    /// What moonlet trusts about a design (see [`DesignRecord`]).
-    pub fn design_record(&self, workspace: &str, slug: &str) -> Result<DesignRecord> {
-        super::store::read_record(&self.design_record_path(workspace, slug)?)
+    /// What moonlet trusts about a design (see [`DesignRecord`]): a
+    /// workspace design's record; a session design has none, its agent
+    /// being its session's.
+    pub fn design_record(&self, at: &DesignAt) -> Result<DesignRecord> {
+        match &at.place {
+            Place::Workspace(workspace) => {
+                super::store::read_record(&self.design_record_path(workspace, &at.slug)?)
+            }
+            Place::Session(_) => Ok(DesignRecord::default()),
+        }
     }
 
     fn design_record_path(&self, workspace: &str, slug: &str) -> Result<PathBuf> {
@@ -215,19 +213,6 @@ impl Store {
             .join(format!("{slug}.toml")))
     }
 
-    /// The folder of an existing workspace design.
-    pub fn design_dir(&self, workspace: &str, slug: &str) -> Result<PathBuf> {
-        // `<slug>@<n>` names a snapshot's folder (X65), never a design.
-        super::place::check_slug(slug)?;
-        let dir = self.designs_dir(workspace, false)?.join(slug);
-        super::store::not_a_link(&dir)?;
-        // Its own file: a link, which would take reads elsewhere, is not one.
-        if !std::fs::symlink_metadata(dir.join(DESIGN_FILE)).is_ok_and(|m| m.is_file()) {
-            bail!("no design \"{slug}\"");
-        }
-        Ok(dir)
-    }
-
     /// A design's `design.toml`.
     pub fn design_config(&self, at: &DesignAt) -> Result<DesignConfig> {
         read_design_config(at)
@@ -237,33 +222,19 @@ impl Store {
     /// agent its record names.
     pub fn design(&self, at: &DesignAt) -> Result<DesignInfo> {
         let config = read_design_config(at)?;
-        let agent = match &at.workspace {
-            Some(workspace) => self.design_record(workspace, &at.slug)?.agent,
-            None => None,
+        Ok(summary(at, &config, self.design_record(at)?.agent))
+    }
+
+    /// Records the chat of a workspace design's agent, which removing it
+    /// stops (`Some`), or forgets one whose start failed (`None`).
+    pub fn set_design_agent(&self, at: &DesignAt, terminal: Option<u32>) -> Result<()> {
+        let Place::Workspace(workspace) = &at.place else {
+            bail!("a session design's agent is its session's");
         };
-        Ok(summary(at, &config, agent))
-    }
-
-    /// Records the chat of the design's agent, which removing it stops.
-    pub fn set_design_agent(&self, workspace: &str, slug: &str, terminal: u32) -> Result<()> {
-        self.design_dir(workspace, slug)?;
-        let mut record = self.design_record(workspace, slug)?;
-        record.agent = Some(terminal);
-        let path = self.design_record_path(workspace, slug)?;
+        let mut record = self.design_record(at)?;
+        record.agent = terminal;
+        let path = self.design_record_path(workspace, &at.slug)?;
         // Replaced whole, so a reader never sees half of one.
-        fsx::write_inside(
-            &self.workspace(workspace)?,
-            &path,
-            toml::to_string(&record)?.as_bytes(),
-        )
-    }
-
-    /// Forgets the design's agent: one whose start failed.
-    pub fn clear_design_agent(&self, workspace: &str, slug: &str) -> Result<()> {
-        self.design_dir(workspace, slug)?;
-        let mut record = self.design_record(workspace, slug)?;
-        record.agent = None;
-        let path = self.design_record_path(workspace, slug)?;
         fsx::write_inside(
             &self.workspace(workspace)?,
             &path,
@@ -298,7 +269,7 @@ impl Store {
             fsx::remove_dir_inside(&at.root, &dir)
                 .with_context(|| format!("cannot remove {}", dir.display()))?;
         }
-        if let Some(workspace) = &at.workspace {
+        if let Place::Workspace(workspace) = &at.place {
             let _ = fsx::remove_file_inside(
                 &self.workspace(workspace)?,
                 &self.design_record_path(workspace, &at.slug)?,
@@ -366,7 +337,7 @@ pub(super) fn summary(at: &DesignAt, config: &DesignConfig, agent: Option<u32>) 
     DesignInfo {
         slug: at.slug.clone(),
         name: config.name.clone(),
-        kind: at.kind,
+        kind: at.kind(),
         system: config.system.clone(),
         path: at.folder().display().to_string(),
         brief: config.brief.clone(),
@@ -434,7 +405,7 @@ fn pages(at: &DesignAt) -> Vec<(String, u64)> {
 /// A workspace design's links the live system, a session or project
 /// design's its own pinned copy beside its pages.
 pub fn styles_link(at: &DesignAt, system: &str) -> String {
-    match at.kind {
+    match at.kind() {
         DesignKind::Workspace => format!("../../../systems/{system}/styles.css"),
         DesignKind::Session | DesignKind::Project => SESSION_STYLES.to_string(),
     }
@@ -842,7 +813,9 @@ label = \"rows\"
         store
             .create_design("w1", "Pricing", "moonlet-desktop", "", 2)
             .unwrap();
-        store.set_design_agent("w1", "pricing", 7).unwrap();
+        store
+            .set_design_agent(&store.workspace_design("w1", "pricing").unwrap(), Some(7))
+            .unwrap();
         std::fs::write(
             home.path().join("design/w1/.records/designs/pricing.toml"),
             "agent = \n",
@@ -947,9 +920,17 @@ label = \"rows\"
         store
             .create_design("w1", "Onboarding", "moonlet-desktop", "", 2)
             .unwrap();
-        store.set_design_agent("w1", "settings-page", 7).unwrap();
+        store
+            .set_design_agent(
+                &store.workspace_design("w1", "settings-page").unwrap(),
+                Some(7),
+            )
+            .unwrap();
         assert_eq!(
-            store.design_record("w1", "settings-page").unwrap().agent,
+            store
+                .design_record(&store.workspace_design("w1", "settings-page").unwrap())
+                .unwrap()
+                .agent,
             Some(7)
         );
         store

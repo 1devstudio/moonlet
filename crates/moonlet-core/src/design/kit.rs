@@ -7,7 +7,7 @@ use anyhow::Result;
 
 use moonlet_proto::methods::{DesignKit, DesignKitCard, DesignToken};
 
-use super::place::DesignAt;
+use super::place::{DesignAt, Place};
 use super::store::Store;
 use super::{fsx, manifest, tokens};
 
@@ -18,9 +18,9 @@ impl Store {
     pub fn design_kit(&self, at: &DesignAt) -> Result<DesignKit> {
         let config = self.design_config(at)?;
         // A workspace design's live system; a session design's own copy.
-        let dir = match &at.workspace {
-            Some(workspace) => self.system_dir(workspace, &config.system)?,
-            None => super::session::system_copy(at)?,
+        let dir = match &at.place {
+            Place::Workspace(workspace) => self.system_dir(workspace, &config.system)?,
+            Place::Session(_) => super::session::system_copy(at)?,
         };
         let tokens = tokens::read(&dir)
             .into_iter()
