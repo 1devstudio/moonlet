@@ -16,6 +16,28 @@ use super::store::Store;
 #[error("{0} changed since it was read")]
 pub struct Stale(pub String);
 
+/// A page whose file is not there or cannot be read, said as the canvas's
+/// did-not-load bar says it (X65).
+#[derive(Debug, thiserror::Error)]
+pub enum Unreadable {
+    #[error("the file is missing")]
+    Missing,
+    #[error("the file cannot be read")]
+    Denied,
+}
+
+impl Unreadable {
+    /// What a failed read of a page is: missing when the file, or a folder
+    /// on its way, is not there; else it cannot be read.
+    fn of(e: &anyhow::Error) -> Self {
+        let missing = e.chain().any(|c| {
+            c.downcast_ref::<std::io::Error>()
+                .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
+        });
+        if missing { Self::Missing } else { Self::Denied }
+    }
+}
+
 /// A page name that names no page of a design.
 #[derive(Debug, thiserror::Error)]
 #[error("bad page \"{0}\"")]
@@ -69,7 +91,8 @@ impl Store {
     /// place it goes wrong as HTML, if it does.
     pub fn page(&self, at: &DesignAt, page: &str) -> Result<DesignPageText> {
         let rel = page_rel(at, page)?;
-        let html = fsx::read_inside(&at.root, &at.root.join(rel))?;
+        let html =
+            fsx::read_inside(&at.root, &at.root.join(rel)).map_err(|e| Unreadable::of(&e))?;
         Ok(DesignPageText {
             version: version_of(&html),
             parse_error: super::parse::first_parse_error(&html),
@@ -321,5 +344,27 @@ mod tests {
                 message: "an attribute's quote is never closed".into()
             })
         );
+    }
+
+    #[test]
+    fn a_page_that_is_missing_or_cannot_be_read_says_so_plainly() {
+        use std::os::unix::fs::PermissionsExt;
+        let (home, store) = store_with_page();
+        let at = store.workspace_design("w1", "settings-page").unwrap();
+        assert_eq!(
+            store.page(&at, "gone").unwrap_err().to_string(),
+            "the file is missing"
+        );
+        // Root reads a file whatever its mode: no case to make there.
+        if nix::unistd::geteuid().is_root() {
+            return;
+        }
+        let file = home
+            .path()
+            .join("design/w1/designs/settings-page/pages/index.html");
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let read = store.page(&at, "index");
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(read.unwrap_err().to_string(), "the file cannot be read");
     }
 }
