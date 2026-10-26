@@ -3,7 +3,9 @@
 //! A worker connects over the tailnet listener like any paired device,
 //! says `moonletd-worker` in its hello and sends `worker.register`. The
 //! list lives in memory only: it reflects live connections and is rebuilt
-//! as workers come back after a restart. A sleeping laptop does not close
+//! as workers come back after a restart. Which paired device owns each
+//! worker id is saved in `workers.json`, so a restart never frees an id for
+//! another device to take (X68). A sleeping laptop does not close
 //! its connection, so the central host pings every worker and drops one
 //! that misses three pings in a row.
 
@@ -29,9 +31,11 @@ struct Entry {
 
 pub struct Workers {
     list: Mutex<HashMap<String, Entry>>,
-    /// The paired device each worker id first registered from, since this
-    /// daemon started: another device may not take that id over.
+    /// The paired device each worker id first registered from: another
+    /// device may not take that id over while that one is paired.
     owners: Mutex<HashMap<String, String>>,
+    /// Where `owners` is saved.
+    owners_file: std::path::PathBuf,
     /// Connections dropped because their worker stopped answering pings,
     /// so a job can say why its worker went away (X62).
     missed: Mutex<std::collections::HashSet<u64>>,
@@ -40,7 +44,7 @@ pub struct Workers {
 }
 
 impl Workers {
-    pub fn new(emit: impl Fn(Message) + Send + Sync + 'static) -> Workers {
+    pub fn new(owners_file: std::path::PathBuf, emit: impl Fn(Message) + Send + Sync + 'static) -> Workers {
         // Tests only: a shorter ping interval, so a missed ping shows quickly.
         let ping_every = std::env::var("MOONLET_WORKER_PING_MS")
             .ok()
@@ -48,7 +52,13 @@ impl Workers {
             .map_or(PING_EVERY, Duration::from_millis);
         Workers {
             list: Mutex::new(HashMap::new()),
-            owners: Mutex::new(HashMap::new()),
+            owners: Mutex::new(
+                std::fs::read(&owners_file)
+                    .ok()
+                    .and_then(|b| serde_json::from_slice(&b).ok())
+                    .unwrap_or_default(),
+            ),
+            owners_file,
             missed: Mutex::default(),
             ping_every,
             emit: Box::new(emit),
@@ -91,7 +101,16 @@ impl Workers {
     /// Releases the worker ids a paired device held, once it is removed: the
     /// same Mac pairing again is a new device, and links with its old id.
     pub fn forget_device(&self, device: &str) {
-        self.owners.lock().unwrap().retain(|_, owner| owner != device);
+        let mut owners = self.owners.lock().unwrap();
+        owners.retain(|_, owner| owner != device);
+        self.save_owners(&owners);
+    }
+
+    fn save_owners(&self, owners: &HashMap<String, String>) {
+        let saved = serde_json::to_vec_pretty(owners).map_err(anyhow::Error::from).and_then(|b| crate::mobile::write_private(&self.owners_file, &b));
+        if let Err(e) = saved {
+            tracing::warn!("cannot save {}: {e:#}", self.owners_file.display());
+        }
     }
 
     /// Lists the worker on `conn`, the connection of paired device `device`.
@@ -103,6 +122,7 @@ impl Workers {
         conn: Arc<Conn>,
         device: &str,
         worker: WorkerRegister,
+        paired: impl Fn(&str) -> bool,
     ) -> Result<(), RpcError> {
         let id = worker.id.clone();
         // One worker per connection: a second id would leave the first
@@ -121,9 +141,16 @@ impl Workers {
         }
         {
             let mut owners = self.owners.lock().unwrap();
-            let owner = owners.entry(id.clone()).or_insert_with(|| device.to_string());
-            if owner != device {
-                return Err(RpcError::new("forbidden", "another Mac links with this worker id"));
+            match owners.get(&id) {
+                Some(owner) if owner == device => {}
+                // A device removed meanwhile owns nothing any more.
+                Some(owner) if paired(owner) => {
+                    return Err(RpcError::new("forbidden", "another Mac links with this worker id"));
+                }
+                _ => {
+                    owners.insert(id.clone(), device.to_string());
+                    self.save_owners(&owners);
+                }
             }
         }
         let old = {

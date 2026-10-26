@@ -742,9 +742,9 @@ impl WorkerLink {
         let version = self.send_account(host, Vec::new()).await?;
         // Only this machine's own changes: the central host takes no other
         // member's from it.
-        let own = format!("{}.", self.info().worker.id);
+        let own = self.info().worker.id;
         let mut lacks = self.sessions.account_changes_for(&version);
-        lacks.retain(|c| c.stamp.member.starts_with(&own));
+        lacks.retain(|c| moonlet_core::account::log_owner(&c.stamp.member) == Some(own.as_str()));
         if !lacks.is_empty() {
             self.send_account(host, lacks).await?;
         }
