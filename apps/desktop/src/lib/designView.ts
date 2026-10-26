@@ -3,7 +3,7 @@
 
 import { ago } from "./mobile";
 import { pagePath } from "./designPage";
-import { designFolder, type DesignPlace } from "./designPlace";
+import { designFolder, placeHost, type DesignPlace } from "./designPlace";
 import type { DesignCard, DesignSystem } from "./protocol";
 
 export interface CardGroup {
@@ -72,8 +72,7 @@ export function changedBanner(sys: DesignSystem, cards: DesignCard[]): string | 
  *  one; `query` asks the scheme for more, such as the comment bridge.
  *  `design_scheme.rs` (`target`) parses it. */
 export function designUrl(place: DesignPlace, path: string, rev = 0, query: Record<string, string> = {}, key = fnv1a64(path)): string {
-  const at = typeof place === "string" ? encodeURIComponent(place) : `s-${encodeURIComponent(place.session)}`;
-  const url = `moonlet-design://${key}.${at}/${path.split("/").map(encodeURIComponent).join("/")}`;
+  const url = `moonlet-design://${key}.${placeHost(place)}/${path.split("/").map(encodeURIComponent).join("/")}`;
   const params = new URLSearchParams({ ...(rev ? { v: String(rev) } : {}), ...query }).toString();
   return params ? `${url}?${params}` : url;
 }

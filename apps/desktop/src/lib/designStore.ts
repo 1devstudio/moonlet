@@ -18,7 +18,7 @@ import { changedPages, reloadsPage } from "./designCanvas";
 import { pageOfPath } from "./designPage";
 import type { PageProblem } from "./designBars";
 import { COMMENTS_FILE, commentsMessage, withMid, withPins, type PageMids } from "./designComments";
-import { designRef, type DesignPlace } from "./designPlace";
+import { changePlace, designRef, isSession, placeOfDesign, type DesignPlace } from "./designPlace";
 
 interface DesignState {
   /** By workspace (`wsKey(host, id)`), once listed. */
@@ -37,7 +37,7 @@ interface DesignState {
   /** Each workspace's session designs (`wsKey`), once listed (X65), which
    *  their sessions' Design tabs show. */
   sessionDesigns: Record<string, Design[]>;
-  /** The design each session's Design tab shows (`host/session`), by slug. */
+  /** The design each session's Design tab shows (its place key), by slug. */
   sessionShown: Record<string, string>;
   /** The designs an agent started from a session that the user has not
    *  seen yet (`itemKey`), for the Design button's accent dot (X65). */
@@ -68,7 +68,7 @@ export const useDesign = create<DesignState>(() => ({ systems: {}, shown: {}, ca
 
 /** A place's key: a workspace's `wsKey`, a session's `host/s:<session>`,
  *  so a session design never shares a workspace design's state (X65). */
-const placeKey = (host: string, place: DesignPlace) => (typeof place === "string" ? wsKey(host, place) : `${host}/s:${place.session}`);
+const placeKey = (host: string, place: DesignPlace) => (isSession(place) ? `${host}/s:${place.session}` : wsKey(host, place));
 
 /** A design system's or a design's key, `<place key>/slug`: a design
  *  system's place is its workspace. */
@@ -76,6 +76,10 @@ export const itemKey = (host: string, place: DesignPlace, slug: string) => `${pl
 
 /** A design page's key, `<place key>/slug/page`. */
 export const pageKey = (host: string, place: DesignPlace, slug: string, page: string) => `${itemKey(host, place, slug)}/${page}`;
+
+/** The place key a key of {@link itemKey} is under: its parse (a slug has
+ *  no `/`). */
+const placeKeyOfItem = (key: string) => key.slice(0, key.lastIndexOf("/"));
 
 /** The page a key of {@link pageKey} names in design `slug`, or null for
  *  another design's or host's key: its parse. */
@@ -185,13 +189,13 @@ export function sessionDesignsOf(s: DesignState, host: string, session: string):
  *  session has it, else its first; null without designs (X65). */
 export function shownSessionDesign(s: DesignState, host: string, session: string): Design | null {
   const list = sessionDesignsOf(s, host, session);
-  const slug = s.sessionShown[`${host}/${session}`];
+  const slug = s.sessionShown[placeKey(host, { session })];
   return list.find((d) => d.slug === slug) ?? list[0] ?? null;
 }
 
 /** Shows design `slug` in a session's Design tab. */
 export function showSessionDesign(host: string, session: string, slug: string) {
-  useDesign.setState((s) => ({ sessionShown: { ...s.sessionShown, [`${host}/${session}`]: slug } }));
+  useDesign.setState((s) => ({ sessionShown: { ...s.sessionShown, [placeKey(host, { session })]: slug } }));
 }
 
 /** Switches the app to a session design: its session, with the design in
@@ -205,8 +209,8 @@ export async function openSessionDesign(host: string, workspace: string, session
 
 /** How many designs of a workspace an agent started that are unseen. */
 export function unseenOf(s: DesignState, host: string, workspace: string): number {
-  const prefix = `${wsKey(host, workspace)}/`;
-  return s.unseen.filter((k) => k.startsWith(prefix)).length;
+  const place = placeKey(host, workspace);
+  return s.unseen.filter((k) => placeKeyOfItem(k) === place).length;
 }
 
 /** The design shown as the design screen in a workspace, or null. */
@@ -466,8 +470,8 @@ function checkSoon(host: string, place: DesignPlace, slug: string) {
  *  agent is writing, and the design's check again. */
 function onDesignChange(host: string, change: DesignChanged) {
   const st = useDesign.getState();
-  const place: DesignPlace = change.session ? { session: change.session } : change.workspace;
-  const list = change.session ? sessionDesignsOf(st, host, change.session) : (designsOf(st, host, change.workspace) ?? []);
+  const place = changePlace(change);
+  const list = isSession(place) ? sessionDesignsOf(st, host, place.session) : (designsOf(st, host, place) ?? []);
   const revs: Record<string, number> = {};
   // A page the editor has read decides itself whether it loads again: not
   // for the editor's own save (designEditor.ts). Only when nothing but
@@ -590,8 +594,6 @@ const pickedViewports: Record<string, string> = {};
 /** The viewport saves of each design, one at a time, the latest pick last. */
 const viewportSaves = latestSends();
 
-/** A listed design's place: its session's for a session design. */
-const placeOf = (d: Design, workspace: string): DesignPlace => (d.kind === "session" && d.session ? { session: d.session } : workspace);
 
 /** Shows `viewport` as the design's, in its host's listing: an id is
  *  unique per host only. */
@@ -601,7 +603,7 @@ function showViewport(host: string, place: DesignPlace, slug: string, viewport: 
     Object.fromEntries(
       Object.entries(byWorkspace).map(([wk, list]) => {
         const ws = parseWsKey(wk);
-        const mine = (d: Design) => itemKey(ws.host, placeOf(d, ws.id), d.slug) === key;
+        const mine = (d: Design) => itemKey(ws.host, placeOfDesign(d, ws.id), d.slug) === key;
         return [wk, list.some(mine) ? list.map((d) => (mine(d) ? { ...d, viewport } : d)) : list];
       }),
     );
@@ -611,7 +613,7 @@ function showViewport(host: string, place: DesignPlace, slug: string, viewport: 
 /** A listing with each design's picked, not yet saved, viewport. */
 function withPickedViewports(host: string, workspace: string, list: Design[]): Design[] {
   return list.map((d) => {
-    const picked = pickedViewports[itemKey(host, placeOf(d, workspace), d.slug)];
+    const picked = pickedViewports[itemKey(host, placeOfDesign(d, workspace), d.slug)];
     return picked ? { ...d, viewport: picked } : d;
   });
 }
