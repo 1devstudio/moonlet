@@ -5,7 +5,7 @@
 // Palette, Comments and History tabs; a snapshot picked in History is
 // previewed on the canvas, read only.
 
-import { ArrowRight, ChevronDown, History as HistoryIcon, LayoutGrid, Loader2, Lock, MessageSquare, MoreHorizontal, PanelLeftClose, PanelLeftOpen, PanelRight, SwatchBook, Trash2, Undo2 } from "lucide-react";
+import { ArrowRight, ChevronDown, GitBranch, History as HistoryIcon, LayoutGrid, Loader2, Lock, MessageSquare, MoreHorizontal, PanelLeftClose, PanelLeftOpen, PanelRight, SwatchBook, Trash2, Undo2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type MutableRefObject, type ReactNode, type RefObject, type SetStateAction } from "react";
 import { errorToast, toast, updateSettings, useStore } from "../../lib/store";
 import { chatKey, useChat } from "../../lib/chat";
@@ -129,16 +129,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
               <h1 className="truncate ui-text-14 font-semibold text-fg">{design.name}</h1>
               <p className="truncate ui-text-12 text-muted">{designSubtitle(systemName, design.pages.length)}</p>
             </div>
-            {building ? (
-              // Built (X65): its session design is the one that changes now.
-              <button
-                title="Open the session it is building in"
-                className="no-drag min-w-0 max-w-[150px] shrink truncate rounded-md px-1.5 py-1 text-left ui-text-12 text-muted hover:bg-panel-2 hover:text-fg"
-                onClick={() => void openSessionDesign(host, workspace, building.session, design.slug, true)}
-              >
-                {building.text}
-              </button>
-            ) : (
+            {!building && (
               <span title="A session in the design system's first source project, with this design attached" className="no-drag">
                 <Button size="sm" onClick={buildIt}>
                   Build it <ArrowRight size={12} />
@@ -158,6 +149,18 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
               <PanelLeftClose size={14} />
             </IconButton>
           </header>
+          {building && (
+            // Built (X65): its session design is the one that changes now.
+            <button
+              title="Open the session it is building in"
+              className="flex h-[30px] shrink-0 items-center gap-2 border-b border-border bg-panel-2 px-4 text-left ui-text-12.5 text-muted hover:text-fg"
+              onClick={() => void openSessionDesign(host, workspace, building.session, design.slug, true)}
+            >
+              <GitBranch size={12} className="shrink-0 text-accent" />
+              <span className="min-w-0 flex-1 truncate">{building.text}</span>
+              <ArrowRight size={12} className="shrink-0" />
+            </button>
+          )}
           <div className="min-h-0 flex-1">
             {agent !== null ? (
               <AgentView
