@@ -40,7 +40,7 @@ import {
   designCanvasKey,
 } from "../../lib/designStore";
 import { isSession, type DesignPlace } from "../../lib/designPlace";
-import { askWithEdits, updateAndTell, toldFolder, type ToldDesign, restoreSnapshot, closeDesign, hasCopy, kitOf, loadKit, sendCommentsWithEdits, copyElementOf, dismissUnsaved, editPage, loadPageSource, pasteInto, pendingOf, readErrorOf, redoEdit, sendWithEdits, sourceOf, undoEdit, undoOf, unsavedOf, useEditor } from "../../lib/designEditor";
+import { askWithEdits, updateAndTell, toldFolder, type ToldDesign, restoreSnapshot, closeDesign, hasCopy, kitOf, loadKit, sendCommentsWithEdits, copyElementOf, dismissUnsaved, editPage, loadPageSource, loadParseError, parseErrorOf, pasteInto, pendingOf, readErrorOf, redoEdit, sendWithEdits, sourceOf, undoEdit, undoOf, unsavedOf, useEditor } from "../../lib/designEditor";
 import { EditRefused, editsChip, inlineStyles, type Edit, type EditOp } from "../../lib/designEdits";
 import { offSystemMids } from "../../lib/designTokens";
 import { selectionOf } from "../../lib/designInspector";
@@ -54,7 +54,7 @@ import { chatCardLookup, commentCardSelector, commentsRail, commentsTab, keepAct
 import { bridgeMessage, editMessage, helloMessage, modeMessage, paletteMessage, pinsMessage, scrollMessage, selectMessage, type DragOver, type DragResult, type Layer, type PickedElement, type Rect } from "../../lib/designBridge";
 import { pageFile, pagePath } from "../../lib/designPage";
 import { barProblems, chatOpensOn, designBar, loadFixMessage, pageFixMessage, type Bar, type BarAction, type PageProblem } from "../../lib/designBars";
-import { LOAD_WAIT_MS, LOADING, loadStep, notLoadedOf, readFailureNote, type LoadEvent, type PageLoad } from "../../lib/designLoad";
+import { LOAD_WAIT_MS, LOADING, loadStep, notLoadedOf, readFailureNote, wantsParseError, type LoadEvent, type PageLoad } from "../../lib/designLoad";
 import { claimKeys } from "../../lib/keys";
 import { askConfirm } from "../../lib/confirm";
 import { NEAR_ROOT, useNear } from "../../lib/useNear";
@@ -319,9 +319,14 @@ export function DesignCanvas({
   // its first parse error, which the bar says only when it did not.
   const [load, onLoadEvent] = useReducer(loadStep, LOADING);
   const framed = page !== null && !previewed && names.includes(page);
-  const parse = useEditor((e) => (page === null ? null : (sourceOf(e, host, place, design.slug, page)?.parse_error ?? null)));
+  const parseError = useEditor((e) => (page === null ? null : parseErrorOf(e, host, place, design.slug, page)));
+  // Only a page whose bridge was silent is read as HTML, for the bar.
+  const silent = framed && wantsParseError(load);
+  useEffect(() => {
+    if (silent && page !== null) void loadParseError(host, place, design.slug, page).catch(() => {});
+  }, [silent, host, place, design.slug, page]);
   const readError = useEditor((e) => (page === null ? null : readErrorOf(e, host, place, design.slug, page)));
-  const notLoaded = framed ? notLoadedOf(load, readError, parse) : null;
+  const notLoaded = framed ? notLoadedOf(load, readError, parseError) : null;
   // A page that loaded but cannot be read for the editor: said once.
   const unreadable = framed && page !== null ? readFailureNote(load, page, readError) : null;
   useEffect(() => {

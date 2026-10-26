@@ -1479,6 +1479,10 @@ pub struct DesignPageRef {
     #[serde(flatten)]
     pub design: DesignRef,
     pub page: String,
+    /// [`DESIGN_PAGE`] only: read the page's parse error too, which the
+    /// canvas asks for a page whose bridge was silent (X65 entry 13).
+    #[serde(default)]
+    pub parse: bool,
 }
 
 /// A design's page as the editor reads it: its text and version, the
@@ -1487,10 +1491,9 @@ pub struct DesignPageRef {
 pub struct DesignPageText {
     pub html: String,
     pub version: String,
-    /// Where the page first goes wrong as HTML, if it does: what the canvas
-    /// says of a page that did not load (X65). A browser recovers from it
-    /// and reports nothing, so the app shows it only for a page that did
-    /// not load, never for one that did.
+    /// Where the page's markup swallows the editor bridge, if it does,
+    /// given only when asked with [`DesignPageRef::parse`]: what the canvas
+    /// says of a page whose bridge was silent (X65 entry 13).
     #[serde(default)]
     pub parse_error: Option<DesignParseError>,
 }
@@ -2932,9 +2935,11 @@ mod tests {
         let restore: DesignSnapshotRef = serde_json::from_str(r#"{"workspace":"w1","slug":"settings-page","n":3}"#).unwrap();
         assert_eq!((restore.design.slug(), restore.n), ("settings-page", 3));
         assert_eq!(
-            serde_json::to_value(DesignPageRef { design: DesignRef::Workspace { workspace: "w1".into(), slug: "a".into() }, page: "index".into() }).unwrap(),
-            serde_json::json!({"workspace": "w1", "slug": "a", "page": "index"})
+            serde_json::to_value(DesignPageRef { design: DesignRef::Workspace { workspace: "w1".into(), slug: "a".into() }, page: "index".into(), parse: true }).unwrap(),
+            serde_json::json!({"workspace": "w1", "slug": "a", "page": "index", "parse": true})
         );
+        // The editor's reads ask for no parse error.
+        assert!(!serde_json::from_str::<DesignPageRef>(r#"{"workspace":"w1","slug":"a","page":"index"}"#).unwrap().parse);
         assert!(serde_json::from_str::<DesignPageRef>(r#"{"slug":"settings-page","page":"index"}"#).is_err());
     }
 }

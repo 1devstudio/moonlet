@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { LOADING, loadStep, notLoadedOf, readFailureNote, type LoadEvent, type PageLoad } from "./designLoad";
+import { LOADING, loadStep, notLoadedOf, readFailureNote, wantsParseError, type LoadEvent, type PageLoad } from "./designLoad";
 import { bridgeMessage } from "./designBridge";
 import { designBar, loadFixMessage } from "./designBars";
 
@@ -86,6 +86,16 @@ describe("a page that loaded but the daemon could not read (X65)", () => {
     expect(readFailureNote(LOADING, "git-b", "the file cannot be read")).toBeNull();
     expect(readFailureNote(run([{ kind: "load", visible: true }]), "git-b", "the file cannot be read")).toBeNull();
     expect(readFailureNote(run([{ kind: "refused" }]), "git-b", "the file cannot be read")).toBeNull();
+  });
+});
+
+describe("asking where a page's markup swallows the bridge (X65)", () => {
+  it("is done only for a page whose bridge was silent, never for one that loads, loaded or the scheme refused", () => {
+    expect(wantsParseError(run([{ kind: "load", visible: true }, { kind: "timeout", asked: 1 }]))).toBe(true);
+    expect(wantsParseError(run([{ kind: "refused" }]))).toBe(false);
+    expect(wantsParseError(run([{ kind: "answer" }]))).toBe(false);
+    expect(wantsParseError(run([{ kind: "load", visible: true }]))).toBe(false);
+    expect(wantsParseError(LOADING)).toBe(false);
   });
 });
 

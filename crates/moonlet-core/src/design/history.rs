@@ -1139,7 +1139,8 @@ mod tests {
             store
                 .page(
                     &store.workspace_design("w1", "settings-page").unwrap(),
-                    "git@2"
+                    "git@2",
+                    false,
                 )
                 .is_err()
         );

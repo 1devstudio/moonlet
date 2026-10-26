@@ -1126,8 +1126,8 @@ export type CommentChange =
 export interface DesignPageText {
   html: string;
   version: string;
-  /** Where the page first goes wrong as HTML: shown only for a page that
-   *  did not load (X65 entry 13). Missing from an older daemon. */
+  /** Where the page's markup swallows the editor bridge, given only when
+   *  asked with `parse` (X65 entry 13). Missing from an older daemon. */
   parse_error?: DesignParseError | null;
 }
 
