@@ -260,29 +260,30 @@ pub async fn serve(app: &tauri::AppHandle, url: &str) -> tauri::http::Response<V
         Ok(f) => f,
         Err(e) => return reply(404, &e.message),
     };
-    let (Some(real), Some(content_type)) = (file["path"].as_str(), file["content_type"].as_str())
-    else {
+    let Some(content_type) = file["content_type"].as_str() else {
         return reply(404, "no such design file");
     };
-    // Checked against the file actually opened, so a link put in its place
-    // after the daemon resolved it leads nowhere outside the workspace's
-    // folder, or the folder a session design's file must be inside, which
-    // the daemon gives as `root`.
-    let real = std::path::PathBuf::from(real);
-    let read = match place {
+    let body = match place {
+        // Checked against the file actually opened, so a link put in its
+        // place after the daemon resolved it leads nowhere outside the
+        // workspace's folder.
         Place::Workspace(ws) => {
-            let design = moonlet_core::paths::home().join("design");
-            tokio::task::spawn_blocking(move || read_inside(&design, &ws, &real)).await
-        }
-        Place::Session(_) => {
-            let Some(root) = file["root"].as_str().map(std::path::PathBuf::from) else {
+            let Some(real) = file["path"].as_str().map(std::path::PathBuf::from) else {
                 return reply(404, "no such design file");
             };
-            tokio::task::spawn_blocking(move || read_within(&root, &real)).await
+            let design = moonlet_core::paths::home().join("design");
+            match tokio::task::spawn_blocking(move || read_inside(&design, &ws, &real)).await {
+                Ok(Ok(body)) => body,
+                _ => return reply(404, "no such design file"),
+            }
         }
-    };
-    let Ok(Ok(body)) = read else {
-        return reply(404, "no such design file");
+        // A session design's file comes with its bytes, read by the daemon
+        // through its folder opened once: the worktree is writable, so a
+        // path read here could lead through a link swapped in meanwhile.
+        Place::Session(_) => match content(&file) {
+            Some(body) => body,
+            None => return reply(404, "no such design file"),
+        },
     };
     // The render page's card measures itself, in its own sandboxed frame.
     let body = if measuring(url) && content_type.starts_with("text/html") {
@@ -312,12 +313,11 @@ pub fn read_inside(
     read_opened(&std::fs::canonicalize(design)?.join(workspace), path)
 }
 
-/// The bytes of `path`, opened first and then checked: the file opened must
-/// be inside `root`, measured from its real path, as `read_inside` does for
-/// a workspace's folder. A session design's file is checked so against the
-/// folder `design.file` gives as its `root` (X65).
-pub fn read_within(root: &std::path::Path, path: &std::path::Path) -> std::io::Result<Vec<u8>> {
-    read_opened(&std::fs::canonicalize(root)?, path)
+/// The bytes `design.file` gives with a file, its `content` in base64 (a
+/// session design's, X65); `None` when it gives none, never a path to read.
+pub fn content(file: &serde_json::Value) -> Option<Vec<u8>> {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.decode(file["content"].as_str()?).ok()
 }
 
 /// The bytes of `path` once opened, when the file opened is inside `root`
@@ -629,24 +629,18 @@ mod tests {
     }
 
     #[test]
-    fn only_a_file_inside_the_root_design_file_gives_when_opened_is_read() {
-        let worktree = tempfile::tempdir().unwrap();
-        let outside = tempfile::tempdir().unwrap();
-        let design = worktree.path().join("docs/design");
-        std::fs::create_dir_all(design.join("settings-page/pages")).unwrap();
-        std::fs::write(design.join("settings-page/pages/index.html"), "<p>page</p>").unwrap();
-        std::fs::write(worktree.path().join("secret.txt"), "secret").unwrap();
-        std::fs::write(outside.path().join("secret.txt"), "secret").unwrap();
-        // A link swapped in after the daemon resolved the file.
-        std::os::unix::fs::symlink(outside.path().join("secret.txt"), design.join("settings-page/pages/link.html")).unwrap();
-        std::os::unix::fs::symlink(worktree.path().join("secret.txt"), design.join("settings-page/pages/up.html")).unwrap();
+    fn a_session_designs_file_is_served_from_the_bytes_design_file_gives_never_from_a_path() {
+        // `<p>page</p>` in base64, as the daemon gives a session design's file.
         assert_eq!(
-            read_within(&design, &design.join("settings-page/pages/index.html")).unwrap(),
-            b"<p>page</p>"
+            content(&serde_json::json!({"content": "PHA+cGFnZTwvcD4=", "content_type": "text/html; charset=utf-8"})),
+            Some(b"<p>page</p>".to_vec())
         );
-        assert!(read_within(&design, &design.join("settings-page/pages/link.html")).is_err());
-        assert!(read_within(&design, &design.join("settings-page/pages/up.html")).is_err());
-        assert!(read_within(&design, &worktree.path().join("secret.txt")).is_err());
+        // A reply naming a path, as design.file gave before, is read nowhere.
+        assert_eq!(
+            content(&serde_json::json!({"path": "/etc/hosts", "content_type": "text/html; charset=utf-8", "root": "/etc"})),
+            None
+        );
+        assert_eq!(content(&serde_json::json!({"content": "not base64!"})), None);
     }
 
     #[test]

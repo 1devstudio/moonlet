@@ -1379,16 +1379,20 @@ impl Daemon {
                         let path = blocking(move || store.resolve(&workspace, &r.path)).await?;
                         ok(serde_json::json!({"path": path, "content_type": store::content_type(&path)}))
                     }
-                    // A session design's (X65): with the folder the file
-                    // must still be inside once it is opened.
+                    // A session design's (X65): its bytes, read through its
+                    // folder opened once, as its worktree is writable and a
+                    // folder swapped for a link after a path was given
+                    // would lead the reader out of it.
                     (None, Some(session)) => {
                         let (s, folder) = self.design_session(&session)?;
                         self.workspace_exists(s.workspace_id.as_deref().unwrap_or_default())?;
                         let rel = r.path.clone();
-                        let (path, root) = blocking(move || moonlet_core::design::session::session_file(Path::new(&s.path), &folder, &rel))
+                        let bytes = blocking(move || moonlet_core::design::session::session_file(Path::new(&s.path), &folder, &rel))
                             .await
                             .map_err(|_| RpcError::new("invalid_params", format!("{} is no file of a session design", r.path)))?;
-                        ok(serde_json::json!({"path": path, "content_type": store::content_type(&path), "root": root}))
+                        use base64::Engine;
+                        let content = base64::engine::general_purpose::STANDARD.encode(bytes);
+                        ok(serde_json::json!({"content": content, "content_type": store::content_type(Path::new(&r.path))}))
                     }
                     (Some(_), Some(_)) => Err(RpcError::new("invalid_params", "name a design file by its workspace or by its session, not both")),
                     (None, None) => Err(RpcError::new("invalid_params", "name a design file by its workspace or by its session")),
