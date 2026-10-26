@@ -1,0 +1,48 @@
+// The PR's Design and build (X65): each page of a session design beside a
+// screenshot of its built screen, which the agent saves after implementing
+// to `<worktree>/.moonlet/design/<slug>/built/<page>.png`. Pure: the tab is
+// components/design/SessionDesign.tsx.
+
+import type { Design } from "./protocol";
+import { worktreeFile } from "./sessionDesign";
+import { parseViewport } from "./designViewport";
+
+/** A page's built screenshot as `design.file {session, path}` names it, in
+ *  the worktree's design folder's terms: `<slug>@built/<page>.png`. */
+export function builtFile(slug: string, page: string): string {
+  return `${slug}@built/${page}.png`;
+}
+
+/** One page of Design and build: the page's file in the worktree, and its
+ *  screenshot's (`built`, for design.file and the frame) once found; under
+ *  it, where the screenshot is, or "Not built yet" once looked for and not
+ *  there (null until looked for). */
+export interface BuildRow {
+  page: string;
+  label: string | null;
+  design: string;
+  built: string | null;
+  builtLabel: string | null;
+}
+
+/** Design and build for design `d` of a session whose worktree is
+ *  `worktree`; `found` says which pages' screenshots are there, by page,
+ *  once looked for. */
+export function designBuild(d: Design, worktree: string, found: Record<string, boolean>): { title: string; line: string; viewport: [number, number]; rows: BuildRow[] } {
+  const viewport = parseViewport(d.viewport) ?? [1440, 900];
+  return {
+    title: "Design and build",
+    line: `each page beside the built screen, at ${viewport[0]}×${viewport[1]}`,
+    viewport,
+    rows: d.pages.map((p) => {
+      const there = found[p.name];
+      return {
+        page: p.name,
+        label: p.label,
+        design: worktreeFile(worktree, d, p.name),
+        built: there ? builtFile(d.slug, p.name) : null,
+        builtLabel: there === undefined ? null : there ? `.moonlet/design/${d.slug}/built/${p.name}.png` : "Not built yet",
+      };
+    }),
+  };
+}
