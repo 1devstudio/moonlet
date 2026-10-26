@@ -31,18 +31,28 @@ describe("the PR's Design and build (X65)", () => {
     expect(view.line).toBe("each page beside the built screen, at 1440×900");
     expect(view.rows.map((r) => [r.page, r.design, r.built, r.builtLabel])).toEqual([
       ["index", "docs/design/settings-page/pages/index.html", "settings-page@built/index.png", ".moonlet/design/settings-page/built/index.png"],
-      ["git-a", "docs/design/settings-page/pages/git-a.html", null, "Not built yet"],
+      ["git-a", "docs/design/settings-page/pages/git-a.html", "settings-page@built/git-a.png", "Not built yet"],
     ]);
   });
 
   it("says nothing of a screenshot until it is looked for, and takes the design's viewport, Desktop without one", () => {
     const view = designBuild(design({ viewport: undefined }), "/Users/alex/.moonlet/worktrees/moonlet/settings-page", {});
     expect(view.line).toBe("each page beside the built screen, at 1440×900");
-    expect(view.rows.map((r) => [r.built, r.builtLabel])).toEqual([
-      [null, null],
-      [null, null],
-    ]);
+    expect(view.rows.map((r) => r.builtLabel)).toEqual([null, null]);
     expect(designBuild(design({ viewport: "390x844" }), "/wt", {}).line).toBe("each page beside the built screen, at 390×844");
+  });
+
+  it("tries each page's screenshot as an image before it is known to be there, showing it once it loads and Not built yet once it fails, so its bytes travel once", () => {
+    const wt = "/Users/alex/.moonlet/worktrees/moonlet/settings-page";
+    const looking = designBuild(design(), wt, {}).rows;
+    expect(looking.map((r) => [r.built, r.builtLabel])).toEqual([
+      ["settings-page@built/index.png", null],
+      ["settings-page@built/git-a.png", null],
+    ]);
+    expect(buildRowShows(looking[0], false)).toEqual({ frame: false, image: true, shown: false });
+    const [loaded, failed] = designBuild(design(), wt, { index: true, "git-a": false }).rows;
+    expect(buildRowShows(loaded, false)).toEqual({ frame: false, image: true, shown: true });
+    expect(buildRowShows(failed, true)).toEqual({ frame: true, image: true, shown: false });
   });
 
   it("names a page's screenshot for design.file as the agent saves it", () => {
@@ -51,8 +61,8 @@ describe("the PR's Design and build (X65)", () => {
 
   it("frames a page only while its row is near the screen, and shows its built screenshot, an image, either way", () => {
     const [built, notBuilt] = designBuild(design(), "/Users/alex/.moonlet/worktrees/moonlet/settings-page", { index: true, "git-a": false }).rows;
-    expect(buildRowShows(built, true)).toEqual({ frame: true, image: true });
-    expect(buildRowShows(built, false)).toEqual({ frame: false, image: true });
-    expect(buildRowShows(notBuilt, false)).toEqual({ frame: false, image: false });
+    expect(buildRowShows(built, true)).toEqual({ frame: true, image: true, shown: true });
+    expect(buildRowShows(built, false)).toEqual({ frame: false, image: true, shown: true });
+    expect(buildRowShows(notBuilt, false)).toEqual({ frame: false, image: true, shown: false });
   });
 });

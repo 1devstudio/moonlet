@@ -32,20 +32,22 @@ export function changesBuilt(paths: string[]): boolean {
 const builtName = (page: string) => `${page}.png`;
 
 /** One page of Design and build: the page's file in the worktree, and its
- *  screenshot's (`built`, for design.file and the frame) once found; under
- *  it, where the screenshot is, or "Not built yet" once looked for and not
- *  there (null until looked for). */
+ *  screenshot's address (`built`, as design.file names it), which an image
+ *  tries before it is known to be there, so the screenshot's bytes travel
+ *  once; `there` once that image loaded or failed. Under it, where the
+ *  screenshot is, or "Not built yet" once it failed (null until then). */
 export interface BuildRow {
   page: string;
   label: string | null;
   design: string;
-  built: string | null;
+  built: string;
+  there: boolean | undefined;
   builtLabel: string | null;
 }
 
 /** Design and build for design `d` of a session whose worktree is
- *  `worktree`; `found` says which pages' screenshots are there, by page,
- *  once looked for. */
+ *  `worktree`; `found` says which pages' screenshots loaded (true) or
+ *  failed to (false), by page, once their images tried them. */
 export function designBuild(d: Design, worktree: string, found: Record<string, boolean>): { title: string; line: string; viewport: [number, number]; rows: BuildRow[] } {
   const viewport = viewportOf(d);
   return {
@@ -58,7 +60,8 @@ export function designBuild(d: Design, worktree: string, found: Record<string, b
         page: p.name,
         label: p.label,
         design: worktreeFile(worktree, d, p.name),
-        built: there ? builtFile(d.slug, p.name) : null,
+        built: builtFile(d.slug, p.name),
+        there,
         builtLabel: there === undefined ? null : there ? builtPath(d.slug, p.name) : "Not built yet",
       };
     }),
@@ -68,7 +71,8 @@ export function designBuild(d: Design, worktree: string, found: Record<string, b
 /** What a row of Design and build mounts: its page's frame only while the
  *  row is `near` the screen (`useNear`), as each frame is a web process of
  *  its own (X64), as the Designs index's cards are; its built screenshot,
- *  an image, cheap, once found, near or not. */
-export function buildRowShows(row: BuildRow, near: boolean): { frame: boolean; image: boolean } {
-  return { frame: near, image: row.built !== null };
+ *  an image, cheap, near or not, which tries the screenshot and is
+ *  `shown` once it loaded. */
+export function buildRowShows(row: BuildRow, near: boolean): { frame: boolean; image: boolean; shown: boolean } {
+  return { frame: near, image: true, shown: row.there === true };
 }
