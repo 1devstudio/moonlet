@@ -2,6 +2,7 @@
 // sandboxed frame they render in, and the zoom of the canvas around it.
 
 import { Minus, Plus } from "lucide-react";
+import type { Ref } from "react";
 import { zoomStep } from "../../lib/designView";
 import { cx } from "../../lib/cx";
 import { IconButton } from "../ui";
@@ -9,13 +10,30 @@ import { IconButton } from "../ui";
 /** A card or a page rendered at `scale`: its viewport, in a frame that may
  *  run its own scripts but never reach the app (no `allow-same-origin`). Not
  *  `live`, the same box without the frame, so its web process (X64) is not
- *  started. */
-export function CardFrame({ url, title, viewport, scale, interactive = false, live = true }: { url: string; title: string; viewport: [number, number]; scale: number; interactive?: boolean; live?: boolean }) {
+ *  started. `frameRef`: the frame, for a page's bridge (X65). */
+export function CardFrame({
+  url,
+  title,
+  viewport,
+  scale,
+  interactive = false,
+  live = true,
+  frameRef,
+}: {
+  url: string;
+  title: string;
+  viewport: [number, number];
+  scale: number;
+  interactive?: boolean;
+  live?: boolean;
+  frameRef?: Ref<HTMLIFrameElement>;
+}) {
   const [w, h] = viewport;
   return (
     <div className="relative overflow-hidden" style={{ width: w * scale, height: h * scale }}>
       {live && (
         <iframe
+          ref={frameRef}
           title={title}
           src={url}
           sandbox="allow-scripts"

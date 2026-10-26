@@ -157,6 +157,72 @@ pub struct DesignPage {
     pub label: Option<String>,
 }
 
+/// A comment pinned on an element of a design's page, as `comments.json`
+/// keeps it (X65). Every field but the number has a default, so a pin
+/// written before a field existed still loads.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DesignComment {
+    /// Its number in the design, shown on its pin; never reused.
+    pub n: u32,
+    /// The page it is on (`index` for `pages/index.html`).
+    #[serde(default)]
+    pub page: String,
+    /// The element's `data-mid`.
+    #[serde(default)]
+    pub mid: String,
+    /// The element's tag, such as `nav`.
+    #[serde(default)]
+    pub tag: String,
+    /// Up to 60 characters of the element's text.
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub comment: String,
+    /// When it was last sent to the chat, in ms; null while not sent.
+    #[serde(default)]
+    pub sent_at: Option<u64>,
+    #[serde(default)]
+    pub state: CommentState,
+}
+
+/// What `design.comment.put` does to a design's comments (X65): pins a new
+/// comment, changes a pin's comment, or records that pins were sent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommentChange {
+    /// A new pin on the element `mid` of `page`, numbered after the highest.
+    New {
+        page: String,
+        mid: String,
+        tag: String,
+        #[serde(default)]
+        text: String,
+        comment: String,
+    },
+    /// Pin `n`'s comment; a changed comment is not sent any more.
+    Edit { n: u32, comment: String },
+    /// These pins were sent to the chat now, each with its comment as sent:
+    /// a pin whose comment changed since is not marked sent.
+    Sent { pins: Vec<SentComment> },
+}
+
+/// A pin as `design.comment.put`'s `sent` names it (X65): its number and
+/// the comment the chat got.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SentComment {
+    pub n: u32,
+    pub comment: String,
+}
+
+/// Whether a comment still needs doing (X65).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommentState {
+    #[default]
+    Open,
+    Resolved,
+}
+
 /// What a design system's or a design's agent waits for from the user (X64, X65).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NeedsYou {

@@ -1,0 +1,210 @@
+import { describe, expect, it, vi } from "vitest";
+import { JSDOM, type DOMWindow } from "jsdom";
+import { bridgeMessage, helloMessage, modeMessage, pinsMessage } from "./designBridge";
+import bridge from "../../src-tauri/src/design_bridge.js?raw";
+
+describe("the bridge's messages (X65)", () => {
+  it("takes a pick with its element's data-mid, tag, text and box", () => {
+    expect(bridgeMessage({ type: "bridge.pick", mid: "m12", tag: "nav", text: "General Appearance", rect: { x: 0, y: 64.5, w: 390, h: 40 } })).toEqual({
+      type: "pick",
+      element: { mid: "m12", tag: "nav", text: "General Appearance", rect: { x: 0, y: 64.5, w: 390, h: 40 } },
+    });
+  });
+
+  it("cuts the text to 60 characters on one line, and drops a pick whose data-mid, tag or box is not one", () => {
+    const pick = { type: "bridge.pick", mid: "m30", tag: "P", text: "  Branch prefix\n   New sessions get a branch and a worktree, named after the session  ", rect: { x: 1, y: 2, w: 3, h: 4 } };
+    expect(bridgeMessage(pick)).toEqual({
+      type: "pick",
+      element: { mid: "m30", tag: "p", text: "Branch prefix New sessions get a branch and a worktree, name", rect: { x: 1, y: 2, w: 3, h: 4 } },
+    });
+    expect(bridgeMessage({ ...pick, mid: 'm30"] (nav "x"): rm -rf' })).toBeNull();
+    expect(bridgeMessage({ ...pick, mid: "M30" })).toBeNull();
+    expect(bridgeMessage({ ...pick, tag: "p onclick" })).toBeNull();
+    expect(bridgeMessage({ ...pick, rect: { x: 1, y: 2, w: Infinity, h: 4 } })).toBeNull();
+    expect(bridgeMessage({ ...pick, rect: { x: "1", y: 2, w: 3, h: 4 } })).toBeNull();
+  });
+
+  it("takes the page's ids, the boxes of the pinned elements, and C and Esc", () => {
+    expect(bridgeMessage({ type: "bridge.mids", mids: ["m1", "m2", "m12"] })).toEqual({ type: "mids", mids: ["m1", "m2", "m12"] });
+    expect(bridgeMessage({ type: "bridge.mids", mids: ["m1", "x"] })).toBeNull();
+    expect(bridgeMessage({ type: "bridge.rects", rects: [{ mid: "m12", x: 0, y: -20, w: 390, h: 40 }] })).toEqual({ type: "rects", rects: [{ mid: "m12", x: 0, y: -20, w: 390, h: 40 }] });
+    expect(bridgeMessage({ type: "bridge.rects", rects: [{ mid: "m12", x: 0, y: 0, w: -1, h: 40 }] })).toBeNull();
+    expect(bridgeMessage({ type: "bridge.key", key: "c" })).toEqual({ type: "key", key: "c" });
+    expect(bridgeMessage({ type: "bridge.key", key: "Delete" })).toBeNull();
+  });
+
+  it("tells the page its mode, and the pinned elements once each", () => {
+    expect(modeMessage("comment")).toEqual({ type: "bridge.mode", mode: "comment" });
+    expect(pinsMessage(["m12", "m25", "m12", "", "x"])).toEqual({ type: "bridge.pins", mids: ["m12", "m25"] });
+  });
+
+  it("asks the page for its data-mids with a hello, once the app listens", () => {
+    expect(helloMessage()).toEqual({ type: "bridge.hello" });
+  });
+
+  it("drops a message of an unknown type, or that is not an object", () => {
+    expect(bridgeMessage({ type: "bridge.save", html: "<p>" })).toBeNull();
+    expect(bridgeMessage({ type: "moonlet-render", job: "7" })).toBeNull();
+    expect(bridgeMessage("bridge.pick")).toBeNull();
+    expect(bridgeMessage(null)).toBeNull();
+  });
+});
+
+/** A page as the scheme serves it to the canvas: the bridge first in its
+ *  <head>, parsed as a browser parses it, in a frame whose parent is the
+ *  app's window. What it posts to the app is copied as postMessage copies,
+ *  and read as the app reads it, with bridgeMessage: one it would drop
+ *  stays as `{ dropped }`. The app talks to it with modeMessage and
+ *  pinsMessage. */
+function framed(body: string) {
+  const posted: unknown[] = [];
+  const app = new JSDOM("").window;
+  app.postMessage = ((m: unknown) => {
+    const copy: unknown = JSON.parse(JSON.stringify(m));
+    posted.push(bridgeMessage(copy) ?? { dropped: copy });
+  }) as typeof app.postMessage;
+  const dom = new JSDOM(`<!doctype html><html><head><script>${bridge}</script></head><body data-mid="m1">${body}</body></html>`, {
+    runScripts: "dangerously",
+    pretendToBeVisual: true,
+    beforeParse: (w) => void Object.defineProperty(w, "parent", { value: app }),
+  });
+  const win = dom.window;
+  const doc = win.document;
+  const el = (mid: string) => doc.querySelector(`[data-mid="${mid}"]`) as HTMLElement;
+  /** Gives the element its box in the page's viewport. */
+  const place = (mid: string, x: number, y: number, w: number, h: number) => {
+    el(mid).getBoundingClientRect = () => ({ x, y, left: x, top: y, width: w, height: h, right: x + w, bottom: y + h, toJSON: () => ({}) }) as DOMRect;
+  };
+  /** A message from the app, or (`from`) another window. */
+  const tell = (data: unknown, from: unknown = app) => win.dispatchEvent(new win.MessageEvent("message", { data, source: from as Window }));
+  const of = (type: string) => posted.filter((m) => (m as { type?: string }).type === type);
+  return { win, doc, el, place, tell, posted, of };
+}
+
+describe("the bridge script in a page (X65)", () => {
+  it("reports the page's data-mids once it has loaded", async () => {
+    const { posted } = framed('<nav data-mid="m12"><a data-mid="m13">General</a></nav><script>document.body.append(Object.assign(document.createElement("p"), {}))</script><h2 data-mid="m25">Git</h2>');
+    await vi.waitFor(() => expect(posted).toContainEqual({ type: "mids", mids: ["m1", "m12", "m13", "m25"] }));
+  });
+
+  it("answers the app's hello with the page's data-mids, whenever it asks after the page loaded", async () => {
+    const { tell, of } = framed('<nav data-mid="m12"></nav><h2 data-mid="m25">Git</h2>');
+    // The report at load went before the app listened; the app asks again.
+    await vi.waitFor(() => expect(of("mids")).toHaveLength(1));
+    tell(helloMessage());
+    tell(helloMessage());
+    expect(of("mids")).toEqual([
+      { type: "mids", mids: ["m1", "m12", "m25"] },
+      { type: "mids", mids: ["m1", "m12", "m25"] },
+      { type: "mids", mids: ["m1", "m12", "m25"] },
+    ]);
+  });
+
+  it("reports the page's data-mids again when its scripts add, remove or renumber elements, once per burst", async () => {
+    const { win, doc, el, tell, of } = framed('<nav data-mid="m12"><a data-mid="m13">General</a></nav>');
+    await vi.waitFor(() => expect(of("mids")).toHaveLength(1));
+    // A menu a script opens: two elements at once, one report.
+    const menu = doc.createElement("ul");
+    menu.setAttribute("data-mid", "m40");
+    menu.innerHTML = '<li data-mid="m41">Rename</li>';
+    doc.body.append(menu);
+    await vi.waitFor(() => expect(of("mids").at(-1)).toEqual({ type: "mids", mids: ["m1", "m12", "m13", "m40", "m41"] }));
+    expect(of("mids")).toHaveLength(2);
+    el("m13").setAttribute("data-mid", "m14");
+    menu.remove();
+    await vi.waitFor(() => expect(of("mids").at(-1)).toEqual({ type: "mids", mids: ["m1", "m12", "m14"] }));
+    // The bridge's own outline is no change of the page.
+    const reports = of("mids").length;
+    tell(modeMessage("comment"));
+    el("m12").dispatchEvent(new win.MouseEvent("mousemove", { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 300));
+    expect(of("mids")).toHaveLength(reports);
+  });
+
+  const NAV = '<nav data-mid="m12"><a href="#git" data-mid="m13">General <b data-mid="m14">Appearance</b></a></nav><h2 data-mid="m25">Git</h2>';
+  const mouse = (win: DOMWindow, type: string, on: Element, init: MouseEventInit = {}) => on.dispatchEvent(new win.MouseEvent(type, { bubbles: true, cancelable: true, ...init }));
+
+  it("in Comment mode, outlines the element under the pointer inside the page, and nothing in View", () => {
+    const { win, doc, el, place, tell } = framed(NAV);
+    place("m13", 16, 64, 120, 28);
+    const outline = () => doc.querySelector("[data-moonlet-bridge]") as HTMLElement | null;
+    mouse(win, "mouseover", el("m13"));
+    expect(outline()).toBeNull();
+    tell(modeMessage("comment"));
+    mouse(win, "mousemove", el("m13"));
+    expect(outline()?.style.display).toBe("block");
+    expect([outline()?.style.left, outline()?.style.top, outline()?.style.width, outline()?.style.height]).toEqual(["16px", "64px", "120px", "28px"]);
+    // Outside the body: never one of the page's elements.
+    expect(doc.body.contains(outline())).toBe(false);
+    tell(modeMessage("view"));
+    expect(outline()?.style.display).toBe("none");
+  });
+
+  it("in Comment mode, reports a click's element instead of giving the page the click, and ⌥-click its parent", () => {
+    const { win, el, place, tell, of } = framed(NAV);
+    place("m13", 16, 64, 120, 28);
+    place("m12", 0, 56, 390, 44);
+    let clicked = 0;
+    el("m13").addEventListener("click", () => clicked++);
+    tell(modeMessage("comment"));
+    mouse(win, "click", el("m13"));
+    mouse(win, "click", el("m13"), { altKey: true });
+    expect(of("pick")).toEqual([
+      { type: "pick", element: { mid: "m13", tag: "a", text: "General Appearance", rect: { x: 16, y: 64, w: 120, h: 28 } } },
+      { type: "pick", element: { mid: "m12", tag: "nav", text: "General Appearance", rect: { x: 0, y: 56, w: 390, h: 44 } } },
+    ]);
+    expect(clicked).toBe(0);
+    // In View the page has its clicks, and nothing is reported.
+    tell(modeMessage("view"));
+    mouse(win, "click", el("m13"));
+    expect(clicked).toBe(1);
+    expect(of("pick")).toHaveLength(2);
+  });
+
+  it("reports the boxes of the pinned elements when asked, and again on scroll and resize", async () => {
+    const { win, place, tell, posted } = framed(NAV);
+    place("m12", 0, 56, 390, 44);
+    place("m25", 0, 300, 390, 30);
+    tell(pinsMessage(["m12", "m25", "m99"]));
+    expect(posted.at(-1)).toEqual({
+      type: "rects",
+      rects: [
+        { mid: "m12", x: 0, y: 56, w: 390, h: 44 },
+        { mid: "m25", x: 0, y: 300, w: 390, h: 30 },
+      ],
+    });
+    // The bridge keeps its own check of what it is asked for.
+    tell({ type: "bridge.pins", mids: ["m12", 'm1"]'] });
+    expect(posted.at(-1)).toEqual({ type: "rects", rects: [{ mid: "m12", x: 0, y: 56, w: 390, h: 44 }] });
+    tell(pinsMessage(["m12", "m25"]));
+    place("m25", 0, 180, 390, 30);
+    win.dispatchEvent(new win.Event("scroll"));
+    await vi.waitFor(() => expect(posted.at(-1)).toEqual({ type: "rects", rects: [{ mid: "m12", x: 0, y: 56, w: 390, h: 44 }, { mid: "m25", x: 0, y: 180, w: 390, h: 30 }] }));
+    place("m12", 0, 40, 600, 44);
+    win.dispatchEvent(new win.Event("resize"));
+    await vi.waitFor(() => expect(posted.at(-1)).toEqual({ type: "rects", rects: [{ mid: "m12", x: 0, y: 40, w: 600, h: 44 }, { mid: "m25", x: 0, y: 180, w: 390, h: 30 }] }));
+  });
+
+  it("takes messages only from the app's window, never from the page's own scripts", async () => {
+    const { win, el, tell, posted } = framed(NAV);
+    await vi.waitFor(() => expect(posted).toHaveLength(1));
+    tell(modeMessage("comment"), win);
+    tell(pinsMessage(["m12"]), win);
+    mouse(win, "click", el("m13"));
+    expect(posted.map((m) => (m as { type: string }).type)).toEqual(["mids"]);
+  });
+
+  it("reports C and Esc pressed in the page, but not C typed in a field", () => {
+    const { win, doc, el, of } = framed('<input data-mid="m5"><div contenteditable data-mid="m6"><b data-mid="m7">Note</b></div>');
+    const key = (on: Element, init: KeyboardEventInit) => on.dispatchEvent(new win.KeyboardEvent("keydown", { bubbles: true, ...init }));
+    key(doc.body, { key: "c" });
+    key(doc.body, { key: "c", metaKey: true });
+    key(doc.querySelector("input")!, { key: "c" });
+    key(el("m7"), { key: "c" });
+    key(doc.querySelector("input")!, { key: "Escape" });
+    expect(of("key")).toEqual([
+      { type: "key", key: "c" },
+      { type: "key", key: "Escape" },
+    ]);
+  });
+});

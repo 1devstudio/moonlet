@@ -43,3 +43,72 @@ export function canvasPage(picked: string | null, pages: string[]): string | nul
   if (picked === null) return null;
   return pages.includes(picked) ? picked : (pages[0] ?? "index");
 }
+
+/** What the canvas does with the pointer: View lets the page have it,
+ *  Comment outlines and pins elements (Edit comes with the editor). */
+export type CanvasMode = "view" | "comment";
+
+/** The hint line's text for a mode. */
+export function modeHint(mode: CanvasMode): string {
+  return mode === "comment" ? "Hover outlines elements · click pins a comment · ⌥-click picks the parent" : "View: the page runs as in a browser, so its links, menus and scripts work";
+}
+
+/** A key pressed on the design screen, outside the app's ⌘ shortcuts. */
+export interface ModeKeyPress {
+  key: string;
+  meta: boolean;
+  ctrl: boolean;
+  alt: boolean;
+  shift: boolean;
+  /** In a field, where the key is text. */
+  typing: boolean;
+}
+
+/** What a key does to the canvas (see {@link canvasStep}): C switches
+ *  Comment on and off, Esc closes the comment box or leaves Comment; null
+ *  for any other key, for C with a modifier, and for C or Esc while typing:
+ *  Esc in a field such as the chat's composer is that field's (it stops the
+ *  agent), and the comment box's own field closes the box itself. */
+export function modeKey(k: ModeKeyPress): "toggle" | "escape" | null {
+  if (k.typing) return null;
+  if (k.key === "Escape") return "escape";
+  if (k.meta || k.ctrl || k.alt || k.shift) return null;
+  return k.key === "c" ? "toggle" : null;
+}
+
+/** Where a key is text: a field or an editable element. The bridge script
+ *  (`design_bridge.js`) asks the same of an element in a page. */
+export const TYPING_SELECTOR = 'input, textarea, select, [contenteditable]:not([contenteditable="false"])';
+
+/** Whether a key pressed on `el` is text, not a shortcut: in a field, an
+ *  editable element, or a terminal (which a page never has). */
+export function isTyping(el: Element | null): boolean {
+  return !!el?.closest(`${TYPING_SELECTOR}, .xterm`);
+}
+
+/** What the design screen's canvas shows around the page: its mode, whether
+ *  a comment box is open, and whether the right rail is shown. */
+export interface CanvasState {
+  mode: CanvasMode;
+  box: boolean;
+  rail: boolean;
+}
+
+/** C (`toggle`), Esc, and the View and Comment buttons. */
+export type CanvasAct = "toggle" | "escape" | "view" | "comment";
+
+/** The canvas after `act`: entering Comment shows the rail; leaving it, by
+ *  C or the View button, closes the box; Esc closes the box, else goes
+ *  back to View. */
+export function canvasStep(s: CanvasState, act: CanvasAct): CanvasState {
+  switch (act) {
+    case "toggle":
+      return s.mode === "comment" ? { ...s, mode: "view", box: false } : { ...s, mode: "comment", rail: true };
+    case "comment":
+      return { ...s, mode: "comment", rail: true };
+    case "view":
+      return { ...s, mode: "view", box: false };
+    case "escape":
+      return s.box ? { ...s, box: false } : { ...s, mode: "view" };
+  }
+}

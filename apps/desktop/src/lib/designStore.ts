@@ -5,7 +5,7 @@
 
 import { create } from "zustand";
 import { onDaemonEvent, onHostStatus, rpc } from "./daemon";
-import { EV, M, type ChatState, type Design, type DesignCard, type DesignChanged, type DesignCover, type DesignCreated, type DesignOpen, type DesignSystem, type DesignSystemCreated } from "./protocol";
+import { EV, M, type ChatState, type Design, type DesignCard, type CommentChange, type DesignComment, type DesignChanged, type DesignCover, type DesignCreated, type DesignOpen, type DesignSystem, type DesignSystemCreated } from "./protocol";
 import { parseWsKey, wsKey } from "./workspaces";
 import { syncNotice } from "./designSync";
 import { agentSeen, notify, registerAgentsElsewhere, shownWorkspace, switchWorkspace, toast, useStore } from "./store";
@@ -15,6 +15,7 @@ import { latestPerKey } from "./prPoll";
 import { designOpenAction } from "./design";
 import { changedPages, reloadsPage } from "./designCanvas";
 import type { PageProblem } from "./designBars";
+import { COMMENTS_FILE, commentsMessage, withMid, withPins, type PageMids } from "./designComments";
 
 interface DesignState {
   /** By workspace (`wsKey(host, id)`), once listed. */
@@ -40,9 +41,16 @@ interface DesignState {
   /** Every design system's name ever listed (`wsKey/slug`), kept after it is
    *  removed, for the designs still on it. */
   systemNames: Record<string, string>;
+  /** Each design's comments (`wsKey/slug`), once listed. */
+  comments: Record<string, DesignComment[]>;
+  /** The `data-mid`s each page of a design (`wsKey/slug`) reported after it
+   *  last loaded on the canvas, by page. */
+  mids: Record<string, PageMids>;
+  /** The pins of each design (`wsKey/slug`) a Send is on its way with, by number. */
+  sending: Record<string, number[]>;
 }
 
-export const useDesign = create<DesignState>(() => ({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, designs: {}, designShown: {}, pageRevs: {}, latest: {}, problems: {}, systemNames: {} }));
+export const useDesign = create<DesignState>(() => ({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, designs: {}, designShown: {}, pageRevs: {}, latest: {}, problems: {}, systemNames: {}, comments: {}, mids: {}, sending: {} }));
 
 /** A design system's or a design's key, `wsKey/slug`. */
 const itemKey = (host: string, workspace: string, slug: string) => `${wsKey(host, workspace)}/${slug}`;
@@ -71,18 +79,38 @@ export function revOf(s: DesignState, host: string, workspace: string, slug: str
   return s.changes[itemKey(host, workspace, slug)] ?? 0;
 }
 
-/** Systems whose cards were asked for, listed or not: listed again when they change. */
-const cardsWanted = new Set<string>();
+/** A list per design system or design (`itemKey`) in `field`, from the
+ *  daemon's `method`: the latest answer lands, never an older one, and
+ *  `wanted` holds those asked for, listed or not, to list again when they
+ *  change. `changed` says the list changed here meanwhile: a listing on its
+ *  way may have read before that change, so it is dropped and asked again. */
+function itemListing<K extends "cards" | "comments">(field: K, method: string) {
+  const wanted = new Set<string>();
+  const asked = latestPerKey();
+  const onTheWay: Record<string, number> = {};
+  const load = async (host: string, workspace: string, slug: string): Promise<void> => {
+    const key = itemKey(host, workspace, slug);
+    wanted.add(key);
+    const latest = asked.start(key);
+    onTheWay[key] = (onTheWay[key] ?? 0) + 1;
+    try {
+      const list = await rpc<DesignState[K][string]>(host, method, { workspace, slug });
+      if (latest()) useDesign.setState((s) => ({ [field]: { ...s[field], [key]: list } }) as Partial<DesignState>);
+    } finally {
+      onTheWay[key] -= 1;
+    }
+  };
+  const changed = (host: string, workspace: string, slug: string) => {
+    if (onTheWay[itemKey(host, workspace, slug)]) void load(host, workspace, slug).catch(() => {});
+  };
+  return { load, wanted, changed };
+}
 
-/** The latest cards request per system, so an older answer never lands last. */
-const cardsAsked = latestPerKey();
+const cardListing = itemListing("cards", M.designCards);
 
-export async function loadCards(host: string, workspace: string, slug: string): Promise<void> {
-  const key = itemKey(host, workspace, slug);
-  cardsWanted.add(key);
-  const latest = cardsAsked.start(key);
-  const list = await rpc<DesignCard[]>(host, M.designCards, { workspace, slug });
-  if (latest()) useDesign.setState((s) => ({ cards: { ...s.cards, [key]: list } }));
+/** Lists a design system's cards (X64). */
+export function loadCards(host: string, workspace: string, slug: string): Promise<void> {
+  return cardListing.load(host, workspace, slug);
 }
 
 /** The design system open in a workspace: the one picked, else the first. */
@@ -125,6 +153,110 @@ export function problemsOf(s: DesignState, host: string, workspace: string, slug
 
 const NONE: string[] = [];
 const NO_PROBLEMS: PageProblem[] = [];
+const NO_COMMENTS: DesignComment[] = [];
+const NO_MIDS: PageMids = {};
+
+/** A design's comments, by number; none until listed. */
+export function commentsOf(s: DesignState, host: string, workspace: string, slug: string): DesignComment[] {
+  return s.comments[itemKey(host, workspace, slug)] ?? NO_COMMENTS;
+}
+
+/** The `data-mid`s of a design's pages, from their last load on the canvas. */
+export function midsOf(s: DesignState, host: string, workspace: string, slug: string): PageMids {
+  return s.mids[itemKey(host, workspace, slug)] ?? NO_MIDS;
+}
+
+const NOT_SENDING: number[] = [];
+
+/** The pins of a design a Send is on its way with, by number: their Send
+ *  is off until it is done. */
+export function sendingOf(s: DesignState, host: string, workspace: string, slug: string): number[] {
+  return s.sending[itemKey(host, workspace, slug)] ?? NOT_SENDING;
+}
+
+/** Records the `data-mid`s a page reported after it loaded (the bridge's). */
+export function setPageMids(host: string, workspace: string, slug: string, page: string, mids: string[]) {
+  const key = itemKey(host, workspace, slug);
+  useDesign.setState((s) => ({ mids: { ...s.mids, [key]: { ...s.mids[key], [page]: mids } } }));
+}
+
+/** Records an element the user picked on a page as there (withMid): the
+ *  page may have added it after its last report. */
+export function addPageMid(host: string, workspace: string, slug: string, page: string, mid: string) {
+  const key = itemKey(host, workspace, slug);
+  useDesign.setState((s) => ({ mids: { ...s.mids, [key]: { ...s.mids[key], [page]: withMid(s.mids[key]?.[page], mid) } } }));
+}
+
+const commentListing = itemListing("comments", M.designComments);
+
+/** Lists a design's comments (X65). */
+export function loadComments(host: string, workspace: string, slug: string): Promise<void> {
+  return commentListing.load(host, workspace, slug);
+}
+
+/** Puts the pins the daemon gave back in the design's list at once, so the
+ *  box, the pins and the tab follow without waiting: the change's
+ *  design.changed, which lists them all again, comes 150 ms or more later.
+ *  A listing still on its way may have read before the change, so it is
+ *  asked again, never left to land over the change. */
+function mergePins(host: string, workspace: string, slug: string, pins: DesignComment[]) {
+  const key = itemKey(host, workspace, slug);
+  useDesign.setState((s) => ({ comments: { ...s.comments, [key]: withPins(s.comments[key] ?? [], pins) } }));
+  commentListing.changed(host, workspace, slug);
+}
+
+/** `design.comment.put` with one change, its pins merged at once. */
+async function changeComments(host: string, workspace: string, slug: string, change: CommentChange): Promise<DesignComment[]> {
+  const pins = await rpc<DesignComment[]>(host, M.designCommentPut, { workspace, slug, ...change });
+  mergePins(host, workspace, slug, pins);
+  return pins;
+}
+
+/** A new pin's element and comment. */
+export interface NewComment {
+  page: string;
+  mid: string;
+  tag: string;
+  text: string;
+  comment: string;
+}
+
+/** **Keep**: saves a new pin, not sent. */
+export async function keepComment(host: string, workspace: string, slug: string, c: NewComment): Promise<DesignComment> {
+  const [pin] = await changeComments(host, workspace, slug, { new: c });
+  return pin;
+}
+
+/** Changes a kept pin's comment; a changed one is not sent any more. */
+export async function editComment(host: string, workspace: string, slug: string, n: number, comment: string): Promise<DesignComment> {
+  const [pin] = await changeComments(host, workspace, slug, { edit: { n, comment } });
+  return pin;
+}
+
+/** **Send** and **Send all**: the pins go to the design's agent as one
+ *  message, one line each, and only then are they marked sent. A pin a
+ *  Send is already on its way with is left out, so a second click never
+ *  sends it twice. */
+export async function sendComments(host: string, workspace: string, slug: string, agent: number, pins: DesignComment[]): Promise<void> {
+  const key = itemKey(host, workspace, slug);
+  const busy = new Set(sendingOf(useDesign.getState(), host, workspace, slug));
+  const going = pins.filter((p) => !busy.has(p.n));
+  if (!going.length) return;
+  const ns = going.map((p) => p.n);
+  useDesign.setState((s) => ({ sending: { ...s.sending, [key]: [...(s.sending[key] ?? []), ...ns].sort((a, b) => a - b) } }));
+  try {
+    await askAgent(host, agent, commentsMessage(going));
+    // Each with the comment sent: one edited meanwhile is not marked sent.
+    await changeComments(host, workspace, slug, { sent: { pins: going.map((p) => ({ n: p.n, comment: p.comment })) } });
+  } finally {
+    useDesign.setState((s) => ({ sending: { ...s.sending, [key]: (s.sending[key] ?? []).filter((n) => !ns.includes(n)) } }));
+  }
+}
+
+/** **Resolve**: the pin is done. */
+export async function resolveComment(host: string, workspace: string, slug: string, n: number): Promise<void> {
+  mergePins(host, workspace, slug, [await rpc<DesignComment>(host, M.designCommentResolve, { workspace, slug, n })]);
+}
 
 /** Shows a design as the design screen (X65), and its agent as seen. */
 export function showDesign(host: string, workspace: string, slug: string) {
@@ -232,6 +364,8 @@ function onDesignChange(host: string, change: DesignChanged) {
     useDesign.setState((s) => ({ pageRevs: { ...s.pageRevs, ...revs }, latest: pages.length ? { ...s.latest, [key]: pages } : s.latest }));
     reloadDesigns(host, change.workspace);
     checkSoon(host, change.workspace, change.design);
+    // Its comments, kept, sent or resolved here or written by its agent.
+    if (commentListing.wanted.has(key) && change.paths.includes(COMMENTS_FILE)) void loadComments(host, change.workspace, change.design).catch(() => {});
   } else if (Object.keys(revs).length) {
     useDesign.setState((s) => ({ pageRevs: { ...s.pageRevs, ...revs } }));
   }
@@ -424,7 +558,7 @@ export async function startDesign() {
         // Its frames load again, and its cards are listed again when asked for
         // (a newer request always lands last).
         useDesign.setState((s) => ({ changes: { ...s.changes, [key]: (s.changes[key] ?? 0) + 1 } }));
-        if (cardsWanted.has(key)) void loadCards(e.host, d.workspace, d.system).catch(() => {});
+        if (cardListing.wanted.has(key)) void loadCards(e.host, d.workspace, d.system).catch(() => {});
       }
     } else if (e.name === EV.chatState) {
       const d = e.data as { id: number; state: ChatState };

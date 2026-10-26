@@ -315,7 +315,7 @@ impl Store {
 
     /// `<workspace>/designs`, never through a link; with `create`, made
     /// (with the workspace's folder) when missing.
-    fn designs_dir(&self, workspace: &str, create: bool) -> Result<PathBuf> {
+    pub(super) fn designs_dir(&self, workspace: &str, create: bool) -> Result<PathBuf> {
         self.kind_dir(workspace, "designs", create)
     }
 }
@@ -433,13 +433,16 @@ fn stylesheets(path_rel: &str, html: &str, styles: &str) -> Vec<Problem> {
     found
 }
 
-/// The pins of `comments.json` whose `state` is `open`; none when it cannot be read.
+/// The pins of `comments.json` whose `state` is `open`, read as
+/// `design.comments` reads them; none when it cannot be read.
 fn open_comments(dir: &Path) -> usize {
-    fsx::read_inside(dir, &dir.join("comments.json"))
+    fsx::read_inside(dir, &dir.join(super::comments::COMMENTS_FILE))
         .ok()
-        .and_then(|t| serde_json::from_str::<Vec<serde_json::Value>>(&t).ok())
+        .and_then(|t| super::comments::parse(&t).ok())
         .map_or(0, |pins| {
-            pins.iter().filter(|p| p["state"] == "open").count()
+            pins.iter()
+                .filter(|p| p.state == moonlet_proto::types::CommentState::Open)
+                .count()
         })
 }
 
