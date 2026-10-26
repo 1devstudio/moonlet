@@ -307,8 +307,12 @@ pub(crate) fn swap_inside(root: &Path, a: &Path, b: &Path) -> Result<bool> {
     // both names are NUL-terminated strings that outlive it.
     #[cfg(target_os = "macos")]
     let done = unsafe { libc::renameatx_np(from_fd, from.as_ptr(), to_fd, to.as_ptr(), libc::RENAME_SWAP) };
+    // Through the system call itself, not libc's wrapper: the static musl
+    // builds of the remote helpers have no `renameat2` to link against.
     #[cfg(target_os = "linux")]
-    let done = unsafe { libc::renameat2(from_fd, from.as_ptr(), to_fd, to.as_ptr(), libc::RENAME_EXCHANGE) };
+    let done = unsafe {
+        libc::syscall(libc::SYS_renameat2, from_fd, from.as_ptr(), to_fd, to.as_ptr(), libc::RENAME_EXCHANGE) as i32
+    };
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     let done: i32 = {
         let _ = (from_fd, to_fd, from, to);
