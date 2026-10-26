@@ -1440,6 +1440,13 @@ impl SessionManager {
         }
         unmade.keep();
         let _ = tokio::spawn(on_saved(ws.clone())).await;
+        // It shows once saved: archived or removed meanwhile, its terminals
+        // never start, its worktree maybe gone (X65).
+        match self.session(&ws.id) {
+            Ok(now) if !now.archived => {}
+            Ok(_) => bail!("the session was archived before its terminals started"),
+            Err(_) => bail!("the session was removed before its terminals started"),
+        }
 
         if let Some(agent) = &agent
             && !req.tui
@@ -2092,6 +2099,28 @@ mod tests {
         let left = (Path::new(&s.path).exists(), !branches().await.is_empty());
         assert_eq!(left, (false, false), "(worktree, branch) left behind");
         assert!(mgr.list_sessions().is_empty(), "a session was recorded");
+    }
+
+    /// X65: a session archived while its creation waits on what runs once
+    /// it is saved (Build it records its design there), as it shows in the
+    /// sidebar, starts no terminal: its agent and setup never run in an
+    /// archived session, and the creation says why.
+    #[tokio::test]
+    async fn a_session_archived_before_its_terminals_start_starts_none() {
+        let (repo, _home, mgr) = setup().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let req = SessionCreate { name: Some("Built".into()), agent: Some("fake".into()), cols: 80, rows: 24, ..SessionCreate::new(&r.id) };
+        let archiving = mgr.clone();
+        let on_saved = move |s: Session| async move {
+            archiving.archive(SessionArchive { id: s.id, remove_worktree: false, delete_branch: false, delete_remote: false }).await.unwrap();
+        };
+        let made = mgr.create_session_prepared(req, |_| async { anyhow::Ok(()) }, on_saved).await;
+        assert_eq!(made.map(|s| s.name).map_err(|e| e.to_string()), Err("the session was archived before its terminals started".to_string()));
+        let s = mgr.list_sessions().into_iter().find(|s| s.name == "Built").unwrap();
+        assert!(s.archived);
+        let running: Vec<String> = mgr.terminals.list().into_iter().filter(|t| t.session_id.as_deref() == Some(s.id.as_str())).map(|t| t.title).collect();
+        assert_eq!(running, Vec::<String>::new());
+        assert_eq!(s.terminals, Vec::<TerminalId>::new());
     }
 
     #[tokio::test]
