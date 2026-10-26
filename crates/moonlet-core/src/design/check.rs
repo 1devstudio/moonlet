@@ -569,8 +569,22 @@ fn fonts(path_rel: &str, text: &str, faces: &BTreeSet<String>, problems: &mut Ve
     }
 }
 
-/// Scripts, `on*` attributes, and `href`/`src`/`srcset` URLs and a `style`
-/// attribute's `url()`s that leave the system or name no file. Returns the snippet ids (`data-snippet`) with
+/// The SVG presentation attributes whose value may be a CSS `url()`.
+const URL_ATTRIBUTES: &[&str] = &[
+    "fill",
+    "stroke",
+    "filter",
+    "mask",
+    "clip-path",
+    "marker-start",
+    "marker-mid",
+    "marker-end",
+    "cursor",
+];
+
+/// Scripts, `on*` attributes, and `href`/`src`/`srcset` URLs and the
+/// `url()`s of `style` and SVG presentation attributes that leave the
+/// system or name no file. Returns the snippet ids (`data-snippet`) with
 /// their lines.
 fn elements(
     root: &Path,
@@ -607,8 +621,9 @@ fn elements(
                     ));
                     continue;
                 }
-                if name == "style" {
-                    // A declaration list: its url()s, never an @import.
+                if name == "style" || URL_ATTRIBUTES.contains(&name.as_str()) {
+                    // A declaration list, or a presentation attribute's
+                    // value: its url()s, never an @import.
                     for r in css_refs(&value).iter().filter(|r| !r.import) {
                         if let Some((kind, message)) = css_problem(root, dir, r) {
                             found.push((line, kind, message));
@@ -1412,6 +1427,49 @@ mod tests {
             ("components/buttons/button/button.html", card),
         ]);
         assert_eq!(check(dir.path()).unwrap(), vec![]);
+    }
+
+    #[test]
+    fn a_url_in_an_svg_presentation_attribute_is_checked_like_one_in_css() {
+        let card = "<!-- @dsCard group=\"Icons\" -->\n\
+<!doctype html>\n\
+<svg viewBox=\"0 0 10 10\">\n\
+<rect filter=\"url(https://x/f.svg#a)\" width=\"10\" height=\"10\"/>\n\
+<circle mask=\"url(missing.svg#m)\" clip-path=\"url(#clip)\" r=\"4\"/>\n\
+<path marker-end=\"url('https://x/m.svg#tip')\" fill=\"url(#grad)\" d=\"M0 0\"/>\n\
+</svg>\n\
+<p title=\"Write url(https://x/y.png) in CSS\">Text</p>\n";
+        let dir = system(&[
+            ("styles.css", STYLES),
+            ("tokens/colors.css", COLORS),
+            ("components.css", COMPONENTS),
+            ("components/icons/icon/icon.html", card),
+        ]);
+        let got: Vec<(usize, Kind, String)> = check(dir.path())
+            .unwrap()
+            .into_iter()
+            .map(|p| (p.line, p.kind, p.message))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (
+                    4,
+                    Kind::ExternalUrl,
+                    "https://x/f.svg#a leaves the design system".into()
+                ),
+                (
+                    5,
+                    Kind::Unresolved,
+                    "url(missing.svg#m) does not resolve".into()
+                ),
+                (
+                    6,
+                    Kind::ExternalUrl,
+                    "https://x/m.svg#tip leaves the design system".into()
+                ),
+            ]
+        );
     }
 
     #[test]
