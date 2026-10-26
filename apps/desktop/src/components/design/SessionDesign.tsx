@@ -6,10 +6,11 @@
 import { useEffect, useMemo, type RefObject } from "react";
 import { ChevronDown, PenTool } from "lucide-react";
 import type { Design, Session } from "../../lib/protocol";
-import { designCanvasKey, commentsOf, loadComments, sessionDesignsOf, showSessionDesign, shownSessionDesign, systemsOf, useDesign } from "../../lib/designStore";
+import { designCanvasKey, commentsOf, loadComments, openSessionDesign, sessionDesignsOf, showSessionDesign, shownSessionDesign, systemsOf, useDesign } from "../../lib/designStore";
 import { projectOf, useStore } from "../../lib/store";
 import { sendWithEdits, type ToldDesign } from "../../lib/designEditor";
-import { designSystemFooter, inWorktree, opensDesignView, worktreeFile } from "../../lib/sessionDesign";
+import { designSystemFooter, inWorktree, opensDesignView, specReplies, worktreeFile } from "../../lib/sessionDesign";
+import { chatKey, useChat } from "../../lib/chat";
 import { Empty } from "../ui";
 import { Menu } from "../Menu";
 import { AgentView } from "../AgentView";
@@ -125,6 +126,14 @@ export function SessionChat({ host, id, wsId, focused, visible }: { host: string
   const systems = useDesign((d) => (session?.workspace_id ? systemsOf(d, host, session.workspace_id) : undefined));
   // The forms show at once; the footer once the workspace's systems are listed.
   const slash = useMemo(() => ({ footer: systems && project ? designSystemFooter(systems, project) : null }), [systems, project]);
+  // Once its agent wrote a spec from the design: Implement it, Back to the design (X65).
+  const items = useChat((s) => s.chats[chatKey(host, id)]?.items);
+  const status = useChat((s) => s.chats[chatKey(host, id)]?.status);
+  const replies = useMemo(() => (session ? specReplies(items ?? [], status, session.path, designs.length > 0) : null), [items, status, session, designs.length]);
+  const backToDesign = () => {
+    const shown = shownSessionDesign(useDesign.getState(), host, wsId);
+    if (session && shown) void openSessionDesign(host, session.workspace_id ?? "", wsId, shown.slug, false);
+  };
   return (
     <AgentView
       host={host}
@@ -134,6 +143,8 @@ export function SessionChat({ host, id, wsId, focused, visible }: { host: string
       visible={visible}
       toolNote={(t) => (t.tool && opensDesignView(t.tool) ? <DesignOpenedNote /> : null)}
       designSlash={slash}
+      replies={replies}
+      onReply={backToDesign}
       userView={own ? (text) => designMessage(text, pinsOf, true) : undefined}
       sendText={own ? (text, images) => sendWithEdits(host, own.place, own.slug, id, text, images, peers) : undefined}
     />

@@ -4,7 +4,7 @@
 
 import { pagePath } from "./designPage";
 import { commandOptions, fuzzyScore, toolCommand } from "./chat";
-import type { Design, DesignSystem, ToolCall } from "./protocol";
+import type { ChatItem, ChatStatus, Design, DesignSystem, ToolCall } from "./protocol";
 
 /** `path` relative to the worktree it is in (`worktree`, with or without a
  *  trailing `/`); as it is when outside it. */
@@ -86,4 +86,36 @@ export function designTab(designs: Design[]): { count: number } | null {
  *  canvas gets the room beside the session's chat. */
 export function designPanelWidth(dragged: number | null, windowWidth: number): number {
   return dragged ?? Math.round(windowWidth * 0.55);
+}
+
+/** A suggested reply above a chat's input: `send` is the message it sends;
+ *  null does something in the app instead (Back to the design opens the
+ *  session's Design tab). */
+export interface SuggestedReply {
+  label: string;
+  send: string | null;
+}
+
+/** The tools that write a file, and the file they write. */
+const WRITES = ["Write", "Edit", "MultiEdit"];
+
+/** The spec-from-design replies (X65): once the session's agent ended a
+ *  turn (`status` idle or done) that wrote a spec, a Markdown file right in
+ *  the worktree's `docs/specs/` other than its README, in a session with a
+ *  design, the chat offers **Implement it**, which asks the agent to
+ *  implement that spec (the turn's first), and **Back to the design**. A
+ *  turn is what came after the user's last message; none while the agent
+ *  works or waits, nor for a write that did not go through. */
+export function specReplies(items: readonly ChatItem[], status: ChatStatus | undefined, worktree: string, hasDesign: boolean): SuggestedReply[] | null {
+  if (!hasDesign || (status !== "idle" && status !== "done")) return null;
+  let start = items.length;
+  while (start > 0 && items[start - 1].kind !== "user") start--;
+  const spec = items
+    .slice(start)
+    .map((it) => it.tool)
+    .filter((t): t is ToolCall => !!t && t.status === "ok" && WRITES.includes(t.name))
+    .map((t) => (t.input as { file_path?: unknown } | null)?.file_path)
+    .map((p) => (typeof p === "string" ? inWorktree(worktree, p) : ""))
+    .find((p) => /^docs\/specs\/[^/]+\.md$/.test(p) && p !== "docs/specs/README.md");
+  return spec ? [{ label: "Implement it", send: `Implement the spec ${spec}` }, { label: "Back to the design", send: null }] : null;
 }
