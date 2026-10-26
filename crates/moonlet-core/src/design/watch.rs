@@ -87,10 +87,13 @@ pub struct SessionChange {
 
 /// Groups changed paths of a worktree by its session designs: those in
 /// its design folder `folder` and in `.moonlet/design/`, by any slug a
-/// session design's listing takes. The design's folder itself (made or
-/// removed) counts for it, with no path, but a file beside the designs
-/// (a README, the `.gitignore`) is none; anything else, and moonlet's own
-/// temporary files, is left out.
+/// session design's listing takes. A design in `folder` is the session's
+/// only while it has its folder in `.moonlet/design/` (see
+/// [`super::session::made_here`]), so a design merged on the base branch is
+/// none; that folder's own changes, its removal too, are its design's. The
+/// design's folder itself (made or removed) counts for it, with no path,
+/// but a file beside the designs (a README, the `.gitignore`) is none;
+/// anything else, and moonlet's own temporary files, is left out.
 pub fn group_session(worktree: &Path, folder: &str, paths: &[PathBuf]) -> Vec<SessionChange> {
     use std::collections::{BTreeMap, BTreeSet};
     let mut by: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
@@ -98,10 +101,15 @@ pub fn group_session(worktree: &Path, folder: &str, paths: &[PathBuf]) -> Vec<Se
         let Ok(rel) = p.strip_prefix(worktree) else {
             continue;
         };
-        let (Ok(inner) | Err(inner)) = rel
-            .strip_prefix(folder)
-            .or_else(|_| rel.strip_prefix(super::session::SIDE_DIR))
-            .map_err(|_| Path::new(""));
+        // In the design folder, or in the session designs' own folder.
+        let (in_folder, inner) = match rel.strip_prefix(folder) {
+            Ok(inner) => (true, inner),
+            Err(_) => (
+                false,
+                rel.strip_prefix(super::session::SIDE_DIR)
+                    .unwrap_or(Path::new("")),
+            ),
+        };
         let parts: Vec<String> = inner
             .components()
             .map(|c| c.as_os_str().to_string_lossy().into_owned())
@@ -113,6 +121,7 @@ pub fn group_session(worktree: &Path, folder: &str, paths: &[PathBuf]) -> Vec<Se
         if super::place::check_slug(slug).is_err()
             || beside
             || parts.last().is_some_and(|name| is_temp(name))
+            || (in_folder && !super::session::made_here(worktree, slug))
         {
             continue;
         }
@@ -457,6 +466,10 @@ mod tests {
             std::fs::create_dir_all(worktree.join(file).parent().unwrap()).unwrap();
             std::fs::write(worktree.join(file), "x\n").unwrap();
         }
+        // Both designs made in the session.
+        for slug in ["settings-page", "onboarding"] {
+            std::fs::create_dir_all(worktree.join(".moonlet/design").join(slug)).unwrap();
+        }
         let paths: Vec<PathBuf> = [
             "docs/design/settings-page/pages/index.html",
             "docs/design/settings-page/pages/.index.html.moonlet-41-3",
@@ -494,8 +507,50 @@ mod tests {
     }
 
     #[test]
+    fn a_change_in_a_design_merged_on_the_base_branch_is_none_of_the_sessions_designs() {
+        let dir = tempfile::tempdir().unwrap();
+        let worktree = dir.path();
+        // `settings-page` made in the session, `onboarding` merged on the
+        // base branch: its committed folder only.
+        for made in [
+            ".moonlet/design/settings-page",
+            "docs/design/settings-page/pages",
+            "docs/design/onboarding/pages",
+        ] {
+            std::fs::create_dir_all(worktree.join(made)).unwrap();
+        }
+        let paths: Vec<PathBuf> = [
+            "docs/design/onboarding",
+            "docs/design/onboarding/pages/index.html",
+            "docs/design/settings-page/pages/index.html",
+            // A session design removed whole: its folder under
+            // .moonlet/design/ is gone too.
+            ".moonlet/design/billing",
+            "docs/design/billing",
+        ]
+        .iter()
+        .map(|p| worktree.join(p))
+        .collect();
+        let change = |d: &str, p: &[&str]| SessionChange {
+            design: d.into(),
+            paths: p.iter().map(|x| x.to_string()).collect(),
+        };
+        assert_eq!(
+            group_session(worktree, "docs/design", &paths),
+            vec![
+                change("billing", &[]),
+                change("settings-page", &["pages/index.html"]),
+            ]
+        );
+    }
+
+    #[test]
     fn a_session_design_of_any_slug_its_listing_takes_has_its_changes_reported() {
-        let worktree = Path::new("/Users/alex/.moonlet/worktrees/shop/settings");
+        let dir = tempfile::tempdir().unwrap();
+        let worktree = dir.path();
+        for slug in ["Settings_Page", "onboarding.v2"] {
+            std::fs::create_dir_all(worktree.join(".moonlet/design").join(slug)).unwrap();
+        }
         let paths: Vec<PathBuf> = [
             "docs/design/Settings_Page/pages/index.html",
             ".moonlet/design/Settings_Page/comments.json",
