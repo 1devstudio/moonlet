@@ -78,6 +78,14 @@ describe("designAttachments (X65 Build it)", () => {
     expect(buildPick(settings, ["git-a", "styles"])).toEqual({ workspace: "a1b2c3d4e5f6", slug: "settings-page", pages: ["index", "git-b"] });
   });
 
+  it("keeps at least one page: the last page left has no ×", () => {
+    const sent = designAttachments(settings, { systemName: "moonlet desktop", dir: "docs/design", left: ["index", "git-a"] });
+    expect(sent.map((a) => [a.file, a.remove])).toEqual([
+      ["git-b.html", null],
+      ["styles.css", null],
+    ]);
+  });
+
   it("unfolds a page to its line and the page, and the styles to their line alone", () => {
     const [index, , , styles] = designAttachments(settings, { systemName: "moonlet desktop", dir: "docs/design", left: [] });
     expect([index.body, index.page]).toEqual(["docs/design/settings-page/pages/index.html · Settings page, rows", "index"]);
