@@ -63,15 +63,28 @@ describe("the chat input's slash menu in a session (X65)", () => {
   ];
 
   it("lists /moonlet-design, /moonlet-design new and /moonlet-design sync, each with what it does, and a footer naming the design system", () => {
-    expect(slashMenu(["compact", "review", "moonlet-design"], "/moon", { start: 0, query: "moon" }, footer)).toEqual({ rows: forms, footer });
+    expect(slashMenu(["compact", "review", "moonlet-design"], "/moon", { start: 0, query: "moon" }, { footer })).toEqual({ rows: forms, footer });
     // The agent's other commands follow, as they match.
-    expect(slashMenu(["compact", "moonlet-design"], "/", { start: 0, query: "" }, footer)).toEqual({ rows: [...forms, { value: "/compact", hint: null }], footer });
+    expect(slashMenu(["compact", "moonlet-design"], "/", { start: 0, query: "" }, { footer })).toEqual({ rows: [...forms, { value: "/compact", hint: null }], footer });
   });
 
   it("is the agent's commands alone outside a session, mid-message, or when the query is another command's", () => {
     expect(slashMenu(["compact", "moonlet-design"], "/moon", { start: 0, query: "moon" }, null)).toEqual({ rows: [{ value: "/moonlet-design", hint: null }], footer: null });
-    expect(slashMenu(["compact", "moonlet-design"], "then /moon", { start: 5, query: "moon" }, footer)).toEqual({ rows: [], footer: null });
-    expect(slashMenu(["compact", "moonlet-design"], "/comp", { start: 0, query: "comp" }, footer)).toEqual({ rows: [{ value: "/compact", hint: null }], footer: null });
+    expect(slashMenu(["compact", "moonlet-design"], "then /moon", { start: 5, query: "moon" }, { footer })).toEqual({ rows: [], footer: null });
+    expect(slashMenu(["compact", "moonlet-design"], "/comp", { start: 0, query: "comp" }, { footer })).toEqual({ rows: [{ value: "/compact", hint: null }], footer: null });
+  });
+});
+
+describe("the slash menu before the session's design systems are listed (X65)", () => {
+  it("still lists /moonlet-design's three forms, with no footer until the design system it will use is known", () => {
+    expect(slashMenu(["compact"], "/moon", { start: 0, query: "moon" }, { footer: null })).toEqual({
+      rows: [
+        { value: "/moonlet-design", hint: "Prototype it here, in this session's Design view" },
+        { value: "/moonlet-design new", hint: "A separate design in Design mode, with its own agent" },
+        { value: "/moonlet-design sync", hint: "Sync the design system built from this project" },
+      ],
+      footer: null,
+    });
   });
 });
 

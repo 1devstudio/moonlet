@@ -896,7 +896,7 @@ function ChatEditor({
   handle,
   top,
   layout,
-  slashFooter = null,
+  designSlash = null,
 }: {
   host: string;
   /** The chat terminal, whose unsent text survives a session switch. */
@@ -928,9 +928,10 @@ function ChatEditor({
   handle?: Ref<EditorHandle>;
   /** What fits at the chat column's width (X51). */
   layout: InputLayout;
-  /** In a session's chat, the design system /moonlet-design will use: the
-   *  slash menu lists its three forms with this footer (X65). */
-  slashFooter?: string | null;
+  /** In a session's chat: the slash menu lists /moonlet-design's three
+   *  forms, over a footer naming the design system it will use once that
+   *  is known (X65). */
+  designSlash?: { footer: string | null } | null;
 }) {
   const [text, setTextState] = useState(() => chatDraft(host, id));
   const setText = (v: string) => {
@@ -988,9 +989,9 @@ function ChatEditor({
 
   const menu = useMemo((): { rows: SlashRow[]; footer: string | null } => {
     if (!token || dismissed === token.start) return { rows: [], footer: null };
-    if (token.kind === "/") return slashMenu(commands, text, token, slashFooter);
+    if (token.kind === "/") return slashMenu(commands, text, token, designSlash);
     return { rows: fuzzyFilter(files ?? [], token.query, 8).map((f) => ({ value: "@" + f, hint: null })), footer: null };
-  }, [token, dismissed, commands, files, text, slashFooter]);
+  }, [token, dismissed, commands, files, text, designSlash]);
   const options = menu.rows;
   useEffect(() => setSel(0), [options.length, token?.query]);
 
@@ -1338,9 +1339,9 @@ async function openInTerminal(host: string, info: TerminalInfo, st: ChatState) {
  *  `sendText`: sends what the user typed in place of `chat.send`, such as a
  *  design's message with its edits by hand before it; `toolNote`: a note
  *  shown after a tool call's group, such as a session's "Design view
- *  opened" after its agent made a session design (X65); `slashFooter`: in
- *  a session's chat, the design system /moonlet-design will use, which the
- *  slash menu names under /moonlet-design's forms (X65). */
+ *  opened" after its agent made a session design (X65); `designSlash`: in
+ *  a session's chat, /moonlet-design's forms in the slash menu, with the
+ *  design system it will use once known (X65). */
 export function AgentView({
   host,
   id,
@@ -1352,7 +1353,7 @@ export function AgentView({
   userView,
   sendText,
   toolNote,
-  slashFooter = null,
+  designSlash = null,
 }: {
   host: string;
   id: number;
@@ -1364,7 +1365,7 @@ export function AgentView({
   userView?: (text: string) => ReactNode | null;
   sendText?: (text: string, images: ChatImage[]) => Promise<unknown>;
   toolNote?: (tool: ChatItem) => ReactNode | null;
-  slashFooter?: string | null;
+  designSlash?: { footer: string | null } | null;
 }) {
   const info = useStore((s) => s.terminals[host]?.[id]);
   const st = useChat((s) => s.chats[chatKey(host, id)]);
@@ -1774,7 +1775,7 @@ export function AgentView({
           handle={editor}
           top={st && <AgentsStrip host={host} id={id} st={st} onSend={(text) => send(text, [])} />}
           layout={layout}
-          slashFooter={slashFooter}
+          designSlash={designSlash}
         />
         {/* Under the input (X29, X34, X51): +, context ring and cost on the left, settings on the right; narrower chats drop the extras. */}
         <div className="mt-1.5 flex h-[34px] items-center justify-between gap-2 whitespace-nowrap ui-text-12.5 text-muted">

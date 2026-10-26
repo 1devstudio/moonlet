@@ -49,16 +49,16 @@ const DESIGN_FORMS: SlashRow[] = [
 ];
 
 /** The chat input's slash menu for a `/token` (X65): the agent's commands
- *  (`commandOptions`); in a session's chat (`footer`, the design system
- *  /moonlet-design will use) `/moonlet-design` is its three forms, each
- *  with what it does, first while the token at the start of the message
- *  matches it, with the footer. */
-export function slashMenu(commands: readonly string[], text: string, token: { start: number; query: string }, footer: string | null): { rows: SlashRow[]; footer: string | null } {
-  if (footer === null) return { rows: commandOptions(commands, text, token).map((value) => ({ value, hint: null })), footer: null };
+ *  (`commandOptions`); in a session's chat (`session`) `/moonlet-design` is
+ *  its three forms, each with what it does, first while the token at the
+ *  start of the message matches it, over the footer naming the design
+ *  system it will use, once that is known (`session.footer`). */
+export function slashMenu(commands: readonly string[], text: string, token: { start: number; query: string }, session: { footer: string | null } | null): { rows: SlashRow[]; footer: string | null } {
+  if (session === null) return { rows: commandOptions(commands, text, token).map((value) => ({ value, hint: null })), footer: null };
   const others = commandOptions(commands.filter((c) => c !== "moonlet-design"), text, token).map((value) => ({ value, hint: null }));
   const atStart = text.slice(0, token.start).trim() === "";
   const design = atStart && fuzzyScore("moonlet-design", token.query) !== null;
-  return design ? { rows: [...DESIGN_FORMS, ...others], footer } : { rows: others, footer: null };
+  return design ? { rows: [...DESIGN_FORMS, ...others], footer: session.footer } : { rows: others, footer: null };
 }
 
 /** The slash menu's footer in a session: the design system `/moonlet-design`
