@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { frameLoader, frameQueue, type FrameStep, type FrameTurn } from "./frameQueue";
+import { frameLoader, frameQueue, type FrameQueue, type FrameStep, type FrameTurn, type FrameView } from "./frameQueue";
 
 /** Frames joining `queue`, each with the steps it was told. */
-function frames(queue: ReturnType<typeof frameQueue>, names: string[]) {
+function frames(queue: FrameQueue, names: string[]) {
   const steps: Record<string, FrameStep[]> = {};
   const turns: Record<string, FrameTurn> = {};
   for (const n of names) {
@@ -58,18 +58,19 @@ describe("a card frame's loads (X64)", () => {
   afterEach(() => vi.useRealTimers());
 
   /** A frame loading through `queue`, and what it was told last. */
-  function frame(queue: ReturnType<typeof frameQueue>) {
-    let seen: { src: string | null; step: FrameStep } = { src: null, step: "waiting" };
+  function frame(queue: FrameQueue) {
+    let seen: FrameView = { src: null, step: "waiting" };
     const loader = frameLoader(queue, (s) => (seen = s));
     return { loader, seen: () => seen };
   }
   const v = (n: number) => `moonlet-design://5a1c3e0f9b2d4c67.w1/systems/s/components/buttons/button/button.html?v=${n}`;
+  const COLOURS = "moonlet-design://80b392e93ab15654.w1/systems/s/foundations/colours/colours.html";
 
   it("gets its address once its turn comes, and shows once it loaded", () => {
     const queue = frameQueue(1000);
     const colours = frame(queue);
     const button = frame(queue);
-    colours.loader.load(v(1).replace("button", "colours"));
+    colours.loader.load(COLOURS);
     button.loader.load(v(1));
     expect(button.seen()).toEqual({ src: null, step: "waiting" });
     colours.loader.loaded();
@@ -94,7 +95,7 @@ describe("a card frame's loads (X64)", () => {
     const queue = frameQueue(1000);
     const colours = frame(queue);
     const button = frame(queue);
-    colours.loader.load(v(1).replace("button", "colours"));
+    colours.loader.load(COLOURS);
     button.loader.load(v(1));
     button.loader.load(v(2));
     colours.loader.loaded();
@@ -105,7 +106,7 @@ describe("a card frame's loads (X64)", () => {
     const queue = frameQueue(1000);
     const colours = frame(queue);
     const button = frame(queue);
-    colours.loader.load(v(1).replace("button", "colours"));
+    colours.loader.load(COLOURS);
     button.loader.load(v(1));
     // The empty frame's own first load, before it was given an address.
     button.loader.loaded();
@@ -117,7 +118,7 @@ describe("a card frame's loads (X64)", () => {
     const queue = frameQueue(1000);
     const colours = frame(queue);
     const button = frame(queue);
-    colours.loader.load(v(1).replace("button", "colours"));
+    colours.loader.load(COLOURS);
     button.loader.load(v(1));
     colours.loader.stop();
     expect(button.seen()).toEqual({ src: v(1), step: "loading" });

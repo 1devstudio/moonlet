@@ -13,7 +13,8 @@ import { IconButton } from "../ui";
  *  `live`, the same box without the frame, so its web process (X64) is not
  *  started. The frame loads in its turn, one frame at a time (X64,
  *  `frameQueue.ts`); with `loader`, it shows only once loaded, a spinner
- *  in its place until then. `frameRef`: the frame, for a page's bridge
+ *  in its place until then. `maxHeight`: the box is cut there, the spinner
+ *  centred in what shows. `frameRef`: the frame, for a page's bridge
  *  (X65); `onLoad`: its load, which tells whether the page loaded (X65
  *  entry 13). */
 export function CardFrame({
@@ -24,6 +25,7 @@ export function CardFrame({
   interactive = false,
   live = true,
   loader = true,
+  maxHeight = Infinity,
   frameRef,
   onLoad,
 }: {
@@ -34,6 +36,7 @@ export function CardFrame({
   interactive?: boolean;
   live?: boolean;
   loader?: boolean;
+  maxHeight?: number;
   frameRef?: Ref<HTMLIFrameElement>;
   onLoad?: () => void;
 }) {
@@ -41,7 +44,7 @@ export function CardFrame({
   const turn = useFrameTurn(url, live);
   const hidden = loader && turn.step !== "shown";
   return (
-    <div className="relative overflow-hidden" style={{ width: w * scale, height: h * scale }}>
+    <div className="relative overflow-hidden" style={{ width: w * scale, height: Math.min(h * scale, maxHeight) }}>
       {live && turn.src !== null && (
         <iframe
           // With the loader, each address gets a frame of its own: WebKit

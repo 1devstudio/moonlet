@@ -86,8 +86,8 @@ function Preview({ url, title, viewport, width }: { url: string; title: string; 
   const near = useNear(ref);
   const scale = Math.min(width / viewport[0], 1);
   return (
-    <div ref={ref} className="relative overflow-hidden" style={{ width: viewport[0] * scale, height: Math.min(viewport[1] * scale, 280) }}>
-      <CardFrame url={url} title={title} viewport={viewport} scale={scale} live={near} />
+    <div ref={ref}>
+      <CardFrame url={url} title={title} viewport={viewport} scale={scale} live={near} maxHeight={280} />
     </div>
   );
 }

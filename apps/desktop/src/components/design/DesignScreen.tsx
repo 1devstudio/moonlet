@@ -1110,7 +1110,7 @@ function Overview({
 function SnapshotFrame({ place, design, snapshot, page, viewport, scale }: { place: DesignPlace; design: Design; snapshot: DesignSnapshot; page: string; viewport: Size; scale: number }) {
   return (
     <div className="relative m-auto shrink-0 rounded-md border-2 border-preview shadow-2xl">
-      <CardFrame key={`${snapshot.n}/${page}`} url={snapshotPageUrl(place, design.slug, snapshot.n, page)} title={`${pageFile(page)} at snapshot ${snapshot.n}`} viewport={viewport} scale={scale} interactive />
+      <CardFrame key={`${snapshot.n}/${page}`} url={snapshotPageUrl(place, design.slug, snapshot.n, page)} title={`${pageFile(page)} at snapshot ${snapshot.n}`} viewport={viewport} scale={scale} interactive loader={false} />
     </div>
   );
 }

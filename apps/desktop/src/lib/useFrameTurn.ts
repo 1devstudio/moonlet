@@ -1,26 +1,27 @@
 import { useEffect, useRef, useState } from "react";
-import { cardFrames, frameLoader, type FrameStep } from "./frameQueue";
+import { cardFrames, frameLoader, type FrameLoader, type FrameView } from "./frameQueue";
 
-type Seen = { src: string | null; step: FrameStep };
+const WAITING: FrameView = { src: null, step: "waiting" };
 
 /** A frame's loads of `url` through the card frames' queue (X64), while
  *  `live`: the address to give the frame (null until its first turn), where
  *  it is, and what to call once it loaded (`frameLoader`). */
-export function useFrameTurn(url: string, live: boolean): Seen & { loaded: () => void } {
-  const [seen, setSeen] = useState<Seen>({ src: null, step: "waiting" });
-  const loader = useRef<ReturnType<typeof frameLoader> | null>(null);
+export function useFrameTurn(url: string, live: boolean): FrameView & { loaded: () => void } {
+  const [view, setView] = useState<FrameView>(WAITING);
+  const loader = useRef<FrameLoader | null>(null);
   useEffect(() => {
     if (!live) return;
-    const mine = frameLoader(cardFrames, setSeen);
-    loader.current = mine;
+    loader.current ??= frameLoader(cardFrames, setView);
+    loader.current.load(url);
+  }, [url, live]);
+  // Let go of its turns once the frame is not live, or gone.
+  useEffect(() => {
+    if (!live) return;
     return () => {
-      mine.stop();
+      loader.current?.stop();
       loader.current = null;
-      setSeen({ src: null, step: "waiting" });
+      setView(WAITING);
     };
   }, [live]);
-  useEffect(() => {
-    if (live) loader.current?.load(url);
-  }, [url, live]);
-  return { ...seen, loaded: () => loader.current?.loaded() };
+  return { ...view, loaded: () => loader.current?.loaded() };
 }

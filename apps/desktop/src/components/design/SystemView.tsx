@@ -56,7 +56,7 @@ function CardTile({ workspace, slug, rev, card, rewriting, onOpen }: { workspace
         )}
       </div>
       <div ref={ref} className="max-h-[320px] w-full overflow-hidden">
-        {scale > 0 && <CardFrame url={cardUrl(workspace, slug, card.path, rev)} title={card.name} viewport={card.viewport} scale={scale} live={near} />}
+        {scale > 0 && <CardFrame url={cardUrl(workspace, slug, card.path, rev)} title={card.name} viewport={card.viewport} scale={scale} live={near} maxHeight={320} />}
       </div>
     </button>
   );

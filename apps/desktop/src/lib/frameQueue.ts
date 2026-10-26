@@ -61,6 +61,13 @@ export function frameQueue(fallbackMs: number) {
 
 export type FrameQueue = ReturnType<typeof frameQueue>;
 
+/** What a frame is told: the address to give it (null until its first
+ *  turn), and where it is. */
+export interface FrameView {
+  src: string | null;
+  step: FrameStep;
+}
+
 /** One frame's loads through `queue`: the address to give it and where it
  *  is, told to `onChange`. A new address waits for a turn of its own, and
  *  never for the end of one that is waiting: it takes that one's place. A
@@ -68,7 +75,7 @@ export type FrameQueue = ReturnType<typeof frameQueue>;
  *  leave unloaded; the new one waits until that load is done. A load the
  *  frame reports while none of its turns is loading (its empty first one)
  *  is none of its own. */
-export function frameLoader(queue: FrameQueue, onChange: (s: { src: string | null; step: FrameStep }) => void) {
+export function frameLoader(queue: FrameQueue, onChange: (view: FrameView) => void) {
   type Mine = { turn: FrameTurn | null };
   let src: string | null = null;
   let step: FrameStep = "waiting";
@@ -98,6 +105,8 @@ export function frameLoader(queue: FrameQueue, onChange: (s: { src: string | nul
     },
   };
 }
+
+export type FrameLoader = ReturnType<typeof frameLoader>;
 
 /** The queue every card and page frame of the app's window loads through. */
 export const cardFrames = frameQueue(1000);
