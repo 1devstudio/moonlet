@@ -265,6 +265,40 @@ pub(crate) fn rename_inside(root: &Path, from: &Path, to: &Path) -> Result<bool>
     }
 }
 
+/// Swaps the folders `a` and `b`, both inside `root`, in one step: each
+/// takes the other's place, so neither path is ever missing, whenever the
+/// process stops. Their parents are reached from `root` as handles, never
+/// through a link, and the swap goes through those handles (macOS's
+/// `renameatx_np` with `RENAME_SWAP`, Linux's `renameat2` with
+/// `RENAME_EXCHANGE`).
+pub(crate) fn swap_inside(root: &Path, a: &Path, b: &Path) -> Result<()> {
+    use std::os::fd::{AsFd, AsRawFd};
+    let parent = |rel: &Path| -> Result<(Dir, std::ffi::CString)> {
+        let name = rel.file_name().context("a folder needs a name")?;
+        let dir = open_path(root, rel.parent().unwrap_or(Path::new("")), false)?
+            .with_context(|| format!("no {} in {}", rel.display(), root.display()))?;
+        Ok((dir, std::ffi::CString::new(name.as_encoded_bytes())?))
+    };
+    let ((from_dir, from), (to_dir, to)) = (parent(a)?, parent(b)?);
+    let (from_fd, to_fd) = (from_dir.as_fd().as_raw_fd(), to_dir.as_fd().as_raw_fd());
+    // SAFETY: both descriptors are open folders for the call's length, and
+    // both names are NUL-terminated strings that outlive it.
+    #[cfg(target_os = "macos")]
+    let done = unsafe { libc::renameatx_np(from_fd, from.as_ptr(), to_fd, to.as_ptr(), libc::RENAME_SWAP) };
+    #[cfg(target_os = "linux")]
+    let done = unsafe { libc::renameat2(from_fd, from.as_ptr(), to_fd, to.as_ptr(), libc::RENAME_EXCHANGE) };
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    let done: i32 = {
+        let _ = (from_fd, to_fd, from, to);
+        anyhow::bail!("folders cannot be swapped in one step here")
+    };
+    if done != 0 {
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("cannot swap {} and {} in {}", a.display(), b.display(), root.display()));
+    }
+    Ok(())
+}
+
 /// Whether the entry `name` of `dir` and the handle `opened` are one file:
 /// a link swapped in between the look and the open is refused.
 fn same(look: &cap_std::fs::Metadata, opened: &cap_std::fs::Metadata) -> bool {
