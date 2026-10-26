@@ -75,7 +75,21 @@ pub fn parse_marker(html: &str) -> Result<Marker, MarkerError> {
                     .map(str::trim)
                     .filter(|s| !s.is_empty())
                     .map(String::from)
-                    .collect()
+                    .collect();
+                // Sources are read from the projects: never from outside them.
+                if let Some(bad) = marker.source.iter().find(|s| {
+                    s.starts_with('/')
+                        || std::path::Path::new(s).components().any(|c| {
+                            !matches!(
+                                c,
+                                std::path::Component::Normal(_) | std::path::Component::CurDir
+                            )
+                        })
+                }) {
+                    return Err(MarkerError::Malformed(format!(
+                        "source \"{bad}\" must be a path inside the project"
+                    )));
+                }
             }
             "viewport" => {
                 marker.viewport = parse_viewport(&v)
@@ -184,5 +198,19 @@ mod tests {
                 "the marker must be the whole first line".into()
             ))
         );
+    }
+
+    #[test]
+    fn a_source_outside_the_project_is_malformed() {
+        for source in ["../secrets.txt", "/etc/passwd", "src/../../x.tsx"] {
+            assert_eq!(
+                parse_marker(&format!(
+                    "<!-- @dsCard group=\"Buttons\" source=\"{source}\" -->\n"
+                )),
+                Err(MarkerError::Malformed(format!(
+                    "source \"{source}\" must be a path inside the project"
+                )))
+            );
+        }
     }
 }
