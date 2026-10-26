@@ -54,7 +54,7 @@ import { chatCardLookup, commentCardSelector, commentsRail, commentsTab, keepAct
 import { bridgeMessage, editMessage, helloMessage, modeMessage, paletteMessage, pinsMessage, scrollMessage, selectMessage, type DragOver, type DragResult, type Layer, type PickedElement, type Rect } from "../../lib/designBridge";
 import { pageFile, pagePath } from "../../lib/designPage";
 import { barProblems, chatOpensOn, designBar, loadFixMessage, pageFixMessage, type Bar, type BarAction, type PageProblem } from "../../lib/designBars";
-import { LOAD_WAIT_MS, LOADING, loadStep, notLoadedOf, readFailureNote, shownLoad, waitToken, wantsParseError, type LoadEvent, type LoadSignal, type PageLoad } from "../../lib/designLoad";
+import { LOAD_WAIT_MS, LOADING, framesWithBridge, loadStep, notLoadedOf, readFailureNote, shownLoad, waitToken, wantsParseError, type LoadEvent, type LoadSignal, type PageLoad } from "../../lib/designLoad";
 import { claimKeys } from "../../lib/keys";
 import { askConfirm } from "../../lib/confirm";
 import { NEAR_ROOT, useNear } from "../../lib/useNear";
@@ -323,7 +323,7 @@ export function DesignCanvas({
   const frameKey = `${page}@${shownRev}`;
   const [loads, onLoadEvent] = useReducer(loadStep, LOADING);
   const load = shownLoad(loads, frameKey);
-  const framed = page !== null && !previewed && names.includes(page);
+  const framed = framesWithBridge(page, !!previewed, names);
   const parseError = useEditor((e) => (page === null ? null : parseErrorOf(e, host, place, design.slug, page)));
   // Only a page whose bridge was silent is read as HTML, for the bar.
   const silent = framed && wantsParseError(load);

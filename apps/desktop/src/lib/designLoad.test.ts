@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { LOADING, loadStep, notLoadedOf, readFailureNote, shownLoad, waitToken, wantsParseError, type LoadEvent, type LoadSignal, type PageLoad } from "./designLoad";
+import { LOADING, framesWithBridge, loadStep, notLoadedOf, readFailureNote, shownLoad, waitToken, wantsParseError, type LoadEvent, type LoadSignal, type PageLoad } from "./designLoad";
 import { bridgeMessage } from "./designBridge";
 import { designBar, loadFixMessage } from "./designBars";
 
@@ -126,6 +126,18 @@ describe("the load of the page shown (X65)", () => {
     expect(shownLoad(b, "b@1").phase).toBe("loading");
     expect(shownLoad(step(b, { kind: "answer", frame: "a@1" }), "b@1").phase).toBe("loading");
     expect(shownLoad(step(b, { kind: "answer", frame: "b@1" }), "b@1").phase).toBe("loaded");
+  });
+});
+
+describe("which frame can show the did-not-load bar (X65)", () => {
+  it("is the shown page's, once written, never Overview's, a snapshot's or a page being written", () => {
+    expect(framesWithBridge("index", false, ["index", "git-a"])).toBe(true);
+    // Overview frames every page without the bridge.
+    expect(framesWithBridge(null, false, ["index"])).toBe(false);
+    // A snapshot previewed is framed without the bridge.
+    expect(framesWithBridge("index", true, ["index"])).toBe(false);
+    // Not written yet: "Claude is writing index.html", no frame.
+    expect(framesWithBridge("index", false, [])).toBe(false);
   });
 });
 
