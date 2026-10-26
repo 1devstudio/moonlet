@@ -1196,8 +1196,11 @@ export interface DesignChanged {
   workspace: string;
   /** The design system they are in, if any. */
   system: string | null;
-  /** The workspace design they are in, if any (X65). */
+  /** The workspace design they are in, if any (X65); with `session`, that
+   *  session's session design. */
   design?: string | null;
+  /** The session of a session design whose files changed (X65). */
+  session?: string;
   /** Relative to the design system's or the design's folder, else the workspace's. */
   paths: string[];
 }

@@ -40,6 +40,9 @@ pub struct Daemon {
     /// (X65): what they did, and how many saves, so only the last save's
     /// wait takes the snapshot.
     hand_edits: Mutex<HashMap<String, HandEdits>>,
+    /// The watches of the sessions' worktrees that hold session designs,
+    /// by session, which announce their changes as `design.changed` (X65).
+    session_watches: Mutex<HashMap<String, moonlet_core::design::watch::Watching>>,
     /// How long edits by hand stop before their snapshot is taken: 10 s, or
     /// `MOONLET_DESIGN_QUIET_MS` (tests).
     edits_quiet: std::time::Duration,
@@ -430,6 +433,7 @@ impl Daemon {
             design_locks: Mutex::new(HashMap::new()),
             _design_watch: design_watch,
             hand_edits: Mutex::new(HashMap::new()),
+            session_watches: Mutex::new(HashMap::new()),
             edits_quiet: std::env::var("MOONLET_DESIGN_QUIET_MS")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -1417,11 +1421,13 @@ impl Daemon {
                     if s.workspace_id.as_deref() != Some(r.workspace.as_str()) {
                         return Err(RpcError::new("invalid_params", format!("session \"{session}\" is not in workspace \"{}\"", r.workspace)));
                     }
-                    let (made, r) = (store.clone(), r.clone());
+                    let (made, r, watched) = (store.clone(), r.clone(), session.clone());
                     let at = blocking(move || {
                         made.create_session_design(&r.workspace, &r.system, &session, Path::new(&s.path), &folder, &r.name, &r.brief, now_ms())
                     })
                     .await?;
+                    // Its folders are there now: watch them.
+                    let _ = self.design_session(&watched);
                     let design = self.session_design_info(at).await?;
                     return ok(moonlet_proto::types::DesignCreated { design, agent_error: None });
                 }
@@ -1830,7 +1836,34 @@ impl Daemon {
         let s = self.sessions.session(id).map_err(|_| RpcError::new("invalid_params", format!("no session \"{id}\"")))?;
         let config = moonlet_core::session::read_config(Path::new(&s.path));
         let folder = moonlet_core::design::session::design_folder(&config).map_err(|e| RpcError::new("invalid_params", format!("{e:#}")))?;
+        self.watch_session_designs(&s, &folder);
         Ok((s, folder))
+    }
+
+    /// Watches a session's worktree for its session designs' changes, once
+    /// it has a design folder, and announces them as `design.changed`
+    /// with the design, its session and its workspace (X65). Every design
+    /// call that reaches a session's designs, and their listing, starts it,
+    /// so after a restart it starts again as the app lists the designs.
+    fn watch_session_designs(&self, s: &moonlet_proto::types::Session, folder: &str) {
+        let worktree = Path::new(&s.path);
+        let mut watches = self.session_watches.lock().unwrap();
+        if watches.contains_key(&s.id) || !worktree.join(folder).is_dir() {
+            return;
+        }
+        let (terminals, workspace, session) = (self.terminals.clone(), s.workspace_id.clone(), s.id.clone());
+        let watching = moonlet_core::design::watch::start_session(worktree, folder, move |changes| {
+            for c in changes {
+                let data = serde_json::json!({"workspace": workspace, "system": null, "design": c.design, "session": session, "paths": c.paths});
+                terminals.emit(Message::event(m::EV_DESIGN_CHANGED, data));
+            }
+        });
+        match watching {
+            Ok(w) => {
+                watches.insert(s.id.clone(), w);
+            }
+            Err(e) => tracing::warn!("cannot watch the designs of session {}: {e:#}", s.id),
+        }
     }
 
     /// A session design as `design.list` gives it: with its session and
@@ -2409,7 +2442,10 @@ impl Daemon {
                     })
                     .await;
                 // The copy's own refusal as it said it; anything else failed.
-                ok(made.map_err(|e| e.downcast::<RpcError>().unwrap_or_else(store_error))?)
+                let made = made.map_err(|e| e.downcast::<RpcError>().unwrap_or_else(store_error))?;
+                // Its design folder is there now: watch it.
+                let _ = self.design_session(&made.id);
+                ok(made)
             }
             m::SESSION_LIST => ok(w.list_sessions()),
             m::SESSION_ARCHIVE => {

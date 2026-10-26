@@ -1,7 +1,7 @@
 // Design mode's labels and names (X64, X65). Pure: the store is designStore.ts.
 
 import { ago } from "./mobile";
-import type { AgentState, Design, DesignOpen, DesignSystem } from "./protocol";
+import type { AgentState, Design, DesignChanged, DesignOpen, DesignSystem } from "./protocol";
 
 export interface RowLabel {
   text: string;
@@ -135,6 +135,14 @@ export function designOpenAction(ev: DesignOpen, sessions: { id: string; name: s
  *  entries 12b and 12c). */
 export function workspaceDesigns(list: Design[]): Design[] {
   return list.filter((d) => d.kind === "workspace");
+}
+
+/** Whether a `design.changed` is Design mode's: its workspace's design
+ *  folder's. A session design's (with its session) belongs to its
+ *  session's Design tab (X65 entry 12b), never to a workspace design of
+ *  the same slug. */
+export function isDesignModeChange(change: DesignChanged): boolean {
+  return !change.session;
 }
 
 /** A design agent's first message is its brief, then the design system's
