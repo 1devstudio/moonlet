@@ -36,7 +36,7 @@ Three questions had to be settled:
 - `systems/<slug>/` for design systems
 - `designs/<slug>/` for workspace designs
 
-The source projects stay read only. The sync agent works in the design system's folder and reads the sources through `--add-dir`.
+The source projects stay read only. The sync agent works in the design system's folder and reads the sources through `--add-dir`. Accept edits lets it write anything in that folder, so nothing moonlet trusts lives there: the sources, the commits of the last sync and the agent's chat are kept in `<workspace>/.records/<slug>.toml` beside the folders, and `config.toml` holds only what the agent may change (name, scope, card settings).
 
 **A session design is committed in the project.**
 - It is made inside a session and lives in the worktree under `docs/design/<slug>/`, so the design, the spec it led to and the code ship in one PR.
@@ -49,6 +49,10 @@ The source projects stay read only. The sync agent works in the design system's 
 - The render check measures the page in that frame.
 - Screenshots for grading and for the PR's design-and-build view come from the app's WKWebView `takeSnapshot`, in a hidden window that is never shown, reached through Tauri's `with_webview`.
 - Rendering therefore needs the moonlet app open. The CLI says so when it is not.
+
+**What a design agent may do (checked with `claude -p` 2.1.309, 2026-10-23).**
+- A deny rule `Edit(//<real path>/**)` in `--settings` blocks Edit and Write in a folder added with `--add-dir`, where Accept edits otherwise allows both; Read still works. The path must be the real one (`/private/tmp`, not `/tmp`).
+- Claude Code refuses a Bash command that names its program through a variable (`"$MOONLET_BIN" design …`), even with a matching allow rule. Design agents get the real path of `moonlet` in their first message, and allow rules on that path: `<path> design system progress:*`, and exactly `<path> design check` and `<path> design system synced`. A rule without `:*` matches only the command without arguments.
 
 **Claude Code only, for now.** The sync relies on Claude Code's skills, subagents, `--add-dir` and its reading of screenshots.
 
