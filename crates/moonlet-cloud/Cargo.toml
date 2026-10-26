@@ -11,6 +11,8 @@ chrono = { version = "0.4", default-features = false, features = ["std"] }
 serde.workspace = true
 serde_json.workspace = true
 base64 = "0.22"
+# RS256 for Google Cloud's sign-in; the same ring as rustls in moonletd.
+ring = "0.17"
 sha2 = "0.10"
 
 [dev-dependencies]
