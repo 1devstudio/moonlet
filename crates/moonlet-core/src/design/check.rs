@@ -383,14 +383,15 @@ fn style_ranges(html: &str) -> Vec<std::ops::Range<usize>> {
 }
 
 /// The byte ranges of a card's CSS: its `<style>`s' text, and the values of
-/// its `style` and SVG presentation attributes, in order.
+/// its `style` and SVG presentation attributes (every one, as each holds a
+/// CSS value), in order.
 fn card_css(html: &str) -> Vec<std::ops::Range<usize>> {
     let values = std::cell::RefCell::new(Vec::new());
     let settings =
         lol_html::Settings::new().append_element_content_handler(lol_html::element!("*", |el| {
             for a in el.attributes() {
                 let name = a.name();
-                if name == "style" || URL_ATTRIBUTES.contains(&name.as_str()) {
+                if name == "style" || PRESENTATION_ATTRIBUTES.contains(&name.as_str()) {
                     values
                         .borrow_mut()
                         .extend(a.value_source_location().map(|l| l.bytes()));
@@ -618,6 +619,85 @@ fn fonts(path_rel: &str, text: &str, faces: &BTreeSet<String>, problems: &mut Ve
         });
     }
 }
+
+/// SVG's presentation attributes (SVG 2, with its geometry properties):
+/// each holds a CSS value, so a `var()` in one is a token as in a `style`.
+/// Lowercase, as the HTML parser gives an attribute's name.
+const PRESENTATION_ATTRIBUTES: &[&str] = &[
+    "alignment-baseline",
+    "baseline-shift",
+    "clip",
+    "clip-path",
+    "clip-rule",
+    "color",
+    "color-interpolation",
+    "color-interpolation-filters",
+    "color-rendering",
+    "cursor",
+    "cx",
+    "cy",
+    "d",
+    "direction",
+    "display",
+    "dominant-baseline",
+    "fill",
+    "fill-opacity",
+    "fill-rule",
+    "filter",
+    "flood-color",
+    "flood-opacity",
+    "font-family",
+    "font-size",
+    "font-size-adjust",
+    "font-stretch",
+    "font-style",
+    "font-variant",
+    "font-weight",
+    "glyph-orientation-horizontal",
+    "glyph-orientation-vertical",
+    "height",
+    "image-rendering",
+    "letter-spacing",
+    "lighting-color",
+    "marker-end",
+    "marker-mid",
+    "marker-start",
+    "mask",
+    "mask-type",
+    "opacity",
+    "overflow",
+    "paint-order",
+    "pointer-events",
+    "r",
+    "rx",
+    "ry",
+    "shape-rendering",
+    "stop-color",
+    "stop-opacity",
+    "stroke",
+    "stroke-dasharray",
+    "stroke-dashoffset",
+    "stroke-linecap",
+    "stroke-linejoin",
+    "stroke-miterlimit",
+    "stroke-opacity",
+    "stroke-width",
+    "text-anchor",
+    "text-decoration",
+    "text-overflow",
+    "text-rendering",
+    "transform",
+    "transform-origin",
+    "unicode-bidi",
+    "vector-effect",
+    "visibility",
+    "white-space",
+    "width",
+    "word-spacing",
+    "writing-mode",
+    "x",
+    "y",
+];
 
 /// The SVG presentation attributes whose value may be a CSS `url()`.
 const URL_ATTRIBUTES: &[&str] = &[
@@ -1522,6 +1602,44 @@ mod tests {
                     Kind::ExternalUrl,
                     "https://x/m.svg#tip leaves the design system".into()
                 ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_token_in_any_svg_presentation_attribute_is_checked_like_one_in_css() {
+        let card = "<!-- @dsCard group=\"Icons\" -->\n\
+<!doctype html>\n\
+<svg viewBox=\"0 0 10 10\">\n\
+<path stroke-width=\"var(--stroke-missing)\" stroke=\"var(--color-accent)\" d=\"M0 0\"/>\n\
+<circle opacity=\"var(--opacity-missing)\" r=\"4\"/>\n\
+<text font-size=\"var(--size-missing)\">A</text>\n\
+</svg>\n\
+<p title=\"Write var(--color-nope) in CSS\" data-token=\"var(--color-other)\">Text</p>\n";
+        let dir = system(&[
+            ("styles.css", STYLES),
+            ("tokens/colors.css", COLORS),
+            ("components.css", COMPONENTS),
+            ("components/icons/icon/icon.html", card),
+        ]);
+        let got: Vec<(usize, Kind, String)> = check(dir.path())
+            .unwrap()
+            .into_iter()
+            .map(|p| (p.line, p.kind, p.message))
+            .collect();
+        let unknown = |line: usize, token: &str| {
+            (
+                line,
+                Kind::UnknownToken,
+                format!("var({token}) is not defined in styles.css or the files it imports"),
+            )
+        };
+        assert_eq!(
+            got,
+            vec![
+                unknown(4, "--stroke-missing"),
+                unknown(5, "--opacity-missing"),
+                unknown(6, "--size-missing"),
             ]
         );
     }
