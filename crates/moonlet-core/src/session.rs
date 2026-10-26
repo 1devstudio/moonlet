@@ -1227,7 +1227,8 @@ impl SessionManager {
     }
 
     pub async fn create_session(&self, req: SessionCreate) -> Result<Session> {
-        self.create_session_prepared(req, |_| async { Ok(()) }).await
+        self.create_session_prepared(req, |_| async { Ok(()) }, |_| async {})
+            .await
     }
 
     /// [`Self::create_session`], with `prepare` run on the new session
@@ -1238,14 +1239,19 @@ impl SessionManager {
     /// adopted is left to its owner. So too when this request is dropped
     /// before the session is saved: `prepare` runs on to its end on a task
     /// of its own, and only then are they removed, so nothing it writes
-    /// lands in the worktree after.
-    pub async fn create_session_prepared<F>(
+    /// lands in the worktree after. `on_saved` runs, to its end on a task of
+    /// its own, once the session is saved and before anything starts in it,
+    /// so what it records (the session a design is built in) holds even when
+    /// its terminals then fail to start; never for a session not saved.
+    pub async fn create_session_prepared<F, G>(
         &self,
         req: SessionCreate,
         prepare: impl FnOnce(Session) -> F,
+        on_saved: impl FnOnce(Session) -> G,
     ) -> Result<Session>
     where
         F: std::future::Future<Output = Result<()>> + Send + 'static,
+        G: std::future::Future<Output = ()> + Send + 'static,
     {
         let mut req = req;
         crate::chat::check_mode(req.mode.as_deref())?;
@@ -1433,6 +1439,7 @@ impl SessionManager {
             return Err(e);
         }
         unmade.keep();
+        let _ = tokio::spawn(on_saved(ws.clone())).await;
 
         if let Some(agent) = &agent
             && !req.tui
@@ -2000,7 +2007,7 @@ mod tests {
         let done = copied.clone();
         // A copy into the new worktree on a blocking thread, as Build it's,
         // still writing when the request is dropped.
-        let making = mgr.create_session_prepared(req, move |s| async move {
+        let prepare = move |s: Session| async move {
             let _ = started.send(s.clone());
             tokio::task::spawn_blocking(move || {
                 std::thread::sleep(Duration::from_millis(300));
@@ -2011,7 +2018,8 @@ mod tests {
             })
             .await?;
             Ok(())
-        });
+        };
+        let making = mgr.create_session_prepared(req, prepare, |_| async {});
         // Dropped once its preparing has started, as a client that goes away.
         let mut making = Box::pin(making);
         let s = tokio::select! {
