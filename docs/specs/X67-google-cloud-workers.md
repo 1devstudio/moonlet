@@ -39,6 +39,7 @@ The adapter calls Compute Engine's REST API (`https://compute.googleapis.com/com
   - a missing field: "That is not a Google Cloud service-account key: it has no project_id." (and the same for the other fields);
   - a private key that does not read: "That is not a Google Cloud service-account key: its private_key is not an RSA key."
 - [x] A key pasted into the one-line field loses its line breaks. It still reads, since JSON needs none between its values, and the private key's line breaks are written as `\n` inside its string.
+- [x] A field of spaces alone is saved as no value, so a key of spaces never shows as saved.
 - [x] `cloud.set` refuses a `max_hours` that is not a whole number from 1 to 2880 (120 days, Google's limit): "Longest a machine lives must be a whole number of hours from 1 to 2880."
 - [x] The adapter works in the key's `project_id`. No other field names the project.
 
@@ -46,7 +47,7 @@ The adapter calls Compute Engine's REST API (`https://compute.googleapis.com/com
 
 - [x] The adapter gets an access token as Google's server-to-server OAuth flow describes. It signs a JWT with RS256 and the key's private key. The JWT's header is `{"alg":"RS256","typ":"JWT","kid":<private_key_id>}`, and its claims are `iss` (the key's `client_email`), `scope` `https://www.googleapis.com/auth/compute`, `aud` `https://oauth2.googleapis.com/token`, `iat` (now) and `exp` (now + 3600). It posts the JWT as a form, `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer` and `assertion=<jwt>`, to `https://oauth2.googleapis.com/token`, and sends the answer's `access_token` as `Authorization: Bearer <token>`.
 - [x] RS256 signatures come out the same each time for the same input, so the test signs a fixed claim set with a test key and compares the JWT with a literal.
-- [x] The token is reused until 5 minutes before its `expires_in` ends, across adapter calls. A new key, or a 401 from Compute Engine, gets a new token.
+- [x] The token is reused until 5 minutes before its `expires_in` ends, across adapter calls. A new key, even one with the same account and key id but another private key, or a 401 from Compute Engine, gets a new token.
 - [x] The token endpoint's refusal (400 `invalid_grant`, 401) reads "Google Cloud refused the service-account key: <its error_description>. Check it in Settings › Cloud workers." It is a refused credential, as Hetzner's 401 is.
 
 ### Compute Engine calls
@@ -71,7 +72,7 @@ Paths are under `https://compute.googleapis.com/compute/v1/projects/<project>`.
   - `scheduling: {maxRunDuration: {seconds: <max_hours × 3600>}, instanceTerminationAction: "DELETE"}`.
 
   The machine's provider id is `<zone>/<name>`.
-- [x] `create` waits for the insert's operation with `POST /zones/<zone>/operations/<operation>/wait`, which answers within 2 minutes, done or not. An operation that ends with an `error` fails `create` with its first error's code and message, such as "ZONE_RESOURCE_POOL_EXHAUSTED: The zone 'projects/acme-moonlet/zones/europe-west4-a' does not have enough resources available to fulfill the request." Quota (`QUOTA_EXCEEDED`) and capacity errors only appear there, never as the insert's own answer. After 4 minutes without `DONE`, `create` returns the id, and X63's startup deadline and sweep take over.
+- [x] `create` looks at the insert's operation every 5 s with `GET /zones/<zone>/operations/<operation>`. It does not use Google's wait call, which can hold a request for 2 minutes, past the daemon's 30 s request timeout. An operation that ends with an `error` fails `create` with its first error's code and message, such as "ZONE_RESOURCE_POOL_EXHAUSTED: The zone 'projects/acme-moonlet/zones/europe-west4-a' does not have enough resources available to fulfill the request." Quota (`QUOTA_EXCEEDED`) and capacity errors only appear there, never as the insert's own answer. After 4 minutes without `DONE`, or when a look fails, `create` returns the id: the insert was taken, so the machine may exist, and X63's startup deadline and sweep take over.
 - [x] **`get`:** `GET /zones/<zone>/instances/<name>`. `RUNNING` is `running`, a 404 is `gone`, and every other status is `starting`. `ipv4` is the first network interface's `accessConfigs[0].natIP`.
 - [x] **`list(labels)`:** `GET /aggregated/instances` with `filter` set to one `(labels.<key> = "<value>")` per label, every page, the instances of every zone. Each is `{id: "<zone>/<name>", name, labels, created_at}`, `created_at` from `creationTimestamp` (RFC 3339) in Unix ms.
 - [x] **`destroy`:** `DELETE /zones/<zone>/instances/<name>`. A 404 is done. The boot disk goes with the machine.
@@ -138,9 +139,9 @@ Each criterion maps to at least one test. The names are the planned ones; a pull
 |---|---|
 | The adapter's description | `describes_google_cloud_and_its_billing`; `cloud_get_lists_google_cloud_after_hetzner`, `the_fake_provider_is_off_without_its_setting` |
 | The service-account key | `reads_a_service_account_key`, `refuses_what_is_not_a_service_account_key`, `a_key_without_line_breaks_still_reads`, `max_hours_is_a_whole_number_from_1_to_2880`, `checks_a_typed_field`; `cloud_set_refuses_a_bad_google_cloud_key` |
-| Signing in | `signs_the_token_request_as_the_worked_jwt`, `asks_for_a_token_with_the_signed_jwt`, `reuses_the_token_until_five_minutes_before_it_expires`, `a_refused_key_says_so` |
+| Signing in | `signs_the_token_request_as_the_worked_jwt`, `asks_for_a_token_with_the_signed_jwt`, `reuses_the_token_until_five_minutes_before_it_expires`, `a_new_private_key_gets_its_own_token`, `a_refused_key_says_so` |
 | Locations, types, images | `reads_every_page_of_zones`, `keeps_the_machine_types_for_builds`, `offers_ubuntu_families_then_own_images` |
-| Create | `creates_an_instance_as_in_the_captured_request`, `hyperdisk_for_c4_and_n4_pd_balanced_for_the_others`, `waits_for_the_insert_and_reports_its_error`, `returns_the_id_after_four_minutes_without_done` |
+| Create | `creates_an_instance_as_in_the_captured_request`, `hyperdisk_for_c4_and_n4_pd_balanced_for_the_others`, `waits_for_the_insert_and_reports_its_error`, `returns_the_id_after_four_minutes_without_done`, `a_look_that_fails_leaves_the_machine_to_its_startup_deadline` |
 | Get, list, destroy | `reads_a_captured_instance`, `a_404_means_gone`, `lists_instances_by_label_across_zones`, `a_404_on_delete_is_done`, `an_id_without_a_zone_is_an_error` |
 | Errors | `a_401_gets_a_new_token_once`, `an_api_that_is_off_says_where_to_turn_it_on`, `a_rate_limit_is_retried`, `a_missing_role_says_which_one`, `another_error_shows_googles_message` |
 | Idle time and usage | `removes_at_the_times_in_the_per_second_examples` |
