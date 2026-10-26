@@ -41,6 +41,27 @@ const SYSTEM_DIR: &str = "system";
 /// [`SIDE_DIR`] (X65), for the PR's Design and build.
 pub const BUILT_DIR: &str = "built";
 
+#[cfg(test)]
+thread_local! {
+    /// A test's failure, run before each write of a design system's update
+    /// to a session design (`pinned` and `side`, its two copies, and
+    /// `anchor`),
+    /// so a step that fails can be tested deterministically.
+    pub(crate) static UPDATE_STEP: std::cell::RefCell<Option<Box<dyn FnMut(&str) -> Result<()>>>> =
+        std::cell::RefCell::new(None);
+}
+
+/// Runs the test's failure for `step`, if one is set; nothing outside tests.
+fn update_step(_step: &str) -> Result<()> {
+    #[cfg(test)]
+    return UPDATE_STEP.with(|h| match h.borrow_mut().as_mut() {
+        Some(fail) => fail(_step),
+        None => Ok(()),
+    });
+    #[cfg(not(test))]
+    Ok(())
+}
+
 impl Store {
     /// Makes a session design named `name` on the workspace's design system
     /// `system` in the worktree's design folder `folder`, and returns it:
@@ -246,6 +267,11 @@ impl Store {
     /// Replaces both copies of a session design's design system with the
     /// system as it is now, records its anchor in `design.toml` (the rest of
     /// the file as it was), and lists the cards that changed since the copy.
+    /// The cards are read before anything is written; each copy is written
+    /// whole beside the one it replaces, then swapped in by a rename in its
+    /// folder, and the anchor recorded last. A step that fails puts back
+    /// what was swapped, so the copies and the anchor stay as they were and
+    /// a retry lists the same cards.
     pub fn update_session_system(
         &self,
         at: &DesignAt,
@@ -256,25 +282,70 @@ impl Store {
             return Err(NoSystem(config.system).into());
         };
         let anchor = self.system_anchor(workspace, &config.system)?;
+        let (styles, all) = system_copies(&system_dir)?;
+        // The agent's copy is the system as the anchor recorded it.
         let before = fsx::read_tree(&at.root, &at.in_side(SYSTEM_DIR))?;
-        copy_system(at, &system_dir)?;
-        let after = fsx::read_tree(&at.root, &at.in_side(SYSTEM_DIR))?;
-        fsx::update_inside(&at.root, &at.in_dir(DESIGN_FILE), |text| {
-            let mut doc: toml_edit::DocumentMut = text
-                .parse()
-                .with_context(|| format!("cannot read {DESIGN_FILE}"))?;
-            match &anchor {
-                Some(a) => doc["anchor"] = toml_edit::value(a.as_str()),
-                None => {
-                    doc.remove("anchor");
+        let cards = changed_cards(&before, &all);
+        let n = NEXT_SWAP.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let (new, old) = (
+            format!(".{SYSTEM_DIR}.moonlet-{}-{n}", std::process::id()),
+            format!(".{SYSTEM_DIR}-old.moonlet-{}-{n}", std::process::id()),
+        );
+        let folder = |base: &Path, name: &str| at.root.join(base).join(name);
+        let copies = [(at.dir.as_path(), &styles, "pinned"), (at.side.as_path(), &all, "side")];
+        let staged = copies.iter().try_for_each(|(base, files, step)| {
+            update_step(step)?;
+            fsx::write_tree(&at.root, base, Path::new(&new), files, true)
+        });
+        if let Err(e) = staged {
+            for (base, _, _) in &copies {
+                let _ = fsx::remove_dir_inside(&at.root, &folder(base, &new));
+            }
+            return Err(e);
+        }
+        // Each swapped copy, and whether it replaced one (kept as `old`).
+        let mut swapped: Vec<(&Path, bool)> = Vec::new();
+        let done = (|| -> Result<()> {
+            for (base, _, _) in &copies {
+                let had = fsx::rename_inside(&at.root, &folder(base, SYSTEM_DIR), &folder(base, &old))?;
+                if let Err(e) = fsx::rename_inside(&at.root, &folder(base, &new), &folder(base, SYSTEM_DIR)) {
+                    if had {
+                        let _ = fsx::rename_inside(&at.root, &folder(base, &old), &folder(base, SYSTEM_DIR));
+                    }
+                    return Err(e);
+                }
+                swapped.push((base, had));
+            }
+            update_step("anchor")?;
+            fsx::update_inside(&at.root, &at.in_dir(DESIGN_FILE), |text| {
+                let mut doc: toml_edit::DocumentMut = text
+                    .parse()
+                    .with_context(|| format!("cannot read {DESIGN_FILE}"))?;
+                match &anchor {
+                    Some(a) => doc["anchor"] = toml_edit::value(a.as_str()),
+                    None => {
+                        doc.remove("anchor");
+                    }
+                }
+                Ok(doc.to_string())
+            })
+        })();
+        if let Err(e) = done {
+            for (base, had) in swapped.into_iter().rev() {
+                let _ = fsx::remove_dir_inside(&at.root, &folder(base, SYSTEM_DIR));
+                if had {
+                    let _ = fsx::rename_inside(&at.root, &folder(base, &old), &folder(base, SYSTEM_DIR));
                 }
             }
-            Ok(doc.to_string())
-        })?;
-        Ok(DesignSystemUpdated {
-            anchor,
-            cards: changed_cards(&before, &after),
-        })
+            for (base, _, _) in &copies {
+                let _ = fsx::remove_dir_inside(&at.root, &folder(base, &new));
+            }
+            return Err(e);
+        }
+        for (base, _, _) in &copies {
+            let _ = fsx::remove_dir_inside(&at.root, &folder(base, &old));
+        }
+        Ok(DesignSystemUpdated { anchor, cards })
     }
 }
 
@@ -568,18 +639,33 @@ fn is_style(path: &str) -> bool {
 /// settings). Each copy is made exactly, so a file
 /// the system no longer has goes too. Links and hidden files are left out.
 fn copy_system(at: &DesignAt, system_dir: &Path) -> Result<()> {
+    let (styles, all) = system_copies(system_dir)?;
+    fsx::write_tree(&at.root, &at.dir, Path::new(SYSTEM_DIR), &styles, true)?;
+    fsx::write_tree(&at.root, &at.side, Path::new(SYSTEM_DIR), &all, true)
+}
+
+/// Files by their paths in a folder, with their bytes.
+type Tree = BTreeMap<String, Vec<u8>>;
+
+/// What a design's two copies of the design system in `system_dir` hold:
+/// its styles, pinned beside the pages, and all of it but its
+/// `config.toml`, for its agent.
+fn system_copies(system_dir: &Path) -> Result<(Tree, Tree)> {
     let mut all = fsx::read_tree(system_dir, Path::new(""))
         .with_context(|| format!("cannot read {}", system_dir.display()))?;
     // The sync's own settings: nothing a design is made from.
     all.remove(super::store::CONFIG);
-    let styles: BTreeMap<String, Vec<u8>> = all
+    let styles: Tree = all
         .iter()
         .filter(|(path, _)| is_style(path))
         .map(|(p, b)| (p.clone(), b.clone()))
         .collect();
-    fsx::write_tree(&at.root, &at.dir, Path::new(SYSTEM_DIR), &styles, true)?;
-    fsx::write_tree(&at.root, &at.side, Path::new(SYSTEM_DIR), &all, true)
+    Ok((styles, all))
 }
+
+/// Numbers the folders an update of a design's system writes beside its
+/// copies, so no two updates share one.
+static NEXT_SWAP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 #[cfg(test)]
 mod tests {
@@ -1036,6 +1122,65 @@ created_at = 1
 "
         );
         assert!(!store.session_system_updated(&at, "w1").unwrap());
+    }
+
+    /// X65: an update of a session design's system that fails partway,
+    /// writing the agent's copy or recording the anchor, leaves both copies
+    /// and `design.toml` as they were, so a retry lists the cards that
+    /// changed since the anchor recorded.
+    #[test]
+    fn a_session_designs_system_update_that_fails_partway_changes_nothing_and_a_retry_lists_the_changed_cards()
+     {
+        let (home, store) = store_with_synced_system();
+        let worktree = tempfile::tempdir().unwrap();
+        let at = store
+            .create_session_design(
+                "w1",
+                "moonlet-desktop",
+                "s1",
+                worktree.path(),
+                "docs/design",
+                "Settings page",
+                "b",
+                1,
+            )
+            .unwrap();
+        let both = || {
+            (
+                files(&worktree.path().join("docs/design/settings-page")),
+                files(&worktree.path().join(".moonlet/design/settings-page")),
+            )
+        };
+        let before = both();
+        // The design system synced again.
+        let system = home.path().join("design/w1/systems/moonlet-desktop");
+        std::fs::write(system.join("tokens/colors.css"), ":root { --color-accent: #2563eb; }\n").unwrap();
+        std::fs::write(
+            system.join("components/buttons/button/button.html"),
+            "<!-- @dsCard group=\"Buttons\" -->\n<button class=\"btn\">Run tests</button>\n",
+        )
+        .unwrap();
+        std::fs::write(system.join("_ds_sync.json"), "{\"cards\":{\"components/buttons/button/button.html\":{}}}\n").unwrap();
+        for failing in ["side", "anchor"] {
+            UPDATE_STEP.set(Some(Box::new(move |step| if step == failing { bail!("disk full") } else { Ok(()) })));
+            let failed = store.update_session_system(&at, "w1");
+            UPDATE_STEP.set(None);
+            assert_eq!(failed.map_err(|e| e.to_string()), Err("disk full".to_string()), "{failing}");
+            assert!(both() == before, "an update failing at {failing} left the design changed");
+            assert!(store.session_system_updated(&at, "w1").unwrap());
+        }
+        let updated = store.update_session_system(&at, "w1").unwrap();
+        assert_eq!(
+            updated.cards,
+            vec![DesignCardChange { path: "components/buttons/button/button.html".into(), change: CardChange::Changed }]
+        );
+        assert_eq!(
+            std::fs::read_to_string(worktree.path().join("docs/design/settings-page/system/tokens/colors.css")).unwrap(),
+            ":root { --color-accent: #2563eb; }\n"
+        );
+        let (pinned, side) = both();
+        let left: Vec<&String> = pinned.keys().chain(side.keys()).filter(|p| p.starts_with('.') || p.contains("/.")).collect();
+        assert_eq!(left, Vec::<&String>::new(), "temporary folders left behind");
     }
 
     #[test]
