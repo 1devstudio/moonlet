@@ -91,10 +91,19 @@ describe("differsAlert (X60 a file differs between machines)", () => {
 
 describe("a design system's sync agent (X65)", () => {
   it("never alerts like a session: Design mode notifies for it", () => {
-    // The daemon marks a sync agent's attention `design`.
+    // The daemon tags a sync agent's attention with what it syncs.
+    expect(alertsLikeASession({ design: { kind: "sync", workspace: "w1", slug: "moonlet-desktop", name: "moonlet desktop" } })).toBe(false);
+    // A daemon from before the tag said which agent marks it `design: true`.
     expect(alertsLikeASession({ design: true })).toBe(false);
     // A standalone chat, with no session either, still alerts.
     expect(alertsLikeASession({ design: false })).toBe(true);
     expect(alertsLikeASession({})).toBe(true);
+  });
+});
+
+describe("a design's agent (X65)", () => {
+  it("alerts like a session, while a sync agent does not", () => {
+    expect(alertsLikeASession({ design: { kind: "design", workspace: "w1", slug: "settings-page", name: "Settings page" } })).toBe(true);
+    expect(alertsLikeASession({ design: { kind: "sync", workspace: "w1", slug: "moonlet-desktop", name: "moonlet desktop" } })).toBe(false);
   });
 });

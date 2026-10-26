@@ -143,8 +143,14 @@ fn system_agent(
 ) -> Option<u32> {
     let record = store.record(workspace, slug).ok()?;
     let dir = store.system_dir(workspace, slug).ok()?;
-    let dir = dir.canonicalize().unwrap_or(dir);
-    let id = record.agent?;
+    folder_agent(terminals, record.agent, &dir)
+}
+
+/// The recorded chat of a design system's or a design's agent, while it is
+/// still a sessionless chat in that folder (X64, X65).
+fn folder_agent(terminals: &[moonlet_proto::types::TerminalInfo], recorded: Option<u32>, dir: &Path) -> Option<u32> {
+    let id = recorded?;
+    let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
     terminals
         .iter()
         .any(|t| t.id == id && t.chat && t.session_id.is_none() && Path::new(&t.cwd) == dir)
@@ -156,7 +162,16 @@ fn system_agent(
 async fn blocking<T: Send + 'static>(
     f: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
 ) -> Result<T, RpcError> {
-    tokio::task::spawn_blocking(f).await.map_err(internal)?.map_err(internal)
+    tokio::task::spawn_blocking(f).await.map_err(internal)?.map_err(store_error)
+}
+
+/// What the design store's error means to the caller: a design system the
+/// workspace does not have is a bad parameter (X65); anything else failed.
+fn store_error(e: anyhow::Error) -> RpcError {
+    if e.is::<moonlet_core::design::designs::NoSystem>() {
+        return RpcError::new("invalid_params", e.to_string());
+    }
+    internal(e)
 }
 
 /// moonlet's hook and skill paths with Claude's in profile folder `dir` (X33).
@@ -471,7 +486,7 @@ impl Daemon {
                             add_dirs: req.add_dirs,
                             settings: None,
                             workspace: None,
-                            design: false,
+                            design: None,
                         })
                         .map_err(internal)?),
                     None => ok(s.create(req).map_err(internal)?),
@@ -1164,6 +1179,16 @@ impl Daemon {
             }
             m::DESIGN_CHECK => {
                 let r: m::DesignCheck = params(p)?;
+                // A design's pages (X65): their ids and stylesheets.
+                if let Some(design) = r.design.clone() {
+                    if r.render {
+                        return Err(RpcError::new("invalid_params", "render checks a design system's cards"));
+                    }
+                    return ok(blocking(move || store.check_design(&r.workspace, &design, r.fix)).await?);
+                }
+                if r.fix {
+                    return Err(RpcError::new("invalid_params", "fix checks a design's pages"));
+                }
                 let (ws, slug) = (r.workspace.clone(), r.slug.clone());
                 let problems = {
                     let store = store.clone();
@@ -1223,6 +1248,66 @@ impl Daemon {
                 let r: m::DesignDetect = params(p)?;
                 ok(blocking(move || Ok(moonlet_core::design::stack::detect(&path(&r.path)))).await?)
             }
+            m::DESIGN_LIST => {
+                let r: m::DesignWorkspace = params(p)?;
+                let designs = blocking(move || store.designs(&r.workspace)).await?;
+                let terminals = self.terminals.list();
+                ok(designs.into_iter().map(|d| self.design_info(d, &terminals)).collect::<Vec<_>>())
+            }
+            m::DESIGN_CREATE => {
+                let r: m::DesignCreate = params(p)?;
+                if r.session.is_some() {
+                    return Err(RpcError::new("not_yet", "session designs are not made yet"));
+                }
+                // The agent that asked for it (X22), and its session.
+                let spawner = match r.spawned_by {
+                    Some(t) => match self.terminals.list().into_iter().find(|i| i.id == t) {
+                        Some(i) => Some((t, i.session_id)),
+                        None => return Err(RpcError::new("invalid_params", format!("no terminal {t}"))),
+                    },
+                    None => None,
+                };
+                let slug = {
+                    let (store, r) = (store.clone(), r.clone());
+                    blocking(move || store.create_design(&r.workspace, &r.name, &r.system, &r.brief, now_ms())).await?
+                };
+                // The design exists either way; the app shows why its agent did not start.
+                let agent_error = self.start_design_agent(&r.workspace, &slug).await.err().map(|e| format!("{e:#}"));
+                let (ws, sl) = (r.workspace.clone(), slug.clone());
+                let design = blocking(move || store.design(&ws, &sl)).await?;
+                let name = design.name.clone();
+                let created = moonlet_proto::types::DesignCreated { design: self.design_info(design, &self.terminals.list()), agent_error };
+                // An agent's `design new`: the app shows a toast, the focus stays (X22).
+                if let Some((t, session)) = spawner {
+                    let opened = m::DesignOpened { workspace: r.workspace, slug, name, spawned_by: Some(t), session };
+                    self.terminals.emit(Message::event(m::EV_DESIGN_OPEN, opened));
+                }
+                ok(created)
+            }
+            m::DESIGN_REMOVE => {
+                let r: m::DesignRef = params(p)?;
+                // After a start running now, so its agent is the one stopped.
+                let lock = self.workspace_design_lock(&r.workspace, &r.slug);
+                let _held = lock.lock().await;
+                let (ws, sl) = (r.workspace.clone(), r.slug.clone());
+                let found = {
+                    let store = store.clone();
+                    blocking(move || Ok((store.design_dir(&ws, &sl)?, store.design_record(&ws, &sl)?.agent))).await?
+                };
+                if let Some(id) = folder_agent(&self.terminals.list(), found.1, &found.0) {
+                    let _ = self.terminals.kill(id, true);
+                }
+                blocking(move || store.remove_design(&r.workspace, &r.slug)).await?;
+                ok(true)
+            }
+            m::DESIGN_OPEN => {
+                let r: m::DesignRef = params(p)?;
+                let (ws, sl) = (r.workspace.clone(), r.slug.clone());
+                let config = blocking(move || store.design_config(&ws, &sl)).await?;
+                let opened = m::DesignOpened { workspace: r.workspace, slug: r.slug, name: config.name, spawned_by: None, session: None };
+                self.terminals.emit(Message::event(m::EV_DESIGN_OPEN, opened));
+                ok(true)
+            }
             m::DESIGN_SETTLE => {
                 let r: m::DesignSettle = params(p)?;
                 let choice: Settle = serde_json::from_value(Value::String(r.choice.clone()))
@@ -1248,7 +1333,7 @@ impl Daemon {
         // the system's folder, never from files the agent can edit. Reading and
         // hashing the sources runs off the async workers.
         let (store, ws, sl) = (self.design.clone(), workspace.to_string(), slug.to_string());
-        let (record, launch) = blocking(move || {
+        let (record, launch, name) = blocking(move || {
             let dir = store.system_dir(&ws, &sl)?.canonicalize()?;
             let config = store.config(&ws, &sl)?;
             let record = store.record(&ws, &sl)?;
@@ -1265,7 +1350,7 @@ impl Daemon {
             // The cards as they are now: what the user changed before this
             // sync is not among the changes it records.
             store.begin_sync(&ws, &sl)?;
-            Ok((record, launch))
+            Ok((record, launch, config.name))
         })
         .await
         .map_err(|e| anyhow::anyhow!("{}", e.message))?;
@@ -1279,24 +1364,93 @@ impl Daemon {
             }
             let _ = self.terminals.kill(id, true);
         }
+        let tag = moonlet_proto::types::DesignAgent {
+            kind: moonlet_proto::types::DesignAgentKind::Sync,
+            workspace: workspace.to_string(),
+            slug: slug.to_string(),
+            name,
+        };
+        self.agent_chat(&launch, tag, |id| match id {
+            Some(id) => self.design.set_agent(workspace, slug, id, &fingerprint),
+            None => self.design.clear_agent(workspace, slug),
+        })
+    }
+
+    /// A design as `design.list` gives it (X65): its agent only while that
+    /// chat is still its design's, with the agent's state and what it waits
+    /// for from the user.
+    fn design_info(&self, mut d: moonlet_proto::types::DesignInfo, terminals: &[moonlet_proto::types::TerminalInfo]) -> moonlet_proto::types::DesignInfo {
+        d.agent = folder_agent(terminals, d.agent, Path::new(&d.path));
+        d.agent_state = d.agent.and_then(|id| terminals.iter().find(|t| t.id == id)).map(|t| t.agent_state);
+        d.needs_you = d
+            .agent
+            .and_then(|id| self.chats.pending(id).ok())
+            .and_then(|pending| moonlet_core::design::agent::needs_you(&pending));
+        d
+    }
+
+    /// Starts a workspace design's agent (X65): Claude Code in the design's
+    /// folder, in the workspace's Claude profile, with its design system's
+    /// folder read only, and the brief with the design system's README and the
+    /// design rules as its first message.
+    async fn start_design_agent(&self, workspace: &str, slug: &str) -> anyhow::Result<u32> {
+        use moonlet_core::design::agent;
+        use moonlet_proto::types::{DesignAgent, DesignAgentKind};
+        let lock = self.workspace_design_lock(workspace, slug);
+        let _held = lock.lock().await;
+        // The folders come from the store, never from what the agent edits:
+        // `design.toml` names the design system, which must be the workspace's.
+        let (store, ws, sl) = (self.design.clone(), workspace.to_string(), slug.to_string());
+        let (launch, name) = blocking(move || {
+            let dir = store.design_dir(&ws, &sl)?.canonicalize()?;
+            let config = store.design_config(&ws, &sl)?;
+            let system = store.system_dir(&ws, &config.system)?.canonicalize()?;
+            let readme = store.readme(&ws, &config.system)?;
+            let launch = agent::design_launch(&dir, &config, &system, &readme, &moonlet_cli_path()?)?;
+            Ok((launch, config.name))
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e.message))?;
+        let tag = DesignAgent { kind: DesignAgentKind::Design, workspace: workspace.to_string(), slug: slug.to_string(), name };
+        self.agent_chat(&launch, tag, |id| match id {
+            Some(id) => self.design.set_design_agent(workspace, slug, id),
+            None => self.design.clear_design_agent(workspace, slug),
+        })
+    }
+
+    /// Starts the chat of a Design mode agent (X64, X65): Claude Code, with
+    /// no session, in the Claude profile of the workspace its tag names,
+    /// started as `launch` says and tagged so. `record` saves the chat as its
+    /// system's or design's agent (`Some`), or forgets it (`None`); then the
+    /// chat gets `launch.prompt` as its first message. When saving the record
+    /// or sending that message fails, the chat is stopped and removed and the
+    /// record forgotten, so a failed start leaves no agent behind.
+    fn agent_chat(&self, launch: &moonlet_core::design::agent::Launch, tag: moonlet_proto::types::DesignAgent, record: impl Fn(Option<u32>) -> anyhow::Result<()>) -> anyhow::Result<u32> {
         let info = self.chats.create(ChatCreate {
-            cwd: launch.cwd,
+            cwd: launch.cwd.clone(),
             agent: "claude".into(),
             model: None,
             effort: None,
-            mode: Some(launch.mode),
+            mode: Some(launch.mode.clone()),
             name: launch.title.clone(),
             title: Some(launch.title.clone()),
             session_id: None,
             env: Default::default(),
-            add_dirs: launch.add_dirs,
-            settings: Some(launch.settings),
-            workspace: Some(workspace.to_string()),
-            design: true,
+            add_dirs: launch.add_dirs.clone(),
+            settings: Some(launch.settings.clone()),
+            workspace: Some(tag.workspace.clone()),
+            design: Some(tag),
         })?;
-        self.design.set_agent(workspace, slug, info.id, &fingerprint)?;
-        self.chats.send(info.id, &launch.prompt, &[])?;
-        Ok(info.id)
+        let id = info.id;
+        let started = record(Some(id)).and_then(|()| {
+            self.chats.send(id, &launch.prompt, &[]).inspect_err(|_| {
+                let _ = record(None);
+            })
+        });
+        if started.is_err() {
+            let _ = self.terminals.kill(id, true);
+        }
+        started.map(|()| id)
     }
 
     /// Has the app render every card of a design system, one at a time, and
@@ -1335,6 +1489,13 @@ impl Daemon {
     /// The lock of one design system (see `design_locks`).
     fn design_lock(&self, workspace: &str, slug: &str) -> Arc<tokio::sync::Mutex<()>> {
         self.design_locks.lock().unwrap().entry(format!("{workspace}/{slug}")).or_default().clone()
+    }
+
+    /// The lock of one workspace design (X65): one start of its agent or one
+    /// removal at a time. Its key never meets a design system's, whose slug
+    /// has no `/`.
+    fn workspace_design_lock(&self, workspace: &str, slug: &str) -> Arc<tokio::sync::Mutex<()>> {
+        self.design_lock(workspace, &format!("designs/{slug}"))
     }
 
     /// The chat of a design system's sync agent, while it still is that system's.
