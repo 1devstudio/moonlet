@@ -593,13 +593,22 @@ pub(super) fn system_copy(at: &DesignAt) -> Result<std::path::PathBuf> {
     Ok(at.root.join(rel))
 }
 
-/// A design folder: a path inside the worktree, made only of folder names.
+/// A design folder: a path inside the worktree, made only of folder names,
+/// outside `.moonlet/`.
 fn check_folder(folder: &str) -> Result<()> {
     let plain = Path::new(folder)
         .components()
         .all(|c| matches!(c, std::path::Component::Normal(_)));
     if folder.is_empty() || !plain {
         bail!("the design folder {folder:?} is not a folder inside the worktree");
+    }
+    // moonlet's own folder, which holds the session designs' side folders
+    // git ignores: committed files would be ignored, and making a design's
+    // side folder could remove its `design.toml`.
+    let side = Path::new(SIDE_DIR);
+    let moonlet = side.parent().unwrap_or(side);
+    if Path::new(folder).starts_with(moonlet) || side.starts_with(folder) {
+        bail!("the design folder {folder:?} is inside .moonlet/, which git ignores: pick one outside it");
     }
     Ok(())
 }
@@ -902,6 +911,26 @@ created_at = 1761200000000
             let text = format!("[design]\ndir = {outside:?}\n");
             assert!(config(Some(&text)).is_err(), "{outside}");
         }
+    }
+
+    /// X65: a design folder in `.moonlet/`, which holds the session designs'
+    /// own folder git ignores, is refused, so a design's committed files never
+    /// land there and making its own folder never removes its `design.toml`.
+    #[test]
+    fn a_design_folder_in_moonlets_own_folder_is_refused() {
+        for inside in [".moonlet/design", ".moonlet", ".moonlet/designs", ".moonlet/design/prototypes"] {
+            let mut config = moonlet_proto::types::ProjectConfig::default();
+            config.design.dir = Some(inside.into());
+            assert_eq!(
+                design_folder(&config).map_err(|e| e.to_string()),
+                Err(format!("the design folder \"{inside}\" is inside .moonlet/, which git ignores: pick one outside it")),
+            );
+        }
+        let (_home, store) = store_with_synced_system();
+        let worktree = tempfile::tempdir().unwrap();
+        let made = store.create_session_design("w1", "moonlet-desktop", "s1", worktree.path(), ".moonlet/design", "Settings page", "b", 1);
+        assert!(made.is_err());
+        assert_eq!(files(worktree.path()), BTreeMap::new());
     }
 
     #[test]
