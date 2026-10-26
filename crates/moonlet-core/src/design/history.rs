@@ -251,10 +251,8 @@ fn numbers(at: &DesignAt) -> Result<Vec<u32>> {
     if std::fs::symlink_metadata(&folder).is_ok_and(|m| !m.is_dir()) {
         return Ok(Vec::new());
     }
-    let entries = match std::fs::read_dir(&folder) {
-        Ok(entries) => entries,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(e).with_context(|| format!("cannot read {}", folder.display())),
+    let Some(entries) = fsx::read_dir_if_there(&folder)? else {
+        return Ok(Vec::new());
     };
     let mut out: Vec<u32> = entries
         .flatten()
