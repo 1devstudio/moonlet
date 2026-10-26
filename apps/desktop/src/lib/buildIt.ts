@@ -54,20 +54,20 @@ function inOrder(pages: BuildDesign["pages"]): BuildDesign["pages"] {
 
 /** Build it's attachments (X54's text contract): one per page not left out
  *  (`left`, by ×), `index` first, then one for the styles, which cannot be
- *  left out. Each sends one line, its page's or the styles' path where the
+ *  left out, nor the last page left: a build has at least one page. Each sends one line, its page's or the styles' path where the
  *  copy puts them in the worktree, under the project's design folder
  *  (`dir`): `<dir>/<slug>/pages/<page>.html · <design name>, <label>` and
  *  `<dir>/<slug>/system/styles.css · <design system> styles`. No HTML goes
  *  in the message, so it stays small whatever the design's size. */
 export function designAttachments(d: Pick<BuildDesign, "slug" | "name" | "pages">, at: { systemName: string; dir: string; left: string[] }): Attachment[] {
   const folder = `${at.dir}/${d.slug}`;
-  const pages = inOrder(d.pages)
-    .filter((p) => !at.left.includes(p.name))
-    .map((p): Attachment => {
-      const summary = p.label ? `${d.name}, ${p.label}` : d.name;
-      const line = `${linePage(p.name, folder)} · ${summary}`;
-      return { id: `page:${p.name}`, icon: "page", file: pageFile(p.name), lead: "", summary, body: line, remove: `Leave ${pageFile(p.name)} out of the copy and the message`, message: line, page: p.name };
-    });
+  const kept = inOrder(d.pages).filter((p) => !at.left.includes(p.name));
+  const pages = kept.map((p): Attachment => {
+    const summary = p.label ? `${d.name}, ${p.label}` : d.name;
+    const line = `${linePage(p.name, folder)} · ${summary}`;
+    const remove = kept.length > 1 ? `Leave ${pageFile(p.name)} out of the copy and the message` : null;
+    return { id: `page:${p.name}`, icon: "page", file: pageFile(p.name), lead: "", summary, body: line, remove, message: line, page: p.name };
+  });
   const summary = `${at.systemName} styles`;
   const styles = `${folder}/system/styles.css · ${summary}`;
   return [...pages, { id: "styles", icon: "styles", file: "styles.css", lead: "", summary, body: styles, remove: null, message: styles }];
