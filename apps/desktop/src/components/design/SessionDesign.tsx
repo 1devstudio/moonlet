@@ -5,18 +5,16 @@
 
 import { useMemo, type RefObject } from "react";
 import { ChevronDown, PenTool } from "lucide-react";
-import type { Session } from "../../lib/protocol";
+import type { Design, Session } from "../../lib/protocol";
 import { commentsOf, sessionDesignsOf, showSessionDesign, shownSessionDesign, systemsOf, useDesign } from "../../lib/designStore";
 import { projectOf, useStore } from "../../lib/store";
 import { sendWithEdits } from "../../lib/designEditor";
-import { messageView } from "../../lib/designComments";
 import { designSystemFooter, opensDesignView, worktreeFile } from "../../lib/sessionDesign";
 import { Empty } from "../ui";
 import { Menu } from "../Menu";
 import { AgentView } from "../AgentView";
-import { CommentCards } from "./Comments";
-import { EditsMessage } from "./Editor";
-import { DesignCanvas, type CanvasChat } from "./DesignScreen";
+import { designMessage } from "./Comments";
+import { DesignCanvas, useDesignBasics, type CanvasChat } from "./DesignScreen";
 
 /** Where Show in chat looks for a comment's card in a session: the session's
  *  chat is in its panes, not beside the canvas, so the whole document. */
@@ -31,9 +29,6 @@ const SESSION_CHAT: CanvasChat = { open: true, setOpen: () => {}, root: WHOLE_DO
 
 export function SessionDesignTab({ host, ws }: { host: string; ws: Session }) {
   const design = useDesign((d) => shownSessionDesign(d, host, ws.id));
-  const designs = useDesign((d) => sessionDesignsOf(d, host, ws.id));
-  // One object per session, as the canvas's effects follow it.
-  const place = useMemo(() => ({ session: ws.id }), [ws.id]);
   if (!design) {
     return (
       <Empty icon={<PenTool size={20} className="text-faint" />} title="No design in this session">
@@ -41,6 +36,16 @@ export function SessionDesignTab({ host, ws }: { host: string; ws: Session }) {
       </Empty>
     );
   }
+  return <SessionCanvas key={design.slug} host={host} ws={ws} design={design} />;
+}
+
+/** The canvas of the design a session's Design tab shows. */
+function SessionCanvas({ host, ws, design }: { host: string; ws: Session; design: Design }) {
+  const designs = useDesign((d) => sessionDesignsOf(d, host, ws.id));
+  const workspace = ws.workspace_id ?? "";
+  const { agent, systemName } = useDesignBasics(host, workspace, design);
+  // One object per session, as the canvas's effects follow it.
+  const place = useMemo(() => ({ session: ws.id }), [ws.id]);
   // Several designs: the tab shows one, picked here.
   const picker =
     designs.length > 1 ? (
@@ -57,11 +62,12 @@ export function SessionDesignTab({ host, ws }: { host: string; ws: Session }) {
   return (
     <div className="flex h-full min-h-0">
       <DesignCanvas
-        key={design.slug}
         host={host}
         place={place}
-        workspace={ws.workspace_id ?? ""}
+        workspace={workspace}
         design={design}
+        agent={agent}
+        systemName={systemName}
         inset={0}
         chat={SESSION_CHAT}
         fileOf={(page) => worktreeFile(ws.path, design, page)}
@@ -106,22 +112,7 @@ export function SessionChat({ host, id, wsId, focused, visible }: { host: string
       visible={visible}
       toolNote={(t) => (t.tool && opensDesignView(t.tool) ? <DesignOpenedNote /> : null)}
       slashFooter={footer}
-      userView={
-        own
-          ? (text) => {
-              const view = messageView(text, comments);
-              if (!view) return null;
-              const cards = view.cards && <CommentCards cards={view.cards} session />;
-              return view.edits ? (
-                <EditsMessage edits={view.edits} text={view.text}>
-                  {cards}
-                </EditsMessage>
-              ) : (
-                cards
-              );
-            }
-          : undefined
-      }
+      userView={own ? (text) => designMessage(text, comments, true) : undefined}
       sendText={own ? (text, images) => sendWithEdits(host, place, own.slug, id, text, images) : undefined}
     />
   );

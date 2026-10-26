@@ -125,13 +125,12 @@ export function newDesignSystem(chosen: string, systems: string[], shown: string
  *  --here`) opens in its session's Design tab while that session is the
  *  one shown (`shown`), else it is offered in a toast too. */
 export function designOpenAction(ev: DesignOpen, sessions: { id: string; name: string }[], shown: string | null = null): { kind: "show" } | { kind: "tab"; session: string } | { kind: "toast"; text: string } | { kind: "none" } {
-  const by = sessions.find((s) => s.id === ev.session)?.name ?? "An agent";
+  const toast = { kind: "toast" as const, text: `${sessions.find((s) => s.id === ev.session)?.name ?? "An agent"} started the design ${ev.name}` };
   if (ev.kind === "session") {
     if (!ev.session) return { kind: "none" };
-    return ev.session === shown ? { kind: "tab", session: ev.session } : { kind: "toast", text: `${by} started the design ${ev.name}` };
+    return ev.session === shown ? { kind: "tab", session: ev.session } : toast;
   }
-  if (ev.spawned_by === undefined || ev.spawned_by === null) return { kind: "show" };
-  return { kind: "toast", text: `${by} started the design ${ev.name}` };
+  return ev.spawned_by === undefined || ev.spawned_by === null ? { kind: "show" } : toast;
 }
 
 /** The designs Design mode lists and opens on its design screen: the
