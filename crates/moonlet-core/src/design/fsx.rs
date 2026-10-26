@@ -93,6 +93,26 @@ const UPDATE_TRIES: usize = 8;
 pub(crate) fn update_inside(
     root: &Path,
     rel: &Path,
+    edit: impl FnMut(&str) -> Result<String>,
+) -> Result<()> {
+    update(root, rel, false, edit)
+}
+
+/// As [`update_inside`], but a missing file reads as empty and the replace
+/// makes it: one made by another writer after it was found missing is read
+/// again, as a changed one is.
+pub(crate) fn update_or_create_inside(
+    root: &Path,
+    rel: &Path,
+    edit: impl FnMut(&str) -> Result<String>,
+) -> Result<()> {
+    update(root, rel, true, edit)
+}
+
+fn update(
+    root: &Path,
+    rel: &Path,
+    create: bool,
     mut edit: impl FnMut(&str) -> Result<String>,
 ) -> Result<()> {
     let name = rel.file_name().context("a file needs a name")?;
@@ -113,15 +133,19 @@ pub(crate) fn update_inside(
         }
         None => root_dir,
     };
-    let read = |dir: &Dir| {
-        dir.read_to_string(name)
-            .with_context(|| format!("cannot read {} in {}", rel.display(), root.display()))
+    // The file's text; None when it is missing and may be made.
+    let read = |dir: &Dir| match dir.read_to_string(name) {
+        Ok(text) => Ok(Some(text)),
+        Err(e) if create && e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => {
+            Err(e).with_context(|| format!("cannot read {} in {}", rel.display(), root.display()))
+        }
     };
     for _ in 0..UPDATE_TRIES {
         let before = read(&dir)?;
-        let after = edit(&before)?;
+        let after = edit(before.as_deref().unwrap_or(""))?;
         before_replace();
-        // Changed since it was read: start again from the newest text.
+        // Changed, or made, since it was read: start again from the newest text.
         if read(&dir)? != before {
             continue;
         }

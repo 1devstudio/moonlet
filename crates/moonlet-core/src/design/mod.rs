@@ -5,6 +5,7 @@ pub mod agent;
 pub mod anchor;
 pub mod card;
 pub mod check;
+pub mod comments;
 pub mod designs;
 pub mod foundations;
 pub(crate) mod fsx;

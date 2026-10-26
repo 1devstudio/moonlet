@@ -280,7 +280,7 @@ A sync runs for a long time and may need the user: a question the code cannot se
     - the `@dsCard` line
     - **Check**: each problem with its line, and **Ask the sync agent to fix**, which sends the problems to the running sync agent, once at a time, and never starts a sync (`lib/designView.test.ts` a card (X64, X65))
     - **Snippets**: each id, with copy (`e2e/specs/design-systems.e2e.ts` opens a card with its check problem's line and its snippets)
-    - **Comments**: comments wait for the next sync, or are sent now with **Send now**
+    - **Comments**: comments wait for the next sync, or are sent now with **Send now**. Not built yet: X65 entry 8 made comments for designs only. Before a card's comments can be built, this spec has to say where they are kept (a design system has no `comments.json`), how the next sync's message takes the waiting ones, and how a comment's line names its card; they then reuse X65's comment bridge, box, pins and Comments tab on the card page
 - [ ] While a sync runs, the sidebar row says `syncing`, and after it `<n> to settle` until **Needs you** is empty.
 
 ### Skill and CLI

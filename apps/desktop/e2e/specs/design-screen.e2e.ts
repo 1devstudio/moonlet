@@ -152,15 +152,16 @@ describe("A design's screen", () => {
     await browser.keys("Escape");
   });
 
-  it("shows every page in Overview with its label, and opens one from there", async () => {
-    // An open comment counts on the design's row, not on a page until comments come (entry 8).
-    writeFileSync(join(dir(), "comments.json"), '[{"n": 1, "state": "open"}]\n');
+  it("shows every page in Overview with its label and open comments, and opens one from there", async () => {
+    // An open comment counts on the design's row, and on its page.
+    writeFileSync(join(dir(), "comments.json"), '[{"n": 1, "page": "git-a", "mid": "m2", "tag": "h1", "comment": "Tighter", "state": "open"}]\n');
     writeFileSync(join(dir(), "pages", "git-a.html"), page("Git, cards"));
     writeFileSync(join(dir(), "design.toml"), `${readFileSync(join(dir(), "design.toml"), "utf8")}\n[pages.git-a]\nlabel = "cards"\n`);
     await $('//nav[@aria-label="Pages"]//button[normalize-space()="git-a"]').waitForExist();
     await $('//nav[@aria-label="Pages"]//button[normalize-space()="Overview"]').click();
     const tile = $('//button[@aria-label="git-a.html"]');
     await expect(tile).toHaveText(expect.stringContaining("cards"));
+    await expect(tile.$('.//*[@title="1 open comment"]')).toBeDisplayed();
     await expect($('//button[@aria-label="index.html"]')).toHaveText("index.html");
     await expect($('//nav[@aria-label="Designs"]//button[.//span[normalize-space()="Settings page"]]')).toHaveText(expect.stringContaining("1"));
     await expect($$('//button[@aria-label="git-a.html" or @aria-label="index.html"]//iframe')).toBeElementsArrayOfSize(2);

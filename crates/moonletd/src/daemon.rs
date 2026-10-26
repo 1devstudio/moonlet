@@ -166,10 +166,10 @@ async fn blocking<T: Send + 'static>(
 }
 
 /// What the design store's error means to the caller: a design system the
-/// workspace does not have, or a viewport that is none, is a bad parameter
-/// (X65); anything else failed.
+/// workspace does not have, a viewport that is none, or a comment that names
+/// no element or pin, is a bad parameter (X65); anything else failed.
 fn store_error(e: anyhow::Error) -> RpcError {
-    if e.is::<moonlet_core::design::designs::NoSystem>() || e.is::<moonlet_core::design::designs::BadViewport>() {
+    if e.is::<moonlet_core::design::designs::NoSystem>() || e.is::<moonlet_core::design::designs::BadViewport>() || e.is::<moonlet_core::design::comments::BadComment>() {
         return RpcError::new("invalid_params", e.to_string());
     }
     internal(e)
@@ -1314,6 +1314,22 @@ impl Daemon {
                 blocking(move || store.set_design_viewport(&r.workspace, &r.slug, &r.viewport)).await?;
                 ok(true)
             }
+            m::DESIGN_COMMENTS => {
+                let r: m::DesignRef = params(p)?;
+                ok(blocking(move || store.comments(&r.workspace, &r.slug)).await?)
+            }
+            m::DESIGN_COMMENT_PUT => {
+                let r: m::DesignCommentPut = params(p)?;
+                let lock = self.comments_lock(&r.workspace, &r.slug);
+                let _held = lock.lock().await;
+                ok(blocking(move || store.put_comment(&r.workspace, &r.slug, &r.change, now_ms())).await?)
+            }
+            m::DESIGN_COMMENT_RESOLVE => {
+                let r: m::DesignCommentRef = params(p)?;
+                let lock = self.comments_lock(&r.workspace, &r.slug);
+                let _held = lock.lock().await;
+                ok(blocking(move || store.resolve_comment(&r.workspace, &r.slug, r.n)).await?)
+            }
             m::DESIGN_SETTLE => {
                 let r: m::DesignSettle = params(p)?;
                 let choice: Settle = serde_json::from_value(Value::String(r.choice.clone()))
@@ -1502,6 +1518,14 @@ impl Daemon {
     /// has no `/`.
     fn workspace_design_lock(&self, workspace: &str, slug: &str) -> Arc<tokio::sync::Mutex<()>> {
         self.design_lock(workspace, &format!("designs/{slug}"))
+    }
+
+    /// The lock of one workspace design's `comments.json` (X65): one change
+    /// of its comments at a time, so two never read the same pins and the
+    /// later write drops the earlier one's. Its own, not the design's agent
+    /// lock, so a comment never waits for an agent to start.
+    fn comments_lock(&self, workspace: &str, slug: &str) -> Arc<tokio::sync::Mutex<()>> {
+        self.design_lock(workspace, &format!("comments/{slug}"))
     }
 
     /// The chat of a design system's sync agent, while it still is that system's.

@@ -239,6 +239,14 @@ pub const DESIGN_OPEN: &str = "design.open";
 /// [`DesignViewport`]: saves the viewport a design was last shown at in its
 /// `design.toml` (X65 entry 7).
 pub const DESIGN_VIEWPORT: &str = "design.viewport";
+/// [`DesignRef`] → the design's comments, by number (X65 entry 8).
+pub const DESIGN_COMMENTS: &str = "design.comments";
+/// [`DesignCommentPut`] → the pins it changed: a new one numbered after the
+/// highest, pin `n`'s comment (not sent any more when it changed), or the
+/// pins sent now.
+pub const DESIGN_COMMENT_PUT: &str = "design.comment.put";
+/// [`DesignCommentRef`] → the pin, resolved.
+pub const DESIGN_COMMENT_RESOLVE: &str = "design.comment.resolve";
 
 // Phones (X39)
 /// Phone access, the Tailscale addresses and the paired phones: [`MobileStatus`].
@@ -1367,6 +1375,24 @@ pub struct DesignViewport {
     pub workspace: String,
     pub slug: String,
     pub viewport: String,
+}
+
+/// [`DESIGN_COMMENT_PUT`]'s params: the design, and what to change, as
+/// `new`, `edit` or `sent` beside them (X65).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DesignCommentPut {
+    pub workspace: String,
+    pub slug: String,
+    #[serde(flatten)]
+    pub change: crate::types::CommentChange,
+}
+
+/// One pin of a design (X65).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DesignCommentRef {
+    pub workspace: String,
+    pub slug: String,
+    pub n: u32,
 }
 
 /// The event [`EV_DESIGN_OPEN`] (X65).
