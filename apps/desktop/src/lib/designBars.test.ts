@@ -92,18 +92,18 @@ describe("the bar over a page that did not load (X65)", () => {
   const quote = { line: 3, message: "an attribute's quote is never closed" };
 
   it("is red with Ask the agent to fix, saying the page's first parse error and its line, or why the scheme could not serve it", () => {
-    expect(designBar({ ...calm, page: "git-b", notLoaded: { reason: null, parse: quote } })).toEqual({
+    expect(designBar({ ...calm, page: "git-b", notLoaded: { kind: "silent", parse: quote } })).toEqual({
       tone: "red",
       text: "git-b.html did not load.",
       detail: "an attribute's quote is never closed at line 3",
       actions: ["fix-load"],
     });
-    expect(designBar({ ...calm, notLoaded: { reason: "the file cannot be read", parse: null } })).toEqual({ tone: "red", text: "index.html did not load.", detail: "the file cannot be read", actions: ["fix-load"] });
-    expect(designBar({ ...calm, notLoaded: { reason: null, parse: null } })?.detail).toBe("the canvas got no answer from it");
+    expect(designBar({ ...calm, notLoaded: { kind: "refused", reason: "the file cannot be read" } })).toEqual({ tone: "red", text: "index.html did not load.", detail: "the file cannot be read", actions: ["fix-load"] });
+    expect(designBar({ ...calm, notLoaded: { kind: "silent" } })?.detail).toBe("the canvas got no answer from it");
   });
 
   it("shows before the page's check problems, as the page shows nothing, and under an edit not saved, the design system updated, the preview and the agent", () => {
-    const failing: BarState = { ...calm, problems: [problem("pages/index.html", "missing_mid", "<h1> has no data-mid")], systemRemoved: true, notLoaded: { reason: null, parse: quote } };
+    const failing: BarState = { ...calm, problems: [problem("pages/index.html", "missing_mid", "<h1> has no data-mid")], systemRemoved: true, notLoaded: { kind: "silent", parse: quote } };
     expect(designBar(failing)?.text).toBe("index.html did not load.");
     expect(designBar({ ...failing, session: true, systemUpdated: true })?.text).toBe("Design system updated.");
     expect(designBar({ ...failing, unsaved: "index.html m30 div: deleted" })?.tone).toBe("yellow");
@@ -114,8 +114,8 @@ describe("the bar over a page that did not load (X65)", () => {
   });
 
   it("asks the agent to fix the page, naming it, its parse error and its line, or why it was not served", () => {
-    expect(loadFixMessage("git-b", { reason: null, parse: quote })).toBe("pages/git-b.html did not load in the canvas: an attribute's quote is never closed at line 3. Fix the page so it loads, then run the check again.");
-    expect(loadFixMessage("index", { reason: "the file cannot be read", parse: null })).toBe("pages/index.html did not load in the canvas: the file cannot be read. Fix the page so it loads, then run the check again.");
+    expect(loadFixMessage("git-b", { kind: "silent", parse: quote })).toBe("pages/git-b.html did not load in the canvas: an attribute's quote is never closed at line 3. Fix the page so it loads, then run the check again.");
+    expect(loadFixMessage("index", { kind: "refused", reason: "the file cannot be read" })).toBe("pages/index.html did not load in the canvas: the file cannot be read. Fix the page so it loads, then run the check again.");
   });
 });
 

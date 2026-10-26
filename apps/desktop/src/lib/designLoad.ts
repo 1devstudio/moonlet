@@ -18,7 +18,6 @@
 //   the window covered), and a suspended frame answers nothing, so a
 //   hidden window waits until it shows again, then asks again.
 
-import type { NotLoaded } from "./designBars";
 import type { DesignParseError } from "./protocol";
 
 /** How long the canvas waits for the bridge's answer to a hello, in ms. */
@@ -73,11 +72,16 @@ export function loadStep(s: PageLoad, e: LoadEvent): PageLoad {
   }
 }
 
+/** Why the shown page did not load: the scheme refused it, saying why, or
+ *  its bridge was silent, with the page's first parse error if it has one. */
+export type NotLoaded = { kind: "refused"; reason: string } | { kind: "silent"; parse?: DesignParseError };
+
 /** What the bar says of the page, `parse` being its first parse error as
  *  `design.page` read it: null unless it failed, so a page that loads never
  *  shows a parse error; the scheme's reason alone when it refused the page,
  *  whose text was not read. */
 export function notLoadedOf(load: PageLoad, parse: DesignParseError | null): NotLoaded | null {
   if (load.phase !== "failed") return null;
-  return load.reason ? { reason: load.reason, parse: null } : { reason: null, parse };
+  if (load.reason) return { kind: "refused", reason: load.reason };
+  return parse ? { kind: "silent", parse } : { kind: "silent" };
 }

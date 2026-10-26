@@ -51,10 +51,10 @@ describe("why the canvas's page did not load (X65)", () => {
   const quote = { line: 3, message: "an attribute's quote is never closed" };
 
   it("is the page's first parse error when its bridge was silent, the scheme's reason when it refused it, and nothing for a page that loads or loaded", () => {
-    expect(notLoadedOf({ phase: "failed", asked: 1, reason: null }, quote)).toEqual({ reason: null, parse: quote });
-    expect(notLoadedOf({ phase: "failed", asked: 1, reason: null }, null)).toEqual({ reason: null, parse: null });
+    expect(notLoadedOf({ phase: "failed", asked: 1, reason: null }, quote)).toEqual({ kind: "silent", parse: quote });
+    expect(notLoadedOf({ phase: "failed", asked: 1, reason: null }, null)).toEqual({ kind: "silent" });
     // A page not served has no text of its own: a parse error read before is not its.
-    expect(notLoadedOf({ phase: "failed", asked: 0, reason: "the file cannot be read" }, quote)).toEqual({ reason: "the file cannot be read", parse: null });
+    expect(notLoadedOf({ phase: "failed", asked: 0, reason: "the file cannot be read" }, quote)).toEqual({ kind: "refused", reason: "the file cannot be read" });
     // A page that loaded never shows its parse errors: a browser recovers from them.
     expect(notLoadedOf({ phase: "loaded", asked: 1 }, quote)).toBeNull();
     expect(notLoadedOf({ phase: "waiting", asked: 1 }, quote)).toBeNull();
