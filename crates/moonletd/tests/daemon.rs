@@ -3854,6 +3854,67 @@ async fn edits_by_hand_saved_while_the_agent_asks_wait_for_its_turn_however_long
     assert_eq!(std::fs::read_to_string(dir.join("history/2/pages/index.html")).unwrap(), "<p>by hand, while the agent asks</p>\n");
 }
 
+/// A design's agent that, told `ASK-ME`, writes half of `pages/other.html`
+/// and asks the user a question, which waits through a daemon restart, and
+/// ends its turn on any other message.
+const QUESTION_CLAUDE: &str = r#"#!/bin/sh
+mkdir -p pages
+while IFS= read -r line; do
+  case "$line" in
+    *'"subtype":"initialize"'*) echo '{"type":"system","subtype":"init","session_id":"s1","model":"fake"}' ;;
+    *'ASK-ME'*) printf '<p data-mid="m3">half</p>\n' > pages/other.html
+      echo '{"type":"assistant","message":{"id":"m1","content":[{"type":"tool_use","id":"t1","name":"AskUserQuestion","input":{"questions":[{"question":"Which layout?","header":"Layout","multiSelect":false,"options":[{"label":"rows","description":"a list"},{"label":"cards","description":"a grid"}]}]}}]}}'
+      echo '{"type":"control_request","request_id":"q1","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","tool_use_id":"t1","input":{"questions":[{"question":"Which layout?","header":"Layout","multiSelect":false,"options":[{"label":"rows","description":"a list"},{"label":"cards","description":"a grid"}]}]}}}' ;;
+    *'"type":"user"'*) echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}' ;;
+  esac
+done
+"#;
+
+/// Waits until chat `id`'s agent asks the user, within 10 s.
+async fn asking(c: &mut Client, id: u64) {
+    for _ in 0..100 {
+        let terminals: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
+        if terminals.iter().any(|t| u64::from(t.id) == id && t.agent_state == moonlet_proto::types::AgentState::Blocked) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("chat {id} never asked");
+}
+
+/// X65: a design's agent still asking the user when the daemon restarts is
+/// within its turn after it: an edit by hand saved meanwhile waits for the
+/// turn, and Stop, which ends the turn, takes its Agent turn snapshot with
+/// the edit.
+#[tokio::test]
+async fn a_turn_still_asking_after_a_restart_takes_its_snapshot_when_stopped() {
+    let mut d = fake_claude_daemon_with(QUESTION_CLAUDE, vec![("MOONLET_DESIGN_QUIET_MS".into(), "300".into())]).await;
+    let mut c = d.client().await;
+    let ws = workspace_with_system(&d, &mut c).await;
+    let created: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    let agent = created["agent"].as_u64().unwrap();
+    turn_over(&mut c, agent).await;
+    let dir = d.home.path().join(".moonlet/design").join(&ws).join("designs/settings-page");
+    std::fs::write(dir.join("pages/index.html"), "<p data-mid=\"m2\">first</p>\n").unwrap();
+    let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": agent, "text": "ASK-ME"})).await.unwrap();
+    asking(&mut c, agent).await;
+    drop(c);
+    d.restart().await;
+    let mut c = d.client().await;
+    asking(&mut c, agent).await;
+    let before: serde_json::Value = c.request(methods::DESIGN_HISTORY, serde_json::json!({"workspace": ws, "slug": "settings-page"})).await.unwrap();
+    let n = before.as_array().unwrap().len();
+    save_by_hand(&mut c, &ws, "<p>by hand, while it asks</p>\n", &["text of m2"]).await;
+    let _: serde_json::Value = c.request(methods::CHAT_INTERRUPT, serde_json::json!({"id": agent})).await.unwrap();
+    let listed = history_of(&mut c, &ws, n + 1).await;
+    assert_eq!((&listed[0]["type"], &listed[0]["n"]), (&serde_json::json!("agent_turn"), &serde_json::json!(n + 1)), "{listed}");
+    let kept = dir.join(format!("history/{}/pages/index.html", n + 1));
+    assert_eq!(std::fs::read_to_string(kept).unwrap(), "<p>by hand, while it asks</p>\n");
+}
+
 /// A design's agent that writes `pages/index.html`, "turn <n>", on each
 /// message, then ends the turn: a message saying `STOP-ME` waits for the
 /// chat's Stop (an interrupt), and one saying `FAIL-NOW` fails.

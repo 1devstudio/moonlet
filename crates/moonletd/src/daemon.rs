@@ -2185,10 +2185,18 @@ impl Daemon {
                 }
             }
         });
+        // The agents in a turn: from working until done, idle (stopped) or
+        // error; asking the user is still within it. One already at work or
+        // asking as the watch starts, such as a question kept through a
+        // restart, is in its turn, as is one first heard asking.
+        let mut in_turn: std::collections::HashSet<_> = self
+            .terminals
+            .list()
+            .into_iter()
+            .filter(|t| turn_of(t).is_some() && matches!(t.agent_state, AgentState::Working | AgentState::Blocked))
+            .map(|t| t.id)
+            .collect();
         tokio::spawn(async move {
-            // The agents in a turn: from working until done, idle
-            // (stopped) or error; asking the user is still within it.
-            let mut in_turn = std::collections::HashSet::new();
             loop {
                 let message = match events.recv().await {
                     Ok(m) => m,
@@ -2203,6 +2211,10 @@ impl Daemon {
                 let Some(of) = turn_of(&t) else { continue };
                 let step = match t.agent_state {
                     AgentState::Working if in_turn.insert(t.id) => AgentStep::Starts,
+                    AgentState::Blocked => {
+                        in_turn.insert(t.id);
+                        continue;
+                    }
                     AgentState::Done | AgentState::Idle | AgentState::Error if in_turn.remove(&t.id) => AgentStep::EndsTurn,
                     _ => continue,
                 };
