@@ -11,6 +11,7 @@ import { cardUrl } from "../../lib/designView";
 import { cardRev, loadCards, loadSystems, openCard, type CardRevs } from "../../lib/designStore";
 import { cx } from "../../lib/cx";
 import { useNear } from "../../lib/useNear";
+import { CardFrame } from "./Frame";
 import { Button } from "../ui";
 
 /** Inventory › Tokens › Cards › Layouts, each with its result. */
@@ -86,7 +87,7 @@ function Preview({ url, title, viewport, width }: { url: string; title: string; 
   const scale = Math.min(width / viewport[0], 1);
   return (
     <div ref={ref} className="relative overflow-hidden" style={{ width: viewport[0] * scale, height: Math.min(viewport[1] * scale, 280) }}>
-      {near && <iframe title={title} src={url} sandbox="allow-scripts" className="pointer-events-none absolute left-0 top-0 border-0" style={{ width: viewport[0], height: viewport[1], transform: `scale(${scale})`, transformOrigin: "0 0" }} />}
+      <CardFrame url={url} title={title} viewport={viewport} scale={scale} live={near} />
     </div>
   );
 }

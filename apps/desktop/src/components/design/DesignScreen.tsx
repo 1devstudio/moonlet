@@ -1055,7 +1055,7 @@ function PageFrame({
     <div className="relative m-auto shrink-0 rounded-md border border-border-strong shadow-2xl">
       {/* A frame of its own for each framing, so an earlier framing's page
           (its load, its bridge's messages) is never taken for this one's. */}
-      <CardFrame key={frameKey} url={pageUrl(place, design.slug, page, rev, true)} title={pageFile(page)} viewport={viewport} scale={scale} interactive frameRef={frame} onLoad={() => onLoadEvent({ kind: "load", visible: document.visibilityState === "visible", frame: frameKey })} />
+      <CardFrame key={frameKey} url={pageUrl(place, design.slug, page, rev, true)} title={pageFile(page)} viewport={viewport} scale={scale} interactive loader={false} frameRef={frame} onLoad={() => onLoadEvent({ kind: "load", visible: document.visibilityState === "visible", frame: frameKey })} />
       <PinLayer pins={pins} rects={rects} scale={scale} size={[viewport[0] * scale, viewport[1] * scale]} open={box?.pin?.n ?? null} onOpen={onOpenPin} />
       {box && (
         <CommentBox
