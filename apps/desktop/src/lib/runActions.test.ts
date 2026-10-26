@@ -213,6 +213,15 @@ describe("the Keyboard shortcuts page (X43)", () => {
     expect(shortcutGroups({}, "⇧⌘P").flatMap((g) => g.rows.map((r) => r.id))).toEqual(["pr"]);
   });
 
+  it("says a key works only in Design mode, so ⇧⌘N listed twice is not a clash (X65)", () => {
+    expect(shortcutGroups({}, "⇧⌘N").flatMap((g) => g.rows)).toEqual([
+      { id: "new-session", label: "New session…", keys: "⇧⌘N", custom: false },
+      { id: "new-design", label: "New design…", keys: "⇧⌘N", custom: false, mode: "in Design mode" },
+    ]);
+    // With no key, there is nothing for the mode to qualify.
+    expect(shortcutGroups({ "new-design": "" }, "new design").flatMap((g) => g.rows)).toEqual([{ id: "new-design", label: "New design…", keys: "", custom: true }]);
+  });
+
   it("puts one action's default key back, or every one", () => {
     expect(resetShortcut({ commit: "alt+cmd+g", pr: "" }, "pr")).toEqual({ commit: "alt+cmd+g" });
     expect(shortcutGroups(resetShortcut({ pr: "" }, "pr"), "pull").flatMap((g) => g.rows)).toEqual([{ id: "pr", label: "Create pull request…", keys: "⇧⌘P", custom: false }]);

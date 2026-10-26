@@ -107,6 +107,11 @@ export function ShortcutsPage() {
                         </IconButton>
                       </>
                     )}
+                    {r.mode && !rec && (
+                      <span data-shortcut-mode className="ui-text-11.5 text-faint">
+                        {r.mode}
+                      </span>
+                    )}
                     <button
                       type="button"
                       aria-label={`Shortcut for ${r.label}`}
