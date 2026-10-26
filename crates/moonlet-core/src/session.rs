@@ -1878,10 +1878,12 @@ impl Unmade {
         self.branch = None;
     }
 
-    /// Removes them now.
+    /// Removes them now, on a task of their own that owns them to its end:
+    /// this request dropped meanwhile leaves that removal running.
     async fn remove(mut self) {
-        let (dir, branch) = (self.dir.take(), self.branch.take());
-        remove_unmade(&self.repo, dir, branch).await;
+        let (repo, dir, branch) = (self.repo.clone(), self.dir.take(), self.branch.take());
+        let removing = tokio::spawn(async move { remove_unmade(&repo, dir, branch).await });
+        let _ = removing.await;
     }
 }
 
@@ -1908,9 +1910,41 @@ impl Drop for Unmade {
     }
 }
 
+/// A test's hold on the removal of a session not made in a repository:
+/// told when it starts, it waits until let go.
+#[cfg(test)]
+type RemoveHold = (
+    PathBuf,
+    tokio::sync::oneshot::Sender<()>,
+    tokio::sync::oneshot::Receiver<()>,
+);
+
+#[cfg(test)]
+static BEFORE_REMOVE: std::sync::Mutex<Vec<RemoveHold>> = std::sync::Mutex::new(Vec::new());
+
+/// Holds the removal of a session not made in `repo` while a test asks,
+/// so it can be cancelled midway deterministically; nothing outside tests.
+async fn before_remove(repo: &Path) {
+    #[cfg(test)]
+    {
+        let hold = {
+            let mut holds = BEFORE_REMOVE.lock().unwrap();
+            let at = holds.iter().position(|(r, ..)| r == repo);
+            at.map(|i| holds.remove(i))
+        };
+        if let Some((_, started, release)) = hold {
+            let _ = started.send(());
+            let _ = release.await;
+        }
+    }
+    #[cfg(not(test))]
+    let _ = repo;
+}
+
 /// Removes the worktree `dir` and the branch `branch` of a session not
 /// made, logging what it cannot.
 async fn remove_unmade(repo: &Path, dir: Option<PathBuf>, branch: Option<String>) {
+    before_remove(repo).await;
     if let Some(dir) = dir
         && let Err(gone) = git::worktree_remove(repo, &dir).await
     {
@@ -2044,6 +2078,73 @@ mod tests {
         // Settled: nothing comes back after it is removed.
         tokio::time::sleep(Duration::from_millis(500)).await;
         let left = (Path::new(&s.path).exists(), !branches().await.is_empty());
+        assert_eq!(left, (false, false), "(worktree, branch) left behind");
+        assert!(mgr.list_sessions().is_empty(), "a session was recorded");
+    }
+
+    #[tokio::test]
+    async fn a_session_not_made_whose_removal_is_cancelled_midway_still_leaves_no_worktree_or_branch()
+     {
+        let (repo, _home, mgr) = setup().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let req = SessionCreate {
+            project_id: r.id.clone(),
+            name: Some("Refused".into()),
+            branch: None,
+            from: None,
+            existing_branch: false,
+            agent: Some("none".into()),
+            prompt: None,
+            cols: 80,
+            rows: 24,
+            model: None,
+            effort: None,
+            mode: None,
+            pr: None,
+            tui: false,
+            cloud: false,
+            spawned_by: None,
+            add_dirs: vec![],
+            workspace_id: None,
+            task: None,
+            worktree: None,
+            design: None,
+        };
+        // The removal of what was made is held as it starts.
+        let (started, removing) = tokio::sync::oneshot::channel();
+        let (release, held) = tokio::sync::oneshot::channel();
+        BEFORE_REMOVE
+            .lock()
+            .unwrap()
+            .push((PathBuf::from(&r.path), started, held));
+        let (made, session) = tokio::sync::oneshot::channel::<Session>();
+        let prepare = move |s: Session| async move {
+            let _ = made.send(s);
+            anyhow::bail!("the copy is refused")
+        };
+        let mut making = Box::pin(mgr.create_session_prepared(req, prepare, |_| async {}));
+        tokio::select! {
+            _ = removing => {}
+            r = &mut making => panic!("ended before its removal started: {r:?}"),
+        }
+        let s = session.await.unwrap();
+        // The request goes away while its worktree and branch are removed.
+        drop(making);
+        let _ = release.send(());
+        let branches = || async {
+            crate::git::git(repo.path(), &["branch", "--list", &s.branch])
+                .await
+                .map(|out| String::from_utf8_lossy(&out).trim().to_string())
+                .unwrap()
+        };
+        let mut left = (true, true);
+        for _ in 0..100 {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            left = (Path::new(&s.path).exists(), !branches().await.is_empty());
+            if left == (false, false) {
+                break;
+            }
+        }
         assert_eq!(left, (false, false), "(worktree, branch) left behind");
         assert!(mgr.list_sessions().is_empty(), "a session was recorded");
     }
