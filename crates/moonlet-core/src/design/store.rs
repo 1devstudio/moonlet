@@ -105,6 +105,25 @@ pub struct Record {
     /// reused only while a new start would be the same.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_launch: Option<String>,
+    /// The cards the last sync changed, for "Changed by this sync".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub last_sync: Vec<SyncChange>,
+    /// The cards as they were when the sync not yet recorded started
+    /// ([`Store::begin_sync`]): its changes are told against them, so a card
+    /// the user changed before it is not among them. Kept until the sync is
+    /// recorded, so a retry after it stopped midway still knows them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync_start: Option<BTreeMap<String, anchor::CardRender>>,
+}
+
+/// One card a sync changed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyncChange {
+    pub path: String,
+    /// `new`, `rewritten` or `removed`.
+    pub change: String,
+    /// The source files it was made from.
+    pub sources: Vec<String>,
 }
 
 /// The design folders of one moonlet home.
@@ -119,6 +138,12 @@ impl Store {
         Store {
             root: home.join("design"),
         }
+    }
+
+    /// `~/.moonlet/design`, created when missing.
+    pub fn root(&self) -> Result<&Path> {
+        crate::paths::ensure_private_dir(&self.root)?;
+        Ok(&self.root)
     }
 
     /// Creates a design system and returns its slug. A name already used in
@@ -229,6 +254,7 @@ impl Store {
                         step_summary: None,
                         error: Some(format!("{err:#}")),
                         agent: record.agent,
+                        last_sync: record.last_sync.clone(),
                     }),
             );
         }
@@ -367,6 +393,26 @@ impl Store {
         // what usually fails, and then nothing is written.
         let anchor = anchor::compute(&dir, &source_roots(&old), &config.exceptions())?;
         let mut record = old.clone();
+        // What the sync changed: against the cards as they were when it
+        // started, or, with no start recorded, as the last anchor has them.
+        let before = record.sync_start.take().unwrap_or_else(|| {
+            anchor::read(&dir)
+                .map(|a| {
+                    a.cards
+                        .into_iter()
+                        .map(|(path, c)| {
+                            let render = anchor::CardRender {
+                                render_hash: c.render_hash,
+                                companion_hash: c.companion_hash,
+                                sources: c.sources.into_keys().collect(),
+                            };
+                            (path, render)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        });
+        record.last_sync = sync_changes(&before, &anchor);
         for s in &mut record.sources {
             if let Some((_, c)) = commits.iter().find(|(p, _)| *p == s.project) {
                 // A HEAD that could not be read leaves no commit, not a stale one.
@@ -383,6 +429,20 @@ impl Store {
         }
         let _ = fsx::remove_file_inside(&dir, &dir.join(PROGRESS));
         Ok(())
+    }
+
+    /// Records that a sync starts: the cards as they are now, which the
+    /// changes [`Store::synced`] records are told against. A start while an
+    /// earlier one is not yet recorded (a build or sync asked for again)
+    /// keeps the earlier cards, so nothing that sync changed is lost.
+    pub fn begin_sync(&self, workspace: &str, slug: &str) -> Result<()> {
+        let dir = self.system_dir(workspace, slug)?;
+        let mut record = self.record(workspace, slug)?;
+        if record.sync_start.is_some() {
+            return Ok(());
+        }
+        record.sync_start = Some(anchor::renders(&dir)?);
+        self.write_record(workspace, slug, &record)
     }
 
     /// A file under the workspace's design folder (`design.file`): never one
@@ -543,6 +603,8 @@ pub struct SystemSummary {
     pub error: Option<String>,
     /// The chat of its sync agent, once one was started.
     pub agent: Option<u32>,
+    /// The cards the last sync changed.
+    pub last_sync: Vec<SyncChange>,
 }
 
 /// Each source's folder: the repository, or its sub-folder when it names one.
@@ -581,6 +643,42 @@ pub fn source_root(source: &Source) -> Result<PathBuf> {
         return Err(outside());
     }
     Ok(root)
+}
+
+/// The cards that differ between `before` and the new anchor, by path.
+fn sync_changes(
+    before: &BTreeMap<String, anchor::CardRender>,
+    after: &anchor::Anchor,
+) -> Vec<SyncChange> {
+    let (b, a) = (before, &after.cards);
+    let mut out = Vec::new();
+    for (path, now) in a {
+        let change = match b.get(path) {
+            None => "new",
+            // Its HTML, or its `.css` or `.prompt.md` alone.
+            Some(then)
+                if then.render_hash != now.render_hash
+                    || then.companion_hash != now.companion_hash =>
+            {
+                "rewritten"
+            }
+            Some(_) => continue,
+        };
+        out.push(SyncChange {
+            path: path.clone(),
+            change: change.into(),
+            sources: now.sources.keys().cloned().collect(),
+        });
+    }
+    for (path, then) in b.iter().filter(|(p, _)| !a.contains_key(*p)) {
+        out.push(SyncChange {
+            path: path.clone(),
+            change: "removed".into(),
+            sources: then.sources.clone(),
+        });
+    }
+    out.sort_by(|x, y| x.path.cmp(&y.path));
+    out
 }
 
 /// What the list shows of one design system.
@@ -623,6 +721,7 @@ fn summary(
         step_summary: progress.and_then(|p| p.summary),
         error: None,
         agent: record.agent,
+        last_sync: record.last_sync.clone(),
     })
 }
 
@@ -905,6 +1004,23 @@ root = \"9c1e0a2\"
                 step_summary: None,
                 error: None,
                 agent: None,
+                last_sync: vec![
+                    SyncChange {
+                        path: "components/buttons/button/button.html".into(),
+                        change: "new".into(),
+                        sources: vec!["src/ui.tsx".into()]
+                    },
+                    SyncChange {
+                        path: "components/custom/row/row.html".into(),
+                        change: "new".into(),
+                        sources: vec!["src/Sidebar.tsx".into()]
+                    },
+                    SyncChange {
+                        path: "ui_kits/app/settings.html".into(),
+                        change: "new".into(),
+                        sources: vec![]
+                    },
+                ],
             }]
         );
         assert_eq!(store.systems("w-none").unwrap(), vec![]);
@@ -1946,5 +2062,255 @@ root = \"9c1e0a2\"
         assert_eq!(store.agent_for("w1", &slug, "settings A").unwrap(), Some(7));
         assert_eq!(store.agent_for("w1", &slug, "settings B").unwrap(), None);
         assert_eq!(store.agent("w1", &slug).unwrap(), Some(7));
+    }
+
+    #[test]
+    fn a_recorded_sync_keeps_what_it_changed() {
+        let home = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        put(project.path(), &[("src/ui.tsx", "button\n")]);
+        let store = Store::new(home.path());
+        let mut src = source();
+        src.path = project.path().display().to_string();
+        let slug = store
+            .create_system("w1", "storefront", vec![src], Cover::Core, 1)
+            .unwrap();
+        let dir = home.path().join("design/w1/systems").join(&slug);
+        let card = |body: &str| {
+            format!("<!-- @dsCard group=\"Buttons\" source=\"src/ui.tsx\" -->\n{body}\n")
+        };
+        put(
+            &dir,
+            &[
+                (
+                    "components/buttons/button/button.html",
+                    &card("<button>Run</button>"),
+                ),
+                ("components/forms/old/old.html", &card("<p>old</p>")),
+            ],
+        );
+        store.synced("w1", &slug, &[], 2).unwrap();
+        let first = store.record("w1", &slug).unwrap().last_sync;
+        assert_eq!(
+            first
+                .iter()
+                .map(|c| (c.path.as_str(), c.change.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("components/buttons/button/button.html", "new"),
+                ("components/forms/old/old.html", "new"),
+            ]
+        );
+
+        put(
+            &dir,
+            &[
+                (
+                    "components/buttons/button/button.html",
+                    &card("<button>Run</button><button disabled>Run</button>"),
+                ),
+                ("components/forms/kbd/kbd.html", &card("<kbd>K</kbd>")),
+            ],
+        );
+        std::fs::remove_dir_all(dir.join("components/forms/old")).unwrap();
+        store.synced("w1", &slug, &[], 3).unwrap();
+        let second = store.record("w1", &slug).unwrap().last_sync;
+        assert_eq!(
+            second,
+            vec![
+                SyncChange {
+                    path: "components/buttons/button/button.html".into(),
+                    change: "rewritten".into(),
+                    sources: vec!["src/ui.tsx".into()]
+                },
+                SyncChange {
+                    path: "components/forms/kbd/kbd.html".into(),
+                    change: "new".into(),
+                    sources: vec!["src/ui.tsx".into()]
+                },
+                SyncChange {
+                    path: "components/forms/old/old.html".into(),
+                    change: "removed".into(),
+                    sources: vec!["src/ui.tsx".into()]
+                },
+            ]
+        );
+        assert_eq!(store.systems("w1").unwrap()[0].last_sync, second);
+    }
+
+    #[test]
+    fn a_card_whose_css_or_prompt_alone_the_sync_rewrote_is_among_its_changes() {
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::new(home.path());
+        let slug = store
+            .create_system("w1", "storefront", vec![], Cover::Core, 1)
+            .unwrap();
+        let dir = home.path().join("design/w1/systems").join(&slug);
+        put(
+            &dir,
+            &[
+                (
+                    "components/forms/button/button.html",
+                    "<!-- @dsCard group=\"Forms\" -->\n<button class=\"btn\">Run</button>\n",
+                ),
+                (
+                    "components/forms/button/button.css",
+                    ".btn { color: red; }\n",
+                ),
+                (
+                    "components/forms/input/input.html",
+                    "<!-- @dsCard group=\"Forms\" -->\n<input>\n",
+                ),
+                ("components/forms/input/input.prompt.md", "An input.\n"),
+            ],
+        );
+        store.synced("w1", &slug, &[], 2).unwrap();
+        store.begin_sync("w1", &slug).unwrap();
+        put(
+            &dir,
+            &[
+                (
+                    "components/forms/button/button.css",
+                    ".btn { color: blue; }\n",
+                ),
+                ("components/forms/input/input.prompt.md", "A text input.\n"),
+            ],
+        );
+        store.synced("w1", &slug, &[], 3).unwrap();
+        let got: Vec<(String, String)> = store
+            .record("w1", &slug)
+            .unwrap()
+            .last_sync
+            .into_iter()
+            .map(|c| (c.path, c.change))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (
+                    "components/forms/button/button.html".to_string(),
+                    "rewritten".to_string()
+                ),
+                (
+                    "components/forms/input/input.html".to_string(),
+                    "rewritten".to_string()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn cards_the_user_changed_before_a_sync_started_are_not_among_its_changes() {
+        let home = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        put(project.path(), &[("src/ui.tsx", "button\n")]);
+        let store = Store::new(home.path());
+        let mut src = source();
+        src.path = project.path().display().to_string();
+        let slug = store
+            .create_system("w1", "storefront", vec![src], Cover::Core, 1)
+            .unwrap();
+        let dir = home.path().join("design/w1/systems").join(&slug);
+        let card = |body: &str| {
+            format!("<!-- @dsCard group=\"Forms\" source=\"src/ui.tsx\" -->\n{body}\n")
+        };
+        put(
+            &dir,
+            &[
+                (
+                    "components/forms/button/button.html",
+                    &card("<button>Run</button>"),
+                ),
+                ("components/forms/input/input.html", &card("<input>")),
+                ("components/forms/old/old.html", &card("<p>old</p>")),
+                ("components/forms/gone/gone.html", &card("<p>gone</p>")),
+            ],
+        );
+        store.synced("w1", &slug, &[], 2).unwrap();
+
+        // By hand, before the sync: one card edited, one made, one deleted.
+        put(
+            &dir,
+            &[
+                (
+                    "components/forms/button/button.html",
+                    &card("<button>Go</button>"),
+                ),
+                ("components/forms/mine/mine.html", &card("<p>mine</p>")),
+            ],
+        );
+        std::fs::remove_dir_all(dir.join("components/forms/old")).unwrap();
+        store.begin_sync("w1", &slug).unwrap();
+        // The sync keeps the edited card (its proposal is no card), rewrites
+        // one, adds one and removes one.
+        put(
+            &dir,
+            &[
+                (
+                    "components/forms/button/button.proposed.html",
+                    &card("<button>Run!</button>"),
+                ),
+                (
+                    "components/forms/input/input.html",
+                    &card("<input disabled>"),
+                ),
+                ("components/forms/kbd/kbd.html", &card("<kbd>K</kbd>")),
+            ],
+        );
+        std::fs::remove_dir_all(dir.join("components/forms/gone")).unwrap();
+        store.synced("w1", &slug, &[], 3).unwrap();
+        assert_eq!(
+            store.record("w1", &slug).unwrap().last_sync,
+            vec![
+                SyncChange {
+                    path: "components/forms/gone/gone.html".into(),
+                    change: "removed".into(),
+                    sources: vec!["src/ui.tsx".into()]
+                },
+                SyncChange {
+                    path: "components/forms/input/input.html".into(),
+                    change: "rewritten".into(),
+                    sources: vec!["src/ui.tsx".into()]
+                },
+                SyncChange {
+                    path: "components/forms/kbd/kbd.html".into(),
+                    change: "new".into(),
+                    sources: vec!["src/ui.tsx".into()]
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_sync_retried_after_it_stopped_midway_keeps_its_change_list() {
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::new(home.path());
+        let slug = store
+            .create_system("w1", "storefront", vec![], Cover::Core, 1)
+            .unwrap();
+        let dir = home.path().join("design/w1/systems").join(&slug);
+        store.begin_sync("w1", &slug).unwrap();
+        put(
+            &dir,
+            &[(
+                "components/buttons/button/button.html",
+                "<!-- @dsCard group=\"Buttons\" -->\n<button>Run</button>\n",
+            )],
+        );
+        // As if a sync stopped after writing the anchor, before finishing its record.
+        anchor::write(&dir, &[], &BTreeMap::new()).unwrap();
+        // The retry finds nothing new against the anchor, and keeps the list.
+        store.synced("w1", &slug, &[], 2).unwrap();
+        assert_eq!(
+            store.record("w1", &slug).unwrap().last_sync,
+            vec![SyncChange {
+                path: "components/buttons/button/button.html".into(),
+                change: "new".into(),
+                sources: vec![]
+            }]
+        );
+        // A later sync with no change says so.
+        store.synced("w1", &slug, &[], 3).unwrap();
+        assert_eq!(store.record("w1", &slug).unwrap().last_sync, vec![]);
     }
 }

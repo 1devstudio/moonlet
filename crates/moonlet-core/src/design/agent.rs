@@ -126,6 +126,30 @@ fn changes(cards: &[CardStatus]) -> String {
     out
 }
 
+/// What a design system's or design's agent waits for from the user (X64).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct NeedsYou {
+    /// `question` or `approval`.
+    pub kind: String,
+    pub text: String,
+}
+
+/// The first thing the agent's chat waits for, from its pending asks.
+pub fn needs_you(pending: &[moonlet_proto::types::PermissionAsk]) -> Option<NeedsYou> {
+    let ask = pending.first()?;
+    Some(if ask.tool == "AskUserQuestion" {
+        NeedsYou {
+            kind: "question".into(),
+            text: ask.summary.clone(),
+        }
+    } else {
+        NeedsYou {
+            kind: "approval".into(),
+            text: format!("{}: {}", ask.tool, ask.summary),
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -266,6 +290,39 @@ Follow the moonlet-design skill's sync: rewrite only these cards, and leave a ca
             launch.prompt.contains("- components/custom/row/row.html: its settings in config.toml changed; edited by hand, so write a proposal\n"),
             "{}",
             launch.prompt
+        );
+    }
+
+    #[test]
+    fn the_first_pending_ask_says_what_the_agent_needs() {
+        let ask = |tool: &str, summary: &str| moonlet_proto::types::PermissionAsk {
+            id: "a".into(),
+            tool: tool.into(),
+            summary: summary.into(),
+            input: serde_json::Value::Null,
+            reason: None,
+            can_always: false,
+            diff: None,
+            asked_at: None,
+            agent: None,
+        };
+        assert_eq!(needs_you(&[]), None);
+        assert_eq!(
+            needs_you(&[
+                ask("AskUserQuestion", "Which button set is current?"),
+                ask("Bash", "ls")
+            ]),
+            Some(NeedsYou {
+                kind: "question".into(),
+                text: "Which button set is current?".into()
+            })
+        );
+        assert_eq!(
+            needs_you(&[ask("Bash", "find src -name '*.tsx'")]),
+            Some(NeedsYou {
+                kind: "approval".into(),
+                text: "Bash: find src -name '*.tsx'".into()
+            })
         );
     }
 }

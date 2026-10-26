@@ -32,6 +32,8 @@ pub struct Daemon {
     /// Per design system (X64): one start of its agent, or one change of its
     /// record or folder, at a time.
     design_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// Announces changes under `~/.moonlet/design` as `design.changed` (X64).
+    _design_watch: Option<moonlet_core::design::watch::Watching>,
     reads: TerminalReads,
     watchers: Arc<Watchers>,
     started_at: u64,
@@ -125,6 +127,26 @@ fn params<T: DeserializeOwned>(v: Value) -> Result<T, RpcError> {
 
 fn ok<T: Serialize>(v: T) -> HandlerResult {
     serde_json::to_value(v).map_err(|e| RpcError::new("internal", e.to_string()))
+}
+
+/// The chat of a design system's sync agent, while it still is that
+/// system's: the chat its record names, still a sessionless chat in its
+/// folder (X64). Never found through its title, which comes from the name the
+/// agent may change in `config.toml`.
+fn system_agent(
+    store: &moonlet_core::design::store::Store,
+    terminals: &[moonlet_proto::types::TerminalInfo],
+    workspace: &str,
+    slug: &str,
+) -> Option<u32> {
+    let record = store.record(workspace, slug).ok()?;
+    let dir = store.system_dir(workspace, slug).ok()?;
+    let dir = dir.canonicalize().unwrap_or(dir);
+    let id = record.agent?;
+    terminals
+        .iter()
+        .any(|t| t.id == id && t.chat && t.session_id.is_none() && Path::new(&t.cwd) == dir)
+        .then_some(id)
 }
 
 /// Runs synchronous filesystem work off the async workers, so a large
@@ -235,6 +257,22 @@ impl Daemon {
         );
         runs.set_machines(Arc::downgrade(&machines));
         link.set_runs(Arc::downgrade(&runs));
+        // Announces changes under `~/.moonlet/design` as `design.changed` (X64).
+        let design_watch = {
+            let store = moonlet_core::design::store::Store::new(&moonlet_core::paths::home());
+            let terms = terminals.clone();
+            store
+                .root()
+                .and_then(|root| {
+                    moonlet_core::design::watch::start(root, move |changes| {
+                        for change in changes {
+                            terms.emit(Message::event(m::EV_DESIGN_CHANGED, change));
+                        }
+                    })
+                })
+                .inspect_err(|e| tracing::warn!("cannot watch the design folder: {e:#}"))
+                .ok()
+        };
         Arc::new(Self {
             heavy,
             cloud,
@@ -247,6 +285,7 @@ impl Daemon {
             sessions,
             design: moonlet_core::design::store::Store::new(&moonlet_core::paths::home()),
             design_locks: Mutex::new(HashMap::new()),
+            _design_watch: design_watch,
             reads,
             watchers,
             started_at: now_ms(),
@@ -1007,7 +1046,32 @@ impl Daemon {
         match method {
             m::DESIGN_SYSTEMS => {
                 let r: m::DesignWorkspace = params(p)?;
-                ok(blocking(move || store.systems(&r.workspace)).await?)
+                // The store reads (the list, each system's record and config)
+                // run off the async workers; the chats give only their pending asks.
+                let terminals = self.terminals.list();
+                let systems = blocking(move || {
+                    let list = store.systems(&r.workspace)?;
+                    Ok(list
+                        .into_iter()
+                        .map(|sys| {
+                            let agent = system_agent(&store, &terminals, &r.workspace, &sys.slug);
+                            (sys, agent)
+                        })
+                        .collect::<Vec<_>>())
+                })
+                .await?;
+                let list: Vec<Value> = systems
+                    .into_iter()
+                    .map(|(sys, agent)| {
+                        let waiting = agent
+                            .and_then(|id| self.chats.pending(id).ok())
+                            .and_then(|pending| moonlet_core::design::agent::needs_you(&pending));
+                        let mut v = serde_json::to_value(&sys).unwrap_or_default();
+                        v["needs_you"] = serde_json::to_value(waiting).unwrap_or_default();
+                        v
+                    })
+                    .collect();
+                ok(list)
             }
             m::DESIGN_SYSTEM_CREATE => {
                 let r: m::DesignSystemCreate = params(p)?;
@@ -1088,6 +1152,10 @@ impl Daemon {
                 let path = blocking(move || store.resolve(&r.workspace, &r.path)).await?;
                 ok(serde_json::json!({"path": path, "content_type": store::content_type(&path)}))
             }
+            m::DESIGN_DETECT => {
+                let r: m::DesignDetect = params(p)?;
+                ok(blocking(move || Ok(moonlet_core::design::stack::detect(&path(&r.path)))).await?)
+            }
             m::DESIGN_SETTLE => {
                 let r: m::DesignSettle = params(p)?;
                 let choice: Settle = serde_json::from_value(Value::String(r.choice.clone()))
@@ -1113,7 +1181,7 @@ impl Daemon {
         // the system's folder, never from files the agent can edit. Reading and
         // hashing the sources runs off the async workers.
         let (store, ws, sl) = (self.design.clone(), workspace.to_string(), slug.to_string());
-        let (dir, record, launch) = blocking(move || {
+        let (record, launch) = blocking(move || {
             let dir = store.system_dir(&ws, &sl)?.canonicalize()?;
             let config = store.config(&ws, &sl)?;
             let record = store.record(&ws, &sl)?;
@@ -1127,14 +1195,17 @@ impl Daemon {
             let status = if synced { anchor::status(&dir, &store::source_roots(&record), &config.exceptions())? } else { Vec::new() };
             let task = if synced { agent::Task::Resync(&status) } else { agent::Task::Build };
             let launch = agent::sync_launch(&dir, &config, &sources, &bin, task)?;
-            Ok((dir, record, launch))
+            // The cards as they are now: what the user changed before this
+            // sync is not among the changes it records.
+            store.begin_sync(&ws, &sl)?;
+            Ok((record, launch))
         })
         .await
         .map_err(|e| anyhow::anyhow!("{}", e.message))?;
         // What the chat starts with: a chat started with other folders or
         // rules (a source moved) is replaced, not reused.
         let fingerprint = format!("{}\n{}", launch.settings, launch.add_dirs.join("\n"));
-        if let Some(id) = self.system_agent(&record, &dir) {
+        if let Some(id) = self.agent_of(workspace, slug) {
             if record.agent_launch.as_deref() == Some(fingerprint.as_str()) {
                 self.chats.send(id, &launch.prompt, &[])?;
                 return Ok(id);
@@ -1165,23 +1236,16 @@ impl Daemon {
         self.design_locks.lock().unwrap().entry(format!("{workspace}/{slug}")).or_default().clone()
     }
 
-    /// Stops a design system's sync agent, when it still is that system's.
-    fn stop_sync_agent(&self, workspace: &str, slug: &str) {
-        let (Ok(record), Ok(dir)) = (self.design.record(workspace, slug), self.design.system_dir(workspace, slug)) else {
-            return;
-        };
-        let dir = dir.canonicalize().unwrap_or(dir);
-        if let Some(id) = self.system_agent(&record, &dir) {
-            let _ = self.terminals.kill(id, true);
-        }
+    /// The chat of a design system's sync agent, while it still is that system's.
+    fn agent_of(&self, workspace: &str, slug: &str) -> Option<u32> {
+        system_agent(&self.design, &self.terminals.list(), workspace, slug)
     }
 
-    /// The chat the record names, while it still is a sessionless chat in the
-    /// system's folder `dir`: never found through its title, which comes from
-    /// the name the agent may change in `config.toml`.
-    fn system_agent(&self, record: &moonlet_core::design::store::Record, dir: &Path) -> Option<u32> {
-        let id = record.agent?;
-        self.terminals.list().into_iter().any(|t| t.id == id && t.chat && t.session_id.is_none() && Path::new(&t.cwd) == dir).then_some(id)
+    /// Stops a design system's sync agent, when it still is that system's.
+    fn stop_sync_agent(&self, workspace: &str, slug: &str) {
+        if let Some(id) = self.agent_of(workspace, slug) {
+            let _ = self.terminals.kill(id, true);
+        }
     }
 
     /// Workspaces, projects, sessions, git and files.
