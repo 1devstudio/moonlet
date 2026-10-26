@@ -187,8 +187,11 @@ pub fn check(root: &Path) -> Result<Vec<Problem>> {
         // A card may define its own custom properties in its <style>.
         let mut known = defined.clone();
         known.extend(definitions(&text));
-        unknown_tokens(&path_rel, &text, &known, &mut problems);
-        // A card's <style> may @import like a stylesheet; its text is not CSS.
+        // A card's CSS is its <style>s and its style and presentation
+        // attributes; its text, a <pre> say, is not CSS.
+        let css = only(&text, &card_css(&text));
+        unknown_tokens(&path_rel, &css, &known, &mut problems);
+        // A card's <style> may @import like a stylesheet.
         css_problems(
             root,
             &path_rel,
@@ -197,7 +200,7 @@ pub fn check(root: &Path) -> Result<Vec<Problem>> {
             &style_ranges(&text),
             &mut problems,
         );
-        fonts(&path_rel, &text, &faces, &mut problems);
+        fonts(&path_rel, &css, &faces, &mut problems);
         for (line, id) in elements(root, &path_rel, &path, &text, &mut problems) {
             if proposed {
                 continue;
@@ -379,6 +382,46 @@ fn style_ranges(html: &str) -> Vec<std::ops::Range<usize>> {
     styles.into_inner()
 }
 
+/// The byte ranges of a card's CSS: its `<style>`s' text, and the values of
+/// its `style` and SVG presentation attributes, in order.
+fn card_css(html: &str) -> Vec<std::ops::Range<usize>> {
+    let values = std::cell::RefCell::new(Vec::new());
+    let settings =
+        lol_html::Settings::new().append_element_content_handler(lol_html::element!("*", |el| {
+            for a in el.attributes() {
+                let name = a.name();
+                if name == "style" || URL_ATTRIBUTES.contains(&name.as_str()) {
+                    values
+                        .borrow_mut()
+                        .extend(a.value_source_location().map(|l| l.bytes()));
+                }
+            }
+            Ok(())
+        }));
+    if lol_html::rewrite_str(html, settings).is_err() {
+        return Vec::new();
+    }
+    let mut out = style_ranges(html);
+    out.extend(values.into_inner());
+    out.sort_by_key(|r| r.start);
+    out
+}
+
+/// `text` with only the bytes in `keep` (sorted) left, the rest but line
+/// breaks made a space, so lines and offsets stay where they were.
+fn only(text: &str, keep: &[std::ops::Range<usize>]) -> String {
+    let mut gaps = Vec::new();
+    let mut from = 0;
+    for r in keep {
+        if r.start > from {
+            gaps.push(from..r.start);
+        }
+        from = from.max(r.end);
+    }
+    gaps.push(from..text.len());
+    blank(text, &gaps)
+}
+
 /// Each `@import` in a page's `<style>`s, comments left out, as the line it
 /// starts on and its URL, which may be on a later line: what a design page's
 /// check holds against its design system's `styles.css` (X65). An `@import`
@@ -449,7 +492,8 @@ fn blank(text: &str, ranges: &[std::ops::Range<usize>]) -> String {
             }
         }
     }
-    // A comment starts and ends on ASCII, so the bytes are still UTF-8.
+    // Each range starts and ends between characters (a comment, a page's
+    // CSS), so the bytes are still UTF-8.
     String::from_utf8(bytes).unwrap_or_else(|_| text.to_string())
 }
 
@@ -1500,6 +1544,46 @@ mod tests {
             vec![
                 (4, "url(missing.png) does not resolve".into()),
                 (6, "https://x/bg.png leaves the design system".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_token_or_font_written_in_a_cards_text_and_not_its_css_is_not_checked() {
+        let card = "<!-- @dsCard group=\"Buttons\" -->\n\
+<!doctype html>\n\
+<style>\n\
+.b { font-family: Papyrus, serif; }\n\
+</style>\n\
+<pre>color: var(--color-nope); font-family: \"Comic Sans\";</pre>\n\
+<p>Use var(--color-other) for text.</p>\n\
+<div style=\"color: var(--color-missing)\">A</div>\n";
+        let dir = system(&[
+            ("styles.css", STYLES),
+            ("tokens/colors.css", COLORS),
+            ("components.css", COMPONENTS),
+            ("components/buttons/button/button.html", card),
+        ]);
+        let got: Vec<(usize, Kind, String)> = check(dir.path())
+            .unwrap()
+            .into_iter()
+            .map(|p| (p.line, p.kind, p.message))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (
+                    4,
+                    Kind::FontMissing,
+                    "font \"Papyrus\" has no @font-face in styles.css or the files it imports"
+                        .into()
+                ),
+                (
+                    8,
+                    Kind::UnknownToken,
+                    "var(--color-missing) is not defined in styles.css or the files it imports"
+                        .into()
+                ),
             ]
         );
     }
