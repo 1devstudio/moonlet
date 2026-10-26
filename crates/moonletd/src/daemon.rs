@@ -1,5 +1,6 @@
 //! Daemon state and request dispatch.
 
+use moonlet_core::account::log_owner;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -393,7 +394,7 @@ impl Daemon {
             move |m| emitter.emit(m),
         );
         let emitter = terminals.clone();
-        let workers = Arc::new(crate::workers::Workers::new(move |m| emitter.emit(m)));
+        let workers = Arc::new(crate::workers::Workers::new(moonlet_core::paths::home().join("workers.json"), move |m| emitter.emit(m)));
         let emitter = terminals.clone();
         let sync = crate::sync::LiveCopies::new(
             moonlet_core::paths::home(),
@@ -1068,12 +1069,7 @@ impl Daemon {
                 // get here (`CLOUD_METHODS`).
                 let refused = || RpcError::new("forbidden", "only a member of the account syncs it");
                 let device = conn.phone.as_deref().ok_or_else(refused)?;
-                let mac = self
-                    .mobile
-                    .status()
-                    .devices
-                    .iter()
-                    .any(|d| d.id == device && d.kind == m::DeviceKind::Desktop);
+                let mac = self.mobile.kind_of(device) == Some(m::DeviceKind::Desktop);
                 let Some(worker) = self.workers.worker_on(conn.id).filter(|_| mac) else {
                     return Err(refused());
                 };
@@ -1085,17 +1081,14 @@ impl Daemon {
                 // after its worker id: never another member's, whose numbers
                 // it could otherwise take first. A central host that lost its
                 // log has every member's work in its state already.
-                // Names are matched whole, `<worker id>.<6 letters or digits>`,
-                // and none is this host's own: its worker id is no secret, as
-                // its log is named after it, under its current worker id
-                // even when link.json was made again.
+                // Names are read whole, `<worker id>.<6 letters or digits>`,
+                // and no worker id this host's own logs ever had is one a
+                // member may claim: they are no secret, as every version
+                // names them.
                 let sent = r.changes.len();
-                let ours = worker == self.link.info().worker.id;
-                let prefix = format!("{worker}.");
-                r.changes.retain(|c| {
-                    !ours
-                        && c.stamp.member.strip_prefix(&prefix).is_some_and(|s| s.len() == 6 && s.bytes().all(|b| b.is_ascii_alphanumeric()))
-                });
+                let own: Vec<String> = self.sessions.account_names().iter().filter_map(|n| log_owner(n).map(String::from)).collect();
+                let claims_this_host = worker == self.link.info().worker.id || own.contains(&worker);
+                r.changes.retain(|c| !claims_this_host && log_owner(&c.stamp.member) == Some(worker.as_str()));
                 if r.changes.len() < sent {
                     tracing::warn!(worker = %worker, "dropped {} account changes stamped as another member", sent - r.changes.len());
                 }
@@ -1116,12 +1109,17 @@ impl Daemon {
                 let Some(device) = conn.phone.as_deref().filter(|_| conn.client == crate::link::WORKER_CLIENT) else {
                     return Err(RpcError::new("forbidden", "only a worker registers"));
                 };
-                if !self.mobile.is_paired(device) {
-                    return Err(RpcError::new("forbidden", "this Mac is no longer paired"));
+                // A Mac's daemon or a cloud machine: never a phone, which
+                // could otherwise take a Mac's worker id first.
+                match self.mobile.kind_of(device) {
+                    None => return Err(RpcError::new("forbidden", "this Mac is no longer paired")),
+                    Some(m::DeviceKind::Phone) => return Err(RpcError::new("forbidden", "only a Mac or a cloud machine registers")),
+                    Some(_) => {}
                 }
                 let r: m::WorkerRegister = params(p)?;
                 let id = r.id.clone();
-                self.workers.register(conn.clone(), device, r)?;
+                let mobile = self.mobile.clone();
+                self.workers.register(conn.clone(), device, r, |owner| mobile.is_paired(owner))?;
                 self.sync.worker_linked(&id);
                 if let Some(machine) = self.machines.machine_of(device) {
                     self.machines.registered(&machine, &id);

@@ -154,17 +154,17 @@ impl SessionManager {
             Some(f) => {
                 // A log named after another worker id (link.json was made
                 // again) goes on under a new name: its central host takes
-                // changes only under this machine's worker id. Its earlier
-                // changes stay, under their old name.
-                let name = if log_owner(&f.member) == Some(member) {
-                    f.member.clone()
-                } else {
-                    new_log_name(member)
-                };
-                let renamed = name != f.member;
-                let mut log = Log::new(&name);
-                log.apply(f.changes);
+                // changes only under this machine's worker id. It takes over
+                // the old log's changes, so those made before still get
+                // there, and the old name stays reserved.
+                let old = f.member.clone();
+                let renamed = log_owner(&old) != Some(member);
+                let mut log = Log::from_file(LogFile {
+                    member: if renamed { new_log_name(member) } else { old.clone() },
+                    ..f
+                });
                 if renamed {
+                    log.adopt(&old);
                     write_private(&path, &log)?;
                 }
                 let mut next = st.clone();
@@ -191,6 +191,12 @@ impl SessionManager {
             listener: None,
         });
         Ok(())
+    }
+
+    /// The names of this member's log, now and before: no other member
+    /// may send changes under them.
+    pub fn account_names(&self) -> Vec<String> {
+        self.with_log(|log| log.former().iter().cloned().chain([log.member().to_string()]).collect())
     }
 
     /// Whether this member shares an account (X68).
