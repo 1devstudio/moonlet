@@ -8,7 +8,7 @@ import { onDaemonEvent, onHostStatus, rpc } from "./daemon";
 import { EV, M, type ChatState, type Design, type DesignCard, type CommentChange, type DesignComment, type DesignChanged, type DesignSnapshot, type DesignCover, type DesignCreated, type DesignOpen, type DesignSystem, type DesignSystemCreated, type DesignSystemUpdated } from "./protocol";
 import { parseWsKey, wsKey } from "./workspaces";
 import { syncNotice } from "./designSync";
-import { agentSeen, notify, registerAgentsElsewhere, shownWorkspace, switchWorkspace, toast, useStore } from "./store";
+import { agentSeen, notify, registerAgentsElsewhere, selectSession, shownWorkspace, switchWorkspace, toast, useStore } from "./store";
 import { alertFor } from "./alerts";
 import { modeOf, setMode } from "./mode";
 import { latestPerKey } from "./prPoll";
@@ -39,6 +39,9 @@ interface DesignState {
   sessionDesigns: Record<string, Design[]>;
   /** The design each session's Design tab shows (`host/session`), by slug. */
   sessionShown: Record<string, string>;
+  /** The designs an agent started from a session that the user has not
+   *  seen yet (`itemKey`), for the Design button's accent dot (X65). */
+  unseen: string[];
   /** The design shown as the design screen in each workspace, by slug; else its design system. */
   designShown: Record<string, string | null>;
   /** How many times each design page (`wsKey/slug/page`) changed, so its frame loads again. */
@@ -61,7 +64,7 @@ interface DesignState {
   histories: Record<string, DesignSnapshot[]>;
 }
 
-export const useDesign = create<DesignState>(() => ({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, designs: {}, sessionDesigns: {}, sessionShown: {}, designShown: {}, pageRevs: {}, latest: {}, problems: {}, systemNames: {}, comments: {}, mids: {}, sending: {}, histories: {} }));
+export const useDesign = create<DesignState>(() => ({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, designs: {}, sessionDesigns: {}, sessionShown: {}, unseen: [], designShown: {}, pageRevs: {}, latest: {}, problems: {}, systemNames: {}, comments: {}, mids: {}, sending: {}, histories: {} }));
 
 /** A place's key: a workspace's `wsKey`, a session's `host/s:<session>`,
  *  so a session design never shares a workspace design's state (X65). */
@@ -184,6 +187,21 @@ export function shownSessionDesign(s: DesignState, host: string, session: string
 /** Shows design `slug` in a session's Design tab. */
 export function showSessionDesign(host: string, session: string, slug: string) {
   useDesign.setState((s) => ({ sessionShown: { ...s.sessionShown, [`${host}/${session}`]: slug } }));
+}
+
+/** Switches the app to a session design: its session, with the design in
+ *  its Design tab (X65). `select`: the session is not the one shown yet. */
+export async function openSessionDesign(host: string, workspace: string, session: string, slug: string, select: boolean) {
+  if (select) selectSession(host, session);
+  showSessionDesign(host, session, slug);
+  useStore.setState({ rightTab: "design", rightOpen: true });
+  await loadDesigns(host, workspace, true).catch(() => {});
+}
+
+/** How many designs of a workspace an agent started that are unseen. */
+export function unseenOf(s: DesignState, host: string, workspace: string): number {
+  const prefix = `${wsKey(host, workspace)}/`;
+  return s.unseen.filter((k) => k.startsWith(prefix)).length;
 }
 
 /** The design shown as the design screen in a workspace, or null. */
@@ -352,7 +370,8 @@ export async function resolveComment(host: string, place: DesignPlace, slug: str
 /** Shows a design as the design screen (X65), and its agent as seen. */
 export function showDesign(host: string, workspace: string, slug: string) {
   const key = wsKey(host, workspace);
-  useDesign.setState((s) => ({ designShown: { ...s.designShown, [key]: slug } }));
+  const item = itemKey(host, workspace, slug);
+  useDesign.setState((s) => ({ designShown: { ...s.designShown, [key]: slug }, unseen: s.unseen.includes(item) ? s.unseen.filter((k) => k !== item) : s.unseen }));
   const agent = designsOf(useDesign.getState(), host, workspace)?.find((d) => d.slug === slug)?.agent;
   if (agent !== undefined && agent !== null) agentSeen(host, agent);
   void checkDesign(host, workspace, slug);
@@ -474,14 +493,24 @@ function onDesignChange(host: string, change: DesignChanged) {
   }
 }
 
-/** `design.open`: show the design, or offer one an agent started (X65). */
+/** `design.open`: show the design, or offer one an agent started (X65): a
+ *  workspace design one until it is seen, with the Design button's dot; a
+ *  session design in its session's Design tab while the session is shown. */
 function onDesignOpen(host: string, ev: DesignOpen) {
-  const action = designOpenAction(ev, useStore.getState().sessions[host] ?? []);
-  const open = () => void openDesign(host, ev.workspace, ev.slug);
+  const st = useStore.getState();
+  const shown = modeOf(st) === "sessions" && st.selected?.host === host ? st.selected.session : null;
+  const action = designOpenAction(ev, st.sessions[host] ?? [], shown);
+  const session = ev.kind === "session" ? ev.session : undefined;
+  const open = () => void (session ? openSessionDesign(host, ev.workspace, session, ev.slug, true) : openDesign(host, ev.workspace, ev.slug));
   if (action.kind === "none") return;
   if (action.kind === "show") open();
+  else if (action.kind === "tab") void openSessionDesign(host, ev.workspace, action.session, ev.slug, false);
   else {
     reloadDesigns(host, ev.workspace);
+    if (!session) {
+      const item = itemKey(host, ev.workspace, ev.slug);
+      useDesign.setState((s) => (s.unseen.includes(item) ? {} : { unseen: [...s.unseen, item] }));
+    }
     toast(action.text, "info", { label: "Open", run: open });
   }
 }

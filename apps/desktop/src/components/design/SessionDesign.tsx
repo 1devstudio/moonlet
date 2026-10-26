@@ -9,7 +9,7 @@ import type { Session } from "../../lib/protocol";
 import { commentsOf, sessionDesignsOf, showSessionDesign, shownSessionDesign, useDesign } from "../../lib/designStore";
 import { sendWithEdits } from "../../lib/designEditor";
 import { messageView } from "../../lib/designComments";
-import { worktreeFile } from "../../lib/sessionDesign";
+import { opensDesignView, worktreeFile } from "../../lib/sessionDesign";
 import { Empty } from "../ui";
 import { Menu } from "../Menu";
 import { AgentView } from "../AgentView";
@@ -71,11 +71,22 @@ export function SessionDesignTab({ host, ws }: { host: string; ws: Session }) {
   );
 }
 
+/** The note after the agent's `design new --here`, which made the session
+ *  design and opened its Design tab (X65). */
+function DesignOpenedNote() {
+  return (
+    <p className="my-1.5 flex items-start gap-2 rounded-lg border border-border px-3 py-2 ui-text-12.5 text-muted">
+      <PenTool size={13} className="mt-0.5 shrink-0" /> Design view opened. The design system is copied into the session for Claude to read
+    </p>
+  );
+}
+
 /** A session's chat (X65): its agent's structured view. When it is the
  *  agent of the design the session's Design tab shows, its comments show as
  *  Comment from the Design view cards and its edits by hand as their block,
  *  and what the user types goes with the edits by hand not told yet before
- *  it. */
+ *  it; after the agent made a session design, a note says the Design view
+ *  opened. */
 export function SessionChat({ host, id, wsId, focused, visible }: { host: string; id: number; wsId: string; focused: boolean; visible: boolean }) {
   const design = useDesign((d) => shownSessionDesign(d, host, wsId));
   const own = design !== null && design.agent === id ? design : null;
@@ -88,6 +99,7 @@ export function SessionChat({ host, id, wsId, focused, visible }: { host: string
       wsId={wsId}
       focused={focused}
       visible={visible}
+      toolNote={(t) => (t.tool && opensDesignView(t.tool) ? <DesignOpenedNote /> : null)}
       userView={
         own
           ? (text) => {

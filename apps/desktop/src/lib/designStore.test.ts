@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Design, DesignComment, DesignSystem, TerminalInfo } from "./protocol";
 import { modeOf, setMode } from "./mode";
 import { agentOnScreen, goToAgent, useStore } from "./store";
-import { pageKey, pageOfKey, commentsOf, historyOf, keepComment, loadComments, loadHistory, sendComments, sendingOf, resolveComment, sessionDesignsOf, shownSessionDesign, showSessionDesign, updateSystem } from "./designStore";
+import { pageKey, pageOfKey, commentsOf, historyOf, keepComment, loadComments, loadHistory, sendComments, sendingOf, resolveComment, sessionDesignsOf, shownSessionDesign, showSessionDesign, unseenOf, updateSystem } from "./designStore";
 import { cardsOf, checkDesign, createFromNewDesign, createSystem, designsOf, detectStack, latestOf, loadCards, loadDesigns, loadSystems, openCard, saveViewport, pageRevOf, problemsOf, revOf, shownCard, shownDesign, shownSystem, showDesign, showSystem, startDesign, systemNameOf, systemsOf, useDesign } from "./designStore";
 
 const calls = vi.hoisted(() => [] as { host: string; method: string; params: unknown }[]);
@@ -56,7 +56,7 @@ const listed = () => calls.filter((c) => c.method === "design.systems");
 beforeEach(async () => {
   calls.length = 0;
   for (const k of Object.keys(answers)) delete answers[k];
-  useDesign.setState({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, designs: {}, sessionDesigns: {}, sessionShown: {}, designShown: {}, pageRevs: {}, latest: {}, problems: {}, systemNames: {}, comments: {}, mids: {}, sending: {}, histories: {} });
+  useDesign.setState({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, designs: {}, sessionDesigns: {}, sessionShown: {}, unseen: [], designShown: {}, pageRevs: {}, latest: {}, problems: {}, systemNames: {}, comments: {}, mids: {}, sending: {}, histories: {} });
   await startDesign();
 });
 
@@ -752,5 +752,46 @@ describe("a session's Design tab (X65)", () => {
       ["onboarding", false],
       ["settings-page", false],
     ]);
+  });
+});
+
+describe("design.open of a design an agent made (X65)", () => {
+  const toasts = () => useStore.getState().toasts.map((t) => [t.text, t.action?.label ?? null]);
+  const sessions = [{ id: "4f2a9c1e7b3d", project_id: "p1", name: "settings-page", branch: "marcin/settings-page", base: "main", path: "/wt/s", agent: "claude", archived: false, created_at: 0, workspace_id: "w-1devstudio", terminals: [], layout: null }];
+  const opened = (data: object) => events.emit({ host: "local", name: "design.open", data: { workspace: "w-1devstudio", name: "Settings page", ...data } });
+
+  beforeEach(() => {
+    answers["design.list"] = () => [design({ kind: "session", session: "4f2a9c1e7b3d", path: "/wt/s/docs/design/settings-page", agent: 31 })];
+    answers["design.check"] = () => [];
+    useStore.setState({ toasts: [], sessions: { local: sessions }, workspace: { host: "local", id: "w-1devstudio" }, mode: {}, rightTab: "files", rightOpen: false, selected: { host: "local", session: "4f2a9c1e7b3d" } });
+  });
+
+  it("opens the session's Design tab on design new --here while that session is shown", async () => {
+    opened({ slug: "settings-page", session: "4f2a9c1e7b3d", kind: "session" });
+    await settle();
+    await settle();
+    expect(useStore.getState()).toMatchObject({ rightTab: "design", rightOpen: true });
+    expect(shownSessionDesign(useDesign.getState(), "local", "4f2a9c1e7b3d")?.slug).toBe("settings-page");
+    expect(toasts()).toEqual([]);
+  });
+
+  it("offers a session design in a toast while another session is shown, and Open shows its session's Design tab", async () => {
+    useStore.setState({ selected: { host: "local", session: "9c9c9c9c9c9c" } });
+    opened({ slug: "settings-page", session: "4f2a9c1e7b3d", kind: "session" });
+    expect(toasts()).toEqual([["settings-page started the design Settings page", "Open"]]);
+    expect(useStore.getState().rightTab).toBe("files");
+    useStore.getState().toasts[0].action?.run();
+    await settle();
+    await settle();
+    expect(useStore.getState()).toMatchObject({ selected: { host: "local", session: "4f2a9c1e7b3d" }, rightTab: "design", rightOpen: true });
+  });
+
+  it("is unseen from the toast of /moonlet-design new until its design screen shows it, for the Design button's dot", async () => {
+    opened({ slug: "onboarding", name: "Onboarding", spawned_by: 4, session: "4f2a9c1e7b3d" });
+    expect(toasts()).toEqual([["settings-page started the design Onboarding", "Open"]]);
+    expect(unseenOf(useDesign.getState(), "local", "w-1devstudio")).toBe(1);
+    expect(unseenOf(useDesign.getState(), "local", "w-acme")).toBe(0);
+    showDesign("local", "w-1devstudio", "onboarding");
+    expect(unseenOf(useDesign.getState(), "local", "w-1devstudio")).toBe(0);
   });
 });
