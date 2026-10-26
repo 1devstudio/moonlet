@@ -13,7 +13,7 @@ use moonlet_proto::types::{Change, ProjectIdentity};
 use serde_json::{Value, json};
 
 use super::*;
-use crate::account::{Log, LogFile, Record, Version, key_between, new_log_name};
+use crate::account::{Log, LogFile, Record, Version, key_between, log_owner, new_log_name};
 use crate::identity::same_project;
 
 const WORKSPACE: &str = "workspace";
@@ -152,8 +152,21 @@ impl SessionManager {
         let mut st = self.state.lock().unwrap();
         let log = match file {
             Some(f) => {
-                let mut log = Log::new(&f.member);
+                // A log named after another worker id (link.json was made
+                // again) goes on under a new name: its central host takes
+                // changes only under this machine's worker id. Its earlier
+                // changes stay, under their old name.
+                let name = if log_owner(&f.member) == Some(member) {
+                    f.member.clone()
+                } else {
+                    new_log_name(member)
+                };
+                let renamed = name != f.member;
+                let mut log = Log::new(&name);
                 log.apply(f.changes);
+                if renamed {
+                    write_private(&path, &log)?;
+                }
                 let mut next = st.clone();
                 lay_onto(&mut next, &log);
                 self.save(&next)?;
@@ -1157,6 +1170,28 @@ mod tests {
         assert_eq!(names(&book), ["Home", "Personal"]);
         assert_eq!(layout(&book), layout(&mini));
         assert_eq!((logs(&book), logs(&mini)), (2, 2));
+    }
+
+    #[tokio::test]
+    async fn a_log_named_after_an_older_worker_id_goes_on_under_the_new_one() {
+        let (_h1, book) = member("book").await;
+        let (h2, mini) = member("mini").await;
+        sync(&book, &mini);
+        drop(mini);
+        // link.json was made again, with a new worker id.
+        let mini = reload(h2.path(), "mini2");
+        assert_eq!(names(&mini), ["Personal", "Personal"]);
+        let sent = Arc::new(Mutex::new(Vec::<Change>::new()));
+        let out = sent.clone();
+        mini.on_account_change(move |c| out.lock().unwrap().extend(c));
+        let ws = mini.list_workspaces()[0].clone();
+        mini.create_section(&ws.id, "Clients").unwrap();
+        let sent = sent.lock().unwrap().clone();
+        assert!(!sent.is_empty());
+        assert!(
+            sent.iter().all(|c| c.stamp.member.starts_with("mini2.")),
+            "{sent:?}"
+        );
     }
 
     #[tokio::test]

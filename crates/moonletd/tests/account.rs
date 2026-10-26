@@ -83,8 +83,14 @@ fn free_port() -> u16 {
 
 /// The central host `studio-mini`, with tailnet access on.
 async fn central() -> (Daemon, String) {
+    central_with(|_| {}).await
+}
+
+/// [`central`], with `prepare` filling its home first.
+async fn central_with(prepare: impl Fn(&std::path::Path)) -> (Daemon, String) {
     for _ in 0..5 {
         let home = tempfile::tempdir().unwrap();
+        prepare(home.path());
         let port = free_port();
         std::fs::write(
             home.path().join("mobile.json"),
@@ -475,6 +481,70 @@ async fn no_member_sends_changes_as_the_central_host() {
     )
     .await;
     assert_eq!(mini.names().await, ["Personal"]);
+}
+
+#[tokio::test]
+async fn a_central_host_whose_worker_id_changed_goes_on_under_the_new_one_and_keeps_its_history() {
+    // The central host's log was made before its link.json was lost, so it
+    // is named after a worker id it no longer has.
+    let old = "5e0c2b7d-91a4-4f3e-b6d8-2a7f0c9e1d35";
+    let named = |seq: u64, field: &str, value: Value| json!({ "stamp": { "ms": 1_793_000_000_000u64 + seq, "n": 0, "member": format!("{old}.k3x9q2") }, "seq": seq, "kind": "workspace", "id": "w1", "op": { "set": { "field": field, "value": value } } });
+    let history = vec![
+        named(1, "name", json!("Studio")),
+        named(2, "created_at", json!(1)),
+    ];
+    let (mini, addr) = central_with(|home| {
+        std::fs::write(
+            home.join("account.json"),
+            json!({ "member": format!("{old}.k3x9q2"), "changes": history }).to_string(),
+        )
+        .unwrap();
+    })
+    .await;
+    assert_eq!(mini.names().await, ["Studio"]);
+    // Its new changes go under its current worker id.
+    let info: Value = mini.call("link.get", json!({})).await;
+    let id = info["worker"]["id"].as_str().unwrap().to_string();
+    let w = mini.workspaces().await[0].clone();
+    rename(&mini, &w.id, "Studio mini").await;
+    let token = pair(&mini, &addr, "Alex's MacBook Pro", DeviceKind::Desktop).await;
+    let mut s = raw(&addr, &token, "moonletd-worker").await;
+    let reg = json!({ "id": old, "name": "studio-mini", "os": "macos", "arch": "arm64", "cores": 10, "version": "0.1.32", "projects": [] });
+    ask(&mut s, 1, "worker.register", reg).await;
+    let got = ask(
+        &mut s,
+        2,
+        "account.sync",
+        json!({ "version": {}, "changes": [] }),
+    )
+    .await;
+    let Message::Response {
+        result: Some(r), ..
+    } = got
+    else {
+        panic!("{got:?}")
+    };
+    let version: std::collections::BTreeMap<String, u64> =
+        serde_json::from_value(r["version"].clone()).unwrap();
+    assert!(
+        version.keys().any(|k| k.starts_with(&format!("{id}."))),
+        "{version:?}"
+    );
+    // A Mac under the old id cannot rewrite what the old log said.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let mut forged = named(1, "name", json!("Forged"));
+    forged["stamp"]["ms"] = json!(now);
+    ask(
+        &mut s,
+        3,
+        "account.sync",
+        json!({ "version": {}, "changes": [forged] }),
+    )
+    .await;
+    assert_eq!(mini.names().await, ["Studio mini"]);
 }
 
 #[tokio::test]
