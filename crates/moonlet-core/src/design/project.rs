@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use moonlet_proto::types::{DesignInfo, DesignKind, DesignPage};
+use moonlet_proto::types::{DesignInfo, DesignKind};
 
 use super::designs::{DESIGN_FILE, DesignConfig};
 use super::store::Store;
@@ -131,33 +131,14 @@ pub async fn project_designs(
             ),
         };
         out.push(DesignInfo {
-            slug: design.slug,
             name,
-            kind: DesignKind::Project,
             system,
-            path: design.path,
             brief,
             viewport,
-            pages: pages
-                .into_iter()
-                .map(|name| DesignPage {
-                    label: labels
-                        .get(&name)
-                        .map(|p| p.label.clone())
-                        .filter(|l| !l.is_empty()),
-                    name,
-                })
-                .collect(),
-            updated_at: 0,
-            open_comments: 0,
-            agent: None,
-            agent_state: None,
-            needs_you: None,
+            pages: super::designs::labelled(pages.into_iter(), &labels),
             error,
-            session: None,
             project: Some(project.to_string()),
-            built_in: None,
-            system_updated: false,
+            ..DesignInfo::new(design.slug, DesignKind::Project, design.path)
         });
     }
     out.sort_by_key(|d| (d.name.to_lowercase(), d.slug.clone()));

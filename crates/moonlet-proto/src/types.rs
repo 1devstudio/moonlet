@@ -319,6 +319,40 @@ pub struct DesignInfo {
     pub system_updated: bool,
 }
 
+impl DesignInfo {
+    /// A design of `kind` at `path` with nothing more known of it yet:
+    /// named by its slug, with no pages, comments or agent.
+    pub fn new(slug: impl Into<String>, kind: DesignKind, path: impl Into<String>) -> Self {
+        let slug = slug.into();
+        DesignInfo {
+            name: slug.clone(),
+            slug,
+            kind,
+            system: String::new(),
+            path: path.into(),
+            brief: String::new(),
+            viewport: String::new(),
+            pages: Vec::new(),
+            updated_at: 0,
+            open_comments: 0,
+            agent: None,
+            agent_state: None,
+            needs_you: None,
+            error: None,
+            session: None,
+            project: None,
+            built_in: None,
+            system_updated: false,
+        }
+    }
+
+    /// A design whose `design.toml` cannot be read, listed with why beside
+    /// the others.
+    pub fn unreadable(slug: impl Into<String>, kind: DesignKind, path: impl Into<String>, error: String) -> Self {
+        DesignInfo { error: Some(error), ..DesignInfo::new(slug, kind, path) }
+    }
+}
+
 /// The session a workspace design is built in (X65), and its project while
 /// the session is there.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

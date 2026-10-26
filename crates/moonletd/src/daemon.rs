@@ -1817,13 +1817,7 @@ impl Daemon {
         };
         let s = self.sessions.session(&session).map_err(internal)?;
         let (store, ws) = (self.design.clone(), s.workspace_id.clone().unwrap_or_default());
-        let mut d = blocking(move || {
-            let mut d = store.design(&at)?;
-            d.system_updated = store.session_system_updated(&at, &ws).unwrap_or(false);
-            Ok(d)
-        })
-        .await?;
-        d.session = Some(session);
+        let mut d = blocking(move || Ok(store.session_design_info(&at, &ws))).await?;
         d.project = Some(s.project_id);
         Ok(self.design_info(d, &self.terminals.list()))
     }
@@ -1840,13 +1834,9 @@ impl Daemon {
             let id = s.id.clone();
             let (store, ws) = (self.design.clone(), workspace.to_string());
             let listed = blocking(move || {
-                let worktree = Path::new(&s.path);
-                let mut out = store.session_designs(&s.id, worktree, &folder)?;
+                let mut out = store.session_designs(&s.id, Path::new(&s.path), &folder, &ws)?;
                 for d in &mut out {
                     d.project = Some(s.project_id.clone());
-                    if let Ok(at) = moonlet_core::design::session::session_design(&s.id, worktree, &folder, &d.slug) {
-                        d.system_updated = store.session_system_updated(&at, &ws).unwrap_or(false);
-                    }
                 }
                 Ok(out)
             })
@@ -2100,16 +2090,7 @@ impl Daemon {
     async fn session_designs_at(&self, session: &str) -> Vec<DesignAt> {
         let Ok((s, folder)) = self.design_session(session) else { return Vec::new() };
         let (store, id) = (self.design.clone(), session.to_string());
-        blocking(move || {
-            let worktree = Path::new(&s.path);
-            Ok(store
-                .session_designs(&id, worktree, &folder)?
-                .into_iter()
-                .filter_map(|d| moonlet_core::design::session::session_design(&id, worktree, &folder, &d.slug).ok())
-                .collect())
-        })
-        .await
-        .unwrap_or_default()
+        blocking(move || store.session_design_ats(&id, Path::new(&s.path), &folder)).await.unwrap_or_default()
     }
 
     /// The chat of a design system's sync agent, while it still is that system's.

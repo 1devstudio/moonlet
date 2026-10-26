@@ -165,24 +165,13 @@ impl Store {
                     ..summary(&at, &config, agent)
                 },
                 Err(err) => DesignInfo {
-                    name: slug.clone(),
-                    slug,
-                    kind: DesignKind::Workspace,
-                    system: String::new(),
-                    path: dir.display().to_string(),
-                    brief: String::new(),
-                    viewport: String::new(),
-                    pages: Vec::new(),
-                    updated_at: 0,
-                    open_comments: 0,
                     agent,
-                    agent_state: None,
-                    needs_you: None,
-                    error: Some(format!("{err:#}")),
-                    session: None,
-                    project: None,
-                    built_in: None,
-                    system_updated: false,
+                    ..DesignInfo::unreadable(
+                        slug,
+                        DesignKind::Workspace,
+                        dir.display().to_string(),
+                        format!("{err:#}"),
+                    )
                 },
             });
         }
@@ -332,11 +321,8 @@ pub(super) fn read_design_config(at: &DesignAt) -> Result<DesignConfig> {
 pub(super) fn summary(at: &DesignAt, config: &DesignConfig, agent: Option<u32>) -> DesignInfo {
     let pages = pages(at);
     DesignInfo {
-        slug: at.slug.clone(),
         name: config.name.clone(),
-        kind: at.kind(),
         system: config.system.clone(),
-        path: at.folder().display().to_string(),
         brief: config.brief.clone(),
         viewport: config.viewport.clone(),
         updated_at: pages
@@ -344,30 +330,36 @@ pub(super) fn summary(at: &DesignAt, config: &DesignConfig, agent: Option<u32>) 
             .map(|(_, ms)| *ms)
             .max()
             .unwrap_or(config.created_at),
-        pages: pages
-            .into_iter()
-            .map(|(name, _)| DesignPage {
-                label: config
-                    .pages
-                    .get(&name)
-                    .map(|p| p.label.clone())
-                    .filter(|l| !l.is_empty()),
-                name,
-            })
-            .collect(),
+        pages: labelled(pages.into_iter().map(|(name, _)| name), &config.pages),
         open_comments: open_comments(at),
         agent,
-        agent_state: None,
-        needs_you: None,
-        error: None,
-        session: None,
-        project: None,
+        session: match &at.place {
+            Place::Session(session) => Some(session.clone()),
+            Place::Workspace(_) => None,
+        },
         built_in: config.session.clone().map(|session| DesignBuiltIn {
             session,
             project: None,
         }),
-        system_updated: false,
+        ..DesignInfo::new(&at.slug, at.kind(), at.folder().display().to_string())
     }
+}
+
+/// Pages by their names, each with its label in `design.toml` when it has
+/// one.
+pub(super) fn labelled(
+    names: impl Iterator<Item = String>,
+    labels: &BTreeMap<String, PageConfig>,
+) -> Vec<DesignPage> {
+    names
+        .map(|name| DesignPage {
+            label: labels
+                .get(&name)
+                .map(|p| p.label.clone())
+                .filter(|l| !l.is_empty()),
+            name,
+        })
+        .collect()
 }
 
 /// A design's pages, `pages/<name>.html`, as their names and last changes in
