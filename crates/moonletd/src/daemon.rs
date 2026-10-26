@@ -90,6 +90,9 @@ struct HandEdits {
     saves: u64,
     /// The wait for them to stop, the latest save's: a later save cancels it.
     quiet: Option<tokio::task::AbortHandle>,
+    /// One was saved while the design's agent worked: they go with its
+    /// turn, also when the daemon hears it start only after them.
+    in_turn: bool,
 }
 
 /// What a workspace design's agent does, for the design's snapshots (X65).
@@ -1378,7 +1381,9 @@ impl Daemon {
                 let _held = lock.lock().await;
                 let (ws, slug, edits) = (r.workspace.clone(), r.slug.clone(), r.edits.clone());
                 let version = blocking(move || store.write_page(&r.workspace, &r.slug, &r.page, &r.html, &r.base_version)).await?;
-                self.edited_by_hand(&ws, &slug, edits);
+                // Saved while the agent works: within its turn.
+                let in_turn = self.design_agent_working(&ws, &slug).await.unwrap_or(false);
+                self.edited_by_hand(&ws, &slug, edits, in_turn);
                 ok(m::DesignPageWritten { version })
             }
             m::DESIGN_KIT => {
@@ -1666,6 +1671,17 @@ impl Daemon {
         Some(taken.edits)
     }
 
+    /// Takes a design's edits by hand not kept yet, as its agent starts a
+    /// turn, unless one was saved while the agent worked: the daemon heard
+    /// it start after them, and they go with the turn, left waiting for
+    /// its snapshot.
+    fn take_hand_edits_before_turn(&self, workspace: &str, slug: &str) -> Option<Vec<String>> {
+        if self.hand_edits.lock().unwrap().get(&design_key(workspace, slug)).is_some_and(|e| e.in_turn) {
+            return None;
+        }
+        self.take_hand_edits(workspace, slug)
+    }
+
     /// A design's page saved by its editor (X65): what its edits did is
     /// kept for the snapshot, taken once its saves stop for
     /// [`EDITS_QUIET`], each save's wait cancelling the one before. The
@@ -1673,12 +1689,14 @@ impl Daemon {
     /// closes meanwhile. While the design's agent works the wait takes
     /// nothing: the edits were kept as the agent started (see
     /// [`Self::snapshot_agent_turns`]), and any made since go with the
-    /// turn's own snapshot.
-    fn edited_by_hand(self: &Arc<Self>, workspace: &str, slug: &str, edits: Vec<String>) {
+    /// turn's own snapshot, `in_turn`, even when the daemon hears the
+    /// agent start only after them.
+    fn edited_by_hand(self: &Arc<Self>, workspace: &str, slug: &str, edits: Vec<String>, in_turn: bool) {
         let key = design_key(workspace, slug);
         let mut all = self.hand_edits.lock().unwrap();
         let pending = all.entry(key.clone()).or_default();
         pending.edits.extend(edits);
+        pending.in_turn |= in_turn;
         pending.saves += 1;
         if let Some(quiet) = pending.quiet.take() {
             quiet.abort();
@@ -1761,17 +1779,22 @@ impl Daemon {
     /// The snapshot a step of a design's agent takes (X65), under the
     /// locks of the design's pages and history, so the edits by hand not
     /// kept yet are read and taken only under them: as it starts, they are
-    /// kept on their own, if there are any; as it ends a turn, everything
-    /// since is kept, edits saved during the turn with it.
+    /// kept on their own, if there are any and none was saved while it
+    /// worked; as it ends a turn, everything since is kept, edits saved
+    /// during the turn with it.
     async fn agent_snapshot(&self, workspace: &str, slug: &str, step: AgentStep) {
         let (pages, history) = (self.pages_lock(workspace, slug), self.history_lock(workspace, slug));
         let _pages = pages.lock().await;
         let _history = history.lock().await;
-        let edits = self.take_hand_edits(workspace, slug);
-        let take = match (step, edits) {
-            (AgentStep::EndsTurn, _) => Take::AgentTurn,
-            (AgentStep::Starts, Some(edits)) => Take::EditsByHand(edits),
-            (AgentStep::Starts, None) => return,
+        let take = match step {
+            AgentStep::EndsTurn => {
+                self.take_hand_edits(workspace, slug);
+                Take::AgentTurn
+            }
+            AgentStep::Starts => match self.take_hand_edits_before_turn(workspace, slug) {
+                Some(edits) => Take::EditsByHand(edits),
+                None => return,
+            },
         };
         self.snapshot(workspace, slug, take).await;
     }
