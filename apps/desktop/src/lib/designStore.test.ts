@@ -742,6 +742,16 @@ describe("a session's Design tab (X65)", () => {
     expect(shownSessionDesign(useDesign.getState(), "local", "9c9c9c9c9c9c")).toBeNull();
   });
 
+  it("lists the designs again when a design system changes, so a session design says its system was synced since it pinned it", async () => {
+    answers["design.list"] = listed;
+    await loadDesigns("local", "w-1devstudio");
+    answers["design.list"] = () => listed().map((d) => ({ ...d, system_updated: true }));
+    changed("w-1devstudio", { system: "moonlet-desktop", paths: ["_ds_sync.json"] });
+    await settle();
+    await settle();
+    expect(sessionDesignsOf(useDesign.getState(), "local", "4f2a9c1e7b3d").map((d) => !!d.system_updated)).toEqual([true, true]);
+  });
+
   it("updates a design's design system by its session and slug, and its bar goes at once", async () => {
     answers["design.list"] = listed;
     answers["design.system.update"] = () => ({ anchor: "9f86d081", cards: [{ path: "components/buttons/button/button.html", change: "changed" }] });

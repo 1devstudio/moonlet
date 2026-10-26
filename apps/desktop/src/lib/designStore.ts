@@ -707,6 +707,8 @@ export async function startDesign() {
         // (a newer request always lands last).
         useDesign.setState((s) => ({ changes: { ...s.changes, [key]: (s.changes[key] ?? 0) + 1 } }));
         if (cardListing.wanted.has(key)) void loadCards(e.host, d.workspace, d.system).catch(() => {});
+        // A session design on it may now be pinned to an older sync (X65).
+        if (designListing.wanted.has(wsKey(e.host, d.workspace))) reloadDesigns(e.host, d.workspace);
       }
     } else if (e.name === EV.chatState) {
       const d = e.data as { id: number; state: ChatState };
