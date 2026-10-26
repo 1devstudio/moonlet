@@ -4,14 +4,15 @@
 // What they decide is in lib/designComments.ts.
 
 import { ChevronDown, X } from "lucide-react";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type { DesignComment } from "../../lib/protocol";
 import type { Rect } from "../../lib/designBridge";
-import { BOX_SIZE, COMMENT_PIN_ATTR, boxLabel, boxPlace, commentLine, pinPlace, commentsTab, footerLabel, pinLabel, sentLabel, type CommentRef, type PageMids } from "../../lib/designComments";
+import { BOX_SIZE, boxLabel, commentCardAttrs, commentCardTitle, boxPlace, commentLine, pinPlace, commentsTab, footerLabel, messageView, pinLabel, sentLabel, type CommentRef, type PageMids, type PinsOf } from "../../lib/designComments";
 import { pageFile } from "../../lib/designPage";
 import { cx } from "../../lib/cx";
 import { Button } from "../ui";
 import { Menu } from "../Menu";
+import { EditsMessage } from "./Editor";
 
 /** A pin's number in its orange badge. */
 export function PinBadge({ n, className }: { n: number | null; className?: string }) {
@@ -253,16 +254,33 @@ export function CommentsTab({
   );
 }
 
+/** How a design's chat shows a message of the user's (X65): its edits by
+ *  hand as their block and its comments as cards (Comment from the Design
+ *  view in a session's chat), read against `pins`; null shows it as any
+ *  other message. The workspace design's chat and the session's share it. */
+export function designMessage(text: string, pins: PinsOf, session: boolean): ReactNode | null {
+  const view = messageView(text, pins);
+  if (!view) return null;
+  const cards = view.cards && <CommentCards cards={view.cards} session={session} />;
+  return view.edits ? (
+    <EditsMessage edits={view.edits} text={view.text}>
+      {cards}
+    </EditsMessage>
+  ) : (
+    cards
+  );
+}
+
 /** A chat message of comments: one **Comment from the canvas** card per
  *  line, numbered like its pin, each found by Show in chat. */
-export function CommentCards({ cards }: { cards: (CommentRef & { n: number | null })[] }) {
+export function CommentCards({ cards, session = false }: { cards: (CommentRef & { n: number | null })[]; session?: boolean }) {
   return (
     <div className="flex flex-col items-end gap-1.5 py-1">
       {cards.map((c, i) => (
-        <div key={i} {...{ [COMMENT_PIN_ATTR]: c.n ?? undefined }} className="max-w-[85%] rounded-2xl rounded-br-md bg-raised px-3.5 py-2.5 transition-shadow">
+        <div key={i} {...commentCardAttrs(c)} className="max-w-[85%] rounded-2xl rounded-br-md bg-raised px-3.5 py-2.5 transition-shadow">
           <p className="mb-1 flex items-center gap-2 ui-text-12 text-muted">
             <PinBadge n={c.n} />
-            Comment from the canvas
+            {commentCardTitle(session)}
           </p>
           <p className="selectable whitespace-pre-wrap break-words font-mono ui-text-12 leading-relaxed text-fg">{commentLine(c)}</p>
         </div>

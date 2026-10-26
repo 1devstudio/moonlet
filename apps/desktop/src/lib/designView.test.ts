@@ -192,6 +192,24 @@ describe("a snapshot's page (X65)", () => {
   });
 });
 
+describe("a session design's page (X65)", () => {
+  it("is served from its worktree's design folder, on a host of its own that names its session and that another page never shares", () => {
+    expect(pageUrl({ session: "4f2a9c1e7b3d" }, "settings-page", "index")).toBe("moonlet-design://19a1c555a197e847.s-4f2a9c1e7b3d/settings-page/pages/index.html");
+    expect(pageUrl({ session: "4f2a9c1e7b3d" }, "settings-page", "git-a")).toBe("moonlet-design://bb40a941d4bee4ad.s-4f2a9c1e7b3d/settings-page/pages/git-a.html");
+    expect(pageUrl({ session: "4f2a9c1e7b3d" }, "settings-page", "index", 4, true)).toBe("moonlet-design://19a1c555a197e847.s-4f2a9c1e7b3d/settings-page/pages/index.html?v=4&moonlet-bridge=1");
+  });
+
+  it("is never built for a workspace whose id starts with s-, which the scheme reads as a session's", () => {
+    expect(() => pageUrl("s-1devstudio", "settings-page", "index")).toThrow("a workspace id never starts with s-");
+    expect(() => cardUrl("s-1devstudio", "moonlet-desktop", "styles.css")).toThrow("a workspace id never starts with s-");
+  });
+
+  it("is served from a session design's snapshot as deep as its pages, on a snapshot's host that names its session", () => {
+    expect(snapshotPageUrl({ session: "4f2a9c1e7b3d" }, "settings-page", 3, "index")).toBe("moonlet-design://315894b4a2cd5984saa0232c623a69ded.s-4f2a9c1e7b3d/settings-page%403/pages/index.html");
+    expect(snapshotPageUrl({ session: "4f2a9c1e7b3d" }, "settings-page", 3, "git-a")).toBe("moonlet-design://509b21765e7e6062saa0232c623a69ded.s-4f2a9c1e7b3d/settings-page%403/pages/git-a.html");
+  });
+});
+
 describe("a card (X64, X65)", () => {
   it("is served from its workspace's design folder, on a host of its own", () => {
     expect(cardUrl("w-1devstudio", "moonlet-desktop", "components/custom/session-row/session-row.html")).toBe(

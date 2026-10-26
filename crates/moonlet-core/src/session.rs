@@ -1965,6 +1965,18 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
+    #[test]
+    fn an_id_is_twelve_hex_digits_so_a_workspace_id_never_starts_with_s_dash() {
+        // The app's moonlet-design:// scheme reads a host label `s-<id>` as
+        // a session's (design_scheme.rs, X65).
+        for _ in 0..1000 {
+            let id = new_id();
+            assert_eq!(id.len(), 12, "{id}");
+            assert!(id.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()), "{id}");
+            assert!(!id.starts_with("s-"), "{id}");
+        }
+    }
+
     async fn setup() -> (tempfile::TempDir, tempfile::TempDir, Arc<SessionManager>) {
         let repo = crate::git::tests::repo().await;
         std::fs::create_dir(repo.path().join(".moonlet")).unwrap();

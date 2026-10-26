@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { askWithEdits, restoreSnapshot, kitOf, loadKit, closeDesign, copyElementOf, hasCopy, dismissUnsaved, editPage, pasteInto, sendCommentsWithEdits, sendWithEdits, redoEdit, undoEdit, loadPageSource, pendingOf, resetEditor, startEditor, settleChecks, settleSaves, sourceOf, undoOf, unsavedOf, useEditor } from "./designEditor";
+import { askWithEdits, updateAndTell, restoreSnapshot, kitOf, loadKit, closeDesign, copyElementOf, hasCopy, dismissUnsaved, editPage, pasteInto, sendCommentsWithEdits, sendWithEdits, redoEdit, undoEdit, loadPageSource, pendingOf, resetEditor, startEditor, settleChecks, settleSaves, sourceOf, undoOf, unsavedOf, useEditor } from "./designEditor";
 import { loadDesigns, pageRevOf, startDesign, useDesign } from "./designStore";
 import { editLines } from "./designEdits";
 import { useStore } from "./store";
@@ -460,5 +460,99 @@ describe("a style, a move and a snippet edited by hand (X65)", () => {
     await undoEdit("local", WS, SLUG);
     await settleSaves();
     expect(disk.index.html).toBe(PAGE);
+  });
+});
+
+describe("a session design's edits by hand (X65)", () => {
+  it("are read and saved by its session and slug, and go before the next message to the session's agent", async () => {
+    const S = { session: "4f2a9c1e7b3d" };
+    answers["chat.send"] = () => null;
+    await loadPageSource("local", S, SLUG, "index");
+    editPage("local", S, SLUG, "index", { kind: "delete", mid: "m30" }, "m30");
+    await settleSaves();
+    await sendWithEdits("local", S, SLUG, 31, "Tighter, please", []);
+    expect(calls.map((c) => [c.method, c.params])).toEqual([
+      ["design.page", { session: "4f2a9c1e7b3d", slug: SLUG, page: "index" }],
+      ["design.write_page", { session: "4f2a9c1e7b3d", slug: SLUG, page: "index", html: '<!doctype html>\n<body data-mid="m1">\n  <h2 data-mid="m25">Git</h2>\n</body>\n', base_version: "v1", edits: ["deleted p m30"] }],
+      ["chat.send", { id: 31, text: "Edits by hand since your last turn:\nindex.html m30 p: deleted\n\nTighter, please", images: [] }],
+    ]);
+    // A workspace design of the same slug has none of them.
+    expect(pendingOf(useEditor.getState(), "local", WS, SLUG)).toEqual([]);
+    expect(sourceOf(useEditor.getState(), "local", WS, SLUG, "index")).toBeUndefined();
+  });
+});
+
+describe("Update of a session design's design system (X65)", () => {
+  const S = { session: "4f2a9c1e7b3d" };
+  beforeEach(() => {
+    answers["design.system.update"] = () => ({ anchor: "9f86d081", cards: [{ path: "components/buttons/button/button.html", change: "changed" }] });
+    answers["chat.send"] = () => null;
+  });
+
+  it("replaces both copies first, then tells the session's agent the cards that changed", async () => {
+    await updateAndTell("local", S, SLUG, 31, "moonlet desktop");
+    expect(calls.map((c) => [c.method, c.params])).toEqual([
+      ["design.system.update", { session: "4f2a9c1e7b3d", slug: SLUG }],
+      ["design.kit", { session: "4f2a9c1e7b3d", slug: SLUG }],
+      [
+        "chat.send",
+        {
+          id: 31,
+          text: "The design system moonlet desktop was updated for the design settings-page: its copy in .moonlet/design/settings-page/system/ and the pinned styles are the synced ones now. Cards that changed:\n- components/buttons/button/button.html (changed)\nRead those cards again and update the pages that use them, then run the check.",
+          images: [],
+        },
+      ],
+    ]);
+  });
+
+  it("reads the design's kit again before telling its agent, so the Inspector and the Palette have the updated design system", async () => {
+    const kit = (value: string) => ({ system: "moonlet-desktop", tokens: [{ name: "--space-4", value, family: "spacing" }], cards: [] });
+    answers["design.kit"] = () => kit("16px");
+    await loadKit("local", S, SLUG);
+    calls.length = 0;
+    answers["design.kit"] = () => kit("18px");
+    await updateAndTell("local", S, SLUG, 31, "moonlet desktop");
+    expect(calls.map((c) => [c.method, c.params.slug ?? null])).toEqual([
+      ["design.system.update", SLUG],
+      ["design.kit", SLUG],
+      ["chat.send", null],
+    ]);
+    expect(calls[1].params).toEqual({ session: "4f2a9c1e7b3d", slug: SLUG });
+    expect(kitOf(useEditor.getState(), "local", S, SLUG)?.tokens).toEqual([{ name: "--space-4", value: "18px", family: "spacing" }]);
+  });
+
+  it("tells no one when the session's agent is not running", async () => {
+    await updateAndTell("local", S, SLUG, null, "moonlet desktop");
+    expect(calls.map((c) => c.method)).toEqual(["design.system.update", "design.kit"]);
+  });
+});
+
+describe("a session's designs, which share its agent (X65)", () => {
+  it("each tell their edits by hand with the next message to the session's agent, their pages named by their paths in the worktree", async () => {
+    const S = { session: "4f2a9c1e7b3d" };
+    answers["chat.send"] = () => null;
+    // Each design's own index.html.
+    const files: Record<string, { html: string; version: string }> = { [SLUG]: { html: PAGE, version: "v1" }, onboarding: { html: PAGE, version: "v1" } };
+    answers["design.page"] = (p) => files[p.slug as string];
+    answers["design.write_page"] = (p) => {
+      files[p.slug as string] = { html: p.html as string, version: "v2" };
+      return { version: "v2" };
+    };
+    await loadPageSource("local", S, SLUG, "index");
+    await loadPageSource("local", S, "onboarding", "index");
+    editPage("local", S, SLUG, "index", { kind: "delete", mid: "m30" }, "m30");
+    editPage("local", S, "onboarding", "index", { kind: "text", mid: "m25", text: "Welcome" }, "m25");
+    await settleSaves();
+    const peers = [
+      { place: S, slug: SLUG, folder: "docs/design/settings-page" },
+      { place: S, slug: "onboarding", folder: "docs/design/onboarding" },
+    ];
+    await sendWithEdits("local", S, SLUG, 31, "Tighter, please", [], peers);
+    expect(calls.filter((c) => c.method === "chat.send").map((c) => c.params.text)).toEqual([
+      "Edits by hand since your last turn:\ndocs/design/settings-page/pages/index.html m30 p: deleted\ndocs/design/onboarding/pages/index.html m25 h2: text “Welcome”\n\nTighter, please",
+    ]);
+    // Both are told.
+    expect(pendingOf(useEditor.getState(), "local", S, SLUG)).toEqual([]);
+    expect(pendingOf(useEditor.getState(), "local", S, "onboarding")).toEqual([]);
   });
 });

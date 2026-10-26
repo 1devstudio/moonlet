@@ -6,7 +6,7 @@
 // previewed on the canvas, read only.
 
 import { ArrowRight, ChevronDown, History as HistoryIcon, LayoutGrid, Loader2, Lock, MessageSquare, MoreHorizontal, PanelLeftClose, PanelLeftOpen, PanelRight, SwatchBook, Trash2, Undo2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type MutableRefObject, type ReactNode, type RefObject, type SetStateAction } from "react";
 import { errorToast, toast, updateSettings, useStore } from "../../lib/store";
 import { chatKey, useChat } from "../../lib/chat";
 import type { Design, DesignComment, DesignSnapshot, DesignToken } from "../../lib/protocol";
@@ -25,7 +25,7 @@ import {
   problemsOf,
   reloadPage,
   removeDesign,
-  revOf,
+  kitRevOf,
   resolveComment,
   saveViewport,
   sendingOf,
@@ -33,9 +33,13 @@ import {
   stopAgent,
   systemNameOf,
   systemsOf,
+  justOpened,
+  tookOpened,
   useDesign,
+  designCanvasKey,
 } from "../../lib/designStore";
-import { askWithEdits, restoreSnapshot, closeDesign, hasCopy, kitOf, loadKit, sendCommentsWithEdits, copyElementOf, dismissUnsaved, editPage, loadPageSource, pasteInto, pendingOf, redoEdit, sendWithEdits, sourceOf, undoEdit, undoOf, unsavedOf, useEditor } from "../../lib/designEditor";
+import { isSession, type DesignPlace } from "../../lib/designPlace";
+import { askWithEdits, updateAndTell, toldFolder, type ToldDesign, restoreSnapshot, closeDesign, hasCopy, kitOf, loadKit, sendCommentsWithEdits, copyElementOf, dismissUnsaved, editPage, loadPageSource, pasteInto, pendingOf, redoEdit, sendWithEdits, sourceOf, undoEdit, undoOf, unsavedOf, useEditor } from "../../lib/designEditor";
 import { EditRefused, editsChip, inlineStyles, type Edit, type EditOp } from "../../lib/designEdits";
 import { offSystemMids } from "../../lib/designTokens";
 import { selectionOf } from "../../lib/designInspector";
@@ -43,9 +47,9 @@ import { snippetDrags, snippetsOf, type Snippet } from "../../lib/designPalette"
 import { pageUrl, snapshotPageUrl } from "../../lib/designView";
 import { previewBar, previewStep, snapshotTime, type Preview } from "../../lib/designHistory";
 import { VIEWPORTS, canvasKey, canvasScale, canvasZoom, customViewports, fitBox, parseViewport, sizeOf, sizeText, viewportLabel, viewportText, withCustomViewport, type Size } from "../../lib/designViewport";
-import { breadcrumb, dragEdit, hintLine, pickEdit, canvasPage, canvasStep, chatAfter, editorStep, isTyping, keyAct, layerPick, modeEntered, onReport, undoOpen, writingPage, type CanvasAct, type CanvasMode, type CanvasState, type ChatPanel, type KeyAct, type RailTab } from "../../lib/designCanvas";
+import { canvasTakesKeys, inTabAfter, breadcrumb, dragEdit, hintLine, pickEdit, canvasPage, canvasStep, chatAfter, editorStep, isTyping, keyAct, layerPick, modeEntered, onReport, undoOpen, writingPage, type CanvasAct, type CanvasMode, type CanvasState, type ChatPanel, type KeyAct, type RailTab } from "../../lib/designCanvas";
 import { keyId } from "../../lib/runActions";
-import { chatCardLookup, commentCardSelector, commentsRail, messageView, commentsTab, keepAction, openCommentsLabel, pageCounts, sendAll } from "../../lib/designComments";
+import { chatCardLookup, commentCardSelector, commentsRail, commentsTab, keepAction, openCommentsLabel, pageCounts, sendAll } from "../../lib/designComments";
 import { bridgeMessage, editMessage, helloMessage, modeMessage, paletteMessage, pinsMessage, scrollMessage, selectMessage, type DragOver, type DragResult, type Layer, type PickedElement, type Rect } from "../../lib/designBridge";
 import { pageFile, pagePath } from "../../lib/designPage";
 import { barProblems, chatOpensOn, designBar, pageFixMessage, type Bar, type BarAction, type PageProblem } from "../../lib/designBars";
@@ -58,8 +62,8 @@ import { Menu } from "../Menu";
 import { AgentView } from "../AgentView";
 import { useSize } from "../../lib/useSize";
 import { CardFrame, ZoomBar } from "./Frame";
-import { CommentBox, CommentCards, CommentsTab, PinLayer, type BoxTarget } from "./Comments";
-import { Breadcrumb, EditsChip, EditsMessage, LayersTab } from "./Editor";
+import { CommentBox, CommentsTab, PinLayer, designMessage, type BoxTarget } from "./Comments";
+import { Breadcrumb, EditsChip, LayersTab } from "./Editor";
 import { InspectorTab, PaletteTab } from "./Inspector";
 import { HistoryTab } from "./History";
 
@@ -79,360 +83,27 @@ const RAIL_TABS: { tab: RailTab; label: string }[] = [
 /** A design's viewport until it has one: Desktop. */
 const DEFAULT_VIEWPORT = VIEWPORTS[0].size;
 
-/** The design screen of `design`, in workspace `workspace` of `host`. */
-export function DesignScreen({ host, workspace, design, inset }: { host: string; workspace: string; design: Design; inset: number }) {
-  const systems = useDesign((d) => systemsOf(d, host, workspace));
-  const system = systems?.find((s) => s.slug === design.system);
-  // Its name, also once it was removed; its slug when never listed.
-  const systemName = useDesign((d) => systemNameOf(d, host, workspace, design.system)) ?? design.system;
+/** What a design's chat and canvas both show of it: its agent while it is
+ *  running in a structured chat, else null (a session design's is its
+ *  session's, X65), and its design system's name, also once it was
+ *  removed, its slug when never listed. */
+export function useDesignBasics(host: string, workspace: string, design: Design): { agent: number | null; systemName: string } {
   const agent = useStore((s) => (design.agent !== null && s.terminals[host]?.[design.agent]?.chat ? design.agent : null));
-  const working = useStore((s) => agent !== null && s.terminals[host]?.[agent]?.agent_state === "working" && !s.terminals[host]?.[agent]?.exit);
-  const lastWritten = useDesign((d) => latestOf(d, host, workspace, design.slug));
-  const problems = useDesign((d) => problemsOf(d, host, workspace, design.slug));
-  const [chatOpen, setChatOpen] = useState(true);
-  // The page shown, or null for Overview.
-  const [picked, setPicked] = useState<string | null>("index");
-  const [zoom, setZoom] = useState<number | null>(null);
-  const [details, setDetails] = useState(false);
-  const [custom, setCustom] = useState(false);
-  const [mode, setMode] = useState<CanvasMode>("view");
-  const [railOpen, setRailOpen] = useState(false);
-  const [railTab, setRailTab] = useState<RailTab>("comments");
-  // Edit mode: the element selected on the shown page, and the page's tree.
-  const [selected, setSelected] = useState<string | null>(null);
-  const [layers, setLayers] = useState<Layer[]>(NO_LAYERS);
-  // The selection's computed style, as the page reports it, for the Inspector.
-  const [computed, setComputed] = useState<{ mid: string; style: Record<string, string> } | null>(null);
-  // Where an element or a Palette snippet dragged over the page would drop.
-  const [dragging, setDragging] = useState<DragOver | null>(null);
-  // The snippet dragged from the Palette, until its drag ends.
-  const snippetDrag = useRef(snippetDrags());
-  // Talks to the shown page's bridge (PageFrame sets it).
-  const bridge = useRef<((message: unknown) => void) | null>(null);
-  const pending = useEditor((e) => pendingOf(e, host, workspace, design.slug));
-  const unsaved = useEditor((e) => unsavedOf(e, host, workspace, design.slug));
-  const changes = useEditor((e) => undoOf(e, host, workspace, design.slug).done.length);
-  // The comment box, pinned to an element of its page, shown with that page.
-  const [box, setBox] = useState<(BoxTarget & { page: string }) | null>(null);
-  const [canvasRef, [cw, ch]] = useSize<HTMLDivElement>();
+  const systemName = useDesign((d) => systemNameOf(d, host, workspace, design.system)) ?? design.system;
+  return { agent, systemName };
+}
+
+/** The design screen of workspace design `design`, in workspace
+ *  `workspace` of `host`: its agent's chat beside its canvas. */
+export function DesignScreen({ host, workspace, design, inset }: { host: string; workspace: string; design: Design; inset: number }) {
+  const { agent, systemName } = useDesignBasics(host, workspace, design);
   const comments = useDesign((d) => commentsOf(d, host, workspace, design.slug));
-  const mids = useDesign((d) => midsOf(d, host, workspace, design.slug));
-  const sending = useDesign((d) => sendingOf(d, host, workspace, design.slug));
+  const [chatOpen, setChatOpen] = useState(true);
   const chatRef = useRef<HTMLElement>(null);
-  // History: the design's snapshots, and the one the canvas previews.
-  const snapshots = useDesign((d) => historyOf(d, host, workspace, design.slug));
-  const [preview, setPreview] = useState<Preview>(null);
-  const previewed = (preview && snapshots?.find((s) => s.n === preview.n)) || null;
-  // A snapshot previewed is read only (canvasStep, editorStep, undoOpen,
-  // layerPick), and the Inspector and the Palette edit nothing then.
-  const readOnly = previewed !== null;
-  const editLocked = working || readOnly;
-
-  const names = previewed ? previewed.pages : design.pages.map((p) => p.name);
-  // A page that went away shows the first one; before any, index (being written).
-  const page = canvasPage(picked, names);
-  const viewport = parseViewport(design.viewport) ?? DEFAULT_VIEWPORT;
-  const scale = canvasScale(zoom, viewport, fitBox([cw, ch]));
-  const writing = writingPage(lastWritten, working);
-  const bar = designBar({ working, needsYou: design.needs_you, page, problems, system: systemName, systemRemoved: !!systems && !system, unsaved, preview: previewed ? previewBar(previewed, Date.now()) : null });
-  const chip = editsChip(pending);
-  // The design system's tokens and snippets, read again when it changes.
-  const kit = useEditor((e) => kitOf(e, host, workspace, design.slug));
-  const [kitError, setKitError] = useState<string | null>(null);
-  const systemRev = useDesign((d) => revOf(d, host, workspace, design.system));
-  useEffect(() => {
-    void loadKit(host, workspace, design.slug).then(
-      () => setKitError(null),
-      (e: unknown) => setKitError(e instanceof Error ? e.message : String(e)),
-    );
-  }, [host, workspace, design.slug, systemRev]);
-  const tokens = kit?.tokens ?? NO_TOKENS;
-  const snippets = useMemo(() => (kit ? snippetsOf(kit.cards) : null), [kit]);
-  // The page's inline styles, from its source, and its off-system elements.
-  const html = useEditor((e) => (page === null ? undefined : sourceOf(e, host, workspace, design.slug, page)?.html));
-  const styles = useMemo(() => (html ? inlineStyles(html) : {}), [html]);
-  const offMids = useMemo(() => offSystemMids(tokens, styles), [tokens, styles]);
-
-  useEffect(() => {
-    void loadComments(host, workspace, design.slug).catch(() => {});
-    void loadHistory(host, workspace, design.slug).catch(() => {});
-  }, [host, workspace, design.slug]);
-  useEffect(() => setBox(null), [design.slug]);
-  // Another design shows its current pages; a snapshot no longer listed too.
-  useEffect(() => setPreview(null), [design.slug]);
-  useEffect(() => {
-    if (snapshots) setPreview((p) => previewStep(p, { kind: "listed", snapshots }));
-  }, [snapshots]);
-  // Another page, design or snapshot: nothing selected, and its tree comes
-  // with it (a snapshot's page reports none).
-  useEffect(() => {
-    setSelected(null);
-    setLayers(NO_LAYERS);
-    setDragging(null);
-  }, [design.slug, page, readOnly]);
-
-  // V, C, Esc and the mode buttons, as canvasStep decides; Edit is locked
-  // while the agent works, and left when it starts. Entering Edit folds the
-  // chat, and leaving it opens the chat again when that folded it.
-  const canvas = useRef<CanvasState>({ mode, box: box !== null, rail: railOpen, readOnly });
-  canvas.current = { mode, box: box !== null, rail: railOpen, readOnly };
-  const workingRef = useRef(working);
-  workingRef.current = working;
-  const chat = useRef<ChatPanel>({ open: chatOpen, foldedForEdit: false });
-  chat.current = { ...chat.current, open: chatOpen };
-  const step = useCallback((act: CanvasAct) => {
-    const before = canvas.current.mode;
-    const next = canvasStep(canvas.current, act, workingRef.current);
-    setMode(next.mode);
-    setRailOpen(next.rail);
-    if (!next.box) setBox(null);
-    const tab = modeEntered(before, next.mode);
-    if (tab) setRailTab(tab);
-    chat.current = chatAfter(before, next.mode, chat.current);
-    setChatOpen(chat.current.open);
-    if (next.mode !== "edit") setSelected(null);
-  }, []);
-  useEffect(() => {
-    if (working) step("lock");
-  }, [working, step]);
-  // The design's undo is since it was opened.
-  useEffect(() => () => closeDesign(host, workspace, design.slug), [host, workspace, design.slug]);
-
-  // The editor: the selection, told to the page in Edit mode (PageFrame),
-  // and each edit by hand made on the page's source, saved, and made on the
-  // live page too so it shows at once.
-  const select = setSelected;
-  /** Runs an edit; one the page's source cannot take is said, and with
-   *  `reload` the page loads again to drop what the live page shows. */
-  const edited = (run: () => Edit | null, reload = false) => {
-    try {
-      const edit = run();
-      if (!edit) return;
-      if (edit.live) bridge.current?.(editMessage(edit.live));
-      select(edit.select);
-    } catch (e) {
-      if (reload && page !== null) reloadPage(host, workspace, design.slug, page);
-      if (e instanceof EditRefused) toast(e.message, "info");
-      else errorToast(e);
-    }
-  };
-  /** An edit of the shown page's source by `op`. */
-  const editShown = (op: EditOp, reload = false) => {
-    if (page !== null) edited(() => editPage(host, workspace, design.slug, page, op, selected), reload);
-  };
-  // A drag on the page, or a snippet picked in the Palette, as dragEdit
-  // and pickEdit decide.
-  const onDragged = (r: DragResult) => {
-    setDragging(null);
-    const drop = dragEdit(r, r.kind === "drop" ? (snippetDrag.current.take(Date.now())?.html ?? null) : null);
-    if (drop) editShown(drop.op, drop.reload);
-  };
-  const dragRef = useRef(onDragged);
-  dragRef.current = onDragged;
-  const pickSnippet = (sn: Snippet) => editShown(pickEdit(selected, sn.html));
-  const dragSnippet = (sn: Snippet | null) => {
-    bridge.current?.(paletteMessage(sn !== null));
-    if (!sn) {
-      snippetDrag.current.end(Date.now());
-      return setDragging(null);
-    }
-    snippetDrag.current.start(sn);
-    if (canvas.current.mode !== "edit") step("edit");
-  };
-  const travel = (back: boolean) =>
-    void (back ? undoEdit : redoEdit)(host, workspace, design.slug).then((to) => {
-      if (!to) return;
-      setPicked(to.page);
-      select(to.select);
-    }, errorToast);
-  // A key on the canvas or in its page, as editorStep decides: true when
-  // the canvas took it.
-  const onKeyAct = (k: KeyAct | null): boolean => {
-    const s = editorStep({ mode, selected, layers, copied: hasCopy(host, workspace, design.slug), locked: working, readOnly }, k);
-    if (!s) return false;
-    switch (s.kind) {
-      case "canvas":
-        step(s.act);
-        break;
-      case "select":
-        select(s.mid);
-        break;
-      case "undo":
-      case "redo":
-        travel(s.kind === "undo");
-        break;
-      case "say":
-        toast(s.text, "info");
-        break;
-      case "copy":
-        if (page !== null && copyElementOf(host, workspace, design.slug, page, s.mid)) toast(`Copied ${s.mid}; ⌘V pastes it on any page of ${design.name}`, "info");
-        break;
-      case "paste":
-        if (page !== null) edited(() => pasteInto(host, workspace, design.slug, page, s.after));
-        break;
-      case "edit":
-        if (page !== null) edited(() => editPage(host, workspace, design.slug, page, { kind: s.op, mid: s.mid }, selected));
-        break;
-    }
-    return true;
-  };
-  const keyRef = useRef(onKeyAct);
-  keyRef.current = onKeyAct;
-  // A text edited in place on the page; one the source cannot take is put
-  // back by loading the page again.
-  const onText = (mid: string, text: string) => {
-    if (page !== null) edited(() => editPage(host, workspace, design.slug, page, { kind: "text", mid, text }, selected), true);
-  };
-  const textRef = useRef(onText);
-  textRef.current = onText;
-  // Keys without ⌘ on the app; the ⌘ ones come through claimKeys below.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const { dialog, confirm, settingsPage } = useStore.getState();
-      if (dialog || confirm || settingsPage || e.metaKey) return;
-      if (keyRef.current(keyAct(keyId(e), isTyping(e.target instanceof Element ? e.target : null)))) e.preventDefault();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
-
-  // The chat opens when the agent starts to ask; folded meanwhile, it stays so.
-  const asked = useRef(design.needs_you);
-  useEffect(() => {
-    if (chatOpensOn(asked.current, design.needs_you)) setChatOpen(true);
-    asked.current = design.needs_you;
-  }, [design.needs_you]);
-
-  // ⌘0 fits, ⌘= and ⌘- zoom, ⌘\ folds the chat, and the editor's ⌘ keys,
-  // while this screen is shown.
-  const scaleRef = useRef(scale);
-  scaleRef.current = scale;
-  useEffect(
-    () =>
-      claimKeys((id, e) => {
-        const k = canvasKey(id);
-        if (k === "fit") setZoom(null);
-        else if (k === "in" || k === "out") setZoom(canvasZoom(scaleRef.current || 1, k === "in" ? 1 : -1));
-        else if (k === "chat") setChatOpen((o) => !o);
-        if (k !== null) return true;
-        const { dialog, confirm, settingsPage } = useStore.getState();
-        if (dialog || confirm || settingsPage) return false;
-        const textSelected = !(window.getSelection()?.isCollapsed ?? true);
-        return keyRef.current(keyAct(id, isTyping(e.target instanceof Element ? e.target : null), textSelected));
-      }),
-    [],
-  );
-
-  const setViewport = (size: Size) => {
-    setZoom(null);
-    void saveViewport(host, workspace, design.slug, viewportText(size)).catch(errorToast);
-  };
   const remove = async () => {
     const ok = await askConfirm({ title: `Remove ${design.name}?`, message: `Its folder, designs/${design.slug}, its pages and its agent's chat are deleted.`, action: "Remove", variant: "danger" });
     if (ok) void removeDesign(host, workspace, design.slug).catch(errorToast);
   };
-  const sendPins = (pins: DesignComment[]) => {
-    if (agent === null) return toast("The design's agent is not running", "error");
-    void sendCommentsWithEdits(host, workspace, design.slug, agent, pins).catch(errorToast);
-  };
-  const keep = async (target: BoxTarget & { page: string }, comment: string): Promise<DesignComment> => {
-    const action = keepAction(target.pin, comment);
-    if (action === "new" || !target.pin) return keepComment(host, workspace, design.slug, { page: target.page, ...target.element, comment });
-    return action === "unchanged" ? target.pin : editComment(host, workspace, design.slug, target.pin.n, comment);
-  };
-  const onKeep = (comment: string) => {
-    if (!box) return;
-    const target = box;
-    setBox(null);
-    void keep(target, comment).catch(errorToast);
-  };
-  const onSend = (comment: string) => {
-    if (!box || agent === null) return;
-    const target = box;
-    setBox(null);
-    void keep(target, comment)
-      .then((pin) => sendCommentsWithEdits(host, workspace, design.slug, agent, [pin]))
-      .catch(errorToast);
-  };
-  const onSendAll = () => {
-    sendPins(sendAll(comments, mids));
-  };
-  // Show in chat: the chat opens, then scrolls to the pin's last card, once
-  // its messages have loaded (chatCardLookup).
-  const [shownPin, setShownPin] = useState<{ n: number; at: number } | null>(null);
-  const chatLoaded = useChat((c) => agent !== null && !!c.chats[chatKey(host, agent)]);
-  const showInChat = (pin: DesignComment) => {
-    setChatOpen(true);
-    setShownPin({ n: pin.n, at: Date.now() });
-  };
-  useEffect(() => {
-    if (!shownPin || !chatOpen) return;
-    let ringed: HTMLElement | null = null;
-    let done: ReturnType<typeof setTimeout> | undefined;
-    const look = () => {
-      const cards = chatRef.current?.querySelectorAll<HTMLElement>(commentCardSelector(shownPin.n));
-      const card = cards?.[cards.length - 1];
-      const step = chatCardLookup({ found: !!card, loaded: chatLoaded, waitedMs: Date.now() - shownPin.at });
-      if (step === "wait") return;
-      clearInterval(again);
-      if (!card) return toast("Its message is not in the chat any more", "info");
-      card.scrollIntoView({ block: "center" });
-      card.classList.add("ring-2", "ring-accent");
-      ringed = card;
-      done = setTimeout(() => card.classList.remove("ring-2", "ring-accent"), 1500);
-    };
-    const again = setInterval(look, 100);
-    look();
-    return () => {
-      clearInterval(again);
-      clearTimeout(done);
-      ringed?.classList.remove("ring-2", "ring-accent");
-    };
-  }, [shownPin, chatOpen, chatLoaded]);
-  // A pin picked in the rail: its page, with its box open.
-  const openPin = (pin: DesignComment) => {
-    if (!pin.page) return;
-    setPicked(pin.page);
-    setBox({ page: pin.page, element: { mid: pin.mid, tag: pin.tag, text: pin.text }, rect: { x: 0, y: 0, w: 0, h: 0 }, pin });
-  };
-  const onPick = useCallback(
-    (el: PickedElement) => {
-      if (mode === "edit") setSelected(el.mid);
-      else setBox(page === null ? null : { page, element: { mid: el.mid, tag: el.tag, text: el.text }, rect: el.rect, pin: null });
-    },
-    [page, mode],
-  );
-  const onPage = useMemo(() => commentsTab(comments, { tab: "open", page }, mids), [comments, page, mids]);
-  const pagePins = page === null ? NO_PINS : onPage.shown;
-
-  // A snapshot picked in History: the canvas shows it read only, in View.
-  const pickSnapshot = (n: number) => {
-    setPreview((p) => previewStep(p, { kind: "pick", n }));
-    if (canvas.current.mode !== "view") step("view");
-    setBox(null);
-  };
-  const restore = (n: number) =>
-    void restoreSnapshot(host, workspace, design.slug, n).then(() => setPreview((p) => previewStep(p, { kind: "restored" })), errorToast);
-  const openHistory = () => {
-    if (railOpen && railTab === "history") return setRailOpen(false);
-    setRailTab("history");
-    setRailOpen(true);
-  };
-
-  const onBarAction = (a: BarAction) => {
-    if (a === "stop" && agent !== null) void stopAgent(host, agent).catch(errorToast);
-    else if (a === "details") setDetails(true);
-    else if (a === "dismiss") dismissUnsaved(host, workspace, design.slug);
-    else if (a === "back") setPreview((p) => previewStep(p, { kind: "back" }));
-    else if (a === "restore" && previewed) restore(previewed.n);
-    else if (a === "fix") {
-      const check = barProblems(page, problems);
-      if (!check) return;
-      if (agent === null) return toast("The design's agent is not running", "error");
-      void askWithEdits(host, workspace, design.slug, agent, pageFixMessage(check.page, check.problems)).then(() => toast("Asked the agent to fix it"), errorToast);
-    }
-  };
-
   return (
     <div className="flex min-h-0 flex-1">
       {chatOpen ? (
@@ -474,18 +145,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
                   </p>
                 }
                 userText={(text, first) => briefShown(text, design.brief, first)}
-                userView={(text) => {
-                  const view = messageView(text, comments);
-                  if (!view) return null;
-                  const cards = view.cards && <CommentCards cards={view.cards} />;
-                  return view.edits ? (
-                    <EditsMessage edits={view.edits} text={view.text}>
-                      {cards}
-                    </EditsMessage>
-                  ) : (
-                    cards
-                  );
-                }}
+                userView={(text) => designMessage(text, comments, false)}
                 sendText={(text, images) => sendWithEdits(host, workspace, design.slug, agent, text, images)}
               />
             ) : (
@@ -501,8 +161,441 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
           <AgentIcon agent="claude" size={14} />
         </div>
       )}
+      <DesignCanvas host={host} place={workspace} workspace={workspace} design={design} agent={agent} systemName={systemName} inset={inset} chat={{ open: chatOpen, setOpen: setChatOpen, root: chatRef }} fileOf={pageFile} />
+    </div>
+  );
+}
+
+/** The chat beside a design's canvas: whether it is open, how the canvas
+ *  opens or folds it, and where its comment cards are, for Show in chat.
+ *  A session's chat is always there: its Design tab neither folds nor
+ *  opens it (X65). */
+export interface CanvasChat {
+  open: boolean;
+  setOpen: Dispatch<SetStateAction<boolean>>;
+  root: RefObject<HTMLElement | null>;
+}
+
+/** A design's canvas (X65): its page tabs, toolbar, bar, hint line, the page
+ *  in a sandboxed frame on a host of its own, and the right rail, for a
+ *  workspace design's screen and a session design's Design tab (its
+ *  `place` a session's); `fileOf` names a page's file above it, and
+ *  `aside` sits at the end of the page tabs. */
+export function DesignCanvas({
+  host,
+  place,
+  workspace,
+  design,
+  agent,
+  systemName,
+  inset,
+  chat: chatPanel,
+  fileOf,
+  aside,
+  peers,
+}: {
+  host: string;
+  place: DesignPlace;
+  /** The workspace whose design systems it is on. */
+  workspace: string;
+  design: Design;
+  /** From useDesignBasics. */
+  agent: number | null;
+  systemName: string;
+  inset: number;
+  chat: CanvasChat;
+  fileOf: (page: string) => string;
+  aside?: ReactNode;
+  /** The designs its agent works on, which its messages tell the edits by
+   *  hand of: a session's designs, each named under its folder in the
+   *  worktree (X65); the design alone when not given. */
+  peers?: ToldDesign[];
+}) {
+  const systems = useDesign((d) => systemsOf(d, host, workspace));
+  const system = systems?.find((s) => s.slug === design.system);
+  const working = useStore((s) => agent !== null && s.terminals[host]?.[agent]?.agent_state === "working" && !s.terminals[host]?.[agent]?.exit);
+  const lastWritten = useDesign((d) => latestOf(d, host, place, design.slug));
+  const problems = useDesign((d) => problemsOf(d, host, place, design.slug));
+  const { open: chatOpen, setOpen: setChatOpen, root: chatRef } = chatPanel;
+  const session = isSession(place);
+  // The tab's keys work while the user is in it, last pressed or focused
+  // there (WebKit focuses no button on a click), never in the session's
+  // terminals or chat beside it; the screen's whenever it is shown.
+  const own = useRef<HTMLDivElement>(null);
+  const inTab = useRef(false);
+  useEffect(() => {
+    if (!session) return;
+    const at = (kind: "pointer" | "focus") => (e: Event) => void (inTab.current = inTabAfter({ kind, inside: e.target instanceof Node && !!own.current?.contains(e.target) }));
+    const [press, focus] = [at("pointer"), at("focus")];
+    window.addEventListener("pointerdown", press, true);
+    window.addEventListener("focusin", focus, true);
+    return () => {
+      window.removeEventListener("pointerdown", press, true);
+      window.removeEventListener("focusin", focus, true);
+    };
+  }, [session]);
+  // The app opened the tab itself (design.open, a toast's Open), or the user
+  // picked it, its button outside the canvas: its keys work at once.
+  const opened = useDesign((d) => isSession(place) && justOpened(d, host, place.session));
+  useEffect(() => {
+    if (!opened || !isSession(place)) return;
+    inTab.current = inTabAfter({ kind: "opened" });
+    tookOpened(host, place.session);
+  }, [opened, host, place]);
+  const keysHere = () => canvasTakesKeys(session, inTab.current);
+  // The page shown, or null for Overview.
+  const [picked, setPicked] = useState<string | null>("index");
+  const [zoom, setZoom] = useState<number | null>(null);
+  const [details, setDetails] = useState(false);
+  const [custom, setCustom] = useState(false);
+  const [mode, setMode] = useState<CanvasMode>("view");
+  const [railOpen, setRailOpen] = useState(false);
+  const [railTab, setRailTab] = useState<RailTab>("comments");
+  // Edit mode: the element selected on the shown page, and the page's tree.
+  const [selected, setSelected] = useState<string | null>(null);
+  const [layers, setLayers] = useState<Layer[]>(NO_LAYERS);
+  // The selection's computed style, as the page reports it, for the Inspector.
+  const [computed, setComputed] = useState<{ mid: string; style: Record<string, string> } | null>(null);
+  // Where an element or a Palette snippet dragged over the page would drop.
+  const [dragging, setDragging] = useState<DragOver | null>(null);
+  // The snippet dragged from the Palette, until its drag ends.
+  const snippetDrag = useRef(snippetDrags());
+  // Talks to the shown page's bridge (PageFrame sets it).
+  const bridge = useRef<((message: unknown) => void) | null>(null);
+  const pending = useEditor((e) => pendingOf(e, host, place, design.slug));
+  const unsaved = useEditor((e) => unsavedOf(e, host, place, design.slug));
+  const changes = useEditor((e) => undoOf(e, host, place, design.slug).done.length);
+  // The comment box, pinned to an element of its page, shown with that page.
+  const [box, setBox] = useState<(BoxTarget & { page: string }) | null>(null);
+  const [canvasRef, [cw, ch]] = useSize<HTMLDivElement>();
+  const comments = useDesign((d) => commentsOf(d, host, place, design.slug));
+  const mids = useDesign((d) => midsOf(d, host, place, design.slug));
+  const sending = useDesign((d) => sendingOf(d, host, place, design.slug));
+  // History: the design's snapshots, and the one the canvas previews.
+  const snapshots = useDesign((d) => historyOf(d, host, place, design.slug));
+  const [preview, setPreview] = useState<Preview>(null);
+  const previewed = (preview && snapshots?.find((s) => s.n === preview.n)) || null;
+  // A snapshot previewed is read only (canvasStep, editorStep, undoOpen,
+  // layerPick), and the Inspector and the Palette edit nothing then.
+  const readOnly = previewed !== null;
+  const editLocked = working || readOnly;
+
+  const names = previewed ? previewed.pages : design.pages.map((p) => p.name);
+  // A page that went away shows the first one; before any, index (being written).
+  const page = canvasPage(picked, names);
+  const viewport = parseViewport(design.viewport) ?? DEFAULT_VIEWPORT;
+  const scale = canvasScale(zoom, viewport, fitBox([cw, ch]));
+  const writing = writingPage(lastWritten, working);
+  const bar = designBar({ working, needsYou: design.needs_you, page, problems, system: systemName, systemRemoved: !!systems && !system, unsaved, preview: previewed ? previewBar(previewed, Date.now()) : null, session, systemUpdated: !!design.system_updated });
+  const chip = editsChip(pending);
+  // The design system's tokens and snippets, read again when it changes: a
+  // session design's own copy of it, as Update writes it.
+  const kit = useEditor((e) => kitOf(e, host, place, design.slug));
+  const [kitError, setKitError] = useState<string | null>(null);
+  const kitRev = useDesign((d) => kitRevOf(d, host, place, design.slug, design.system));
+  useEffect(() => {
+    void loadKit(host, place, design.slug).then(
+      () => setKitError(null),
+      (e: unknown) => setKitError(e instanceof Error ? e.message : String(e)),
+    );
+  }, [host, place, design.slug, kitRev]);
+  const tokens = kit?.tokens ?? NO_TOKENS;
+  const snippets = useMemo(() => (kit ? snippetsOf(kit.cards) : null), [kit]);
+  // The page's inline styles, from its source, and its off-system elements.
+  const html = useEditor((e) => (page === null ? undefined : sourceOf(e, host, place, design.slug, page)?.html));
+  const styles = useMemo(() => (html ? inlineStyles(html) : {}), [html]);
+  const offMids = useMemo(() => offSystemMids(tokens, styles), [tokens, styles]);
+
+  useEffect(() => {
+    void loadComments(host, place, design.slug).catch(() => {});
+    void loadHistory(host, place, design.slug).catch(() => {});
+  }, [host, place, design.slug]);
+  // Another design, or the same slug in another place, has its own
+  // comments, snapshots and elements.
+  const shown = designCanvasKey(host, place, design.slug);
+  useEffect(() => setBox(null), [shown]);
+  // Another design shows its current pages; a snapshot no longer listed too.
+  useEffect(() => setPreview(null), [shown]);
+  useEffect(() => {
+    if (snapshots) setPreview((p) => previewStep(p, { kind: "listed", snapshots }));
+  }, [snapshots]);
+  // Another page, design or snapshot: nothing selected, and its tree comes
+  // with it (a snapshot's page reports none).
+  useEffect(() => {
+    setSelected(null);
+    setLayers(NO_LAYERS);
+    setDragging(null);
+  }, [shown, page, readOnly]);
+
+  // V, C, Esc and the mode buttons, as canvasStep decides; Edit is locked
+  // while the agent works, and left when it starts. Entering Edit folds the
+  // chat, and leaving it opens the chat again when that folded it.
+  const canvas = useRef<CanvasState>({ mode, box: box !== null, rail: railOpen, readOnly });
+  canvas.current = { mode, box: box !== null, rail: railOpen, readOnly };
+  const workingRef = useRef(working);
+  workingRef.current = working;
+  const chat = useRef<ChatPanel>({ open: chatOpen, foldedForEdit: false });
+  chat.current = { ...chat.current, open: chatOpen };
+  const step = useCallback((act: CanvasAct) => {
+    const before = canvas.current.mode;
+    const next = canvasStep(canvas.current, act, workingRef.current);
+    setMode(next.mode);
+    setRailOpen(next.rail);
+    if (!next.box) setBox(null);
+    const tab = modeEntered(before, next.mode);
+    if (tab) setRailTab(tab);
+    chat.current = chatAfter(before, next.mode, chat.current);
+    setChatOpen(chat.current.open);
+    if (next.mode !== "edit") setSelected(null);
+  }, []);
+  useEffect(() => {
+    if (working) step("lock");
+  }, [working, step]);
+  // The design's undo is since it was opened.
+  useEffect(() => () => closeDesign(host, place, design.slug), [host, place, design.slug]);
+
+  // The editor: the selection, told to the page in Edit mode (PageFrame),
+  // and each edit by hand made on the page's source, saved, and made on the
+  // live page too so it shows at once.
+  const select = setSelected;
+  /** Runs an edit; one the page's source cannot take is said, and with
+   *  `reload` the page loads again to drop what the live page shows. */
+  const edited = (run: () => Edit | null, reload = false) => {
+    try {
+      const edit = run();
+      if (!edit) return;
+      if (edit.live) bridge.current?.(editMessage(edit.live));
+      select(edit.select);
+    } catch (e) {
+      if (reload && page !== null) reloadPage(host, place, design.slug, page);
+      if (e instanceof EditRefused) toast(e.message, "info");
+      else errorToast(e);
+    }
+  };
+  /** An edit of the shown page's source by `op`. */
+  const editShown = (op: EditOp, reload = false) => {
+    if (page !== null) edited(() => editPage(host, place, design.slug, page, op, selected), reload);
+  };
+  // A drag on the page, or a snippet picked in the Palette, as dragEdit
+  // and pickEdit decide.
+  const onDragged = (r: DragResult) => {
+    setDragging(null);
+    const drop = dragEdit(r, r.kind === "drop" ? (snippetDrag.current.take(Date.now())?.html ?? null) : null);
+    if (drop) editShown(drop.op, drop.reload);
+  };
+  const dragRef = useRef(onDragged);
+  dragRef.current = onDragged;
+  const pickSnippet = (sn: Snippet) => editShown(pickEdit(selected, sn.html));
+  const dragSnippet = (sn: Snippet | null) => {
+    bridge.current?.(paletteMessage(sn !== null));
+    if (!sn) {
+      snippetDrag.current.end(Date.now());
+      return setDragging(null);
+    }
+    snippetDrag.current.start(sn);
+    if (canvas.current.mode !== "edit") step("edit");
+  };
+  const travel = (back: boolean) =>
+    void (back ? undoEdit : redoEdit)(host, place, design.slug).then((to) => {
+      if (!to) return;
+      setPicked(to.page);
+      select(to.select);
+    }, errorToast);
+  // A key on the canvas or in its page, as editorStep decides: true when
+  // the canvas took it.
+  const onKeyAct = (k: KeyAct | null): boolean => {
+    const s = editorStep({ mode, selected, layers, copied: hasCopy(host, place, design.slug), locked: working, readOnly }, k);
+    if (!s) return false;
+    switch (s.kind) {
+      case "canvas":
+        step(s.act);
+        break;
+      case "select":
+        select(s.mid);
+        break;
+      case "undo":
+      case "redo":
+        travel(s.kind === "undo");
+        break;
+      case "say":
+        toast(s.text, "info");
+        break;
+      case "copy":
+        if (page !== null && copyElementOf(host, place, design.slug, page, s.mid)) toast(`Copied ${s.mid}; ⌘V pastes it on any page of ${design.name}`, "info");
+        break;
+      case "paste":
+        if (page !== null) edited(() => pasteInto(host, place, design.slug, page, s.after));
+        break;
+      case "edit":
+        if (page !== null) edited(() => editPage(host, place, design.slug, page, { kind: s.op, mid: s.mid }, selected));
+        break;
+    }
+    return true;
+  };
+  const keyRef = useRef(onKeyAct);
+  keyRef.current = onKeyAct;
+  const keysRef = useRef(keysHere);
+  keysRef.current = keysHere;
+  // A text edited in place on the page; one the source cannot take is put
+  // back by loading the page again.
+  const onText = (mid: string, text: string) => {
+    if (page !== null) edited(() => editPage(host, place, design.slug, page, { kind: "text", mid, text }, selected), true);
+  };
+  const textRef = useRef(onText);
+  textRef.current = onText;
+  // Keys without ⌘ on the app; the ⌘ ones come through claimKeys below.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const { dialog, confirm, settingsPage } = useStore.getState();
+      if (dialog || confirm || settingsPage || e.metaKey || !keysRef.current()) return;
+      if (keyRef.current(keyAct(keyId(e), isTyping(e.target instanceof Element ? e.target : null)))) e.preventDefault();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // The chat opens when the agent starts to ask; folded meanwhile, it stays so.
+  const asked = useRef(design.needs_you);
+  useEffect(() => {
+    if (chatOpensOn(asked.current, design.needs_you)) setChatOpen(true);
+    asked.current = design.needs_you;
+  }, [design.needs_you]);
+
+  // ⌘0 fits, ⌘= and ⌘- zoom, ⌘\ folds the chat, and the editor's ⌘ keys,
+  // while this screen is shown.
+  const scaleRef = useRef(scale);
+  scaleRef.current = scale;
+  useEffect(
+    () =>
+      claimKeys((id, e) => {
+        if (!keysRef.current()) return false;
+        const k = canvasKey(id);
+        if (k === "fit") setZoom(null);
+        else if (k === "in" || k === "out") setZoom(canvasZoom(scaleRef.current || 1, k === "in" ? 1 : -1));
+        else if (k === "chat") setChatOpen((o) => !o);
+        if (k !== null) return true;
+        const { dialog, confirm, settingsPage } = useStore.getState();
+        if (dialog || confirm || settingsPage) return false;
+        const textSelected = !(window.getSelection()?.isCollapsed ?? true);
+        return keyRef.current(keyAct(id, isTyping(e.target instanceof Element ? e.target : null), textSelected));
+      }),
+    [],
+  );
+
+  const setViewport = (size: Size) => {
+    setZoom(null);
+    void saveViewport(host, place, design.slug, viewportText(size)).catch(errorToast);
+  };
+  const sendPins = (pins: DesignComment[]) => {
+    if (agent === null) return toast("The design's agent is not running", "error");
+    void sendCommentsWithEdits(host, place, design.slug, agent, pins, peers).catch(errorToast);
+  };
+  const keep = async (target: BoxTarget & { page: string }, comment: string): Promise<DesignComment> => {
+    const action = keepAction(target.pin, comment);
+    if (action === "new" || !target.pin) return keepComment(host, place, design.slug, { page: target.page, ...target.element, comment });
+    return action === "unchanged" ? target.pin : editComment(host, place, design.slug, target.pin.n, comment);
+  };
+  const onKeep = (comment: string) => {
+    if (!box) return;
+    const target = box;
+    setBox(null);
+    void keep(target, comment).catch(errorToast);
+  };
+  const onSend = (comment: string) => {
+    if (!box || agent === null) return;
+    const target = box;
+    setBox(null);
+    void keep(target, comment)
+      .then((pin) => sendCommentsWithEdits(host, place, design.slug, agent, [pin], peers))
+      .catch(errorToast);
+  };
+  const onSendAll = () => {
+    sendPins(sendAll(comments, mids));
+  };
+  // Show in chat: the chat opens, then scrolls to the pin's last card, its
+  // design's (commentCardSelector), once its messages have loaded
+  // (chatCardLookup).
+  const [shownPin, setShownPin] = useState<{ n: number; folder: string | null; at: number } | null>(null);
+  const chatLoaded = useChat((c) => agent !== null && !!c.chats[chatKey(host, agent)]);
+  const showInChat = (pin: DesignComment) => {
+    setChatOpen(true);
+    // Its design's card: a session's chat has every design's comments.
+    setShownPin({ n: pin.n, folder: toldFolder(peers, design.slug), at: Date.now() });
+  };
+  useEffect(() => {
+    if (!shownPin || !chatOpen) return;
+    let ringed: HTMLElement | null = null;
+    let done: ReturnType<typeof setTimeout> | undefined;
+    const look = () => {
+      const cards = chatRef.current?.querySelectorAll<HTMLElement>(commentCardSelector(shownPin.n, shownPin.folder));
+      const card = cards?.[cards.length - 1];
+      const step = chatCardLookup({ found: !!card, loaded: chatLoaded, waitedMs: Date.now() - shownPin.at });
+      if (step === "wait") return;
+      clearInterval(again);
+      if (!card) return toast("Its message is not in the chat any more", "info");
+      card.scrollIntoView({ block: "center" });
+      card.classList.add("ring-2", "ring-accent");
+      ringed = card;
+      done = setTimeout(() => card.classList.remove("ring-2", "ring-accent"), 1500);
+    };
+    const again = setInterval(look, 100);
+    look();
+    return () => {
+      clearInterval(again);
+      clearTimeout(done);
+      ringed?.classList.remove("ring-2", "ring-accent");
+    };
+  }, [shownPin, chatOpen, chatLoaded]);
+  // A pin picked in the rail: its page, with its box open.
+  const openPin = (pin: DesignComment) => {
+    if (!pin.page) return;
+    setPicked(pin.page);
+    setBox({ page: pin.page, element: { mid: pin.mid, tag: pin.tag, text: pin.text }, rect: { x: 0, y: 0, w: 0, h: 0 }, pin });
+  };
+  const onPick = useCallback(
+    (el: PickedElement) => {
+      if (mode === "edit") setSelected(el.mid);
+      else setBox(page === null ? null : { page, element: { mid: el.mid, tag: el.tag, text: el.text }, rect: el.rect, pin: null });
+    },
+    [page, mode],
+  );
+  const onPage = useMemo(() => commentsTab(comments, { tab: "open", page }, mids), [comments, page, mids]);
+  const pagePins = page === null ? NO_PINS : onPage.shown;
+
+  // A snapshot picked in History: the canvas shows it read only, in View.
+  const pickSnapshot = (n: number) => {
+    setPreview((p) => previewStep(p, { kind: "pick", n }));
+    if (canvas.current.mode !== "view") step("view");
+    setBox(null);
+  };
+  const restore = (n: number) =>
+    void restoreSnapshot(host, place, design.slug, n).then(() => setPreview((p) => previewStep(p, { kind: "restored" })), errorToast);
+  const openHistory = () => {
+    if (railOpen && railTab === "history") return setRailOpen(false);
+    setRailTab("history");
+    setRailOpen(true);
+  };
+
+  const onBarAction = (a: BarAction) => {
+    if (a === "stop" && agent !== null) void stopAgent(host, agent).catch(errorToast);
+    else if (a === "details") setDetails(true);
+    else if (a === "dismiss") dismissUnsaved(host, place, design.slug);
+    else if (a === "back") setPreview((p) => previewStep(p, { kind: "back" }));
+    else if (a === "restore" && previewed) restore(previewed.n);
+    else if (a === "fix") {
+      const check = barProblems(page, problems);
+      if (!check) return;
+      if (agent === null) return toast("The design's agent is not running", "error");
+      void askWithEdits(host, place, design.slug, agent, pageFixMessage(check.page, check.problems), peers).then(() => toast("Asked the agent to fix it"), errorToast);
+    } else if (a === "update" && isSession(place)) {
+      void updateAndTell(host, place, design.slug, agent, systemName, peers).then(() => toast("Design system updated", "info"), errorToast);
+    }
+  };
+
+  return (
+    <div ref={own} className="flex min-h-0 min-w-0 flex-1">
       <div className="flex min-w-0 flex-1 flex-col">
-        <div data-tauri-drag-region className="drag flex h-[52px] shrink-0 items-center gap-1 border-b border-border bg-panel px-3" style={{ paddingLeft: chatOpen ? 12 : inset + 12 }}>
+        <div {...(session ? {} : { "data-tauri-drag-region": "" })} className={cx("flex shrink-0 items-center gap-1 border-b border-border bg-panel px-3", session ? "h-10" : "drag h-[52px]")} style={{ paddingLeft: chatOpen ? 12 : inset + 12 }}>
           <nav aria-label="Pages" className="no-drag flex min-w-0 items-center gap-0.5 overflow-x-auto">
             {(names.length ? names : ["index"]).map((name) => (
               <button
@@ -525,6 +618,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
               <LayoutGrid size={13} /> Overview
             </button>
           </nav>
+          {aside}
         </div>
         <div className="flex h-10 shrink-0 items-center gap-1.5 border-b border-border px-3 ui-text-12">
           <ViewportMenu viewport={viewport} onPick={setViewport} onCustom={() => setCustom(true)} />
@@ -568,14 +662,14 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
             <span className="text-muted">Every page at the same viewport. Click a page to open it.</span>
           ) : previewed ? (
             <>
-              <span className="font-mono text-fg">{pageFile(page)}</span>
+              <span className="font-mono text-fg">{fileOf(page)}</span>
               <span className="truncate text-faint">at {snapshotTime(previewed.time, Date.now())} · read only</span>
             </>
           ) : mode === "edit" && selected && breadcrumb(layers, selected).length ? (
             <Breadcrumb path={breadcrumb(layers, selected)} hint={hintLine(mode, layers, dragging)} onSelect={select} />
           ) : (
             <>
-              <span className="font-mono text-fg">{pageFile(page)}</span>
+              <span className="truncate font-mono text-fg">{fileOf(page)}</span>
               <span className="truncate text-faint">{names.includes(page) ? hintLine(mode, layers, dragging) : "not written yet"}</span>
             </>
           )}
@@ -588,7 +682,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
           {page === null ? (
             <Overview
               host={host}
-              workspace={workspace}
+              place={place}
               design={design}
               pages={previewed ? previewed.pages.map((name) => ({ name, label: null })) : design.pages}
               snapshot={previewed?.n ?? null}
@@ -597,11 +691,11 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
               onOpen={setPicked}
             />
           ) : previewed ? (
-            scale > 0 && <SnapshotFrame workspace={workspace} design={design} snapshot={previewed} page={page} viewport={viewport} scale={scale} />
+            scale > 0 && <SnapshotFrame place={place} design={design} snapshot={previewed} page={page} viewport={viewport} scale={scale} />
           ) : scale > 0 && names.includes(page) ? (
             <PageFrame
               host={host}
-              workspace={workspace}
+              place={place}
               design={design}
               page={page}
               viewport={viewport}
@@ -692,7 +786,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
             rail={commentsRail({ agent: agent !== null, readOnly })}
             onSend={(p) => sendPins([p])}
             onSendAll={onSendAll}
-            onResolve={(p) => void resolveComment(host, workspace, design.slug, p.n).catch(errorToast)}
+            onResolve={(p) => void resolveComment(host, place, design.slug, p.n).catch(errorToast)}
             onShowInChat={showInChat}
             onPick={openPin}
           />
@@ -724,7 +818,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
  *  listens, the app asks for them too, in case the page reported first. */
 function PageFrame({
   host,
-  workspace,
+  place,
   design,
   page,
   viewport,
@@ -750,7 +844,7 @@ function PageFrame({
   onCloseBox,
 }: {
   host: string;
-  workspace: string;
+  place: DesignPlace;
   design: Design;
   page: string;
   viewport: Size;
@@ -777,7 +871,7 @@ function PageFrame({
   onSend: (comment: string) => void;
   onCloseBox: () => void;
 }) {
-  const rev = useDesign((d) => pageRevOf(d, host, workspace, design.slug, page));
+  const rev = useDesign((d) => pageRevOf(d, host, place, design.slug, page));
   const frame = useRef<HTMLIFrameElement>(null);
   const [rects, setRects] = useState<Record<string, Rect>>({});
   // The elements whose boxes the page reports: the pins', and the open box's.
@@ -803,7 +897,7 @@ function PageFrame({
   }, [page]);
   // The page's source for the editor, read as the frame loads it.
   // An older read coming back late is dropped by the store; a failed one is said.
-  useEffect(() => void loadPageSource(host, workspace, design.slug, page).catch(errorToast), [host, workspace, design.slug, page, rev]);
+  useEffect(() => void loadPageSource(host, place, design.slug, page).catch(errorToast), [host, place, design.slug, page, rev]);
   useEffect(() => void tell(modeMessage(mode)), [mode]);
   useEffect(() => void tell(pinsMessage(wanted)), [wantedKey]);
   useEffect(() => {
@@ -817,7 +911,7 @@ function PageFrame({
       const m = bridgeMessage(e.data);
       if (!m) return;
       if (m.type === "mids") {
-        setPageMids(host, workspace, design.slug, page, m.mids);
+        setPageMids(host, place, design.slug, page, m.mids);
         tell(modeMessage(latest.current.mode));
         tell(pinsMessage(latest.current.wanted));
         // The first report of a load: back where it was scrolled, with the
@@ -840,7 +934,7 @@ function PageFrame({
       else if (m.type === "drop") latest.current.onDragged({ kind: "drop", place: m.place });
       else if (m.type === "rects") setRects(Object.fromEntries(m.rects.map(({ mid, ...r }) => [mid, r])));
       else if (m.type === "pick") {
-        addPageMid(host, workspace, design.slug, page, m.element.mid);
+        addPageMid(host, place, design.slug, page, m.element.mid);
         latest.current.onPick(m.element);
       } else if (m.type === "key") {
         // A key pressed in the page, where the bridge already left out typing.
@@ -851,11 +945,11 @@ function PageFrame({
     // The page may have reported its ids before this listened: ask again.
     tell(helloMessage());
     return () => window.removeEventListener("message", onMessage);
-  }, [host, workspace, design.slug, page]);
+  }, [host, place, design.slug, page]);
 
   return (
     <div className="relative m-auto shrink-0 rounded-md border border-border-strong shadow-2xl">
-      <CardFrame url={pageUrl(workspace, design.slug, page, rev, true)} title={pageFile(page)} viewport={viewport} scale={scale} interactive frameRef={frame} />
+      <CardFrame url={pageUrl(place, design.slug, page, rev, true)} title={pageFile(page)} viewport={viewport} scale={scale} interactive frameRef={frame} />
       <PinLayer pins={pins} rects={rects} scale={scale} size={[viewport[0] * scale, viewport[1] * scale]} open={box?.pin?.n ?? null} onOpen={onOpenPin} />
       {box && (
         <CommentBox
@@ -878,7 +972,7 @@ function PageFrame({
  *  screen: the design's, or (`snapshot`) a snapshot's. */
 function Overview({
   host,
-  workspace,
+  place,
   design,
   pages,
   snapshot,
@@ -887,7 +981,7 @@ function Overview({
   onOpen,
 }: {
   host: string;
-  workspace: string;
+  place: DesignPlace;
   design: Design;
   pages: { name: string; label: string | null }[];
   snapshot: number | null;
@@ -899,7 +993,7 @@ function Overview({
   return (
     <div className="grid w-full grid-cols-[repeat(auto-fill,minmax(280px,1fr))] content-start gap-6 p-8">
       {pages.map((p) => (
-        <OverviewTile key={p.name} host={host} workspace={workspace} design={design} page={p.name} label={p.label} snapshot={snapshot} comments={counts[p.name] ?? 0} viewport={viewport} onOpen={() => onOpen(p.name)} />
+        <OverviewTile key={p.name} host={host} place={place} design={design} page={p.name} label={p.label} snapshot={snapshot} comments={counts[p.name] ?? 0} viewport={viewport} onOpen={() => onOpen(p.name)} />
       ))}
     </div>
   );
@@ -907,17 +1001,17 @@ function Overview({
 
 /** A snapshot's page, read only (X65): framed without the bridge, so
  *  nothing on it can be picked or edited, and outlined in the preview's blue. */
-function SnapshotFrame({ workspace, design, snapshot, page, viewport, scale }: { workspace: string; design: Design; snapshot: DesignSnapshot; page: string; viewport: Size; scale: number }) {
+function SnapshotFrame({ place, design, snapshot, page, viewport, scale }: { place: DesignPlace; design: Design; snapshot: DesignSnapshot; page: string; viewport: Size; scale: number }) {
   return (
     <div className="relative m-auto shrink-0 rounded-md border-2 border-preview shadow-2xl">
-      <CardFrame key={`${snapshot.n}/${page}`} url={snapshotPageUrl(workspace, design.slug, snapshot.n, page)} title={`${pageFile(page)} at snapshot ${snapshot.n}`} viewport={viewport} scale={scale} interactive />
+      <CardFrame key={`${snapshot.n}/${page}`} url={snapshotPageUrl(place, design.slug, snapshot.n, page)} title={`${pageFile(page)} at snapshot ${snapshot.n}`} viewport={viewport} scale={scale} interactive />
     </div>
   );
 }
 
 function OverviewTile({
   host,
-  workspace,
+  place,
   design,
   page,
   label,
@@ -927,7 +1021,7 @@ function OverviewTile({
   onOpen,
 }: {
   host: string;
-  workspace: string;
+  place: DesignPlace;
   design: Design;
   page: string;
   label: string | null;
@@ -939,7 +1033,7 @@ function OverviewTile({
 }) {
   const [ref, [width]] = useSize<HTMLDivElement>();
   const near = useNear(ref);
-  const rev = useDesign((d) => pageRevOf(d, host, workspace, design.slug, page));
+  const rev = useDesign((d) => pageRevOf(d, host, place, design.slug, page));
   const scale = width ? width / viewport[0] : 0;
   return (
     <button aria-label={pageFile(page)} onClick={onOpen} className="flex min-w-0 flex-col text-left">
@@ -953,7 +1047,7 @@ function OverviewTile({
         )}
       </span>
       <div ref={ref} className="w-full overflow-hidden rounded-md border border-border-strong hover:border-accent">
-        {scale > 0 && <CardFrame url={snapshot === null ? pageUrl(workspace, design.slug, page, rev) : snapshotPageUrl(workspace, design.slug, snapshot, page)} title={pageFile(page)} viewport={viewport} scale={scale} live={near} />}
+        {scale > 0 && <CardFrame url={snapshot === null ? pageUrl(place, design.slug, page, rev) : snapshotPageUrl(place, design.slug, snapshot, page)} title={pageFile(page)} viewport={viewport} scale={scale} live={near} />}
       </div>
     </button>
   );
@@ -967,7 +1061,7 @@ const BAR_TONES: Record<Bar["tone"], { box: string; dot: string }> = {
   blue: { box: "bg-preview/[0.12]", dot: "bg-preview" },
 };
 
-const BAR_ACTIONS: Record<BarAction, string> = { stop: "Stop", details: "Details", fix: "Ask the agent to fix", dismiss: "Dismiss", back: "Back to current", restore: "Restore" };
+const BAR_ACTIONS: Record<BarAction, string> = { stop: "Stop", details: "Details", fix: "Ask the agent to fix", dismiss: "Dismiss", back: "Back to current", restore: "Restore", update: "Update" };
 
 function BarView({ bar, onAct }: { bar: Bar; onAct: (a: BarAction) => void }) {
   const tone = BAR_TONES[bar.tone];

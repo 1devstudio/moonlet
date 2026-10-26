@@ -9,7 +9,7 @@
 
 import { parse, parseFragment } from "parse5";
 import type { DefaultTreeAdapterMap } from "parse5";
-import { pageFile, pageOfFile } from "./designPage";
+import { linePage, pageOfLine } from "./designPage";
 import type { DropPlace, LiveEdit } from "./designBridge";
 import { attrText, isStyleProp, isStyleValue, parseStyle, restyled, valueParts, type Decl, type StyleSet } from "./designStyle";
 
@@ -89,8 +89,8 @@ function changeText(c: Change): string {
 
 /** An element's line in the message that tells the agent: `index.html m24
  *  section: moved above m22`, its changes after the colon. */
-function elementLine(e: { page: string; mid: string; tag: string }, changes: string[]): string {
-  return `${pageFile(e.page)} ${e.mid} ${e.tag}: ${changes.join(", ")}`;
+function elementLine(e: { page: string; folder?: string | null; mid: string; tag: string }, changes: string[]): string {
+  return `${linePage(e.page, e.folder ?? null)} ${e.mid} ${e.tag}: ${changes.join(", ")}`;
 }
 
 /** An edit's line, as the agent is told it. */
@@ -110,6 +110,9 @@ export function editSaid(e: Untold): string {
  *  told, undone since. */
 export interface Untold extends HandEdit {
   undone?: boolean;
+  /** Its design's folder in the worktree, a session design's, which names
+   *  its page in the line (X65); none names it by file alone. */
+  folder?: string | null;
 }
 
 /** The first line of a message that tells the agent the edits by hand. */
@@ -120,10 +123,10 @@ export const EDITS_HEADER = "Edits by hand since your last turn:";
  *  the place of the first, each property at its latest value, each since
  *  the element's last undone change, so one made after an undo is said
  *  after it. */
-function byElement(edits: Untold[]): { head: HandEdit; changes: string[] }[] {
-  const out = new Map<string, { head: HandEdit; changes: string[]; text: number | null; style: { at: number; set: StyleSet } | null }>();
+function byElement(edits: Untold[]): { head: Untold; changes: string[] }[] {
+  const out = new Map<string, { head: Untold; changes: string[]; text: number | null; style: { at: number; set: StyleSet } | null }>();
   for (const e of edits) {
-    const key = `${e.page}\0${e.mid}`;
+    const key = `${e.folder ?? ""}\0${e.page}\0${e.mid}`;
     const el = out.get(key) ?? { head: e, changes: [], text: null, style: null };
     out.set(key, el);
     const said = `${e.undone ? "undid " : ""}${changeText(e.change)}`;
@@ -151,6 +154,8 @@ export function editLines(edits: Untold[]): string[] {
 /** An edit's line read back: its element and what it says changed. */
 export interface EditLineRead {
   page: string;
+  /** A session design's folder, when the line names the page by its path. */
+  folder?: string;
   mid: string;
   tag: string;
   said: string;
@@ -172,9 +177,9 @@ export function readEditsMessage(message: string): { edits: EditLineRead[]; text
   const edits: EditLineRead[] = [];
   for (const l of lines) {
     const m = /^(.+?\.html) (m\d+) ([a-z][a-z0-9-]*): (.+)$/.exec(l);
-    const page = m ? pageOfFile(m[1]) : null;
-    if (!m || page === null) return null;
-    edits.push({ page, mid: m[2], tag: m[3], said: m[4] });
+    const named = m ? pageOfLine(m[1]) : null;
+    if (!m || named === null) return null;
+    edits.push({ page: named.page, ...(named.folder ? { folder: named.folder } : {}), mid: m[2], tag: m[3], said: m[4] });
   }
   return edits.length ? { edits, text: blank < 0 ? "" : rest.slice(blank + 1).join("\n") } : null;
 }
