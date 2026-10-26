@@ -184,6 +184,11 @@ const DESIGN_ADDRESSED: &[&str] = &[
     m::DESIGN_SYSTEM_UPDATE,
 ];
 
+/// The design calls that gate what their own parsed params name (X65):
+/// `design.check`, a design system's workspace or a design, and
+/// `design.file`, a workspace's file or a session design's.
+const DESIGN_SELF_GATED: &[&str] = &[m::DESIGN_CHECK, m::DESIGN_FILE];
+
 /// The name the `moonlet` CLI gives in its hello; agents reach the daemon
 /// through it.
 pub const CLI_CLIENT: &str = "moonlet-cli";
@@ -1183,15 +1188,14 @@ impl Daemon {
             _ => {}
         }
         let store = self.design.clone();
-        // Design folders belong to a moonlet workspace (ADR 0013). A call
+        // Design folders belong to a moonlet workspace (ADR 0013). Which
+        // gate a call meets is its method's, never a key it carries: a call
         // that names a design is let through by the design it names, which
-        // `locate` finds once: a session design's workspace is its
-        // session's, never one the call claims (X65).
-        let addressed = DESIGN_ADDRESSED.contains(&method)
-            || (method == m::DESIGN_CHECK && p.get("design").is_some())
-            || (method == m::DESIGN_FILE && p.get("session").is_some());
+        // `locate` finds once (a session design's workspace is its
+        // session's, never one the call claims), and `design.check` and
+        // `design.file` gate what their parsed params name (X65).
         let workspace = p.get("workspace").and_then(Value::as_str).unwrap_or_default().to_string();
-        if !addressed {
+        if !DESIGN_ADDRESSED.contains(&method) && !DESIGN_SELF_GATED.contains(&method) {
             self.workspace_exists(&workspace)?;
         }
         match method {
@@ -1311,6 +1315,8 @@ impl Daemon {
                 if r.fix {
                     return Err(RpcError::new("invalid_params", "fix checks a design's pages"));
                 }
+                let workspace = r.workspace.clone().unwrap_or_default();
+                self.workspace_exists(&workspace)?;
                 let (ws, slug) = (workspace.clone(), r.slug.clone());
                 let problems = {
                     let store = store.clone();
@@ -1365,6 +1371,7 @@ impl Daemon {
                 let r: m::DesignFile = params(p)?;
                 match (r.workspace, r.session) {
                     (Some(workspace), None) => {
+                        self.workspace_exists(&workspace)?;
                         let path = blocking(move || store.resolve(&workspace, &r.path)).await?;
                         ok(serde_json::json!({"path": path, "content_type": store::content_type(&path)}))
                     }
@@ -1379,7 +1386,8 @@ impl Daemon {
                             .map_err(|_| RpcError::new("invalid_params", format!("{} is no file of a session design", r.path)))?;
                         ok(serde_json::json!({"path": path, "content_type": store::content_type(&path), "root": root}))
                     }
-                    _ => Err(RpcError::new("invalid_params", "name a design file by its workspace or by its session, not both")),
+                    (Some(_), Some(_)) => Err(RpcError::new("invalid_params", "name a design file by its workspace or by its session, not both")),
+                    (None, None) => Err(RpcError::new("invalid_params", "name a design file by its workspace or by its session")),
                 }
             }
             m::DESIGN_DETECT => {
