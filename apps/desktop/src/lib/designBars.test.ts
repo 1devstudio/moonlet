@@ -98,14 +98,16 @@ describe("the bar over a session design's canvas (X65)", () => {
     });
   });
 
-  it("says Design system updated with Update once its design system synced after it pinned it, after the check", () => {
+  it("says Design system updated with Update once its design system synced after it pinned it, over the check, which an out of date pin may fail, under what the agent asks and an edit not saved", () => {
     expect(designBar({ ...calm, session: true, systemUpdated: true })).toEqual({
       tone: "grey",
       text: "Design system updated.",
       detail: "moonlet-desktop was synced since this design copied it.",
       actions: ["update"],
     });
-    expect(designBar({ ...calm, session: true, systemUpdated: true, problems: [problem("pages/index.html", "missing_mid", "<h1> has no data-mid")] })?.tone).toBe("red");
+    expect(designBar({ ...calm, session: true, systemUpdated: true, problems: [problem("pages/index.html", "missing_mid", "<h1> has no data-mid")] })?.text).toBe("Design system updated.");
+    expect(designBar({ ...calm, session: true, systemUpdated: true, unsaved: "index.html m30 div: deleted" })?.tone).toBe("yellow");
+    expect(designBar({ ...calm, session: true, systemUpdated: true, needsYou: { kind: "question", text: "Which?" } })?.text).toBe("Claude asks…");
   });
 });
 
