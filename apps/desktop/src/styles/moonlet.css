@@ -24,6 +24,8 @@
   --color-add: #3ecf6e;
   --color-del: #ef5f5f;
   --color-merged: #a371f7;
+  /* A design's snapshot previewed (X65): the blue bar and outline. */
+  --color-preview: #5b8def;
   --font-sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", "SF Mono", Menlo, Monaco, monospace;
 }

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { chatOpensOn, designBar, pageFixMessage, type BarState } from "./designBars";
 
 const problem = (path: string, kind: string, message: string, line = 3) => ({ path, line, kind, message });
-const calm: BarState = { working: false, needsYou: null, page: "index", problems: [], system: "moonlet-desktop", systemRemoved: false, unsaved: null };
+const calm: BarState = { working: false, needsYou: null, page: "index", problems: [], system: "moonlet-desktop", systemRemoved: false, unsaved: null, preview: null };
 
 describe("the bar over the canvas (X65)", () => {
   it("shows none while nothing needs saying", () => {
@@ -54,8 +54,32 @@ describe("the bar over the canvas (X65)", () => {
     expect(designBar({ ...calm, systemRemoved: true })).toEqual({ tone: "grey", text: "Design system removed.", detail: "Pages show without moonlet-desktop's styles.", actions: [] });
   });
 
+  it("is blue with Back to current and Restore while a snapshot is previewed, and with Stop instead of Restore while the agent works", () => {
+    const preview = { time: "10:33", type: "edits by hand" };
+    expect(designBar({ ...calm, preview })).toEqual({
+      tone: "blue",
+      text: "Previewing the snapshot from 10:33, edits by hand. Nothing changes until you restore it.",
+      detail: null,
+      actions: ["back", "restore"],
+    });
+    expect(designBar({ ...calm, working: true, preview })).toEqual({
+      tone: "blue",
+      text: "Previewing the snapshot from 10:33, edits by hand. Nothing changes until you restore it.",
+      detail: "Restore opens when Claude stops.",
+      actions: ["back", "stop"],
+    });
+  });
+
+  it("shows what the agent asks over the preview, and the preview over the agent at work, an edit not saved, the check and the design system", () => {
+    const all: BarState = { working: true, needsYou: { kind: "question", text: "Which?" }, page: "index", problems: [problem("pages/index.html", "missing_mid", "<h1> has no data-mid")], system: "moonlet-desktop", systemRemoved: true, unsaved: "index.html m30 div: deleted", preview: { time: "09:58", type: "agent turn" } };
+    expect(designBar(all)?.text).toBe("Claude asks…");
+    expect(designBar({ ...all, needsYou: { kind: "approval", text: "Bash: rm -rf assets" } })?.text).toBe("Claude needs your approval");
+    expect(designBar({ ...all, needsYou: null })?.tone).toBe("blue");
+    expect(designBar({ ...all, needsYou: null, working: false })?.tone).toBe("blue");
+  });
+
   it("shows one bar at a time: the agent at work, then what it asks, then an edit not saved, then the check, then the design system", () => {
-    const all: BarState = { working: true, needsYou: { kind: "question", text: "Which?" }, page: "index", problems: [problem("pages/index.html", "missing_mid", "<h1> has no data-mid")], system: "moonlet-desktop", systemRemoved: true, unsaved: "index.html m30 div: deleted" };
+    const all: BarState = { working: true, needsYou: { kind: "question", text: "Which?" }, page: "index", problems: [problem("pages/index.html", "missing_mid", "<h1> has no data-mid")], system: "moonlet-desktop", systemRemoved: true, unsaved: "index.html m30 div: deleted", preview: null };
     expect(designBar(all)?.text).toBe("Claude is changing the design. Edit mode opens when it stops; comments still work");
     expect(designBar({ ...all, working: false })?.text).toBe("Claude asks…");
     expect(designBar({ ...all, working: false, needsYou: null })?.text).toBe("The page changed; your last edit was not saved.");

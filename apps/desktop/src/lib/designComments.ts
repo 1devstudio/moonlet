@@ -189,6 +189,15 @@ export function chatCardLookup(l: { found: boolean; loaded: boolean; waitedMs: n
   return !l.loaded && l.waitedMs < SHOW_IN_CHAT_WAIT_MS ? "wait" : "missing";
 }
 
+/** What the Comments rail's buttons may do (X65): Send and Send all need
+ *  the design's agent; while a snapshot is previewed the rail is read
+ *  only, as the canvas is, since Send, Send all and Resolve would change
+ *  the current design's comments. `why` is the off buttons' title. */
+export function commentsRail(s: { agent: boolean; readOnly: boolean }): { send: boolean; resolve: boolean; why: string | null } {
+  if (s.readOnly) return { send: false, resolve: false, why: "Previewing a snapshot: go back to current to send or resolve" };
+  return s.agent ? { send: true, resolve: true, why: null } : { send: false, resolve: true, why: "The design's agent is not running" };
+}
+
 /** "1 open comment", "3 open comments". */
 export function openCommentsLabel(n: number): string {
   return `${n} open comment${n === 1 ? "" : "s"}`;

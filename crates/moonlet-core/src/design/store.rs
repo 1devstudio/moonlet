@@ -464,6 +464,8 @@ impl Store {
     /// outside it, through `..`, an absolute path or a symlink.
     pub fn resolve(&self, workspace: &str, rel: &str) -> Result<PathBuf> {
         let base = self.workspace(workspace)?;
+        // A snapshot's page or asset, at its design's depth (X65).
+        let rel = &super::history::snapshot_file(rel)?.unwrap_or_else(|| rel.to_string());
         let Some(path) = inside_dir(&base, rel) else {
             bail!("{rel} is outside the design folder");
         };

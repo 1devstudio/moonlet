@@ -69,8 +69,8 @@ export function changedBanner(sys: DesignSystem, cards: DesignCard[]): string | 
  *  `rev`, its changes so far, makes a frame load it again after one;
  *  `query` asks the scheme for more, such as the comment bridge.
  *  `design_scheme.rs` (`target`) parses it. */
-export function designUrl(workspace: string, path: string, rev = 0, query: Record<string, string> = {}): string {
-  const url = `moonlet-design://${fnv1a64(path)}.${encodeURIComponent(workspace)}/${path.split("/").map(encodeURIComponent).join("/")}`;
+export function designUrl(workspace: string, path: string, rev = 0, query: Record<string, string> = {}, key = fnv1a64(path)): string {
+  const url = `moonlet-design://${key}.${encodeURIComponent(workspace)}/${path.split("/").map(encodeURIComponent).join("/")}`;
   const params = new URLSearchParams({ ...(rev ? { v: String(rev) } : {}), ...query }).toString();
   return params ? `${url}?${params}` : url;
 }
@@ -85,6 +85,21 @@ export function cardUrl(workspace: string, slug: string, path: string, rev = 0):
  *  talks to (`design_scheme.rs` `bridging`). */
 export function pageUrl(workspace: string, design: string, page: string, rev = 0, bridge = false): string {
   return designUrl(workspace, `designs/${design}/${pagePath(page)}`, rev, bridge ? { "moonlet-bridge": "1" } : {});
+}
+
+/** Page `page` of design `design`'s snapshot `n`, read only: never with the
+ *  bridge, so nothing on it can be picked or edited. Its folder is
+ *  `designs/<design>@<n>/`, which the daemon serves from the snapshot
+ *  (`snapshot_file` in design/history.rs), as deep as the design's own, so
+ *  the page's relative links to its assets and its design system's
+ *  styles resolve as they do for the design's pages. Its host's key is the
+ *  page's, an `s`, then the folder's, on which the scheme serves only that
+ *  snapshot's files and design systems' (`serves` in design_scheme.rs): a
+ *  link in the page never shows the current page in the preview. */
+export function snapshotPageUrl(workspace: string, design: string, n: number, page: string): string {
+  const folder = `designs/${design}@${n}`;
+  const path = `${folder}/${pagePath(page)}`;
+  return designUrl(workspace, path, 0, {}, `${fnv1a64(path)}s${fnv1a64(folder)}`);
 }
 
 /** The 64-bit FNV-1a hash of `text`'s UTF-8 bytes, as 16 lowercase hex digits. */

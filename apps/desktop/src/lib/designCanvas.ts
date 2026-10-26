@@ -111,6 +111,8 @@ export interface CanvasState {
   mode: CanvasMode;
   box: boolean;
   rail: boolean;
+  /** A snapshot is previewed (History): the canvas is View only. */
+  readOnly?: boolean;
 }
 
 /** C (`toggle`), V (`toggleEdit`), Esc, the View, Comment and Edit
@@ -122,6 +124,8 @@ export type CanvasAct = "toggle" | "toggleEdit" | "escape" | "view" | "comment" 
  *  the box, else goes back to View. Edit is `locked` while the agent works,
  *  and left for View when it starts (`lock`); comments still work. */
 export function canvasStep(s: CanvasState, act: CanvasAct, locked = false): CanvasState {
+  // A snapshot previewed is View only: no Comment, no Edit, no box.
+  if (s.readOnly) return { ...s, mode: "view", box: false };
   switch (act) {
     case "toggle":
       return s.mode === "comment" ? { ...s, mode: "view", box: false } : { ...s, mode: "comment", rail: true };
@@ -144,12 +148,12 @@ export function canvasStep(s: CanvasState, act: CanvasAct, locked = false): Canv
  *  where the layer is selected; null while the agent works and Edit is
  *  locked, so the click selects nothing the page would not show. */
 export function layerPick(s: CanvasState, locked: boolean): CanvasState | null {
-  return locked ? null : canvasStep(s, "edit");
+  return locked || s.readOnly ? null : canvasStep(s, "edit");
 }
 
-/** The right rail's tabs so far: Layers (Edit), Inspector, Palette and
- *  Comments. */
-export type RailTab = "layers" | "inspector" | "palette" | "comments";
+/** The right rail's tabs: Layers (Edit), Inspector, Palette, Comments and
+ *  History. */
+export type RailTab = "layers" | "inspector" | "palette" | "comments" | "history";
 
 /** The rail's tab entering mode `after` from `before` shows: Layers for
  *  Edit, Comments for Comment; null for none. */
@@ -209,6 +213,8 @@ export interface EditorState {
   layers: Layer[];
   copied: boolean;
   locked: boolean;
+  /** A snapshot is previewed: no key is the canvas's. */
+  readOnly?: boolean;
 }
 
 /** What a key does: a step of the canvas's mode, a selection, an edit of
@@ -233,7 +239,7 @@ export type EditorStep =
  *  nothing selected; ⌘V pastes once something was copied; ⌘Z and ⇧⌘Z wait
  *  while the agent works. */
 export function editorStep(s: EditorState, act: KeyAct | null): EditorStep | null {
-  if (act === null) return null;
+  if (act === null || s.readOnly) return null;
   if (act === "toggle" || act === "toggleEdit") return { kind: "canvas", act };
   if (act === "escape") return s.mode === "edit" && s.selected ? { kind: "select", mid: layerStep(s.layers, s.selected, "parent") } : { kind: "canvas", act };
   if (s.mode !== "edit") return null;
@@ -245,10 +251,10 @@ export function editorStep(s: EditorState, act: KeyAct | null): EditorStep | nul
   return { kind: "edit", op: act, mid: s.selected };
 }
 
-/** Whether the toolbar's undo button works: a change to undo, and the
- *  agent not at work, as ⌘Z. */
-export function undoOpen(s: { locked: boolean; changes: number }): boolean {
-  return !s.locked && s.changes > 0;
+/** Whether the toolbar's undo button works: a change to undo, the agent
+ *  not at work, as ⌘Z, and no snapshot previewed. */
+export function undoOpen(s: { locked: boolean; changes: number; readOnly?: boolean }): boolean {
+  return !s.locked && !s.readOnly && s.changes > 0;
 }
 
 /** What the canvas tells a page when the bridge reports its ids: on the

@@ -13,9 +13,9 @@ export function pagePath(page: string): string {
 
 /** A page's name, `index` for `pages/index.html`, as the daemon takes it
  *  (`is_page_name` in design/pages.rs): not empty, no folder, no hidden
- *  file. */
+ *  file, and no `@`, which names a snapshot's folder (`designs/<slug>@<n>/`). */
 export function isPageName(page: string): boolean {
-  return page !== "" && !page.startsWith(".") && !/[/\\\0]/.test(page);
+  return page !== "" && !page.startsWith(".") && !/[/\\\0@]/.test(page);
 }
 
 /** The page a file name (`<page>.html`) is, or null: the parse of {@link pageFile}. */

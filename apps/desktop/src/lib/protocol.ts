@@ -1120,6 +1120,23 @@ export interface DesignPageText {
   version: string;
 }
 
+/** What took a design's snapshot (X65). */
+export type SnapshotKind = "agent_turn" | "edits_by_hand" | "restored";
+
+/** A snapshot of a design's pages/ and assets/, as `design.history` lists it
+ *  (X65): `summary` says what changed ("Wrote git-a.html and git-b.html · 3
+ *  pages"); a restore has none, and `from` names the snapshot it made current. */
+export interface DesignSnapshot {
+  n: number;
+  /** When it was taken, in ms. */
+  time: number;
+  type: SnapshotKind;
+  summary: string;
+  from?: { n: number; time: number };
+  /** Its pages, `index` first. */
+  pages: string[];
+}
+
 /** `design.write_page`'s answer: the page's new version. */
 export interface DesignPageWritten {
   version: string;
@@ -1368,6 +1385,8 @@ export const M = {
   designPage: "design.page",
   designWritePage: "design.write_page",
   designKit: "design.kit",
+  designHistory: "design.history",
+  designSnapshotRestore: "design.snapshot.restore",
   designCreate: "design.create",
   designRemove: "design.remove",
   designOpen: "design.open",

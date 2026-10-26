@@ -6,7 +6,6 @@
 use std::path::Path;
 
 use anyhow::Result;
-use sha2::{Digest, Sha256};
 
 use moonlet_proto::methods::DesignPageText;
 
@@ -23,18 +22,16 @@ pub struct Stale(pub String);
 #[error("bad page \"{0}\"")]
 pub struct BadPage(pub String);
 
-/// A page's name, `index` for `pages/index.html`: not empty, no folder and
-/// no hidden file.
+/// A page's name, `index` for `pages/index.html`: not empty, no folder, no
+/// hidden file, and no `@`, which names a snapshot's folder
+/// (`designs/<slug>@<n>/`, X65).
 pub fn is_page_name(page: &str) -> bool {
-    !page.is_empty() && !page.starts_with('.') && !page.contains(['/', '\\', '\0'])
+    !page.is_empty() && !page.starts_with('.') && !page.contains(['/', '\\', '\0', '@'])
 }
 
 /// A page's version: the SHA-256 of its text, in hex.
 fn version_of(text: &str) -> String {
-    Sha256::digest(text.as_bytes())
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    crate::hash::sha256_hex(text.as_bytes())
 }
 
 /// `<slug>/pages/<page>.html`, inside the designs folder.
