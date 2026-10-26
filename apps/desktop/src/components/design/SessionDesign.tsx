@@ -92,8 +92,8 @@ function DesignOpenedNote() {
  *  Comment from the Design view cards and its edits by hand as their block,
  *  and what the user types goes with the edits by hand not told yet before
  *  it; after the agent made a session design, a note says the Design view
- *  opened. Its slash menu names the design system /moonlet-design will use,
- *  once the workspace's are listed. */
+ *  opened. Its slash menu lists /moonlet-design's forms, naming the design
+ *  system it will use once the workspace's are listed. */
 export function SessionChat({ host, id, wsId, focused, visible }: { host: string; id: number; wsId: string; focused: boolean; visible: boolean }) {
   const design = useDesign((d) => shownSessionDesign(d, host, wsId));
   const own = design !== null && design.agent === id ? design : null;
@@ -102,7 +102,8 @@ export function SessionChat({ host, id, wsId, focused, visible }: { host: string
   const session = useStore((s) => s.sessions[host]?.find((x) => x.id === wsId));
   const project = useStore((s) => (session ? projectOf(s, host, session)?.path : undefined));
   const systems = useDesign((d) => (session?.workspace_id ? systemsOf(d, host, session.workspace_id) : undefined));
-  const footer = useMemo(() => (systems && project ? designSystemFooter(systems, project) : null), [systems, project]);
+  // The forms show at once; the footer once the workspace's systems are listed.
+  const slash = useMemo(() => ({ footer: systems && project ? designSystemFooter(systems, project) : null }), [systems, project]);
   return (
     <AgentView
       host={host}
@@ -111,7 +112,7 @@ export function SessionChat({ host, id, wsId, focused, visible }: { host: string
       focused={focused}
       visible={visible}
       toolNote={(t) => (t.tool && opensDesignView(t.tool) ? <DesignOpenedNote /> : null)}
-      slashFooter={footer}
+      designSlash={slash}
       userView={own ? (text) => designMessage(text, comments, true) : undefined}
       sendText={own ? (text, images) => sendWithEdits(host, place, own.slug, id, text, images) : undefined}
     />
