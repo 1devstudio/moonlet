@@ -38,6 +38,7 @@
     "material-icon-theme": "5.39.0",
     "mermaid": "^12.1.0",
     "monaco-editor": "^0.57.0",
+    "parse5": "^8.0.1",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "shiki": "4.5.0",

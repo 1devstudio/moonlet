@@ -22,6 +22,7 @@ import { TasksMode } from "./components/tasks/TasksMode";
 import { loadTrackersConfig } from "./lib/tasksStore";
 import { modeOf } from "./lib/mode";
 import { startDesign } from "./lib/designStore";
+import { startEditor } from "./lib/designEditor";
 import { DesignMain } from "./components/design/DesignMode";
 
 function FindBar({ onClose }: { onClose: () => void }) {
@@ -141,6 +142,7 @@ export default function App() {
     startJobs();
     startCloud();
     void startDesign();
+    startEditor();
     void loadTrackersConfig();
     const off = installShortcuts();
     const onFind = () => setFinding(true);

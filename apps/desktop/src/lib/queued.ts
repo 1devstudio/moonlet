@@ -2,6 +2,7 @@
 // messages Claude has not read yet.
 import type { AsideAnswer, ChatItem, ChatState, QueuedMessage } from "./protocol";
 import { clock } from "./subagents";
+import type { ChatImage } from "./attachments";
 
 /** A line of the queued area: text, then a command in mono, then more text. */
 export interface Line {
@@ -106,6 +107,22 @@ export interface Aside {
 /** The open aside once `question`'s reply arrives; a reply to a closed or replaced question changes nothing. */
 export function asideSettled(cur: Aside | null, question: string, reply: Pick<Aside, "answer" | "error">): Aside | null {
   return cur?.question === question ? { ...cur, ...reply } : cur;
+}
+
+/** Sends a message of the user's to the agent. */
+export type UserSend = (text: string, images: ChatImage[]) => Promise<unknown>;
+
+/** How the user's messages reach the agent, a message typed and an aside's
+ *  question requeued alike: through the screen's own send when it has one,
+ *  as a design's chat puts its edits by hand first (X65), else `chatSend`. */
+export function userSend(sendText: UserSend | undefined, chatSend: UserSend): UserSend {
+  return sendText ?? chatSend;
+}
+
+/** Requeue on an aside's card: its question goes to Claude as the user's
+ *  own message, by `send` ({@link userSend}); nothing once it is closed. */
+export function requeue(aside: Aside | null, send: UserSend): Promise<unknown> {
+  return aside ? send(aside.question, []) : Promise.resolve();
 }
 
 /** ⌥↵ asks aside while Claude works, unless the input answers a plan. */

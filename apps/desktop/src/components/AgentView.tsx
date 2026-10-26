@@ -75,7 +75,7 @@ import { bashChip, shownCommand } from "../lib/jobs";
 import { useToolJob } from "../lib/jobsStore";
 import { WorkerIcon } from "./JobsPanel";
 import { type AsideAnswer, type ChatItem, type ChatState, M, type PermissionAsk, type QueuedMessage, type TerminalInfo, type ToolCall, type TurnTime } from "../lib/protocol";
-import { type Aside, type Line, type Running, asideFooter, asideSettled, canAskAside, composerPlaceholder, interruptedLine, queuedCount, queuedHeader, sendNowLabel, sendNowParams, sendNowWarning, unqueued, waitingOn } from "../lib/queued";
+import { type Aside, type Line, type Running, asideFooter, asideSettled, canAskAside, composerPlaceholder, interruptedLine, queuedCount, queuedHeader, requeue, sendNowLabel, sendNowParams, sendNowWarning, unqueued, userSend, waitingOn } from "../lib/queued";
 import { firstWord, suggest } from "../lib/suggest";
 import { canMentionFiles, fileMention, isAttachShortcut, withMention, withSlashCommand } from "../lib/plusMenu";
 import { type ChatImage, base64, splitAttachments } from "../lib/attachments";
@@ -1322,7 +1322,9 @@ async function openInTerminal(host: string, info: TerminalInfo, st: ChatState) {
  *  with its brief (X65); `userText`: what a message of the user's shows when
  *  not its whole text (null keeps it), told whether it is the user's first;
  *  `userView`: a message of the user's shown its own way, such as a design's
- *  comments as Comment from the canvas cards (null shows it as a message). */
+ *  comments as Comment from the canvas cards (null shows it as a message);
+ *  `sendText`: sends what the user typed in place of `chat.send`, such as a
+ *  design's message with its edits by hand before it. */
 export function AgentView({
   host,
   id,
@@ -1332,6 +1334,7 @@ export function AgentView({
   lead,
   userText,
   userView,
+  sendText,
 }: {
   host: string;
   id: number;
@@ -1341,6 +1344,7 @@ export function AgentView({
   lead?: ReactNode;
   userText?: (text: string, first: boolean) => string | null;
   userView?: (text: string) => ReactNode | null;
+  sendText?: (text: string, images: ChatImage[]) => Promise<unknown>;
 }) {
   const info = useStore((s) => s.terminals[host]?.[id]);
   const st = useChat((s) => s.chats[chatKey(host, id)]);
@@ -1413,6 +1417,9 @@ export function AgentView({
     />
   );
 
+  // A message typed and an aside requeued go the same way: a design's
+  // chat puts its edits by hand before them.
+  const sendUser = userSend(sendText, (text, images) => call(M.chatSend, { text, images }));
   const send = (text: string, images: ChatImage[]) => {
     stick.current = true;
     if (revising) {
@@ -1421,7 +1428,7 @@ export function AgentView({
       if (answer) void call(M.chatPermission, { ask: revise, ...answer });
       return;
     }
-    void call(M.chatSend, { text, images });
+    void sendUser(text, images).catch(errorToast);
   };
   const stop = () => void call(M.chatInterrupt, {});
   // Queued messages (X49): Send now, Ask aside, and the aside's card.
@@ -1457,8 +1464,8 @@ export function AgentView({
     if (outcome === "cancelled") askAside(unqueuing.text);
     else toast("Claude read the message before it could be asked aside");
   }, [st, unqueuing]); // eslint-disable-line react-hooks/exhaustive-deps
-  const requeue = () => {
-    if (aside) void call(M.chatSend, { text: aside.question, images: [] });
+  const requeueAside = () => {
+    void requeue(aside, sendUser).catch(errorToast);
     setAside(null);
   };
   const column = useRef<HTMLElement>(null);
@@ -1680,7 +1687,7 @@ export function AgentView({
                 onRing={setRing}
               />
             )}
-            {aside && <AsideCard aside={aside} onRequeue={requeue} onClose={() => setAside(null)} />}
+            {aside && <AsideCard aside={aside} onRequeue={requeueAside} onClose={() => setAside(null)} />}
             {st?.pending.map((ask) => {
               if (planOf(ask)) return null;
               return isQuestion(ask) ? (

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { DesignComment } from "./protocol";
-import { boxLabel, boxPlace, chatCardLookup, pinPlace, withMid, keepAction, openCommentsLabel, commentCards, footerLabel, pinLabel, sentLabel, commentLine, commentsMessage, commentsTab, isOrphaned, pageCounts, parseCommentLine, sendAll, withPins, type PageMids } from "./designComments";
+import { editsMessage, type Untold } from "./designEdits";
+import { boxLabel, boxPlace, chatCardLookup, pinPlace, withMid, keepAction, openCommentsLabel, commentCards, footerLabel, pinLabel, sentLabel, commentLine, commentsMessage, commentsTab, isOrphaned, messageView, pageCounts, parseCommentLine, sendAll, withPins, type PageMids } from "./designComments";
 
 const pin = (n: number, over: Partial<DesignComment> = {}): DesignComment => ({
   n,
@@ -214,5 +215,21 @@ describe("a pin over the page (X65)", () => {
     // Scrolled out above, or below the page.
     expect(at(0, -300, 400, 100)).toBeNull();
     expect(at(0, 1000, 100, 20)).toBeNull();
+  });
+});
+
+describe("a message of comments with edits by hand (X65)", () => {
+  it("carries the edits by hand first, then a line per comment, and is read back as both, its comments still as cards", () => {
+    const nav = pin(1, { sent_at: 1 });
+    const edits: Untold[] = [{ page: "index", mid: "m30", tag: "p", change: { kind: "deleted" } }];
+    const sent = editsMessage(edits, commentsMessage([nav]));
+    expect(sent).toBe('Edits by hand since your last turn:\nindex.html m30 p: deleted\n\nComment on index.html [data-mid=m12] (nav "General Appearance Terminal Agents"): Collapse into a menu on phone');
+    expect(messageView(sent, [nav])).toEqual({
+      edits: [{ page: "index", mid: "m30", tag: "p", said: "deleted" }],
+      cards: [{ n: 1, page: "index", mid: "m12", tag: "nav", text: "General Appearance Terminal Agents", comment: "Collapse into a menu on phone" }],
+      text: "",
+    });
+    expect(messageView("Two more variants", [nav])).toBeNull();
+    expect(messageView("Edits by hand since your last turn:\nindex.html m30 p: deleted\n\nTwo more variants", [nav])).toEqual({ edits: [{ page: "index", mid: "m30", tag: "p", said: "deleted" }], cards: null, text: "Two more variants" });
   });
 });

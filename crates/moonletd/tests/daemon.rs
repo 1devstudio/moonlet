@@ -2515,6 +2515,104 @@ async fn overlapping_comment_changes_keep_every_pin() {
     assert_eq!(got, (1..=PINS).zip(edited.iter().map(String::as_str)).collect::<Vec<_>>());
 }
 
+/// X65 entry 9: the visual editor reads a page with its version and saves it
+/// over that version, exactly as sent; a save over a page that changed on
+/// disk since is refused as `stale` and leaves the change.
+#[tokio::test]
+async fn a_page_is_read_with_its_version_saved_as_sent_and_a_stale_save_is_refused() {
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    let ws = workspace_with_system(&d, &mut c).await;
+    let _: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    let file = d.home.path().join(".moonlet/design").join(&ws).join("designs/settings-page/pages/index.html");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, "<!doctype html>\r\n<body data-mid=\"m1\">\r\n<h1 data-mid=m2>Settings</h1>\r\n</body>\r\n").unwrap();
+    let page: serde_json::Value = c
+        .request(methods::DESIGN_PAGE, serde_json::json!({"workspace": ws, "slug": "settings-page", "page": "index"}))
+        .await
+        .unwrap();
+    assert_eq!(
+        page,
+        serde_json::json!({"html": "<!doctype html>\r\n<body data-mid=\"m1\">\r\n<h1 data-mid=m2>Settings</h1>\r\n</body>\r\n", "version": "481faada599299fe4a62df14441b3ede9a8a2d0a53b1c90e93902910d05ec0e4"})
+    );
+    let mut listener = d.client().await;
+    let edited = "<!doctype html>\r\n<body data-mid=\"m1\">\r\n<h1 data-mid=m2>Settings &amp; more</h1>\r\n</body>\r\n";
+    let saved: serde_json::Value = c
+        .request(
+            methods::DESIGN_WRITE_PAGE,
+            serde_json::json!({"workspace": ws, "slug": "settings-page", "page": "index", "html": edited, "base_version": page["version"]}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), edited);
+    let again: serde_json::Value = c
+        .request(methods::DESIGN_PAGE, serde_json::json!({"workspace": ws, "slug": "settings-page", "page": "index"}))
+        .await
+        .unwrap();
+    assert_eq!(again["version"], saved["version"]);
+    let data = next_change_of(&mut listener, "pages/index.html").await;
+    assert_eq!(data["design"], "settings-page");
+    std::fs::write(&file, "<p data-mid=\"m1\">The agent's</p>\n").unwrap();
+    let stale = c
+        .request::<_, serde_json::Value>(
+            methods::DESIGN_WRITE_PAGE,
+            serde_json::json!({"workspace": ws, "slug": "settings-page", "page": "index", "html": "<p>mine</p>", "base_version": saved["version"]}),
+        )
+        .await;
+    assert_eq!(stale.unwrap_err().to_string(), "stale: pages/index.html changed since it was read");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "<p data-mid=\"m1\">The agent's</p>\n");
+    let bad = c
+        .request::<_, serde_json::Value>(
+            methods::DESIGN_WRITE_PAGE,
+            serde_json::json!({"workspace": ws, "slug": "settings-page", "page": "../design", "html": "x", "base_version": "0"}),
+        )
+        .await;
+    assert_eq!(bad.unwrap_err().to_string(), "invalid_params: bad page \"../design\"");
+}
+
+/// X65: saves of one page that overlap, each from its own client and all
+/// over the version read, are taken one at a time: one is saved, every
+/// other is refused as `stale`, and the file is the one saved.
+#[tokio::test]
+async fn overlapping_saves_of_a_page_over_one_version_save_one_and_refuse_the_others_as_stale() {
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    let ws = workspace_with_system(&d, &mut c).await;
+    let _: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    let file = d.home.path().join(".moonlet/design").join(&ws).join("designs/settings-page/pages/index.html");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    const SAVES: usize = 12;
+    for round in 0..5 {
+        std::fs::write(&file, format!("<!doctype html>\n<body data-mid=\"m1\"><h1 data-mid=\"m2\">Round {round}</h1></body>\n")).unwrap();
+        let page: serde_json::Value = c
+            .request(methods::DESIGN_PAGE, serde_json::json!({"workspace": ws, "slug": "settings-page", "page": "index"}))
+            .await
+            .unwrap();
+        let mut runs = Vec::new();
+        for i in 0..SAVES {
+            let mut client = d.client().await;
+            let html = format!("<!doctype html>\n<body data-mid=\"m1\"><h1 data-mid=\"m2\">Round {round}, save {i}</h1></body>\n");
+            let params = serde_json::json!({"workspace": ws, "slug": "settings-page", "page": "index", "html": html, "base_version": page["version"]});
+            runs.push(tokio::spawn(async move { (html, client.request::<_, serde_json::Value>(methods::DESIGN_WRITE_PAGE, params).await.map_err(|e| e.to_string())) }));
+        }
+        let mut saved = Vec::new();
+        for run in runs {
+            match run.await.unwrap() {
+                (html, Ok(_)) => saved.push(html),
+                (_, Err(e)) => assert_eq!(e, "stale: pages/index.html changed since it was read"),
+            }
+        }
+        assert_eq!(saved.len(), 1, "round {round}: saved {saved:?}");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), saved[0]);
+    }
+}
+
 /// X65: a design needs a design system its workspace has, and a session
 /// design is not made yet (entry 12).
 #[tokio::test]

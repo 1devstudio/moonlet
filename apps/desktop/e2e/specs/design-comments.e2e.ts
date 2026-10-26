@@ -80,7 +80,7 @@ describe("A design's comments", () => {
   });
 
   it("shows and hides the right rail with its button, and Comment mode shows it", async () => {
-    const toggle = $('//button[@title="Comments"]');
+    const toggle = $('//button[@title="Right rail"]');
     await toggle.click();
     await expect(rail()).not.toBeExisting();
     await toggle.click();
