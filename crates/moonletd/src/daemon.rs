@@ -92,13 +92,15 @@ const EDITS_QUIET: std::time::Duration = std::time::Duration::from_secs(10);
 /// A design's edits by hand saved since its last snapshot (X65).
 #[derive(Default)]
 struct HandEdits {
-    /// What each save made while the design's agent did not work did, as
-    /// the app said with it; `None` when there was none.
-    before: Option<Vec<String>>,
-    /// What each save made while the design's agent worked did, `None`
-    /// when there was none: they go with its turn, also when the daemon
-    /// hears it start only after them.
-    in_turn: Option<Vec<String>>,
+    /// What each save did, as the app said with it, in the order they were
+    /// saved, each with whether the design's agent worked as it was saved:
+    /// those go with its turn, also when the daemon hears it start only
+    /// after them.
+    edits: Vec<(bool, String)>,
+    /// One was saved while the agent did not work.
+    before: bool,
+    /// One was saved while the agent worked.
+    in_turn: bool,
     /// Saves so far: a wait that ends after a later save takes nothing.
     saves: u64,
     /// The wait for them to stop, the latest save's: a later save cancels it.
@@ -106,9 +108,9 @@ struct HandEdits {
 }
 
 impl HandEdits {
-    /// What all of them did, in the order they were saved in each batch.
+    /// What all of them did, in the order they were saved.
     fn all(&self) -> Vec<String> {
-        self.before.iter().chain(&self.in_turn).flatten().cloned().collect()
+        self.edits.iter().map(|(_, e)| e.clone()).collect()
     }
 }
 
@@ -2088,10 +2090,15 @@ impl Daemon {
         let key = at.key();
         let mut all = self.hand_edits.lock().unwrap();
         let pending = all.get_mut(&key)?;
-        if pending.in_turn.is_some() {
-            return pending.before.take();
+        if !pending.before {
+            return None;
         }
-        pending.before.as_ref()?;
+        if pending.in_turn {
+            let (during, before): (Vec<_>, Vec<_>) = std::mem::take(&mut pending.edits).into_iter().partition(|(in_turn, _)| *in_turn);
+            pending.edits = during;
+            pending.before = false;
+            return Some(before.into_iter().map(|(_, e)| e).collect());
+        }
         let taken = all.remove(&key)?;
         if let Some(quiet) = &taken.quiet {
             quiet.abort();
@@ -2112,9 +2119,10 @@ impl Daemon {
         let key = at.key();
         let mut all = self.hand_edits.lock().unwrap();
         let pending = all.entry(key.clone()).or_default();
+        pending.edits.extend(edits.into_iter().map(|e| (in_turn, e)));
         match in_turn {
-            true => pending.in_turn.get_or_insert_default().extend(edits),
-            false => pending.before.get_or_insert_default().extend(edits),
+            true => pending.in_turn = true,
+            false => pending.before = true,
         }
         pending.saves += 1;
         if let Some(quiet) = pending.quiet.take() {

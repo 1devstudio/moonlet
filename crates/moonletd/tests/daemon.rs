@@ -3615,6 +3615,40 @@ async fn edits_by_hand_saved_before_a_start_heard_late_keep_their_own_snapshot()
     assert_eq!(kinds, [(4, "agent_turn"), (3, "edits_by_hand"), (2, "agent_turn"), (1, "agent_turn")], "{listed}");
 }
 
+/// X65: edits by hand kept before a restore are listed in the order they
+/// were saved, one saved during the agent's turn before one saved after
+/// it, though the turn's end waits in line (`MOONLET_DESIGN_TURNS_HELD`).
+#[tokio::test]
+async fn edits_by_hand_kept_before_a_restore_are_listed_in_the_order_they_were_saved() {
+    let held = tempfile::tempdir().unwrap();
+    let hold = held.path().join("hold");
+    let env = vec![("MOONLET_DESIGN_QUIET_MS".into(), "60000".into()), ("MOONLET_DESIGN_TURNS_HELD".into(), hold.display().to_string())];
+    let d = fake_claude_daemon_with(WRITING_CLAUDE, env).await;
+    let mut c = d.client().await;
+    let ws = workspace_with_system(&d, &mut c).await;
+    let created: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    let agent = created["agent"].as_u64().unwrap();
+    history_of(&mut c, &ws, 1).await;
+    turn_over(&mut c, agent).await;
+    let dir = d.home.path().join(".moonlet/design").join(&ws).join("designs/settings-page");
+    let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": agent, "text": "HOLD-NOW"})).await.unwrap();
+    working(&mut c, agent).await;
+    // The turn's end waits in line from here.
+    std::fs::write(&hold, "").unwrap();
+    save_by_hand(&mut c, &ws, "<p>by hand, while the agent works</p>\n", &["text of m2"]).await;
+    std::fs::write(dir.join("release"), "").unwrap();
+    turn_over(&mut c, agent).await;
+    save_by_hand(&mut c, &ws, "<p>by hand, after the turn</p>\n", &["style of m1"]).await;
+    let _: serde_json::Value = c.request(methods::DESIGN_SNAPSHOT_RESTORE, serde_json::json!({"workspace": ws, "slug": "settings-page", "n": 1})).await.unwrap();
+    std::fs::remove_file(&hold).unwrap();
+    let listed = history_of(&mut c, &ws, 3).await;
+    let kept = listed.as_array().unwrap().iter().find(|s| s["type"] == "edits_by_hand").unwrap_or_else(|| panic!("{listed}"));
+    assert_eq!(kept["summary"], "Text of m2, style of m1", "{listed}");
+}
+
 /// X65: a restore that fails, of a snapshot the design does not have,
 /// leaves the edits by hand not kept yet waiting: they are kept once they
 /// stop, as without the restore.
