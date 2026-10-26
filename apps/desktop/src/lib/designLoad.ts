@@ -27,13 +27,19 @@ import { pageFile } from "./designPage";
 /** How long the canvas waits for the bridge's answer to a hello, in ms. */
 export const LOAD_WAIT_MS = 3000;
 
-/** The shown page's load: `loading` until its frame loads, `hidden` while
- *  a frame loaded without an answer waits for the window to show,
+/** The load of `frame`, the page framed (`<page>@<rev>`, framed again
+ *  when it is written again): `loading` until its frame loads, `hidden`
+ *  while a frame loaded without an answer waits for the window to show,
  *  `waiting` for an answer to the `asked`th hello, then `loaded` or
  *  `failed`, `refused` by the scheme or with its bridge silent. */
-export type PageLoad = { phase: "loading" | "hidden" | "waiting" | "loaded"; asked: number } | { phase: "failed"; asked: number; refused: boolean };
+export type PageLoad = { frame: string; asked: number } & ({ phase: "loading" | "hidden" | "waiting" | "loaded" } | { phase: "failed"; refused: boolean });
 
-export type LoadEvent =
+/** What moves a page's load, from its frame `frame`: a signal of another
+ *  frame than the one framed now, sent before it was replaced, does
+ *  nothing. */
+export type LoadEvent = LoadSignal & { frame: string };
+
+export type LoadSignal =
   /** The frame's load, and whether the window shows then. */
   | { kind: "load"; visible: boolean }
   /** The bridge reported the page's ids. */
@@ -45,12 +51,12 @@ export type LoadEvent =
   | { kind: "timeout"; token: number }
   /** The scheme could not serve the page (or the page says so). */
   | { kind: "refused" }
-  /** The page is framed again: written again, or another page. */
-  | { kind: "reload" };
+  /** The page is framed: another page, or written again. */
+  | { kind: "frame" };
 
-export const LOADING: PageLoad = { phase: "loading", asked: 0 };
+export const LOADING: PageLoad = { frame: "", phase: "loading", asked: 0 };
 
-const ask = (s: PageLoad): PageLoad => ({ phase: "waiting", asked: s.asked + 1 });
+const ask = (s: PageLoad): PageLoad => ({ frame: s.frame, phase: "waiting", asked: s.asked + 1 });
 
 /** What names the hello the canvas asks now, for its wait's timeout: the
  *  timeout of an earlier ask does nothing. */
@@ -63,23 +69,32 @@ export function waitToken(s: PageLoad): number {
  *  first load of a frame counts: a link the page follows in View mode loads
  *  the frame again, with no bridge, and a page that loaded stays loaded. */
 export function loadStep(s: PageLoad, e: LoadEvent): PageLoad {
+  // The ask count goes on across frames, so no wait of one ends another's.
+  if (e.kind === "frame") return { frame: e.frame, phase: "loading", asked: s.asked };
+  if (e.frame !== s.frame) return s;
+  const { frame, asked } = s;
   switch (e.kind) {
-    case "reload":
-      return { phase: "loading", asked: s.asked };
     case "answer":
-      return { phase: "loaded", asked: s.asked };
+      return { frame, asked, phase: "loaded" };
     case "refused":
-      return { phase: "failed", asked: s.asked, refused: true };
+      return { frame, asked, phase: "failed", refused: true };
     case "load":
       if (s.phase !== "loading") return s;
-      return e.visible ? ask(s) : { phase: "hidden", asked: s.asked };
+      return e.visible ? ask(s) : { frame, asked, phase: "hidden" };
     case "visible":
       return s.phase === "hidden" ? ask(s) : s;
     case "hidden":
-      return s.phase === "waiting" ? { phase: "hidden", asked: s.asked } : s;
+      return s.phase === "waiting" ? { frame, asked, phase: "hidden" } : s;
     case "timeout":
-      return s.phase === "waiting" && e.token === s.asked ? { phase: "failed", asked: s.asked, refused: false } : s;
+      return s.phase === "waiting" && e.token === asked ? { frame, asked, phase: "failed", refused: false } : s;
   }
+}
+
+/** The load of `frame`, the page framed now: loading until its own frame
+ *  is told, so a page switched to never shows, for a render, the load of
+ *  the page before it. */
+export function shownLoad(s: PageLoad, frame: string): PageLoad {
+  return s.frame === frame ? s : { frame, phase: "loading", asked: s.asked };
 }
 
 /** Why the shown page did not load: the scheme refused it, saying why, or

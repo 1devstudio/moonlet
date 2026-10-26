@@ -54,7 +54,7 @@ import { chatCardLookup, commentCardSelector, commentsRail, commentsTab, keepAct
 import { bridgeMessage, editMessage, helloMessage, modeMessage, paletteMessage, pinsMessage, scrollMessage, selectMessage, type DragOver, type DragResult, type Layer, type PickedElement, type Rect } from "../../lib/designBridge";
 import { pageFile, pagePath } from "../../lib/designPage";
 import { barProblems, chatOpensOn, designBar, loadFixMessage, pageFixMessage, type Bar, type BarAction, type PageProblem } from "../../lib/designBars";
-import { LOAD_WAIT_MS, LOADING, loadStep, notLoadedOf, readFailureNote, waitToken, wantsParseError, type LoadEvent, type PageLoad } from "../../lib/designLoad";
+import { LOAD_WAIT_MS, LOADING, loadStep, notLoadedOf, readFailureNote, shownLoad, waitToken, wantsParseError, type LoadEvent, type LoadSignal, type PageLoad } from "../../lib/designLoad";
 import { claimKeys } from "../../lib/keys";
 import { askConfirm } from "../../lib/confirm";
 import { NEAR_ROOT, useNear } from "../../lib/useNear";
@@ -317,7 +317,12 @@ export function DesignCanvas({
   const writing = writingPage(lastWritten, working);
   // Whether the page framed with the bridge loaded (lib/designLoad.ts), and
   // its first parse error, which the bar says only when it did not.
-  const [load, onLoadEvent] = useReducer(loadStep, LOADING);
+  // Keyed by the frame, `<page>@<rev>`: a page switched to, or written
+  // again, is loading from the render it is framed in.
+  const shownRev = useDesign((d) => (page === null ? 0 : pageRevOf(d, host, place, design.slug, page)));
+  const frameKey = `${page}@${shownRev}`;
+  const [loads, onLoadEvent] = useReducer(loadStep, LOADING);
+  const load = shownLoad(loads, frameKey);
   const framed = page !== null && !previewed && names.includes(page);
   const parseError = useEditor((e) => (page === null ? null : parseErrorOf(e, host, place, design.slug, page)));
   // Only a page whose bridge was silent is read as HTML, for the bar.
@@ -756,6 +761,7 @@ export function DesignCanvas({
               bridge={bridge}
               load={load}
               onLoadEvent={onLoadEvent}
+              frameKey={frameKey}
               onTree={setLayers}
               onComputed={(mid, style) => setComputed({ mid, style })}
               onDrag={setDragging}
@@ -881,6 +887,7 @@ function PageFrame({
   bridge,
   load,
   onLoadEvent,
+  frameKey,
   onTree,
   onComputed,
   onDrag,
@@ -913,6 +920,8 @@ function PageFrame({
    *  and the window's visibility move on. */
   load: PageLoad;
   onLoadEvent: (e: LoadEvent) => void;
+  /** The frame the events are of: `<page>@<rev>`. */
+  frameKey: string;
   onTree: (layers: Layer[]) => void;
   onComputed: (mid: string, style: Record<string, string>) => void;
   onDrag: (drag: DragOver) => void;
@@ -930,6 +939,10 @@ function PageFrame({
   onCloseBox: () => void;
 }) {
   const rev = useDesign((d) => pageRevOf(d, host, place, design.slug, page));
+  // A signal of the frame framed now (lib/designLoad.ts).
+  const framedNow = useRef(frameKey);
+  framedNow.current = frameKey;
+  const signal = useCallback((e: LoadSignal) => onLoadEvent({ ...e, frame: framedNow.current }), [onLoadEvent]);
   const frame = useRef<HTMLIFrameElement>(null);
   const [rects, setRects] = useState<Record<string, Rect>>({});
   // The elements whose boxes the page reports: the pins', and the open box's.
@@ -970,9 +983,9 @@ function PageFrame({
       if (!win || e.source !== win) return;
       const m = bridgeMessage(e.data);
       if (!m) return;
-      if (m.type === "failed") return onLoadEvent({ kind: "refused" });
+      if (m.type === "failed") return signal({ kind: "refused" });
       if (m.type === "mids") {
-        onLoadEvent({ kind: "answer" });
+        signal({ kind: "answer" });
         setPageMids(host, place, design.slug, page, m.mids);
         tell(modeMessage(latest.current.mode));
         tell(pinsMessage(latest.current.wanted));
@@ -1012,23 +1025,23 @@ function PageFrame({
   // Each framing of the page starts its load again; a hidden window's
   // frames may be suspended, so the wait for an answer runs only while it
   // shows (lib/designLoad.ts).
-  useEffect(() => onLoadEvent({ kind: "reload" }), [host, place, design.slug, page, rev, onLoadEvent]);
+  useEffect(() => onLoadEvent({ kind: "frame", frame: frameKey }), [frameKey, onLoadEvent]);
   useEffect(() => {
-    const seen = () => onLoadEvent({ kind: document.visibilityState === "visible" ? "visible" : "hidden" });
+    const seen = () => signal({ kind: document.visibilityState === "visible" ? "visible" : "hidden" });
     document.addEventListener("visibilitychange", seen);
     return () => document.removeEventListener("visibilitychange", seen);
-  }, [onLoadEvent]);
+  }, [signal]);
   const token = waitToken(load);
   useEffect(() => {
     if (load.phase !== "waiting") return;
     tell(helloMessage());
-    const t = setTimeout(() => onLoadEvent({ kind: "timeout", token }), LOAD_WAIT_MS);
+    const t = setTimeout(() => onLoadEvent({ kind: "timeout", token, frame: frameKey }), LOAD_WAIT_MS);
     return () => clearTimeout(t);
-  }, [load.phase, token, onLoadEvent]);
+  }, [load.phase, token, frameKey, onLoadEvent]);
 
   return (
     <div className="relative m-auto shrink-0 rounded-md border border-border-strong shadow-2xl">
-      <CardFrame url={pageUrl(place, design.slug, page, rev, true)} title={pageFile(page)} viewport={viewport} scale={scale} interactive frameRef={frame} onLoad={() => onLoadEvent({ kind: "load", visible: document.visibilityState === "visible" })} />
+      <CardFrame url={pageUrl(place, design.slug, page, rev, true)} title={pageFile(page)} viewport={viewport} scale={scale} interactive frameRef={frame} onLoad={() => signal({ kind: "load", visible: document.visibilityState === "visible" })} />
       <PinLayer pins={pins} rects={rects} scale={scale} size={[viewport[0] * scale, viewport[1] * scale]} open={box?.pin?.n ?? null} onOpen={onOpenPin} />
       {box && (
         <CommentBox

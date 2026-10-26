@@ -1,15 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { LOADING, loadStep, notLoadedOf, readFailureNote, waitToken, wantsParseError, type LoadEvent, type PageLoad } from "./designLoad";
+import { LOADING, loadStep, notLoadedOf, readFailureNote, shownLoad, waitToken, wantsParseError, type LoadEvent, type LoadSignal, type PageLoad } from "./designLoad";
 import { bridgeMessage } from "./designBridge";
 import { designBar, loadFixMessage } from "./designBars";
 
-const run = (events: LoadEvent[], from: PageLoad = LOADING) => events.reduce(loadStep, from);
+type Signal = LoadSignal | LoadEvent;
+/** `e` from the frame framed now, unless it names its own. */
+const step = (s: PageLoad, e: Signal) => loadStep(s, { frame: s.frame, ...e });
+const run = (events: Signal[], from: PageLoad = LOADING) => events.reduce(step, from);
 /** The wait for the hello the canvas asks now is over. */
-const timeout = (s: PageLoad): LoadEvent => ({ kind: "timeout", token: waitToken(s) });
+const timeout = (s: PageLoad): LoadSignal => ({ kind: "timeout", token: waitToken(s) });
 /** `events`, then the end of the wait for the hello asked by then. */
-const thenTimeout = (events: LoadEvent[], from: PageLoad = LOADING) => {
+const thenTimeout = (events: Signal[], from: PageLoad = LOADING) => {
   const s = run(events, from);
-  return loadStep(s, timeout(s));
+  return step(s, timeout(s));
 };
 
 describe("whether the canvas's page loaded (X65)", () => {
@@ -27,15 +30,15 @@ describe("whether the canvas's page loaded (X65)", () => {
     const hidden = run([{ kind: "load", visible: false }]);
     expect(hidden.phase).toBe("hidden");
     // However long it stays hidden: a suspended frame answers nothing.
-    expect(loadStep(hidden, timeout(hidden)).phase).toBe("hidden");
+    expect(step(hidden, timeout(hidden)).phase).toBe("hidden");
     expect(run([{ kind: "visible" }], hidden).phase).toBe("waiting");
     expect(run([{ kind: "visible" }, { kind: "answer" }], hidden).phase).toBe("loaded");
     const first = run([{ kind: "visible" }], hidden);
     const again = run([{ kind: "hidden" }, timeout(first), { kind: "visible" }], first);
     expect(again.phase).toBe("waiting");
     // The first ask's wait ends after the second ask: nothing happens.
-    expect(loadStep(again, timeout(first)).phase).toBe("waiting");
-    expect(loadStep(again, timeout(again)).phase).toBe("failed");
+    expect(step(again, timeout(first)).phase).toBe("waiting");
+    expect(step(again, timeout(again)).phase).toBe("failed");
   });
 
   it("takes a late answer: a page said not to load that answers after all has loaded", () => {
@@ -43,11 +46,12 @@ describe("whether the canvas's page loaded (X65)", () => {
   });
 
   it("starts again on a reload, where the wait of the load before does nothing", () => {
-    const waiting = run([{ kind: "load", visible: true }]);
-    const failed = loadStep(waiting, timeout(waiting));
-    expect(run([{ kind: "reload" }], failed).phase).toBe("loading");
-    expect(run([{ kind: "reload" }, { kind: "load", visible: true }, timeout(waiting)], failed).phase).toBe("waiting");
-    expect(run([{ kind: "reload" }, { kind: "load", visible: true }, { kind: "answer" }], failed).phase).toBe("loaded");
+    const waiting = run([{ kind: "frame", frame: "index@1" }, { kind: "load", visible: true }]);
+    const failed = step(waiting, timeout(waiting));
+    const again = { kind: "frame", frame: "index@2" } as const;
+    expect(run([again], failed).phase).toBe("loading");
+    expect(run([again, { kind: "load", visible: true }, timeout(waiting)], failed).phase).toBe("waiting");
+    expect(run([again, { kind: "load", visible: true }, { kind: "answer" }], failed).phase).toBe("loaded");
   });
 
   it("fails a page the scheme could not serve at once, in a hidden window too", () => {
@@ -108,6 +112,20 @@ describe("asking where a page's markup swallows the bridge (X65)", () => {
     expect(wantsParseError(run([{ kind: "answer" }]))).toBe(false);
     expect(wantsParseError(run([{ kind: "load", visible: true }]))).toBe(false);
     expect(wantsParseError(LOADING)).toBe(false);
+  });
+});
+
+describe("the load of the page shown (X65)", () => {
+  it("is loading for a page switched to in the render it is switched, never the page before's failure, whose events then do nothing", () => {
+    const a = thenTimeout([{ kind: "frame", frame: "a@1" }, { kind: "load", visible: true, frame: "a@1" }]);
+    expect(shownLoad(a, "a@1").phase).toBe("failed");
+    expect(shownLoad(a, "b@1").phase).toBe("loading");
+    // The same page written again is framed again too.
+    expect(shownLoad(a, "a@2").phase).toBe("loading");
+    const b = step(a, { kind: "frame", frame: "b@1" });
+    expect(shownLoad(b, "b@1").phase).toBe("loading");
+    expect(shownLoad(step(b, { kind: "answer", frame: "a@1" }), "b@1").phase).toBe("loading");
+    expect(shownLoad(step(b, { kind: "answer", frame: "b@1" }), "b@1").phase).toBe("loaded");
   });
 });
 
