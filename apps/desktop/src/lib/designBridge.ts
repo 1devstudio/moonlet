@@ -83,9 +83,10 @@ export type BridgeMessage =
   | { type: "style"; mid: string; set: Record<string, string> }
   /** A snippet dragged from the Palette dropped at `place`, or nowhere. */
   | { type: "drop"; place: DropPlace | null }
-  /** Not the page: the scheme's page in its place, as it could not serve
-   *  it, saying why (X65 entry 13, src-tauri/src/design_refused.js). */
-  | { type: "failed"; reason: string };
+  /** The scheme's page in place of one it could not serve (X65 entry 13,
+   *  src-tauri/src/design_refused.js). The page's own scripts can post it
+   *  too, so it is a signal only, never text: why comes from the daemon. */
+  | { type: "failed" };
 
 /** The keys the bridge sends the app from the page: C, V and Esc for the
  *  mode, and in Edit mode the editor's (Tab, Delete, ⌘D, ⌥⌘G, ⌘C, ⌘V, ⌘Z…). */
@@ -136,10 +137,6 @@ function rectOf(r: unknown): Rect | null {
 }
 
 /** The element's text on one line, cut to {@link TEXT_MAX} characters. */
-/** How much of the scheme's reason for a page it could not serve the app
- *  takes, in characters. */
-const REASON_MAX = 200;
-
 function textOf(t: unknown): string {
   return typeof t === "string" ? [...t.replace(/\s+/g, " ").trim()].slice(0, TEXT_MAX).join("") : "";
 }
@@ -152,10 +149,8 @@ export function bridgeMessage(data: unknown): BridgeMessage | null {
   if (typeof data !== "object" || data === null) return null;
   const d = data as Record<string, unknown>;
   switch (d.type) {
-    case "bridge.failed": {
-      const reason = typeof d.reason === "string" ? [...d.reason.replace(/\s+/g, " ").trim()].slice(0, REASON_MAX).join("") : "";
-      return reason ? { type: "failed", reason } : null;
-    }
+    case "bridge.failed":
+      return { type: "failed" };
     case "bridge.mids":
       return Array.isArray(d.mids) && d.mids.length <= MIDS_MAX && d.mids.every(isMid) ? { type: "mids", mids: d.mids } : null;
     case "bridge.tree": {

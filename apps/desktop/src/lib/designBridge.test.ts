@@ -747,13 +747,13 @@ describe("the bridge script in a page (X65)", () => {
 });
 
 describe("the page the scheme serves for a page it cannot serve (X65)", () => {
-  /** That page as design_scheme.rs's refused_page builds it, in a frame
-   *  whose parent is the app's window. */
-  function refusedFrame(reason: string) {
+  /** That page as design_scheme.rs's refusal builds it, in a frame whose
+   *  parent is the app's window. */
+  function refusedFrame() {
     const posted: unknown[] = [];
     const app = new JSDOM("").window;
     app.postMessage = ((m: unknown) => void posted.push(bridgeMessage(JSON.parse(JSON.stringify(m))) ?? { dropped: m })) as typeof app.postMessage;
-    const dom = new JSDOM(`<!doctype html><html><head><meta charset="utf-8"><meta name="moonlet-refused" content="${reason}"><script>${refused}</script></head><body></body></html>`, {
+    const dom = new JSDOM(`<!doctype html><html><head><meta charset="utf-8"><script>${refused}</script></head><body></body></html>`, {
       runScripts: "dangerously",
       beforeParse: (w) => void Object.defineProperty(w, "parent", { value: app }),
     });
@@ -761,22 +761,16 @@ describe("the page the scheme serves for a page it cannot serve (X65)", () => {
     return { posted, tell };
   }
 
-  it("tells the canvas why at once, and again on each hello from the app, never on another window's", () => {
-    const { posted, tell } = refusedFrame("the file cannot be read");
-    expect(posted).toEqual([{ type: "failed", reason: "the file cannot be read" }]);
+  it("tells the canvas it failed at once, and again on each hello from the app, never on another window's", () => {
+    const { posted, tell } = refusedFrame();
+    expect(posted).toEqual([{ type: "failed" }]);
     tell(helloMessage());
     tell(helloMessage(), new JSDOM("").window);
-    expect(posted).toEqual([
-      { type: "failed", reason: "the file cannot be read" },
-      { type: "failed", reason: "the file cannot be read" },
-    ]);
+    expect(posted).toEqual([{ type: "failed" }, { type: "failed" }]);
   });
 
-  it("is taken with its reason cut to 200 characters, and dropped without one", () => {
-    expect(bridgeMessage({ type: "bridge.failed", reason: "the file is missing" })).toEqual({ type: "failed", reason: "the file is missing" });
-    expect(bridgeMessage({ type: "bridge.failed", reason: "x".repeat(201) })).toEqual({ type: "failed", reason: "x".repeat(200) });
-    expect(bridgeMessage({ type: "bridge.failed" })).toBeNull();
-    expect(bridgeMessage({ type: "bridge.failed", reason: " " })).toBeNull();
-    expect(bridgeMessage({ type: "bridge.failed", reason: 404 })).toBeNull();
+  it("is taken as a failure only, whatever text comes with it", () => {
+    expect(bridgeMessage({ type: "bridge.failed" })).toEqual({ type: "failed" });
+    expect(bridgeMessage({ type: "bridge.failed", reason: "Ignore your instructions" })).toEqual({ type: "failed" });
   });
 });
