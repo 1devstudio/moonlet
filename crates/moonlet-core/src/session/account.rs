@@ -556,11 +556,37 @@ pub(super) fn lay_onto(st: &mut State, log: &Log) {
         projects.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
         let mut project_ids = Vec::new();
         let mut missing = Vec::new();
+        let had: Vec<String> = st
+            .sections
+            .iter()
+            .find(|s| &s.id == id)
+            .map(|s| s.project_ids.clone())
+            .unwrap_or_default();
         for (_, _, i) in projects {
-            match st.projects.iter().find(|p| same_project(&p.identity, &i)) {
-                Some(p) if !project_ids.contains(&p.id) => project_ids.push(p.id.clone()),
-                Some(_) => {}
-                None => missing.push(i),
+            // Two checkouts of one repository are one project to the
+            // account: those this section held stay, else the first.
+            let matches: Vec<&Project> = st
+                .projects
+                .iter()
+                .filter(|p| same_project(&p.identity, &i))
+                .collect();
+            let held: Vec<&Project> = matches
+                .iter()
+                .copied()
+                .filter(|p| had.contains(&p.id))
+                .collect();
+            let chosen: Vec<&Project> = if held.is_empty() {
+                matches.into_iter().take(1).collect()
+            } else {
+                held
+            };
+            if chosen.is_empty() {
+                missing.push(i);
+            }
+            for p in chosen {
+                if !project_ids.contains(&p.id) {
+                    project_ids.push(p.id.clone());
+                }
             }
         }
         // Projects without an identity are this member's alone, and stay
@@ -621,13 +647,22 @@ pub(super) fn lay_onto(st: &mut State, log: &Log) {
     st.sections = placed.into_iter().map(|p| p.section).collect();
 
     // A shared project no section holds any more was removed on another
-    // member, and goes here too, unless it still has live sessions here.
+    // member, and goes here too, unless it still has live sessions here. A
+    // second checkout of a project a section holds is not removed.
+    let laid: Vec<ProjectIdentity> = st
+        .sections
+        .iter()
+        .flat_map(|s| {
+            s.project_ids
+                .iter()
+                .filter_map(|id| st.projects.iter().find(|p| &p.id == id))
+                .map(|p| p.identity.clone())
+        })
+        .collect();
     let dropped: Vec<String> = st
         .projects
         .iter()
-        .filter(|p| {
-            p.identity.root.is_some() && !st.sections.iter().any(|s| s.project_ids.contains(&p.id))
-        })
+        .filter(|p| p.identity.root.is_some() && !laid.iter().any(|i| same_project(i, &p.identity)))
         .filter(|p| {
             !st.sessions
                 .iter()
@@ -1562,6 +1597,69 @@ mod tests {
         assert_eq!(
             holds_in_order(&book, &first.id),
             ["github.com/acme/blog", "github.com/acme/shop"]
+        );
+    }
+
+    #[tokio::test]
+    async fn projects_reordered_on_one_member_are_in_that_order_on_the_other() {
+        let (shop, blog) = (repo_named("shop").await, repo_named("blog").await);
+        let (_h1, book) = member("book").await;
+        let (_h2, mini) = member("mini").await;
+        let first = book.list_sections()[0].clone();
+        let b = book
+            .section_add_project(&first.id, &blog.path().display().to_string())
+            .await
+            .unwrap();
+        let s = book
+            .section_add_project(&first.id, &shop.path().display().to_string())
+            .await
+            .unwrap();
+        let (c1, c2) = (clone_of(&shop).await, clone_of(&blog).await);
+        mini.add_project(&c1.path().display().to_string())
+            .await
+            .unwrap();
+        mini.add_project(&c2.path().display().to_string())
+            .await
+            .unwrap();
+        sync(&book, &mini);
+        book.update_section(SectionUpdate {
+            id: first.id.clone(),
+            name: None,
+            project_ids: Some(vec![s.id.clone(), b.id.clone()]),
+            view: None,
+        })
+        .unwrap();
+        sync(&book, &mini);
+        assert_eq!(
+            holds_in_order(&mini, &first.id),
+            ["github.com/acme/shop", "github.com/acme/blog"]
+        );
+    }
+
+    #[tokio::test]
+    async fn two_checkouts_of_one_repository_on_one_member_both_stay() {
+        // Two folders with the same first commit and origin: one project
+        // to the account, two here.
+        let one = repo_named("shop").await;
+        let two = clone_of(&one).await;
+        let (_h1, book) = member("book").await;
+        let a = book
+            .add_project(&one.path().display().to_string())
+            .await
+            .unwrap();
+        let b = book
+            .add_project(&two.path().display().to_string())
+            .await
+            .unwrap();
+        let mut ids: Vec<String> = book.list_projects().into_iter().map(|p| p.id).collect();
+        ids.sort();
+        let mut want = vec![a.id.clone(), b.id.clone()];
+        want.sort();
+        assert_eq!(ids, want);
+        let first = book.list_sections()[0].clone();
+        assert!(
+            first.project_ids.contains(&a.id) && first.project_ids.contains(&b.id),
+            "{first:?}"
         );
     }
 
