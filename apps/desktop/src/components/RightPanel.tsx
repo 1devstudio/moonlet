@@ -27,7 +27,7 @@ import { cx, prTone } from "./ui";
 import { TaskTab, useSessionTask } from "./tasks/SessionTask";
 import { SessionDesignTab } from "./design/SessionDesign";
 import { designTab } from "../lib/sessionDesign";
-import { sessionDesignsOf, useDesign } from "../lib/designStore";
+import { pickDesignTab, sessionDesignsOf, useDesign } from "../lib/designStore";
 
 const ChangesPanel = lazy(() => import("./ChangesPanel"));
 
@@ -294,9 +294,12 @@ export function RightPanel({ host, ws }: { host: string; ws: Session }) {
             role="tab"
             aria-selected={tab === t.id}
             aria-controls="right-tabpanel"
-            // The Agents tab always opens on its list (X42).
+            // The Agents tab always opens on its list (X42); the Design tab
+            // is entered, its canvas's keys working at once (X65).
             onClick={() =>
-              useStore.setState(t.id === "agents" ? { rightTab: t.id, agentDetail: null } : t.id === "jobs" ? { rightTab: t.id, jobDetail: null } : { rightTab: t.id })
+              t.id === "design"
+                ? pickDesignTab(host, ws.id)
+                : useStore.setState(t.id === "agents" ? { rightTab: t.id, agentDetail: null } : t.id === "jobs" ? { rightTab: t.id, jobDetail: null } : { rightTab: t.id })
             }
             className={cx(
               "flex items-center gap-1.5 px-3 ui-text-13 transition-colors",

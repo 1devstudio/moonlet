@@ -206,13 +206,22 @@ export function showSessionDesign(host: string, session: string, slug: string) {
 export async function openSessionDesign(host: string, workspace: string, session: string, slug: string, select: boolean) {
   if (select) selectSession(host, session);
   showSessionDesign(host, session, slug);
-  const key = placeKey(host, { session });
-  useDesign.setState((s) => (s.tabOpened.includes(key) ? {} : { tabOpened: [...s.tabOpened, key] }));
-  useStore.setState({ rightTab: "design", rightOpen: true });
+  pickDesignTab(host, session);
+  useStore.setState({ rightOpen: true });
   await loadDesigns(host, workspace, true).catch(() => {});
 }
 
-/** Whether the app just opened this session's Design tab itself. */
+/** Shows a session's Design tab, entered, as the user picking it or the
+ *  app opening it does (X65): its canvas takes its keys at once
+ *  (justOpened), as the tab's own button is outside the canvas. */
+export function pickDesignTab(host: string, session: string) {
+  const key = placeKey(host, { session });
+  useDesign.setState((s) => (s.tabOpened.includes(key) ? {} : { tabOpened: [...s.tabOpened, key] }));
+  useStore.setState({ rightTab: "design" });
+}
+
+/** Whether the app just opened this session's Design tab itself, or the
+ *  user just picked it. */
 export function justOpened(s: DesignState, host: string, session: string): boolean {
   return s.tabOpened.includes(placeKey(host, { session }));
 }

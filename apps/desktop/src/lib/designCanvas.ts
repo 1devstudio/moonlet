@@ -314,8 +314,9 @@ export function pickEdit(selected: string | null, snippet: string): EditOp {
 
 /** What last told whether the user is in a session's Design tab: a press
  *  or a focus, in it or elsewhere (WebKit focuses no button on a click,
- *  so a press counts as much as a focus), or the app opening the tab
- *  itself, on `design.open` or a toast's Open (X65). */
+ *  so a press counts as much as a focus), or the tab opened: by the app
+ *  itself, on `design.open` or a toast's Open, or by the user picking it,
+ *  whose button is outside the canvas (X65). */
 export type TabKeysEvent = { kind: "pointer" | "focus"; inside: boolean } | { kind: "opened" };
 
 /** Whether the user is in a session's Design tab after `e`. */
