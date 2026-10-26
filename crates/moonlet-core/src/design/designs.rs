@@ -287,11 +287,8 @@ impl Store {
         let styles = styles_link(at, &config.system);
         let mut problems = Vec::new();
         for (name, _) in pages(at) {
-            let file = format!("{name}.html");
-            let (rel, path) = (
-                format!("pages/{file}"),
-                at.root.join(at.in_dir("pages")).join(&file),
-            );
+            let rel = super::pages::page_path(&name)?;
+            let path = at.root.join(at.in_dir(&rel));
             let mut html = fsx::read_inside(&at.root, &path)?;
             if fix {
                 let fixed = super::mid::fix_page(&html);
@@ -387,7 +384,7 @@ fn pages(at: &DesignAt) -> Vec<(String, u64)> {
         .flatten()
         .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
         .filter_map(|e| {
-            let name = e.file_name().to_str()?.strip_suffix(".html")?.to_string();
+            let name = super::pages::page_of_file(e.file_name().to_str()?)?.to_string();
             let changed = e.metadata().ok()?.modified().ok()?;
             let ms = changed
                 .duration_since(std::time::UNIX_EPOCH)

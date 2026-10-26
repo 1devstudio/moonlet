@@ -3,8 +3,6 @@
 //! text, and written whole as the app sends it, only over the version the
 //! editor read, so an edit by hand never overwrites the agent's change.
 
-use std::path::Path;
-
 use anyhow::Result;
 
 use moonlet_proto::methods::DesignPageText;
@@ -30,6 +28,32 @@ pub fn is_page_name(page: &str) -> bool {
     !page.is_empty() && !page.starts_with('.') && !page.contains(['/', '\\', '\0', '@'])
 }
 
+/// A page's path in its design's folder, `pages/<page>.html`: the one build
+/// of it, [`page_of`] its one parse. A name that is not a page's is
+/// [`BadPage`].
+pub fn page_path(page: &str) -> Result<String> {
+    if !is_page_name(page) {
+        return Err(BadPage(page.to_string()).into());
+    }
+    Ok(format!("pages/{page}.html"))
+}
+
+/// The page a path in a design's folder is (`pages/index.html` is
+/// `index`); `None` for any other path.
+pub fn page_of(path: &str) -> Option<&str> {
+    path.strip_prefix("pages/").and_then(page_of_file)
+}
+
+/// The page a file of `pages/` is by its name (`index.html` is `index`).
+pub fn page_of_file(name: &str) -> Option<&str> {
+    name.strip_suffix(".html").filter(|p| is_page_name(p))
+}
+
+/// Pages in the order their tabs show them: `index` first, then by name.
+pub fn sort_pages(pages: &mut [String]) {
+    pages.sort_by(|a, b| (a != "index", a).cmp(&(b != "index", b)));
+}
+
 /// A page's version: the SHA-256 of its text, in hex.
 fn version_of(text: &str) -> String {
     crate::hash::sha256_hex(text.as_bytes())
@@ -37,10 +61,7 @@ fn version_of(text: &str) -> String {
 
 /// `pages/<page>.html` of the design, inside its root.
 fn page_rel(at: &DesignAt, page: &str) -> Result<std::path::PathBuf> {
-    if !is_page_name(page) {
-        return Err(BadPage(page.to_string()).into());
-    }
-    Ok(at.in_dir(Path::new("pages").join(format!("{page}.html"))))
+    Ok(at.in_dir(page_path(page)?))
 }
 
 impl Store {
@@ -72,7 +93,7 @@ impl Store {
         // read again, and is no longer at `base`.
         fsx::update_inside(&at.root, &rel, |text| {
             if version_of(text) != base {
-                return Err(Stale(format!("pages/{page}.html")).into());
+                return Err(Stale(page_path(page)?).into());
             }
             Ok(html.to_string())
         })?;

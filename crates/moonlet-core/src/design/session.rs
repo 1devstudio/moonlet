@@ -251,15 +251,12 @@ impl Store {
         let link = super::designs::styles_link(from, &config.system);
         let mut kept = BTreeMap::new();
         for page in pages {
-            if !super::pages::is_page_name(page) {
-                return Err(super::pages::BadPage(page.clone()).into());
-            }
-            let rel = from.in_dir(Path::new("pages").join(format!("{page}.html")));
-            let bytes = fsx::read_file_inside(&from.root, &rel)
+            let path = super::pages::page_path(page)?;
+            let bytes = fsx::read_file_inside(&from.root, &from.in_dir(&path))
                 .map_err(|_| super::pages::BadPage(page.clone()))?;
             let text =
                 String::from_utf8_lossy(&bytes).replace(&link, super::designs::SESSION_STYLES);
-            kept.insert(format!("{page}.html"), text.into_bytes());
+            kept.insert(path, text.into_bytes());
         }
         let assets = fsx::read_tree(&from.root, &from.in_dir("assets"))?;
         let copy = DesignConfig {
@@ -275,7 +272,9 @@ impl Store {
             ..config
         };
         let at = self.make_session_design(workspace, copy, session, worktree, folder, |at| {
-            fsx::write_tree(&at.root, &at.dir, Path::new("pages"), &kept, true)?;
+            for (path, text) in &kept {
+                fsx::write_inside(&at.root, &at.root.join(at.in_dir(path)), text)?;
+            }
             fsx::write_tree(&at.root, &at.dir, Path::new("assets"), &assets, true)
         })?;
         // The design it came from records where it is built.
