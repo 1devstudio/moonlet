@@ -54,7 +54,7 @@ import { chatCardLookup, commentCardSelector, commentsRail, commentsTab, keepAct
 import { bridgeMessage, editMessage, helloMessage, modeMessage, paletteMessage, pinsMessage, scrollMessage, selectMessage, type DragOver, type DragResult, type Layer, type PickedElement, type Rect } from "../../lib/designBridge";
 import { pageFile, pagePath } from "../../lib/designPage";
 import { barProblems, chatOpensOn, designBar, loadFixMessage, pageFixMessage, type Bar, type BarAction, type PageProblem } from "../../lib/designBars";
-import { LOAD_WAIT_MS, LOADING, loadStep, notLoadedOf, type LoadEvent, type PageLoad } from "../../lib/designLoad";
+import { LOAD_WAIT_MS, LOADING, loadStep, notLoadedOf, readFailureNote, type LoadEvent, type PageLoad } from "../../lib/designLoad";
 import { claimKeys } from "../../lib/keys";
 import { askConfirm } from "../../lib/confirm";
 import { NEAR_ROOT, useNear } from "../../lib/useNear";
@@ -322,6 +322,11 @@ export function DesignCanvas({
   const parse = useEditor((e) => (page === null ? null : (sourceOf(e, host, place, design.slug, page)?.parse_error ?? null)));
   const readError = useEditor((e) => (page === null ? null : readErrorOf(e, host, place, design.slug, page)));
   const notLoaded = framed ? notLoadedOf(load, readError, parse) : null;
+  // A page that loaded but cannot be read for the editor: said once.
+  const unreadable = framed && page !== null ? readFailureNote(load, page, readError) : null;
+  useEffect(() => {
+    if (unreadable) toast(unreadable, "error");
+  }, [unreadable]);
   const bar = designBar({ working, needsYou: design.needs_you, page, problems, system: systemName, systemRemoved: !!systems && !system, unsaved, preview: previewed ? previewBar(previewed, Date.now()) : null, session, systemUpdated: !!design.system_updated, notLoaded });
   const chip = editsChip(pending);
   // The design system's tokens and snippets, read again when it changes: a
@@ -945,8 +950,8 @@ function PageFrame({
   }, [page]);
   // The page's source for the editor, read as the frame loads it.
   // An older read coming back late is dropped by the store. A failed one is
-  // said by the red did-not-load bar, as the scheme reads the same file
-  // through the same daemon and cannot serve it either: no toast over it.
+  // kept in the store, and said by the red did-not-load bar, or for a page
+  // that loaded all the same, by a toast (readFailureNote).
   useEffect(() => void loadPageSource(host, place, design.slug, page).catch(() => {}), [host, place, design.slug, page, rev]);
   useEffect(() => void tell(modeMessage(mode)), [mode]);
   useEffect(() => void tell(pinsMessage(wanted)), [wantedKey]);

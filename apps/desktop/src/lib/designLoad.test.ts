@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { LOADING, loadStep, notLoadedOf, type LoadEvent, type PageLoad } from "./designLoad";
+import { LOADING, loadStep, notLoadedOf, readFailureNote, type LoadEvent, type PageLoad } from "./designLoad";
 import { bridgeMessage } from "./designBridge";
 import { designBar, loadFixMessage } from "./designBars";
 
@@ -75,6 +75,17 @@ describe("a page's own bridge.failed (X65)", () => {
     expect(loadFixMessage("index", notLoaded!)).toBe("pages/index.html did not load in the canvas: the file cannot be read. Fix the page so it loads, then run the check again.");
     // The daemon read the page after all: the bar says only that moonlet could not serve it.
     expect(notLoadedOf(load, null, null)).toEqual({ kind: "refused", reason: "moonlet could not serve it" });
+  });
+});
+
+describe("a page that loaded but the daemon could not read (X65)", () => {
+  it("is said once it loaded, as editing it is not possible, and not while it loads or when the red bar says it", () => {
+    const loaded = run([{ kind: "answer" }]);
+    expect(readFailureNote(loaded, "git-b", "the file cannot be read")).toBe("git-b.html loaded, but it cannot be edited: the file cannot be read");
+    expect(readFailureNote(loaded, "git-b", null)).toBeNull();
+    expect(readFailureNote(LOADING, "git-b", "the file cannot be read")).toBeNull();
+    expect(readFailureNote(run([{ kind: "load", visible: true }]), "git-b", "the file cannot be read")).toBeNull();
+    expect(readFailureNote(run([{ kind: "refused" }]), "git-b", "the file cannot be read")).toBeNull();
   });
 });
 

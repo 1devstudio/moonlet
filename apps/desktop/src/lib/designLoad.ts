@@ -22,6 +22,7 @@
 //   hidden window waits until it shows again, then asks again.
 
 import type { DesignParseError } from "./protocol";
+import { pageFile } from "./designPage";
 
 /** How long the canvas waits for the bridge's answer to a hello, in ms. */
 export const LOAD_WAIT_MS = 3000;
@@ -91,4 +92,12 @@ export function notLoadedOf(load: PageLoad, readError: string | null, parse: Des
   if (load.phase !== "failed") return null;
   if (load.refused) return { kind: "refused", reason: readError ?? NOT_SERVED };
   return parse ? { kind: "silent", parse } : { kind: "silent" };
+}
+
+/** What is said of a page that loaded but whose source the daemon could
+ *  not read (`readError`), which the editor needs: for a workspace design
+ *  the scheme reads the file itself, so one can work and the other fail.
+ *  Nothing until it loaded, as a page that did not load has the red bar. */
+export function readFailureNote(load: PageLoad, page: string, readError: string | null): string | null {
+  return load.phase === "loaded" && readError ? `${pageFile(page)} loaded, but it cannot be edited: ${readError}` : null;
 }
