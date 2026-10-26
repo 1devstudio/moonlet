@@ -36,7 +36,7 @@ import {
   updateSystem,
   useDesign,
 } from "../../lib/designStore";
-import type { DesignPlace } from "../../lib/designPlace";
+import { isSession, type DesignPlace } from "../../lib/designPlace";
 import { askWithEdits, restoreSnapshot, closeDesign, hasCopy, kitOf, loadKit, sendCommentsWithEdits, copyElementOf, dismissUnsaved, editPage, loadPageSource, pasteInto, pendingOf, redoEdit, sendWithEdits, sourceOf, undoEdit, undoOf, unsavedOf, useEditor } from "../../lib/designEditor";
 import { EditRefused, editsChip, inlineStyles, type Edit, type EditOp } from "../../lib/designEdits";
 import { offSystemMids } from "../../lib/designTokens";
@@ -167,7 +167,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
           <AgentIcon agent="claude" size={14} />
         </div>
       )}
-      <DesignCanvas host={host} place={workspace} workspace={workspace} design={design} inset={inset} chat={{ open: chatOpen, setOpen: setChatOpen, root: chatRef }} frame="screen" fileOf={pageFile} />
+      <DesignCanvas host={host} place={workspace} workspace={workspace} design={design} inset={inset} chat={{ open: chatOpen, setOpen: setChatOpen, root: chatRef }} fileOf={pageFile} />
     </div>
   );
 }
@@ -184,9 +184,9 @@ export interface CanvasChat {
 
 /** A design's canvas (X65): its page tabs, toolbar, bar, hint line, the page
  *  in a sandboxed frame on a host of its own, and the right rail, for a
- *  workspace design's screen (`frame` "screen") and a session's Design tab
- *  ("tab"); `fileOf` names a page's file above it, and `aside` sits at the
- *  end of the page tabs. */
+ *  workspace design's screen and a session design's Design tab (its
+ *  `place` a session's); `fileOf` names a page's file above it, and
+ *  `aside` sits at the end of the page tabs. */
 export function DesignCanvas({
   host,
   place,
@@ -194,7 +194,6 @@ export function DesignCanvas({
   design,
   inset,
   chat: chatPanel,
-  frame,
   fileOf,
   aside,
 }: {
@@ -205,7 +204,6 @@ export function DesignCanvas({
   design: Design;
   inset: number;
   chat: CanvasChat;
-  frame: "screen" | "tab";
   fileOf: (page: string) => string;
   aside?: ReactNode;
 }) {
@@ -218,7 +216,7 @@ export function DesignCanvas({
   const lastWritten = useDesign((d) => latestOf(d, host, place, design.slug));
   const problems = useDesign((d) => problemsOf(d, host, place, design.slug));
   const { open: chatOpen, setOpen: setChatOpen, root: chatRef } = chatPanel;
-  const session = frame === "tab";
+  const session = isSession(place);
   // The tab's keys work while the user is in it, last pressed or focused
   // there (WebKit focuses no button on a click), never in the session's
   // terminals or chat beside it; the screen's whenever it is shown.
@@ -573,7 +571,7 @@ export function DesignCanvas({
       if (!check) return;
       if (agent === null) return toast("The design's agent is not running", "error");
       void askWithEdits(host, place, design.slug, agent, pageFixMessage(check.page, check.problems)).then(() => toast("Asked the agent to fix it"), errorToast);
-    } else if (a === "update" && typeof place !== "string") {
+    } else if (a === "update" && isSession(place)) {
       // Both copies replaced, then the cards that changed go to the session's agent.
       void updateSystem(host, place, design.slug)
         .then((updated) => (agent === null ? toast("Design system updated", "info") : askWithEdits(host, place, design.slug, agent, systemUpdateMessage(design.slug, systemName, updated.cards)).then(() => toast("Design system updated", "info"))))

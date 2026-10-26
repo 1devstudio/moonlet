@@ -18,16 +18,16 @@ import { CommentCards } from "./Comments";
 import { EditsMessage } from "./Editor";
 import { DesignCanvas, type CanvasChat } from "./DesignScreen";
 
-/** The session's chat is in its panes, not beside the canvas: Show in chat
- *  looks for a comment's card in the whole window. */
-const WINDOW: RefObject<HTMLElement | null> = {
+/** Where Show in chat looks for a comment's card in a session: the session's
+ *  chat is in its panes, not beside the canvas, so the whole document. */
+const WHOLE_DOCUMENT: RefObject<HTMLElement | null> = {
   get current() {
     return document.body;
   },
 };
 
 /** The session's chat is always there: the tab neither folds nor opens it. */
-const SESSION_CHAT: CanvasChat = { open: true, setOpen: () => {}, root: WINDOW };
+const SESSION_CHAT: CanvasChat = { open: true, setOpen: () => {}, root: WHOLE_DOCUMENT };
 
 export function SessionDesignTab({ host, ws }: { host: string; ws: Session }) {
   const design = useDesign((d) => shownSessionDesign(d, host, ws.id));
@@ -64,7 +64,6 @@ export function SessionDesignTab({ host, ws }: { host: string; ws: Session }) {
         design={design}
         inset={0}
         chat={SESSION_CHAT}
-        frame="tab"
         fileOf={(page) => worktreeFile(ws.path, design, page)}
         aside={picker}
       />
