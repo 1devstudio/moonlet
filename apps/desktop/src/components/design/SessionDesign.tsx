@@ -4,16 +4,15 @@
 // opens; the file above the page is its path in the worktree.
 
 import { useEffect, useMemo, useState, type RefObject } from "react";
-import { useShallow } from "zustand/react/shallow";
 import { ArrowLeft, ChevronDown, Columns2, PenTool } from "lucide-react";
 import { rpc } from "../../lib/daemon";
 import { M } from "../../lib/protocol";
-import { builtFile, designBuild } from "../../lib/designBuild";
+import { builtFile, designBuild, type BuildRow as BuildRowView } from "../../lib/designBuild";
 import { designUrl, pageUrl } from "../../lib/designView";
 import { useSize } from "../../lib/useSize";
 import { CardFrame } from "./Frame";
 import type { Design, Session } from "../../lib/protocol";
-import { designCanvasKey, commentsOf, loadComments, openSessionDesign, pageRevOf, sessionDesignsOf, showSessionDesign, shownSessionDesign, systemsOf, useDesign } from "../../lib/designStore";
+import { designCanvasKey, commentsOf, loadComments, openSessionDesign, pageRevOf, sessionDesignsOf, showSessionDesign, shownSessionDesign, systemsOf, useDesign, builtRevOf } from "../../lib/designStore";
 import { projectOf, useStore } from "../../lib/store";
 import { sendWithEdits, type ToldDesign } from "../../lib/designEditor";
 import { designSystemFooter, inWorktree, opensDesignView, specReplies, worktreeFile } from "../../lib/sessionDesign";
@@ -59,13 +58,13 @@ export function SessionDesignTab({ host, ws }: { host: string; ws: Session }) {
  *  change, the screenshots' folder included. */
 function DesignAndBuild({ host, ws, design, onBack }: { host: string; ws: Session; design: Design; onBack: () => void }) {
   const place = useMemo(() => ({ session: ws.id }), [ws.id]);
-  const revs = useDesign(useShallow((d) => design.pages.map((p) => pageRevOf(d, host, place, design.slug, p.name))));
-  const rev = revs.reduce((a, b) => a + b, 0);
+  // Looked for again as its agent saves screenshots in built/.
+  const builtRev = useDesign((d) => builtRevOf(d, host, place, design.slug));
   const [found, setFound] = useState<Record<string, boolean>>({});
-  const pages = design.pages.map((p) => p.name).join(" ");
+  const pages = JSON.stringify(design.pages.map((p) => p.name));
   useEffect(() => {
     let live = true;
-    for (const page of pages.split(" ").filter(Boolean)) {
+    for (const page of JSON.parse(pages) as string[]) {
       void rpc(host, M.designFile, { session: ws.id, path: builtFile(design.slug, page) }).then(
         () => live && setFound((f) => ({ ...f, [page]: true })),
         () => live && setFound((f) => ({ ...f, [page]: false })),
@@ -74,7 +73,7 @@ function DesignAndBuild({ host, ws, design, onBack }: { host: string; ws: Sessio
     return () => {
       live = false;
     };
-  }, [host, ws.id, design.slug, pages, rev]);
+  }, [host, ws.id, design.slug, pages, builtRev]);
   const view = designBuild(design, ws.path, found);
   return (
     <section aria-label="Design and build" className="flex min-h-0 flex-1 flex-col">
@@ -88,13 +87,21 @@ function DesignAndBuild({ host, ws, design, onBack }: { host: string; ws: Sessio
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
         {view.rows.map((r) => (
-          <article key={r.page} aria-label={`${r.page} design and build`} className="mb-5 grid grid-cols-2 gap-4">
-            <BuildTile url={pageUrl(place, design.slug, r.page, revs[design.pages.findIndex((p) => p.name === r.page)] ?? 0)} title={`${r.page} design`} viewport={view.viewport} caption={["design", r.design]} />
-            <BuildTile url={r.built && designUrl(place, r.built, rev)} title={`${r.page} built`} viewport={view.viewport} caption={["built", r.builtLabel ?? ""]} empty={r.builtLabel ?? ""} />
-          </article>
+          <BuildRow key={r.page} host={host} place={place} slug={design.slug} row={r} viewport={view.viewport} builtRev={builtRev} />
         ))}
       </div>
     </section>
+  );
+}
+
+/** One page of Design and build: the page as it is now, beside its built screenshot. */
+function BuildRow({ host, place, slug, row, viewport, builtRev }: { host: string; place: { session: string }; slug: string; row: BuildRowView; viewport: [number, number]; builtRev: number }) {
+  const rev = useDesign((d) => pageRevOf(d, host, place, slug, row.page));
+  return (
+    <article aria-label={`${row.page} design and build`} className="mb-5 grid grid-cols-2 gap-4">
+      <BuildTile url={pageUrl(place, slug, row.page, rev)} title={`${row.page} design`} viewport={viewport} caption={["design", row.design]} />
+      <BuildTile url={row.built && designUrl(place, row.built, builtRev)} title={`${row.page} built`} viewport={viewport} caption={["built", row.builtLabel ?? ""]} empty={row.builtLabel ?? ""} />
+    </article>
   );
 }
 
