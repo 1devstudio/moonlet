@@ -3,6 +3,7 @@
 //! PTY output to the webview over a binary channel.
 
 mod attach;
+mod design_scheme;
 mod hosts;
 mod login_item;
 mod native_menu;
@@ -488,6 +489,13 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        // Design systems' and designs' files for their sandboxed frames (X65).
+        .register_asynchronous_uri_scheme_protocol("moonlet-design", |ctx, req, responder| {
+            let (app, url) = (ctx.app_handle().clone(), req.uri().to_string());
+            tauri::async_runtime::spawn(async move {
+                responder.respond(design_scheme::serve(&app, &url).await);
+            });
+        })
         .setup(|app| {
             let hosts = HostManager::new(app.handle().clone());
             app.manage(hosts);

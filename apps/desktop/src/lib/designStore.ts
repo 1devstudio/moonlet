@@ -4,7 +4,7 @@
 
 import { create } from "zustand";
 import { onDaemonEvent, onHostStatus, rpc } from "./daemon";
-import { EV, M, type ChatState, type DesignChanged, type DesignCover, type DesignSystem, type DesignSystemCreated } from "./protocol";
+import { EV, M, type ChatState, type DesignCard, type DesignChanged, type DesignCover, type DesignSystem, type DesignSystemCreated } from "./protocol";
 import { parseWsKey, wsKey } from "./workspaces";
 
 interface DesignState {
@@ -12,9 +12,52 @@ interface DesignState {
   systems: Record<string, DesignSystem[]>;
   /** The design system open in each workspace, by slug. */
   shown: Record<string, string>;
+  /** Each design system's cards (`wsKey/slug`), once listed. */
+  cards: Record<string, DesignCard[]>;
+  /** The card open as the card page in each workspace: its system and path. */
+  opened: Record<string, { slug: string; path: string } | null>;
+  /** How many times each design system (`wsKey/slug`) changed, so its frames load again. */
+  changes: Record<string, number>;
 }
 
-export const useDesign = create<DesignState>(() => ({ systems: {}, shown: {} }));
+export const useDesign = create<DesignState>(() => ({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {} }));
+
+const systemKey = (host: string, workspace: string, slug: string) => `${wsKey(host, workspace)}/${slug}`;
+
+/** A design system's cards; undefined until listed. */
+export function cardsOf(s: DesignState, host: string, workspace: string, slug: string): DesignCard[] | undefined {
+  return s.cards[systemKey(host, workspace, slug)];
+}
+
+/** The card of design system `slug` open as the card page, or null. */
+export function shownCard(s: DesignState, host: string, workspace: string, slug: string): string | null {
+  const open = s.opened[wsKey(host, workspace)];
+  return open?.slug === slug ? open.path : null;
+}
+
+/** Opens a card of `slug` as the card page, or (null) goes back to its design system. */
+export function openCard(host: string, workspace: string, slug: string, path: string | null) {
+  useDesign.setState((s) => ({ opened: { ...s.opened, [wsKey(host, workspace)]: path === null ? null : { slug, path } } }));
+}
+
+/** How many times design system `slug` changed since the app started. */
+export function revOf(s: DesignState, host: string, workspace: string, slug: string): number {
+  return s.changes[systemKey(host, workspace, slug)] ?? 0;
+}
+
+/** Systems whose cards were asked for, listed or not: listed again when they change. */
+const cardsWanted = new Set<string>();
+
+/** The latest cards request per system, so an older answer never lands last. */
+const cardsAsked: Record<string, number> = {};
+
+export async function loadCards(host: string, workspace: string, slug: string): Promise<void> {
+  const key = systemKey(host, workspace, slug);
+  cardsWanted.add(key);
+  const n = (cardsAsked[key] = (cardsAsked[key] ?? 0) + 1);
+  const list = await rpc<DesignCard[]>(host, M.designCards, { workspace, slug });
+  if (cardsAsked[key] === n) useDesign.setState((s) => ({ cards: { ...s.cards, [key]: list } }));
+}
 
 /** The design system open in a workspace: the one picked, else the first. */
 export function shownSystem(s: DesignState, host: string, workspace: string): DesignSystem | null {
@@ -24,7 +67,8 @@ export function shownSystem(s: DesignState, host: string, workspace: string): De
 
 /** Opens a design system in Design mode's main area. */
 export function showSystem(host: string, workspace: string, slug: string) {
-  useDesign.setState((s) => ({ shown: { ...s.shown, [wsKey(host, workspace)]: slug } }));
+  const key = wsKey(host, workspace);
+  useDesign.setState((s) => ({ shown: { ...s.shown, [key]: slug }, opened: { ...s.opened, [key]: null } }));
 }
 
 /** A workspace's design systems; undefined until listed. */
@@ -86,6 +130,13 @@ export async function startDesign() {
     if (e.name === EV.designChanged) {
       const d = e.data as DesignChanged;
       if (wanted.has(wsKey(e.host, d.workspace))) reload(e.host, d.workspace);
+      if (d.system) {
+        const key = systemKey(e.host, d.workspace, d.system);
+        // Its frames load again, and its cards are listed again when asked for
+        // (a newer request always lands last).
+        useDesign.setState((s) => ({ changes: { ...s.changes, [key]: (s.changes[key] ?? 0) + 1 } }));
+        if (cardsWanted.has(key)) void loadCards(e.host, d.workspace, d.system).catch(() => {});
+      }
     } else if (e.name === EV.chatState) {
       const d = e.data as { id: number; state: ChatState };
       onChatState(e.host, d.id, d.state);
