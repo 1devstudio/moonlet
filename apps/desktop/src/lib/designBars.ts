@@ -77,9 +77,10 @@ function summary(problems: PageProblem[]): string {
 export const RESTORE_WAITS = "Restore opens when Claude stops.";
 
 /** The bar to show, or null: the agent at work, then what it asks, then an
- *  edit by hand a save lost to a change on disk, then the page's check
- *  problems, then a removed design system, then a session design's design
- *  system synced since it pinned it, with **Update**. A snapshot previewed
+ *  edit by hand a save lost to a change on disk, then a session design's
+ *  design system synced since it pinned it, with **Update** (an older pin
+ *  may be what fails the check), then the page's check problems, then a
+ *  removed design system. A snapshot previewed
  *  comes right after what the agent asks, above the rest, as the canvas
  *  then shows it and not the current pages they are about; while the agent
  *  works its bar has Stop in place of Restore. */
@@ -92,10 +93,11 @@ export function designBar(s: BarState): Bar | null {
     return s.working ? { tone: "blue", text, detail: RESTORE_WAITS, actions: ["back", "stop"] } : { tone: "blue", text, detail: null, actions: ["back", "restore"] };
   }
   if (s.unsaved) return { tone: "yellow", text: "The page changed; your last edit was not saved.", detail: s.unsaved, actions: ["dismiss"] };
+  // Over the check: a pin of an older sync may be what fails it.
+  if (s.systemUpdated) return { tone: "grey", text: "Design system updated.", detail: `${s.system} was synced since this design copied it.`, actions: ["update"] };
   const check = barProblems(s.page, s.problems);
   if (check) return { tone: "red", text: `${pageFile(check.page)} has check problems:`, detail: summary(check.problems), actions: ["details", "fix"] };
   if (s.systemRemoved) return { tone: "grey", text: "Design system removed.", detail: `Pages show without ${s.system}'s styles.`, actions: [] };
-  if (s.systemUpdated) return { tone: "grey", text: "Design system updated.", detail: `${s.system} was synced since this design copied it.`, actions: ["update"] };
   return null;
 }
 
