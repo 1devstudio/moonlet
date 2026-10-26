@@ -233,7 +233,8 @@ export function DesignCanvas({
       window.removeEventListener("focusin", focus, true);
     };
   }, [session]);
-  // The app opened the tab itself (design.open, a toast's Open): its keys work at once.
+  // The app opened the tab itself (design.open, a toast's Open), or the user
+  // picked it, its button outside the canvas: its keys work at once.
   const opened = useDesign((d) => isSession(place) && justOpened(d, host, place.session));
   useEffect(() => {
     if (!opened || !isSession(place)) return;

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Design, DesignComment, DesignSystem, TerminalInfo } from "./protocol";
 import { modeOf, setMode } from "./mode";
 import { agentOnScreen, goToAgent, useStore } from "./store";
-import { pageKey, pageOfKey, commentsOf, historyOf, keepComment, loadComments, loadHistory, sendComments, sendingOf, resolveComment, sessionDesignsOf, shownSessionDesign, showSessionDesign, unseenOf, updateSystem, justOpened, tookOpened } from "./designStore";
+import { pageKey, pageOfKey, commentsOf, historyOf, keepComment, loadComments, loadHistory, sendComments, sendingOf, resolveComment, sessionDesignsOf, shownSessionDesign, showSessionDesign, unseenOf, updateSystem, justOpened, tookOpened, pickDesignTab } from "./designStore";
 import { cardsOf, checkDesign, createFromNewDesign, createSystem, designsOf, detectStack, latestOf, loadCards, loadDesigns, loadSystems, openCard, saveViewport, pageRevOf, problemsOf, revOf, shownCard, shownDesign, shownSystem, showDesign, showSystem, startDesign, systemNameOf, systemsOf, useDesign } from "./designStore";
 
 const calls = vi.hoisted(() => [] as { host: string; method: string; params: unknown }[]);
@@ -812,6 +812,19 @@ describe("design.open of a design an agent made (X65)", () => {
     expect(justOpened(useDesign.getState(), "mac-2", "4f2a9c1e7b3d")).toBe(false);
     tookOpened("local", "4f2a9c1e7b3d");
     expect(justOpened(useDesign.getState(), "local", "4f2a9c1e7b3d")).toBe(false);
+  });
+
+  it("marks the tab as entered when the user picks it, opening it or coming back to it, so its keys work at once as when the app opens it", () => {
+    pickDesignTab("local", "4f2a9c1e7b3d");
+    expect(useStore.getState().rightTab).toBe("design");
+    expect(justOpened(useDesign.getState(), "local", "4f2a9c1e7b3d")).toBe(true);
+    expect(justOpened(useDesign.getState(), "mac-2", "4f2a9c1e7b3d")).toBe(false);
+    tookOpened("local", "4f2a9c1e7b3d");
+    // Away to Files and back: picked again, its keys work again.
+    useStore.setState({ rightTab: "files" });
+    pickDesignTab("local", "4f2a9c1e7b3d");
+    expect(useStore.getState().rightTab).toBe("design");
+    expect(justOpened(useDesign.getState(), "local", "4f2a9c1e7b3d")).toBe(true);
   });
 
   it("offers a session design in a toast while another session is shown, and Open shows its session's Design tab", async () => {
