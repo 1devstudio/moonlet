@@ -35,8 +35,9 @@ interface EditorState {
    *  a read of it succeeds: what the did-not-load bar says (X65). */
   readErrors: Record<string, string>;
   /** Where a page's markup swallows the bridge (`pageKey`), asked only for
-   *  a page whose bridge was silent (X65); null when it does not. */
-  parseErrors: Record<string, DesignParseError | null>;
+   *  a page whose bridge was silent (X65), in the framing `frame` it was
+   *  asked for; `error` null when it does not. */
+  parseErrors: Record<string, { frame: string; error: DesignParseError | null }>;
 }
 
 const EMPTY: EditorState = { sources: {}, undo: {}, pending: {}, unsaved: {}, kits: {}, readErrors: {}, parseErrors: {} };
@@ -118,18 +119,28 @@ function setReadError(key: string, error: string | null) {
   });
 }
 
+/** The latest ask of each page where its markup swallows the bridge, so an
+ *  older framing's answer never lands last. */
+const parseReads = latestPerKey();
+
 /** Asks the daemon where the page's markup swallows the bridge, for a page
- *  whose bridge was silent: the editor's reads, on every change, never
- *  ask, as the daemon reads the whole page as HTML for it. */
-export async function loadParseError(host: string, place: DesignPlace, slug: string, page: string): Promise<void> {
+ *  whose bridge was silent in its framing `frame` (`<page>@<rev>`): the
+ *  editor's reads, on every change, never ask, as the daemon reads the
+ *  whole page as HTML for it. Kept for that framing only, and dropped when
+ *  a later ask of the page started meanwhile. */
+export async function loadParseError(host: string, place: DesignPlace, slug: string, page: string, frame: string): Promise<void> {
   const key = pageKey(host, place, slug, page);
+  const latest = parseReads.start(key);
   const text = await rpc<DesignPageText>(host, M.designPage, { ...designRef(place, slug), page, parse: true });
-  useEditor.setState((s) => ({ parseErrors: { ...s.parseErrors, [key]: text.parse_error ?? null } }));
+  if (!latest()) return;
+  useEditor.setState((s) => ({ parseErrors: { ...s.parseErrors, [key]: { frame, error: text.parse_error ?? null } } }));
 }
 
-/** Where the page's markup swallows the bridge, once asked; null before. */
-export function parseErrorOf(s: EditorState, host: string, place: DesignPlace, slug: string, page: string): DesignParseError | null {
-  return s.parseErrors[pageKey(host, place, slug, page)] ?? null;
+/** Where the page's markup swallows the bridge in its framing `frame`, once
+ *  asked for that framing; null before, and for the page framed again. */
+export function parseErrorOf(s: EditorState, host: string, place: DesignPlace, slug: string, page: string, frame: string): DesignParseError | null {
+  const read = s.parseErrors[pageKey(host, place, slug, page)];
+  return read?.frame === frame ? read.error : null;
 }
 
 /** Why the daemon could not read the page, as it said it; null once a read
