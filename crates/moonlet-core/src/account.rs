@@ -64,11 +64,18 @@ impl Log {
     /// Takes in changes from any member.
     pub fn apply(&mut self, changes: impl IntoIterator<Item = Change>) {
         for c in changes {
+            // The first copy of a change stays: one under a number already
+            // seen never rewrites what it said, nor moves the clock.
+            let std::collections::btree_map::Entry::Vacant(slot) =
+                self.changes.entry((c.stamp.member.clone(), c.seq))
+            else {
+                continue;
+            };
             self.clock = self.clock.max((c.stamp.ms, c.stamp.n));
             if c.stamp.member == self.member {
                 self.seq = self.seq.max(c.seq);
             }
-            self.changes.insert((c.stamp.member.clone(), c.seq), c);
+            slot.insert(c);
         }
     }
 
@@ -407,6 +414,30 @@ mod tests {
                 ("color".into(), json!("blue"))
             ])
         );
+    }
+
+    #[test]
+    fn a_change_that_comes_again_with_other_content_does_not_replace_the_first() {
+        let mut log = Log::new("book.k3x9q2");
+        log.apply(vec![set(
+            1_000,
+            "mini.a1b2c3",
+            1,
+            "w1",
+            "name",
+            json!("Personal"),
+        )]);
+        // Another change under the same member and number: never history
+        // rewritten after the fact.
+        log.apply(vec![set(
+            1_000,
+            "mini.a1b2c3",
+            1,
+            "w1",
+            "name",
+            json!("Forged"),
+        )]);
+        assert_eq!(log.records("workspace")["w1"]["name"], json!("Personal"));
     }
 
     #[test]
