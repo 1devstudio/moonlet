@@ -40,7 +40,7 @@ The source projects stay read only. The sync agent works in the design system's 
 
 **A session design is committed in the project.**
 - It is made inside a session and lives in the worktree under `docs/design/<slug>/`, so the design, the spec it led to and the code ship in one PR.
-- It carries a pinned copy of the design system's styles (`system/`: `styles.css`, tokens, fonts, `components.css`), recorded with the design system's sync anchor. It therefore renders without the user's `~/.moonlet`: in the PR, after the merge as a read-only project design, and on another machine.
+- It carries a pinned copy of the design system's styles (`system/`: `styles.css`, tokens, fonts, `components.css` and the component stylesheets it imports, `components/**/*.css`), recorded with the design system's sync anchor. It therefore renders without the user's `~/.moonlet`: in the PR, after the merge as a read-only project design, and on another machine.
 - The session's agent reads the full design system from a copy in `<worktree>/.moonlet/design/<slug>/system/`, which is not committed. No extra directory access is needed.
 - Comments and snapshots stay in that uncommitted folder too.
 
