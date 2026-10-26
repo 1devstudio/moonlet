@@ -39,6 +39,11 @@ interface DesignState {
   /** Each workspace's session designs (`wsKey`), once listed (X65), which
    *  their sessions' Design tabs show. */
   sessionDesigns: Record<string, Design[]>;
+  /** Each workspace's project designs (`wsKey`), once listed (X65), which
+   *  the Designs index shows. */
+  projectDesigns: Record<string, Design[]>;
+  /** The workspaces (`wsKey`) whose Design mode shows the Designs index. */
+  indexShown: Record<string, boolean>;
   /** The design each session's Design tab shows (its place key), by slug. */
   sessionShown: Record<string, string>;
   /** The sessions (place keys) whose Design tab the app just opened itself,
@@ -69,7 +74,7 @@ interface DesignState {
   histories: Record<string, DesignSnapshot[]>;
 }
 
-export const useDesign = create<DesignState>(() => ({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, designs: {}, sessionDesigns: {}, sessionShown: {}, tabOpened: [], unseen: [], designShown: {}, pageRevs: {}, latest: {}, problems: {}, systemNames: {}, comments: {}, mids: {}, sending: {}, histories: {} }));
+export const useDesign = create<DesignState>(() => ({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, designs: {}, sessionDesigns: {}, projectDesigns: {}, indexShown: {}, sessionShown: {}, tabOpened: [], unseen: [], designShown: {}, pageRevs: {}, latest: {}, problems: {}, systemNames: {}, comments: {}, mids: {}, sending: {}, histories: {} }));
 
 /** A place's key: a workspace's `wsKey`, a session's `host/s:<session>`,
  *  so a session design never shares a workspace design's state (X65). */
@@ -170,7 +175,34 @@ export function shownSystem(s: DesignState, host: string, workspace: string): De
 /** Opens a design system in Design mode's main area. */
 export function showSystem(host: string, workspace: string, slug: string) {
   const key = wsKey(host, workspace);
-  useDesign.setState((s) => ({ shown: { ...s.shown, [key]: slug }, opened: { ...s.opened, [key]: null }, designShown: { ...s.designShown, [key]: null } }));
+  useDesign.setState((s) => ({ shown: { ...s.shown, [key]: slug }, opened: { ...s.opened, [key]: null }, designShown: { ...s.designShown, [key]: null }, indexShown: { ...s.indexShown, [key]: false } }));
+}
+
+/** Shows the Designs index in Design mode's main area (X65). */
+export function showIndex(host: string, workspace: string) {
+  const key = wsKey(host, workspace);
+  useDesign.setState((s) => ({ designShown: { ...s.designShown, [key]: null }, indexShown: { ...s.indexShown, [key]: true } }));
+}
+
+/** Whether a workspace's Design mode shows the Designs index. */
+export function indexShownIn(s: DesignState, host: string, workspace: string): boolean {
+  return !!s.indexShown[wsKey(host, workspace)];
+}
+
+/** A workspace's project designs (X65); undefined until listed. */
+export function projectDesignsIn(s: DesignState, host: string, workspace: string): Design[] | undefined {
+  return s.projectDesigns[wsKey(host, workspace)];
+}
+
+/** **Use as a start** (X65): a project design copied into a new workspace
+ *  design, under its name (numbered by the daemon when taken), which then
+ *  shows. */
+export async function startFromProjectDesign(host: string, workspace: string, d: Design): Promise<DesignCreated> {
+  const made = await rpc<DesignCreated>(host, M.designCopy, { workspace, from: { project: d.project, path: d.path }, name: d.name });
+  await loadDesigns(host, workspace, true).catch(() => {});
+  showDesign(host, workspace, made.slug);
+  if (made.agent_error) toast(`${made.name} was made, but its agent did not start: ${made.agent_error}`, "error");
+  return made;
 }
 
 /** A workspace's designs; undefined until listed (X65). */
@@ -422,7 +454,7 @@ export async function resolveComment(host: string, place: DesignPlace, slug: str
 export function showDesign(host: string, workspace: string, slug: string) {
   const key = wsKey(host, workspace);
   const item = itemKey(host, workspace, slug);
-  useDesign.setState((s) => ({ designShown: { ...s.designShown, [key]: slug }, unseen: s.unseen.includes(item) ? s.unseen.filter((k) => k !== item) : s.unseen }));
+  useDesign.setState((s) => ({ designShown: { ...s.designShown, [key]: slug }, indexShown: { ...s.indexShown, [key]: false }, unseen: s.unseen.includes(item) ? s.unseen.filter((k) => k !== item) : s.unseen }));
   const agent = designsOf(useDesign.getState(), host, workspace)?.find((d) => d.slug === slug)?.agent;
   if (agent !== undefined && agent !== null) agentSeen(host, agent);
   void checkDesign(host, workspace, slug);
@@ -470,6 +502,7 @@ const designListing = listing(async (host, workspace, key) => {
   useDesign.setState((s) => ({
     designs: { ...s.designs, [key]: designs },
     sessionDesigns: { ...s.sessionDesigns, [key]: list.filter((d) => d.kind === "session") },
+    projectDesigns: { ...s.projectDesigns, [key]: list.filter((d) => d.kind === "project") },
     unseen: gone.size ? s.unseen.filter((k) => !gone.has(k)) : s.unseen,
   }));
 });
