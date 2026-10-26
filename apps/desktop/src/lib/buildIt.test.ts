@@ -144,6 +144,11 @@ describe("buildingIn (X65 Build it)", () => {
     expect(buildingIn({}, sessions, projects)).toBeNull();
     expect(buildingIn({ built_in: { session: "s9" } }, sessions, projects)).toBeNull();
   });
+
+  it("says nothing for a design built in a session that is archived, which Build it may start again", () => {
+    const archived = [{ id: "s7", name: "implement-settings-page", project_id: "p-moon", archived: true }];
+    expect(buildingIn({ built_in: { session: "s7", project: "p-moon" } }, archived, projects)).toBeNull();
+  });
 });
 
 describe("promptAfterDrop (X65 Build it)", () => {

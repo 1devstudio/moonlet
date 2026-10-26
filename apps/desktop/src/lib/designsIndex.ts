@@ -7,6 +7,7 @@ import type { Design, DesignKind } from "./protocol";
 import type { DesignPlace } from "./designPlace";
 import { inWorktree } from "./sessionDesign";
 import { pageUrl, projectPageUrl } from "./designView";
+import { builtSession } from "./buildIt";
 
 /** What a card's button does: open a session design's session, a
  *  workspace design's screen, or start a workspace design from a project
@@ -43,7 +44,7 @@ export interface IndexGroup {
  *  changed first page is framed again; none, 0. */
 export interface IndexNames {
   workspace: string;
-  sessions: { id: string; name: string; project_id: string; path: string }[];
+  sessions: { id: string; name: string; project_id: string; path: string; archived?: boolean }[];
   projects: { id: string; name: string }[];
   systems: { slug: string; name: string }[];
   pageRev?: (place: DesignPlace, slug: string, page: string) => number;
@@ -77,7 +78,7 @@ const KINDS: { kind: DesignKind; title: IndexGroup["title"]; note: string; card:
     title: "Workspace designs",
     note: "Their own agent, no branch",
     card: (d, at) => {
-      const built = d.built_in && at.sessions.find((x) => x.id === d.built_in!.session);
+      const built = builtSession(d.built_in, at.sessions);
       const system = at.systems.find((x) => x.slug === d.system)?.name ?? d.system;
       return {
         key: `workspace/${d.slug}`,

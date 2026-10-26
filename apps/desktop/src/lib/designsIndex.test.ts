@@ -102,6 +102,11 @@ describe("designsIndex (X65 Designs index)", () => {
     ]);
   });
 
+  it("counts the pages of a workspace design built in a session that is archived, as of one never built", () => {
+    const archived = { ...at, sessions: [{ ...at.sessions[0], archived: true }] };
+    expect(designsIndex([design({ built_in: { session: "s7", project: "p-moon" } })], archived)[0].cards.map((c) => c.line)).toEqual(["moonlet desktop · 3 pages"]);
+  });
+
   it("leaves out a group with no designs, and has none without designs", () => {
     expect(shown([design({})]).map((g) => g.title)).toEqual(["Workspace designs"]);
     expect(shown([])).toEqual([]);
