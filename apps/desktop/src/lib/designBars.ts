@@ -2,6 +2,7 @@
 // has to act. Pure: the screen is components/design/DesignScreen.tsx.
 
 import { pageFile, pageOfPath, pagePath } from "./designPage";
+import type { DesignSystemUpdated } from "./protocol";
 
 /** One problem of `design.check` for a design. */
 export interface PageProblem {
@@ -32,9 +33,12 @@ export interface BarState {
   preview: { time: string; type: string } | null;
   /** A session design, whose agent is its session's (X65). */
   session?: boolean;
+  /** A session design whose design system was synced since it pinned it
+   *  (`design.list`'s `system_updated`). */
+  systemUpdated?: boolean;
 }
 
-export type BarAction = "stop" | "details" | "fix" | "dismiss" | "back" | "restore";
+export type BarAction = "stop" | "details" | "fix" | "dismiss" | "back" | "restore" | "update";
 
 export interface Bar {
   tone: "orange" | "red" | "yellow" | "grey" | "blue";
@@ -74,9 +78,10 @@ export const RESTORE_WAITS = "Restore opens when Claude stops.";
 
 /** The bar to show, or null: the agent at work, then what it asks, then an
  *  edit by hand a save lost to a change on disk, then the page's check
- *  problems, then a removed design system. A snapshot previewed comes
- *  right after what the agent asks, above the rest, as the canvas then
- *  shows it and not the current pages they are about; while the agent
+ *  problems, then a removed design system, then a session design's design
+ *  system synced since it pinned it, with **Update**. A snapshot previewed
+ *  comes right after what the agent asks, above the rest, as the canvas
+ *  then shows it and not the current pages they are about; while the agent
  *  works its bar has Stop in place of Restore. */
 export function designBar(s: BarState): Bar | null {
   if (s.working && !s.preview) return { tone: "orange", text: `Claude is ${s.session ? "working in this session" : "changing the design"}. Edit mode opens when it stops; comments still work`, detail: null, actions: ["stop"] };
@@ -90,6 +95,7 @@ export function designBar(s: BarState): Bar | null {
   const check = barProblems(s.page, s.problems);
   if (check) return { tone: "red", text: `${pageFile(check.page)} has check problems:`, detail: summary(check.problems), actions: ["details", "fix"] };
   if (s.systemRemoved) return { tone: "grey", text: "Design system removed.", detail: `Pages show without ${s.system}'s styles.`, actions: [] };
+  if (s.systemUpdated) return { tone: "grey", text: "Design system updated.", detail: `${s.system} was synced since this design copied it.`, actions: ["update"] };
   return null;
 }
 
@@ -97,6 +103,16 @@ export function designBar(s: BarState): Bar | null {
 export function pageFixMessage(page: string, problems: PageProblem[]): string {
   const lines = problems.map((p) => `- line ${p.line}: ${p.message}`).join("\n");
   return `Fix the check problems of ${pagePath(page)}, then run the check again:\n${lines}`;
+}
+
+/** What **Update** tells a session design's agent once both copies of its
+ *  design system are replaced (`design.system.update`, X65): the cards
+ *  that changed since its copy, by path, each new, changed or removed. */
+export function systemUpdateMessage(slug: string, system: string, cards: DesignSystemUpdated["cards"]): string {
+  const head = `The design system ${system} was updated for the design ${slug}: its copy in .moonlet/design/${slug}/system/ and the pinned styles are the synced ones now.`;
+  if (!cards.length) return `${head} No card changed, only its styles.`;
+  const lines = cards.map((c) => `- ${c.path} (${c.change})`).join("\n");
+  return `${head} Cards that changed:\n${lines}\nRead those cards again and update the pages that use them, then run the check.`;
 }
 
 /** Whether the chat panel opens on what the agent asks: when the design goes

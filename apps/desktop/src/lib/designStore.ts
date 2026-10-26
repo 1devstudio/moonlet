@@ -5,7 +5,7 @@
 
 import { create } from "zustand";
 import { onDaemonEvent, onHostStatus, rpc } from "./daemon";
-import { EV, M, type ChatState, type Design, type DesignCard, type CommentChange, type DesignComment, type DesignChanged, type DesignSnapshot, type DesignCover, type DesignCreated, type DesignOpen, type DesignSystem, type DesignSystemCreated } from "./protocol";
+import { EV, M, type ChatState, type Design, type DesignCard, type CommentChange, type DesignComment, type DesignChanged, type DesignSnapshot, type DesignCover, type DesignCreated, type DesignOpen, type DesignSystem, type DesignSystemCreated, type DesignSystemUpdated } from "./protocol";
 import { parseWsKey, wsKey } from "./workspaces";
 import { syncNotice } from "./designSync";
 import { agentSeen, notify, registerAgentsElsewhere, shownWorkspace, switchWorkspace, toast, useStore } from "./store";
@@ -519,6 +519,18 @@ export async function removeDesign(host: string, workspace: string, slug: string
   clearTimeout(checkTimers[timer]);
   delete checkTimers[timer];
   await loadDesigns(host, workspace, true).catch(() => {});
+}
+
+/** **Update** (X65): a session design's two copies of its design system
+ *  replaced with the system as it is now, its anchor recorded; the cards
+ *  that changed since its copy, for its agent. Its bar goes at once: the
+ *  listing its design.changed brings says so too. */
+export async function updateSystem(host: string, place: { session: string }, slug: string): Promise<DesignSystemUpdated> {
+  const updated = await rpc<DesignSystemUpdated>(host, M.designSystemUpdate, designRef(place, slug));
+  useDesign.setState((s) => ({
+    sessionDesigns: Object.fromEntries(Object.entries(s.sessionDesigns).map(([key, list]) => [key, list.some((d) => d.session === place.session && d.slug === slug) ? list.map((d) => (d.session === place.session && d.slug === slug ? { ...d, system_updated: false } : d)) : list])),
+  }));
+  return updated;
 }
 
 /** Stops what a Design mode agent is doing: Stop and Stop sync. */
