@@ -46,6 +46,10 @@ pub struct Daemon {
     /// How long edits by hand stop before their snapshot is taken: 10 s, or
     /// `MOONLET_DESIGN_QUIET_MS` (tests).
     edits_quiet: std::time::Duration,
+    /// Tests only, `MOONLET_DESIGN_TURNS_HELD`: while the file it names is
+    /// there, the snapshots of design agents' steps wait in line, as one
+    /// waits behind another design's slow snapshot, so a start is heard late.
+    turns_held: Option<PathBuf>,
     /// The app that renders design cards, and the cards it is rendering (X64).
     renders: crate::render::Renders,
     reads: TerminalReads,
@@ -462,6 +466,7 @@ impl Daemon {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .map_or(EDITS_QUIET, std::time::Duration::from_millis),
+            turns_held: std::env::var_os("MOONLET_DESIGN_TURNS_HELD").map(PathBuf::from),
             renders: Default::default(),
             reads,
             watchers,
@@ -2164,6 +2169,9 @@ impl Daemon {
         let d = self.clone();
         tokio::spawn(async move {
             while let Some((of, step)) = todo.recv().await {
+                while d.turns_held.as_deref().is_some_and(Path::exists) {
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
                 for at in d.designs_of_turn(&of).await {
                     d.agent_snapshot(&at, step).await;
                 }
