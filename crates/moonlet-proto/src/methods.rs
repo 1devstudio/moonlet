@@ -1405,12 +1405,37 @@ pub struct DesignCreate {
 
 /// A design (X65): a workspace design by its workspace and slug, a session
 /// design by its session and slug. Written as the fields beside the others
-/// of a call, so `{workspace, slug}` reads as it always did.
+/// of a call, so `{workspace, slug}` reads as it always did. Read once, by
+/// [`DesignRef::try_from`]: a call naming both a workspace and a session, or
+/// neither, is refused, so it can never pass as one and act on the other.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(untagged)]
+#[serde(untagged, try_from = "DesignFields")]
 pub enum DesignRef {
     Session { session: String, slug: String },
     Workspace { workspace: String, slug: String },
+}
+
+/// The fields a design is named by, as a call gives them.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DesignFields {
+    #[serde(default)]
+    pub workspace: Option<String>,
+    #[serde(default)]
+    pub session: Option<String>,
+    pub slug: String,
+}
+
+impl TryFrom<DesignFields> for DesignRef {
+    type Error = String;
+
+    fn try_from(f: DesignFields) -> Result<Self, String> {
+        match (f.workspace, f.session) {
+            (Some(workspace), None) => Ok(DesignRef::Workspace { workspace, slug: f.slug }),
+            (None, Some(session)) => Ok(DesignRef::Session { session, slug: f.slug }),
+            (Some(_), Some(_)) => Err("name a design by its workspace or by its session, not both".into()),
+            (None, None) => Err("name a design by its workspace or by its session".into()),
+        }
+    }
 }
 
 impl DesignRef {

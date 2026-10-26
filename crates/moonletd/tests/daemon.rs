@@ -4235,3 +4235,41 @@ async fn edits_by_hand_on_a_session_design_are_kept_on_their_own_before_its_sess
     assert_eq!(std::fs::read_to_string(side.join("1/pages/index.html")).unwrap(), "<p>by hand</p>\n");
     assert_eq!(std::fs::read_to_string(side.join("2/pages/index.html")).unwrap(), "<body data-mid=\"m1\"><p data-mid=\"m2\">turn 1</p></body>\n");
 }
+
+/// X65 entry 12: a design is named by its workspace or by its session,
+/// never both, so a call can never pass as one workspace's and act on a
+/// session design of another; either missing, or both given, is refused
+/// with a message that says so.
+#[tokio::test]
+async fn a_design_is_named_by_its_workspace_or_its_session_never_both() {
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    let (ws, _, session) = workspace_with_session(&d, &mut c, &[]).await;
+    let _: serde_json::Value = c
+        .request(
+            methods::DESIGN_CREATE,
+            serde_json::json!({"workspace": ws, "session": session.id, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}),
+        )
+        .await
+        .unwrap();
+    let other: moonlet_proto::types::Workspace =
+        c.request(methods::WORKSPACE_CREATE, serde_json::json!({"name": "Acme", "color": "clay"})).await.unwrap();
+    let both = "invalid_params: name a design by its workspace or by its session, not both";
+    for (method, more) in [
+        (methods::DESIGN_PAGE, serde_json::json!({"page": "index"})),
+        (methods::DESIGN_COMMENTS, serde_json::json!({})),
+        (methods::DESIGN_OPEN, serde_json::json!({})),
+        (methods::DESIGN_SYSTEM_UPDATE, serde_json::json!({})),
+        (methods::DESIGN_VIEWPORT, serde_json::json!({"viewport": "390x844"})),
+    ] {
+        let mut call = serde_json::json!({"workspace": other.id, "session": session.id, "slug": "settings-page"});
+        call.as_object_mut().unwrap().extend(more.as_object().unwrap().clone());
+        let refused = c.request::<_, serde_json::Value>(method, call).await;
+        assert_eq!(refused.unwrap_err().to_string(), both, "{method}");
+    }
+    let neither = c.request::<_, serde_json::Value>(methods::DESIGN_COMMENTS, serde_json::json!({"slug": "settings-page"})).await;
+    assert_eq!(neither.unwrap_err().to_string(), "invalid_params: name a design by its workspace or by its session");
+    // The viewport was never saved through the other workspace's call.
+    let toml = std::fs::read_to_string(std::path::PathBuf::from(&session.path).join("docs/design/settings-page/design.toml")).unwrap();
+    assert!(toml.contains("viewport = \"1440x900\""), "{toml}");
+}
