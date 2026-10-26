@@ -999,7 +999,13 @@ mod tests {
         let a = book.create_section(&ws.id, "Acme").unwrap();
         let b = book.create_section(&ws.id, "Blog").unwrap();
         sync(&book, &mini);
-        let mine = book.list_workspaces()[0].section_ids[0].clone();
+        let mine = book
+            .list_workspaces()
+            .into_iter()
+            .find(|w| w.id == ws.id)
+            .unwrap()
+            .section_ids[0]
+            .clone();
         book.update_workspace(WorkspaceUpdate {
             id: ws.id.clone(),
             name: None,
