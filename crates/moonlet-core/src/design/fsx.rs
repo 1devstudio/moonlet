@@ -35,8 +35,9 @@ type Disk = Option<Box<dyn FnMut(&Path) -> Result<()>>>;
 
 #[cfg(test)]
 thread_local! {
-    /// A test's disk, told the path of each file about to be written and
-    /// failing the write when it fails, so a write that fails, or a stop in
+    /// A test's disk, told the path of each file about to be written, or
+    /// each path a rename is about to put something at, and failing the
+    /// write when it fails, so a write that fails, or a stop in
     /// the middle, can be tested deterministically.
     pub(crate) static BEFORE_WRITE: std::cell::RefCell<Disk> =
         std::cell::RefCell::new(None);
@@ -256,6 +257,7 @@ pub(crate) fn remove_file_inside(root: &Path, path: &Path) -> Result<()> {
 /// Renames `from` over `to`, both inside `root`; false when `from` is
 /// missing.
 pub(crate) fn rename_inside(root: &Path, from: &Path, to: &Path) -> Result<bool> {
+    before_write(to)?;
     let (from, to) = (from.strip_prefix(root)?, to.strip_prefix(root)?);
     let root_dir = open_root(root)?;
     match root_dir.rename(from, &root_dir, to) {
