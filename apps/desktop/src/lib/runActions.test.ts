@@ -2,15 +2,16 @@ import { describe, expect, it } from "vitest";
 import { ACTIONS, actionForKey, assignShortcut, effectiveKeys, filterActions, highlight, keyId, keyLabel, keyParts, recordKey, resetShortcut, shortcutGroups } from "./runActions";
 
 describe("filtering", () => {
-  it("lists all 28 actions in catalogue order for an empty query", () => {
+  it("lists all 29 actions in catalogue order for an empty query", () => {
     const rows = filterActions("");
-    expect(rows).toHaveLength(28);
+    expect(rows).toHaveLength(29);
     expect(rows[0].action.label).toBe("New session…");
     expect(rows[1].action.label).toBe("New workspace…");
     expect(rows[24].action.label).toBe("Switch between Sessions and Tasks");
     expect(rows[25].action.label).toBe("Switch between Sessions and Design");
-    expect(rows[26].action.label).toBe("Settings…");
-    expect(rows[27].action.label).toBe("Check for updates…");
+    expect(rows[26].action.label).toBe("New design…");
+    expect(rows[27].action.label).toBe("Settings…");
+    expect(rows[28].action.label).toBe("Check for updates…");
   });
 
   it("finds the update check (X35)", () => {
@@ -101,6 +102,22 @@ describe("shortcuts", () => {
     expect(actionForKey("cmd+t", { "new-tab": "" })).toBeUndefined();
     expect(actionForKey("cmd+t", { "new-tab": "alt+cmd+t" })).toBeUndefined();
     expect(actionForKey("alt+cmd+t", { "new-tab": "alt+cmd+t" })).toBe("new-tab");
+  });
+
+  it("gives ⇧⌘N to New design… in Design mode and to New session… elsewhere (X65)", () => {
+    expect(ACTIONS.find((a) => a.id === "new-session")?.label).toBe("New session…");
+    expect(ACTIONS.find((a) => a.id === "new-design")?.label).toBe("New design…");
+    expect(actionForKey("shift+cmd+n", undefined, "design")).toBe("new-design");
+    expect(actionForKey("shift+cmd+n", undefined, "sessions")).toBe("new-session");
+    expect(actionForKey("shift+cmd+n", undefined, "tasks")).toBe("new-session");
+    // A key the user gives New design is its own in Design mode only.
+    expect(actionForKey("alt+cmd+n", { "new-design": "alt+cmd+n" }, "design")).toBe("new-design");
+    expect(actionForKey("alt+cmd+n", { "new-design": "alt+cmd+n" }, "sessions")).toBeUndefined();
+    // Taking ⇧⌘N from New session asks, and then New design loses it too.
+    expect(recordKey("shift+cmd+n", "commit", {})).toEqual({ kind: "conflict", keys: "shift+cmd+n", other: "new-session" });
+    expect(actionForKey("shift+cmd+n", { commit: "shift+cmd+n", "new-session": "" }, "design")).toBe("commit");
+    // New design and New session share ⇧⌘N without a conflict: one key, one per mode.
+    expect(recordKey("shift+cmd+n", "new-design", { "new-design": "" })).toEqual({ kind: "ok", keys: "shift+cmd+n" });
   });
 
   it("opens an agent tab with ⌘T and a terminal tab with ⇧⌘T (X38)", () => {

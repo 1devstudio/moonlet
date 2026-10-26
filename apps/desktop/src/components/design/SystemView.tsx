@@ -2,14 +2,17 @@
 // rendered in a sandboxed frame on the moonlet-design:// scheme, and one card
 // with where it was made from, its check problems and its snippets.
 
-import { ChevronLeft, Copy, Loader2, Maximize, Minus, MoreHorizontal, Plus, RotateCw, ShieldAlert, Trash2 } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { ChevronLeft, Copy, Loader2, MoreHorizontal, RotateCw, ShieldAlert, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { errorToast, toast, useStore } from "../../lib/store";
 import { rpc } from "../../lib/daemon";
 import { M, type DesignCard, type DesignSystem } from "../../lib/protocol";
 import type { RowLabel } from "../../lib/design";
-import { cardGroups, cardUrl, changedBanner, fitScale, fixMessage, fixState, headerLine, listedCards, problemsLabel, rendersHere, statusLine, variantsLabel, visibleCards, zoomStep } from "../../lib/designView";
-import { cardsOf, loadCards, openCard, revOf, shownCard, useDesign } from "../../lib/designStore";
+import { cardGroups, cardUrl, changedBanner, fixMessage, fixState, headerLine, listedCards, problemsLabel, rendersHere, statusLine, variantsLabel, visibleCards } from "../../lib/designView";
+import { canvasScale, fitBox, sizeText } from "../../lib/designViewport";
+import { useSize } from "../../lib/useSize";
+import { CardFrame, ZoomBar } from "./Frame";
+import { askAgent, cardsOf, loadCards, openCard, revOf, shownCard, stopAgent, useDesign } from "../../lib/designStore";
 import { workspaceProjects } from "../../lib/tasksStore";
 import { useNow } from "../../lib/useNow";
 import { NEAR_ROOT, useNear } from "../../lib/useNear";
@@ -25,40 +28,6 @@ import { useShallow } from "zustand/react/shallow";
 
 /** The colour of a design system's status label (sidebar row and header). */
 export const TONES: Record<RowLabel["tone"], string> = { attention: "text-blocked", changed: "text-accent", error: "text-error", muted: "text-faint" };
-
-/** A card rendered at `scale`: its viewport, in a frame that may run its own
- *  scripts but never reach the app (no `allow-same-origin`). Not `live`, the
- *  same box without the frame, so its web process (X64) is not started. */
-function CardFrame({ url, title, viewport, scale, interactive = false, live = true }: { url: string; title: string; viewport: [number, number]; scale: number; interactive?: boolean; live?: boolean }) {
-  const [w, h] = viewport;
-  return (
-    <div className="relative overflow-hidden" style={{ width: w * scale, height: h * scale }}>
-      {live && <iframe
-        title={title}
-        src={url}
-        sandbox="allow-scripts"
-        className={cx("absolute left-0 top-0 border-0 bg-transparent", !interactive && "pointer-events-none")}
-        style={{ width: w, height: h, transform: `scale(${scale})`, transformOrigin: "0 0" }}
-      />}
-    </div>
-  );
-}
-
-/** The inner size an element has, kept up to date. */
-function useSize<T extends HTMLElement>(): [React.RefObject<T | null>, [number, number]] {
-  const ref = useRef<T>(null);
-  const [size, setSize] = useState<[number, number]>([0, 0]);
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const measure = () => setSize([el.clientWidth, el.clientHeight]);
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    measure();
-    return () => ro.disconnect();
-  }, []);
-  return [ref, size];
-}
 
 function CardTile({ workspace, slug, rev, card, rewriting, onOpen }: { workspace: string; slug: string; rev: number; card: DesignCard; rewriting: boolean; onOpen: () => void }) {
   const [ref, [width]] = useSize<HTMLDivElement>();
@@ -131,7 +100,7 @@ export function DesignSystemView({ host, workspace, sys, label, working, inset }
   });
   // Hidden as the user left it, but open while the agent asks something.
   const showAgent = agent !== null && agentShown(hidden, sys);
-  const stop = () => agent !== null && void rpc(host, M.chatInterrupt, { id: agent }).catch(errorToast);
+  const stop = () => agent !== null && void stopAgent(host, agent).catch(errorToast);
   const sync = () => void rpc(host, M.designSystemSync, { workspace, slug: sys.slug }).catch(errorToast);
   const remove = async () => {
     const ok = await askConfirm({ title: `Remove ${sys.name}?`, message: `Its folder, systems/${sys.slug}, and its cards are deleted. Designs that use it keep their copies.`, action: "Remove", variant: "danger" });
@@ -272,15 +241,14 @@ function CardPage({ host, workspace, sys, rev, card, agent, inset }: { host: str
   const [canvas, [cw, ch]] = useSize<HTMLDivElement>();
   // Fitted until the user zooms.
   const [zoom, setZoom] = useState<number | null>(null);
-  const fit = cw > 96 && ch > 96 ? fitScale(card.viewport, [cw - 96, ch - 96]) : 0;
-  const scale = zoom ?? fit;
+  const scale = canvasScale(zoom, card.viewport, fitBox([cw, ch]));
   const [asking, setAsking] = useState(false);
   const fix = fixState(agent, asking);
   const askToFix = async () => {
     if (!fix.enabled || agent === null) return;
     setAsking(true);
     try {
-      await rpc(host, M.chatSend, { id: agent, text: fixMessage(card), images: [] });
+      await askAgent(host, agent, fixMessage(card));
       toast("Asked the sync agent to fix it");
     } catch (e) {
       errorToast(e);
@@ -308,19 +276,10 @@ function CardPage({ host, workspace, sys, rev, card, agent, inset }: { host: str
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3 ui-text-12">
             <span className="rounded-md border border-border-strong px-2 py-0.5 text-fg">
-              Card viewport <span className="font-mono text-faint">{`${card.viewport[0]}×${card.viewport[1]}`}</span>
+              Card viewport <span className="font-mono text-faint">{sizeText(card.viewport)}</span>
             </span>
-            <span className="ml-auto flex items-center gap-0.5">
-              <IconButton title="Zoom out" disabled={!scale} onClick={() => setZoom(zoomStep(scale, -1))}>
-                <Minus size={13} />
-              </IconButton>
-              <span className="w-12 text-center font-mono text-faint">{scale ? `${Math.round(scale * 100)}%` : ""}</span>
-              <IconButton title="Zoom in" disabled={!scale} onClick={() => setZoom(zoomStep(scale, 1))}>
-                <Plus size={13} />
-              </IconButton>
-              <IconButton title="Fit" aria-pressed={zoom === null} onClick={() => setZoom(null)}>
-                <Maximize size={13} />
-              </IconButton>
+            <span className="ml-auto">
+              <ZoomBar scale={scale} fitted={zoom === null} max={4} onZoom={setZoom} />
             </span>
           </div>
           <div ref={canvas} className="flex min-h-0 flex-1 overflow-auto bg-bg [background-image:radial-gradient(var(--color-border)_1px,transparent_1px)] [background-size:16px_16px]">

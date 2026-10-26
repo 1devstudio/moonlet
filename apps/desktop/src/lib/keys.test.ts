@@ -1,5 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { installShortcuts } from "./keys";
+import { claimKeys, installShortcuts } from "./keys";
+import { runAction } from "./actions";
 import { askConfirm } from "./confirm";
 import { useStore } from "./store";
 
@@ -58,6 +59,46 @@ describe("workspace shortcuts (X32)", () => {
   it("⌃⌘ with a number past the last workspace does nothing", () => {
     ctrlCmd("5");
     expect(useStore.getState().workspace).toEqual({ host: "local", id: "personal" });
+  });
+});
+
+describe("⇧⌘N (X54, X65)", () => {
+  const host = { id: "local", label: "This Mac", remote: false, status: "connected" as const, message: null, daemon_version: null, hostname: null, home: null };
+  const shiftCmd = (key: string) => document.body.dispatchEvent(new KeyboardEvent("keydown", { key, metaKey: true, shiftKey: true, bubbles: true }));
+
+  beforeAll(() => installShortcuts());
+  beforeEach(() =>
+    useStore.setState({
+      confirm: null,
+      dialog: null,
+      hosts: { local: host },
+      workspaces: { local: [{ id: "personal", name: "Personal", color: "clay" as const, section_ids: [], created_at: 0 }] },
+      workspace: { host: "local", id: "personal" },
+      mode: {},
+    }),
+  );
+
+  it("opens the New session composer in Sessions mode", () => {
+    shiftCmd("N");
+    expect(useStore.getState().dialog).toEqual({ kind: "new-session" });
+  });
+
+  it("opens New design in Design mode, for the shown workspace", () => {
+    useStore.setState({ mode: { "local/personal": "design" } });
+    shiftCmd("N");
+    expect(useStore.getState().dialog).toEqual({ kind: "new-design", host: "local", workspace: "personal" });
+  });
+
+  it("New session… in the Run action modal opens the New session composer, also in Design mode", () => {
+    useStore.setState({ mode: { "local/personal": "design" } });
+    runAction("new-session");
+    expect(useStore.getState().dialog).toEqual({ kind: "new-session" });
+  });
+
+  it("New design… in the Run action modal opens New design for the shown workspace, in Design mode", () => {
+    runAction("new-design");
+    expect(useStore.getState().dialog).toEqual({ kind: "new-design", host: "local", workspace: "personal" });
+    expect(useStore.getState().mode).toEqual({ "local/personal": "design" });
   });
 });
 
@@ -125,6 +166,32 @@ describe("font size shortcuts (X37)", () => {
     expect(fontSize()).toBe(20);
     press("0");
     expect(fontSize()).toBe(20);
+  });
+});
+
+describe("keys a screen takes (X65)", () => {
+  const press = (key: string) => document.body.dispatchEvent(new KeyboardEvent("keydown", { key, metaKey: true, bubbles: true }));
+  const fontSize = () => useStore.getState().settings.term.fontSize;
+
+  beforeAll(() => installShortcuts());
+  beforeEach(() => {
+    useStore.setState((s) => ({ confirm: null, dialog: null, sidebarOpen: true, settings: { ...s.settings, term: { ...s.settings.term, fontSize: 13 } } }));
+  });
+
+  it("go to the design screen while it claims them, and back to the app once it lets go", () => {
+    const got: string[] = [];
+    const release = claimKeys((id) => (id === "cmd+=" || id === "cmd+0" ? (got.push(id), true) : false));
+    press("=");
+    press("0");
+    // A key it does not take is still the app's.
+    press("b");
+    expect(got).toEqual(["cmd+=", "cmd+0"]);
+    expect(fontSize()).toBe(13);
+    expect(useStore.getState().sidebarOpen).toBe(false);
+    release();
+    press("=");
+    expect(got).toEqual(["cmd+=", "cmd+0"]);
+    expect(fontSize()).toBe(14);
   });
 });
 

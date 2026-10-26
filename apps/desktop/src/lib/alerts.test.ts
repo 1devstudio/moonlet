@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DoneBursts, alertFor, alertsLikeASession, differsAlert } from "./alerts";
+import { DoneBursts, agentPlace, alertFor, alertsLikeASession, differsAlert } from "./alerts";
 
 const away = { focused: false, visible: false, settings: { notifyWhenFocused: false }, now: 1_000_000 };
 
@@ -105,5 +105,18 @@ describe("a design's agent (X65)", () => {
   it("alerts like a session, while a sync agent does not", () => {
     expect(alertsLikeASession({ design: { kind: "design", workspace: "w1", slug: "settings-page", name: "Settings page" } })).toBe(true);
     expect(alertsLikeASession({ design: { kind: "sync", workspace: "w1", slug: "moonlet-desktop", name: "moonlet desktop" } })).toBe(false);
+  });
+});
+
+describe("where an agent's notification and approval point (X65)", () => {
+  const tag = { kind: "design" as const, workspace: "w1", slug: "settings-page", name: "Settings page" };
+
+  it("is Design · <name> for a design's agent, and opens the design", () => {
+    expect(agentPlace({ design: tag, title: "Design · Settings page" }, undefined)).toEqual({ label: "Design · Settings page", design: { workspace: "w1", slug: "settings-page" } });
+  });
+
+  it("is the session for a session's agent, else the terminal's title", () => {
+    expect(agentPlace({ title: "claude" }, "Fix checkout button")).toEqual({ label: "Fix checkout button", design: null });
+    expect(agentPlace({ title: "claude" }, undefined)).toEqual({ label: "claude", design: null });
   });
 });
