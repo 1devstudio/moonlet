@@ -416,7 +416,8 @@ pub fn session_design(
 /// `<slug>@<n>/pages/…` or `assets/…`, kept in
 /// `.moonlet/design/<slug>/history/<n>/`, at the design's own depth, so its
 /// `../system/styles.css` (`<slug>@<n>/system/…`) is the design's pinned
-/// copy, as its pages' is. No part is empty, `.` or `..`. The folder the
+/// copy, as its pages' is. No part is empty, `.` or `..`, and the slug's
+/// folder is a design's, with a `design.toml` of its own. The folder the
 /// file is in (the design's, or the snapshot's) is reached from the
 /// worktree through folders of its own, never a link, so it is inside the
 /// worktree; and the file, its links followed, must be inside that folder:
@@ -448,6 +449,10 @@ pub fn session_file(
     };
     super::place::check_slug(slug).map_err(|_| no_file())?;
     let design = Path::new(folder).join(slug);
+    // Only a design's: a folder with a design.toml of its own, never a link.
+    if fsx::read_file_inside(worktree, &design.join(DESIGN_FILE)).is_err() {
+        return Err(no_file());
+    }
     let base = match (snapshot, rest[0]) {
         (None, _) | (Some(_), "system") => design,
         (Some(n), "pages" | "assets") => Path::new(SIDE_DIR)
@@ -1281,5 +1286,54 @@ label = \"cards\"
         .map(|(folder, rel)| format!("{folder}/{rel}"))
         .collect();
         assert_eq!(served, Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_session_designs_file_is_served_only_from_a_folder_with_a_design_toml_of_its_own() {
+        let (_home, store) = store_with_synced_system();
+        let worktree = tempfile::tempdir().unwrap();
+        let wt = worktree.path().canonicalize().unwrap();
+        store
+            .create_session_design(
+                "w1",
+                "moonlet-desktop",
+                "s1",
+                &wt,
+                "docs/design",
+                "Settings page",
+                "",
+                1,
+            )
+            .unwrap();
+        std::fs::write(
+            wt.join("docs/design/settings-page/pages/index.html"),
+            "<p>design</p>\n",
+        )
+        .unwrap();
+        // Folders beside the designs that are none: no design.toml, or one
+        // that is a link to another design's.
+        for dir in [
+            "docs/design/notes/pages",
+            "docs/design/linked/pages",
+            ".moonlet/design/notes/history/1/pages",
+        ] {
+            std::fs::create_dir_all(wt.join(dir)).unwrap();
+            std::fs::write(wt.join(dir).join("index.html"), "<p>no design</p>\n").unwrap();
+        }
+        std::os::unix::fs::symlink(
+            wt.join("docs/design/settings-page/design.toml"),
+            wt.join("docs/design/linked/design.toml"),
+        )
+        .unwrap();
+        assert!(session_file(&wt, "docs/design", "settings-page/pages/index.html").is_ok());
+        let served: Vec<&str> = [
+            "notes/pages/index.html",
+            "linked/pages/index.html",
+            "notes@1/pages/index.html",
+        ]
+        .into_iter()
+        .filter(|rel| session_file(&wt, "docs/design", rel).is_ok())
+        .collect();
+        assert_eq!(served, Vec::<&str>::new());
     }
 }
