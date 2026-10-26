@@ -163,13 +163,15 @@ describe("Build it and the Designs index", () => {
   });
 
   it("shows each page beside its built screenshot in Design and build, or Not built yet", async () => {
-    const built = join(session!.path, ".moonlet", "design", SLUG, "built");
-    mkdirSync(built, { recursive: true });
-    writeFileSync(join(built, "index.png"), PNG);
     await panel().$(sel.button("Design and build").replace(/^\/\//, ".//")).click();
     const view = panel().$('.//section[@aria-label="Design and build"]');
     await expect(view).toHaveText(expect.stringContaining("Design and build"));
     const index = view.$('.//article[@aria-label="index design and build"]');
+    await expect(index).toHaveText(expect.stringContaining("Not built yet"), { wait: 20_000 });
+    // The agent saves a screenshot while the view is open: it shows.
+    const built = join(session!.path, ".moonlet", "design", SLUG, "built");
+    mkdirSync(built, { recursive: true });
+    writeFileSync(join(built, "index.png"), PNG);
     await expect(index.$('.//iframe[@title="index built"]')).toBeExisting({ wait: 20_000 });
     expect(await index.$('.//iframe[@title="index built"]').getAttribute("src")).toMatch(new RegExp(`^moonlet-design://[0-9a-f]{16}\\.s-${session!.id}/${SLUG}%40built/index\\.png`));
     await expect(index).toHaveText(expect.stringContaining(`.moonlet/design/${SLUG}/built/index.png`));

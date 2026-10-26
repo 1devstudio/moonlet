@@ -15,6 +15,7 @@ import { latestPerKey } from "./prPoll";
 import { latestSends } from "./latestSend";
 import { designOpenAction, isDesignModeChange, workspaceDesigns } from "./design";
 import { changedPages, changesOwnSystem, reloadsPage } from "./designCanvas";
+import { changesBuilt } from "./designBuild";
 import { pageOfPath } from "./designPage";
 import type { PageProblem } from "./designBars";
 import { COMMENTS_FILE, commentsMessage, withMid, withPins, type PageMids } from "./designComments";
@@ -70,11 +71,14 @@ interface DesignState {
   mids: Record<string, PageMids>;
   /** The pins of each design (`wsKey/slug`) a Send is on its way with, by number. */
   sending: Record<string, number[]>;
+  /** How many times each session design's built screenshots (`itemKey`)
+   *  changed, so Design and build looks for them again (X65). */
+  builtRevs: Record<string, number>;
   /** Each design's snapshots (`wsKey/slug`), newest first, once listed. */
   histories: Record<string, DesignSnapshot[]>;
 }
 
-export const useDesign = create<DesignState>(() => ({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, designs: {}, sessionDesigns: {}, projectDesigns: {}, indexShown: {}, sessionShown: {}, tabOpened: [], unseen: [], designShown: {}, pageRevs: {}, latest: {}, problems: {}, systemNames: {}, comments: {}, mids: {}, sending: {}, histories: {} }));
+export const useDesign = create<DesignState>(() => ({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, designs: {}, sessionDesigns: {}, projectDesigns: {}, indexShown: {}, builtRevs: {}, sessionShown: {}, tabOpened: [], unseen: [], designShown: {}, pageRevs: {}, latest: {}, problems: {}, systemNames: {}, comments: {}, mids: {}, sending: {}, histories: {} }));
 
 /** A place's key: a workspace's `wsKey`, a session's `host/s:<session>`,
  *  so a session design never shares a workspace design's state (X65). */
@@ -130,6 +134,12 @@ export function revOf(s: DesignState, host: string, workspace: string, slug: str
  *  own copy (X65). */
 export function kitRevOf(s: DesignState, host: string, place: DesignPlace, slug: string, system: string): number {
   return isSession(place) ? (s.changes[itemKey(host, place, slug)] ?? 0) : revOf(s, host, place, system);
+}
+
+/** How many times a session design's built screenshots changed since the
+ *  app started (X65). */
+export function builtRevOf(s: DesignState, host: string, place: DesignPlace, slug: string): number {
+  return s.builtRevs[itemKey(host, place, slug)] ?? 0;
 }
 
 /** A list per design system or design (`itemKey`) in `field`, from the
@@ -576,7 +586,10 @@ function onDesignChange(host: string, change: DesignChanged) {
     for (const page of pages) bump(pageKey(host, place, change.design, page), change.design, page);
     // A session design's own copy of its design system: its kit is read again.
     const own = isSession(place) && changesOwnSystem(change);
+    // Its built screenshots, saved by its agent after implementing it.
+    const built = isSession(place) && changesBuilt(change.paths);
     useDesign.setState((s) => ({
+      builtRevs: built ? { ...s.builtRevs, [key]: (s.builtRevs[key] ?? 0) + 1 } : s.builtRevs,
       pageRevs: { ...s.pageRevs, ...revs },
       latest: pages.length ? { ...s.latest, [key]: pages } : s.latest,
       changes: own ? { ...s.changes, [key]: (s.changes[key] ?? 0) + 1 } : s.changes,

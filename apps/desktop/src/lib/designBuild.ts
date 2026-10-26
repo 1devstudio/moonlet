@@ -23,6 +23,12 @@ export function builtPath(slug: string, page: string): string {
 /** The built screenshots' folder (`BUILT_DIR` in design/session.rs). */
 const BUILT = "built";
 
+/** Whether a session design's change names its built screenshots, a path
+ *  under its side folder's `built/`: Design and build looks for them again. */
+export function changesBuilt(paths: string[]): boolean {
+  return paths.some((p) => p.startsWith(`${BUILT}/`));
+}
+
 const builtName = (page: string) => `${page}.png`;
 
 /** One page of Design and build: the page's file in the worktree, and its
