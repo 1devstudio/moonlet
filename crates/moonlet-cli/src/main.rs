@@ -4,6 +4,7 @@
 //! `moonlet ls`, `moonlet pane run` and `moonlet agent start`; agents open sessions
 //! in other projects with `moonlet session new` (X22).
 
+mod design;
 mod exec;
 mod hook;
 mod session;
@@ -105,6 +106,11 @@ enum Cmd {
         #[command(subcommand)]
         action: SessionAction,
     },
+    /// Design systems built from a project's code (X64).
+    Design {
+        #[command(subcommand)]
+        action: DesignAction,
+    },
     /// Read the terminals of your session, with the user's approval (X31).
     Term {
         #[command(subcommand)]
@@ -130,6 +136,67 @@ enum WorkerAction {
     Ls,
     /// Remove a cloud machine, once its running commands end.
     Down { name: String },
+}
+
+#[derive(Subcommand)]
+enum DesignAction {
+    /// Manage the workspace's design systems.
+    System {
+        #[command(subcommand)]
+        action: SystemAction,
+    },
+    /// Check a design system: rewrites its generated files (foundations,
+    /// manifest, README) and prints every problem as JSON. Exits 1 when there is one.
+    Check {
+        /// Design system slug (defaults to the one the current folder is in).
+        #[arg(long)]
+        system: Option<String>,
+        /// Workspace id (defaults to the current folder's, then your session's).
+        #[arg(long)]
+        workspace: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum SystemAction {
+    /// List the workspace's design systems as JSON.
+    Ls {
+        #[arg(long)]
+        workspace: Option<String>,
+    },
+    /// Create a design system from projects' code. Prints its slug.
+    New {
+        /// Its name, such as "moonlet desktop".
+        name: String,
+        /// Project id, path or name (see `moonlet project ls`); repeat for several.
+        #[arg(long = "from", required = true)]
+        from: Vec<String>,
+        #[arg(long)]
+        workspace: Option<String>,
+    },
+    /// Delete a design system.
+    Rm {
+        slug: String,
+        #[arg(long)]
+        workspace: Option<String>,
+    },
+    /// Report a sync step: inventory, tokens, cards or layouts.
+    Progress {
+        step: String,
+        /// A short result, such as "3 changed, 1 new".
+        summary: Vec<String>,
+        #[arg(long)]
+        system: Option<String>,
+        #[arg(long)]
+        workspace: Option<String>,
+    },
+    /// Record a finished sync: each source's commit, and the anchor.
+    Synced {
+        #[arg(long)]
+        system: Option<String>,
+        #[arg(long)]
+        workspace: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -589,6 +656,7 @@ async fn run(cmd: Cmd, socket: PathBuf) -> Result<()> {
                 }
             }
         }
+        Cmd::Design { action } => design_cmd(&socket, action).await?,
         Cmd::Project {
             action: ProjectAction::Ls { json },
         } => {
@@ -756,6 +824,85 @@ async fn session_agent(c: &mut Client, id: &str) -> Result<TerminalId> {
 
 async fn chat_state(c: &mut Client, id: TerminalId) -> Result<ChatState> {
     c.request(methods::CHAT_STATE, TerminalRef { id }).await
+}
+
+/// The workspace (and design system) a `moonlet design` command means: the
+/// flags, else the folder it runs in, else the session of the agent running it.
+async fn design_target(c: &mut Client, workspace: Option<String>, system: Option<String>) -> Result<(String, Option<String>)> {
+    // The working folder comes back with symlinks resolved (`/private/var`
+    // for `/var` on macOS), so compare it with the resolved design folder.
+    let root = moonlet_core::paths::home().join("design");
+    let root = std::fs::canonicalize(&root).unwrap_or(root);
+    let here = std::env::current_dir().ok().and_then(|cwd| design::locate(&cwd, &root));
+    let system = system.or_else(|| here.as_ref().and_then(|h| h.system.clone()));
+    if let Some(w) = workspace.or_else(|| here.map(|h| h.workspace)) {
+        return Ok((w, system));
+    }
+    if let Some(t) = terminal_from_env() {
+        let terminals: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await?;
+        let sessions: Vec<Session> = c.request(methods::SESSION_LIST, ()).await?;
+        let terminals: Vec<_> = terminals.into_iter().map(|t| (t.id, t.session_id)).collect();
+        let sessions: Vec<_> = sessions.into_iter().map(|s| (s.id, s.workspace_id)).collect();
+        if let Some(w) = design::workspace_of_terminal(&terminals, &sessions, t) {
+            return Ok((w, system));
+        }
+    }
+    bail!("no workspace: run inside a design folder or a moonlet session, or pass --workspace")
+}
+
+async fn design_cmd(socket: &std::path::Path, action: DesignAction) -> Result<()> {
+    let mut c = connect(socket).await?;
+    let need = |s: Option<String>| s.context("no design system: run inside its folder or pass --system");
+    match action {
+        DesignAction::Check { system, workspace } => {
+            let (w, s) = design_target(&mut c, workspace, system).await?;
+            let problems: serde_json::Value =
+                c.request(methods::DESIGN_CHECK, serde_json::json!({"workspace": w, "slug": need(s)?})).await?;
+            println!("{}", serde_json::to_string_pretty(&problems)?);
+            if problems.as_array().is_some_and(|p| !p.is_empty()) {
+                std::process::exit(1);
+            }
+        }
+        DesignAction::System { action } => match action {
+            SystemAction::Ls { workspace } => {
+                let (w, _) = design_target(&mut c, workspace, None).await?;
+                let list: serde_json::Value = c.request(methods::DESIGN_SYSTEMS, serde_json::json!({"workspace": w})).await?;
+                println!("{}", serde_json::to_string_pretty(&list)?);
+            }
+            SystemAction::New { name, from, workspace } => {
+                let (w, _) = design_target(&mut c, workspace, None).await?;
+                let projects: Vec<Project> = c.request(methods::PROJECT_LIST, ()).await?;
+                let home = std::env::var("HOME").unwrap_or_default();
+                let mut sources = Vec::new();
+                for q in &from {
+                    sources.push(serde_json::json!({"project": session::find_project(&projects, q, &home)?.id}));
+                }
+                let slug: String = c
+                    .request(methods::DESIGN_SYSTEM_CREATE, serde_json::json!({"workspace": w, "name": name, "sources": sources}))
+                    .await?;
+                println!("{slug}");
+            }
+            SystemAction::Rm { slug, workspace } => {
+                let (w, _) = design_target(&mut c, workspace, None).await?;
+                let _: bool = c.request(methods::DESIGN_SYSTEM_REMOVE, serde_json::json!({"workspace": w, "slug": slug})).await?;
+            }
+            SystemAction::Progress { step, summary, system, workspace } => {
+                let (w, s) = design_target(&mut c, workspace, system).await?;
+                let summary = Some(summary.join(" ")).filter(|s| !s.trim().is_empty());
+                let _: bool = c
+                    .request(
+                        methods::DESIGN_SYSTEM_PROGRESS,
+                        serde_json::json!({"workspace": w, "slug": need(s)?, "step": step, "summary": summary}),
+                    )
+                    .await?;
+            }
+            SystemAction::Synced { system, workspace } => {
+                let (w, s) = design_target(&mut c, workspace, system).await?;
+                let _: bool = c.request(methods::DESIGN_SYSTEM_SYNCED, serde_json::json!({"workspace": w, "slug": need(s)?})).await?;
+            }
+        },
+    }
+    Ok(())
 }
 
 /// The terminal this command runs in. Terminals jaunt opened carry
