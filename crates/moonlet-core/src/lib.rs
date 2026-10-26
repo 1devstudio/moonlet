@@ -1,6 +1,7 @@
 //! Core logic of `moonletd`: PTYs, terminal state, sessions, agent state,
 //! repos and worktree workspaces, git and files.
 
+pub mod account;
 pub mod agent;
 pub mod chat;
 pub mod claude_update;
