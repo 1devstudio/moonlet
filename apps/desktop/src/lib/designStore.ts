@@ -79,6 +79,12 @@ const placeKey = (host: string, place: DesignPlace) => (isSession(place) ? `${ho
  *  system's place is its workspace. */
 export const itemKey = (host: string, place: DesignPlace, slug: string) => `${placeKey(host, place)}/${slug}`;
 
+/** The key a design's canvas is shown under, the design screen's and a
+ *  session's Design tab's: its place and slug, as {@link itemKey}, so a
+ *  design of the same slug in another session or workspace is another
+ *  canvas, its comment box, snapshot previewed and selection afresh. */
+export const designCanvasKey = itemKey;
+
 /** A design page's key, `<place key>/slug/page`. */
 export const pageKey = (host: string, place: DesignPlace, slug: string, page: string) => `${itemKey(host, place, slug)}/${page}`;
 

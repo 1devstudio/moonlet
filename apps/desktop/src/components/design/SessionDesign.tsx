@@ -6,7 +6,7 @@
 import { useEffect, useMemo, type RefObject } from "react";
 import { ChevronDown, PenTool } from "lucide-react";
 import type { Design, Session } from "../../lib/protocol";
-import { commentsOf, loadComments, sessionDesignsOf, showSessionDesign, shownSessionDesign, systemsOf, useDesign } from "../../lib/designStore";
+import { designCanvasKey, commentsOf, loadComments, sessionDesignsOf, showSessionDesign, shownSessionDesign, systemsOf, useDesign } from "../../lib/designStore";
 import { projectOf, useStore } from "../../lib/store";
 import { sendWithEdits, type ToldDesign } from "../../lib/designEditor";
 import { designSystemFooter, inWorktree, opensDesignView, worktreeFile } from "../../lib/sessionDesign";
@@ -36,7 +36,8 @@ export function SessionDesignTab({ host, ws }: { host: string; ws: Session }) {
       </Empty>
     );
   }
-  return <SessionCanvas key={design.slug} host={host} ws={ws} design={design} />;
+  // Another session's design of the same slug is another canvas.
+  return <SessionCanvas key={designCanvasKey(host, { session: ws.id }, design.slug)} host={host} ws={ws} design={design} />;
 }
 
 /** The canvas of the design a session's Design tab shows. */

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Design, DesignComment, DesignSystem, TerminalInfo } from "./protocol";
 import { modeOf, setMode } from "./mode";
 import { agentOnScreen, goToAgent, useStore } from "./store";
-import { pageKey, pageOfKey, commentsOf, historyOf, keepComment, loadComments, loadHistory, sendComments, sendingOf, resolveComment, sessionDesignsOf, shownSessionDesign, showSessionDesign, unseenOf, updateSystem, justOpened, tookOpened, pickDesignTab, kitRevOf } from "./designStore";
+import { designCanvasKey, pageKey, pageOfKey, commentsOf, historyOf, keepComment, loadComments, loadHistory, sendComments, sendingOf, resolveComment, sessionDesignsOf, shownSessionDesign, showSessionDesign, unseenOf, updateSystem, justOpened, tookOpened, pickDesignTab, kitRevOf } from "./designStore";
 import { cardsOf, checkDesign, createFromNewDesign, createSystem, designsOf, detectStack, latestOf, loadCards, loadDesigns, loadSystems, openCard, saveViewport, pageRevOf, problemsOf, revOf, shownCard, shownDesign, shownSystem, showDesign, showSystem, startDesign, systemNameOf, systemsOf, useDesign } from "./designStore";
 
 const calls = vi.hoisted(() => [] as { host: string; method: string; params: unknown }[]);
@@ -668,6 +668,15 @@ describe("a design page's key (X65)", () => {
     expect(pageOfKey("local", "w-1devstudio", "settings-page", pageKey("local", "w-1devstudio", "settings-page", "git rows"))).toBe("git rows");
     expect(pageOfKey("local", "w-1devstudio", "settings-page", pageKey("local", "w-1devstudio", "settings-page-2", "index"))).toBeNull();
     expect(pageOfKey("local", "w-1devstudio", "settings-page", pageKey("mac-2", "w-1devstudio", "settings-page", "index"))).toBeNull();
+  });
+});
+
+describe("a design canvas's key (X65)", () => {
+  it("is the design's place and slug, so the same slug in another session or workspace is another canvas, its comment box, snapshot previewed and selection afresh", () => {
+    expect(designCanvasKey("local", { session: "4f2a9c1e7b3d" }, "settings-page")).toBe("local/s:4f2a9c1e7b3d/settings-page");
+    expect(designCanvasKey("local", { session: "9c1e7b3d4f2a" }, "settings-page")).toBe("local/s:9c1e7b3d4f2a/settings-page");
+    expect(designCanvasKey("local", "a1b2c3d4e5f6", "settings-page")).toBe("local/a1b2c3d4e5f6/settings-page");
+    expect(designCanvasKey("mac-2", "a1b2c3d4e5f6", "settings-page")).toBe("mac-2/a1b2c3d4e5f6/settings-page");
   });
 });
 
