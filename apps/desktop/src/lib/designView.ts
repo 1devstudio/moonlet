@@ -3,7 +3,7 @@
 
 import { ago } from "./mobile";
 import { pagePath } from "./designPage";
-import { designFolder, placeHost, type DesignPlace } from "./designPlace";
+import { designFolder, placeHost, taggedSlug, type DesignPlace } from "./designPlace";
 import type { DesignCard, DesignSystem } from "./protocol";
 
 export interface CardGroup {
@@ -101,7 +101,7 @@ export function pageUrl(place: DesignPlace, design: string, page: string, rev = 
  *  snapshot's files and design systems' (`serves` in design_scheme.rs): a
  *  link in the page never shows the current page in the preview. */
 export function snapshotPageUrl(place: DesignPlace, design: string, n: number, page: string): string {
-  const folder = designFolder(place, `${design}@${n}`);
+  const folder = designFolder(place, taggedSlug(design, n));
   const path = `${folder}/${pagePath(page)}`;
   return designUrl(place, path, 0, {}, `${fnv1a64(path)}s${fnv1a64(folder)}`);
 }

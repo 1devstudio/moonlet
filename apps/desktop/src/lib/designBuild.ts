@@ -6,12 +6,24 @@
 import type { Design } from "./protocol";
 import { worktreeFile } from "./sessionDesign";
 import { viewportOf } from "./designViewport";
+import { sideFolder, taggedSlug } from "./designPlace";
 
 /** A page's built screenshot as `design.file {session, path}` names it, in
  *  the worktree's design folder's terms: `<slug>@built/<page>.png`. */
 export function builtFile(slug: string, page: string): string {
-  return `${slug}@built/${page}.png`;
+  return `${taggedSlug(slug, BUILT)}/${builtName(page)}`;
 }
+
+/** Where the agent saves a page's built screenshot in the worktree:
+ *  `.moonlet/design/<slug>/built/<page>.png`. */
+export function builtPath(slug: string, page: string): string {
+  return `${sideFolder(slug)}/${BUILT}/${builtName(page)}`;
+}
+
+/** The built screenshots' folder (`BUILT_DIR` in design/session.rs). */
+const BUILT = "built";
+
+const builtName = (page: string) => `${page}.png`;
 
 /** One page of Design and build: the page's file in the worktree, and its
  *  screenshot's (`built`, for design.file and the frame) once found; under
@@ -41,7 +53,7 @@ export function designBuild(d: Design, worktree: string, found: Record<string, b
         label: p.label,
         design: worktreeFile(worktree, d, p.name),
         built: there ? builtFile(d.slug, p.name) : null,
-        builtLabel: there === undefined ? null : there ? `.moonlet/design/${d.slug}/built/${p.name}.png` : "Not built yet",
+        builtLabel: there === undefined ? null : there ? builtPath(d.slug, p.name) : "Not built yet",
       };
     }),
   };
