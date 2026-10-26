@@ -36,12 +36,13 @@ export function designAgentState(d: Design, live: AgentState | undefined): Agent
 }
 
 /** A design's sidebar row (X65): its agent's state (`state`, the agent's
- *  live state, which the caller knows), then needs you, else its open
- *  comments, else its age. */
+ *  live state, which the caller knows), then needs you, else `session` for
+ *  a session design, else its open comments, else its age. */
 export function designRow(d: Design, now: number, state: AgentState | null): DesignRowLabel {
   const dot = d.agent === null ? null : state;
   if (d.error) return { state: dot, text: "unreadable", tone: "error", comments: false };
   if (d.needs_you) return { state: dot, text: "needs you", tone: "attention", comments: false };
+  if (d.kind === "session") return { state: dot, text: "session", tone: "muted", comments: false };
   if (d.open_comments > 0) return { state: dot, text: String(d.open_comments), tone: "muted", comments: true };
   return { state: dot, text: shortAge(now - d.updated_at), tone: "muted", comments: false };
 }

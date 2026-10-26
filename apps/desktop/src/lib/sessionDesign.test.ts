@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Design, ToolCall } from "./protocol";
-import { opensDesignView, worktreeFile } from "./sessionDesign";
+import { designMark, opensDesignView, worktreeFile } from "./sessionDesign";
 
 const design = (over: Partial<Design> = {}): Design => ({
   slug: "settings-page",
@@ -26,6 +26,14 @@ describe("the file above a session design's page (X65)", () => {
     expect(worktreeFile("/Users/alex/.moonlet/worktrees/moonlet/settings-page/", design(), "git-a")).toBe("docs/design/settings-page/pages/git-a.html");
     // A design folder the project's config puts elsewhere in the worktree.
     expect(worktreeFile("/wt/s", design({ path: "/wt/s/design/prototypes/onboarding" }), "index")).toBe("design/prototypes/onboarding/pages/index.html");
+  });
+});
+
+describe("a session's row in Sessions mode (X65)", () => {
+  it("shows the pen icon while the session has a design, titled with its designs", () => {
+    expect(designMark([])).toBeNull();
+    expect(designMark([design()])).toBe("Design: Settings page");
+    expect(designMark([design(), design({ slug: "onboarding", name: "Onboarding" })])).toBe("Designs: Settings page, Onboarding");
   });
 });
 

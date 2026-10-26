@@ -14,6 +14,13 @@ export function worktreeFile(worktree: string, design: Design, page: string): st
   return `${folder}/${pagePath(page)}`;
 }
 
+/** The pen icon on a session's row in Sessions mode, titled with its
+ *  designs, while it has one; null without. */
+export function designMark(designs: Design[]): string | null {
+  if (!designs.length) return null;
+  return `${designs.length === 1 ? "Design" : "Designs"}: ${designs.map((d) => d.name).join(", ")}`;
+}
+
 /** The note "Design view opened. The design system is copied into the
  *  session for Claude to read" follows a tool call of the session's agent
  *  when it is its `design new --here` that ran: the call that made the
