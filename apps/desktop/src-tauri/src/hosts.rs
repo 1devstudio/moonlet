@@ -58,6 +58,10 @@ struct DaemonEvent<'a> {
 
 impl Events for WebviewEvents {
     fn status(&self, info: &HostInfo) {
+        // This Mac's daemon renders its design cards in this app (X64).
+        if self.1 == HostKind::Local && info.status == HostStatus::Connected {
+            crate::design_render::announce(&self.0);
+        }
         let entry = HostEntry {
             info: info.clone(),
             kind: self.1,
@@ -66,6 +70,14 @@ impl Events for WebviewEvents {
     }
 
     fn event(&self, host: &str, name: String, data: Value) {
+        // A card to render, from this Mac's daemon alone (X64): the app's
+        // backend renders it, the webview never sees it.
+        if name == moonlet_proto::methods::EV_DESIGN_RENDER {
+            if self.1 == HostKind::Local {
+                crate::design_render::handle(&self.0, data);
+            }
+            return;
+        }
         let _ = self
             .0
             .emit("daemon-event", DaemonEvent { host, name, data });

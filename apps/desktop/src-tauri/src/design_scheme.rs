@@ -42,6 +42,56 @@ pub fn target(url: &str) -> Option<(String, String)> {
     Some((workspace, parts.join("/")))
 }
 
+/// The render check's measuring script (X64), put in a card the render
+/// page asks for.
+const MEASURE: &str = include_str!("design_measure.js");
+
+/// Whether the app's render page asks for `url` (`?moonlet-render=<job>`),
+/// so the card is served with the measuring script (X64).
+pub fn measuring(url: &str) -> bool {
+    let query = url
+        .split('#')
+        .next()
+        .and_then(|u| u.split_once('?'))
+        .map_or("", |(_, q)| q);
+    query
+        .split('&')
+        .any(|pair| pair.split('=').next() == Some("moonlet-render"))
+}
+
+/// `html` with `script` first in its `<head>`: after the `<head>` tag, else
+/// after `<html>`, else after the doctype (never before it, which would put
+/// the page in quirks mode), else at the start.
+pub fn with_script(html: &[u8], script: &[u8]) -> Vec<u8> {
+    // Found in the bytes, so a card in another encoding is served as it is:
+    // lowercased ASCII keeps every byte where it was.
+    let lower = html.to_ascii_lowercase();
+    let find = |from: usize, needle: &[u8]| {
+        lower
+            .get(from..)?
+            .windows(needle.len())
+            .position(|w| w == needle)
+            .map(|i| from + i)
+    };
+    // Just after the `>` of the first `<tag` (followed by `>`, a space or `/`).
+    let after = |tag: &[u8]| {
+        let mut from = 0;
+        while let Some(start) = find(from, tag) {
+            let next = lower.get(start + tag.len()).copied();
+            if matches!(next, Some(b'>' | b'/' | b' ' | b'\t' | b'\n' | b'\r')) {
+                return find(start, b">").map(|j| j + 1);
+            }
+            from = start + tag.len();
+        }
+        None
+    };
+    let at = after(b"<head")
+        .or_else(|| after(b"<html"))
+        .or_else(|| after(b"<!doctype"))
+        .unwrap_or(0);
+    [&html[..at], script, &html[at..]].concat()
+}
+
 /// The headers of a served file.
 pub fn headers(content_type: &str, workspace: &str) -> [(&'static str, String); 4] {
     [
@@ -94,6 +144,12 @@ pub async fn serve(app: &tauri::AppHandle, url: &str) -> tauri::http::Response<V
     let Ok(Ok(body)) = tokio::task::spawn_blocking(move || read_inside(&design, &ws, &real)).await
     else {
         return reply(404, "no such design file");
+    };
+    // The render page's card measures itself, in its own sandboxed frame.
+    let body = if measuring(url) && content_type.starts_with("text/html") {
+        with_script(&body, format!("<script>{MEASURE}</script>").as_bytes())
+    } else {
+        body
     };
     let mut res = tauri::http::Response::builder().status(200);
     for (name, value) in headers(content_type, &workspace) {
@@ -247,6 +303,69 @@ mod tests {
             Some(
                 "default-src moonlet-design://w-1devstudio data: blob: 'unsafe-inline'; connect-src 'none'; form-action 'none'; frame-src 'none'"
             )
+        );
+    }
+
+    #[test]
+    fn the_measuring_script_is_served_only_when_the_render_page_asks() {
+        assert!(measuring(
+            "moonlet-design://w1/systems/s/components/buttons/button/button.html?moonlet-render=3"
+        ));
+        assert!(measuring(
+            "moonlet-design://w1/systems/s/components/buttons/button/button.html?moonlet-render=3&variant=buttons%2Fbutton%2Fghost"
+        ));
+        for plain in [
+            "moonlet-design://w1/systems/s/components/buttons/button/button.html",
+            "moonlet-design://w1/systems/s/components/buttons/button/button.html?v=2",
+            "moonlet-design://w1/systems/s/components/buttons/button/button.html#moonlet-render=3",
+            "moonlet-design://w1/systems/s/x.html?not-moonlet-render=3",
+        ] {
+            assert!(!measuring(plain), "{plain}");
+        }
+    }
+
+    #[test]
+    fn the_measuring_script_goes_first_in_the_head_and_never_before_the_doctype() {
+        let s = "<script>measure()</script>";
+        let with_script = |html: &str, script: &str| {
+            String::from_utf8(with_script(html.as_bytes(), script.as_bytes())).unwrap()
+        };
+        assert_eq!(
+            with_script(
+                "<!-- @dsCard group=\"Buttons\" -->\n<!doctype html>\n<html><HEAD lang=\"en\"><link rel=\"stylesheet\" href=\"../../../styles.css\"></head><body></body></html>\n",
+                s
+            ),
+            "<!-- @dsCard group=\"Buttons\" -->\n<!doctype html>\n<html><HEAD lang=\"en\"><script>measure()</script><link rel=\"stylesheet\" href=\"../../../styles.css\"></head><body></body></html>\n"
+        );
+        // A <header> is not the head.
+        assert_eq!(
+            with_script(
+                "<!DOCTYPE html><html lang=\"en\"><body><header>Top</header></body></html>",
+                s
+            ),
+            "<!DOCTYPE html><html lang=\"en\"><script>measure()</script><body><header>Top</header></body></html>"
+        );
+        assert_eq!(
+            with_script(
+                "<!-- @dsCard group=\"Buttons\" -->\n<!doctype html>\n<p>Run</p>",
+                s
+            ),
+            "<!-- @dsCard group=\"Buttons\" -->\n<!doctype html><script>measure()</script>\n<p>Run</p>"
+        );
+        assert_eq!(
+            with_script("<p>Run</p>", s),
+            "<script>measure()</script><p>Run</p>"
+        );
+    }
+
+    #[test]
+    fn a_card_that_is_not_utf_8_keeps_its_bytes_around_the_script() {
+        // Latin-1 "Café": 0xE9 is not UTF-8.
+        let card =
+            b"<!doctype html><html><head><title>Caf\xe9</title></head><body>Caf\xe9</body></html>";
+        assert_eq!(
+            with_script(card, b"<script>measure()</script>"),
+            b"<!doctype html><html><head><script>measure()</script><title>Caf\xe9</title></head><body>Caf\xe9</body></html>".to_vec()
         );
     }
 }

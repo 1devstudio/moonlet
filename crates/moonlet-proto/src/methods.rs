@@ -201,8 +201,20 @@ pub const DESIGN_SYSTEM_REMOVE: &str = "design.system.remove";
 pub const DESIGN_SYSTEM_PROGRESS: &str = "design.system.progress";
 /// [`DesignSystemRef`]: the sync is done; records each source's `HEAD` and writes the anchor.
 pub const DESIGN_SYSTEM_SYNCED: &str = "design.system.synced";
-/// [`DesignSystemRef`] → every problem, after rewriting the generated files.
+/// [`DesignCheck`] → every problem, after rewriting the generated files.
+/// With `render`, `{problems, render: {total, bad, thin, variants_identical}}`
+/// once the app has rendered every card (X64).
 pub const DESIGN_CHECK: &str = "design.check";
+/// [`DesignSnap`] → `{path, blank}`: a card's screenshot, taken by the app,
+/// saved in the system's `.cache/screenshots/` (X64).
+pub const DESIGN_SNAP: &str = "design.snap";
+/// `{}`: the Mac's moonlet app renders cards for this daemon (X64): the
+/// render check and snapshots go to this connection. Only the app may say so.
+pub const DESIGN_RENDER_READY: &str = "design.render.ready";
+/// [`DesignRenderDone`]: the app's answer to an [`EV_DESIGN_RENDER`] (X64).
+pub const DESIGN_RENDER_DONE: &str = "design.render.done";
+/// How long the app has for one card, from when the daemon sends it (X64).
+pub const RENDER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 /// [`DesignFile`] → `{path, content_type}` of a file under the workspace's design folder.
 pub const DESIGN_FILE: &str = "design.file";
 /// [`DesignDetect`] → what a folder's UI is built with, such as `["React", "Tailwind"]`.
@@ -389,6 +401,9 @@ pub const EV_SYNC_CHANGED: &str = "sync.changed";
 /// `{workspace, system, paths}`: files changed in a design system, or in a
 /// workspace's other design files (`system: null`) (X64).
 pub const EV_DESIGN_CHANGED: &str = "design.changed";
+/// [`DesignRender`]: render a card, sent only to the connection of the app
+/// that said [`DESIGN_RENDER_READY`] (X64).
+pub const EV_DESIGN_RENDER: &str = "design.render";
 
 // Events
 pub const EV_TERMINAL_CREATED: &str = "terminal.created";
@@ -1201,6 +1216,88 @@ pub struct DesignProgress {
     pub step: String,
     #[serde(default)]
     pub summary: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DesignCheck {
+    pub workspace: String,
+    pub slug: String,
+    /// Also render each card in the app and judge it (`--render`).
+    #[serde(default)]
+    pub render: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DesignSnap {
+    pub workspace: String,
+    pub slug: String,
+    /// The card's path in the system, such as `components/buttons/button/button.html`.
+    pub path: String,
+    /// Width and height; the card's own viewport when absent.
+    #[serde(default)]
+    pub viewport: Option<(u32, u32)>,
+    /// Show only this variant: a snippet's id, or its last part.
+    #[serde(default)]
+    pub variant: Option<String>,
+}
+
+/// What the app is asked for a card (X64).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RenderWant {
+    /// The rubric's flags, from what the card measured of itself.
+    Metrics,
+    /// A screenshot.
+    Png,
+}
+
+/// What the app is asked to render (event [`EV_DESIGN_RENDER`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DesignRender {
+    pub id: u64,
+    pub workspace: String,
+    /// The design system.
+    pub slug: String,
+    /// The card's path in the system, such as `components/buttons/button/button.html`.
+    pub path: String,
+    pub viewport: (u32, u32),
+    /// The snippet shown alone, by its full id.
+    pub variant: Option<String>,
+    pub want: RenderWant,
+}
+
+/// The rubric's verdict on a rendered card.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct RenderMetrics {
+    /// The flags it raised, such as `rootEmpty` and `bad`.
+    pub flags: Vec<String>,
+    /// Its page errors.
+    #[serde(default)]
+    pub errors: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DesignRenderDone {
+    pub id: u64,
+    #[serde(default)]
+    pub metrics: Option<RenderMetrics>,
+    /// The screenshot, a PNG.
+    #[serde(default)]
+    pub png_base64: Option<String>,
+    /// Why the card could not be rendered.
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+impl DesignRenderDone {
+    /// The rubric's verdict, or why the app has none.
+    pub fn metrics(self) -> Result<RenderMetrics, String> {
+        match (self.error, self.metrics) {
+            (Some(e), _) => Err(e),
+            (None, Some(m)) => Ok(m),
+            (None, None) => Err("the app measured nothing".into()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

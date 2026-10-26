@@ -34,6 +34,8 @@ pub struct Daemon {
     design_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// Announces changes under `~/.moonlet/design` as `design.changed` (X64).
     _design_watch: Option<moonlet_core::design::watch::Watching>,
+    /// The app that renders design cards, and the cards it is rendering (X64).
+    renders: crate::render::Renders,
     reads: TerminalReads,
     watchers: Arc<Watchers>,
     started_at: u64,
@@ -286,6 +288,7 @@ impl Daemon {
             design: moonlet_core::design::store::Store::new(&moonlet_core::paths::home()),
             design_locks: Mutex::new(HashMap::new()),
             _design_watch: design_watch,
+            renders: Default::default(),
             reads,
             watchers,
             started_at: now_ms(),
@@ -392,6 +395,7 @@ impl Daemon {
     pub fn on_disconnect(&self, client: u64) {
         self.watchers.release_client(client);
         self.workers.disconnected(client);
+        self.renders.disconnected(client);
     }
 
     pub fn info(&self) -> DaemonInfo {
@@ -1038,6 +1042,20 @@ impl Daemon {
             return Err(RpcError::new("forbidden", "manage design systems from the Mac"));
         }
         use moonlet_core::design::store::{self, Settle, Source};
+        // The app renders cards for the render check and snapshots (X64).
+        match method {
+            m::DESIGN_RENDER_READY => {
+                app_only(conn, "design rendering")?;
+                self.renders.ready(conn.id, conn.tx.clone());
+                return ok(true);
+            }
+            m::DESIGN_RENDER_DONE => {
+                let done: m::DesignRenderDone = params(p)?;
+                self.renders.done(conn.id, done)?;
+                return ok(true);
+            }
+            _ => {}
+        }
         let store = self.design.clone();
         // Design folders belong to a moonlet workspace (ADR 0013).
         let workspace = p.get("workspace").and_then(Value::as_str).unwrap_or_default();
@@ -1145,8 +1163,52 @@ impl Daemon {
                 ok(true)
             }
             m::DESIGN_CHECK => {
-                let r: m::DesignSystemRef = params(p)?;
-                ok(blocking(move || store.check_system(&r.workspace, &r.slug)).await?)
+                let r: m::DesignCheck = params(p)?;
+                let (ws, slug) = (r.workspace.clone(), r.slug.clone());
+                let problems = {
+                    let store = store.clone();
+                    blocking(move || store.check_system(&ws, &slug)).await?
+                };
+                if !r.render {
+                    return ok(problems);
+                }
+                // Without the app, the problems still come, with why nothing rendered.
+                match self.render_check(&r.workspace, &r.slug).await {
+                    Ok(counts) => ok(serde_json::json!({"problems": problems, "render": counts, "render_error": null})),
+                    Err(crate::render::RenderError::NoApp) => {
+                        ok(serde_json::json!({"problems": problems, "render": null, "render_error": moonlet_core::design::render::NO_APP}))
+                    }
+                    Err(e) => Err(e.into()),
+                }
+            }
+            m::DESIGN_SNAP => {
+                let r: m::DesignSnap = params(p)?;
+                let (ws, slug, path, variant) = (r.workspace.clone(), r.slug.clone(), r.path.clone(), r.variant.clone());
+                let target = {
+                    let store = store.clone();
+                    blocking(move || store.snap_target(&ws, &slug, &path, variant.as_deref(), r.viewport)).await?
+                };
+                let done = self
+                    .renders
+                    .render(crate::render::Ask {
+                        workspace: r.workspace.clone(),
+                        slug: r.slug.clone(),
+                        path: target.path.clone(),
+                        viewport: target.viewport,
+                        variant: target.variant.clone(),
+                        want: m::RenderWant::Png,
+                    })
+                    .await?;
+                if let Some(e) = done.error {
+                    return Err(RpcError::new("failed", e));
+                }
+                use base64::Engine;
+                let png = base64::engine::general_purpose::STANDARD
+                    .decode(done.png_base64.unwrap_or_default())
+                    .map_err(|e| RpcError::new("failed", format!("the app sent no PNG: {e}")))?;
+                let blank = png.len() < moonlet_core::design::render::BLANK_BELOW;
+                let path = blocking(move || store.write_screenshot(&r.workspace, &r.slug, &target, &png)).await?;
+                ok(serde_json::json!({"path": path, "blank": blank}))
             }
             m::DESIGN_CARDS => {
                 let r: m::DesignSystemRef = params(p)?;
@@ -1235,6 +1297,39 @@ impl Daemon {
         self.design.set_agent(workspace, slug, info.id, &fingerprint)?;
         self.chats.send(info.id, &launch.prompt, &[])?;
         Ok(info.id)
+    }
+
+    /// Has the app render every card of a design system, one at a time, and
+    /// writes what it found to `.cache/render-check.json` (X64). A card the
+    /// app could not render is `bad`, with why; without the app, nothing is
+    /// written and it fails with `NoApp`.
+    async fn render_check(&self, workspace: &str, slug: &str) -> Result<moonlet_core::design::render::RenderCounts, crate::render::RenderError> {
+        use crate::render::{Ask, RenderError};
+        use moonlet_core::design::render::RenderResult;
+        if !self.renders.has_app() {
+            return Err(RenderError::NoApp);
+        }
+        let (store, ws, sl) = (self.design.clone(), workspace.to_string(), slug.to_string());
+        let cards = blocking(move || store.render_cards(&ws, &sl)).await.map_err(RenderError::Failed)?;
+        let mut results = Vec::new();
+        for card in cards {
+            let ask = Ask {
+                workspace: workspace.to_string(),
+                slug: slug.to_string(),
+                path: card.path.clone(),
+                viewport: card.viewport,
+                variant: None,
+                want: m::RenderWant::Metrics,
+            };
+            let answer = match self.renders.render(ask).await {
+                Ok(done) => done.metrics(),
+                Err(RenderError::NoApp) => return Err(RenderError::NoApp),
+                Err(e) => Err(e.to_string()),
+            };
+            results.push(RenderResult::new(card.path, answer));
+        }
+        let (store, ws, sl) = (self.design.clone(), workspace.to_string(), slug.to_string());
+        blocking(move || store.write_render_check(&ws, &sl, &results)).await.map_err(RenderError::Failed)
     }
 
     /// The lock of one design system (see `design_locks`).

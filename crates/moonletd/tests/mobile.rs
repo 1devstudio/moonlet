@@ -834,7 +834,8 @@ async fn phones_cannot_reach_design_systems() {
     let token = mac.pair(&addr).await;
     let (mut phone, _) = auth(&addr, json!({ "token": token })).await;
     hello(&mut phone, "moonlet-mobile").await;
-    for (id, method) in [(1, "design.systems"), (2, "design.system.remove"), (3, "design.settle")] {
+    // Nor can a phone say it renders cards, and be sent them (X64).
+    for (id, method) in [(1, "design.systems"), (2, "design.system.remove"), (3, "design.settle"), (4, "design.render.ready")] {
         let Message::Response { error: Some(e), .. } = call(&mut phone, id, method).await else {
             panic!("{method} worked from a phone")
         };
