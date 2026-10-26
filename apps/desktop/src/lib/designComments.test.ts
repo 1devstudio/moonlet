@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { DesignComment } from "./protocol";
 import { editsMessage, type Untold } from "./designEdits";
-import { boxLabel, boxPlace, chatCardLookup, commentsRail, pinPlace, withMid, keepAction, openCommentsLabel, commentCards, footerLabel, pinLabel, sentLabel, commentLine, commentsMessage, commentsTab, isOrphaned, messageView, pageCounts, parseCommentLine, sendAll, withPins, type PageMids } from "./designComments";
+import { boxLabel, boxPlace, chatCardLookup, commentCardTitle, commentsRail, pinPlace, withMid, keepAction, openCommentsLabel, commentCards, footerLabel, pinLabel, sentLabel, commentLine, commentsMessage, commentsTab, isOrphaned, messageView, pageCounts, parseCommentLine, sendAll, withPins, type PageMids } from "./designComments";
 
 const pin = (n: number, over: Partial<DesignComment> = {}): DesignComment => ({
   n,
@@ -54,6 +54,13 @@ describe("a message of comments in the chat (X65)", () => {
     expect(commentCards("Make the nav sticky", [nav])).toBeNull();
     expect(commentCards(`${commentLine(nav)}\nAnd make it sticky`, [nav])).toBeNull();
     expect(commentCards("", [nav])).toBeNull();
+  });
+});
+
+describe("a comment's card in the chat (X65)", () => {
+  it("is a Comment from the canvas in a workspace design's chat, and a Comment from the Design view in a session's", () => {
+    expect(commentCardTitle(false)).toBe("Comment from the canvas");
+    expect(commentCardTitle(true)).toBe("Comment from the Design view");
   });
 });
 

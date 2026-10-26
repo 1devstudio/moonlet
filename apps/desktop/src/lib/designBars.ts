@@ -30,6 +30,8 @@ export interface BarState {
   /** The snapshot the canvas previews, as History says its time and type
    *  ("10:33", "edits by hand"); null while it shows the current pages. */
   preview: { time: string; type: string } | null;
+  /** A session design, whose agent is its session's (X65). */
+  session?: boolean;
 }
 
 export type BarAction = "stop" | "details" | "fix" | "dismiss" | "back" | "restore";
@@ -77,7 +79,7 @@ export const RESTORE_WAITS = "Restore opens when Claude stops.";
  *  shows it and not the current pages they are about; while the agent
  *  works its bar has Stop in place of Restore. */
 export function designBar(s: BarState): Bar | null {
-  if (s.working && !s.preview) return { tone: "orange", text: "Claude is changing the design. Edit mode opens when it stops; comments still work", detail: null, actions: ["stop"] };
+  if (s.working && !s.preview) return { tone: "orange", text: `Claude is ${s.session ? "working in this session" : "changing the design"}. Edit mode opens when it stops; comments still work`, detail: null, actions: ["stop"] };
   if (s.needsYou) return { tone: "orange", text: s.needsYou.kind === "question" ? "Claude asks…" : "Claude needs your approval", detail: s.needsYou.text, actions: [] };
   if (s.preview) {
     const text = `Previewing the snapshot from ${s.preview.time}, ${s.preview.type}. Nothing changes until you restore it.`;

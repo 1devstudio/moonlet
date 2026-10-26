@@ -198,6 +198,13 @@ export function commentsRail(s: { agent: boolean; readOnly: boolean }): { send: 
   return s.agent ? { send: true, resolve: true, why: null } : { send: false, resolve: true, why: "The design's agent is not running" };
 }
 
+/** The title of a comment's card in the chat: **Comment from the canvas**
+ *  in a workspace design's chat, **Comment from the Design view** in a
+ *  session's, whose Design tab the comment came from (X65). */
+export function commentCardTitle(session: boolean): string {
+  return session ? "Comment from the Design view" : "Comment from the canvas";
+}
+
 /** "1 open comment", "3 open comments". */
 export function openCommentsLabel(n: number): string {
   return `${n} open comment${n === 1 ? "" : "s"}`;

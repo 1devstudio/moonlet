@@ -25,6 +25,8 @@ import { useNow } from "../lib/useNow";
 import { FilesPanel } from "./FilesPanel";
 import { cx, prTone } from "./ui";
 import { TaskTab, useSessionTask } from "./tasks/SessionTask";
+import { SessionDesignTab } from "./design/SessionDesign";
+import { sessionDesignsOf, useDesign } from "../lib/designStore";
 
 const ChangesPanel = lazy(() => import("./ChangesPanel"));
 
@@ -262,9 +264,14 @@ export function RightPanel({ host, ws }: { host: string; ws: Session }) {
   const chosen = useStore((s) => s.rightTab);
   // The Jobs tab is there once the session has routed a command (X62).
   const jobs = useSessionJobs(host, ws.id);
-  const tab = (chosen === "task" && !linked) || (chosen === "jobs" && !jobs.length) ? "files" : chosen;
-  const shown = jobs.length ? TABS.flatMap((t) => (t.id === "agents" ? [t, { id: "jobs" as const, label: "Jobs" }] : [t])) : TABS;
+  // The Design tab is there for a session with a design (X65), after the others.
+  const designs = useDesign((d) => sessionDesignsOf(d, host, ws.id));
+  const tab = (chosen === "task" && !linked) || (chosen === "jobs" && !jobs.length) || (chosen === "design" && !designs.length) ? "files" : chosen;
+  const withJobs = jobs.length ? TABS.flatMap((t) => (t.id === "agents" ? [t, { id: "jobs" as const, label: "Jobs" }] : [t])) : TABS;
+  const shown = designs.length ? [...withJobs, { id: "design" as const, label: "Design" }] : withJobs;
   const tabs = linked ? [{ id: "task" as const, label: "Task" }, ...shown] : shown;
+  // Its count: the open comments of the session's designs.
+  const openComments = designs.reduce((n, d) => n + d.open_comments, 0);
   const plan = useSessionPlan(host, ws);
   const agents = useSessionAgents(host, ws);
   // Plan file links (X30) check the worktree while the Plan tab shows, and again whenever the plan changes.
@@ -298,6 +305,7 @@ export function RightPanel({ host, ws }: { host: string; ws: Session }) {
           >
             {t.label}
             {t.id === "jobs" && <span className="ui-text-12 tabular-nums text-faint">{jobsTabCount(jobs)}</span>}
+            {t.id === "design" && openComments > 0 && <span aria-label={`${openComments} open comments`} className="ui-text-12 tabular-nums text-faint">{openComments}</span>}
             {t.id === "plan" && planTabDot(tab, plan?.status === "pending") && <span aria-label="plan waiting" className="h-1.5 w-1.5 rounded-full bg-blocked" />}
             {t.id === "agents" && agentsTabDot(tab, agents.rows) && <span aria-label="agent waiting" className="h-1.5 w-1.5 rounded-full bg-blocked" />}
           </button>
@@ -307,10 +315,12 @@ export function RightPanel({ host, ws }: { host: string; ws: Session }) {
         id="right-tabpanel"
         role="tabpanel"
         aria-labelledby={`right-tab-${tab}`}
-        className="min-h-0 flex-1 overflow-y-auto bg-bg"
+        className={cx("min-h-0 flex-1 bg-bg", tab === "design" ? "flex flex-col" : "overflow-y-auto")}
       >
         <Suspense fallback={null}>
-          {tab === "task" ? (
+          {tab === "design" ? (
+            <SessionDesignTab host={host} ws={ws} />
+          ) : tab === "task" ? (
             <TaskTab host={host} ws={ws} />
           ) : tab === "plan" ? (
             <FileLinks.Provider value={{ host, wsId: ws.id, cwd: ws.path, exists }}>
