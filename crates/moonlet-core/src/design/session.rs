@@ -333,6 +333,13 @@ impl Store {
 const STAGED_PINNED: &str = ".update-pinned";
 const STAGED_SIDE: &str = ".update-system";
 
+/// Whether `name`, in a session design's folder under [`SIDE_DIR`], is a
+/// folder an Update writes aside ([`STAGED_PINNED`], [`STAGED_SIDE`], or
+/// where it moves a copy it replaces), none of the design's files.
+pub(super) fn is_update_folder(name: &str) -> bool {
+    name.starts_with(".update-")
+}
+
 /// The sync anchor a copy of a design system names: the SHA-256 of its
 /// `_ds_sync.json`, as [`Store::system_anchor`] reads it.
 fn anchor_of(copy: &Tree) -> Option<String> {

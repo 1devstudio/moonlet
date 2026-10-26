@@ -120,6 +120,7 @@ pub fn group_session(worktree: &Path, folder: &str, paths: &[PathBuf]) -> Vec<Se
         let beside = rest.is_empty() && std::fs::symlink_metadata(p).is_ok_and(|m| m.is_file());
         if super::place::check_slug(slug).is_err()
             || beside
+            || (!in_folder && rest.first().is_some_and(|name| super::session::is_update_folder(name)))
             || parts.last().is_some_and(|name| is_temp(name))
             || (in_folder && !super::session::made_here(worktree, slug))
         {
@@ -513,6 +514,29 @@ mod tests {
                     ]
                 ),
             ]
+        );
+    }
+
+    /// X65: what an Update writes aside before swapping a session design's
+    /// copies of its design system into place is none of the design's
+    /// changes; its copies in place still are.
+    #[test]
+    fn an_updates_folders_beside_a_session_designs_copies_are_none_of_its_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let worktree = dir.path();
+        std::fs::create_dir_all(worktree.join(".moonlet/design/settings-page")).unwrap();
+        let paths: Vec<PathBuf> = [
+            ".moonlet/design/settings-page/.update-system",
+            ".moonlet/design/settings-page/.update-system/styles.css",
+            ".moonlet/design/settings-page/.update-pinned/tokens/colors.css",
+            ".moonlet/design/settings-page/system/styles.css",
+        ]
+        .iter()
+        .map(|p| worktree.join(p))
+        .collect();
+        assert_eq!(
+            group_session(worktree, "docs/design", &paths),
+            vec![SessionChange { design: "settings-page".into(), paths: vec!["system/styles.css".into()] }]
         );
     }
 
