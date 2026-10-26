@@ -38,7 +38,7 @@ import {
   useDesign,
 } from "../../lib/designStore";
 import { isSession, type DesignPlace } from "../../lib/designPlace";
-import { askWithEdits, updateAndTell, restoreSnapshot, closeDesign, hasCopy, kitOf, loadKit, sendCommentsWithEdits, copyElementOf, dismissUnsaved, editPage, loadPageSource, pasteInto, pendingOf, redoEdit, sendWithEdits, sourceOf, undoEdit, undoOf, unsavedOf, useEditor } from "../../lib/designEditor";
+import { askWithEdits, updateAndTell, type ToldDesign, restoreSnapshot, closeDesign, hasCopy, kitOf, loadKit, sendCommentsWithEdits, copyElementOf, dismissUnsaved, editPage, loadPageSource, pasteInto, pendingOf, redoEdit, sendWithEdits, sourceOf, undoEdit, undoOf, unsavedOf, useEditor } from "../../lib/designEditor";
 import { EditRefused, editsChip, inlineStyles, type Edit, type EditOp } from "../../lib/designEdits";
 import { offSystemMids } from "../../lib/designTokens";
 import { selectionOf } from "../../lib/designInspector";
@@ -191,6 +191,7 @@ export function DesignCanvas({
   chat: chatPanel,
   fileOf,
   aside,
+  peers,
 }: {
   host: string;
   place: DesignPlace;
@@ -204,6 +205,10 @@ export function DesignCanvas({
   chat: CanvasChat;
   fileOf: (page: string) => string;
   aside?: ReactNode;
+  /** The designs its agent works on, which its messages tell the edits by
+   *  hand of: a session's designs, each named under its folder in the
+   *  worktree (X65); the design alone when not given. */
+  peers?: ToldDesign[];
 }) {
   const systems = useDesign((d) => systemsOf(d, host, workspace));
   const system = systems?.find((s) => s.slug === design.system);
@@ -477,7 +482,7 @@ export function DesignCanvas({
   };
   const sendPins = (pins: DesignComment[]) => {
     if (agent === null) return toast("The design's agent is not running", "error");
-    void sendCommentsWithEdits(host, place, design.slug, agent, pins).catch(errorToast);
+    void sendCommentsWithEdits(host, place, design.slug, agent, pins, peers).catch(errorToast);
   };
   const keep = async (target: BoxTarget & { page: string }, comment: string): Promise<DesignComment> => {
     const action = keepAction(target.pin, comment);
@@ -495,7 +500,7 @@ export function DesignCanvas({
     const target = box;
     setBox(null);
     void keep(target, comment)
-      .then((pin) => sendCommentsWithEdits(host, place, design.slug, agent, [pin]))
+      .then((pin) => sendCommentsWithEdits(host, place, design.slug, agent, [pin], peers))
       .catch(errorToast);
   };
   const onSendAll = () => {
@@ -573,9 +578,9 @@ export function DesignCanvas({
       const check = barProblems(page, problems);
       if (!check) return;
       if (agent === null) return toast("The design's agent is not running", "error");
-      void askWithEdits(host, place, design.slug, agent, pageFixMessage(check.page, check.problems)).then(() => toast("Asked the agent to fix it"), errorToast);
+      void askWithEdits(host, place, design.slug, agent, pageFixMessage(check.page, check.problems), peers).then(() => toast("Asked the agent to fix it"), errorToast);
     } else if (a === "update" && isSession(place)) {
-      void updateAndTell(host, place, design.slug, agent, systemName).then(() => toast("Design system updated", "info"), errorToast);
+      void updateAndTell(host, place, design.slug, agent, systemName, peers).then(() => toast("Design system updated", "info"), errorToast);
     }
   };
 

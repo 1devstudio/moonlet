@@ -3,13 +3,13 @@
 // chat is the session's own, beside it, which the tab neither folds nor
 // opens; the file above the page is its path in the worktree.
 
-import { useMemo, type RefObject } from "react";
+import { useEffect, useMemo, type RefObject } from "react";
 import { ChevronDown, PenTool } from "lucide-react";
 import type { Design, Session } from "../../lib/protocol";
-import { commentsOf, sessionDesignsOf, showSessionDesign, shownSessionDesign, systemsOf, useDesign } from "../../lib/designStore";
+import { commentsOf, loadComments, sessionDesignsOf, showSessionDesign, shownSessionDesign, systemsOf, useDesign } from "../../lib/designStore";
 import { projectOf, useStore } from "../../lib/store";
-import { sendWithEdits } from "../../lib/designEditor";
-import { designSystemFooter, opensDesignView, worktreeFile } from "../../lib/sessionDesign";
+import { sendWithEdits, type ToldDesign } from "../../lib/designEditor";
+import { designSystemFooter, inWorktree, opensDesignView, worktreeFile } from "../../lib/sessionDesign";
 import { Empty } from "../ui";
 import { Menu } from "../Menu";
 import { AgentView } from "../AgentView";
@@ -46,6 +46,7 @@ function SessionCanvas({ host, ws, design }: { host: string; ws: Session; design
   const { agent, systemName } = useDesignBasics(host, workspace, design);
   // One object per session, as the canvas's effects follow it.
   const place = useMemo(() => ({ session: ws.id }), [ws.id]);
+  const peers = useMemo(() => sharing(designs, design.agent, ws), [designs, design.agent, ws]);
   // Several designs: the tab shows one, picked here.
   const picker =
     designs.length > 1 ? (
@@ -72,9 +73,16 @@ function SessionCanvas({ host, ws, design }: { host: string; ws: Session; design
         chat={SESSION_CHAT}
         fileOf={(page) => worktreeFile(ws.path, design, page)}
         aside={picker}
+        peers={peers}
       />
     </div>
   );
+}
+
+/** The designs of a session its agent `agent` works on, as its messages
+ *  name them: by their folders in the worktree. */
+function sharing(designs: Design[], agent: number | null, ws: Session): ToldDesign[] {
+  return designs.filter((d) => agent !== null && d.agent === agent).map((d) => ({ place: { session: ws.id }, slug: d.slug, folder: inWorktree(ws.path, d.path) }));
 }
 
 /** The note after the agent's `design new --here`, which made the session
@@ -91,15 +99,27 @@ function DesignOpenedNote() {
  *  agent of the design the session's Design tab shows, its comments show as
  *  Comment from the Design view cards and its edits by hand as their block,
  *  and what the user types goes with the edits by hand not told yet before
- *  it; after the agent made a session design, a note says the Design view
+ *  it, every design's that shares the agent, each comment card read against
+ *  the design its line's folder names; after the agent made a session design, a note says the Design view
  *  opened. Its slash menu lists /moonlet-design's forms, naming the design
  *  system it will use once the workspace's are listed. */
 export function SessionChat({ host, id, wsId, focused, visible }: { host: string; id: number; wsId: string; focused: boolean; visible: boolean }) {
-  const design = useDesign((d) => shownSessionDesign(d, host, wsId));
-  const own = design !== null && design.agent === id ? design : null;
-  const place = useMemo(() => ({ session: wsId }), [wsId]);
-  const comments = useDesign((d) => commentsOf(d, host, place, own?.slug ?? ""));
+  const designs = useDesign((d) => sessionDesignsOf(d, host, wsId));
   const session = useStore((s) => s.sessions[host]?.find((x) => x.id === wsId));
+  // The session's designs this chat's agent works on: every one's edits by
+  // hand go with what the user types here.
+  const peers = useMemo(() => (session ? sharing(designs, id, session) : []), [designs, id, session]);
+  const own = peers[0] ?? null;
+  // Each comment card is read against the design its line's folder names;
+  // a change of any design's comments shows here again.
+  useDesign((d) => d.comments);
+  useEffect(() => {
+    for (const p of peers) void loadComments(host, p.place, p.slug).catch(() => {});
+  }, [host, peers]);
+  const pinsOf = (folder: string | null) => {
+    const p = peers.find((x) => x.folder === folder);
+    return p ? commentsOf(useDesign.getState(), host, p.place, p.slug) : [];
+  };
   const project = useStore((s) => (session ? projectOf(s, host, session)?.path : undefined));
   const systems = useDesign((d) => (session?.workspace_id ? systemsOf(d, host, session.workspace_id) : undefined));
   // The forms show at once; the footer once the workspace's systems are listed.
@@ -113,8 +133,8 @@ export function SessionChat({ host, id, wsId, focused, visible }: { host: string
       visible={visible}
       toolNote={(t) => (t.tool && opensDesignView(t.tool) ? <DesignOpenedNote /> : null)}
       designSlash={slash}
-      userView={own ? (text) => designMessage(text, comments, true) : undefined}
-      sendText={own ? (text, images) => sendWithEdits(host, place, own.slug, id, text, images) : undefined}
+      userView={own ? (text) => designMessage(text, pinsOf, true) : undefined}
+      sendText={own ? (text, images) => sendWithEdits(host, own.place, own.slug, id, text, images, peers) : undefined}
     />
   );
 }

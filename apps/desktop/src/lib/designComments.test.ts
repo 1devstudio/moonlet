@@ -251,3 +251,20 @@ describe("a message of comments with edits by hand (X65)", () => {
     expect(messageView("Edits by hand since your last turn:\nindex.html m30 p: deleted\n\nTwo more variants", [nav])).toEqual({ edits: [{ page: "index", mid: "m30", tag: "p", said: "deleted" }], cards: null, text: "Two more variants" });
   });
 });
+
+describe("a session's comments, of several designs sharing its agent (X65)", () => {
+  const settings = [pin(1, { text: "General Appearance", comment: "Collapse it", sent_at: 1 })];
+  const onboarding = [pin(4, { mid: "m25", tag: "h2", text: "Welcome", comment: "Bigger", sent_at: 1 })];
+  const pinsOf = (folder: string | null) => (folder === "docs/design/settings-page" ? settings : folder === "docs/design/onboarding" ? onboarding : []);
+
+  it("name each page by its path in the worktree, and are read against the design that path names", () => {
+    const text = commentsMessage(settings, "docs/design/settings-page") + "\n" + commentsMessage(onboarding, "docs/design/onboarding");
+    expect(text).toBe(
+      'Comment on docs/design/settings-page/pages/index.html [data-mid=m12] (nav "General Appearance"): Collapse it\nComment on docs/design/onboarding/pages/index.html [data-mid=m25] (h2 "Welcome"): Bigger',
+    );
+    expect(commentCards(text, pinsOf)?.map((c) => [c.n, c.folder, c.page, c.mid])).toEqual([
+      [1, "docs/design/settings-page", "index", "m12"],
+      [4, "docs/design/onboarding", "index", "m25"],
+    ]);
+  });
+});

@@ -186,43 +186,61 @@ function save(host: string, place: DesignPlace, slug: string, page: string): Pro
   });
 }
 
+/** A design as its agent's messages name it (X65): its place and slug,
+ *  and the folder its pages are named under in them, a session design's
+ *  path in the worktree; null names them by file alone. The designs of a
+ *  session share its agent: a message to it tells every one's edits. */
+export interface ToldDesign {
+  place: DesignPlace;
+  slug: string;
+  folder: string | null;
+}
+
 /** The user's message to a design's agent, with the edits by hand not told
  *  yet before it, once their pages' saves on their way are back: only the
  *  edits a save took are told. One a save refused as stale was taken back
  *  meanwhile; one whose save failed waits for a save that takes it. Once
- *  the message is sent, those are told. */
-export async function sendWithEdits(host: string, place: DesignPlace, slug: string, agent: number, text: string, images: ChatImage[]): Promise<void> {
-  const design = itemKey(host, place, slug);
-  const keyOf = (p: Pending) => pageKey(host, place, slug, p.page);
+ *  the message is sent, those are told. `peers`: every design the agent
+ *  works on, the session's designs for a session design's agent, whose
+ *  edits all go, each page named under its folder; else the design alone. */
+export async function sendWithEdits(host: string, place: DesignPlace, slug: string, agent: number, text: string, images: ChatImage[], peers?: ToldDesign[]): Promise<void> {
+  const designs = peers ?? [{ place, slug, folder: null }];
+  const pendingOf = (d: ToldDesign) => useEditor.getState().pending[itemKey(host, d.place, d.slug)] ?? [];
+  const keyOf = (d: ToldDesign, p: Pending) => pageKey(host, d.place, d.slug, p.page);
   for (;;) {
-    const busy = [...new Set((useEditor.getState().pending[design] ?? []).map(keyOf))].filter((k) => saves.busy(k));
+    const busy = [...new Set(designs.flatMap((d) => pendingOf(d).map((p) => keyOf(d, p))))].filter((k) => saves.busy(k));
     if (!busy.length) break;
     await Promise.all(busy.map((k) => saves.idle(k)));
   }
-  const told = (useEditor.getState().pending[design] ?? []).filter((p) => !notSaved[keyOf(p)]?.some((c) => c.step === p.id));
-  await rpc(host, M.chatSend, { id: agent, text: editsMessage(told, text), images });
-  useEditor.setState((s) => ({ pending: { ...s.pending, [design]: (s.pending[design] ?? []).filter((p) => !told.includes(p)) } }));
+  const told = designs.map((d) => ({ d, edits: pendingOf(d).filter((p) => !notSaved[keyOf(d, p)]?.some((c) => c.step === p.id)) }));
+  const lines = told.flatMap(({ d, edits }) => edits.map((e) => ({ ...e, folder: d.folder })));
+  await rpc(host, M.chatSend, { id: agent, text: editsMessage(lines, text), images });
+  useEditor.setState((s) => ({
+    pending: { ...s.pending, ...Object.fromEntries(told.map(({ d, edits }) => [itemKey(host, d.place, d.slug), (s.pending[itemKey(host, d.place, d.slug)] ?? []).filter((p) => !edits.includes(p))])) },
+  }));
 }
 
 /** **Send** and **Send all** of comments, the edits by hand not told yet
- *  before their lines. */
-export function sendCommentsWithEdits(host: string, place: DesignPlace, slug: string, agent: number, pins: DesignComment[]): Promise<void> {
-  return sendComments(host, place, slug, agent, pins, (text) => sendWithEdits(host, place, slug, agent, text, []));
+ *  before their lines; `peers` as {@link sendWithEdits}, the design's own
+ *  folder naming the comments' pages. */
+export function sendCommentsWithEdits(host: string, place: DesignPlace, slug: string, agent: number, pins: DesignComment[], peers?: ToldDesign[]): Promise<void> {
+  const folder = peers?.find((d) => d.slug === slug)?.folder ?? null;
+  return sendComments(host, place, slug, agent, pins, (text) => sendWithEdits(host, place, slug, agent, text, [], peers), folder);
 }
 
 /** A message the app sends the design's agent, such as **Ask the agent to
  *  fix**, the edits by hand not told yet before it. */
-export function askWithEdits(host: string, place: DesignPlace, slug: string, agent: number, text: string): Promise<void> {
-  return sendWithEdits(host, place, slug, agent, text, []);
+export function askWithEdits(host: string, place: DesignPlace, slug: string, agent: number, text: string, peers?: ToldDesign[]): Promise<void> {
+  return sendWithEdits(host, place, slug, agent, text, [], peers);
 }
 
 /** **Update** of a session design's design system (X65): both copies
  *  replaced (`updateSystem`), then, when the session's agent runs
  *  (`agent`), the cards that changed told to it, the edits by hand not
  *  told yet before them; the update's answer. */
-export async function updateAndTell(host: string, place: { session: string }, slug: string, agent: number | null, systemName: string): Promise<DesignSystemUpdated> {
+export async function updateAndTell(host: string, place: { session: string }, slug: string, agent: number | null, systemName: string, peers?: ToldDesign[]): Promise<DesignSystemUpdated> {
   const updated = await updateSystem(host, place, slug);
-  if (agent !== null) await askWithEdits(host, place, slug, agent, systemUpdateMessage(slug, systemName, updated.cards));
+  if (agent !== null) await askWithEdits(host, place, slug, agent, systemUpdateMessage(slug, systemName, updated.cards), peers);
   return updated;
 }
 
