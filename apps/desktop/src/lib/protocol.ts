@@ -999,6 +999,25 @@ export interface DesignSystem {
   needs_you: { kind: "question" | "approval"; text: string } | null;
 }
 
+/** One card of a design system, from `design.cards` (X64). */
+export interface DesignCard {
+  group: string;
+  name: string;
+  /** Relative to the design system's folder. */
+  path: string;
+  /** Width and height. */
+  viewport: [number, number];
+  /** The source files it was made from, relative to their project. */
+  source: string[];
+  /** Its snippets' ids. */
+  snippets: string[];
+  /** Its `@dsCard` line. */
+  marker: string;
+  problems: { path: string; line: number; kind: string; message: string }[];
+  /** Its sources changed since the last sync. */
+  changed_sources: string[];
+}
+
 /** What a design system covers: the components that matter most, all of them, or none yet. */
 export type DesignCover = "core" | "all" | "none";
 
@@ -1203,6 +1222,7 @@ export const M = {
   designDetect: "design.detect",
   designFile: "design.file",
   designSettle: "design.settle",
+  designCards: "design.cards",
 } as const;
 
 export const EV = {
