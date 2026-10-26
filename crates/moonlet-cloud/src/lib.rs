@@ -132,7 +132,16 @@ impl Billing {
 
 /// Every provider, for the app's **Add provider**.
 pub fn providers() -> Vec<ProviderInfo> {
-    vec![hetzner::info()]
+    vec![hetzner::info(), gcp::info()]
+}
+
+/// Whether `value`, typed for provider `provider`'s field `name`, is one the
+/// provider can use; or what is wrong with it.
+pub fn check_field(provider: &str, name: &str, value: &str) -> Result<(), String> {
+    match provider {
+        "gcp" => gcp::check_field(name, value),
+        _ => Ok(()),
+    }
 }
 
 /// Why a provider call failed, as the user reads it.

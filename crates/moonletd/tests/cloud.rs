@@ -635,7 +635,7 @@ async fn the_fake_provider_is_off_without_its_setting() {
         .iter()
         .map(|k| k["id"].as_str().unwrap())
         .collect();
-    assert_eq!(ids, ["hetzner"]);
+    assert_eq!(ids, ["hetzner", "gcp"]);
     let c = cloud().await;
     let got: Value = c.d.call("cloud.get", json!({})).await;
     let ids: Vec<&str> = got["kinds"]
@@ -644,7 +644,83 @@ async fn the_fake_provider_is_off_without_its_setting() {
         .iter()
         .map(|k| k["id"].as_str().unwrap())
         .collect();
-    assert_eq!(ids, ["hetzner", "fake"]);
+    assert_eq!(ids, ["hetzner", "gcp", "fake"]);
+}
+
+#[tokio::test]
+async fn cloud_get_lists_google_cloud_after_hetzner() {
+    let d = Daemon::start(tempfile::tempdir().unwrap(), &[]).await;
+    let got: Value = d.call("cloud.get", json!({})).await;
+    let gcp = &got["kinds"][1];
+    assert_eq!(gcp["id"], json!("gcp"));
+    assert_eq!(gcp["label"], json!("Google Cloud"));
+    assert_eq!(gcp["billing_unit_secs"], json!(1));
+    let fields: Vec<(&str, bool)> = gcp["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| (f["name"].as_str().unwrap(), f["secret"].as_bool().unwrap()))
+        .collect();
+    assert_eq!(fields, [("key", true), ("max_hours", false)]);
+}
+
+/// A service-account key for the test key, as Google Cloud's console
+/// downloads it.
+fn gcp_key() -> String {
+    json!({
+        "type": "service_account",
+        "project_id": "acme-moonlet",
+        "private_key_id": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c",
+        "private_key": include_str!("../../moonlet-cloud/src/fixtures/gcp/test_key.pem"),
+        "client_email": "moonlet@acme-moonlet.iam.gserviceaccount.com",
+    })
+    .to_string()
+}
+
+#[tokio::test]
+async fn cloud_set_refuses_a_bad_google_cloud_key() {
+    let d = Daemon::start(tempfile::tempdir().unwrap(), &[]).await;
+    assert_eq!(
+        d.fails("cloud.set", json!({ "providers": { "gcp": { "key": "hc_7Kq2mXw9pD" } } }))
+            .await,
+        "invalid_params: That is not a Google Cloud service-account key: it is not JSON."
+    );
+    assert_eq!(
+        d.fails(
+            "cloud.set",
+            json!({ "providers": { "gcp": { "key": gcp_key(), "max_hours": "0" } } })
+        )
+        .await,
+        "invalid_params: Longest a machine lives must be a whole number of hours from 1 to 2880."
+    );
+    // Nothing was saved.
+    let got: Value = d.call("cloud.get", json!({})).await;
+    assert_eq!(got["providers"], json!({}));
+    let _: Value = d
+        .call(
+            "cloud.set",
+            json!({ "providers": { "gcp": { "key": gcp_key(), "max_hours": "24" } } }),
+        )
+        .await;
+    let got: Value = d.call("cloud.get", json!({})).await;
+    assert_eq!(
+        got["providers"],
+        json!({ "gcp": { "has_key": true, "max_hours": "24" } })
+    );
+    assert!(!got.to_string().contains("PRIVATE KEY"), "{got}");
+    // A key of spaces is no key: never shown as saved.
+    let d2 = Daemon::start(tempfile::tempdir().unwrap(), &[]).await;
+    let _: Value = d2
+        .call("cloud.set", json!({ "providers": { "gcp": { "key": "   " } } }))
+        .await;
+    let got2: Value = d2.call("cloud.get", json!({})).await;
+    assert_eq!(got2["providers"], json!({ "gcp": {} }));
+    // An empty max_hours is 12, and keeps the saved key.
+    let _: Value = d
+        .call("cloud.set", json!({ "providers": { "gcp": { "max_hours": "" } } }))
+        .await;
+    let got: Value = d.call("cloud.get", json!({})).await;
+    assert_eq!(got["providers"]["gcp"]["has_key"], json!(true));
 }
 
 #[tokio::test]
