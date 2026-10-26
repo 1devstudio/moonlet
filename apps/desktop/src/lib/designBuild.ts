@@ -64,3 +64,11 @@ export function designBuild(d: Design, worktree: string, found: Record<string, b
     }),
   };
 }
+
+/** What a row of Design and build mounts: its page's frame only while the
+ *  row is `near` the screen (`useNear`), as each frame is a web process of
+ *  its own (X64), as the Designs index's cards are; its built screenshot,
+ *  an image, cheap, once found, near or not. */
+export function buildRowShows(row: BuildRow, near: boolean): { frame: boolean; image: boolean } {
+  return { frame: near, image: row.built !== null };
+}

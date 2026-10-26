@@ -4,14 +4,15 @@
 // PR's Checks tab (X2's PR panel, the right panel's Review tab), and a view
 // of the session's Design tab.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft } from "lucide-react";
 import { rpc } from "../../lib/daemon";
 import { M, type Design, type Session } from "../../lib/protocol";
-import { builtFile, designBuild, type BuildRow as BuildRowView } from "../../lib/designBuild";
+import { buildRowShows, builtFile, designBuild, type BuildRow as BuildRowView } from "../../lib/designBuild";
 import { builtRevOf, pageRevOf, useDesign } from "../../lib/designStore";
 import { designUrl, pageUrl } from "../../lib/designView";
 import { useSize } from "../../lib/useSize";
+import { NEAR_ROOT, useNear } from "../../lib/useNear";
 import { CardFrame } from "./Frame";
 
 /** Design and build of `design`: its screenshots looked for with
@@ -49,7 +50,7 @@ export function DesignAndBuild({ host, ws, design, onBack }: { host: string; ws:
           <ArrowLeft size={12} /> Canvas
         </button>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto p-4">
+      <div className="min-h-0 flex-1 overflow-y-auto p-4" {...{ [NEAR_ROOT]: "" }}>
         {view.rows.map((r) => (
           <BuildRow key={r.page} host={host} place={place} slug={design.slug} row={r} viewport={view.viewport} builtRev={builtRev} />
         ))}
@@ -74,21 +75,24 @@ export function DesignBuildSection({ host, ws, design }: { host: string; ws: Ses
   );
 }
 
-/** One page of Design and build: the page as it is now, beside its built screenshot. */
+/** One page of Design and build: the page as it is now, framed only near
+ *  the screen (buildRowShows), beside its built screenshot. */
 function BuildRow({ host, place, slug, row, viewport, builtRev }: { host: string; place: { session: string }; slug: string; row: BuildRowView; viewport: [number, number]; builtRev: number }) {
   const rev = useDesign((d) => pageRevOf(d, host, place, slug, row.page));
+  const ref = useRef<HTMLElement>(null);
+  const shows = buildRowShows(row, useNear(ref));
   return (
-    <article aria-label={`${row.page} design and build`} className="mb-5 grid grid-cols-2 gap-4">
-      <BuildTile url={pageUrl(place, slug, row.page, rev)} title={`${row.page} design`} viewport={viewport} caption={["design", row.design]} />
-      <BuildTile image={row.built && designUrl(place, row.built, builtRev)} title={`${row.page} built`} viewport={viewport} caption={["built", row.builtLabel ?? ""]} empty={row.builtLabel ?? ""} />
+    <article ref={ref} aria-label={`${row.page} design and build`} className="mb-5 grid grid-cols-2 gap-4">
+      <BuildTile url={pageUrl(place, slug, row.page, rev)} live={shows.frame} title={`${row.page} design`} viewport={viewport} caption={["design", row.design]} />
+      <BuildTile image={shows.image ? row.built && designUrl(place, row.built, builtRev) : null} title={`${row.page} built`} viewport={viewport} caption={["built", row.builtLabel ?? ""]} empty={row.builtLabel ?? ""} />
     </article>
   );
 }
 
-/** A page (`url`, framed as on the canvas) or its built screenshot
- *  (`image`, scaled to fit whatever its pixel density), fitted to the
- *  column, and what it is under it. */
-function BuildTile({ url = null, image = null, title, viewport, caption, empty = "" }: { url?: string | null; image?: string | null; title: string; viewport: [number, number]; caption: [string, string]; empty?: string }) {
+/** A page (`url`, framed as on the canvas while `live`) or its built
+ *  screenshot (`image`, scaled to fit whatever its pixel density), fitted
+ *  to the column, and what it is under it. */
+function BuildTile({ url = null, live = true, image = null, title, viewport, caption, empty = "" }: { url?: string | null; live?: boolean; image?: string | null; title: string; viewport: [number, number]; caption: [string, string]; empty?: string }) {
   const [ref, [width]] = useSize<HTMLDivElement>();
   const scale = width ? width / viewport[0] : 0;
   return (
@@ -97,7 +101,7 @@ function BuildTile({ url = null, image = null, title, viewport, caption, empty =
         {image ? (
           <img src={image} alt={title} className="absolute inset-0 h-full w-full object-contain object-top" />
         ) : url && scale > 0 ? (
-          <CardFrame url={url} title={title} viewport={viewport} scale={scale} />
+          <CardFrame url={url} title={title} viewport={viewport} scale={scale} live={live} />
         ) : (
           <span className="absolute inset-0 flex items-center justify-center ui-text-12.5 text-faint">{empty}</span>
         )}

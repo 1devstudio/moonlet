@@ -7,6 +7,7 @@ import { pollPr, useStore, sesKey } from "../lib/store";
 import { Button, Empty, prTone } from "./ui";
 import { sessionDesignsOf, useDesign } from "../lib/designStore";
 import { DesignBuildSection } from "./design/DesignAndBuild";
+import { NEAR_ROOT } from "../lib/useNear";
 
 function CheckIcon({ status, conclusion }: { status: string; conclusion: string | null }) {
   if (status !== "completed" && !conclusion) return <LoaderCircle size={13} className="spin text-working" />;
@@ -43,7 +44,7 @@ export function ChecksPanel({ host, ws }: { host: string; ws: Session }) {
   }, [host, ws.id, ws.path, ws.base]);
 
   return (
-    <div className="h-full overflow-y-auto p-3 ui-text-13">
+    <div className="h-full overflow-y-auto p-3 ui-text-13" {...{ [NEAR_ROOT]: "" }}>
       <section className="mb-4">
         <h3 className="mb-2 ui-text-11 font-semibold uppercase tracking-wider text-faint">Branch</h3>
         <div className="space-y-1 text-muted">

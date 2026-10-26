@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Design } from "./protocol";
-import { builtFile, designBuild } from "./designBuild";
+import { buildRowShows, builtFile, designBuild } from "./designBuild";
 
 const design = (over: Partial<Design> = {}): Design => ({
   slug: "settings-page",
@@ -47,5 +47,12 @@ describe("the PR's Design and build (X65)", () => {
 
   it("names a page's screenshot for design.file as the agent saves it", () => {
     expect(builtFile("settings-page", "index")).toBe("settings-page@built/index.png");
+  });
+
+  it("frames a page only while its row is near the screen, and shows its built screenshot, an image, either way", () => {
+    const [built, notBuilt] = designBuild(design(), "/Users/alex/.moonlet/worktrees/moonlet/settings-page", { index: true, "git-a": false }).rows;
+    expect(buildRowShows(built, true)).toEqual({ frame: true, image: true });
+    expect(buildRowShows(built, false)).toEqual({ frame: false, image: true });
+    expect(buildRowShows(notBuilt, false)).toEqual({ frame: false, image: false });
   });
 });
