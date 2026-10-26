@@ -2,7 +2,8 @@
 // has to act. Pure: the screen is components/design/DesignScreen.tsx.
 
 import { pageFile, pageOfPath, pagePath } from "./designPage";
-import type { DesignParseError, DesignSystemUpdated } from "./protocol";
+import type { DesignSystemUpdated } from "./protocol";
+import type { NotLoaded } from "./designLoad";
 import { sideFolder } from "./designPlace";
 
 /** One problem of `design.check` for a design. */
@@ -42,13 +43,6 @@ export interface BarState {
   notLoaded?: NotLoaded | null;
 }
 
-/** Why the shown page did not load: the scheme's reason when it could not
- *  serve it, else the page's first parse error from `design.page`, if it
- *  has one. */
-export interface NotLoaded {
-  reason: string | null;
-  parse: DesignParseError | null;
-}
 
 export type BarAction = "stop" | "details" | "fix" | "fix-load" | "dismiss" | "back" | "restore" | "update";
 
@@ -88,7 +82,7 @@ function summary(problems: PageProblem[]): string {
  *  not serve it, else its first parse error and line. A page that loaded
  *  never shows its parse errors: a browser recovers from them. */
 function notLoadedDetail(n: NotLoaded): string {
-  if (n.reason) return n.reason;
+  if (n.kind === "refused") return n.reason;
   return n.parse ? `${n.parse.message} at line ${n.parse.line}` : "the canvas got no answer from it";
 }
 
