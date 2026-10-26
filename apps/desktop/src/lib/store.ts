@@ -117,6 +117,12 @@ function loadJson<T>(key: string, fallback: T): T {
     // Defaults from older versions (wider review panel).
     if (v && typeof v === "object" && (v as { rightWidth?: number }).rightWidth === 520) (v as { rightWidth: number }).rightWidth = 380;
     if (v && typeof v === "object" && (v as { sidebarWidth?: number }).sidebarWidth === 264) (v as { sidebarWidth: number }).sidebarWidth = 280;
+    // Tasks mode from older versions, a flag per workspace (X45).
+    if (v && typeof v === "object" && "tasksMode" in v) {
+      const old = v as { tasksMode?: Record<string, boolean>; mode?: Record<string, string> };
+      if (!Object.keys(old.mode ?? {}).length) old.mode = Object.fromEntries(Object.entries(old.tasksMode ?? {}).flatMap(([k, on]) => (on ? [[k, "tasks"]] : [])));
+      delete old.tasksMode;
+    }
     // Tabs from older versions.
     if (v && typeof v === "object" && "rightTab" in v && !(RIGHT_TABS as readonly string[]).includes((v as { rightTab: string }).rightTab)) {
       (v as { rightTab: string }).rightTab = "files";
@@ -149,9 +155,11 @@ interface UiPersist {
   workspace: WorkspaceRef | null;
   /** The session last open in each workspace (`host/workspaceId`). */
   lastSession: Record<string, string>;
-  /** Workspaces (`host/workspaceId`) showing Tasks mode instead of Sessions (X45). */
-  tasksMode: Record<string, boolean>;
+  /** Each workspace's (`host/workspaceId`) sidebar mode; Sessions when absent (X45, X65). */
+  mode: Record<string, AppMode>;
 }
+
+export type AppMode = "sessions" | "tasks" | "design";
 
 const uiDefaults: UiPersist = {
   selected: null,
@@ -164,7 +172,7 @@ const uiDefaults: UiPersist = {
   changesView: "tree",
   workspace: null,
   lastSession: {},
-  tasksMode: {},
+  mode: {},
 };
 
 /** In-app card when an agent in the open workspace finishes or needs input. */
@@ -235,6 +243,8 @@ interface State extends UiPersist {
     | { kind: "add-project"; host?: string; section?: string; clone?: string }
     | { kind: "new-section" }
     | { kind: "new-workspace" }
+    /** New design system (X64), in a workspace. */
+    | { kind: "new-design-system"; host: string; workspace: string }
     | { kind: "create-pr" }
     /** Link a session to a task (X46). */
     | { kind: "link-task"; host: string; session: string }
@@ -354,10 +364,10 @@ useStore.subscribe((s, prev) => {
     s.changesView !== prev.changesView ||
     s.workspace !== prev.workspace ||
     s.lastSession !== prev.lastSession ||
-    s.tasksMode !== prev.tasksMode
+    s.mode !== prev.mode
   ) {
-    const { selected, sidebarWidth, rightWidth, rightOpen, sidebarOpen, rightTab, collapsed, changesView, workspace, lastSession, tasksMode } = s;
-    saveJson(UI_KEY, { selected, sidebarWidth, rightWidth, rightOpen, sidebarOpen, rightTab, collapsed, changesView, workspace, lastSession, tasksMode });
+    const { selected, sidebarWidth, rightWidth, rightOpen, sidebarOpen, rightTab, collapsed, changesView, workspace, lastSession, mode } = s;
+    saveJson(UI_KEY, { selected, sidebarWidth, rightWidth, rightOpen, sidebarOpen, rightTab, collapsed, changesView, workspace, lastSession, mode });
   }
   if (s.settings !== prev.settings) {
     saveJson(SETTINGS_KEY, s.settings);
@@ -633,11 +643,15 @@ export function getLayout(host: string, id: string): Layout {
 }
 
 /** Opening a session, from the sidebar, a notification, the inbox or the
- * palette, shows its workspace and makes it that workspace's last session (X32). */
-function showSessionWorkspace(s: State, host: string, id: string): Partial<State> {
+ * palette, shows its workspace in Sessions mode and makes it that
+ * workspace's last session (X32, X65). Restoring one on a workspace switch
+ * (`keepMode`) leaves the workspace in the mode it was left in. */
+function showSessionWorkspace(s: State, host: string, id: string, keepMode = false): Partial<State> {
   const wsId = s.sessions[host]?.find((x) => x.id === id)?.workspace_id;
   if (!wsId) return {};
-  return { workspace: isShown(s.workspace, host, wsId) ? s.workspace : { host, id: wsId }, lastSession: { ...s.lastSession, [wsKey(host, wsId)]: id } };
+  const key = wsKey(host, wsId);
+  const toSessions = !keepMode && s.mode[key] && s.mode[key] !== "sessions";
+  return { workspace: isShown(s.workspace, host, wsId) ? s.workspace : { host, id: wsId }, lastSession: { ...s.lastSession, [key]: id }, ...(toSessions && { mode: { ...s.mode, [key]: "sessions" as const } }) };
 }
 
 /** A session needs you while one of its agents is blocked or a terminal of
@@ -662,8 +676,8 @@ export function focusTerminal(host: string, session: number) {
   updateBadge();
 }
 
-export function selectSession(host: string, id: string) {
-  set((s) => ({ selected: { host, session: id }, diffFile: null, ...showSessionWorkspace(s, host, id) }));
+export function selectSession(host: string, id: string, keepMode = false) {
+  set((s) => ({ selected: { host, session: id }, diffFile: null, ...showSessionWorkspace(s, host, id, keepMode) }));
   const layout = getLayout(host, id);
   if (layout.focused !== null) {
     set((s) => {
@@ -714,7 +728,7 @@ export function switchWorkspace(ref: WorkspaceRef) {
   const lastSession = from && s.selected ? { ...s.lastSession, [wsKey(from.host, from.id)]: s.selected.session } : s.lastSession;
   const restore = sessionToRestore(lastSession[wsKey(ref.host, ref.id)], s.sessions[ref.host] ?? [], ref.id);
   set({ workspace: ref, lastSession, showHistory: false });
-  if (restore) selectSession(ref.host, restore);
+  if (restore) selectSession(ref.host, restore, true);
   else set({ selected: null });
 }
 

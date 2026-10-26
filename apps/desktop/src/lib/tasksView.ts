@@ -1,6 +1,7 @@
 // Labels of the Tasks mode sidebar and header, and the header's filters (X45).
 
 import { ago } from "./mobile";
+import type { AppMode } from "./store";
 import type { Board } from "./tasksBoard";
 
 /** The sidebar footer: "GitHub synced 3 min ago", or "Syncing GitHub…" before the first answer. */
@@ -36,10 +37,18 @@ export function sessionTaskLines(board: Board): Record<string, SessionTaskLine> 
   return out;
 }
 
-/** The mode switch's titles, with the shortcut as bound, and the Tasks button's label and dot (X45). */
-export function modeSwitch(key: string, outOfSync: number): { sessions: string; tasks: string; label: string; dot: boolean } {
-  const titled = (name: string) => (key ? `${name} ${key}` : name);
-  return { sessions: titled("Sessions"), tasks: titled("Tasks"), label: outOfSync ? `Tasks, ${outOfSync} out of sync` : "Tasks", dot: outOfSync > 0 };
+/** The mode switch's titles, with the shortcuts as bound, and the Tasks
+ * button's label and dot (X45, X65). A mode's key goes back to Sessions from
+ * it, so Sessions is titled with the shown mode's key. */
+export function modeSwitch(keys: { tasks: string; design: string }, mode: AppMode, outOfSync: number): { sessions: string; tasks: string; design: string; label: string; dot: boolean } {
+  const titled = (name: string, key: string) => (key ? `${name} ${key}` : name);
+  return {
+    sessions: mode === "sessions" ? "Sessions" : titled("Sessions", keys[mode]),
+    tasks: titled("Tasks", keys.tasks),
+    design: titled("Design", keys.design),
+    label: outOfSync ? `Tasks, ${outOfSync} out of sync` : "Tasks",
+    dot: outOfSync > 0,
+  };
 }
 
 export interface BoardFilters {

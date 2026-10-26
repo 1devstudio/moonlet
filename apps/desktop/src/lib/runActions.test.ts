@@ -2,14 +2,15 @@ import { describe, expect, it } from "vitest";
 import { ACTIONS, actionForKey, assignShortcut, effectiveKeys, filterActions, highlight, keyId, keyLabel, keyParts, recordKey, resetShortcut, shortcutGroups } from "./runActions";
 
 describe("filtering", () => {
-  it("lists all 27 actions in catalogue order for an empty query", () => {
+  it("lists all 28 actions in catalogue order for an empty query", () => {
     const rows = filterActions("");
-    expect(rows).toHaveLength(27);
+    expect(rows).toHaveLength(28);
     expect(rows[0].action.label).toBe("New session…");
     expect(rows[1].action.label).toBe("New workspace…");
     expect(rows[24].action.label).toBe("Switch between Sessions and Tasks");
-    expect(rows[25].action.label).toBe("Settings…");
-    expect(rows[26].action.label).toBe("Check for updates…");
+    expect(rows[25].action.label).toBe("Switch between Sessions and Design");
+    expect(rows[26].action.label).toBe("Settings…");
+    expect(rows[27].action.label).toBe("Check for updates…");
   });
 
   it("finds the update check (X35)", () => {
@@ -25,6 +26,7 @@ describe("filtering", () => {
       "Split pane right",
       "Show review (PR, checks, commits)",
       "Switch between Sessions and Tasks",
+      "Switch between Sessions and Design",
     ]);
   });
 
@@ -90,6 +92,9 @@ describe("shortcuts", () => {
     expect(actionForKey("cmd+t", undefined)).toBe("new-tab");
     // ⌃⌘T switches Sessions ⇄ Tasks (X45); ⇧⌘T stays New terminal tab.
     expect(actionForKey("ctrl+cmd+t", undefined)).toBe("tasks");
+    // ⌃⌘D switches Sessions ⇄ Design (X65); ⌘D stays Split pane right.
+    expect(actionForKey("ctrl+cmd+d", undefined)).toBe("design");
+    expect(actionForKey("cmd+d", undefined)).toBe("split-r");
     expect(actionForKey("shift+cmd+t", undefined)).toBe("new-terminal");
     expect(actionForKey("alt+cmd+s", undefined)).toBeUndefined();
     expect(actionForKey("alt+cmd+s", { setup: "alt+cmd+s" })).toBe("setup");

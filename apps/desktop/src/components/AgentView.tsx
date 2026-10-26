@@ -96,7 +96,8 @@ import { ContextMeter } from "./ContextMeter";
 import { Menu, type MenuItem } from "./Menu";
 import { ModeMenu, useModeMenu } from "./ModeMenu";
 import { PlusMenu } from "./PlusMenu";
-import { AgentIcon, Button, IconButton, Kbd, StateGlyph, cx, inputCls } from "./ui";
+import { AgentIcon, Button, Dialog, IconButton, Kbd, StateGlyph, cx, inputCls } from "./ui";
+import { PlanPanel } from "./PlanPanel";
 import { ClaudeAuthDialog } from "./Profiles";
 
 // ------------------------------------------------------------ messages
@@ -644,7 +645,7 @@ export function PlanCard({
         )}
       </div>
       {waiting && view.askId && (
-        <div className="flex items-center gap-1.5 border-t border-border pt-2.5">
+        <div className="flex flex-wrap items-center gap-1.5 border-t border-border pt-2.5">
           <Button size="sm" variant="primary" onClick={() => onChoose("approve")}>
             {planApproveLabel(approveMode)}
           </Button>
@@ -1313,6 +1314,9 @@ async function openInTerminal(host: string, info: TerminalInfo, st: ChatState) {
   }
 }
 
+/** A structured agent's chat. `wsId` is its session; "" for a chat with no
+ * session, such as a design system's sync agent (X64), which has no pane
+ * layout or file tabs to open. */
 export function AgentView({ host, id, wsId, focused, visible }: { host: string; id: number; wsId: string; focused: boolean; visible: boolean }) {
   const info = useStore((s) => s.terminals[host]?.[id]);
   const st = useChat((s) => s.chats[chatKey(host, id)]);
@@ -1329,7 +1333,7 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
 
   const working = turnRunning(st?.status);
   const exists = useProjectFiles(host, cwd, working);
-  const fileLinks = useMemo(() => ({ host, wsId, cwd, exists }), [host, wsId, cwd, exists]);
+  const fileLinks = useMemo(() => (wsId ? { host, wsId, cwd, exists } : null), [host, wsId, cwd, exists]);
   const now = useNow(working && visible);
   // Subagents (X42): their launch cards, notes and asks.
   const agentsRunning = (st?.subagents ?? []).some((a) => a.status === "running");
@@ -1346,16 +1350,18 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
   const call = (method: string, params: object) => rpc(host, method, { id, ...params }).catch(errorToast);
 
   // The latest plan (X24): its card follows its transcript row, and its text
-  // is in the Plan tab, which opens when a plan arrives on screen.
+  // is in the Plan tab, which opens when a plan arrives on screen. A chat with
+  // no session has no Plan tab: its plan opens in a dialog.
   const plan = useMemo(() => (st ? planView(st) : null), [st]);
   const approveMode = useStore((s) => resolvePlanMode(s.settings.planApproveMode));
-  const planShown = useStore((s) => s.rightOpen && s.rightTab === "plan");
+  const planShown = useStore((s) => !!wsId && s.rightOpen && s.rightTab === "plan");
+  const [planDialog, setPlanDialog] = useState(false);
   const opened = useRef<string | null>(null);
   useEffect(() => {
-    if (!plan?.askId || !visible || opened.current === plan.askId) return;
+    if (!wsId || !plan?.askId || !visible || opened.current === plan.askId) return;
     opened.current = plan.askId;
     useStore.setState({ rightOpen: true, rightTab: "plan" });
-  }, [plan?.askId, visible]);
+  }, [wsId, plan?.askId, visible]);
   // Keep planning: the composer's next message is the feedback on this ask.
   const [revise, setRevise] = useState<string | null>(null);
   const [focusSignal, setFocusSignal] = useState(0);
@@ -1376,7 +1382,7 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
       view={plan}
       approveMode={approveMode}
       showOpen={!planShown}
-      onOpen={() => useStore.setState({ rightOpen: true, rightTab: "plan" })}
+      onOpen={() => (wsId ? useStore.setState({ rightOpen: true, rightTab: "plan" }) : setPlanDialog(true))}
       onChoose={choosePlan}
     />
   );
@@ -1564,7 +1570,8 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
   ];
   const modeMenu = useModeMenu(st?.mode ?? DEFAULT_MODE, (m) => void call(M.chatSettings, { mode: m }));
   const more: MenuItem[] = [
-    { label: "Open in terminal", icon: <SquareTerminal size={14} />, onSelect: () => info && st && void openInTerminal(host, info, st) },
+    // A chat with no session has no pane to open a terminal in.
+    ...(wsId ? [{ label: "Open in terminal", icon: <SquareTerminal size={14} />, onSelect: () => info && st && void openInTerminal(host, info, st) }] : []),
     {
       label: "Copy transcript",
       icon: <Copy size={14} />,
@@ -1576,10 +1583,16 @@ export function AgentView({ host, id, wsId, focused, visible }: { host: string; 
     <div
       className="flex h-full w-full flex-col overflow-hidden bg-bg ui-text-13.5"
       onMouseDown={() => {
+        if (!wsId) return;
         const l = getLayout(host, wsId);
         if (l.focused !== id) setLayout(host, wsId, { ...l, focused: id });
       }}
     >
+      {planDialog && plan && (
+        <Dialog title="Plan" width={720} onClose={() => setPlanDialog(false)}>
+          <PlanPanel view={plan} />
+        </Dialog>
+      )}
       <div
         ref={scroller}
         className="min-h-0 flex-1 overflow-y-auto"

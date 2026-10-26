@@ -47,7 +47,7 @@ export function WorkspaceSwitcher() {
 
   if (!cur) return null;
   return (
-    <div className="no-drag relative">
+    <div className="no-drag relative min-w-0">
       <button
         aria-haspopup="menu"
         aria-expanded={open}

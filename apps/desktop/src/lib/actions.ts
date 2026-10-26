@@ -14,7 +14,7 @@ import { ARCHIVE_FOLD_MS, ARCHIVE_MIN_MS, type Archiving, pickLoader } from "./a
 import { archivePrompt, askConfirm, unpushedPrompt } from "./confirm";
 import { archiveFlags, archivePlan, gitSettingsOf, unpushedParams, unpushedView } from "./gitSettings";
 import { goSettings } from "./settingsNavigation";
-import { toggleTasksMode } from "./tasksStore";
+import { toggleMode } from "./mode";
 
 function current(): { host: string; ws: Session } | null {
   const s = useStore.getState();
@@ -424,7 +424,8 @@ const RUN: Record<string, () => void> = {
   "copy-out": copyOutput,
   rerun: () => focusedEntry()?.rerunLast(),
   history: () => useStore.setState({ showHistory: true }),
-  tasks: () => toggleTasksMode(),
+  tasks: () => toggleMode("tasks"),
+  design: () => toggleMode("design"),
   settings: () => void goSettings({ page: "general" }),
   "check-updates": () => void checkForUpdates({ manual: true }),
 };
