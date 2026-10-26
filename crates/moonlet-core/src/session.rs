@@ -1606,12 +1606,13 @@ impl SessionManager {
         Ok(done)
     }
 
-    /// Brings an archived workspace back (recreating the worktree if needed).
-    /// The lock a session's terminals starting and its archive share.
+    /// The lock a session's terminals starting and its archive share (X65):
+    /// one per session, made the first time either asks for it.
     fn lifecycle(&self, id: &str) -> Arc<tokio::sync::Mutex<()>> {
         self.lifecycles.lock().unwrap().entry(id.to_string()).or_default().clone()
     }
 
+    /// Brings an archived workspace back (recreating the worktree if needed).
     pub async fn unarchive(&self, id: &str) -> Result<Session> {
         let ws = self.session(id)?;
         let repo = self.project(&ws.project_id)?;
