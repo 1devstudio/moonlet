@@ -146,6 +146,23 @@ fn design_key(workspace: &str, slug: &str) -> String {
     format!("{workspace}/{slug}")
 }
 
+/// The design calls that name one design (X65), as a [`m::DesignRef`]:
+/// the design they name lets them through, not a workspace they claim.
+const DESIGN_ADDRESSED: &[&str] = &[
+    m::DESIGN_REMOVE,
+    m::DESIGN_OPEN,
+    m::DESIGN_VIEWPORT,
+    m::DESIGN_COMMENTS,
+    m::DESIGN_COMMENT_PUT,
+    m::DESIGN_COMMENT_RESOLVE,
+    m::DESIGN_PAGE,
+    m::DESIGN_WRITE_PAGE,
+    m::DESIGN_KIT,
+    m::DESIGN_HISTORY,
+    m::DESIGN_SNAPSHOT_RESTORE,
+    m::DESIGN_SYSTEM_UPDATE,
+];
+
 /// The name the `moonlet` CLI gives in its hello; agents reach the daemon
 /// through it.
 pub const CLI_CLIENT: &str = "moonlet-cli";
@@ -1144,15 +1161,14 @@ impl Daemon {
             _ => {}
         }
         let store = self.design.clone();
-        // Design folders belong to a moonlet workspace (ADR 0013): the one
-        // named, or a session design's session's (X65).
-        let workspace = match (p.get("workspace").and_then(Value::as_str), p.get("session").and_then(Value::as_str)) {
-            (Some(w), _) => w.to_string(),
-            (None, Some(session)) => self.design_session(session)?.0.workspace_id.unwrap_or_default(),
-            (None, None) => String::new(),
-        };
-        if !self.sessions.list_workspaces().iter().any(|w| w.id == workspace) {
-            return Err(RpcError::new("invalid_params", format!("no workspace \"{workspace}\"")));
+        // Design folders belong to a moonlet workspace (ADR 0013). A call
+        // that names a design is let through by the design it names, which
+        // `locate` finds once: a session design's workspace is its
+        // session's, never one the call claims (X65).
+        let addressed = DESIGN_ADDRESSED.contains(&method) || (method == m::DESIGN_CHECK && p.get("design").is_some());
+        let workspace = p.get("workspace").and_then(Value::as_str).unwrap_or_default().to_string();
+        if !addressed {
+            self.workspace_exists(&workspace)?;
         }
         match method {
             m::DESIGN_SYSTEMS => {
@@ -1398,6 +1414,7 @@ impl Daemon {
                 // One update of its copies at a time.
                 let lock = self.lock_of(&at, "system");
                 let _held = lock.lock().await;
+                let workspace = self.workspace_of(&at);
                 ok(blocking(move || store.update_session_system(&at, &workspace)).await?)
             }
             m::DESIGN_COPY => {
@@ -1446,7 +1463,7 @@ impl Daemon {
             m::DESIGN_OPEN => {
                 let r: m::DesignRef = params(p)?;
                 let at = self.locate(&r).await?;
-                let (session, kind) = (at.session.clone(), at.session.as_ref().map(|_| at.kind));
+                let (session, kind, workspace) = (at.session.clone(), at.session.as_ref().map(|_| at.kind), self.workspace_of(&at));
                 let config = blocking(move || store.design_config(&at)).await?;
                 let opened = m::DesignOpened { workspace, slug: r.slug().to_string(), name: config.name, spawned_by: None, session, kind };
                 self.terminals.emit(Message::event(m::EV_DESIGN_OPEN, opened));
@@ -1740,11 +1757,33 @@ impl Daemon {
     async fn locate(&self, r: &m::DesignRef) -> Result<DesignAt, RpcError> {
         let store = self.design.clone();
         match r.clone() {
-            m::DesignRef::Workspace { workspace, slug } => blocking(move || store.workspace_design(&workspace, &slug)).await,
+            m::DesignRef::Workspace { workspace, slug } => {
+                self.workspace_exists(&workspace)?;
+                blocking(move || store.workspace_design(&workspace, &slug)).await
+            }
             m::DesignRef::Session { session, slug } => {
                 let (s, folder) = self.design_session(&session)?;
+                self.workspace_exists(s.workspace_id.as_deref().unwrap_or_default())?;
                 blocking(move || moonlet_core::design::session::session_design(&session, Path::new(&s.path), &folder, &slug)).await
             }
+        }
+    }
+
+    /// Refuses a workspace moonlet does not have.
+    fn workspace_exists(&self, workspace: &str) -> Result<(), RpcError> {
+        if !self.sessions.list_workspaces().iter().any(|w| w.id == workspace) {
+            return Err(RpcError::new("invalid_params", format!("no workspace \"{workspace}\"")));
+        }
+        Ok(())
+    }
+
+    /// The workspace a design is in: a workspace design's own, a session
+    /// design's session's.
+    fn workspace_of(&self, at: &DesignAt) -> String {
+        match (&at.workspace, &at.session) {
+            (Some(w), _) => w.clone(),
+            (None, Some(s)) => self.sessions.session(s).ok().and_then(|s| s.workspace_id).unwrap_or_default(),
+            (None, None) => String::new(),
         }
     }
 
