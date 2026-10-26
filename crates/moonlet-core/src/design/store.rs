@@ -11,7 +11,7 @@ use anyhow::{Context, Result, bail};
 use moonlet_proto::types::ProjectIdentity;
 use serde::{Deserialize, Serialize};
 
-use super::check::{self, html_files};
+use super::check;
 use super::{anchor, foundations, fsx, manifest, readme};
 
 /// One project a design system is built from.
@@ -41,9 +41,23 @@ fn is_unknown(i: &ProjectIdentity) -> bool {
 pub struct SystemConfig {
     pub name: String,
     pub created_at: u64,
+    /// What the user chose to cover when creating it, so the agent does not ask.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cover: Option<Cover>,
     /// Per-card settings, by card path.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub cards: BTreeMap<String, CardSettings>,
+}
+
+/// What a design system covers (X64).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Cover {
+    /// The 20 to 40 components that matter most.
+    Core,
+    All,
+    /// None yet: honest floor cards only.
+    None,
 }
 
 /// A card's exceptions to the defaults (X64).
@@ -114,6 +128,7 @@ impl Store {
         workspace: &str,
         name: &str,
         sources: Vec<Source>,
+        cover: Cover,
         now: u64,
     ) -> Result<String> {
         let systems = self.systems_dir(workspace, true)?;
@@ -144,6 +159,7 @@ impl Store {
         let config = SystemConfig {
             name: name_n,
             created_at: now,
+            cover: Some(cover),
             cards: BTreeMap::new(),
         };
         let dir = systems.join(&slug);
@@ -421,14 +437,49 @@ impl Store {
         // outside it, whatever links are in the way.
         let path = dir.join(card);
         let folder = path.parent().unwrap_or(&dir).to_path_buf();
-        let proposed = path.with_extension("proposed.html");
+        // The sync's version of each of the card's files it changed, beside
+        // the file it would replace: settled together.
+        let stem = card[..card.len() - ".html".len()]
+            .rsplit('/')
+            .next()
+            .unwrap_or("");
+        let proposals: Vec<(PathBuf, PathBuf)> = PROPOSED
+            .iter()
+            .map(|ext| {
+                (
+                    folder.join(format!("{stem}.proposed.{ext}")),
+                    folder.join(format!("{stem}.{ext}")),
+                )
+            })
+            .collect();
         match choice {
-            Settle::Mine => fsx::remove_file_inside(&dir, &proposed)?,
-            Settle::Synced => fsx::rename_inside(&dir, &proposed, &path)?,
-            Settle::Remove if parts[0] == "components" => fsx::remove_dir_inside(&dir, &folder)?,
+            Settle::Mine => {
+                for (proposed, _) in &proposals {
+                    fsx::remove_file_inside(&dir, proposed)?;
+                }
+            }
+            Settle::Synced => {
+                let mut took = false;
+                for (proposed, live) in &proposals {
+                    took |= fsx::rename_inside(&dir, proposed, live)?;
+                }
+                if !took {
+                    bail!("{card} has no proposal to take");
+                }
+                // What the user took is what the sync made: the next look
+                // finds it up to date, not edited by hand.
+                anchor::take(&dir, card, &read_config(&dir)?.exceptions())?;
+            }
             Settle::Remove => {
-                fsx::remove_file_inside(&dir, &path)?;
-                fsx::remove_file_inside(&dir, &proposed)?;
+                if parts[0] == "components" {
+                    fsx::remove_dir_inside(&dir, &folder)?;
+                } else {
+                    fsx::remove_file_inside(&dir, &path)?;
+                    for (proposed, _) in &proposals {
+                        fsx::remove_file_inside(&dir, proposed)?;
+                    }
+                }
+                anchor::forget(&dir, card)?;
             }
             Settle::Keep => {}
         }
@@ -550,10 +601,7 @@ fn summary(
         .collect();
     changed.sort();
     changed.dedup();
-    let proposed = html_files(dir)
-        .iter()
-        .filter(|p| p.to_string_lossy().ends_with(".proposed.html"))
-        .count();
+    let proposed = proposed_cards(dir).len();
     Ok(SystemSummary {
         slug,
         name: config.name.clone(),
@@ -578,13 +626,32 @@ fn summary(
     })
 }
 
+/// The kinds of a card's files a sync may propose a new version of, as
+/// `<name>.proposed.<kind>` beside `<name>.<kind>` (X64).
+const PROPOSED: [&str; 3] = ["html", "css", "prompt.md"];
+
+/// Each card with a proposal waiting to be settled, as its folder and name:
+/// once, however many of its files are proposed.
+fn proposed_cards(dir: &Path) -> std::collections::BTreeSet<PathBuf> {
+    check::files(dir)
+        .into_iter()
+        .filter_map(|p| {
+            let name = p.file_name()?.to_str()?;
+            let stem = PROPOSED
+                .iter()
+                .find_map(|ext| name.strip_suffix(&format!(".proposed.{ext}")))?;
+            Some(p.with_file_name(stem))
+        })
+        .collect()
+}
+
 /// What the user picks for a card under Needs you (X64).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Settle {
-    /// Keep the card as edited by hand; drop the sync's proposal.
+    /// Keep the card as edited by hand; drop every file the sync proposed.
     Mine,
-    /// Replace the card with the sync's proposal.
+    /// Replace each of the card's files with the sync's proposal of it.
     Synced,
     /// Delete an orphaned card.
     Remove,
@@ -711,6 +778,7 @@ mod tests {
                     "w-1devstudio",
                     "moonlet desktop",
                     vec![source()],
+                    Cover::Core,
                     1_761_200_000_000
                 )
                 .unwrap(),
@@ -722,7 +790,7 @@ mod tests {
                     .join("design/w-1devstudio/systems/moonlet-desktop/config.toml")
             )
             .unwrap(),
-            "name = \"moonlet desktop\"\ncreated_at = 1761200000000\n"
+            "name = \"moonlet desktop\"\ncreated_at = 1761200000000\ncover = \"core\"\n"
         );
         // The sources are moonlet's, outside the folder the agent edits.
         assert_eq!(
@@ -742,7 +810,13 @@ root = \"9c1e0a2\"
         );
         assert_eq!(
             store
-                .create_system("w-1devstudio", "moonlet desktop", vec![source()], 1)
+                .create_system(
+                    "w-1devstudio",
+                    "moonlet desktop",
+                    vec![source()],
+                    Cover::Core,
+                    1
+                )
                 .unwrap(),
             "moonlet-desktop-2"
         );
@@ -774,7 +848,7 @@ root = \"9c1e0a2\"
         let mut src = source();
         src.path = project.path().display().to_string();
         let slug = store
-            .create_system("w1", "moonlet desktop", vec![src], 5)
+            .create_system("w1", "moonlet desktop", vec![src], Cover::Core, 5)
             .unwrap();
         let dir = home.path().join("design/w1/systems").join(&slug);
         put(
@@ -840,7 +914,9 @@ root = \"9c1e0a2\"
     fn removing_a_system_deletes_its_folder_and_files_resolve_only_inside_the_workspace() {
         let home = tempfile::tempdir().unwrap();
         let store = Store::new(home.path());
-        let slug = store.create_system("w1", "storefront", vec![], 1).unwrap();
+        let slug = store
+            .create_system("w1", "storefront", vec![], Cover::Core, 1)
+            .unwrap();
         put(
             &home.path().join("design/w1/systems/storefront"),
             &[("styles.css", "")],
@@ -873,7 +949,9 @@ root = \"9c1e0a2\"
     fn checking_a_system_writes_its_generated_files_and_returns_every_problem() {
         let home = tempfile::tempdir().unwrap();
         let store = Store::new(home.path());
-        let slug = store.create_system("w1", "storefront", vec![], 1).unwrap();
+        let slug = store
+            .create_system("w1", "storefront", vec![], Cover::Core, 1)
+            .unwrap();
         let dir = home.path().join("design/w1/systems").join(&slug);
         put(
             &dir,
@@ -926,7 +1004,9 @@ root = \"9c1e0a2\"
     fn settling_a_card_keeps_mine_uses_the_synced_one_or_removes_it() {
         let home = tempfile::tempdir().unwrap();
         let store = Store::new(home.path());
-        let slug = store.create_system("w1", "storefront", vec![], 1).unwrap();
+        let slug = store
+            .create_system("w1", "storefront", vec![], Cover::Core, 1)
+            .unwrap();
         let dir = home.path().join("design/w1/systems").join(&slug);
         let mine = "<!-- @dsCard group=\"Custom\" -->\n<div>mine</div>\n";
         let synced = "<!-- @dsCard group=\"Custom\" -->\n<div>synced</div>\n";
@@ -962,10 +1042,278 @@ root = \"9c1e0a2\"
     }
 
     #[test]
+    fn settling_a_card_takes_or_drops_its_proposed_html_css_and_prompt_together() {
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::new(home.path());
+        let slug = store
+            .create_system("w1", "storefront", vec![], Cover::Core, 1)
+            .unwrap();
+        let dir = home.path().join("design/w1/systems").join(&slug);
+        let row = "components/custom/row/row.html";
+        let mine = [
+            (
+                row,
+                "<!-- @dsCard group=\"Custom\" -->\n<div class=\"row\">mine</div>\n",
+            ),
+            (
+                "components/custom/row/row.css",
+                ".row { color: var(--mine); }\n",
+            ),
+            (
+                "components/custom/row/row.prompt.md",
+                "A row, as I wrote it.\n",
+            ),
+        ];
+        let proposals = [
+            (
+                "components/custom/row/row.proposed.html",
+                "<!-- @dsCard group=\"Custom\" -->\n<div class=\"row\">synced</div>\n",
+            ),
+            (
+                "components/custom/row/row.proposed.css",
+                ".row { color: var(--synced); }\n",
+            ),
+            (
+                "components/custom/row/row.proposed.prompt.md",
+                "A row, as the code has it.\n",
+            ),
+        ];
+        put(&dir, &mine);
+        put(&dir, &proposals);
+        assert_eq!(store.systems("w1").unwrap()[0].to_settle, 1, "one card");
+
+        store.settle("w1", &slug, row, Settle::Mine).unwrap();
+        for (path, text) in mine {
+            assert_eq!(std::fs::read_to_string(dir.join(path)).unwrap(), text);
+        }
+        for (path, _) in proposals {
+            assert!(!dir.join(path).exists(), "{path} left behind");
+        }
+        assert_eq!(store.systems("w1").unwrap()[0].to_settle, 0);
+
+        put(&dir, &proposals);
+        store.settle("w1", &slug, row, Settle::Synced).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join(row)).unwrap(),
+            "<!-- @dsCard group=\"Custom\" -->\n<div class=\"row\">synced</div>\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("components/custom/row/row.css")).unwrap(),
+            ".row { color: var(--synced); }\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("components/custom/row/row.prompt.md")).unwrap(),
+            "A row, as the code has it.\n"
+        );
+        for (path, _) in proposals {
+            assert!(!dir.join(path).exists(), "{path} left behind");
+        }
+
+        // A sync that changed only the styling proposes only that.
+        put(
+            &dir,
+            &[(
+                "components/custom/row/row.proposed.css",
+                ".row { color: red; }\n",
+            )],
+        );
+        assert_eq!(store.systems("w1").unwrap()[0].to_settle, 1);
+        store.settle("w1", &slug, row, Settle::Synced).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join("components/custom/row/row.css")).unwrap(),
+            ".row { color: red; }\n"
+        );
+        assert!(
+            store.settle("w1", &slug, row, Settle::Synced).is_err(),
+            "nothing left to take"
+        );
+    }
+
+    #[test]
+    fn a_settled_card_is_up_to_date_on_the_next_look_and_a_removed_one_comes_back_new() {
+        let home = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        put(
+            project.path(),
+            &[("src/Sidebar.tsx", "sidebar\n"), ("src/Row.tsx", "row\n")],
+        );
+        let store = Store::new(home.path());
+        let mut src = source();
+        src.path = project.path().display().to_string();
+        let slug = store
+            .create_system("w1", "storefront", vec![src], Cover::Core, 1)
+            .unwrap();
+        let dir = home.path().join("design/w1/systems").join(&slug);
+        let row = "components/custom/row/row.html";
+        let look = || {
+            let roots = source_roots(&store.record("w1", &slug).unwrap());
+            anchor::status(&dir, &roots, &BTreeMap::new()).unwrap()
+        };
+        put(
+            &dir,
+            &[(
+                row,
+                "<!-- @dsCard group=\"Custom\" source=\"src/Sidebar.tsx\" -->\n<div>row</div>\n",
+            )],
+        );
+        store.synced("w1", &slug, &[], 2).unwrap();
+
+        // Edited by hand; the sync proposes its version, from one more
+        // source, and is recorded.
+        let mine =
+            "<!-- @dsCard group=\"Custom\" source=\"src/Sidebar.tsx\" -->\n<div>mine</div>\n";
+        let proposal = "<!-- @dsCard group=\"Custom\" source=\"src/Sidebar.tsx,src/Row.tsx\" -->\n<div>synced</div>\n";
+        put(
+            &dir,
+            &[
+                (row, mine),
+                ("components/custom/row/row.proposed.html", proposal),
+            ],
+        );
+        store.synced("w1", &slug, &[], 3).unwrap();
+        assert_eq!(look(), vec![]);
+        store.settle("w1", &slug, row, Settle::Synced).unwrap();
+        assert_eq!(look(), vec![], "the synced card is the anchored one");
+
+        // Keep mine: the sync recorded the user's card, so it stays up to date.
+        put(
+            &dir,
+            &[
+                (row, mine),
+                ("components/custom/row/row.proposed.html", proposal),
+            ],
+        );
+        store.synced("w1", &slug, &[], 4).unwrap();
+        store.settle("w1", &slug, row, Settle::Mine).unwrap();
+        assert_eq!(look(), vec![]);
+
+        // A source that changed after the sync still shows after taking it.
+        put(
+            &dir,
+            &[("components/custom/row/row.proposed.html", proposal)],
+        );
+        store.synced("w1", &slug, &[], 5).unwrap();
+        put(project.path(), &[("src/Sidebar.tsx", "sidebar, wider\n")]);
+        store.settle("w1", &slug, row, Settle::Synced).unwrap();
+        assert_eq!(
+            look(),
+            vec![anchor::CardStatus {
+                path: row.into(),
+                changed_sources: vec!["src/Sidebar.tsx".into()],
+                edited_by_hand: false,
+                orphaned: false,
+                new: false,
+                exceptions_changed: false,
+            }]
+        );
+
+        // An orphan removed is forgotten: a card written there later is new.
+        std::fs::remove_dir_all(project.path().join("src")).unwrap();
+        store.settle("w1", &slug, row, Settle::Remove).unwrap();
+        assert_eq!(look(), vec![]);
+        put(
+            &dir,
+            &[(
+                row,
+                "<!-- @dsCard group=\"Custom\" source=\"src/Sidebar.tsx\" -->\n<div>row</div>\n",
+            )],
+        );
+        let again = look();
+        assert!(again.len() == 1 && again[0].new, "{again:?}");
+    }
+
+    #[test]
+    fn taking_a_proposed_css_and_prompt_leaves_the_card_up_to_date() {
+        let home = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        put(project.path(), &[("src/Row.tsx", "row\n")]);
+        let store = Store::new(home.path());
+        let mut src = source();
+        src.path = project.path().display().to_string();
+        let slug = store
+            .create_system("w1", "storefront", vec![src], Cover::Core, 1)
+            .unwrap();
+        let dir = home.path().join("design/w1/systems").join(&slug);
+        let row = "components/custom/row/row.html";
+        put(
+            &dir,
+            &[
+                (
+                    row,
+                    "<!-- @dsCard group=\"Custom\" source=\"src/Row.tsx\" -->\n<div class=\"row\">row</div>\n",
+                ),
+                ("components/custom/row/row.css", ".row { color: red; }\n"),
+                ("components/custom/row/row.prompt.md", "A row, mine.\n"),
+                (
+                    "components/custom/row/row.proposed.css",
+                    ".row { color: var(--color-row-text); }\n",
+                ),
+                ("components/custom/row/row.proposed.prompt.md", "A row.\n"),
+            ],
+        );
+        store.synced("w1", &slug, &[], 2).unwrap();
+        store.settle("w1", &slug, row, Settle::Synced).unwrap();
+        let roots = source_roots(&store.record("w1", &slug).unwrap());
+        assert_eq!(
+            anchor::status(&dir, &roots, &BTreeMap::new()).unwrap(),
+            vec![]
+        );
+    }
+
+    #[test]
+    fn a_source_the_proposal_names_that_changed_before_it_was_taken_shows_after() {
+        let home = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        put(
+            project.path(),
+            &[("src/Sidebar.tsx", "sidebar\n"), ("src/Row.tsx", "row\n")],
+        );
+        let store = Store::new(home.path());
+        let mut src = source();
+        src.path = project.path().display().to_string();
+        let slug = store
+            .create_system("w1", "storefront", vec![src], Cover::Core, 1)
+            .unwrap();
+        let dir = home.path().join("design/w1/systems").join(&slug);
+        let row = "components/custom/row/row.html";
+        put(
+            &dir,
+            &[
+                (
+                    row,
+                    "<!-- @dsCard group=\"Custom\" source=\"src/Sidebar.tsx\" -->\n<div>mine</div>\n",
+                ),
+                (
+                    "components/custom/row/row.proposed.html",
+                    "<!-- @dsCard group=\"Custom\" source=\"src/Sidebar.tsx,src/Row.tsx\" -->\n<div>synced</div>\n",
+                ),
+            ],
+        );
+        store.synced("w1", &slug, &[], 2).unwrap();
+        // While the proposal waits, a source only it names changes.
+        put(project.path(), &[("src/Row.tsx", "row, taller\n")]);
+        store.settle("w1", &slug, row, Settle::Synced).unwrap();
+        let roots = source_roots(&store.record("w1", &slug).unwrap());
+        assert_eq!(
+            anchor::status(&dir, &roots, &BTreeMap::new()).unwrap(),
+            vec![anchor::CardStatus {
+                path: row.into(),
+                changed_sources: vec!["src/Row.tsx".into()],
+                edited_by_hand: false,
+                orphaned: false,
+                new: false,
+                exceptions_changed: false,
+            }]
+        );
+    }
+
+    #[test]
     fn sync_progress_shows_in_the_list_until_the_sync_is_recorded() {
         let home = tempfile::tempdir().unwrap();
         let store = Store::new(home.path());
-        let slug = store.create_system("w1", "storefront", vec![], 1).unwrap();
+        let slug = store
+            .create_system("w1", "storefront", vec![], Cover::Core, 1)
+            .unwrap();
         store
             .progress("w1", &slug, "cards", Some("1 of 3"))
             .unwrap();
@@ -1011,7 +1359,9 @@ root = \"9c1e0a2\"
             ],
         );
         let store = Store::new(home.path());
-        let slug = store.create_system("w1", "storefront", vec![], 1).unwrap();
+        let slug = store
+            .create_system("w1", "storefront", vec![], Cover::Core, 1)
+            .unwrap();
         let dir = home.path().join("design/w1/systems").join(&slug);
         put(
             &dir,
@@ -1073,7 +1423,7 @@ root = \"9c1e0a2\"
         src.path = repo.path().display().to_string();
         src.subdir = Some("apps/mobile".into());
         let slug = store
-            .create_system("w1", "moonlet mobile", vec![src], 1)
+            .create_system("w1", "moonlet mobile", vec![src], Cover::Core, 1)
             .unwrap();
         let dir = home.path().join("design/w1/systems").join(&slug);
         put(
@@ -1109,7 +1459,7 @@ root = \"9c1e0a2\"
         let mut src = source();
         src.commit = Some("old1234".into());
         let slug = store
-            .create_system("w1", "storefront", vec![src], 1)
+            .create_system("w1", "storefront", vec![src], Cover::Core, 1)
             .unwrap();
         let dir = home.path().join("design/w1/systems").join(&slug);
         put(
@@ -1149,8 +1499,12 @@ root = \"9c1e0a2\"
     fn one_broken_system_still_lists_with_its_error_beside_the_others() {
         let home = tempfile::tempdir().unwrap();
         let store = Store::new(home.path());
-        let a = store.create_system("w1", "alpha", vec![], 1).unwrap();
-        store.create_system("w1", "beta", vec![], 1).unwrap();
+        let a = store
+            .create_system("w1", "alpha", vec![], Cover::Core, 1)
+            .unwrap();
+        store
+            .create_system("w1", "beta", vec![], Cover::Core, 1)
+            .unwrap();
         put(
             &home.path().join("design/w1/systems").join(&a),
             &[("_ds_sync.json", "{ not json")],
@@ -1168,7 +1522,9 @@ root = \"9c1e0a2\"
     fn a_system_remembers_its_agents_chat() {
         let home = tempfile::tempdir().unwrap();
         let store = Store::new(home.path());
-        let slug = store.create_system("w1", "storefront", vec![], 1).unwrap();
+        let slug = store
+            .create_system("w1", "storefront", vec![], Cover::Core, 1)
+            .unwrap();
         assert_eq!(store.agent("w1", &slug).unwrap(), None);
         store.set_agent("w1", &slug, 42, "l").unwrap();
         assert_eq!(store.agent("w1", &slug).unwrap(), Some(42));
@@ -1180,7 +1536,7 @@ root = \"9c1e0a2\"
         let home = tempfile::tempdir().unwrap();
         let store = Store::new(home.path());
         let slug = store
-            .create_system("w1", "storefront", vec![source()], 1)
+            .create_system("w1", "storefront", vec![source()], Cover::Core, 1)
             .unwrap();
         store.set_agent("w1", &slug, 7, "l").unwrap();
         let dir = home.path().join("design/w1/systems").join(&slug);
@@ -1213,7 +1569,9 @@ root = \"9c1e0a2\"
             &[("record.toml", "trusted\n"), ("dir/keep.txt", "keep\n")],
         );
         let store = Store::new(home.path());
-        let slug = store.create_system("w1", "storefront", vec![], 1).unwrap();
+        let slug = store
+            .create_system("w1", "storefront", vec![], Cover::Core, 1)
+            .unwrap();
         let dir = home.path().join("design/w1/systems").join(&slug);
         put(
             &dir,
@@ -1248,7 +1606,7 @@ root = \"9c1e0a2\"
         let home = tempfile::tempdir().unwrap();
         let store = Store::new(home.path());
         let slug = store
-            .create_system("w1", "storefront", vec![source()], 1)
+            .create_system("w1", "storefront", vec![source()], Cover::Core, 1)
             .unwrap();
         std::fs::write(
             home.path()
@@ -1288,13 +1646,23 @@ root = \"9c1e0a2\"
         assert!(store.remove_system("w1", "storefront").is_err());
         assert!(store.config("w1", "storefront").is_err());
         assert!(store.check_system("w1", "storefront").is_err());
-        assert!(store.create_system("w1", "pricing", vec![], 1).is_err());
+        assert!(
+            store
+                .create_system("w1", "pricing", vec![], Cover::Core, 1)
+                .is_err()
+        );
         assert!(store.systems("w1").is_err());
         // `design/w2` links out.
         std::os::unix::fs::symlink(outside.path(), home.path().join("design/w2")).unwrap();
-        assert!(store.create_system("w2", "pricing", vec![], 1).is_err());
+        assert!(
+            store
+                .create_system("w2", "pricing", vec![], Cover::Core, 1)
+                .is_err()
+        );
         // A system folder that is a link.
-        store.create_system("w3", "alpha", vec![], 1).unwrap();
+        store
+            .create_system("w3", "alpha", vec![], Cover::Core, 1)
+            .unwrap();
         std::os::unix::fs::symlink(
             outside.path().join("storefront"),
             home.path().join("design/w3/systems/storefront"),
@@ -1326,8 +1694,12 @@ root = \"9c1e0a2\"
             ],
         );
         let store = Store::new(home.path());
-        let a = store.create_system("w1", "alpha", vec![], 1).unwrap();
-        let b = store.create_system("w1", "beta", vec![], 1).unwrap();
+        let a = store
+            .create_system("w1", "alpha", vec![], Cover::Core, 1)
+            .unwrap();
+        let b = store
+            .create_system("w1", "beta", vec![], Cover::Core, 1)
+            .unwrap();
         let systems = home.path().join("design/w1/systems");
         // alpha's config.toml links out: alpha is not read, nor written.
         std::fs::remove_file(systems.join(&a).join(CONFIG)).unwrap();
@@ -1367,21 +1739,23 @@ root = \"9c1e0a2\"
     fn a_creation_that_fails_leaves_no_folder_and_its_name_free() {
         let home = tempfile::tempdir().unwrap();
         let store = Store::new(home.path());
-        store.create_system("w1", "alpha", vec![], 1).unwrap();
+        store
+            .create_system("w1", "alpha", vec![], Cover::Core, 1)
+            .unwrap();
         // The record cannot be written: `.records` is a file.
         let records = home.path().join("design/w1/.records");
         std::fs::remove_dir_all(&records).unwrap();
         std::fs::write(&records, "").unwrap();
         assert!(
             store
-                .create_system("w1", "storefront", vec![source()], 1)
+                .create_system("w1", "storefront", vec![source()], Cover::Core, 1)
                 .is_err()
         );
         assert!(!home.path().join("design/w1/systems/storefront").exists());
         std::fs::remove_file(&records).unwrap();
         assert_eq!(
             store
-                .create_system("w1", "storefront", vec![source()], 1)
+                .create_system("w1", "storefront", vec![source()], Cover::Core, 1)
                 .unwrap(),
             "storefront"
         );
@@ -1393,7 +1767,7 @@ root = \"9c1e0a2\"
         let home = tempfile::tempdir().unwrap();
         let store = Store::new(home.path());
         let slug = store
-            .create_system("w1", "storefront", vec![source()], 1)
+            .create_system("w1", "storefront", vec![source()], Cover::Core, 1)
             .unwrap();
         let records = home.path().join("design/w1/.records");
         // Opened before the write, as by a read that the write interrupts.
@@ -1431,7 +1805,7 @@ root = \"9c1e0a2\"
         let mut src = source();
         src.commit = Some("old1234".into());
         let slug = store
-            .create_system("w1", "storefront", vec![src], 1)
+            .create_system("w1", "storefront", vec![src], Cover::Core, 1)
             .unwrap();
         let dir = home.path().join("design/w1/systems").join(&slug);
         put(
@@ -1530,7 +1904,9 @@ root = \"9c1e0a2\"
             ],
         );
         let store = Store::new(home.path());
-        let slug = store.create_system("w1", "storefront", vec![], 1).unwrap();
+        let slug = store
+            .create_system("w1", "storefront", vec![], Cover::Core, 1)
+            .unwrap();
         let dir = home.path().join("design/w1/systems").join(&slug);
         put(
             &dir,
@@ -1563,7 +1939,9 @@ root = \"9c1e0a2\"
     fn a_recorded_agent_is_reused_only_with_the_launch_it_was_started_with() {
         let home = tempfile::tempdir().unwrap();
         let store = Store::new(home.path());
-        let slug = store.create_system("w1", "storefront", vec![], 1).unwrap();
+        let slug = store
+            .create_system("w1", "storefront", vec![], Cover::Core, 1)
+            .unwrap();
         store.set_agent("w1", &slug, 7, "settings A").unwrap();
         assert_eq!(store.agent_for("w1", &slug, "settings A").unwrap(), Some(7));
         assert_eq!(store.agent_for("w1", &slug, "settings B").unwrap(), None);

@@ -77,7 +77,7 @@ pub fn sync_launch(
             config.name
         ),
         Task::Resync(cards) => format!(
-            "Sync the design system \"{}\" in this folder with the code of:\n{listed}\n{}\nFollow the moonlet-design skill's sync: rewrite only these cards, and write a card edited by hand as <name>.proposed.html beside it.",
+            "Sync the design system \"{}\" in this folder with the code of:\n{listed}\n{}\nFollow the moonlet-design skill's sync: rewrite only these cards, and leave a card edited by hand as it is, with your version of each of its files you change beside it as <name>.proposed.html, <name>.proposed.css or <name>.proposed.prompt.md.",
             config.name,
             changes(cards)
         ),
@@ -135,6 +135,7 @@ mod tests {
         SystemConfig {
             name: "moonlet desktop".into(),
             created_at: 1,
+            cover: None,
             cards: BTreeMap::new(),
         }
     }
@@ -218,7 +219,7 @@ Since the last sync:
 - components/custom/session-row/session-row.html: its sources changed: src/Sidebar.tsx; edited by hand, so write a proposal
 - components/custom/toolbar/toolbar.html: orphaned: its sources are gone; leave it for the user
 
-Follow the moonlet-design skill's sync: rewrite only these cards, and write a card edited by hand as <name>.proposed.html beside it. Run moonlet's commands with this exact path:
+Follow the moonlet-design skill's sync: rewrite only these cards, and leave a card edited by hand as it is, with your version of each of its files you change beside it as <name>.proposed.html, <name>.proposed.css or <name>.proposed.prompt.md. Run moonlet's commands with this exact path:
 - after each step: /bin/moonlet design system progress <step> <summary>
 - to check your work: /bin/moonlet design check
 - when every step is done: /bin/moonlet design system synced
