@@ -451,10 +451,11 @@ pub fn session_file(worktree: &Path, folder: &str, rel: &str) -> Result<Vec<u8>>
     {
         return Err(no_file());
     }
-    let (slug, snapshot) = match first.split_once('@') {
-        Some((slug, n)) if super::history::is_number(n) || n == BUILT_DIR => (slug, Some(n)),
+    let (slug, beside) = match first.split_once('@') {
+        Some((slug, BUILT_DIR)) => (slug, Beside::Built),
+        Some((slug, n)) if super::history::is_number(n) => (slug, Beside::Snapshot(n)),
         Some(_) => return Err(no_file()),
-        None => (*first, None),
+        None => (*first, Beside::Design),
     };
     super::place::check_slug(slug).map_err(|_| no_file())?;
     let design = Path::new(folder).join(slug);
@@ -465,20 +466,20 @@ pub fn session_file(worktree: &Path, folder: &str, rel: &str) -> Result<Vec<u8>>
     {
         return Err(no_file());
     }
-    let base = match (snapshot, rest) {
-        // Only a page's screenshot, right in the folder.
-        (Some(BUILT_DIR), [png]) => match png.strip_suffix(".png") {
-            Some(page) if super::pages::is_page_name(page) => {
-                Path::new(SIDE_DIR).join(slug).join(BUILT_DIR)
-            }
-            _ => return Err(no_file()),
-        },
-        (Some(BUILT_DIR), _) => return Err(no_file()),
-        (None, _) | (Some(_), ["system", ..]) => design,
-        (Some(n), ["pages" | "assets", ..]) => Path::new(SIDE_DIR)
+    let base = match (beside, rest) {
+        (Beside::Design, _) | (Beside::Snapshot(_), ["system", ..]) => design,
+        (Beside::Snapshot(n), ["pages" | "assets", ..]) => Path::new(SIDE_DIR)
             .join(slug)
             .join(super::history::HISTORY_DIR)
             .join(n),
+        // Only a page's screenshot, right in the folder.
+        (Beside::Built, [png])
+            if png
+                .strip_suffix(".png")
+                .is_some_and(super::pages::is_page_name) =>
+        {
+            Path::new(SIDE_DIR).join(slug).join(BUILT_DIR)
+        }
         _ => return Err(no_file()),
     };
     // The folder reached with no link on the way from the worktree, and the
@@ -494,6 +495,15 @@ pub fn session_file(worktree: &Path, folder: &str, rel: &str) -> Result<Vec<u8>>
 /// none, and is a project design only.
 pub(super) fn made_here(worktree: &Path, slug: &str) -> bool {
     fsx::is_dir_inside(worktree, &Path::new(SIDE_DIR).join(slug)).unwrap_or(false)
+}
+
+/// Which folder a path of [`session_file`] names by its first part: the
+/// design's own (`<slug>`), a snapshot's (`<slug>@<n>`) or the built
+/// screenshots' (`<slug>@built`).
+enum Beside<'a> {
+    Design,
+    Snapshot(&'a str),
+    Built,
 }
 
 /// A session design's address: `<folder>/<slug>/` in the worktree, its
