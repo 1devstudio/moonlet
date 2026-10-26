@@ -56,14 +56,15 @@ Session records, settings, devices and secrets join the account state in later s
 
 ### Syncing between members
 
-- [x] A member with a central host (X41's `link.json`) keeps its link open while it has one, not only while heavy commands or copies need it. (`the_link_is_open_while_heavy_commands_are_on_or_a_session_is_kept_in_sync`, `turning_the_link_off_drops_the_worker_at_once_and_a_restarted_central_host_gets_it_back`)
-- [x] A live copy (X60) waits until the link is registered before it asks for the session, since the link is now open before a copy starts. (`tests/sync.rs`, which failed under load without it)
+- [x] A member with a central host (X41's `link.json`) keeps its link open while it has one, not only while heavy commands or copies need it. (`the_link_is_open_while_a_central_host_is_set_and_something_needs_it`, `turning_the_link_off_drops_the_worker_at_once_and_a_restarted_central_host_gets_it_back`)
+- [x] A live copy (X60) waits until the link is registered before it asks for the session, since the link is now open before a copy starts. A routing copy (X62) does not wait: the central host asks for one only from a registered worker. (`a_copy_started_before_this_mac_is_registered_waits_for_it`)
 - [x] Over the link, the member sends its version with `account.sync {version, changes}`. The central host applies the changes and replies with the changes the member lacks and its own version; the member then sends what that version lacks. (`changes_made_apart_meet_when_a_member_links_again`)
-- [x] The central host sends `account.changed {changes}` to every other linked member when it applies a change from any member or makes one itself. A member that misses one catches up at its next `account.sync`, which it sends on every link and every 60 s. (`a_rename_on_one_member_reaches_the_others_within_three_seconds`)
+- [x] The central host sends `account.changed {changes}` to every other linked member when it takes in changes from a member or makes one itself: only the changes it had not seen and kept, and never to the member that sent them, to cloud machines, phones or apps. A member takes in news only from its current central host. A member that misses one catches up at its next `account.sync`, which it sends on every link and every 60 s. (`a_rename_on_one_member_reaches_the_others_within_three_seconds`, `a_member_that_missed_a_change_has_it_at_its_next_exchange`, `a_phone_never_hears_the_accounts_changes`)
+- [x] A central host whose account could not be loaded answers `account.sync` with `no_account`, and its members stop asking until they link again, as with a central host from before X68 (`unknown_method`).
 - [x] A change made on a member reaches another member linked to the same central host within 3 s. (`a_rename_on_one_member_reaches_the_others_within_three_seconds`)
 - [x] A member that is not linked keeps making changes. When it links again, both sides end with the same state, with every change of both kept per the rules above. (`changes_made_apart_meet_when_a_member_links_again`)
-- [x] A change only ever reaches members of the same central host. A paired phone, or the `moonlet` CLI, cannot send `account.sync` (`forbidden`); nor can a cloud machine, which is not a member. (`only_a_linked_mac_syncs_the_account`)
-- [ ] `workspaces.changed` and `sections.changed` fire on a member when changes from another member change what it lists.
+- [x] A change only ever reaches members of the same central host. A paired phone, or the `moonlet` CLI, cannot send `account.sync` (`forbidden`); nor can a cloud machine, which is not a member and keeps no account. (`only_a_linked_mac_syncs_the_account`, `a_cloud_device_may_call_only_worker_methods`)
+- [x] `workspaces.changed`, `sections.changed`, `projects.changed` and `sessions.changed` fire on a member when it takes in changes from another member. (`another_members_change_says_workspaces_changed_to_this_macs_app`)
 
 ### The app
 

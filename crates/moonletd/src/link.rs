@@ -297,16 +297,31 @@ fn save(path: &Path, data: &LinkFile) -> anyhow::Result<()> {
     crate::mobile::write_private(path, &serde_json::to_vec_pretty(data)?)
 }
 
-/// Whether the link should be open: a central host is set, and this
-/// machine shares its account (X68), takes heavy commands, or keeps at
-/// least one session in sync (X60).
-pub fn should_link(enabled: bool, central: bool, synced_copies: usize, member: bool) -> bool {
-    central && (member || enabled || synced_copies > 0)
+/// What can need the link to the central host.
+pub struct LinkNeeds {
+    /// This machine takes heavy commands.
+    pub heavy: bool,
+    /// Sessions it keeps in sync (X60).
+    pub copies: usize,
+    /// It shares the account of its central host (X68).
+    pub member: bool,
+}
+
+/// Whether the link should be open: a central host is set, and something
+/// needs it.
+pub fn should_link(central: bool, needs: LinkNeeds) -> bool {
+    central && (needs.member || needs.heavy || needs.copies > 0)
 }
 
 /// How often a member catches up with its central host's account, in case
-/// an `account.changed` went missing (X68).
-const ACCOUNT_EVERY: std::time::Duration = std::time::Duration::from_secs(60);
+/// an `account.changed` went missing (X68). `MOONLET_ACCOUNT_RESYNC_MS`
+/// shortens it in tests.
+fn account_resync_interval() -> std::time::Duration {
+    std::env::var("MOONLET_ACCOUNT_RESYNC_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .map_or(std::time::Duration::from_secs(60), std::time::Duration::from_millis)
+}
 
 /// This Mac's name, as Sharing settings show it (`scutil --get
 /// ComputerName`), or the host name without `.local`.
@@ -578,10 +593,12 @@ impl WorkerLink {
             let store = self.store.lock().unwrap();
             let central = store.central().cloned();
             let want = should_link(
-                store.worker().enabled,
                 central.is_some(),
-                self.synced.load(Ordering::SeqCst),
-                self.sessions.has_account(),
+                LinkNeeds {
+                    heavy: store.worker().enabled,
+                    copies: self.synced.load(Ordering::SeqCst),
+                    member: self.sessions.has_account(),
+                },
             );
             (want, central)
         };
@@ -631,6 +648,10 @@ impl WorkerLink {
 
     /// Introduces this worker to its central host, on every new link.
     async fn register(self: Arc<Self>, host: Arc<Host>) {
+        // Tests only: a slow registration, so a copy can start before it.
+        if let Some(ms) = std::env::var("MOONLET_TEST_REGISTER_DELAY_MS").ok().and_then(|v| v.parse().ok()) {
+            tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+        }
         let worker = self.store.lock().unwrap().worker().clone();
         let projects = self
             .sessions
@@ -683,42 +704,49 @@ impl WorkerLink {
         if !self.sessions.has_account() {
             return;
         }
-        let me = self.account_loop.fetch_add(1, Ordering::SeqCst) + 1;
-        let current = |link: &WorkerLink| {
-            link.account_loop.load(Ordering::SeqCst) == me
-                && link.host.lock().unwrap().as_ref().is_some_and(|h| Arc::ptr_eq(h, &host))
-        };
-        while current(&self) {
+        let generation = self.account_loop.fetch_add(1, Ordering::SeqCst) + 1;
+        let every = account_resync_interval();
+        while self.account_loop.load(Ordering::SeqCst) == generation && self.is_current(&host) {
             if let Err(e) = self.sync_account(&host).await {
-                // A central host from before X68 has no account to share.
-                if e.code == "unknown_method" {
-                    tracing::info!("the central host shares no account: update moonlet on it");
+                // A central host from before X68, or one whose account
+                // could not be read, has none to share.
+                if e.code == "unknown_method" || e.code == "no_account" {
+                    tracing::info!("the central host shares no account: {}", e.message);
                     return;
                 }
                 tracing::warn!("cannot sync the account: {}", e.message);
             }
-            tokio::time::sleep(ACCOUNT_EVERY).await;
+            tokio::time::sleep(every).await;
         }
+    }
+
+    /// Whether `host` is still this link's connection: a reply from a
+    /// former central host is not taken in.
+    fn is_current(&self, host: &Arc<Host>) -> bool {
+        self.host.lock().unwrap().as_ref().is_some_and(|h| Arc::ptr_eq(h, host))
     }
 
     /// One exchange: what this member lacks first, then what the central
     /// host lacks, by the version it gave.
-    async fn sync_account(&self, host: &Host) -> Result<(), RpcError> {
-        let ask = m::AccountSync { version: self.sessions.account_version(), changes: Vec::new() };
-        let got: m::AccountSynced = parse(host.request(m::ACCOUNT_SYNC, serde_json::to_value(ask).unwrap()).await?)?;
-        self.sessions.apply_account(got.changes);
-        let lacks = self.sessions.account_changes_for(&got.version);
+    async fn sync_account(&self, host: &Arc<Host>) -> Result<(), RpcError> {
+        let version = self.send_account(host, Vec::new()).await?;
+        let lacks = self.sessions.account_changes_for(&version);
         if !lacks.is_empty() {
             self.send_account(host, lacks).await?;
         }
         Ok(())
     }
 
-    async fn send_account(&self, host: &Host, changes: Vec<moonlet_proto::types::Change>) -> Result<(), RpcError> {
+    /// Sends `changes` with this member's version, takes in what the central
+    /// host answers, and returns the central host's version.
+    async fn send_account(&self, host: &Arc<Host>, changes: Vec<moonlet_proto::types::Change>) -> Result<moonlet_core::account::Version, RpcError> {
         let send = m::AccountSync { version: self.sessions.account_version(), changes };
         let got: m::AccountSynced = parse(host.request(m::ACCOUNT_SYNC, serde_json::to_value(send).unwrap()).await?)?;
+        if !self.is_current(host) {
+            return Err(RpcError::new("gone", "the central host changed meanwhile"));
+        }
         self.sessions.apply_account(got.changes);
-        Ok(())
+        Ok(got.version)
     }
 
     /// Sends changes made on this member to its central host, when linked.
@@ -821,7 +849,11 @@ impl Events for LinkEvents {
         let Some(link) = self.0.upgrade() else { return };
         // Changes from the other members (X68).
         if name == m::EV_ACCOUNT_CHANGED {
-            if let Ok(c) = serde_json::from_value::<m::AccountChanged>(data) {
+            // Tests only: a member that misses every change as it happens.
+            let ignore = std::env::var_os("MOONLET_TEST_IGNORE_ACCOUNT_EVENTS").is_some();
+            // A former central host's late news is not this link's.
+            let current = self.1 == link.generation.load(Ordering::SeqCst);
+            if !ignore && current && let Ok(c) = serde_json::from_value::<m::AccountChanged>(data) {
                 link.sessions.apply_account(c.changes);
             }
             return;
@@ -927,28 +959,34 @@ impl Requests for WorkerRequests {
     }
 }
 
-/// Opens the link when the settings say so, and closes it when the daemon
-/// shuts down (an upgraded daemon links again by itself).
 /// Shares this machine's workspaces and sections with the other members of
 /// its account (X68): the log is named after its worker id, and every change
-/// made here goes to this machine's own clients, which include the members
-/// linked to it, and to its central host.
+/// made here goes to the members linked to it, when it is a central host,
+/// and to its own central host. A cloud machine is a worker only, never a
+/// member, and shares nothing.
 pub fn attach_account(daemon: &Arc<crate::daemon::Daemon>) {
-    let member = daemon.link.info().worker.id;
-    if let Err(e) = daemon.sessions.attach_account(moonlet_core::paths::home().join("account.json"), &member) {
+    let worker = daemon.link.info().worker;
+    if worker.cloud {
+        return;
+    }
+    if let Err(e) = daemon.sessions.attach_account(moonlet_core::paths::home().join("account.json"), &worker.id) {
         tracing::warn!("cannot share workspaces with the account: {e:#}");
         return;
     }
-    let terminals = daemon.terminals.clone();
+    let workers = Arc::downgrade(&daemon.workers);
     let link = Arc::downgrade(&daemon.link);
     daemon.sessions.on_account_change(move |changes| {
-        terminals.emit(Message::event(m::EV_ACCOUNT_CHANGED, m::AccountChanged { changes: changes.clone() }));
+        if let Some(workers) = workers.upgrade() {
+            workers.send_to_members(Message::event(m::EV_ACCOUNT_CHANGED, m::AccountChanged { changes: changes.clone() }), None);
+        }
         if let Some(link) = link.upgrade() {
             link.push_account(changes);
         }
     });
 }
 
+/// Opens the link when the settings say so, and closes it when the daemon
+/// shuts down (an upgraded daemon links again by itself).
 pub fn spawn(daemon: Arc<crate::daemon::Daemon>) {
     let link = daemon.link.clone();
     link.apply();
@@ -1196,14 +1234,15 @@ mod tests {
     }
 
     #[test]
-    fn the_link_is_open_while_heavy_commands_are_on_or_a_session_is_kept_in_sync() {
-        assert!(!should_link(false, false, 0, false));
-        assert!(!should_link(true, false, 0, false), "no central host");
-        assert!(!should_link(false, false, 2, false), "no central host");
-        assert!(!should_link(false, false, 0, true), "no central host");
-        assert!(!should_link(false, true, 0, false), "nothing needs it");
-        assert!(should_link(true, true, 0, false));
-        assert!(should_link(false, true, 1, false), "a session kept in sync (X60)");
-        assert!(should_link(false, true, 0, true), "a member of an account (X68)");
+    fn the_link_is_open_while_a_central_host_is_set_and_something_needs_it() {
+        let needs = |heavy, copies, member| LinkNeeds { heavy, copies, member };
+        assert!(!should_link(false, needs(false, 0, false)));
+        assert!(!should_link(false, needs(true, 0, false)), "no central host");
+        assert!(!should_link(false, needs(false, 2, false)), "no central host");
+        assert!(!should_link(false, needs(false, 0, true)), "no central host");
+        assert!(!should_link(true, needs(false, 0, false)), "nothing needs it");
+        assert!(should_link(true, needs(true, 0, false)), "heavy commands");
+        assert!(should_link(true, needs(false, 1, false)), "a session kept in sync (X60)");
+        assert!(should_link(true, needs(false, 0, true)), "a member of an account (X68)");
     }
 }

@@ -1071,12 +1071,15 @@ impl Daemon {
                 if !self.mobile.is_paired(device) {
                     return Err(RpcError::new("forbidden", "this Mac is no longer paired"));
                 }
+                if !self.sessions.has_account() {
+                    return Err(RpcError::new("no_account", "this host shares no account"));
+                }
                 let r: m::AccountSync = params(p)?;
-                if !r.changes.is_empty() {
-                    self.sessions.apply_account(r.changes.clone());
-                    // The other members take them from here; the one that
-                    // sent them already has them.
-                    self.terminals.emit(Message::event(m::EV_ACCOUNT_CHANGED, m::AccountChanged { changes: r.changes }));
+                // The other members take what this host newly kept from
+                // here; the one that sent them already has them.
+                let taken = self.sessions.apply_account(r.changes);
+                if !taken.is_empty() {
+                    self.workers.send_to_members(Message::event(m::EV_ACCOUNT_CHANGED, m::AccountChanged { changes: taken }), Some(conn.id));
                 }
                 ok(m::AccountSynced {
                     changes: self.sessions.account_changes_for(&r.version),

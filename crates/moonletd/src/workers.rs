@@ -55,6 +55,23 @@ impl Workers {
         }
     }
 
+    /// Sends event `message` to every linked worker but cloud machines and
+    /// the one on connection `except`: the account's changes go to its
+    /// members alone (X68), never to phones or apps.
+    pub fn send_to_members(&self, message: Message, except: Option<u64>) {
+        let conns: Vec<Arc<Conn>> = self
+            .list
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|e| Some(e.conn.id) != except && !e.conn.cloud.load(std::sync::atomic::Ordering::Relaxed))
+            .map(|e| e.conn.clone())
+            .collect();
+        for conn in conns {
+            conn.tx.send(moonlet_proto::Frame::Json(message.clone()));
+        }
+    }
+
     pub fn list(&self) -> Vec<WorkerInfo> {
         let mut out: Vec<WorkerInfo> = self
             .list
