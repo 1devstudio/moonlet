@@ -33,6 +33,8 @@ import {
   stopAgent,
   systemNameOf,
   systemsOf,
+  justOpened,
+  tookOpened,
   useDesign,
 } from "../../lib/designStore";
 import { isSession, type DesignPlace } from "../../lib/designPlace";
@@ -44,7 +46,7 @@ import { snippetDrags, snippetsOf, type Snippet } from "../../lib/designPalette"
 import { pageUrl, snapshotPageUrl } from "../../lib/designView";
 import { previewBar, previewStep, snapshotTime, type Preview } from "../../lib/designHistory";
 import { VIEWPORTS, canvasKey, canvasScale, canvasZoom, customViewports, fitBox, parseViewport, sizeOf, sizeText, viewportLabel, viewportText, withCustomViewport, type Size } from "../../lib/designViewport";
-import { breadcrumb, dragEdit, hintLine, pickEdit, canvasPage, canvasStep, chatAfter, editorStep, isTyping, keyAct, layerPick, modeEntered, onReport, undoOpen, writingPage, type CanvasAct, type CanvasMode, type CanvasState, type ChatPanel, type KeyAct, type RailTab } from "../../lib/designCanvas";
+import { canvasTakesKeys, inTabAfter, breadcrumb, dragEdit, hintLine, pickEdit, canvasPage, canvasStep, chatAfter, editorStep, isTyping, keyAct, layerPick, modeEntered, onReport, undoOpen, writingPage, type CanvasAct, type CanvasMode, type CanvasState, type ChatPanel, type KeyAct, type RailTab } from "../../lib/designCanvas";
 import { keyId } from "../../lib/runActions";
 import { chatCardLookup, commentCardSelector, commentsRail, commentsTab, keepAction, openCommentsLabel, pageCounts, sendAll } from "../../lib/designComments";
 import { bridgeMessage, editMessage, helloMessage, modeMessage, paletteMessage, pinsMessage, scrollMessage, selectMessage, type DragOver, type DragResult, type Layer, type PickedElement, type Rect } from "../../lib/designBridge";
@@ -217,15 +219,23 @@ export function DesignCanvas({
   const inTab = useRef(false);
   useEffect(() => {
     if (!session) return;
-    const at = (e: Event) => void (inTab.current = e.target instanceof Node && !!own.current?.contains(e.target));
-    window.addEventListener("pointerdown", at, true);
-    window.addEventListener("focusin", at, true);
+    const at = (kind: "pointer" | "focus") => (e: Event) => void (inTab.current = inTabAfter({ kind, inside: e.target instanceof Node && !!own.current?.contains(e.target) }));
+    const [press, focus] = [at("pointer"), at("focus")];
+    window.addEventListener("pointerdown", press, true);
+    window.addEventListener("focusin", focus, true);
     return () => {
-      window.removeEventListener("pointerdown", at, true);
-      window.removeEventListener("focusin", at, true);
+      window.removeEventListener("pointerdown", press, true);
+      window.removeEventListener("focusin", focus, true);
     };
   }, [session]);
-  const keysHere = () => !session || inTab.current;
+  // The app opened the tab itself (design.open, a toast's Open): its keys work at once.
+  const opened = useDesign((d) => isSession(place) && justOpened(d, host, place.session));
+  useEffect(() => {
+    if (!opened || !isSession(place)) return;
+    inTab.current = inTabAfter({ kind: "opened" });
+    tookOpened(host, place.session);
+  }, [opened, host, place]);
+  const keysHere = () => canvasTakesKeys(session, inTab.current);
   // The page shown, or null for Overview.
   const [picked, setPicked] = useState<string | null>("index");
   const [zoom, setZoom] = useState<number | null>(null);
