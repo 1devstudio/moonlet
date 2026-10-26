@@ -1648,8 +1648,9 @@ impl Daemon {
                 let _pages = pages.lock().await;
                 let history = self.lock_of(&at, DesignLock::History);
                 let _history = history.lock().await;
-                // Never while the agent writes the pages it would replace.
-                if self.design_agent_working(&at).await? {
+                // Never within the agent's turn, at work or asking the user,
+                // its pages maybe half written.
+                if self.design_agent_in_turn(&at).await? {
                     return Err(RpcError::new("busy", "Claude is changing the design; restore once it stops"));
                 }
                 // What is not kept yet is kept first, as edits by hand. They
@@ -2061,11 +2062,6 @@ impl Daemon {
         Ok(agent.and_then(|id| terminals.into_iter().find(|t| t.id == id)))
     }
 
-    /// Whether a design's agent is at work (X65).
-    async fn design_agent_working(&self, at: &DesignAt) -> Result<bool, RpcError> {
-        Ok(self.design_agent(at).await?.is_some_and(|t| t.agent_state == moonlet_proto::types::AgentState::Working))
-    }
-
     /// Whether a design's agent is within a turn: at work, or asking the
     /// user, as the snapshots' watch counts a turn (X65).
     async fn design_agent_in_turn(&self, at: &DesignAt) -> Result<bool, RpcError> {
@@ -2117,8 +2113,8 @@ impl Daemon {
     /// kept for the snapshot, taken once its saves stop for
     /// [`EDITS_QUIET`], each save's wait cancelling the one before. The
     /// daemon sees every save, so the snapshot comes also when the app
-    /// closes meanwhile. While the design's agent works the wait takes
-    /// nothing: the edits were kept as the agent started (see
+    /// closes meanwhile. While the design's agent is within a turn, at work
+    /// or asking the user, the wait takes nothing: the edits were kept as the agent started (see
     /// [`Self::snapshot_agent_turns`]), and any made since go with the
     /// turn's own snapshot, `in_turn`, even when the daemon hears the
     /// agent start only after them.
@@ -2143,8 +2139,9 @@ impl Daemon {
             let (pages, history) = (d.lock_of(&at, DesignLock::Pages), d.lock_of(&at, DesignLock::History));
             let _pages = pages.lock().await;
             let _history = history.lock().await;
-            // The agent's pages may be half written: its turn keeps them.
-            if d.design_agent_working(&at).await.unwrap_or(false) {
+            // Within the agent's turn, at work or asking the user, its pages
+            // may be half written: the turn keeps them.
+            if d.design_agent_in_turn(&at).await.unwrap_or(false) {
                 return;
             }
             let edits = {
