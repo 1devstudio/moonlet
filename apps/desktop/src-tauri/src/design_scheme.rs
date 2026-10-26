@@ -163,9 +163,9 @@ const MEASURE: &str = include_str!("design_measure.js");
 /// the page, cross-origin to the app, outlines and reports its elements.
 const BRIDGE: &str = include_str!("design_bridge.js");
 
-/// The script of the page served in place of a page the canvas asks for
-/// and the scheme cannot serve: it tells the canvas why (X65 entry 13).
-const REFUSED: &str = include_str!("design_refused.js");
+/// The page served in place of a page the canvas asks for and the scheme
+/// cannot serve: it tells the canvas it failed (X65 entry 13).
+const REFUSED: &str = include_str!("design_refused.html");
 
 /// Whether the app's render page asks for `url` (`?moonlet-render=<job>`),
 /// so the card is served with the measuring script (X64).
@@ -259,15 +259,12 @@ pub fn refusal(url: &str, status: u16, why: &str) -> (u16, Vec<(&'static str, St
     if !bridging(url) {
         return (status, vec![("Content-Type", "text/plain; charset=utf-8".into())], why.as_bytes().to_vec());
     }
-    let page = format!(
-        "<!doctype html><html><head><meta charset=\"utf-8\"><script>{REFUSED}</script></head><body></body></html>"
-    );
     let headers = vec![
         ("Content-Type", "text/html; charset=utf-8".to_string()),
         ("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'".to_string()),
         ("Cache-Control", "no-store".to_string()),
     ];
-    (status, headers, page.into_bytes())
+    (status, headers, REFUSED.as_bytes().to_vec())
 }
 
 /// Answers a request for `url`: the file this Mac's daemon resolves it to,
