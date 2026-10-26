@@ -70,7 +70,7 @@ describe("the chat input's slash menu in a session (X65)", () => {
 
   it("is the agent's commands alone outside a session, mid-message, or when the query is another command's", () => {
     expect(slashMenu(["compact", "moonlet-design"], "/moon", { start: 0, query: "moon" }, null)).toEqual({ rows: [{ value: "/moonlet-design", hint: null }], footer: null });
-    expect(slashMenu(["compact", "moonlet-design"], "then /moon", { start: 5, query: "moon" }, { footer })).toEqual({ rows: [], footer: null });
+    expect(slashMenu(["compact", "moonlet-design"], "then /moon", { start: 5, query: "moon" }, { footer })).toEqual({ rows: [{ value: "/moonlet-design", hint: null }], footer: null });
     expect(slashMenu(["compact", "moonlet-design"], "/comp", { start: 0, query: "comp" }, { footer })).toEqual({ rows: [{ value: "/compact", hint: null }], footer: null });
   });
 });
