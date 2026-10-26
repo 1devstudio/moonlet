@@ -9,16 +9,8 @@ use serde::Serialize;
 
 use super::check::{rel, styles_closure};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Family {
-    Color,
-    Spacing,
-    Typography,
-    Radius,
-    Shadow,
-    Other,
-}
+/// A token's family: the protocol's, so the app gets it as serde writes it.
+pub use moonlet_proto::methods::TokenFamily as Family;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Token {

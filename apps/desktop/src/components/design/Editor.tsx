@@ -8,13 +8,15 @@ import { Fragment, useEffect, useRef, type ReactNode } from "react";
 import type { Layer } from "../../lib/designBridge";
 import { EDITS_HEADER, lineRead, type EditLineRead } from "../../lib/designEdits";
 import { cx } from "../../lib/cx";
+import { OffSystemDot } from "./Inspector";
 
 /** The selection's blue, as the page's outline draws it. */
 const SELECTED = "bg-[rgba(91,156,255,0.16)] text-[#cfe0ff]";
 
 /** The Layers tab: the page's element tree, each element with its tag, the
- *  start of its text and its id; a click selects it on the canvas. */
-export function LayersTab({ layers, selected, onSelect }: { layers: Layer[]; selected: string | null; onSelect: (mid: string) => void }) {
+ *  start of its text and its id, and the off-system dot of one whose
+ *  inline style matches no token (`off`); a click selects it on the canvas. */
+export function LayersTab({ layers, selected, off, onSelect }: { layers: Layer[]; selected: string | null; off: Set<string>; onSelect: (mid: string) => void }) {
   const list = useRef<HTMLDivElement>(null);
   useEffect(() => {
     list.current?.querySelector<HTMLElement>('[aria-current="true"]')?.scrollIntoView({ block: "nearest" });
@@ -37,6 +39,7 @@ export function LayersTab({ layers, selected, onSelect }: { layers: Layer[]; sel
             <span className="w-2.5 shrink-0 text-faint">{parent ? "▾" : ""}</span>
             <span className="shrink-0">{l.tag}</span>
             <span className="min-w-0 flex-1 truncate font-sans text-muted">{l.text}</span>
+            {off.has(l.mid) && <OffSystemDot />}
             <span className="shrink-0 ui-text-11 text-faint">{l.mid}</span>
           </button>
         );

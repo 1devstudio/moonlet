@@ -253,6 +253,10 @@ pub const DESIGN_PAGE: &str = "design.page";
 /// [`DesignWritePage`] → [`DesignPageWritten`]: the page replaced with the
 /// editor's text, only over `base_version`; else the error `stale`.
 pub const DESIGN_WRITE_PAGE: &str = "design.write_page";
+/// [`DesignRef`] → [`DesignKit`]: what the visual editor builds a design with
+/// from its own design system, its tokens and the cards that hold snippets
+/// (X65 entry 10).
+pub const DESIGN_KIT: &str = "design.kit";
 
 // Phones (X39)
 /// Phone access, the Tailscale addresses and the paired phones: [`MobileStatus`].
@@ -1424,6 +1428,50 @@ pub struct DesignWritePage {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DesignPageWritten {
     pub version: String,
+}
+
+/// What a design's visual editor builds with from its design system (X65):
+/// the Inspector's tokens and the Palette's snippets.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DesignKit {
+    /// The design system's slug.
+    pub system: String,
+    /// Its tokens, as the X64 check reads them: in import order, each name
+    /// once with its last value.
+    pub tokens: Vec<DesignToken>,
+    /// Its cards that hold snippets (`data-snippet`), by group then name.
+    pub cards: Vec<DesignKitCard>,
+}
+
+/// A design system's token (X64): `--space-4: 16px`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DesignToken {
+    pub name: String,
+    pub value: String,
+    pub family: TokenFamily,
+}
+
+/// A design system token's family (X64), as design-sync's README groups
+/// them: by its name first, then by what its value looks like.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TokenFamily {
+    Color,
+    Spacing,
+    Typography,
+    Radius,
+    Shadow,
+    Other,
+}
+
+/// A card of a design system with its HTML, whose snippets the palette inserts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DesignKitCard {
+    /// Relative to the design system's folder.
+    pub path: String,
+    pub group: String,
+    pub name: String,
+    pub html: String,
 }
 
 /// One pin of a design (X65).

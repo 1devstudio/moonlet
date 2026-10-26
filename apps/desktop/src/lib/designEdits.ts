@@ -10,16 +10,24 @@
 import { parse, parseFragment } from "parse5";
 import type { DefaultTreeAdapterMap } from "parse5";
 import { pageFile, pageOfFile } from "./designPage";
-import type { LiveEdit } from "./designBridge";
+import type { DropPlace, LiveEdit } from "./designBridge";
+import { attrText, isStyleProp, isStyleValue, parseStyle, restyled, valueParts, type Decl, type StyleSet } from "./designStyle";
 
 type Node = DefaultTreeAdapterMap["node"];
 type Element = DefaultTreeAdapterMap["element"];
+
 
 /** An operation of the visual editor on one element of a page. */
 export type EditOp = { kind: "text"; mid: string; text: string } | { kind: "delete"; mid: string } | { kind: "duplicate"; mid: string } | { kind: "wrap"; mid: string } | { kind: "unwrap"; mid: string }
   /** A copied element's source (see {@link copyElement}) after element
    *  `after`, or at the end of the body. */
-  | { kind: "paste"; after: string | null; html: string };
+  | { kind: "paste"; after: string | null; html: string }
+  /** Properties of its inline `style` set (a value) or removed (null). */
+  | { kind: "restyle"; mid: string; set: StyleSet }
+  /** Moved to `place` (drag to move). */
+  | { kind: "move"; mid: string; place: DropPlace }
+  /** A design system's snippet put at `place`, or at the end of the body. */
+  | { kind: "insert"; place: DropPlace | null; html: string };
 
 /** What an edit did to its element, as the agent is told. */
 export type Change =
@@ -28,8 +36,11 @@ export type Change =
   | { kind: "duplicated"; copy: string }
   | { kind: "wrapped"; box: string }
   | { kind: "unwrapped" }
-  /** Pasted after element `after`, or (null) at the end of the body. */
-  | { kind: "inserted"; after: string | null };
+  /** Pasted or inserted at `place`, or (null) at the end of the body. */
+  | { kind: "inserted"; place: DropPlace | null }
+  /** Its inline style's properties set, or (null) removed. */
+  | { kind: "restyled"; set: StyleSet }
+  | { kind: "moved"; place: DropPlace };
 
 /** An edit by hand of one element of a page. */
 export interface HandEdit {
@@ -65,7 +76,14 @@ function changeText(c: Change): string {
     case "wrapped":
       return `wrapped in div ${c.box}`;
     case "inserted":
-      return c.after === null ? "inserted at the end of the body" : `inserted after ${c.after}`;
+      if (c.place === null) return "inserted at the end of the body";
+      return `inserted ${c.place.where === "below" ? "after" : c.place.where} ${c.place.ref}`;
+    case "moved":
+      return `moved ${c.place.where} ${c.place.ref}`;
+    case "restyled":
+      return `restyled with ${Object.entries(c.set)
+        .map(([p, v]) => (v === null ? `no ${p}` : `${p}: ${v}`))
+        .join("; ")}`;
   }
 }
 
@@ -90,17 +108,28 @@ export interface Untold extends HandEdit {
 export const EDITS_HEADER = "Edits by hand since your last turn:";
 
 /** Each element edited, in the order first edited, with its changes in
- *  order, a text change only as its latest. */
+ *  order: a text change only as its latest, and its restyles as one, in
+ *  the place of the first, each property at its latest value, each since
+ *  the element's last undone change, so one made after an undo is said
+ *  after it. */
 function byElement(edits: Untold[]): { head: HandEdit; changes: string[] }[] {
-  const out = new Map<string, { head: HandEdit; changes: string[]; text: number | null }>();
+  const out = new Map<string, { head: HandEdit; changes: string[]; text: number | null; style: { at: number; set: StyleSet } | null }>();
   for (const e of edits) {
     const key = `${e.page}\0${e.mid}`;
-    const el = out.get(key) ?? { head: e, changes: [], text: null };
+    const el = out.get(key) ?? { head: e, changes: [], text: null, style: null };
     out.set(key, el);
     const said = `${e.undone ? "undid " : ""}${changeText(e.change)}`;
     if (e.change.kind === "text" && !e.undone && el.text !== null) el.changes[el.text] = said;
     else if (e.change.kind === "text" && !e.undone) el.text = el.changes.push(said) - 1;
-    else el.changes.push(said);
+    else if (e.change.kind === "restyled" && !e.undone) {
+      const set = { ...el.style?.set, ...e.change.set };
+      const text = changeText({ kind: "restyled", set });
+      if (el.style) el.changes[el.style.at] = text;
+      el.style = { at: el.style ? el.style.at : el.changes.push(text) - 1, set };
+    } else {
+      el.changes.push(said);
+      if (e.undone) el.text = el.style = null;
+    }
   }
   return [...out.values()];
 }
@@ -209,17 +238,26 @@ export function applyEdit(html: string, op: EditOp, floor = 0): Edit {
   const added = [...got];
   for (const id of want) remove(added, id);
   const lost = want.filter((id) => !got.includes(id));
-  if (lost.length || (added.length && !["duplicate", "wrap", "paste"].includes(op.kind))) {
-    throw new EditRefused(`The page's markup around ${op.kind === "paste" ? (op.after ?? "the body") : op.mid} is tangled: ask the agent to fix it`);
+  if (lost.length || (added.length && !["duplicate", "wrap", "paste", "insert"].includes(op.kind))) {
+    throw new EditRefused(`The page's markup around ${around(op)} is tangled: ask the agent to fix it`);
   }
   // The page read back must be the tree the live page gets: a box the
   // parser moves out of a <p> or a table's row, or a paste it moves, would
   // save another page than the canvas shows.
   if (JSON.stringify(reshaped(doc, edit.live)) !== JSON.stringify(tree(after).top)) {
     if (op.kind === "wrap") throw new EditRefused(`A box cannot go around ${op.mid} inside <${tagOf(find(doc, op.mid).parentNode)}>`);
-    throw new EditRefused(`The page would not keep its structure around ${op.kind === "paste" ? (op.after ?? "the body") : op.mid}`);
+    if (op.kind === "move") throw new EditRefused(`${op.mid} cannot go ${op.place.where} ${op.place.ref}: the page would not keep its structure`);
+    throw new EditRefused(`The page would not keep its structure around ${around(op)}`);
   }
   return edit;
+}
+
+/** Where an edit is, as a refusal names it: its element, or where a paste
+ *  or an insert goes. */
+function around(op: EditOp): string {
+  if (op.kind === "paste") return op.after ?? "the body";
+  if (op.kind === "insert") return op.place?.ref ?? "the body";
+  return op.mid;
 }
 
 /** An element in a page's tree: its tag, its id and its child elements. */
@@ -262,18 +300,27 @@ function reshaped(doc: Node, live: LiveEdit | null): Shape[] {
     return [list, list.indexOf(t.own.get(el)!)];
   };
   if (!live) return t.top;
+  /** Shapes put above or below an element, or into it, last. */
+  const putAt = ({ where, ref }: DropPlace, shapes: Shape[]) => {
+    if (where === "into") return void t.own.get(find(doc, ref))!.kids.push(...shapes);
+    const [to, j] = place(ref);
+    to.splice(where === "above" ? j : j + 1, 0, ...shapes);
+  };
   if (live.op === "insert") {
     const added = tree(parseFragment(live.html)).top;
-    if (live.after !== null) {
-      const [list, i] = place(live.after);
-      list.splice(i + 1, 0, ...added);
-    } else {
+    if (live.place) putAt(live.place, added);
+    else {
       const body = [...elements(doc)].find((e) => e.tagName === "body");
       if (body) t.kidsOf.get(body)!.unshift(...added);
     }
     return t.top;
   }
+  if (live.op === "style") return t.top;
   const [list, i] = place(live.mid);
+  if (live.op === "move") {
+    putAt(live.place, list.splice(i, 1));
+    return t.top;
+  }
   if (live.op === "remove") list.splice(i, 1);
   if (live.op === "wrap") list.splice(i, 1, { tag: "div", mid: live.box, kids: [list[i]] });
   if (live.op === "unwrap") list.splice(i, 1, ...list[i].kids);
@@ -296,6 +343,7 @@ function remove(list: string[], id: string | null) {
 
 function edited(html: string, doc: Node, op: EditOp, floor: number): Edit {
   if (op.kind === "paste") return paste(html, doc, op.after, op.html, floor);
+  if (op.kind === "insert") return insert(html, doc, op.place, op.html, floor);
   const el = find(doc, op.mid);
   switch (op.kind) {
     case "text":
@@ -309,7 +357,7 @@ function edited(html: string, doc: Node, op: EditOp, floor: number): Edit {
       inBody(el);
       const ids = freshIds(html, floor);
       const copy = renumbered(html, el, ids);
-      return { html: after(html, outer(el), copy), select: ids.taken[0], change: { ...who(el), change: { kind: "duplicated", copy: ids.taken[0] } }, live: { op: "insert", after: op.mid, html: copy } };
+      return { html: after(html, outer(el), copy), select: ids.taken[0], change: { ...who(el), change: { kind: "duplicated", copy: ids.taken[0] } }, live: { op: "insert", place: { where: "below", ref: op.mid }, html: copy } };
     }
     case "wrap": {
       inBody(el);
@@ -317,6 +365,10 @@ function edited(html: string, doc: Node, op: EditOp, floor: number): Edit {
       const [from, to] = outer(el);
       return { html: splice(html, [from, to], `<div data-mid="${box}">${html.slice(from, to)}</div>`), select: box, change: { ...who(el), change: { kind: "wrapped", box } }, live: { op: "wrap", mid: op.mid, box } };
     }
+    case "restyle":
+      return restyle(html, el, op.set);
+    case "move":
+      return move(html, doc, el, op.place);
     case "unwrap": {
       inBody(el);
       const [a, b] = inner(el);
@@ -325,6 +377,109 @@ function edited(html: string, doc: Node, op: EditOp, floor: number): Edit {
       return { html: splice(html, outer(el), html.slice(a, b)), select: first ?? parentMid(el), change: { ...who(el), change: { kind: "unwrapped" } }, live: { op: "unwrap", mid: op.mid } };
     }
   }
+}
+
+/** Elements that hold no elements of the page: void ones, those whose
+ *  inside is not the page's (scripts, styles, raw text, an <svg>'s or
+ *  <math>'s drawing), form controls, and embedded content. The bridge
+ *  (`design_bridge.js`) keeps the same list, which a test checks. */
+export const HOLDS_NO_ELEMENTS = ["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr", "svg", "math", "select", "option", "textarea", "script", "style", "title", "template", "noscript", "xmp", "iframe", "noembed", "noframes", "plaintext", "object", "video", "audio", "canvas"] as const;
+const HOLDS_NONE = new Set<string>(HOLDS_NO_ELEMENTS);
+
+/** `el` moved to `place`: taken out with its line when it has the line to
+ *  itself, and put above or below element `ref`, on a line of its own
+ *  indented as `ref` when `ref` has its line, or into `ref` after its last
+ *  child, on a line of its own indented as that child when the end tag has
+ *  its line. Never into itself, into an element that holds no elements,
+ *  or the body moved. */
+function move(html: string, doc: Node, el: Element, place: DropPlace): Edit {
+  inBody(el);
+  const mid = midOf(el)!;
+  const ref = find(doc, place.ref);
+  for (let p: Node | null = ref; p && isElement(p); p = p.parentNode) if (p === el) throw new EditRefused(`${mid} cannot go inside itself`);
+  if (place.where === "into") {
+    if (ref.tagName !== "body") inBody(ref);
+    holds(ref);
+  } else inBody(ref);
+  const text = html.slice(...outer(el));
+  const rest = splice(html, line(html, outer(el)), "");
+  const target = find(parsed(rest), place.ref);
+  const out = place.where === "above" ? before(rest, outer(target), text) : place.where === "below" ? after(rest, outer(target), text) : into(rest, target, text);
+  return { html: out, select: mid, change: { ...who(el), change: { kind: "moved", place } }, live: { op: "move", mid, place } };
+}
+
+/** Refuses an element that holds no elements of the page. */
+function holds(ref: Element) {
+  const none = () => new EditRefused(`<${ref.tagName}> ${midOf(ref)} holds no elements`);
+  if (HOLDS_NONE.has(ref.tagName)) throw none();
+  for (let p = ref.parentNode; p && isElement(p); p = p.parentNode) if (p.tagName === "svg" || p.tagName === "math") throw none();
+}
+
+/** `html` with `text` put before `span`: on a line of its own, indented as
+ *  `span`, when `span` has its line to itself; else right before it. */
+function before(html: string, span: [number, number], text: string): string {
+  const [from, to] = span;
+  const whole = line(html, span);
+  if (whole[0] === from && whole[1] === to) return splice(html, [from, from], text);
+  const indent = html.slice(whole[0], from);
+  return splice(html, [from, from], text + eolOf(html, to, whole[1]) + indent);
+}
+
+/** The line end after `to` on its line, else the page's. */
+function eolOf(html: string, to: number, end: number): string {
+  return html.slice(to, end).match(/\r?\n/)?.[0] ?? (html.includes("\r\n") ? "\r\n" : "\n");
+}
+
+/** `html` with `text` put into element `el` after its last child: when its
+ *  end tag has its line to itself, on a line of its own before it,
+ *  indented as its last element child when that has its line, else one
+ *  step in from the end tag; else right before the end tag. */
+function into(html: string, el: Element, text: string): string {
+  const loc = el.sourceCodeLocation!;
+  const at = loc.endTag ? loc.endTag.startOffset : loc.endOffset;
+  const start = html.lastIndexOf("\n", at - 1) + 1;
+  if (!loc.endTag || /\S/.test(html.slice(start, at))) return splice(html, [at, at], text);
+  const last = el.childNodes.filter(isElement).at(-1);
+  const own = last ? line(html, outer(last)) : null;
+  const indent = own && last && own[0] !== outer(last)[0] ? html.slice(own[0], outer(last)[0]) : html.slice(start, at) + "  ";
+  return splice(html, [start, start], indent + text + eolOf(html, at, html.length));
+}
+
+/** `el` with its inline style's properties set or removed, spliced, the
+ *  rest of its style kept as written (designStyle's `restyled`); the
+ *  attribute is written in double quotes after the element's others, and
+ *  removed once nothing is left in it. A property or value that is not one
+ *  is refused. */
+function restyle(html: string, el: Element, set: StyleSet): Edit {
+  inBody(el);
+  const loc = el.sourceCodeLocation!;
+  const old = el.attrs.find((a) => a.name === "style");
+  const had = parseStyle(old?.value ?? "");
+  for (const [prop, value] of Object.entries(set)) {
+    if (!isStyleProp(prop)) throw new EditRefused(`${prop} is not a style property`);
+    // Parts the property's value already had (a background's image) stay
+    // as written; only what is new must be a value the editor writes.
+    const kept = valueParts(had.find(([p]) => p === prop)?.[1] ?? "");
+    const fresh = value === null ? [] : valueParts(value).filter((p) => !kept.includes(p));
+    if (value !== null && (fresh.length ? !isStyleValue(fresh.join(" ")) : !value.trim())) throw new EditRefused(`${value} is not a value the editor writes`);
+  }
+  const spliced = restyled(old?.value ?? "", set);
+  const text = spliced.trim() ? spliced : "";
+  const attr = text ? `style="${attrText(text)}"` : "";
+  const at = loc.attrs?.style;
+  let out: string;
+  if (old && at) {
+    // Removed with the space before it.
+    const from = text ? at.startOffset : at.startOffset - (/\s+$/.exec(html.slice(0, at.startOffset))?.[0].length ?? 0);
+    out = splice(html, [from, at.endOffset], attr);
+  } else if (text) {
+    // After its last attribute, before any space and `/>` or `>`.
+    const end = loc.startTag!.endOffset;
+    let close = html[end - 2] === "/" ? end - 2 : end - 1;
+    while (/\s/.test(html[close - 1])) close--;
+    out = splice(html, [close, close], ` ${attr}`);
+  } else out = html;
+  return { html: out, select: midOf(el), change: { ...who(el), change: { kind: "restyled", set } }, live: { op: "style", mid: midOf(el)!, style: text } };
 }
 
 /** The highest number of a `data-mid` in page `html`, anywhere in it
@@ -363,19 +518,25 @@ function freshIds(html: string, floor = 0) {
 
 /** The source of `el`, its own `data-mid` and every one inside it given a
  *  fresh id in document order; only the ids' values change. */
-function renumbered(html: string, el: Element, ids: ReturnType<typeof freshIds>): string {
+function renumbered(html: string, el: Element, ids: ReturnType<typeof freshIds>, addMissing = false): string {
   const [from, to] = outer(el);
-  const spans: [number, number][] = [];
+  // Each id's value where its attribute writes it; with `addMissing`, an
+  // element that needs an id and has none gets one after its tag's name.
+  const spans: { at: [number, number]; text: (id: string) => string }[] = [];
   for (const e of elements(el)) {
-    const at = e.sourceCodeLocation?.attrs?.["data-mid"];
-    if (!at || !midOf(e)) continue;
-    spans.push(attrValue(html, at));
+    const loc = e.sourceCodeLocation;
+    const at = loc?.attrs?.["data-mid"];
+    if (at && midOf(e)) spans.push({ at: attrValue(html, at), text: (id) => id });
+    else if (addMissing && loc?.startTag && needsId(e, el)) {
+      const end = loc.startTag.startOffset + 1 + e.tagName.length;
+      spans.push({ at: [end, end], text: (id) => ` data-mid="${id}"` });
+    }
   }
   let out = "";
   let at = from;
-  for (const [a, b] of spans.sort((x, y) => x[0] - y[0])) {
-    out += html.slice(at, a) + ids.take();
-    at = b;
+  for (const s of spans.sort((x, y) => x.at[0] - y.at[0])) {
+    out += html.slice(at, s.at[0]) + s.text(ids.take());
+    at = s.at[1];
   }
   return out + html.slice(at, to);
 }
@@ -396,8 +557,20 @@ function after(html: string, span: [number, number], text: string): string {
   const whole = line(html, span);
   if (whole[0] === from && whole[1] === to) return splice(html, [to, to], text);
   const indent = html.slice(whole[0], from);
-  const eol = html.slice(to, whole[1]).match(/\r?\n/)?.[0] ?? (html.includes("\r\n") ? "\r\n" : "\n");
-  return splice(html, [to, to], eol + indent + text);
+  return splice(html, [to, to], eolOf(html, to, whole[1]) + indent + text);
+}
+
+/** The inline style of each element of page `html` that has one, by its
+ *  `data-mid`, as its source writes it (designStyle's parse). */
+export function inlineStyles(html: string): Record<string, Decl[]> {
+  const out: Record<string, Decl[]> = {};
+  for (const el of elements(parsed(html))) {
+    const mid = midOf(el);
+    const style = el.attrs.find((a) => a.name === "style")?.value;
+    const decls = mid && style ? parseStyle(style) : [];
+    if (mid && decls.length) out[mid] = decls;
+  }
+  return out;
 }
 
 /** The source of element `mid` of page `html`, for a paste; null when the
@@ -412,20 +585,56 @@ export function copyElement(html: string, mid: string): string | null {
 function paste(html: string, doc: Node, mid: string | null, copied: string, floor: number): Edit {
   const root = parseFragment(copied, { sourceCodeLocationInfo: true }).childNodes.find(isElement);
   if (!root?.sourceCodeLocation) throw new EditRefused("Nothing to paste");
+  return placed(html, doc, mid === null ? null : { where: "below", ref: mid }, copied.slice(...outer(root)), floor);
+}
+
+/** A design system's snippet inserted at `place`, else at the end of the
+ *  body: one element as it is, several in a `div`, every element given a
+ *  fresh id. */
+function insert(html: string, doc: Node, place: DropPlace | null, snippet: string, floor: number): Edit {
+  const nodes = parseFragment(snippet, { sourceCodeLocationInfo: true }).childNodes.filter((n) => n.nodeName !== "#comment" && !(n.nodeName === "#text" && !/\S/.test((n as DefaultTreeAdapterMap["textNode"]).value)));
+  if (!nodes.some(isElement)) throw new EditRefused("The snippet has no element to insert");
+  const one = nodes.length === 1 ? (nodes[0] as Element) : null;
+  return placed(html, doc, place, one ? snippet.slice(...outer(one)) : `<div>${snippet.trim()}</div>`, floor);
+}
+
+/** Element source `source` put at `place`, else after the body's last
+ *  element with an id, else first in the body, with its ids fresh. */
+function placed(html: string, doc: Node, place: DropPlace | null, source: string, floor: number): Edit {
   const ids = freshIds(html, floor);
-  const text = renumbered(copied, root, ids);
-  let at: Element | undefined;
-  if (mid !== null) {
-    at = find(doc, mid);
-    inBody(at);
+  const root = parseFragment(source, { sourceCodeLocationInfo: true }).childNodes.find(isElement)!;
+  const text = renumbered(source, root, ids, true);
+  const change = { mid: ids.taken[0], tag: root.tagName, change: { kind: "inserted", place } as const };
+  const select = ids.taken[0];
+  if (place) {
+    const ref = find(doc, place.ref);
+    if (place.where === "into") holds(ref);
+    else inBody(ref);
+    if (place.where === "above") return { html: before(html, outer(ref), text), select, change, live: { op: "insert", place, html: text } };
+    if (place.where === "into") return { html: into(html, ref, text), select, change, live: { op: "insert", place, html: text } };
+    return { html: after(html, outer(ref), text), select, change, live: { op: "insert", place, html: text } };
   }
   const body = [...elements(doc)].find((e) => e.tagName === "body");
-  at ??= body?.childNodes.filter(isElement).filter((e) => midOf(e) !== null && e.sourceCodeLocation).at(-1);
-  const change = { mid: ids.taken[0], tag: root.tagName, change: { kind: "inserted", after: mid } as const };
-  if (at) return { html: after(html, outer(at), text), select: ids.taken[0], change, live: { op: "insert", after: midOf(at), html: text } };
+  const last = body?.childNodes.filter(isElement).filter((e) => midOf(e) !== null && e.sourceCodeLocation).at(-1);
+  if (last) return { html: after(html, outer(last), text), select, change, live: { op: "insert", place: { where: "below", ref: midOf(last)! }, html: text } };
   const start = body?.sourceCodeLocation?.startTag?.endOffset;
   if (start === undefined) throw new EditRefused("The page has no body to paste into");
-  return { html: splice(html, [start, start], text), select: ids.taken[0], change, live: { op: "insert", after: null, html: text } };
+  return { html: splice(html, [start, start], text), select, change, live: { op: "insert", place: null, html: text } };
+}
+
+/** Elements that draw nothing of their own and get no id, as `moonlet
+ *  design check` takes them. */
+const NO_ID = new Set(["script", "style", "template", "noscript"]);
+
+/** Whether element `e` inside `root` needs an id: not one of {@link
+ *  NO_ID} or inside one, and not part of an <svg>'s or <math>'s drawing. */
+function needsId(e: Element, root: Element): boolean {
+  if (NO_ID.has(e.tagName)) return false;
+  for (let p = e.parentNode; p && isElement(p) && e !== root; p = p.parentNode) {
+    if (NO_ID.has(p.tagName) || p.tagName === "svg" || p.tagName === "math") return false;
+    if (p === root) break;
+  }
+  return true;
 }
 
 /** Refuses the body and anything outside it: only the body's elements are edited. */

@@ -15,7 +15,10 @@
 // parent) instead of letting the page have the click; in Edit mode it also
 // selects that element, edits the text of one holding only text on a
 // double-click, makes the app's edits on the live page, and sends the app
-// the editor's keys. It reports the boxes of the pinned elements when asked,
+// the editor's keys; it reports the selection's computed style, drags the
+// selection to move it, showing an insertion line where it would land,
+// resizes it by its handles, and shows where a snippet dragged from the
+// app's Palette would drop. It reports the boxes of the pinned elements when asked,
 // and again on load, scroll and resize; and C, V and Esc pressed in the
 // page. The page's file is never written from here: the app edits the
 // page's source and saves it.
@@ -47,6 +50,11 @@
   };
   const text = (el) => [...(el.textContent || "").replace(/\s+/g, " ").trim()].slice(0, TEXT_MAX).join("");
 
+  // What the bridge draws over the page: fixed, above it, never taking the
+  // pointer; the dashed box of the hover outline and of a drop into a box.
+  const OVER_CSS = "position:fixed;pointer-events:none;z-index:2147483647;box-sizing:border-box;";
+  const OUTLINE_CSS = `${OVER_CSS}border:1.5px dashed #4c8dff;background:rgba(76,141,255,0.06);border-radius:2px`;
+
   // The outline, drawn in the page over the element, outside its <body> so
   // it is never one of the page's elements.
   let outline = null;
@@ -58,7 +66,7 @@
     if (!outline) {
       outline = document.createElement("moonlet-outline");
       outline.setAttribute("data-moonlet-bridge", "");
-      outline.style.cssText = "position:fixed;pointer-events:none;z-index:2147483647;box-sizing:border-box;border:1.5px dashed #4c8dff;background:rgba(76,141,255,0.06);border-radius:2px";
+      outline.style.cssText = OUTLINE_CSS;
       document.documentElement.append(outline);
     }
     const r = box(el);
@@ -69,9 +77,52 @@
   // id over it, drawn like the hover outline, outside the page's <body>.
   let selected = null;
   let selection = null;
+  // The app says whether the selection is off-system, which its label says.
+  let offMark = false;
   const select = (el) => {
+    if (el !== selected) offMark = false;
     selected = el;
     drawSelection();
+    if (el) reportComputed(el);
+  };
+  // The selection's computed style, the Inspector's properties of it; a
+  // shorthand the browser leaves empty is made from its longhands.
+  // The app's COMPUTED_PROPS (src/lib/designBridge.ts), which a test checks.
+  const COMPUTED = ["display", "flex-direction", "gap", "align-items", "justify-content", "grid-template-columns", "padding", "margin", "width", "height", "background-color", "border", "border-radius", "box-shadow", "opacity"];
+  // The border styles that draw one: the app's BORDER_STYLES
+  // (src/lib/designStyle.ts) but none and hidden, which a test checks.
+  const DRAWN = /\b(dotted|dashed|solid|double|groove|ridge|inset|outset)\b/;
+  const sides = (vals) => {
+    const [t, r, b, l] = vals;
+    if (!t) return "";
+    if (t === r && r === b && b === l) return t;
+    if (t === b && r === l) return `${t} ${r}`;
+    if (r === l) return `${t} ${r} ${b}`;
+    return `${t} ${r} ${b} ${l}`;
+  };
+  const reportComputed = (el) => {
+    const cs = getComputedStyle(el);
+    const style = {};
+    for (const p of COMPUTED) {
+      let v = cs.getPropertyValue(p);
+      if (!v && (p === "padding" || p === "margin")) v = sides(["top", "right", "bottom", "left"].map((s) => cs.getPropertyValue(`${p}-${s}`)));
+      if (!v && p === "border-radius") v = sides(["top-left", "top-right", "bottom-right", "bottom-left"].map((s) => cs.getPropertyValue(`border-${s}-radius`)));
+      if (!v && p === "border") {
+        const each = ["top", "right", "bottom", "left"].map((s) => ["width", "style", "color"].map((k) => cs.getPropertyValue(`border-${s}-${k}`)).join(" ").trim());
+        if (each.every((x) => x === each[0])) v = each[0];
+      }
+      // No border and no fill read as such, not as their colours.
+      if (p === "border" && v && (!DRAWN.test(v) || /^0px\b/.test(v))) v = "none";
+      if (p === "background-color" && /^rgba\(0, 0, 0, 0\)$/.test(v)) v = "transparent";
+      if (v) style[p] = v.trim();
+    }
+    post({ type: "bridge.computed", mid: midOf(el), style });
+  };
+  // An absolutely positioned element's left and top in px, which a drag or
+  // a west or north handle moves; null for one in flow.
+  const placed = (el) => {
+    const cs = getComputedStyle(el);
+    return /^(absolute|fixed)$/.test(cs.position) ? { left: parseFloat(cs.left) || 0, top: parseFloat(cs.top) || 0 } : null;
   };
   const drawSelection = () => {
     if (!selected || !selected.isConnected) {
@@ -81,14 +132,27 @@
     if (!selection) {
       selection = document.createElement("moonlet-selection");
       selection.setAttribute("data-moonlet-bridge", "selection");
-      selection.style.cssText = "position:fixed;pointer-events:none;z-index:2147483647;box-sizing:border-box;border:1.5px solid #5b9cff;border-radius:2px";
+      selection.style.cssText = `${OVER_CSS}border:1.5px solid #5b9cff;border-radius:2px`;
       const label = document.createElement("span");
       label.style.cssText = "position:absolute;left:-1.5px;bottom:100%;margin-bottom:2px;padding:1px 5px;border-radius:3px;background:#5b9cff;color:#0b1a33;font:600 10px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:nowrap";
       selection.append(label);
+      // Its handles resize it: they take the pointer, the outline does not.
+      for (const [edge, left, top] of [["nw", "0%", "0%"], ["n", "50%", "0%"], ["ne", "100%", "0%"], ["e", "100%", "50%"], ["se", "100%", "100%"], ["s", "50%", "100%"], ["sw", "0%", "100%"], ["w", "0%", "50%"]]) {
+        const h = document.createElement("moonlet-handle");
+        h.setAttribute("data-moonlet-handle", edge);
+        h.style.cssText = `position:absolute;left:${left};top:${top};width:7px;height:7px;margin:-4px 0 0 -4px;box-sizing:border-box;background:#0b1a33;border:1.5px solid #5b9cff;border-radius:1px;pointer-events:auto;cursor:${edge}-resize`;
+        selection.append(h);
+      }
       document.documentElement.append(selection);
     }
+    // One in flow resizes only from its east and south: its west or north
+    // edge stays where the flow puts it, so a handle there would move the
+    // opposite edge.
+    const all = placed(selected);
+    for (const h of selection.querySelectorAll("[data-moonlet-handle]")) h.style.display = all || !/[nw]/.test(h.getAttribute("data-moonlet-handle")) ? "" : "none";
     const r = box(selected);
-    selection.firstChild.textContent = `${selected.tagName.toLowerCase()} · ${midOf(selected)}`;
+    selection.firstChild.textContent = `${selected.tagName.toLowerCase()} · ${midOf(selected)}${offMark ? " · off-system" : ""}`;
+    selection.firstChild.style.background = offMark ? "#e8a24f" : "#5b9cff";
     Object.assign(selection.style, { display: "block", left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px` });
   };
 
@@ -124,18 +188,33 @@
   // An edit by hand made on the live page, as the app made it on the
   // page's source, so it shows at once. True when it was made.
   const byMid = (mid) => (typeof mid === "string" && MID.test(mid) ? document.querySelector(`[data-mid="${mid}"]`) : null);
+  // Nodes put above or below element `place.ref`, or into it, last.
+  const putAt = (place, nodes, moving) => {
+    const ref = place && typeof place === "object" ? byMid(place.ref) : null;
+    if (!ref || (moving && moving.contains(ref))) return false;
+    if (place.where === "above") ref.before(nodes);
+    else if (place.where === "below") ref.after(nodes);
+    else if (place.where === "into") ref.append(nodes);
+    else return false;
+    return true;
+  };
   const live = (d) => {
     if (d.op === "insert" && typeof d.html === "string") {
       const t = document.createElement("template");
       t.innerHTML = d.html;
-      if (d.after === null && document.body) document.body.prepend(t.content);
-      else if (byMid(d.after)) byMid(d.after).after(t.content);
-      else return false;
+      if (d.place !== null) return putAt(d.place, t.content, null);
+      if (!document.body) return false;
+      document.body.prepend(t.content);
       return true;
     }
     const el = byMid(d.mid);
     if (!el || el === document.body) return false;
-    if (d.op === "remove") el.remove();
+    if (d.op === "move") {
+      if (!putAt(d.place, el, el)) return false;
+    } else if (d.op === "style" && typeof d.style === "string") {
+      if (d.style) el.setAttribute("style", d.style);
+      else el.removeAttribute("style");
+    } else if (d.op === "remove") el.remove();
     else if (d.op === "unwrap") el.replaceWith(...el.childNodes);
     else if (d.op === "wrap" && typeof d.box === "string" && MID.test(d.box)) {
       const box = document.createElement("div");
@@ -235,7 +314,12 @@
       if (editing && byMid(d.mid) !== editing) finish(true);
       const el = mode === "edit" ? byMid(d.mid) : null;
       select(el);
+      offMark = !!el && d.off === true;
+      drawSelection();
       post(el ? { type: "bridge.selected", mid: midOf(el), rect: box(el) } : { type: "bridge.selected", mid: null });
+    } else if (d.type === "bridge.palette") {
+      palette = d.dragging === true;
+      if (!palette) dropShown(null, null);
     } else if (d.type === "bridge.scrollTo") {
       if (Number.isFinite(d.x) && Number.isFinite(d.y)) scrollBack(d.x, d.y);
     } else if (d.type === "bridge.edit") {
@@ -255,6 +339,204 @@
   addEventListener("mousemove", hover, true);
   addEventListener("mouseover", hover, true);
   document.addEventListener("mouseleave", () => draw(null));
+  // Where a dragged element (or, `dragged` null, a snippet from the app's
+  // Palette) would drop at a point: among the children of the element
+  // under it, by the side of the one nearest; beside an element that holds
+  // only text, or near an edge of a container; into an empty container.
+  const EDGE = 6;
+  // The app's HOLDS_NO_ELEMENTS (src/lib/designEdits.ts), which a test checks.
+  const HOLDS_NONE = /^(area|base|br|col|embed|hr|img|input|link|meta|source|track|wbr|svg|math|select|option|textarea|script|style|title|template|noscript|xmp|iframe|noembed|noframes|plaintext|object|video|audio|canvas)$/i;
+  const holds = (el) => !HOLDS_NONE.test(el.tagName) && !(el.parentElement && el.parentElement.closest("svg, math"));
+  const kidsOf = (el, skip) => [...el.children].filter((c) => c !== skip && MID.test(midOf(c)) && !QUIET.test(c.tagName));
+  const inRow = (el) => {
+    if (!el || el.nodeType !== 1) return false;
+    const cs = getComputedStyle(el);
+    return /grid$/.test(cs.display) || (/flex$/.test(cs.display) && !/^column/.test(cs.flexDirection || ""));
+  };
+  const beside = (el, x, y) => {
+    const r = box(el);
+    const row = inRow(el.parentElement);
+    return { where: (row ? x < r.x + r.w / 2 : y < r.y + r.h / 2) ? "above" : "below", ref: midOf(el) };
+  };
+  const nearEdge = (el, x, y) => {
+    const r = box(el);
+    return inRow(el.parentElement) ? Math.min(x - r.x, r.x + r.w - x) < EDGE : Math.min(y - r.y, r.y + r.h - y) < EDGE;
+  };
+  const placeAt = (x, y, dragged) => {
+    const t = marked(document.elementFromPoint ? document.elementFromPoint(x, y) : null);
+    if (!t || (dragged && dragged.contains(t))) return null;
+    const body = t === document.body;
+    if (holds(t) && (body || !nearEdge(t, x, y))) {
+      const kids = kidsOf(t, dragged);
+      if (kids.length) {
+        const at = kids.find((c) => beside(c, x, y).where === "above");
+        return at ? { where: "above", ref: midOf(at) } : { where: "below", ref: midOf(kids[kids.length - 1]) };
+      }
+      if (body || !t.textContent.trim()) return { where: "into", ref: midOf(t) };
+    }
+    return body ? null : beside(t, x, y);
+  };
+  // Where the dragged element is already: dropping there changes nothing.
+  const already = (el, p) =>
+    (p.where === "above" && el.nextElementSibling === byMid(p.ref)) || (p.where === "below" && el.previousElementSibling === byMid(p.ref)) || (p.where === "into" && el.parentElement === byMid(p.ref) && el.parentElement.lastElementChild === el);
+
+  // The insertion line, inside the page outside its <body>: at the edge of
+  // the element it would land beside, or a box over the container it
+  // would go into. The app is told the place when it changes, for its hint.
+  let dropLine = null;
+  let dropSaid = "";
+  const dropShown = (mid, p) => {
+    if (!dropLine) {
+      dropLine = document.createElement("moonlet-drop");
+      dropLine.setAttribute("data-moonlet-bridge", "drop");
+      document.documentElement.append(dropLine);
+    }
+    const ref = p ? byMid(p.ref) : null;
+    const said = p ? `${mid} ${p.where} ${p.ref}` : "";
+    if (said !== dropSaid) {
+      dropSaid = said;
+      post({ type: "bridge.drag", mid, place: p ? { where: p.where, ref: p.ref } : null });
+    }
+    if (!ref) {
+      dropLine.style.display = "none";
+      return;
+    }
+    const r = box(ref);
+    let at;
+    if (p.where === "into") {
+      dropLine.style.cssText = OUTLINE_CSS;
+      at = [r.x, r.y, r.w, r.h];
+    } else {
+      dropLine.style.cssText = `${OVER_CSS}background:#5b9cff;border-radius:1px`;
+      const row = inRow(ref.parentElement);
+      const edge = p.where === "above" ? (row ? r.x : r.y) : row ? r.x + r.w : r.y + r.h;
+      at = row ? [edge - 1, r.y, 2, r.h] : [r.x, edge - 1, r.w, 2];
+    }
+    Object.assign(dropLine.style, { display: "block", left: `${at[0]}px`, top: `${at[1]}px`, width: `${at[2]}px`, height: `${at[3]}px` });
+  };
+
+  // A press on a handle of the selection resizes it: its width and height
+  // in px, shown at once, ⇧ keeping its aspect ratio; the size is reported
+  // on release, for the app to write in the page's source. An absolutely
+  // positioned one resized from its west or north edge moves its left or
+  // top by as much, so the opposite edge stays; one in flow has no handle
+  // there.
+  let sizing = null;
+  // A press on the selection that moves a few px drags it to another place;
+  // an absolutely positioned one moves by its left and top instead.
+  let drag = null;
+  // The click a drag or a resize ends with is no click on the page.
+  let justDragged = false;
+  const endDrag = () => {
+    justDragged = true;
+    setTimeout(() => (justDragged = false), 0);
+  };
+  const cancelDrag = () => {
+    if (sizing) Object.assign(sizing.el.style, sizing.style);
+    if (drag && drag.abs) Object.assign(drag.el.style, drag.style);
+    if (drag && drag.on && !drag.abs) dropShown(midOf(drag.el), null);
+    sizing = drag = null;
+    drawSelection();
+  };
+  addEventListener(
+    "mousedown",
+    (e) => {
+      if (mode !== "edit" || !selected || e.button !== 0) return;
+      const handle = e.target instanceof Element ? e.target.closest("[data-moonlet-handle]") : null;
+      if (handle) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        const edge = handle.getAttribute("data-moonlet-handle");
+        const abs = placed(selected);
+        if (!abs && /[nw]/.test(edge)) return;
+        const r = box(selected);
+        const s = selected.style;
+        sizing = { el: selected, edge, x: e.clientX, y: e.clientY, w: r.w, h: r.h, abs, style: { width: s.width, height: s.height, left: s.left, top: s.top }, size: null };
+        return;
+      }
+      if (editing || !(e.target instanceof Node) || !selected.contains(e.target)) return;
+      const abs = placed(selected);
+      drag = { el: selected, x: e.clientX, y: e.clientY, on: false, abs, style: { left: selected.style.left, top: selected.style.top }, place: null };
+    },
+    true,
+  );
+  addEventListener(
+    "mousemove",
+    (e) => {
+      if (sizing) {
+        const s = sizing;
+        const dx = e.clientX - s.x;
+        const dy = e.clientY - s.y;
+        const across = /[ew]/.test(s.edge);
+        const down = /[ns]/.test(s.edge);
+        let w = s.w + (s.edge.includes("e") ? dx : s.edge.includes("w") ? -dx : 0);
+        let h = s.h + (s.edge.includes("s") ? dy : s.edge.includes("n") ? -dy : 0);
+        if (e.shiftKey && s.w > 0 && s.h > 0) {
+          if (across && (!down || Math.abs(w / s.w - 1) >= Math.abs(h / s.h - 1))) h = (w * s.h) / s.w;
+          else w = (h * s.w) / s.h;
+        }
+        const size = { width: Math.max(1, Math.round(w)), height: Math.max(1, Math.round(h)) };
+        s.size = { width: `${size.width}px`, height: `${size.height}px` };
+        if (s.abs && s.edge.includes("w")) s.size.left = `${Math.round(s.abs.left + s.w - size.width)}px`;
+        if (s.abs && s.edge.includes("n")) s.size.top = `${Math.round(s.abs.top + s.h - size.height)}px`;
+        Object.assign(s.el.style, s.size);
+        drawSelection();
+        return;
+      }
+      if (!drag) return;
+      const dx = e.clientX - drag.x;
+      const dy = e.clientY - drag.y;
+      if (!drag.on && Math.hypot(dx, dy) < 4) return;
+      drag.on = true;
+      if (drag.abs) {
+        Object.assign(drag.el.style, { left: `${Math.round(drag.abs.left + dx)}px`, top: `${Math.round(drag.abs.top + dy)}px` });
+        drawSelection();
+        return;
+      }
+      const p = placeAt(e.clientX, e.clientY, drag.el);
+      drag.place = p && !already(drag.el, p) ? p : null;
+      dropShown(midOf(drag.el), drag.place);
+    },
+    true,
+  );
+  addEventListener(
+    "mouseup",
+    () => {
+      const s = sizing;
+      const d = drag;
+      sizing = drag = null;
+      if (s) {
+        endDrag();
+        if (s.size) post({ type: "bridge.style", mid: midOf(s.el), set: s.size });
+        return;
+      }
+      if (!d || !d.on) return;
+      endDrag();
+      if (d.abs) return post({ type: "bridge.style", mid: midOf(d.el), set: { left: d.el.style.left, top: d.el.style.top } });
+      dropShown(midOf(d.el), null);
+      if (d.place) post({ type: "bridge.move", mid: midOf(d.el), place: d.place });
+    },
+    true,
+  );
+  // A snippet dragged from the app's Palette, which the app says: where it
+  // would drop shows as for a move, and the drop is reported.
+  let palette = false;
+  addEventListener("dragover", (e) => {
+    if (!palette || mode !== "edit") return;
+    e.preventDefault();
+    dropShown(null, placeAt(e.clientX, e.clientY, null));
+  });
+  addEventListener("dragleave", (e) => {
+    if (palette && !e.relatedTarget) dropShown(null, null);
+  });
+  addEventListener("drop", (e) => {
+    if (!palette || mode !== "edit") return;
+    e.preventDefault();
+    const p = placeAt(e.clientX, e.clientY, null);
+    dropShown(null, null);
+    post({ type: "bridge.drop", place: p });
+  });
+
   // In Comment and Edit mode the page never has the pointer's presses: its
   // links, menus and scripts stay as they are while the user picks.
   const swallow = (e) => {
@@ -321,6 +603,7 @@
     (e) => {
       if (mode === "view") return;
       swallow(e);
+      if (justDragged) return void (justDragged = false);
       const el = target(e);
       if (!el) return;
       if (mode === "edit") select(el);
@@ -331,6 +614,11 @@
   addEventListener(
     "keydown",
     (e) => {
+      if ((sizing || (drag && drag.on)) && e.key === "Escape") {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        return cancelDrag();
+      }
       if (editing) {
         if (e.key === "Escape" || (e.key === "Enter" && !e.shiftKey)) {
           e.preventDefault();

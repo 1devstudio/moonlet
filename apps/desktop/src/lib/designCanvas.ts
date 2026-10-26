@@ -4,7 +4,8 @@
 
 import type { DesignChanged } from "./protocol";
 import { pageOfPath, pagePath } from "./designPage";
-import type { Layer } from "./designBridge";
+import type { DragOver, DragResult, Layer } from "./designBridge";
+import type { EditOp } from "./designEdits";
 
 /** The pages (`index` for `pages/index.html`) a change to design `slug` wrote. */
 export function changedPages(change: DesignChanged, slug: string): string[] {
@@ -146,8 +147,9 @@ export function layerPick(s: CanvasState, locked: boolean): CanvasState | null {
   return locked ? null : canvasStep(s, "edit");
 }
 
-/** The right rail's tabs so far: Layers (Edit) and Comments. */
-export type RailTab = "layers" | "comments";
+/** The right rail's tabs so far: Layers (Edit), Inspector, Palette and
+ *  Comments. */
+export type RailTab = "layers" | "inspector" | "palette" | "comments";
 
 /** The rail's tab entering mode `after` from `before` shows: Layers for
  *  Edit, Comments for Comment; null for none. */
@@ -256,4 +258,49 @@ export function undoOpen(s: { locked: boolean; changes: number }): boolean {
 export function onReport(s: { rev: number; reported: number; scrolled: { x: number; y: number }; mode: CanvasMode; selected: string | null }): { scroll: { x: number; y: number } | null; select: string | null | undefined } | null {
   if (s.reported === s.rev) return null;
   return { scroll: s.scrolled.x || s.scrolled.y ? s.scrolled : null, select: s.mode === "edit" ? s.selected : undefined };
+}
+
+/** An element as the hint line names it: the text of its first part that
+ *  has text, the first leaf of its branch in the tree, cut to 24
+ *  characters; else its tag and id. */
+function layerName(layers: Layer[], mid: string): string {
+  const at = layers.findIndex((l) => l.mid === mid);
+  if (at < 0) return mid;
+  for (let i = at; i < layers.length && (i === at || layers[i].depth > layers[at].depth); i++) {
+    const leaf = (layers[i + 1]?.depth ?? -1) <= layers[i].depth;
+    if (leaf && layers[i].text) return [...layers[i].text].length > 24 ? `${[...layers[i].text].slice(0, 23).join("")}…` : layers[i].text;
+  }
+  return `${layers[at].tag} ${mid}`;
+}
+
+/** The hint line while an element (`mid`) or a Palette snippet (null) is
+ *  dragged over the page: "Drop to move above General", "Drop to insert
+ *  after Git"; null while it would drop nowhere. */
+export function dropHint(layers: Layer[], drag: DragOver): string | null {
+  const p = drag.place;
+  if (!p) return null;
+  const where = drag.mid === null && p.where === "below" ? "after" : p.where;
+  return `Drop to ${drag.mid === null ? "insert" : "move"} ${where} ${layerName(layers, p.ref)}`;
+}
+
+/** The hint line: where a drag over the page would drop while it would
+ *  ({@link dropHint}), else what the mode does. */
+export function hintLine(mode: CanvasMode, layers: Layer[], drag: DragOver | null): string {
+  return (drag && dropHint(layers, drag)) ?? modeHint(mode);
+}
+
+/** The edit a drag in the page makes: a move for an element dropped, a
+ *  restyle for a size or a place (the live page already shows it, so one
+ *  refused loads the page again), an insert of the Palette's snippet
+ *  `snippet` at its drop; null for a drop of none, or nowhere. */
+export function dragEdit(r: DragResult, snippet: string | null): { op: EditOp; reload: boolean } | null {
+  if (r.kind === "move") return { op: { kind: "move", mid: r.mid, place: r.place }, reload: false };
+  if (r.kind === "style") return { op: { kind: "restyle", mid: r.mid, set: r.set }, reload: true };
+  return snippet !== null && r.place ? { op: { kind: "insert", place: r.place, html: snippet }, reload: false } : null;
+}
+
+/** The edit a snippet picked in the Palette makes: inserted after the
+ *  selection, else at the end of the body. */
+export function pickEdit(selected: string | null, snippet: string): EditOp {
+  return { kind: "insert", place: selected ? { where: "below", ref: selected } : null, html: snippet };
 }
