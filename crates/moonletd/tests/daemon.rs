@@ -3961,6 +3961,30 @@ async fn a_project_design_on_the_base_branch_is_listed_and_copied_into_a_new_wor
     assert_eq!(missing.unwrap_err().to_string(), "invalid_params: no design at docs/design/nope on main");
 }
 
+/// X65 entry 12: `design.copy` copies only a design the project's listing
+/// gives, a folder of its design folder, `<design dir>/<slug>`: a folder
+/// elsewhere on the base branch that holds a `design.toml` is none, and no
+/// workspace design is made from it.
+#[tokio::test]
+async fn design_copy_takes_only_a_folder_of_the_projects_design_folder() {
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    let mut files = MERGED_DESIGN.to_vec();
+    files.push(("prototypes/old-settings/design.toml", "name = \"Old settings\"\nsystem = \"moonlet-desktop\"\n"));
+    files.push(("prototypes/old-settings/pages/index.html", "<body data-mid=\"m1\">old</body>\n"));
+    let (ws, project, _) = workspace_with_session(&d, &mut c, &files).await;
+    let refused = c
+        .request::<_, serde_json::Value>(
+            methods::DESIGN_COPY,
+            serde_json::json!({"workspace": ws, "from": {"project": project.id, "path": "prototypes/old-settings"}, "name": "Old settings"}),
+        )
+        .await;
+    assert_eq!(refused.unwrap_err().to_string(), "invalid_params: no design at prototypes/old-settings on main");
+    let list: serde_json::Value = c.request(methods::DESIGN_LIST, serde_json::json!({"workspace": ws})).await.unwrap();
+    let workspace_designs: Vec<&serde_json::Value> = list.as_array().unwrap().iter().filter(|d| d["kind"] == "workspace").collect();
+    assert_eq!(workspace_designs, Vec::<&serde_json::Value>::new());
+}
+
 /// A Claude Code that first records every file of the session designs its
 /// worktree has as it starts, in `claude-saw`, then answers as FAKE_CLAUDE.
 const SEEING_CLAUDE: &str = r#"#!/bin/sh

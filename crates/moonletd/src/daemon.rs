@@ -1474,7 +1474,10 @@ impl Daemon {
                     return Err(RpcError::new("invalid_params", format!("no project \"{}\" in the workspace", r.from.project)));
                 };
                 let (repo, base, path) = (Path::new(&project.path), project.base_branch.clone(), r.from.path.clone());
-                let from = moonlet_core::design::project::read_project_design(repo, &base, &path).await.map_err(store_error)?;
+                // Only a design the project's listing gives: one of its design folder's.
+                let folder = moonlet_core::design::session::design_folder(&moonlet_core::session::read_config(repo))
+                    .map_err(|e| RpcError::new("invalid_params", format!("{e:#}")))?;
+                let from = moonlet_core::design::project::read_project_design(repo, &base, &folder, &path).await.map_err(store_error)?;
                 // Its agent starts from the pages it has, never over them.
                 let intro = format!(
                     "This design starts as a copy of the design \"{}\" at {path} on {base} of the project {}: its pages are written already. Read them, then wait for what the user asks. Its brief was: {}",
