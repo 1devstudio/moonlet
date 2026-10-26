@@ -118,7 +118,18 @@ impl SessionManager {
             Ok(bytes) => match serde_json::from_slice::<LogFile>(&bytes) {
                 Ok(f) => Some(f),
                 Err(e) => {
-                    let bad = path.with_extension(format!("json.{}.bad", now_ms()));
+                    // Never over an earlier one, even from the same millisecond.
+                    let ms = now_ms();
+                    let bad = (1..)
+                        .map(|n| {
+                            path.with_extension(if n == 1 {
+                                format!("json.{ms}.bad")
+                            } else {
+                                format!("json.{ms}-{n}.bad")
+                            })
+                        })
+                        .find(|p| !p.exists())
+                        .unwrap();
                     tracing::warn!(
                         "cannot read {} ({e}); kept it as {}",
                         path.display(),
