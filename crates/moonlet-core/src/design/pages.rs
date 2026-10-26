@@ -87,15 +87,21 @@ fn page_rel(at: &DesignAt, page: &str) -> Result<std::path::PathBuf> {
 }
 
 impl Store {
-    /// A design's page, `pages/<page>.html`, with its version and the first
-    /// place it goes wrong as HTML, if it does.
-    pub fn page(&self, at: &DesignAt, page: &str) -> Result<DesignPageText> {
+    /// A design's page, `pages/<page>.html`, with its version, and when
+    /// `parse` asks for it, where its markup swallows the editor bridge, if
+    /// it does: what the canvas asks of a page whose bridge was silent,
+    /// never on the editor's reads on every change.
+    pub fn page(&self, at: &DesignAt, page: &str, parse: bool) -> Result<DesignPageText> {
         let rel = page_rel(at, page)?;
         let html =
             fsx::read_inside(&at.root, &at.root.join(rel)).map_err(|e| Unreadable::of(&e))?;
         Ok(DesignPageText {
             version: version_of(&html),
-            parse_error: super::parse::first_parse_error(&html),
+            parse_error: if parse {
+                super::parse::first_parse_error(&html)
+            } else {
+                None
+            },
             html,
         })
     }
@@ -162,6 +168,7 @@ mod tests {
             .page(
                 &store.workspace_design("w1", "settings-page").unwrap(),
                 "index",
+                false,
             )
             .unwrap();
         assert_eq!(read.html, INDEX);
@@ -187,7 +194,8 @@ mod tests {
             store
                 .page(
                     &store.workspace_design("w1", "settings-page").unwrap(),
-                    "index"
+                    "index",
+                    false
                 )
                 .unwrap(),
             DesignPageText {
@@ -218,6 +226,7 @@ mod tests {
             .page(
                 &store.workspace_design("w1", "settings-page").unwrap(),
                 "index",
+                false,
             )
             .unwrap();
         let agents = "<!doctype html>\n<body data-mid=\"m1\"><h1 data-mid=\"m2\">Settings, by the agent</h1></body>\n";
@@ -241,6 +250,7 @@ mod tests {
             .page(
                 &store.workspace_design("w1", "settings-page").unwrap(),
                 "index",
+                false,
             )
             .unwrap();
         let theirs = file.clone();
@@ -274,6 +284,7 @@ mod tests {
             .page(
                 &store.workspace_design("w1", "settings-page").unwrap(),
                 "index",
+                false,
             )
             .unwrap();
         // A pages folder swapped for a link to a folder outside.
@@ -284,7 +295,8 @@ mod tests {
             store
                 .page(
                     &store.workspace_design("w1", "settings-page").unwrap(),
-                    "index"
+                    "index",
+                    false
                 )
                 .is_err()
         );
@@ -327,10 +339,10 @@ mod tests {
     }
 
     #[test]
-    fn a_page_is_read_with_the_first_place_it_goes_wrong_as_html() {
+    fn a_page_is_read_with_the_first_place_it_goes_wrong_as_html_only_when_asked() {
         let (home, store) = store_with_page();
         let at = store.workspace_design("w1", "settings-page").unwrap();
-        assert_eq!(store.page(&at, "index").unwrap().parse_error, None);
+        assert_eq!(store.page(&at, "index", true).unwrap().parse_error, None);
         std::fs::write(
             home.path()
                 .join("design/w1/designs/settings-page/pages/index.html"),
@@ -338,12 +350,14 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            store.page(&at, "index").unwrap().parse_error,
+            store.page(&at, "index", true).unwrap().parse_error,
             Some(moonlet_proto::methods::DesignParseError {
                 line: 3,
                 message: "an attribute's quote is never closed".into()
             })
         );
+        // The editor's reads, on every change, read no further than the text.
+        assert_eq!(store.page(&at, "index", false).unwrap().parse_error, None);
     }
 
     #[test]
@@ -352,7 +366,7 @@ mod tests {
         let (home, store) = store_with_page();
         let at = store.workspace_design("w1", "settings-page").unwrap();
         assert_eq!(
-            store.page(&at, "gone").unwrap_err().to_string(),
+            store.page(&at, "gone", false).unwrap_err().to_string(),
             "the file is missing"
         );
         // Root reads a file whatever its mode: no case to make there.
@@ -363,7 +377,7 @@ mod tests {
             .path()
             .join("design/w1/designs/settings-page/pages/index.html");
         std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000)).unwrap();
-        let read = store.page(&at, "index");
+        let read = store.page(&at, "index", false);
         std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
         assert_eq!(read.unwrap_err().to_string(), "the file cannot be read");
     }

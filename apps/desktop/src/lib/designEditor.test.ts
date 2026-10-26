@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { askWithEdits, updateAndTell, restoreSnapshot, kitOf, loadKit, closeDesign, copyElementOf, hasCopy, dismissUnsaved, editPage, pasteInto, sendCommentsWithEdits, sendWithEdits, redoEdit, undoEdit, loadPageSource, pendingOf, readErrorOf, resetEditor, startEditor, settleChecks, settleSaves, sourceOf, undoOf, unsavedOf, useEditor } from "./designEditor";
+import { askWithEdits, updateAndTell, restoreSnapshot, kitOf, loadKit, closeDesign, copyElementOf, hasCopy, dismissUnsaved, editPage, pasteInto, sendCommentsWithEdits, sendWithEdits, redoEdit, undoEdit, loadPageSource, loadParseError, parseErrorOf, pendingOf, readErrorOf, resetEditor, startEditor, settleChecks, settleSaves, sourceOf, undoOf, unsavedOf, useEditor } from "./designEditor";
 import { loadDesigns, pageRevOf, startDesign, useDesign } from "./designStore";
 import { editLines } from "./designEdits";
 import { useStore } from "./store";
@@ -568,6 +568,19 @@ describe("a page the daemon could not read (X65)", () => {
     answers["design.page"] = (p) => disk[p.page as string];
     await loadPageSource("local", WS, SLUG, "index");
     expect(readErrorOf(useEditor.getState(), "local", WS, SLUG, "index")).toBeNull();
+  });
+});
+
+describe("a page whose bridge was silent (X65)", () => {
+  it("asks the daemon for where its markup swallows the bridge, which the editor's reads never do, and keeps it for the page", async () => {
+    const quote = { line: 2, message: "an attribute's quote is never closed" };
+    answers["design.page"] = (p) => ({ ...disk[p.page as string], parse_error: p.parse ? quote : null });
+    await loadPageSource("local", WS, SLUG, "index");
+    expect(calls.filter((c) => c.method === "design.page").map((c) => c.params.parse ?? false)).toEqual([false]);
+    expect(parseErrorOf(useEditor.getState(), "local", WS, SLUG, "index")).toBeNull();
+    await loadParseError("local", WS, SLUG, "index");
+    expect(calls.filter((c) => c.method === "design.page").map((c) => c.params.parse ?? false)).toEqual([false, true]);
+    expect(parseErrorOf(useEditor.getState(), "local", WS, SLUG, "index")).toEqual(quote);
   });
 });
 

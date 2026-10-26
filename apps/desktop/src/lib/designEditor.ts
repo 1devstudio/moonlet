@@ -12,7 +12,7 @@ import { latestSends } from "./latestSend";
 import { designRef, type DesignPlace } from "./designPlace";
 import { errorToast } from "./store";
 import { latestPerKey } from "./prPoll";
-import { M, type DesignComment, type DesignKit, type DesignPageText, type DesignPageWritten, type DesignSnapshot, type DesignSystemUpdated } from "./protocol";
+import { M, type DesignComment, type DesignKit, type DesignPageText, type DesignParseError, type DesignPageWritten, type DesignSnapshot, type DesignSystemUpdated } from "./protocol";
 import type { ChatImage } from "./attachments";
 import { applyEdit, copyElement, EditRefused, editLine, editSaid, editsMessage, highestMid, type Edit, type EditOp } from "./designEdits";
 import { NO_UNDO, dropPage, pendingAfter, pushStep, redoStep, undoStep, type Pending, type Step, type Undo } from "./designUndo";
@@ -34,9 +34,12 @@ interface EditorState {
   /** Why the daemon could not read a page (`pageKey`), as it said it, until
    *  a read of it succeeds: what the did-not-load bar says (X65). */
   readErrors: Record<string, string>;
+  /** Where a page's markup swallows the bridge (`pageKey`), asked only for
+   *  a page whose bridge was silent (X65); null when it does not. */
+  parseErrors: Record<string, DesignParseError | null>;
 }
 
-const EMPTY: EditorState = { sources: {}, undo: {}, pending: {}, unsaved: {}, kits: {}, readErrors: {} };
+const EMPTY: EditorState = { sources: {}, undo: {}, pending: {}, unsaved: {}, kits: {}, readErrors: {}, parseErrors: {} };
 
 export const useEditor = create<EditorState>(() => EMPTY);
 
@@ -113,6 +116,20 @@ function setReadError(key: string, error: string | null) {
     const { [key]: _, ...rest } = s.readErrors;
     return { readErrors: error === null ? rest : { ...rest, [key]: error } };
   });
+}
+
+/** Asks the daemon where the page's markup swallows the bridge, for a page
+ *  whose bridge was silent: the editor's reads, on every change, never
+ *  ask, as the daemon reads the whole page as HTML for it. */
+export async function loadParseError(host: string, place: DesignPlace, slug: string, page: string): Promise<void> {
+  const key = pageKey(host, place, slug, page);
+  const text = await rpc<DesignPageText>(host, M.designPage, { ...designRef(place, slug), page, parse: true });
+  useEditor.setState((s) => ({ parseErrors: { ...s.parseErrors, [key]: text.parse_error ?? null } }));
+}
+
+/** Where the page's markup swallows the bridge, once asked; null before. */
+export function parseErrorOf(s: EditorState, host: string, place: DesignPlace, slug: string, page: string): DesignParseError | null {
+  return s.parseErrors[pageKey(host, place, slug, page)] ?? null;
 }
 
 /** Why the daemon could not read the page, as it said it; null once a read

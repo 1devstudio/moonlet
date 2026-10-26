@@ -80,6 +80,13 @@ export function loadStep(s: PageLoad, e: LoadEvent): PageLoad {
  *  its bridge was silent, with the page's first parse error if it has one. */
 export type NotLoaded = { kind: "refused"; reason: string } | { kind: "silent"; parse?: DesignParseError };
 
+/** Whether the canvas asks the daemon where the page's markup swallows the
+ *  bridge (`design.page` with `parse`): only for a page whose bridge was
+ *  silent, the one case the bar says it. */
+export function wantsParseError(load: PageLoad): boolean {
+  return load.phase === "failed" && !load.refused;
+}
+
 /** What a refused page's bar says when the daemon read the page after all. */
 const NOT_SERVED = "moonlet could not serve it";
 

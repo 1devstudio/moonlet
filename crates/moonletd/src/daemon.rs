@@ -1584,7 +1584,7 @@ impl Daemon {
             m::DESIGN_PAGE => {
                 let r: m::DesignPageRef = params(p)?;
                 let at = self.locate(&r.design).await?;
-                ok(blocking(move || store.page(&at, &r.page)).await?)
+                ok(blocking(move || store.page(&at, &r.page, r.parse)).await?)
             }
             m::DESIGN_WRITE_PAGE => {
                 let r: m::DesignWritePage = params(p)?;
