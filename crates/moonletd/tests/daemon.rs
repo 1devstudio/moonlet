@@ -4464,6 +4464,75 @@ async fn a_design_file_is_found_only_through_a_workspace_or_a_session_moonlet_ha
     }
 }
 
+/// X65 entry 12: an archived session's designs are no longer watched, so
+/// a file written in one is never announced, while another session's still
+/// are; unarchived, its designs are watched again from the next call that
+/// reaches them.
+#[tokio::test]
+async fn an_archived_sessions_designs_are_no_longer_watched_and_are_again_once_it_is_unarchived() {
+    use moonlet_proto::types::Session;
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    let (ws, project, archived) = workspace_with_session(&d, &mut c, &[]).await;
+    let live: Session = c
+        .request(methods::SESSION_CREATE, serde_json::json!({"project_id": project.id, "name": "Onboarding", "agent": "none", "workspace_id": ws}))
+        .await
+        .unwrap();
+    for (session, name) in [(&archived, "Settings page"), (&live, "Onboarding")] {
+        let _: serde_json::Value = c
+            .request(
+                methods::DESIGN_CREATE,
+                serde_json::json!({"workspace": ws, "session": session.id, "name": name, "system": "moonlet-desktop", "brief": "b"}),
+            )
+            .await
+            .unwrap();
+    }
+    // A new page of the session's design: each write its own file, so no
+    // two are taken for one change.
+    let write = |s: &Session, page: &str| {
+        let slug = if s.id == archived.id { "settings-page" } else { "onboarding" };
+        std::fs::write(std::path::PathBuf::from(&s.path).join("docs/design").join(slug).join(format!("pages/{page}.html")), "<p>x</p>\n").unwrap();
+    };
+    let names = |s: &Session, page: &str| {
+        let (id, path) = (s.id.clone(), format!("pages/{page}.html"));
+        move |e: &serde_json::Value| e["session"] == id.as_str() && e["paths"].as_array().is_some_and(|p| p.iter().any(|x| x == path.as_str()))
+    };
+    let mut listener = d.client().await;
+    // Both watched while open; each one's making is delivered before its write.
+    write(&archived, "open");
+    next_event(&mut listener, methods::EV_DESIGN_CHANGED, names(&archived, "open")).await;
+    write(&live, "open");
+    next_event(&mut listener, methods::EV_DESIGN_CHANGED, names(&live, "open")).await;
+
+    let _: serde_json::Value = c
+        .request(methods::SESSION_ARCHIVE, serde_json::json!({"id": archived.id, "remove_worktree": false}))
+        .await
+        .unwrap();
+    write(&archived, "archived");
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    write(&live, "live");
+    // Every announcement up to the live session's write.
+    let mut heard = Vec::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let f = tokio::time::timeout_at(deadline, listener.next_frame()).await.expect("the live session's write").unwrap().unwrap();
+        if let Frame::Json(Message::Event { name, data }) = f
+            && name == methods::EV_DESIGN_CHANGED
+        {
+            if names(&live, "live")(&data) {
+                break;
+            }
+            heard.push(data);
+        }
+    }
+    assert_eq!(heard, Vec::<serde_json::Value>::new(), "an archived session's design was announced");
+
+    let _: Session = c.request(methods::SESSION_UNARCHIVE, serde_json::json!({"id": archived.id})).await.unwrap();
+    let _: serde_json::Value = c.request(methods::DESIGN_LIST, serde_json::json!({"workspace": ws})).await.unwrap();
+    write(&archived, "unarchived");
+    next_event(&mut listener, methods::EV_DESIGN_CHANGED, names(&archived, "unarchived")).await;
+}
+
 /// X65 entry 12: a file written in a session design, in the worktree's
 /// design folder or its `.moonlet/design/`, is announced as `design.changed`
 /// with the design, its session and its workspace.
