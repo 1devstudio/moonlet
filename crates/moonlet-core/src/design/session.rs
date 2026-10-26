@@ -1065,7 +1065,7 @@ created_at = 1
             "<body data-mid=\"m1\"></body>\n",
         )
         .unwrap();
-        let read = store.page(&at, "index").unwrap();
+        let read = store.page(&at, "index", false).unwrap();
         store.write_page(&at, "index", page, &read.version).unwrap();
         assert_eq!(
             std::fs::read_to_string(dir.join("pages/index.html")).unwrap(),

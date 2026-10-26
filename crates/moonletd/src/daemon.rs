@@ -300,6 +300,12 @@ fn store_error(e: anyhow::Error) -> RpcError {
     if e.is::<pages::Stale>() {
         return RpcError::new("stale", e.to_string());
     }
+    // Said plainly, with no path: the canvas's did-not-load bar shows it,
+    // and the design's agent is sent it (X65). Its cause goes to the log.
+    if e.is::<pages::Unreadable>() {
+        tracing::warn!("cannot read a design's page: {e:#}");
+        return RpcError::new("unreadable", e.to_string());
+    }
     internal(e)
 }
 
@@ -1596,7 +1602,7 @@ impl Daemon {
             m::DESIGN_PAGE => {
                 let r: m::DesignPageRef = params(p)?;
                 let at = self.locate(&r.design).await?;
-                ok(blocking(move || store.page(&at, &r.page)).await?)
+                ok(blocking(move || store.page(&at, &r.page, r.parse)).await?)
             }
             m::DESIGN_WRITE_PAGE => {
                 let r: m::DesignWritePage = params(p)?;

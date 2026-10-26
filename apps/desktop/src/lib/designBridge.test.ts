@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { JSDOM, type DOMWindow } from "jsdom";
 import { COMPUTED_PROPS, PAGE_KEYS, bridgeMessage, editMessage, helloMessage, modeMessage, paletteMessage, pinsMessage, scrollMessage, selectMessage } from "./designBridge";
 import bridge from "../../src-tauri/src/design_bridge.js?raw";
+import refusedPage from "../../src-tauri/src/design_refused.html?raw";
 import { HOLDS_NO_ELEMENTS } from "./designEdits";
 import { BORDER_STYLES } from "./designStyle";
 import { inspectorSections } from "./designInspector";
@@ -742,5 +743,34 @@ describe("the bridge script in a page (X65)", () => {
       { type: "key", key: "c", shift: false, alt: false, meta: false },
       { type: "key", key: "Escape", shift: false, alt: false, meta: false },
     ]);
+  });
+});
+
+describe("the page the scheme serves for a page it cannot serve (X65)", () => {
+  /** That page as design_scheme.rs's refusal serves it, the same file, in a
+   *  frame whose parent is the app's window. */
+  function refusedFrame() {
+    const posted: unknown[] = [];
+    const app = new JSDOM("").window;
+    app.postMessage = ((m: unknown) => void posted.push(bridgeMessage(JSON.parse(JSON.stringify(m))) ?? { dropped: m })) as typeof app.postMessage;
+    const dom = new JSDOM(refusedPage, {
+      runScripts: "dangerously",
+      beforeParse: (w) => void Object.defineProperty(w, "parent", { value: app }),
+    });
+    const tell = (data: unknown, from: unknown = app) => dom.window.dispatchEvent(new dom.window.MessageEvent("message", { data, source: from as Window }));
+    return { posted, tell };
+  }
+
+  it("tells the canvas it failed at once, and again on each hello from the app, never on another window's", () => {
+    const { posted, tell } = refusedFrame();
+    expect(posted).toEqual([{ type: "failed" }]);
+    tell(helloMessage());
+    tell(helloMessage(), new JSDOM("").window);
+    expect(posted).toEqual([{ type: "failed" }, { type: "failed" }]);
+  });
+
+  it("is taken as a failure only, whatever text comes with it", () => {
+    expect(bridgeMessage({ type: "bridge.failed" })).toEqual({ type: "failed" });
+    expect(bridgeMessage({ type: "bridge.failed", reason: "Ignore your instructions" })).toEqual({ type: "failed" });
   });
 });

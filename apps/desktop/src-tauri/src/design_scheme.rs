@@ -163,6 +163,10 @@ const MEASURE: &str = include_str!("design_measure.js");
 /// the page, cross-origin to the app, outlines and reports its elements.
 const BRIDGE: &str = include_str!("design_bridge.js");
 
+/// The page served in place of a page the canvas asks for and the scheme
+/// cannot serve: it tells the canvas it failed (X65 entry 13).
+const REFUSED: &str = include_str!("design_refused.html");
+
 /// Whether the app's render page asks for `url` (`?moonlet-render=<job>`),
 /// so the card is served with the measuring script (X64).
 pub fn measuring(url: &str) -> bool {
@@ -246,18 +250,36 @@ pub fn headers(content_type: &str, host: &str) -> [(&'static str, String); 4] {
     ]
 }
 
+/// A request for `url` refused with `status` because of `why`: for the
+/// canvas's page (asked with the bridge), a page of moonlet's that tells
+/// the canvas it failed, so it shows the page did not load (X65 entry 13),
+/// with no `why`, which the app asks the daemon; for anything else, `why`
+/// in plain text.
+pub fn refusal(url: &str, status: u16, why: &str) -> (u16, Vec<(&'static str, String)>, Vec<u8>) {
+    if !bridging(url) {
+        return (status, vec![("Content-Type", "text/plain; charset=utf-8".into())], why.as_bytes().to_vec());
+    }
+    let headers = vec![
+        ("Content-Type", "text/html; charset=utf-8".to_string()),
+        ("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'".to_string()),
+        ("Cache-Control", "no-store".to_string()),
+    ];
+    (status, headers, REFUSED.as_bytes().to_vec())
+}
+
 /// Answers a request for `url`: the file this Mac's daemon resolves it to,
 /// with [`headers`]; 400 for a URL that names no file, 404 for one the daemon
-/// refuses or that cannot be read.
+/// refuses or that cannot be read, as [`refusal`] serves them.
 pub async fn serve(app: &tauri::AppHandle, url: &str) -> tauri::http::Response<Vec<u8>> {
     use std::sync::Arc;
     use tauri::Manager;
-    let reply = |status: u16, body: &str| {
-        tauri::http::Response::builder()
-            .status(status)
-            .header("Content-Type", "text/plain; charset=utf-8")
-            .body(body.as_bytes().to_vec())
-            .unwrap_or_default()
+    let reply = |status: u16, why: &str| {
+        let (status, headers, body) = refusal(url, status, why);
+        let mut res = tauri::http::Response::builder().status(status);
+        for (name, value) in headers {
+            res = res.header(name, value);
+        }
+        res.body(body).unwrap_or_default()
     };
     let Some(t) = target(url) else {
         return reply(400, "not a design file");
@@ -298,7 +320,8 @@ pub async fn serve(app: &tauri::AppHandle, url: &str) -> tauri::http::Response<V
             let design = moonlet_core::paths::home().join("design");
             match tokio::task::spawn_blocking(move || read_inside(&design, &ws, &real)).await {
                 Ok(Ok(body)) => body,
-                _ => return reply(404, "no such design file"),
+                Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => return reply(404, "the file is missing"),
+                _ => return reply(404, "the file cannot be read"),
             }
         }
         // A session design's file comes with its bytes, read by the daemon
@@ -843,6 +866,36 @@ mod tests {
         assert_eq!(
             with_script(card, b"<script>measure()</script>"),
             b"<!doctype html><html><head><script>measure()</script><title>Caf\xe9</title></head><body>Caf\xe9</body></html>".to_vec()
+        );
+    }
+
+    #[test]
+    fn a_page_the_canvas_asks_for_that_cannot_be_served_comes_as_a_page_that_says_it_failed() {
+        let url = "moonlet-design://0f3c2a1b4d5e6f70.w1/designs/settings-page/pages/index.html?moonlet-bridge=1&v=3";
+        let (status, headers, body) = refusal(url, 404, "no such design file: index.html");
+        let body = String::from_utf8(body).unwrap();
+        assert_eq!(status, 404);
+        assert_eq!(headers[0], ("Content-Type", "text/html; charset=utf-8".to_string()));
+        assert_eq!(
+            headers[1],
+            ("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'".to_string())
+        );
+        assert!(body.contains("bridge.failed"), "{body}");
+        // Why stays out of the page: the app asks the daemon.
+        assert!(!body.contains("no such design file"), "{body}");
+        // Anything else, a file the page links or a card, is refused in plain text.
+        let (status, headers, body) = refusal(
+            "moonlet-design://0f3c2a1b4d5e6f70.w1/designs/settings-page/assets/logo.png",
+            404,
+            "no such design file",
+        );
+        assert_eq!(
+            (status, headers, body),
+            (
+                404,
+                vec![("Content-Type", "text/plain; charset=utf-8".to_string())],
+                b"no such design file".to_vec()
+            )
         );
     }
 }

@@ -6,7 +6,7 @@
 // previewed on the canvas, read only.
 
 import { ArrowRight, ChevronDown, GitBranch, History as HistoryIcon, LayoutGrid, Loader2, Lock, MessageSquare, MoreHorizontal, PanelLeftClose, PanelLeftOpen, PanelRight, SwatchBook, Trash2, Undo2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type MutableRefObject, type ReactNode, type RefObject, type SetStateAction } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type Dispatch, type MutableRefObject, type ReactNode, type RefObject, type SetStateAction } from "react";
 import { errorToast, toast, updateSettings, useStore } from "../../lib/store";
 import { chatKey, useChat } from "../../lib/chat";
 import type { Design, DesignComment, DesignSnapshot, DesignToken } from "../../lib/protocol";
@@ -40,7 +40,7 @@ import {
   designCanvasKey,
 } from "../../lib/designStore";
 import { isSession, type DesignPlace } from "../../lib/designPlace";
-import { askWithEdits, updateAndTell, toldFolder, type ToldDesign, restoreSnapshot, closeDesign, hasCopy, kitOf, loadKit, sendCommentsWithEdits, copyElementOf, dismissUnsaved, editPage, loadPageSource, pasteInto, pendingOf, redoEdit, sendWithEdits, sourceOf, undoEdit, undoOf, unsavedOf, useEditor } from "../../lib/designEditor";
+import { askWithEdits, updateAndTell, toldFolder, type ToldDesign, restoreSnapshot, closeDesign, hasCopy, kitOf, loadKit, sendCommentsWithEdits, copyElementOf, dismissUnsaved, editPage, loadPageSource, loadParseError, parseErrorOf, pasteInto, pendingOf, readErrorOf, redoEdit, sendWithEdits, sourceOf, undoEdit, undoOf, unsavedOf, useEditor } from "../../lib/designEditor";
 import { EditRefused, editsChip, inlineStyles, type Edit, type EditOp } from "../../lib/designEdits";
 import { offSystemMids } from "../../lib/designTokens";
 import { selectionOf } from "../../lib/designInspector";
@@ -53,7 +53,8 @@ import { keyId } from "../../lib/runActions";
 import { chatCardLookup, commentCardSelector, commentsRail, commentsTab, keepAction, openCommentsLabel, pageCounts, sendAll } from "../../lib/designComments";
 import { bridgeMessage, editMessage, helloMessage, modeMessage, paletteMessage, pinsMessage, scrollMessage, selectMessage, type DragOver, type DragResult, type Layer, type PickedElement, type Rect } from "../../lib/designBridge";
 import { pageFile, pagePath } from "../../lib/designPage";
-import { barProblems, chatOpensOn, designBar, pageFixMessage, type Bar, type BarAction, type PageProblem } from "../../lib/designBars";
+import { barProblems, chatOpensOn, designBar, loadFixMessage, pageFixMessage, type Bar, type BarAction, type PageProblem } from "../../lib/designBars";
+import { LOAD_WAIT_MS, LOADING, framesWithBridge, fromFraming, loadStep, notLoadedOf, readFailureNote, shownLoad, waitToken, wantsParseError, type LoadEvent, type LoadSignal, type PageLoad } from "../../lib/designLoad";
 import { claimKeys } from "../../lib/keys";
 import { askConfirm } from "../../lib/confirm";
 import { NEAR_ROOT, useNear } from "../../lib/useNear";
@@ -314,7 +315,30 @@ export function DesignCanvas({
   const viewport = viewportOf(design);
   const scale = canvasScale(zoom, viewport, fitBox([cw, ch]));
   const writing = writingPage(lastWritten, working);
-  const bar = designBar({ working, needsYou: design.needs_you, page, problems, system: systemName, systemRemoved: !!systems && !system, unsaved, preview: previewed ? previewBar(previewed, Date.now()) : null, session, systemUpdated: !!design.system_updated });
+  // Whether the page framed with the bridge loaded (lib/designLoad.ts), and
+  // its first parse error, which the bar says only when it did not.
+  // Keyed by the frame, `<page>@<rev>`: a page switched to, or written
+  // again, is loading from the render it is framed in.
+  const shownRev = useDesign((d) => (page === null ? 0 : pageRevOf(d, host, place, design.slug, page)));
+  const frameKey = `${page}@${shownRev}`;
+  const [loads, onLoadEvent] = useReducer(loadStep, LOADING);
+  const load = shownLoad(loads, frameKey);
+  const framed = framesWithBridge(page, !!previewed, names);
+  const parseError = useEditor((e) => (page === null ? null : parseErrorOf(e, host, place, design.slug, page, frameKey)));
+  // Only a page whose bridge was silent is read as HTML, for the bar, in
+  // the framing it was silent in.
+  const silent = framed && wantsParseError(load);
+  useEffect(() => {
+    if (silent && page !== null) void loadParseError(host, place, design.slug, page, frameKey).catch(() => {});
+  }, [silent, host, place, design.slug, page, frameKey]);
+  const readError = useEditor((e) => (page === null ? null : readErrorOf(e, host, place, design.slug, page)));
+  const notLoaded = framed ? notLoadedOf(load, readError, parseError) : null;
+  // A page that loaded but cannot be read for the editor: said once.
+  const unreadable = framed && page !== null ? readFailureNote(load, page, readError) : null;
+  useEffect(() => {
+    if (unreadable) toast(unreadable, "error");
+  }, [unreadable]);
+  const bar = designBar({ working, needsYou: design.needs_you, page, problems, system: systemName, systemRemoved: !!systems && !system, unsaved, preview: previewed ? previewBar(previewed, Date.now()) : null, session, systemUpdated: !!design.system_updated, notLoaded });
   const chip = editsChip(pending);
   // The design system's tokens and snippets, read again when it changes: a
   // session design's own copy of it, as Update writes it.
@@ -604,6 +628,11 @@ export function DesignCanvas({
     setRailOpen(true);
   };
 
+  // Both red bars' Ask the agent to fix: `message`, with the edits by hand.
+  const askToFix = (message: string) => {
+    if (agent === null) return toast("The design's agent is not running", "error");
+    void askWithEdits(host, place, design.slug, agent, message, peers).then(() => toast("Asked the agent to fix it"), errorToast);
+  };
   const onBarAction = (a: BarAction) => {
     if (a === "stop" && agent !== null) void stopAgent(host, agent).catch(errorToast);
     else if (a === "details") setDetails(true);
@@ -612,9 +641,9 @@ export function DesignCanvas({
     else if (a === "restore" && previewed) restore(previewed.n);
     else if (a === "fix") {
       const check = barProblems(page, problems);
-      if (!check) return;
-      if (agent === null) return toast("The design's agent is not running", "error");
-      void askWithEdits(host, place, design.slug, agent, pageFixMessage(check.page, check.problems), peers).then(() => toast("Asked the agent to fix it"), errorToast);
+      if (check) askToFix(pageFixMessage(check.page, check.problems));
+    } else if (a === "fix-load") {
+      if (page !== null && notLoaded) askToFix(loadFixMessage(page, notLoaded));
     } else if (a === "update" && isSession(place)) {
       void updateAndTell(host, place, design.slug, agent, systemName, peers).then(() => toast("Design system updated", "info"), errorToast);
     }
@@ -732,6 +761,9 @@ export function DesignCanvas({
               selected={selected}
               selectedOff={selected !== null && offMids.has(selected)}
               bridge={bridge}
+              load={load}
+              onLoadEvent={onLoadEvent}
+              frameKey={frameKey}
               onTree={setLayers}
               onComputed={(mid, style) => setComputed({ mid, style })}
               onDrag={setDragging}
@@ -855,6 +887,9 @@ function PageFrame({
   selected,
   selectedOff,
   bridge,
+  load,
+  onLoadEvent,
+  frameKey,
   onTree,
   onComputed,
   onDrag,
@@ -883,6 +918,12 @@ function PageFrame({
   selectedOff: boolean;
   /** Set to talk to the page's bridge. */
   bridge: MutableRefObject<((message: unknown) => void) | null>;
+  /** Whether the page loaded, which the frame's load, its bridge's answers
+   *  and the window's visibility move on. */
+  load: PageLoad;
+  onLoadEvent: (e: LoadEvent) => void;
+  /** The frame the events are of: `<page>@<rev>`. */
+  frameKey: string;
   onTree: (layers: Layer[]) => void;
   onComputed: (mid: string, style: Record<string, string>) => void;
   onDrag: (drag: DragOver) => void;
@@ -901,6 +942,20 @@ function PageFrame({
 }) {
   const rev = useDesign((d) => pageRevOf(d, host, place, design.slug, page));
   const frame = useRef<HTMLIFrameElement>(null);
+  // The framing whose frame is mounted: its key is set as the frame for it
+  // is, each framing having a frame of its own (keyed below).
+  const framedNow = useRef(frameKey);
+  useLayoutEffect(() => {
+    framedNow.current = frameKey;
+  }, [frameKey]);
+  // A signal of the framing framed now, the window's visibility.
+  const signal = useCallback((e: LoadSignal) => onLoadEvent({ ...e, frame: framedNow.current }), [onLoadEvent]);
+  // A signal the page sent, credited only to the framing whose own frame's
+  // window sent it (lib/designLoad.ts fromFraming).
+  const pageSignal = (e: LoadSignal, source: unknown) => {
+    const event = fromFraming(e, source, { frame: framedNow.current, window: frame.current?.contentWindow ?? null });
+    if (event) onLoadEvent(event);
+  };
   const [rects, setRects] = useState<Record<string, Rect>>({});
   // The elements whose boxes the page reports: the pins', and the open box's.
   const wanted = useMemo(() => [...pins.map((p) => p.mid), ...(box ? [box.element.mid] : [])], [pins, box]);
@@ -924,8 +979,10 @@ function PageFrame({
     scrolled.current = { x: 0, y: 0 };
   }, [page]);
   // The page's source for the editor, read as the frame loads it.
-  // An older read coming back late is dropped by the store; a failed one is said.
-  useEffect(() => void loadPageSource(host, place, design.slug, page).catch(errorToast), [host, place, design.slug, page, rev]);
+  // An older read coming back late is dropped by the store. A failed one is
+  // kept in the store, and said by the red did-not-load bar, or for a page
+  // that loaded all the same, by a toast (readFailureNote).
+  useEffect(() => void loadPageSource(host, place, design.slug, page).catch(() => {}), [host, place, design.slug, page, rev]);
   useEffect(() => void tell(modeMessage(mode)), [mode]);
   useEffect(() => void tell(pinsMessage(wanted)), [wantedKey]);
   useEffect(() => {
@@ -938,7 +995,9 @@ function PageFrame({
       if (!win || e.source !== win) return;
       const m = bridgeMessage(e.data);
       if (!m) return;
+      if (m.type === "failed") return pageSignal({ kind: "refused" }, e.source);
       if (m.type === "mids") {
+        pageSignal({ kind: "answer" }, e.source);
         setPageMids(host, place, design.slug, page, m.mids);
         tell(modeMessage(latest.current.mode));
         tell(pinsMessage(latest.current.wanted));
@@ -975,9 +1034,28 @@ function PageFrame({
     return () => window.removeEventListener("message", onMessage);
   }, [host, place, design.slug, page]);
 
+  // Each framing of the page starts its load again; a hidden window's
+  // frames may be suspended, so the wait for an answer runs only while it
+  // shows (lib/designLoad.ts).
+  useEffect(() => onLoadEvent({ kind: "frame", frame: frameKey }), [frameKey, onLoadEvent]);
+  useEffect(() => {
+    const onVisibility = () => signal({ kind: document.visibilityState === "visible" ? "visible" : "hidden" });
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, [signal]);
+  const token = waitToken(load);
+  useEffect(() => {
+    if (load.phase !== "waiting") return;
+    tell(helloMessage());
+    const t = setTimeout(() => onLoadEvent({ kind: "timeout", token, frame: frameKey }), LOAD_WAIT_MS);
+    return () => clearTimeout(t);
+  }, [load.phase, token, frameKey, onLoadEvent]);
+
   return (
     <div className="relative m-auto shrink-0 rounded-md border border-border-strong shadow-2xl">
-      <CardFrame url={pageUrl(place, design.slug, page, rev, true)} title={pageFile(page)} viewport={viewport} scale={scale} interactive frameRef={frame} />
+      {/* A frame of its own for each framing, so an earlier framing's page
+          (its load, its bridge's messages) is never taken for this one's. */}
+      <CardFrame key={frameKey} url={pageUrl(place, design.slug, page, rev, true)} title={pageFile(page)} viewport={viewport} scale={scale} interactive frameRef={frame} onLoad={() => onLoadEvent({ kind: "load", visible: document.visibilityState === "visible", frame: frameKey })} />
       <PinLayer pins={pins} rects={rects} scale={scale} size={[viewport[0] * scale, viewport[1] * scale]} open={box?.pin?.n ?? null} onOpen={onOpenPin} />
       {box && (
         <CommentBox
@@ -1089,7 +1167,7 @@ const BAR_TONES: Record<Bar["tone"], { box: string; dot: string }> = {
   blue: { box: "bg-preview/[0.12]", dot: "bg-preview" },
 };
 
-const BAR_ACTIONS: Record<BarAction, string> = { stop: "Stop", details: "Details", fix: "Ask the agent to fix", dismiss: "Dismiss", back: "Back to current", restore: "Restore", update: "Update" };
+const BAR_ACTIONS: Record<BarAction, string> = { stop: "Stop", details: "Details", fix: "Ask the agent to fix", "fix-load": "Ask the agent to fix", dismiss: "Dismiss", back: "Back to current", restore: "Restore", update: "Update" };
 
 function BarView({ bar, onAct }: { bar: Bar; onAct: (a: BarAction) => void }) {
   const tone = BAR_TONES[bar.tone];

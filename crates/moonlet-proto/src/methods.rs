@@ -248,7 +248,8 @@ pub const DESIGN_COMMENT_PUT: &str = "design.comment.put";
 /// [`DesignCommentRef`] → the pin, resolved.
 pub const DESIGN_COMMENT_RESOLVE: &str = "design.comment.resolve";
 /// [`DesignPageRef`] → [`DesignPageText`]: a design's page and its version,
-/// for the visual editor (X65 entry 9).
+/// for the visual editor (X65 entry 9), and its first parse error, for the
+/// canvas's "did not load" bar (entry 13).
 pub const DESIGN_PAGE: &str = "design.page";
 /// [`DesignWritePage`] → [`DesignPageWritten`]: the page replaced with the
 /// editor's text, only over `base_version`; else the error `stale`.
@@ -1482,6 +1483,10 @@ pub struct DesignPageRef {
     #[serde(flatten)]
     pub design: DesignRef,
     pub page: String,
+    /// [`DESIGN_PAGE`] only: read the page's parse error too, which the
+    /// canvas asks for a page whose bridge was silent (X65 entry 13).
+    #[serde(default)]
+    pub parse: bool,
 }
 
 /// A design's page as the editor reads it: its text and version, the
@@ -1490,6 +1495,18 @@ pub struct DesignPageRef {
 pub struct DesignPageText {
     pub html: String,
     pub version: String,
+    /// Where the page's markup swallows the editor bridge, if it does,
+    /// given only when asked with [`DesignPageRef::parse`]: what the canvas
+    /// says of a page whose bridge was silent (X65 entry 13).
+    #[serde(default)]
+    pub parse_error: Option<DesignParseError>,
+}
+
+/// A page's first parse error: its line, 1-based, and what is wrong.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DesignParseError {
+    pub line: u32,
+    pub message: String,
 }
 
 /// [`DESIGN_WRITE_PAGE`]'s params: the page's new text, and the version it
@@ -2935,9 +2952,11 @@ mod tests {
         let restore: DesignSnapshotRef = serde_json::from_str(r#"{"workspace":"w1","slug":"settings-page","n":3}"#).unwrap();
         assert_eq!((restore.design.slug(), restore.n), ("settings-page", 3));
         assert_eq!(
-            serde_json::to_value(DesignPageRef { design: DesignRef::Workspace { workspace: "w1".into(), slug: "a".into() }, page: "index".into() }).unwrap(),
-            serde_json::json!({"workspace": "w1", "slug": "a", "page": "index"})
+            serde_json::to_value(DesignPageRef { design: DesignRef::Workspace { workspace: "w1".into(), slug: "a".into() }, page: "index".into(), parse: true }).unwrap(),
+            serde_json::json!({"workspace": "w1", "slug": "a", "page": "index", "parse": true})
         );
+        // The editor's reads ask for no parse error.
+        assert!(!serde_json::from_str::<DesignPageRef>(r#"{"workspace":"w1","slug":"a","page":"index"}"#).unwrap().parse);
         assert!(serde_json::from_str::<DesignPageRef>(r#"{"slug":"settings-page","page":"index"}"#).is_err());
     }
 }

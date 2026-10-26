@@ -2774,6 +2774,7 @@ dependencies = [
  "cap-std",
  "cssparser 0.36.0",
  "dirs 6.0.0",
+ "html5ever",
  "ignore",
  "libc",
  "lol_html",
