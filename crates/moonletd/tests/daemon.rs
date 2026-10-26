@@ -4454,8 +4454,8 @@ async fn building_a_design_whose_slug_the_base_branch_has_makes_no_session_and_l
 
 /// X65 entry 12: `design.file` finds a session design's file for the
 /// canvas by its session and its path in the worktree's design folder, a
-/// snapshot's at the design's depth, with the folder it must be inside,
-/// and never one outside it.
+/// snapshot's at the design's depth, and gives its bytes, never one outside
+/// it.
 #[tokio::test]
 async fn a_session_designs_files_are_found_for_the_canvas_by_its_session() {
     let d = fake_claude_daemon(FAKE_CLAUDE).await;
@@ -4474,10 +4474,9 @@ async fn a_session_designs_files_are_found_for_the_canvas_by_its_session() {
         .request(methods::DESIGN_FILE, serde_json::json!({"session": session.id, "path": "settings-page/pages/index.html"}))
         .await
         .unwrap();
-    assert_eq!(
-        found,
-        serde_json::json!({"path": dir.join("pages/index.html"), "content_type": "text/html; charset=utf-8", "root": dir})
-    );
+    // Its bytes, `<body data-mid="m1"></body>\n` in base64: the app reads
+    // no path of the worktree.
+    assert_eq!(found, serde_json::json!({"content": "PGJvZHkgZGF0YS1taWQ9Im0xIj48L2JvZHk+Cg==", "content_type": "text/html; charset=utf-8"}));
     let outside = c
         .request::<_, serde_json::Value>(methods::DESIGN_FILE, serde_json::json!({"session": session.id, "path": "settings-page/../../../../README.md"}))
         .await;
