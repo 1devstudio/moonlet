@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { JSDOM, type DOMWindow } from "jsdom";
 import { COMPUTED_PROPS, PAGE_KEYS, bridgeMessage, editMessage, helloMessage, modeMessage, paletteMessage, pinsMessage, scrollMessage, selectMessage } from "./designBridge";
 import bridge from "../../src-tauri/src/design_bridge.js?raw";
-import refused from "../../src-tauri/src/design_refused.js?raw";
+import refusedPage from "../../src-tauri/src/design_refused.html?raw";
 import { HOLDS_NO_ELEMENTS } from "./designEdits";
 import { BORDER_STYLES } from "./designStyle";
 import { inspectorSections } from "./designInspector";
@@ -747,13 +747,13 @@ describe("the bridge script in a page (X65)", () => {
 });
 
 describe("the page the scheme serves for a page it cannot serve (X65)", () => {
-  /** That page as design_scheme.rs's refusal builds it, in a frame whose
-   *  parent is the app's window. */
+  /** That page as design_scheme.rs's refusal serves it, the same file, in a
+   *  frame whose parent is the app's window. */
   function refusedFrame() {
     const posted: unknown[] = [];
     const app = new JSDOM("").window;
     app.postMessage = ((m: unknown) => void posted.push(bridgeMessage(JSON.parse(JSON.stringify(m))) ?? { dropped: m })) as typeof app.postMessage;
-    const dom = new JSDOM(`<!doctype html><html><head><meta charset="utf-8"><script>${refused}</script></head><body></body></html>`, {
+    const dom = new JSDOM(refusedPage, {
       runScripts: "dangerously",
       beforeParse: (w) => void Object.defineProperty(w, "parent", { value: app }),
     });

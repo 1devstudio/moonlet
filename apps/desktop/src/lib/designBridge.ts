@@ -84,7 +84,7 @@ export type BridgeMessage =
   /** A snippet dragged from the Palette dropped at `place`, or nowhere. */
   | { type: "drop"; place: DropPlace | null }
   /** The scheme's page in place of one it could not serve (X65 entry 13,
-   *  src-tauri/src/design_refused.js). The page's own scripts can post it
+   *  src-tauri/src/design_refused.html). The page's own scripts can post it
    *  too, so it is a signal only, never text: why comes from the daemon. */
   | { type: "failed" };
 
