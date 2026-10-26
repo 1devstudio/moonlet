@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DesignCard, DesignSystem } from "./protocol";
-import { cardGroups, cardUrl, pageUrl, snapshotPageUrl, changedBanner, fitScale, fixMessage, fixState, headerLine, listedCards, problemsLabel, rendersHere, statusLine, variantsLabel, visibleCards, zoomStep, projectPageUrl } from "./designView";
+import { cardGroups, cardsReloaded, cardUrl, pageUrl, snapshotPageUrl, changedBanner, fitScale, fixMessage, fixState, headerLine, listedCards, problemsLabel, rendersHere, statusLine, variantsLabel, visibleCards, zoomStep, projectPageUrl } from "./designView";
 
 const NOW = 1_761_200_000_000;
 const DAY = 86_400_000;
@@ -278,5 +278,45 @@ describe("a card (X64, X65)", () => {
 describe("a project design's page (X65)", () => {
   it("is read from its project's base branch on a host of its own, its page's key, an s and its design folder's, and never with the bridge", () => {
     expect(projectPageUrl("p1a2b3c4d5e6", "checkout-flow", "index")).toBe("moonlet-design://bed26365685ad797s5e582e3821d83054.p-p1a2b3c4d5e6/checkout-flow/pages/index.html");
+  });
+});
+
+describe("the cards a change in their design system loads again (X64)", () => {
+  it("are none for what a sync writes beside the cards: its notes, grades, records and screenshots", () => {
+    // Written by the sync of the moonlet design system on 2026-10-26.
+    const paths = [
+      ".cache/grades/Agent icon.json",
+      ".cache/render-check.json",
+      ".cache/screenshots/components/buttons/button/button.png",
+      ".claude/settings.local.json",
+      "NOTES.md",
+      "README.md",
+      "_ds_manifest.json",
+      "_ds_sync.json",
+      "components/buttons/button/button.prompt.md",
+      "config.toml",
+      "conventions.md",
+      "guidelines/layout.md",
+    ];
+    expect(cardsReloaded({ paths })).toEqual({ all: false, cards: [] });
+    // Its record alone changed.
+    expect(cardsReloaded({ paths: [] })).toEqual({ all: false, cards: [] });
+  });
+
+  it("are the cards whose page changed, alone", () => {
+    expect(cardsReloaded({ paths: ["components/buttons/button/button.html", "NOTES.md", "ui_kits/session/session.html"] })).toEqual({
+      all: false,
+      cards: ["components/buttons/button/button.html", "ui_kits/session/session.html"],
+    });
+  });
+
+  it("are all of them for a change to what every card loads: a stylesheet, a font, an image, a folder, or the system's folder itself", () => {
+    expect(cardsReloaded({ paths: ["tokens/tokens.css", "NOTES.md"] })).toEqual({ all: true, cards: [] });
+    expect(cardsReloaded({ paths: ["components/buttons/button/button.css"] })).toEqual({ all: true, cards: [] });
+    expect(cardsReloaded({ paths: ["fonts/inter-latin-400-normal.woff2"] })).toEqual({ all: true, cards: [] });
+    expect(cardsReloaded({ paths: ["components/forms/field"] })).toEqual({ all: true, cards: [] });
+    // Its folder itself: made again, removed, or reported whole.
+    expect(cardsReloaded({ paths: [], whole: true })).toEqual({ all: true, cards: [] });
+    expect(cardsReloaded({ paths: ["NOTES.md"], whole: true })).toEqual({ all: true, cards: [] });
   });
 });

@@ -1229,6 +1229,10 @@ export interface DesignChanged {
   session?: string;
   /** Relative to the design system's or the design's folder, else the workspace's. */
   paths: string[];
+  /** The design system's or the design's folder itself changed: made,
+   *  removed, or reported whole; not its record alone, which has no paths
+   *  either. */
+  whole?: boolean;
 }
 
 /** `sync.changed`: a copy, the paths that just started to differ, and why it went. */

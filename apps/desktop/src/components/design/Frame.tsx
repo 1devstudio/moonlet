@@ -1,17 +1,22 @@
 // What a design system's card and a design's page share (X64, X65): the
 // sandboxed frame they render in, and the zoom of the canvas around it.
 
-import { Minus, Plus } from "lucide-react";
+import { Loader2, Minus, Plus } from "lucide-react";
 import type { Ref } from "react";
 import { zoomStep } from "../../lib/designView";
+import { useFrameTurn } from "../../lib/useFrameTurn";
 import { cx } from "../../lib/cx";
 import { IconButton } from "../ui";
 
 /** A card or a page rendered at `scale`: its viewport, in a frame that may
  *  run its own scripts but never reach the app (no `allow-same-origin`). Not
  *  `live`, the same box without the frame, so its web process (X64) is not
- *  started. `frameRef`: the frame, for a page's bridge (X65); `onLoad`: its
- *  load, which tells whether the page loaded (X65 entry 13). */
+ *  started. The frame loads in its turn, one frame at a time (X64,
+ *  `frameQueue.ts`); with `loader`, it shows only once loaded, a spinner
+ *  in its place until then. `maxHeight`: the box is cut there, the spinner
+ *  centred in what shows. `frameRef`: the frame, for a page's bridge
+ *  (X65); `onLoad`: its load, which tells whether the page loaded (X65
+ *  entry 13). */
 export function CardFrame({
   url,
   title,
@@ -19,6 +24,8 @@ export function CardFrame({
   scale,
   interactive = false,
   live = true,
+  loader = true,
+  maxHeight = Infinity,
   frameRef,
   onLoad,
 }: {
@@ -28,22 +35,38 @@ export function CardFrame({
   scale: number;
   interactive?: boolean;
   live?: boolean;
+  loader?: boolean;
+  maxHeight?: number;
   frameRef?: Ref<HTMLIFrameElement>;
   onLoad?: () => void;
 }) {
   const [w, h] = viewport;
+  const turn = useFrameTurn(url, live);
+  const hidden = loader && turn.step !== "shown";
   return (
-    <div className="relative overflow-hidden" style={{ width: w * scale, height: h * scale }}>
-      {live && (
+    <div className="relative overflow-hidden" style={{ width: w * scale, height: Math.min(h * scale, maxHeight) }}>
+      {live && turn.src !== null && (
         <iframe
+          // With the loader, each address gets a frame of its own: WebKit
+          // suspends a hidden window's card processes, and a frame sent
+          // to a new address in one may not load until the window shows.
+          key={loader ? turn.src : undefined}
           ref={frameRef}
           title={title}
-          src={url}
+          src={turn.src}
           sandbox="allow-scripts"
-          onLoad={onLoad}
-          className={cx("absolute left-0 top-0 border-0 bg-transparent", !interactive && "pointer-events-none")}
+          onLoad={() => {
+            turn.loaded();
+            onLoad?.();
+          }}
+          className={cx("absolute left-0 top-0 border-0 bg-transparent", !interactive && "pointer-events-none", hidden && "invisible")}
           style={{ width: w, height: h, transform: `scale(${scale})`, transformOrigin: "0 0" }}
         />
+      )}
+      {live && hidden && (
+        <span role="status" aria-label={`Loading ${title}`} className="absolute inset-0 flex items-center justify-center text-faint">
+          <Loader2 size={16} className="animate-spin" />
+        </span>
       )}
     </div>
   );
