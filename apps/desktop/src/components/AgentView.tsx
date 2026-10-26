@@ -34,10 +34,11 @@ import {
   X,
 } from "lucide-react";
 import { rpc } from "../lib/daemon";
-import { slashMenu, type SlashRow, type SuggestedReply } from "../lib/sessionDesign";
+import { slashMenu, type SlashRow } from "../lib/sessionDesign";
 import { BYPASS_MODE, CLAUDE_MODELS, CLAUDE_MODES, DEFAULT_MODE, EFFORTS, type PlanApproveMode, agentLabel, nextMode, resolvePlanMode } from "../lib/agents";
 import {
   type QuestionPick,
+  type SuggestedReply,
   activeToken,
   withCompletion,
   askQuestions,
@@ -1345,7 +1346,7 @@ async function openInTerminal(host: string, info: TerminalInfo, st: ChatState) {
  *  design system it will use once known (X65); `replies`: suggested replies
  *  above the input once the agent's turn ended, such as the
  *  spec-from-design replies (X65): one with a message sends it as the user
- *  would, any other goes to `onReply`. */
+ *  would (`send`), any other goes to `onReply`, which acts on its kind. */
 export function AgentView({
   host,
   id,
@@ -1373,7 +1374,7 @@ export function AgentView({
   toolNote?: (tool: ChatItem) => ReactNode | null;
   designSlash?: { footer: string | null } | null;
   replies?: SuggestedReply[] | null;
-  onReply?: (reply: SuggestedReply) => void;
+  onReply?: (reply: Exclude<SuggestedReply, { kind: "send" }>) => void;
 }) {
   const info = useStore((s) => s.terminals[host]?.[id]);
   const st = useChat((s) => s.chats[chatKey(host, id)]);
@@ -1754,7 +1755,7 @@ export function AgentView({
             {replies.map((r, i) => (
               <button
                 key={r.label}
-                onClick={() => (r.send !== null ? send(r.send, []) : onReply?.(r))}
+                onClick={() => (r.kind === "send" ? send(r.text, []) : onReply?.(r))}
                 className={cx(
                   "flex h-[26px] items-center gap-1.5 rounded-full border px-2.5 ui-text-12.5",
                   i === 0 ? "border-accent/60 bg-accent/10 text-fg hover:bg-accent/20" : "border-border-strong text-muted hover:bg-hover hover:text-fg",
