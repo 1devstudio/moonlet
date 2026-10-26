@@ -709,7 +709,7 @@ describe("boards (X50 Sync)", () => {
   it("opens a board of another workspace there, in Tasks mode", () => {
     useStore.setState({ workspace: { host: "local", id: "personal" }, mode: { "local/personal": "tasks" } });
     openBoard("local", "acme", "acme-board");
-    expect(useStore.getState().workspace).toEqual({ host: "local", id: "acme" });
+    expect(useStore.getState().workspace).toEqual({ host: "local", id: "acme", account: "local" });
     expect(useStore.getState().mode["local/acme"]).toBe("tasks");
     expect(useTasks.getState().shownBoard["local/acme"]).toBe("acme-board");
     useTasks.setState({ shownBoard: {} });

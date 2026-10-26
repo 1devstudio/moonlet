@@ -685,6 +685,15 @@ export interface Workspace {
   /** The Claude profile its sessions use (X33); null for the default. */
   claude_profile?: string | null;
   created_at: number;
+  /** The member of the account that made it, as it calls itself (X68). */
+  made_by?: string;
+}
+
+/** `account.get` (X68): the account a host shares, named after its central
+ * host's worker id (its own when it has none), and that host's name. */
+export interface AccountInfo {
+  account: string;
+  central: string | null;
 }
 
 /** A Claude Code config folder (X33). */
@@ -1325,6 +1334,7 @@ export const M = {
   workspaceUpdate: "workspace.update",
   workspaceDelete: "workspace.delete",
   workspaceMerge: "workspace.merge",
+  accountGet: "account.get",
   profileList: "profile.list",
   profileCreate: "profile.create",
   profileUpdate: "profile.update",
@@ -1452,6 +1462,7 @@ export const EV = {
   projectsChanged: "projects.changed",
   sessionsChanged: "sessions.changed",
   workspacesChanged: "workspaces.changed",
+  accountInfo: "account.info",
   sectionsChanged: "sections.changed",
   profilesChanged: "profiles.changed",
   gitSettingsChanged: "git.settings_changed",

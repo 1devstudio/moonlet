@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState, type R
 import { Archive, ArrowDown, ArrowLeftRight, Bell, BellOff, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, Command, Download, FolderPlus, History, Link2, Loader2, MoreHorizontal, PenTool, Plus, RotateCcw, RotateCw, Settings, ShieldAlert, X } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { M, type Copy, type HostInfo, type Project, type Section, type SectionView, type Session, type Workspace } from "../lib/protocol";
-import { arrangeShared, groupHeading, lastActive, projectRemoval, sessionBadge, sessionMenu, shownSections, type SectionPart, type SharedGroup } from "../lib/sidebar";
+import { arrangeShared, groupCollapseKey, groupHeading, lastActive, missingProjectNote, projectRemoval, sectionCollapseKey, sectionParts, sessionBadge, sessionMenu, shownSections, type HostSession, type SharedGroup } from "../lib/sidebar";
 import { closeClaudeUpdate, errorToast, projKey, pullBase, selectSession, updateActions, updateClaude, sesKey, sessionState, sessionTerminals, shownWorkspace, termKey, toast, updateSettings, useStore } from "../lib/store";
 import { hostNotice } from "../lib/settingsPage";
 import { gitSettingsOf } from "../lib/gitSettings";
@@ -498,7 +498,7 @@ function GroupBlock({ primary, workspaceId, sec, g, onRowMenu }: { primary: stri
   const host = g.host;
   // Keyed by the section id, which X32 kept from the X5 workspace it was, so
   // collapse state carries over.
-  const key = `${primary}/${sec.id}/${g.key}`;
+  const key = groupCollapseKey(primary, sec.id, g.key);
   const hosts = useStore((s) => s.hosts);
   const labelOf = (h: string) => hosts[h]?.label ?? h;
   const collapsed = useStore((s) => !!s.collapsed[key]);
@@ -510,7 +510,7 @@ function GroupBlock({ primary, workspaceId, sec, g, onRowMenu }: { primary: stri
   const ids = g.sessions.map((e) => e.session.id);
   const column = style === "number" && sources ? numberColumn(ids, lines, { heading: heading === "project" }) : null;
   const tasks = style === "task" ? taskGroups(ids, lines, { sources, groupedByTask: g.kind === "task" }) : null;
-  const row = ({ host: h, session: s }: { host: string; session: Session }, nested?: boolean) => (
+  const row = ({ host: h, session: s }: HostSession, nested?: boolean) => (
     <SessionRow key={`${h}/${s.id}`} host={h} s={s} nested={nested} on={h !== primary ? labelOf(h) : undefined} cell={cellOf(column, s.id)} onMenu={(e) => onRowMenu({ host: h, session: s }, e)} />
   );
   const header =
@@ -518,7 +518,7 @@ function GroupBlock({ primary, workspaceId, sec, g, onRowMenu }: { primary: stri
       <>
         {g.projectId ? <ProjectMark host={host} projectId={g.projectId} /> : <span aria-hidden className="h-[18px] w-[18px] shrink-0 rounded-[5px] border border-dashed border-border-strong" />}
         <span className={cx("truncate ui-text-14 font-semibold", g.projectId ? "text-[#d6d6d6]" : "text-faint")}>{g.label}</span>
-        {g.on && <span className="shrink-0 font-mono ui-text-11 text-faint">{g.on === "missing" ? `not on ${labelOf(primary)}` : `on ${labelOf(g.on)}`}</span>}
+        {g.on && <span className="shrink-0 font-mono ui-text-11 text-faint">{"missing" in g.on ? `not on ${labelOf(primary)}` : `on ${labelOf(g.on.host)}`}</span>}
         {column?.prefix && <span className="shrink-0 font-mono ui-text-11.5 text-faint">{column.prefix}</span>}
       </>
     ) : heading === "label" ? (
@@ -535,7 +535,7 @@ function GroupBlock({ primary, workspaceId, sec, g, onRowMenu }: { primary: stri
             onRowMenu({ host, projectId: g.projectId }, e);
           }}
         >
-          <button onClick={toggle} className={cx("flex min-w-0 items-center gap-2 text-left", g.kind !== "project" && "flex-1")}>
+          <button onClick={g.on && "missing" in g.on ? () => toast(missingProjectNote(g.label, labelOf(primary))) : toggle} className={cx("flex min-w-0 items-center gap-2 text-left", g.kind !== "project" && "flex-1")}>
             {header}
             {collapsed && <ChevronRight size={12} className="text-faint" />}
           </button>
@@ -569,7 +569,7 @@ function SectionBlock({ hosts: holding, ws, sec, onRowMenu }: { hosts: string[];
   // the other members holding it add their sessions (X68).
   const host = holding[0];
   // The X5 workspace's key: the section kept its id (X32).
-  const key = `ws:${host}/${sec.id}`;
+  const key = sectionCollapseKey(host, sec.id);
   const collapsed = useStore((s) => !!s.collapsed[key]);
   const allSections = useStore((s) => s.sections);
   const allProjects = useStore((s) => s.projects);
@@ -585,12 +585,7 @@ function SectionBlock({ hosts: holding, ws, sec, onRowMenu }: { hosts: string[];
   const [renaming, setRenaming] = useState(false);
   const { lines } = useContext(TaskLines);
   const groups = useMemo(() => {
-    const parts: SectionPart[] = holding.map((h) => ({
-      host: h,
-      sec: h === host ? sec : ((allSections[h] ?? []).find((x) => x.id === sec.id) ?? sec),
-      projects: allProjects[h] ?? [],
-      sessions: allSessions[h] ?? [],
-    }));
+    const parts = sectionParts(holding, sec, { sections: allSections, projects: allProjects, sessions: allSessions });
     return arrangeShared(ws.id, parts, {
       stateOf: (h, s) => sessionState(useStore.getState(), h, s.id),
       activeAt: (h, s) => activeAt(h, s),
@@ -703,7 +698,7 @@ function SectionBlock({ hosts: holding, ws, sec, onRowMenu }: { hosts: string[];
           {groups.map((g) => (
             <GroupBlock key={g.key} primary={host} workspaceId={ws.id} sec={sec} g={g} onRowMenu={(target, e) => onRowMenu({ x: e.clientX, y: e.clientY, section: sec, ...target })} />
           ))}
-          {secProjects.length === 0 && (
+          {groups.length === 0 && (
             <button
               className="ml-4 mt-1 flex items-center gap-2 ui-text-13 text-faint hover:text-accent"
               onClick={() => useStore.setState({ dialog: { kind: "add-project", host, section: sec.id } })}
@@ -875,6 +870,7 @@ export function Sidebar() {
   const hosts = useStore((s) => s.hosts);
   const workspaces = useStore((s) => s.workspaces);
   const sections = useStore((s) => s.sections);
+  const accounts = useStore((s) => s.accounts);
   const shown = useStore((s) => shownWorkspace(s));
   const showHistory = useStore((s) => s.showHistory);
   const mode = useStore((s) => modeOf(s));
@@ -912,7 +908,7 @@ export function Sidebar() {
             {/* Each section once, from every host holding it (X68). */}
             {shownSections(
               shown,
-              ordered.map((h) => ({ host: h.id, workspaces: workspaces[h.id] ?? [], sections: sections[h.id] ?? [] })),
+              ordered.map((h) => ({ host: h.id, account: accounts[h.id]?.account, workspaces: workspaces[h.id] ?? [], sections: sections[h.id] ?? [] })),
             ).map(({ ws, sec, hosts: holding }) => (
               <SectionBlock key={sec.id} hosts={holding} ws={ws} sec={sec} onRowMenu={setRowMenu} />
             ))}

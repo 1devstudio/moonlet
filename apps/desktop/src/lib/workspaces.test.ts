@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isShown, mergePrompt, mergeTargets, parseWsKey, wsKey, composerOptions, composerPick, composerProjects, composerTarget, createRequest, newSectionWorkspace, currentWorkspace, deleteBlocked, sessionToRestore, switcherRows, workspaceDirty, workspaceInitial, sectionRows, syncWorkspaceForm, workspaceCanSave, workspacesNeedingYou, workspaceSummary } from "./workspaces";
+import { composerWorkspace, isShown, lastSessionKey, mergeHost, mergeProfileChange, mergePrompt, sharedNotice, mergeTargets, parseWsKey, restoreTarget, rowNeedsYou, wsKey, composerOptions, composerPick, composerProjects, composerTarget, createRequest, newSectionWorkspace, currentWorkspace, deleteBlocked, switcherRows, workspaceDirty, workspaceInitial, sectionRows, syncWorkspaceForm, workspaceCanSave, workspacesNeedingYou, workspaceSummary } from "./workspaces";
 import type { Section, Session, Workspace } from "./protocol";
 
 const w = (id: string, name: string, section_ids: string[], color: Workspace["color"] = "clay", claude_profile: string | null = null): Workspace => ({ id, name, color, section_ids, claude_profile, created_at: 0 });
@@ -57,46 +57,54 @@ describe("switcherRows", () => {
   });
 });
 
-describe("switcherRows across the members of an account (X68)", () => {
+describe("workspaces of an account (X68)", () => {
   // Both Macs list both "Personal" workspaces: the MacBook's and studio-mini's.
-  const book = w("b1", "Personal", ["a"]);
-  const mini = w("m1", "Personal", ["c"], "blue");
+  const book = { ...w("b1", "Personal", ["a"]), made_by: "Alex's MacBook Pro" };
+  const mini = { ...w("m1", "Personal", ["c"], "blue"), made_by: "studio-mini" };
   const shared = [sec("a"), sec("c")];
+  const members = [
+    { host: "local", label: "This Mac", account: "acct-mini", workspaces: [book, mini], sections: shared, sessions: [s("1", "b1")], profiles: [] },
+    { host: "studio-mini", label: "studio-mini", account: "acct-mini", workspaces: [book, mini], sections: shared, sessions: [s("2", "b1"), s("3", "m1")], profiles: [] },
+  ];
+  // A host outside the account, with a workspace whose id happens to match.
+  const devbox = { host: "devbox", label: "devbox", account: "devbox", workspaces: [w("b1", "Lab", [])], sections: [], sessions: [], profiles: [] };
 
-  it("lists a workspace once whichever members list it, with every member's sessions", () => {
-    const rows = switcherRows([
-      { host: "local", label: "This Mac", workspaces: [book, mini], sections: shared, sessions: [s("1", "b1")], profiles: [] },
-      { host: "studio-mini", label: "studio-mini", workspaces: [book, mini], sections: shared, sessions: [s("2", "b1"), s("3", "m1")], profiles: [] },
-      { host: "devbox", label: "devbox", workspaces: [w("lab", "Lab", [])], sections: [], sessions: [], profiles: [] },
-    ]);
-    expect(rows.map((r) => [r.hostLabel, r.ws.id, r.summary, r.kbd])).toEqual([
-      ["This Mac", "b1", "1 section · 2 sessions · Default", "⌃⌘1"],
-      [null, "m1", "1 section · 1 session · Default", "⌃⌘2"],
-      // A host outside the account keeps its own workspaces, under its name.
-      ["devbox", "lab", "0 sections · 0 sessions · Default", "⌃⌘3"],
+  it("lists the account's workspaces once with every member's sessions, and a host outside it apart", () => {
+    const rows = switcherRows([...members, devbox]);
+    expect(rows.map((r) => [r.hostLabel, r.ws.name, r.summary, r.kbd])).toEqual([
+      ["This Mac", "Personal", "1 section · 2 sessions · Default", "⌃⌘1"],
+      [null, "Personal", "1 section · 1 session · Default", "⌃⌘2"],
+      ["devbox", "Lab", "0 sections · 0 sessions · Default", "⌃⌘3"],
     ]);
     expect(rows.map((r) => r.hosts)).toEqual([["local", "studio-mini"], ["local", "studio-mini"], ["devbox"]]);
-  });
-  const members = [
-    { host: "local", label: "This Mac", workspaces: [book, mini], sections: shared, sessions: [], profiles: [] },
-    { host: "studio-mini", label: "studio-mini", workspaces: [book, mini], sections: shared, sessions: [], profiles: [] },
-  ];
-
-  it("shows a shared workspace on every member that lists it", () => {
-    const shown = { host: "local", id: "b1" };
-    expect(isShown(shown, "studio-mini", "b1")).toBe(true);
-    expect(isShown(shown, "studio-mini", "m1")).toBe(false);
-    expect(newSectionWorkspace(shown, "studio-mini", [mini, book])).toBe("b1");
+    // Two of one name say which Mac made each, until they are merged.
+    expect(rows.map((r) => r.from)).toEqual(["Alex's MacBook Pro", "studio-mini", null]);
   });
 
-  it("merges a workspace only into another of the same account, never a host's outside it", () => {
-    const rows = switcherRows([...members, { host: "devbox", label: "devbox", workspaces: [w("lab", "Lab", [])], sections: [], sessions: [], profiles: [] }]);
+  it("shows a shared workspace on every member of its account, never on a host outside it", () => {
+    const shown = { host: "local", id: "b1", account: "acct-mini" };
+    expect(isShown(shown, "studio-mini", "b1", "acct-mini")).toBe(true);
+    expect(isShown(shown, "studio-mini", "m1", "acct-mini")).toBe(false);
+    expect(isShown(shown, "devbox", "b1", "devbox")).toBe(false);
+    expect(newSectionWorkspace(shown, "studio-mini", [mini, book], "acct-mini")).toBe("b1");
+    expect(newSectionWorkspace(shown, "devbox", [w("lab2", "Lab", [])], "devbox")).toBe("lab2");
+  });
+
+  it("keeps showing a shared workspace from a member that still lists it", () => {
+    // This Mac's daemon restarts, and lists nothing for a moment.
+    const hosts = [{ ...members[0], workspaces: [] }, members[1]];
+    expect(currentWorkspace({ host: "local", id: "m1", account: "acct-mini" }, hosts)).toEqual({ host: "studio-mini", id: "m1", account: "acct-mini" });
+  });
+
+  it("merges a workspace only into another of its account, on a member that lists both", () => {
+    const rows = switcherRows([...members, devbox]);
     const cur = rows.find((r) => r.ws.id === "m1")!;
-    expect(mergeTargets(rows, cur).map((r) => r.ws.id)).toEqual(["b1"]);
-    expect(mergeTargets([rows[2]], rows[2])).toEqual([]);
+    expect(mergeTargets(rows, cur).map((r) => [r.host, r.ws.id])).toEqual([["local", "b1"]]);
+    expect(mergeHost(cur, mergeTargets(rows, cur)[0])).toBe("local");
+    expect(mergeTargets(rows, rows[2])).toEqual([]);
   });
 
-  it("asks before merging, saying what moves and what goes", () => {
+  it("asks before merging, saying what moves and what goes, and what a new profile does to running agents", () => {
     expect(mergePrompt(mini, book)).toEqual({
       title: "Merge workspaces",
       message: "Move the 1 section of this Personal, with its sessions, into the other Personal, and delete this one? Every Mac sharing them gets the change.",
@@ -105,12 +113,46 @@ describe("switcherRows across the members of an account (X68)", () => {
     expect(mergePrompt(w("acme", "Acme", ["x", "y"]), book).message).toBe(
       "Move the 2 sections of Acme, with their sessions, into Personal, and delete Acme? Every Mac sharing them gets the change.",
     );
+    expect(mergePrompt(w("acme", "Acme", ["x"]), book, { agents: 2, profile: "Work profile" }).message).toBe(
+      "Move the 1 section of Acme, with its sessions, into Personal, and delete Acme? Every Mac sharing them gets the change. 2 sessions in this workspace have agents. A running agent keeps its account until it restarts, then signs in with Work profile and starts a new conversation.",
+    );
   });
 
-  it("keeps showing a shared workspace while another member lists it", () => {
-    // This Mac's daemon restarts, and lists nothing for a moment.
-    const hosts = [{ ...members[0], workspaces: [] }, members[1]];
-    expect(currentWorkspace({ host: "local", id: "m1" }, hosts)).toEqual({ host: "local", id: "m1" });
+  it("starts a session in the shown workspace on whichever member has the project", () => {
+    const target = { host: "local", id: "b1", account: "acct-mini" };
+    expect(composerWorkspace(target, "studio-mini", [...members, devbox])).toBe("b1");
+    expect(composerWorkspace(target, "devbox", [...members, devbox])).toBeNull();
+    expect(composerWorkspace(null, "local", members)).toBeNull();
+  });
+
+  it("reopens the session last open in a shared workspace on the member it is on", () => {
+    const ref = { host: "local", id: "b1", account: "acct-mini" };
+    expect(lastSessionKey(ref)).toBe("acct-mini/b1");
+    expect(restoreTarget("studio-mini/2", [...members, devbox], ref)).toEqual({ host: "studio-mini", session: "2" });
+    // Saved before X68: the session id alone, on the shown host.
+    expect(restoreTarget("1", members, ref)).toEqual({ host: "local", session: "1" });
+    expect(restoreTarget("studio-mini/3", members, ref)).toBeNull();
+  });
+
+  it("says once that this Mac's workspaces are now shared with its central host", () => {
+    expect(sharedNotice({ account: "acct-mini", central: "studio-mini" }, [])).toBe("Workspaces are now shared with studio-mini");
+    expect(sharedNotice({ account: "acct-mini", central: "studio-mini" }, ["acct-mini"])).toBeNull();
+    expect(sharedNotice({ account: "7d3f", central: null }, [])).toBeNull();
+  });
+
+  it("warns of a new Claude profile only when merging moves running agents to another one", () => {
+    const work = { id: "pw", name: "Work profile", path: "/w", created_at: 0, account: null, hooks_installed: true };
+    const acme = { ...w("acme", "Acme", ["x"]), claude_profile: "pw" };
+    expect(mergeProfileChange(acme, book, [work], 2)).toEqual({ agents: 2, profile: "Default" });
+    expect(mergeProfileChange(book, acme, [work], 1)).toEqual({ agents: 1, profile: "Work profile" });
+    expect(mergeProfileChange(book, mini, [work], 3)).toBeUndefined();
+    expect(mergeProfileChange(acme, book, [work], 0)).toBeUndefined();
+  });
+
+  it("marks a shared workspace when a session on any member needs you", () => {
+    const rows = switcherRows(members);
+    expect(rowNeedsYou(rows[0], new Set(["studio-mini/b1"]))).toBe(true);
+    expect(rowNeedsYou(rows[1], new Set(["studio-mini/b1"]))).toBe(false);
   });
 });
 
@@ -118,9 +160,10 @@ describe("currentWorkspace", () => {
   const hosts = [{ host: "local", label: "This Mac", workspaces: [w("personal", "Personal", []), w("acme", "Acme", [])], sections: [], sessions: [], profiles: [] }];
 
   it("keeps the remembered workspace while it exists, else falls back to the first", () => {
-    expect(currentWorkspace({ host: "local", id: "acme" }, hosts)).toEqual({ host: "local", id: "acme" });
-    expect(currentWorkspace({ host: "local", id: "deleted" }, hosts)).toEqual({ host: "local", id: "personal" });
-    expect(currentWorkspace(null, hosts)).toEqual({ host: "local", id: "personal" });
+    // A host that says no account is its own (X68).
+    expect(currentWorkspace({ host: "local", id: "acme" }, hosts)).toEqual({ host: "local", id: "acme", account: "local" });
+    expect(currentWorkspace({ host: "local", id: "deleted" }, hosts)).toEqual({ host: "local", id: "personal", account: "local" });
+    expect(currentWorkspace(null, hosts)).toEqual({ host: "local", id: "personal", account: "local" });
     expect(currentWorkspace(null, [])).toBeNull();
   });
 });
@@ -130,17 +173,6 @@ describe("workspacesNeedingYou", () => {
     const hosts = [{ host: "local", label: "This Mac", workspaces: [], sections: [], sessions: [s("1", "personal"), s("2", "acme"), s("3", "lab", true)], profiles: [] }];
     const needs = (_host: string, x: Session) => x.id !== "1";
     expect([...workspacesNeedingYou(hosts, needs)]).toEqual(["local/acme"]);
-  });
-});
-
-describe("sessionToRestore", () => {
-  const sessions = [s("1", "personal"), s("2", "acme"), s("3", "acme", true)];
-
-  it("reopens the session last selected in that workspace while it is still there", () => {
-    expect(sessionToRestore("2", sessions, "acme")).toBe("2");
-    expect(sessionToRestore("3", sessions, "acme")).toBeNull();
-    expect(sessionToRestore("1", sessions, "acme")).toBeNull();
-    expect(sessionToRestore(undefined, sessions, "acme")).toBeNull();
   });
 });
 

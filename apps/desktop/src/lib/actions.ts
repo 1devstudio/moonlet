@@ -5,8 +5,7 @@ import { rpc, sendInput } from "./daemon";
 import { addTab, closeFile, closeJob, cycleFocus, openFile, openJob, splitLeaf, tabOf } from "./layout";
 import { M, type ProjectConfig, type TerminalInfo, type Session, type SessionArchived, type UnpushedWork } from "./protocol";
 import { checkForUpdates, errorToast, focusTerminal, getLayout, selectedSession, sesKey, sessionState, setLayout, termKey, toast, useStore, sessionTerminals, shownWorkspace } from "./store";
-import { arrange, hostSections, lastActive } from "./sidebar";
-import { isShown } from "./workspaces";
+import { lastActive, sharedSessionOrder } from "./sidebar";
 import { findEntry, outputToCopy } from "./terminals";
 import { agentReadiness, isStructured, tabAgent } from "./agents";
 import { hasRunCommand } from "./projectSettings";
@@ -344,28 +343,17 @@ function setArchiving(key: string, a: Archiving | null) {
 export function visibleSessionOrder(): { host: string; id: string }[] {
   const s = useStore.getState();
   const hosts = Object.values(s.hosts).sort((a, b) => Number(a.remote) - Number(b.remote) || a.id.localeCompare(b.id));
-  const flat: { host: string; id: string }[] = [];
-  const seen = new Set<string>();
-  for (const h of hosts) {
-    const terms = s.terminals[h.id] ?? {};
-    // Only the workspace the sidebar shows (X32).
-    const shown = shownWorkspace(s);
-    const wss = (s.workspaces[h.id] ?? []).filter((w) => isShown(shown, h.id, w.id));
-    for (const { ws, sec } of hostSections(wss, s.sections[h.id] ?? [])) {
-      if (s.collapsed[`ws:${h.id}/${sec.id}`]) continue;
-      const groups = arrange(ws.id, sec, s.projects[h.id] ?? [], s.sessions[h.id] ?? [], (x) => sessionState(s, h.id, x.id), (x) => lastActive(terms, x));
-      for (const g of groups) {
-        if (s.collapsed[`${h.id}/${sec.id}/${g.key}`]) continue;
-        for (const x of g.sessions) {
-          const key = `${h.id}/${x.id}`;
-          if (seen.has(key)) continue;
-          seen.add(key);
-          flat.push({ host: h.id, id: x.id });
-        }
-      }
-    }
-  }
-  return flat;
+  // Only the workspace the sidebar shows (X32), as it shows it: each shared
+  // section once, with every member's sessions (X68).
+  return sharedSessionOrder({
+    shown: shownWorkspace(s),
+    hosts: hosts.map((h) => ({ host: h.id, account: s.accounts[h.id]?.account, workspaces: s.workspaces[h.id] ?? [], sections: s.sections[h.id] ?? [] })),
+    projects: s.projects,
+    sessions: s.sessions,
+    activeAt: (host, x) => lastActive(s.terminals[host] ?? {}, x),
+    stateOf: (host, x) => sessionState(s, host, x.id),
+    collapsed: s.collapsed,
+  });
 }
 
 export function selectSessionByIndex(i: number) {
