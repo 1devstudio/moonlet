@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildComposer, buildPick, buildingIn, designAttachments, promptAfterDrop } from "./buildIt";
+import { branchPrefix, buildNames, buildPick, buildProject, buildingIn, createFailure, createReady, designAttachments, designDir, promptAfterDrop } from "./buildIt";
 import { firstMessage } from "./composer";
 
 const settings = {
@@ -7,6 +7,7 @@ const settings = {
   slug: "settings-page",
   name: "Settings page",
   system: "moonlet-desktop",
+  systemName: "moonlet desktop",
   pages: [
     { name: "index", label: "rows" },
     { name: "git-a", label: "Git section as cards" },
@@ -14,14 +15,14 @@ const settings = {
   ],
 };
 
-describe("buildComposer (X65 Build it)", () => {
+describe("Build it's composer (X65)", () => {
   it("opens the composer on the design system's first source, with the design as its chip, its branch, its prompt and the note", () => {
     const projects = [
       { id: "p-store", path: "/Users/marcin/code/storefront" },
       { id: "p-moon", path: "/Users/marcin/code/moonlet" },
     ];
-    expect(buildComposer(settings, { sources: ["/Users/marcin/code/moonlet", "/Users/marcin/code/storefront"], projects, prefix: "marcin/" })).toEqual({
-      project: "p-moon",
+    expect(buildProject(["/Users/marcin/code/moonlet", "/Users/marcin/code/storefront"], projects)).toBe("p-moon");
+    expect(buildNames(settings, "marcin/")).toEqual({
       chip: "Design · Settings page",
       name: "implement-settings-page",
       branch: "marcin/implement-settings-page",
@@ -31,8 +32,37 @@ describe("buildComposer (X65 Build it)", () => {
   });
 
   it("has no project when the design system's first source is not one of the workspace's projects", () => {
-    expect(buildComposer(settings, { sources: ["/elsewhere"], projects: [{ id: "p-moon", path: "/Users/marcin/code/moonlet" }], prefix: "" })).toMatchObject({ project: null, branch: "implement-settings-page" });
-    expect(buildComposer(settings, { sources: [], projects: [], prefix: "" }).project).toBeNull();
+    expect(buildProject(["/elsewhere"], [{ id: "p-moon", path: "/Users/marcin/code/moonlet" }])).toBeNull();
+    expect(buildProject([], [])).toBeNull();
+    expect(buildNames(settings, "").branch).toBe("implement-settings-page");
+  });
+
+  it("takes the project's branch prefix, else the host's, as the daemon does", () => {
+    expect(branchPrefix({ branch_prefix: "acme/" }, "moonlet/")).toBe("acme/");
+    expect(branchPrefix({ branch_prefix: "  " }, "moonlet/")).toBe("moonlet/");
+    expect(branchPrefix({}, "moonlet/")).toBe("moonlet/");
+    expect(branchPrefix(null, "")).toBe("");
+  });
+
+  it("names its lines by the project's design folder, trimmed, else docs/design", () => {
+    expect(designDir({ design: { dir: " ui/prototypes " } })).toBe("ui/prototypes");
+    expect(designDir({ design: { dir: "" } })).toBe("docs/design");
+    expect(designDir({})).toBe("docs/design");
+    expect(designDir(null)).toBe("docs/design");
+  });
+
+  it("creates only once the project's config is read while it builds a design, as its lines name the project's design folder", () => {
+    expect(createReady({ busy: false, project: true, building: true, configRead: false })).toBe(false);
+    expect(createReady({ busy: false, project: true, building: true, configRead: true })).toBe(true);
+    expect(createReady({ busy: false, project: true, building: false, configRead: false })).toBe(true);
+    expect(createReady({ busy: true, project: true, building: false, configRead: true })).toBe(false);
+    expect(createReady({ busy: false, project: false, building: false, configRead: true })).toBe(false);
+  });
+
+  it("says a refused Create in the composer while it builds a design, and in a toast otherwise", () => {
+    const refused = "docs/design/settings-page is in the worktree already: rename the design before building it";
+    expect(createFailure(true, refused)).toEqual({ refused });
+    expect(createFailure(false, "no such project")).toEqual({ toast: "no such project" });
   });
 });
 

@@ -59,7 +59,7 @@ import { askConfirm } from "../../lib/confirm";
 import { NEAR_ROOT, useNear } from "../../lib/useNear";
 import { useShallow } from "zustand/react/shallow";
 import { workspaceProjects } from "../../lib/tasksStore";
-import { buildComposer, buildingIn } from "../../lib/buildIt";
+import { buildProject, buildingIn, type BuildDesign } from "../../lib/buildIt";
 import { cx } from "../../lib/cx";
 import { AgentIcon, Button, Dialog, Field, IconButton, inputCls } from "../ui";
 import { Menu } from "../Menu";
@@ -110,8 +110,8 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
   const building = buildingIn(design, sessions ?? [], allProjects ?? []);
   const buildIt = () => {
     const sources = systems?.find((x) => x.slug === design.system)?.sources ?? [];
-    const { project } = buildComposer(design, { sources, projects, prefix: "" });
-    const build = { workspace, slug: design.slug, name: design.name, system: design.system, pages: design.pages, systemName, viewport: design.viewport };
+    const project = buildProject(sources, projects);
+    const build: BuildDesign = { workspace, slug: design.slug, name: design.name, system: design.system, pages: design.pages, systemName, viewport: design.viewport };
     useStore.setState({ dialog: { kind: "new-session", host, workspace, project: project ?? undefined, design: build } });
   };
   const remove = async () => {

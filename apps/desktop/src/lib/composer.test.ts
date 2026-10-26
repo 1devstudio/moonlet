@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { attachments, branchRow, firstMessage, linkMenu, pickerBranches, pickerHint, pickerSearch, placeholder, sessionName, showsLinkSlot, suggestedTask } from "./composer";
+import { attachments, branchRow, firstMessage, linkMenu, pickerBranches, pickerHint, pickerSearch, newBranch, placeholder, sessionName, showsLinkSlot, suggestedTask } from "./composer";
 import type { Task } from "./tasks";
 
 const facts = { base: "main", task: null, taskBranch: null, from: null, worktree: null, pr: null, checkbox: false };
@@ -152,6 +152,21 @@ describe("placeholder (X54)", () => {
     // "Don’t send the PR description": the PR stays picked, nothing of it is attached.
     const sent = attachments({ task: aioTask, pr: null, prContext: null });
     expect(placeholder(sent.map((a) => a.id))).toBe("Anything to add? Leave empty to start from the issue.");
+  });
+});
+
+describe("sessionName (X65 Build it)", () => {
+  it("is Build it's name for a design's session, after a task's or a PR's title", () => {
+    expect(sessionName({ task: null, pr: null, build: { name: "implement-settings-page" } })).toBe("implement-settings-page");
+    expect(sessionName({ task: null, pr: null, build: null })).toBeNull();
+  });
+});
+
+describe("newBranch (X65 Build it)", () => {
+  it("is the task's branch, else Build it's, else none: the daemon names it after the prompt", () => {
+    expect(newBranch({ taskBranch: "aio-279-x", build: { branch: "moonlet/implement-settings-page" } })).toBe("aio-279-x");
+    expect(newBranch({ taskBranch: null, build: { branch: "moonlet/implement-settings-page" } })).toBe("moonlet/implement-settings-page");
+    expect(newBranch({ taskBranch: null, build: null })).toBeNull();
   });
 });
 

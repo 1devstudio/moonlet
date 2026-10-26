@@ -5,7 +5,7 @@ import { hostsApi, rpc } from "../lib/daemon";
 import type { Task, TaskStart } from "../lib/tasks";
 import { branchUser, composerTask, ensureTasks, leaveTasksMode, placedTasks, startedFromTask, useTasks } from "../lib/tasksStore";
 import { composerOptions, composerPick, composerProjects, composerTarget, wsKey } from "../lib/workspaces";
-import { attachments, branchRow, firstMessage, linkMenu, pickerBranches, pickerHint, pickerSearch, placeholder, sessionName, showsLinkSlot, suggestedTask, type Attachment, type PickerList, type PickerTab } from "../lib/composer";
+import { attachments, branchRow, firstMessage, linkMenu, newBranch, pickerBranches, pickerHint, pickerSearch, placeholder, sessionName, showsLinkSlot, suggestedTask, type Attachment, type PickerList, type PickerTab } from "../lib/composer";
 import { M, type IssueRef, type Project, type ProjectConfig, type Session } from "../lib/protocol";
 import { errorMessage, errorToast, selectSession, shownWorkspace, useStore } from "../lib/store";
 import { composerSync, syncOffered } from "../lib/sync";
@@ -22,7 +22,7 @@ import { Markdown } from "./AgentView";
 import { fileMention } from "../lib/plusMenu";
 import { fromOtherDialog } from "../lib/modal";
 import { defaultStartLabel, gitSettingsOf } from "../lib/gitSettings";
-import { buildComposer, buildPick, designAttachments, designDir, promptAfterDrop, type BuildDesign } from "../lib/buildIt";
+import { branchPrefix, buildNames, buildPick, createFailure, createReady, designAttachments, designDir, promptAfterDrop, type BuildDesign } from "../lib/buildIt";
 import { loadDesigns } from "../lib/designStore";
 import { pageUrl } from "../lib/designView";
 import { viewportOf } from "../lib/designViewport";
@@ -165,10 +165,13 @@ export interface AttachmentPage {
 
 const THUMB_WIDTH = 320;
 
+/** Each kind of attachment's icon. */
+const ATTACHMENT_ICONS: Record<Attachment["icon"], typeof FileText> = { file: FileText, pr: GitPullRequest, page: FileCode, styles: FileCode };
+
 /** A folded attachment (X54): its line, › to unfold its text, × to remove it. */
 function AttachmentRow({ a, onRemove, design }: { a: Attachment; onRemove: () => void; design?: AttachmentPage }) {
   const [open, setOpen] = useState(false);
-  const Icon = a.icon === "pr" ? GitPullRequest : a.icon === "page" || a.icon === "styles" ? FileCode : FileText;
+  const Icon = ATTACHMENT_ICONS[a.icon];
   return (
     <div role="group" aria-label={a.file ? `${a.file} ${a.summary}` : `${a.lead}${a.summary}`} className="rounded-[10px] border border-border bg-panel-2">
       <div className="flex items-center gap-2 px-3 py-[9px] ui-text-12.5 text-muted">
@@ -316,7 +319,7 @@ export function Composer({
   /** Adopting a worktree without a session, and its branch (X46). */
   worktree?: { path: string; branch: string };
   /** Building a workspace design (X65 Build it): its chip, attachments, branch and prompt. */
-  design?: BuildDesign & { systemName: string; viewport?: string };
+  design?: BuildDesign;
 }) {
   const hosts = useStore((s) => s.hosts);
   const allProjects = useStore((s) => s.projects);
@@ -357,7 +360,7 @@ export function Composer({
   const [left, setLeft] = useState<string[]>([]);
   const [refused, setRefused] = useState<string | null>(null);
   // The task's text is an attachment; what the user types goes after it (X54).
-  const [prompt, setPrompt] = useState(() => (presetDesign ? buildComposer(presetDesign, { sources: [], projects: [], prefix: "" }).prompt : ""));
+  const [prompt, setPrompt] = useState(() => (presetDesign ? buildNames(presetDesign, "").prompt : ""));
   const [task, setTask] = useState(presetTask ?? null);
   const [assign, setAssign] = useState(!!presetTask?.assign?.checked);
   // Keep in sync with this Mac (X60): for a project on the central host,
@@ -428,15 +431,20 @@ export function Composer({
     if (!current) return;
     setChoice(loadChoice(current.project.id));
     setConfigRead(false);
+    // A project picked meanwhile asks again: this answer is no longer its.
+    let live = true;
     void rpc<ProjectConfig>(current.host, M.projectConfig, { id: current.project.id })
-      .then(setConfig)
-      .catch(() => setConfig(null))
-      .finally(() => setConfigRead(true));
+      .then((c) => live && setConfig(c))
+      .catch(() => live && setConfig(null))
+      .finally(() => live && setConfigRead(true));
     void rpc<string[]>(current.host, M.gitBranches, { path: current.project.path }).then(setBranches).catch(() => setBranches([]));
     setPr(null);
     wantedContext.current = null;
     setFrom(null);
     setAddDirs([]);
+    return () => {
+      live = false;
+    };
   }, [current?.host, current?.project.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => ta.current?.focus(), []);
@@ -525,15 +533,15 @@ export function Composer({
   };
 
   const create = async () => {
-    if (!current || busy || (design && !configRead)) return;
+    if (!current || !createReady({ busy, project: true, building: !!design, configRead })) return;
     setBusy(true);
     setRefused(null);
     try {
-      const named = task && !worktree ? await taskBranchLoad.current : (built?.branch ?? null);
+      const named = newBranch({ taskBranch: task && !worktree ? await taskBranchLoad.current : null, build: built });
       const s = await rpc<Session>(current.host, M.sessionCreate, {
         project_id: current.project.id,
         prompt: firstMessage(sent, prompt),
-        name: sessionName({ task, pr }) ?? built?.name ?? null,
+        name: sessionName({ task, pr, build: built }),
         task: task?.ref ?? null,
         worktree: worktree?.path ?? null,
         agent: choice.agent,
@@ -570,8 +578,9 @@ export function Composer({
       selectSession(current.host, s.id);
     } catch (e) {
       // Build it says why in the composer, such as a design folder the base branch has (X65).
-      if (design) setRefused(errorMessage(e));
-      else errorToast(e);
+      const failed = createFailure(!!design, errorMessage(e));
+      if ("refused" in failed) setRefused(failed.refused);
+      else errorToast(failed.toast);
     } finally {
       setBusy(false);
     }
@@ -595,8 +604,8 @@ export function Composer({
       ])
     : [];
 
-  const prefix = useStore((s) => config?.branch_prefix ?? gitSettingsOf(s.gitSettings, current?.host ?? "local").branch_prefix);
-  const built = design ? buildComposer(design, { sources: [], projects: [], prefix }) : null;
+  const prefix = useStore((s) => branchPrefix(config, gitSettingsOf(s.gitSettings, current?.host ?? "local").branch_prefix));
+  const built = design ? buildNames(design, prefix) : null;
   const designSent = design ? designAttachments(design, { systemName: design.systemName, dir: designDir(config), left }) : [];
   const sent = [...designSent, ...attachments({ task, pr: pr && prSend ? pr : null, prContext })];
   const thumbs = design ? { workspace: design.workspace, slug: design.slug, viewport: viewportOf(design) } : undefined;
@@ -889,7 +898,7 @@ export function Composer({
           <span className="ml-auto" />
           <PlusMenu variant="composer" onAttach={() => void attach()} onAddDir={() => void addDir()} />
           <button
-            disabled={busy || !current || (!!design && !configRead)}
+            disabled={!createReady({ busy, project: !!current, building: !!design, configRead })}
             title={current ? undefined : "Choose a project first"}
             className="flex items-center gap-2 rounded-lg bg-fg px-3 py-1.5 ui-text-14 font-medium text-bg hover:bg-white disabled:opacity-50"
             onClick={() => void create()}
