@@ -17,25 +17,58 @@ use super::store::Store;
 pub struct Stale(pub String);
 
 /// A page whose file is not there or cannot be read, said as the canvas's
-/// did-not-load bar says it (X65).
+/// did-not-load bar says it (X65): plainly, with no path, as it goes to the
+/// bar and the design's agent. It is the context of the error it comes
+/// from, which keeps the cause for the daemon's log.
 #[derive(Debug, thiserror::Error)]
 pub enum Unreadable {
     #[error("the file is missing")]
     Missing,
+    #[error("the file is a link out of the design")]
+    LinkOut,
+    #[error("the file is not valid UTF-8")]
+    NotUtf8,
     #[error("the file cannot be read")]
     Denied,
 }
 
 impl Unreadable {
-    /// What a failed read of a page is: missing when the file, or a folder
-    /// on its way, is not there; else it cannot be read.
-    fn of(e: &anyhow::Error) -> Self {
-        let missing = e.chain().any(|c| {
-            c.downcast_ref::<std::io::Error>()
-                .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
-        });
-        if missing { Self::Missing } else { Self::Denied }
+    /// What a failed read of `rel` in `root` is: a link out of the design
+    /// when the file, or a folder on its way, is a link that leads out of
+    /// `root`; missing when it is not there; not UTF-8 when its bytes are
+    /// not text; else it cannot be read (no permission, a folder, …).
+    fn of(e: &anyhow::Error, root: &std::path::Path, rel: &std::path::Path) -> Self {
+        let io = |kind: std::io::ErrorKind| {
+            e.chain().any(|c| {
+                c.downcast_ref::<std::io::Error>()
+                    .is_some_and(|io| io.kind() == kind)
+            })
+        };
+        if leads_out(root, rel) {
+            Self::LinkOut
+        } else if io(std::io::ErrorKind::NotFound) {
+            Self::Missing
+        } else if io(std::io::ErrorKind::InvalidData) {
+            Self::NotUtf8
+        } else {
+            Self::Denied
+        }
     }
+}
+
+/// Whether `rel` in `root`, or a folder on its way, is a link whose target
+/// is outside `root`: only to say why a read failed, never to allow one.
+fn leads_out(root: &std::path::Path, rel: &std::path::Path) -> bool {
+    let Ok(root) = root.canonicalize() else {
+        return false;
+    };
+    let mut at = root.clone();
+    rel.components().any(|part| {
+        at.push(part);
+        at.symlink_metadata()
+            .is_ok_and(|m| m.file_type().is_symlink())
+            && !at.canonicalize().is_ok_and(|real| real.starts_with(&root))
+    })
 }
 
 /// A page name that names no page of a design.
@@ -93,8 +126,10 @@ impl Store {
     /// never on the editor's reads on every change.
     pub fn page(&self, at: &DesignAt, page: &str, parse: bool) -> Result<DesignPageText> {
         let rel = page_rel(at, page)?;
-        let html =
-            fsx::read_inside(&at.root, &at.root.join(rel)).map_err(|e| Unreadable::of(&e))?;
+        let html = fsx::read_inside(&at.root, &at.root.join(&rel)).map_err(|e| {
+            let why = Unreadable::of(&e, &at.root, &rel);
+            e.context(why)
+        })?;
         Ok(DesignPageText {
             version: version_of(&html),
             parse_error: if parse {
@@ -380,5 +415,28 @@ mod tests {
         let read = store.page(&at, "index", false);
         std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
         assert_eq!(read.unwrap_err().to_string(), "the file cannot be read");
+    }
+
+    #[test]
+    fn a_page_that_is_not_utf_8_or_a_link_out_of_the_design_says_so_and_keeps_its_cause() {
+        let (home, store) = store_with_page();
+        let at = store.workspace_design("w1", "settings-page").unwrap();
+        let pages = home.path().join("design/w1/designs/settings-page/pages");
+        std::fs::write(pages.join("latin.html"), b"<p>caf\xe9</p>\n").unwrap();
+        let latin = store.page(&at, "latin", false).unwrap_err();
+        assert_eq!(latin.to_string(), "the file is not valid UTF-8");
+        // The cause stays in the chain, for the daemon's log, never in what is said.
+        assert!(
+            latin.chain().any(|c| c
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|io| io.kind() == std::io::ErrorKind::InvalidData)),
+            "{latin:#}"
+        );
+        std::fs::write(home.path().join("outside.html"), "<p>out</p>\n").unwrap();
+        std::os::unix::fs::symlink(home.path().join("outside.html"), pages.join("out.html"))
+            .unwrap();
+        let out = store.page(&at, "out", false).unwrap_err();
+        assert_eq!(out.to_string(), "the file is a link out of the design");
+        assert!(out.chain().count() > 1, "{out:#}");
     }
 }
