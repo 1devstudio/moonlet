@@ -834,6 +834,11 @@ label = \"rows\"
     #[test]
     fn a_designs_folder_that_cannot_be_read_fails_the_listing_with_its_reason() {
         use std::os::unix::fs::PermissionsExt;
+        // Root reads a folder whatever its mode, so chmod 000 refuses it
+        // nothing: the test has no case to make there.
+        if nix::unistd::geteuid().is_root() {
+            return;
+        }
         let (home, store) = store_with_system();
         store
             .create_design("w1", "Settings page", "moonlet-desktop", "", 1)
