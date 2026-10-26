@@ -1627,8 +1627,8 @@ impl Daemon {
                 let _held = lock.lock().await;
                 let (written, edits) = (at.clone(), r.edits.clone());
                 let version = blocking(move || store.write_page(&written, &r.page, &r.html, &r.base_version)).await?;
-                // Saved while the agent works: within its turn.
-                let in_turn = self.design_agent_working(&at).await.unwrap_or(false);
+                // Saved while the agent works, or asks the user: within its turn.
+                let in_turn = self.design_agent_in_turn(&at).await.unwrap_or(false);
                 self.edited_by_hand(&at, edits, in_turn);
                 ok(m::DesignPageWritten { version })
             }
@@ -2064,6 +2064,13 @@ impl Daemon {
     /// Whether a design's agent is at work (X65).
     async fn design_agent_working(&self, at: &DesignAt) -> Result<bool, RpcError> {
         Ok(self.design_agent(at).await?.is_some_and(|t| t.agent_state == moonlet_proto::types::AgentState::Working))
+    }
+
+    /// Whether a design's agent is within a turn: at work, or asking the
+    /// user, as the snapshots' watch counts a turn (X65).
+    async fn design_agent_in_turn(&self, at: &DesignAt) -> Result<bool, RpcError> {
+        use moonlet_proto::types::AgentState;
+        Ok(self.design_agent(at).await?.is_some_and(|t| matches!(t.agent_state, AgentState::Working | AgentState::Blocked)))
     }
 
     /// What a design's edits by hand not kept yet did, leaving them and

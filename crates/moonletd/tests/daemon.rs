@@ -3765,10 +3765,16 @@ done
 
 /// X65: a message sent while the design's agent asks the user is within
 /// its turn: the edits by hand not kept yet then go with the turn's
-/// snapshot, never on their own with its half-written pages.
+/// snapshot, never on their own with its half-written pages. Edits saved
+/// while it asks are within the turn too, also when the daemon hears it
+/// start only after them: here its start is held in line
+/// (`MOONLET_DESIGN_TURNS_HELD`) until the turn ends.
 #[tokio::test]
 async fn edits_by_hand_go_with_the_turn_when_a_message_comes_while_the_agent_asks() {
-    let d = fake_claude_daemon_with(ASKING_CLAUDE, vec![("MOONLET_DESIGN_QUIET_MS".into(), "60000".into())]).await;
+    let held = tempfile::tempdir().unwrap();
+    let hold = held.path().join("hold");
+    let env = vec![("MOONLET_DESIGN_QUIET_MS".into(), "60000".into()), ("MOONLET_DESIGN_TURNS_HELD".into(), hold.display().to_string())];
+    let d = fake_claude_daemon_with(ASKING_CLAUDE, env).await;
     let mut c = d.client().await;
     let ws = workspace_with_system(&d, &mut c).await;
     let created: serde_json::Value = c
@@ -3780,16 +3786,24 @@ async fn edits_by_hand_go_with_the_turn_when_a_message_comes_while_the_agent_ask
     turn_over(&mut c, agent).await;
     let dir = d.home.path().join(".moonlet/design").join(&ws).join("designs/settings-page");
     std::fs::write(dir.join("pages/index.html"), "<p data-mid=\"m2\">first</p>\n").unwrap();
+    std::fs::write(&hold, "").unwrap();
     let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": agent, "text": "ASK-ME"})).await.unwrap();
+    let mut asks = false;
     for _ in 0..100 {
         let terminals: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
         if terminals.iter().any(|t| u64::from(t.id) == agent && t.agent_state == moonlet_proto::types::AgentState::Blocked) {
+            asks = true;
             break;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+    assert!(asks, "the agent never asked");
     save_by_hand(&mut c, &ws, "<p>by hand</p>\n", &["text of m2"]).await;
     let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": agent, "text": "Go on"})).await.unwrap();
+    turn_over(&mut c, agent).await;
+    // Its start and its end are heard now, in that order: snapshot 2 is
+    // what the start keeps, if anything, else the end's.
+    std::fs::remove_file(&hold).unwrap();
     let listed = history_of(&mut c, &ws, 2).await;
     let kinds: Vec<(u64, &str)> = listed.as_array().unwrap().iter().map(|s| (s["n"].as_u64().unwrap(), s["type"].as_str().unwrap())).collect();
     assert_eq!(kinds, [(2, "agent_turn"), (1, "agent_turn")]);
