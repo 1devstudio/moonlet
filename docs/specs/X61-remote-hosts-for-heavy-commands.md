@@ -21,7 +21,7 @@ As in X41, nothing is routed yet: the switch links the host as a worker, and rou
 3. You turn the switch on. `build-box` has never paired with `studio-mini`, so a dialog asks for a pairing code from `studio-mini`. It says where to get one: **Let another Mac connect** in moonlet on `studio-mini`, or `moonletd pair` there.
 4. On `studio-mini` you run `moonletd pair` and type the code into the dialog. The line under `build-box`'s switch reads "Linking to studio-mini…", then "Linked to studio-mini since 10:42".
 5. On `studio-mini`, `moonlet rpc worker.list` lists `build-box`, and Settings › Hosts › Macs that can connect lists it too.
-6. You turn the switch off: the line reads "Not linked" again. Turning it on later needs no code, since `build-box` kept its pairing.
+6. You turn the switch off: `build-box` takes no more heavy commands. Since [X68](X68-account-state.md) it stays linked as a member of the account, so the line still reads "Linked to studio-mini since …"; before X68 it read "Not linked". Turning it on later needs no code, since `build-box` kept its pairing.
 
 ## Behaviour and acceptance criteria
 
@@ -88,7 +88,7 @@ As in X41, nothing is routed yet: the switch links the host as a worker, and rou
 - Routing commands to workers, slots and placement: ADR 0009's routing slice.
 - SSH hosts. They have no tailnet listener to pair over.
 - The central host minting codes for another device on request, which would let any paired Mac add devices to it.
-- Clearing a remote host's central host from this Mac. Turning the switch off unlinks it; its pairing stays.
+- Clearing a remote host's central host from this Mac. Turning the switch off stops its heavy commands; since X68 its link stays, as a member of the account, and its pairing stays.
 - Keep in sync (X60) on a remote host.
 
 ## Test plan
@@ -101,7 +101,7 @@ Every acceptance criterion maps to a test. Expected values are literals from thi
   - A bad `central` (empty name, `studio-mini` as an address, one of the host's own addresses) is refused without contacting the central host.
   - A paired phone and the CLI get `forbidden` for `link.set`, `link.retry` and `link.pair`; a paired Mac gets `forbidden` for `link.set` with `central`.
 - **Vitest, `apps/desktop/src/lib/workerLink.test.ts`:** which host rows get the switch; the status line for each state; what turning on needs (enable, pair, or confirm a move), from literal `LinkInfo` values.
-- **e2e, `apps/desktop/e2e/specs/remote-worker.e2e.ts`:** two scratch daemons: a central host on `::1` and a remote host on 127.0.0.1, which counts 127.0.0.1 as its own address and so never takes `::1` for itself. The app pairs with both and makes the first its central host with **Make central host**. On the remote host's row, turning the switch on asks for a code (from `moonletd pair` on the central host), and the line reads "Linked to …"; the central host's `worker.list` lists the remote host. Turning it off reads "Not linked"; turning it on again links without a code. Saving settings is a crucial feature (X12).
+- **e2e, `apps/desktop/e2e/specs/remote-worker.e2e.ts`:** two scratch daemons: a central host on `::1` and a remote host on 127.0.0.1, which counts 127.0.0.1 as its own address and so never takes `::1` for itself. The app pairs with both and makes the first its central host with **Make central host**. On the remote host's row, turning the switch on asks for a code (from `moonletd pair` on the central host), and the line reads "Linked to …"; the central host's `worker.list` lists the remote host. Turning it off stops its heavy commands and, since X68, leaves it linked; turning it on again takes heavy commands without a code. Saving settings is a crucial feature (X12).
 
 ## Open questions
 
