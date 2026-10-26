@@ -97,6 +97,14 @@ export function shownLoad(s: PageLoad, frame: string): PageLoad {
   return s.frame === frame ? s : { frame, phase: "loading", asked: s.asked };
 }
 
+/** Whether the canvas frames `page` with the bridge, the one frame whose
+ *  load the did-not-load bar is about: the shown page once written
+ *  (`written`), never Overview's frames (`page` null) nor a snapshot's
+ *  (`previewing`), which have no bridge. */
+export function framesWithBridge(page: string | null, previewing: boolean, written: string[]): boolean {
+  return page !== null && !previewing && written.includes(page);
+}
+
 /** Why the shown page did not load: the scheme refused it, saying why, or
  *  its bridge was silent, with the page's first parse error if it has one. */
 export type NotLoaded = { kind: "refused"; reason: string } | { kind: "silent"; parse?: DesignParseError };
