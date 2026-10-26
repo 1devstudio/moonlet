@@ -4,10 +4,10 @@ import { Check, ChevronDown, ChevronRight, CornerDownLeft, FileCode, FileText, F
 import { hostsApi, rpc } from "../lib/daemon";
 import type { Task, TaskStart } from "../lib/tasks";
 import { branchUser, composerTask, ensureTasks, leaveTasksMode, placedTasks, startedFromTask, useTasks } from "../lib/tasksStore";
-import { composerOptions, composerPick, composerProjects, composerTarget, wsKey } from "../lib/workspaces";
+import { composerOptions, composerPick, composerProjects, composerTarget, composerWorkspace, wsKey } from "../lib/workspaces";
 import { afterCreate, attachments, branchRow, firstMessage, linkMenu, newBranch, pickerBranches, pickerHint, pickerSearch, placeholder, sessionName, showsLinkSlot, suggestedTask, type Attachment, type PickerList, type PickerTab } from "../lib/composer";
 import { M, type IssueRef, type Project, type ProjectConfig, type Session } from "../lib/protocol";
-import { errorMessage, errorToast, selectSession, shownWorkspace, useStore } from "../lib/store";
+import { errorMessage, errorToast, hostWorkspaces, selectSession, shownWorkspace, useStore } from "../lib/store";
 import { syncOffered } from "../lib/sync";
 import { declineSync, keepInSync, projectKeepsNew, useSync } from "../lib/syncStore";
 import { cloudOffered } from "../lib/cloudMachines";
@@ -331,21 +331,25 @@ export function Composer({
   // The session goes into the preset workspace, else the one the sidebar
   // shows (X32), and the picker offers that workspace's projects.
   const shown = useStore((s) => shownWorkspace(s));
-  const target = composerTarget(presetHost, presetWorkspace, shown);
+  const accounts = useStore((s) => s.accounts);
+  const preset = composerTarget(presetHost, presetWorkspace, shown);
+  // The account it belongs to, so any member of it can take the session (X68).
+  const target = preset && { ...preset, account: preset.account ?? accounts[preset.host]?.account ?? preset.host };
   const options = useMemo(
     () =>
       composerOptions<Project>(
         Object.fromEntries(
-          Object.keys(allProjects).map((h) => [h, { connected: hosts[h]?.status === "connected", workspaces: allWorkspaces[h] ?? [], sections: allSections[h] ?? [], projects: allProjects[h] ?? [] }]),
+          Object.keys(allProjects).map((h) => [h, { connected: hosts[h]?.status === "connected", account: accounts[h]?.account, workspaces: allWorkspaces[h] ?? [], sections: allSections[h] ?? [], projects: allProjects[h] ?? [] }]),
         ),
         target,
       ),
     // `target` is rebuilt each render; its parts are what matter.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [allProjects, allSections, allWorkspaces, hosts, target?.host, target?.id],
+    [allProjects, allSections, allWorkspaces, hosts, accounts, target?.host, target?.id, target?.account],
   );
-  /** Every option is in the target workspace when there is one (X32). */
-  const workspaceFor = (host: string) => (target?.host === host ? target.id : null);
+  /** Every option is in the target workspace when there is one (X32), on
+   * whichever member of its account has the project (X68). */
+  const workspaceFor = (host: string) => composerWorkspace(target, host, hostWorkspaces(useStore.getState()));
   const currentProject = useStore((s) => (s.selected ? s.sessions[s.selected.host]?.find((x) => x.id === s.selected!.session)?.project_id : undefined));
   // Started from an issue, the projects that link its tracker project (X44).
   // An adopted worktree stays in its project (X46).

@@ -34,14 +34,15 @@ beforeEach(() =>
 describe("opening a session elsewhere (X32)", () => {
   it("a notification or the palette (focusTerminal) shows the terminal's workspace", () => {
     focusTerminal("local", 7);
-    expect(useStore.getState().workspace).toEqual({ host: "local", id: "acme" });
+    expect(useStore.getState().workspace).toEqual({ host: "local", id: "acme", account: "local" });
     expect(useStore.getState().selected).toEqual({ host: "local", session: "s2" });
-    expect(useStore.getState().lastSession).toEqual({ "local/acme": "s2" });
+    // Kept as host and session, for the account the workspace belongs to (X68).
+    expect(useStore.getState().lastSession).toEqual({ "local/acme": "local/s2" });
   });
 
   it("selecting a session shows its workspace too", () => {
     selectSession("local", "s3");
-    expect(useStore.getState().workspace).toEqual({ host: "local", id: "acme" });
+    expect(useStore.getState().workspace).toEqual({ host: "local", id: "acme", account: "local" });
   });
 
   it("shows the session in Sessions mode, from Design or Tasks (X65)", () => {
@@ -82,7 +83,7 @@ describe("shownWorkspace", () => {
   it("falls back to the first workspace as one stable object, safe as a zustand selector", () => {
     useStore.setState({ workspace: { host: "local", id: "deleted" } });
     const a = shownWorkspace(useStore.getState());
-    expect(a).toEqual({ host: "local", id: "personal" });
+    expect(a).toEqual({ host: "local", id: "personal", account: "local" });
     expect(shownWorkspace(useStore.getState())).toBe(a);
   });
 });
