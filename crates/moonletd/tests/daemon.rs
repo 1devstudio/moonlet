@@ -3540,6 +3540,115 @@ async fn edits_by_hand_saved_once_the_agent_works_go_with_its_turn_though_its_st
     assert_eq!(kinds, [(2, "agent_turn"), (1, "agent_turn")], "{listed}");
 }
 
+/// A design's agent like [`WRITING_CLAUDE`] that reads a message sent
+/// during its turn, `QUEUED`, only once a `go` file is in its folder, says
+/// it started it, which starts the next turn with no `chat.send`, and holds
+/// that turn until `release`.
+const QUEUEING_CLAUDE: &str = r#"#!/bin/sh
+n=0
+while IFS= read -r line; do
+  case "$line" in
+    *'"subtype":"initialize"'*) echo '{"type":"system","subtype":"init","session_id":"s1","model":"fake"}' ;;
+    *'"type":"user"'*) case "$line" in
+        *'QUEUED'*) while [ ! -f go ]; do sleep 0.05; done; rm -f go
+          uuid=${line#*'"uuid":"'}; uuid=${uuid%%'"'*}
+          echo "{\"type\":\"command_lifecycle\",\"command_uuid\":\"$uuid\",\"state\":\"started\",\"session_id\":\"s1\"}"
+          while [ ! -f release ]; do sleep 0.05; done; rm -f release ;;
+        *'HOLD-NOW'*) while [ ! -f release ]; do sleep 0.05; done; rm -f release ;;
+      esac
+      n=$((n+1)); mkdir -p pages
+      printf '<body data-mid="m1"><p data-mid="m2">turn %s</p></body>\n' "$n" > pages/index.html
+      echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}' ;;
+  esac
+done
+"#;
+
+/// X65: when the daemon hears a design's agent start only after edits by
+/// hand saved before it worked and others saved once it works, the edits
+/// from before still get their own Edits by hand snapshot as it starts;
+/// only those saved during the turn go with it. That snapshot holds the
+/// pages as they are when the start is heard, the later save's too, and is
+/// labelled with the edits from before only. Here the turn starts from a
+/// message queued during the last one, with no `chat.send` to keep the
+/// edits first, and its start is held in line (`MOONLET_DESIGN_TURNS_HELD`)
+/// until both are saved.
+#[tokio::test]
+async fn edits_by_hand_saved_before_a_start_heard_late_keep_their_own_snapshot() {
+    let held = tempfile::tempdir().unwrap();
+    let hold = held.path().join("hold");
+    let env = vec![("MOONLET_DESIGN_QUIET_MS".into(), "60000".into()), ("MOONLET_DESIGN_TURNS_HELD".into(), hold.display().to_string())];
+    let d = fake_claude_daemon_with(QUEUEING_CLAUDE, env).await;
+    let mut c = d.client().await;
+    let ws = workspace_with_system(&d, &mut c).await;
+    let created: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    let agent = created["agent"].as_u64().unwrap();
+    history_of(&mut c, &ws, 1).await;
+    turn_over(&mut c, agent).await;
+    let dir = d.home.path().join(".moonlet/design").join(&ws).join("designs/settings-page");
+    // The agent holds a turn, and a message is queued during it.
+    let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": agent, "text": "HOLD-NOW"})).await.unwrap();
+    working(&mut c, agent).await;
+    let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": agent, "text": "QUEUED"})).await.unwrap();
+    std::fs::write(dir.join("release"), "").unwrap();
+    turn_over(&mut c, agent).await;
+    history_of(&mut c, &ws, 2).await;
+    // Saved before the agent works; then the queued message starts its
+    // turn, whose start waits in line, and a save during it.
+    std::fs::write(&hold, "").unwrap();
+    save_by_hand(&mut c, &ws, "<p>by hand, before the agent works</p>\n", &["text of m2"]).await;
+    std::fs::write(dir.join("go"), "").unwrap();
+    working(&mut c, agent).await;
+    save_by_hand(&mut c, &ws, "<p>by hand, while the agent works</p>\n", &["style of m1"]).await;
+    let listed: serde_json::Value = c.request(methods::DESIGN_HISTORY, serde_json::json!({"workspace": ws, "slug": "settings-page"})).await.unwrap();
+    assert_eq!(listed.as_array().unwrap().len(), 2, "nothing kept while the start waits: {listed}");
+    // The start is heard: what it keeps is kept before the turn ends.
+    std::fs::remove_file(&hold).unwrap();
+    let listed = history_of(&mut c, &ws, 3).await;
+    assert_eq!((&listed[0]["n"], &listed[0]["type"], &listed[0]["summary"]), (&serde_json::json!(3), &serde_json::json!("edits_by_hand"), &serde_json::json!("Text of m2")), "{listed}");
+    assert_eq!(std::fs::read_to_string(dir.join("history/3/pages/index.html")).unwrap(), "<p>by hand, while the agent works</p>\n");
+    std::fs::write(dir.join("release"), "").unwrap();
+    let listed = history_of(&mut c, &ws, 4).await;
+    let kinds: Vec<(u64, &str)> = listed.as_array().unwrap().iter().map(|s| (s["n"].as_u64().unwrap(), s["type"].as_str().unwrap())).collect();
+    assert_eq!(kinds, [(4, "agent_turn"), (3, "edits_by_hand"), (2, "agent_turn"), (1, "agent_turn")], "{listed}");
+}
+
+/// X65: edits by hand kept before a restore are listed in the order they
+/// were saved, one saved during the agent's turn before one saved after
+/// it, though the turn's end waits in line (`MOONLET_DESIGN_TURNS_HELD`).
+#[tokio::test]
+async fn edits_by_hand_kept_before_a_restore_are_listed_in_the_order_they_were_saved() {
+    let held = tempfile::tempdir().unwrap();
+    let hold = held.path().join("hold");
+    let env = vec![("MOONLET_DESIGN_QUIET_MS".into(), "60000".into()), ("MOONLET_DESIGN_TURNS_HELD".into(), hold.display().to_string())];
+    let d = fake_claude_daemon_with(WRITING_CLAUDE, env).await;
+    let mut c = d.client().await;
+    let ws = workspace_with_system(&d, &mut c).await;
+    let created: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    let agent = created["agent"].as_u64().unwrap();
+    history_of(&mut c, &ws, 1).await;
+    turn_over(&mut c, agent).await;
+    let dir = d.home.path().join(".moonlet/design").join(&ws).join("designs/settings-page");
+    let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": agent, "text": "HOLD-NOW"})).await.unwrap();
+    working(&mut c, agent).await;
+    // The turn's end waits in line from here.
+    std::fs::write(&hold, "").unwrap();
+    save_by_hand(&mut c, &ws, "<p>by hand, while the agent works</p>\n", &["text of m2"]).await;
+    std::fs::write(dir.join("release"), "").unwrap();
+    turn_over(&mut c, agent).await;
+    save_by_hand(&mut c, &ws, "<p>by hand, after the turn</p>\n", &["style of m1"]).await;
+    let _: serde_json::Value = c.request(methods::DESIGN_SNAPSHOT_RESTORE, serde_json::json!({"workspace": ws, "slug": "settings-page", "n": 1})).await.unwrap();
+    std::fs::remove_file(&hold).unwrap();
+    let listed = history_of(&mut c, &ws, 3).await;
+    let kept = listed.as_array().unwrap().iter().find(|s| s["type"] == "edits_by_hand").unwrap_or_else(|| panic!("{listed}"));
+    assert_eq!(kept["summary"], "Text of m2, style of m1", "{listed}");
+}
+
 /// X65: a restore that fails, of a snapshot the design does not have,
 /// leaves the edits by hand not kept yet waiting: they are kept once they
 /// stop, as without the restore.
@@ -3656,10 +3765,59 @@ done
 
 /// X65: a message sent while the design's agent asks the user is within
 /// its turn: the edits by hand not kept yet then go with the turn's
-/// snapshot, never on their own with its half-written pages.
+/// snapshot, never on their own with its half-written pages. Edits saved
+/// while it asks are within the turn too, also when the daemon hears it
+/// start only after them: here its start is held in line
+/// (`MOONLET_DESIGN_TURNS_HELD`) until the turn ends.
 #[tokio::test]
 async fn edits_by_hand_go_with_the_turn_when_a_message_comes_while_the_agent_asks() {
-    let d = fake_claude_daemon_with(ASKING_CLAUDE, vec![("MOONLET_DESIGN_QUIET_MS".into(), "60000".into())]).await;
+    let held = tempfile::tempdir().unwrap();
+    let hold = held.path().join("hold");
+    let env = vec![("MOONLET_DESIGN_QUIET_MS".into(), "60000".into()), ("MOONLET_DESIGN_TURNS_HELD".into(), hold.display().to_string())];
+    let d = fake_claude_daemon_with(ASKING_CLAUDE, env).await;
+    let mut c = d.client().await;
+    let ws = workspace_with_system(&d, &mut c).await;
+    let created: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    let agent = created["agent"].as_u64().unwrap();
+    history_of(&mut c, &ws, 1).await;
+    turn_over(&mut c, agent).await;
+    let dir = d.home.path().join(".moonlet/design").join(&ws).join("designs/settings-page");
+    std::fs::write(dir.join("pages/index.html"), "<p data-mid=\"m2\">first</p>\n").unwrap();
+    std::fs::write(&hold, "").unwrap();
+    let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": agent, "text": "ASK-ME"})).await.unwrap();
+    let mut asks = false;
+    for _ in 0..100 {
+        let terminals: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
+        if terminals.iter().any(|t| u64::from(t.id) == agent && t.agent_state == moonlet_proto::types::AgentState::Blocked) {
+            asks = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(asks, "the agent never asked");
+    save_by_hand(&mut c, &ws, "<p>by hand</p>\n", &["text of m2"]).await;
+    let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": agent, "text": "Go on"})).await.unwrap();
+    turn_over(&mut c, agent).await;
+    // Its start and its end are heard now, in that order: snapshot 2 is
+    // what the start keeps, if anything, else the end's.
+    std::fs::remove_file(&hold).unwrap();
+    let listed = history_of(&mut c, &ws, 2).await;
+    let kinds: Vec<(u64, &str)> = listed.as_array().unwrap().iter().map(|s| (s["n"].as_u64().unwrap(), s["type"].as_str().unwrap())).collect();
+    assert_eq!(kinds, [(2, "agent_turn"), (1, "agent_turn")]);
+    assert_eq!(std::fs::read_to_string(dir.join("history/2/pages/index.html")).unwrap(), "<p>by hand</p>\n");
+    assert_eq!(std::fs::read_to_string(dir.join("history/2/pages/other.html")).unwrap(), "<p data-mid=\"m3\">whole</p>\n");
+}
+
+/// X65: while the design's agent asks the user it is within its turn: the
+/// wait for edits by hand saved meanwhile to stop takes nothing, however
+/// long it asks, and a restore is refused; the edits go with the turn's
+/// snapshot once it ends.
+#[tokio::test]
+async fn edits_by_hand_saved_while_the_agent_asks_wait_for_its_turn_however_long_it_asks() {
+    let d = fake_claude_daemon_with(ASKING_CLAUDE, vec![("MOONLET_DESIGN_QUIET_MS".into(), "300".into())]).await;
     let mut c = d.client().await;
     let ws = workspace_with_system(&d, &mut c).await;
     let created: serde_json::Value = c
@@ -3672,20 +3830,89 @@ async fn edits_by_hand_go_with_the_turn_when_a_message_comes_while_the_agent_ask
     let dir = d.home.path().join(".moonlet/design").join(&ws).join("designs/settings-page");
     std::fs::write(dir.join("pages/index.html"), "<p data-mid=\"m2\">first</p>\n").unwrap();
     let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": agent, "text": "ASK-ME"})).await.unwrap();
+    let mut asks = false;
     for _ in 0..100 {
         let terminals: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
         if terminals.iter().any(|t| u64::from(t.id) == agent && t.agent_state == moonlet_proto::types::AgentState::Blocked) {
+            asks = true;
             break;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    save_by_hand(&mut c, &ws, "<p>by hand</p>\n", &["text of m2"]).await;
+    assert!(asks, "the agent never asked");
+    save_by_hand(&mut c, &ws, "<p>by hand, while the agent asks</p>\n", &["text of m2"]).await;
+    let refused = c.request::<_, serde_json::Value>(methods::DESIGN_SNAPSHOT_RESTORE, serde_json::json!({"workspace": ws, "slug": "settings-page", "n": 1})).await;
+    assert_eq!(refused.map_err(|e| e.to_string()).err().as_deref(), Some("busy: Claude is changing the design; restore once it stops"));
+    // Well past the quiet, the agent still asking: still only the first turn's snapshot.
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    let listed: serde_json::Value = c.request(methods::DESIGN_HISTORY, serde_json::json!({"workspace": ws, "slug": "settings-page"})).await.unwrap();
+    assert_eq!(listed.as_array().unwrap().len(), 1, "{listed}");
     let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": agent, "text": "Go on"})).await.unwrap();
     let listed = history_of(&mut c, &ws, 2).await;
     let kinds: Vec<(u64, &str)> = listed.as_array().unwrap().iter().map(|s| (s["n"].as_u64().unwrap(), s["type"].as_str().unwrap())).collect();
-    assert_eq!(kinds, [(2, "agent_turn"), (1, "agent_turn")]);
-    assert_eq!(std::fs::read_to_string(dir.join("history/2/pages/index.html")).unwrap(), "<p>by hand</p>\n");
-    assert_eq!(std::fs::read_to_string(dir.join("history/2/pages/other.html")).unwrap(), "<p data-mid=\"m3\">whole</p>\n");
+    assert_eq!(kinds, [(2, "agent_turn"), (1, "agent_turn")], "{listed}");
+    assert_eq!(std::fs::read_to_string(dir.join("history/2/pages/index.html")).unwrap(), "<p>by hand, while the agent asks</p>\n");
+}
+
+/// A design's agent that, told `ASK-ME`, writes half of `pages/other.html`
+/// and asks the user a question, which waits through a daemon restart, and
+/// ends its turn on any other message.
+const QUESTION_CLAUDE: &str = r#"#!/bin/sh
+mkdir -p pages
+while IFS= read -r line; do
+  case "$line" in
+    *'"subtype":"initialize"'*) echo '{"type":"system","subtype":"init","session_id":"s1","model":"fake"}' ;;
+    *'ASK-ME'*) printf '<p data-mid="m3">half</p>\n' > pages/other.html
+      echo '{"type":"assistant","message":{"id":"m1","content":[{"type":"tool_use","id":"t1","name":"AskUserQuestion","input":{"questions":[{"question":"Which layout?","header":"Layout","multiSelect":false,"options":[{"label":"rows","description":"a list"},{"label":"cards","description":"a grid"}]}]}}]}}'
+      echo '{"type":"control_request","request_id":"q1","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","tool_use_id":"t1","input":{"questions":[{"question":"Which layout?","header":"Layout","multiSelect":false,"options":[{"label":"rows","description":"a list"},{"label":"cards","description":"a grid"}]}]}}}' ;;
+    *'"type":"user"'*) echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}' ;;
+  esac
+done
+"#;
+
+/// Waits until chat `id`'s agent asks the user, within 10 s.
+async fn asking(c: &mut Client, id: u64) {
+    for _ in 0..100 {
+        let terminals: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
+        if terminals.iter().any(|t| u64::from(t.id) == id && t.agent_state == moonlet_proto::types::AgentState::Blocked) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("chat {id} never asked");
+}
+
+/// X65: a design's agent still asking the user when the daemon restarts is
+/// within its turn after it: an edit by hand saved meanwhile waits for the
+/// turn, and Stop, which ends the turn, takes its Agent turn snapshot with
+/// the edit.
+#[tokio::test]
+async fn a_turn_still_asking_after_a_restart_takes_its_snapshot_when_stopped() {
+    let mut d = fake_claude_daemon_with(QUESTION_CLAUDE, vec![("MOONLET_DESIGN_QUIET_MS".into(), "300".into())]).await;
+    let mut c = d.client().await;
+    let ws = workspace_with_system(&d, &mut c).await;
+    let created: serde_json::Value = c
+        .request(methods::DESIGN_CREATE, serde_json::json!({"workspace": ws, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}))
+        .await
+        .unwrap();
+    let agent = created["agent"].as_u64().unwrap();
+    turn_over(&mut c, agent).await;
+    let dir = d.home.path().join(".moonlet/design").join(&ws).join("designs/settings-page");
+    std::fs::write(dir.join("pages/index.html"), "<p data-mid=\"m2\">first</p>\n").unwrap();
+    let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": agent, "text": "ASK-ME"})).await.unwrap();
+    asking(&mut c, agent).await;
+    drop(c);
+    d.restart().await;
+    let mut c = d.client().await;
+    asking(&mut c, agent).await;
+    let before: serde_json::Value = c.request(methods::DESIGN_HISTORY, serde_json::json!({"workspace": ws, "slug": "settings-page"})).await.unwrap();
+    let n = before.as_array().unwrap().len();
+    save_by_hand(&mut c, &ws, "<p>by hand, while it asks</p>\n", &["text of m2"]).await;
+    let _: serde_json::Value = c.request(methods::CHAT_INTERRUPT, serde_json::json!({"id": agent})).await.unwrap();
+    let listed = history_of(&mut c, &ws, n + 1).await;
+    assert_eq!((&listed[0]["type"], &listed[0]["n"]), (&serde_json::json!("agent_turn"), &serde_json::json!(n + 1)), "{listed}");
+    let kept = dir.join(format!("history/{}/pages/index.html", n + 1));
+    assert_eq!(std::fs::read_to_string(kept).unwrap(), "<p>by hand, while it asks</p>\n");
 }
 
 /// A design's agent that writes `pages/index.html`, "turn <n>", on each
@@ -4621,6 +4848,51 @@ async fn an_archived_sessions_designs_are_no_longer_watched_and_are_again_once_i
     let _: serde_json::Value = c.request(methods::DESIGN_LIST, serde_json::json!({"workspace": ws})).await.unwrap();
     write(&archived, "unarchived");
     next_event(&mut listener, methods::EV_DESIGN_CHANGED, names(&archived, "unarchived")).await;
+}
+
+/// X65 entry 12: after a restart the daemon watches the designs of every
+/// open session that has session designs as it starts, so an edit of one
+/// is announced with no design call in between.
+#[tokio::test]
+async fn a_session_designs_edits_are_announced_after_a_restart_with_no_design_call() {
+    let mut d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    let (ws, _, session) = workspace_with_session(&d, &mut c, &[]).await;
+    let _: serde_json::Value = c
+        .request(
+            methods::DESIGN_CREATE,
+            serde_json::json!({"workspace": ws, "session": session.id, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}),
+        )
+        .await
+        .unwrap();
+    drop(c);
+    d.restart().await;
+    let mut listener = d.client().await;
+    std::fs::write(std::path::PathBuf::from(&session.path).join("docs/design/settings-page/pages/index.html"), "<p>after a restart</p>\n").unwrap();
+    let mut changed = next_change_of(&mut listener, "pages/index.html").await;
+    changed.as_object_mut().unwrap().remove("paths");
+    assert_eq!(changed, serde_json::json!({"workspace": ws, "system": null, "design": "settings-page", "session": session.id}));
+}
+
+/// X65 entry 12: a session whose worktree has no design folder yet when a
+/// design call first reaches it is watched all the same, from the nearest
+/// folder above, so a session design another tool makes there later, with
+/// no design call since, is announced with its session.
+#[tokio::test]
+async fn a_session_design_made_where_there_was_no_design_folder_is_announced() {
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    let (ws, _, session) = workspace_with_session(&d, &mut c, &[]).await;
+    let worktree = std::path::PathBuf::from(&session.path);
+    assert!(!worktree.join("docs/design").exists());
+    let listed: serde_json::Value = c.request(methods::DESIGN_LIST, serde_json::json!({"workspace": ws})).await.unwrap();
+    assert!(listed.is_array(), "{listed}");
+    let mut listener = d.client().await;
+    std::fs::create_dir_all(worktree.join(".moonlet/design/settings-page")).unwrap();
+    std::fs::create_dir_all(worktree.join("docs/design/settings-page/pages")).unwrap();
+    std::fs::write(worktree.join("docs/design/settings-page/pages/index.html"), "<p>made by another tool</p>\n").unwrap();
+    let changed = next_event(&mut listener, methods::EV_DESIGN_CHANGED, |e| e["session"] == session.id.as_str()).await;
+    assert_eq!((&changed["design"], &changed["workspace"]), (&serde_json::json!("settings-page"), &serde_json::json!(ws)));
 }
 
 /// X65 entry 12: a file written in a session design, in the worktree's

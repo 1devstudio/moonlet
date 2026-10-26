@@ -94,6 +94,7 @@ impl Store {
             bail!("a design needs a name");
         }
         check_folder(folder)?;
+        check_new_folder(folder)?;
         let Ok(system_dir) = self.system_dir(workspace, &config.system) else {
             return Err(NoSystem(config.system).into());
         };
@@ -245,7 +246,25 @@ impl Store {
 
     /// Replaces both copies of a session design's design system with the
     /// system as it is now, records its anchor in `design.toml` (the rest of
-    /// the file as it was), and lists the cards that changed since the copy.
+    /// the file as it was), and lists the cards that changed since the
+    /// anchor recorded. Every folder it writes aside is in the design's
+    /// folder under [`SIDE_DIR`], which git ignores:
+    ///
+    /// 1. Both copies as the recorded anchor names them are kept first, whole
+    ///    ([`KEPT_PINNED`], [`KEPT_SIDE`]), each written aside and renamed in.
+    ///    Kept ones an earlier Update left, stopped before its anchor, are
+    ///    used as they are. The cards that changed are read from them.
+    /// 2. The new copies are written whole ([`STAGED_PINNED`],
+    ///    [`STAGED_SIDE`]).
+    /// 3. Each is swapped with the copy in place in one step
+    ///    ([`fsx::swap_inside`]), so neither is ever missing; where the
+    ///    filesystem cannot swap, the copy in place is removed and the new
+    ///    one renamed in, the place empty between them.
+    /// 4. The anchor is recorded.
+    ///
+    /// The kept copies are removed only once all of it is done. A step that
+    /// fails writes the kept copies back in place, and removes them only once
+    /// both read back as kept; else they stay, for the next Update.
     pub fn update_session_system(
         &self,
         at: &DesignAt,
@@ -256,26 +275,134 @@ impl Store {
             return Err(NoSystem(config.system).into());
         };
         let anchor = self.system_anchor(workspace, &config.system)?;
-        let before = fsx::read_tree(&at.root, &at.in_side(SYSTEM_DIR))?;
-        copy_system(at, &system_dir)?;
-        let after = fsx::read_tree(&at.root, &at.in_side(SYSTEM_DIR))?;
-        fsx::update_inside(&at.root, &at.in_dir(DESIGN_FILE), |text| {
-            let mut doc: toml_edit::DocumentMut = text
-                .parse()
-                .with_context(|| format!("cannot read {DESIGN_FILE}"))?;
-            match &anchor {
-                Some(a) => doc["anchor"] = toml_edit::value(a.as_str()),
-                None => {
-                    doc.remove("anchor");
+        let (styles, all) = system_copies(&system_dir)?;
+        let places = [at.in_dir(SYSTEM_DIR), at.in_side(SYSTEM_DIR)];
+        let staged = [at.in_side(STAGED_PINNED), at.in_side(STAGED_SIDE)];
+        let kept = [at.in_side(KEPT_PINNED), at.in_side(KEPT_SIDE)];
+        let keeping = [at.in_side(KEEPING_PINNED), at.in_side(KEEPING_SIDE)];
+        let root = |rel: &Path| at.root.join(rel);
+        let remove = |rel: &Path| {
+            if let Err(e) = fsx::remove_dir_inside(&at.root, &root(rel)) {
+                tracing::warn!("cannot remove {}: {e:#}", root(rel).display());
+            }
+        };
+        // 1. The copies the recorded anchor names, kept whole.
+        let valid = kept.iter().all(|k| fsx::is_dir_inside(&at.root, k).unwrap_or(false))
+            && anchor_of(&fsx::read_tree(&at.root, &kept[1])?) == config.anchor;
+        let made_kept = !valid;
+        if made_kept {
+            let keep = (|| -> Result<()> {
+                for ((place, keeping), kept) in places.iter().zip(&keeping).zip(&kept) {
+                    let copy = fsx::read_tree(&at.root, place)?;
+                    fsx::remove_dir_inside(&at.root, &root(keeping))?;
+                    fsx::make_dirs_inside(&at.root, keeping)?;
+                    fsx::write_tree(&at.root, keeping, Path::new(""), &copy, true)?;
+                    fsx::remove_dir_inside(&at.root, &root(kept))?;
+                    fsx::rename_inside(&at.root, &root(keeping), &root(kept))?;
+                }
+                Ok(())
+            })();
+            if let Err(e) = keep {
+                for folder in keeping.iter().chain(&kept) {
+                    remove(folder);
+                }
+                return Err(e);
+            }
+        }
+        let before = fsx::read_tree(&at.root, &kept[1])?;
+        let cards = changed_cards(&before, &all);
+        // 2.–4. Written, put in place, and the anchor recorded.
+        let done = (|| -> Result<()> {
+            for (folder, files) in staged.iter().zip([&styles, &all]) {
+                fsx::remove_dir_inside(&at.root, &root(folder))?;
+                fsx::make_dirs_inside(&at.root, folder)?;
+                fsx::write_tree(&at.root, folder, Path::new(""), files, true)?;
+            }
+            for (place, new) in places.iter().zip(&staged) {
+                // A copy missing from its place swaps with an empty folder.
+                fsx::make_dirs_inside(&at.root, place)?;
+                if !fsx::swap_inside(&at.root, place, new)? {
+                    tracing::info!("{} cannot be swapped in one step: replacing it", root(place).display());
+                    fsx::remove_dir_inside(&at.root, &root(place))?;
+                    fsx::rename_inside(&at.root, &root(new), &root(place))?;
                 }
             }
-            Ok(doc.to_string())
-        })?;
-        Ok(DesignSystemUpdated {
-            anchor,
-            cards: changed_cards(&before, &after),
-        })
+            fsx::update_inside(&at.root, &at.in_dir(DESIGN_FILE), |text| {
+                let mut doc: toml_edit::DocumentMut = text
+                    .parse()
+                    .with_context(|| format!("cannot read {DESIGN_FILE}"))?;
+                match &anchor {
+                    Some(a) => doc["anchor"] = toml_edit::value(a.as_str()),
+                    None => {
+                        doc.remove("anchor");
+                    }
+                }
+                Ok(doc.to_string())
+            })
+        })();
+        if let Err(e) = done {
+            // The kept copies back in place, and gone only once they are.
+            let mut back = true;
+            for (place, kept) in places.iter().zip(&kept) {
+                let restored = (|| -> Result<bool> {
+                    let copy = fsx::read_tree(&at.root, kept)?;
+                    fsx::make_dirs_inside(&at.root, place)?;
+                    fsx::write_tree(&at.root, place, Path::new(""), &copy, true)?;
+                    Ok(fsx::read_tree(&at.root, place)? == copy)
+                })();
+                match restored {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        back = false;
+                        tracing::warn!("{} does not read back as kept after a failed update", root(place).display());
+                    }
+                    Err(err) => {
+                        back = false;
+                        tracing::warn!("cannot put back {} after a failed update: {err:#}", root(place).display());
+                    }
+                }
+            }
+            for folder in &staged {
+                remove(folder);
+            }
+            if back {
+                for folder in &kept {
+                    remove(folder);
+                }
+            }
+            return Err(e);
+        }
+        for folder in staged.iter().chain(&kept) {
+            remove(folder);
+        }
+        Ok(DesignSystemUpdated { anchor, cards })
     }
+}
+
+/// Where an update writes a session design's pinned styles, and its copy
+/// for the agent, before putting each in place: folders of the design's own
+/// folder under [`SIDE_DIR`], which git ignores.
+const STAGED_PINNED: &str = ".update-pinned";
+const STAGED_SIDE: &str = ".update-system";
+
+/// Where an update keeps both copies as the recorded anchor names them,
+/// until it is done or has put them back, and where it writes them first.
+const KEPT_PINNED: &str = ".update-kept-pinned";
+const KEPT_SIDE: &str = ".update-kept-system";
+const KEEPING_PINNED: &str = ".update-keeping-pinned";
+const KEEPING_SIDE: &str = ".update-keeping-system";
+
+/// Whether `name`, in a session design's folder under [`SIDE_DIR`], is a
+/// folder an Update writes aside (staged or kept copies), none of the
+/// design's files.
+pub(super) fn is_update_folder(name: &str) -> bool {
+    name.starts_with(".update-")
+}
+
+/// The sync anchor a copy of a design system names: the SHA-256 of its
+/// `_ds_sync.json`, as [`Store::system_anchor`] reads it.
+fn anchor_of(copy: &Tree) -> Option<String> {
+    copy.get(super::anchor::FILE).map(|b| crate::hash::sha256_hex(b))
 }
 
 impl Store {
@@ -533,6 +660,20 @@ fn check_folder(folder: &str) -> Result<()> {
     Ok(())
 }
 
+/// A design folder a new session design may be made in: one outside
+/// `.moonlet/`, whatever its case (APFS ignores it), which holds the session
+/// designs' own folders git ignores: committed files would be ignored
+/// there, and making a design's own folder could remove its `design.toml`.
+/// A config naming one still loads, and the designs already there are read.
+fn check_new_folder(folder: &str) -> Result<()> {
+    let moonlet = Path::new(SIDE_DIR).components().next().map(|c| c.as_os_str().to_string_lossy().into_owned()).unwrap_or_default();
+    let first = Path::new(folder).components().next().map(|c| c.as_os_str().to_string_lossy().into_owned()).unwrap_or_default();
+    if first.eq_ignore_ascii_case(&moonlet) {
+        bail!("the design folder {folder:?} is inside .moonlet/, which git ignores: pick one outside it");
+    }
+    Ok(())
+}
+
 /// The design's folder under [`SIDE_DIR`], made afresh (one left by a
 /// design of the same name before is removed), and the `.gitignore` of `*`
 /// that keeps that folder out of git.
@@ -568,18 +709,30 @@ fn is_style(path: &str) -> bool {
 /// settings). Each copy is made exactly, so a file
 /// the system no longer has goes too. Links and hidden files are left out.
 fn copy_system(at: &DesignAt, system_dir: &Path) -> Result<()> {
+    let (styles, all) = system_copies(system_dir)?;
+    fsx::write_tree(&at.root, &at.dir, Path::new(SYSTEM_DIR), &styles, true)?;
+    fsx::write_tree(&at.root, &at.side, Path::new(SYSTEM_DIR), &all, true)
+}
+
+/// Files by their paths in a folder, with their bytes.
+type Tree = BTreeMap<String, Vec<u8>>;
+
+/// What a design's two copies of the design system in `system_dir` hold:
+/// its styles, pinned beside the pages, and all of it but its
+/// `config.toml`, for its agent.
+fn system_copies(system_dir: &Path) -> Result<(Tree, Tree)> {
     let mut all = fsx::read_tree(system_dir, Path::new(""))
         .with_context(|| format!("cannot read {}", system_dir.display()))?;
     // The sync's own settings: nothing a design is made from.
     all.remove(super::store::CONFIG);
-    let styles: BTreeMap<String, Vec<u8>> = all
+    let styles: Tree = all
         .iter()
         .filter(|(path, _)| is_style(path))
         .map(|(p, b)| (p.clone(), b.clone()))
         .collect();
-    fsx::write_tree(&at.root, &at.dir, Path::new(SYSTEM_DIR), &styles, true)?;
-    fsx::write_tree(&at.root, &at.side, Path::new(SYSTEM_DIR), &all, true)
+    Ok((styles, all))
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -818,6 +971,37 @@ created_at = 1761200000000
         }
     }
 
+    /// X65: a design folder in `.moonlet/`, whatever its case, which holds
+    /// the session designs' own folders git ignores, is refused when a
+    /// session design is made there, so a design's committed files never
+    /// land there and making its own folder never removes its
+    /// `design.toml`; a project config that names one still loads, and the
+    /// designs already there are listed as before.
+    #[test]
+    fn a_design_folder_in_moonlets_own_folder_is_refused_for_a_new_design_and_still_loads() {
+        let (_home, store) = store_with_synced_system();
+        for inside in [".moonlet/design", ".moonlet", ".moonlet/designs", ".Moonlet/design", ".MOONLET/prototypes"] {
+            let mut config = moonlet_proto::types::ProjectConfig::default();
+            config.design.dir = Some(inside.into());
+            assert_eq!(design_folder(&config).unwrap(), inside);
+            let worktree = tempfile::tempdir().unwrap();
+            let made = store.create_session_design("w1", "moonlet-desktop", "s1", worktree.path(), inside, "Settings page", "b", 1);
+            assert_eq!(
+                made.map(|at| at.slug).map_err(|e| e.to_string()),
+                Err(format!("the design folder \"{inside}\" is inside .moonlet/, which git ignores: pick one outside it")),
+            );
+            assert_eq!(files(worktree.path()), BTreeMap::new(), "{inside}");
+        }
+        // A design made there before keeps loading.
+        let worktree = tempfile::tempdir().unwrap();
+        let wt = worktree.path();
+        std::fs::create_dir_all(wt.join(".moonlet/designs/onboarding/pages")).unwrap();
+        std::fs::write(wt.join(".moonlet/designs/onboarding/design.toml"), "name = \"Onboarding\"\nsystem = \"moonlet-desktop\"\n").unwrap();
+        std::fs::create_dir_all(wt.join(".moonlet/design/onboarding")).unwrap();
+        let listed: Vec<String> = store.session_design_ats("s1", wt, ".moonlet/designs").unwrap().into_iter().map(|at| at.slug).collect();
+        assert_eq!(listed, ["onboarding"]);
+    }
+
     #[test]
     fn a_session_design_is_found_in_its_worktree_but_never_through_a_link_or_outside_it() {
         let (_home, store) = store_with_synced_system();
@@ -1036,6 +1220,200 @@ created_at = 1
 "
         );
         assert!(!store.session_system_updated(&at, "w1").unwrap());
+    }
+
+    /// X65: an update of a session design's system that fails partway, a
+    /// write into the agent's copy or into `design.toml` failing, leaves
+    /// both copies and `design.toml` as they were, so a retry lists the
+    /// cards that changed since the anchor recorded.
+    #[test]
+    fn a_session_designs_system_update_that_fails_partway_changes_nothing_and_a_retry_lists_the_changed_cards()
+     {
+        let (home, store) = store_with_synced_system();
+        let worktree = tempfile::tempdir().unwrap();
+        let at = store
+            .create_session_design(
+                "w1",
+                "moonlet-desktop",
+                "s1",
+                worktree.path(),
+                "docs/design",
+                "Settings page",
+                "b",
+                1,
+            )
+            .unwrap();
+        let both = || {
+            (
+                files(&worktree.path().join("docs/design/settings-page")),
+                files(&worktree.path().join(".moonlet/design/settings-page")),
+            )
+        };
+        let before = both();
+        // The design system synced again.
+        let system = home.path().join("design/w1/systems/moonlet-desktop");
+        std::fs::write(system.join("tokens/colors.css"), ":root { --color-accent: #2563eb; }\n").unwrap();
+        std::fs::write(
+            system.join("components/buttons/button/button.html"),
+            "<!-- @dsCard group=\"Buttons\" -->\n<button class=\"btn\">Run tests</button>\n",
+        )
+        .unwrap();
+        std::fs::write(system.join("_ds_sync.json"), "{\"cards\":{\"components/buttons/button/button.html\":{}}}\n").unwrap();
+        let side = worktree.path().join(".moonlet/design/settings-page");
+        let toml = worktree.path().join("docs/design/settings-page/design.toml");
+        type Fails = Box<dyn Fn(&Path) -> bool>;
+        let failing: [(&str, Fails); 2] =
+            [("the agent's copy", Box::new(move |p: &Path| p.starts_with(&side))), ("design.toml", Box::new(move |p: &Path| p == toml))];
+        for (what, fails) in failing {
+            fsx::BEFORE_WRITE.set(Some(Box::new(move |p| if fails(p) { bail!("disk full") } else { Ok(()) })));
+            let failed = store.update_session_system(&at, "w1");
+            fsx::BEFORE_WRITE.set(None);
+            assert_eq!(failed.map_err(|e| e.to_string()), Err("disk full".to_string()), "{what}");
+            assert!(both() == before, "an update whose write of {what} failed left the design changed");
+            assert!(store.session_system_updated(&at, "w1").unwrap());
+        }
+        let updated = store.update_session_system(&at, "w1").unwrap();
+        assert_eq!(
+            updated.cards,
+            vec![DesignCardChange { path: "components/buttons/button/button.html".into(), change: CardChange::Changed }]
+        );
+        assert_eq!(
+            std::fs::read_to_string(worktree.path().join("docs/design/settings-page/system/tokens/colors.css")).unwrap(),
+            ":root { --color-accent: #2563eb; }\n"
+        );
+        let (pinned, side) = both();
+        let left: Vec<&String> = pinned.keys().chain(side.keys()).filter(|p| p.starts_with('.') || p.contains("/.")).collect();
+        assert_eq!(left, Vec::<&String>::new(), "temporary folders left behind");
+    }
+
+    /// X65: an update of a session design's system stopped after both
+    /// copies are in place but before its anchor is recorded, as a crash
+    /// would stop it, still lists the cards that changed since the anchor
+    /// recorded when it is run again, and leaves nothing of its own behind,
+    /// least of all in the design's committed folder.
+    #[test]
+    fn a_session_designs_system_update_stopped_before_its_anchor_lists_the_changed_cards_when_run_again() {
+        let (home, store) = store_with_synced_system();
+        let worktree = tempfile::tempdir().unwrap();
+        let at = store
+            .create_session_design("w1", "moonlet-desktop", "s1", worktree.path(), "docs/design", "Settings page", "b", 1)
+            .unwrap();
+        let system = home.path().join("design/w1/systems/moonlet-desktop");
+        std::fs::write(
+            system.join("components/buttons/button/button.html"),
+            "<!-- @dsCard group=\"Buttons\" -->\n<button class=\"btn\">Run tests</button>\n",
+        )
+        .unwrap();
+        std::fs::write(system.join("_ds_sync.json"), "{\"cards\":{\"components/buttons/button/button.html\":{}}}\n").unwrap();
+        let toml = worktree.path().join("docs/design/settings-page/design.toml");
+        let recorded = std::fs::read_to_string(&toml).unwrap();
+        // The process stops as it writes design.toml.
+        fsx::BEFORE_WRITE.set(Some(Box::new(move |p| if p == toml { panic!("stopped") } else { Ok(()) })));
+        let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| store.update_session_system(&at, "w1")));
+        fsx::BEFORE_WRITE.set(None);
+        assert!(stopped.is_err(), "the update was stopped");
+        assert_eq!(std::fs::read_to_string(worktree.path().join("docs/design/settings-page/design.toml")).unwrap(), recorded);
+        let updated = store.update_session_system(&at, "w1").unwrap();
+        assert_eq!(
+            updated.cards,
+            vec![DesignCardChange { path: "components/buttons/button/button.html".into(), change: CardChange::Changed }]
+        );
+        assert!(!store.session_system_updated(&at, "w1").unwrap());
+        let hidden = |dir: &Path| -> Vec<String> {
+            let mut out: Vec<String> = std::fs::read_dir(dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| n.starts_with('.')).collect();
+            out.sort();
+            out
+        };
+        assert_eq!(hidden(&worktree.path().join("docs/design/settings-page")), Vec::<String>::new());
+        assert_eq!(hidden(&worktree.path().join(".moonlet/design/settings-page")), Vec::<String>::new());
+    }
+
+    /// X65: where the filesystem cannot swap two folders in one step, an
+    /// Update moves each copy in place aside and the new one in, two renames,
+    /// and still lists the cards that changed, leaving nothing of its own.
+    #[test]
+    fn a_session_designs_system_update_where_folders_cannot_be_swapped_still_replaces_both_copies() {
+        let (home, store) = store_with_synced_system();
+        let worktree = tempfile::tempdir().unwrap();
+        let at = store
+            .create_session_design("w1", "moonlet-desktop", "s1", worktree.path(), "docs/design", "Settings page", "b", 1)
+            .unwrap();
+        let system = home.path().join("design/w1/systems/moonlet-desktop");
+        std::fs::write(system.join("tokens/colors.css"), ":root { --color-accent: #2563eb; }\n").unwrap();
+        std::fs::write(
+            system.join("components/buttons/button/button.html"),
+            "<!-- @dsCard group=\"Buttons\" -->\n<button class=\"btn\">Run tests</button>\n",
+        )
+        .unwrap();
+        std::fs::write(system.join("_ds_sync.json"), "{\"cards\":{\"components/buttons/button/button.html\":{}}}\n").unwrap();
+        fsx::NO_SWAP.set(true);
+        let updated = store.update_session_system(&at, "w1");
+        fsx::NO_SWAP.set(false);
+        assert_eq!(
+            updated.map(|u| u.cards).map_err(|e| e.to_string()),
+            Ok(vec![DesignCardChange { path: "components/buttons/button/button.html".into(), change: CardChange::Changed }])
+        );
+        assert!(!store.session_system_updated(&at, "w1").unwrap());
+        for copy in ["docs/design/settings-page/system/tokens/colors.css", ".moonlet/design/settings-page/system/tokens/colors.css"] {
+            assert_eq!(std::fs::read_to_string(worktree.path().join(copy)).unwrap(), ":root { --color-accent: #2563eb; }\n", "{copy}");
+        }
+        let hidden: Vec<String> = std::fs::read_dir(worktree.path().join(".moonlet/design/settings-page"))
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with('.'))
+            .collect();
+        assert_eq!(hidden, Vec::<String>::new());
+    }
+
+    /// X65: where folders cannot be swapped, an Update stopped between its
+    /// two renames of the agent's copy, and then a retry that fails, leave
+    /// both copies whole, as the recorded anchor names them; the next
+    /// Update still lists the changed cards.
+    #[test]
+    fn a_session_designs_system_update_stopped_between_its_renames_then_failing_again_leaves_both_copies_whole() {
+        let (home, store) = store_with_synced_system();
+        let worktree = tempfile::tempdir().unwrap();
+        let at = store
+            .create_session_design("w1", "moonlet-desktop", "s1", worktree.path(), "docs/design", "Settings page", "b", 1)
+            .unwrap();
+        let (pinned, side) = (worktree.path().join("docs/design/settings-page/system"), worktree.path().join(".moonlet/design/settings-page/system"));
+        let before = (files(&pinned), files(&side));
+        let system = home.path().join("design/w1/systems/moonlet-desktop");
+        std::fs::write(system.join("tokens/colors.css"), ":root { --color-accent: #2563eb; }\n").unwrap();
+        std::fs::write(
+            system.join("components/buttons/button/button.html"),
+            "<!-- @dsCard group=\"Buttons\" -->\n<button class=\"btn\">Run tests</button>\n",
+        )
+        .unwrap();
+        std::fs::write(system.join("_ds_sync.json"), "{\"cards\":{\"components/buttons/button/button.html\":{}}}\n").unwrap();
+        // No swap: the process stops as the new agent's copy is moved in.
+        let stop_at = side.clone();
+        fsx::NO_SWAP.set(true);
+        fsx::BEFORE_WRITE.set(Some(Box::new(move |p| if p == stop_at { panic!("stopped") } else { Ok(()) })));
+        let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| store.update_session_system(&at, "w1")));
+        fsx::BEFORE_WRITE.set(None);
+        fsx::NO_SWAP.set(false);
+        assert!(stopped.is_err(), "the update was stopped");
+        // Run again, it fails as it records the anchor.
+        let toml = worktree.path().join("docs/design/settings-page/design.toml");
+        fsx::BEFORE_WRITE.set(Some(Box::new(move |p| if p == toml { bail!("disk full") } else { Ok(()) })));
+        let failed = store.update_session_system(&at, "w1");
+        fsx::BEFORE_WRITE.set(None);
+        assert_eq!(failed.map(|u| u.cards).map_err(|e| e.to_string()), Err("disk full".to_string()));
+        assert!((files(&pinned), files(&side)) == before, "a copy is not the one the recorded anchor names: {:?}", (files(&pinned).len(), files(&side).len()));
+        let updated = store.update_session_system(&at, "w1").unwrap();
+        assert_eq!(
+            updated.cards,
+            vec![DesignCardChange { path: "components/buttons/button/button.html".into(), change: CardChange::Changed }]
+        );
+        let hidden: Vec<String> = std::fs::read_dir(worktree.path().join(".moonlet/design/settings-page"))
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with('.'))
+            .collect();
+        assert_eq!(hidden, Vec::<String>::new());
     }
 
     #[test]

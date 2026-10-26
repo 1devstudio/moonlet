@@ -290,6 +290,8 @@ fn run_daemon(
         mobile::spawn(daemon.clone());
         // A design's snapshot when its agent ends a turn (X65).
         daemon.snapshot_agent_turns();
+        // The session designs saved before a restart, watched again at once.
+        daemon.watch_saved_session_designs();
         // Cloud machines: the sweep and the startup deadlines (X63).
         daemon.machines.start();
         // Live copies, before the link they may open (X60).

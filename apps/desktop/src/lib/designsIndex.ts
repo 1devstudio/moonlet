@@ -4,8 +4,10 @@
 // view components/design/DesignsIndex.tsx.
 
 import type { Design, DesignKind } from "./protocol";
+import type { DesignPlace } from "./designPlace";
 import { inWorktree } from "./sessionDesign";
 import { pageUrl, projectPageUrl } from "./designView";
+import { builtSession } from "./buildIt";
 
 /** What a card's button does: open a session design's session, a
  *  workspace design's screen, or start a workspace design from a project
@@ -37,13 +39,18 @@ export interface IndexGroup {
 }
 
 /** What the index names designs by: the workspace's sessions (with their
- *  worktrees), projects and design systems. */
+ *  worktrees), projects and design systems. `pageRev`: how many times a
+ *  page changed (`pageRevOf`), carried by its thumbnail's address so a
+ *  changed first page is framed again; none, 0. */
 export interface IndexNames {
   workspace: string;
-  sessions: { id: string; name: string; project_id: string; path: string }[];
+  sessions: { id: string; name: string; project_id: string; path: string; archived?: boolean }[];
   projects: { id: string; name: string }[];
   systems: { slug: string; name: string }[];
+  pageRev?: (place: DesignPlace, slug: string, page: string) => number;
 }
+
+const revOf = (at: IndexNames, place: DesignPlace, slug: string, page: string) => at.pageRev?.(place, slug, page) ?? 0;
 
 const pages = (n: number) => (n === 0 ? "no pages yet" : `${n} page${n === 1 ? "" : "s"}`);
 
@@ -61,7 +68,7 @@ const KINDS: { kind: DesignKind; title: IndexGroup["title"]; note: string; card:
         key: `session/${d.session}/${d.slug}`,
         line: [projectName(at, s?.project_id ?? d.project), s?.name ?? d.session, folder].join(" · "),
         act: { label: "Open session", kind: "session", session: d.session, slug: d.slug },
-        thumb: d.pages[0] ? pageUrl({ session: d.session }, d.slug, d.pages[0].name) : null,
+        thumb: d.pages[0] ? pageUrl({ session: d.session }, d.slug, d.pages[0].name, revOf(at, { session: d.session }, d.slug, d.pages[0].name)) : null,
         updated_at: d.updated_at,
       };
     },
@@ -71,13 +78,13 @@ const KINDS: { kind: DesignKind; title: IndexGroup["title"]; note: string; card:
     title: "Workspace designs",
     note: "Their own agent, no branch",
     card: (d, at) => {
-      const built = d.built_in && at.sessions.find((x) => x.id === d.built_in!.session);
+      const built = builtSession(d.built_in, at.sessions);
       const system = at.systems.find((x) => x.slug === d.system)?.name ?? d.system;
       return {
         key: `workspace/${d.slug}`,
         line: `${system} · ${built ? `built in ${built.name}` : pages(d.pages.length)}`,
         act: { label: "Open", kind: "workspace", slug: d.slug },
-        thumb: d.pages[0] ? pageUrl(at.workspace, d.slug, d.pages[0].name) : null,
+        thumb: d.pages[0] ? pageUrl(at.workspace, d.slug, d.pages[0].name, revOf(at, at.workspace, d.slug, d.pages[0].name)) : null,
         updated_at: d.updated_at,
       };
     },

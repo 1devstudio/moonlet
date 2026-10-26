@@ -89,6 +89,24 @@ describe("designsIndex (X65 Designs index)", () => {
     ]);
   });
 
+  it("frames a workspace or session design's first page again once it changes, its address carrying the page's revision", () => {
+    const list = [
+      design({ slug: "onboarding", name: "Onboarding" }),
+      design({ slug: "settings-page", kind: "session", session: "s7", project: "p-moon", path: "/Users/alex/.moonlet/worktrees/moonlet/settings-page/docs/design/settings-page" }),
+    ];
+    const revs: Record<string, number> = { "a1b2c3d4e5f6/onboarding/index": 3, "s7/settings-page/index": 2 };
+    const pageRev = (place: string | { session: string }, slug: string, page: string) => revs[`${typeof place === "string" ? place : place.session}/${slug}/${page}`] ?? 0;
+    expect(designsIndex(list, { ...at, pageRev }).flatMap((g) => g.cards.map((c) => c.thumb))).toEqual([
+      "moonlet-design://19a1c555a197e847.s-s7/settings-page/pages/index.html?v=2",
+      "moonlet-design://163f264033417147.a1b2c3d4e5f6/designs/onboarding/pages/index.html?v=3",
+    ]);
+  });
+
+  it("counts the pages of a workspace design built in a session that is archived, as of one never built", () => {
+    const archived = { ...at, sessions: [{ ...at.sessions[0], archived: true }] };
+    expect(designsIndex([design({ built_in: { session: "s7", project: "p-moon" } })], archived)[0].cards.map((c) => c.line)).toEqual(["moonlet desktop · 3 pages"]);
+  });
+
   it("leaves out a group with no designs, and has none without designs", () => {
     expect(shown([design({})]).map((g) => g.title)).toEqual(["Workspace designs"]);
     expect(shown([])).toEqual([]);

@@ -31,6 +31,18 @@ export function buildProject(sources: string[], projects: { id: string; path: st
   return (first !== undefined && projects.find((p) => p.path === first)?.id) || null;
 }
 
+/** Where Build it builds: the project of the design system's first source,
+ *  or, when the workspace has no such project or the system no source,
+ *  why Build it is disabled. It never falls back to another project, which
+ *  would send the design to an unrelated repository. */
+export function buildItTarget(sources: string[], projects: { id: string; path: string }[]): { project: string } | { unavailable: string } {
+  const project = buildProject(sources, projects);
+  if (project) return { project };
+  if (sources[0] === undefined) return { unavailable: "The design system has no source project to build in" };
+  const name = sources[0].split("/").filter(Boolean).pop() ?? sources[0];
+  return { unavailable: `${name}, the design system's first source, is not a project of this workspace` };
+}
+
 /** The new branches' prefix, as the daemon takes it (X55): the project's
  *  `branch_prefix`, else the host's. */
 export function branchPrefix(config: { branch_prefix?: string | null } | null | undefined, hostPrefix: string): string {
@@ -109,16 +121,22 @@ export function buildPick(d: Pick<BuildDesign, "workspace" | "slug" | "pages">, 
 
 /** A built workspace design's header (X65): "Building in <project> ·
  *  <session>", and the session a click opens; null while it was never
- *  built, or once its session is gone, when Build it shows again. The
- *  session's project is its own, else `built_in`'s. */
+ *  built, or once its session is gone or archived, when Build it shows
+ *  again. The session's project is its own, else `built_in`'s. */
 export function buildingIn(
   d: { built_in?: { session: string; project?: string } },
-  sessions: { id: string; name: string; project_id: string }[],
+  sessions: { id: string; name: string; project_id: string; archived?: boolean }[],
   projects: { id: string; name: string }[],
 ): { text: string; session: string } | null {
   const built = d.built_in;
-  const session = built && sessions.find((s) => s.id === built.session);
+  const session = built && builtSession(built, sessions);
   if (!session) return null;
   const project = projects.find((p) => p.id === session.project_id) ?? projects.find((p) => p.id === built.project);
   return { text: `Building in ${project ? `${project.name} · ` : ""}${session.name}`, session: session.id };
+}
+
+/** The session a workspace design is built in while it is open: none once
+ *  it is gone or archived (X65). */
+export function builtSession<S extends { id: string; archived?: boolean }>(built: { session: string } | null | undefined, sessions: S[]): S | undefined {
+  return built ? sessions.find((s) => s.id === built.session && !s.archived) : undefined;
 }

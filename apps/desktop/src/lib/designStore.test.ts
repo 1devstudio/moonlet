@@ -3,6 +3,7 @@ import type { Design, DesignComment, DesignSystem, TerminalInfo } from "./protoc
 import { modeOf, setMode } from "./mode";
 import { agentOnScreen, goToAgent, useStore } from "./store";
 import { designCanvasKey, pageKey, pageOfKey, commentsOf, historyOf, keepComment, loadComments, loadHistory, sendComments, sendingOf, resolveComment, sessionDesignsOf, shownSessionDesign, showSessionDesign, unseenOf, updateSystem, justOpened, tookOpened, pickDesignTab, kitRevOf, builtRevOf } from "./designStore";
+import { pageRevReader, startFromProjectDesign } from "./designStore";
 import { cardsOf, checkDesign, createFromNewDesign, createSystem, designsOf, detectStack, latestOf, loadCards, loadDesigns, loadSystems, openCard, saveViewport, pageRevOf, problemsOf, revOf, shownCard, shownDesign, shownSystem, showDesign, showSystem, startDesign, systemNameOf, systemsOf, useDesign } from "./designStore";
 
 const calls = vi.hoisted(() => [] as { host: string; method: string; params: unknown }[]);
@@ -325,6 +326,17 @@ const changed = (workspace: string, over: { system?: string | null; design?: str
 describe("a design's pages on a change (X65)", () => {
   const revs = () => ["index", "git-a"].map((p) => pageRevOf(useDesign.getState(), "local", "w-1devstudio", "settings-page", p));
 
+  it("give the Designs index each page's revision on its host, read from the revisions the store keeps", async () => {
+    answers["design.list"] = () => [design()];
+    answers["design.check"] = () => [];
+    await loadDesigns("local", "w-1devstudio");
+    changed("w-1devstudio", { design: "settings-page", paths: ["pages/index.html"] });
+    changed("w-1devstudio", { design: "settings-page", paths: ["pages/index.html"] });
+    const rev = pageRevReader(useDesign.getState().pageRevs, "local");
+    expect([rev("w-1devstudio", "settings-page", "index"), rev("w-1devstudio", "settings-page", "git-a"), rev({ session: "w-1devstudio" }, "settings-page", "index")]).toEqual([2, 0, 0]);
+    expect(pageRevReader(useDesign.getState().pageRevs, "studio-mac")("w-1devstudio", "settings-page", "index")).toBe(0);
+  });
+
   it("load again when they, the design's assets or its design system's styles change, and the latest written page is known", async () => {
     answers["design.list"] = () => [design()];
     answers["design.check"] = () => [];
@@ -418,6 +430,25 @@ describe("Create design in the New design dialog (X65)", () => {
     expect(useStore.getState().dialog).toEqual({ kind: "new-design-system", host: "local", workspace: "w-1devstudio" });
     expect(shownDesign(useDesign.getState(), "local", "w-1devstudio")).toBeNull();
     expect(toasts()).toEqual([["Settings page was made", "Open"]]);
+  });
+});
+
+describe("Use as a start (X65)", () => {
+  const toasts = () => useStore.getState().toasts.map((t) => [t.text, t.action?.label ?? null]);
+
+  it("opens the design copied from design.copy's answer, and says so, when the designs cannot be listed again after it", async () => {
+    useStore.setState({ toasts: [] });
+    answers["design.list"] = () => [design({ slug: "onboarding", name: "Onboarding" })];
+    answers["design.check"] = () => [];
+    await loadDesigns("local", "w-1devstudio");
+    answers["design.copy"] = () => ({ ...design({ slug: "checkout", name: "Checkout", agent: 14 }), agent_error: null });
+    answers["design.list"] = () => {
+      throw new Error("cannot read designs");
+    };
+    const merged = design({ slug: "checkout", name: "Checkout", kind: "project", project: "p-moon", path: "docs/design/checkout" });
+    await startFromProjectDesign("local", "w-1devstudio", merged);
+    expect(shownDesign(useDesign.getState(), "local", "w-1devstudio")?.name).toBe("Checkout");
+    expect(toasts()).toEqual([["The designs could not be listed again: cannot read designs", null]]);
   });
 });
 

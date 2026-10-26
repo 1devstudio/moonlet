@@ -29,6 +29,32 @@ pub(crate) fn before_replace() {
     }
 }
 
+/// A test's disk: see [`BEFORE_WRITE`].
+#[cfg(test)]
+type Disk = Option<Box<dyn FnMut(&Path) -> Result<()>>>;
+
+#[cfg(test)]
+thread_local! {
+    /// A test's disk, told the path of each file about to be written, or
+    /// each path a rename is about to put something at, and failing the
+    /// write when it fails, so a write that fails, or a stop in
+    /// the middle, can be tested deterministically.
+    pub(crate) static BEFORE_WRITE: std::cell::RefCell<Disk> =
+        std::cell::RefCell::new(None);
+}
+
+/// Runs the test's disk for the file `path` about to be written, if one is
+/// set; nothing outside tests.
+fn before_write(_path: &Path) -> Result<()> {
+    #[cfg(test)]
+    return BEFORE_WRITE.with(|h| match h.borrow_mut().as_mut() {
+        Some(disk) => disk(_path),
+        None => Ok(()),
+    });
+    #[cfg(not(test))]
+    Ok(())
+}
+
 /// The entries of `folder`: none while it is not there, and an error with
 /// the reason when it is there but cannot be read.
 pub(crate) fn read_dir_if_there(folder: &Path) -> Result<Option<std::fs::ReadDir>> {
@@ -48,6 +74,7 @@ fn open_root(root: &Path) -> Result<Dir> {
 /// Writes `path`, which must be inside `root`, replacing what is there. A
 /// symlink at `path` is replaced, never followed.
 pub(crate) fn write_inside(root: &Path, path: &Path, bytes: &[u8]) -> Result<()> {
+    before_write(path)?;
     let rel = path
         .strip_prefix(root)
         .with_context(|| format!("{} is outside {}", path.display(), root.display()))?;
@@ -143,6 +170,7 @@ fn update(
     mut edit: impl FnMut(&str) -> Result<String>,
 ) -> Result<()> {
     let name = rel.file_name().context("a file needs a name")?;
+    before_write(&root.join(rel))?;
     let root_dir = open_root(root)?;
     let dir = match rel.parent().filter(|p| !p.as_os_str().is_empty()) {
         Some(parent) => {
@@ -229,6 +257,7 @@ pub(crate) fn remove_file_inside(root: &Path, path: &Path) -> Result<()> {
 /// Renames `from` over `to`, both inside `root`; false when `from` is
 /// missing.
 pub(crate) fn rename_inside(root: &Path, from: &Path, to: &Path) -> Result<bool> {
+    before_write(to)?;
     let (from, to) = (from.strip_prefix(root)?, to.strip_prefix(root)?);
     let root_dir = open_root(root)?;
     match root_dir.rename(from, &root_dir, to) {
@@ -236,6 +265,63 @@ pub(crate) fn rename_inside(root: &Path, from: &Path, to: &Path) -> Result<bool>
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(e) => Err(e.into()),
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A test's filesystem that cannot swap two folders in one step, as
+    /// some cannot, so what is done in its place can be tested.
+    pub(crate) static NO_SWAP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether the test's filesystem cannot swap; never outside tests.
+fn no_swap() -> bool {
+    #[cfg(test)]
+    return NO_SWAP.get();
+    #[cfg(not(test))]
+    false
+}
+
+/// Swaps the folders `a` and `b`, both inside `root`, in one step: each
+/// takes the other's place, so neither path is ever missing, whenever the
+/// process stops. Their parents are reached from `root` as handles, never
+/// through a link, and the swap goes through those handles (macOS's
+/// `renameatx_np` with `RENAME_SWAP`, Linux's `renameat2` with
+/// `RENAME_EXCHANGE`). False, with nothing changed, where the system or the
+/// filesystem cannot swap folders (`EINVAL`, `ENOTSUP`, `ENOSYS`, or
+/// another system).
+pub(crate) fn swap_inside(root: &Path, a: &Path, b: &Path) -> Result<bool> {
+    if no_swap() {
+        return Ok(false);
+    }
+    use std::os::fd::{AsFd, AsRawFd};
+    let parent = |rel: &Path| -> Result<(Dir, std::ffi::CString)> {
+        let name = rel.file_name().context("a folder needs a name")?;
+        let dir = open_path(root, rel.parent().unwrap_or(Path::new("")), false)?
+            .with_context(|| format!("no {} in {}", rel.display(), root.display()))?;
+        Ok((dir, std::ffi::CString::new(name.as_encoded_bytes())?))
+    };
+    let ((from_dir, from), (to_dir, to)) = (parent(a)?, parent(b)?);
+    let (from_fd, to_fd) = (from_dir.as_fd().as_raw_fd(), to_dir.as_fd().as_raw_fd());
+    // SAFETY: both descriptors are open folders for the call's length, and
+    // both names are NUL-terminated strings that outlive it.
+    #[cfg(target_os = "macos")]
+    let done = unsafe { libc::renameatx_np(from_fd, from.as_ptr(), to_fd, to.as_ptr(), libc::RENAME_SWAP) };
+    #[cfg(target_os = "linux")]
+    let done = unsafe { libc::renameat2(from_fd, from.as_ptr(), to_fd, to.as_ptr(), libc::RENAME_EXCHANGE) };
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    let done: i32 = {
+        let _ = (from_fd, to_fd, from, to);
+        return Ok(false);
+    };
+    if done != 0 {
+        let e = std::io::Error::last_os_error();
+        if matches!(e.raw_os_error(), Some(libc::EINVAL | libc::ENOTSUP | libc::ENOSYS)) {
+            return Ok(false);
+        }
+        return Err(e).with_context(|| format!("cannot swap {} and {} in {}", a.display(), b.display(), root.display()));
+    }
+    Ok(true)
 }
 
 /// Whether the entry `name` of `dir` and the handle `opened` are one file:
@@ -399,6 +485,7 @@ pub(crate) fn write_tree(
         .with_context(|| format!("no {} in {}", base.display(), root.display()))?;
     let dir = open_under(base_dir, rel, true)?.context("a folder went away")?;
     for (path, bytes) in files {
+        before_write(&root.join(base).join(rel).join(path))?;
         let (at, name) = parent_of(&dir, path)?;
         replace_in(&at, name, bytes)?;
     }
