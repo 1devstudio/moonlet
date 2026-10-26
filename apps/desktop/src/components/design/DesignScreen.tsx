@@ -54,7 +54,7 @@ import { chatCardLookup, commentCardSelector, commentsRail, commentsTab, keepAct
 import { bridgeMessage, editMessage, helloMessage, modeMessage, paletteMessage, pinsMessage, scrollMessage, selectMessage, type DragOver, type DragResult, type Layer, type PickedElement, type Rect } from "../../lib/designBridge";
 import { pageFile, pagePath } from "../../lib/designPage";
 import { barProblems, chatOpensOn, designBar, loadFixMessage, pageFixMessage, type Bar, type BarAction, type PageProblem } from "../../lib/designBars";
-import { LOAD_WAIT_MS, LOADING, loadStep, notLoadedOf, readFailureNote, wantsParseError, type LoadEvent, type PageLoad } from "../../lib/designLoad";
+import { LOAD_WAIT_MS, LOADING, loadStep, notLoadedOf, readFailureNote, waitToken, wantsParseError, type LoadEvent, type PageLoad } from "../../lib/designLoad";
 import { claimKeys } from "../../lib/keys";
 import { askConfirm } from "../../lib/confirm";
 import { NEAR_ROOT, useNear } from "../../lib/useNear";
@@ -1018,13 +1018,13 @@ function PageFrame({
     document.addEventListener("visibilitychange", seen);
     return () => document.removeEventListener("visibilitychange", seen);
   }, [onLoadEvent]);
+  const token = waitToken(load);
   useEffect(() => {
     if (load.phase !== "waiting") return;
     tell(helloMessage());
-    const asked = load.asked;
-    const t = setTimeout(() => onLoadEvent({ kind: "timeout", asked }), LOAD_WAIT_MS);
+    const t = setTimeout(() => onLoadEvent({ kind: "timeout", token }), LOAD_WAIT_MS);
     return () => clearTimeout(t);
-  }, [load.phase, load.asked, onLoadEvent]);
+  }, [load.phase, token, onLoadEvent]);
 
   return (
     <div className="relative m-auto shrink-0 rounded-md border border-border-strong shadow-2xl">
