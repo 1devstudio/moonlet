@@ -1843,15 +1843,17 @@ impl Daemon {
         Ok((s, folder))
     }
 
-    /// Watches a session's worktree for its session designs' changes, once
-    /// it has a design folder, and announces them as `design.changed`
-    /// with the design, its session and its workspace (X65). Every design
-    /// call that reaches a session's designs, and their listing, starts it,
-    /// so after a restart it starts again as the app lists the designs.
+    /// Watches an open session's worktree for its session designs'
+    /// changes, once it has a design folder, and announces them as
+    /// `design.changed` with the design, its session and its workspace
+    /// (X65). Every design call that reaches a session's designs, and their
+    /// listing, starts it, so after a restart, or once the session is
+    /// unarchived, it starts again as the app lists the designs. An archived
+    /// session's designs are not watched (see `prune_session_watches`).
     fn watch_session_designs(&self, s: &moonlet_proto::types::Session, folder: &str) {
         let worktree = Path::new(&s.path);
         let mut watches = self.session_watches.lock().unwrap();
-        if watches.contains_key(&s.id) || !worktree.join(folder).is_dir() {
+        if s.archived || watches.contains_key(&s.id) || !worktree.join(folder).is_dir() {
             return;
         }
         let (terminals, workspace, session) = (self.terminals.clone(), s.workspace_id.clone(), s.id.clone());
@@ -1867,6 +1869,14 @@ impl Daemon {
             }
             Err(e) => tracing::warn!("cannot watch the designs of session {}: {e:#}", s.id),
         }
+    }
+
+    /// Stops watching the designs of sessions that are archived or gone
+    /// (X65): their watches end with them.
+    fn prune_session_watches(&self) {
+        let open: std::collections::HashSet<String> =
+            self.sessions.list_sessions().into_iter().filter(|s| !s.archived).map(|s| s.id).collect();
+        self.session_watches.lock().unwrap().retain(|id, _| open.contains(id));
     }
 
     /// A session design as `design.list` gives it: with its session and
@@ -2388,6 +2398,8 @@ impl Daemon {
             m::PROJECT_REMOVE => {
                 let r: m::IdRef = params(p)?;
                 w.remove_project(&r.id).map_err(internal)?;
+                // Its sessions are gone: so are their designs' watches.
+                self.prune_session_watches();
                 ok(true)
             }
             m::PROJECT_CONFIG => {
@@ -2467,6 +2479,8 @@ impl Daemon {
                 self.sync.archived(archiving);
                 self.jobs.forget(&id);
                 self.reads.clear_grant(&id);
+                // Its designs are watched again once it is unarchived.
+                self.prune_session_watches();
                 ok(done)
             }
             m::SESSION_UNARCHIVE => {
