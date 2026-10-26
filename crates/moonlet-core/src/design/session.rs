@@ -94,6 +94,7 @@ impl Store {
             bail!("a design needs a name");
         }
         check_folder(folder)?;
+        check_new_folder(folder)?;
         let Ok(system_dir) = self.system_dir(workspace, &config.system) else {
             return Err(NoSystem(config.system).into());
         };
@@ -582,8 +583,7 @@ pub(super) fn system_copy(at: &DesignAt) -> Result<std::path::PathBuf> {
     Ok(at.root.join(rel))
 }
 
-/// A design folder: a path inside the worktree, made only of folder names,
-/// outside `.moonlet/`.
+/// A design folder: a path inside the worktree, made only of folder names.
 fn check_folder(folder: &str) -> Result<()> {
     let plain = Path::new(folder)
         .components()
@@ -591,12 +591,18 @@ fn check_folder(folder: &str) -> Result<()> {
     if folder.is_empty() || !plain {
         bail!("the design folder {folder:?} is not a folder inside the worktree");
     }
-    // moonlet's own folder, which holds the session designs' side folders
-    // git ignores: committed files would be ignored, and making a design's
-    // side folder could remove its `design.toml`.
-    let side = Path::new(SIDE_DIR);
-    let moonlet = side.parent().unwrap_or(side);
-    if Path::new(folder).starts_with(moonlet) || side.starts_with(folder) {
+    Ok(())
+}
+
+/// A design folder a new session design may be made in: one outside
+/// `.moonlet/`, whatever its case (APFS ignores it), which holds the session
+/// designs' own folders git ignores: committed files would be ignored
+/// there, and making a design's own folder could remove its `design.toml`.
+/// A config naming one still loads, and the designs already there are read.
+fn check_new_folder(folder: &str) -> Result<()> {
+    let moonlet = Path::new(SIDE_DIR).components().next().map(|c| c.as_os_str().to_string_lossy().into_owned()).unwrap_or_default();
+    let first = Path::new(folder).components().next().map(|c| c.as_os_str().to_string_lossy().into_owned()).unwrap_or_default();
+    if first.eq_ignore_ascii_case(&moonlet) {
         bail!("the design folder {folder:?} is inside .moonlet/, which git ignores: pick one outside it");
     }
     Ok(())
@@ -899,24 +905,35 @@ created_at = 1761200000000
         }
     }
 
-    /// X65: a design folder in `.moonlet/`, which holds the session designs'
-    /// own folder git ignores, is refused, so a design's committed files never
-    /// land there and making its own folder never removes its `design.toml`.
+    /// X65: a design folder in `.moonlet/`, whatever its case, which holds
+    /// the session designs' own folders git ignores, is refused when a
+    /// session design is made there, so a design's committed files never
+    /// land there and making its own folder never removes its
+    /// `design.toml`; a project config that names one still loads, and the
+    /// designs already there are listed as before.
     #[test]
-    fn a_design_folder_in_moonlets_own_folder_is_refused() {
-        for inside in [".moonlet/design", ".moonlet", ".moonlet/designs", ".moonlet/design/prototypes"] {
+    fn a_design_folder_in_moonlets_own_folder_is_refused_for_a_new_design_and_still_loads() {
+        let (_home, store) = store_with_synced_system();
+        for inside in [".moonlet/design", ".moonlet", ".moonlet/designs", ".Moonlet/design", ".MOONLET/prototypes"] {
             let mut config = moonlet_proto::types::ProjectConfig::default();
             config.design.dir = Some(inside.into());
+            assert_eq!(design_folder(&config).unwrap(), inside);
+            let worktree = tempfile::tempdir().unwrap();
+            let made = store.create_session_design("w1", "moonlet-desktop", "s1", worktree.path(), inside, "Settings page", "b", 1);
             assert_eq!(
-                design_folder(&config).map_err(|e| e.to_string()),
+                made.map(|at| at.slug).map_err(|e| e.to_string()),
                 Err(format!("the design folder \"{inside}\" is inside .moonlet/, which git ignores: pick one outside it")),
             );
+            assert_eq!(files(worktree.path()), BTreeMap::new(), "{inside}");
         }
-        let (_home, store) = store_with_synced_system();
+        // A design made there before keeps loading.
         let worktree = tempfile::tempdir().unwrap();
-        let made = store.create_session_design("w1", "moonlet-desktop", "s1", worktree.path(), ".moonlet/design", "Settings page", "b", 1);
-        assert!(made.is_err());
-        assert_eq!(files(worktree.path()), BTreeMap::new());
+        let wt = worktree.path();
+        std::fs::create_dir_all(wt.join(".moonlet/designs/onboarding/pages")).unwrap();
+        std::fs::write(wt.join(".moonlet/designs/onboarding/design.toml"), "name = \"Onboarding\"\nsystem = \"moonlet-desktop\"\n").unwrap();
+        std::fs::create_dir_all(wt.join(".moonlet/design/onboarding")).unwrap();
+        let listed: Vec<String> = store.session_design_ats("s1", wt, ".moonlet/designs").unwrap().into_iter().map(|at| at.slug).collect();
+        assert_eq!(listed, ["onboarding"]);
     }
 
     #[test]
