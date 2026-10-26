@@ -5,10 +5,10 @@ import { hostsApi, rpc } from "../lib/daemon";
 import type { Task, TaskStart } from "../lib/tasks";
 import { branchUser, composerTask, ensureTasks, leaveTasksMode, placedTasks, startedFromTask, useTasks } from "../lib/tasksStore";
 import { composerOptions, composerPick, composerProjects, composerTarget, wsKey } from "../lib/workspaces";
-import { attachments, branchRow, firstMessage, linkMenu, newBranch, pickerBranches, pickerHint, pickerSearch, placeholder, sessionName, showsLinkSlot, suggestedTask, type Attachment, type PickerList, type PickerTab } from "../lib/composer";
+import { afterCreate, attachments, branchRow, firstMessage, linkMenu, newBranch, pickerBranches, pickerHint, pickerSearch, placeholder, sessionName, showsLinkSlot, suggestedTask, type Attachment, type PickerList, type PickerTab } from "../lib/composer";
 import { M, type IssueRef, type Project, type ProjectConfig, type Session } from "../lib/protocol";
 import { errorMessage, errorToast, selectSession, shownWorkspace, useStore } from "../lib/store";
-import { composerSync, syncOffered } from "../lib/sync";
+import { syncOffered } from "../lib/sync";
 import { declineSync, keepInSync, projectKeepsNew, useSync } from "../lib/syncStore";
 import { cloudOffered } from "../lib/cloudMachines";
 import { useCloud } from "../lib/cloudStore";
@@ -561,16 +561,13 @@ export function Composer({
         rows: 32,
       });
       close();
+      // The checkbox decides for this session, Build it's too (afterCreate).
+      const next = afterCreate({ building: !!design, box: { shown: syncShown, value: keepSync, touched: syncTouched } });
+      if (next.sync === "keep") void keepInSync(current.host, s.id);
+      else if (next.sync === "decline") void declineSync(s.id);
       // Built from Design mode: the design's header says where it is building (X65).
-      if (design) {
-        void loadDesigns(current.host, design.workspace, true).catch(() => {});
-        return;
-      }
-      // The checkbox decides for this session, before this Mac's daemon
-      // would keep it for a project that keeps new sessions in sync.
-      const sync = composerSync({ shown: syncShown, value: keepSync, touched: syncTouched });
-      if (sync === "keep") void keepInSync(current.host, s.id);
-      else if (sync === "decline") void declineSync(s.id);
+      if (next.designs && design) void loadDesigns(current.host, design.workspace, true).catch(() => {});
+      if (!next.select) return;
       // Activity, and Keep in step's "session starts" rule (X46).
       if (task) void startedFromTask(current.host, s.workspace_id ?? workspaceFor(current.host) ?? "", task, { session: s.name, assign: !!task.assign && assign });
       // Started from Tasks mode: work on it in Sessions mode (X46).
