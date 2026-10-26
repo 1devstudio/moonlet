@@ -409,7 +409,10 @@ fn card_css(html: &str) -> Vec<std::ops::Range<usize>> {
 }
 
 /// `text` with only the bytes in `keep` (sorted) left, the rest but line
-/// breaks made a space, so lines and offsets stay where they were.
+/// breaks made a space, so lines and offsets stay where they were. Each
+/// piece kept is ended by a `;`, the first byte after it that is not a line
+/// break, so a declaration a piece leaves open, `style="font-family: Inter"`,
+/// never runs on into the next piece.
 fn only(text: &str, keep: &[std::ops::Range<usize>]) -> String {
     let mut gaps = Vec::new();
     let mut from = 0;
@@ -420,7 +423,14 @@ fn only(text: &str, keep: &[std::ops::Range<usize>]) -> String {
         from = from.max(r.end);
     }
     gaps.push(from..text.len());
-    blank(text, &gaps)
+    // A gap is all spaces and line breaks once blanked: a `;` keeps it UTF-8.
+    let mut bytes = blank(text, &gaps).into_bytes();
+    for gap in gaps.iter().filter(|g| g.start > 0) {
+        if let Some(end) = gap.clone().find(|&i| !matches!(bytes[i], b'\n' | b'\r')) {
+            bytes[end] = b';';
+        }
+    }
+    String::from_utf8(bytes).unwrap_or_else(|_| text.to_string())
 }
 
 /// Each `@import` in a page's `<style>`s, comments left out, as the line it
@@ -1641,6 +1651,39 @@ mod tests {
                 unknown(5, "--opacity-missing"),
                 unknown(6, "--size-missing"),
             ]
+        );
+    }
+
+    #[test]
+    fn a_font_family_in_a_style_attribute_ends_with_its_attribute() {
+        let styles = "@import \"tokens/colors.css\";\n@import \"fonts/fonts.css\";\n";
+        let fonts = "@font-face {\n  font-family: \"Inter\";\n  src: url(./Inter.woff2);\n}\n";
+        let card = "<!-- @dsCard group=\"Buttons\" -->\n\
+<!doctype html>\n\
+<p style=\"font-family: Inter\"><span style=\"color: var(--color-accent)\">A</span></p>\n\
+<p style=\"font-family: 'JetBrains Mono'\"><span style=\"color: red\">B</span></p>\n\
+<p style=\"font-family: Inter\">C</p>\n\
+<p style=\"margin: 0\">D</p>\n";
+        let dir = system(&[
+            ("styles.css", styles),
+            ("tokens/colors.css", COLORS),
+            ("fonts/fonts.css", fonts),
+            ("fonts/Inter.woff2", "woff2"),
+            ("components/buttons/button/button.html", card),
+        ]);
+        let got: Vec<(usize, Kind, String)> = check(dir.path())
+            .unwrap()
+            .into_iter()
+            .map(|p| (p.line, p.kind, p.message))
+            .collect();
+        assert_eq!(
+            got,
+            vec![(
+                4,
+                Kind::FontMissing,
+                "font \"JetBrains Mono\" has no @font-face in styles.css or the files it imports"
+                    .into()
+            )]
         );
     }
 
