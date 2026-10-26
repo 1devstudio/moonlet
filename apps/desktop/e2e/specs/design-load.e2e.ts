@@ -2,7 +2,8 @@
 // bar over the canvas, and its Ask the agent to fix.
 //
 // A page the scheme cannot serve comes as a page of moonlet's that tells
-// the canvas why as it loads, so the bar shows in a hidden window too. A
+// the canvas it failed as it loads, so the bar shows in a hidden window
+// too, saying why as the daemon's read of the page says it. A
 // page whose bridge is silent fails only after a wait in a visible window:
 // WebKit suspends a hidden window's frames about 2 s after they load, and
 // the e2e window is often hidden (the screen locked, or covered), so that
