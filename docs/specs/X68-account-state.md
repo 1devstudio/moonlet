@@ -86,7 +86,7 @@ Session records, settings, devices and secrets join the account state in later s
 - Event `account.changed {changes: [Change]}`, from the central host to members.
 - `Change`: `{stamp: {ms, n, member}, seq, kind, id, op}`, where `op` is `{"set": {field, value}}` or `"delete"`, and `seq` counts the changes its member has made, from 1; versions are built from it.
 - `section.list`: each section gains `missing: [ProjectIdentity]`.
-- `workspace.merge {id, into}`: moves the sections of `id` into `into`, after its own, and deletes `id`.
+- `workspace.merge {id, into}` → `true`: moves the sections of `id` into `into`, after its own, with every session of `id`, and deletes `id`. Merging a workspace into itself, or with one that does not exist, fails and changes nothing. (`a_merged_workspace_hands_its_sections_and_sessions_to_the_chosen_one_on_every_member`, `a_workspace_merges_only_into_another_existing_one`, `workspaces_merged_on_one_member_are_one_on_the_others`)
 - No protocol change: `account.sync` is a new method and `missing` an optional field. A central host from before X68 answers `unknown_method`, and the member keeps its workspaces to itself until moonlet is updated there.
 
 ## Data and config
@@ -127,4 +127,6 @@ Session records, settings, devices and secrets join the account state in later s
 
 ## Open questions
 
-- **Same-name workspaces:** shown twice until merged by hand (this spec), or merged automatically on the first link? Proposed: by hand, as two "Personal" workspaces may not be the same.
+None open. Decided by the user on 2026-10-26:
+
+- **Same-name workspaces stay apart until the user merges them** with **Merge with…**, never merged by name on their own: two "Personal" workspaces on different machines may not be the same.
