@@ -3,6 +3,7 @@
 
 import { highlightLines, readRows } from "./codeHighlight";
 import type { ToolCall } from "./protocol";
+import { toolFile } from "./chat";
 
 export type Tone = "add" | "del" | "dim" | "error" | "warn" | "ok" | "accent";
 export type Segment = { text: string; tone?: Tone };
@@ -71,8 +72,7 @@ export function toolOutputView(tool: ToolCall): OutputView | { kind: "read"; row
   if (!tool.output) return null;
   if (tool.name === "Read") {
     // The summary is cut to 200 characters, which can drop the extension.
-    const input = tool.input as { file_path?: unknown } | null;
-    const rows = readRows(tool.output, typeof input?.file_path === "string" ? input.file_path : tool.summary);
+    const rows = readRows(tool.output, toolFile(tool) ?? tool.summary);
     return rows && { kind: "read", rows };
   }
   return SHELL.includes(tool.name.toLowerCase()) || tool.name === "Grep" ? outputView(tool.output) : null;

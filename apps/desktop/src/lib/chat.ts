@@ -406,6 +406,13 @@ export function toolCommand(tool: ToolCall): string | null {
   return cmd?.trimEnd() || null;
 }
 
+/** The file a tool call names in its input, `file_path` (Read, Write,
+ *  Edit, MultiEdit); null for one that names none. */
+export function toolFile(tool: ToolCall): string | null {
+  const file = (tool.input as { file_path?: unknown } | null)?.file_path;
+  return typeof file === "string" ? file : null;
+}
+
 /** One question from Claude's `AskUserQuestion` tool input. */
 export interface Question {
   question: string;
