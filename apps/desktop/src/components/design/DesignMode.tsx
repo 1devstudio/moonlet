@@ -8,7 +8,7 @@ import { useShallow } from "zustand/react/shallow";
 import { errorToast, shownWorkspace, toast, useStore } from "../../lib/store";
 import { type DesignCover } from "../../lib/protocol";
 import { designAgentState, designRow, designsEmpty, picksInWorkspace, systemFolder, systemLabel } from "../../lib/design";
-import { designCanvasKey, createSystem, designsOf, openNewDesign, openSessionDesign, sessionDesignsIn, detectStack, loadDesigns, loadSystems, shownDesign, shownSystem, showDesign, showSystem, systemsOf, useDesign } from "../../lib/designStore";
+import { designCanvasKey, createSystem, designsOf, openNewDesign, openSessionDesign, sessionDesignsIn, detectStack, indexShownIn, loadDesigns, showIndex, loadSystems, shownDesign, shownSystem, showDesign, showSystem, systemsOf, useDesign } from "../../lib/designStore";
 import { workspaceProjects } from "../../lib/tasksStore";
 import { tildePath } from "../../lib/profiles";
 import { useNow } from "../../lib/useNow";
@@ -17,6 +17,7 @@ import { AgentIcon, Button, Dialog, Field, IconButton, Kbd, StateGlyph, inputCls
 import { ProjectMark } from "../Sidebar";
 import { DesignSystemView, TONES } from "./SystemView";
 import { DesignScreen } from "./DesignScreen";
+import { DesignsIndex } from "./DesignsIndex";
 
 /** The shown workspace, its design systems and designs, and the ones shown;
  * `load` lists them when the workspace is shown (the sidebar does, so a
@@ -28,13 +29,14 @@ function useWorkspaceDesign(load = false) {
   const designs = useDesign((d) => (ws ? designsOf(d, ws.host, ws.id) : undefined));
   const inSessions = useDesign((d) => (ws ? sessionDesignsIn(d, ws.host, ws.id) : undefined));
   const design = useDesign((d) => (ws ? shownDesign(d, ws.host, ws.id) : null));
+  const indexed = useDesign((d) => !!ws && indexShownIn(d, ws.host, ws.id));
   useEffect(() => {
     if (ws && load) {
       void loadSystems(ws.host, ws.id).catch(errorToast);
       void loadDesigns(ws.host, ws.id).catch(errorToast);
     }
   }, [ws, load]);
-  return { ws, systems, shown, designs, inSessions, design };
+  return { ws, systems, shown, designs, inSessions, design, indexed };
 }
 
 /** Whether a sync agent's chat is at work now, so its system is syncing. */
@@ -46,10 +48,16 @@ function agentWorking(s: ReturnType<typeof useStore.getState>, host: string, id:
 const openNewSystem = (ws: { host: string; id: string } | null) => ws && useStore.setState({ dialog: { kind: "new-design-system", host: ws.host, workspace: ws.id } });
 
 
-function Heading({ label, add }: { label: string; add?: { title: string; run: () => void } }) {
+function Heading({ label, add, open }: { label: string; add?: { title: string; run: () => void }; open?: { title: string; current: boolean; run: () => void } }) {
   return (
     <div className="mx-2 mt-3 flex h-7 items-center px-2">
-      <span className="flex-1 ui-text-11.5 uppercase tracking-[0.08em] text-faint">{label}</span>
+      {open ? (
+        <button title={open.title} aria-current={open.current ? "page" : undefined} onClick={open.run} className={cx("flex-1 text-left ui-text-11.5 uppercase tracking-[0.08em] hover:text-fg", open.current ? "text-fg" : "text-faint")}>
+          {label}
+        </button>
+      ) : (
+        <span className="flex-1 ui-text-11.5 uppercase tracking-[0.08em] text-faint">{label}</span>
+      )}
       {add && (
         <IconButton title={add.title} onClick={add.run}>
           <Plus size={12} />
@@ -61,7 +69,7 @@ function Heading({ label, add }: { label: string; add?: { title: string; run: ()
 
 /** The sidebar body in Design mode. */
 export function DesignSidebar() {
-  const { ws, systems, shown, designs: own, inSessions, design } = useWorkspaceDesign(true);
+  const { ws, systems, shown, designs: own, inSessions, design, indexed } = useWorkspaceDesign(true);
   // The workspace designs, then the session designs, which open in their sessions (X65).
   const designs = useMemo(() => own && [...own, ...(inSessions ?? [])], [own, inSessions]);
   const working = useStore(useShallow((s) => (ws ? (systems ?? []).map((sys) => agentWorking(s, ws.host, sys.agent)) : [])));
@@ -100,7 +108,7 @@ export function DesignSidebar() {
           {systems?.length === 0 && <p className="px-2 py-1 ui-text-12.5 text-faint">None yet. Build one from a project's code.</p>}
           {systems?.map((sys, i) => {
             const label = systemLabel(sys, now, !!working[i]);
-            const current = !design && sys.slug === shown?.slug;
+            const current = !design && !indexed && sys.slug === shown?.slug;
             return (
               <button
                 key={sys.slug}
@@ -118,7 +126,7 @@ export function DesignSidebar() {
             );
           })}
         </nav>
-        <Heading label="Designs" />
+        <Heading label="Designs" open={{ title: "Every design of the workspace, as cards", current: indexed, run: () => ws && showIndex(ws.host, ws.id) }} />
         <nav aria-label="Designs" className="px-2">
           {empty && <p className="px-2 py-1 ui-text-12.5 text-faint">{empty}</p>}
           {designs?.map((d, i) => {
@@ -151,14 +159,22 @@ export function DesignSidebar() {
 
 /** The main area in Design mode: the open design system, or how to start. */
 export function DesignMain() {
-  const { ws, systems, shown, design } = useWorkspaceDesign();
+  const { ws, systems, shown, design, indexed } = useWorkspaceDesign();
   const working = useStore((s) => !!ws && !!shown && agentWorking(s, ws.host, shown.agent));
   const sidebarOpen = useStore((s) => s.sidebarOpen);
+  const wsName = useStore((s) => (ws ? (s.workspaces[ws.host]?.find((w) => w.id === ws.id)?.name ?? "") : ""));
   const now = useNow(true);
   if (design && ws) {
     return (
       <div className="flex h-full flex-col bg-bg">
         <DesignScreen key={designCanvasKey(ws.host, ws.id, design.slug)} host={ws.host} workspace={ws.id} design={design} inset={sidebarOpen ? 0 : 84} />
+      </div>
+    );
+  }
+  if (indexed && ws) {
+    return (
+      <div className="flex h-full flex-col bg-bg">
+        <DesignsIndex host={ws.host} workspace={ws.id} name={wsName} systems={systems} inset={sidebarOpen ? 0 : 84} />
       </div>
     );
   }
