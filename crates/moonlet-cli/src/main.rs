@@ -167,6 +167,9 @@ enum DesignAction {
         /// a repeated one, the next free id, and save the pages.
         #[arg(long)]
         fix: bool,
+        /// The design is a session design of the session this agent works in.
+        #[arg(long, requires = "design")]
+        here: bool,
     },
     /// List the workspace's designs as JSON.
     Ls {
@@ -174,11 +177,16 @@ enum DesignAction {
         workspace: Option<String>,
     },
     /// Create a design on a design system and start its agent with the
-    /// brief. Prints the design as JSON.
+    /// brief. Prints the design as JSON. With --here, a session design in
+    /// the session this agent works in, which you write yourself.
     New {
-        /// The design system's slug (see `moonlet design system ls`).
+        /// The design system's slug (see `moonlet design system ls`); with
+        /// --here, the one built from the session's project by default.
+        #[arg(long, required_unless_present = "here")]
+        system: Option<String>,
+        /// Make it in this session's worktree, under its design folder.
         #[arg(long)]
-        system: String,
+        here: bool,
         /// Its name (defaults to the brief's first words).
         #[arg(long)]
         name: Option<String>,
@@ -772,6 +780,7 @@ async fn run(cmd: Cmd, socket: PathBuf) -> Result<()> {
                         add_dirs: vec![],
                         task: None,
                         worktree: None,
+                        design: None,
                         cols: 120,
                         rows: 32,
                     },
@@ -906,6 +915,21 @@ async fn design_target(c: &mut Client, workspace: Option<String>, system: Option
     bail!("no workspace: run inside a design folder or a moonlet session, or pass --workspace")
 }
 
+/// The session the agent running the command works in, from its
+/// terminal (X65 `--here`), and that terminal.
+async fn here_session(c: &mut Client) -> Result<(Session, TerminalId)> {
+    let t = terminal_from_env().context("--here runs in a moonlet session's terminal")?;
+    let terminals: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await?;
+    let id = terminals
+        .into_iter()
+        .find(|i| i.id == t)
+        .and_then(|i| i.session_id)
+        .context("--here runs in a moonlet session's terminal: this one is in no session")?;
+    let sessions: Vec<Session> = c.request(methods::SESSION_LIST, ()).await?;
+    let session = sessions.into_iter().find(|s| s.id == id).context("the session is gone")?;
+    Ok((session, t))
+}
+
 /// What the folder the command runs in belongs to under `~/.moonlet/design`.
 fn here() -> Option<design::Located> {
     std::env::current_dir().ok().and_then(|cwd| design::locate(&cwd, &design_root()))
@@ -932,7 +956,17 @@ async fn design_cmd(socket: &std::path::Path, action: DesignAction) -> Result<()
     let mut c = connect(socket).await?;
     let need = |s: Option<String>| s.context("no design system: run inside its folder or pass --system");
     match action {
-        DesignAction::Check { design, system, workspace, render, fix } => {
+        DesignAction::Check { design: Some(slug), here: true, fix, .. } => {
+            let (session, _) = here_session(&mut c).await?;
+            let out: serde_json::Value = c
+                .request(methods::DESIGN_CHECK, serde_json::json!({"design": {"session": session.id, "slug": slug}, "fix": fix}))
+                .await?;
+            println!("{}", serde_json::to_string_pretty(&out)?);
+            if out.as_array().is_some_and(|p| !p.is_empty()) {
+                std::process::exit(1);
+            }
+        }
+        DesignAction::Check { design, system, workspace, render, fix, .. } => {
             let named_system = system.is_some();
             let (w, s) = design_target(&mut c, workspace, system).await?;
             // A design named, else the design whose folder this is, unless a
@@ -940,7 +974,7 @@ async fn design_cmd(socket: &std::path::Path, action: DesignAction) -> Result<()
             let design = design.or_else(|| if named_system || s.is_some() { None } else { here()?.design });
             if let Some(d) = design {
                 let out: serde_json::Value = c
-                    .request(methods::DESIGN_CHECK, serde_json::json!({"workspace": w, "design": d, "fix": fix, "render": render}))
+                    .request(methods::DESIGN_CHECK, serde_json::json!({"design": {"workspace": w, "slug": d}, "fix": fix, "render": render}))
                     .await?;
                 println!("{}", serde_json::to_string_pretty(&out)?);
                 if out.as_array().is_some_and(|p| !p.is_empty()) {
@@ -970,7 +1004,35 @@ async fn design_cmd(socket: &std::path::Path, action: DesignAction) -> Result<()
             let list: serde_json::Value = c.request(methods::DESIGN_LIST, serde_json::json!({"workspace": w})).await?;
             println!("{}", serde_json::to_string_pretty(&list)?);
         }
-        DesignAction::New { system, name, brief, workspace } => {
+        DesignAction::New { system, name, brief, here: true, .. } => {
+            let (session, terminal) = here_session(&mut c).await?;
+            let workspace = session.workspace_id.clone().context("this session is in no workspace")?;
+            let projects: Vec<moonlet_proto::types::Project> = c.request(methods::PROJECT_LIST, ()).await?;
+            let project = projects.iter().find(|p| p.id == session.project_id).context("the session's project is gone")?;
+            let systems: Vec<serde_json::Value> = c.request(methods::DESIGN_SYSTEMS, serde_json::json!({"workspace": workspace})).await?;
+            let systems: Vec<(String, Vec<String>)> = systems
+                .iter()
+                .map(|s| {
+                    let sources = s["sources"].as_array().into_iter().flatten().filter_map(|p| p.as_str().map(String::from)).collect();
+                    (s["slug"].as_str().unwrap_or_default().to_string(), sources)
+                })
+                .collect();
+            let system = design::pick_system(&systems, &project.path, system.as_deref()).map_err(anyhow::Error::msg)?;
+            let name = name.unwrap_or_else(|| design::name_from_brief(&brief));
+            let made: serde_json::Value = c
+                .request(
+                    methods::DESIGN_CREATE,
+                    serde_json::json!({"workspace": workspace, "session": session.id, "name": name, "system": system, "brief": brief, "spawned_by": terminal}),
+                )
+                .await?;
+            println!("{}", serde_json::to_string_pretty(&made)?);
+            // The app shows it in the session's Design tab.
+            let _: bool = c
+                .request(methods::DESIGN_OPEN, serde_json::json!({"session": session.id, "slug": made["slug"]}))
+                .await?;
+        }
+        DesignAction::New { system, name, brief, workspace, .. } => {
+            let system = system.context("--system names the design system")?;
             let (w, _) = design_target(&mut c, workspace, None).await?;
             let name = name.unwrap_or_else(|| design::name_from_brief(&brief));
             // From an agent, the app shows a toast and keeps the focus (X22).

@@ -260,6 +260,13 @@ pub const DESIGN_KIT: &str = "design.kit";
 /// [`DesignRef`] → the design's snapshots, newest first:
 /// [`crate::types::DesignSnapshot`]s (X65 entry 11).
 pub const DESIGN_HISTORY: &str = "design.history";
+/// [`DesignRef`] of a session design → [`DesignSystemUpdated`]: both
+/// copies of its design system replaced by the system as it is now, its
+/// anchor recorded, and the cards that changed (X65 entry 12).
+pub const DESIGN_SYSTEM_UPDATE: &str = "design.system.update";
+/// [`DesignCopy`] → [`crate::types::DesignCreated`]: a project design
+/// copied into a new workspace design, whose agent starts (X65 entry 12).
+pub const DESIGN_COPY: &str = "design.copy";
 /// [`DesignSnapshotRef`] → the **Restored snapshot** entry: snapshot `n`
 /// made the design's `pages/` and `assets/`. Refused with `busy` while the
 /// design's agent works.
@@ -798,10 +805,23 @@ pub struct SessionCreate {
     /// instead of making a new one (X46).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<String>,
+    /// A workspace design to build (X65 Build it): copied into the new
+    /// worktree as a session design before the agent starts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub design: Option<SessionDesignPick>,
     #[serde(default = "default_cols")]
     pub cols: u16,
     #[serde(default = "default_rows")]
     pub rows: u16,
+}
+
+/// The workspace design a new session builds, and its pages kept (X65).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionDesignPick {
+    pub workspace: String,
+    pub slug: String,
+    /// Its pages to copy (`index` for `pages/index.html`).
+    pub pages: Vec<String>,
 }
 
 impl SessionCreate {
@@ -826,6 +846,7 @@ impl SessionCreate {
             workspace_id: None,
             task: None,
             worktree: None,
+            design: None,
             cols: default_cols(),
             rows: default_rows(),
         }
@@ -1265,16 +1286,19 @@ pub struct DesignProgress {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DesignCheck {
-    pub workspace: String,
+    /// The design system's workspace; none when `design` names a design.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
     /// The design system; empty when `design` names a design.
     #[serde(default)]
     pub slug: String,
     /// Also render each card in the app and judge it (`--render`).
     #[serde(default)]
     pub render: bool,
-    /// A workspace design to check instead of a design system (X65).
+    /// A design to check instead of a design system (X65), a workspace's
+    /// or a session's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub design: Option<String>,
+    pub design: Option<DesignRef>,
     /// With `design`: first give the missing and repeated `data-mid`s the
     /// next free numbers (`--fix`).
     #[serde(default)]
@@ -1356,8 +1380,15 @@ impl DesignRenderDone {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DesignFile {
-    pub workspace: String,
-    /// Relative to the workspace's design folder, such as `systems/<slug>/styles.css`.
+    /// A file of this workspace's design folder; or, with `session`, of
+    /// that session's worktree's design folder (X65).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+    /// Relative to the workspace's design folder, such as
+    /// `systems/<slug>/styles.css`; or to the worktree's, such as
+    /// `settings-page/pages/index.html`.
     pub path: String,
 }
 
@@ -1370,7 +1401,8 @@ pub struct DesignCreate {
     pub system: String,
     #[serde(default)]
     pub brief: String,
-    /// A session design in that session's worktree: not made yet (entry 12).
+    /// A session design in that session's worktree, which the session's
+    /// agent writes: no agent of its own starts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
     /// The terminal of the agent that asked for it (X22): the app shows a
@@ -1379,18 +1411,54 @@ pub struct DesignCreate {
     pub spawned_by: Option<TerminalId>,
 }
 
-/// A design, by its workspace and slug (X65).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DesignRef {
-    pub workspace: String,
+/// A design (X65): a workspace design by its workspace and slug, a session
+/// design by its session and slug. Written as the fields beside the others
+/// of a call, so `{workspace, slug}` reads as it always did. Read once, by
+/// [`DesignRef::try_from`]: a call naming both a workspace and a session, or
+/// neither, is refused, so it can never pass as one and act on the other.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged, try_from = "DesignFields")]
+pub enum DesignRef {
+    Session { session: String, slug: String },
+    Workspace { workspace: String, slug: String },
+}
+
+/// The fields a design is named by, as a call gives them.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DesignFields {
+    #[serde(default)]
+    pub workspace: Option<String>,
+    #[serde(default)]
+    pub session: Option<String>,
     pub slug: String,
+}
+
+impl TryFrom<DesignFields> for DesignRef {
+    type Error = String;
+
+    fn try_from(f: DesignFields) -> Result<Self, String> {
+        match (f.workspace, f.session) {
+            (Some(workspace), None) => Ok(DesignRef::Workspace { workspace, slug: f.slug }),
+            (None, Some(session)) => Ok(DesignRef::Session { session, slug: f.slug }),
+            (Some(_), Some(_)) => Err("name a design by its workspace or by its session, not both".into()),
+            (None, None) => Err("name a design by its workspace or by its session".into()),
+        }
+    }
+}
+
+impl DesignRef {
+    pub fn slug(&self) -> &str {
+        match self {
+            DesignRef::Session { slug, .. } | DesignRef::Workspace { slug, .. } => slug,
+        }
+    }
 }
 
 /// [`DESIGN_VIEWPORT`]'s params: the design and its viewport, `WxH` in px.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DesignViewport {
-    pub workspace: String,
-    pub slug: String,
+    #[serde(flatten)]
+    pub design: DesignRef,
     pub viewport: String,
 }
 
@@ -1398,8 +1466,8 @@ pub struct DesignViewport {
 /// `new`, `edit` or `sent` beside them (X65).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DesignCommentPut {
-    pub workspace: String,
-    pub slug: String,
+    #[serde(flatten)]
+    pub design: DesignRef,
     #[serde(flatten)]
     pub change: crate::types::CommentChange,
 }
@@ -1407,8 +1475,8 @@ pub struct DesignCommentPut {
 /// A design's page (X65): `index` for `pages/index.html`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DesignPageRef {
-    pub workspace: String,
-    pub slug: String,
+    #[serde(flatten)]
+    pub design: DesignRef,
     pub page: String,
 }
 
@@ -1424,8 +1492,8 @@ pub struct DesignPageText {
 /// was edited from.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DesignWritePage {
-    pub workspace: String,
-    pub slug: String,
+    #[serde(flatten)]
+    pub design: DesignRef,
     pub page: String,
     pub html: String,
     pub base_version: String,
@@ -1439,8 +1507,8 @@ pub struct DesignWritePage {
 /// [`DESIGN_SNAPSHOT_RESTORE`]'s params: a design's snapshot `n`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DesignSnapshotRef {
-    pub workspace: String,
-    pub slug: String,
+    #[serde(flatten)]
+    pub design: DesignRef,
     pub n: u32,
 }
 
@@ -1494,11 +1562,57 @@ pub struct DesignKitCard {
     pub html: String,
 }
 
+/// A session design's copies of its design system replaced by the system
+/// as it is now (X65): the anchor recorded, and the cards that changed since
+/// the copy, for the chat.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DesignSystemUpdated {
+    /// The design system's sync anchor now; none before its first sync.
+    pub anchor: Option<String>,
+    /// By path.
+    pub cards: Vec<DesignCardChange>,
+}
+
+/// A card of a design system that changed since a session design copied
+/// it (X65).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DesignCardChange {
+    /// Relative to the design system's folder.
+    pub path: String,
+    pub change: CardChange,
+}
+
+/// How a card changed since a session design copied its design system (X65).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CardChange {
+    New,
+    Changed,
+    Removed,
+}
+
+/// [`DESIGN_COPY`]'s params: the project design to start from, and the
+/// new workspace design's name.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DesignCopy {
+    pub workspace: String,
+    pub from: ProjectDesignRef,
+    pub name: String,
+}
+
+/// A project design: its project, and its folder in the repository, such as
+/// `docs/design/settings-page`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectDesignRef {
+    pub project: String,
+    pub path: String,
+}
+
 /// One pin of a design (X65).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DesignCommentRef {
-    pub workspace: String,
-    pub slug: String,
+    #[serde(flatten)]
+    pub design: DesignRef,
     pub n: u32,
 }
 
@@ -1511,8 +1625,13 @@ pub struct DesignOpened {
     /// The agent's terminal that started the design, and its session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spawned_by: Option<TerminalId>,
+    /// With `spawned_by`, the agent's session; for a session design, its
+    /// session, whose Design tab shows it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
+    /// `session` for a session design; none for a workspace design.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<crate::types::DesignKind>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2785,4 +2904,36 @@ pub struct CloudProvider {
 pub struct CloudTypes {
     pub provider: String,
     pub location: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// X65 entry 12: a design call names a workspace design as it always
+    /// did, `{workspace, slug}`, or a session design as `{session, slug}`,
+    /// beside its other fields.
+    #[test]
+    fn a_design_is_addressed_by_its_workspace_or_its_session_and_its_slug() {
+        let page: DesignPageRef = serde_json::from_str(r#"{"workspace":"w1","slug":"settings-page","page":"index"}"#).unwrap();
+        assert_eq!(page.design, DesignRef::Workspace { workspace: "w1".into(), slug: "settings-page".into() });
+        let page: DesignPageRef = serde_json::from_str(r#"{"session":"s1","slug":"settings-page","page":"index"}"#).unwrap();
+        assert_eq!(page.design, DesignRef::Session { session: "s1".into(), slug: "settings-page".into() });
+        let put: DesignCommentPut =
+            serde_json::from_str(r#"{"session":"s1","slug":"settings-page","edit":{"n":2,"comment":"Smaller"}}"#).unwrap();
+        assert_eq!(
+            (put.design, put.change),
+            (
+                DesignRef::Session { session: "s1".into(), slug: "settings-page".into() },
+                crate::types::CommentChange::Edit { n: 2, comment: "Smaller".into() }
+            )
+        );
+        let restore: DesignSnapshotRef = serde_json::from_str(r#"{"workspace":"w1","slug":"settings-page","n":3}"#).unwrap();
+        assert_eq!((restore.design.slug(), restore.n), ("settings-page", 3));
+        assert_eq!(
+            serde_json::to_value(DesignPageRef { design: DesignRef::Workspace { workspace: "w1".into(), slug: "a".into() }, page: "index".into() }).unwrap(),
+            serde_json::json!({"workspace": "w1", "slug": "a", "page": "index"})
+        );
+        assert!(serde_json::from_str::<DesignPageRef>(r#"{"slug":"settings-page","page":"index"}"#).is_err());
+    }
 }

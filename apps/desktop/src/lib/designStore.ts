@@ -13,7 +13,7 @@ import { alertFor } from "./alerts";
 import { modeOf, setMode } from "./mode";
 import { latestPerKey } from "./prPoll";
 import { latestSends } from "./latestSend";
-import { designOpenAction } from "./design";
+import { designOpenAction, isDesignModeChange, workspaceDesigns } from "./design";
 import { changedPages, reloadsPage } from "./designCanvas";
 import { pageOfPath } from "./designPage";
 import type { PageProblem } from "./designBars";
@@ -346,7 +346,7 @@ function listing(fetch: (host: string, workspace: string, key: string) => Promis
 }
 
 const designListing = listing(async (host, workspace, key) => {
-  const list = withPickedViewports(host, workspace, await rpc<Design[]>(host, M.designList, { workspace }));
+  const list = withPickedViewports(host, workspace, workspaceDesigns(await rpc<Design[]>(host, M.designList, { workspace })));
   useDesign.setState((s) => ({ designs: { ...s.designs, [key]: list } }));
 });
 
@@ -368,7 +368,7 @@ export async function checkDesign(host: string, workspace: string, slug: string)
   const latest = checksAsked.start(key);
   let found: PageProblem[];
   try {
-    found = await rpc<PageProblem[]>(host, M.designCheck, { workspace, design: slug });
+    found = await rpc<PageProblem[]>(host, M.designCheck, { design: { workspace, slug } });
   } catch {
     // A design removed meanwhile, or a page that cannot be read: no bar.
     found = NO_PROBLEMS;
@@ -431,6 +431,7 @@ function onDesignChange(host: string, change: DesignChanged) {
 function onDesignOpen(host: string, ev: DesignOpen) {
   const action = designOpenAction(ev, useStore.getState().sessions[host] ?? []);
   const open = () => void openDesign(host, ev.workspace, ev.slug);
+  if (action.kind === "none") return;
   if (action.kind === "show") open();
   else {
     reloadDesigns(host, ev.workspace);
@@ -599,7 +600,7 @@ export async function startDesign() {
   started = true;
   await onDaemonEvent((e) => {
     if (e.name === EV.designOpen) onDesignOpen(e.host, e.data as DesignOpen);
-    else if (e.name === EV.designChanged) {
+    else if (e.name === EV.designChanged && isDesignModeChange(e.data as DesignChanged)) {
       const d = e.data as DesignChanged;
       onDesignChange(e.host, d);
       if (systemListing.wanted.has(wsKey(e.host, d.workspace))) reload(e.host, d.workspace);

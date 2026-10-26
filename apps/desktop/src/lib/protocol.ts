@@ -348,6 +348,8 @@ export interface ProjectConfig {
   trackers?: string[];
   /** Commands that may run on another machine, `[heavy]` (X62). */
   heavy?: HeavyConfig;
+  /** Where session designs live in a worktree, `[design]` (X65). */
+  design?: { dir?: string | null };
 }
 
 /** Which workers may take a project's heavy commands (X62). */
@@ -1061,12 +1063,20 @@ export interface DesignSystemCreated {
   agent_error: string | null;
 }
 
-/** One design of a workspace, from `design.list` (X65). Session and
- * project designs come with entry 12. */
+/** Where a design lives (X65): a workspace design with its own agent, a
+ *  session design in a session's worktree, or a project design merged into
+ *  a project's base branch, read only. */
+export type DesignKind = "workspace" | "session" | "project";
+
+/** A design as every design call names it (X65): a workspace design by its
+ *  workspace, a session design by its session; beside the call's other fields. */
+export type DesignRef = { workspace: string; slug: string } | { session: string; slug: string };
+
+/** One design of a workspace, from `design.list` (X65). */
 export interface Design {
   slug: string;
   name: string;
-  kind: "workspace";
+  kind: DesignKind;
   /** The design system's slug. */
   system: string;
   /** The design's folder. */
@@ -1086,6 +1096,21 @@ export interface Design {
   needs_you: { kind: "question" | "approval"; text: string } | null;
   /** Why the design could not be read. */
   error: string | null;
+  /** A session design's session. */
+  session?: string;
+  /** A session design's or a project design's project. */
+  project?: string;
+  /** A workspace design built in a session (Build it), and its project. */
+  built_in?: { session: string; project?: string };
+  /** A session design whose design system was synced since it pinned it. */
+  system_updated?: boolean;
+}
+
+/** `design.system.update`'s answer: the new anchor, and the cards that
+ *  changed since a session design's copy (X65). */
+export interface DesignSystemUpdated {
+  anchor: string | null;
+  cards: { path: string; change: "new" | "changed" | "removed" }[];
 }
 
 /** A comment pinned on an element of a design's page, as `design.comments`
@@ -1177,7 +1202,10 @@ export interface DesignOpen {
   slug: string;
   name: string;
   spawned_by?: number;
+  /** With `spawned_by`, the agent's session; for a session design, its session. */
   session?: string;
+  /** `session` for a session design. */
+  kind?: DesignKind;
 }
 
 /** `design.changed`: files changed in a workspace's design folder (X64, X65). */
@@ -1185,8 +1213,11 @@ export interface DesignChanged {
   workspace: string;
   /** The design system they are in, if any. */
   system: string | null;
-  /** The workspace design they are in, if any (X65). */
+  /** The workspace design they are in, if any (X65); with `session`, that
+   *  session's session design. */
   design?: string | null;
+  /** The session of a session design whose files changed (X65). */
+  session?: string;
   /** Relative to the design system's or the design's folder, else the workspace's. */
   paths: string[];
 }
@@ -1391,6 +1422,8 @@ export const M = {
   designRemove: "design.remove",
   designOpen: "design.open",
   designViewport: "design.viewport",
+  designSystemUpdate: "design.system.update",
+  designCopy: "design.copy",
 } as const;
 
 export const EV = {

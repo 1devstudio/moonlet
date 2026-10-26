@@ -54,6 +54,33 @@ pub fn workspace_of_terminal(
     sessions.iter().find(|(id, _)| id == session)?.1.clone()
 }
 
+/// The design system a session design made with `design new --here` is
+/// on (X65): `named` when given, else the workspace's one design system
+/// whose sources include the session's project at `project`. `systems` are
+/// each system's slug and source folders. Several, or none, is an error
+/// saying what to do.
+pub fn pick_system(systems: &[(String, Vec<String>)], project: &str, named: Option<&str>) -> Result<String, String> {
+    if let Some(named) = named {
+        return match systems.iter().any(|(slug, _)| slug == named) {
+            true => Ok(named.to_string()),
+            false => Err(format!("no design system \"{named}\" in this workspace")),
+        };
+    }
+    let built: Vec<&str> = systems
+        .iter()
+        .filter(|(_, sources)| sources.iter().any(|s| s == project))
+        .map(|(slug, _)| slug.as_str())
+        .collect();
+    match built.as_slice() {
+        [one] => Ok(one.to_string()),
+        [] => Err("no design system is built from this project: make one with `/moonlet-design sync`, or pick one with --system".into()),
+        several => Err(format!(
+            "several design systems are built from this project: {}. Pick one with --system",
+            several.join(", ")
+        )),
+    }
+}
+
 /// A `--viewport` such as `900x700`.
 pub fn parse_viewport(v: &str) -> Result<(u32, u32), String> {
     let size = |n: &str| n.parse::<u32>().ok().filter(|n| *n > 0);
@@ -213,5 +240,29 @@ mod tests {
         ] {
             assert_eq!(card_in_system(&cwd, outside, &system), None, "{outside}");
         }
+    }
+
+    #[test]
+    fn a_session_design_takes_the_design_system_built_from_its_project_or_asks_which() {
+        let system = |slug: &str, sources: &[&str]| (slug.to_string(), sources.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        let one = [system("moonlet-desktop", &["/Users/alex/code/moonlet"]), system("storefront", &["/Users/alex/code/shop"])];
+        assert_eq!(pick_system(&one, "/Users/alex/code/moonlet", None), Ok("moonlet-desktop".into()));
+        let several = [
+            system("moonlet-desktop", &["/Users/alex/code/moonlet"]),
+            system("moonlet-mobile", &["/Users/alex/code/shop", "/Users/alex/code/moonlet"]),
+        ];
+        assert_eq!(
+            pick_system(&several, "/Users/alex/code/moonlet", None),
+            Err("several design systems are built from this project: moonlet-desktop, moonlet-mobile. Pick one with --system".into())
+        );
+        assert_eq!(pick_system(&several, "/Users/alex/code/moonlet", Some("moonlet-mobile")), Ok("moonlet-mobile".into()));
+        assert_eq!(
+            pick_system(&one, "/Users/alex/code/blog", None),
+            Err("no design system is built from this project: make one with `/moonlet-design sync`, or pick one with --system".into())
+        );
+        assert_eq!(
+            pick_system(&one, "/Users/alex/code/blog", Some("nope")),
+            Err("no design system \"nope\" in this workspace".into())
+        );
     }
 }

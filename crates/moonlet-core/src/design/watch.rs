@@ -76,6 +76,210 @@ pub fn group(root: &Path, paths: &[PathBuf]) -> Vec<Change> {
         .collect()
 }
 
+/// The files that changed in one session design of a worktree (X65), by
+/// their paths in its folder (`pages/index.html`) or in its folder under
+/// `.moonlet/design/` (`comments.json`, `history/3/snapshot.json`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionChange {
+    pub design: String,
+    pub paths: Vec<String>,
+}
+
+/// Groups changed paths of a worktree by its session designs: those in
+/// its design folder `folder` and in `.moonlet/design/`, by any slug a
+/// session design's listing takes. A design in `folder` is the session's
+/// only while it has its folder in `.moonlet/design/` (see
+/// [`super::session::made_here`]), so a design merged on the base branch is
+/// none; that folder's own changes, its removal too, are its design's. The
+/// design's folder itself (made or removed) counts for it, with no path,
+/// but a file beside the designs (a README, the `.gitignore`) is none;
+/// anything else, and moonlet's own temporary files, is left out.
+pub fn group_session(worktree: &Path, folder: &str, paths: &[PathBuf]) -> Vec<SessionChange> {
+    use std::collections::{BTreeMap, BTreeSet};
+    let mut by: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for p in paths {
+        let Ok(rel) = p.strip_prefix(worktree) else {
+            continue;
+        };
+        // In the design folder, or in the session designs' own folder.
+        let (in_folder, inner) = match rel.strip_prefix(folder) {
+            Ok(inner) => (true, inner),
+            Err(_) => (
+                false,
+                rel.strip_prefix(super::session::SIDE_DIR)
+                    .unwrap_or(Path::new("")),
+            ),
+        };
+        let parts: Vec<String> = inner
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect();
+        let [slug, rest @ ..] = parts.as_slice() else {
+            continue;
+        };
+        let beside = rest.is_empty() && std::fs::symlink_metadata(p).is_ok_and(|m| m.is_file());
+        if super::place::check_slug(slug).is_err()
+            || beside
+            || parts.last().is_some_and(|name| is_temp(name))
+            || (in_folder && !super::session::made_here(worktree, slug))
+        {
+            continue;
+        }
+        let paths = by.entry(slug.clone()).or_default();
+        if !rest.is_empty() {
+            paths.insert(rest.join("/"));
+        }
+    }
+    by.into_iter()
+        .map(|(design, paths)| SessionChange {
+            design,
+            paths: paths.into_iter().collect(),
+        })
+        .collect()
+}
+
+/// Watches a worktree's session designs, its design folder `folder` and
+/// `.moonlet/design/`, and calls `emit` with their changes, gathered over
+/// 150 ms. Either folder may come later, as the first session design makes
+/// `.moonlet/design/`: until it is there, the nearest folder above it in
+/// the worktree is watched for it, and once it is, it is watched whole, the
+/// designs already in it reported as changed. Watching stops when the
+/// returned watcher is dropped.
+pub fn start_session(
+    worktree: &Path,
+    folder: &str,
+    emit: impl Fn(Vec<SessionChange>) + Send + 'static,
+) -> anyhow::Result<Watching> {
+    let (worktree, folder) = (worktree.to_path_buf(), folder.to_string());
+    let real = worktree.canonicalize()?;
+    let roots = [
+        worktree.join(&folder),
+        worktree.join(super::session::SIDE_DIR),
+    ];
+    let top = worktree.clone();
+    let arm = move |armed: &mut Armed| -> anyhow::Result<Vec<PathBuf>> {
+        let mut made = Vec::new();
+        for root in &roots {
+            if root.is_dir() {
+                if armed.watch(root, true)? {
+                    // What it has came before its watch: count it.
+                    for e in std::fs::read_dir(root)?.flatten() {
+                        made.push(e.path());
+                    }
+                }
+                continue;
+            }
+            // Gone, or not made yet: watched for from the nearest folder
+            // above it, the worktree at the top.
+            armed.unwatch(root);
+            if let Some(above) = root
+                .ancestors()
+                .skip(1)
+                .take_while(|a| a.starts_with(&top))
+                .find(|a| a.is_dir())
+            {
+                armed.watch(above, false)?;
+            }
+        }
+        Ok(made)
+    };
+    watch_with(arm, move |batch| {
+        // Each path as under the worktree as given, also when the watch
+        // reports it with its links resolved.
+        let batch: Vec<PathBuf> = batch
+            .iter()
+            .filter_map(|p| under(&[&worktree, &real], p))
+            .collect();
+        let changes = group_session(&worktree, &folder, &batch);
+        if !changes.is_empty() {
+            emit(changes);
+        }
+    })
+}
+
+/// A watcher and the folders it is on, each whole or only its own entries.
+struct Armed {
+    watcher: notify::RecommendedWatcher,
+    on: std::collections::BTreeMap<PathBuf, bool>,
+}
+
+impl Armed {
+    /// Watches `dir`, whole (`recursive`) or only its own entries; true
+    /// when it was not watched so before.
+    fn watch(&mut self, dir: &Path, recursive: bool) -> notify::Result<bool> {
+        use notify::Watcher;
+        if self.on.get(dir) == Some(&recursive) {
+            return Ok(false);
+        }
+        self.unwatch(dir);
+        let mode = if recursive {
+            notify::RecursiveMode::Recursive
+        } else {
+            notify::RecursiveMode::NonRecursive
+        };
+        self.watcher.watch(dir, mode)?;
+        self.on.insert(dir.to_path_buf(), recursive);
+        Ok(true)
+    }
+
+    /// Stops watching `dir`, if it was.
+    fn unwatch(&mut self, dir: &Path) {
+        use notify::Watcher;
+        if self.on.remove(dir).is_some() {
+            let _ = self.watcher.unwatch(dir);
+        }
+    }
+}
+
+/// Watches what `arm` puts the watcher on, and calls `on` with each batch
+/// of changed paths, gathered over 150 ms. `arm` runs first, and again
+/// before each batch, so a folder made meanwhile is watched from then on;
+/// the paths it gives (what a folder it newly watches has) join the batch,
+/// but for its first run's.
+fn watch_with(
+    mut arm: impl FnMut(&mut Armed) -> anyhow::Result<Vec<PathBuf>> + Send + 'static,
+    on: impl Fn(Vec<PathBuf>) + Send + 'static,
+) -> anyhow::Result<Watching> {
+    let (tx, rx) = std::sync::mpsc::channel::<PathBuf>();
+    let watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+        if let Ok(ev) = res {
+            for p in ev.paths {
+                let _ = tx.send(p);
+            }
+        }
+    })?;
+    let mut armed = Armed {
+        watcher,
+        on: Default::default(),
+    };
+    arm(&mut armed)?;
+    let armed = std::sync::Arc::new(std::sync::Mutex::new(armed));
+    // Only the returned watcher keeps it: once that is dropped, so is the
+    // watch's sender, and this thread ends.
+    let weak = std::sync::Arc::downgrade(&armed);
+    std::thread::spawn(move || {
+        while let Ok(first) = rx.recv() {
+            let mut batch = vec![first];
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(150);
+            while let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) {
+                match rx.recv_timeout(left) {
+                    Ok(p) => batch.push(p),
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => break,
+                    Err(_) => return,
+                }
+            }
+            let Some(armed) = weak.upgrade() else { return };
+            match arm(&mut armed.lock().unwrap()) {
+                Ok(made) => batch.extend(made),
+                Err(e) => tracing::warn!("cannot watch a design folder: {e:#}"),
+            }
+            drop(armed);
+            on(batch);
+        }
+    });
+    Ok(Watching(armed))
+}
+
 /// moonlet's own temporary files: `.<name>.moonlet-<pid>-<n>` (design
 /// writes) and `.<name>.<pid>-<n>.moonlet-tmp` (file writes).
 fn is_temp(name: &str) -> bool {
@@ -104,45 +308,30 @@ pub fn under(roots: &[&Path], p: &Path) -> Option<PathBuf> {
 /// Watches `root` and calls `emit` with the changes, gathered over 150 ms.
 /// Watching stops when the returned watcher is dropped.
 pub fn start(root: &Path, emit: impl Fn(Vec<Change>) + Send + 'static) -> anyhow::Result<Watching> {
-    use notify::Watcher;
-    let (tx, rx) = std::sync::mpsc::channel::<PathBuf>();
-    let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-        if let Ok(ev) = res {
-            for p in ev.paths {
-                let _ = tx.send(p);
-            }
-        }
-    })?;
-    watcher.watch(root, notify::RecursiveMode::Recursive)?;
     // Events may arrive with the path as given or with its symlinks resolved
     // (`/private/var` for `/var` on macOS, a linked home on Linux): both count.
     let (given, real) = (root.to_path_buf(), root.canonicalize()?);
-    std::thread::spawn(move || {
-        while let Ok(first) = rx.recv() {
-            let mut batch = vec![first];
-            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(150);
-            while let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) {
-                match rx.recv_timeout(left) {
-                    Ok(p) => batch.push(p),
-                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => break,
-                    Err(_) => return,
-                }
-            }
-            let batch: Vec<PathBuf> = batch
-                .iter()
-                .filter_map(|p| under(&[&given, &real], p))
-                .collect();
-            let changes = group(&given, &batch);
-            if !changes.is_empty() {
-                emit(changes);
-            }
+    let watched = given.clone();
+    let arm = move |armed: &mut Armed| {
+        armed
+            .watch(&watched, true)
+            .map(|_| Vec::new())
+            .map_err(Into::into)
+    };
+    watch_with(arm, move |batch| {
+        let batch: Vec<PathBuf> = batch
+            .iter()
+            .filter_map(|p| under(&[&given, &real], p))
+            .collect();
+        let changes = group(&given, &batch);
+        if !changes.is_empty() {
+            emit(changes);
         }
-    });
-    Ok(Watching(watcher))
+    })
 }
 
 /// A running watch of the design folder; dropping it stops the watch.
-pub struct Watching(#[allow(dead_code)] notify::RecommendedWatcher);
+pub struct Watching(#[allow(dead_code)] std::sync::Arc<std::sync::Mutex<Armed>>);
 
 #[cfg(test)]
 mod tests {
@@ -266,5 +455,156 @@ mod tests {
             Some(given.join("w1/systems/a/x.html"))
         );
         assert_eq!(under(&[given, real], Path::new("/tmp/x")), None);
+    }
+
+    #[test]
+    fn changed_files_of_a_worktree_are_grouped_by_its_session_designs() {
+        let dir = tempfile::tempdir().unwrap();
+        let worktree = dir.path();
+        // Files beside the designs.
+        for file in ["docs/design/README.md", ".moonlet/design/.gitignore"] {
+            std::fs::create_dir_all(worktree.join(file).parent().unwrap()).unwrap();
+            std::fs::write(worktree.join(file), "x\n").unwrap();
+        }
+        // Both designs made in the session.
+        for slug in ["settings-page", "onboarding"] {
+            std::fs::create_dir_all(worktree.join(".moonlet/design").join(slug)).unwrap();
+        }
+        let paths: Vec<PathBuf> = [
+            "docs/design/settings-page/pages/index.html",
+            "docs/design/settings-page/pages/.index.html.moonlet-41-3",
+            "docs/design/settings-page/pages/index.html",
+            ".moonlet/design/settings-page/comments.json",
+            ".moonlet/design/settings-page/history/3/snapshot.json",
+            ".moonlet/design/.gitignore",
+            "docs/design/onboarding",
+            "docs/design/README.md",
+            "docs/specs/X66-settings.md",
+            "src/main.rs",
+            "/Users/alex/elsewhere.txt",
+        ]
+        .iter()
+        .map(|p| worktree.join(p))
+        .collect();
+        let change = |d: &str, p: &[&str]| SessionChange {
+            design: d.into(),
+            paths: p.iter().map(|x| x.to_string()).collect(),
+        };
+        assert_eq!(
+            group_session(worktree, "docs/design", &paths),
+            vec![
+                change("onboarding", &[]),
+                change(
+                    "settings-page",
+                    &[
+                        "comments.json",
+                        "history/3/snapshot.json",
+                        "pages/index.html"
+                    ]
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_change_in_a_design_merged_on_the_base_branch_is_none_of_the_sessions_designs() {
+        let dir = tempfile::tempdir().unwrap();
+        let worktree = dir.path();
+        // `settings-page` made in the session, `onboarding` merged on the
+        // base branch: its committed folder only.
+        for made in [
+            ".moonlet/design/settings-page",
+            "docs/design/settings-page/pages",
+            "docs/design/onboarding/pages",
+        ] {
+            std::fs::create_dir_all(worktree.join(made)).unwrap();
+        }
+        let paths: Vec<PathBuf> = [
+            "docs/design/onboarding",
+            "docs/design/onboarding/pages/index.html",
+            "docs/design/settings-page/pages/index.html",
+            // A session design removed whole: its folder under
+            // .moonlet/design/ is gone too.
+            ".moonlet/design/billing",
+            "docs/design/billing",
+        ]
+        .iter()
+        .map(|p| worktree.join(p))
+        .collect();
+        let change = |d: &str, p: &[&str]| SessionChange {
+            design: d.into(),
+            paths: p.iter().map(|x| x.to_string()).collect(),
+        };
+        assert_eq!(
+            group_session(worktree, "docs/design", &paths),
+            vec![
+                change("billing", &[]),
+                change("settings-page", &["pages/index.html"]),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_session_design_of_any_slug_its_listing_takes_has_its_changes_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        let worktree = dir.path();
+        for slug in ["Settings_Page", "onboarding.v2"] {
+            std::fs::create_dir_all(worktree.join(".moonlet/design").join(slug)).unwrap();
+        }
+        let paths: Vec<PathBuf> = [
+            "docs/design/Settings_Page/pages/index.html",
+            ".moonlet/design/Settings_Page/comments.json",
+            "docs/design/onboarding.v2/pages/index.html",
+        ]
+        .iter()
+        .map(|p| worktree.join(p))
+        .collect();
+        let change = |d: &str, p: &[&str]| SessionChange {
+            design: d.into(),
+            paths: p.iter().map(|x| x.to_string()).collect(),
+        };
+        assert_eq!(
+            group_session(worktree, "docs/design", &paths),
+            vec![
+                change("Settings_Page", &["comments.json", "pages/index.html"]),
+                change("onboarding.v2", &["pages/index.html"]),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_side_folder_made_after_the_watch_started_has_its_changes_reported() {
+        let worktree = tempfile::tempdir().unwrap();
+        let wt = worktree.path();
+        // The base branch's designs: the design folder is there, and no
+        // `.moonlet/design/` yet.
+        std::fs::create_dir_all(wt.join("docs/design/onboarding/pages")).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<SessionChange>>();
+        let _watching = start_session(wt, "docs/design", move |changes| {
+            let _ = tx.send(changes);
+        })
+        .unwrap();
+        // The first session design made here makes `.moonlet/design/`.
+        std::fs::create_dir_all(wt.join(".moonlet/design/settings-page")).unwrap();
+        let comments = |c: &SessionChange| {
+            c.design == "settings-page" && c.paths.iter().any(|p| p == "comments.json")
+        };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            std::fs::write(
+                wt.join(".moonlet/design/settings-page/comments.json"),
+                "[]\n",
+            )
+            .unwrap();
+            if let Ok(changes) = rx.recv_timeout(std::time::Duration::from_millis(300))
+                && changes.iter().any(comments)
+            {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "comments.json in a .moonlet/design/ made after the watch started was never reported"
+            );
+        }
     }
 }

@@ -413,3 +413,55 @@ pub(crate) fn read_file_inside(root: &Path, rel: &Path) -> Result<Vec<u8>> {
         .with_context(|| format!("no {} in {}", folder.display(), root.display()))?;
     read_file(&dir, name)
 }
+
+/// Makes the folder `rel` inside `root` and those on its way, each one of
+/// its own: a link on the way is refused, never followed.
+pub(crate) fn make_dirs_inside(root: &Path, rel: &Path) -> Result<()> {
+    open_path(root, rel, true)?.context("a folder went away")?;
+    Ok(())
+}
+
+/// Makes the folder `name` in the folder `rel` inside `root` (made when
+/// missing, never through a link); an error of kind `AlreadyExists` when it
+/// is there.
+pub(crate) fn create_dir_in(root: &Path, rel: &Path, name: &str) -> std::io::Result<()> {
+    let dir = open_path(root, rel, true)
+        .map_err(std::io::Error::other)?
+        .ok_or_else(|| std::io::Error::other("a folder went away"))?;
+    dir.create_dir(name)
+}
+
+/// Makes a folder in the folder `rel` inside `root` (made when missing,
+/// never through a link) named after `name`, or `<name> 2` (` 3`, …) when
+/// that one is taken, and returns the name and the folder's slug.
+pub(crate) fn create_numbered_inside(
+    root: &Path,
+    rel: &Path,
+    name: &str,
+    fallback: &str,
+) -> Result<(String, String)> {
+    let dir = open_path(root, rel, true)?.context("a folder went away")?;
+    let mut n = 1;
+    loop {
+        let name_n = if n == 1 {
+            name.to_string()
+        } else {
+            format!("{name} {n}")
+        };
+        let slug = super::store::slug_or(&name_n, fallback);
+        match dir.create_dir(&slug) {
+            Ok(()) => return Ok((name_n, slug)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => n += 1,
+            Err(e) => {
+                return Err(e)
+                    .with_context(|| format!("cannot create {slug} in {}", rel.display()));
+            }
+        }
+    }
+}
+
+/// Whether the folder `rel` inside `root` is there, each folder on its way
+/// one of its own, never a link.
+pub(crate) fn is_dir_inside(root: &Path, rel: &Path) -> Result<bool> {
+    Ok(open_path(root, rel, false)?.is_some())
+}
