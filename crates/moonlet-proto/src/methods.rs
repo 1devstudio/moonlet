@@ -205,6 +205,8 @@ pub const DESIGN_SYSTEM_SYNCED: &str = "design.system.synced";
 pub const DESIGN_CHECK: &str = "design.check";
 /// [`DesignFile`] → `{path, content_type}` of a file under the workspace's design folder.
 pub const DESIGN_FILE: &str = "design.file";
+/// [`DesignDetect`] → what a folder's UI is built with, such as `["React", "Tailwind"]`.
+pub const DESIGN_DETECT: &str = "design.detect";
 /// [`DesignSettle`]: the user's choice for a card after a sync.
 pub const DESIGN_SETTLE: &str = "design.settle";
 
@@ -381,6 +383,9 @@ pub const EV_JOB_CHANGED: &str = "job.changed";
 pub const EV_JOB_OUTPUT: &str = "job.output";
 /// A [`CopyChanged`], on every change of a copy's state.
 pub const EV_SYNC_CHANGED: &str = "sync.changed";
+/// `{workspace, system, paths}`: files changed in a design system, or in a
+/// workspace's other design files (`system: null`) (X64).
+pub const EV_DESIGN_CHANGED: &str = "design.changed";
 
 // Events
 pub const EV_TERMINAL_CREATED: &str = "terminal.created";
@@ -1195,6 +1200,12 @@ pub struct DesignProgress {
 pub struct DesignFile {
     pub workspace: String,
     /// Relative to the workspace's design folder, such as `systems/<slug>/styles.css`.
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DesignDetect {
+    pub workspace: String,
     pub path: String,
 }
 
