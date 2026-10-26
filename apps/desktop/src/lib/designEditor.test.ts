@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { askWithEdits, restoreSnapshot, kitOf, loadKit, closeDesign, copyElementOf, hasCopy, dismissUnsaved, editPage, pasteInto, sendCommentsWithEdits, sendWithEdits, redoEdit, undoEdit, loadPageSource, pendingOf, resetEditor, startEditor, settleChecks, settleSaves, sourceOf, undoOf, unsavedOf, useEditor } from "./designEditor";
+import { askWithEdits, updateAndTell, restoreSnapshot, kitOf, loadKit, closeDesign, copyElementOf, hasCopy, dismissUnsaved, editPage, pasteInto, sendCommentsWithEdits, sendWithEdits, redoEdit, undoEdit, loadPageSource, pendingOf, resetEditor, startEditor, settleChecks, settleSaves, sourceOf, undoOf, unsavedOf, useEditor } from "./designEditor";
 import { loadDesigns, pageRevOf, startDesign, useDesign } from "./designStore";
 import { editLines } from "./designEdits";
 import { useStore } from "./store";
@@ -479,5 +479,33 @@ describe("a session design's edits by hand (X65)", () => {
     // A workspace design of the same slug has none of them.
     expect(pendingOf(useEditor.getState(), "local", WS, SLUG)).toEqual([]);
     expect(sourceOf(useEditor.getState(), "local", WS, SLUG, "index")).toBeUndefined();
+  });
+});
+
+describe("Update of a session design's design system (X65)", () => {
+  const S = { session: "4f2a9c1e7b3d" };
+  beforeEach(() => {
+    answers["design.system.update"] = () => ({ anchor: "9f86d081", cards: [{ path: "components/buttons/button/button.html", change: "changed" }] });
+    answers["chat.send"] = () => null;
+  });
+
+  it("replaces both copies first, then tells the session's agent the cards that changed", async () => {
+    await updateAndTell("local", S, SLUG, 31, "moonlet desktop");
+    expect(calls.map((c) => [c.method, c.params])).toEqual([
+      ["design.system.update", { session: "4f2a9c1e7b3d", slug: SLUG }],
+      [
+        "chat.send",
+        {
+          id: 31,
+          text: "The design system moonlet desktop was updated for the design settings-page: its copy in .moonlet/design/settings-page/system/ and the pinned styles are the synced ones now. Cards that changed:\n- components/buttons/button/button.html (changed)\nRead those cards again and update the pages that use them, then run the check.",
+          images: [],
+        },
+      ],
+    ]);
+  });
+
+  it("tells no one when the session's agent is not running", async () => {
+    await updateAndTell("local", S, SLUG, null, "moonlet desktop");
+    expect(calls.map((c) => c.method)).toEqual(["design.system.update"]);
   });
 });

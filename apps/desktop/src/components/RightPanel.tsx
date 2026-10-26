@@ -26,6 +26,7 @@ import { FilesPanel } from "./FilesPanel";
 import { cx, prTone } from "./ui";
 import { TaskTab, useSessionTask } from "./tasks/SessionTask";
 import { SessionDesignTab } from "./design/SessionDesign";
+import { designTab } from "../lib/sessionDesign";
 import { sessionDesignsOf, useDesign } from "../lib/designStore";
 
 const ChangesPanel = lazy(() => import("./ChangesPanel"));
@@ -266,12 +267,11 @@ export function RightPanel({ host, ws }: { host: string; ws: Session }) {
   const jobs = useSessionJobs(host, ws.id);
   // The Design tab is there for a session with a design (X65), after the others.
   const designs = useDesign((d) => sessionDesignsOf(d, host, ws.id));
-  const tab = (chosen === "task" && !linked) || (chosen === "jobs" && !jobs.length) || (chosen === "design" && !designs.length) ? "files" : chosen;
+  const design = designTab(designs);
+  const tab = (chosen === "task" && !linked) || (chosen === "jobs" && !jobs.length) || (chosen === "design" && !design) ? "files" : chosen;
   const withJobs = jobs.length ? TABS.flatMap((t) => (t.id === "agents" ? [t, { id: "jobs" as const, label: "Jobs" }] : [t])) : TABS;
-  const shown = designs.length ? [...withJobs, { id: "design" as const, label: "Design" }] : withJobs;
+  const shown = design ? [...withJobs, { id: "design" as const, label: "Design" }] : withJobs;
   const tabs = linked ? [{ id: "task" as const, label: "Task" }, ...shown] : shown;
-  // Its count: the open comments of the session's designs.
-  const openComments = designs.reduce((n, d) => n + d.open_comments, 0);
   const plan = useSessionPlan(host, ws);
   const agents = useSessionAgents(host, ws);
   // Plan file links (X30) check the worktree while the Plan tab shows, and again whenever the plan changes.
@@ -305,7 +305,7 @@ export function RightPanel({ host, ws }: { host: string; ws: Session }) {
           >
             {t.label}
             {t.id === "jobs" && <span className="ui-text-12 tabular-nums text-faint">{jobsTabCount(jobs)}</span>}
-            {t.id === "design" && openComments > 0 && <span aria-label={`${openComments} open comments`} className="ui-text-12 tabular-nums text-faint">{openComments}</span>}
+            {t.id === "design" && !!design?.count && <span aria-label={`${design.count} open comments`} className="ui-text-12 tabular-nums text-faint">{design.count}</span>}
             {t.id === "plan" && planTabDot(tab, plan?.status === "pending") && <span aria-label="plan waiting" className="h-1.5 w-1.5 rounded-full bg-blocked" />}
             {t.id === "agents" && agentsTabDot(tab, agents.rows) && <span aria-label="agent waiting" className="h-1.5 w-1.5 rounded-full bg-blocked" />}
           </button>

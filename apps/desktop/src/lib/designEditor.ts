@@ -6,12 +6,13 @@
 
 import { create } from "zustand";
 import { DaemonError, rpc } from "./daemon";
-import { itemKey, pageKey, pageOfKey, registerPageOwner, reloadPage, sendComments } from "./designStore";
+import { itemKey, pageKey, pageOfKey, registerPageOwner, reloadPage, sendComments, updateSystem } from "./designStore";
+import { systemUpdateMessage } from "./designBars";
 import { latestSends } from "./latestSend";
 import { designRef, type DesignPlace } from "./designPlace";
 import { errorToast } from "./store";
 import { latestPerKey } from "./prPoll";
-import { M, type DesignComment, type DesignKit, type DesignPageText, type DesignPageWritten, type DesignSnapshot } from "./protocol";
+import { M, type DesignComment, type DesignKit, type DesignPageText, type DesignPageWritten, type DesignSnapshot, type DesignSystemUpdated } from "./protocol";
 import type { ChatImage } from "./attachments";
 import { applyEdit, copyElement, EditRefused, editLine, editSaid, editsMessage, highestMid, type Edit, type EditOp } from "./designEdits";
 import { NO_UNDO, dropPage, pendingAfter, pushStep, redoStep, undoStep, type Pending, type Step, type Undo } from "./designUndo";
@@ -213,6 +214,16 @@ export function sendCommentsWithEdits(host: string, place: DesignPlace, slug: st
  *  fix**, the edits by hand not told yet before it. */
 export function askWithEdits(host: string, place: DesignPlace, slug: string, agent: number, text: string): Promise<void> {
   return sendWithEdits(host, place, slug, agent, text, []);
+}
+
+/** **Update** of a session design's design system (X65): both copies
+ *  replaced (`updateSystem`), then, when the session's agent runs
+ *  (`agent`), the cards that changed told to it, the edits by hand not
+ *  told yet before them; the update's answer. */
+export async function updateAndTell(host: string, place: { session: string }, slug: string, agent: number | null, systemName: string): Promise<DesignSystemUpdated> {
+  const updated = await updateSystem(host, place, slug);
+  if (agent !== null) await askWithEdits(host, place, slug, agent, systemUpdateMessage(slug, systemName, updated.cards));
+  return updated;
 }
 
 /** The element copied with ⌘C in each design, as its source: ⌘V pastes

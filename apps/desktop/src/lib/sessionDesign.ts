@@ -72,3 +72,17 @@ export function designSystemFooter(systems: DesignSystem[], project: string): st
   if (built.length > 1) return `Asks which design system to use: ${built.slice(0, -1).join(", ")} or ${built.at(-1)}, ${built.length === 2 ? "both" : "all"} built from this project`;
   return "No design system is built from this project yet: /moonlet-design sync builds one";
 }
+
+/** A session's Design tab in its right panel (X65): there while the
+ *  session has a design, with the open comments of its designs, as
+ *  `design.list` counts them; null without one. */
+export function designTab(designs: Design[]): { count: number } | null {
+  return designs.length ? { count: designs.reduce((n, d) => n + d.open_comments, 0) } : null;
+}
+
+/** The right panel's width while a session's Design tab shows it: the
+ *  width the user dragged it to (`dragged`), else 55% of the window, so the
+ *  canvas gets the room beside the session's chat. */
+export function designPanelWidth(dragged: number | null, windowWidth: number): number {
+  return dragged ?? Math.round(windowWidth * 0.55);
+}
