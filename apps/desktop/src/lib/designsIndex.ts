@@ -4,22 +4,29 @@
 // view components/design/DesignsIndex.tsx.
 
 import type { Design, DesignKind } from "./protocol";
-import type { DesignPlace } from "./designPlace";
 import { inWorktree } from "./sessionDesign";
+import { pageUrl, projectPageUrl } from "./designView";
 
-/** A design's card in the index. `thumb`: its first page, framed on its
- *  place's host; null without a page, or for a project design, which is in
- *  the base branch's git objects and on no disk the scheme serves from.
+/** What a card's button does: open a session design's session, a
+ *  workspace design's screen, or start a workspace design from a project
+ *  design (`design.copy`). */
+export type CardAction =
+  | { label: "Open session"; kind: "session"; session: string; slug: string }
+  | { label: "Open"; kind: "workspace"; slug: string }
+  | { label: "Use as a start"; kind: "project"; design: Design };
+
+/** A design's card in the index. `thumb`: its first page's address, framed
+ *  near the screen; null without a page, when `placeholder` says so.
  *  `updated_at`: its newest change, null for a project design, which has
- *  none of its own. */
+ *  none of its own. `key`: the card's, unique in the index. */
 export interface IndexCard {
   key: string;
-  kind: DesignKind;
-  slug: string;
+  design: Design;
   name: string;
   line: string;
-  action: "Open session" | "Open" | "Use as a start";
-  thumb: { place: DesignPlace; page: string } | null;
+  act: CardAction;
+  thumb: string | null;
+  placeholder: string | null;
   updated_at: number | null;
 }
 
@@ -40,69 +47,66 @@ export interface IndexNames {
 
 const pages = (n: number) => (n === 0 ? "no pages yet" : `${n} page${n === 1 ? "" : "s"}`);
 
+/** Each kind of design's group and card, in the index's order. */
+const KINDS: { kind: DesignKind; title: IndexGroup["title"]; note: string; card: (d: Design, at: IndexNames) => Omit<IndexCard, "design" | "name" | "placeholder"> | null }[] = [
+  {
+    kind: "session",
+    title: "In sessions",
+    note: "Their pages live in the session's branch; open the session to change them",
+    card: (d, at) => {
+      if (!d.session) return null;
+      const s = at.sessions.find((x) => x.id === d.session);
+      const folder = s ? inWorktree(s.path, d.path) : d.path;
+      return {
+        key: `session/${d.session}/${d.slug}`,
+        line: [projectName(at, s?.project_id ?? d.project), s?.name ?? d.session, folder].join(" · "),
+        act: { label: "Open session", kind: "session", session: d.session, slug: d.slug },
+        thumb: d.pages[0] ? pageUrl({ session: d.session }, d.slug, d.pages[0].name) : null,
+        updated_at: d.updated_at,
+      };
+    },
+  },
+  {
+    kind: "workspace",
+    title: "Workspace designs",
+    note: "Their own agent, no branch",
+    card: (d, at) => {
+      const built = d.built_in && at.sessions.find((x) => x.id === d.built_in!.session);
+      const system = at.systems.find((x) => x.slug === d.system)?.name ?? d.system;
+      return {
+        key: `workspace/${d.slug}`,
+        line: `${system} · ${built ? `built in ${built.name}` : pages(d.pages.length)}`,
+        act: { label: "Open", kind: "workspace", slug: d.slug },
+        thumb: d.pages[0] ? pageUrl(at.workspace, d.slug, d.pages[0].name) : null,
+        updated_at: d.updated_at,
+      };
+    },
+  },
+  {
+    kind: "project",
+    title: "In projects",
+    note: "Merged to main: found under docs/design/. Read only; reuse them as a start",
+    card: (d, at) => ({
+      key: `project/${d.project}/${d.path}`,
+      line: `${projectName(at, d.project)} · ${d.path}`,
+      act: { label: "Use as a start", kind: "project", design: d },
+      thumb: d.pages[0] && d.project ? projectPageUrl(d.project, d.slug, d.pages[0].name) : null,
+      updated_at: null,
+    }),
+  },
+];
+
+const projectName = (at: IndexNames, id: string | undefined) => at.projects.find((p) => p.id === id)?.name ?? id ?? "";
+
 /** The Designs index of `list`, `design.list`'s answer: its groups in
  *  order, each in the listing's order, a group with no designs left out. */
 export function designsIndex(list: Design[], at: IndexNames): IndexGroup[] {
-  const session = (id: string | undefined) => at.sessions.find((s) => s.id === id);
-  const project = (id: string | undefined) => at.projects.find((p) => p.id === id)?.name ?? id ?? "";
-  const first = (d: Design, place: DesignPlace) => (d.pages[0] ? { place, page: d.pages[0].name } : null);
-  const groups: IndexGroup[] = [
-    {
-      title: "In sessions",
-      note: "Their pages live in the session's branch; open the session to change them",
-      cards: list
-        .filter((d) => d.kind === "session" && d.session)
-        .map((d) => {
-          const s = session(d.session);
-          const folder = s ? inWorktree(s.path, d.path) : d.path;
-          return {
-            key: `session/${d.session}/${d.slug}`,
-            kind: d.kind,
-            slug: d.slug,
-            name: d.name,
-            line: [project(s?.project_id ?? d.project), s?.name ?? d.session, folder].join(" · "),
-            action: "Open session" as const,
-            thumb: first(d, { session: d.session! }),
-            updated_at: d.updated_at,
-          };
-        }),
-    },
-    {
-      title: "Workspace designs",
-      note: "Their own agent, no branch",
-      cards: list
-        .filter((d) => d.kind === "workspace")
-        .map((d) => {
-          const built = d.built_in && session(d.built_in.session);
-          const system = at.systems.find((x) => x.slug === d.system)?.name ?? d.system;
-          return {
-            key: `workspace/${d.slug}`,
-            kind: d.kind,
-            slug: d.slug,
-            name: d.name,
-            line: `${system} · ${built ? `built in ${built.name}` : pages(d.pages.length)}`,
-            action: "Open" as const,
-            thumb: first(d, at.workspace),
-            updated_at: d.updated_at,
-          };
-        }),
-    },
-    {
-      title: "In projects",
-      note: "Merged to main: found under docs/design/. Read only; reuse them as a start",
-      cards: list
-        .filter((d) => d.kind === "project")
-        .map((d) => ({
-          key: `project/${d.project}/${d.path}`,
-          kind: d.kind,
-          slug: d.slug,
-          name: d.name,
-          line: `${project(d.project)} · ${d.path}`,
-          action: "Use as a start" as const,
-          thumb: null,
-          updated_at: null,
-        })),
-    },
-  ];
-  return groups.filter((g) => g.cards.length);
+  return KINDS.map(({ kind, title, note, card }) => ({
+    title,
+    note,
+    cards: list.flatMap((d) => {
+      const c = d.kind === kind ? card(d, at) : null;
+      return c ? [{ ...c, design: d, name: d.name, placeholder: c.thumb ? null : "No pages yet" }] : [];
+    }),
+  })).filter((g) => g.cards.length);
 }
