@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Design, DesignComment, DesignSystem, TerminalInfo } from "./protocol";
 import { modeOf, setMode } from "./mode";
 import { agentOnScreen, goToAgent, useStore } from "./store";
-import { pageKey, pageOfKey, commentsOf, historyOf, keepComment, loadComments, loadHistory, sendComments, sendingOf, resolveComment, sessionDesignsOf } from "./designStore";
+import { pageKey, pageOfKey, commentsOf, historyOf, keepComment, loadComments, loadHistory, sendComments, sendingOf, resolveComment, sessionDesignsOf, shownSessionDesign, showSessionDesign } from "./designStore";
 import { cardsOf, checkDesign, createFromNewDesign, createSystem, designsOf, detectStack, latestOf, loadCards, loadDesigns, loadSystems, openCard, saveViewport, pageRevOf, problemsOf, revOf, shownCard, shownDesign, shownSystem, showDesign, showSystem, startDesign, systemNameOf, systemsOf, useDesign } from "./designStore";
 
 const calls = vi.hoisted(() => [] as { host: string; method: string; params: unknown }[]);
@@ -56,7 +56,7 @@ const listed = () => calls.filter((c) => c.method === "design.systems");
 beforeEach(async () => {
   calls.length = 0;
   for (const k of Object.keys(answers)) delete answers[k];
-  useDesign.setState({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, designs: {}, sessionDesigns: {}, designShown: {}, pageRevs: {}, latest: {}, problems: {}, systemNames: {}, comments: {}, mids: {}, sending: {}, histories: {} });
+  useDesign.setState({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, designs: {}, sessionDesigns: {}, sessionShown: {}, designShown: {}, pageRevs: {}, latest: {}, problems: {}, systemNames: {}, comments: {}, mids: {}, sending: {}, histories: {} });
   await startDesign();
 });
 
@@ -721,5 +721,24 @@ describe("a session design's state (X65)", () => {
     expect(calls.filter((c) => c.method === "design.check").map((c) => c.params)).toEqual([{ design: { session: "4f2a9c1e7b3d", slug: "settings-page" } }]);
     expect(problemsOf(useDesign.getState(), "local", S, "settings-page").map((p) => p.line)).toEqual([3]);
     expect(problemsOf(useDesign.getState(), "local", "w-1devstudio", "settings-page")).toEqual([]);
+  });
+});
+
+describe("a session's Design tab (X65)", () => {
+  const listed = () => [
+    design({ slug: "onboarding", name: "Onboarding", kind: "session", session: "4f2a9c1e7b3d", path: "/wt/s/docs/design/onboarding", agent: 31 }),
+    design({ kind: "session", session: "4f2a9c1e7b3d", path: "/wt/s/docs/design/settings-page", agent: 31, system_updated: true }),
+  ];
+
+  it("shows the design picked, else the session's first", async () => {
+    answers["design.list"] = listed;
+    await loadDesigns("local", "w-1devstudio");
+    expect(shownSessionDesign(useDesign.getState(), "local", "4f2a9c1e7b3d")?.slug).toBe("onboarding");
+    showSessionDesign("local", "4f2a9c1e7b3d", "settings-page");
+    expect(shownSessionDesign(useDesign.getState(), "local", "4f2a9c1e7b3d")?.slug).toBe("settings-page");
+    // One that is gone shows the first again; a session without designs none.
+    showSessionDesign("local", "4f2a9c1e7b3d", "billing");
+    expect(shownSessionDesign(useDesign.getState(), "local", "4f2a9c1e7b3d")?.slug).toBe("onboarding");
+    expect(shownSessionDesign(useDesign.getState(), "local", "9c9c9c9c9c9c")).toBeNull();
   });
 });

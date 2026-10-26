@@ -1,0 +1,110 @@
+// A session's Design tab (X65): its session design's canvas, with the same
+// page tabs, toolbar, modes, bars and right rail as the design screen. Its
+// chat is the session's own, beside it, which the tab neither folds nor
+// opens; the file above the page is its path in the worktree.
+
+import { useMemo, type RefObject } from "react";
+import { ChevronDown, PenTool } from "lucide-react";
+import type { Session } from "../../lib/protocol";
+import { commentsOf, sessionDesignsOf, showSessionDesign, shownSessionDesign, useDesign } from "../../lib/designStore";
+import { sendWithEdits } from "../../lib/designEditor";
+import { messageView } from "../../lib/designComments";
+import { worktreeFile } from "../../lib/sessionDesign";
+import { Empty } from "../ui";
+import { Menu } from "../Menu";
+import { AgentView } from "../AgentView";
+import { CommentCards } from "./Comments";
+import { EditsMessage } from "./Editor";
+import { DesignCanvas, type CanvasChat } from "./DesignScreen";
+
+/** The session's chat is in its panes, not beside the canvas: Show in chat
+ *  looks for a comment's card in the whole window. */
+const WINDOW: RefObject<HTMLElement | null> = {
+  get current() {
+    return document.body;
+  },
+};
+
+/** The session's chat is always there: the tab neither folds nor opens it. */
+const SESSION_CHAT: CanvasChat = { open: true, setOpen: () => {}, root: WINDOW };
+
+export function SessionDesignTab({ host, ws }: { host: string; ws: Session }) {
+  const design = useDesign((d) => shownSessionDesign(d, host, ws.id));
+  const designs = useDesign((d) => sessionDesignsOf(d, host, ws.id));
+  // One object per session, as the canvas's effects follow it.
+  const place = useMemo(() => ({ session: ws.id }), [ws.id]);
+  if (!design) {
+    return (
+      <Empty icon={<PenTool size={20} className="text-faint" />} title="No design in this session">
+        /moonlet-design in the chat prototypes a page here, in this session's Design tab.
+      </Empty>
+    );
+  }
+  // Several designs: the tab shows one, picked here.
+  const picker =
+    designs.length > 1 ? (
+      <Menu
+        align="right"
+        items={designs.map((d) => ({ label: d.name, hint: d.slug, checked: d.slug === design.slug, onSelect: () => showSessionDesign(host, ws.id, d.slug) }))}
+        trigger={(open) => (
+          <button aria-label="Design" onClick={open} className="ml-auto flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 ui-text-13 text-muted hover:bg-panel-2 hover:text-fg">
+            {design.name} <ChevronDown size={12} className="text-faint" />
+          </button>
+        )}
+      />
+    ) : null;
+  return (
+    <div className="flex h-full min-h-0">
+      <DesignCanvas
+        key={design.slug}
+        host={host}
+        place={place}
+        workspace={ws.workspace_id ?? ""}
+        design={design}
+        inset={0}
+        chat={SESSION_CHAT}
+        frame="tab"
+        fileOf={(page) => worktreeFile(ws.path, design, page)}
+        aside={picker}
+      />
+    </div>
+  );
+}
+
+/** A session's chat (X65): its agent's structured view. When it is the
+ *  agent of the design the session's Design tab shows, its comments show as
+ *  Comment from the Design view cards and its edits by hand as their block,
+ *  and what the user types goes with the edits by hand not told yet before
+ *  it. */
+export function SessionChat({ host, id, wsId, focused, visible }: { host: string; id: number; wsId: string; focused: boolean; visible: boolean }) {
+  const design = useDesign((d) => shownSessionDesign(d, host, wsId));
+  const own = design !== null && design.agent === id ? design : null;
+  const place = useMemo(() => ({ session: wsId }), [wsId]);
+  const comments = useDesign((d) => commentsOf(d, host, place, own?.slug ?? ""));
+  return (
+    <AgentView
+      host={host}
+      id={id}
+      wsId={wsId}
+      focused={focused}
+      visible={visible}
+      userView={
+        own
+          ? (text) => {
+              const view = messageView(text, comments);
+              if (!view) return null;
+              const cards = view.cards && <CommentCards cards={view.cards} session />;
+              return view.edits ? (
+                <EditsMessage edits={view.edits} text={view.text}>
+                  {cards}
+                </EditsMessage>
+              ) : (
+                cards
+              );
+            }
+          : undefined
+      }
+      sendText={own ? (text, images) => sendWithEdits(host, place, own.slug, id, text, images) : undefined}
+    />
+  );
+}

@@ -7,7 +7,7 @@ import { ChevronDown, X } from "lucide-react";
 import { useState } from "react";
 import type { DesignComment } from "../../lib/protocol";
 import type { Rect } from "../../lib/designBridge";
-import { BOX_SIZE, COMMENT_PIN_ATTR, boxLabel, boxPlace, commentLine, pinPlace, commentsTab, footerLabel, pinLabel, sentLabel, type CommentRef, type PageMids } from "../../lib/designComments";
+import { BOX_SIZE, COMMENT_PIN_ATTR, boxLabel, commentCardTitle, boxPlace, commentLine, pinPlace, commentsTab, footerLabel, pinLabel, sentLabel, type CommentRef, type PageMids } from "../../lib/designComments";
 import { pageFile } from "../../lib/designPage";
 import { cx } from "../../lib/cx";
 import { Button } from "../ui";
@@ -255,14 +255,14 @@ export function CommentsTab({
 
 /** A chat message of comments: one **Comment from the canvas** card per
  *  line, numbered like its pin, each found by Show in chat. */
-export function CommentCards({ cards }: { cards: (CommentRef & { n: number | null })[] }) {
+export function CommentCards({ cards, session = false }: { cards: (CommentRef & { n: number | null })[]; session?: boolean }) {
   return (
     <div className="flex flex-col items-end gap-1.5 py-1">
       {cards.map((c, i) => (
         <div key={i} {...{ [COMMENT_PIN_ATTR]: c.n ?? undefined }} className="max-w-[85%] rounded-2xl rounded-br-md bg-raised px-3.5 py-2.5 transition-shadow">
           <p className="mb-1 flex items-center gap-2 ui-text-12 text-muted">
             <PinBadge n={c.n} />
-            Comment from the canvas
+            {commentCardTitle(session)}
           </p>
           <p className="selectable whitespace-pre-wrap break-words font-mono ui-text-12 leading-relaxed text-fg">{commentLine(c)}</p>
         </div>

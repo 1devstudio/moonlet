@@ -37,6 +37,8 @@ interface DesignState {
   /** Each workspace's session designs (`wsKey`), once listed (X65), which
    *  their sessions' Design tabs show. */
   sessionDesigns: Record<string, Design[]>;
+  /** The design each session's Design tab shows (`host/session`), by slug. */
+  sessionShown: Record<string, string>;
   /** The design shown as the design screen in each workspace, by slug; else its design system. */
   designShown: Record<string, string | null>;
   /** How many times each design page (`wsKey/slug/page`) changed, so its frame loads again. */
@@ -59,7 +61,7 @@ interface DesignState {
   histories: Record<string, DesignSnapshot[]>;
 }
 
-export const useDesign = create<DesignState>(() => ({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, designs: {}, sessionDesigns: {}, designShown: {}, pageRevs: {}, latest: {}, problems: {}, systemNames: {}, comments: {}, mids: {}, sending: {}, histories: {} }));
+export const useDesign = create<DesignState>(() => ({ systems: {}, shown: {}, cards: {}, opened: {}, changes: {}, designs: {}, sessionDesigns: {}, sessionShown: {}, designShown: {}, pageRevs: {}, latest: {}, problems: {}, systemNames: {}, comments: {}, mids: {}, sending: {}, histories: {} }));
 
 /** A place's key: a workspace's `wsKey`, a session's `host/s:<session>`,
  *  so a session design never shares a workspace design's state (X65). */
@@ -169,6 +171,19 @@ export function sessionDesignsOf(s: DesignState, host: string, session: string):
     if (groups[session]) return groups[session];
   }
   return NO_DESIGNS;
+}
+
+/** The design a session's Design tab shows: the one picked while the
+ *  session has it, else its first; null without designs (X65). */
+export function shownSessionDesign(s: DesignState, host: string, session: string): Design | null {
+  const list = sessionDesignsOf(s, host, session);
+  const slug = s.sessionShown[`${host}/${session}`];
+  return list.find((d) => d.slug === slug) ?? list[0] ?? null;
+}
+
+/** Shows design `slug` in a session's Design tab. */
+export function showSessionDesign(host: string, session: string, slug: string) {
+  useDesign.setState((s) => ({ sessionShown: { ...s.sessionShown, [`${host}/${session}`]: slug } }));
 }
 
 /** The design shown as the design screen in a workspace, or null. */

@@ -163,8 +163,8 @@ A design lives in one of three places:
 
 ### Session Design tab
 
-- [ ] A session with a design has a **Design** tab in its right panel, after Changes, Files and Plan, with a count of open comments.
-- [ ] The tab has the same canvas toolbar, modes, bars and right rail as the design screen. Its chat is the session's chat, and the file path above the page is the worktree path.
+- [ ] A session with a design has a **Design** tab in its right panel, after Changes, Files and Plan, with a count of open comments: the open pins of the session's designs, as `design.list` counts them. While it shows, the right panel is wider, 55% of the window until the user drags it. A session with several designs shows one, picked at the end of the page tabs, else its first (`lib/designStore.test.ts` shows the design picked, else the session's first).
+- [ ] The tab has the same canvas toolbar, modes, bars and right rail as the design screen: one canvas, the design screen's, framed as a tab, keyed by `{session, slug}`. Its chat is the session's chat, and the file path above the page is the worktree path (`lib/sessionDesign.test.ts` is the page's path in the worktree). The tab neither folds nor opens the session's chat, and its keys (C, V, Esc, the editor's and ⌘0, ⌘= and ⌘-) work while the focus is in it, so the session's terminals and chat keep theirs. Its orange bar says "Claude is working in this session. Edit mode opens when it stops; comments still work" (`lib/designBars.test.ts` says Claude is working in this session while the session's agent works). The session's chat shows its comments as **Comment from the Design view** cards and its edits by hand as their block, and a message typed there carries the edits by hand not told yet, as a design's chat does, when its agent is the shown design's (`lib/designComments.test.ts` is a Comment from the canvas in a workspace design's chat, and a Comment from the Design view in a session's).
 
 ### Canvas
 

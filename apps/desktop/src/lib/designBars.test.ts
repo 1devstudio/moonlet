@@ -88,6 +88,17 @@ describe("the bar over the canvas (X65)", () => {
   });
 });
 
+describe("the bar over a session design's canvas (X65)", () => {
+  it("says Claude is working in this session while the session's agent works", () => {
+    expect(designBar({ ...calm, session: true, working: true })).toEqual({
+      tone: "orange",
+      text: "Claude is working in this session. Edit mode opens when it stops; comments still work",
+      detail: null,
+      actions: ["stop"],
+    });
+  });
+});
+
 describe("Ask the agent to fix (X65)", () => {
   it("sends the page's check problems by line, and asks for the check again", () => {
     const problems = [problem("pages/git-b.html", "missing_mid", "<h2> has no data-mid", 12), problem("pages/git-b.html", "duplicate_mid", '<p> repeats data-mid="m31"', 40)];
