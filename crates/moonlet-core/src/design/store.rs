@@ -4,7 +4,7 @@
 //! the commits of the last sync, the agent's chat) is in
 //! `<workspace>/.records/<slug>.toml`, outside the agent's reach.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -114,6 +114,11 @@ pub struct Record {
     /// recorded, so a retry after it stopped midway still knows them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sync_start: Option<BTreeMap<String, anchor::CardRender>>,
+    /// The orphaned cards the user keeps for now: not asked about again
+    /// while they stay orphaned. A sync drops each one that is no longer
+    /// orphaned or no longer there, and removing a card drops it.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub kept: BTreeSet<String>,
 }
 
 /// One card a sync changed.
@@ -252,6 +257,8 @@ impl Store {
                         to_settle: 0,
                         step: None,
                         step_summary: None,
+                        steps: Vec::new(),
+                        sync_running: record.sync_start.is_some(),
                         error: Some(format!("{err:#}")),
                         agent: record.agent,
                         last_sync: record.last_sync.clone(),
@@ -367,11 +374,15 @@ impl Store {
             );
         }
         let dir = self.system_dir(workspace, slug)?;
-
-        let p = Progress {
+        // The steps before this one stay; this one is replaced, and any after
+        // it go (a sync that starts over).
+        let at = step_index(step);
+        let mut p = read_progress(&dir);
+        p.steps.retain(|r| step_index(&r.step) < at);
+        p.steps.push(StepReport {
             step: step.into(),
             summary: summary.map(String::from),
-        };
+        });
         fsx::write_inside(&dir, &dir.join(PROGRESS), toml::to_string(&p)?.as_bytes())?;
         Ok(())
     }
@@ -420,6 +431,15 @@ impl Store {
             }
         }
         record.synced_at = Some(now);
+        // A kept card stays kept while it is there and its sources are gone,
+        // or unknown (its marker broke): only a source back, or the card gone,
+        // ends it.
+        record.kept.retain(|card| {
+            anchor
+                .cards
+                .get(card)
+                .is_some_and(|c| c.orphaned() || c.sources.is_empty())
+        });
         // Then the record, and the anchor last; an anchor that cannot be
         // written puts the old record back. Both are replaced whole.
         self.write_record(workspace, slug, &record)?;
@@ -473,6 +493,10 @@ impl Store {
         let record = self.record(workspace, slug)?;
         let mut problems = check::check(&dir)?;
         let status = anchor::status(&dir, &source_roots(&record), &config.exceptions())?;
+        let files: BTreeSet<String> = check::files(&dir)
+            .iter()
+            .map(|f| check::rel(&dir, f))
+            .collect();
         let mut out = Vec::new();
         for file in check::html_files(&dir) {
             let path = check::rel(&dir, &file);
@@ -505,11 +529,18 @@ impl Store {
                 .into_iter()
                 .partition(|p| p.path == path || own.contains(&p.path));
             problems = rest;
-            let changed_sources = status
+            let st = status.iter().find(|s| s.path == path);
+            let changed_sources = st.map(|s| s.changed_sources.clone()).unwrap_or_default();
+            // The sync's version of each of its files, beside it.
+            let base = &path[..path.len() - ".html".len()];
+            let mut proposals: Vec<String> = PROPOSED
                 .iter()
-                .find(|s| s.path == path)
-                .map(|s| s.changed_sources.clone())
-                .unwrap_or_default();
+                .map(|ext| format!("{base}.proposed.{ext}"))
+                .filter(|p| files.contains(p))
+                .collect();
+            proposals.sort();
+            let orphaned = st.is_some_and(|s| s.orphaned);
+            let kept = orphaned && record.kept.contains(&path);
             out.push(CardInfo {
                 group,
                 name,
@@ -520,6 +551,10 @@ impl Store {
                 marker: text.lines().next().unwrap_or_default().to_string(),
                 problems: mine,
                 changed_sources,
+                proposals,
+                edited_by_hand: st.is_some_and(|s| s.edited_by_hand),
+                orphaned,
+                kept,
             });
         }
         out.sort_by(|a, b| (&a.group, &a.name).cmp(&(&b.group, &b.name)));
@@ -605,8 +640,24 @@ impl Store {
                     }
                 }
                 anchor::forget(&dir, card)?;
+                let mut record = self.record(workspace, slug)?;
+                if record.kept.remove(card) {
+                    self.write_record(workspace, slug, &record)?;
+                }
             }
-            Settle::Keep => {}
+            Settle::Keep => {
+                let mut record = self.record(workspace, slug)?;
+                let status = anchor::status(
+                    &dir,
+                    &source_roots(&record),
+                    &read_config(&dir)?.exceptions(),
+                )?;
+                if !status.iter().any(|s| s.path == card && s.orphaned) {
+                    bail!("{card} is not orphaned");
+                }
+                record.kept.insert(card.to_string());
+                self.write_record(workspace, slug, &record)?;
+            }
         }
         Ok(())
     }
@@ -664,6 +715,12 @@ pub struct SystemSummary {
     /// The step a running sync reported last: `inventory`, `tokens`, `cards` or `layouts`.
     pub step: Option<String>,
     pub step_summary: Option<String>,
+    /// Every step the running sync reported, in the order of [`STEPS`], each
+    /// with its last summary; empty with no sync running.
+    pub steps: Vec<StepReport>,
+    /// A sync started and not yet recorded: its agent's turns are the sync's
+    /// (a later turn, such as the user's chat, is not).
+    pub sync_running: bool,
     /// Why the system could not be read, when it could not.
     pub error: Option<String>,
     /// The chat of its sync agent, once one was started.
@@ -764,6 +821,15 @@ pub struct CardInfo {
     pub problems: Vec<check::Problem>,
     /// Its sources changed since the last sync.
     pub changed_sources: Vec<String>,
+    /// The sync's proposals beside it (`<name>.proposed.html`, `.css`,
+    /// `.prompt.md`), relative to the design system's folder, sorted.
+    pub proposals: Vec<String>,
+    /// Its HTML, `.css` or `.prompt.md` changed since the sync.
+    pub edited_by_hand: bool,
+    /// Every one of its source files is gone.
+    pub orphaned: bool,
+    /// Orphaned, and kept for now: it waits for no choice.
+    pub kept: bool,
 }
 
 /// What the list shows of one design system.
@@ -773,9 +839,8 @@ fn summary(
     config: &SystemConfig,
     record: &Record,
 ) -> Result<SystemSummary> {
-    let progress: Option<Progress> = fsx::read_inside(dir, &dir.join(PROGRESS))
-        .ok()
-        .and_then(|t| toml::from_str(&t).ok());
+    let steps = read_progress(dir).steps;
+    let last = steps.last();
     let cards = manifest::build(dir)?.cards;
     let status = anchor::status(dir, &source_roots(record), &config.exceptions())?;
     let mut changed: Vec<String> = status
@@ -801,9 +866,15 @@ fn summary(
             .count(),
         changed_sources: changed,
         check_problems: check::check(dir)?.len(),
-        to_settle: proposed + status.iter().filter(|s| s.orphaned).count(),
-        step: progress.as_ref().map(|p| p.step.clone()),
-        step_summary: progress.and_then(|p| p.summary),
+        to_settle: proposed
+            + status
+                .iter()
+                .filter(|s| s.orphaned && !record.kept.contains(&s.path))
+                .count(),
+        step: last.map(|r| r.step.clone()),
+        step_summary: last.and_then(|r| r.summary.clone()),
+        steps,
+        sync_running: record.sync_start.is_some(),
         error: None,
         agent: record.agent,
         last_sync: record.last_sync.clone(),
@@ -887,11 +958,45 @@ fn read_config(dir: &Path) -> Result<SystemConfig> {
 pub const STEPS: [&str; 4] = ["inventory", "tokens", "cards", "layouts"];
 const PROGRESS: &str = ".cache/progress.toml";
 
-#[derive(Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize)]
 struct Progress {
-    step: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    steps: Vec<StepReport>,
+    /// The one step a progress file held before `steps`; read, never written.
+    #[serde(default, skip_serializing)]
+    step: Option<String>,
+    #[serde(default, skip_serializing)]
     summary: Option<String>,
+}
+
+/// One step a running sync reported, with its summary (X64).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StepReport {
+    pub step: String,
+    #[serde(default)]
+    pub summary: Option<String>,
+}
+
+/// The running sync's progress; none when it cannot be read.
+fn read_progress(dir: &Path) -> Progress {
+    let mut p: Progress = fsx::read_inside(dir, &dir.join(PROGRESS))
+        .ok()
+        .and_then(|t| toml::from_str(&t).ok())
+        .unwrap_or_default();
+    if p.steps.is_empty()
+        && let Some(step) = p.step.take()
+    {
+        p.steps.push(StepReport {
+            step,
+            summary: p.summary.take(),
+        });
+    }
+    p
+}
+
+/// Where `step` comes in [`STEPS`]; an unknown one after them all.
+fn step_index(step: &str) -> usize {
+    STEPS.iter().position(|s| *s == step).unwrap_or(STEPS.len())
 }
 
 /// The content type the app serves a design file with.
@@ -1098,6 +1203,8 @@ root = \"9c1e0a2\"
                 to_settle: 1,
                 step: None,
                 step_summary: None,
+                steps: vec![],
+                sync_running: false,
                 error: None,
                 agent: None,
                 last_sync: vec![
@@ -1342,6 +1449,82 @@ root = \"9c1e0a2\"
     }
 
     #[test]
+    fn an_orphan_kept_for_now_waits_no_more_until_it_is_orphaned_again() {
+        let home = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        put(
+            project.path(),
+            &[("src/Row.tsx", "row\n"), ("src/Chip.tsx", "chip\n")],
+        );
+        let store = Store::new(home.path());
+        let mut src = source();
+        src.path = project.path().display().to_string();
+        let slug = store
+            .create_system("w1", "storefront", vec![src], Cover::Core, 1)
+            .unwrap();
+        let dir = home.path().join("design/w1/systems").join(&slug);
+        let (row, chip) = (
+            "components/custom/row/row.html",
+            "components/custom/chip/chip.html",
+        );
+        let row_card = "<!-- @dsCard group=\"Custom\" source=\"src/Row.tsx\" -->\n<div>row</div>\n";
+        let chip_card =
+            "<!-- @dsCard group=\"Custom\" source=\"src/Chip.tsx\" -->\n<div>chip</div>\n";
+        put(&dir, &[(row, row_card), (chip, chip_card)]);
+        store.synced("w1", &slug, &[], 2).unwrap();
+        let to_settle = || store.systems("w1").unwrap()[0].to_settle;
+
+        // A card that is not orphaned cannot be kept for now.
+        assert!(store.settle("w1", &slug, row, Settle::Keep).is_err());
+        assert_eq!(to_settle(), 0);
+
+        std::fs::remove_file(project.path().join("src/Row.tsx")).unwrap();
+        std::fs::remove_file(project.path().join("src/Chip.tsx")).unwrap();
+        assert_eq!(to_settle(), 2, "two orphans");
+        store.settle("w1", &slug, row, Settle::Keep).unwrap();
+        store.settle("w1", &slug, chip, Settle::Keep).unwrap();
+        assert_eq!(to_settle(), 0, "both kept");
+        assert_eq!(std::fs::read_to_string(dir.join(row)).unwrap(), row_card);
+
+        // A sync that leaves them orphaned keeps them kept.
+        store.synced("w1", &slug, &[], 3).unwrap();
+        assert_eq!(to_settle(), 0);
+
+        // A sync while the row's marker is broken (its sources unknown) keeps
+        // it kept, so once the marker is repaired it still waits for nothing.
+        put(&dir, &[(row, "<!-- @dsCard broken -->\n<div>row</div>\n")]);
+        store.synced("w1", &slug, &[], 3).unwrap();
+        put(&dir, &[(row, row_card)]);
+        assert_eq!(to_settle(), 0, "kept through a broken marker");
+
+        // The row's source comes back and a sync records it: kept no more,
+        // so when it goes again the row waits again.
+        put(project.path(), &[("src/Row.tsx", "row\n")]);
+        store.synced("w1", &slug, &[], 4).unwrap();
+        std::fs::remove_file(project.path().join("src/Row.tsx")).unwrap();
+        assert_eq!(to_settle(), 1);
+
+        // A kept card removed is kept no more: one written there later
+        // and orphaned waits.
+        store.settle("w1", &slug, chip, Settle::Remove).unwrap();
+        put(project.path(), &[("src/Chip.tsx", "chip\n")]);
+        put(&dir, &[(chip, chip_card)]);
+        store.synced("w1", &slug, &[], 5).unwrap();
+        std::fs::remove_file(project.path().join("src/Chip.tsx")).unwrap();
+        assert_eq!(to_settle(), 2);
+
+        // A kept card deleted by hand before a sync is kept no more either.
+        store.settle("w1", &slug, chip, Settle::Keep).unwrap();
+        std::fs::remove_dir_all(dir.join("components/custom/chip")).unwrap();
+        store.synced("w1", &slug, &[], 6).unwrap();
+        put(project.path(), &[("src/Chip.tsx", "chip\n")]);
+        put(&dir, &[(chip, chip_card)]);
+        store.synced("w1", &slug, &[], 7).unwrap();
+        std::fs::remove_file(project.path().join("src/Chip.tsx")).unwrap();
+        assert_eq!(to_settle(), 2);
+    }
+
+    #[test]
     fn a_settled_card_is_up_to_date_on_the_next_look_and_a_removed_one_comes_back_new() {
         let home = tempfile::tempdir().unwrap();
         let project = tempfile::tempdir().unwrap();
@@ -1537,6 +1720,112 @@ root = \"9c1e0a2\"
         assert!(store.progress("w1", &slug, "painting", None).is_err());
         store.synced("w1", &slug, &[], 2).unwrap();
         assert_eq!(store.systems("w1").unwrap()[0].step, None);
+    }
+
+    #[test]
+    fn a_sync_runs_from_its_start_until_it_is_recorded() {
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::new(home.path());
+        let slug = store
+            .create_system("w1", "storefront", vec![], Cover::Core, 1)
+            .unwrap();
+        let running = || store.systems("w1").unwrap()[0].sync_running;
+        assert!(!running());
+        store.begin_sync("w1", &slug).unwrap();
+        assert!(running());
+        store.synced("w1", &slug, &[], 2).unwrap();
+        assert!(!running(), "a later turn of the agent is no sync");
+    }
+
+    #[test]
+    fn a_progress_file_of_one_step_written_before_steps_reads_as_that_step() {
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::new(home.path());
+        let slug = store
+            .create_system("w1", "storefront", vec![], Cover::Core, 1)
+            .unwrap();
+        let dir = home.path().join("design/w1/systems").join(&slug);
+        put(
+            &dir,
+            &[(
+                ".cache/progress.toml",
+                "step = \"cards\"\nsummary = \"1 of 3\"\n",
+            )],
+        );
+        let sys = store.systems("w1").unwrap().remove(0);
+        assert_eq!(
+            sys.steps,
+            vec![StepReport {
+                step: "cards".into(),
+                summary: Some("1 of 3".into())
+            }]
+        );
+        assert_eq!(
+            (sys.step.as_deref(), sys.step_summary.as_deref()),
+            (Some("cards"), Some("1 of 3"))
+        );
+    }
+
+    #[test]
+    fn a_sync_keeps_every_step_it_reported_and_a_step_reported_again_starts_over_from_it() {
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::new(home.path());
+        let slug = store
+            .create_system("w1", "storefront", vec![], Cover::Core, 1)
+            .unwrap();
+        let report =
+            |step: &str, summary: &str| store.progress("w1", &slug, step, Some(summary)).unwrap();
+        let steps = || {
+            let s = store.systems("w1").unwrap().remove(0);
+            let steps: Vec<(String, Option<String>)> =
+                s.steps.into_iter().map(|r| (r.step, r.summary)).collect();
+            (s.step, s.step_summary, steps)
+        };
+        let pair = |step: &str, summary: &str| (step.to_string(), Some(summary.to_string()));
+        assert_eq!(steps(), (None, None, vec![]));
+
+        report("inventory", "3 changed, 1 new, 1 gone");
+        report("tokens", "no change");
+        report("cards", "1 of 3");
+        report("cards", "2 of 3");
+        assert_eq!(
+            steps(),
+            (
+                Some("cards".into()),
+                Some("2 of 3".into()),
+                vec![
+                    pair("inventory", "3 changed, 1 new, 1 gone"),
+                    pair("tokens", "no change"),
+                    pair("cards", "2 of 3"),
+                ]
+            )
+        );
+
+        // A sync that goes back to an earlier step drops the later ones.
+        report("tokens", "1 changed");
+        assert_eq!(
+            steps(),
+            (
+                Some("tokens".into()),
+                Some("1 changed".into()),
+                vec![
+                    pair("inventory", "3 changed, 1 new, 1 gone"),
+                    pair("tokens", "1 changed"),
+                ]
+            )
+        );
+        store.progress("w1", &slug, "cards", None).unwrap();
+        assert_eq!(
+            steps().2,
+            vec![
+                pair("inventory", "3 changed, 1 new, 1 gone"),
+                pair("tokens", "1 changed"),
+                ("cards".to_string(), None),
+            ]
+        );
+
+        store.synced("w1", &slug, &[], 2).unwrap();
+        assert_eq!(steps(), (None, None, vec![]));
     }
 
     #[test]
@@ -2438,6 +2727,120 @@ root = \"9c1e0a2\"
         assert_eq!(
             cards[0].marker,
             "<!-- @dsCard group=\"Buttons\" name=\"Button\" source=\"src/ui.tsx\" viewport=\"320x140\" -->"
+        );
+    }
+
+    #[test]
+    fn a_systems_cards_say_what_each_waits_for_its_proposals_an_edit_by_hand_or_an_orphan_kept() {
+        let home = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        put(
+            project.path(),
+            &[
+                ("src/Row.tsx", "row\n"),
+                ("src/Chip.tsx", "chip\n"),
+                ("src/ui.tsx", "button\n"),
+                ("src/form.tsx", "input\n"),
+            ],
+        );
+        let store = Store::new(home.path());
+        let mut src = source();
+        src.path = project.path().display().to_string();
+        let slug = store
+            .create_system("w1", "storefront", vec![src], Cover::Core, 1)
+            .unwrap();
+        let dir = home.path().join("design/w1/systems").join(&slug);
+        put(
+            &dir,
+            &[
+                (
+                    "components/custom/row/row.html",
+                    "<!-- @dsCard group=\"Custom\" name=\"Row\" source=\"src/Row.tsx\" -->\n<div>row</div>\n",
+                ),
+                (
+                    "components/custom/chip/chip.html",
+                    "<!-- @dsCard group=\"Custom\" name=\"Chip\" source=\"src/Chip.tsx\" -->\n<span>chip</span>\n",
+                ),
+                (
+                    "components/buttons/button/button.html",
+                    "<!-- @dsCard group=\"Buttons\" name=\"Button\" source=\"src/ui.tsx\" -->\n<button>Run</button>\n",
+                ),
+                (
+                    "components/forms/field/field.html",
+                    "<!-- @dsCard group=\"Forms\" name=\"Field\" source=\"src/form.tsx\" -->\n<input>\n",
+                ),
+            ],
+        );
+        store.synced("w1", &slug, &[], 2).unwrap();
+        // The user edits the row; the next sync proposes its HTML and CSS.
+        put(
+            &dir,
+            &[
+                (
+                    "components/custom/row/row.html",
+                    "<!-- @dsCard group=\"Custom\" name=\"Row\" source=\"src/Row.tsx\" -->\n<div>mine</div>\n",
+                ),
+                (
+                    "components/custom/row/row.proposed.html",
+                    "<!-- @dsCard group=\"Custom\" name=\"Row\" source=\"src/Row.tsx\" -->\n<div>synced</div>\n",
+                ),
+                ("components/custom/row/row.proposed.css", ".row {}\n"),
+            ],
+        );
+        // The chip's and the button's sources go; the chip is kept for now.
+        std::fs::remove_file(project.path().join("src/Chip.tsx")).unwrap();
+        std::fs::remove_file(project.path().join("src/ui.tsx")).unwrap();
+        store
+            .settle(
+                "w1",
+                &slug,
+                "components/custom/chip/chip.html",
+                Settle::Keep,
+            )
+            .unwrap();
+
+        let got: Vec<_> = store
+            .cards("w1", &slug)
+            .unwrap()
+            .into_iter()
+            .map(|c| (c.path, c.proposals, c.edited_by_hand, c.orphaned, c.kept))
+            .collect();
+        let s = |v: &[&str]| v.iter().map(|p| p.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            got,
+            vec![
+                (
+                    "components/buttons/button/button.html".to_string(),
+                    vec![],
+                    false,
+                    true,
+                    false
+                ),
+                (
+                    "components/custom/chip/chip.html".to_string(),
+                    vec![],
+                    false,
+                    true,
+                    true
+                ),
+                (
+                    "components/custom/row/row.html".to_string(),
+                    s(&[
+                        "components/custom/row/row.proposed.css",
+                        "components/custom/row/row.proposed.html"
+                    ]),
+                    true,
+                    false,
+                    false
+                ),
+                (
+                    "components/forms/field/field.html".to_string(),
+                    vec![],
+                    false,
+                    false,
+                    false
+                ),
+            ]
         );
     }
 

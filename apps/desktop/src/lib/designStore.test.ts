@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DesignSystem } from "./protocol";
+import { useStore } from "./store";
 import { cardsOf, createSystem, detectStack, loadCards, loadSystems, openCard, revOf, shownCard, shownSystem, showSystem, startDesign, systemsOf, useDesign } from "./designStore";
 
 const calls = vi.hoisted(() => [] as { host: string; method: string; params: unknown }[]);
@@ -7,6 +8,13 @@ const calls = vi.hoisted(() => [] as { host: string; method: string; params: unk
 const answers = vi.hoisted(() => ({}) as Record<string, (params: unknown) => unknown>);
 const events = vi.hoisted(() => ({ emit: (_e: { host: string; name: string; data: unknown }) => {} }));
 const hostStatus = vi.hoisted(() => ({ emit: (_h: { id: string; status: string }) => {} }));
+const shown = vi.hoisted(() => [] as { title: string; body: string }[]);
+vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ setBadgeCount: () => Promise.resolve() }) }));
+vi.mock("@tauri-apps/plugin-notification", () => ({
+  isPermissionGranted: () => Promise.resolve(true),
+  requestPermission: () => Promise.resolve("granted"),
+  sendNotification: (n: { title: string; body: string }) => shown.push(n),
+}));
 
 vi.mock("./daemon", () => ({
   rpc: vi.fn((host: string, method: string, params: unknown) => {
@@ -35,6 +43,8 @@ const system = (over: Partial<DesignSystem> = {}): DesignSystem => ({
   agent: 7,
   last_sync: [],
   needs_you: null,
+  steps: [],
+  sync_running: false,
   ...over,
 });
 
@@ -202,6 +212,56 @@ describe("a design system's cards (X64)", () => {
     events.emit({ host: "local", name: "design.changed", data: { workspace: "w-1devstudio", system: "moonlet-desktop", paths: ["components.css"] } });
     events.emit({ host: "local", name: "design.changed", data: { workspace: "w-1devstudio", system: "storefront", paths: ["components.css"] } });
     expect(revOf(useDesign.getState(), "local", "w-1devstudio", "moonlet-desktop")).toBe(1);
+  });
+});
+
+describe("the sync agent's notifications (X64, X65)", () => {
+  it("come when a listing shows it asking, also the first, or the sync recorded since the last", async () => {
+    shown.length = 0;
+    // The first listing tells a question still waiting, never a sync recorded before.
+    answers["design.systems"] = () => [system({ synced_at: 3, needs_you: { kind: "question", text: "Still waiting?" } })];
+    await loadSystems("local", "w-notes");
+    await settle();
+    expect(shown).toEqual([{ title: "Design · moonlet desktop", body: "asks: Still waiting?" }]);
+    shown.length = 0;
+    answers["design.systems"] = () => [system({ needs_you: { kind: "question", text: "Which button set is current?" } })];
+    await loadSystems("local", "w-notes");
+    await settle();
+    answers["design.systems"] = () => [system({ synced_at: 5, to_settle: 1 })];
+    await loadSystems("local", "w-notes");
+    await settle();
+    expect(shown).toEqual([
+      { title: "Design · moonlet desktop", body: "asks: Which button set is current?" },
+      { title: "Design · moonlet desktop", body: "moonlet desktop synced · 1 to settle" },
+    ]);
+  });
+});
+
+describe("the sync agent's notifications, as the settings say (X47, X65)", () => {
+  it("follow the banner settings for a question and for a finished sync", async () => {
+    shown.length = 0;
+    useStore.setState((st) => ({ settings: { ...st.settings, banners: { blocked: false } } }));
+    answers["design.systems"] = () => [system()];
+    await loadSystems("local", "w-quiet");
+    answers["design.systems"] = () => [system({ needs_you: { kind: "question", text: "Which?" } })];
+    await loadSystems("local", "w-quiet");
+    answers["design.systems"] = () => [system({ synced_at: 9 })];
+    await loadSystems("local", "w-quiet");
+    await settle();
+    expect(shown).toEqual([{ title: "Design · moonlet desktop", body: "moonlet desktop synced" }]);
+    useStore.setState((st) => ({ settings: { ...st.settings, banners: {} } }));
+  });
+});
+
+describe("every workspace's design systems (X64, X65)", () => {
+  it("are listed once a host is connected, so a sync started from a session notifies too", async () => {
+    answers["design.systems"] = () => [];
+    useStore.setState({
+      hosts: { local: { id: "local", label: "This Mac", remote: false, status: "connected", message: null, daemon_version: null, hostname: null, home: null } },
+      workspaces: { local: [{ id: "w-everyone", name: "Everyone", color: "clay", section_ids: [], created_at: 0 }] },
+    });
+    await settle();
+    expect(listed().some((c) => (c.params as { workspace: string }).workspace === "w-everyone")).toBe(true);
   });
 });
 

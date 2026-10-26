@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DoneBursts, alertFor, differsAlert } from "./alerts";
+import { DoneBursts, alertFor, alertsLikeASession, differsAlert } from "./alerts";
 
 const away = { focused: false, visible: false, settings: { notifyWhenFocused: false }, now: 1_000_000 };
 
@@ -86,5 +86,15 @@ describe("differsAlert (X60 a file differs between machines)", () => {
   it("sends nothing with its switch off; the mark and the popover still show the files", () => {
     expect(differsAlert({ focused: false, notifyWhenFocused: false, banner: false })).toEqual({ banner: false, toast: false });
     expect(differsAlert({ focused: true, notifyWhenFocused: true, banner: false })).toEqual({ banner: false, toast: false });
+  });
+});
+
+describe("a design system's sync agent (X65)", () => {
+  it("never alerts like a session: Design mode notifies for it", () => {
+    // The daemon marks a sync agent's attention `design`.
+    expect(alertsLikeASession({ design: true })).toBe(false);
+    // A standalone chat, with no session either, still alerts.
+    expect(alertsLikeASession({ design: false })).toBe(true);
+    expect(alertsLikeASession({})).toBe(true);
   });
 });

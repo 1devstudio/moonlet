@@ -22,6 +22,8 @@ const system = (over: Partial<DesignSystem>): DesignSystem => ({
   agent: 7,
   last_sync: [],
   needs_you: null,
+  steps: [],
+  sync_running: false,
   ...over,
 });
 
@@ -43,8 +45,10 @@ describe("a design system's sidebar row (X65)", () => {
   });
 
   it("says syncing while its agent works on a sync or the first build", () => {
-    expect(systemLabel(system({ step: "cards", to_settle: 2 }), NOW, true)).toEqual({ text: "syncing", tone: "muted" });
-    expect(systemLabel(system({ synced_at: null, cards: 0, layouts: 0 }), NOW, true)).toEqual({ text: "syncing", tone: "muted" });
+    expect(systemLabel(system({ step: "cards", to_settle: 2, sync_running: true }), NOW, true)).toEqual({ text: "syncing", tone: "muted" });
+    expect(systemLabel(system({ synced_at: null, cards: 0, layouts: 0, sync_running: true }), NOW, true)).toEqual({ text: "syncing", tone: "muted" });
+    // A turn of the agent after the sync was recorded, such as the user's chat, is no sync.
+    expect(systemLabel(system({ sync_running: false }), NOW, true)).toEqual({ text: "3d", tone: "muted" });
   });
 
   it("stops saying syncing once its agent stopped without recording the sync", () => {
