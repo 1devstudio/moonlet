@@ -561,8 +561,10 @@ export async function removeDesign(host: string, workspace: string, slug: string
  *  listing its design.changed brings says so too. */
 export async function updateSystem(host: string, place: { session: string }, slug: string): Promise<DesignSystemUpdated> {
   const updated = await rpc<DesignSystemUpdated>(host, M.designSystemUpdate, designRef(place, slug));
+  // Its own host's listing only: a session id is unique per host.
+  const mine = (d: Design) => d.session === place.session && d.slug === slug;
   useDesign.setState((s) => ({
-    sessionDesigns: Object.fromEntries(Object.entries(s.sessionDesigns).map(([key, list]) => [key, list.some((d) => d.session === place.session && d.slug === slug) ? list.map((d) => (d.session === place.session && d.slug === slug ? { ...d, system_updated: false } : d)) : list])),
+    sessionDesigns: Object.fromEntries(Object.entries(s.sessionDesigns).map(([key, list]) => [key, parseWsKey(key).host === host && list.some(mine) ? list.map((d) => (mine(d) ? { ...d, system_updated: false } : d)) : list])),
   }));
   return updated;
 }
@@ -591,11 +593,18 @@ const viewportSaves = latestSends();
 /** A listed design's place: its session's for a session design. */
 const placeOf = (d: Design, workspace: string): DesignPlace => (d.kind === "session" && d.session ? { session: d.session } : workspace);
 
-/** Shows `viewport` as the design's, in its listing. */
+/** Shows `viewport` as the design's, in its host's listing: an id is
+ *  unique per host only. */
 function showViewport(host: string, place: DesignPlace, slug: string, viewport: string) {
-  const mine = (d: Design, workspace: string) => d.slug === slug && itemKey(host, placeOf(d, workspace), d.slug) === itemKey(host, place, slug);
+  const key = itemKey(host, place, slug);
   const shown = (byWorkspace: Record<string, Design[]>) =>
-    Object.fromEntries(Object.entries(byWorkspace).map(([key, list]) => [key, list.some((d) => mine(d, parseWsKey(key).id)) ? list.map((d) => (mine(d, parseWsKey(key).id) ? { ...d, viewport } : d)) : list]));
+    Object.fromEntries(
+      Object.entries(byWorkspace).map(([wk, list]) => {
+        const ws = parseWsKey(wk);
+        const mine = (d: Design) => itemKey(ws.host, placeOf(d, ws.id), d.slug) === key;
+        return [wk, list.some(mine) ? list.map((d) => (mine(d) ? { ...d, viewport } : d)) : list];
+      }),
+    );
   useDesign.setState((s) => ({ designs: shown(s.designs), sessionDesigns: shown(s.sessionDesigns) }));
 }
 

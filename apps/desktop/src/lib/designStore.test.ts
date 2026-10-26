@@ -518,6 +518,16 @@ describe("a design's viewport picked in a row (X65)", () => {
     expect(calls.filter((c) => c.method === "design.viewport").at(-1)?.params).toEqual({ workspace: "w-picks", slug: "settings-page", viewport: "834x1112" });
   });
 
+  it("shows only on its own host, never on a design of the same workspace id and slug on another host", async () => {
+    answers["design.list"] = () => [design()];
+    answers["design.viewport"] = () => true;
+    await loadDesigns("local", "w-both");
+    await loadDesigns("mac-2", "w-both");
+    await saveViewport("local", "w-both", "settings-page", "390x844");
+    expect(designsOf(useDesign.getState(), "local", "w-both")?.[0].viewport).toBe("390x844");
+    expect(designsOf(useDesign.getState(), "mac-2", "w-both")?.[0].viewport).toBe("1440x900");
+  });
+
   it("stays the latest pick when its save fails", async () => {
     answers["design.list"] = () => [design()];
     await loadDesigns("local", "w-fails");
@@ -750,6 +760,16 @@ describe("a session's Design tab (X65)", () => {
     await settle();
     await settle();
     expect(sessionDesignsOf(useDesign.getState(), "local", "4f2a9c1e7b3d").map((d) => !!d.system_updated)).toEqual([true, true]);
+  });
+
+  it("takes the Update bar off its own host's session design only, never one of the same session id and slug on another host", async () => {
+    answers["design.list"] = listed;
+    answers["design.system.update"] = () => ({ anchor: "9f86d081", cards: [] });
+    await loadDesigns("local", "w-1devstudio");
+    await loadDesigns("mac-2", "w-1devstudio");
+    await updateSystem("local", { session: "4f2a9c1e7b3d" }, "settings-page");
+    expect(sessionDesignsOf(useDesign.getState(), "local", "4f2a9c1e7b3d").map((d) => !!d.system_updated)).toEqual([false, false]);
+    expect(sessionDesignsOf(useDesign.getState(), "mac-2", "4f2a9c1e7b3d").map((d) => !!d.system_updated)).toEqual([false, true]);
   });
 
   it("updates a design's design system by its session and slug, and its bar goes at once", async () => {
