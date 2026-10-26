@@ -1,6 +1,6 @@
 # ADR 0014: Hosts share one account; a session's agent runs on the host that made it, and the central host keeps a copy
 
-- **Status:** proposed (2026-10-26)
+- **Status:** proposed (2026-10-26); its first slice is [X68](../specs/X68-account-state.md)
 - **Changes:** [ADR 0009](0009-central-host-workers-live-copies.md)'s "the central host owns every session" and the direction of its live copies; [ADR 0008](0008-phone-link-over-tailscale.md) and [X39](../specs/X39-phone-pairing-and-link.md)'s pairing, which the central host now does for every app; [ADR 0011](0011-machines-connect-over-the-tailnet.md) and [X57](../specs/X57-tailnet-hosts.md)'s "a paired desktop cannot manage the remote's devices"; [ADR 0013](0013-design-systems-and-designs.md)'s "rendering needs the moonlet app open".
 - **Builds on:** [ADR 0011](0011-machines-connect-over-the-tailnet.md) (the tailnet transport and pairing), [X41](../specs/X41-worker-link-and-project-identity.md) (the worker link and project identity), [X60](../specs/X60-keep-in-sync.md) (live copies), [X62](../specs/X62-routed-commands.md) and [ADR 0012](0012-cloud-workers.md) (routing and cloud workers).
 
@@ -41,7 +41,7 @@ ADR 0009 put every session on the central host, with other machines as windows o
 
 - **What it holds:** workspaces, sections, projects (by project identity, X41), each session's record (name, branch, task link, owner, ownership number), boards and tracker settings, the git branch prefix, the app's preferences now kept in localStorage, approved setup commands, and the list of paired devices (token hashes only).
 - **What stays on each host:** paths, `link.json`, the worker id, terminals and their processes, ignored files such as `node_modules` and `.env`, and a host's own settings (tailnet access, worker slots, the folder of each Claude profile, rendering on or off). An admin edits these from any app, but they never sync.
-- **How it syncs:** every member keeps the whole state and a log of changes. Each change is stamped with a hybrid logical clock and the member's id. A field takes the change with the latest stamp. A deletion leaves a tombstone. Order inside a list comes from sort keys, so two members reordering never conflict. Members exchange the changes the other has not seen, usually through the central host. A member that was offline merges on reconnect, with no step from the user.
+- **How it syncs:** every member keeps the whole state and a log of changes. Each change is stamped with a hybrid logical clock and the member's id. A field takes the change with the latest stamp. A deletion leaves a tombstone. Order inside a list comes from sort keys, so two members reordering never conflict. Members exchange the changes the other has not seen through the central host, which takes each member's own changes and passes them on to the others. A member that was offline merges on reconnect, with no step from the user.
 - **Workspaces become account-wide.** A workspace's projects are project identities. Each member maps an identity to its own clone, or clones the project when it needs to. A workspace's Claude profile is a name, which each member maps to a folder of its own.
 
 ### Sessions

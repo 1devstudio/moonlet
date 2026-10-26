@@ -1,6 +1,7 @@
 # ADR 0013: Design systems and designs are files, laid out like design-sync's, rendered in the app's WebKit
 
 - **Status:** proposed (2026-10-23); to be built in [X64](../specs/X64-design-systems.md) and [X65](../specs/X65-design-mode.md)
+- **Changed by:** [ADR 0014](0014-one-account-across-hosts.md) (proposed, 2026-10-26). A member without the app renders for its design agent with a helper of its own (WKWebView on a Mac, WPE WebKit on Linux).
 - **Builds on:** [ADR 0005](0005-workspace-project-session-terminal.md) (workspaces, projects, sessions) and [X22](../specs/X22-agent-opens-session.md) (the `moonlet` skill)
 
 ## Context
