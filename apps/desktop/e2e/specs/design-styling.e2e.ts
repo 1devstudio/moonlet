@@ -107,8 +107,8 @@ describe("The visual editor's styling", () => {
     })());
   });
 
-  it("has the right rail's Layers, Inspector, Palette and Comments tabs, and inspects the element selected in Layers", async () => {
-    expect((await rail().$$('.//button[@role="tab"]').map((t) => t.getText())).map((t) => t.replace(/\s*\d+$/, ""))).toEqual(["Layers", "Inspector", "Palette", "Comments"]);
+  it("has the right rail's Layers, Inspector, Palette, Comments and History tabs, and inspects the element selected in Layers", async () => {
+    expect((await rail().$$('.//button[@role="tab"]').map((t) => t.getText())).map((t) => t.replace(/\s*\d+$/, ""))).toEqual(["Layers", "Inspector", "Palette", "Comments", "History"]);
     await layer("section m24").click();
     await tab("Inspector").click();
     await expect(inspector()).toHaveText(expect.stringContaining("section"));

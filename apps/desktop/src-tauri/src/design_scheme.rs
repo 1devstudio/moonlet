@@ -8,7 +8,11 @@
 //! `moonlet-design://<card key>.<workspace>/<path>` (`cardUrl` in
 //! `src/lib/designView.ts` builds it), so WebKit's site isolation gives it a
 //! web process of its own (X64). The key only names the process: the file is
-//! the path's, whichever key asks for it.
+//! the path's, whichever key asks for it, except on a snapshot's host
+//! (`snapshotPageUrl`, X65), whose key, `<page key>s<folder key>`, names the
+//! snapshot: there only that snapshot's files and design systems' are
+//! served ([`serves`]), so a link in a snapshot's page never shows the
+//! current page in its preview.
 
 /// What a `moonlet-design://` URL names: the host it was asked on (the
 /// workspace, or a card's key and the workspace), the workspace, and the path
@@ -75,6 +79,45 @@ pub fn target(url: &str) -> Option<Target> {
         workspace,
         path: parts.join("/"),
     })
+}
+
+/// Whether a file of `path` is served on `host` (X65): any is, but on a
+/// snapshot's host, whose key is its page's key, an `s`, and its folder's,
+/// `designs/<slug>@<n>`, as the 64-bit FNV-1a hash in hex: there only that
+/// folder's files, and design systems' (the page's styles), are served.
+/// No other key has an `s`, being hex; one with an `s` naming no folder
+/// serves nothing.
+pub fn serves(host: &str, path: &str) -> bool {
+    let key = match host.split('.').collect::<Vec<_>>()[..] {
+        [key, _] => key,
+        _ => return true,
+    };
+    let Some((page, folder)) = key.split_once('s') else {
+        return true;
+    };
+    let hex = |k: &str| k.len() == 16 && k.bytes().all(|b| b.is_ascii_hexdigit());
+    if !hex(page) || !hex(folder) {
+        return false;
+    }
+    if path.starts_with("systems/") {
+        return true;
+    }
+    let mut parts = path.splitn(3, '/');
+    match (parts.next(), parts.next()) {
+        (Some("designs"), Some(named)) => {
+            named.contains('@') && fnv1a64(&format!("designs/{named}")) == folder
+        }
+        _ => false,
+    }
+}
+
+/// The 64-bit FNV-1a hash of `text`'s UTF-8 bytes, as 16 lowercase hex
+/// digits, as `designUrl` in `src/lib/designView.ts` makes a host's key.
+fn fnv1a64(text: &str) -> String {
+    let hash = text.bytes().fold(0xcbf29ce484222325u64, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x100000001b3)
+    });
+    format!("{hash:016x}")
 }
 
 /// The render check's measuring script (X64), put in a card the render
@@ -174,6 +217,10 @@ pub async fn serve(app: &tauri::AppHandle, url: &str) -> tauri::http::Response<V
     else {
         return reply(400, "not a design file");
     };
+    // A snapshot's frame, led away by a link in its page, shows no other.
+    if !serves(&host, &path) {
+        return reply(403, "a snapshot's preview shows only its own files");
+    }
     let hosts = app.state::<Arc<crate::hosts::HostManager>>();
     let Ok(local) = hosts.get("local") else {
         return reply(404, "the daemon is not running");
@@ -369,6 +416,66 @@ mod tests {
                 "default-src moonlet-design://5a1c3e0f9b2d4c67.w-1devstudio data: blob: 'unsafe-inline'; connect-src 'none'; form-action 'none'; frame-src 'none'"
             )
         );
+    }
+
+    #[test]
+    fn a_snapshots_host_serves_only_that_snapshots_files_and_design_systems() {
+        // As `snapshotPageUrl` asks for snapshot 3's pages of settings-page.
+        for host in [
+            "bde3977b4fe8bcc8sc159239263e42bb1.w-1devstudio",
+            "d33e539a169502d6sc159239263e42bb1.w-1devstudio",
+        ] {
+            for path in [
+                "designs/settings-page@3/pages/index.html",
+                "designs/settings-page@3/pages/git-a.html",
+                "designs/settings-page@3/assets/logo.svg",
+                "systems/moonlet-desktop/styles.css",
+            ] {
+                assert!(serves(host, path), "{host} {path}");
+            }
+            // The current design's page, which a link in the snapshot's page
+            // could lead the frame to, another snapshot, or another design.
+            for path in [
+                "designs/settings-page/pages/index.html",
+                "designs/settings-page/assets/logo.svg",
+                "designs/settings-page@2/pages/index.html",
+                "designs/settings-page@31/pages/index.html",
+                "designs/billing@3/pages/index.html",
+                "comments.json",
+            ] {
+                assert!(!serves(host, path), "{host} {path}");
+            }
+        }
+        // A design's own page, a card, and a workspace's host serve as they did.
+        for (host, path) in [
+            (
+                "77b546eb07dc1f7b.w-1devstudio",
+                "designs/settings-page/pages/index.html",
+            ),
+            (
+                "77b546eb07dc1f7b.w-1devstudio",
+                "designs/settings-page@3/pages/index.html",
+            ),
+            (
+                "de8ad9aca07be977.w-1devstudio",
+                "systems/moonlet-desktop/styles.css",
+            ),
+            ("w-1devstudio", "designs/settings-page/pages/index.html"),
+        ] {
+            assert!(serves(host, path), "{host} {path}");
+        }
+        // A key with an s that names no snapshot's folder serves nothing.
+        for host in [
+            "s.w1",
+            "sc159239263e42bb1.w1",
+            "bde3977b4fe8bcc8s.w1",
+            "bde3977b4fe8bcc8sc159239263e42bb1s.w1",
+        ] {
+            assert!(
+                !serves(host, "systems/moonlet-desktop/styles.css"),
+                "{host}"
+            );
+        }
     }
 
     #[test]

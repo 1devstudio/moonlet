@@ -138,7 +138,7 @@ export function CommentsTab({
   mids,
   pages,
   sending,
-  canSend,
+  rail,
   onSend,
   onSendAll,
   onResolve,
@@ -150,7 +150,8 @@ export function CommentsTab({
   pages: string[];
   /** The pins a Send is on its way with, whose Send is off meanwhile. */
   sending: number[];
-  canSend: boolean;
+  /** What its buttons may do (`commentsRail`). */
+  rail: { send: boolean; resolve: boolean; why: string | null };
   onSend: (pin: DesignComment) => void;
   onSendAll: () => void;
   onResolve: (pin: DesignComment) => void;
@@ -161,7 +162,7 @@ export function CommentsTab({
   const [page, setPage] = useState<string | null>(null);
   const shown = commentsTab(pins, { tab, page }, mids);
   const action = "ui-text-12 text-accent hover:text-accent-2 disabled:text-faint";
-  const plain = "ui-text-12 text-muted hover:text-fg";
+  const plain = "ui-text-12 text-muted enabled:hover:text-fg disabled:text-faint";
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex h-11 shrink-0 items-center gap-1 px-3">
@@ -203,7 +204,7 @@ export function CommentsTab({
                 <span className={cx("mr-auto ui-text-12", p.sent_at === null ? "text-accent" : "text-faint")}>{sentLabel(p)}</span>
                 {p.state === "open" &&
                   (p.sent_at === null ? (
-                    <button className={action} disabled={!canSend || sending.includes(p.n)} title={canSend ? undefined : "The design's agent is not running"} onClick={() => onSend(p)}>
+                    <button className={action} disabled={!rail.send || sending.includes(p.n)} title={rail.send ? undefined : (rail.why ?? undefined)} onClick={() => onSend(p)}>
                       {sending.includes(p.n) ? "Sending…" : "Send"}
                     </button>
                   ) : (
@@ -212,7 +213,7 @@ export function CommentsTab({
                     </button>
                   ))}
                 {p.state === "open" && (
-                  <button className={plain} onClick={() => onResolve(p)}>
+                  <button className={plain} disabled={!rail.resolve} title={rail.resolve ? undefined : (rail.why ?? undefined)} onClick={() => onResolve(p)}>
                     Resolve
                   </button>
                 )}
@@ -231,7 +232,7 @@ export function CommentsTab({
                 <p className="selectable mt-0.5 ui-text-13 text-muted">{p.comment}</p>
                 <p className="mt-1 ui-text-12 text-faint">
                   The element is gone after the last change.{" "}
-                  <button className={action} onClick={() => onResolve(p)}>
+                  <button className={action} disabled={!rail.resolve} title={rail.resolve ? undefined : (rail.why ?? undefined)} onClick={() => onResolve(p)}>
                     Resolve
                   </button>
                 </p>
@@ -243,7 +244,7 @@ export function CommentsTab({
       {tab === "open" && (
         <div className="flex h-12 shrink-0 items-center gap-2 border-t border-border px-3.5">
           <span className="min-w-0 flex-1 truncate ui-text-12 text-muted">{footerLabel(shown.unsent)}</span>
-          <Button size="sm" variant="subtle" disabled={!shown.unsent || !canSend} onClick={onSendAll}>
+          <Button size="sm" variant="subtle" disabled={!shown.unsent || !rail.send} title={rail.send ? undefined : (rail.why ?? undefined)} onClick={onSendAll}>
             Send all
           </Button>
         </div>

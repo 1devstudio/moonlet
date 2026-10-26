@@ -2,6 +2,7 @@
 // before and while the host's daemon clones a repository.
 
 import type { CloneDone, CloneJob, CloneProgress, CloneStep, CloneTarget, GhStatus, Project } from "./protocol";
+import { MONTHS } from "./dates";
 import { readStored, writeStored } from "./storage";
 
 /** A GitHub repository typed into Repository, and the SSH address when one was typed. */
@@ -54,7 +55,7 @@ export function pushedAgo(iso: string, now: Date): string {
   if (hours < 48) return "yesterday";
   if (days < 14) return `${days}d ago`;
   if (days < 56) return `${Math.floor(days / 7)}w ago`;
-  const month = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][then.getUTCMonth()];
+  const month = MONTHS[then.getUTCMonth()];
   return `${then.getUTCDate()} ${month} ${then.getUTCFullYear()}`;
 }
 

@@ -9,6 +9,7 @@ pub mod comments;
 pub mod designs;
 pub mod foundations;
 pub(crate) mod fsx;
+pub mod history;
 pub mod kit;
 pub mod manifest;
 pub mod mid;

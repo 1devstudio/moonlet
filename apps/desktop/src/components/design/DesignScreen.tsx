@@ -2,21 +2,24 @@
 // canvas with its page tabs, viewport, zoom, mode, bar and the page in a
 // sandboxed frame on a host of its own, with its comments pinned over it or
 // its selection in Edit mode, and the right rail's Layers, Inspector,
-// Palette and Comments tabs.
+// Palette, Comments and History tabs; a snapshot picked in History is
+// previewed on the canvas, read only.
 
-import { ArrowRight, ChevronDown, LayoutGrid, Loader2, Lock, MessageSquare, MoreHorizontal, PanelLeftClose, PanelLeftOpen, PanelRight, SwatchBook, Trash2, Undo2 } from "lucide-react";
+import { ArrowRight, ChevronDown, History as HistoryIcon, LayoutGrid, Loader2, Lock, MessageSquare, MoreHorizontal, PanelLeftClose, PanelLeftOpen, PanelRight, SwatchBook, Trash2, Undo2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import { errorToast, toast, updateSettings, useStore } from "../../lib/store";
 import { chatKey, useChat } from "../../lib/chat";
-import type { Design, DesignComment, DesignToken } from "../../lib/protocol";
+import type { Design, DesignComment, DesignSnapshot, DesignToken } from "../../lib/protocol";
 import { briefShown, designSubtitle } from "../../lib/design";
 import {
   addPageMid,
   commentsOf,
   editComment,
+  historyOf,
   keepComment,
   latestOf,
   loadComments,
+  loadHistory,
   midsOf,
   pageRevOf,
   problemsOf,
@@ -32,16 +35,17 @@ import {
   systemsOf,
   useDesign,
 } from "../../lib/designStore";
-import { askWithEdits, closeDesign, hasCopy, kitOf, loadKit, sendCommentsWithEdits, copyElementOf, dismissUnsaved, editPage, loadPageSource, pasteInto, pendingOf, redoEdit, sendWithEdits, sourceOf, undoEdit, undoOf, unsavedOf, useEditor } from "../../lib/designEditor";
+import { askWithEdits, restoreSnapshot, closeDesign, hasCopy, kitOf, loadKit, sendCommentsWithEdits, copyElementOf, dismissUnsaved, editPage, loadPageSource, pasteInto, pendingOf, redoEdit, sendWithEdits, sourceOf, undoEdit, undoOf, unsavedOf, useEditor } from "../../lib/designEditor";
 import { EditRefused, editsChip, inlineStyles, type Edit, type EditOp } from "../../lib/designEdits";
 import { offSystemMids } from "../../lib/designTokens";
 import { selectionOf } from "../../lib/designInspector";
 import { snippetDrags, snippetsOf, type Snippet } from "../../lib/designPalette";
-import { pageUrl } from "../../lib/designView";
+import { pageUrl, snapshotPageUrl } from "../../lib/designView";
+import { previewBar, previewStep, snapshotTime, type Preview } from "../../lib/designHistory";
 import { VIEWPORTS, canvasKey, canvasScale, canvasZoom, customViewports, fitBox, parseViewport, sizeOf, sizeText, viewportLabel, viewportText, withCustomViewport, type Size } from "../../lib/designViewport";
 import { breadcrumb, dragEdit, hintLine, pickEdit, canvasPage, canvasStep, chatAfter, editorStep, isTyping, keyAct, layerPick, modeEntered, onReport, undoOpen, writingPage, type CanvasAct, type CanvasMode, type CanvasState, type ChatPanel, type KeyAct, type RailTab } from "../../lib/designCanvas";
 import { keyId } from "../../lib/runActions";
-import { chatCardLookup, commentCardSelector, messageView, commentsTab, keepAction, openCommentsLabel, pageCounts, sendAll } from "../../lib/designComments";
+import { chatCardLookup, commentCardSelector, commentsRail, messageView, commentsTab, keepAction, openCommentsLabel, pageCounts, sendAll } from "../../lib/designComments";
 import { bridgeMessage, editMessage, helloMessage, modeMessage, paletteMessage, pinsMessage, scrollMessage, selectMessage, type DragOver, type DragResult, type Layer, type PickedElement, type Rect } from "../../lib/designBridge";
 import { pageFile, pagePath } from "../../lib/designPage";
 import { barProblems, chatOpensOn, designBar, pageFixMessage, type Bar, type BarAction, type PageProblem } from "../../lib/designBars";
@@ -57,6 +61,7 @@ import { CardFrame, ZoomBar } from "./Frame";
 import { CommentBox, CommentCards, CommentsTab, PinLayer, type BoxTarget } from "./Comments";
 import { Breadcrumb, EditsChip, EditsMessage, LayersTab } from "./Editor";
 import { InspectorTab, PaletteTab } from "./Inspector";
+import { HistoryTab } from "./History";
 
 const NO_PINS: DesignComment[] = [];
 const NO_LAYERS: Layer[] = [];
@@ -68,6 +73,7 @@ const RAIL_TABS: { tab: RailTab; label: string }[] = [
   { tab: "inspector", label: "Inspector" },
   { tab: "palette", label: "Palette" },
   { tab: "comments", label: "Comments" },
+  { tab: "history", label: "History" },
 ];
 
 /** A design's viewport until it has one: Desktop. */
@@ -113,14 +119,22 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
   const mids = useDesign((d) => midsOf(d, host, workspace, design.slug));
   const sending = useDesign((d) => sendingOf(d, host, workspace, design.slug));
   const chatRef = useRef<HTMLElement>(null);
+  // History: the design's snapshots, and the one the canvas previews.
+  const snapshots = useDesign((d) => historyOf(d, host, workspace, design.slug));
+  const [preview, setPreview] = useState<Preview>(null);
+  const previewed = (preview && snapshots?.find((s) => s.n === preview.n)) || null;
+  // A snapshot previewed is read only (canvasStep, editorStep, undoOpen,
+  // layerPick), and the Inspector and the Palette edit nothing then.
+  const readOnly = previewed !== null;
+  const editLocked = working || readOnly;
 
-  const names = design.pages.map((p) => p.name);
+  const names = previewed ? previewed.pages : design.pages.map((p) => p.name);
   // A page that went away shows the first one; before any, index (being written).
   const page = canvasPage(picked, names);
   const viewport = parseViewport(design.viewport) ?? DEFAULT_VIEWPORT;
   const scale = canvasScale(zoom, viewport, fitBox([cw, ch]));
   const writing = writingPage(lastWritten, working);
-  const bar = designBar({ working, needsYou: design.needs_you, page, problems, system: systemName, systemRemoved: !!systems && !system, unsaved });
+  const bar = designBar({ working, needsYou: design.needs_you, page, problems, system: systemName, systemRemoved: !!systems && !system, unsaved, preview: previewed ? previewBar(previewed, Date.now()) : null });
   const chip = editsChip(pending);
   // The design system's tokens and snippets, read again when it changes.
   const kit = useEditor((e) => kitOf(e, host, workspace, design.slug));
@@ -141,20 +155,27 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
 
   useEffect(() => {
     void loadComments(host, workspace, design.slug).catch(() => {});
+    void loadHistory(host, workspace, design.slug).catch(() => {});
   }, [host, workspace, design.slug]);
   useEffect(() => setBox(null), [design.slug]);
-  // Another page or design: nothing selected, and its tree comes with it.
+  // Another design shows its current pages; a snapshot no longer listed too.
+  useEffect(() => setPreview(null), [design.slug]);
+  useEffect(() => {
+    if (snapshots) setPreview((p) => previewStep(p, { kind: "listed", snapshots }));
+  }, [snapshots]);
+  // Another page, design or snapshot: nothing selected, and its tree comes
+  // with it (a snapshot's page reports none).
   useEffect(() => {
     setSelected(null);
     setLayers(NO_LAYERS);
     setDragging(null);
-  }, [design.slug, page]);
+  }, [design.slug, page, readOnly]);
 
   // V, C, Esc and the mode buttons, as canvasStep decides; Edit is locked
   // while the agent works, and left when it starts. Entering Edit folds the
   // chat, and leaving it opens the chat again when that folded it.
-  const canvas = useRef<CanvasState>({ mode, box: box !== null, rail: railOpen });
-  canvas.current = { mode, box: box !== null, rail: railOpen };
+  const canvas = useRef<CanvasState>({ mode, box: box !== null, rail: railOpen, readOnly });
+  canvas.current = { mode, box: box !== null, rail: railOpen, readOnly };
   const workingRef = useRef(working);
   workingRef.current = working;
   const chat = useRef<ChatPanel>({ open: chatOpen, foldedForEdit: false });
@@ -227,7 +248,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
   // A key on the canvas or in its page, as editorStep decides: true when
   // the canvas took it.
   const onKeyAct = (k: KeyAct | null): boolean => {
-    const s = editorStep({ mode, selected, layers, copied: hasCopy(host, workspace, design.slug), locked: working }, k);
+    const s = editorStep({ mode, selected, layers, copied: hasCopy(host, workspace, design.slug), locked: working, readOnly }, k);
     if (!s) return false;
     switch (s.kind) {
       case "canvas":
@@ -384,10 +405,26 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
   const onPage = useMemo(() => commentsTab(comments, { tab: "open", page }, mids), [comments, page, mids]);
   const pagePins = page === null ? NO_PINS : onPage.shown;
 
+  // A snapshot picked in History: the canvas shows it read only, in View.
+  const pickSnapshot = (n: number) => {
+    setPreview((p) => previewStep(p, { kind: "pick", n }));
+    if (canvas.current.mode !== "view") step("view");
+    setBox(null);
+  };
+  const restore = (n: number) =>
+    void restoreSnapshot(host, workspace, design.slug, n).then(() => setPreview((p) => previewStep(p, { kind: "restored" })), errorToast);
+  const openHistory = () => {
+    if (railOpen && railTab === "history") return setRailOpen(false);
+    setRailTab("history");
+    setRailOpen(true);
+  };
+
   const onBarAction = (a: BarAction) => {
     if (a === "stop" && agent !== null) void stopAgent(host, agent).catch(errorToast);
     else if (a === "details") setDetails(true);
     else if (a === "dismiss") dismissUnsaved(host, workspace, design.slug);
+    else if (a === "back") setPreview((p) => previewStep(p, { kind: "back" }));
+    else if (a === "restore" && previewed) restore(previewed.n);
     else if (a === "fix") {
       const check = barProblems(page, problems);
       if (!check) return;
@@ -489,13 +526,15 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
             </button>
           </nav>
         </div>
-        <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3 ui-text-12">
+        <div className="flex h-10 shrink-0 items-center gap-1.5 border-b border-border px-3 ui-text-12">
           <ViewportMenu viewport={viewport} onPick={setViewport} onCustom={() => setCustom(true)} />
           <ZoomBar scale={scale} fitted={zoom === null} max={2} keys onZoom={setZoom} />
           {chip && <EditsChip text={chip} />}
-          <IconButton title="Undo (⌘Z)" className="ml-auto" disabled={!undoOpen({ locked: working, changes })} onClick={() => travel(true)}>
+          <IconButton title="Undo (⌘Z)" className="ml-auto" disabled={!undoOpen({ locked: working, changes, readOnly })} onClick={() => travel(true)}>
             <Undo2 size={14} />
           </IconButton>
+          {/* A snapshot previewed is View only, as the History board shows it: no switch. */}
+          {!readOnly && (
           <div role="group" aria-label="Canvas mode" className="flex h-7 items-center rounded-md border border-border-strong p-0.5">
             {(["view", "comment", "edit"] as const).map((m) => {
               const locked = m === "edit" && working;
@@ -506,7 +545,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
                   disabled={locked}
                   title={locked ? "Edit opens when Claude stops" : m === "comment" ? "Comment (C)" : m === "edit" ? "Edit (V)" : "View"}
                   onClick={() => step(m)}
-                  className={cx("flex h-full items-center gap-1.5 rounded px-2.5 disabled:text-faint", mode === m ? "bg-raised text-fg" : "text-muted hover:text-fg")}
+                  className={cx("flex h-full items-center gap-1.5 rounded px-2 disabled:text-faint", mode === m ? "bg-raised text-fg" : "text-muted hover:text-fg")}
                 >
                   {m === "comment" ? "Comment" : m === "edit" ? "Edit" : "View"}
                   {m === "comment" && <kbd className="font-mono ui-text-11 text-faint">C</kbd>}
@@ -515,6 +554,10 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
               );
             })}
           </div>
+          )}
+          <IconButton title="History" aria-pressed={railOpen && railTab === "history"} onClick={openHistory}>
+            <HistoryIcon size={14} />
+          </IconButton>
           <IconButton title="Right rail" aria-pressed={railOpen} onClick={() => setRailOpen((o) => !o)}>
             <PanelRight size={14} />
           </IconButton>
@@ -523,6 +566,11 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
         <div className="flex h-9 shrink-0 items-center gap-2 px-4 ui-text-12">
           {page === null ? (
             <span className="text-muted">Every page at the same viewport. Click a page to open it.</span>
+          ) : previewed ? (
+            <>
+              <span className="font-mono text-fg">{pageFile(page)}</span>
+              <span className="truncate text-faint">at {snapshotTime(previewed.time, Date.now())} · read only</span>
+            </>
           ) : mode === "edit" && selected && breadcrumb(layers, selected).length ? (
             <Breadcrumb path={breadcrumb(layers, selected)} hint={hintLine(mode, layers, dragging)} onSelect={select} />
           ) : (
@@ -538,7 +586,18 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
           className="flex min-h-0 flex-1 overflow-auto bg-bg [background-image:radial-gradient(var(--color-border)_1px,transparent_1px)] [background-size:16px_16px]"
         >
           {page === null ? (
-            <Overview host={host} workspace={workspace} design={design} viewport={viewport} counts={pageCounts(comments)} onOpen={setPicked} />
+            <Overview
+              host={host}
+              workspace={workspace}
+              design={design}
+              pages={previewed ? previewed.pages.map((name) => ({ name, label: null })) : design.pages}
+              snapshot={previewed?.n ?? null}
+              viewport={viewport}
+              counts={previewed ? {} : pageCounts(comments)}
+              onOpen={setPicked}
+            />
+          ) : previewed ? (
+            scale > 0 && <SnapshotFrame workspace={workspace} design={design} snapshot={previewed} page={page} viewport={viewport} scale={scale} />
           ) : scale > 0 && names.includes(page) ? (
             <PageFrame
               host={host}
@@ -580,14 +639,14 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
       </div>
       {railOpen && (
         <aside aria-label="Right rail" className="flex w-[300px] shrink-0 flex-col border-l border-border bg-panel">
-          <div role="tablist" className="flex h-[52px] shrink-0 items-end gap-4 border-b border-border px-4">
+          <div role="tablist" className="flex h-[52px] shrink-0 items-end gap-2 overflow-x-auto border-b border-border px-3">
             {RAIL_TABS.map(({ tab: t, label }) => (
               <button
                 key={t}
                 role="tab"
                 aria-selected={railTab === t}
                 onClick={() => setRailTab(t)}
-                className={cx("flex h-full items-center gap-1.5 border-b-2 ui-text-13", railTab === t ? "border-accent text-fg" : "border-transparent text-muted hover:text-fg")}
+                className={cx("flex h-full shrink-0 items-center gap-1 border-b-2 ui-text-12", railTab === t ? "border-accent text-fg" : "border-transparent text-muted hover:text-fg")}
               >
                 {label}
                 {t === "comments" && <span className="rounded bg-raised px-1 font-mono ui-text-11 text-muted">{onPage.open}</span>}
@@ -611,16 +670,18 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
               mid={selected}
               computed={(computed?.mid === selected && computed?.style) || {}}
               tokens={tokens}
-              locked={working}
+              locked={editLocked}
               onSet={(set) => {
                 if (selected) editShown({ kind: "restyle", mid: selected, set });
               }}
             />
+          ) : railTab === "history" ? (
+            <HistoryTab snapshots={snapshots} previewed={previewed?.n ?? null} locked={working} onPick={pickSnapshot} onBack={() => setPreview(null)} onRestore={restore} />
           ) : railTab === "palette" ? (
             kitError && !kit ? (
               <p className="px-4 py-6 text-center ui-text-12.5 text-faint">The design system's snippets could not be read: {kitError}</p>
             ) : (
-              <PaletteTab snippets={snippets} selected={selected} locked={working} onPick={pickSnippet} onDrag={dragSnippet} />
+              <PaletteTab snippets={snippets} selected={selected} locked={editLocked} onPick={pickSnippet} onDrag={dragSnippet} />
             )
           ) : (
           <CommentsTab
@@ -628,7 +689,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
             mids={mids}
             pages={names}
             sending={sending}
-            canSend={agent !== null}
+            rail={commentsRail({ agent: agent !== null, readOnly })}
             onSend={(p) => sendPins([p])}
             onSendAll={onSendAll}
             onResolve={(p) => void resolveComment(host, workspace, design.slug, p.n).catch(errorToast)}
@@ -813,14 +874,43 @@ function PageFrame({
   );
 }
 
-/** Overview: every page at the same viewport, each framed only near the screen. */
-function Overview({ host, workspace, design, viewport, counts, onOpen }: { host: string; workspace: string; design: Design; viewport: Size; counts: Record<string, number>; onOpen: (page: string) => void }) {
-  if (design.pages.length === 0) return <p className="m-auto ui-text-13 text-muted">No pages yet.</p>;
+/** Overview: every page at the same viewport, each framed only near the
+ *  screen: the design's, or (`snapshot`) a snapshot's. */
+function Overview({
+  host,
+  workspace,
+  design,
+  pages,
+  snapshot,
+  viewport,
+  counts,
+  onOpen,
+}: {
+  host: string;
+  workspace: string;
+  design: Design;
+  pages: { name: string; label: string | null }[];
+  snapshot: number | null;
+  viewport: Size;
+  counts: Record<string, number>;
+  onOpen: (page: string) => void;
+}) {
+  if (pages.length === 0) return <p className="m-auto ui-text-13 text-muted">No pages yet.</p>;
   return (
     <div className="grid w-full grid-cols-[repeat(auto-fill,minmax(280px,1fr))] content-start gap-6 p-8">
-      {design.pages.map((p) => (
-        <OverviewTile key={p.name} host={host} workspace={workspace} design={design} page={p.name} label={p.label} comments={counts[p.name] ?? 0} viewport={viewport} onOpen={() => onOpen(p.name)} />
+      {pages.map((p) => (
+        <OverviewTile key={p.name} host={host} workspace={workspace} design={design} page={p.name} label={p.label} snapshot={snapshot} comments={counts[p.name] ?? 0} viewport={viewport} onOpen={() => onOpen(p.name)} />
       ))}
+    </div>
+  );
+}
+
+/** A snapshot's page, read only (X65): framed without the bridge, so
+ *  nothing on it can be picked or edited, and outlined in the preview's blue. */
+function SnapshotFrame({ workspace, design, snapshot, page, viewport, scale }: { workspace: string; design: Design; snapshot: DesignSnapshot; page: string; viewport: Size; scale: number }) {
+  return (
+    <div className="relative m-auto shrink-0 rounded-md border-2 border-preview shadow-2xl">
+      <CardFrame key={`${snapshot.n}/${page}`} url={snapshotPageUrl(workspace, design.slug, snapshot.n, page)} title={`${pageFile(page)} at snapshot ${snapshot.n}`} viewport={viewport} scale={scale} interactive />
     </div>
   );
 }
@@ -831,6 +921,7 @@ function OverviewTile({
   design,
   page,
   label,
+  snapshot,
   comments,
   viewport,
   onOpen,
@@ -840,6 +931,8 @@ function OverviewTile({
   design: Design;
   page: string;
   label: string | null;
+  /** The snapshot it is of, or null for the design's own page. */
+  snapshot: number | null;
   comments: number;
   viewport: Size;
   onOpen: () => void;
@@ -860,7 +953,7 @@ function OverviewTile({
         )}
       </span>
       <div ref={ref} className="w-full overflow-hidden rounded-md border border-border-strong hover:border-accent">
-        {scale > 0 && <CardFrame url={pageUrl(workspace, design.slug, page, rev)} title={pageFile(page)} viewport={viewport} scale={scale} live={near} />}
+        {scale > 0 && <CardFrame url={snapshot === null ? pageUrl(workspace, design.slug, page, rev) : snapshotPageUrl(workspace, design.slug, snapshot, page)} title={pageFile(page)} viewport={viewport} scale={scale} live={near} />}
       </div>
     </button>
   );
@@ -871,9 +964,10 @@ const BAR_TONES: Record<Bar["tone"], { box: string; dot: string }> = {
   red: { box: "bg-error/[0.08]", dot: "bg-error" },
   yellow: { box: "bg-[rgba(242,201,76,0.10)]", dot: "bg-[#f2c94c]" },
   grey: { box: "bg-panel-2", dot: "bg-idle" },
+  blue: { box: "bg-preview/[0.12]", dot: "bg-preview" },
 };
 
-const BAR_ACTIONS: Record<BarAction, string> = { stop: "Stop", details: "Details", fix: "Ask the agent to fix", dismiss: "Dismiss" };
+const BAR_ACTIONS: Record<BarAction, string> = { stop: "Stop", details: "Details", fix: "Ask the agent to fix", dismiss: "Dismiss", back: "Back to current", restore: "Restore" };
 
 function BarView({ bar, onAct }: { bar: Bar; onAct: (a: BarAction) => void }) {
   const tone = BAR_TONES[bar.tone];
@@ -890,7 +984,7 @@ function BarView({ bar, onAct }: { bar: Bar; onAct: (a: BarAction) => void }) {
         )}
       </span>
       {bar.actions.map((a) => (
-        <Button key={a} size="sm" variant={a === "details" ? "ghost" : "subtle"} onClick={() => onAct(a)}>
+        <Button key={a} size="sm" variant={a === "details" || a === "back" ? "ghost" : "subtle"} onClick={() => onAct(a)}>
           {BAR_ACTIONS[a]}
         </Button>
       ))}

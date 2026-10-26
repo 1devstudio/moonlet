@@ -14,4 +14,9 @@ describe("a design page's file (X65)", () => {
     expect(pageOfPath("pages/git rows.html")).toBe("git rows");
     for (const other of [".git.html", "a\\b.html", "git.htm", ".html"]) expect(pageOfFile(other)).toBeNull();
   });
+
+  it("is never named with an @, as the daemon takes none: designs/<slug>@<n>/ is a snapshot's folder", () => {
+    expect(pageOfFile("git@2.html")).toBeNull();
+    expect(pageOfPath("pages/git@2.html")).toBeNull();
+  });
 });

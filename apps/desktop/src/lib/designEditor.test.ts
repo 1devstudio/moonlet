@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { askWithEdits, kitOf, loadKit, closeDesign, copyElementOf, hasCopy, dismissUnsaved, editPage, pasteInto, sendCommentsWithEdits, sendWithEdits, redoEdit, undoEdit, loadPageSource, pendingOf, resetEditor, startEditor, settleChecks, settleSaves, sourceOf, undoOf, unsavedOf, useEditor } from "./designEditor";
+import { askWithEdits, restoreSnapshot, kitOf, loadKit, closeDesign, copyElementOf, hasCopy, dismissUnsaved, editPage, pasteInto, sendCommentsWithEdits, sendWithEdits, redoEdit, undoEdit, loadPageSource, pendingOf, resetEditor, startEditor, settleChecks, settleSaves, sourceOf, undoOf, unsavedOf, useEditor } from "./designEditor";
 import { loadDesigns, pageRevOf, startDesign, useDesign } from "./designStore";
 import { editLines } from "./designEdits";
 import { useStore } from "./store";
@@ -83,6 +83,20 @@ describe("an edit by hand saved (X65)", () => {
     expect(pageRevOf(useDesign.getState(), "local", WS, SLUG, "index")).toBe(1);
     dismissUnsaved("local", WS, SLUG);
     expect(unsavedOf(useEditor.getState(), "local", WS, SLUG)).toBeNull();
+  });
+});
+
+describe("a save of edits by hand (X65)", () => {
+  it("says what the edits it carries did, for the snapshot the daemon takes once they stop, an undo as undone", async () => {
+    await loadPageSource("local", WS, SLUG, "index");
+    editPage("local", WS, SLUG, "index", { kind: "delete", mid: "m30" }, "m30");
+    // Made while the first save is on its way: the next save carries both.
+    editPage("local", WS, SLUG, "index", { kind: "text", mid: "m25", text: "Git & GitHub" }, "m25");
+    editPage("local", WS, SLUG, "index", { kind: "wrap", mid: "m25" }, "m25");
+    await settleSaves();
+    await undoEdit("local", WS, SLUG);
+    await settleSaves();
+    expect(calls.filter((c) => c.method === "design.write_page").map((c) => c.params.edits)).toEqual([["deleted p m30"], ["text of m25", "wrapped h2 m25"], ["undid wrapped h2 m25"]]);
   });
 });
 
@@ -217,6 +231,46 @@ describe("a page the editor saved, changed on disk (X65)", () => {
     await settleChecks();
     expect(sourceOf(useEditor.getState(), "local", WS, SLUG, "index")).toEqual(second);
     expect(rev()).toBe(before + 1);
+  });
+});
+
+describe("a page the editor has read, changed with a snapshot (X65)", () => {
+  const LISTED = [{ slug: SLUG, name: "Settings page", kind: "workspace", system: "moonlet-desktop", path: "", brief: "", viewport: "1440x900", pages: [{ name: "index", label: null }], updated_at: 0, open_comments: 0, agent: null, agent_state: null, needs_you: null, error: null }];
+  const changed = (paths: string[]) => events.emit({ host: "local", name: "design.changed", data: { workspace: WS, system: null, design: SLUG, paths } });
+
+  it("is read again when the agent's change comes with the snapshot its turn took, as for any other writer's", async () => {
+    answers["design.list"] = () => LISTED;
+    answers["design.check"] = () => [];
+    await startDesign();
+    startEditor();
+    await loadDesigns("local", WS);
+    await loadPageSource("local", WS, SLUG, "index");
+    const agents = '<!doctype html>\n<body data-mid="m1"><h2 data-mid="m25">Rows</h2></body>\n';
+    disk.index = { html: agents, version: "v9" };
+    changed(["history/2/pages/index.html", "history/2/snapshot.json", "pages/index.html"]);
+    await settleChecks();
+    expect(sourceOf(useEditor.getState(), "local", WS, SLUG, "index")).toEqual({ html: agents, version: "v9" });
+  });
+});
+
+describe("a restore of a snapshot (X65)", () => {
+  it("forgets the design's changes and its edits by hand not told yet, as the pages they were made on are gone, reads its pages again and loads them on the canvas", async () => {
+    await loadPageSource("local", WS, SLUG, "index");
+    editPage("local", WS, SLUG, "index", { kind: "delete", mid: "m30" }, "m30");
+    await settleSaves();
+    const restored = { n: 4, time: 5000, type: "restored", summary: "", from: { n: 2, time: 2000 }, pages: ["index"] };
+    answers["design.snapshot.restore"] = () => {
+      disk.index = { html: PAGE, version: "v7" };
+      return restored;
+    };
+    const rev = pageRevOf(useDesign.getState(), "local", WS, SLUG, "index");
+    expect(await restoreSnapshot("local", WS, SLUG, 2)).toEqual(restored);
+    expect(calls.filter((c) => c.method === "design.snapshot.restore").map((c) => c.params)).toEqual([{ workspace: WS, slug: SLUG, n: 2 }]);
+    const st = useEditor.getState();
+    expect(undoOf(st, "local", WS, SLUG).done).toEqual([]);
+    expect(pendingOf(st, "local", WS, SLUG)).toEqual([]);
+    expect(sourceOf(st, "local", WS, SLUG, "index")).toEqual({ html: PAGE, version: "v7" });
+    expect(pageRevOf(useDesign.getState(), "local", WS, SLUG, "index")).toBe(rev + 1);
   });
 });
 
