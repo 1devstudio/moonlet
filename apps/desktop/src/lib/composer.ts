@@ -71,7 +71,7 @@ export interface AttachFacts extends Picks {
  */
 export interface Attachment {
   /** `task`, `pr`, or a design's (X65 Build it): `page:<page>` and `styles`. */
-  id: string;
+  id: "task" | "pr" | "styles" | `page:${string}`;
   icon: "file" | "pr" | "page" | "styles";
   lead: string;
   summary: string;
@@ -138,7 +138,7 @@ export function firstMessage(sent: Attachment[], typed: string): string | null {
 }
 
 /** The prompt's placeholder, by what is attached (not by what is picked: a removed PR attachment says nothing). */
-export function placeholder(attached: string[]): string {
+export function placeholder(attached: Attachment["id"][]): string {
   const has = { task: attached.includes("task"), pr: attached.includes("pr") };
   if (has.task && has.pr) return "Anything to add? e.g. “Address the review comments”";
   if (has.task) return "Anything to add? Leave empty to start from the issue.";
@@ -146,9 +146,16 @@ export function placeholder(attached: string[]): string {
   return "What do you want to work on?";
 }
 
-/** The session's name: the task's title, else the PR's; null names it after the prompt (X5). */
-export function sessionName(f: Picks): string | null {
-  return f.task?.title ?? f.pr?.title ?? null;
+/** The session's name: the task's title, else the PR's, else Build it's
+ *  (X65); null names it after the prompt (X5). */
+export function sessionName(f: Picks & { build?: { name: string } | null }): string | null {
+  return f.task?.title ?? f.pr?.title ?? f.build?.name ?? null;
+}
+
+/** The new branch Create asks for: the task's (X44 template), else Build
+ *  it's (X65); null lets the daemon name it after the prompt. */
+export function newBranch(f: { taskBranch: string | null; build: { branch: string } | null }): string | null {
+  return f.taskBranch ?? f.build?.branch ?? null;
 }
 
 /** A branch by its first two parts: `web-279-remove-…` is `web-279-…`. */
