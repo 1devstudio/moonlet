@@ -117,6 +117,11 @@ async fn central() -> (Daemon, String) {
 /// A Mac with a fixed worker id, not linked yet. Its own "Tailscale
 /// address" is 127.0.0.2, so linking to 127.0.0.1 is not linking to itself.
 async fn mac(id: &str, name: &str) -> Daemon {
+    mac_with(id, name, &[]).await
+}
+
+/// [`mac`], with more of the daemon's environment.
+async fn mac_with(id: &str, name: &str, env: &[(&str, &str)]) -> Daemon {
     let home = tempfile::tempdir().unwrap();
     std::fs::write(
         home.path().join("link.json"),
@@ -124,7 +129,9 @@ async fn mac(id: &str, name: &str) -> Daemon {
             .to_string(),
     )
     .unwrap();
-    Daemon::start(home, &[("MOONLET_MOBILE_ADDRS", "127.0.0.2")]).await
+    let mut all = vec![("MOONLET_MOBILE_ADDRS", "127.0.0.2")];
+    all.extend_from_slice(env);
+    Daemon::start(home, &all).await
 }
 
 async fn pair(central: &Daemon, addr: &str, device: &str, kind: DeviceKind) -> String {
@@ -233,6 +240,103 @@ async fn changes_made_apart_meet_when_a_member_links_again() {
         )
         .await;
     }
+}
+
+#[tokio::test]
+async fn another_members_change_says_workspaces_changed_to_this_macs_app() {
+    let (mini, addr) = central().await;
+    let book = mac(BOOK, "Alex's MacBook Pro").await;
+    let air = mac(AIR, "Alex's MacBook Air").await;
+    link(&book, &mini, &addr, "Alex's MacBook Pro").await;
+    link(&air, &mini, &addr, "Alex's MacBook Air").await;
+    within(
+        Duration::from_secs(10),
+        "every Personal on the Air",
+        || async { air.names().await.len() == 3 },
+    )
+    .await;
+    let mut app = Client::connect(&air.socket, "moonlet-app").await.unwrap();
+    let books = book.workspaces().await[0].clone();
+    rename(&book, &books.id, "Home").await;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let frame = tokio::time::timeout_at(deadline.into(), app.next_frame())
+            .await
+            .expect("no workspaces.changed with Home")
+            .unwrap()
+            .unwrap();
+        if let Frame::Json(Message::Event { name, data }) = frame
+            && name == "workspaces.changed"
+            && data.as_array().unwrap().iter().any(|w| w["name"] == "Home")
+        {
+            break;
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_member_that_missed_a_change_has_it_at_its_next_exchange() {
+    let (mini, addr) = central().await;
+    let book = mac(BOOK, "Alex's MacBook Pro").await;
+    // The Air hears no account.changed, and exchanges every half second.
+    let air = mac_with(
+        AIR,
+        "Alex's MacBook Air",
+        &[
+            ("MOONLET_TEST_IGNORE_ACCOUNT_EVENTS", "1"),
+            ("MOONLET_ACCOUNT_RESYNC_MS", "500"),
+        ],
+    )
+    .await;
+    link(&book, &mini, &addr, "Alex's MacBook Pro").await;
+    link(&air, &mini, &addr, "Alex's MacBook Air").await;
+    within(
+        Duration::from_secs(10),
+        "every Personal on the Air",
+        || async { air.names().await.len() == 3 },
+    )
+    .await;
+    let books = book.workspaces().await[0].clone();
+    rename(&book, &books.id, "Home").await;
+    within(Duration::from_secs(3), "the rename on the Air", || async {
+        air.names().await.contains(&"Home".to_string())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_phone_never_hears_the_accounts_changes() {
+    use moonlet_proto::read_frame;
+    let (mini, addr) = central().await;
+    let book = mac(BOOK, "Alex's MacBook Pro").await;
+    let phone = pair(&mini, &addr, "iPhone", DeviceKind::Phone).await;
+    let mut s = raw(&addr, &phone, "moonlet-mobile").await;
+    link(&book, &mini, &addr, "Alex's MacBook Pro").await;
+    let books = book.workspaces().await[0].clone();
+    within(
+        Duration::from_secs(10),
+        "the MacBook's Personal on studio-mini",
+        || async { mini.workspaces().await.iter().any(|w| w.id == books.id) },
+    )
+    .await;
+    rename(&book, &books.id, "Home").await;
+    // The phone hears that the workspaces changed, never the changes.
+    let mut heard = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !heard
+        .iter()
+        .any(|(n, d): &(String, Value)| n == "workspaces.changed" && d.to_string().contains("Home"))
+    {
+        let Ok(frame) = tokio::time::timeout_at(deadline.into(), read_frame(&mut s)).await else {
+            break;
+        };
+        if let Some(Frame::Json(Message::Event { name, data })) = frame.unwrap() {
+            heard.push((name, data));
+        }
+    }
+    let names: Vec<&str> = heard.iter().map(|(n, _)| n.as_str()).collect();
+    assert!(names.contains(&"workspaces.changed"), "{names:?}");
+    assert!(!names.contains(&"account.changed"), "{names:?}");
 }
 
 /// A connection by hand: authenticated with `token`, hello as `client`.

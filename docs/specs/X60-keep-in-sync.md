@@ -157,6 +157,7 @@ This spec delivers ADR 0009's two live-copy slices ("one way, then both ways") t
 ### Disconnects and restarts
 
 - [x] While the link is down, the copy reads "Waiting for studio-mini. Changes made on this Mac sync when it is back." Both sides keep working on their own. (`while_the_link_is_down_the_copy_waits_and_then_catches_up`, `sync.test.ts` syncLine)
+- [x] A copy started while the link is up but this Mac not yet registered with its central host waits for the registration rather than failing; since X68 the link is open before any copy starts, so this can happen. (`a_copy_started_before_this_mac_is_registered_waits_for_it`)
 - [x] After this Mac's daemon restarts, and when the link is closed, every copy waits until it reaches its host again; none reads "In sync" or "Copying…" before then. (`a_copy_not_made_yet_waits_after_a_restart_while_its_host_is_away`, `a_copy_never_reads_in_sync_once_its_link_is_closed`)
 - [x] When the link is back, both sides send what changed since the base, and the central host reconciles them as above. No edit made on either side while the link was down is lost. (`edits_on_both_sides_while_the_link_is_down_reach_both_sides`, `a_file_both_sides_change_differs_until_one_version_is_kept`)
 - [x] The base, the copy list and each copy's differing paths are saved on both sides. After a restart of either daemon, syncing resumes from the saved base. (`a_restarted_worker_resumes_its_copy`, `while_the_link_is_down_the_copy_waits_and_then_catches_up`, `a_live_upgrade_of_the_central_host_loses_no_edit`)
