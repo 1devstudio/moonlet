@@ -104,4 +104,4 @@ Each feature of moonlet has its own spec in this directory. Write the spec befor
 | X64 | Design systems from a project's code (design-sync's layout in static HTML: README, styles.css, tokens, foundations, cards, layouts; render check and grading; hash-anchored sync) | P1 | 4 | draft | [X64-design-systems.md](X64-design-systems.md) |
 | X65 | Design mode: workspace and session designs beside a live canvas, comments to the chat, a visual editor, snapshots, Build it, design → spec → PR | P1 | 4 | draft | [X65-design-mode.md](X65-design-mode.md) |
 | X66 | Task comments (read and post a tracker issue's comments in the Task detail and Task tab) | P1 | 3 | implemented (Linear and ClickUp untried on a real account) | [X66-task-comments.md](X66-task-comments.md) |
-| X67 | Google Cloud workers: a Compute Engine adapter for cloud machines | P1 | 4 | draft | [X67-google-cloud-workers.md](X67-google-cloud-workers.md) |
+| X67 | Google Cloud workers: a Compute Engine adapter for cloud machines | P1 | 4 | implemented (untried with a real Google Cloud project; provisional API captures) | [X67-google-cloud-workers.md](X67-google-cloud-workers.md) |
