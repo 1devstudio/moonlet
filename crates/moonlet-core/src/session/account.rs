@@ -174,6 +174,11 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Whether this member shares an account (X68).
+    pub fn has_account(&self) -> bool {
+        self.account.lock().unwrap().is_some()
+    }
+
     /// Called with every change this member makes, to send it on.
     pub fn on_account_change(&self, f: impl Fn(Vec<Change>) + Send + Sync + 'static) {
         if let Some(a) = self.account.lock().unwrap().as_mut() {
