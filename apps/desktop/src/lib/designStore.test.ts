@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Design, DesignComment, DesignSystem, TerminalInfo } from "./protocol";
 import { modeOf, setMode } from "./mode";
 import { agentOnScreen, goToAgent, useStore } from "./store";
-import { designCanvasKey, pageKey, pageOfKey, commentsOf, historyOf, keepComment, loadComments, loadHistory, sendComments, sendingOf, resolveComment, sessionDesignsOf, shownSessionDesign, showSessionDesign, unseenOf, updateSystem, justOpened, tookOpened, pickDesignTab, kitRevOf } from "./designStore";
+import { designCanvasKey, pageKey, pageOfKey, commentsOf, historyOf, keepComment, loadComments, loadHistory, sendComments, sendingOf, resolveComment, sessionDesignsOf, shownSessionDesign, showSessionDesign, unseenOf, updateSystem, justOpened, tookOpened, pickDesignTab, kitRevOf, builtRevOf } from "./designStore";
 import { cardsOf, checkDesign, createFromNewDesign, createSystem, designsOf, detectStack, latestOf, loadCards, loadDesigns, loadSystems, openCard, saveViewport, pageRevOf, problemsOf, revOf, shownCard, shownDesign, shownSystem, showDesign, showSystem, startDesign, systemNameOf, systemsOf, useDesign } from "./designStore";
 
 const calls = vi.hoisted(() => [] as { host: string; method: string; params: unknown }[]);
@@ -724,6 +724,16 @@ describe("a session design's state (X65)", () => {
     sessionChanged(["system/styles.css"]);
     sessionChanged(["assets/logo.svg"]);
     expect(["index", "git-a"].map((p) => pageRevOf(useDesign.getState(), "local", S, "settings-page", p))).toEqual([2, 2]);
+  });
+
+  it("looks for its built screenshots again when its session's design.changed names its built/ folder, and only then", async () => {
+    answers["design.check"] = () => [];
+    expect(builtRevOf(useDesign.getState(), "local", S, "settings-page")).toBe(0);
+    sessionChanged(["built/index.png"]);
+    expect(builtRevOf(useDesign.getState(), "local", S, "settings-page")).toBe(1);
+    sessionChanged(["pages/index.html", "comments.json"]);
+    expect(builtRevOf(useDesign.getState(), "local", S, "settings-page")).toBe(1);
+    expect(builtRevOf(useDesign.getState(), "local", "w-1devstudio", "settings-page")).toBe(0);
   });
 
   it("is listed with its session's designs, never with Design mode's workspace designs", async () => {

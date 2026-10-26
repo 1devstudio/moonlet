@@ -22,6 +22,12 @@ export function parseViewport(text: string | undefined): Size | null {
   return rest.length || h === undefined ? null : sizeOf(w, h);
 }
 
+/** The viewport a design was last shown at, else Desktop: a design from
+ *  an older daemon has none. */
+export function viewportOf(d: { viewport?: string }): Size {
+  return parseViewport(d.viewport) ?? VIEWPORTS[0].size;
+}
+
 /** A width and a height as typed, each whole px above 0, or null. */
 export function sizeOf(width: string, height: string): Size | null {
   const px = (n: string) => (/^\d+$/.test(n) && Number(n) > 0 ? Number(n) : null);

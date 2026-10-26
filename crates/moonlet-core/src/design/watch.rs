@@ -476,6 +476,7 @@ mod tests {
             "docs/design/settings-page/pages/index.html",
             ".moonlet/design/settings-page/comments.json",
             ".moonlet/design/settings-page/history/3/snapshot.json",
+            ".moonlet/design/settings-page/built/index.png",
             ".moonlet/design/.gitignore",
             "docs/design/onboarding",
             "docs/design/README.md",
@@ -497,6 +498,7 @@ mod tests {
                 change(
                     "settings-page",
                     &[
+                        "built/index.png",
                         "comments.json",
                         "history/3/snapshot.json",
                         "pages/index.html"

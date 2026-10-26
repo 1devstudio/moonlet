@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DesignCard, DesignSystem } from "./protocol";
-import { cardGroups, cardUrl, pageUrl, snapshotPageUrl, changedBanner, fitScale, fixMessage, fixState, headerLine, listedCards, problemsLabel, rendersHere, statusLine, variantsLabel, visibleCards, zoomStep } from "./designView";
+import { cardGroups, cardUrl, pageUrl, snapshotPageUrl, changedBanner, fitScale, fixMessage, fixState, headerLine, listedCards, problemsLabel, rendersHere, statusLine, variantsLabel, visibleCards, zoomStep, projectPageUrl } from "./designView";
 
 const NOW = 1_761_200_000_000;
 const DAY = 86_400_000;
@@ -272,5 +272,11 @@ describe("a card (X64, X65)", () => {
     expect(fixMessage(c)).toBe(
       "Fix the check problems of components/custom/session-row/session-row.html, then run the check again:\n- line 14: var(--color-selected-2) is not in tokens.css\n- line 20: https://example.com/a.png is outside the design system",
     );
+  });
+});
+
+describe("a project design's page (X65)", () => {
+  it("is read from its project's base branch on a host of its own, its page's key, an s and its design folder's, and never with the bridge", () => {
+    expect(projectPageUrl("p1a2b3c4d5e6", "checkout-flow", "index")).toBe("moonlet-design://bed26365685ad797s5e582e3821d83054.p-p1a2b3c4d5e6/checkout-flow/pages/index.html");
   });
 });

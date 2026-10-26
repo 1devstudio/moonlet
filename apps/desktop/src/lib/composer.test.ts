@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { attachments, branchRow, firstMessage, linkMenu, pickerBranches, pickerHint, pickerSearch, placeholder, sessionName, showsLinkSlot, suggestedTask } from "./composer";
+import { afterCreate, attachments, branchRow, firstMessage, linkMenu, pickerBranches, pickerHint, pickerSearch, newBranch, placeholder, sessionName, showsLinkSlot, suggestedTask } from "./composer";
 import type { Task } from "./tasks";
 
 const facts = { base: "main", task: null, taskBranch: null, from: null, worktree: null, pr: null, checkbox: false };
@@ -29,6 +29,11 @@ describe("branchRow (X54)", () => {
   it("says × on an existing branch goes back to the task's branch when there is a task", () => {
     expect(branchRow({ ...facts, task: aio, taskBranch: "aio-279-x", from: { ref: "feature/login", existing: true } })).toEqual({ kind: "branch", name: "feature/login", detail: "existing branch", clear: "Back to aio-279-x from main" });
     expect(branchRow({ ...facts, task: aio, from: { ref: "feature/login", existing: true } })).toMatchObject({ clear: "Back to the task's branch from main" });
+  });
+
+  it("names the branch Build it gives a design's session, from the base (X65)", () => {
+    expect(branchRow({ ...facts, named: "marcin/implement-settings-page" })).toEqual({ kind: "branch", name: "marcin/implement-settings-page", detail: "from main", clear: null });
+    expect(branchRow({ ...facts, named: "marcin/implement-settings-page", from: { ref: "v2.1", existing: false } })).toEqual({ kind: "branch", name: "marcin/implement-settings-page", detail: "from v2.1", clear: "Start from main instead" });
   });
 
   it("keeps an adopted worktree's branch, with no way out", () => {
@@ -147,6 +152,33 @@ describe("placeholder (X54)", () => {
     // "Don’t send the PR description": the PR stays picked, nothing of it is attached.
     const sent = attachments({ task: aioTask, pr: null, prContext: null });
     expect(placeholder(sent.map((a) => a.id))).toBe("Anything to add? Leave empty to start from the issue.");
+  });
+});
+
+describe("sessionName (X65 Build it)", () => {
+  it("is Build it's name for a design's session, after a task's or a PR's title", () => {
+    expect(sessionName({ task: null, pr: null, build: { name: "implement-settings-page" } })).toBe("implement-settings-page");
+    expect(sessionName({ task: null, pr: null, build: null })).toBeNull();
+  });
+});
+
+describe("newBranch (X65 Build it)", () => {
+  it("is the task's branch, else Build it's, else none: the daemon names it after the prompt", () => {
+    expect(newBranch({ taskBranch: "aio-279-x", build: { branch: "moonlet/implement-settings-page" } })).toBe("aio-279-x");
+    expect(newBranch({ taskBranch: null, build: { branch: "moonlet/implement-settings-page" } })).toBe("moonlet/implement-settings-page");
+    expect(newBranch({ taskBranch: null, build: null })).toBeNull();
+  });
+});
+
+describe("afterCreate (X65 Build it)", () => {
+  const box = (value: boolean | null) => ({ shown: true, value, touched: true });
+  it("keeps or declines the session's sync as the Keep in sync checkbox says, for Build it's session too", () => {
+    expect(afterCreate({ building: true, box: box(true) })).toEqual({ sync: "keep", designs: true, select: false });
+    expect(afterCreate({ building: true, box: box(false) })).toEqual({ sync: "decline", designs: true, select: false });
+    expect(afterCreate({ building: false, box: box(true) })).toEqual({ sync: "keep", designs: false, select: true });
+    // No checkbox, or the project's choice not known: nothing is said.
+    expect(afterCreate({ building: true, box: { shown: false, value: true, touched: false } })).toEqual({ sync: null, designs: true, select: false });
+    expect(afterCreate({ building: true, box: box(null) })).toEqual({ sync: null, designs: true, select: false });
   });
 });
 

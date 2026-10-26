@@ -43,6 +43,7 @@ import { avatarUrl } from "./projectAvatar";
 import type { Archiving } from "./archiveLoader";
 import type { PendingConfirm } from "./confirm";
 import type { TaskStart } from "./tasks";
+import type { BuildDesign } from "./buildIt";
 import { spawnedNotices } from "./spawned";
 import { currentWorkspace, isShown, sessionToRestore, switcherRows, wsKey, type HostWorkspaces, type WorkspaceRef } from "./workspaces";
 import { focusThrottle, latestPerKey, needsPrPoll } from "./prPoll";
@@ -240,6 +241,8 @@ interface State extends UiPersist {
         task?: TaskStart;
         /** Adopting a worktree without a session, with its branch (X46). */
         worktree?: { path: string; branch: string };
+        /** Building a workspace design (X65 Build it). */
+        design?: BuildDesign;
       }
     /** `clone`: the `<host>/<id>` of the clone the dialog shows (X59). */
     | { kind: "add-project"; host?: string; section?: string; clone?: string }

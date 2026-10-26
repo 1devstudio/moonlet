@@ -36,6 +36,11 @@ pub const SIDE_DIR: &str = ".moonlet/design";
 /// pages and in its folder under [`SIDE_DIR`].
 const SYSTEM_DIR: &str = "system";
 
+/// Where the agent saves a screenshot of each built screen after
+/// implementing a session design, `<page>.png`, in its folder under
+/// [`SIDE_DIR`] (X65), for the PR's Design and build.
+pub const BUILT_DIR: &str = "built";
+
 impl Store {
     /// Makes a session design named `name` on the workspace's design system
     /// `system` in the worktree's design folder `folder`, and returns it:
@@ -422,7 +427,8 @@ pub fn session_design(
 /// `<slug>@<n>/pages/…` or `assets/…`, kept in
 /// `.moonlet/design/<slug>/history/<n>/`, at the design's own depth, so its
 /// `../system/styles.css` (`<slug>@<n>/system/…`) is the design's pinned
-/// copy, as its pages' is. No part is empty, `.` or `..`, and the slug's
+/// copy, as its pages' is; and `<slug>@built/<page>.png`, the screenshot of
+/// a page's built screen in `.moonlet/design/<slug>/built/`. No part is empty, `.` or `..`, and the slug's
 /// folder is a design's, with a `design.toml` of its own. The folder the
 /// file is in (the design's, or the snapshot's) is reached from the
 /// worktree through folders of its own, never a link, so it is inside the
@@ -445,10 +451,11 @@ pub fn session_file(worktree: &Path, folder: &str, rel: &str) -> Result<Vec<u8>>
     {
         return Err(no_file());
     }
-    let (slug, snapshot) = match first.split_once('@') {
-        Some((slug, n)) if super::history::is_number(n) => (slug, Some(n)),
+    let (slug, beside) = match first.split_once('@') {
+        Some((slug, BUILT_DIR)) => (slug, Beside::Built),
+        Some((slug, n)) if super::history::is_number(n) => (slug, Beside::Snapshot(n)),
         Some(_) => return Err(no_file()),
-        None => (*first, None),
+        None => (*first, Beside::Design),
     };
     super::place::check_slug(slug).map_err(|_| no_file())?;
     let design = Path::new(folder).join(slug);
@@ -459,12 +466,20 @@ pub fn session_file(worktree: &Path, folder: &str, rel: &str) -> Result<Vec<u8>>
     {
         return Err(no_file());
     }
-    let base = match (snapshot, rest[0]) {
-        (None, _) | (Some(_), "system") => design,
-        (Some(n), "pages" | "assets") => Path::new(SIDE_DIR)
+    let base = match (beside, rest) {
+        (Beside::Design, _) | (Beside::Snapshot(_), ["system", ..]) => design,
+        (Beside::Snapshot(n), ["pages" | "assets", ..]) => Path::new(SIDE_DIR)
             .join(slug)
             .join(super::history::HISTORY_DIR)
             .join(n),
+        // Only a page's screenshot, right in the folder.
+        (Beside::Built, [png])
+            if png
+                .strip_suffix(".png")
+                .is_some_and(super::pages::is_page_name) =>
+        {
+            Path::new(SIDE_DIR).join(slug).join(BUILT_DIR)
+        }
         _ => return Err(no_file()),
     };
     // The folder reached with no link on the way from the worktree, and the
@@ -480,6 +495,15 @@ pub fn session_file(worktree: &Path, folder: &str, rel: &str) -> Result<Vec<u8>>
 /// none, and is a project design only.
 pub(super) fn made_here(worktree: &Path, slug: &str) -> bool {
     fsx::is_dir_inside(worktree, &Path::new(SIDE_DIR).join(slug)).unwrap_or(false)
+}
+
+/// Which folder a path of [`session_file`] names by its first part: the
+/// design's own (`<slug>`), a snapshot's (`<slug>@<n>`) or the built
+/// screenshots' (`<slug>@built`).
+enum Beside<'a> {
+    Design,
+    Snapshot(&'a str),
+    Built,
 }
 
 /// A session design's address: `<folder>/<slug>/` in the worktree, its
@@ -1323,6 +1347,48 @@ label = \"cards\"
         );
         // The link, there now, is never followed.
         assert!(session_file(&wt, "docs/design", "settings-page/pages/index.html").is_err());
+    }
+
+    #[test]
+    fn a_session_designs_built_screenshots_are_served_from_its_moonlet_folder_and_nothing_else_there()
+     {
+        let (_home, store) = store_with_synced_system();
+        let worktree = tempfile::tempdir().unwrap();
+        let wt = worktree.path().canonicalize().unwrap();
+        store
+            .create_session_design(
+                "w1",
+                "moonlet-desktop",
+                "s1",
+                &wt,
+                "docs/design",
+                "Settings page",
+                "",
+                1,
+            )
+            .unwrap();
+        let built = wt.join(".moonlet/design/settings-page/built");
+        std::fs::create_dir_all(built.join("old")).unwrap();
+        std::fs::write(built.join("index.png"), b"\x89PNG").unwrap();
+        std::fs::write(built.join("old/index.png"), b"\x89PNG").unwrap();
+        let file = |rel: &str| session_file(&wt, "docs/design", rel);
+        assert_eq!(file("settings-page@built/index.png").unwrap(), b"\x89PNG");
+        for bad in [
+            "settings-page@built/git-a.png",
+            "settings-page@built/old/index.png",
+            "settings-page@built/../comments.json",
+            "settings-page@built/index.html",
+            "settings-page@built",
+            "nope@built/index.png",
+        ] {
+            assert!(file(bad).is_err(), "{bad}");
+        }
+        // The folder the agent saves them in, made a link, serves nothing.
+        std::fs::remove_dir_all(&built).unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("index.png"), b"\x89PNG").unwrap();
+        std::os::unix::fs::symlink(outside.path(), &built).unwrap();
+        assert!(file("settings-page@built/index.png").is_err());
     }
 
     #[test]
