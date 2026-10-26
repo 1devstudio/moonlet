@@ -507,23 +507,30 @@ impl SessionManager {
         let mut st = self.state.lock().unwrap();
         let mut next = st.clone();
         let out = f(&mut next)?;
-        // The account's changes are saved first: a state saved without
-        // them would never reach the other members.
         let mut account = self.account.lock().unwrap();
-        let recorded = match account.as_ref() {
-            Some(a) => Some(a.record(&st, &next)?),
+        let staged = match account.as_ref() {
+            Some(a) => Some(a.stage(&st, &next)?),
             None => None,
         };
-        self.save(&next)?;
+        // The state as every member lays the account onto theirs, so that
+        // a project added here leaves `missing`, and repairs match (X68).
+        if let Some(s) = staged.as_ref().filter(|s| !s.changes.is_empty()) {
+            account::lay_onto(&mut next, s.log());
+        }
+        if let Err(e) = self.save(&next) {
+            if let Some(s) = staged {
+                s.discard();
+            }
+            return Err(e);
+        }
         *st = next;
-        let changes = recorded.and_then(|(log, changes)| {
-            let a = account.as_mut()?;
-            a.log = log;
-            Some(changes)
-        });
+        let changes = match (account.as_mut(), staged) {
+            (Some(a), Some(s)) => a.commit(s),
+            _ => Vec::new(),
+        };
         drop(account);
         drop(st);
-        if let Some(changes) = changes.filter(|c| !c.is_empty()) {
+        if !changes.is_empty() {
             self.account_changed(changes);
         }
         Ok(out)
@@ -743,6 +750,12 @@ impl SessionManager {
                 Some(other) => {
                     let o = st.sections.iter_mut().find(|s| s.id == other).unwrap();
                     o.project_ids.extend(held_only_here);
+                    // Those other members have but this one lacks, too (X68).
+                    for m in &sec.missing {
+                        if !o.missing.contains(m) {
+                            o.missing.push(m.clone());
+                        }
+                    }
                 }
                 None if held_only_here.iter().any(|p| st.has_live_sessions(&ws, p)) => {
                     bail!("archive the sessions of this section's projects first")
