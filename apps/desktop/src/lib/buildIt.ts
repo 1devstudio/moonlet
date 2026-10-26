@@ -4,7 +4,7 @@
 // contract, and the session made with `session.create {…, design}`.
 
 import type { Attachment } from "./composer";
-import { pageFile, pagePath } from "./designPage";
+import { linePage, pageFile } from "./designPage";
 
 /** The workspace design Build it starts a session from. */
 export interface BuildDesign {
@@ -65,7 +65,7 @@ export function designAttachments(d: Pick<BuildDesign, "slug" | "name" | "pages"
     .filter((p) => !at.left.includes(p.name))
     .map((p): Attachment => {
       const summary = p.label ? `${d.name}, ${p.label}` : d.name;
-      const line = `${folder}/${pagePath(p.name)} · ${summary}`;
+      const line = `${linePage(p.name, folder)} · ${summary}`;
       return { id: `page:${p.name}`, icon: "page", file: pageFile(p.name), lead: "", summary, body: line, remove: `Leave ${pageFile(p.name)} out of the copy and the message`, message: line, page: p.name };
     });
   const summary = `${at.systemName} styles`;

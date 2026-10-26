@@ -3,6 +3,7 @@
 
 import { pageFile, pageOfPath, pagePath } from "./designPage";
 import type { DesignSystemUpdated } from "./protocol";
+import { sideFolder } from "./designPlace";
 
 /** One problem of `design.check` for a design. */
 export interface PageProblem {
@@ -111,7 +112,7 @@ export function pageFixMessage(page: string, problems: PageProblem[]): string {
  *  design system are replaced (`design.system.update`, X65): the cards
  *  that changed since its copy, by path, each new, changed or removed. */
 export function systemUpdateMessage(slug: string, system: string, cards: DesignSystemUpdated["cards"]): string {
-  const head = `The design system ${system} was updated for the design ${slug}: its copy in .moonlet/design/${slug}/system/ and the pinned styles are the synced ones now.`;
+  const head = `The design system ${system} was updated for the design ${slug}: its copy in ${sideFolder(slug)}/system/ and the pinned styles are the synced ones now.`;
   if (!cards.length) return `${head} No card changed, only its styles.`;
   const lines = cards.map((c) => `- ${c.path} (${c.change})`).join("\n");
   return `${head} Cards that changed:\n${lines}\nRead those cards again and update the pages that use them, then run the check.`;
