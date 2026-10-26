@@ -28,6 +28,12 @@ const DEFAULT_SECTION_ID: &str = "default-section";
 
 type Listener = Arc<dyn Fn(Vec<Change>) + Send + Sync>;
 
+/// How far ahead of this machine's clock a change may be stamped. One
+/// further ahead would win every field from then on and pull every
+/// member's clock forward with it, so it is refused, and stays with its
+/// member until its clock is right.
+const AHEAD_MS: u64 = 24 * 60 * 60 * 1000;
+
 pub(super) struct Account {
     log: Log,
     path: PathBuf,
@@ -220,6 +226,11 @@ impl SessionManager {
     /// Takes in changes from other members, and shows what they change.
     /// Returns those it had not seen and kept: the ones to pass on.
     pub fn apply_account(&self, changes: Vec<Change>) -> Vec<Change> {
+        let limit = now_ms() + AHEAD_MS;
+        let (changes, ahead): (Vec<Change>, Vec<Change>) = changes.into_iter().partition(|c| c.stamp.ms <= limit);
+        if let Some(c) = ahead.first() {
+            tracing::warn!(member = %c.stamp.member, "refused {} account changes stamped more than a day ahead", ahead.len());
+        }
         let (taken, changed) = {
             let mut st = self.state.lock().unwrap();
             let mut account = self.account.lock().unwrap();
@@ -1146,6 +1157,36 @@ mod tests {
         assert_eq!(names(&book), ["Home", "Personal"]);
         assert_eq!(layout(&book), layout(&mini));
         assert_eq!((logs(&book), logs(&mini)), (2, 2));
+    }
+
+    #[tokio::test]
+    async fn a_change_stamped_more_than_a_day_ahead_is_refused() {
+        use moonlet_proto::types::{ChangeOp, Stamp};
+        let (_h1, book) = member("book").await;
+        let w = book.list_workspaces()[0].clone();
+        let at = |ms: u64, seq: u64, name: &str| Change {
+            stamp: Stamp {
+                ms,
+                n: 0,
+                member: "mini.a1b2c3".into(),
+            },
+            seq,
+            kind: "workspace".into(),
+            id: w.id.clone(),
+            op: ChangeOp::Set {
+                field: "name".into(),
+                value: serde_json::json!(name),
+            },
+        };
+        let day = 24 * 60 * 60 * 1000;
+        // A clock two days fast would win every field from now on, and drag
+        // every member's clock with it.
+        book.apply_account(vec![at(now_ms() + 2 * day, 1, "From the future")]);
+        assert_eq!(book.list_workspaces()[0].name, "Personal");
+        assert!(!book.account_version().contains_key("mini.a1b2c3"));
+        // An hour fast is a clock that drifted, and is taken.
+        book.apply_account(vec![at(now_ms() + 60 * 60 * 1000, 1, "Home")]);
+        assert_eq!(book.list_workspaces()[0].name, "Home");
     }
 
     #[tokio::test]
