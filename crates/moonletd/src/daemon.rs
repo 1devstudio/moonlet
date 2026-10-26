@@ -1062,14 +1062,20 @@ impl Daemon {
             }
             m::WORKER_LIST => ok(self.workers.list()),
             m::ACCOUNT_SYNC => {
-                // Only a linked Mac's daemon, over the tailnet with a paired
-                // device's token: never a phone, nor an agent's CLI (X68).
-                // Cloud machines never get here (`CLOUD_METHODS`).
-                let Some(device) = conn.phone.as_deref().filter(|_| conn.client == crate::link::WORKER_CLIENT) else {
-                    return Err(RpcError::new("forbidden", "only a member of the account syncs it"));
-                };
-                if !self.mobile.is_paired(device) {
-                    return Err(RpcError::new("forbidden", "this Mac is no longer paired"));
+                // Only a linked Mac's daemon: a paired Mac's connection that
+                // registered as a worker, never a phone, nor an agent's CLI,
+                // whatever client name they give (X68). Cloud machines never
+                // get here (`CLOUD_METHODS`).
+                let refused = || RpcError::new("forbidden", "only a member of the account syncs it");
+                let device = conn.phone.as_deref().ok_or_else(refused)?;
+                let mac = self
+                    .mobile
+                    .status()
+                    .devices
+                    .iter()
+                    .any(|d| d.id == device && d.kind == m::DeviceKind::Desktop);
+                if !mac || self.workers.worker_on(conn.id).is_none() {
+                    return Err(refused());
                 }
                 if !self.sessions.has_account() {
                     return Err(RpcError::new("no_account", "this host shares no account"));
