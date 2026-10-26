@@ -178,7 +178,7 @@ A design system belongs to a moonlet workspace, so every project and design in t
   - a missing `styles.css`
   - a missing or malformed `@dsCard` line: it must be the whole first line, `group="…"` first, then only `name="value"` pairs
   - a `var(--x)` that no file in the `styles.css` closure defines
-  - an `@import`, `<link>`, `src` or CSS `url()` (fonts included) that names no file; every `@import` and `url()` of a line is checked
+  - an `@import`, `<link>`, `src` or CSS `url()` (fonts included) that names no file; every `@import` and `url()` of a line is checked, an `@import` also when its quote or `url(` follows it with no space (`@import"kit.css";`, as minifiers write it) (`design/check.rs` an_import_with_no_space_before_its_url_is_checked)
   - an `@import` of a proposal (`<name>.proposed.css`): it is not live until settled, and the styles closure does not follow it (`design/check.rs` a_proposal_waiting_to_be_settled_is_not_live_and_importing_it_is_reported)
   - a font family used first in a stack with no `@font-face`, also when the declaration spans lines
   - a URL outside the design system: any scheme but `data:`, `mailto:` and `tel:`, an absolute path, a relative path whose `..` climbs out of the folder (even when the file exists), or a symlink that points out of it. Folders that are symlinks are never entered.

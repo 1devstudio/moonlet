@@ -166,26 +166,7 @@ impl Store {
         if name.is_empty() {
             bail!("a design system needs a name");
         }
-        // `create_dir` fails when the folder exists, even when another request
-        // made it a moment ago, so two creations never share a slug.
-        let mut n = 1;
-        let (name_n, slug) = loop {
-            let name_n = if n == 1 {
-                name.to_string()
-            } else {
-                format!("{name} {n}")
-            };
-            let slug = slug(&name_n);
-            match std::fs::create_dir(systems.join(&slug)) {
-                Ok(()) => break (name_n, slug),
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => n += 1,
-                Err(e) => {
-                    return Err(e).with_context(|| {
-                        format!("cannot create {}", systems.join(&slug).display())
-                    });
-                }
-            }
-        };
+        let (name_n, slug) = create_numbered(&systems, name, "design-system")?;
         let config = SystemConfig {
             name: name_n,
             created_at: now,
@@ -289,6 +270,16 @@ impl Store {
         read_config(&self.system_dir(workspace, slug)?)
     }
 
+    /// A design system's `README.md`, empty before its first check wrote one.
+    /// Read inside its folder: a link the agent left out of it is refused.
+    pub fn readme(&self, workspace: &str, slug: &str) -> Result<String> {
+        let dir = self.system_dir(workspace, slug)?;
+        if std::fs::symlink_metadata(dir.join("README.md")).is_err() {
+            return Ok(String::new());
+        }
+        fsx::read_inside(&dir, &dir.join("README.md"))
+    }
+
     /// Deletes a design system. Designs that use it keep their pages.
     pub fn remove_system(&self, workspace: &str, slug: &str) -> Result<()> {
         let dir = self.system_dir(workspace, slug)?;
@@ -302,12 +293,7 @@ impl Store {
 
     /// What moonlet trusts about a system (see [`Record`]).
     pub fn record(&self, workspace: &str, slug: &str) -> Result<Record> {
-        let path = self.record_path(workspace, slug)?;
-        match std::fs::read_to_string(&path) {
-            Ok(text) => Ok(toml::from_str(&text)?),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Record::default()),
-            Err(e) => Err(e).with_context(|| format!("cannot read {}", path.display())),
-        }
+        read_record(&self.record_path(workspace, slug)?)
     }
 
     /// A new file renamed over the old record: a write cut short leaves the
@@ -344,6 +330,15 @@ impl Store {
         let mut record = self.record(workspace, slug)?;
         record.agent = Some(terminal);
         record.agent_launch = Some(launch.to_string());
+        self.write_record(workspace, slug, &record)
+    }
+
+    /// Forgets the system's sync agent: one whose start failed.
+    pub fn clear_agent(&self, workspace: &str, slug: &str) -> Result<()> {
+        self.system_dir(workspace, slug)?;
+        let mut record = self.record(workspace, slug)?;
+        record.agent = None;
+        record.agent_launch = None;
         self.write_record(workspace, slug, &record)
     }
 
@@ -669,7 +664,7 @@ impl Store {
 
     /// `~/.moonlet/design/<workspace>`, refusing an id that is not one folder
     /// name, and a folder that is a link (it would take writes elsewhere).
-    fn workspace(&self, workspace: &str) -> Result<PathBuf> {
+    pub(super) fn workspace(&self, workspace: &str) -> Result<PathBuf> {
         if !is_name(workspace) {
             bail!("bad workspace id \"{workspace}\"");
         }
@@ -682,10 +677,16 @@ impl Store {
     /// `<workspace>/systems`, never through a link; with `create`, made
     /// (with the workspace's folder) when missing.
     fn systems_dir(&self, workspace: &str, create: bool) -> Result<PathBuf> {
+        self.kind_dir(workspace, "systems", create)
+    }
+
+    /// `<workspace>/<kind>` (`systems` or `designs`), never through a link;
+    /// with `create`, made (with the workspace's folder) when missing.
+    pub(super) fn kind_dir(&self, workspace: &str, kind: &str, create: bool) -> Result<PathBuf> {
         let ws = self.workspace(workspace)?;
-        let systems = ws.join("systems");
+        let folder = ws.join(kind);
         if create {
-            for dir in [&ws, &systems] {
+            for dir in [&ws, &folder] {
                 match std::fs::create_dir(dir) {
                     Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => {
                         return Err(e).with_context(|| format!("cannot create {}", dir.display()));
@@ -694,8 +695,8 @@ impl Store {
                 }
             }
         }
-        not_a_link(&systems)?;
-        Ok(systems)
+        not_a_link(&folder)?;
+        Ok(folder)
     }
 }
 
@@ -919,9 +920,37 @@ pub enum Settle {
     Keep,
 }
 
+/// Makes a folder in `parent` named after `name`, or `<name> 2` (` 3`, …)
+/// when that one is taken, and returns the name and the folder's slug.
+/// `create_dir` fails when the folder exists, even when another request made
+/// it a moment ago, so two creations never share a slug.
+pub(super) fn create_numbered(parent: &Path, name: &str, fallback: &str) -> Result<(String, String)> {
+    let mut n = 1;
+    loop {
+        let name_n = if n == 1 { name.to_string() } else { format!("{name} {n}") };
+        let slug = slug_or(&name_n, fallback);
+        match std::fs::create_dir(parent.join(&slug)) {
+            Ok(()) => return Ok((name_n, slug)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => n += 1,
+            Err(e) => {
+                return Err(e).with_context(|| format!("cannot create {}", parent.join(&slug).display()));
+            }
+        }
+    }
+}
+
+/// A record moonlet keeps outside an agent's folders; a missing one is empty.
+pub(super) fn read_record<T: Default + serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(toml::from_str(&text)?),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(T::default()),
+        Err(e) => Err(e).with_context(|| format!("cannot read {}", path.display())),
+    }
+}
+
 /// Refuses `dir` when it is there but not a folder of its own: a link
 /// (even to a folder) or a file.
-fn not_a_link(dir: &Path) -> Result<()> {
+pub(super) fn not_a_link(dir: &Path) -> Result<()> {
     match std::fs::symlink_metadata(dir) {
         Ok(m) if !m.is_dir() => bail!("{} is not a folder (a link is refused)", dir.display()),
         _ => Ok(()),
@@ -929,7 +958,7 @@ fn not_a_link(dir: &Path) -> Result<()> {
 }
 
 /// One folder name: not empty, not `.` or `..`, no separator.
-fn is_name(s: &str) -> bool {
+pub(super) fn is_name(s: &str) -> bool {
     !s.is_empty() && s != "." && s != ".." && !s.contains(['/', '\\'])
 }
 
@@ -1029,6 +1058,12 @@ pub const CONFIG: &str = "config.toml";
 
 /// `moonlet desktop` → `moonlet-desktop`.
 pub fn slug(name: &str) -> String {
+    slug_or(name, "design-system")
+}
+
+/// A folder name from `name`, lowercase letters and digits joined by dashes,
+/// or `fallback` when it has none.
+pub(super) fn slug_or(name: &str, fallback: &str) -> String {
     let mut out = String::new();
     for c in name.trim().to_lowercase().chars() {
         if c.is_ascii_alphanumeric() {
@@ -1039,7 +1074,7 @@ pub fn slug(name: &str) -> String {
     }
     let out = out.trim_end_matches('-').to_string();
     if out.is_empty() {
-        "design-system".into()
+        fallback.into()
     } else {
         out
     }

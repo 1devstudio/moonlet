@@ -106,7 +106,7 @@ enum Cmd {
         #[command(subcommand)]
         action: SessionAction,
     },
-    /// Design systems built from a project's code (X64).
+    /// Design systems built from a project's code (X64), and designs made on them (X65).
     Design {
         #[command(subcommand)]
         action: DesignAction,
@@ -147,7 +147,11 @@ enum DesignAction {
     },
     /// Check a design system: rewrites its generated files (foundations,
     /// manifest, README) and prints every problem as JSON. Exits 1 when there is one.
+    /// In a design's folder, or given a design, checks its pages instead: each
+    /// element's data-mid, and that they link only their design system's styles.css.
     Check {
+        /// Design slug (defaults to the one the current folder is in, unless it is a design system's).
+        design: Option<String>,
         /// Design system slug (defaults to the one the current folder is in).
         #[arg(long)]
         system: Option<String>,
@@ -159,6 +163,41 @@ enum DesignAction {
         /// writes `.cache/render-check.json`, and exits 1 on a bad card too.
         #[arg(long)]
         render: bool,
+        /// With a design: first give each element without a data-mid, or with
+        /// a repeated one, the next free id, and save the pages.
+        #[arg(long)]
+        fix: bool,
+    },
+    /// List the workspace's designs as JSON.
+    Ls {
+        #[arg(long)]
+        workspace: Option<String>,
+    },
+    /// Create a design on a design system and start its agent with the
+    /// brief. Prints the design as JSON.
+    New {
+        /// The design system's slug (see `moonlet design system ls`).
+        #[arg(long)]
+        system: String,
+        /// Its name (defaults to the brief's first words).
+        #[arg(long)]
+        name: Option<String>,
+        /// What to design, such as "A settings page with General and Git sections".
+        brief: String,
+        #[arg(long)]
+        workspace: Option<String>,
+    },
+    /// Show a design in the moonlet app.
+    Open {
+        slug: String,
+        #[arg(long)]
+        workspace: Option<String>,
+    },
+    /// Delete a design and stop its agent.
+    Rm {
+        slug: String,
+        #[arg(long)]
+        workspace: Option<String>,
     },
     /// Save a screenshot of a card of the design system this folder is in,
     /// taken by the moonlet app, to `.cache/screenshots/`; prints its path.
@@ -850,11 +889,7 @@ async fn chat_state(c: &mut Client, id: TerminalId) -> Result<ChatState> {
 /// The workspace (and design system) a `moonlet design` command means: the
 /// flags, else the folder it runs in, else the session of the agent running it.
 async fn design_target(c: &mut Client, workspace: Option<String>, system: Option<String>) -> Result<(String, Option<String>)> {
-    // The working folder comes back with symlinks resolved (`/private/var`
-    // for `/var` on macOS), so compare it with the resolved design folder.
-    let root = moonlet_core::paths::home().join("design");
-    let root = std::fs::canonicalize(&root).unwrap_or(root);
-    let here = std::env::current_dir().ok().and_then(|cwd| design::locate(&cwd, &root));
+    let here = here();
     let system = system.or_else(|| here.as_ref().and_then(|h| h.system.clone()));
     if let Some(w) = workspace.or_else(|| here.map(|h| h.workspace)) {
         return Ok((w, system));
@@ -871,14 +906,24 @@ async fn design_target(c: &mut Client, workspace: Option<String>, system: Option
     bail!("no workspace: run inside a design folder or a moonlet session, or pass --workspace")
 }
 
+/// What the folder the command runs in belongs to under `~/.moonlet/design`.
+fn here() -> Option<design::Located> {
+    std::env::current_dir().ok().and_then(|cwd| design::locate(&cwd, &design_root()))
+}
+
+/// `~/.moonlet/design`, with its symlinks resolved: the working folder comes
+/// back resolved (`/private/var` for `/var` on macOS), so it is compared
+/// with this.
+fn design_root() -> std::path::PathBuf {
+    let root = moonlet_core::paths::home().join("design");
+    std::fs::canonicalize(&root).unwrap_or(root)
+}
+
 /// The design system whose folder the command runs in, and its workspace:
 /// the sync agent's commands act on its own system only, never one named.
 fn own_system() -> Result<(String, String)> {
-    let root = moonlet_core::paths::home().join("design");
-    let root = std::fs::canonicalize(&root).unwrap_or(root);
-    let here = std::env::current_dir().ok().and_then(|cwd| design::locate(&cwd, &root));
-    match here {
-        Some(design::Located { workspace, system: Some(system) }) => Ok((workspace, system)),
+    match here() {
+        Some(design::Located { workspace, system: Some(system), .. }) => Ok((workspace, system)),
         _ => bail!("no design system: run inside its folder"),
     }
 }
@@ -887,8 +932,25 @@ async fn design_cmd(socket: &std::path::Path, action: DesignAction) -> Result<()
     let mut c = connect(socket).await?;
     let need = |s: Option<String>| s.context("no design system: run inside its folder or pass --system");
     match action {
-        DesignAction::Check { system, workspace, render } => {
+        DesignAction::Check { design, system, workspace, render, fix } => {
+            let named_system = system.is_some();
             let (w, s) = design_target(&mut c, workspace, system).await?;
+            // A design named, else the design whose folder this is, unless a
+            // design system is named or this is its folder (X65).
+            let design = design.or_else(|| if named_system || s.is_some() { None } else { here()?.design });
+            if let Some(d) = design {
+                let out: serde_json::Value = c
+                    .request(methods::DESIGN_CHECK, serde_json::json!({"workspace": w, "design": d, "fix": fix, "render": render}))
+                    .await?;
+                println!("{}", serde_json::to_string_pretty(&out)?);
+                if out.as_array().is_some_and(|p| !p.is_empty()) {
+                    std::process::exit(1);
+                }
+                return Ok(());
+            }
+            if fix {
+                bail!("--fix is for a design's pages: run it in the design's folder or name the design");
+            }
             let out: serde_json::Value = c
                 .request(methods::DESIGN_CHECK, serde_json::json!({"workspace": w, "slug": need(s)?, "render": render}))
                 .await?;
@@ -903,13 +965,39 @@ async fn design_cmd(socket: &std::path::Path, action: DesignAction) -> Result<()
                 std::process::exit(1);
             }
         }
+        DesignAction::Ls { workspace } => {
+            let (w, _) = design_target(&mut c, workspace, None).await?;
+            let list: serde_json::Value = c.request(methods::DESIGN_LIST, serde_json::json!({"workspace": w})).await?;
+            println!("{}", serde_json::to_string_pretty(&list)?);
+        }
+        DesignAction::New { system, name, brief, workspace } => {
+            let (w, _) = design_target(&mut c, workspace, None).await?;
+            let name = name.unwrap_or_else(|| design::name_from_brief(&brief));
+            // From an agent, the app shows a toast and keeps the focus (X22).
+            let made: serde_json::Value = c
+                .request(
+                    methods::DESIGN_CREATE,
+                    serde_json::json!({"workspace": w, "name": name, "system": system, "brief": brief, "spawned_by": terminal_from_env()}),
+                )
+                .await?;
+            println!("{}", serde_json::to_string_pretty(&made)?);
+            if let Some(e) = made["agent_error"].as_str() {
+                eprintln!("the design's agent did not start: {e}");
+            }
+        }
+        DesignAction::Open { slug, workspace } => {
+            let (w, _) = design_target(&mut c, workspace, None).await?;
+            let _: bool = c.request(methods::DESIGN_OPEN, serde_json::json!({"workspace": w, "slug": slug})).await?;
+        }
+        DesignAction::Rm { slug, workspace } => {
+            let (w, _) = design_target(&mut c, workspace, None).await?;
+            let _: bool = c.request(methods::DESIGN_REMOVE, serde_json::json!({"workspace": w, "slug": slug})).await?;
+        }
         DesignAction::Snap { card, variant, viewport } => {
             // A card of the system this folder is in, never another's.
             let (w, s) = own_system()?;
-            let root = moonlet_core::paths::home().join("design");
-            let root = std::fs::canonicalize(&root).unwrap_or(root);
             let cwd = std::env::current_dir()?;
-            let path = design::card_in_system(&cwd, &card, &root.join(&w).join("systems").join(&s))
+            let path = design::card_in_system(&cwd, &card, &design_root().join(&w).join("systems").join(&s))
                 .with_context(|| format!("{card} is not in the design system {s}"))?;
             let shot: serde_json::Value = c
                 .request(

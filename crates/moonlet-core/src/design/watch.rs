@@ -11,16 +11,21 @@ use serde::Serialize;
 pub struct Change {
     pub workspace: String,
     pub system: Option<String>,
-    /// Relative to the system's folder (or the workspace's), sorted, each once.
+    /// The workspace design they are in (X65), its slug.
+    pub design: Option<String>,
+    /// Relative to the system's or the design's folder (or the
+    /// workspace's), sorted, each once.
     pub paths: Vec<String>,
 }
 
-/// Groups changed paths under `root` (`~/.moonlet/design`). A change to a
-/// system's record counts as a change to that system, with no path.
+/// Groups changed paths under `root` (`~/.moonlet/design`), by design system
+/// and by workspace design. A change to a system's or a design's record
+/// counts as a change to it, with no path.
 /// moonlet's own temporary files are left out.
 pub fn group(root: &Path, paths: &[PathBuf]) -> Vec<Change> {
     use std::collections::{BTreeMap, BTreeSet};
-    let mut by: BTreeMap<(String, Option<String>), BTreeSet<String>> = BTreeMap::new();
+    let mut by: BTreeMap<(String, Option<String>, Option<String>), BTreeSet<String>> =
+        BTreeMap::new();
     for p in paths {
         let Ok(rel) = p.strip_prefix(root) else {
             continue;
@@ -35,23 +40,37 @@ pub fn group(root: &Path, paths: &[PathBuf]) -> Vec<Change> {
         let [workspace, rest @ ..] = parts.as_slice() else {
             continue;
         };
-        let (system, path) = match rest {
+        let (system, design, path) = match rest {
             // The system's folder itself (made or removed) counts for the system.
-            [kind, slug, inner @ ..] if kind == "systems" => (Some(slug.clone()), inner.join("/")),
-            [kind, file] if kind == ".records" => {
-                (file.strip_suffix(".toml").map(String::from), String::new())
+            [kind, slug, inner @ ..] if kind == "systems" => {
+                (Some(slug.clone()), None, inner.join("/"))
             }
-            _ => (None, rest.join("/")),
+            [kind, file] if kind == ".records" => (
+                file.strip_suffix(".toml").map(String::from),
+                None,
+                String::new(),
+            ),
+            // So does a design's (X65), and its record.
+            [kind, slug, inner @ ..] if kind == "designs" => {
+                (None, Some(slug.clone()), inner.join("/"))
+            }
+            [kind, designs, file] if kind == ".records" && designs == "designs" => (
+                None,
+                file.strip_suffix(".toml").map(String::from),
+                String::new(),
+            ),
+            _ => (None, None, rest.join("/")),
         };
-        let paths = by.entry((workspace.clone(), system)).or_default();
+        let paths = by.entry((workspace.clone(), system, design)).or_default();
         if !path.is_empty() {
             paths.insert(path);
         }
     }
     by.into_iter()
-        .map(|((workspace, system), paths)| Change {
+        .map(|((workspace, system, design), paths)| Change {
             workspace,
             system,
+            design,
             paths: paths.into_iter().collect(),
         })
         .collect()
@@ -148,6 +167,7 @@ mod tests {
         let change = |w: &str, s: Option<&str>, p: &[&str]| Change {
             workspace: w.into(),
             system: s.map(String::from),
+            design: None,
             paths: p.iter().map(|x| x.to_string()).collect(),
         };
         assert_eq!(
@@ -162,7 +182,48 @@ mod tests {
                         "components/buttons/button/button.html"
                     ]
                 ),
-                change("w2", None, &["designs/settings-page/pages/index.html"]),
+                Change {
+                    workspace: "w2".into(),
+                    system: None,
+                    design: Some("settings-page".into()),
+                    paths: vec!["pages/index.html".into()]
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn changed_files_of_a_design_are_grouped_by_design_with_its_record() {
+        let root = Path::new("/Users/alex/.moonlet/design");
+        let paths: Vec<PathBuf> = [
+            "w1/designs/settings-page/pages/git-a.html",
+            "w1/designs/settings-page/pages/.git-a.html.moonlet-41-3",
+            "w1/designs/settings-page/design.toml",
+            "w1/designs/onboarding",
+            "w1/.records/designs/onboarding.toml",
+            "w1/systems/settings-page/styles.css",
+        ]
+        .iter()
+        .map(|p| root.join(p))
+        .collect();
+        let design = |d: &str, p: &[&str]| Change {
+            workspace: "w1".into(),
+            system: None,
+            design: Some(d.into()),
+            paths: p.iter().map(|x| x.to_string()).collect(),
+        };
+        assert_eq!(
+            group(root, &paths),
+            vec![
+                design("onboarding", &[]),
+                design("settings-page", &["design.toml", "pages/git-a.html"]),
+                // A system and a design of one name stay apart.
+                Change {
+                    workspace: "w1".into(),
+                    system: Some("settings-page".into()),
+                    design: None,
+                    paths: vec!["styles.css".into()]
+                },
             ]
         );
     }
@@ -184,6 +245,7 @@ mod tests {
             vec![Change {
                 workspace: "w1".into(),
                 system: Some("pricing".into()),
+                design: None,
                 paths: vec!["my.moonlet-notes.md".into()]
             }]
         );

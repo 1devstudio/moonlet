@@ -203,7 +203,8 @@ pub const DESIGN_SYSTEM_PROGRESS: &str = "design.system.progress";
 pub const DESIGN_SYSTEM_SYNCED: &str = "design.system.synced";
 /// [`DesignCheck`] → every problem, after rewriting the generated files.
 /// With `render`, `{problems, render: {total, bad, thin, variants_identical}}`
-/// once the app has rendered every card (X64).
+/// once the app has rendered every card (X64). With `design`, a workspace
+/// design's pages: their `data-mid`s and stylesheets (X65).
 pub const DESIGN_CHECK: &str = "design.check";
 /// [`DesignSnap`] → `{path, blank}`: a card's screenshot, taken by the app,
 /// saved in the system's `.cache/screenshots/` (X64).
@@ -224,6 +225,17 @@ pub const DESIGN_SETTLE: &str = "design.settle";
 /// [`DesignSystemRef`] → a design system's cards, each with its marker, check
 /// problems and the sources changed since the last sync.
 pub const DESIGN_CARDS: &str = "design.cards";
+
+// Designs (X65)
+/// `{workspace}` → the workspace's designs, each with its pages and its agent.
+pub const DESIGN_LIST: &str = "design.list";
+/// [`DesignCreate`] → the new workspace design, with `agent_error` (why its
+/// agent did not start, or null): its folder made and its agent started.
+pub const DESIGN_CREATE: &str = "design.create";
+/// [`DesignRef`]: stops a design's agent and deletes its folder.
+pub const DESIGN_REMOVE: &str = "design.remove";
+/// [`DesignRef`]: asks the app to show a design, as [`EV_DESIGN_OPEN`].
+pub const DESIGN_OPEN: &str = "design.open";
 
 // Phones (X39)
 /// Phone access, the Tailscale addresses and the paired phones: [`MobileStatus`].
@@ -398,12 +410,16 @@ pub const EV_JOB_CHANGED: &str = "job.changed";
 pub const EV_JOB_OUTPUT: &str = "job.output";
 /// A [`CopyChanged`], on every change of a copy's state.
 pub const EV_SYNC_CHANGED: &str = "sync.changed";
-/// `{workspace, system, paths}`: files changed in a design system, or in a
-/// workspace's other design files (`system: null`) (X64).
+/// `{workspace, system, design, paths}`: files changed in a design system,
+/// in a workspace design (`design`, X65), or in a workspace's other design
+/// files (both `null`) (X64).
 pub const EV_DESIGN_CHANGED: &str = "design.changed";
 /// [`DesignRender`]: render a card, sent only to the connection of the app
 /// that said [`DESIGN_RENDER_READY`] (X64).
 pub const EV_DESIGN_RENDER: &str = "design.render";
+/// [`DesignOpened`]: show this design (X65); from an agent's `design new`, a
+/// toast that leaves the focus where it is.
+pub const EV_DESIGN_OPEN: &str = "design.open";
 
 // Events
 pub const EV_TERMINAL_CREATED: &str = "terminal.created";
@@ -669,10 +685,11 @@ pub struct Attention {
     pub state: AgentState,
     pub title: String,
     pub message: Option<String>,
-    /// From a design system's sync agent (X64): the app notifies for it in
-    /// Design mode, never as a session's agent (X65).
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub design: bool,
+    /// From a design system's sync agent (X64), which the app notifies for
+    /// in Design mode, never as a session's agent, or a design's agent, which
+    /// notifies like a session's (X65).
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::types::design_tag")]
+    pub design: Option<crate::types::DesignAgent>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1221,10 +1238,19 @@ pub struct DesignProgress {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DesignCheck {
     pub workspace: String,
+    /// The design system; empty when `design` names a design.
+    #[serde(default)]
     pub slug: String,
     /// Also render each card in the app and judge it (`--render`).
     #[serde(default)]
     pub render: bool,
+    /// A workspace design to check instead of a design system (X65).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub design: Option<String>,
+    /// With `design`: first give the missing and repeated `data-mid`s the
+    /// next free numbers (`--fix`).
+    #[serde(default)]
+    pub fix: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1305,6 +1331,44 @@ pub struct DesignFile {
     pub workspace: String,
     /// Relative to the workspace's design folder, such as `systems/<slug>/styles.css`.
     pub path: String,
+}
+
+/// A new workspace design (X65).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DesignCreate {
+    pub workspace: String,
+    pub name: String,
+    /// The design system's slug.
+    pub system: String,
+    #[serde(default)]
+    pub brief: String,
+    /// A session design in that session's worktree: not made yet (entry 12).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+    /// The terminal of the agent that asked for it (X22): the app shows a
+    /// toast instead of switching to it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spawned_by: Option<TerminalId>,
+}
+
+/// A design, by its workspace and slug (X65).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DesignRef {
+    pub workspace: String,
+    pub slug: String,
+}
+
+/// The event [`EV_DESIGN_OPEN`] (X65).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DesignOpened {
+    pub workspace: String,
+    pub slug: String,
+    pub name: String,
+    /// The agent's terminal that started the design, and its session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spawned_by: Option<TerminalId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -35,6 +35,9 @@ pub enum Kind {
     MissingMid,
     /// A `data-mid` an earlier element of the page already has (X65).
     DuplicateMid,
+    /// A design page's stylesheet that is not its design system's
+    /// `styles.css` (X65).
+    Stylesheet,
     /// A class or token in `conventions.md` that nothing defines.
     UnknownName,
     /// A README longer than the design agent reads.
@@ -56,8 +59,13 @@ pub struct Problem {
 
 /// CSS keywords and functions are case-insensitive: `@IMPORT` and `URL(` count.
 /// A quoted URL runs to its closing quote and may hold spaces; see [`quoted`].
+/// A quote or `url(` may follow `@import` with no space, as minifiers write
+/// it (`@import"kit.css";`); a bare URL needs one, or it is part of the name.
 static IMPORT: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?i)@import\s+(?:url\(\s*)?(?:"([^"]*)"|'([^']*)'|([^"')\s;]+))"#).unwrap()
+    Regex::new(
+        r#"(?i)@import(?:\s*(?:url\(\s*)?(?:"([^"]*)"|'([^']*)')|\s*url\(\s*([^"')\s]+)|\s+([^"')\s;]+))"#,
+    )
+    .unwrap()
 });
 static DEFINITION: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(--[A-Za-z0-9_-]+)\s*:").unwrap());
@@ -92,7 +100,7 @@ static URL: LazyLock<Regex> =
 
 /// The URL an [`IMPORT`] or [`URL`] match took: double-quoted, single-quoted or bare.
 fn quoted<'t>(c: &regex::Captures<'t>) -> &'t str {
-    (1..=3).find_map(|i| c.get(i)).map_or("", |m| m.as_str())
+    c.iter().skip(1).flatten().next().map_or("", |m| m.as_str())
 }
 
 /// Checks the design system in `root`.
@@ -357,8 +365,8 @@ fn css_comments(css: &str) -> Vec<std::ops::Range<usize>> {
     out
 }
 
-/// The comments of a page's `<style>` elements: elsewhere in a page `/*` is text.
-fn style_comments(html: &str) -> Vec<std::ops::Range<usize>> {
+/// The byte ranges of a page's `<style>` elements' text: the page's CSS.
+fn style_ranges(html: &str) -> Vec<std::ops::Range<usize>> {
     let styles = std::cell::RefCell::new(Vec::<std::ops::Range<usize>>::new());
     let settings =
         lol_html::Settings::new().append_element_content_handler(lol_html::text!("style", |t| {
@@ -374,13 +382,39 @@ fn style_comments(html: &str) -> Vec<std::ops::Range<usize>> {
     if lol_html::rewrite_str(html, settings).is_err() {
         return Vec::new();
     }
-    styles
-        .into_inner()
+    styles.into_inner()
+}
+
+/// The comments of a page's `<style>` elements: elsewhere in a page `/*` is text.
+fn style_comments(html: &str) -> Vec<std::ops::Range<usize>> {
+    style_ranges(html)
         .into_iter()
         .flat_map(|s| {
             css_comments(&html[s.clone()])
                 .into_iter()
                 .map(move |c| s.start + c.start..s.start + c.end)
+        })
+        .collect()
+}
+
+/// Each `@import` in a page's `<style>`s, comments left out, as the line it
+/// starts on and its URL, which may be on a later line: what a design page's
+/// check holds against its design system's `styles.css` (X65). An `@import`
+/// anywhere else in the page, in its text or a script, is not CSS.
+pub(super) fn style_imports(html: &str) -> Vec<(usize, String)> {
+    let line_of = |byte: usize| html[..byte].matches('\n').count() + 1;
+    style_ranges(html)
+        .into_iter()
+        .flat_map(|s| {
+            let css = &html[s.clone()];
+            let css = blank(css, &css_comments(css));
+            IMPORT
+                .captures_iter(&css)
+                .map(|c| {
+                    let at = c.get(0).map_or(0, |m| m.start());
+                    (line_of(s.start + at), quoted(&c).to_string())
+                })
+                .collect::<Vec<_>>()
         })
         .collect()
 }
@@ -1121,6 +1155,26 @@ mod tests {
                     "https://cdn.example.com/bg.png leaves the design system".into()
                 ),
             ]
+        );
+    }
+
+    #[test]
+    fn an_import_with_no_space_before_its_url_is_checked() {
+        let dir = system(&[
+            (
+                "styles.css",
+                "@import\"tokens/colors.css\";@import'https://fonts.example.com/inter.css';\n",
+            ),
+            ("tokens/colors.css", COLORS),
+        ]);
+        assert_eq!(
+            check(dir.path()).unwrap(),
+            vec![Problem {
+                path: "styles.css".into(),
+                line: 1,
+                kind: Kind::ExternalUrl,
+                message: "https://fonts.example.com/inter.css leaves the design system".into(),
+            }]
         );
     }
 

@@ -5,13 +5,15 @@ use std::path::Path;
 
 use moonlet_proto::TerminalId;
 
-/// The workspace, and the design system when there is one, that a folder
-/// under `~/.moonlet/design` belongs to: the sync agent works in its system's
-/// folder, so its commands need no arguments.
+/// The workspace, and the design system or the design when there is one,
+/// that a folder under `~/.moonlet/design` belongs to: the sync agent works in
+/// its system's folder and a design's agent in its design's (X65), so their
+/// commands need no arguments.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Located {
     pub workspace: String,
     pub system: Option<String>,
+    pub design: Option<String>,
 }
 
 pub fn locate(cwd: &Path, design_root: &Path) -> Option<Located> {
@@ -21,11 +23,20 @@ pub fn locate(cwd: &Path, design_root: &Path) -> Option<Located> {
         .components()
         .map(|c| c.as_os_str().to_string_lossy().into_owned());
     let workspace = parts.next()?;
-    let system = match parts.next().as_deref() {
-        Some("systems") => parts.next(),
-        _ => None,
+    let (system, design) = match parts.next().as_deref() {
+        Some("systems") => (parts.next(), None),
+        Some("designs") => (None, parts.next()),
+        _ => (None, None),
     };
-    Some(Located { workspace, system })
+    Some(Located { workspace, system, design })
+}
+
+/// The name of a design made without `--name` (X65): the first words of its
+/// brief, up to its first punctuation, five at most.
+pub fn name_from_brief(brief: &str) -> String {
+    let head = brief.split(['.', ',', ';', ':', '!', '?', '\n']).next().unwrap_or("");
+    let words: Vec<&str> = head.split_whitespace().take(5).collect();
+    if words.is_empty() { "Design".into() } else { words.join(" ") }
 }
 
 /// The workspace of the session the agent's terminal belongs to, from
@@ -94,14 +105,25 @@ mod tests {
             ),
             Some(Located {
                 workspace: "w-1dev".into(),
-                system: Some("moonlet-desktop".into())
+                system: Some("moonlet-desktop".into()),
+                design: None
+            })
+        );
+        // A design's folder names its design (X65).
+        assert_eq!(
+            locate(&root.join("w-1dev/designs/settings-page/pages"), &root),
+            Some(Located {
+                workspace: "w-1dev".into(),
+                system: None,
+                design: Some("settings-page".into())
             })
         );
         assert_eq!(
-            locate(&root.join("w-1dev/designs/settings-page"), &root),
+            locate(&root.join("w-1dev"), &root),
             Some(Located {
                 workspace: "w-1dev".into(),
-                system: None
+                system: None,
+                design: None
             })
         );
         assert_eq!(
@@ -109,6 +131,20 @@ mod tests {
             None
         );
         assert_eq!(locate(&root, &root), None);
+    }
+
+    #[test]
+    fn a_design_without_a_name_is_named_after_its_briefs_first_words() {
+        assert_eq!(
+            name_from_brief("Pricing table for three plans, monthly and yearly"),
+            "Pricing table for three plans"
+        );
+        assert_eq!(
+            name_from_brief("A settings page with General and Git sections"),
+            "A settings page with General"
+        );
+        assert_eq!(name_from_brief("  Onboarding.\nThree steps"), "Onboarding");
+        assert_eq!(name_from_brief(" , "), "Design");
     }
 
     #[test]

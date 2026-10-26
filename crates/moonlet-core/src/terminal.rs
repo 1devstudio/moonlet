@@ -343,7 +343,7 @@ impl TerminalManager {
             alt_screen: false,
             chat: false,
             classic: req.classic,
-            design: false,
+            design: None,
             created_at: now,
             last_output_at: now,
         };
@@ -646,7 +646,7 @@ impl TerminalManager {
                     state: st.agent.state,
                     title: st.info.title.clone(),
                     message: st.agent.message.clone(),
-                    design: st.info.design,
+                    design: st.info.design.clone(),
                 },
             ));
         }

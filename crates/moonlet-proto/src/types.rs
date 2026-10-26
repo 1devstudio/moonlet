@@ -87,10 +87,10 @@ pub struct TerminalInfo {
     /// Shell shows its own prompt instead of the app's editor (T7).
     #[serde(default)]
     pub classic: bool,
-    /// A design system's sync agent (X64): the app notifies for it in Design
-    /// mode, never as a session's agent (X65).
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub design: bool,
+    /// A design system's sync agent (X64) or a design's agent (X65): what it
+    /// works on, so the app labels and opens it, and tells the two apart.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "design_tag")]
+    pub design: Option<DesignAgent>,
     /// `node --version` of the `node` on the shell's PATH, reported by the
     /// prompt hook when that `node` changes (T8 context chips).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -100,6 +100,114 @@ pub struct TerminalInfo {
     pub subagents: u32,
     pub created_at: u64,
     pub last_output_at: u64,
+}
+
+/// The agent of a design system or of a design (X64, X65), as its terminal
+/// and its `agent.attention` carry it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DesignAgent {
+    pub kind: DesignAgentKind,
+    /// The workspace, and the design system's or the design's slug; empty for
+    /// a sync agent saved before they were kept.
+    #[serde(default)]
+    pub workspace: String,
+    #[serde(default)]
+    pub slug: String,
+    /// The design system's or the design's name, for `Design · <name>`.
+    #[serde(default)]
+    pub name: String,
+}
+
+impl DesignAgent {
+    /// A sync agent saved as `design: true`, before its tag said more.
+    fn saved_sync() -> Self {
+        DesignAgent { kind: DesignAgentKind::Sync, workspace: String::new(), slug: String::new(), name: String::new() }
+    }
+}
+
+/// A design tag, also as saved before X65: `true` is a sync agent, the only
+/// one there was, and `false` none.
+pub fn design_tag<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<DesignAgent>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Tag {
+        Saved(bool),
+        Agent(DesignAgent),
+    }
+    Ok(match Option::<Tag>::deserialize(d)? {
+        Some(Tag::Agent(a)) => Some(a),
+        Some(Tag::Saved(true)) => Some(DesignAgent::saved_sync()),
+        Some(Tag::Saved(false)) | None => None,
+    })
+}
+
+/// Where a design lives (X65). Session and project designs come with entry 12.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DesignKind {
+    /// In `~/.moonlet/design/<workspace>/designs/`, with its own agent.
+    Workspace,
+}
+
+/// One page of a design: `pages/<name>.html` (X65).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DesignPage {
+    pub name: String,
+    /// Its label in `design.toml`, when it has one.
+    pub label: Option<String>,
+}
+
+/// What a design system's or a design's agent waits for from the user (X64, X65).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NeedsYou {
+    /// `question` or `approval`.
+    pub kind: String,
+    pub text: String,
+}
+
+/// One design of a workspace, as `design.list` gives it (X65).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DesignInfo {
+    pub slug: String,
+    pub name: String,
+    pub kind: DesignKind,
+    /// The design system's slug.
+    pub system: String,
+    /// The design's folder.
+    pub path: String,
+    /// Its pages, `index` first, then by name.
+    pub pages: Vec<DesignPage>,
+    /// The newest change under `pages/`, in ms; its creation before any page.
+    pub updated_at: u64,
+    /// Comments still open in `comments.json`.
+    pub open_comments: usize,
+    /// The chat of its agent, while it is still the design's.
+    pub agent: Option<u32>,
+    /// That agent's state.
+    pub agent_state: Option<AgentState>,
+    /// What that agent waits for from the user.
+    pub needs_you: Option<NeedsYou>,
+    /// Why the design could not be read, when it could not.
+    pub error: Option<String>,
+}
+
+/// `design.create`'s answer (X65): the design, and why its agent did not start.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DesignCreated {
+    #[serde(flatten)]
+    pub design: DesignInfo,
+    pub agent_error: Option<String>,
+}
+
+/// Which agent of Design mode a terminal is (X65).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DesignAgentKind {
+    /// A design system's sync agent: Design mode notifies for it, never as
+    /// a session's agent.
+    Sync,
+    /// A workspace design's agent: it notifies like a session's.
+    Design,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1163,4 +1271,48 @@ pub struct NamedItem {
     pub name: String,
     #[serde(default)]
     pub description: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A chat terminal as the daemon saves it, with `design` as given.
+    fn chat_info(design: &str) -> String {
+        format!(
+            r#"{{"id":4,"kind":"agent","title":"Design · storefront","cwd":"/d","command":["claude"],"agent":"claude","agent_state":"idle","cols":80,"rows":24,"pid":null,"chat":true{design},"created_at":1,"last_output_at":1}}"#
+        )
+    }
+
+    #[test]
+    fn a_terminal_saved_as_design_true_reads_as_a_sync_agent() {
+        let old: TerminalInfo = serde_json::from_str(&chat_info(r#","design":true"#)).unwrap();
+        assert_eq!(
+            old.design,
+            Some(DesignAgent { kind: DesignAgentKind::Sync, workspace: String::new(), slug: String::new(), name: String::new() })
+        );
+        let plain: TerminalInfo = serde_json::from_str(&chat_info(r#","design":false"#)).unwrap();
+        assert_eq!(plain.design, None);
+        let none: TerminalInfo = serde_json::from_str(&chat_info("")).unwrap();
+        assert_eq!(none.design, None);
+    }
+
+    #[test]
+    fn a_design_agents_tag_names_its_kind_workspace_slug_and_name() {
+        let tagged = r#","design":{"kind":"design","workspace":"w1","slug":"settings-page","name":"Settings page"}"#;
+        let info: TerminalInfo = serde_json::from_str(&chat_info(tagged)).unwrap();
+        assert_eq!(
+            info.design,
+            Some(DesignAgent {
+                kind: DesignAgentKind::Design,
+                workspace: "w1".into(),
+                slug: "settings-page".into(),
+                name: "Settings page".into()
+            })
+        );
+        // Written back the same way; a terminal without one writes no key.
+        assert!(serde_json::to_string(&info).unwrap().contains(tagged), "{}", serde_json::to_string(&info).unwrap());
+        let none: TerminalInfo = serde_json::from_str(&chat_info("")).unwrap();
+        assert!(!serde_json::to_string(&none).unwrap().contains("design"));
+    }
 }
