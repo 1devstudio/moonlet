@@ -3523,7 +3523,7 @@ async fn edits_by_hand_saved_once_the_agent_works_go_with_its_turn_though_its_st
     let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": other_agent, "text": "HOLD-NOW"})).await.unwrap();
     working(&mut c, other_agent).await;
     std::fs::write(designs.join("other-page/pages/long.html"), format!("<body>{}</body>\n", "<p>row</p>".repeat(60_000))).unwrap();
-    let fix = serde_json::json!({"workspace": ws, "design": "other-page", "fix": true});
+    let fix = serde_json::json!({"design": {"workspace": ws, "slug": "other-page"}, "fix": true});
     let check = tokio::spawn(async move { checker.request::<_, serde_json::Value>(methods::DESIGN_CHECK, fix).await.unwrap() });
     tokio::time::sleep(Duration::from_millis(500)).await;
     std::fs::write(designs.join("other-page/release"), "").unwrap();
@@ -3585,7 +3585,7 @@ async fn a_snapshot_of_edits_by_hand_waits_for_a_save_in_progress() {
     let long = format!("<body>{}</body>\n", "<p>row</p>".repeat(80_000));
     std::fs::write(dir.join("pages/long.html"), &long).unwrap();
     save_by_hand(&mut c, &ws, "<p>by hand</p>\n", &["text of m2"]).await;
-    let fixed: serde_json::Value = checker.request(methods::DESIGN_CHECK, serde_json::json!({"workspace": ws, "design": "settings-page", "fix": true})).await.unwrap();
+    let fixed: serde_json::Value = checker.request(methods::DESIGN_CHECK, serde_json::json!({"design": {"workspace": ws, "slug": "settings-page"}, "fix": true})).await.unwrap();
     assert!(fixed.is_array(), "{fixed}");
     let now = std::fs::read_to_string(dir.join("pages/long.html")).unwrap();
     assert!(now.contains("data-mid"), "the check numbered the page");

@@ -1282,22 +1282,19 @@ pub struct DesignProgress {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DesignCheck {
-    /// The workspace; none for a session design, named by `session`.
-    #[serde(default)]
-    pub workspace: String,
+    /// The design system's workspace; none when `design` names a design.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
     /// The design system; empty when `design` names a design.
     #[serde(default)]
     pub slug: String,
     /// Also render each card in the app and judge it (`--render`).
     #[serde(default)]
     pub render: bool,
-    /// A design to check instead of a design system (X65): the
-    /// workspace's, or with `session` that session's.
+    /// A design to check instead of a design system (X65), a workspace's
+    /// or a session's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub design: Option<String>,
-    /// With `design`: the session whose session design it is.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub session: Option<String>,
+    pub design: Option<DesignRef>,
     /// With `design`: first give the missing and repeated `data-mid`s the
     /// next free numbers (`--fix`).
     #[serde(default)]
@@ -1571,8 +1568,16 @@ pub struct DesignSystemUpdated {
 pub struct DesignCardChange {
     /// Relative to the design system's folder.
     pub path: String,
-    /// `new`, `changed` or `removed`.
-    pub change: String,
+    pub change: CardChange,
+}
+
+/// How a card changed since a session design copied its design system (X65).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CardChange {
+    New,
+    Changed,
+    Removed,
 }
 
 /// [`DESIGN_COPY`]'s params: the project design to start from, and the

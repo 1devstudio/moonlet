@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use moonlet_proto::methods::{DesignCardChange, DesignSystemUpdated};
+use moonlet_proto::methods::{CardChange, DesignCardChange, DesignSystemUpdated};
 use moonlet_proto::types::{DesignInfo, DesignKind};
 
 use super::designs::{DESIGN_FILE, DesignConfig, NoSystem};
@@ -324,14 +324,14 @@ fn changed_cards(
         .filter(|p| is_card(p))
         .filter_map(|p| {
             let change = match (before.get(p), after.get(p)) {
-                (None, Some(_)) => "new",
-                (Some(_), None) => "removed",
-                (Some(a), Some(b)) if a != b => "changed",
+                (None, Some(_)) => CardChange::New,
+                (Some(_), None) => CardChange::Removed,
+                (Some(a), Some(b)) if a != b => CardChange::Changed,
                 _ => return None,
             };
             Some(DesignCardChange {
                 path: p.clone(),
-                change: change.into(),
+                change,
             })
         })
         .collect()
@@ -810,9 +810,9 @@ created_at = 1761200000000
         .unwrap();
         assert!(store.session_system_updated(&at, "w1").unwrap());
         let updated = store.update_session_system(&at, "w1").unwrap();
-        let change = |path: &str, change: &str| moonlet_proto::methods::DesignCardChange {
+        let change = |path: &str, change: CardChange| DesignCardChange {
             path: path.into(),
-            change: change.into(),
+            change,
         };
         assert_eq!(
             updated,
@@ -821,9 +821,9 @@ created_at = 1761200000000
                     "c8927a57a423efa36791952c3c820cb62eccbc94a69cb2f6d8be80b7663e7ba6".into()
                 ),
                 cards: vec![
-                    change("components/buttons/button/button.html", "changed"),
-                    change("components/forms/field/field.html", "new"),
-                    change("ui_kits/app/settings.html", "removed"),
+                    change("components/buttons/button/button.html", CardChange::Changed),
+                    change("components/forms/field/field.html", CardChange::New),
+                    change("ui_kits/app/settings.html", CardChange::Removed),
                 ],
             }
         );

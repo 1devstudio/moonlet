@@ -1298,10 +1298,7 @@ impl Daemon {
                     if r.render {
                         return Err(RpcError::new("invalid_params", "render checks a design system's cards"));
                     }
-                    let at = match r.session.clone() {
-                        Some(session) => self.locate(&m::DesignRef::Session { session, slug: design }).await?,
-                        None => self.locate(&m::DesignRef::Workspace { workspace: r.workspace.clone(), slug: design }).await?,
-                    };
+                    let at = self.locate(&design).await?;
                     // `--fix` saves pages: never between a save's check of
                     // its version and its replace.
                     let lock = self.lock_of(&at, DesignLock::Pages);
@@ -1311,7 +1308,7 @@ impl Daemon {
                 if r.fix {
                     return Err(RpcError::new("invalid_params", "fix checks a design's pages"));
                 }
-                let (ws, slug) = (r.workspace.clone(), r.slug.clone());
+                let (ws, slug) = (workspace.clone(), r.slug.clone());
                 let problems = {
                     let store = store.clone();
                     blocking(move || store.check_system(&ws, &slug)).await?
@@ -1320,7 +1317,7 @@ impl Daemon {
                     return ok(problems);
                 }
                 // Without the app, the problems still come, with why nothing rendered.
-                match self.render_check(&r.workspace, &r.slug).await {
+                match self.render_check(&workspace, &r.slug).await {
                     Ok(counts) => ok(serde_json::json!({"problems": problems, "render": counts, "render_error": null})),
                     Err(crate::render::RenderError::NoApp) => {
                         ok(serde_json::json!({"problems": problems, "render": null, "render_error": moonlet_core::design::render::NO_APP}))
