@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { Check, ChevronDown, ChevronRight, CornerDownLeft, FileText, FolderPlus, GitBranch, GitPullRequest, MoreHorizontal, Plus, X } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, CornerDownLeft, FileCode, FileText, FolderPlus, GitBranch, GitPullRequest, MoreHorizontal, PenTool, Plus, X } from "lucide-react";
 import { hostsApi, rpc } from "../lib/daemon";
 import type { Task, TaskStart } from "../lib/tasks";
 import { branchUser, composerTask, ensureTasks, leaveTasksMode, placedTasks, startedFromTask, useTasks } from "../lib/tasksStore";
 import { composerOptions, composerPick, composerProjects, composerTarget, wsKey } from "../lib/workspaces";
 import { attachments, branchRow, firstMessage, linkMenu, pickerBranches, pickerHint, pickerSearch, placeholder, sessionName, showsLinkSlot, suggestedTask, type Attachment, type PickerList, type PickerTab } from "../lib/composer";
 import { M, type IssueRef, type Project, type ProjectConfig, type Session } from "../lib/protocol";
-import { errorToast, selectSession, shownWorkspace, useStore } from "../lib/store";
+import { errorMessage, errorToast, selectSession, shownWorkspace, useStore } from "../lib/store";
 import { composerSync, syncOffered } from "../lib/sync";
 import { declineSync, keepInSync, projectKeepsNew, useSync } from "../lib/syncStore";
 import { cloudOffered } from "../lib/cloudMachines";
@@ -22,6 +22,11 @@ import { Markdown } from "./AgentView";
 import { fileMention } from "../lib/plusMenu";
 import { fromOtherDialog } from "../lib/modal";
 import { defaultStartLabel, gitSettingsOf } from "../lib/gitSettings";
+import { buildComposer, buildPick, designAttachments, designDir, type BuildDesign } from "../lib/buildIt";
+import { loadDesigns } from "../lib/designStore";
+import { pageUrl } from "../lib/designView";
+import { parseViewport } from "../lib/designViewport";
+import { CardFrame } from "./design/Frame";
 
 
 interface Choice {
@@ -149,19 +154,37 @@ function SourcePicker({
   );
 }
 
+/** A design page's thumbnail in its unfolded attachment (X65 Build it):
+ *  the page framed on a host of its own, sandboxed as on the canvas, at
+ *  the design's viewport; mounted only while the attachment is unfolded. */
+export interface AttachmentPage {
+  workspace: string;
+  slug: string;
+  viewport: [number, number];
+}
+
+const THUMB_WIDTH = 320;
+
 /** A folded attachment (X54): its line, › to unfold its text, × to remove it. */
-function AttachmentRow({ a, onRemove }: { a: Attachment; onRemove: () => void }) {
+function AttachmentRow({ a, onRemove, design }: { a: Attachment; onRemove: () => void; design?: AttachmentPage }) {
   const [open, setOpen] = useState(false);
-  const Icon = a.icon === "pr" ? GitPullRequest : FileText;
+  const Icon = a.icon === "pr" ? GitPullRequest : a.icon === "page" || a.icon === "styles" ? FileCode : FileText;
   return (
-    <div role="group" aria-label={`${a.lead}${a.summary}`} className="rounded-[10px] border border-border bg-panel-2">
+    <div role="group" aria-label={a.file ? `${a.file} ${a.summary}` : `${a.lead}${a.summary}`} className="rounded-[10px] border border-border bg-panel-2">
       <div className="flex items-center gap-2 px-3 py-[9px] ui-text-12.5 text-muted">
         <button className="flex min-w-0 flex-1 items-center gap-2 text-left" aria-expanded={open} title={open ? "Fold" : "Unfold"} onClick={() => setOpen(!open)}>
           <Icon size={13} className="shrink-0" />
-          <span className="min-w-0 flex-1 truncate">
-            {a.lead}
-            <span className="text-fg">{a.summary}</span>
-          </span>
+          {a.file ? (
+            <span className="min-w-0 flex-1 truncate">
+              <span className="font-mono text-fg">{a.file}</span>
+              <span className="ml-2">{a.summary}</span>
+            </span>
+          ) : (
+            <span className="min-w-0 flex-1 truncate">
+              {a.lead}
+              <span className="text-fg">{a.summary}</span>
+            </span>
+          )}
           <ChevronRight size={13} className={cx("shrink-0 transition-transform", open && "rotate-90")} />
         </button>
         {a.remove && (
@@ -170,11 +193,22 @@ function AttachmentRow({ a, onRemove }: { a: Attachment; onRemove: () => void })
           </IconButton>
         )}
       </div>
-      {open && (
-        <div className="max-h-[220px] overflow-y-auto border-t border-border px-3 py-2">
-          {a.body ? <Markdown text={a.body} task /> : <span className="ui-text-12.5 text-faint">No description.</span>}
-        </div>
-      )}
+      {open &&
+        (a.file ? (
+          // A design's file sends its line; a page shows the page too (X65).
+          <div className="flex flex-col gap-2 border-t border-border px-3 py-2">
+            <span className="selectable break-all font-mono ui-text-12 text-muted">{a.body}</span>
+            {a.page && design && (
+              <div className="self-start overflow-hidden rounded-md border border-border-strong">
+                <CardFrame url={pageUrl(design.workspace, design.slug, a.page)} title={`${a.file} preview`} viewport={design.viewport} scale={THUMB_WIDTH / design.viewport[0]} />
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="max-h-[220px] overflow-y-auto border-t border-border px-3 py-2">
+            {a.body ? <Markdown text={a.body} task /> : <span className="ui-text-12.5 text-faint">No description.</span>}
+          </div>
+        ))}
     </div>
   );
 }
@@ -272,6 +306,7 @@ export function Composer({
   workspace: presetWorkspace,
   task: presetTask,
   worktree,
+  design: presetDesign,
 }: {
   host?: string;
   project?: string;
@@ -280,6 +315,8 @@ export function Composer({
   task?: TaskStart;
   /** Adopting a worktree without a session, and its branch (X46). */
   worktree?: { path: string; branch: string };
+  /** Building a workspace design (X65 Build it): its chip, attachments, branch and prompt. */
+  design?: BuildDesign & { systemName: string; viewport?: string };
 }) {
   const hosts = useStore((s) => s.hosts);
   const allProjects = useStore((s) => s.projects);
@@ -315,8 +352,12 @@ export function Composer({
   const [pick, setPick] = useState(initial ? { host: initial.host, id: initial.project.id } : null);
   const current = options.find((o) => pick && o.host === pick.host && o.project.id === pick.id);
 
+  // Build it (X65): the design, the pages × left out, and why Create was refused.
+  const [design, setDesign] = useState(presetDesign ?? null);
+  const [left, setLeft] = useState<string[]>([]);
+  const [refused, setRefused] = useState<string | null>(null);
   // The task's text is an attachment; what the user types goes after it (X54).
-  const [prompt, setPrompt] = useState("");
+  const [prompt, setPrompt] = useState(() => (presetDesign ? buildComposer(presetDesign, { sources: [], projects: [], prefix: "" }).prompt : ""));
   const [task, setTask] = useState(presetTask ?? null);
   const [assign, setAssign] = useState(!!presetTask?.assign?.checked);
   // Keep in sync with this Mac (X60): for a project on the central host,
@@ -360,6 +401,8 @@ export function Composer({
   const modeMenu = useModeMenu(mode, setMode);
   const [choice, setChoice] = useState<Choice>(() => (initial ? loadChoice(initial.project.id) : defaultChoice));
   const [config, setConfig] = useState<ProjectConfig | null>(null);
+  // Build it's lines name the project's design folder: Create waits for its config.
+  const [configRead, setConfigRead] = useState(false);
   const [from, setFrom] = useState<{ ref: string; existing: boolean } | null>(null);
   const [editingFrom, setEditingFrom] = useState<null | "from" | "existing">(null);
   const [branches, setBranches] = useState<string[]>([]);
@@ -384,7 +427,11 @@ export function Composer({
   useEffect(() => {
     if (!current) return;
     setChoice(loadChoice(current.project.id));
-    void rpc<ProjectConfig>(current.host, M.projectConfig, { id: current.project.id }).then(setConfig).catch(() => setConfig(null));
+    setConfigRead(false);
+    void rpc<ProjectConfig>(current.host, M.projectConfig, { id: current.project.id })
+      .then(setConfig)
+      .catch(() => setConfig(null))
+      .finally(() => setConfigRead(true));
     void rpc<string[]>(current.host, M.gitBranches, { path: current.project.path }).then(setBranches).catch(() => setBranches([]));
     setPr(null);
     wantedContext.current = null;
@@ -478,14 +525,15 @@ export function Composer({
   };
 
   const create = async () => {
-    if (!current || busy) return;
+    if (!current || busy || (design && !configRead)) return;
     setBusy(true);
+    setRefused(null);
     try {
-      const named = task && !worktree ? await taskBranchLoad.current : null;
+      const named = task && !worktree ? await taskBranchLoad.current : (built?.branch ?? null);
       const s = await rpc<Session>(current.host, M.sessionCreate, {
         project_id: current.project.id,
         prompt: firstMessage(sent, prompt),
-        name: sessionName({ task, pr }),
+        name: sessionName({ task, pr }) ?? built?.name ?? null,
         task: task?.ref ?? null,
         worktree: worktree?.path ?? null,
         agent: choice.agent,
@@ -499,10 +547,17 @@ export function Composer({
         add_dirs: choice.agent === "none" ? [] : addDirs,
         cloud: cloudShown && cloud,
         workspace_id: workspaceFor(current.host),
+        // Copied into the worktree as a session design before the agent starts (X65).
+        design: design ? buildPick(design, left) : null,
         cols: 120,
         rows: 32,
       });
       close();
+      // Built from Design mode: the design's header says where it is building (X65).
+      if (design) {
+        void loadDesigns(current.host, design.workspace, true).catch(() => {});
+        return;
+      }
       // The checkbox decides for this session, before this Mac's daemon
       // would keep it for a project that keeps new sessions in sync.
       const sync = composerSync({ shown: syncShown, value: keepSync, touched: syncTouched });
@@ -514,7 +569,9 @@ export function Composer({
       if (task || worktree) leaveTasksMode();
       selectSession(current.host, s.id);
     } catch (e) {
-      errorToast(e);
+      // Build it says why in the composer, such as a design folder the base branch has (X65).
+      if (design) setRefused(errorMessage(e));
+      else errorToast(e);
     } finally {
       setBusy(false);
     }
@@ -538,7 +595,11 @@ export function Composer({
       ])
     : [];
 
-  const sent = attachments({ task, pr: pr && prSend ? pr : null, prContext });
+  const prefix = useStore((s) => config?.branch_prefix ?? gitSettingsOf(s.gitSettings, current?.host ?? "local").branch_prefix);
+  const built = design ? buildComposer(design, { sources: [], projects: [], prefix }) : null;
+  const designSent = design ? designAttachments(design, { systemName: design.systemName, dir: designDir(config), left }) : [];
+  const sent = [...designSent, ...attachments({ task, pr: pr && prSend ? pr : null, prContext })];
+  const thumbs = design ? { workspace: design.workspace, slug: design.slug, viewport: parseViewport(design.viewport ?? "") ?? ([1440, 900] as [number, number]) } : undefined;
   const row = branchRow({
     base: current?.project.base_branch ?? "base",
     task,
@@ -547,6 +608,7 @@ export function Composer({
     worktree: worktree ?? null,
     pr,
     checkbox: !!task?.assign,
+    named: built?.branch ?? null,
   });
 
   if (!options.length) {
@@ -564,7 +626,7 @@ export function Composer({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 pt-[12vh]" onMouseDown={close}>
+    <div className="fixed inset-0 z-50 flex flex-col items-center bg-black/60 pt-[12vh]" onMouseDown={close}>
       <div
         role="dialog"
         aria-label="New session"
@@ -592,7 +654,17 @@ export function Composer({
             )}
           />
           <span className="text-border-strong">|</span>
-          {task ? (
+          {design && built ? (
+            // The design is the composer's source (X65 Build it).
+            <span role="group" aria-label={built.chip} className="flex h-[30px] min-w-0 flex-1 items-center gap-2 rounded-lg bg-hover pl-2 pr-1.5 ui-text-13" title={design.name}>
+              <PenTool size={13} className="shrink-0 text-accent" />
+              <span className="min-w-0 truncate">{built.chip}</span>
+              <span className="flex-1" />
+              <IconButton title="Don’t build the design" className="shrink-0" onClick={() => (setDesign(null), setRefused(null))}>
+                <X size={12} />
+              </IconButton>
+            </span>
+          ) : task ? (
             // The task chip takes the spare width (X54).
             <span role="group" aria-label={`Task ${task.key}`} className="flex h-[30px] min-w-0 flex-1 items-center gap-2 rounded-lg bg-hover pl-2 pr-1.5 ui-text-13" title={task.title}>
               <BoardTile tracker={task.kind} />
@@ -788,8 +860,11 @@ export function Composer({
             <AttachmentRow
               key={a.id}
               a={a}
+              design={thumbs}
               onRemove={() => {
                 if (a.id === "pr") setPrSend(false);
+                // × leaves a design's page out of the copy and the message (X65).
+                if (a.page) setLeft((l) => [...l, a.page!]);
                 ta.current?.focus();
               }}
             />
@@ -814,7 +889,7 @@ export function Composer({
           <span className="ml-auto" />
           <PlusMenu variant="composer" onAttach={() => void attach()} onAddDir={() => void addDir()} />
           <button
-            disabled={busy || !current}
+            disabled={busy || !current || (!!design && !configRead)}
             title={current ? undefined : "Choose a project first"}
             className="flex items-center gap-2 rounded-lg bg-fg px-3 py-1.5 ui-text-14 font-medium text-bg hover:bg-white disabled:opacity-50"
             onClick={() => void create()}
@@ -822,7 +897,17 @@ export function Composer({
             {busy ? "Creating…" : "Create"} <CornerDownLeft size={14} />
           </button>
         </div>
+        {refused && (
+          <p role="alert" className="border-t border-border px-6 py-2.5 ui-text-12.5 text-error">
+            {refused}
+          </p>
+        )}
       </div>
+      {built && (
+        <p className="mt-2.5 w-[min(720px,90vw)] px-2 ui-text-12.5 text-faint" onMouseDown={(e) => e.stopPropagation()}>
+          {built.note}
+        </p>
+      )}
     </div>
   );
 }

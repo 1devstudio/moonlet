@@ -20,6 +20,8 @@ export interface BranchFacts {
   pr: { number: number; head_branch?: string | null } | null;
   /** The "session starts" checkbox shows in the row. */
   checkbox: boolean;
+  /** The branch Build it names for a design's session (X65). */
+  named?: string | null;
 }
 
 /**
@@ -45,7 +47,7 @@ export function branchRow(f: BranchFacts): BranchRow {
     const clear = f.task ? `Back to ${f.taskBranch ?? "the task's branch"} from ${f.base}` : `Create a new branch from ${f.base} instead`;
     return { kind: "branch", name: f.from.ref, detail: "existing branch", clear };
   }
-  const name = f.task ? (f.taskBranch ?? "…") : null;
+  const name = f.task ? (f.taskBranch ?? "…") : (f.named ?? null);
   if (f.from) return { kind: "branch", name, detail: `from ${f.from.ref}`, clear: `Start from ${f.base} instead` };
   return { kind: "branch", name, detail: `from ${f.base}`, clear: null };
 }
@@ -68,13 +70,18 @@ export interface AttachFacts extends Picks {
  * the ×'s title, null when it has none; `message` is what Create sends.
  */
 export interface Attachment {
-  id: "task" | "pr";
-  icon: "file" | "pr";
+  /** `task`, `pr`, or a design's (X65 Build it): `page:<page>` and `styles`. */
+  id: string;
+  icon: "file" | "pr" | "page" | "styles";
   lead: string;
   summary: string;
   body: string;
   remove: string | null;
   message: string;
+  /** A design's file, before the summary, as `index.html` (X65 Build it). */
+  file?: string;
+  /** A design's page, which the unfolded attachment shows (X65 Build it). */
+  page?: string;
 }
 
 /** A description's first line of text, without its Markdown markers. */
@@ -131,7 +138,7 @@ export function firstMessage(sent: Attachment[], typed: string): string | null {
 }
 
 /** The prompt's placeholder, by what is attached (not by what is picked: a removed PR attachment says nothing). */
-export function placeholder(attached: Attachment["id"][]): string {
+export function placeholder(attached: string[]): string {
   const has = { task: attached.includes("task"), pr: attached.includes("pr") };
   if (has.task && has.pr) return "Anything to add? e.g. “Address the review comments”";
   if (has.task) return "Anything to add? Leave empty to start from the issue.";

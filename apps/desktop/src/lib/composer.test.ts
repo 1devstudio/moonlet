@@ -31,6 +31,11 @@ describe("branchRow (X54)", () => {
     expect(branchRow({ ...facts, task: aio, from: { ref: "feature/login", existing: true } })).toMatchObject({ clear: "Back to the task's branch from main" });
   });
 
+  it("names the branch Build it gives a design's session, from the base (X65)", () => {
+    expect(branchRow({ ...facts, named: "marcin/implement-settings-page" })).toEqual({ kind: "branch", name: "marcin/implement-settings-page", detail: "from main", clear: null });
+    expect(branchRow({ ...facts, named: "marcin/implement-settings-page", from: { ref: "v2.1", existing: false } })).toEqual({ kind: "branch", name: "marcin/implement-settings-page", detail: "from v2.1", clear: "Start from main instead" });
+  });
+
   it("keeps an adopted worktree's branch, with no way out", () => {
     expect(branchRow({ ...facts, task: aio, taskBranch: "aio-279-x", worktree: { branch: "12-orphan-fix" } })).toEqual({ kind: "branch", name: "12-orphan-fix", detail: "existing worktree", clear: null });
   });
