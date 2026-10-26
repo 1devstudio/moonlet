@@ -3,6 +3,7 @@
 // is designStore.ts.
 
 import type { ChatItem, DesignCard, DesignStep, DesignSystem } from "./protocol";
+import { toolFile } from "./chat";
 
 const STEPS: { step: DesignStep; label: string }[] = [
   { step: "inventory", label: "Inventory" },
@@ -128,7 +129,7 @@ export function rewritingCard(items: ChatItem[], systemDir: string): string | nu
   for (let i = items.length - 1; i >= 0; i--) {
     const t = items[i].tool;
     if (!t || t.status !== "running" || (t.name !== "Write" && t.name !== "Edit")) continue;
-    const file = (t.input as { file_path?: string } | null)?.file_path ?? "";
+    const file = toolFile(t) ?? "";
     if (!file.startsWith(`${systemDir}/`)) continue;
     const rel = file.slice(systemDir.length + 1);
     const m = /^components\/([^/]+)\/([^/]+)\/[^/]+$/.exec(rel);

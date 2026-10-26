@@ -3,7 +3,7 @@
 // designStore.ts, the tab components/design/SessionDesign.tsx.
 
 import { pagePath } from "./designPage";
-import { commandOptions, fuzzyScore, toolCommand } from "./chat";
+import { commandOptions, fuzzyScore, toolCommand, toolFile } from "./chat";
 import type { ChatItem, ChatStatus, Design, DesignSystem, ToolCall } from "./protocol";
 
 /** `path` relative to the worktree it is in (`worktree`, with or without a
@@ -114,8 +114,7 @@ export function specReplies(items: readonly ChatItem[], status: ChatStatus | und
     .slice(start)
     .map((it) => it.tool)
     .filter((t): t is ToolCall => !!t && t.status === "ok" && WRITES.includes(t.name))
-    .map((t) => (t.input as { file_path?: unknown } | null)?.file_path)
-    .map((p) => (typeof p === "string" ? inWorktree(worktree, p) : ""))
+    .map((t) => inWorktree(worktree, toolFile(t) ?? ""))
     .find((p) => /^docs\/specs\/[^/]+\.md$/.test(p) && p !== "docs/specs/README.md");
   return spec ? [{ label: "Implement it", send: `Implement the spec ${spec}` }, { label: "Back to the design", send: null }] : null;
 }
