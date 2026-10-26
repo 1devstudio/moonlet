@@ -10,7 +10,7 @@ import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { $, browser, expect } from "@wdio/globals";
-import { BIN_DIR, closeSettings, fill, openSettings, rpc, sel, socketRpc, world } from "../fixtures";
+import { accountSnapshot, BIN_DIR, closeSettings, fill, openSettings, rpc, restoreAccount, sel, socketRpc, world } from "../fixtures";
 
 const w = world();
 const home = join(w.root, "sync-central-home");
@@ -59,10 +59,13 @@ describe("keep in sync", () => {
   let pairing: ChildProcess | undefined;
   let name = "";
   let sessionPath = "";
+  // What the app's daemon shared while linked goes again (X68).
+  let shared = { workspaces: [] as string[], sections: [] as string[] };
   const row = sel.sessionRow(SESSION);
   const mark = (text: string) => $(`${row}//button[starts-with(@aria-label, ${JSON.stringify(`Keep in sync: ${text}`)})]`);
 
   before(async () => {
+    shared = accountSnapshot(w);
     // The project: on this Mac as `shop`, and cloned on the central host.
     mkdirSync(join(original, ".moonlet"), { recursive: true });
     writeFileSync(join(original, ".moonlet", "config.toml"), 'setup = "touch ignored-by-setup"\n');
@@ -94,6 +97,7 @@ describe("keep in sync", () => {
     } catch {
       // Already gone.
     }
+    restoreAccount(w, shared);
   });
 
   it("pairs with the host and shows its session", async () => {

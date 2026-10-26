@@ -1,6 +1,7 @@
 // The workspace switcher (X32): one workspace is shown at a time, picked
 // from a menu in the title bar or with ⌃⌘1–9. Pure, so it is unit-tested.
 
+import type { ConfirmOptions } from "./confirmOptions";
 import type { ProfileInfo, Section, Session, Workspace, WorkspaceColor } from "./protocol";
 import { profileName } from "./profiles";
 import { workspaceSections } from "./sidebar";
@@ -34,8 +35,11 @@ export interface HostWorkspaces {
 
 export interface SwitcherRow {
   host: string;
-  /** The host's name above its first row, when there are several hosts. */
+  /** The host's name above its first row, when several hosts have rows. */
   hostLabel: string | null;
+  /** Every host listing the workspace: the members of an account share
+   * theirs (X68). */
+  hosts: string[];
   ws: Workspace;
   initial: string;
   summary: string;
@@ -46,16 +50,27 @@ export interface SwitcherRow {
 /** `1 section`, `2 sections`. */
 export const count = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
 
-/** The switcher menu's rows, in order: hosts as given, workspaces in each. */
+/** The switcher menu's rows, in order: hosts as given, workspaces in each.
+ * A workspace several hosts list, as the members of an account do (X68),
+ * shows once, under the first of them, with the sessions of all. */
 export function switcherRows(hosts: HostWorkspaces[]): SwitcherRow[] {
+  const seen = new Set<string>();
+  const own = hosts.map((h) => {
+    const list = h.workspaces.filter((ws) => !seen.has(ws.id));
+    list.forEach((ws) => seen.add(ws.id));
+    return { h, list };
+  });
+  const labelled = own.filter((o) => o.list.length).length > 1;
   const rows: SwitcherRow[] = [];
-  for (const h of hosts) {
-    h.workspaces.forEach((ws, i) => {
-      const live = h.sessions.filter((s) => !s.archived && s.workspace_id === ws.id).length;
+  for (const { h, list } of own) {
+    list.forEach((ws, i) => {
+      const listing = hosts.filter((x) => x.workspaces.some((w) => w.id === ws.id));
+      const live = listing.flatMap((x) => x.sessions).filter((s) => !s.archived && s.workspace_id === ws.id).length;
       const n = rows.length;
       rows.push({
         host: h.host,
-        hostLabel: hosts.length > 1 && i === 0 ? h.label : null,
+        hostLabel: labelled && i === 0 ? h.label : null,
+        hosts: listing.map((x) => x.host),
         ws,
         initial: workspaceInitial(ws.name),
         summary: `${count(ws.section_ids.length, "section")} · ${count(live, "session")} · ${profileName(ws, h.profiles)}`,
@@ -64,6 +79,27 @@ export function switcherRows(hosts: HostWorkspaces[]): SwitcherRow[] {
     });
   }
   return rows;
+}
+
+/** The workspaces `cur` can merge into (X68): the others its hosts list,
+ * which are the same account's. */
+export function mergeTargets(rows: SwitcherRow[], cur: SwitcherRow): SwitcherRow[] {
+  return rows.filter((r) => r !== cur && r.hosts.some((h) => cur.hosts.includes(h)));
+}
+
+/** The question before `from` merges into `into`. Two workspaces of one
+ * name are told apart as "this" and "the other". */
+export function mergePrompt(from: Workspace, into: Workspace): ConfirmOptions {
+  const same = from.name === into.name;
+  const n = from.section_ids.length;
+  const them = n === 1 ? "its" : "their";
+  const what = `the ${count(n, "section")} of ${same ? `this ${from.name}` : from.name}, with ${them} sessions,`;
+  const where = same ? `the other ${into.name}` : into.name;
+  return {
+    title: "Merge workspaces",
+    message: `Move ${what} into ${where}, and delete ${same ? "this one" : from.name}? Every Mac sharing them gets the change.`,
+    action: "Merge",
+  };
 }
 
 /** Where the sidebar is: a workspace of a host. */
@@ -81,12 +117,15 @@ export function parseWsKey(key: string): { host: string; id: string } {
   return { host: key.slice(0, at), id: key.slice(at + 1) };
 }
 
-/** Whether workspace `id` of `host` is the one shown. */
-export const isShown = (shown: WorkspaceRef | null, host: string, id: string) => shown?.host === host && shown.id === id;
+/** Whether workspace `id` of `host` is the one shown. Workspace ids are
+ * unique across hosts, and the members of an account list the same ones, so
+ * the shown workspace is shown on every host that lists it (X68). */
+export const isShown = (shown: WorkspaceRef | null, _host: string, id: string) => shown?.id === id;
 
 /** The remembered workspace while it still exists, else the first one. */
 export function currentWorkspace(cur: WorkspaceRef | null, hosts: HostWorkspaces[]): WorkspaceRef | null {
-  if (cur && hosts.some((h) => h.host === cur.host && h.workspaces.some((w) => w.id === cur.id))) return cur;
+  // On any host: another member may list it while this one cannot (X68).
+  if (cur && hosts.some((h) => h.workspaces.some((w) => w.id === cur.id))) return cur;
   const first = hosts.find((h) => h.workspaces.length);
   return first ? { host: first.host, id: first.workspaces[0].id } : null;
 }
@@ -202,9 +241,10 @@ export function composerTarget(host: string | undefined, workspace: string | und
   return shown;
 }
 
-/** The workspace "New section" adds to: the shown one on `host`, else the host's first. */
+/** The workspace "New section" adds to: the shown one when `host` lists
+ * it, else the host's first. */
 export function newSectionWorkspace(shown: WorkspaceRef | null, host: string, workspaces: Workspace[]): string | null {
-  return shown?.host === host ? shown.id : (workspaces[0]?.id ?? null);
+  return shown && workspaces.some((w) => isShown(shown, host, w.id)) ? shown.id : (workspaces[0]?.id ?? null);
 }
 
 /** Under a workspace page's name (X43): "Workspace on this Mac · 2 sections ·
