@@ -3897,6 +3897,35 @@ const MERGED_DESIGN: [(&str, &str); 5] = [
     ("docs/design/settings-page/system/styles.css", "@import \"tokens/colors.css\";\n"),
 ];
 
+/// X65 entry 12c: the Designs index frames a project design's first page
+/// from its base branch, with no checkout: `design.file {project, path}`
+/// gives the file's bytes from git's objects, by its path in the project's
+/// design folder, and nothing outside its designs.
+#[tokio::test]
+async fn a_project_designs_file_is_read_from_its_base_branch_for_the_designs_index() {
+    use base64::Engine;
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    let (ws, project, _) = workspace_with_session(&d, &mut c, &MERGED_DESIGN).await;
+    std::fs::remove_dir_all(d.home.path().join("repo/docs")).unwrap();
+    let found: serde_json::Value = c
+        .request(methods::DESIGN_FILE, serde_json::json!({"project": project.id, "path": "settings-page/pages/index.html"}))
+        .await
+        .unwrap();
+    assert_eq!(found["content_type"], "text/html; charset=utf-8");
+    let bytes = base64::engine::general_purpose::STANDARD.decode(found["content"].as_str().unwrap()).unwrap();
+    assert_eq!(String::from_utf8(bytes).unwrap(), "<link rel=\"stylesheet\" href=\"../system/styles.css\">\n<body data-mid=\"m1\">rows</body>\n");
+    for (call, refusal) in [
+        (serde_json::json!({"project": project.id, "path": "settings-page/../../README.md"}), "invalid_params: settings-page/../../README.md is no file of a project design on main".to_string()),
+        (serde_json::json!({"project": project.id, "path": "settings-page/pages/nope.html"}), "invalid_params: settings-page/pages/nope.html is no file of a project design on main".to_string()),
+        (serde_json::json!({"project": "nope", "path": "settings-page/pages/index.html"}), "invalid_params: no project \"nope\"".to_string()),
+        (serde_json::json!({"project": project.id, "workspace": ws, "path": "settings-page/pages/index.html"}), "invalid_params: name a design file by its project alone".to_string()),
+    ] {
+        let refused = c.request::<_, serde_json::Value>(methods::DESIGN_FILE, call.clone()).await;
+        assert_eq!(refused.map_err(|e| e.to_string()), Err(refusal), "{call}");
+    }
+}
+
 /// X65 entry 12: a session design merged into a project's base branch is
 /// listed as a project design, read from git without checking anything
 /// out, and `design.copy` starts a new workspace design from it: its pages
