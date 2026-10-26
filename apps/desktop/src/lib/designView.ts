@@ -3,7 +3,7 @@
 
 import { ago } from "./mobile";
 import { pagePath } from "./designPage";
-import { designFolder, placeHost, type DesignPlace } from "./designPlace";
+import { designFolder, placeHost, taggedSlug, type DesignPlace } from "./designPlace";
 import type { DesignCard, DesignSystem } from "./protocol";
 
 export interface CardGroup {
@@ -101,9 +101,21 @@ export function pageUrl(place: DesignPlace, design: string, page: string, rev = 
  *  snapshot's files and design systems' (`serves` in design_scheme.rs): a
  *  link in the page never shows the current page in the preview. */
 export function snapshotPageUrl(place: DesignPlace, design: string, n: number, page: string): string {
-  const folder = designFolder(place, `${design}@${n}`);
+  const folder = designFolder(place, taggedSlug(design, n));
   const path = `${folder}/${pagePath(page)}`;
   return designUrl(place, path, 0, {}, `${fnv1a64(path)}s${fnv1a64(folder)}`);
+}
+
+/** Page `page` of project design `design` of project `project` (X65): a
+ *  session design merged into the project's base branch, its file read
+ *  from git's objects (`design.file {project, path}`). On a host of its
+ *  own, `<page key>s<folder key>.p-<project>`, its path relative to the
+ *  project's design folder, on which the scheme serves only that design's
+ *  files, its pinned styles in its `system/` (`serves` in
+ *  design_scheme.rs), and never with the bridge: it is read only. */
+export function projectPageUrl(project: string, design: string, page: string): string {
+  const path = `${design}/${pagePath(page)}`;
+  return `moonlet-design://${fnv1a64(path)}s${fnv1a64(design)}.p-${encodeURIComponent(project)}/${path.split("/").map(encodeURIComponent).join("/")}`;
 }
 
 /** The 64-bit FNV-1a hash of `text`'s UTF-8 bytes, as 16 lowercase hex digits. */

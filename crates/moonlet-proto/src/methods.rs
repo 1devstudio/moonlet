@@ -1386,9 +1386,13 @@ pub struct DesignFile {
     pub workspace: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
+    /// Alone: a file of that project's designs on its base branch, read
+    /// from git's objects, given as its bytes (X65 entry 12c).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
     /// Relative to the workspace's design folder, such as
-    /// `systems/<slug>/styles.css`; or to the worktree's, such as
-    /// `settings-page/pages/index.html`.
+    /// `systems/<slug>/styles.css`; or to the worktree's or the project's,
+    /// such as `settings-page/pages/index.html`.
     pub path: String,
 }
 

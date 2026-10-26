@@ -102,6 +102,38 @@ async fn blob(repo: &Path, id: &str) -> Result<Vec<u8>> {
     git::git(repo, &["cat-file", "blob", id]).await
 }
 
+/// A file of a project design that is none, or that the base branch does
+/// not have.
+#[derive(Debug, thiserror::Error)]
+#[error("{path} is no file of a project design on {base}")]
+pub struct NoProjectFile {
+    pub path: String,
+    pub base: String,
+}
+
+/// A file of a project design, `<slug>/<file>` in the project's design
+/// folder `dir` on its base branch `base`, read from git's objects, never
+/// checked out (X65): the Designs index frames a project design's first
+/// page from it. Only a file of a folder right under `dir` with a
+/// `design.toml`, a plain file (never a link or a submodule), by a path
+/// with no empty, `.` or `..` part.
+pub async fn project_file(repo: &Path, base: &str, dir: &str, rel: &str) -> Result<Vec<u8>> {
+    let no_file = || NoProjectFile { path: rel.to_string(), base: base.to_string() };
+    let parts: Vec<&str> = rel.split('/').collect();
+    let [slug, rest @ ..] = parts.as_slice() else {
+        return Err(no_file().into());
+    };
+    let plain = |p: &&str| !p.is_empty() && *p != "." && *p != "..";
+    if rest.is_empty() || !rest.iter().all(plain) || super::place::check_slug(slug).is_err() {
+        return Err(no_file().into());
+    }
+    let dir = dir.trim_end_matches('/');
+    let listing = ls_tree(repo, base, &format!("{dir}/{slug}")).await?;
+    let design = tree_designs(&listing, dir).into_iter().find(|d| d.slug == *slug).ok_or_else(no_file)?;
+    let id = design.files.get(&rest.join("/")).ok_or_else(no_file)?;
+    blob(repo, id).await
+}
+
 /// The project `project`'s designs on its base branch `base`, in its
 /// design folder `dir`, read from git's objects (X65). One whose
 /// `design.toml` cannot be read lists with its error.
@@ -306,5 +338,64 @@ mod tests {
         // Another folder lists nothing of these, and an empty tree nothing.
         assert_eq!(tree_designs(LS_TREE, "design"), vec![]);
         assert_eq!(tree_designs("", "docs/design"), vec![]);
+    }
+
+    /// A repository whose `main` has the design `settings-page` (a page, its
+    /// pinned styles, a link in it), a folder without a `design.toml` and a
+    /// README beside them, and a newer page on a branch that is not `main`.
+    fn repo_with_a_merged_design() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git").args(args).current_dir(repo).output().unwrap();
+            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        };
+        git(&["init", "-q", "-b", "main"]);
+        for (path, text) in [
+            ("docs/design/settings-page/design.toml", "name = \"Settings page\"\nsystem = \"moonlet-desktop\"\n"),
+            ("docs/design/settings-page/pages/index.html", "<body data-mid=\"m1\">rows</body>\n"),
+            ("docs/design/settings-page/system/styles.css", "body { margin: 0; }\n"),
+            ("docs/design/drafts/pages/index.html", "<p>draft</p>\n"),
+            ("docs/design/README.md", "designs\n"),
+            ("secret.txt", "not a design's\n"),
+        ] {
+            std::fs::create_dir_all(repo.join(path).parent().unwrap()).unwrap();
+            std::fs::write(repo.join(path), text).unwrap();
+        }
+        std::os::unix::fs::symlink("../../../../secret.txt", repo.join("docs/design/settings-page/pages/link.html")).unwrap();
+        git(&["add", "-A"]);
+        git(&["-c", "user.email=t@moonlet.test", "-c", "user.name=t", "commit", "-qm", "design"]);
+        git(&["checkout", "-qb", "next"]);
+        std::fs::write(repo.join("docs/design/settings-page/pages/index.html"), "<body data-mid=\"m1\">cards</body>\n").unwrap();
+        git(&["-c", "user.email=t@moonlet.test", "-c", "user.name=t", "commit", "-qam", "next"]);
+        dir
+    }
+
+    #[tokio::test]
+    async fn a_project_designs_file_is_read_from_the_base_branchs_objects_and_never_outside_the_design() {
+        let dir = repo_with_a_merged_design();
+        let repo = dir.path();
+        let file = |rel: &'static str| project_file(repo, "main", "docs/design", rel);
+        // The base branch's, whatever the checkout has.
+        assert_eq!(file("settings-page/pages/index.html").await.unwrap(), b"<body data-mid=\"m1\">rows</body>\n");
+        assert_eq!(file("settings-page/system/styles.css").await.unwrap(), b"body { margin: 0; }\n");
+        for bad in [
+            "settings-page/pages/link.html",
+            "settings-page/pages/nope.html",
+            "settings-page/../../../secret.txt",
+            "settings-page/./design.toml",
+            "settings-page//design.toml",
+            "settings-page",
+            "drafts/pages/index.html",
+            "README.md",
+            "../secret.txt",
+        ] {
+            assert_eq!(
+                file(bad).await.map_err(|e| e.to_string()),
+                Err(format!("{bad} is no file of a project design on main")),
+                "{bad}"
+            );
+        }
+        assert!(project_file(repo, "--output=x", "docs/design", "settings-page/design.toml").await.is_err());
     }
 }

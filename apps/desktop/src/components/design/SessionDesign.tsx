@@ -3,13 +3,15 @@
 // chat is the session's own, beside it, which the tab neither folds nor
 // opens; the file above the page is its path in the worktree.
 
-import { useEffect, useMemo, type RefObject } from "react";
-import { ChevronDown, PenTool } from "lucide-react";
+import { useEffect, useMemo, useState, type RefObject } from "react";
+import { ChevronDown, Columns2, PenTool } from "lucide-react";
+import { DesignAndBuild } from "./DesignAndBuild";
 import type { Design, Session } from "../../lib/protocol";
-import { designCanvasKey, commentsOf, loadComments, sessionDesignsOf, showSessionDesign, shownSessionDesign, systemsOf, useDesign } from "../../lib/designStore";
+import { designCanvasKey, commentsOf, loadComments, openSessionDesign, sessionDesignsOf, showSessionDesign, shownSessionDesign, systemsOf, useDesign } from "../../lib/designStore";
 import { projectOf, useStore } from "../../lib/store";
 import { sendWithEdits, type ToldDesign } from "../../lib/designEditor";
-import { designSystemFooter, inWorktree, opensDesignView, worktreeFile } from "../../lib/sessionDesign";
+import { designSystemFooter, inWorktree, opensDesignView, specReplies, worktreeFile } from "../../lib/sessionDesign";
+import { chatKey, useChat, type SuggestedReply } from "../../lib/chat";
 import { Empty } from "../ui";
 import { Menu } from "../Menu";
 import { AgentView } from "../AgentView";
@@ -29,6 +31,8 @@ const SESSION_CHAT: CanvasChat = { open: true, setOpen: () => {}, root: WHOLE_DO
 
 export function SessionDesignTab({ host, ws }: { host: string; ws: Session }) {
   const design = useDesign((d) => shownSessionDesign(d, host, ws.id));
+  // The canvas, or the PR's Design and build: each page beside its built screen.
+  const [build, setBuild] = useState(false);
   if (!design) {
     return (
       <Empty icon={<PenTool size={20} className="text-faint" />} title="No design in this session">
@@ -37,11 +41,13 @@ export function SessionDesignTab({ host, ws }: { host: string; ws: Session }) {
     );
   }
   // Another session's design of the same slug is another canvas.
-  return <SessionCanvas key={designCanvasKey(host, { session: ws.id }, design.slug)} host={host} ws={ws} design={design} />;
+  const key = designCanvasKey(host, { session: ws.id }, design.slug);
+  if (build) return <DesignAndBuild key={key} host={host} ws={ws} design={design} onBack={() => setBuild(false)} />;
+  return <SessionCanvas key={key} host={host} ws={ws} design={design} onBuild={() => setBuild(true)} />;
 }
 
 /** The canvas of the design a session's Design tab shows. */
-function SessionCanvas({ host, ws, design }: { host: string; ws: Session; design: Design }) {
+function SessionCanvas({ host, ws, design, onBuild }: { host: string; ws: Session; design: Design; onBuild: () => void }) {
   const designs = useDesign((d) => sessionDesignsOf(d, host, ws.id));
   const workspace = ws.workspace_id ?? "";
   const { agent, systemName } = useDesignBasics(host, workspace, design);
@@ -49,18 +55,27 @@ function SessionCanvas({ host, ws, design }: { host: string; ws: Session; design
   const place = useMemo(() => ({ session: ws.id }), [ws.id]);
   const peers = useMemo(() => sharing(designs, design.agent, ws), [designs, design.agent, ws]);
   // Several designs: the tab shows one, picked here.
-  const picker =
+  const pick =
     designs.length > 1 ? (
       <Menu
         align="right"
         items={designs.map((d) => ({ label: d.name, hint: d.slug, checked: d.slug === design.slug, onSelect: () => showSessionDesign(host, ws.id, d.slug) }))}
         trigger={(open) => (
-          <button aria-label="Design" onClick={open} className="ml-auto flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 ui-text-13 text-muted hover:bg-panel-2 hover:text-fg">
+          <button aria-label="Design" onClick={open} className="flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 ui-text-13 text-muted hover:bg-panel-2 hover:text-fg">
             {design.name} <ChevronDown size={12} className="text-faint" />
           </button>
         )}
       />
     ) : null;
+  // The PR's Design and build, at the end of the page tabs (X65).
+  const picker = (
+    <span className="ml-auto flex shrink-0 items-center gap-1">
+      <button title="Each page beside a screenshot of its built screen" onClick={onBuild} className="flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 ui-text-13 text-muted hover:bg-panel-2 hover:text-fg">
+        <Columns2 size={13} /> Design and build
+      </button>
+      {pick}
+    </span>
+  );
   return (
     <div className="flex h-full min-h-0">
       <DesignCanvas
@@ -125,6 +140,20 @@ export function SessionChat({ host, id, wsId, focused, visible }: { host: string
   const systems = useDesign((d) => (session?.workspace_id ? systemsOf(d, host, session.workspace_id) : undefined));
   // The forms show at once; the footer once the workspace's systems are listed.
   const slash = useMemo(() => ({ footer: systems && project ? designSystemFooter(systems, project) : null }), [systems, project]);
+  // Once its agent wrote a spec from the design: Implement it, Back to the design (X65).
+  const items = useChat((s) => s.chats[chatKey(host, id)]?.items);
+  const status = useChat((s) => s.chats[chatKey(host, id)]?.status);
+  const replies = useMemo(() => (session ? specReplies(items ?? [], status, session.path, designs.length > 0) : null), [items, status, session, designs.length]);
+  // The replies that are no message: Back to the design opens the Design tab.
+  const onReply = (r: Exclude<SuggestedReply, { kind: "send" }>) => {
+    switch (r.kind) {
+      case "design": {
+        const shown = shownSessionDesign(useDesign.getState(), host, wsId);
+        if (session && shown) void openSessionDesign(host, session.workspace_id ?? "", wsId, shown.slug, false);
+      }
+    }
+  };
+
   return (
     <AgentView
       host={host}
@@ -134,6 +163,8 @@ export function SessionChat({ host, id, wsId, focused, visible }: { host: string
       visible={visible}
       toolNote={(t) => (t.tool && opensDesignView(t.tool) ? <DesignOpenedNote /> : null)}
       designSlash={slash}
+      replies={replies}
+      onReply={onReply}
       userView={own ? (text) => designMessage(text, pinsOf, true) : undefined}
       sendText={own ? (text, images) => sendWithEdits(host, own.place, own.slug, id, text, images, peers) : undefined}
     />

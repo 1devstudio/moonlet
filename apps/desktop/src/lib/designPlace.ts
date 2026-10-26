@@ -26,6 +26,20 @@ export function designFolder(place: DesignPlace, slug: string): string {
   return isSession(place) ? slug : `designs/${slug}`;
 }
 
+/** A session design's side folder in its worktree, which git ignores: its
+ *  comments, history, built screenshots and the agent's copy of its design
+ *  system (`SIDE_DIR` in design/session.rs). */
+export function sideFolder(slug: string): string {
+  return `.moonlet/design/${slug}`;
+}
+
+/** The folder the `moonlet-design://` scheme and `design.file` name beside
+ *  a design's own: a snapshot's, `<slug>@<n>`, or its built screenshots',
+ *  `<slug>@built` (X65). */
+export function taggedSlug(slug: string, tag: number | "built"): string {
+  return `${slug}@${tag}`;
+}
+
 /** The place a `design.change` names: its session's, else its workspace's. */
 export function changePlace(change: DesignChanged): DesignPlace {
   return change.session ? { session: change.session } : change.workspace;

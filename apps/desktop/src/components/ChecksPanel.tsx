@@ -5,6 +5,9 @@ import { rpc } from "../lib/daemon";
 import { M, type Commit, type PullRequest, type Session } from "../lib/protocol";
 import { pollPr, useStore, sesKey } from "../lib/store";
 import { Button, Empty, prTone } from "./ui";
+import { sessionDesignsOf, useDesign } from "../lib/designStore";
+import { DesignBuildSection } from "./design/DesignAndBuild";
+import { NEAR_ROOT } from "../lib/useNear";
 
 function CheckIcon({ status, conclusion }: { status: string; conclusion: string | null }) {
   if (status !== "completed" && !conclusion) return <LoaderCircle size={13} className="spin text-working" />;
@@ -20,6 +23,7 @@ export function ChecksPanel({ host, ws }: { host: string; ws: Session }) {
   const pr = useStore((s): PullRequest | null | undefined => s.prs[sesKey(host, ws.id)]);
   const [prError, setPrError] = useState<string | null>(null);
   const [log, setLog] = useState<Commit[]>([]);
+  const designs = useDesign((d) => sessionDesignsOf(d, host, ws.id));
 
   useEffect(() => {
     let live = true;
@@ -40,7 +44,7 @@ export function ChecksPanel({ host, ws }: { host: string; ws: Session }) {
   }, [host, ws.id, ws.path, ws.base]);
 
   return (
-    <div className="h-full overflow-y-auto p-3 ui-text-13">
+    <div className="h-full overflow-y-auto p-3 ui-text-13" {...{ [NEAR_ROOT]: "" }}>
       <section className="mb-4">
         <h3 className="mb-2 ui-text-11 font-semibold uppercase tracking-wider text-faint">Branch</h3>
         <div className="space-y-1 text-muted">
@@ -95,6 +99,11 @@ export function ChecksPanel({ host, ws }: { host: string; ws: Session }) {
           </div>
         )}
       </section>
+
+      {/* The PR's Design and build: each page of the session's designs beside its built screen (X65). */}
+      {designs.map((d) => (
+        <DesignBuildSection key={d.slug} host={host} ws={ws} design={d} />
+      ))}
 
       <section>
         <h3 className="mb-2 ui-text-11 font-semibold uppercase tracking-wider text-faint">Commits on this branch</h3>

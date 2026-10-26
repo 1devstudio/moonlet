@@ -33,11 +33,13 @@ pub struct Target {
 }
 
 /// Whose design folder a URL names: a workspace's, under the design root,
-/// or a session's worktree's (X65).
+/// a session's worktree's, or a project's on its base branch, read from
+/// git's objects (X65).
 #[derive(Debug, PartialEq, Eq)]
 pub enum Place {
     Workspace(String),
     Session(String),
+    Project(String),
 }
 
 /// The policy every file asked on `host` is served with: a page may load
@@ -92,10 +94,11 @@ pub fn target(url: &str) -> Option<Target> {
                 .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
         ok.then_some(id)
     };
-    let place = match place.strip_prefix("s-") {
-        Some(_) if key.is_none() => return None,
-        Some(session) => Place::Session(id(session)?),
-        None => Place::Workspace(id(place)?),
+    let place = match (place.strip_prefix("s-"), place.strip_prefix("p-")) {
+        (Some(_), _) | (_, Some(_)) if key.is_none() => return None,
+        (Some(session), _) => Place::Session(id(session)?),
+        (_, Some(project)) => Place::Project(id(project)?),
+        _ => Place::Workspace(id(place)?),
     };
     Some(Target {
         host: host.to_string(),
@@ -117,15 +120,19 @@ pub fn serves(t: &Target) -> bool {
         return true;
     };
     let Some((page, folder)) = key.split_once('s') else {
-        return true;
+        // A project design's host always names its design's folder.
+        return !matches!(t.place, Place::Project(_));
     };
     let hex = |k: &str| k.len() == 16 && k.bytes().all(|b| b.is_ascii_hexdigit());
     if !hex(page) || !hex(folder) {
         return false;
     }
-    if let Place::Session(_) = t.place {
-        let named = path.split('/').next().unwrap_or_default();
-        return named.contains('@') && fnv1a64(named) == folder;
+    let named = path.split('/').next().unwrap_or_default();
+    match t.place {
+        Place::Session(_) => return named.contains('@') && fnv1a64(named) == folder,
+        // A project design's own files, its pinned styles in its `system/`.
+        Place::Project(_) => return !named.contains('@') && fnv1a64(named) == folder,
+        Place::Workspace(_) => {}
     }
     if path.starts_with("systems/") {
         return true;
@@ -166,6 +173,21 @@ pub fn measuring(url: &str) -> bool {
 /// (`?moonlet-bridge=1`, X65).
 pub fn bridging(url: &str) -> bool {
     asks(url, "moonlet-bridge")
+}
+
+/// The script served first in an HTML page asked for at `url` on `place`:
+/// the render page's measuring script, or the canvas's bridge; none for a
+/// project design, which is only ever shown, read only (X65).
+pub fn script_for(place: &Place, url: &str) -> Option<&'static str> {
+    if matches!(place, Place::Project(_)) {
+        None
+    } else if measuring(url) {
+        Some(MEASURE)
+    } else if bridging(url) {
+        Some(BRIDGE)
+    } else {
+        None
+    }
 }
 
 /// Whether `url`'s query has the parameter `name`.
@@ -249,9 +271,11 @@ pub async fn serve(app: &tauri::AppHandle, url: &str) -> tauri::http::Response<V
     let Ok(local) = hosts.get("local") else {
         return reply(404, "the daemon is not running");
     };
+    let script = script_for(&place, url);
     let params = match &place {
         Place::Workspace(workspace) => serde_json::json!({ "workspace": workspace, "path": path }),
         Place::Session(session) => serde_json::json!({ "session": session, "path": path }),
+        Place::Project(project) => serde_json::json!({ "project": project, "path": path }),
     };
     let file = match local
         .request(moonlet_proto::methods::DESIGN_FILE, params)
@@ -279,20 +303,18 @@ pub async fn serve(app: &tauri::AppHandle, url: &str) -> tauri::http::Response<V
         }
         // A session design's file comes with its bytes, read by the daemon
         // through its folder opened once: the worktree is writable, so a
-        // path read here could lead through a link swapped in meanwhile.
-        Place::Session(_) => match content(&file) {
+        // path read here could lead through a link swapped in meanwhile. A
+        // project design's has no path on disk: its bytes come with it too.
+        Place::Session(_) | Place::Project(_) => match content(&file) {
             Some(body) => body,
             None => return reply(404, "no such design file"),
         },
     };
-    // The render page's card measures itself, in its own sandboxed frame.
-    let body = if measuring(url) && content_type.starts_with("text/html") {
-        with_script(&body, format!("<script>{MEASURE}</script>").as_bytes())
-    } else if bridging(url) && content_type.starts_with("text/html") {
-        // The canvas's page outlines and reports its elements (X65).
-        with_script(&body, format!("<script>{BRIDGE}</script>").as_bytes())
-    } else {
-        body
+    // The render page's card measures itself, and the canvas's page outlines
+    // and reports its elements (X65), each in its own sandboxed frame.
+    let body = match script {
+        Some(js) if content_type.starts_with("text/html") => with_script(&body, format!("<script>{js}</script>").as_bytes()),
+        _ => body,
     };
     let mut res = tauri::http::Response::builder().status(200);
     for (name, value) in headers(content_type, &host) {
@@ -314,7 +336,8 @@ pub fn read_inside(
 }
 
 /// The bytes `design.file` gives with a file, its `content` in base64 (a
-/// session design's, X65); `None` when it gives none, never a path to read.
+/// session or a project design's, X65); `None` when it gives none, never a
+/// path to read.
 pub fn content(file: &serde_json::Value) -> Option<Vec<u8>> {
     use base64::Engine;
     base64::engine::general_purpose::STANDARD.decode(file["content"].as_str()?).ok()
@@ -626,6 +649,45 @@ mod tests {
         }
         // A session design's own page serves as a workspace design's does.
         assert!(serves_at("19a1c555a197e847.s-4f2a9c1e7b3d", "settings-page/pages/index.html"));
+    }
+
+    #[test]
+    fn a_project_designs_own_host_names_its_key_and_its_project() {
+        // As `pageUrl({project}, …)` asks for a project design's first page:
+        // its page's key, an `s`, then its folder's.
+        assert_eq!(
+            target("moonlet-design://19a1c555a197e847s9ff8f03cf1cd3824.p-p1a2b3c4d5e6/settings-page/pages/index.html"),
+            Some(Target {
+                host: "19a1c555a197e847s9ff8f03cf1cd3824.p-p1a2b3c4d5e6".to_string(),
+                key: Some("19a1c555a197e847s9ff8f03cf1cd3824".to_string()),
+                place: Place::Project("p1a2b3c4d5e6".to_string()),
+                path: "settings-page/pages/index.html".to_string(),
+            })
+        );
+        for bad in [
+            // A project's host always has its key.
+            "moonlet-design://p-p1a2b3c4d5e6/settings-page/pages/index.html",
+            "moonlet-design://19a1c555a197e847s9ff8f03cf1cd3824.p-/settings-page/pages/index.html",
+            "moonlet-design://19a1c555a197e847s9ff8f03cf1cd3824.p-%2e%2e/settings-page/pages/index.html",
+            "moonlet-design://19a1c555a197e847s9ff8f03cf1cd3824.p-p1a2b3c4d5e6/settings-page/../../README.md",
+        ] {
+            assert_eq!(target(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_project_designs_host_serves_only_that_designs_files_and_never_with_the_bridge() {
+        let host = "19a1c555a197e847s9ff8f03cf1cd3824.p-p1a2b3c4d5e6";
+        for path in ["settings-page/pages/index.html", "settings-page/pages/git-a.html", "settings-page/system/styles.css", "settings-page/assets/logo.svg"] {
+            assert!(serves_at(host, path), "{path}");
+        }
+        for path in ["checkout-flow/pages/index.html", "README.md", "settings-page@3/pages/index.html"] {
+            assert!(!serves_at(host, path), "{path}");
+        }
+        // A key that names no folder serves nothing.
+        assert!(!serves_at("19a1c555a197e847.p-p1a2b3c4d5e6", "settings-page/pages/index.html"));
+        let url = "moonlet-design://19a1c555a197e847s9ff8f03cf1cd3824.p-p1a2b3c4d5e6/settings-page/pages/index.html?moonlet-bridge=1";
+        assert_eq!(script_for(&target(url).unwrap().place, url), None);
     }
 
     #[test]

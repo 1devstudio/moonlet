@@ -2,6 +2,7 @@
 // the attachments it sends before the user's text.
 
 import { withoutComments } from "./markdown";
+import { composerSync } from "./sync";
 import type { IssueRef } from "./protocol";
 import { linkChoices } from "./taskLinking";
 import { githubRepo, prPointsAt, type Task } from "./tasks";
@@ -20,6 +21,8 @@ export interface BranchFacts {
   pr: { number: number; head_branch?: string | null } | null;
   /** The "session starts" checkbox shows in the row. */
   checkbox: boolean;
+  /** The branch Build it names for a design's session (X65). */
+  named?: string | null;
 }
 
 /**
@@ -45,7 +48,7 @@ export function branchRow(f: BranchFacts): BranchRow {
     const clear = f.task ? `Back to ${f.taskBranch ?? "the task's branch"} from ${f.base}` : `Create a new branch from ${f.base} instead`;
     return { kind: "branch", name: f.from.ref, detail: "existing branch", clear };
   }
-  const name = f.task ? (f.taskBranch ?? "…") : null;
+  const name = f.task ? (f.taskBranch ?? "…") : (f.named ?? null);
   if (f.from) return { kind: "branch", name, detail: `from ${f.from.ref}`, clear: `Start from ${f.base} instead` };
   return { kind: "branch", name, detail: `from ${f.base}`, clear: null };
 }
@@ -68,13 +71,18 @@ export interface AttachFacts extends Picks {
  * the ×'s title, null when it has none; `message` is what Create sends.
  */
 export interface Attachment {
-  id: "task" | "pr";
-  icon: "file" | "pr";
+  /** `task`, `pr`, or a design's (X65 Build it): `page:<page>` and `styles`. */
+  id: "task" | "pr" | "styles" | `page:${string}`;
+  icon: "file" | "pr" | "page" | "styles";
   lead: string;
   summary: string;
   body: string;
   remove: string | null;
   message: string;
+  /** A design's file, before the summary, as `index.html` (X65 Build it). */
+  file?: string;
+  /** A design's page, which the unfolded attachment shows (X65 Build it). */
+  page?: string;
 }
 
 /** A description's first line of text, without its Markdown markers. */
@@ -139,9 +147,36 @@ export function placeholder(attached: Attachment["id"][]): string {
   return "What do you want to work on?";
 }
 
-/** The session's name: the task's title, else the PR's; null names it after the prompt (X5). */
-export function sessionName(f: Picks): string | null {
-  return f.task?.title ?? f.pr?.title ?? null;
+/** The session's name: the task's title, else the PR's, else Build it's
+ *  (X65); null names it after the prompt (X5). */
+export function sessionName(f: Picks & { build?: { name: string } | null }): string | null {
+  return f.task?.title ?? f.pr?.title ?? f.build?.name ?? null;
+}
+
+/** The new branch Create asks for: the task's (X44 template), else Build
+ *  it's (X65); null lets the daemon name it after the prompt. */
+export function newBranch(f: { taskBranch: string | null; build: { branch: string } | null }): string | null {
+  return f.taskBranch ?? f.build?.branch ?? null;
+}
+
+/** What Create does once `session.create` made the session. */
+export interface AfterCreate {
+  /** The Keep in sync checkbox's choice for it (`composerSync`). */
+  sync: "keep" | "decline" | null;
+  /** Lists the design's workspace's designs again, so its header says
+   *  Building in (X65 Build it). */
+  designs: boolean;
+  /** Selects the session in Sessions mode. */
+  select: boolean;
+}
+
+/** What Create does once the session is made: the Keep in sync checkbox
+ *  decides for every session, Build it's too, before this Mac's daemon
+ *  would keep it for a project that keeps new sessions in sync; then Build
+ *  it lists its design's workspace's designs again and stays in Design
+ *  mode, and any other create selects the session. */
+export function afterCreate(f: { building: boolean; box: { shown: boolean; value: boolean | null; touched: boolean } }): AfterCreate {
+  return { sync: composerSync(f.box), designs: f.building, select: !f.building };
 }
 
 /** A branch by its first two parts: `web-279-remove-…` is `web-279-…`. */

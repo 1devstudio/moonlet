@@ -5,7 +5,7 @@
 // Palette, Comments and History tabs; a snapshot picked in History is
 // previewed on the canvas, read only.
 
-import { ArrowRight, ChevronDown, History as HistoryIcon, LayoutGrid, Loader2, Lock, MessageSquare, MoreHorizontal, PanelLeftClose, PanelLeftOpen, PanelRight, SwatchBook, Trash2, Undo2 } from "lucide-react";
+import { ArrowRight, ChevronDown, GitBranch, History as HistoryIcon, LayoutGrid, Loader2, Lock, MessageSquare, MoreHorizontal, PanelLeftClose, PanelLeftOpen, PanelRight, SwatchBook, Trash2, Undo2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type MutableRefObject, type ReactNode, type RefObject, type SetStateAction } from "react";
 import { errorToast, toast, updateSettings, useStore } from "../../lib/store";
 import { chatKey, useChat } from "../../lib/chat";
@@ -34,6 +34,7 @@ import {
   systemNameOf,
   systemsOf,
   justOpened,
+  openSessionDesign,
   tookOpened,
   useDesign,
   designCanvasKey,
@@ -46,7 +47,7 @@ import { selectionOf } from "../../lib/designInspector";
 import { snippetDrags, snippetsOf, type Snippet } from "../../lib/designPalette";
 import { pageUrl, snapshotPageUrl } from "../../lib/designView";
 import { previewBar, previewStep, snapshotTime, type Preview } from "../../lib/designHistory";
-import { VIEWPORTS, canvasKey, canvasScale, canvasZoom, customViewports, fitBox, parseViewport, sizeOf, sizeText, viewportLabel, viewportText, withCustomViewport, type Size } from "../../lib/designViewport";
+import { VIEWPORTS, canvasKey, canvasScale, canvasZoom, customViewports, fitBox, sizeOf, sizeText, viewportLabel, viewportOf, viewportText, withCustomViewport, type Size } from "../../lib/designViewport";
 import { canvasTakesKeys, inTabAfter, breadcrumb, dragEdit, hintLine, pickEdit, canvasPage, canvasStep, chatAfter, editorStep, isTyping, keyAct, layerPick, modeEntered, onReport, undoOpen, writingPage, type CanvasAct, type CanvasMode, type CanvasState, type ChatPanel, type KeyAct, type RailTab } from "../../lib/designCanvas";
 import { keyId } from "../../lib/runActions";
 import { chatCardLookup, commentCardSelector, commentsRail, commentsTab, keepAction, openCommentsLabel, pageCounts, sendAll } from "../../lib/designComments";
@@ -56,6 +57,9 @@ import { barProblems, chatOpensOn, designBar, pageFixMessage, type Bar, type Bar
 import { claimKeys } from "../../lib/keys";
 import { askConfirm } from "../../lib/confirm";
 import { NEAR_ROOT, useNear } from "../../lib/useNear";
+import { useShallow } from "zustand/react/shallow";
+import { workspaceProjects } from "../../lib/tasksStore";
+import { buildProject, buildingIn, type BuildDesign } from "../../lib/buildIt";
 import { cx } from "../../lib/cx";
 import { AgentIcon, Button, Dialog, Field, IconButton, inputCls } from "../ui";
 import { Menu } from "../Menu";
@@ -80,8 +84,6 @@ const RAIL_TABS: { tab: RailTab; label: string }[] = [
   { tab: "history", label: "History" },
 ];
 
-/** A design's viewport until it has one: Desktop. */
-const DEFAULT_VIEWPORT = VIEWPORTS[0].size;
 
 /** What a design's chat and canvas both show of it: its agent while it is
  *  running in a structured chat, else null (a session design's is its
@@ -100,6 +102,18 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
   const comments = useDesign((d) => commentsOf(d, host, workspace, design.slug));
   const [chatOpen, setChatOpen] = useState(true);
   const chatRef = useRef<HTMLElement>(null);
+  // Build it (X65): the New session composer, in the design system's first source.
+  const systems = useDesign((d) => systemsOf(d, host, workspace));
+  const projects = useStore(useShallow((s) => workspaceProjects(s, host, workspace)));
+  const sessions = useStore((s) => s.sessions[host]);
+  const allProjects = useStore((s) => s.projects[host]);
+  const building = buildingIn(design, sessions ?? [], allProjects ?? []);
+  const buildIt = () => {
+    const sources = systems?.find((x) => x.slug === design.system)?.sources ?? [];
+    const project = buildProject(sources, projects);
+    const build: BuildDesign = { workspace, slug: design.slug, name: design.name, system: design.system, pages: design.pages, systemName, viewport: design.viewport };
+    useStore.setState({ dialog: { kind: "new-session", host, workspace, project: project ?? undefined, design: build } });
+  };
   const remove = async () => {
     const ok = await askConfirm({ title: `Remove ${design.name}?`, message: `Its folder, designs/${design.slug}, its pages and its agent's chat are deleted.`, action: "Remove", variant: "danger" });
     if (ok) void removeDesign(host, workspace, design.slug).catch(errorToast);
@@ -113,11 +127,13 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
               <h1 className="truncate ui-text-14 font-semibold text-fg">{design.name}</h1>
               <p className="truncate ui-text-12 text-muted">{designSubtitle(systemName, design.pages.length)}</p>
             </div>
-            <span title="Build it comes with a later entry of Design mode: it starts a session with this design attached" className="no-drag">
-              <Button size="sm" disabled>
-                Build it <ArrowRight size={12} />
-              </Button>
-            </span>
+            {!building && (
+              <span title="A session in the design system's first source project, with this design attached" className="no-drag">
+                <Button size="sm" onClick={buildIt}>
+                  Build it <ArrowRight size={12} />
+                </Button>
+              </span>
+            )}
             <Menu
               align="right"
               trigger={(open) => (
@@ -131,6 +147,18 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
               <PanelLeftClose size={14} />
             </IconButton>
           </header>
+          {building && (
+            // Built (X65): its session design is the one that changes now.
+            <button
+              title="Open the session it is building in"
+              className="flex h-[30px] shrink-0 items-center gap-2 border-b border-border bg-panel-2 px-4 text-left ui-text-12.5 text-muted hover:text-fg"
+              onClick={() => void openSessionDesign(host, workspace, building.session, design.slug, true)}
+            >
+              <GitBranch size={12} className="shrink-0 text-accent" />
+              <span className="min-w-0 flex-1 truncate">{building.text}</span>
+              <ArrowRight size={12} className="shrink-0" />
+            </button>
+          )}
           <div className="min-h-0 flex-1">
             {agent !== null ? (
               <AgentView
@@ -283,7 +311,7 @@ export function DesignCanvas({
   const names = previewed ? previewed.pages : design.pages.map((p) => p.name);
   // A page that went away shows the first one; before any, index (being written).
   const page = canvasPage(picked, names);
-  const viewport = parseViewport(design.viewport) ?? DEFAULT_VIEWPORT;
+  const viewport = viewportOf(design);
   const scale = canvasScale(zoom, viewport, fitBox([cw, ch]));
   const writing = writingPage(lastWritten, working);
   const bar = designBar({ working, needsYou: design.needs_you, page, problems, system: systemName, systemRemoved: !!systems && !system, unsaved, preview: previewed ? previewBar(previewed, Date.now()) : null, session, systemUpdated: !!design.system_updated });

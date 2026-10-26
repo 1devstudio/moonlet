@@ -3,8 +3,9 @@
 // designStore.ts, the tab components/design/SessionDesign.tsx.
 
 import { pagePath } from "./designPage";
-import { commandOptions, fuzzyScore, toolCommand } from "./chat";
-import type { Design, DesignSystem, ToolCall } from "./protocol";
+import { commandOptions, fuzzyScore, toolCommand, toolFile } from "./chat";
+import type { ChatItem, ChatStatus, Design, DesignSystem, ToolCall } from "./protocol";
+import type { SuggestedReply } from "./chat";
 
 /** `path` relative to the worktree it is in (`worktree`, with or without a
  *  trailing `/`); as it is when outside it. */
@@ -86,4 +87,41 @@ export function designTab(designs: Design[]): { count: number } | null {
  *  canvas gets the room beside the session's chat. */
 export function designPanelWidth(dragged: number | null, windowWidth: number): number {
   return dragged ?? Math.round(windowWidth * 0.55);
+}
+
+/** A tool call that made a spec from the design (X65): a Write that
+ *  created the file (Claude Code's result says "File created
+ *  successfully"), or an Edit or MultiEdit that added the `- **Design:**`
+ *  line the skill writes into a spec from a design. */
+function madeSpec(t: ToolCall): boolean {
+  if (t.status !== "ok") return false;
+  if (t.name === "Write") return !!t.output?.startsWith("File created successfully");
+  const input = t.input as { old_string?: unknown; new_string?: unknown; edits?: unknown } | null;
+  const edits = t.name === "Edit" ? [input] : t.name === "MultiEdit" && Array.isArray(input?.edits) ? (input.edits as (typeof input)[]) : [];
+  const has = (text: unknown) => typeof text === "string" && text.includes(DESIGN_LINE);
+  return edits.some((e) => has(e?.new_string) && !has(e?.old_string));
+}
+
+/** The line the skill adds to a spec written from a design. */
+const DESIGN_LINE = "- **Design:**";
+
+/** The spec-from-design replies (X65): once the session's agent ended a
+ *  turn (`status` idle or done) that made a spec from the design, a
+ *  Markdown file right in the worktree's `docs/specs/` other than its
+ *  README ({@link madeSpec}), in a session with a design, the chat offers
+ *  **Implement it**, which asks the agent to implement that spec (the
+ *  turn's first), and **Back to the design**. A turn is what came after
+ *  the user's last message; none while the agent works or waits, nor for a
+ *  write that did not go through or only touched a spec, such as a typo. */
+export function specReplies(items: readonly ChatItem[], status: ChatStatus | undefined, worktree: string, hasDesign: boolean): SuggestedReply[] | null {
+  if (!hasDesign || (status !== "idle" && status !== "done")) return null;
+  let start = items.length;
+  while (start > 0 && items[start - 1].kind !== "user") start--;
+  const spec = items
+    .slice(start)
+    .map((it) => it.tool)
+    .filter((t): t is ToolCall => !!t && madeSpec(t))
+    .map((t) => inWorktree(worktree, toolFile(t) ?? ""))
+    .find((p) => /^docs\/specs\/[^/]+\.md$/.test(p) && p !== "docs/specs/README.md");
+  return spec ? [{ label: "Implement it", kind: "send", text: `Implement the spec ${spec}` }, { label: "Back to the design", kind: "design" }] : null;
 }
