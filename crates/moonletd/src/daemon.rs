@@ -1085,8 +1085,16 @@ impl Daemon {
                 // after its worker id: never another member's, whose numbers
                 // it could otherwise take first. A central host that lost its
                 // log has every member's work in its state already.
+                // Names are matched whole, `<worker id>.<6 letters or digits>`,
+                // and none is this host's own: its worker id is no secret, as
+                // its log is named after it.
                 let sent = r.changes.len();
-                r.changes.retain(|c| c.stamp.member.split_once('.').is_some_and(|(id, _)| id == worker));
+                let ours = worker == self.link.info().worker.id;
+                let prefix = format!("{worker}.");
+                r.changes.retain(|c| {
+                    !ours
+                        && c.stamp.member.strip_prefix(&prefix).is_some_and(|s| s.len() == 6 && s.bytes().all(|b| b.is_ascii_alphanumeric()))
+                });
                 if r.changes.len() < sent {
                     tracing::warn!(worker = %worker, "dropped {} account changes stamped as another member", sent - r.changes.len());
                 }

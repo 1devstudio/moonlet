@@ -452,6 +452,32 @@ async fn a_member_sends_only_its_own_changes() {
 }
 
 #[tokio::test]
+async fn no_member_sends_changes_as_the_central_host() {
+    let (mini, addr) = central().await;
+    // The central host's worker id is no secret: its log is named after it.
+    let info: Value = mini.call("link.get", json!({})).await;
+    let central_id = info["worker"]["id"].as_str().unwrap().to_string();
+    let token = pair(&mini, &addr, "Alex's MacBook Pro", DeviceKind::Desktop).await;
+    let mut s = raw(&addr, &token, "moonletd-worker").await;
+    let reg = json!({ "id": central_id, "name": "studio-mini", "os": "macos", "arch": "arm64", "cores": 10, "version": "0.1.32", "projects": [] });
+    ask(&mut s, 1, "worker.register", reg).await;
+    let w = mini.workspaces().await[0].clone();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let change = json!({ "stamp": { "ms": now, "n": 0, "member": format!("{central_id}.k3x9q2") }, "seq": 1, "kind": "workspace", "id": w.id, "op": { "set": { "field": "name", "value": "Forged" } } });
+    ask(
+        &mut s,
+        2,
+        "account.sync",
+        json!({ "version": {}, "changes": [change] }),
+    )
+    .await;
+    assert_eq!(mini.names().await, ["Personal"]);
+}
+
+#[tokio::test]
 async fn only_a_linked_mac_syncs_the_account() {
     let (mini, addr) = central().await;
     let phone = pair(&mini, &addr, "iPhone", DeviceKind::Phone).await;
