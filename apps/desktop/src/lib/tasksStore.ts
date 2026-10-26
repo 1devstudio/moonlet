@@ -10,6 +10,7 @@ import { type GhCreated, type GhCreateChoices, type GhProjectBoard, type GhTask,
 import { errorMessage, errorToast, notify, sesKey, sessionState, sessionTerminals, shownWorkspace, switchWorkspace, toast, useStore } from "./store";
 import { askConfirm } from "./confirm";
 import { applyRules, autoFixes, cleanUpMessage, DEFAULT_RULES, driftFix, driftKey, outsideMoves, prComments, type Rules, startAction } from "./keepInStep";
+import { modeOf, setMode, toggleMode } from "./mode";
 import { readStored, writeStored } from "./storage";
 import { type ActivityEntry, appendActivity } from "./taskDetails";
 import type { Pasted } from "./taskLinking";
@@ -204,7 +205,7 @@ export function openBoard(host: string, workspaceId: string, id: string) {
   const shown = shownWorkspace(useStore.getState());
   if (shown?.host !== host || shown.id !== workspaceId) switchWorkspace({ host, id: workspaceId });
   const key = wsKey(host, workspaceId);
-  useStore.setState((s) => ({ tasksMode: { ...s.tasksMode, [key]: true } }));
+  useStore.setState((s) => ({ mode: { ...s.mode, [key]: "tasks" } }));
   showBoard(host, workspaceId, id);
 }
 
@@ -373,24 +374,17 @@ type StoreState = ReturnType<typeof useStore.getState>;
 
 /** Whether the shown workspace is in Tasks mode. */
 export function isTasksMode(s: StoreState): boolean {
-  const ws = shownWorkspace(s);
-  return !!ws && !!s.tasksMode[wsKey(ws.host, ws.id)];
+  return modeOf(s) === "tasks";
 }
 
-/** ⌃⌘T and the sidebar's mode switch: Sessions ⇄ Tasks for the shown workspace. */
+/** ⌃⌘T: Sessions ⇄ Tasks for the shown workspace. */
 export function toggleTasksMode() {
-  const s = useStore.getState();
-  const ws = shownWorkspace(s);
-  if (!ws) return;
-  const key = wsKey(ws.host, ws.id);
-  useStore.setState({ tasksMode: { ...s.tasksMode, [key]: !s.tasksMode[key] }, showHistory: false });
+  toggleMode("tasks");
 }
 
 /** Back to Sessions mode in the shown workspace, to work on a session (X45, X46). */
 export function leaveTasksMode() {
-  const s = useStore.getState();
-  const ws = shownWorkspace(s);
-  if (ws && s.tasksMode[wsKey(ws.host, ws.id)]) useStore.setState({ tasksMode: { ...s.tasksMode, [wsKey(ws.host, ws.id)]: false } });
+  if (isTasksMode(useStore.getState())) setMode("sessions");
 }
 
 /** The projects in a workspace's sections. */

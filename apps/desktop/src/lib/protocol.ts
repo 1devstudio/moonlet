@@ -964,6 +964,60 @@ export interface SyncStopped {
   leftovers: string[];
 }
 
+/** A card the last sync added, rewrote or removed (X64). */
+export interface DesignSyncChange {
+  path: string;
+  change: "new" | "rewritten" | "removed";
+  sources: string[];
+}
+
+/** One design system of a workspace, from `design.systems` (X64). */
+export interface DesignSystem {
+  slug: string;
+  name: string;
+  /** The source projects' folders. */
+  sources: string[];
+  synced_at: number | null;
+  synced_commit: string | null;
+  /** Component cards, not foundations or layouts. */
+  cards: number;
+  layouts: number;
+  /** Source files changed since the last sync. */
+  changed_sources: string[];
+  check_problems: number;
+  /** Proposed changes and orphaned cards waiting for the user. */
+  to_settle: number;
+  /** The step a running sync reported last. */
+  step: "inventory" | "tokens" | "cards" | "layouts" | null;
+  step_summary: string | null;
+  /** Why the system could not be read. */
+  error: string | null;
+  /** Its sync agent's chat, once one was started. */
+  agent: number | null;
+  last_sync: DesignSyncChange[];
+  /** What its sync agent waits for from the user. */
+  needs_you: { kind: "question" | "approval"; text: string } | null;
+}
+
+/** What a design system covers: the components that matter most, all of them, or none yet. */
+export type DesignCover = "core" | "all" | "none";
+
+/** `design.system.create`'s answer: the agent's chat, or why it did not start. */
+export interface DesignSystemCreated {
+  slug: string;
+  agent: number | null;
+  agent_error: string | null;
+}
+
+/** `design.changed`: files changed in a workspace's design folder (X64). */
+export interface DesignChanged {
+  workspace: string;
+  /** The design system they are in, if any. */
+  system: string | null;
+  /** Relative to the workspace's design folder. */
+  paths: string[];
+}
+
 /** `sync.changed`: a copy, the paths that just started to differ, and why it went. */
 export interface CopyChanged extends Copy {
   newly_differing?: string[];
@@ -1142,6 +1196,13 @@ export const M = {
   jobStop: "job.stop",
   jobStopAll: "job.stop_all",
   jobRunHere: "job.run_here",
+  designSystems: "design.systems",
+  designSystemCreate: "design.system.create",
+  designSystemSync: "design.system.sync",
+  designSystemRemove: "design.system.remove",
+  designDetect: "design.detect",
+  designFile: "design.file",
+  designSettle: "design.settle",
 } as const;
 
 export const EV = {
@@ -1177,6 +1238,7 @@ export const EV = {
   execSetup: "exec.setup",
   cloudChanged: "cloud.changed",
   jobOutput: "job.output",
+  designChanged: "design.changed",
 } as const;
 
 /**
