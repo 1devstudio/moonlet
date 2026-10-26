@@ -300,6 +300,10 @@ fn store_error(e: anyhow::Error) -> RpcError {
     if e.is::<pages::Stale>() {
         return RpcError::new("stale", e.to_string());
     }
+    // Said as it is: the canvas's did-not-load bar shows it (X65).
+    if e.is::<pages::Unreadable>() {
+        return RpcError::new("unreadable", e.to_string());
+    }
     internal(e)
 }
 
