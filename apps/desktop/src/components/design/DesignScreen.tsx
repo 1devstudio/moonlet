@@ -47,7 +47,7 @@ import { previewBar, previewStep, snapshotTime, type Preview } from "../../lib/d
 import { VIEWPORTS, canvasKey, canvasScale, canvasZoom, customViewports, fitBox, parseViewport, sizeOf, sizeText, viewportLabel, viewportText, withCustomViewport, type Size } from "../../lib/designViewport";
 import { breadcrumb, dragEdit, hintLine, pickEdit, canvasPage, canvasStep, chatAfter, editorStep, isTyping, keyAct, layerPick, modeEntered, onReport, undoOpen, writingPage, type CanvasAct, type CanvasMode, type CanvasState, type ChatPanel, type KeyAct, type RailTab } from "../../lib/designCanvas";
 import { keyId } from "../../lib/runActions";
-import { chatCardLookup, commentCardSelector, commentsRail, messageView, commentsTab, keepAction, openCommentsLabel, pageCounts, sendAll } from "../../lib/designComments";
+import { chatCardLookup, commentCardSelector, commentsRail, commentsTab, keepAction, openCommentsLabel, pageCounts, sendAll } from "../../lib/designComments";
 import { bridgeMessage, editMessage, helloMessage, modeMessage, paletteMessage, pinsMessage, scrollMessage, selectMessage, type DragOver, type DragResult, type Layer, type PickedElement, type Rect } from "../../lib/designBridge";
 import { pageFile, pagePath } from "../../lib/designPage";
 import { barProblems, chatOpensOn, designBar, pageFixMessage, systemUpdateMessage, type Bar, type BarAction, type PageProblem } from "../../lib/designBars";
@@ -60,8 +60,8 @@ import { Menu } from "../Menu";
 import { AgentView } from "../AgentView";
 import { useSize } from "../../lib/useSize";
 import { CardFrame, ZoomBar } from "./Frame";
-import { CommentBox, CommentCards, CommentsTab, PinLayer, type BoxTarget } from "./Comments";
-import { Breadcrumb, EditsChip, EditsMessage, LayersTab } from "./Editor";
+import { CommentBox, CommentsTab, PinLayer, designMessage, type BoxTarget } from "./Comments";
+import { Breadcrumb, EditsChip, LayersTab } from "./Editor";
 import { InspectorTab, PaletteTab } from "./Inspector";
 import { HistoryTab } from "./History";
 
@@ -81,17 +81,20 @@ const RAIL_TABS: { tab: RailTab; label: string }[] = [
 /** A design's viewport until it has one: Desktop. */
 const DEFAULT_VIEWPORT = VIEWPORTS[0].size;
 
-/** A design's agent while it is running in a structured chat, else null;
- *  a session design's is its session's (X65). */
-function useDesignAgent(host: string, design: Design): number | null {
-  return useStore((s) => (design.agent !== null && s.terminals[host]?.[design.agent]?.chat ? design.agent : null));
+/** What a design's chat and canvas both show of it: its agent while it is
+ *  running in a structured chat, else null (a session design's is its
+ *  session's, X65), and its design system's name, also once it was
+ *  removed, its slug when never listed. */
+export function useDesignBasics(host: string, workspace: string, design: Design): { agent: number | null; systemName: string } {
+  const agent = useStore((s) => (design.agent !== null && s.terminals[host]?.[design.agent]?.chat ? design.agent : null));
+  const systemName = useDesign((d) => systemNameOf(d, host, workspace, design.system)) ?? design.system;
+  return { agent, systemName };
 }
 
 /** The design screen of workspace design `design`, in workspace
  *  `workspace` of `host`: its agent's chat beside its canvas. */
 export function DesignScreen({ host, workspace, design, inset }: { host: string; workspace: string; design: Design; inset: number }) {
-  const systemName = useDesign((d) => systemNameOf(d, host, workspace, design.system)) ?? design.system;
-  const agent = useDesignAgent(host, design);
+  const { agent, systemName } = useDesignBasics(host, workspace, design);
   const comments = useDesign((d) => commentsOf(d, host, workspace, design.slug));
   const [chatOpen, setChatOpen] = useState(true);
   const chatRef = useRef<HTMLElement>(null);
@@ -140,18 +143,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
                   </p>
                 }
                 userText={(text, first) => briefShown(text, design.brief, first)}
-                userView={(text) => {
-                  const view = messageView(text, comments);
-                  if (!view) return null;
-                  const cards = view.cards && <CommentCards cards={view.cards} />;
-                  return view.edits ? (
-                    <EditsMessage edits={view.edits} text={view.text}>
-                      {cards}
-                    </EditsMessage>
-                  ) : (
-                    cards
-                  );
-                }}
+                userView={(text) => designMessage(text, comments, false)}
                 sendText={(text, images) => sendWithEdits(host, workspace, design.slug, agent, text, images)}
               />
             ) : (
@@ -167,7 +159,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
           <AgentIcon agent="claude" size={14} />
         </div>
       )}
-      <DesignCanvas host={host} place={workspace} workspace={workspace} design={design} inset={inset} chat={{ open: chatOpen, setOpen: setChatOpen, root: chatRef }} fileOf={pageFile} />
+      <DesignCanvas host={host} place={workspace} workspace={workspace} design={design} agent={agent} systemName={systemName} inset={inset} chat={{ open: chatOpen, setOpen: setChatOpen, root: chatRef }} fileOf={pageFile} />
     </div>
   );
 }
@@ -192,6 +184,8 @@ export function DesignCanvas({
   place,
   workspace,
   design,
+  agent,
+  systemName,
   inset,
   chat: chatPanel,
   fileOf,
@@ -202,6 +196,9 @@ export function DesignCanvas({
   /** The workspace whose design systems it is on. */
   workspace: string;
   design: Design;
+  /** From useDesignBasics. */
+  agent: number | null;
+  systemName: string;
   inset: number;
   chat: CanvasChat;
   fileOf: (page: string) => string;
@@ -209,9 +206,6 @@ export function DesignCanvas({
 }) {
   const systems = useDesign((d) => systemsOf(d, host, workspace));
   const system = systems?.find((s) => s.slug === design.system);
-  // Its name, also once it was removed; its slug when never listed.
-  const systemName = useDesign((d) => systemNameOf(d, host, workspace, design.system)) ?? design.system;
-  const agent = useDesignAgent(host, design);
   const working = useStore((s) => agent !== null && s.terminals[host]?.[agent]?.agent_state === "working" && !s.terminals[host]?.[agent]?.exit);
   const lastWritten = useDesign((d) => latestOf(d, host, place, design.slug));
   const problems = useDesign((d) => problemsOf(d, host, place, design.slug));

@@ -4,14 +4,15 @@
 // What they decide is in lib/designComments.ts.
 
 import { ChevronDown, X } from "lucide-react";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type { DesignComment } from "../../lib/protocol";
 import type { Rect } from "../../lib/designBridge";
-import { BOX_SIZE, COMMENT_PIN_ATTR, boxLabel, commentCardTitle, boxPlace, commentLine, pinPlace, commentsTab, footerLabel, pinLabel, sentLabel, type CommentRef, type PageMids } from "../../lib/designComments";
+import { BOX_SIZE, COMMENT_PIN_ATTR, boxLabel, commentCardTitle, boxPlace, commentLine, pinPlace, commentsTab, footerLabel, messageView, pinLabel, sentLabel, type CommentRef, type PageMids } from "../../lib/designComments";
 import { pageFile } from "../../lib/designPage";
 import { cx } from "../../lib/cx";
 import { Button } from "../ui";
 import { Menu } from "../Menu";
+import { EditsMessage } from "./Editor";
 
 /** A pin's number in its orange badge. */
 export function PinBadge({ n, className }: { n: number | null; className?: string }) {
@@ -250,6 +251,23 @@ export function CommentsTab({
         </div>
       )}
     </div>
+  );
+}
+
+/** How a design's chat shows a message of the user's (X65): its edits by
+ *  hand as their block and its comments as cards (Comment from the Design
+ *  view in a session's chat), read against `pins`; null shows it as any
+ *  other message. The workspace design's chat and the session's share it. */
+export function designMessage(text: string, pins: DesignComment[], session: boolean): ReactNode | null {
+  const view = messageView(text, pins);
+  if (!view) return null;
+  const cards = view.cards && <CommentCards cards={view.cards} session={session} />;
+  return view.edits ? (
+    <EditsMessage edits={view.edits} text={view.text}>
+      {cards}
+    </EditsMessage>
+  ) : (
+    cards
   );
 }
 

@@ -6,12 +6,17 @@ import { pagePath } from "./designPage";
 import { commandOptions, fuzzyScore, toolCommand } from "./chat";
 import type { Design, DesignSystem, ToolCall } from "./protocol";
 
+/** `path` relative to the worktree it is in (`worktree`, with or without a
+ *  trailing `/`); as it is when outside it. */
+export function inWorktree(worktree: string, path: string): string {
+  const root = `${worktree.replace(/\/+$/, "")}/`;
+  return path.startsWith(root) ? path.slice(root.length) : path;
+}
+
 /** The file above a session design's page: its path in the worktree, such
  *  as `docs/design/settings-page/pages/index.html`. */
 export function worktreeFile(worktree: string, design: Design, page: string): string {
-  const root = `${worktree.replace(/\/+$/, "")}/`;
-  const folder = design.path.startsWith(root) ? design.path.slice(root.length) : design.path;
-  return `${folder}/${pagePath(page)}`;
+  return `${inWorktree(worktree, design.path)}/${pagePath(page)}`;
 }
 
 /** The pen icon on a session's row in Sessions mode, titled with its

@@ -3,6 +3,7 @@
 // components/ChangesPanel.tsx.
 
 import type { FileChange } from "./protocol";
+import { inWorktree } from "./sessionDesign";
 
 export interface ChangeGroup {
   name: "Design" | "Spec" | "Code";
@@ -24,8 +25,7 @@ const SPECS = "docs/specs/";
  *  (`designs`, their folders in `worktree`), whose files list as before. */
 export function changesGroups(files: FileChange[], worktree: string, designs: { path: string }[]): ChangeGroup[] | null {
   if (!designs.length) return null;
-  const root = `${worktree.replace(/\/+$/, "")}/`;
-  const dirs = [...new Set(designs.map((d) => (d.path.startsWith(root) ? d.path.slice(root.length) : d.path).replace(/\/*[^/]+\/*$/, "/")))];
+  const dirs = [...new Set(designs.map((d) => inWorktree(worktree, d.path).replace(/\/*[^/]+\/*$/, "/")))];
   const sorted = [...files].sort((a, b) => a.path.localeCompare(b.path));
   const isDesign = (f: FileChange) => dirs.some((dir) => f.path.startsWith(dir));
   const isSpec = (f: FileChange) => f.path.startsWith(SPECS);
