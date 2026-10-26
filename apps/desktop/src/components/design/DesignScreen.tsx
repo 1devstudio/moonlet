@@ -627,6 +627,11 @@ export function DesignCanvas({
     setRailOpen(true);
   };
 
+  // Both red bars' Ask the agent to fix: `message`, with the edits by hand.
+  const askToFix = (message: string) => {
+    if (agent === null) return toast("The design's agent is not running", "error");
+    void askWithEdits(host, place, design.slug, agent, message, peers).then(() => toast("Asked the agent to fix it"), errorToast);
+  };
   const onBarAction = (a: BarAction) => {
     if (a === "stop" && agent !== null) void stopAgent(host, agent).catch(errorToast);
     else if (a === "details") setDetails(true);
@@ -635,13 +640,9 @@ export function DesignCanvas({
     else if (a === "restore" && previewed) restore(previewed.n);
     else if (a === "fix") {
       const check = barProblems(page, problems);
-      if (!check) return;
-      if (agent === null) return toast("The design's agent is not running", "error");
-      void askWithEdits(host, place, design.slug, agent, pageFixMessage(check.page, check.problems), peers).then(() => toast("Asked the agent to fix it"), errorToast);
+      if (check) askToFix(pageFixMessage(check.page, check.problems));
     } else if (a === "fix-load") {
-      if (page === null || !notLoaded) return;
-      if (agent === null) return toast("The design's agent is not running", "error");
-      void askWithEdits(host, place, design.slug, agent, loadFixMessage(page, notLoaded), peers).then(() => toast("Asked the agent to fix it"), errorToast);
+      if (page !== null && notLoaded) askToFix(loadFixMessage(page, notLoaded));
     } else if (a === "update" && isSession(place)) {
       void updateAndTell(host, place, design.slug, agent, systemName, peers).then(() => toast("Design system updated", "info"), errorToast);
     }
