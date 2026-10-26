@@ -21,12 +21,35 @@ export interface PickedElement {
   rect: Rect;
 }
 
+/** One element of the page's tree, as the Layers tab lists it: its depth
+ *  among the elements with an id, from the body's 0. */
+export interface Layer {
+  mid: string;
+  tag: string;
+  depth: number;
+  /** Up to 60 characters of its text, on one line. */
+  text: string;
+}
+
 /** What the page tells the app. */
 export type BridgeMessage =
   | { type: "mids"; mids: string[] }
+  | { type: "tree"; layers: Layer[] }
+  /** The element selected in Edit mode and its box; none when the one asked
+   *  for is not on the page. */
+  | { type: "selected"; mid: string | null; rect: Rect | null }
+  /** Where the page is scrolled, in its CSS px. */
+  | { type: "scroll"; x: number; y: number }
+  /** An element's text, edited in place and committed. */
+  | { type: "text"; mid: string; text: string }
   | { type: "pick"; element: PickedElement }
   | { type: "rects"; rects: ({ mid: string } & Rect)[] }
-  | { type: "key"; key: "c" | "Escape" };
+  | { type: "key"; key: PageKey; shift: boolean; alt: boolean; meta: boolean };
+
+/** The keys the bridge sends the app from the page: C, V and Esc for the
+ *  mode, and in Edit mode the editor's (Tab, Delete, ⌘D, ⌥⌘G, ⌘C, ⌘V, ⌘Z…). */
+export const PAGE_KEYS = ["c", "v", "Escape", "Tab", "Delete", "Backspace", "d", "g", "z"] as const;
+export type PageKey = (typeof PAGE_KEYS)[number];
 
 /** How much of an element's text a pin keeps, in characters. */
 export const TEXT_MAX = 60;
@@ -45,6 +68,13 @@ export function isTag(tag: unknown): tag is string {
 
 /** The most ids a page reports, so a page cannot flood the app. */
 const MIDS_MAX = 20_000;
+
+/** The longest text an element is given in place, in UTF-16 units; the
+ *  bridge script keeps its own, and puts a longer text back. */
+const TEXT_EDIT_MAX = 10_000;
+
+/** The deepest an element of the tree is taken. */
+const DEPTH_MAX = 1_000;
 
 const num = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n);
 
@@ -69,6 +99,26 @@ export function bridgeMessage(data: unknown): BridgeMessage | null {
   switch (d.type) {
     case "bridge.mids":
       return Array.isArray(d.mids) && d.mids.length <= MIDS_MAX && d.mids.every(isMid) ? { type: "mids", mids: d.mids } : null;
+    case "bridge.tree": {
+      if (!Array.isArray(d.nodes) || d.nodes.length > MIDS_MAX) return null;
+      const layers: Layer[] = [];
+      for (const n of d.nodes as unknown[]) {
+        const { mid, tag, depth, text } = (typeof n === "object" && n !== null ? n : {}) as Record<string, unknown>;
+        const lower = typeof tag === "string" ? tag.toLowerCase() : "";
+        if (!isMid(mid) || !isTag(lower) || !Number.isInteger(depth) || (depth as number) < 0 || (depth as number) > DEPTH_MAX) return null;
+        layers.push({ mid, tag: lower, depth: depth as number, text: textOf(text) });
+      }
+      return { type: "tree", layers };
+    }
+    case "bridge.scroll":
+      return num(d.x) && num(d.y) ? { type: "scroll", x: d.x, y: d.y } : null;
+    case "bridge.text":
+      return isMid(d.mid) && typeof d.text === "string" && d.text.length <= TEXT_EDIT_MAX ? { type: "text", mid: d.mid, text: d.text } : null;
+    case "bridge.selected": {
+      if (d.mid === null) return { type: "selected", mid: null, rect: null };
+      const rect = rectOf(d.rect);
+      return isMid(d.mid) && rect ? { type: "selected", mid: d.mid, rect } : null;
+    }
     case "bridge.pick": {
       const rect = rectOf(d.rect);
       const tag = typeof d.tag === "string" ? d.tag.toLowerCase() : "";
@@ -87,15 +137,26 @@ export function bridgeMessage(data: unknown): BridgeMessage | null {
       return { type: "rects", rects };
     }
     case "bridge.key":
-      return d.key === "c" || d.key === "Escape" ? { type: "key", key: d.key } : null;
+      return (PAGE_KEYS as readonly unknown[]).includes(d.key) ? { type: "key", key: d.key as PageKey, shift: d.shift === true, alt: d.alt === true, meta: d.meta === true } : null;
     default:
       return null;
   }
 }
 
-/** Tells the page the canvas's mode: Comment outlines and picks elements. */
-export function modeMessage(mode: "view" | "comment"): { type: "bridge.mode"; mode: "view" | "comment" } {
+/** Tells the page the canvas's mode: Comment outlines and picks elements,
+ *  Edit selects them. */
+export function modeMessage(mode: "view" | "comment" | "edit"): { type: "bridge.mode"; mode: "view" | "comment" | "edit" } {
   return { type: "bridge.mode", mode };
+}
+
+/** Tells a page loaded again where it was scrolled before. */
+export function scrollMessage(x: number, y: number): { type: "bridge.scrollTo"; x: number; y: number } {
+  return { type: "bridge.scrollTo", x, y };
+}
+
+/** Tells the page which element is selected in Edit mode, or none. */
+export function selectMessage(mid: string | null): { type: "bridge.select"; mid: string | null } {
+  return { type: "bridge.select", mid: isMid(mid) ? mid : null };
 }
 
 /** Asks the page for the boxes of the pinned elements, now and as they move. */
@@ -107,4 +168,15 @@ export function pinsMessage(mids: string[]): { type: "bridge.pins"; mids: string
  *  once the app listens, so a report sent before that is not lost. */
 export function helloMessage(): { type: "bridge.hello" } {
   return { type: "bridge.hello" };
+}
+
+/** An edit by hand made on the live page too, so it shows at once without
+ *  loading the page again (the saved file is what counts): remove an
+ *  element, insert one's source after element `after` (null: first in the
+ *  body), wrap one in a box with id `box`, or unwrap one. */
+export type LiveEdit = { op: "remove"; mid: string } | { op: "insert"; after: string | null; html: string } | { op: "wrap"; mid: string; box: string } | { op: "unwrap"; mid: string };
+
+/** Tells the page to make an edit on its live page. */
+export function editMessage(edit: LiveEdit): { type: "bridge.edit" } & LiveEdit {
+  return { type: "bridge.edit", ...edit };
 }

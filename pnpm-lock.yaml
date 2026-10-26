@@ -70,6 +70,9 @@ importers:
       monaco-editor:
         specifier: ^0.57.0
         version: 0.57.0
+      parse5:
+        specifier: ^8.0.1
+        version: 8.0.1
       react:
         specifier: ^19.3.0
         version: 19.3.0

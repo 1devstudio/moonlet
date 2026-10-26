@@ -193,6 +193,19 @@ describe("keys a screen takes (X65)", () => {
     expect(got).toEqual(["cmd+=", "cmd+0"]);
     expect(fontSize()).toBe(14);
   });
+  it("give the design screen ⌘C when no terminal block is copied, with the key's event, so it can tell a ⌘C in a field", () => {
+    const got: { id: string; on: string }[] = [];
+    const release = claimKeys((id, e) => (got.push({ id, on: (e.target as HTMLElement).tagName }), id === "cmd+c"));
+    const input = document.body.appendChild(document.createElement("input"));
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "c", metaKey: true, bubbles: true }));
+    press("c");
+    release();
+    input.remove();
+    expect(got).toEqual([
+      { id: "cmd+c", on: "INPUT" },
+      { id: "cmd+c", on: "BODY" },
+    ]);
+  });
 });
 
 describe("the settings page (X43)", () => {

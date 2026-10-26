@@ -1,17 +1,16 @@
 // A workspace design's screen (X65): its agent's chat on the left, the
 // canvas with its page tabs, viewport, zoom, mode, bar and the page in a
-// sandboxed frame on a host of its own, with its comments pinned over it, and
-// the right rail's Comments tab.
+// sandboxed frame on a host of its own, with its comments pinned over it or
+// its selection in Edit mode, and the right rail's Layers and Comments tabs.
 
-import { ArrowRight, ChevronDown, LayoutGrid, Loader2, MessageSquare, MoreHorizontal, PanelLeftClose, PanelLeftOpen, PanelRight, SwatchBook, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ArrowRight, ChevronDown, LayoutGrid, Loader2, Lock, MessageSquare, MoreHorizontal, PanelLeftClose, PanelLeftOpen, PanelRight, SwatchBook, Trash2, Undo2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import { errorToast, toast, updateSettings, useStore } from "../../lib/store";
 import { chatKey, useChat } from "../../lib/chat";
 import type { Design, DesignComment } from "../../lib/protocol";
 import { briefShown, designSubtitle } from "../../lib/design";
 import {
   addPageMid,
-  askAgent,
   commentsOf,
   editComment,
   keepComment,
@@ -20,10 +19,10 @@ import {
   midsOf,
   pageRevOf,
   problemsOf,
+  reloadPage,
   removeDesign,
   resolveComment,
   saveViewport,
-  sendComments,
   sendingOf,
   setPageMids,
   stopAgent,
@@ -31,11 +30,14 @@ import {
   systemsOf,
   useDesign,
 } from "../../lib/designStore";
+import { askWithEdits, closeDesign, hasCopy, sendCommentsWithEdits, copyElementOf, dismissUnsaved, editPage, loadPageSource, pasteInto, pendingOf, redoEdit, sendWithEdits, undoEdit, undoOf, unsavedOf, useEditor } from "../../lib/designEditor";
+import { EditRefused, editsChip, type Edit } from "../../lib/designEdits";
 import { pageUrl } from "../../lib/designView";
 import { VIEWPORTS, canvasKey, canvasScale, canvasZoom, customViewports, fitBox, parseViewport, sizeOf, sizeText, viewportLabel, viewportText, withCustomViewport, type Size } from "../../lib/designViewport";
-import { canvasPage, canvasStep, isTyping, modeHint, modeKey, writingPage, type CanvasAct, type CanvasMode, type CanvasState } from "../../lib/designCanvas";
-import { chatCardLookup, commentCards, commentCardSelector, commentsTab, keepAction, openCommentsLabel, pageCounts, sendAll } from "../../lib/designComments";
-import { bridgeMessage, helloMessage, modeMessage, pinsMessage, type PickedElement, type Rect } from "../../lib/designBridge";
+import { breadcrumb, canvasPage, canvasStep, chatAfter, editorStep, isTyping, keyAct, layerPick, modeEntered, modeHint, onReport, undoOpen, writingPage, type CanvasAct, type CanvasMode, type CanvasState, type ChatPanel, type KeyAct, type RailTab } from "../../lib/designCanvas";
+import { keyId } from "../../lib/runActions";
+import { chatCardLookup, commentCardSelector, messageView, commentsTab, keepAction, openCommentsLabel, pageCounts, sendAll } from "../../lib/designComments";
+import { bridgeMessage, editMessage, helloMessage, modeMessage, pinsMessage, scrollMessage, selectMessage, type Layer, type PickedElement, type Rect } from "../../lib/designBridge";
 import { pageFile, pagePath } from "../../lib/designPage";
 import { barProblems, chatOpensOn, designBar, pageFixMessage, type Bar, type BarAction, type PageProblem } from "../../lib/designBars";
 import { claimKeys } from "../../lib/keys";
@@ -48,8 +50,10 @@ import { AgentView } from "../AgentView";
 import { useSize } from "../../lib/useSize";
 import { CardFrame, ZoomBar } from "./Frame";
 import { CommentBox, CommentCards, CommentsTab, PinLayer, type BoxTarget } from "./Comments";
+import { Breadcrumb, EditsChip, EditsMessage, LayersTab } from "./Editor";
 
 const NO_PINS: DesignComment[] = [];
+const NO_LAYERS: Layer[] = [];
 
 /** A design's viewport until it has one: Desktop. */
 const DEFAULT_VIEWPORT = VIEWPORTS[0].size;
@@ -72,6 +76,15 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
   const [custom, setCustom] = useState(false);
   const [mode, setMode] = useState<CanvasMode>("view");
   const [railOpen, setRailOpen] = useState(false);
+  const [railTab, setRailTab] = useState<RailTab>("comments");
+  // Edit mode: the element selected on the shown page, and the page's tree.
+  const [selected, setSelected] = useState<string | null>(null);
+  const [layers, setLayers] = useState<Layer[]>(NO_LAYERS);
+  // Talks to the shown page's bridge (PageFrame sets it).
+  const bridge = useRef<((message: unknown) => void) | null>(null);
+  const pending = useEditor((e) => pendingOf(e, host, workspace, design.slug));
+  const unsaved = useEditor((e) => unsavedOf(e, host, workspace, design.slug));
+  const changes = useEditor((e) => undoOf(e, host, workspace, design.slug).done.length);
   // The comment box, pinned to an element of its page, shown with that page.
   const [box, setBox] = useState<(BoxTarget & { page: string }) | null>(null);
   const [canvasRef, [cw, ch]] = useSize<HTMLDivElement>();
@@ -86,33 +99,120 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
   const viewport = parseViewport(design.viewport) ?? DEFAULT_VIEWPORT;
   const scale = canvasScale(zoom, viewport, fitBox([cw, ch]));
   const writing = writingPage(lastWritten, working);
-  const bar = designBar({ working, needsYou: design.needs_you, page, problems, system: systemName, systemRemoved: !!systems && !system });
+  const bar = designBar({ working, needsYou: design.needs_you, page, problems, system: systemName, systemRemoved: !!systems && !system, unsaved });
+  const chip = editsChip(pending);
 
   useEffect(() => {
     void loadComments(host, workspace, design.slug).catch(() => {});
   }, [host, workspace, design.slug]);
   useEffect(() => setBox(null), [design.slug]);
+  // Another page or design: nothing selected, and its tree comes with it.
+  useEffect(() => {
+    setSelected(null);
+    setLayers(NO_LAYERS);
+  }, [design.slug, page]);
 
-  // C, Esc and the mode buttons, as canvasStep decides.
+  // V, C, Esc and the mode buttons, as canvasStep decides; Edit is locked
+  // while the agent works, and left when it starts. Entering Edit folds the
+  // chat, and leaving it opens the chat again when that folded it.
   const canvas = useRef<CanvasState>({ mode, box: box !== null, rail: railOpen });
   canvas.current = { mode, box: box !== null, rail: railOpen };
+  const workingRef = useRef(working);
+  workingRef.current = working;
+  const chat = useRef<ChatPanel>({ open: chatOpen, foldedForEdit: false });
+  chat.current = { ...chat.current, open: chatOpen };
   const step = useCallback((act: CanvasAct) => {
-    const next = canvasStep(canvas.current, act);
+    const before = canvas.current.mode;
+    const next = canvasStep(canvas.current, act, workingRef.current);
     setMode(next.mode);
     setRailOpen(next.rail);
     if (!next.box) setBox(null);
+    const tab = modeEntered(before, next.mode);
+    if (tab) setRailTab(tab);
+    chat.current = chatAfter(before, next.mode, chat.current);
+    setChatOpen(chat.current.open);
+    if (next.mode !== "edit") setSelected(null);
   }, []);
+  useEffect(() => {
+    if (working) step("lock");
+  }, [working, step]);
+  // The design's undo is since it was opened.
+  useEffect(() => () => closeDesign(host, workspace, design.slug), [host, workspace, design.slug]);
+
+  // The editor: the selection, told to the page in Edit mode (PageFrame),
+  // and each edit by hand made on the page's source, saved, and made on the
+  // live page too so it shows at once.
+  const select = setSelected;
+  /** Runs an edit; one the page's source cannot take is said, and with
+   *  `reload` the page loads again to drop what the live page shows. */
+  const edited = (run: () => Edit | null, reload = false) => {
+    try {
+      const edit = run();
+      if (!edit) return;
+      if (edit.live) bridge.current?.(editMessage(edit.live));
+      select(edit.select);
+    } catch (e) {
+      if (reload && page !== null) reloadPage(host, workspace, design.slug, page);
+      if (e instanceof EditRefused) toast(e.message, "info");
+      else errorToast(e);
+    }
+  };
+  const travel = (back: boolean) =>
+    void (back ? undoEdit : redoEdit)(host, workspace, design.slug).then((to) => {
+      if (!to) return;
+      setPicked(to.page);
+      select(to.select);
+    }, errorToast);
+  // A key on the canvas or in its page, as editorStep decides: true when
+  // the canvas took it.
+  const onKeyAct = (k: KeyAct | null): boolean => {
+    const s = editorStep({ mode, selected, layers, copied: hasCopy(host, workspace, design.slug), locked: working }, k);
+    if (!s) return false;
+    switch (s.kind) {
+      case "canvas":
+        step(s.act);
+        break;
+      case "select":
+        select(s.mid);
+        break;
+      case "undo":
+      case "redo":
+        travel(s.kind === "undo");
+        break;
+      case "say":
+        toast(s.text, "info");
+        break;
+      case "copy":
+        if (page !== null && copyElementOf(host, workspace, design.slug, page, s.mid)) toast(`Copied ${s.mid}; ⌘V pastes it on any page of ${design.name}`, "info");
+        break;
+      case "paste":
+        if (page !== null) edited(() => pasteInto(host, workspace, design.slug, page, s.after));
+        break;
+      case "edit":
+        if (page !== null) edited(() => editPage(host, workspace, design.slug, page, { kind: s.op, mid: s.mid }, selected));
+        break;
+    }
+    return true;
+  };
+  const keyRef = useRef(onKeyAct);
+  keyRef.current = onKeyAct;
+  // A text edited in place on the page; one the source cannot take is put
+  // back by loading the page again.
+  const onText = (mid: string, text: string) => {
+    if (page !== null) edited(() => editPage(host, workspace, design.slug, page, { kind: "text", mid, text }, selected), true);
+  };
+  const textRef = useRef(onText);
+  textRef.current = onText;
+  // Keys without ⌘ on the app; the ⌘ ones come through claimKeys below.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const { dialog, confirm, settingsPage } = useStore.getState();
-      if (dialog || confirm || settingsPage) return;
-      const typing = isTyping(e.target instanceof Element ? e.target : null);
-      const k = modeKey({ key: e.key, meta: e.metaKey, ctrl: e.ctrlKey, alt: e.altKey, shift: e.shiftKey, typing });
-      if (k) step(k);
+      if (dialog || confirm || settingsPage || e.metaKey) return;
+      if (keyRef.current(keyAct(keyId(e), isTyping(e.target instanceof Element ? e.target : null)))) e.preventDefault();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [step]);
+  }, []);
 
   // The chat opens when the agent starts to ask; folded meanwhile, it stays so.
   const asked = useRef(design.needs_you);
@@ -121,17 +221,22 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
     asked.current = design.needs_you;
   }, [design.needs_you]);
 
-  // ⌘0 fits, ⌘= and ⌘- zoom, ⌘\ folds the chat, while this screen is shown.
+  // ⌘0 fits, ⌘= and ⌘- zoom, ⌘\ folds the chat, and the editor's ⌘ keys,
+  // while this screen is shown.
   const scaleRef = useRef(scale);
   scaleRef.current = scale;
   useEffect(
     () =>
-      claimKeys((id) => {
+      claimKeys((id, e) => {
         const k = canvasKey(id);
         if (k === "fit") setZoom(null);
         else if (k === "in" || k === "out") setZoom(canvasZoom(scaleRef.current || 1, k === "in" ? 1 : -1));
         else if (k === "chat") setChatOpen((o) => !o);
-        return k !== null;
+        if (k !== null) return true;
+        const { dialog, confirm, settingsPage } = useStore.getState();
+        if (dialog || confirm || settingsPage) return false;
+        const textSelected = !(window.getSelection()?.isCollapsed ?? true);
+        return keyRef.current(keyAct(id, isTyping(e.target instanceof Element ? e.target : null), textSelected));
       }),
     [],
   );
@@ -146,7 +251,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
   };
   const sendPins = (pins: DesignComment[]) => {
     if (agent === null) return toast("The design's agent is not running", "error");
-    void sendComments(host, workspace, design.slug, agent, pins).catch(errorToast);
+    void sendCommentsWithEdits(host, workspace, design.slug, agent, pins).catch(errorToast);
   };
   const keep = async (target: BoxTarget & { page: string }, comment: string): Promise<DesignComment> => {
     const action = keepAction(target.pin, comment);
@@ -164,7 +269,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
     const target = box;
     setBox(null);
     void keep(target, comment)
-      .then((pin) => sendComments(host, workspace, design.slug, agent, [pin]))
+      .then((pin) => sendCommentsWithEdits(host, workspace, design.slug, agent, [pin]))
       .catch(errorToast);
   };
   const onSendAll = () => {
@@ -208,18 +313,25 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
     setPicked(pin.page);
     setBox({ page: pin.page, element: { mid: pin.mid, tag: pin.tag, text: pin.text }, rect: { x: 0, y: 0, w: 0, h: 0 }, pin });
   };
-  const onPick = useCallback((el: PickedElement) => setBox(page === null ? null : { page, element: { mid: el.mid, tag: el.tag, text: el.text }, rect: el.rect, pin: null }), [page]);
+  const onPick = useCallback(
+    (el: PickedElement) => {
+      if (mode === "edit") setSelected(el.mid);
+      else setBox(page === null ? null : { page, element: { mid: el.mid, tag: el.tag, text: el.text }, rect: el.rect, pin: null });
+    },
+    [page, mode],
+  );
   const onPage = useMemo(() => commentsTab(comments, { tab: "open", page }, mids), [comments, page, mids]);
   const pagePins = page === null ? NO_PINS : onPage.shown;
 
   const onBarAction = (a: BarAction) => {
     if (a === "stop" && agent !== null) void stopAgent(host, agent).catch(errorToast);
     else if (a === "details") setDetails(true);
+    else if (a === "dismiss") dismissUnsaved(host, workspace, design.slug);
     else if (a === "fix") {
       const check = barProblems(page, problems);
       if (!check) return;
       if (agent === null) return toast("The design's agent is not running", "error");
-      void askAgent(host, agent, pageFixMessage(check.page, check.problems)).then(() => toast("Asked the agent to fix it"), errorToast);
+      void askWithEdits(host, workspace, design.slug, agent, pageFixMessage(check.page, check.problems)).then(() => toast("Asked the agent to fix it"), errorToast);
     }
   };
 
@@ -265,9 +377,18 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
                 }
                 userText={(text, first) => briefShown(text, design.brief, first)}
                 userView={(text) => {
-                  const cards = commentCards(text, comments);
-                  return cards && <CommentCards cards={cards} />;
+                  const view = messageView(text, comments);
+                  if (!view) return null;
+                  const cards = view.cards && <CommentCards cards={view.cards} />;
+                  return view.edits ? (
+                    <EditsMessage edits={view.edits} text={view.text}>
+                      {cards}
+                    </EditsMessage>
+                  ) : (
+                    cards
+                  );
                 }}
+                sendText={(text, images) => sendWithEdits(host, workspace, design.slug, agent, text, images)}
               />
             ) : (
               <p className="p-5 ui-text-13 text-muted">This design's agent is not running.</p>
@@ -310,21 +431,30 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
         <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3 ui-text-12">
           <ViewportMenu viewport={viewport} onPick={setViewport} onCustom={() => setCustom(true)} />
           <ZoomBar scale={scale} fitted={zoom === null} max={2} keys onZoom={setZoom} />
-          <div role="group" aria-label="Canvas mode" className="ml-auto flex h-7 items-center rounded-md border border-border-strong p-0.5">
-            {(["view", "comment"] as const).map((m) => (
-              <button
-                key={m}
-                aria-pressed={mode === m}
-                title={m === "comment" ? "Comment (C)" : "View"}
-                onClick={() => step(m)}
-                className={cx("flex h-full items-center gap-1.5 rounded px-2.5", mode === m ? "bg-raised text-fg" : "text-muted hover:text-fg")}
-              >
-                {m === "comment" ? "Comment" : "View"}
-                {m === "comment" && <kbd className="font-mono ui-text-11 text-faint">C</kbd>}
-              </button>
-            ))}
+          {chip && <EditsChip text={chip} />}
+          <IconButton title="Undo (⌘Z)" className="ml-auto" disabled={!undoOpen({ locked: working, changes })} onClick={() => travel(true)}>
+            <Undo2 size={14} />
+          </IconButton>
+          <div role="group" aria-label="Canvas mode" className="flex h-7 items-center rounded-md border border-border-strong p-0.5">
+            {(["view", "comment", "edit"] as const).map((m) => {
+              const locked = m === "edit" && working;
+              return (
+                <button
+                  key={m}
+                  aria-pressed={mode === m}
+                  disabled={locked}
+                  title={locked ? "Edit opens when Claude stops" : m === "comment" ? "Comment (C)" : m === "edit" ? "Edit (V)" : "View"}
+                  onClick={() => step(m)}
+                  className={cx("flex h-full items-center gap-1.5 rounded px-2.5 disabled:text-faint", mode === m ? "bg-raised text-fg" : "text-muted hover:text-fg")}
+                >
+                  {m === "comment" ? "Comment" : m === "edit" ? "Edit" : "View"}
+                  {m === "comment" && <kbd className="font-mono ui-text-11 text-faint">C</kbd>}
+                  {m === "edit" && (locked ? <Lock size={11} aria-label="Locked while Claude works" /> : <kbd className="font-mono ui-text-11 text-faint">V</kbd>)}
+                </button>
+              );
+            })}
           </div>
-          <IconButton title="Comments" aria-pressed={railOpen} onClick={() => setRailOpen((o) => !o)}>
+          <IconButton title="Right rail" aria-pressed={railOpen} onClick={() => setRailOpen((o) => !o)}>
             <PanelRight size={14} />
           </IconButton>
         </div>
@@ -332,6 +462,8 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
         <div className="flex h-9 shrink-0 items-center gap-2 px-4 ui-text-12">
           {page === null ? (
             <span className="text-muted">Every page at the same viewport. Click a page to open it.</span>
+          ) : mode === "edit" && selected && breadcrumb(layers, selected).length ? (
+            <Breadcrumb path={breadcrumb(layers, selected)} hint={modeHint(mode)} onSelect={select} />
           ) : (
             <>
               <span className="font-mono text-fg">{pageFile(page)}</span>
@@ -355,12 +487,17 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
               viewport={viewport}
               scale={scale}
               mode={mode}
+              selected={selected}
+              bridge={bridge}
+              onTree={setLayers}
+              onSelected={setSelected}
+              onText={(mid, text) => textRef.current(mid, text)}
               pins={pagePins}
               box={box?.page === page ? box : null}
               canSend={agent !== null}
               onPick={onPick}
               onOpenPin={openPin}
-              onKey={step}
+              onKey={(k) => keyRef.current(k)}
               onKeep={onKeep}
               onSend={onSend}
               onCloseBox={() => setBox(null)}
@@ -379,10 +516,30 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
       {railOpen && (
         <aside aria-label="Right rail" className="flex w-[300px] shrink-0 flex-col border-l border-border bg-panel">
           <div role="tablist" className="flex h-[52px] shrink-0 items-end gap-4 border-b border-border px-4">
-            <button role="tab" aria-selected className="flex h-full items-center gap-1.5 border-b-2 border-accent ui-text-13 text-fg">
-              Comments <span className="rounded bg-raised px-1 font-mono ui-text-11 text-muted">{onPage.open}</span>
-            </button>
+            {(["layers", "comments"] as const).map((t) => (
+              <button
+                key={t}
+                role="tab"
+                aria-selected={railTab === t}
+                onClick={() => setRailTab(t)}
+                className={cx("flex h-full items-center gap-1.5 border-b-2 ui-text-13", railTab === t ? "border-accent text-fg" : "border-transparent text-muted hover:text-fg")}
+              >
+                {t === "layers" ? "Layers" : "Comments"}
+                {t === "comments" && <span className="rounded bg-raised px-1 font-mono ui-text-11 text-muted">{onPage.open}</span>}
+              </button>
+            ))}
           </div>
+          {railTab === "layers" ? (
+            <LayersTab
+              layers={page === null ? NO_LAYERS : layers}
+              selected={selected}
+              onSelect={(mid) => {
+                if (!layerPick(canvas.current, workingRef.current)) return;
+                if (canvas.current.mode !== "edit") step("edit");
+                select(mid);
+              }}
+            />
+          ) : (
           <CommentsTab
             pins={comments}
             mids={mids}
@@ -395,6 +552,7 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
             onShowInChat={showInChat}
             onPick={openPin}
           />
+          )}
         </aside>
       )}
       {details && <DetailsDialog page={page} problems={problems} onClose={() => setDetails(false)} />}
@@ -428,6 +586,11 @@ function PageFrame({
   viewport,
   scale,
   mode,
+  selected,
+  bridge,
+  onTree,
+  onSelected,
+  onText,
   pins,
   box,
   canSend,
@@ -445,12 +608,18 @@ function PageFrame({
   viewport: Size;
   scale: number;
   mode: CanvasMode;
+  selected: string | null;
+  /** Set to talk to the page's bridge. */
+  bridge: MutableRefObject<((message: unknown) => void) | null>;
+  onTree: (layers: Layer[]) => void;
+  onSelected: (mid: string | null) => void;
+  onText: (mid: string, text: string) => void;
   pins: DesignComment[];
   box: BoxTarget | null;
   canSend: boolean;
   onPick: (el: PickedElement) => void;
   onOpenPin: (pin: DesignComment) => void;
-  onKey: (act: CanvasAct) => void;
+  onKey: (act: ReturnType<typeof keyAct>) => void;
   onKeep: (comment: string) => void;
   onSend: (comment: string) => void;
   onCloseBox: () => void;
@@ -461,13 +630,32 @@ function PageFrame({
   // The elements whose boxes the page reports: the pins', and the open box's.
   const wanted = useMemo(() => [...pins.map((p) => p.mid), ...(box ? [box.element.mid] : [])], [pins, box]);
   const wantedKey = wanted.join(" ");
-  const latest = useRef({ mode, wanted, onPick, onKey });
-  latest.current = { mode, wanted, onPick, onKey };
+  const latest = useRef({ mode, wanted, selected, rev, onPick, onKey, onTree, onSelected, onText });
+  latest.current = { mode, wanted, selected, rev, onPick, onKey, onTree, onSelected, onText };
   const tell = (message: unknown) => frame.current?.contentWindow?.postMessage(message, "*");
+  useEffect(() => {
+    bridge.current = tell;
+    return () => {
+      if (bridge.current === tell) bridge.current = null;
+    };
+  });
+  // Where the page was scrolled, and the load of it the bridge last
+  // reported from: a reload comes back there, with the selection.
+  const scrolled = useRef({ x: 0, y: 0 });
+  const reported = useRef(-1);
 
-  useEffect(() => setRects({}), [page]);
+  useEffect(() => {
+    setRects({});
+    scrolled.current = { x: 0, y: 0 };
+  }, [page]);
+  // The page's source for the editor, read as the frame loads it.
+  // An older read coming back late is dropped by the store; a failed one is said.
+  useEffect(() => void loadPageSource(host, workspace, design.slug, page).catch(errorToast), [host, workspace, design.slug, page, rev]);
   useEffect(() => void tell(modeMessage(mode)), [mode]);
   useEffect(() => void tell(pinsMessage(wanted)), [wantedKey]);
+  useEffect(() => {
+    if (mode === "edit") tell(selectMessage(selected));
+  }, [selected, mode]);
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
       // Only this page's frame, and only a message the bridge sends.
@@ -479,15 +667,26 @@ function PageFrame({
         setPageMids(host, workspace, design.slug, page, m.mids);
         tell(modeMessage(latest.current.mode));
         tell(pinsMessage(latest.current.wanted));
-      } else if (m.type === "rects") setRects(Object.fromEntries(m.rects.map(({ mid, ...r }) => [mid, r])));
+        // The first report of a load: back where it was scrolled, with the
+        // selection, as before the reload.
+        const back = onReport({ rev: latest.current.rev, reported: reported.current, scrolled: scrolled.current, mode: latest.current.mode, selected: latest.current.selected });
+        if (back) {
+          reported.current = latest.current.rev;
+          if (back.scroll) tell(scrollMessage(back.scroll.x, back.scroll.y));
+          if (back.select !== undefined) tell(selectMessage(back.select));
+        }
+      } else if (m.type === "tree") latest.current.onTree(m.layers);
+      else if (m.type === "scroll") scrolled.current = { x: m.x, y: m.y };
+      else if (m.type === "selected") {
+        if (m.mid !== latest.current.selected) latest.current.onSelected(m.mid);
+      } else if (m.type === "text") latest.current.onText(m.mid, m.text);
+      else if (m.type === "rects") setRects(Object.fromEntries(m.rects.map(({ mid, ...r }) => [mid, r])));
       else if (m.type === "pick") {
         addPageMid(host, workspace, design.slug, page, m.element.mid);
         latest.current.onPick(m.element);
-      }
-      else {
+      } else if (m.type === "key") {
         // A key pressed in the page, where the bridge already left out typing.
-        const k = modeKey({ key: m.key, meta: false, ctrl: false, alt: false, shift: false, typing: false });
-        if (k) latest.current.onKey(k);
+        latest.current.onKey(keyAct(keyId({ key: m.key, code: "", ctrlKey: false, shiftKey: m.shift, altKey: m.alt, metaKey: m.meta }), false));
       }
     };
     window.addEventListener("message", onMessage);
@@ -573,10 +772,11 @@ function OverviewTile({
 const BAR_TONES: Record<Bar["tone"], { box: string; dot: string }> = {
   orange: { box: "bg-accent/[0.08]", dot: "bg-accent" },
   red: { box: "bg-error/[0.08]", dot: "bg-error" },
+  yellow: { box: "bg-[rgba(242,201,76,0.10)]", dot: "bg-[#f2c94c]" },
   grey: { box: "bg-panel-2", dot: "bg-idle" },
 };
 
-const BAR_ACTIONS: Record<BarAction, string> = { stop: "Stop", details: "Details", fix: "Ask the agent to fix" };
+const BAR_ACTIONS: Record<BarAction, string> = { stop: "Stop", details: "Details", fix: "Ask the agent to fix", dismiss: "Dismiss" };
 
 function BarView({ bar, onAct }: { bar: Bar; onAct: (a: BarAction) => void }) {
   const tone = BAR_TONES[bar.tone];

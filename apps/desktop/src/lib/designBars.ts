@@ -24,12 +24,15 @@ export interface BarState {
   system: string;
   /** The workspace no longer has it. */
   systemRemoved: boolean;
+  /** The edit by hand a save lost to a change on disk, as its line says it;
+   *  null once dismissed. */
+  unsaved: string | null;
 }
 
-export type BarAction = "stop" | "details" | "fix";
+export type BarAction = "stop" | "details" | "fix" | "dismiss";
 
 export interface Bar {
-  tone: "orange" | "red" | "grey";
+  tone: "orange" | "red" | "yellow" | "grey";
   text: string;
   /** Said after the text, in a quieter type. */
   detail: string | null;
@@ -60,12 +63,13 @@ function summary(problems: PageProblem[]): string {
   return [...known, ...(rest > 0 ? [count(rest, "other problem", "other problems")] : [])].join(", ");
 }
 
-/** The bar to show, or null: the agent at work, then what it asks, then the
- *  page's check problems, then a removed design system. A page that does not
- *  load needs the editor bridge (entry 9) to be told; it has no bar yet. */
+/** The bar to show, or null: the agent at work, then what it asks, then an
+ *  edit by hand a save lost to a change on disk, then the page's check
+ *  problems, then a removed design system. */
 export function designBar(s: BarState): Bar | null {
   if (s.working) return { tone: "orange", text: "Claude is changing the design. Edit mode opens when it stops; comments still work", detail: null, actions: ["stop"] };
   if (s.needsYou) return { tone: "orange", text: s.needsYou.kind === "question" ? "Claude asks…" : "Claude needs your approval", detail: s.needsYou.text, actions: [] };
+  if (s.unsaved) return { tone: "yellow", text: "The page changed; your last edit was not saved.", detail: s.unsaved, actions: ["dismiss"] };
   const check = barProblems(s.page, s.problems);
   if (check) return { tone: "red", text: `${pageFile(check.page)} has check problems:`, detail: summary(check.problems), actions: ["details", "fix"] };
   if (s.systemRemoved) return { tone: "grey", text: "Design system removed.", detail: `Pages show without ${s.system}'s styles.`, actions: [] };

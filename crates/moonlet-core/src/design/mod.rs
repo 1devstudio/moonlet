@@ -11,6 +11,7 @@ pub mod foundations;
 pub(crate) mod fsx;
 pub mod manifest;
 pub mod mid;
+pub mod pages;
 pub mod readme;
 pub mod render;
 pub mod stack;

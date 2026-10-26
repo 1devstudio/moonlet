@@ -111,9 +111,7 @@ impl Store {
         slug: &str,
         mut change: impl FnMut(&mut Vec<DesignComment>) -> Result<T>,
     ) -> Result<T> {
-        // An existing design, its folder no link.
-        self.design_dir(workspace, slug)?;
-        let designs = self.designs_dir(workspace, false)?;
+        let designs = self.designs_of(workspace, slug)?;
         let rel = Path::new(slug).join(COMMENTS_FILE);
         let mut out = None;
         fsx::update_or_create_inside(&designs, &rel, |text| {
@@ -146,8 +144,7 @@ fn comment_text(comment: &str) -> Result<String> {
 /// `m` and digits, the tag a tag's name; the text squashed to one line and
 /// cut to [`TEXT_MAX`] characters.
 fn new_pin(page: &str, mid: &str, tag: &str, text: &str, comment: String) -> Result<DesignComment> {
-    let page_ok = !page.is_empty() && !page.starts_with('.') && !page.contains(['/', '\\', '\0']);
-    if !page_ok {
+    if !super::pages::is_page_name(page) {
         return Err(BadComment(format!("bad page \"{page}\"")).into());
     }
     if !is_mid(mid) {

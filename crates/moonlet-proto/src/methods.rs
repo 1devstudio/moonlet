@@ -247,6 +247,12 @@ pub const DESIGN_COMMENTS: &str = "design.comments";
 pub const DESIGN_COMMENT_PUT: &str = "design.comment.put";
 /// [`DesignCommentRef`] → the pin, resolved.
 pub const DESIGN_COMMENT_RESOLVE: &str = "design.comment.resolve";
+/// [`DesignPageRef`] → [`DesignPageText`]: a design's page and its version,
+/// for the visual editor (X65 entry 9).
+pub const DESIGN_PAGE: &str = "design.page";
+/// [`DesignWritePage`] → [`DesignPageWritten`]: the page replaced with the
+/// editor's text, only over `base_version`; else the error `stale`.
+pub const DESIGN_WRITE_PAGE: &str = "design.write_page";
 
 // Phones (X39)
 /// Phone access, the Tailscale addresses and the paired phones: [`MobileStatus`].
@@ -1385,6 +1391,39 @@ pub struct DesignCommentPut {
     pub slug: String,
     #[serde(flatten)]
     pub change: crate::types::CommentChange,
+}
+
+/// A design's page (X65): `index` for `pages/index.html`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DesignPageRef {
+    pub workspace: String,
+    pub slug: String,
+    pub page: String,
+}
+
+/// A design's page as the editor reads it: its text and version, the
+/// SHA-256 of the text in hex.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DesignPageText {
+    pub html: String,
+    pub version: String,
+}
+
+/// [`DESIGN_WRITE_PAGE`]'s params: the page's new text, and the version it
+/// was edited from.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DesignWritePage {
+    pub workspace: String,
+    pub slug: String,
+    pub page: String,
+    pub html: String,
+    pub base_version: String,
+}
+
+/// A page saved: its new version.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DesignPageWritten {
+    pub version: String,
 }
 
 /// One pin of a design (X65).

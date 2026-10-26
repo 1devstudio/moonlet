@@ -256,12 +256,8 @@ impl Store {
         if parse_viewport(viewport).is_none() {
             return Err(BadViewport(viewport.to_string()).into());
         }
-        // An existing design, its folder no link.
-        self.design_dir(workspace, slug)?;
-        // Through the designs folder, so a design folder swapped for a link
-        // after that check is not followed; and the agent may label a page
-        // meanwhile: its edit is kept.
-        let designs = self.designs_dir(workspace, false)?;
+        // The agent may label a page meanwhile: its edit is kept.
+        let designs = self.designs_of(workspace, slug)?;
         fsx::update_inside(&designs, &Path::new(slug).join(DESIGN_FILE), |text| {
             let mut doc: toml_edit::DocumentMut = text
                 .parse()
@@ -311,6 +307,15 @@ impl Store {
         }
         problems.sort_by(|a, b| (&a.path, a.line).cmp(&(&b.path, b.line)));
         Ok(problems)
+    }
+
+    /// The designs folder of an existing design `slug`, its own folder no
+    /// link, for reading and writing its files through the designs folder
+    /// as a handle, so a design folder swapped for a link after the check
+    /// is never followed.
+    pub(super) fn designs_of(&self, workspace: &str, slug: &str) -> Result<PathBuf> {
+        self.design_dir(workspace, slug)?;
+        self.designs_dir(workspace, false)
     }
 
     /// `<workspace>/designs`, never through a link; with `create`, made

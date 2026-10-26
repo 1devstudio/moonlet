@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { JSDOM, type DOMWindow } from "jsdom";
-import { bridgeMessage, helloMessage, modeMessage, pinsMessage } from "./designBridge";
+import { PAGE_KEYS, bridgeMessage, editMessage, helloMessage, modeMessage, pinsMessage, scrollMessage, selectMessage } from "./designBridge";
 import bridge from "../../src-tauri/src/design_bridge.js?raw";
 
 describe("the bridge's messages (X65)", () => {
@@ -29,8 +29,8 @@ describe("the bridge's messages (X65)", () => {
     expect(bridgeMessage({ type: "bridge.mids", mids: ["m1", "x"] })).toBeNull();
     expect(bridgeMessage({ type: "bridge.rects", rects: [{ mid: "m12", x: 0, y: -20, w: 390, h: 40 }] })).toEqual({ type: "rects", rects: [{ mid: "m12", x: 0, y: -20, w: 390, h: 40 }] });
     expect(bridgeMessage({ type: "bridge.rects", rects: [{ mid: "m12", x: 0, y: 0, w: -1, h: 40 }] })).toBeNull();
-    expect(bridgeMessage({ type: "bridge.key", key: "c" })).toEqual({ type: "key", key: "c" });
-    expect(bridgeMessage({ type: "bridge.key", key: "Delete" })).toBeNull();
+    expect(bridgeMessage({ type: "bridge.key", key: "c" })).toEqual({ type: "key", key: "c", shift: false, alt: false, meta: false });
+    expect(bridgeMessage({ type: "bridge.key", key: "q" })).toBeNull();
   });
 
   it("tells the page its mode, and the pinned elements once each", () => {
@@ -40,6 +40,66 @@ describe("the bridge's messages (X65)", () => {
 
   it("asks the page for its data-mids with a hello, once the app listens", () => {
     expect(helloMessage()).toEqual({ type: "bridge.hello" });
+  });
+
+  it("takes the page's element tree, each element with its depth, tag and its text cut to 60 characters, and drops one that is not a tree", () => {
+    const tree = {
+      type: "bridge.tree",
+      nodes: [
+        { mid: "m1", tag: "BODY", depth: 0, text: "" },
+        { mid: "m20", tag: "main", depth: 1, text: "Settings\n  Git  Branch prefix" },
+        { mid: "m24", tag: "section", depth: 2, text: "Git ".repeat(20) },
+      ],
+    };
+    expect(bridgeMessage(tree)).toEqual({
+      type: "tree",
+      layers: [
+        { mid: "m1", tag: "body", depth: 0, text: "" },
+        { mid: "m20", tag: "main", depth: 1, text: "Settings Git Branch prefix" },
+        { mid: "m24", tag: "section", depth: 2, text: "Git Git Git Git Git Git Git Git Git Git Git Git Git Git Git " },
+      ],
+    });
+    expect(bridgeMessage({ type: "bridge.tree", nodes: [{ mid: "m1", tag: "body", depth: -1, text: "" }] })).toBeNull();
+    expect(bridgeMessage({ type: "bridge.tree", nodes: [{ mid: "m1", tag: "body", depth: 0.5, text: "" }] })).toBeNull();
+    expect(bridgeMessage({ type: "bridge.tree", nodes: [{ mid: "x", tag: "body", depth: 0, text: "" }] })).toBeNull();
+    expect(bridgeMessage({ type: "bridge.tree", nodes: "m1" })).toBeNull();
+  });
+
+  it("takes the selected element and its box, or that none is, and tells the page which to select, and Edit as its mode", () => {
+    expect(bridgeMessage({ type: "bridge.selected", mid: "m24", rect: { x: 0, y: 120, w: 794, h: 210 } })).toEqual({ type: "selected", mid: "m24", rect: { x: 0, y: 120, w: 794, h: 210 } });
+    expect(bridgeMessage({ type: "bridge.selected", mid: null })).toEqual({ type: "selected", mid: null, rect: null });
+    expect(bridgeMessage({ type: "bridge.selected", mid: "m24" })).toBeNull();
+    expect(bridgeMessage({ type: "bridge.selected", mid: "m24]", rect: { x: 0, y: 0, w: 1, h: 1 } })).toBeNull();
+    expect(selectMessage("m24")).toEqual({ type: "bridge.select", mid: "m24" });
+    expect(selectMessage(null)).toEqual({ type: "bridge.select", mid: null });
+    expect(modeMessage("edit")).toEqual({ type: "bridge.mode", mode: "edit" });
+  });
+
+  it("takes an element's new text as it was typed, and drops one too long or not text", () => {
+    expect(bridgeMessage({ type: "bridge.text", mid: "m31", text: "Prefix for\nnew  branches" })).toEqual({ type: "text", mid: "m31", text: "Prefix for\nnew  branches" });
+    expect(bridgeMessage({ type: "bridge.text", mid: "m31", text: "x".repeat(10_001) })).toBeNull();
+    expect(bridgeMessage({ type: "bridge.text", mid: "m31", text: 7 })).toBeNull();
+    expect(bridgeMessage({ type: "bridge.text", mid: "31", text: "x" })).toBeNull();
+  });
+
+  it("tells the page an edit to make on its live page", () => {
+    expect(editMessage({ op: "remove", mid: "m33" })).toEqual({ type: "bridge.edit", op: "remove", mid: "m33" });
+    expect(editMessage({ op: "insert", after: "m30", html: '<div data-mid="m41">Copy</div>' })).toEqual({ type: "bridge.edit", op: "insert", after: "m30", html: '<div data-mid="m41">Copy</div>' });
+    expect(editMessage({ op: "wrap", mid: "m25", box: "m41" })).toEqual({ type: "bridge.edit", op: "wrap", mid: "m25", box: "m41" });
+    expect(editMessage({ op: "unwrap", mid: "m30" })).toEqual({ type: "bridge.edit", op: "unwrap", mid: "m30" });
+  });
+
+  it("takes the editor's keys pressed in the page, with ⇧, ⌥ and ⌘, and drops any other key", () => {
+    for (const key of ["v", "Tab", "Delete", "Backspace", "d", "g", "z"]) expect(bridgeMessage({ type: "bridge.key", key })).toEqual({ type: "key", key, shift: false, alt: false, meta: false });
+    expect(bridgeMessage({ type: "bridge.key", key: "g", shift: true, alt: true, meta: true })).toEqual({ type: "key", key: "g", shift: true, alt: true, meta: true });
+    expect(bridgeMessage({ type: "bridge.key", key: "g", meta: "yes" })).toEqual({ type: "key", key: "g", shift: false, alt: false, meta: false });
+    expect(bridgeMessage({ type: "bridge.key", key: "Enter" })).toBeNull();
+  });
+
+  it("takes where the page is scrolled, and tells the page where to scroll after it loads again", () => {
+    expect(bridgeMessage({ type: "bridge.scroll", x: 0, y: 1240.5 })).toEqual({ type: "scroll", x: 0, y: 1240.5 });
+    expect(bridgeMessage({ type: "bridge.scroll", x: 0, y: NaN })).toBeNull();
+    expect(scrollMessage(0, 1240.5)).toEqual({ type: "bridge.scrollTo", x: 0, y: 1240.5 });
   });
 
   it("drops a message of an unknown type, or that is not an object", () => {
@@ -121,6 +181,24 @@ describe("the bridge script in a page (X65)", () => {
     expect(of("mids")).toHaveLength(reports);
   });
 
+  it("reports the page's element tree once it has loaded, each element with an id at its depth among them", async () => {
+    const { of } = framed('<main data-mid="m20"><div class="wrap"><section data-mid="m24"><h2 data-mid="m25">Git</h2><svg data-mid="m26"><path data-mid="m40" d="M0 0"/></svg></section></div></main><script>1</script>');
+    await vi.waitFor(() =>
+      expect(of("tree")).toEqual([
+        {
+          type: "tree",
+          layers: [
+            { mid: "m1", tag: "body", depth: 0, text: "Git" },
+            { mid: "m20", tag: "main", depth: 1, text: "Git" },
+            { mid: "m24", tag: "section", depth: 2, text: "Git" },
+            { mid: "m25", tag: "h2", depth: 3, text: "Git" },
+            { mid: "m26", tag: "svg", depth: 3, text: "" },
+          ],
+        },
+      ]),
+    );
+  });
+
   const NAV = '<nav data-mid="m12"><a href="#git" data-mid="m13">General <b data-mid="m14">Appearance</b></a></nav><h2 data-mid="m25">Git</h2>';
   const mouse = (win: DOMWindow, type: string, on: Element, init: MouseEventInit = {}) => on.dispatchEvent(new win.MouseEvent(type, { bubbles: true, cancelable: true, ...init }));
 
@@ -161,6 +239,191 @@ describe("the bridge script in a page (X65)", () => {
     expect(of("pick")).toHaveLength(2);
   });
 
+  it("in Edit mode, selects a click's element instead of giving the page the click, outlined with its tag and id inside the page; the app's select moves it, and one not on the page is reported as none", () => {
+    const { win, doc, el, place, tell, of } = framed(NAV);
+    place("m13", 16, 64, 120, 28);
+    place("m25", 0, 300, 390, 30);
+    let clicked = 0;
+    el("m13").addEventListener("click", () => clicked++);
+    tell(modeMessage("edit"));
+    mouse(win, "click", el("m13"));
+    expect(of("pick")).toEqual([{ type: "pick", element: { mid: "m13", tag: "a", text: "General Appearance", rect: { x: 16, y: 64, w: 120, h: 28 } } }]);
+    expect(clicked).toBe(0);
+    const selection = () => doc.querySelector('[data-moonlet-bridge="selection"]') as HTMLElement | null;
+    const shown = () => [selection()?.style.display, selection()?.style.left, selection()?.style.top, selection()?.style.width, selection()?.style.height, selection()?.textContent];
+    expect(shown()).toEqual(["block", "16px", "64px", "120px", "28px", "a · m13"]);
+    expect(doc.body.contains(selection())).toBe(false);
+    tell(selectMessage("m25"));
+    expect(of("selected").at(-1)).toEqual({ type: "selected", mid: "m25", rect: { x: 0, y: 300, w: 390, h: 30 } });
+    expect(shown()).toEqual(["block", "0px", "300px", "390px", "30px", "h2 · m25"]);
+    tell(selectMessage("m99"));
+    expect(of("selected").at(-1)).toEqual({ type: "selected", mid: null, rect: null });
+    expect(selection()?.style.display).toBe("none");
+    tell(selectMessage("m25"));
+    tell(modeMessage("view"));
+    expect(selection()?.style.display).toBe("none");
+  });
+
+  it("in Edit mode, a double-click edits in place the text of an element that holds only text: Enter or a click outside commits it, Esc puts it back", () => {
+    const { win, doc, el, tell, of } = framed('<h2 data-mid="m25">Git</h2><p data-mid="m30">Branch <b data-mid="m31">prefix</b></p>');
+    const key = (on: Element, k: string) => on.dispatchEvent(new win.KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true }));
+    const editable = (mid: string) => el(mid).getAttribute("contenteditable");
+    tell(modeMessage("edit"));
+    mouse(win, "dblclick", el("m25"));
+    expect(editable("m25")).toBe("plaintext-only");
+    el("m25").textContent = "Git and GitHub";
+    key(el("m25"), "Enter");
+    expect(of("text")).toEqual([{ type: "text", mid: "m25", text: "Git and GitHub" }]);
+    expect(editable("m25")).toBeNull();
+    mouse(win, "dblclick", el("m25"));
+    el("m25").textContent = "Gone";
+    key(el("m25"), "Escape");
+    expect(el("m25").textContent).toBe("Git and GitHub");
+    expect(editable("m25")).toBeNull();
+    mouse(win, "dblclick", el("m25"));
+    el("m25").textContent = "Git, then GitHub";
+    mouse(win, "mousedown", doc.body);
+    expect(of("text").at(-1)).toEqual({ type: "text", mid: "m25", text: "Git, then GitHub" });
+    // Not an element with more than text in it, and not in Comment mode.
+    mouse(win, "dblclick", el("m30"));
+    expect(editable("m30")).toBeNull();
+    tell(modeMessage("comment"));
+    mouse(win, "dblclick", el("m25"));
+    expect(editable("m25")).toBeNull();
+    expect(of("key")).toEqual([]);
+  });
+
+  it("puts back a text edited in place that is longer than the app takes, so the page never shows a text that is not saved", () => {
+    const { win, el, tell, posted, of } = framed('<h2 data-mid="m25">Git</h2>');
+    tell(modeMessage("edit"));
+    mouse(win, "dblclick", el("m25"));
+    el("m25").textContent = "x".repeat(10_001);
+    el("m25").dispatchEvent(new win.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    expect(el("m25").textContent).toBe("Git");
+    expect(el("m25").getAttribute("contenteditable")).toBeNull();
+    expect(posted.filter((m) => "dropped" in (m as object))).toEqual([]);
+    mouse(win, "dblclick", el("m25"));
+    el("m25").textContent = "x".repeat(10_000);
+    el("m25").dispatchEvent(new win.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    expect(of("text")).toEqual([{ type: "text", mid: "m25", text: "x".repeat(10_000) }]);
+  });
+
+  it("names each element of the tree by its text, its parts' texts apart", async () => {
+    // The settings page's nav, as the agent wrote it, which Layers names
+    // "General Appearance Terminal Git", as the design export's board does.
+    const { of } = framed('<nav data-mid="m3"><a class="on" data-mid="m4">General</a><a data-mid="m5">Appearance</a><a data-mid="m6">Terminal</a><a data-mid="m7">Git</a></nav>');
+    await vi.waitFor(() => expect(of("tree")).toHaveLength(1));
+    expect((of("tree")[0] as { layers: { mid: string; text: string }[] }).layers.map((l) => [l.mid, l.text])).toEqual([
+      ["m1", "General Appearance Terminal Git"],
+      ["m3", "General Appearance Terminal Git"],
+      ["m4", "General"],
+      ["m5", "Appearance"],
+      ["m6", "Terminal"],
+      ["m7", "Git"],
+    ]);
+  });
+
+  it("makes the app's edits on its live page, only well formed, and reports the tree again after each", async () => {
+    const { doc, tell, of } = framed('<section data-mid="m24"><h2 data-mid="m25">Git</h2><div data-mid="m30"><span data-mid="m31">Prefix</span></div></section>');
+    await vi.waitFor(() => expect(of("tree")).toHaveLength(1));
+    const body = () => doc.body.innerHTML;
+    tell(editMessage({ op: "insert", after: "m30", html: '<div data-mid="m41"><span data-mid="m42">Prefix</span></div>' }));
+    tell(editMessage({ op: "wrap", mid: "m25", box: "m43" }));
+    tell(editMessage({ op: "unwrap", mid: "m30" }));
+    tell(editMessage({ op: "remove", mid: "m41" }));
+    expect(body()).toBe('<section data-mid="m24"><div data-mid="m43"><h2 data-mid="m25">Git</h2></div><span data-mid="m31">Prefix</span></section>');
+    expect(of("tree")).toHaveLength(5);
+    expect(of("tree").at(-1)).toEqual({
+      type: "tree",
+      layers: [
+        { mid: "m1", tag: "body", depth: 0, text: "Git Prefix" },
+        { mid: "m24", tag: "section", depth: 1, text: "Git Prefix" },
+        { mid: "m43", tag: "div", depth: 2, text: "Git" },
+        { mid: "m25", tag: "h2", depth: 3, text: "Git" },
+        { mid: "m31", tag: "span", depth: 2, text: "Prefix" },
+      ],
+    });
+    // The bridge keeps its own check of what it is told.
+    tell({ type: "bridge.edit", op: "remove", mid: '[data-mid="m24"]' });
+    tell({ type: "bridge.edit", op: "wrap", mid: "m25", box: 'x" onclick="' });
+    tell({ type: "bridge.edit", op: "replace", mid: "m24" });
+    tell(editMessage({ op: "insert", after: null, html: '<p data-mid="m44">First</p>' }));
+    expect(body()).toBe('<p data-mid="m44">First</p><section data-mid="m24"><div data-mid="m43"><h2 data-mid="m25">Git</h2></div><span data-mid="m31">Prefix</span></section>');
+  });
+
+  it("in Edit mode, sends the app the editor's keys pressed in the page instead of giving them to the page, and in View only C, V and Esc", () => {
+    const { win, doc, tell, of } = framed('<input data-mid="m5"><h2 data-mid="m25">Git</h2>');
+    const press = (init: KeyboardEventInit, on: Element = doc.body) => {
+      const e = new win.KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
+      on.dispatchEvent(e);
+      return e.defaultPrevented;
+    };
+    const keys = () => of("key").map((k) => { const { key, shift, alt, meta } = k as { key: string; shift: boolean; alt: boolean; meta: boolean }; return `${shift ? "⇧" : ""}${alt ? "⌥" : ""}${meta ? "⌘" : ""}${key}`; });
+    expect([press({ key: "Tab" }), press({ key: "v" }), press({ key: "d", metaKey: true })]).toEqual([false, false, false]);
+    expect(keys()).toEqual(["v"]);
+    tell(modeMessage("edit"));
+    const kept = [
+      press({ key: "Tab" }),
+      press({ key: "Tab", shiftKey: true }),
+      press({ key: "Backspace" }),
+      press({ key: "Delete" }),
+      press({ key: "d", code: "KeyD", metaKey: true }),
+      // ⌥ makes another character of G; the key's place says which.
+      press({ key: "©", code: "KeyG", altKey: true, metaKey: true }),
+      press({ key: "©", code: "KeyG", shiftKey: true, altKey: true, metaKey: true }),
+      press({ key: "c", code: "KeyC", metaKey: true }),
+      press({ key: "v", code: "KeyV", metaKey: true }),
+      press({ key: "z", code: "KeyZ", metaKey: true }),
+      press({ key: "Z", code: "KeyZ", shiftKey: true, metaKey: true }),
+    ];
+    expect(kept.every(Boolean)).toBe(true);
+    expect(keys().slice(1)).toEqual(["Tab", "⇧Tab", "Backspace", "Delete", "⌘d", "⌥⌘g", "⇧⌥⌘g", "⌘c", "⌘v", "⌘z", "⇧⌘z"]);
+    // Typed in a field, they are the field's.
+    expect(press({ key: "Backspace" }, doc.querySelector("input")!)).toBe(false);
+    expect(press({ key: "z", code: "KeyZ", metaKey: true }, doc.querySelector("input")!)).toBe(false);
+    expect(keys()).toHaveLength(12);
+  });
+
+  it("commits a text being edited when it loses the focus, the page loses it to the app, or the app selects another element", () => {
+    const { win, el, tell, of } = framed('<h2 data-mid="m25">Git</h2><p data-mid="m30">Branch prefix</p>');
+    const edit = (mid: string, text: string) => {
+      mouse(win, "dblclick", el(mid));
+      el(mid).textContent = text;
+    };
+    tell(modeMessage("edit"));
+    edit("m25", "Git and GitHub");
+    el("m25").dispatchEvent(new win.FocusEvent("focusout", { bubbles: true }));
+    expect(of("text").at(-1)).toEqual({ type: "text", mid: "m25", text: "Git and GitHub" });
+    edit("m30", "Prefix");
+    win.dispatchEvent(new win.FocusEvent("blur"));
+    expect(of("text").at(-1)).toEqual({ type: "text", mid: "m30", text: "Prefix" });
+    edit("m25", "Git, GitHub");
+    tell(selectMessage("m30"));
+    expect(of("text").at(-1)).toEqual({ type: "text", mid: "m25", text: "Git, GitHub" });
+    expect(el("m25").getAttribute("contenteditable")).toBeNull();
+  });
+
+  it("keeps a text being edited and the selection when told the mode it is in again, as after each report of its ids", () => {
+    const { win, doc, el, tell, of } = framed('<h2 data-mid="m25">Git</h2>');
+    tell(modeMessage("edit"));
+    mouse(win, "click", el("m25"));
+    mouse(win, "dblclick", el("m25"));
+    el("m25").textContent = "Git and";
+    tell(modeMessage("edit"));
+    expect(el("m25").getAttribute("contenteditable")).toBe("plaintext-only");
+    expect(of("text")).toEqual([]);
+    expect((doc.querySelector('[data-moonlet-bridge="selection"]') as HTMLElement).style.display).toBe("block");
+  });
+
+  it("sends the app only the keys the app takes from a page, and every one of them, whatever is pressed in Edit mode", () => {
+    const { win, doc, tell, of } = framed('<h2 data-mid="m25">Git</h2>');
+    tell(modeMessage("edit"));
+    const keys = [...PAGE_KEYS, ..."abefhijklmnopqrstuwxy", "Enter", "ArrowUp", "Space", "Home"];
+    const mods = [{}, { shiftKey: true }, { metaKey: true }, { altKey: true, metaKey: true }, { shiftKey: true, altKey: true, metaKey: true }, { shiftKey: true, metaKey: true }];
+    for (const key of keys) for (const m of mods) doc.body.dispatchEvent(new win.KeyboardEvent("keydown", { key, code: key.length === 1 ? `Key${key.toUpperCase()}` : key, bubbles: true, cancelable: true, ...m }));
+    expect(new Set(of("key").map((k) => (k as { key: string }).key))).toEqual(new Set(PAGE_KEYS));
+  });
+
   it("reports the boxes of the pinned elements when asked, and again on scroll and resize", async () => {
     const { win, place, tell, posted } = framed(NAV);
     place("m12", 0, 56, 390, 44);
@@ -185,13 +448,26 @@ describe("the bridge script in a page (X65)", () => {
     await vi.waitFor(() => expect(posted.at(-1)).toEqual({ type: "rects", rects: [{ mid: "m12", x: 0, y: 40, w: 600, h: 44 }, { mid: "m25", x: 0, y: 180, w: 390, h: 30 }] }));
   });
 
+  it("reports where the page is scrolled, and scrolls where the app tells it, again once the page has loaded", async () => {
+    const { win, doc, tell, of } = framed(NAV);
+    const went: number[][] = [];
+    win.scrollTo = ((x: number, y: number) => void went.push([x, y])) as typeof win.scrollTo;
+    expect(doc.readyState).not.toBe("complete");
+    tell(scrollMessage(0, 1240));
+    expect(went).toEqual([[0, 1240]]);
+    await vi.waitFor(() => expect(went).toEqual([[0, 1240], [0, 1240]]));
+    Object.defineProperty(win, "scrollY", { value: 640, configurable: true });
+    win.dispatchEvent(new win.Event("scroll"));
+    await vi.waitFor(() => expect(of("scroll").at(-1)).toEqual({ type: "scroll", x: 0, y: 640 }));
+  });
+
   it("takes messages only from the app's window, never from the page's own scripts", async () => {
     const { win, el, tell, posted } = framed(NAV);
-    await vi.waitFor(() => expect(posted).toHaveLength(1));
+    await vi.waitFor(() => expect(posted).toHaveLength(2));
     tell(modeMessage("comment"), win);
     tell(pinsMessage(["m12"]), win);
     mouse(win, "click", el("m13"));
-    expect(posted.map((m) => (m as { type: string }).type)).toEqual(["mids"]);
+    expect(posted.map((m) => (m as { type: string }).type)).toEqual(["mids", "tree"]);
   });
 
   it("reports C and Esc pressed in the page, but not C typed in a field", () => {
@@ -203,8 +479,8 @@ describe("the bridge script in a page (X65)", () => {
     key(el("m7"), { key: "c" });
     key(doc.querySelector("input")!, { key: "Escape" });
     expect(of("key")).toEqual([
-      { type: "key", key: "c" },
-      { type: "key", key: "Escape" },
+      { type: "key", key: "c", shift: false, alt: false, meta: false },
+      { type: "key", key: "Escape", shift: false, alt: false, meta: false },
     ]);
   });
 });

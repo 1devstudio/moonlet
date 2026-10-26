@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type Aside, asideFooter, asideSettled, canAskAside, composerPlaceholder, interruptedLine, queuedCount, queuedHeader, queuedLine, sendNowLabel, sendNowParams, sendNowWarning, stoppingLine, unqueued, waitingOn } from "./queued";
+import { type Aside, asideFooter, asideSettled, canAskAside, requeue, userSend, composerPlaceholder, interruptedLine, queuedCount, queuedHeader, queuedLine, sendNowLabel, sendNowParams, sendNowWarning, stoppingLine, unqueued, waitingOn } from "./queued";
 import type { ChatItem, ChatState, QueuedMessage } from "./protocol";
 
 const T0 = 1_792_150_000_000;
@@ -144,6 +144,18 @@ describe("asideSettled", () => {
   it("drops a late reply to a question that was closed or replaced", () => {
     expect(asideSettled(null, "and the web port?", { error: "late" })).toBeNull();
     expect(asideSettled({ question: "which db?" }, "and the web port?", { error: "late" })).toEqual({ question: "which db?" });
+  });
+});
+
+describe("requeue (X65)", () => {
+  it("sends the aside's question as the user's message, through the chat's own send, as a design's that puts its edits by hand first", async () => {
+    const sent: string[] = [];
+    const design = (text: string) => (sent.push(`design: ${text}`), Promise.resolve());
+    const chatSend = (text: string) => (sent.push(`chat.send: ${text}`), Promise.resolve());
+    await requeue({ question: "Which branch is this on?" }, userSend(design, chatSend));
+    await requeue({ question: "And the base?" }, userSend(undefined, chatSend));
+    await requeue(null, userSend(design, chatSend));
+    expect(sent).toEqual(["design: Which branch is this on?", "chat.send: And the base?"]);
   });
 });
 

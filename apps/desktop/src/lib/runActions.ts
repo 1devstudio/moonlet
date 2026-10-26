@@ -87,7 +87,7 @@ export function highlight(label: string, hits: number[]): { text: string; hit: b
 
 /** Key id of a key press: modifiers in fixed order + lower-case key, e.g.
  * "shift+cmd+n". The format of ActionDef.keys and settings.shortcuts. */
-export function keyId(e: KeyboardEvent): string {
+export function keyId(e: Pick<KeyboardEvent, "key" | "code" | "ctrlKey" | "shiftKey" | "altKey" | "metaKey">): string {
   const parts = [];
   if (e.ctrlKey) parts.push("ctrl");
   if (e.shiftKey) parts.push("shift");
