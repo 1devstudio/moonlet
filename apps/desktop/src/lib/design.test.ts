@@ -143,6 +143,13 @@ describe("a design's sidebar row (X65)", () => {
     });
   });
 
+  it("says session for a session design, its dot its session's agent's, needs you and unreadable before it", () => {
+    const inSession = design({ kind: "session", session: "s1", open_comments: 2 });
+    expect(designRow(inSession, NOW, "working")).toEqual({ state: "working", text: "session", tone: "muted", comments: false });
+    expect(designRow({ ...inSession, needs_you: { kind: "question", text: "Rows or cards?" } }, NOW, "blocked").text).toBe("needs you");
+    expect(designRow({ ...inSession, error: "cannot read design.toml" }, NOW, null).text).toBe("unreadable");
+  });
+
   it("has no dot without an agent, and says unreadable when its design.toml could not be read", () => {
     expect(designRow(design({ agent: null, agent_state: null }), NOW, null)).toEqual({ state: null, text: "2d", tone: "muted", comments: false });
     expect(designRow(design({ error: "cannot read design.toml" }), NOW, null)).toEqual({ state: null, text: "unreadable", tone: "error", comments: false });

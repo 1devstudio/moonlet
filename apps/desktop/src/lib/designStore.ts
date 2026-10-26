@@ -156,6 +156,11 @@ export function designsOf(s: DesignState, host: string, workspace: string): Desi
   return s.designs[wsKey(host, workspace)];
 }
 
+/** A workspace's session designs, every session's (X65); undefined until listed. */
+export function sessionDesignsIn(s: DesignState, host: string, workspace: string): Design[] | undefined {
+  return s.sessionDesigns[wsKey(host, workspace)];
+}
+
 const NO_DESIGNS: Design[] = [];
 /** Each listing of session designs by session, so a session's list is the
  *  same array until the next listing. */
