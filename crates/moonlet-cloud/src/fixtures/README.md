@@ -9,6 +9,6 @@ published API references, not captured traffic. X63 asks for captured,
 sanitised responses; replace each file with one captured from a sandbox
 project, keeping the file names, and rerun the tests.
 
-`gcp/test_key.pem` is an RSA key made with `openssl genpkey` for these tests
-only; no Google account knows it. `gcp/worked_jwt.txt` is the JWT that X67's
+`gcp/test_key.pem` and `gcp/test_key_2.pem` are RSA keys made with `openssl genpkey` for these tests
+only; no Google account knows them. `gcp/worked_jwt.txt` is the JWT that X67's
 worked claims make with it, signed with `openssl dgst -sha256 -sign`.
