@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Design, DesignComment, DesignSystem, TerminalInfo } from "./protocol";
 import { modeOf, setMode } from "./mode";
 import { agentOnScreen, goToAgent, useStore } from "./store";
-import { pageKey, pageOfKey, commentsOf, historyOf, keepComment, loadComments, loadHistory, sendComments, sendingOf, resolveComment, sessionDesignsOf, shownSessionDesign, showSessionDesign, unseenOf, updateSystem, justOpened, tookOpened, pickDesignTab } from "./designStore";
+import { pageKey, pageOfKey, commentsOf, historyOf, keepComment, loadComments, loadHistory, sendComments, sendingOf, resolveComment, sessionDesignsOf, shownSessionDesign, showSessionDesign, unseenOf, updateSystem, justOpened, tookOpened, pickDesignTab, kitRevOf } from "./designStore";
 import { cardsOf, checkDesign, createFromNewDesign, createSystem, designsOf, detectStack, latestOf, loadCards, loadDesigns, loadSystems, openCard, saveViewport, pageRevOf, problemsOf, revOf, shownCard, shownDesign, shownSystem, showDesign, showSystem, startDesign, systemNameOf, systemsOf, useDesign } from "./designStore";
 
 const calls = vi.hoisted(() => [] as { host: string; method: string; params: unknown }[]);
@@ -770,6 +770,20 @@ describe("a session's Design tab (X65)", () => {
     await updateSystem("local", { session: "4f2a9c1e7b3d" }, "settings-page");
     expect(sessionDesignsOf(useDesign.getState(), "local", "4f2a9c1e7b3d").map((d) => !!d.system_updated)).toEqual([false, false]);
     expect(sessionDesignsOf(useDesign.getState(), "mac-2", "4f2a9c1e7b3d").map((d) => !!d.system_updated)).toEqual([false, true]);
+  });
+
+  it("has its kit read again when its session's design.changed is under its own system/, as Update writes it, never for a page alone", () => {
+    const S = { session: "4f2a9c1e7b3d" };
+    const rev = (host: string, session: string) => kitRevOf(useDesign.getState(), host, { session }, "settings-page", "moonlet-desktop");
+    const own = (paths: string[]) => events.emit({ host: "local", name: "design.changed", data: { workspace: "w-1devstudio", system: null, design: "settings-page", session: S.session, paths } });
+    own(["pages/index.html"]);
+    expect(rev("local", S.session)).toBe(0);
+    own(["system/styles.css", "system/tokens/spacing.css"]);
+    expect(rev("local", S.session)).toBe(1);
+    // Another session's, another host's, and a workspace design of the same slug are left alone.
+    expect(rev("local", "9c9c9c9c9c9c")).toBe(0);
+    expect(rev("mac-2", S.session)).toBe(0);
+    expect(kitRevOf(useDesign.getState(), "local", "w-1devstudio", "settings-page", "moonlet-desktop")).toBe(0);
   });
 
   it("updates a design's design system by its session and slug, and its bar goes at once", async () => {

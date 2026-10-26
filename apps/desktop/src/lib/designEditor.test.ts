@@ -493,6 +493,7 @@ describe("Update of a session design's design system (X65)", () => {
     await updateAndTell("local", S, SLUG, 31, "moonlet desktop");
     expect(calls.map((c) => [c.method, c.params])).toEqual([
       ["design.system.update", { session: "4f2a9c1e7b3d", slug: SLUG }],
+      ["design.kit", { session: "4f2a9c1e7b3d", slug: SLUG }],
       [
         "chat.send",
         {
@@ -504,9 +505,25 @@ describe("Update of a session design's design system (X65)", () => {
     ]);
   });
 
+  it("reads the design's kit again before telling its agent, so the Inspector and the Palette have the updated design system", async () => {
+    const kit = (value: string) => ({ system: "moonlet-desktop", tokens: [{ name: "--space-4", value, family: "spacing" }], cards: [] });
+    answers["design.kit"] = () => kit("16px");
+    await loadKit("local", S, SLUG);
+    calls.length = 0;
+    answers["design.kit"] = () => kit("18px");
+    await updateAndTell("local", S, SLUG, 31, "moonlet desktop");
+    expect(calls.map((c) => [c.method, c.params.slug ?? null])).toEqual([
+      ["design.system.update", SLUG],
+      ["design.kit", SLUG],
+      ["chat.send", null],
+    ]);
+    expect(calls[1].params).toEqual({ session: "4f2a9c1e7b3d", slug: SLUG });
+    expect(kitOf(useEditor.getState(), "local", S, SLUG)?.tokens).toEqual([{ name: "--space-4", value: "18px", family: "spacing" }]);
+  });
+
   it("tells no one when the session's agent is not running", async () => {
     await updateAndTell("local", S, SLUG, null, "moonlet desktop");
-    expect(calls.map((c) => c.method)).toEqual(["design.system.update"]);
+    expect(calls.map((c) => c.method)).toEqual(["design.system.update", "design.kit"]);
   });
 });
 

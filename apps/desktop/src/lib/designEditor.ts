@@ -235,11 +235,13 @@ export function askWithEdits(host: string, place: DesignPlace, slug: string, age
 }
 
 /** **Update** of a session design's design system (X65): both copies
- *  replaced (`updateSystem`), then, when the session's agent runs
- *  (`agent`), the cards that changed told to it, the edits by hand not
- *  told yet before them; the update's answer. */
+ *  replaced (`updateSystem`), its kit read again for the Inspector and the
+ *  Palette, then, when the session's agent runs (`agent`), the cards that
+ *  changed told to it, the edits by hand not told yet before them; the
+ *  update's answer. */
 export async function updateAndTell(host: string, place: { session: string }, slug: string, agent: number | null, systemName: string, peers?: ToldDesign[]): Promise<DesignSystemUpdated> {
   const updated = await updateSystem(host, place, slug);
+  await loadKit(host, place, slug).catch(() => {});
   if (agent !== null) await askWithEdits(host, place, slug, agent, systemUpdateMessage(slug, systemName, updated.cards), peers);
   return updated;
 }
