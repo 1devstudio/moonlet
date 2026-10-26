@@ -100,19 +100,27 @@ function BuildRow({ host, place, slug, row, viewport, builtRev }: { host: string
   return (
     <article aria-label={`${row.page} design and build`} className="mb-5 grid grid-cols-2 gap-4">
       <BuildTile url={pageUrl(place, slug, row.page, rev)} title={`${row.page} design`} viewport={viewport} caption={["design", row.design]} />
-      <BuildTile url={row.built && designUrl(place, row.built, builtRev)} title={`${row.page} built`} viewport={viewport} caption={["built", row.builtLabel ?? ""]} empty={row.builtLabel ?? ""} />
+      <BuildTile image={row.built && designUrl(place, row.built, builtRev)} title={`${row.page} built`} viewport={viewport} caption={["built", row.builtLabel ?? ""]} empty={row.builtLabel ?? ""} />
     </article>
   );
 }
 
-/** A page or its built screenshot, fitted to the column, and what it is under it. */
-function BuildTile({ url, title, viewport, caption, empty = "" }: { url: string | null; title: string; viewport: [number, number]; caption: [string, string]; empty?: string }) {
+/** A page (`url`, framed as on the canvas) or its built screenshot
+ *  (`image`, scaled to fit whatever its pixel density), fitted to the
+ *  column, and what it is under it. */
+function BuildTile({ url = null, image = null, title, viewport, caption, empty = "" }: { url?: string | null; image?: string | null; title: string; viewport: [number, number]; caption: [string, string]; empty?: string }) {
   const [ref, [width]] = useSize<HTMLDivElement>();
   const scale = width ? width / viewport[0] : 0;
   return (
     <figure className="m-0 flex min-w-0 flex-col gap-1.5">
       <div ref={ref} className="relative w-full overflow-hidden rounded-md border border-border-strong bg-bg" style={{ aspectRatio: `${viewport[0]} / ${viewport[1]}` }}>
-        {url && scale > 0 ? <CardFrame url={url} title={title} viewport={viewport} scale={scale} /> : <span className="absolute inset-0 flex items-center justify-center ui-text-12.5 text-faint">{empty}</span>}
+        {image ? (
+          <img src={image} alt={title} className="absolute inset-0 h-full w-full object-contain object-top" />
+        ) : url && scale > 0 ? (
+          <CardFrame url={url} title={title} viewport={viewport} scale={scale} />
+        ) : (
+          <span className="absolute inset-0 flex items-center justify-center ui-text-12.5 text-faint">{empty}</span>
+        )}
       </div>
       <figcaption className="truncate ui-text-12 text-muted">
         <span className="font-mono text-fg">{caption[0]}</span> · {caption[1]}
