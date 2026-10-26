@@ -227,6 +227,8 @@ describe("cloud workers in the search (X63)", () => {
       ["Monthly limit", "Machines › Cloud workers", "cloud-hours"],
     ]);
     expect(found("hetzner")).toEqual([["Cloud workers", "Machines › Cloud workers", undefined]]);
+    expect(found("gcp")).toEqual([["Cloud workers", "Machines › Cloud workers", undefined]]);
+    expect(found("google cloud")).toEqual([["Cloud workers", "Machines › Cloud workers", undefined]]);
     expect(found("oauth")).toEqual([["Tailscale OAuth client", "Machines › Cloud workers", "cloud-tailscale"]]);
     expect(found("machine-hours")).toEqual([["Monthly limit", "Machines › Cloud workers", "cloud-hours"]]);
   });
