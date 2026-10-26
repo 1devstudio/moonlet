@@ -347,26 +347,42 @@ async fn a_worker_that_stops_answering_pings_is_dropped() {
 #[tokio::test]
 async fn turning_the_link_off_drops_the_worker_at_once_and_a_restarted_central_host_gets_it_back() {
     let (mut central, addr) = central().await;
-    let worker = linked_worker(&central, &addr).await;
+    let worker = worker(WORKER_ID, "Alex's MacBook Pro").await;
+    let token = pair(&central, &addr, "Alex's MacBook Pro").await;
+    link(&worker, &addr, &token).await;
+    eventually("the worker is listed", || async {
+        workers(&central).await.len() == 1
+    })
+    .await;
     let mut events = central.app().await;
 
-    let off = Instant::now();
+    // Without heavy commands it still shares the account, so it stays
+    // linked (X68).
     let info: LinkInfo = worker
         .call("link.set", json!({ "worker": { "enabled": false } }))
         .await;
+    assert!(matches!(info.state, LinkState::Connected { .. }), "{:?}", info.state);
+
+    let off = Instant::now();
+    let info: LinkInfo = worker
+        .call("link.set", json!({ "central": null }))
+        .await;
     assert_eq!(info.state, LinkState::Off);
-    let list: Vec<WorkerInfo> =
-        serde_json::from_value(next_event(&mut events, "workers.changed").await).unwrap();
-    assert!(list.is_empty());
+    // Earlier news may come first: the worker listed without heavy commands.
+    loop {
+        let list: Vec<WorkerInfo> =
+            serde_json::from_value(next_event(&mut events, "workers.changed").await).unwrap();
+        if list.is_empty() {
+            break;
+        }
+    }
     assert!(
         off.elapsed() < Duration::from_secs(1),
         "closed after {:?}",
         off.elapsed()
     );
 
-    let _: LinkInfo = worker
-        .call("link.set", json!({ "worker": { "enabled": true } }))
-        .await;
+    link(&worker, &addr, &token).await;
     eventually("the worker is back", || async {
         workers(&central).await.len() == 1
     })
