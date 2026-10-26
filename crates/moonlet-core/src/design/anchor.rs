@@ -1,6 +1,7 @@
 //! `_ds_sync.json` (X64), the re-sync anchor, as design-sync's: per card, a
 //! hash of each source file it was made from and a hash of its HTML without
-//! the marker line. Comparing it with the folder and the sources now tells
+//! the marker line, and (moonlet's own) a hash of a component's `.css` and
+//! `.prompt.md`. Comparing it with the folder and the sources now tells
 //! which cards are out of date, edited by hand, orphaned or new.
 
 use std::collections::BTreeMap;
@@ -19,8 +20,16 @@ pub struct CardAnchor {
     pub source_key: String,
     /// A hash of the card's HTML after its first line, so a regroup keeps it.
     pub render_hash: String,
+    /// A hash of the component's `<name>.css` and `<name>.prompt.md` beside
+    /// the card; empty when it has neither (a layout has neither).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub companion_hash: String,
     /// Each source file, relative to its project, and its hash.
     pub sources: BTreeMap<String, String>,
+    /// With a `<name>.proposed.html` waiting beside the card: each source
+    /// the proposal's marker names, and its hash when the sync made it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub proposed_sources: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,6 +64,75 @@ pub fn save(root: &Path, anchor: &Anchor) -> Result<()> {
     super::fsx::write_inside(root, &root.join(FILE), (json + "\n").as_bytes())
 }
 
+/// The anchor of the design system in `root`, read without following a link
+/// out of it; `None` before the first sync.
+fn load(root: &Path) -> Result<Option<Anchor>> {
+    match super::fsx::read_inside(root, &root.join(FILE)) {
+        Ok(text) => Ok(Some(
+            serde_json::from_str(&text).with_context(|| format!("parsing {FILE}"))?,
+        )),
+        Err(e)
+            if e.downcast_ref::<std::io::Error>()
+                .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) =>
+        {
+            Ok(None)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Records that `card` now holds the sync's version, taken by the user (X64):
+/// its HTML, `.css` and `.prompt.md` are the anchored ones, and each source
+/// its marker names keeps the hash the sync recorded for its proposal (one
+/// the sync did not record is unknown, so it shows as changed). So the next
+/// look finds it up to date, unless a source changed since the sync. Every
+/// other card stays as it is; with no anchor, or no entry for the card,
+/// nothing changes.
+pub fn take(root: &Path, card: &str, exceptions: &BTreeMap<String, String>) -> Result<()> {
+    let Some(mut anchor) = load(root)? else {
+        return Ok(());
+    };
+    let Some(then) = anchor.cards.get(card) else {
+        return Ok(());
+    };
+    let text = super::fsx::read_inside(root, &root.join(card))?;
+    let files: BTreeMap<String, String> = card::parse_marker(&text)
+        .map(|m| m.source)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|s| {
+            let hash = then
+                .proposed_sources
+                .get(&s)
+                .or_else(|| then.sources.get(&s))
+                .cloned()
+                .unwrap_or_else(|| UNKNOWN.to_string());
+            (s, hash)
+        })
+        .collect();
+    let entry = CardAnchor {
+        source_key: source_key(&files, exceptions.get(card).map(String::as_str)),
+        render_hash: render_hash(&text),
+        companion_hash: companion_hash(root, card),
+        sources: files,
+        proposed_sources: BTreeMap::new(),
+    };
+    anchor.cards.insert(card.to_string(), entry);
+    save(root, &anchor)
+}
+
+/// Forgets `card`, removed by the user (X64): a card written at its path
+/// later is new. Every other card stays as it is.
+pub fn forget(root: &Path, card: &str) -> Result<()> {
+    let Some(mut anchor) = load(root)? else {
+        return Ok(());
+    };
+    if anchor.cards.remove(card).is_none() {
+        return Ok(());
+    }
+    save(root, &anchor)
+}
+
 /// The anchor as it would be written now.
 /// `exceptions` holds each card's settings in `config.toml`, by card path:
 /// a change to them changes the card's `source_key`.
@@ -82,12 +160,16 @@ pub fn compute(
             .map(|s| (s.clone(), source_hash(sources, s).unwrap_or_default()))
             .collect();
         let key = source_key(&files, exceptions.get(&rel_path).map(String::as_str));
+        let companion = companion_hash(root, &rel_path);
+        let proposed_sources = proposed_sources(root, &rel_path, sources);
         cards.insert(
             rel_path,
             CardAnchor {
                 source_key: key,
                 render_hash: render_hash(&text),
+                companion_hash: companion,
                 sources: files,
+                proposed_sources,
             },
         );
     }
@@ -217,7 +299,8 @@ pub fn status(
                 );
                 changed.sort();
                 st.changed_sources = changed;
-                st.edited_by_hand = now.render_hash != then.render_hash;
+                st.edited_by_hand = now.render_hash != then.render_hash
+                    || now.companion_hash != then.companion_hash;
                 st.exceptions_changed = st.changed_sources.is_empty()
                     && now.sources == then.sources
                     && now.source_key != then.source_key;
@@ -266,6 +349,65 @@ fn render_hash(html: &str) -> String {
     )
 }
 
+/// The hash a source gets in a taken card when the sync recorded none: it
+/// matches no file, so the source shows as changed.
+const UNKNOWN: &str = "unknown";
+
+/// The sources the `<name>.proposed.html` beside `card` names, with their
+/// hashes now; empty with no proposal (or a link in its place).
+fn proposed_sources(root: &Path, card: &str, sources: &[PathBuf]) -> BTreeMap<String, String> {
+    let Some(stem) = card.strip_suffix(".html") else {
+        return BTreeMap::new();
+    };
+    let path = root.join(format!("{stem}.proposed.html"));
+    if !std::fs::symlink_metadata(&path).is_ok_and(|m| m.is_file()) {
+        return BTreeMap::new();
+    }
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return BTreeMap::new();
+    };
+    card::parse_marker(&text)
+        .map(|m| m.source)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|s| {
+            let hash = source_hash(sources, &s).unwrap_or_default();
+            (s, hash)
+        })
+        .collect()
+}
+
+/// The component card `card`'s `<name>.css` and `<name>.prompt.md`, each
+/// with its name, hashed together; empty for a layout or a card with
+/// neither. A link is not read.
+fn companion_hash(root: &Path, card: &str) -> String {
+    let Some(stem) = card
+        .strip_prefix("components/")
+        .and_then(|c| c.strip_suffix(".html"))
+    else {
+        return String::new();
+    };
+    let mut bytes = Vec::new();
+    for ext in ["css", "prompt.md"] {
+        let path = root.join(format!("components/{stem}.{ext}"));
+        if !std::fs::symlink_metadata(&path).is_ok_and(|m| m.is_file()) {
+            continue;
+        }
+        let Ok(b) = std::fs::read(&path) else {
+            continue;
+        };
+        bytes.extend_from_slice(ext.as_bytes());
+        bytes.push(0);
+        bytes.extend_from_slice(&b);
+        bytes.push(0);
+    }
+    if bytes.is_empty() {
+        String::new()
+    } else {
+        sha16(&bytes)
+    }
+}
+
 fn source_key(files: &BTreeMap<String, String>, exceptions: Option<&str>) -> String {
     let mut lines: String = files.iter().map(|(p, h)| format!("{p} {h}\n")).collect();
     if let Some(e) = exceptions {
@@ -274,12 +416,20 @@ fn source_key(files: &BTreeMap<String, String>, exceptions: Option<&str>) -> Str
     sha16(lines.as_bytes())
 }
 
-/// The hash of `path` in the first source project that has it.
+/// The hash of `path` in the source projects. A path that more than one
+/// project has could be any of them, so all their files count: a change in
+/// either shows.
 fn source_hash(sources: &[PathBuf], path: &str) -> Option<String> {
-    sources
+    let hashes: Vec<String> = sources
         .iter()
-        .find_map(|root| std::fs::read(root.join(path)).ok())
+        .filter_map(|root| std::fs::read(root.join(path)).ok())
         .map(|b| sha16(&b))
+        .collect();
+    match hashes.as_slice() {
+        [] => None,
+        [one] => Some(one.clone()),
+        many => Some(sha16(many.join("\n").as_bytes())),
+    }
 }
 
 #[cfg(test)]
@@ -325,6 +475,50 @@ mod tests {
                 "sources": { "src/ui.tsx": "101086c04aac0612" }
             })
         );
+    }
+
+    #[test]
+    fn a_cards_css_or_prompt_edited_by_hand_makes_it_edited_by_hand() {
+        let (system, project) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        files(
+            system.path(),
+            &[
+                ("components/buttons/button/button.html", CARD),
+                (
+                    "components/buttons/button/button.css",
+                    ".btn { color: var(--color-accent); }\n",
+                ),
+                ("components/buttons/button/button.prompt.md", "A button.\n"),
+            ],
+        );
+        files(project.path(), &[("src/ui.tsx", UI)]);
+        let sources = [project.path().to_path_buf()];
+        let edited = || {
+            status(system.path(), &sources, &BTreeMap::new())
+                .unwrap()
+                .into_iter()
+                .map(|s| (s.path, s.edited_by_hand))
+                .collect::<Vec<_>>()
+        };
+        for (file, text) in [
+            (
+                "components/buttons/button/button.css",
+                ".btn { color: red; }\n",
+            ),
+            (
+                "components/buttons/button/button.prompt.md",
+                "A button, mine.\n",
+            ),
+        ] {
+            write(system.path(), &sources, &BTreeMap::new()).unwrap();
+            assert_eq!(edited(), vec![]);
+            files(system.path(), &[(file, text)]);
+            assert_eq!(
+                edited(),
+                vec![("components/buttons/button/button.html".to_string(), true)],
+                "{file} edited"
+            );
+        }
     }
 
     #[test]
@@ -652,5 +846,36 @@ mod tests {
                 .source_key,
             "5ced44ca6deea951"
         );
+    }
+
+    #[test]
+    fn a_path_in_two_source_projects_is_out_of_date_when_either_changes() {
+        let (system, web, admin) = (
+            tempfile::tempdir().unwrap(),
+            tempfile::tempdir().unwrap(),
+            tempfile::tempdir().unwrap(),
+        );
+        files(
+            system.path(),
+            &[("components/buttons/button/button.html", CARD)],
+        );
+        files(web.path(), &[("src/ui.tsx", UI)]);
+        files(
+            admin.path(),
+            &[("src/ui.tsx", "export const Button = () => \"admin\";\n")],
+        );
+        let sources = [web.path().to_path_buf(), admin.path().to_path_buf()];
+        write(system.path(), &sources, &BTreeMap::new()).unwrap();
+        assert_eq!(
+            status(system.path(), &sources, &BTreeMap::new()).unwrap(),
+            vec![]
+        );
+        files(
+            admin.path(),
+            &[("src/ui.tsx", "export const Button = () => \"admin 2\";\n")],
+        );
+        let got = status(system.path(), &sources, &BTreeMap::new()).unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].changed_sources, vec!["src/ui.tsx".to_string()]);
     }
 }
