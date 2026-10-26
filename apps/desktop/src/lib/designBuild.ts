@@ -70,9 +70,10 @@ export function designBuild(d: Design, worktree: string, found: Record<string, b
 
 /** What a row of Design and build mounts: its page's frame only while the
  *  row is `near` the screen (`useNear`), as each frame is a web process of
- *  its own (X64), as the Designs index's cards are; its built screenshot,
- *  an image, cheap, near or not, which tries the screenshot and is
- *  `shown` once it loaded. */
+ *  its own (X64), as the Designs index's cards are; its built screenshot's
+ *  image, which tries the screenshot, while near too, and, once it loaded,
+ *  near or not, `shown`. */
 export function buildRowShows(row: BuildRow, near: boolean): { frame: boolean; image: boolean; shown: boolean } {
-  return { frame: near, image: true, shown: row.there === true };
+  const shown = row.there === true;
+  return { frame: near, image: near || shown, shown };
 }

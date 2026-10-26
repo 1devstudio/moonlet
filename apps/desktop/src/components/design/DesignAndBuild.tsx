@@ -120,6 +120,7 @@ function BuildTile({
           <img
             src={image}
             alt={title}
+            loading="lazy"
             onLoad={() => onImage?.(true)}
             onError={() => onImage?.(false)}
             className={cx("absolute inset-0 h-full w-full object-contain object-top", !imageShown && "invisible")}

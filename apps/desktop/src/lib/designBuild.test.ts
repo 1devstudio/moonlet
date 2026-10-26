@@ -49,10 +49,25 @@ describe("the PR's Design and build (X65)", () => {
       ["settings-page@built/index.png", null],
       ["settings-page@built/git-a.png", null],
     ]);
-    expect(buildRowShows(looking[0], false)).toEqual({ frame: false, image: true, shown: false });
+    expect(buildRowShows(looking[0], true)).toEqual({ frame: true, image: true, shown: false });
     const [loaded, failed] = designBuild(design(), wt, { index: true, "git-a": false }).rows;
     expect(buildRowShows(loaded, false)).toEqual({ frame: false, image: true, shown: true });
     expect(buildRowShows(failed, true)).toEqual({ frame: true, image: true, shown: false });
+  });
+
+  it("tries a page's screenshot only while its row is near the screen, and keeps one that loaded, near or not", () => {
+    const wt = "/Users/alex/.moonlet/worktrees/moonlet/settings-page";
+    const [looking] = designBuild(design(), wt, {}).rows;
+    expect([buildRowShows(looking, false), buildRowShows(looking, true)]).toEqual([
+      { frame: false, image: false, shown: false },
+      { frame: true, image: true, shown: false },
+    ]);
+    const [loaded, failed] = designBuild(design(), wt, { index: true, "git-a": false }).rows;
+    expect([buildRowShows(loaded, false), buildRowShows(failed, false), buildRowShows(failed, true)]).toEqual([
+      { frame: false, image: true, shown: true },
+      { frame: false, image: false, shown: false },
+      { frame: true, image: true, shown: false },
+    ]);
   });
 
   it("names a page's screenshot for design.file as the agent saves it", () => {
@@ -63,6 +78,6 @@ describe("the PR's Design and build (X65)", () => {
     const [built, notBuilt] = designBuild(design(), "/Users/alex/.moonlet/worktrees/moonlet/settings-page", { index: true, "git-a": false }).rows;
     expect(buildRowShows(built, true)).toEqual({ frame: true, image: true, shown: true });
     expect(buildRowShows(built, false)).toEqual({ frame: false, image: true, shown: true });
-    expect(buildRowShows(notBuilt, false)).toEqual({ frame: false, image: true, shown: false });
+    expect(buildRowShows(notBuilt, false)).toEqual({ frame: false, image: false, shown: false });
   });
 });
