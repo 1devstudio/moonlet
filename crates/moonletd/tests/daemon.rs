@@ -4725,6 +4725,27 @@ async fn an_archived_sessions_designs_are_no_longer_watched_and_are_again_once_i
     next_event(&mut listener, methods::EV_DESIGN_CHANGED, names(&archived, "unarchived")).await;
 }
 
+/// X65 entry 12: a session whose worktree has no design folder yet when a
+/// design call first reaches it is watched all the same, from the nearest
+/// folder above, so a session design another tool makes there later, with
+/// no design call since, is announced with its session.
+#[tokio::test]
+async fn a_session_design_made_where_there_was_no_design_folder_is_announced() {
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    let (ws, _, session) = workspace_with_session(&d, &mut c, &[]).await;
+    let worktree = std::path::PathBuf::from(&session.path);
+    assert!(!worktree.join("docs/design").exists());
+    let listed: serde_json::Value = c.request(methods::DESIGN_LIST, serde_json::json!({"workspace": ws})).await.unwrap();
+    assert!(listed.is_array(), "{listed}");
+    let mut listener = d.client().await;
+    std::fs::create_dir_all(worktree.join(".moonlet/design/settings-page")).unwrap();
+    std::fs::create_dir_all(worktree.join("docs/design/settings-page/pages")).unwrap();
+    std::fs::write(worktree.join("docs/design/settings-page/pages/index.html"), "<p>made by another tool</p>\n").unwrap();
+    let changed = next_event(&mut listener, methods::EV_DESIGN_CHANGED, |e| e["session"] == session.id.as_str()).await;
+    assert_eq!((&changed["design"], &changed["workspace"]), (&serde_json::json!("settings-page"), &serde_json::json!(ws)));
+}
+
 /// X65 entry 12: a file written in a session design, in the worktree's
 /// design folder or its `.moonlet/design/`, is announced as `design.changed`
 /// with the design, its session and its workspace.

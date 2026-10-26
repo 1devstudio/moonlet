@@ -42,7 +42,7 @@ pub struct Daemon {
     hand_edits: Mutex<HashMap<String, HandEdits>>,
     /// The watches of the sessions' worktrees that hold session designs,
     /// by session, which announce their changes as `design.changed` (X65).
-    session_watches: Mutex<HashMap<String, moonlet_core::design::watch::Watching>>,
+    session_watches: Mutex<HashMap<String, SessionWatch>>,
     /// How long edits by hand stop before their snapshot is taken: 10 s, or
     /// `MOONLET_DESIGN_QUIET_MS` (tests).
     edits_quiet: std::time::Duration,
@@ -146,6 +146,15 @@ fn turn_of(t: &moonlet_proto::types::TerminalInfo) -> Option<TurnOf> {
         Some(_) => None,
         None => t.session_id.clone().filter(|_| t.chat && t.kind == TerminalKind::Agent).map(TurnOf::Session),
     }
+}
+
+/// The watch of a session's designs (X65).
+struct SessionWatch {
+    /// Watching ends when this is dropped.
+    _watching: moonlet_core::design::watch::Watching,
+    /// Its design folder and `.moonlet/design/` were both there as it
+    /// started, so it watches them whole from the start.
+    whole: bool,
 }
 
 /// What a design's agent does, for the design's snapshots (X65).
@@ -1901,16 +1910,21 @@ impl Daemon {
     }
 
     /// Watches an open session's worktree for its session designs'
-    /// changes, once it has a design folder, and announces them as
-    /// `design.changed` with the design, its session and its workspace
-    /// (X65). Every design call that reaches a session's designs, and their
+    /// changes, and announces them as `design.changed` with the design, its
+    /// session and its workspace (X65). A design folder not there yet is
+    /// watched for from the nearest folder above it, so a design another
+    /// tool makes there later is announced too. Every design call that reaches a session's designs, and their
     /// listing, starts it, so after a restart, or once the session is
     /// unarchived, it starts again as the app lists the designs. An archived
     /// session's designs are not watched (see `prune_session_watches`).
     fn watch_session_designs(&self, s: &moonlet_proto::types::Session, folder: &str) {
         let worktree = Path::new(&s.path);
+        let whole = worktree.join(folder).is_dir() && worktree.join(moonlet_core::design::session::SIDE_DIR).is_dir();
         let mut watches = self.session_watches.lock().unwrap();
-        if s.archived || watches.contains_key(&s.id) || !worktree.join(folder).is_dir() {
+        // A watch started while a folder was not there arms it only once
+        // the watch hears it made; a design call coming once both are there
+        // starts the watch again, armed on them before it returns.
+        if s.archived || watches.get(&s.id).is_some_and(|w| w.whole || !whole) {
             return;
         }
         let (terminals, workspace, session) = (self.terminals.clone(), s.workspace_id.clone(), s.id.clone());
@@ -1921,8 +1935,8 @@ impl Daemon {
             }
         });
         match watching {
-            Ok(w) => {
-                watches.insert(s.id.clone(), w);
+            Ok(watching) => {
+                watches.insert(s.id.clone(), SessionWatch { _watching: watching, whole });
             }
             Err(e) => tracing::warn!("cannot watch the designs of session {}: {e:#}", s.id),
         }
