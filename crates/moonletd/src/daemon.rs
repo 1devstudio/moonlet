@@ -467,6 +467,7 @@ impl Daemon {
                             add_dirs: req.add_dirs,
                             settings: None,
                             workspace: None,
+                            design: false,
                         })
                         .map_err(internal)?),
                     None => ok(s.create(req).map_err(internal)?),
@@ -1229,6 +1230,7 @@ impl Daemon {
             add_dirs: launch.add_dirs,
             settings: Some(launch.settings),
             workspace: Some(workspace.to_string()),
+            design: true,
         })?;
         self.design.set_agent(workspace, slug, info.id, &fingerprint)?;
         self.chats.send(info.id, &launch.prompt, &[])?;

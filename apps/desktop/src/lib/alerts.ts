@@ -77,3 +77,10 @@ export function differsAlert(o: { focused: boolean; notifyWhenFocused: boolean; 
   const banner = o.banner && (!o.focused || o.notifyWhenFocused);
   return { banner, toast: o.banner && !banner };
 }
+
+/** Whether an agent's `agent.attention` alerts as a session's does (X47).
+ *  The daemon marks a design system's sync agent `design`: Design mode
+ *  notifies for it, when it asks or the sync is done, never per turn (X65). */
+export function alertsLikeASession(a: { design?: boolean }): boolean {
+  return !a.design;
+}

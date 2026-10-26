@@ -2,7 +2,7 @@
 // rendered in a sandboxed frame on the moonlet-design:// scheme, and one card
 // with where it was made from, its check problems and its snippets.
 
-import { ChevronLeft, Copy, Maximize, Minus, MoreHorizontal, Plus, RotateCw, ShieldAlert, Trash2 } from "lucide-react";
+import { ChevronLeft, Copy, Loader2, Maximize, Minus, MoreHorizontal, Plus, RotateCw, ShieldAlert, Trash2 } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { errorToast, toast, useStore } from "../../lib/store";
 import { rpc } from "../../lib/daemon";
@@ -15,6 +15,9 @@ import { useNow } from "../../lib/useNow";
 import { cx } from "../../lib/cx";
 import { AgentIcon, Button, IconButton } from "../ui";
 import { Menu } from "../Menu";
+import { AfterSyncBar, ChangedSection, NeedsYouSection, StepBar } from "./SyncParts";
+import { agentShown, rewritingCard, stepBar } from "../../lib/designSync";
+import { chatKey, useChat } from "../../lib/chat";
 import { askConfirm } from "../../lib/confirm";
 import { AgentView } from "../AgentView";
 import { useShallow } from "zustand/react/shallow";
@@ -55,7 +58,7 @@ function useSize<T extends HTMLElement>(): [React.RefObject<T | null>, [number, 
   return [ref, size];
 }
 
-function CardTile({ workspace, slug, rev, card, onOpen }: { workspace: string; slug: string; rev: number; card: DesignCard; onOpen: () => void }) {
+function CardTile({ workspace, slug, rev, card, rewriting, onOpen }: { workspace: string; slug: string; rev: number; card: DesignCard; rewriting: boolean; onOpen: () => void }) {
   const [ref, [width]] = useSize<HTMLDivElement>();
   const problems = card.problems.length;
   // At card scale: the tile's width, never larger than the card itself.
@@ -64,11 +67,16 @@ function CardTile({ workspace, slug, rev, card, onOpen }: { workspace: string; s
     <button
       aria-label={card.name}
       onClick={onOpen}
-      className={cx("flex min-w-0 flex-col overflow-hidden rounded-lg border bg-panel text-left hover:border-border-strong", problems ? "border-blocked/60" : "border-border")}
+      className={cx("flex min-w-0 flex-col overflow-hidden rounded-lg border bg-panel text-left hover:border-border-strong", rewriting ? "border-accent" : problems ? "border-blocked/60" : "border-border")}
     >
       <div className="flex h-10 w-full shrink-0 items-center gap-2 border-b border-border px-3">
         <span className="truncate ui-text-13 font-medium text-fg">{card.name}</span>
         <span className="truncate font-mono ui-text-11.5 text-faint">{variantsLabel(card)}</span>
+        {rewriting && (
+          <span className="ml-auto flex items-center gap-1 ui-text-11.5 text-accent">
+            <Loader2 size={11} className="animate-spin" /> Rewriting
+          </span>
+        )}
         {problems > 0 && (
           <span title={problemsLabel(problems)} className="ml-auto flex items-center gap-1 rounded bg-blocked/15 px-1.5 ui-text-11.5 text-blocked">
             <ShieldAlert size={11} /> {problems}
@@ -83,7 +91,7 @@ function CardTile({ workspace, slug, rev, card, onOpen }: { workspace: string; s
 }
 
 /** A design system: its header, the sources-changed banner, its groups and cards, or one card's page; its agent's chat docked on the right. */
-export function DesignSystemView({ host, workspace, sys, label, inset }: { host: string; workspace: string; sys: DesignSystem; label: RowLabel; inset: number }) {
+export function DesignSystemView({ host, workspace, sys, label, working, inset }: { host: string; workspace: string; sys: DesignSystem; label: RowLabel; working: boolean; inset: number }) {
   const cards = listedCards(sys, useDesign((d) => cardsOf(d, host, workspace, sys.slug)));
   const open = useDesign((d) => shownCard(d, host, workspace, sys.slug));
   const rev = useDesign((d) => revOf(d, host, workspace, sys.slug));
@@ -109,6 +117,18 @@ export function DesignSystemView({ host, workspace, sys, label, inset }: { host:
   const view = visibleCards(cards ?? [], { group, onlyProblems, onlyChanged });
   const shown = view.cards;
   const status = statusLine(sys);
+  const steps = stepBar(sys, working);
+  // The agent at work on a sync; a later turn, such as the user's chat, is not one.
+  const syncing = working && sys.sync_running;
+  // The card the agent is writing: from its chat, in the system's folder.
+  const agentDir = useStore((s) => (agent !== null ? s.terminals[host]?.[agent]?.cwd : undefined));
+  const rewriting = useChat((c) => {
+    const items = agent !== null && syncing ? c.chats[chatKey(host, agent)]?.items : undefined;
+    return items && agentDir ? rewritingCard(items, agentDir) : null;
+  });
+  // Hidden as the user left it, but open while the agent asks something.
+  const showAgent = agent !== null && agentShown(hidden, sys);
+  const stop = () => agent !== null && void rpc(host, M.chatInterrupt, { id: agent }).catch(errorToast);
   const sync = () => void rpc(host, M.designSystemSync, { workspace, slug: sys.slug }).catch(errorToast);
   const remove = async () => {
     const ok = await askConfirm({ title: `Remove ${sys.name}?`, message: `Its folder, systems/${sys.slug}, and its cards are deleted. Designs that use it keep their copies.`, action: "Remove", variant: "danger" });
@@ -139,10 +159,16 @@ export function DesignSystemView({ host, workspace, sys, label, inset }: { host:
                   <ShieldAlert size={12} /> {problemsLabel(problems)}
                 </button>
               )}
-              <Button size="sm" className="no-drag" onClick={sync}>
-                <RotateCw size={12} /> Sync
-              </Button>
-              {agent !== null && hidden && (
+              {syncing ? (
+                <Button key="stop" size="sm" variant="danger" className="no-drag" onClick={stop}>
+                  Stop sync
+                </Button>
+              ) : (
+                <Button key="sync" size="sm" className="no-drag" onClick={sync}>
+                  <RotateCw size={12} /> Sync
+                </Button>
+              )}
+              {agent !== null && !showAgent && (
                 <Button size="sm" variant="ghost" className="no-drag" onClick={() => setHidden(false)}>
                   Show agent
                 </Button>
@@ -157,9 +183,12 @@ export function DesignSystemView({ host, workspace, sys, label, inset }: { host:
                 items={[{ label: "Remove design system…", icon: <Trash2 size={14} />, danger: true, onSelect: () => void remove() }]}
               />
             </header>
-            {status && (
-              <p className={cx("shrink-0 border-b border-border px-5 py-2 ui-text-12.5", sys.error ? "text-error" : sys.needs_you ? "text-blocked" : "text-muted")}>{status}</p>
+            {steps && !sys.error ? (
+              <StepBar cells={steps} />
+            ) : (
+              status && <p className={cx("shrink-0 border-b border-border px-5 py-2 ui-text-12.5", sys.error ? "text-error" : sys.needs_you ? "text-blocked" : "text-muted")}>{status}</p>
             )}
+            {!syncing && cards && <AfterSyncBar sys={sys} cards={cards} onOpenAgent={agent !== null ? () => setHidden(false) : null} />}
             {banner && (
               <div className="flex shrink-0 items-center gap-2 border-b border-border bg-blocked/[0.06] px-5 py-2 ui-text-12.5 text-muted">
                 <span className="h-1.5 w-1.5 rounded-full bg-blocked" />
@@ -189,6 +218,12 @@ export function DesignSystemView({ host, workspace, sys, label, inset }: { host:
                 </nav>
                 <div className="min-w-0 flex-1 overflow-y-auto p-6">
                   {cards?.length === 0 && <p className="ui-text-13 text-muted">No cards yet. The sync agent writes them in the Cards step.</p>}
+                  {!syncing && cards && (
+                    <>
+                      <NeedsYouSection host={host} workspace={workspace} sys={sys} cards={cards} rev={rev} />
+                      <ChangedSection host={host} workspace={workspace} sys={sys} cards={cards} />
+                    </>
+                  )}
                   {groups
                     .slice(1)
                     .filter((g) => shown.some((c) => c.group === g.key))
@@ -199,7 +234,7 @@ export function DesignSystemView({ host, workspace, sys, label, inset }: { host:
                           {shown
                             .filter((c) => c.group === g.key)
                             .map((c) => (
-                              <CardTile key={c.path} workspace={workspace} slug={sys.slug} rev={rev} card={c} onOpen={() => openCard(host, workspace, sys.slug, c.path)} />
+                              <CardTile key={c.path} workspace={workspace} slug={sys.slug} rev={rev} card={c} rewriting={c.path === rewriting} onOpen={() => openCard(host, workspace, sys.slug, c.path)} />
                             ))}
                         </div>
                       </section>
@@ -210,7 +245,7 @@ export function DesignSystemView({ host, workspace, sys, label, inset }: { host:
           </>
         )}
       </div>
-      {agent !== null && !hidden && (
+      {agent !== null && showAgent && (
         <section aria-label={`Design · ${sys.name}`} className="flex w-[440px] shrink-0 flex-col border-l border-border">
           <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3 ui-text-12.5">
             <AgentIcon agent="claude" size={13} />

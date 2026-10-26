@@ -1981,16 +1981,57 @@ async fn design_systems_over_rpc() {
         )
     );
 
-    let _: bool = c
-        .request(methods::DESIGN_SYSTEM_PROGRESS, serde_json::json!({"workspace": w, "slug": slug, "step": "cards", "summary": "1 of 1"}))
-        .await
-        .unwrap();
+    assert_eq!(
+        (&button["proposals"], &button["edited_by_hand"], &button["orphaned"], &button["kept"]),
+        (&serde_json::json!([]), &serde_json::json!(false), &serde_json::json!(false), &serde_json::json!(false))
+    );
+
+    // Every step a running sync reported, in step order, each with its summary.
+    for (step, summary) in [("inventory", Some("1 new")), ("tokens", None), ("cards", Some("1 of 1"))] {
+        let _: bool = c
+            .request(methods::DESIGN_SYSTEM_PROGRESS, serde_json::json!({"workspace": w, "slug": slug, "step": step, "summary": summary}))
+            .await
+            .unwrap();
+    }
+    let list: serde_json::Value = c.request(methods::DESIGN_SYSTEMS, serde_json::json!({"workspace": w})).await.unwrap();
+    assert_eq!(
+        list[0]["steps"],
+        serde_json::json!([
+            {"step": "inventory", "summary": "1 new"},
+            {"step": "tokens", "summary": null},
+            {"step": "cards", "summary": "1 of 1"}
+        ])
+    );
+    assert_eq!((&list[0]["step"], &list[0]["step_summary"]), (&serde_json::json!("cards"), &serde_json::json!("1 of 1")));
     let _: bool = c.request(methods::DESIGN_SYSTEM_SYNCED, serde_json::json!({"workspace": w, "slug": slug})).await.unwrap();
     let list: serde_json::Value = c.request(methods::DESIGN_SYSTEMS, serde_json::json!({"workspace": w})).await.unwrap();
     assert_eq!(list[0]["name"], "moonlet desktop");
     assert_eq!(list[0]["synced_commit"], head.trim());
     assert_eq!(list[0]["cards"], 1);
     assert_eq!(list[0]["step"], serde_json::Value::Null);
+    assert_eq!(list[0]["steps"], serde_json::json!([]));
+
+    // Edited by hand, with the sync's proposal beside it; then orphaned and kept for now.
+    let button_path = "components/buttons/button/button.html";
+    std::fs::write(dir.join(button_path), "<!-- @dsCard group=\"Buttons\" source=\"src/ui.tsx\" -->\n<button class=\"btn\">Go</button>\n").unwrap();
+    std::fs::write(dir.join("components/buttons/button/button.proposed.html"), "<!-- @dsCard group=\"Buttons\" source=\"src/ui.tsx\" -->\n<button class=\"btn\">Run</button>\n").unwrap();
+    let keep = serde_json::json!({"workspace": w, "slug": slug, "card": button_path, "choice": "keep"});
+    assert!(c.request::<_, bool>(methods::DESIGN_SETTLE, keep.clone()).await.is_err(), "a card that is not orphaned is not kept");
+    std::fs::remove_file(repo.join("src/ui.tsx")).unwrap();
+    let _: bool = c.request(methods::DESIGN_SETTLE, keep).await.unwrap();
+    let cards: serde_json::Value = c.request(methods::DESIGN_CARDS, serde_json::json!({"workspace": w, "slug": slug})).await.unwrap();
+    let button = cards.as_array().unwrap().iter().find(|c| c["path"] == button_path).expect("the button card");
+    assert_eq!(
+        (&button["proposals"], &button["edited_by_hand"], &button["orphaned"], &button["kept"]),
+        (
+            &serde_json::json!(["components/buttons/button/button.proposed.html"]),
+            &serde_json::json!(true),
+            &serde_json::json!(true),
+            &serde_json::json!(true)
+        )
+    );
+    let list: serde_json::Value = c.request(methods::DESIGN_SYSTEMS, serde_json::json!({"workspace": w})).await.unwrap();
+    assert_eq!(list[0]["to_settle"], 1, "its proposal waits; the orphan is kept");
 
     std::fs::write(repo.join("package.json"), r#"{"dependencies": {"react": "19"}, "devDependencies": {"tailwindcss": "4"}}"#).unwrap();
     let stack: Vec<String> = c.request(methods::DESIGN_DETECT, serde_json::json!({"workspace": w, "path": repo})).await.unwrap();
@@ -2053,7 +2094,9 @@ done
     let real_repo = repo.canonicalize().unwrap().display().to_string();
     let terminals: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
     let t = terminals.iter().find(|t| t.id == agent).expect("the agent's chat");
-    assert_eq!((t.title.as_str(), t.session_id.as_deref(), t.chat), ("Design · moonlet desktop", None, true));
+    // Marked as a design system's sync agent: the app notifies for it in
+    // Design mode, never as a session (X65); a standalone chat is not one.
+    assert_eq!((t.title.as_str(), t.session_id.as_deref(), t.chat, t.design), ("Design · moonlet desktop", None, true, true));
 
     let file = |name: &str| {
         let p = dir.join(name);
