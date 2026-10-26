@@ -154,6 +154,9 @@ const DISK_GB: u64 = 50;
 /// machine to the startup deadline.
 const CREATE_WAIT_SECS: u64 = 240;
 
+/// How often `create` looks at its insert.
+const LOOK_EVERY: Duration = Duration::from_secs(5);
+
 /// The insert's `requestId`, a UUID from the machine's name: a retried call
 /// makes no second machine.
 fn request_id(name: &str) -> String {
@@ -327,16 +330,10 @@ impl Gcp {
         let mut signed_in_again = false;
         loop {
             let token = self.tokens.token(&self.key, &self.transport).await?;
-            let mut headers = vec![("Authorization".into(), format!("Bearer {token}"))];
-            // Google answers a POST without a length with 411 Length Required,
-            // and a request with no body is sent without one.
-            if body.is_none() && method == "POST" {
-                headers.push(("Content-Length".into(), "0".into()));
-            }
             let request = Request {
                 method,
                 url: format!("{}{path}", self.project()),
-                headers,
+                headers: vec![("Authorization".into(), format!("Bearer {token}"))],
                 body: body.clone().map(Body::Json),
             };
             let r = self
@@ -541,7 +538,10 @@ impl Provider for Gcp {
         });
         let path = format!("/zones/{zone}/instances?requestId={}", request_id(&m.name));
         let mut op = self.call("POST", &path, Some(body)).await?;
-        // Quota and capacity errors show only in the operation.
+        // Quota and capacity errors show only in the operation. Its wait call
+        // can take 2 minutes, past the daemon's request timeout, so it is
+        // asked about with short looks instead.
+        let name = op["name"].as_str().unwrap_or_default().to_string();
         let deadline = self.transport.now() + CREATE_WAIT_SECS;
         loop {
             if op["status"] == "DONE" {
@@ -557,18 +557,15 @@ impl Provider for Gcp {
             if self.transport.now() >= deadline {
                 break;
             }
-            let asked = self.transport.now();
-            let name = op["name"].as_str().unwrap_or_default().to_string();
-            op = self
-                .call(
-                    "POST",
-                    &format!("/zones/{zone}/operations/{name}/wait"),
-                    None,
-                )
-                .await?;
-            // A wait answers within 2 minutes, but at times at once.
-            if op["status"] != "DONE" && self.transport.now().saturating_sub(asked) < 10 {
-                self.transport.sleep(Duration::from_secs(5)).await;
+            self.transport.sleep(LOOK_EVERY).await;
+            // The insert was taken, so the machine may exist: a failed look
+            // leaves it to the startup deadline and the sweep.
+            match self
+                .call("GET", &format!("/zones/{zone}/operations/{name}"), None)
+                .await
+            {
+                Ok(v) => op = v,
+                Err(_) => break,
             }
         }
         Ok(format!("{zone}/{}", m.name))
@@ -697,6 +694,10 @@ mod tests {
             self.sent.lock().unwrap().push(request);
             let (status, takes, body) = self.answers.lock().unwrap().remove(0);
             *self.now.lock().unwrap() += takes;
+            // Status 0: the request never got an answer.
+            if status == 0 {
+                return Err("operation timed out".into());
+            }
             Ok(Response {
                 status,
                 headers: vec![],
@@ -949,23 +950,17 @@ mod tests {
             }
         });
         assert_eq!(sent[0].body, Some(Body::Json(want)));
-        // Then it waits for the insert to be done.
-        assert_eq!(sent[1].method, "POST");
+        // Then it asks how the insert went: a short GET, well inside the
+        // daemon's 30 s request timeout, where Google's wait call can take 2
+        // minutes.
+        assert_eq!(sent[1].method, "GET");
         assert_eq!(
             sent[1].url,
             format!(
-                "{PROJECT}/zones/europe-west4-a/operations/operation-1761400000000-6420a1b2c3d4e-5f6a7b8c-9d0e1f2a/wait"
+                "{PROJECT}/zones/europe-west4-a/operations/operation-1761400000000-6420a1b2c3d4e-5f6a7b8c-9d0e1f2a"
             )
         );
-        // Google answers a POST without a length with 411 Length Required.
-        assert_eq!(sent[1].body, None);
-        assert!(
-            sent[1]
-                .headers
-                .contains(&("Content-Length".into(), "0".into())),
-            "{:?}",
-            sent[1].headers
-        );
+        assert_eq!(*script.slept.lock().unwrap(), vec![Duration::from_secs(5)]);
         assert_eq!(sent.len(), 2);
     }
 
@@ -1035,12 +1030,8 @@ mod tests {
     #[tokio::test]
     async fn returns_the_id_after_four_minutes_without_done() {
         let running = include_str!("fixtures/gcp/insert_operation.json");
-        // Each wait answers after its 2 minutes, still running.
-        let script = Script::timed(vec![
-            (200, 0, running),
-            (200, 120, running),
-            (200, 120, running),
-        ]);
+        // Asked every 5 s, the insert is still running after 4 minutes.
+        let script = Script::new(vec![(200, running); 49]);
         assert_eq!(
             gcp(&script)
                 .create(&machine(
@@ -1051,23 +1042,37 @@ mod tests {
                 .await,
             Ok("europe-west4-a/moonlet-shop-7k2q".into())
         );
-        assert_eq!(script.compute().len(), 3);
-        // A wait that answers at once is not asked again at once.
-        let script = Script::timed(vec![
-            (200, 0, running),
-            (200, 0, running),
-            (200, 0, include_str!("fixtures/gcp/operation_done.json")),
-        ]);
-        gcp(&script)
-            .create(&machine(
-                "c4-standard-8",
-                "ubuntu-os-cloud/ubuntu-2404-lts-amd64",
-                "moonlet-shop-7k2q",
-            ))
-            .await
-            .unwrap();
-        assert_eq!(*script.slept.lock().unwrap(), vec![Duration::from_secs(5)]);
+        // The insert, then 48 looks, 5 s apart.
+        assert_eq!(script.compute().len(), 49);
+        assert_eq!(script.slept.lock().unwrap().len(), 48);
     }
+
+    #[tokio::test]
+    async fn a_look_that_fails_leaves_the_machine_to_its_startup_deadline() {
+        // The insert was taken: the machine may exist, so create never
+        // fails over a look at the operation.
+        for (status, body) in [
+            (0, ""),
+            (503, r#"{"error":{"code":503,"message":"Backend Error"}}"#),
+        ] {
+            let script = Script::new(vec![
+                (200, include_str!("fixtures/gcp/insert_operation.json")),
+                (status, body),
+            ]);
+            assert_eq!(
+                gcp(&script)
+                    .create(&machine(
+                        "c4-standard-8",
+                        "ubuntu-os-cloud/ubuntu-2404-lts-amd64",
+                        "moonlet-shop-7k2q"
+                    ))
+                    .await,
+                Ok("europe-west4-a/moonlet-shop-7k2q".into()),
+                "{status}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn reads_a_captured_instance() {
         let script = Script::new(vec![
