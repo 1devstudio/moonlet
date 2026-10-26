@@ -739,6 +739,42 @@ async fn a_central_host_whose_worker_id_changed_goes_on_under_the_new_one_and_ke
     assert_eq!(mini.names().await, ["Studio mini"]);
 }
 
+async fn account(d: &Daemon) -> Value {
+    d.call("account.get", json!({})).await
+}
+
+#[tokio::test]
+async fn a_host_says_which_account_it_shares() {
+    let (mini, addr) = central().await;
+    let book = mac(BOOK, "Alex's MacBook Pro").await;
+    let mini_id = {
+        let info: Value = mini.call("link.get", json!({})).await;
+        info["worker"]["id"].as_str().unwrap().to_string()
+    };
+    // Each is its own account until the MacBook links.
+    assert_eq!(account(&mini).await["account"], json!(mini_id));
+    assert_eq!(
+        account(&book).await,
+        json!({ "account": BOOK, "central": null })
+    );
+    link(&book, &mini, &addr, "Alex's MacBook Pro").await;
+    within(
+        Duration::from_secs(10),
+        "the MacBook in studio-mini's account",
+        || async { account(&book).await["account"] == json!(mini_id) },
+    )
+    .await;
+    assert_eq!(account(&book).await["central"], json!("studio-mini"));
+    // Without a central host it is its own account again, and keeps the
+    // workspaces it shared.
+    let _: Value = book.call("link.set", json!({ "central": null })).await;
+    assert_eq!(
+        account(&book).await,
+        json!({ "account": BOOK, "central": null })
+    );
+    assert_eq!(book.names().await.len(), 2);
+}
+
 fn refused(reply: &Message) -> Option<&str> {
     match reply {
         Message::Response { error: Some(e), .. } => Some(e.code.as_str()),
