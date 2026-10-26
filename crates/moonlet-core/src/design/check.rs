@@ -623,10 +623,14 @@ fn elements(
                 }
                 if name == "style" || URL_ATTRIBUTES.contains(&name.as_str()) {
                     // A declaration list, or a presentation attribute's
-                    // value: its url()s, never an @import.
+                    // value: its url()s, never an @import, each on its own
+                    // line, the value's first line being where it starts.
+                    let first = a
+                        .value_source_location()
+                        .map_or(line, |l| line_of(text, l.bytes().start));
                     for r in css_refs(&value).iter().filter(|r| !r.import) {
                         if let Some((kind, message)) = css_problem(root, dir, r) {
-                            found.push((line, kind, message));
+                            found.push((first + line_of(&value, r.at) - 1, kind, message));
                         }
                     }
                     continue;
@@ -1468,6 +1472,34 @@ mod tests {
                     Kind::ExternalUrl,
                     "https://x/m.svg#tip leaves the design system".into()
                 ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_url_in_an_attribute_is_reported_on_its_own_line_not_its_tags() {
+        let card = "<!-- @dsCard group=\"Buttons\" -->\n\
+<!doctype html>\n\
+<div\n\
+ style=\"background:url(missing.png)\">A</div>\n\
+<div style=\"color: red;\n\
+  background: url(https://x/bg.png)\">B</div>\n";
+        let dir = system(&[
+            ("styles.css", STYLES),
+            ("tokens/colors.css", COLORS),
+            ("components.css", COMPONENTS),
+            ("components/buttons/button/button.html", card),
+        ]);
+        let got: Vec<(usize, String)> = check(dir.path())
+            .unwrap()
+            .into_iter()
+            .map(|p| (p.line, p.message))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (4, "url(missing.png) does not resolve".into()),
+                (6, "https://x/bg.png leaves the design system".into()),
             ]
         );
     }
