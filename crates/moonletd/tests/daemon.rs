@@ -4369,3 +4369,36 @@ async fn a_session_designs_files_are_found_for_the_canvas_by_its_session() {
         .await;
     assert_eq!(both.unwrap_err().to_string(), "invalid_params: name a design file by its workspace or by its session, not both");
 }
+
+/// X65 entry 12: `design.file` is let through only by a workspace or a
+/// session moonlet has, read from its parsed params: a call naming a
+/// workspace that is gone (whose design folder is still on disk) is refused
+/// whatever its `session` key holds, null, empty or a real session, and no
+/// file comes back.
+#[tokio::test]
+async fn a_design_file_is_found_only_through_a_workspace_or_a_session_moonlet_has() {
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    let (_, _, session) = workspace_with_session(&d, &mut c, &[]).await;
+    let gone = workspace_with_system(&d, &mut c).await;
+    let _: bool = c.request(methods::WORKSPACE_DELETE, serde_json::json!({"id": gone})).await.unwrap();
+    let left = d.home.path().join(".moonlet/design").join(&gone).join("systems/moonlet-desktop/README.md");
+    assert!(left.is_file(), "the gone workspace's design folder is still there");
+    let path = "systems/moonlet-desktop/README.md";
+    for (call, refusal) in [
+        (serde_json::json!({"workspace": gone, "session": null, "path": path}), format!("invalid_params: no workspace \"{gone}\"")),
+        (serde_json::json!({"workspace": gone, "path": path}), format!("invalid_params: no workspace \"{gone}\"")),
+        (
+            serde_json::json!({"workspace": gone, "session": "", "path": path}),
+            "invalid_params: name a design file by its workspace or by its session, not both".to_string(),
+        ),
+        (
+            serde_json::json!({"workspace": gone, "session": session.id, "path": path}),
+            "invalid_params: name a design file by its workspace or by its session, not both".to_string(),
+        ),
+        (serde_json::json!({"session": "", "path": path}), "invalid_params: no session \"\"".to_string()),
+    ] {
+        let refused = c.request::<_, serde_json::Value>(methods::DESIGN_FILE, call.clone()).await;
+        assert_eq!(refused.map_err(|e| e.to_string()), Err(refusal), "{call}");
+    }
+}
