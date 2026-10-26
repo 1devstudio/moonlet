@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chatOpensOn, designBar, pageFixMessage, type BarState } from "./designBars";
+import { chatOpensOn, designBar, pageFixMessage, systemUpdateMessage, type BarState } from "./designBars";
 
 const problem = (path: string, kind: string, message: string, line = 3) => ({ path, line, kind, message });
 const calm: BarState = { working: false, needsYou: null, page: "index", problems: [], system: "moonlet-desktop", systemRemoved: false, unsaved: null, preview: null };
@@ -97,6 +97,16 @@ describe("the bar over a session design's canvas (X65)", () => {
       actions: ["stop"],
     });
   });
+
+  it("says Design system updated with Update once its design system synced after it pinned it, after the check", () => {
+    expect(designBar({ ...calm, session: true, systemUpdated: true })).toEqual({
+      tone: "grey",
+      text: "Design system updated.",
+      detail: "moonlet-desktop was synced since this design copied it.",
+      actions: ["update"],
+    });
+    expect(designBar({ ...calm, session: true, systemUpdated: true, problems: [problem("pages/index.html", "missing_mid", "<h1> has no data-mid")] })?.tone).toBe("red");
+  });
 });
 
 describe("Ask the agent to fix (X65)", () => {
@@ -116,5 +126,25 @@ describe("the design's chat panel on an ask (X65)", () => {
     expect(chatOpensOn(ask, { kind: "approval", text: "Bash: rm -rf assets" })).toBe(false);
     expect(chatOpensOn(ask, null)).toBe(false);
     expect(chatOpensOn(null, null)).toBe(false);
+  });
+});
+
+describe("Update of a session design's design system (X65)", () => {
+  it("lists the cards that changed in the chat for the session's agent, by path, and where to read them", () => {
+    expect(
+      systemUpdateMessage("settings-page", "moonlet desktop", [
+        { path: "components/buttons/button/button.html", change: "changed" },
+        { path: "components/forms/toggle/toggle.html", change: "new" },
+        { path: "components/custom/old-row/old-row.html", change: "removed" },
+      ]),
+    ).toBe(
+      "The design system moonlet desktop was updated for the design settings-page: its copy in .moonlet/design/settings-page/system/ and the pinned styles are the synced ones now. Cards that changed:\n- components/buttons/button/button.html (changed)\n- components/forms/toggle/toggle.html (new)\n- components/custom/old-row/old-row.html (removed)\nRead those cards again and update the pages that use them, then run the check.",
+    );
+  });
+
+  it("says no card changed when only the styles did", () => {
+    expect(systemUpdateMessage("settings-page", "moonlet desktop", [])).toBe(
+      "The design system moonlet desktop was updated for the design settings-page: its copy in .moonlet/design/settings-page/system/ and the pinned styles are the synced ones now. No card changed, only its styles.",
+    );
   });
 });

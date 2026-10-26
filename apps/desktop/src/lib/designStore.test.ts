@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Design, DesignComment, DesignSystem, TerminalInfo } from "./protocol";
 import { modeOf, setMode } from "./mode";
 import { agentOnScreen, goToAgent, useStore } from "./store";
-import { pageKey, pageOfKey, commentsOf, historyOf, keepComment, loadComments, loadHistory, sendComments, sendingOf, resolveComment, sessionDesignsOf, shownSessionDesign, showSessionDesign } from "./designStore";
+import { pageKey, pageOfKey, commentsOf, historyOf, keepComment, loadComments, loadHistory, sendComments, sendingOf, resolveComment, sessionDesignsOf, shownSessionDesign, showSessionDesign, updateSystem } from "./designStore";
 import { cardsOf, checkDesign, createFromNewDesign, createSystem, designsOf, detectStack, latestOf, loadCards, loadDesigns, loadSystems, openCard, saveViewport, pageRevOf, problemsOf, revOf, shownCard, shownDesign, shownSystem, showDesign, showSystem, startDesign, systemNameOf, systemsOf, useDesign } from "./designStore";
 
 const calls = vi.hoisted(() => [] as { host: string; method: string; params: unknown }[]);
@@ -740,5 +740,17 @@ describe("a session's Design tab (X65)", () => {
     showSessionDesign("local", "4f2a9c1e7b3d", "billing");
     expect(shownSessionDesign(useDesign.getState(), "local", "4f2a9c1e7b3d")?.slug).toBe("onboarding");
     expect(shownSessionDesign(useDesign.getState(), "local", "9c9c9c9c9c9c")).toBeNull();
+  });
+
+  it("updates a design's design system by its session and slug, and its bar goes at once", async () => {
+    answers["design.list"] = listed;
+    answers["design.system.update"] = () => ({ anchor: "9f86d081", cards: [{ path: "components/buttons/button/button.html", change: "changed" }] });
+    await loadDesigns("local", "w-1devstudio");
+    expect(await updateSystem("local", { session: "4f2a9c1e7b3d" }, "settings-page")).toEqual({ anchor: "9f86d081", cards: [{ path: "components/buttons/button/button.html", change: "changed" }] });
+    expect(calls.filter((c) => c.method === "design.system.update").map((c) => c.params)).toEqual([{ session: "4f2a9c1e7b3d", slug: "settings-page" }]);
+    expect(sessionDesignsOf(useDesign.getState(), "local", "4f2a9c1e7b3d").map((d) => [d.slug, !!d.system_updated])).toEqual([
+      ["onboarding", false],
+      ["settings-page", false],
+    ]);
   });
 });
