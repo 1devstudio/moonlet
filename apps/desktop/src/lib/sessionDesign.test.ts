@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Design, DesignSystem, ToolCall } from "./protocol";
-import { designMark, designSystemFooter, opensDesignView, slashMenu, worktreeFile } from "./sessionDesign";
+import { designMark, designPanelWidth, designSystemFooter, designTab, opensDesignView, slashMenu, worktreeFile } from "./sessionDesign";
 
 const design = (over: Partial<Design> = {}): Design => ({
   slug: "settings-page",
@@ -104,5 +104,18 @@ describe("the design system /moonlet-design will use (X65)", () => {
     expect(designSystemFooter([desktop, shop], "/Users/alex/Workspace/moonlet")).toBe("Uses moonlet desktop, the design system built from this project");
     expect(designSystemFooter([desktop, mobile, shop], "/Users/alex/Workspace/moonlet")).toBe("Asks which design system to use: moonlet desktop or moonlet mobile, both built from this project");
     expect(designSystemFooter([shop], "/Users/alex/Workspace/moonlet")).toBe("No design system is built from this project yet: /moonlet-design sync builds one");
+  });
+});
+
+describe("a session's Design tab in its right panel (X65)", () => {
+  it("is there while the session has a design, counting the open comments of its designs", () => {
+    expect(designTab([])).toBeNull();
+    expect(designTab([design({ open_comments: 2 }), design({ slug: "onboarding", open_comments: 1 })])).toEqual({ count: 3 });
+    expect(designTab([design()])).toEqual({ count: 0 });
+  });
+
+  it("widens the right panel to 55% of the window until the user drags it", () => {
+    expect(designPanelWidth(null, 1440)).toBe(792);
+    expect(designPanelWidth(640, 1440)).toBe(640);
   });
 });

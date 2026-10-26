@@ -33,11 +33,10 @@ import {
   stopAgent,
   systemNameOf,
   systemsOf,
-  updateSystem,
   useDesign,
 } from "../../lib/designStore";
 import { isSession, type DesignPlace } from "../../lib/designPlace";
-import { askWithEdits, restoreSnapshot, closeDesign, hasCopy, kitOf, loadKit, sendCommentsWithEdits, copyElementOf, dismissUnsaved, editPage, loadPageSource, pasteInto, pendingOf, redoEdit, sendWithEdits, sourceOf, undoEdit, undoOf, unsavedOf, useEditor } from "../../lib/designEditor";
+import { askWithEdits, updateAndTell, restoreSnapshot, closeDesign, hasCopy, kitOf, loadKit, sendCommentsWithEdits, copyElementOf, dismissUnsaved, editPage, loadPageSource, pasteInto, pendingOf, redoEdit, sendWithEdits, sourceOf, undoEdit, undoOf, unsavedOf, useEditor } from "../../lib/designEditor";
 import { EditRefused, editsChip, inlineStyles, type Edit, type EditOp } from "../../lib/designEdits";
 import { offSystemMids } from "../../lib/designTokens";
 import { selectionOf } from "../../lib/designInspector";
@@ -50,7 +49,7 @@ import { keyId } from "../../lib/runActions";
 import { chatCardLookup, commentCardSelector, commentsRail, commentsTab, keepAction, openCommentsLabel, pageCounts, sendAll } from "../../lib/designComments";
 import { bridgeMessage, editMessage, helloMessage, modeMessage, paletteMessage, pinsMessage, scrollMessage, selectMessage, type DragOver, type DragResult, type Layer, type PickedElement, type Rect } from "../../lib/designBridge";
 import { pageFile, pagePath } from "../../lib/designPage";
-import { barProblems, chatOpensOn, designBar, pageFixMessage, systemUpdateMessage, type Bar, type BarAction, type PageProblem } from "../../lib/designBars";
+import { barProblems, chatOpensOn, designBar, pageFixMessage, type Bar, type BarAction, type PageProblem } from "../../lib/designBars";
 import { claimKeys } from "../../lib/keys";
 import { askConfirm } from "../../lib/confirm";
 import { NEAR_ROOT, useNear } from "../../lib/useNear";
@@ -566,10 +565,7 @@ export function DesignCanvas({
       if (agent === null) return toast("The design's agent is not running", "error");
       void askWithEdits(host, place, design.slug, agent, pageFixMessage(check.page, check.problems)).then(() => toast("Asked the agent to fix it"), errorToast);
     } else if (a === "update" && isSession(place)) {
-      // Both copies replaced, then the cards that changed go to the session's agent.
-      void updateSystem(host, place, design.slug)
-        .then((updated) => (agent === null ? toast("Design system updated", "info") : askWithEdits(host, place, design.slug, agent, systemUpdateMessage(design.slug, systemName, updated.cards)).then(() => toast("Design system updated", "info"))))
-        .catch(errorToast);
+      void updateAndTell(host, place, design.slug, agent, systemName).then(() => toast("Design system updated", "info"), errorToast);
     }
   };
 

@@ -22,6 +22,7 @@ import { TasksMode } from "./components/tasks/TasksMode";
 import { loadTrackersConfig } from "./lib/tasksStore";
 import { modeOf } from "./lib/mode";
 import { sessionDesignsOf, startDesign, useDesign } from "./lib/designStore";
+import { designPanelWidth } from "./lib/sessionDesign";
 import { startEditor } from "./lib/designEditor";
 import { DesignMain } from "./components/design/DesignMode";
 
@@ -163,7 +164,7 @@ export default function App() {
   const clampSide = (w: number) => Math.max(200, Math.min(420, w));
   const clampRight = (w: number) => Math.max(320, Math.min(window.innerWidth * 0.6, w));
   // A session's Design tab (X65) takes more room: its canvas beside the chat.
-  const rightWidth = designTab ? (designWidth ?? Math.round(window.innerWidth * 0.55)) : s.rightWidth;
+  const rightWidth = designTab ? designPanelWidth(designWidth, window.innerWidth) : s.rightWidth;
 
   return (
     <div className="flex h-full w-full">
