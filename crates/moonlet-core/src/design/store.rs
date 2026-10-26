@@ -201,9 +201,12 @@ impl Store {
         Ok(slug)
     }
 
-    /// The workspace's design systems, by name.
+    /// The workspace's design systems, by name: none while it has no
+    /// `systems` folder, and a folder that is there but cannot be read fails
+    /// the listing with the reason.
     pub fn systems(&self, workspace: &str) -> Result<Vec<SystemSummary>> {
-        let Ok(entries) = std::fs::read_dir(self.systems_dir(workspace, false)?) else {
+        let folder = self.systems_dir(workspace, false)?;
+        let Some(entries) = fsx::read_dir_if_there(&folder)? else {
             return Ok(Vec::new());
         };
         let mut out = Vec::new();
@@ -2059,6 +2062,33 @@ root = \"9c1e0a2\"
             .map(|s| (s.name, s.error.is_some()))
             .collect();
         assert_eq!(got, vec![("alpha".into(), true), ("beta".into(), false)]);
+    }
+
+    #[test]
+    fn no_systems_folder_lists_none_and_one_that_cannot_be_read_fails_the_listing_with_its_reason()
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // Root reads a folder whatever its mode, so chmod 000 refuses it
+        // nothing: the test has no case to make there.
+        if nix::unistd::geteuid().is_root() {
+            return;
+        }
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::new(home.path());
+        assert_eq!(store.systems("w1").unwrap().len(), 0);
+        store
+            .create_system("w1", "alpha", vec![], Cover::Core, 1)
+            .unwrap();
+        let systems = home.path().join("design/w1/systems");
+        std::fs::set_permissions(&systems, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let listed = store.systems("w1");
+        std::fs::set_permissions(&systems, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let err = format!("{:#}", listed.unwrap_err());
+        assert!(
+            err.starts_with(&format!("cannot read {}", systems.display()))
+                && err.contains("Permission denied"),
+            "{err}"
+        );
     }
 
     #[test]
