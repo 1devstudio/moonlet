@@ -4420,11 +4420,10 @@ async fn a_file_written_in_a_session_design_is_announced_with_its_session() {
         .unwrap();
     let mut listener = d.client().await;
     std::fs::write(std::path::PathBuf::from(&session.path).join("docs/design/settings-page/pages/index.html"), "<p>agent</p>\n").unwrap();
-    let changed = next_change_of(&mut listener, "pages/index.html").await;
-    assert_eq!(
-        changed,
-        serde_json::json!({"workspace": ws, "system": null, "design": "settings-page", "session": session.id, "paths": ["pages/index.html"]})
-    );
+    // The watch may deliver the design's own making in the same batch.
+    let mut changed = next_change_of(&mut listener, "pages/index.html").await;
+    changed.as_object_mut().unwrap().remove("paths");
+    assert_eq!(changed, serde_json::json!({"workspace": ws, "system": null, "design": "settings-page", "session": session.id}));
     let _: serde_json::Value = c
         .request(
             methods::DESIGN_COMMENT_PUT,
