@@ -1914,8 +1914,9 @@ impl Daemon {
     /// session and its workspace (X65). A design folder not there yet is
     /// watched for from the nearest folder above it, so a design another
     /// tool makes there later is announced too. Every design call that reaches a session's designs, and their
-    /// listing, starts it, so after a restart, or once the session is
-    /// unarchived, it starts again as the app lists the designs. An archived
+    /// listing, starts it, so once the session is unarchived it starts
+    /// again as the app lists the designs; after a restart the daemon starts
+    /// it (see `watch_saved_session_designs`). An archived
     /// session's designs are not watched (see `prune_session_watches`).
     fn watch_session_designs(&self, s: &moonlet_proto::types::Session, folder: &str) {
         let worktree = Path::new(&s.path);
@@ -1939,6 +1940,17 @@ impl Daemon {
                 watches.insert(s.id.clone(), SessionWatch { _watching: watching, whole });
             }
             Err(e) => tracing::warn!("cannot watch the designs of session {}: {e:#}", s.id),
+        }
+    }
+
+    /// Watches the designs of every open session that has session designs,
+    /// a `.moonlet/design/` in its worktree (X65), as the daemon starts, so
+    /// after a restart their edits are announced before any design call.
+    pub fn watch_saved_session_designs(&self) {
+        for s in self.sessions.list_sessions() {
+            if !s.archived && Path::new(&s.path).join(moonlet_core::design::session::SIDE_DIR).is_dir() {
+                let _ = self.design_session(&s.id);
+            }
         }
     }
 

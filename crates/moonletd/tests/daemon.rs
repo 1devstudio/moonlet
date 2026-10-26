@@ -4725,6 +4725,30 @@ async fn an_archived_sessions_designs_are_no_longer_watched_and_are_again_once_i
     next_event(&mut listener, methods::EV_DESIGN_CHANGED, names(&archived, "unarchived")).await;
 }
 
+/// X65 entry 12: after a restart the daemon watches the designs of every
+/// open session that has session designs as it starts, so an edit of one
+/// is announced with no design call in between.
+#[tokio::test]
+async fn a_session_designs_edits_are_announced_after_a_restart_with_no_design_call() {
+    let mut d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    let (ws, _, session) = workspace_with_session(&d, &mut c, &[]).await;
+    let _: serde_json::Value = c
+        .request(
+            methods::DESIGN_CREATE,
+            serde_json::json!({"workspace": ws, "session": session.id, "name": "Settings page", "system": "moonlet-desktop", "brief": "b"}),
+        )
+        .await
+        .unwrap();
+    drop(c);
+    d.restart().await;
+    let mut listener = d.client().await;
+    std::fs::write(std::path::PathBuf::from(&session.path).join("docs/design/settings-page/pages/index.html"), "<p>after a restart</p>\n").unwrap();
+    let mut changed = next_change_of(&mut listener, "pages/index.html").await;
+    changed.as_object_mut().unwrap().remove("paths");
+    assert_eq!(changed, serde_json::json!({"workspace": ws, "system": null, "design": "settings-page", "session": session.id}));
+}
+
 /// X65 entry 12: a session whose worktree has no design folder yet when a
 /// design call first reaches it is watched all the same, from the nearest
 /// folder above, so a session design another tool makes there later, with
