@@ -30,7 +30,7 @@ Three questions had to be settled:
 - moonlet adds what design-sync lacks:
   - foundation cards (colours, type, spacing), generated from the tokens
   - layouts in `ui_kits/`
-- Because static cards are look-alikes, the sync grades them against the project's real render when the project has a Storybook or a dev server. It uses design-sync's absolute rubric otherwise.
+- Because static cards are look-alikes, the sync is to grade them against the project's real render when the project has a Storybook or a dev server. X64's entry 6 ships design-sync's absolute rubric (Styled, Complete, Plausible) from moonlet's own screenshots; grading against the real render (`design snap --url`) is a follow-up.
 
 **Design systems and workspace designs are daemon-owned files per workspace**, under `~/.moonlet/design/<workspace id>/`:
 - `systems/<slug>/` for design systems
@@ -52,7 +52,7 @@ The source projects stay read only. The sync agent works in the design system's 
 
 **What a design agent may do (checked with `claude -p` 2.1.309, 2026-10-23).**
 - A deny rule `Edit(//<real path>/**)` in `--settings` blocks Edit and Write in a folder added with `--add-dir`, where Accept edits otherwise allows both; Read still works. The path must be the real one (`/private/tmp`, not `/tmp`).
-- Claude Code refuses a Bash command that names its program through a variable (`"$MOONLET_BIN" design …`), even with a matching allow rule. Design agents get the real path of `moonlet` in their first message, and allow rules on that path: `<path> design system progress:*`, and exactly `<path> design check` and `<path> design system synced`. A rule without `:*` matches only the command without arguments.
+- Claude Code refuses a Bash command that names its program through a variable (`"$MOONLET_BIN" design …`), even with a matching allow rule. Design agents get the real path of `moonlet` in their first message, and allow rules on that path: `<path> design system progress:*` and `<path> design snap:*`, and exactly `<path> design check`, `<path> design check --render` and `<path> design system synced`. A rule without `:*` matches only the command without arguments.
 
 **Claude Code only, for now.** The sync relies on Claude Code's skills, subagents, `--add-dir` and its reading of screenshots.
 
@@ -72,6 +72,7 @@ The source projects stay read only. The sync agent works in the design system's 
   - Every window took a correct snapshot again after navigating to another page, and again after 15 s idle.
   - So a hidden window is enough: no off-screen placement, and nothing shows on the screen.
   - The snapshot is at 1× (900×700 px for a 900×700 window), which matches design-sync's captures. A `WKSnapshotConfiguration` can ask for a larger width if grading needs it.
+  - Built in X64's entry 6: on a Retina Mac the hidden window snapshots at 2×, so the app asks for a `snapshotWidth` of the page's width divided by the window's backing scale, which gives one pixel per point again. The window's page load can finish before the render page's script runs, so the page says when it is ready for cards. The daemon sends renders only to the app that said `design.render.ready` on its local connection.
   - The app's own CSP will need `moonlet-design:` in `frame-src` for the canvas.
 - A session design's pinned styles can fall behind the design system. The Design tab offers "Design system updated · Update", and the update is a commit like any other.
 - The layout stays close enough to Claude Design's that an upload could be added later.

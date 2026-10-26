@@ -57,13 +57,16 @@ pub fn sync_launch(
     // `Edit(//abs/**)`: an absolute path, as Claude's rules write one. It
     // covers every tool that edits files; `--add-dir` alone would not.
     let deny: Vec<String> = sources.iter().map(|s| format!("Edit(/{s}/**)")).collect();
-    // Only what a sync needs: reporting a step (any summary), and the check
-    // and the sync record of this folder's system, with no other arguments.
-    // `progress` and `synced` take no system or workspace: they act only on
-    // the system of the folder they run in.
+    // Only what a sync needs: reporting a step (any summary), the check (with
+    // or without rendering the cards) and the sync record of this folder's
+    // system, with no other arguments, and a card's screenshot for grading.
+    // `progress`, `snap` and `synced` take no system or workspace: they act
+    // only on the system of the folder they run in.
     let allow = [
         format!("Bash({bin} design system progress:*)"),
         format!("Bash({bin} design check)"),
+        format!("Bash({bin} design check --render)"),
+        format!("Bash({bin} design snap:*)"),
         format!("Bash({bin} design system synced)"),
     ];
     let settings = serde_json::json!({ "permissions": { "allow": allow, "deny": deny } });
@@ -86,6 +89,8 @@ pub fn sync_launch(
         " Run moonlet's commands with this exact path:\n\
 - after each step: {bin} design system progress <step> <summary>\n\
 - to check your work: {bin} design check\n\
+- to render every card in the app and judge it: {bin} design check --render\n\
+- to see a card, for grading: {bin} design snap <card> [--variant <variant>]\n\
 - when every step is done: {bin} design system synced\n"
     ));
     Ok(Launch {
@@ -179,7 +184,7 @@ mod tests {
             Launch {
                 cwd: "/Users/alex/.moonlet/design/w1/systems/moonlet-desktop".into(),
                 add_dirs: vec!["/Users/alex/Workspace/moonlet".into()],
-                settings: r#"{"permissions":{"allow":["Bash(/Applications/moonlet.app/Contents/MacOS/moonlet design system progress:*)","Bash(/Applications/moonlet.app/Contents/MacOS/moonlet design check)","Bash(/Applications/moonlet.app/Contents/MacOS/moonlet design system synced)"],"deny":["Edit(//Users/alex/Workspace/moonlet/**)"]}}"#.into(),
+                settings: r#"{"permissions":{"allow":["Bash(/Applications/moonlet.app/Contents/MacOS/moonlet design system progress:*)","Bash(/Applications/moonlet.app/Contents/MacOS/moonlet design check)","Bash(/Applications/moonlet.app/Contents/MacOS/moonlet design check --render)","Bash(/Applications/moonlet.app/Contents/MacOS/moonlet design snap:*)","Bash(/Applications/moonlet.app/Contents/MacOS/moonlet design system synced)"],"deny":["Edit(//Users/alex/Workspace/moonlet/**)"]}}"#.into(),
                 title: "Design · moonlet desktop".into(),
                 mode: "acceptEdits".into(),
                 prompt: "Build the design system \"moonlet desktop\" in this folder from the code of:
@@ -188,6 +193,8 @@ mod tests {
 Follow the moonlet-design skill: Inventory, Tokens, Cards, Layouts. Run moonlet's commands with this exact path:
 - after each step: /Applications/moonlet.app/Contents/MacOS/moonlet design system progress <step> <summary>
 - to check your work: /Applications/moonlet.app/Contents/MacOS/moonlet design check
+- to render every card in the app and judge it: /Applications/moonlet.app/Contents/MacOS/moonlet design check --render
+- to see a card, for grading: /Applications/moonlet.app/Contents/MacOS/moonlet design snap <card> [--variant <variant>]
 - when every step is done: /Applications/moonlet.app/Contents/MacOS/moonlet design system synced
 "
                 .into(),
@@ -246,6 +253,8 @@ Since the last sync:
 Follow the moonlet-design skill's sync: rewrite only these cards, and leave a card edited by hand as it is, with your version of each of its files you change beside it as <name>.proposed.html, <name>.proposed.css or <name>.proposed.prompt.md. Run moonlet's commands with this exact path:
 - after each step: /bin/moonlet design system progress <step> <summary>
 - to check your work: /bin/moonlet design check
+- to render every card in the app and judge it: /bin/moonlet design check --render
+- to see a card, for grading: /bin/moonlet design snap <card> [--variant <variant>]
 - when every step is done: /bin/moonlet design system synced
 "
         );

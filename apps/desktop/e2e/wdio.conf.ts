@@ -31,10 +31,12 @@ export const config: WebdriverIO.Config = {
   logLevel: "warn",
   waitforTimeout: 15_000,
   async before() {
-    // moonlet has one window. An explicit switch tells the service so, which
-    // stops it from probing window focus (5 s each) before every command.
-    const [main] = await browser.getWindowHandles();
-    await browser.switchToWindow(main);
+    // The specs drive the main window. An explicit switch tells the service
+    // so, which stops it from probing window focus (5 s each) before every
+    // command. Handles are window labels; the hidden window that renders
+    // design cards (X64), once it exists, sorts before "main".
+    const handles = await browser.getWindowHandles();
+    await browser.switchToWindow(handles.includes("main") ? "main" : handles[0]);
   },
   async afterTest(test, _context, { passed }) {
     if (passed) return;

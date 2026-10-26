@@ -14,7 +14,7 @@ A **design system** is a folder of static HTML and CSS that shows a project's UI
 - **You work in a session of a project** (the user ran `/moonlet-design sync`): run `"$MOONLET_BIN" design system ls`. If a design system is built from this project, run `"$MOONLET_BIN" design system sync --system <slug>`; otherwise `"$MOONLET_BIN" design system new "<name>" --from <this project's path>`. Tell the user its own agent now does the work in Design mode, and stop.
 - **You are the sync agent**: your working folder holds `config.toml`, and your first message names the source folders and the path of `moonlet`. On a **build**, do steps 1 to 4. On a **sync**, do the steps of [Sync](#sync).
 
-Run moonlet with the exact path your first message gives; it is written `moonlet` below. Those three commands run without asking.
+Run moonlet with the exact path your first message gives; it is written `moonlet` below. Its `design` commands in that message run without asking: `design system progress`, `design check` (also with `--render`), `design snap` and `design system synced`.
 
 The user is away while you work, and every approval stops you until they come back. Read, search and write files with your file tools (Read, Grep, Glob, Write, Edit): they run without asking here. Keep Bash for the `moonlet` commands.
 
@@ -54,11 +54,30 @@ For each component in scope write three files in `components/<group>/<name>/`: `
 
 1. **Solo first**: write 2 or 3 diverse components yourself: one compound, one with many states, one text-heavy. Fix what `moonlet design check` finds.
 2. **Then fan out**: hand the rest to subagents in batches of 5 to 8, each batch a disjoint set of components, started with the `sonnet` model; inventory, conventions and the review of their work stay with you. Give each subagent, in its brief, the path of `moonlet`, the [Ground rules](#ground-rules), the tool rule (file tools for files, Bash only for `moonlet`) and the formats in [cards.md](cards.md). A subagent writes only its own components' files and a `NOTES.md` line per gotcha, and runs `moonlet design check`. When two components hit the same cause, fix it once, for all, before the next batch.
-3. After each batch, `moonlet design system progress cards "<done> of <total>"`.
+3. After each batch, render, grade and fix its cards (steps 4 and 5 below), then `moonlet design system progress cards "<done> of <total>"`.
 
-Read each card beside its source as you finish it: same states, same content shape, same tokens. Screenshots for grading arrive with a later moonlet; until then write in `NOTES.md` that cards are checked by reading, not by eye.
+Read each card beside its source as you finish it: same states, same content shape, same tokens.
 
-Done when every component in scope has a card (or an honest floor card) and `moonlet design check` passes.
+4. **Render check**: `moonlet design check --render`. The moonlet app loads every card in its sandboxed canvas and measures it; the counts print, and each card's flags are in `.cache/render-check.json`.
+   - `bad`: a cell's `.ds-mount` is empty (`rootEmpty`), or the page had errors (`errs`, listed under the card's `errors`). Fix every one.
+   - `thin`: the only text is the card's name (`nameOnly`), nothing shows at all (`allHollow`), or text is under 8 px tall (`collapsed`). Fix it, or make it an honest floor card.
+   - Warnings: every cell has the same markup (`variantsIdentical`), a cell overflows at a 680 px grid (`wide`), or content escapes its cell (`escape`). Fix them or write in `NOTES.md` why the card keeps them.
+
+   Run it again after fixing, at most 3 rounds; what is left goes in `NOTES.md`. When it says "Open moonlet to render cards", ask the user to open the moonlet app, then run it again.
+5. **Grade** each card by eye. `moonlet design snap <card>` saves a screenshot of it, taken by the app, in `.cache/screenshots/` and prints its path and `blank`; read that image. Add `--variant <variant>` to see one cell alone. Grade each cell:
+   - **Styled**: it has the component's own colours, type, radius and spacing, not the browser's defaults.
+   - **Complete**: every state the source defines is a cell, with realistic content.
+   - **Plausible**: it looks like the source's component would on screen.
+
+   A cell is `good` when it is all three; otherwise `needs-work`, and so is a `blank` screenshot. Write `.cache/grades/<Name>.json`:
+
+   ```json
+   {"card": "components/buttons/button/button.html", "grade": "needs-work", "cells": {"primary": {"grade": "good"}, "loading": {"grade": "needs-work", "why": "no spinner; the source shows one"}}}
+   ```
+
+   The card's grade is `good` only when every cell is. Fix what needs work, snap it again and grade it again.
+
+Done when every component in scope has a card (or an honest floor card), `moonlet design check` passes, `moonlet design check --render` finds nothing `bad`, and every card in scope is graded `good`.
 
 ## 4. Layouts and conventions
 
@@ -78,4 +97,4 @@ Your first message lists the cards that changed since the last sync. For each:
 - **Its settings changed**: apply its entry in `config.toml`.
 - **Orphaned**: leave it for the user.
 
-Then `moonlet design check`, fix every problem, `moonlet design system progress cards "<done> of <total>"`, and `moonlet design system synced`.
+Then `moonlet design check`, fix every problem, `moonlet design check --render` and grade each card you wrote (steps 4 and 5 of [Cards](#3-cards)), `moonlet design system progress cards "<done> of <total>"`, and `moonlet design system synced`.

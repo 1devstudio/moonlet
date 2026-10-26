@@ -10,6 +10,7 @@ pub(crate) mod fsx;
 pub mod manifest;
 pub mod mid;
 pub mod readme;
+pub mod render;
 pub mod stack;
 pub mod store;
 pub mod tokens;

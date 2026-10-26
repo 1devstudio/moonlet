@@ -272,3 +272,161 @@ async fn the_sync_agents_commands_act_only_on_the_system_of_their_folder() {
     let lost = d.moonlet(d.home.path(), &["design", "system", "progress", "cards"]);
     assert!(!lost.status.success());
 }
+
+/// A design system with a button card of two variants and a field card
+/// whose mount is empty, for `--render` and `snap` (X64).
+async fn render_system(d: &Daemon) -> PathBuf {
+    let mut c = Client::connect(&d.socket, "test").await.unwrap();
+    let ws: Workspace = c
+        .request(
+            methods::WORKSPACE_CREATE,
+            serde_json::json!({"name": "1devstudio", "color": "clay"}),
+        )
+        .await
+        .unwrap();
+    let _: serde_json::Value = c
+        .request(
+            methods::DESIGN_SYSTEM_CREATE,
+            serde_json::json!({"workspace": ws.id, "name": "storefront", "sources": [], "agent": false}),
+        )
+        .await
+        .unwrap();
+    let dir = d
+        .home
+        .path()
+        .join("design")
+        .join(&ws.id)
+        .join("systems/storefront");
+    for (path, body) in [
+        ("styles.css", "@import \"components.css\";\n"),
+        ("components.css", ".btn { color: red; }\n"),
+        (
+            "components/buttons/button/button.html",
+            "<!-- @dsCard group=\"Buttons\" name=\"Button\" viewport=\"320x140\" -->\n<!doctype html>\n<html><head><link rel=\"stylesheet\" href=\"../../../styles.css\"></head><body><section class=\"ds-cell\" data-snippet=\"buttons/button/primary\"><h4>primary</h4><div class=\"ds-mount\"><button class=\"btn\">Run</button></div></section><section class=\"ds-cell\" data-snippet=\"buttons/button/ghost\"><h4>ghost</h4><div class=\"ds-mount\"><button class=\"btn\">Cancel</button></div></section></body></html>\n",
+        ),
+        (
+            "components/forms/field/field.html",
+            "<!-- @dsCard group=\"Forms\" name=\"Field\" -->\n<!doctype html>\n<html><head><link rel=\"stylesheet\" href=\"../../../styles.css\"></head><body><section class=\"ds-cell\" data-snippet=\"forms/field/default\"><h4>default</h4><div class=\"ds-mount\"></div></section></body></html>\n",
+        ),
+    ] {
+        std::fs::create_dir_all(dir.join(path).parent().unwrap()).unwrap();
+        std::fs::write(dir.join(path), body).unwrap();
+    }
+    dir
+}
+
+/// A stand-in for the moonlet app: it renders cards for the daemon, finds
+/// the field's empty mount bad, and snaps a 6 KB PNG.
+async fn fake_app(d: &Daemon) {
+    use moonlet_proto::{Frame, Message};
+    let mut app = Client::connect(&d.socket, "moonlet-app").await.unwrap();
+    let _: serde_json::Value = app
+        .request(methods::DESIGN_RENDER_READY, serde_json::json!({}))
+        .await
+        .unwrap();
+    tokio::spawn(async move {
+        while let Ok(Some(f)) = app.next_frame().await {
+            let Frame::Json(Message::Event { name, data }) = f else {
+                continue;
+            };
+            if name != methods::EV_DESIGN_RENDER {
+                continue;
+            }
+            let mut done = serde_json::json!({"id": data["id"]});
+            if data["want"] == "png" {
+                // The PNG signature, then 6 KB of zeros.
+                done["png_base64"] = format!("iVBORw0KGgo{}", "A".repeat(8181)).into();
+            } else if data["path"]
+                .as_str()
+                .is_some_and(|p| p.ends_with("field.html"))
+            {
+                done["metrics"] = serde_json::json!({"flags": ["rootEmpty", "bad"]});
+            } else {
+                done["metrics"] = serde_json::json!({"flags": []});
+            }
+            let _: serde_json::Value = app
+                .request(methods::DESIGN_RENDER_DONE, done)
+                .await
+                .unwrap();
+        }
+    });
+}
+
+// Multi-threaded: the stand-in app answers while the CLI blocks this thread.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_sync_agent_renders_its_cards_and_snaps_one_from_its_folder() {
+    let d = Daemon::start().await;
+    let dir = render_system(&d).await;
+    fake_app(&d).await;
+
+    let check = d.moonlet(&dir, &["design", "check", "--render"]);
+    // A bad card fails the check, as a problem does.
+    assert_eq!(check.status.code(), Some(1));
+    let out: serde_json::Value = serde_json::from_str(&text(&check)).unwrap();
+    assert_eq!(
+        out["render"],
+        serde_json::json!({"total": 2, "bad": 1, "thin": 0, "variants_identical": 0})
+    );
+    assert!(dir.join(".cache/render-check.json").is_file());
+
+    let card_dir = dir.join("components/buttons/button");
+    let snap = d.moonlet(
+        &card_dir,
+        &[
+            "design",
+            "snap",
+            "button.html",
+            "--variant",
+            "ghost",
+            "--viewport",
+            "600x400",
+        ],
+    );
+    assert!(
+        snap.status.success(),
+        "{}",
+        String::from_utf8_lossy(&snap.stderr)
+    );
+    let shot: serde_json::Value = serde_json::from_str(&text(&snap)).unwrap();
+    assert_eq!(shot["blank"], false);
+    let path = PathBuf::from(shot["path"].as_str().unwrap());
+    assert!(
+        path.ends_with(".cache/screenshots/components/buttons/button/button--ghost-600x400.png"),
+        "{path:?}"
+    );
+    assert!(path.is_file());
+
+    // Only a card of the system the command runs in.
+    let other = d.moonlet(&dir, &["design", "snap", "../../../../README.md"]);
+    assert!(!other.status.success());
+    let bad = d.moonlet(&dir, &["design", "snap", "x.html", "--viewport", "wide"]);
+    assert!(!bad.status.success());
+}
+
+#[tokio::test]
+async fn without_the_app_render_and_snap_say_to_open_moonlet() {
+    let d = Daemon::start().await;
+    let dir = render_system(&d).await;
+    // The check prints its problems, then fails with why nothing rendered.
+    let check = d.moonlet(&dir, &["design", "check", "--render"]);
+    assert_eq!(check.status.code(), Some(1));
+    let out: serde_json::Value = serde_json::from_str(&text(&check)).unwrap();
+    assert_eq!(out["problems"], serde_json::json!([]));
+    assert_eq!(out["render"], serde_json::Value::Null);
+    assert_eq!(
+        String::from_utf8_lossy(&check.stderr),
+        "moonlet: Open moonlet to render cards\n"
+    );
+    for args in [vec!["design", "snap", "components/buttons/button/button.html"]] {
+        let out = d.moonlet(&dir, &args);
+        assert!(!out.status.success(), "{args:?}");
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("Open moonlet to render cards"),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    // The check without --render needs no app.
+    let plain = d.moonlet(&dir, &["design", "check"]);
+    assert_eq!(plain.status.code(), Some(0), "{}", text(&plain));
+}

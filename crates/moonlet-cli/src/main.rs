@@ -154,6 +154,23 @@ enum DesignAction {
         /// Workspace id (defaults to the current folder's, then your session's).
         #[arg(long)]
         workspace: Option<String>,
+        /// Also have the moonlet app render each card and judge it: prints
+        /// `{problems, render: {total, bad, thin, variants_identical}}`,
+        /// writes `.cache/render-check.json`, and exits 1 on a bad card too.
+        #[arg(long)]
+        render: bool,
+    },
+    /// Save a screenshot of a card of the design system this folder is in,
+    /// taken by the moonlet app, to `.cache/screenshots/`; prints its path.
+    Snap {
+        /// The card's file, from this folder.
+        card: String,
+        /// Show only this variant (a snippet's id, or its last part).
+        #[arg(long)]
+        variant: Option<String>,
+        /// The size to render at, such as 900x700 (the card's own by default).
+        #[arg(long, value_parser = design::parse_viewport)]
+        viewport: Option<(u32, u32)>,
     },
 }
 
@@ -870,14 +887,37 @@ async fn design_cmd(socket: &std::path::Path, action: DesignAction) -> Result<()
     let mut c = connect(socket).await?;
     let need = |s: Option<String>| s.context("no design system: run inside its folder or pass --system");
     match action {
-        DesignAction::Check { system, workspace } => {
+        DesignAction::Check { system, workspace, render } => {
             let (w, s) = design_target(&mut c, workspace, system).await?;
-            let problems: serde_json::Value =
-                c.request(methods::DESIGN_CHECK, serde_json::json!({"workspace": w, "slug": need(s)?})).await?;
-            println!("{}", serde_json::to_string_pretty(&problems)?);
-            if problems.as_array().is_some_and(|p| !p.is_empty()) {
+            let out: serde_json::Value = c
+                .request(methods::DESIGN_CHECK, serde_json::json!({"workspace": w, "slug": need(s)?, "render": render}))
+                .await?;
+            println!("{}", serde_json::to_string_pretty(&out)?);
+            // The problems are printed; then why nothing rendered.
+            if let Some(why) = out["render_error"].as_str() {
+                bail!("{why}");
+            }
+            let problems = if render { &out["problems"] } else { &out };
+            let bad = out["render"]["bad"].as_u64().unwrap_or(0);
+            if problems.as_array().is_some_and(|p| !p.is_empty()) || bad > 0 {
                 std::process::exit(1);
             }
+        }
+        DesignAction::Snap { card, variant, viewport } => {
+            // A card of the system this folder is in, never another's.
+            let (w, s) = own_system()?;
+            let root = moonlet_core::paths::home().join("design");
+            let root = std::fs::canonicalize(&root).unwrap_or(root);
+            let cwd = std::env::current_dir()?;
+            let path = design::card_in_system(&cwd, &card, &root.join(&w).join("systems").join(&s))
+                .with_context(|| format!("{card} is not in the design system {s}"))?;
+            let shot: serde_json::Value = c
+                .request(
+                    methods::DESIGN_SNAP,
+                    serde_json::json!({"workspace": w, "slug": s, "path": path, "variant": variant, "viewport": viewport}),
+                )
+                .await?;
+            println!("{}", serde_json::to_string_pretty(&shot)?);
         }
         DesignAction::System { action } => match action {
             SystemAction::Ls { workspace } => {
