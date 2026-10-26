@@ -1,5 +1,8 @@
 //! Where design systems live (X64, ADR 0013): `~/.moonlet/design/<workspace
-//! id>/systems/<slug>/`, each with a `config.toml` naming its sources.
+//! id>/systems/<slug>/`. What the sync agent may edit is in the system's
+//! folder, `config.toml` among it; what moonlet trusts (the source folders,
+//! the commits of the last sync, the agent's chat) is in
+//! `<workspace>/.records/<slug>.toml`, outside the agent's reach.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -9,7 +12,7 @@ use moonlet_proto::types::ProjectIdentity;
 use serde::{Deserialize, Serialize};
 
 use super::check::{self, html_files};
-use super::{anchor, foundations, manifest, readme};
+use super::{anchor, foundations, fsx, manifest, readme};
 
 /// One project a design system is built from.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,15 +36,11 @@ fn is_unknown(i: &ProjectIdentity) -> bool {
     i.origin.is_none() && i.root.is_none()
 }
 
-/// `config.toml`.
+/// `config.toml`, which the sync agent may edit (the scope, per-card settings).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SystemConfig {
     pub name: String,
     pub created_at: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub synced_at: Option<u64>,
-    #[serde(default)]
-    pub sources: Vec<Source>,
     /// Per-card settings, by card path.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub cards: BTreeMap<String, CardSettings>,
@@ -76,6 +75,24 @@ impl SystemConfig {
     }
 }
 
+/// What moonlet trusts about a design system, kept where its agent cannot
+/// write: the sync agent's `--add-dir` folders and deny rules come from here,
+/// and Sync sends its prompt only to the chat named here.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Record {
+    #[serde(default)]
+    pub sources: Vec<Source>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub synced_at: Option<u64>,
+    /// The chat of its sync agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<u32>,
+    /// What that chat was started with (its folders and settings): it is
+    /// reused only while a new start would be the same.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_launch: Option<String>,
+}
+
 /// The design folders of one moonlet home.
 #[derive(Clone)]
 pub struct Store {
@@ -99,9 +116,7 @@ impl Store {
         sources: Vec<Source>,
         now: u64,
     ) -> Result<String> {
-        let systems = self.workspace(workspace)?.join("systems");
-        std::fs::create_dir_all(&systems)
-            .with_context(|| format!("cannot create {}", systems.display()))?;
+        let systems = self.systems_dir(workspace, true)?;
         let name = name.trim();
         if name.is_empty() {
             bail!("a design system needs a name");
@@ -129,21 +144,47 @@ impl Store {
         let config = SystemConfig {
             name: name_n,
             created_at: now,
-            synced_at: None,
-            sources,
             cards: BTreeMap::new(),
         };
-        std::fs::write(systems.join(&slug).join(CONFIG), toml::to_string(&config)?)?;
+        let dir = systems.join(&slug);
+        let written = fsx::write_inside(
+            &dir,
+            &dir.join(CONFIG),
+            toml::to_string(&config)?.as_bytes(),
+        )
+        .and_then(|()| {
+            self.write_record(
+                workspace,
+                &slug,
+                &Record {
+                    sources,
+                    ..Record::default()
+                },
+            )
+        });
+        // A creation that fails leaves nothing behind, so its name is free
+        // again and no hidden half-made folder stays.
+        if let Err(e) = written {
+            let _ = fsx::remove_dir_inside(&systems, &dir);
+            if let Ok(record) = self.record_path(workspace, &slug) {
+                let _ = std::fs::remove_file(record);
+            }
+            return Err(e);
+        }
         Ok(slug)
     }
 
     /// The workspace's design systems, by name.
     pub fn systems(&self, workspace: &str) -> Result<Vec<SystemSummary>> {
-        let Ok(entries) = std::fs::read_dir(self.workspace(workspace)?.join("systems")) else {
+        let Ok(entries) = std::fs::read_dir(self.systems_dir(workspace, false)?) else {
             return Ok(Vec::new());
         };
         let mut out = Vec::new();
         for e in entries.flatten() {
+            // A link is not a system, wherever it points.
+            if !e.file_type().is_ok_and(|t| t.is_dir()) {
+                continue;
+            }
             let dir = e.path();
             let Ok(config) = read_config(&dir) else {
                 continue;
@@ -151,22 +192,28 @@ impl Store {
             let slug = e.file_name().to_string_lossy().into_owned();
             // A system that cannot be read still lists, with its error, so
             // one broken folder never hides the others.
+            let (record, read) = match self.record(workspace, &slug) {
+                Ok(r) => (r, Ok(())),
+                Err(e) => (Record::default(), Err(e.context("cannot read its record"))),
+            };
             out.push(
-                summary(&dir, slug.clone(), &config).unwrap_or_else(|err| SystemSummary {
-                    slug,
-                    name: config.name.clone(),
-                    sources: config.sources.iter().map(|s| s.path.clone()).collect(),
-                    synced_at: config.synced_at,
-                    synced_commit: config.sources.first().and_then(|s| s.commit.clone()),
-                    cards: 0,
-                    layouts: 0,
-                    changed_sources: Vec::new(),
-                    check_problems: 0,
-                    to_settle: 0,
-                    step: None,
-                    step_summary: None,
-                    error: Some(format!("{err:#}")),
-                }),
+                read.and_then(|()| summary(&dir, slug.clone(), &config, &record))
+                    .unwrap_or_else(|err| SystemSummary {
+                        slug,
+                        name: config.name.clone(),
+                        sources: record.sources.iter().map(|s| s.path.clone()).collect(),
+                        synced_at: record.synced_at,
+                        synced_commit: record.sources.first().and_then(|s| s.commit.clone()),
+                        cards: 0,
+                        layouts: 0,
+                        changed_sources: Vec::new(),
+                        check_problems: 0,
+                        to_settle: 0,
+                        step: None,
+                        step_summary: None,
+                        error: Some(format!("{err:#}")),
+                        agent: record.agent,
+                    }),
             );
         }
         out.sort_by(|a, b| a.name.cmp(&b.name));
@@ -178,8 +225,11 @@ impl Store {
         if !is_name(slug) {
             bail!("bad design system \"{slug}\"");
         }
-        let dir = self.workspace(workspace)?.join("systems").join(slug);
-        if !dir.join(CONFIG).is_file() {
+        let dir = self.systems_dir(workspace, false)?.join(slug);
+        not_a_link(&dir)?;
+        // Its own file: a link, which would take reads and writes elsewhere,
+        // is not one.
+        if !std::fs::symlink_metadata(dir.join(CONFIG)).is_ok_and(|m| m.is_file()) {
             bail!("no design system \"{slug}\"");
         }
         Ok(dir)
@@ -193,7 +243,71 @@ impl Store {
     /// Deletes a design system. Designs that use it keep their pages.
     pub fn remove_system(&self, workspace: &str, slug: &str) -> Result<()> {
         let dir = self.system_dir(workspace, slug)?;
-        std::fs::remove_dir_all(&dir).with_context(|| format!("cannot remove {}", dir.display()))
+        // Through handles opened from the design folder, so a folder swapped
+        // for a link on the way is refused, not followed.
+        fsx::remove_dir_inside(&self.root, &dir)
+            .with_context(|| format!("cannot remove {}", dir.display()))?;
+        let _ = fsx::remove_file_inside(&self.root, &self.record_path(workspace, slug)?);
+        Ok(())
+    }
+
+    /// What moonlet trusts about a system (see [`Record`]).
+    pub fn record(&self, workspace: &str, slug: &str) -> Result<Record> {
+        let path = self.record_path(workspace, slug)?;
+        match std::fs::read_to_string(&path) {
+            Ok(text) => Ok(toml::from_str(&text)?),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Record::default()),
+            Err(e) => Err(e).with_context(|| format!("cannot read {}", path.display())),
+        }
+    }
+
+    /// A new file renamed over the old record: a write cut short leaves the
+    /// old record whole, and a reader never sees half of one.
+    fn write_record(&self, workspace: &str, slug: &str, record: &Record) -> Result<()> {
+        let path = self.record_path(workspace, slug)?;
+        fsx::write_inside(
+            &self.workspace(workspace)?,
+            &path,
+            toml::to_string(record)?.as_bytes(),
+        )
+    }
+
+    fn record_path(&self, workspace: &str, slug: &str) -> Result<PathBuf> {
+        if !is_name(slug) {
+            bail!("bad design system \"{slug}\"");
+        }
+        Ok(self
+            .workspace(workspace)?
+            .join(".records")
+            .join(format!("{slug}.toml")))
+    }
+
+    /// The chat of the system's sync agent, kept for the app's Open agent
+    /// and across daemon restarts (chats restore themselves).
+    pub fn set_agent(
+        &self,
+        workspace: &str,
+        slug: &str,
+        terminal: u32,
+        launch: &str,
+    ) -> Result<()> {
+        self.system_dir(workspace, slug)?;
+        let mut record = self.record(workspace, slug)?;
+        record.agent = Some(terminal);
+        record.agent_launch = Some(launch.to_string());
+        self.write_record(workspace, slug, &record)
+    }
+
+    pub fn agent(&self, workspace: &str, slug: &str) -> Result<Option<u32>> {
+        Ok(self.record(workspace, slug)?.agent)
+    }
+
+    /// The recorded agent, when it was started with `launch`.
+    pub fn agent_for(&self, workspace: &str, slug: &str, launch: &str) -> Result<Option<u32>> {
+        let record = self.record(workspace, slug)?;
+        Ok(record
+            .agent
+            .filter(|_| record.agent_launch.as_deref() == Some(launch)))
     }
 
     /// What a running sync reports as it goes (`design.system.progress`).
@@ -211,17 +325,18 @@ impl Store {
             );
         }
         let dir = self.system_dir(workspace, slug)?;
-        std::fs::create_dir_all(dir.join(".cache"))?;
+
         let p = Progress {
             step: step.into(),
             summary: summary.map(String::from),
         };
-        std::fs::write(dir.join(PROGRESS), toml::to_string(&p)?)?;
+        fsx::write_inside(&dir, &dir.join(PROGRESS), toml::to_string(&p)?.as_bytes())?;
         Ok(())
     }
 
-    /// Records a finished sync: each source's commit, the time, and the anchor
-    /// (written last).
+    /// Records a finished sync: each source's commit, the time, and the
+    /// anchor. Either both the record and the anchor say the sync is done, or
+    /// neither does and its progress stays.
     pub fn synced(
         &self,
         workspace: &str,
@@ -230,19 +345,27 @@ impl Store {
         now: u64,
     ) -> Result<()> {
         let dir = self.system_dir(workspace, slug)?;
-        let mut config = read_config(&dir)?;
-        // The anchor first: until it is written the sync is not done, and
-        // config.toml and the progress still say so.
-        anchor::write(&dir, &source_roots(&config), &config.exceptions())?;
-        for s in &mut config.sources {
+        let config = read_config(&dir)?;
+        let old = self.record(workspace, slug)?;
+        // The anchor is worked out first: reading every card and source is
+        // what usually fails, and then nothing is written.
+        let anchor = anchor::compute(&dir, &source_roots(&old), &config.exceptions())?;
+        let mut record = old.clone();
+        for s in &mut record.sources {
             if let Some((_, c)) = commits.iter().find(|(p, _)| *p == s.project) {
                 // A HEAD that could not be read leaves no commit, not a stale one.
                 s.commit = c.clone();
             }
         }
-        config.synced_at = Some(now);
-        std::fs::write(dir.join(CONFIG), toml::to_string(&config)?)?;
-        let _ = std::fs::remove_file(dir.join(PROGRESS));
+        record.synced_at = Some(now);
+        // Then the record, and the anchor last; an anchor that cannot be
+        // written puts the old record back. Both are replaced whole.
+        self.write_record(workspace, slug, &record)?;
+        if let Err(e) = anchor::save(&dir, &anchor) {
+            let _ = self.write_record(workspace, slug, &old);
+            return Err(e);
+        }
+        let _ = fsx::remove_file_inside(&dir, &dir.join(PROGRESS));
         Ok(())
     }
 
@@ -294,33 +417,53 @@ impl Store {
         if !(shape && plain && html) {
             bail!("{card} is not a card of {slug}");
         }
+        // Through handles opened from the system's folder: nothing lands
+        // outside it, whatever links are in the way.
         let path = dir.join(card);
         let folder = path.parent().unwrap_or(&dir).to_path_buf();
-        let real_dir = std::fs::canonicalize(&dir)?;
-        if std::fs::canonicalize(&folder).map_or(true, |f| !f.starts_with(&real_dir)) {
-            bail!("{card} is not a card of {slug}");
-        }
         let proposed = path.with_extension("proposed.html");
         match choice {
-            Settle::Mine => std::fs::remove_file(&proposed)?,
-            Settle::Synced => std::fs::rename(&proposed, &path)?,
-            Settle::Remove if parts[0] == "components" => std::fs::remove_dir_all(&folder)?,
+            Settle::Mine => fsx::remove_file_inside(&dir, &proposed)?,
+            Settle::Synced => fsx::rename_inside(&dir, &proposed, &path)?,
+            Settle::Remove if parts[0] == "components" => fsx::remove_dir_inside(&dir, &folder)?,
             Settle::Remove => {
-                std::fs::remove_file(&path)?;
-                let _ = std::fs::remove_file(&proposed);
+                fsx::remove_file_inside(&dir, &path)?;
+                fsx::remove_file_inside(&dir, &proposed)?;
             }
             Settle::Keep => {}
         }
         Ok(())
     }
 
-    /// `~/.moonlet/design/<workspace>`, refusing an id that is not one folder name.
+    /// `~/.moonlet/design/<workspace>`, refusing an id that is not one folder
+    /// name, and a folder that is a link (it would take writes elsewhere).
     fn workspace(&self, workspace: &str) -> Result<PathBuf> {
         if !is_name(workspace) {
             bail!("bad workspace id \"{workspace}\"");
         }
         crate::paths::ensure_private_dir(&self.root)?;
-        Ok(self.root.join(workspace))
+        let dir = self.root.join(workspace);
+        not_a_link(&dir)?;
+        Ok(dir)
+    }
+
+    /// `<workspace>/systems`, never through a link; with `create`, made
+    /// (with the workspace's folder) when missing.
+    fn systems_dir(&self, workspace: &str, create: bool) -> Result<PathBuf> {
+        let ws = self.workspace(workspace)?;
+        let systems = ws.join("systems");
+        if create {
+            for dir in [&ws, &systems] {
+                match std::fs::create_dir(dir) {
+                    Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => {
+                        return Err(e).with_context(|| format!("cannot create {}", dir.display()));
+                    }
+                    _ => not_a_link(dir)?,
+                }
+            }
+        }
+        not_a_link(&systems)?;
+        Ok(systems)
     }
 }
 
@@ -347,12 +490,14 @@ pub struct SystemSummary {
     pub step_summary: Option<String>,
     /// Why the system could not be read, when it could not.
     pub error: Option<String>,
+    /// The chat of its sync agent, once one was started.
+    pub agent: Option<u32>,
 }
 
 /// Each source's folder: the repository, or its sub-folder when it names one.
 /// Card sources are relative to it.
-fn source_roots(config: &SystemConfig) -> Vec<PathBuf> {
-    config
+pub fn source_roots(record: &Record) -> Vec<PathBuf> {
+    record
         .sources
         .iter()
         .map(|s| match &s.subdir {
@@ -362,13 +507,43 @@ fn source_roots(config: &SystemConfig) -> Vec<PathBuf> {
         .collect()
 }
 
+/// A source's folder as a real path (no links): the project, or its
+/// sub-folder, which must be a folder inside the project: named with no
+/// `..` and not absolute, and not a link out of it. Sync agents get only
+/// such folders.
+pub fn source_root(source: &Source) -> Result<PathBuf> {
+    use std::path::Component;
+    let project = std::fs::canonicalize(&source.path)
+        .with_context(|| format!("cannot reach {}", source.path))?;
+    let Some(sub) = &source.subdir else {
+        return Ok(project);
+    };
+    let outside = || anyhow::anyhow!("{sub} is not a folder inside {}", source.path);
+    let plain = Path::new(sub)
+        .components()
+        .all(|c| matches!(c, Component::Normal(_)));
+    if sub.is_empty() || !plain {
+        return Err(outside());
+    }
+    let root = std::fs::canonicalize(project.join(sub)).map_err(|_| outside())?;
+    if !root.starts_with(&project) || !root.is_dir() {
+        return Err(outside());
+    }
+    Ok(root)
+}
+
 /// What the list shows of one design system.
-fn summary(dir: &Path, slug: String, config: &SystemConfig) -> Result<SystemSummary> {
-    let progress: Option<Progress> = std::fs::read_to_string(dir.join(PROGRESS))
+fn summary(
+    dir: &Path,
+    slug: String,
+    config: &SystemConfig,
+    record: &Record,
+) -> Result<SystemSummary> {
+    let progress: Option<Progress> = fsx::read_inside(dir, &dir.join(PROGRESS))
         .ok()
         .and_then(|t| toml::from_str(&t).ok());
     let cards = manifest::build(dir)?.cards;
-    let status = anchor::status(dir, &source_roots(config), &config.exceptions())?;
+    let status = anchor::status(dir, &source_roots(record), &config.exceptions())?;
     let mut changed: Vec<String> = status
         .iter()
         .flat_map(|s| s.changed_sources.clone())
@@ -382,9 +557,9 @@ fn summary(dir: &Path, slug: String, config: &SystemConfig) -> Result<SystemSumm
     Ok(SystemSummary {
         slug,
         name: config.name.clone(),
-        sources: config.sources.iter().map(|s| s.path.clone()).collect(),
-        synced_at: config.synced_at,
-        synced_commit: config.sources.first().and_then(|s| s.commit.clone()),
+        sources: record.sources.iter().map(|s| s.path.clone()).collect(),
+        synced_at: record.synced_at,
+        synced_commit: record.sources.first().and_then(|s| s.commit.clone()),
         cards: cards
             .iter()
             .filter(|c| c.path.starts_with("components/"))
@@ -399,6 +574,7 @@ fn summary(dir: &Path, slug: String, config: &SystemConfig) -> Result<SystemSumm
         step: progress.as_ref().map(|p| p.step.clone()),
         step_summary: progress.and_then(|p| p.summary),
         error: None,
+        agent: record.agent,
     })
 }
 
@@ -414,6 +590,15 @@ pub enum Settle {
     Remove,
     /// Leave an orphaned card until the next sync.
     Keep,
+}
+
+/// Refuses `dir` when it is there but not a folder of its own: a link
+/// (even to a folder) or a file.
+fn not_a_link(dir: &Path) -> Result<()> {
+    match std::fs::symlink_metadata(dir) {
+        Ok(m) if !m.is_dir() => bail!("{} is not a folder (a link is refused)", dir.display()),
+        _ => Ok(()),
+    }
 }
 
 /// One folder name: not empty, not `.` or `..`, no separator.
@@ -444,7 +629,7 @@ fn inside_dir(base: &Path, rel: &str) -> Option<PathBuf> {
 }
 
 fn read_config(dir: &Path) -> Result<SystemConfig> {
-    Ok(toml::from_str(&std::fs::read_to_string(dir.join(CONFIG))?)?)
+    Ok(toml::from_str(&fsx::read_inside(dir, &dir.join(CONFIG))?)?)
 }
 
 /// The sync's steps, in order (X64).
@@ -537,10 +722,16 @@ mod tests {
                     .join("design/w-1devstudio/systems/moonlet-desktop/config.toml")
             )
             .unwrap(),
-            "name = \"moonlet desktop\"
-created_at = 1761200000000
-
-[[sources]]
+            "name = \"moonlet desktop\"\ncreated_at = 1761200000000\n"
+        );
+        // The sources are moonlet's, outside the folder the agent edits.
+        assert_eq!(
+            std::fs::read_to_string(
+                home.path()
+                    .join("design/w-1devstudio/.records/moonlet-desktop.toml")
+            )
+            .unwrap(),
+            "[[sources]]
 project = \"p-moonlet\"
 path = \"/Users/alex/Workspace/1devstudio/moonlet\"
 
@@ -639,6 +830,7 @@ root = \"9c1e0a2\"
                 step: None,
                 step_summary: None,
                 error: None,
+                agent: None,
             }]
         );
         assert_eq!(store.systems("w-none").unwrap(), vec![]);
@@ -970,5 +1162,411 @@ root = \"9c1e0a2\"
             .map(|s| (s.name, s.error.is_some()))
             .collect();
         assert_eq!(got, vec![("alpha".into(), true), ("beta".into(), false)]);
+    }
+
+    #[test]
+    fn a_system_remembers_its_agents_chat() {
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::new(home.path());
+        let slug = store.create_system("w1", "storefront", vec![], 1).unwrap();
+        assert_eq!(store.agent("w1", &slug).unwrap(), None);
+        store.set_agent("w1", &slug, 42, "l").unwrap();
+        assert_eq!(store.agent("w1", &slug).unwrap(), Some(42));
+        assert_eq!(store.systems("w1").unwrap()[0].agent, Some(42));
+    }
+
+    #[test]
+    fn what_the_agent_can_edit_never_changes_the_sources_or_its_chat() {
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::new(home.path());
+        let slug = store
+            .create_system("w1", "storefront", vec![source()], 1)
+            .unwrap();
+        store.set_agent("w1", &slug, 7, "l").unwrap();
+        let dir = home.path().join("design/w1/systems").join(&slug);
+        // The agent works in `dir` and may write anything there.
+        put(
+            &dir,
+            &[
+                (
+                    "config.toml",
+                    "name = \"storefront\"\ncreated_at = 1\n\n[[sources]]\nproject = \"x\"\npath = \"/etc\"\n",
+                ),
+                (".cache/agent.toml", "terminal = 3\n"),
+                (".records/storefront.toml", "agent = 3\n"),
+            ],
+        );
+        let record = store.record("w1", &slug).unwrap();
+        assert_eq!(record.sources, vec![source()]);
+        assert_eq!(record.agent, Some(7));
+        assert!(!store.record_path("w1", &slug).unwrap().starts_with(&dir));
+    }
+
+    // Review fixes (#347).
+
+    #[test]
+    fn writing_generated_files_never_follows_a_link_the_agent_left() {
+        let home = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        put(
+            outside.path(),
+            &[("record.toml", "trusted\n"), ("dir/keep.txt", "keep\n")],
+        );
+        let store = Store::new(home.path());
+        let slug = store.create_system("w1", "storefront", vec![], 1).unwrap();
+        let dir = home.path().join("design/w1/systems").join(&slug);
+        put(
+            &dir,
+            &[
+                ("styles.css", "@import \"tokens/c.css\";\n"),
+                ("tokens/c.css", ":root { --color-bg: #fff; }\n"),
+            ],
+        );
+        for (link, to) in [
+            ("README.md", outside.path().join("record.toml")),
+            ("_ds_manifest.json", outside.path().join("record.toml")),
+            ("foundations", outside.path().join("dir")),
+            (".cache", outside.path().join("dir")),
+        ] {
+            std::os::unix::fs::symlink(&to, dir.join(link)).unwrap();
+        }
+        let _ = store.check_system("w1", &slug);
+        let _ = store.progress("w1", &slug, "cards", None);
+        assert_eq!(
+            std::fs::read_to_string(outside.path().join("record.toml")).unwrap(),
+            "trusted\n"
+        );
+        let left: Vec<String> = std::fs::read_dir(outside.path().join("dir"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(left, vec!["keep.txt".to_string()]);
+    }
+
+    #[test]
+    fn a_record_that_cannot_be_read_lists_the_system_with_its_error() {
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::new(home.path());
+        let slug = store
+            .create_system("w1", "storefront", vec![source()], 1)
+            .unwrap();
+        std::fs::write(
+            home.path()
+                .join("design/w1/.records")
+                .join(format!("{slug}.toml")),
+            "sources = 3 = 4\n",
+        )
+        .unwrap();
+        let s = &store.systems("w1").unwrap()[0];
+        assert!(
+            s.error.as_deref().is_some_and(|e| e.contains("record")),
+            "{:?}",
+            s.error
+        );
+    }
+
+    // Review fixes (#343, on #347).
+
+    #[test]
+    fn a_linked_workspace_or_systems_folder_is_refused_and_nothing_outside_changes() {
+        let home = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        put(
+            outside.path(),
+            &[
+                (
+                    "storefront/config.toml",
+                    "name = \"storefront\"\ncreated_at = 1\n",
+                ),
+                ("storefront/keep.txt", "keep\n"),
+            ],
+        );
+        let store = Store::new(home.path());
+        // `design/w1/systems` links out.
+        std::fs::create_dir_all(home.path().join("design/w1")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), home.path().join("design/w1/systems")).unwrap();
+        assert!(store.remove_system("w1", "storefront").is_err());
+        assert!(store.config("w1", "storefront").is_err());
+        assert!(store.check_system("w1", "storefront").is_err());
+        assert!(store.create_system("w1", "pricing", vec![], 1).is_err());
+        assert!(store.systems("w1").is_err());
+        // `design/w2` links out.
+        std::os::unix::fs::symlink(outside.path(), home.path().join("design/w2")).unwrap();
+        assert!(store.create_system("w2", "pricing", vec![], 1).is_err());
+        // A system folder that is a link.
+        store.create_system("w3", "alpha", vec![], 1).unwrap();
+        std::os::unix::fs::symlink(
+            outside.path().join("storefront"),
+            home.path().join("design/w3/systems/storefront"),
+        )
+        .unwrap();
+        assert!(store.remove_system("w3", "storefront").is_err());
+        let mut left: Vec<String> = std::fs::read_dir(outside.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        assert_eq!(left, vec!["storefront".to_string()]);
+        assert_eq!(
+            std::fs::read_to_string(outside.path().join("storefront/keep.txt")).unwrap(),
+            "keep\n"
+        );
+    }
+
+    #[test]
+    fn a_linked_config_is_refused_and_a_sync_never_changes_files_outside_through_a_link() {
+        let home = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let theirs = "name = \"theirs\"\ncreated_at = 1\n";
+        put(
+            outside.path(),
+            &[
+                ("config.toml", theirs),
+                ("progress.toml", "step = \"cards\"\n"),
+            ],
+        );
+        let store = Store::new(home.path());
+        let a = store.create_system("w1", "alpha", vec![], 1).unwrap();
+        let b = store.create_system("w1", "beta", vec![], 1).unwrap();
+        let systems = home.path().join("design/w1/systems");
+        // alpha's config.toml links out: alpha is not read, nor written.
+        std::fs::remove_file(systems.join(&a).join(CONFIG)).unwrap();
+        std::os::unix::fs::symlink(
+            outside.path().join("config.toml"),
+            systems.join(&a).join(CONFIG),
+        )
+        .unwrap();
+        assert!(store.config("w1", &a).is_err());
+        assert!(store.synced("w1", &a, &[], 2).is_err());
+        assert!(store.progress("w1", &a, "cards", None).is_err());
+        assert!(store.check_system("w1", &a).is_err());
+        assert!(store.set_agent("w1", &a, 3, "l").is_err());
+        // beta's `.cache` links out: its sync leaves the file there alone.
+        std::os::unix::fs::symlink(outside.path(), systems.join(&b).join(".cache")).unwrap();
+        store.synced("w1", &b, &[], 2).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(outside.path().join("config.toml")).unwrap(),
+            theirs
+        );
+        assert_eq!(
+            std::fs::read_to_string(outside.path().join("progress.toml")).unwrap(),
+            "step = \"cards\"\n"
+        );
+        assert_eq!(
+            store
+                .systems("w1")
+                .unwrap()
+                .iter()
+                .map(|s| s.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["beta"]
+        );
+    }
+
+    #[test]
+    fn a_creation_that_fails_leaves_no_folder_and_its_name_free() {
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::new(home.path());
+        store.create_system("w1", "alpha", vec![], 1).unwrap();
+        // The record cannot be written: `.records` is a file.
+        let records = home.path().join("design/w1/.records");
+        std::fs::remove_dir_all(&records).unwrap();
+        std::fs::write(&records, "").unwrap();
+        assert!(
+            store
+                .create_system("w1", "storefront", vec![source()], 1)
+                .is_err()
+        );
+        assert!(!home.path().join("design/w1/systems/storefront").exists());
+        std::fs::remove_file(&records).unwrap();
+        assert_eq!(
+            store
+                .create_system("w1", "storefront", vec![source()], 1)
+                .unwrap(),
+            "storefront"
+        );
+    }
+
+    #[test]
+    fn a_record_is_replaced_whole_so_a_reader_never_sees_it_half_written() {
+        use std::io::Read;
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::new(home.path());
+        let slug = store
+            .create_system("w1", "storefront", vec![source()], 1)
+            .unwrap();
+        let records = home.path().join("design/w1/.records");
+        // Opened before the write, as by a read that the write interrupts.
+        let mut reader = std::fs::File::open(records.join("storefront.toml")).unwrap();
+        store.set_agent("w1", &slug, 7, "l").unwrap();
+        let mut seen = String::new();
+        reader.read_to_string(&mut seen).unwrap();
+        assert_eq!(
+            seen,
+            "[[sources]]
+project = \"p-moonlet\"
+path = \"/Users/alex/Workspace/1devstudio/moonlet\"
+
+[sources.identity]
+origin = \"github.com/1devstudio/moonlet\"
+root = \"9c1e0a2\"
+"
+        );
+        assert_eq!(store.agent("w1", &slug).unwrap(), Some(7));
+        let left: Vec<String> = std::fs::read_dir(&records)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(left, vec!["storefront.toml".to_string()]);
+    }
+
+    #[test]
+    fn a_sync_that_cannot_be_recorded_leaves_the_anchor_and_the_record_as_they_were() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &Path, m: u32| {
+            std::fs::set_permissions(p, std::fs::Permissions::from_mode(m)).unwrap()
+        };
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::new(home.path());
+        let mut src = source();
+        src.commit = Some("old1234".into());
+        let slug = store
+            .create_system("w1", "storefront", vec![src], 1)
+            .unwrap();
+        let dir = home.path().join("design/w1/systems").join(&slug);
+        put(
+            &dir,
+            &[(
+                "components/buttons/button/button.html",
+                "<!-- @dsCard group=\"Buttons\" -->\n",
+            )],
+        );
+        store.progress("w1", &slug, "layouts", None).unwrap();
+        let unfinished = |store: &Store| {
+            let s = &store.systems("w1").unwrap()[0];
+            (s.synced_at, s.synced_commit.clone(), s.step.clone())
+        };
+        let before = (
+            None,
+            Some("old1234".to_string()),
+            Some("layouts".to_string()),
+        );
+        let sync = |store: &Store| {
+            store.synced(
+                "w1",
+                &slug,
+                &[("p-moonlet".into(), Some("new5678".into()))],
+                9,
+            )
+        };
+        // The record cannot be written: the anchor stays unwritten.
+        let records = home.path().join("design/w1/.records");
+        mode(&records, 0o555);
+        mode(&records.join("storefront.toml"), 0o444);
+        let failed = sync(&store);
+        mode(&records, 0o755);
+        mode(&records.join("storefront.toml"), 0o644);
+        assert!(failed.is_err());
+        assert!(!dir.join("_ds_sync.json").exists());
+        assert_eq!(unfinished(&store), before);
+        // The anchor cannot be written: the record is as it was.
+        mode(&dir, 0o555);
+        let failed = sync(&store);
+        mode(&dir, 0o755);
+        assert!(failed.is_err());
+        assert!(!dir.join("_ds_sync.json").exists());
+        assert_eq!(unfinished(&store), before);
+        sync(&store).unwrap();
+        assert!(dir.join("_ds_sync.json").is_file());
+        assert_eq!(
+            unfinished(&store),
+            (Some(9), Some("new5678".to_string()), None)
+        );
+    }
+
+    #[test]
+    fn a_sources_folder_is_a_real_folder_inside_its_project() {
+        let repo = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        put(
+            repo.path(),
+            &[("apps/mobile/src/a.tsx", ""), ("README.md", "")],
+        );
+        std::os::unix::fs::symlink(outside.path(), repo.path().join("apps/out")).unwrap();
+        let real = repo.path().canonicalize().unwrap();
+        let with = |subdir: Option<&str>| Source {
+            path: repo.path().display().to_string(),
+            subdir: subdir.map(String::from),
+            ..source()
+        };
+        assert_eq!(source_root(&with(None)).unwrap(), real);
+        assert_eq!(
+            source_root(&with(Some("apps/mobile"))).unwrap(),
+            real.join("apps/mobile")
+        );
+        for bad in [
+            "/etc",
+            "..",
+            "apps/../..",
+            "apps/mobile/../../..",
+            "apps/out",
+            "apps/missing",
+            "README.md",
+            "",
+        ] {
+            assert!(source_root(&with(Some(bad))).is_err(), "{bad} accepted");
+        }
+    }
+
+    #[test]
+    fn checking_never_writes_or_removes_through_a_linked_foundation_family() {
+        let home = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        put(
+            outside.path(),
+            &[
+                ("colours/colours.html", "theirs\n"),
+                ("type/type.html", "theirs\n"),
+            ],
+        );
+        let store = Store::new(home.path());
+        let slug = store.create_system("w1", "storefront", vec![], 1).unwrap();
+        let dir = home.path().join("design/w1/systems").join(&slug);
+        put(
+            &dir,
+            &[
+                ("styles.css", "@import \"tokens/c.css\";\n"),
+                ("tokens/c.css", ":root { --color-bg: #fff; }\n"),
+            ],
+        );
+        // `colours` has tokens (its card is written), `type` has none (its
+        // folder is removed).
+        std::fs::create_dir_all(dir.join("foundations")).unwrap();
+        for family in ["colours", "type"] {
+            std::os::unix::fs::symlink(
+                outside.path().join(family),
+                dir.join("foundations").join(family),
+            )
+            .unwrap();
+        }
+        let _ = store.check_system("w1", &slug);
+        for family in ["colours", "type"] {
+            assert_eq!(
+                std::fs::read_to_string(outside.path().join(format!("{family}/{family}.html")))
+                    .unwrap(),
+                "theirs\n"
+            );
+        }
+    }
+
+    #[test]
+    fn a_recorded_agent_is_reused_only_with_the_launch_it_was_started_with() {
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::new(home.path());
+        let slug = store.create_system("w1", "storefront", vec![], 1).unwrap();
+        store.set_agent("w1", &slug, 7, "settings A").unwrap();
+        assert_eq!(store.agent_for("w1", &slug, "settings A").unwrap(), Some(7));
+        assert_eq!(store.agent_for("w1", &slug, "settings B").unwrap(), None);
+        assert_eq!(store.agent("w1", &slug).unwrap(), Some(7));
     }
 }

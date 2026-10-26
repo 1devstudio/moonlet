@@ -91,7 +91,7 @@ A design system belongs to a moonlet workspace, so every project and design in t
   components/<group>/<Name>/<Name>.prompt.md  how to use it
   ui_kits/<kit>/<Screen>.html        layouts: whole screens
   assets/                            icons and images copied from the source
-  config.toml                        sources, scope, exceptions
+  config.toml                        name, scope, per-card settings (the agent may edit it)
   NOTES.md                           gotchas, known render warnings, re-sync risks
   conventions.md                     the header prepended to README.md
   _ds_manifest.json                  the card index (generated)
@@ -99,11 +99,11 @@ A design system belongs to a moonlet workspace, so every project and design in t
   .cache/                            render-check results, grades, screenshots (not part of the system)
   ```
 
-- [ ] `config.toml` holds:
+- [ ] `config.toml` holds what the sync agent may edit:
   - the name
-  - the sources: each project by project identity (X41), its path on this Mac, an optional sub-folder, and the commit last synced
   - the scope: the components covered
   - per-card exceptions: `skip`, `mode` and `viewport`
+- [ ] What moonlet trusts is kept outside the system's folder, where the agent cannot write: `~/.moonlet/design/<workspace id>/.records/<slug>.toml` holds the sources (each project by its id and project identity (X41), its path on this Mac, an optional sub-folder, and the commit last synced), the time of the last sync, and the chat of the sync agent. The agent's `--add-dir` folders and deny rules come only from there. Sync sends its prompt only to that chat, while it is still a sessionless chat in the system's folder and would start with the same folders and rules; otherwise it is stopped and a new one starts. The chat is the one the record names, never one found by its title: the agent may rename the system in `config.toml`, and it still has one agent, which removing the system stops (`moonletd/tests/daemon.rs` a_renamed_design_system_keeps_its_one_agent_and_removing_it_stops_that_agent). One start of its agent, recorded sync, progress report, settle or removal runs at a time per system: two starts never make two agents, a recorded sync and a start never lose each other's change to the record, and a removal waits for a running start and stops the agent it made (`moonletd/tests/daemon.rs` a_sync_recorded_while_its_agent_starts_keeps_both). A record that cannot be read lists the system with its error. (`design/store.rs` a_recorded_agent_is_reused_only_with_the_launch_it_was_started_with, a_record_that_cannot_be_read_lists_the_system_with_its_error) (`design/store.rs` what_the_agent_can_edit_never_changes_the_sources_or_its_chat; `moonletd/tests/daemon.rs` a_new_design_system_starts_its_sync_agent)
 
   A setting at its default is not written. Config describes conventions and exceptions, never lists of everything. A card's settings join its `source_key`, so changing them makes it out of date (`design/anchor.rs` a_changed_card_exception_makes_the_card_out_of_date).
 - [ ] A workspace lists its design systems in Design mode (`design/store.rs` a_workspace_lists_its_design_systems_with_their_cards_and_what_needs_the_user). Deleting one asks first and leaves the designs that use it (`design/store.rs` removing_a_system_deletes_its_folder_and_files_resolve_only_inside_the_workspace). Those designs show the grey "Design system removed" bar (X65).
@@ -185,6 +185,7 @@ A design system belongs to a moonlet workspace, so every project and design in t
   - a README over budget
 
   It exits non-zero on any error. The check itself is in `design/check.rs`: a_token_no_file_in_the_styles_closure_defines_is_reported_at_its_line, a_card_without_a_marker_or_with_a_bad_one_is_reported_on_its_first_line, links_that_do_not_resolve_urls_outside_the_system_and_scripts_are_reported, a_font_used_first_in_a_stack_without_a_font_face_is_reported, two_cards_in_one_folder_and_a_snippet_id_used_twice_are_reported, a_relative_link_or_import_that_climbs_out_of_the_system_leaves_it_even_when_the_file_exists, a_local_url_that_names_no_file_and_every_import_on_a_line_are_checked, any_scheme_but_data_mailto_and_tel_leaves_the_system_and_javascript_urls_are_scripts, a_font_family_declared_over_two_lines_is_checked, a_system_without_styles_css_is_reported; `design/card.rs` a_marker_with_stray_text_is_malformed. The `conventions.md` and README checks come with entry 2b, and the command with entry 3.
+- [ ] moonlet writes, renames and removes its files in the system's folder through directory handles opened from that folder (`cap-std`), never by resolving a path twice, so no link and no folder swapped for a link while it runs can take a write outside it: a link the agent left (a `README.md` pointing at the record, a linked `foundations/` or `.cache/`) is replaced or refused, never written through (`design/store.rs` writing_generated_files_never_follows_a_link_the_agent_left).
 - [ ] The check rewrites the generated files: `_ds_manifest.json` (from the markers, sorted by group and name), the foundation cards, and the README index. (`design/manifest.rs` the_manifest_lists_every_card_by_group_then_name_with_its_snippets; the foundation cards and README come with entry 2b.)
 - [ ] With `--render`, the check asks the moonlet app to load each card in its sandboxed canvas (the app's own WebKit, in a hidden window that is never shown), measures it in the page, and writes `.cache/render-check.json` with design-sync's rubric:
   - `rootEmpty`: a mount is empty
@@ -203,7 +204,7 @@ A design system belongs to a moonlet workspace, so every project and design in t
 
 ### Sync
 
-- [ ] **Build design system** and **Sync** start the sync agent: a Claude Code terminal owned by moonletd, in the design system's folder, with each source given with `--add-dir`, in Accept edits mode. Its `--settings` deny `Edit(//<source path>/**)` for each source, so Claude Code's file-editing tools can read the sources but never change them. `--add-dir` alone would not stop that, and Accept edits would accept such edits. The `moonlet-design` skill gives it the four steps.
+- [ ] **Build design system** and **Sync** start the sync agent: a Claude Code chat owned by moonletd, titled `Design · <name>`, with no session but in the workspace's Claude profile (X33), in the design system's folder, with each source given with `--add-dir`, in Accept edits mode. Sync asks the same chat again while it exists. (`moonletd/tests/daemon.rs` a_new_design_system_starts_its_sync_agent; `session.rs` a_chat_of_a_workspace_without_a_session_starts_in_the_workspaces_profile) Its `--settings` deny `Edit(//<source path>/**)` for each source, with the source's real path (no symlinks), so Claude Code's file-editing tools can read the sources but never change them. They allow exactly `<moonlet> design system progress:*`, `<moonlet> design check` and `<moonlet> design system synced`, with the real path of the `moonlet` binary, which the first message names: a command through a variable such as `$MOONLET_BIN` is refused by Claude Code's permission check. A source path with `*?[]{}` is refused, as Claude reads it as a pattern. (`design/agent.rs` the_first_sync_agent_reads_the_sources_and_may_only_run_design_commands, a_source_path_with_glob_characters_is_refused, a_resync_names_the_cards_that_changed_and_how) `--add-dir` alone would not stop that, and Accept edits would accept such edits. The `moonlet-design` skill gives it the four steps.
 - [ ] **Inventory.** The agent finds the components and their groups. Groups come from the source's folders, else a doc's `category`, else `general`. It asks the user what to cover and writes `config.toml`.
 - [ ] **Tokens.** The agent writes `tokens/`, `fonts/`, `guidelines/` and `styles.css`, then runs the check.
 - [ ] **Cards.** The agent writes `components.css`, the cards and the `.prompt.md` files. It does 2–3 diverse components itself first (one compound, one with many states, one text-heavy), then hands the rest to subagents in disjoint batches. A subagent edits only its own cards and notes, and never runs the whole check. A cause shared by two or more cards stops the batch and goes to `NOTES.md` as `[GENERAL]`. The agent runs `design check --render` and fixes until nothing is `bad`, at most 3 rounds, and records accepted warnings in `NOTES.md`.
@@ -213,7 +214,7 @@ A design system belongs to a moonlet workspace, so every project and design in t
 
   Grades go to `.cache/grades/<Name>.json`. The step is done when nothing is `bad` and every card in scope is `good` or `match`.
 - [ ] **Layouts.** The agent writes `ui_kits/`, then `conventions.md`, and runs the check, which rebuilds the README.
-- [ ] The agent reports each step with `"$MOONLET_BIN" design system progress <step> [<summary>]`. When it is done, `"$MOONLET_BIN" design system synced` writes `_ds_sync.json` (last) and records each source's short `HEAD` in `config.toml`. In the design system's folder neither needs `--system` or `--workspace`; elsewhere the workspace comes from the agent's session. (`design/store.rs` sync_progress_shows_in_the_list_until_the_sync_is_recorded; `moonlet-cli/tests/design_e2e.rs` the_sync_agent_reports_checks_and_records_from_its_folder; `moonlet-cli/src/design.rs` a_folder_of_a_design_system_names_its_workspace_and_system, an_agents_terminal_names_its_sessions_workspace)
+- [ ] The agent reports each step with `"$MOONLET_BIN" design system progress <step> [<summary>]`. When it is done, `"$MOONLET_BIN" design system synced` records each source's short `HEAD` in the system's record and writes `_ds_sync.json`, both or neither. Both act only on the design system of the folder they run in and take no `--system` or `--workspace`, so the agent, allowed `progress` with any summary, can never report a step or record a sync of another system; outside a system's folder they fail. (`design/store.rs` sync_progress_shows_in_the_list_until_the_sync_is_recorded; `moonlet-cli/tests/design_e2e.rs` the_sync_agent_reports_checks_and_records_from_its_folder, the_sync_agents_commands_act_only_on_the_system_of_their_folder; `moonlet-cli/src/design.rs` a_folder_of_a_design_system_names_its_workspace_and_system, an_agents_terminal_names_its_sessions_workspace)
 - [ ] `_ds_sync.json` holds, per card (components and layouts; the foundation cards are moonlet's and are rewritten from the tokens):
   - `sources`: each source file and its hash, looked up in the source projects in order
   - `source_key`: a hash of `sources`. The card's exceptions in `config.toml` join it with entry 3, which reads `config.toml`.
@@ -273,10 +274,10 @@ The boards of the design export are the reference.
 Every call names an existing moonlet workspace, or fails with `invalid_params` (`moonletd/tests/daemon.rs` design_systems_over_rpc). The app and the agents' `moonlet` CLI may call them; a paired phone gets `forbidden` (`moonletd/tests/mobile.rs` phones_cannot_reach_design_systems).
 
 - `design.systems {workspace}` → `[{slug, name, sources, synced_at, synced_commit, cards, layouts, changed_sources: [path], check_problems, to_settle, step, step_summary, error}]`. A system that cannot be read still lists, with its `error`, beside the others (`design/store.rs` one_broken_system_still_lists_with_its_error_beside_the_others).
-- `design.system.create {workspace, name, sources: [{project, subdir?}]}` → the slug. With entry 3b it also starts the sync agent.
+- `design.system.create {workspace, name, sources: [{project, subdir?}]}` → the slug. With entry 3b it also starts the sync agent. A `subdir` must be a folder inside its project: one that is absolute, has `..`, is missing or links out of the project fails with `invalid_params`, and the sync agent is never given a source folder outside its project, whatever the record says (`design/store.rs` a_sources_folder_is_a_real_folder_inside_its_project; `moonletd/tests/daemon.rs` a_design_source_never_reaches_outside_its_project).
 - `design.system.sync {workspace, slug}` starts the sync agent on an existing system (entry 3b).
 - `design.system.progress {workspace, slug, step, summary?}`
-- `design.system.synced {workspace, slug}` writes the anchor, then records each source's short `HEAD` (none when it cannot be read) and the time. When the anchor cannot be written, nothing is recorded and the progress stays (`design/store.rs` a_sync_whose_anchor_cannot_be_written_stays_unfinished_and_a_lost_head_is_cleared).
+- `design.system.synced {workspace, slug}` works out the anchor, records each source's short `HEAD` (none when it cannot be read) and the time, then writes the anchor, each file replaced whole. Either both say the sync is done or neither does: when the anchor cannot be worked out nothing is written, when the record cannot be written the anchor is not either, and when the anchor cannot be written the old record is put back; the progress stays until both are written (`design/store.rs` a_sync_whose_anchor_cannot_be_written_stays_unfinished_and_a_lost_head_is_cleared, a_sync_that_cannot_be_recorded_leaves_the_anchor_and_the_record_as_they_were).
 - `design.system.remove {workspace, slug}`
 - `design.check {workspace, slug}` → `[{path, line, kind, message}]`, after rewriting the generated files. Entry 6 adds `render?: bool` and the render counts.
 - `design.snap {workspace, path, viewport?, variant?}` → the PNG path. The app renders it (entry 6).
@@ -322,7 +323,7 @@ While the spec is a draft, the plan names test files and areas. Each criterion g
   - path resolution rejecting `..` and an outside symlink
 - `crates/moonletd/tests/`:
   - `design.system.create` writes `config.toml` and starts a terminal with the expected `--add-dir` and `Edit` deny rules for each source
-  - `synced` writes the anchor last and records `HEAD`
+  - `synced` records `HEAD` and writes the anchor, both or neither
   - a card edited by hand produces `.proposed.html`, and each `design.settle` choice
 - Desktop `lib/`:
   - the render rubric from captured DOM measurements, compared with literal flags
