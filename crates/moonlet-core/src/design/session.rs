@@ -138,8 +138,9 @@ impl Store {
     }
 
     /// The session designs in a worktree's design folder `folder`: each
-    /// folder of its own with a `design.toml`, by its address. A worktree
-    /// without the folder has none.
+    /// folder of its own with a `design.toml` that was made in the worktree
+    /// (see [`made_here`]), by its address. A worktree without the folder
+    /// has none.
     pub fn session_design_ats(
         &self,
         session: &str,
@@ -161,8 +162,11 @@ impl Store {
                 continue;
             }
             let at = session_at(session, worktree, folder, &slug);
-            // Only a folder with a design.toml is a design.
-            if std::fs::symlink_metadata(at.root.join(at.in_dir(DESIGN_FILE))).is_ok() {
+            // Only a folder with a design.toml is a design, and only one made
+            // in this worktree is the session's.
+            if std::fs::symlink_metadata(at.root.join(at.in_dir(DESIGN_FILE))).is_ok()
+                && made_here(worktree, &slug)
+            {
                 out.push(at);
             }
         }
@@ -393,7 +397,8 @@ pub fn design_folder(config: &moonlet_proto::types::ProjectConfig) -> Result<Str
 
 /// The session design `slug` of session `session`, whose worktree is
 /// `worktree` and design folder `folder`: it must have a `design.toml` of
-/// its own, reached through no link from the worktree.
+/// its own, reached through no link from the worktree, and have been made
+/// in the worktree (see [`made_here`]).
 pub fn session_design(
     session: &str,
     worktree: &Path,
@@ -403,7 +408,9 @@ pub fn session_design(
     super::place::check_slug(slug)?;
     check_folder(folder)?;
     let at = session_at(session, worktree, folder, slug);
-    if fsx::read_file_inside(&at.root, &at.in_dir(DESIGN_FILE)).is_err() {
+    if fsx::read_file_inside(&at.root, &at.in_dir(DESIGN_FILE)).is_err()
+        || !made_here(worktree, slug)
+    {
         bail!("no design \"{slug}\" in {}", at.folder().display());
     }
     Ok(at)
@@ -448,8 +455,11 @@ pub fn session_file(
     };
     super::place::check_slug(slug).map_err(|_| no_file())?;
     let design = Path::new(folder).join(slug);
-    // Only a design's: a folder with a design.toml of its own, never a link.
-    if fsx::read_file_inside(worktree, &design.join(DESIGN_FILE)).is_err() {
+    // Only a session design's: a folder with a design.toml of its own,
+    // never a link, made in this worktree.
+    if fsx::read_file_inside(worktree, &design.join(DESIGN_FILE)).is_err()
+        || !made_here(worktree, slug)
+    {
         return Err(no_file());
     }
     let base = match (snapshot, rest[0]) {
@@ -474,6 +484,16 @@ pub fn session_file(
         return Err(no_file());
     }
     Ok((file, base))
+}
+
+/// Whether the design `slug` of a worktree's design folder was made in that
+/// worktree, so it is its session's: it has its folder under [`SIDE_DIR`],
+/// a folder of its own on a path with no link. Only a session design's
+/// making makes that folder, and git ignores it, so it is never on a base
+/// branch: a design merged there and checked out with the worktree has
+/// none, and is a project design only.
+pub(super) fn made_here(worktree: &Path, slug: &str) -> bool {
+    fsx::is_dir_inside(worktree, &Path::new(SIDE_DIR).join(slug)).unwrap_or(false)
 }
 
 /// A session design's address: `<folder>/<slug>/` in the worktree, its
@@ -876,6 +896,51 @@ created_at = 1761200000000
         );
         assert!(!outside.path().join("design").exists());
         assert!(!other.path().join("docs/design/x").exists());
+    }
+
+    #[test]
+    fn only_a_design_folder_with_its_folder_under_moonlet_design_is_a_session_design_never_one_merged_on_the_base_branch()
+     {
+        let (_home, store) = store_with_synced_system();
+        let worktree = tempfile::tempdir().unwrap();
+        let wt = worktree.path().canonicalize().unwrap();
+        store
+            .create_session_design(
+                "w1",
+                "moonlet-desktop",
+                "s1",
+                &wt,
+                "docs/design",
+                "Settings page",
+                "",
+                1,
+            )
+            .unwrap();
+        // A design merged on the base branch, checked out with the worktree:
+        // its committed files only, no folder under .moonlet/design/.
+        let merged = wt.join("docs/design/onboarding");
+        std::fs::create_dir_all(merged.join("pages")).unwrap();
+        std::fs::write(
+            merged.join("design.toml"),
+            "name = \"Onboarding\"\nsystem = \"moonlet-desktop\"\n",
+        )
+        .unwrap();
+        std::fs::write(merged.join("pages/index.html"), "<p>merged</p>\n").unwrap();
+        let listed: Vec<String> = store
+            .session_designs("s1", &wt, "docs/design", "w1")
+            .unwrap()
+            .into_iter()
+            .map(|d| d.slug)
+            .collect();
+        assert_eq!(listed, ["settings-page"]);
+        assert!(session_design("s1", &wt, "docs/design", "settings-page").is_ok());
+        assert_eq!(
+            session_design("s1", &wt, "docs/design", "onboarding")
+                .unwrap_err()
+                .to_string(),
+            format!("no design \"onboarding\" in {}", merged.display())
+        );
+        assert!(session_file(&wt, "docs/design", "onboarding/pages/index.html").is_err());
     }
 
     #[test]

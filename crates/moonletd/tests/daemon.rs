@@ -3961,6 +3961,28 @@ async fn a_project_design_on_the_base_branch_is_listed_and_copied_into_a_new_wor
     assert_eq!(missing.unwrap_err().to_string(), "invalid_params: no design at docs/design/nope on main");
 }
 
+/// X65 entry 12: a session made from a base branch with a design merged on
+/// it has that design checked out in its worktree, but it is not the
+/// session's: `design.list` gives it as a project design only, and the
+/// session reaches no design by its slug, nor a file of it.
+#[tokio::test]
+async fn a_design_merged_on_the_base_branch_is_no_session_design_of_a_session_made_from_it() {
+    let d = fake_claude_daemon(FAKE_CLAUDE).await;
+    let mut c = d.client().await;
+    let (ws, _, session) = workspace_with_session(&d, &mut c, &MERGED_DESIGN).await;
+    let checked_out = std::path::PathBuf::from(&session.path).join("docs/design/settings-page/design.toml");
+    assert!(checked_out.is_file(), "the merged design is not in the session's worktree");
+    let list: serde_json::Value = c.request(methods::DESIGN_LIST, serde_json::json!({"workspace": ws})).await.unwrap();
+    let listed: Vec<(&str, &str)> = list.as_array().unwrap().iter().map(|d| (d["kind"].as_str().unwrap(), d["slug"].as_str().unwrap())).collect();
+    assert_eq!(listed, [("project", "settings-page")]);
+    let page = c.request::<_, serde_json::Value>(methods::DESIGN_PAGE, serde_json::json!({"session": session.id, "slug": "settings-page", "page": "index"})).await;
+    assert!(page.is_err(), "{page:?}");
+    let file = c
+        .request::<_, serde_json::Value>(methods::DESIGN_FILE, serde_json::json!({"session": session.id, "path": "settings-page/pages/index.html"}))
+        .await;
+    assert_eq!(file.unwrap_err().to_string(), "invalid_params: settings-page/pages/index.html is no file of a session design");
+}
+
 /// X65 entry 12, Build it: a session whose state cannot be saved is not
 /// made, and the workspace design it was to build records no session, so
 /// `design.list` gives it no `built_in`; the worktree made for it goes too.
