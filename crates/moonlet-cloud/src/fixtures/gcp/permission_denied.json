@@ -1,0 +1,13 @@
+{
+  "error": {
+    "code": 403,
+    "message": "Required 'compute.instances.create' permission for 'projects/acme-moonlet/zones/europe-west4-a/instances/moonlet-shop-7k2q'",
+    "errors": [
+      {
+        "message": "Required 'compute.instances.create' permission for 'projects/acme-moonlet/zones/europe-west4-a/instances/moonlet-shop-7k2q'",
+        "domain": "global",
+        "reason": "forbidden"
+      }
+    ]
+  }
+}

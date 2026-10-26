@@ -1,0 +1,12 @@
+{
+  "kind": "compute#imageList",
+  "id": "projects/acme-moonlet/global/images",
+  "items": [
+    {"kind": "compute#image", "id": "7310000000000000001", "creationTimestamp": "2026-10-20T09:12:00.000-07:00", "name": "shop-builder-2026-10", "description": "Ubuntu 24.04 with Node 24", "sourceType": "RAW", "status": "READY", "archiveSizeBytes": "2147483648", "diskSizeGb": "20", "family": "shop-builder", "architecture": "X86_64", "selfLink": "https://www.googleapis.com/compute/v1/projects/acme-moonlet/global/images/shop-builder-2026-10"},
+    {"kind": "compute#image", "id": "7310000000000000002", "creationTimestamp": "2026-09-01T09:12:00.000-07:00", "name": "shop-builder-2026-09", "description": "Ubuntu 24.04 with Node 22", "status": "READY", "diskSizeGb": "20", "family": "shop-builder", "architecture": "X86_64", "deprecated": {"state": "DEPRECATED", "replacement": "https://www.googleapis.com/compute/v1/projects/acme-moonlet/global/images/shop-builder-2026-10"}, "selfLink": "https://www.googleapis.com/compute/v1/projects/acme-moonlet/global/images/shop-builder-2026-09"},
+    {"kind": "compute#image", "id": "7310000000000000003", "creationTimestamp": "2026-10-25T09:12:00.000-07:00", "name": "shop-builder-next", "status": "PENDING", "diskSizeGb": "20", "architecture": "X86_64", "selfLink": "https://www.googleapis.com/compute/v1/projects/acme-moonlet/global/images/shop-builder-next"},
+    {"kind": "compute#image", "id": "7310000000000000004", "creationTimestamp": "2026-10-21T09:12:00.000-07:00", "name": "arm-builder", "status": "READY", "diskSizeGb": "20", "architecture": "ARM64", "deprecated": {"state": "ACTIVE"}, "selfLink": "https://www.googleapis.com/compute/v1/projects/acme-moonlet/global/images/arm-builder"},
+    {"kind": "compute#image", "id": "7310000000000000005", "creationTimestamp": "2025-01-02T09:12:00.000-07:00", "name": "plain-disk", "status": "READY", "diskSizeGb": "10", "selfLink": "https://www.googleapis.com/compute/v1/projects/acme-moonlet/global/images/plain-disk"}
+  ],
+  "selfLink": "https://www.googleapis.com/compute/v1/projects/acme-moonlet/global/images"
+}
