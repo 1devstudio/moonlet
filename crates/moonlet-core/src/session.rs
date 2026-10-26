@@ -3,7 +3,7 @@
 //! worktree on its own branch plus the terminals running in it. State is
 //! persisted to `~/.moonlet/state.json` so it survives daemon restarts.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -334,6 +334,10 @@ pub struct SessionManager {
     /// Set when an unreadable state file could not be backed up: saving
     /// would destroy the only copy, so it is refused.
     save_blocked: bool,
+    /// Per session, held while its new terminals start and while it is
+    /// archived, so an archive never runs between a creation's look at the
+    /// session and its terminals starting (X65).
+    lifecycles: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 fn new_id() -> String {
@@ -457,6 +461,7 @@ impl SessionManager {
             terminals,
             chats: std::sync::OnceLock::new(),
             save_blocked,
+            lifecycles: Mutex::new(HashMap::new()),
         });
         tokio::spawn(track_removed_sessions(Arc::downgrade(&mgr)));
         mgr
@@ -1441,7 +1446,10 @@ impl SessionManager {
         unmade.keep();
         let _ = tokio::spawn(on_saved(ws.clone())).await;
         // It shows once saved: archived or removed meanwhile, its terminals
-        // never start, its worktree maybe gone (X65).
+        // never start, its worktree maybe gone (X65). An archive under way
+        // ends first; one asked for now waits until they have started.
+        let lifecycle = self.lifecycle(&ws.id);
+        let _starting = lifecycle.lock().await;
         match self.session(&ws.id) {
             Ok(now) if !now.archived => {}
             Ok(_) => bail!("the session was archived before its terminals started"),
@@ -1552,6 +1560,9 @@ impl SessionManager {
     }
 
     pub async fn archive(&self, req: SessionArchive) -> Result<SessionArchived> {
+        // Never while a new session's terminals start (X65).
+        let lifecycle = self.lifecycle(&req.id);
+        let _archiving = lifecycle.lock().await;
         let ws = self.session(&req.id)?;
         let repo = self.project(&ws.project_id)?;
         let config = read_config(Path::new(&repo.path));
@@ -1596,6 +1607,11 @@ impl SessionManager {
     }
 
     /// Brings an archived workspace back (recreating the worktree if needed).
+    /// The lock a session's terminals starting and its archive share.
+    fn lifecycle(&self, id: &str) -> Arc<tokio::sync::Mutex<()>> {
+        self.lifecycles.lock().unwrap().entry(id.to_string()).or_default().clone()
+    }
+
     pub async fn unarchive(&self, id: &str) -> Result<Session> {
         let ws = self.session(id)?;
         let repo = self.project(&ws.project_id)?;
@@ -2121,6 +2137,69 @@ mod tests {
         let running: Vec<String> = mgr.terminals.list().into_iter().filter(|t| t.session_id.as_deref() == Some(s.id.as_str())).map(|t| t.title).collect();
         assert_eq!(running, Vec::<String>::new());
         assert_eq!(s.terminals, Vec::<TerminalId>::new());
+    }
+
+    /// X65: a session whose archive is under way as its creation goes on to
+    /// start its terminals, its archive script still running, starts none:
+    /// the creation waits for the archive, then says why.
+    #[tokio::test]
+    async fn a_session_whose_archive_is_under_way_as_its_terminals_would_start_starts_none() {
+        let (repo, _home, mgr) = setup().await;
+        let gate = tempfile::tempdir().unwrap();
+        let (started, go) = (gate.path().join("started"), gate.path().join("go"));
+        std::fs::write(
+            repo.path().join(".moonlet/config.toml"),
+            format!(
+                "archive = \"touch {}; while [ ! -f {} ]; do sleep 0.05; done\"\ndefault_agent = \"fake\"\n[agents]\nfake = \"sh -c 'sleep 30'\"\n",
+                started.display(),
+                go.display()
+            ),
+        )
+        .unwrap();
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let req = SessionCreate { name: Some("Built".into()), agent: Some("fake".into()), cols: 80, rows: 24, ..SessionCreate::new(&r.id) };
+        let archiving = mgr.clone();
+        let seen = started.clone();
+        let on_saved = move |s: Session| async move {
+            tokio::spawn(async move {
+                archiving.archive(SessionArchive { id: s.id, remove_worktree: false, delete_branch: false, delete_remote: false }).await.unwrap();
+            });
+            while !seen.exists() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        };
+        let making = mgr.create_session_prepared(req, |_| async { anyhow::Ok(()) }, on_saved);
+        let release = async {
+            while !started.exists() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            std::fs::write(&go, "").unwrap();
+        };
+        let (made, ()) = tokio::join!(making, release);
+        assert_eq!(made.map(|s| s.name).map_err(|e| e.to_string()), Err("the session was archived before its terminals started".to_string()));
+        let s = mgr.list_sessions().into_iter().find(|s| s.name == "Built").unwrap();
+        assert!(s.archived);
+        assert_eq!(mgr.terminals.list().into_iter().filter(|t| t.session_id.as_deref() == Some(s.id.as_str())).count(), 0);
+    }
+
+    /// X65: a session removed, with its project, while its creation waits on
+    /// what runs once it is saved starts no terminal, and the creation says
+    /// why.
+    #[tokio::test]
+    async fn a_session_removed_before_its_terminals_start_starts_none() {
+        let (repo, _home, mgr) = setup().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let req = SessionCreate { name: Some("Built".into()), agent: Some("fake".into()), cols: 80, rows: 24, ..SessionCreate::new(&r.id) };
+        let (removing, project) = (mgr.clone(), r.id.clone());
+        let on_saved = move |s: Session| async move {
+            removing.archive(SessionArchive { id: s.id, remove_worktree: false, delete_branch: false, delete_remote: false }).await.unwrap();
+            removing.remove_project(&project).unwrap();
+        };
+        let made = mgr.create_session_prepared(req, |_| async { anyhow::Ok(()) }, on_saved).await;
+        assert_eq!(made.map(|s| s.name).map_err(|e| e.to_string()), Err("the session was removed before its terminals started".to_string()));
+        assert!(mgr.list_sessions().is_empty());
+        assert_eq!(mgr.terminals.list().len(), 0);
     }
 
     #[tokio::test]
