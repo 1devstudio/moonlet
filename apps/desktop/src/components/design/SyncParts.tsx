@@ -2,7 +2,7 @@
 // after it the summary, what needs the user and what it changed.
 
 import { Check, ChevronRight, Circle, CircleAlert, Loader2, Square, X } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { errorToast } from "../../lib/store";
 import { rpc } from "../../lib/daemon";
 import { M, type DesignCard, type DesignSystem } from "../../lib/protocol";
@@ -10,6 +10,7 @@ import { afterSyncLine, afterSyncShown, base, changedRows, needsYou, orphanLine,
 import { cardUrl } from "../../lib/designView";
 import { loadCards, loadSystems, openCard } from "../../lib/designStore";
 import { cx } from "../../lib/cx";
+import { useNear } from "../../lib/useNear";
 import { Button } from "../ui";
 
 /** Inventory › Tokens › Cards › Layouts, each with its result. */
@@ -77,12 +78,15 @@ export function AfterSyncBar({ sys, cards, onOpenAgent }: { sys: DesignSystem; c
 
 const sectionLabel = "mb-3 ui-text-11.5 uppercase tracking-[0.08em] text-faint";
 
-/** A card's frame at a fixed width, for Needs you. */
+/** A card's frame at a fixed width, for Needs you; framed only near the
+ *  screen, as each frame is its own web process (X64). */
 function Preview({ url, title, viewport, width }: { url: string; title: string; viewport: [number, number]; width: number }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const near = useNear(ref);
   const scale = Math.min(width / viewport[0], 1);
   return (
-    <div className="relative overflow-hidden" style={{ width: viewport[0] * scale, height: Math.min(viewport[1] * scale, 280) }}>
-      <iframe title={title} src={url} sandbox="allow-scripts" className="pointer-events-none absolute left-0 top-0 border-0" style={{ width: viewport[0], height: viewport[1], transform: `scale(${scale})`, transformOrigin: "0 0" }} />
+    <div ref={ref} className="relative overflow-hidden" style={{ width: viewport[0] * scale, height: Math.min(viewport[1] * scale, 280) }}>
+      {near && <iframe title={title} src={url} sandbox="allow-scripts" className="pointer-events-none absolute left-0 top-0 border-0" style={{ width: viewport[0], height: viewport[1], transform: `scale(${scale})`, transformOrigin: "0 0" }} />}
     </div>
   );
 }

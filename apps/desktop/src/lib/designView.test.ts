@@ -163,13 +163,19 @@ describe("the design system view's status (X64)", () => {
 });
 
 describe("a card (X64, X65)", () => {
-  it("is served from its workspace's design folder", () => {
+  it("is served from its workspace's design folder, on a host of its own", () => {
     expect(cardUrl("w-1devstudio", "moonlet-desktop", "components/custom/session-row/session-row.html")).toBe(
-      "moonlet-design://w-1devstudio/systems/moonlet-desktop/components/custom/session-row/session-row.html",
+      "moonlet-design://de8ad9aca07be977.w-1devstudio/systems/moonlet-desktop/components/custom/session-row/session-row.html",
     );
-    expect(cardUrl("w1", "s", "ui_kits/app/home screen.html")).toBe("moonlet-design://w1/systems/s/ui_kits/app/home%20screen.html");
+    expect(cardUrl("w1", "s", "ui_kits/app/home screen.html")).toBe("moonlet-design://2fc3df998e1992eb.w1/systems/s/ui_kits/app/home%20screen.html");
     // After a change in the system, a new address, so the frame loads it again.
-    expect(cardUrl("w1", "s", "components/a/b/b.html", 3)).toBe("moonlet-design://w1/systems/s/components/a/b/b.html?v=3");
+    expect(cardUrl("w1", "s", "components/a/b/b.html", 3)).toBe("moonlet-design://2bbb23f838086fab.w1/systems/s/components/a/b/b.html?v=3");
+  });
+
+  it("always gets the same host, and another card another one", () => {
+    expect(cardUrl("w1", "s", "components/a/b/b.html")).toBe("moonlet-design://2bbb23f838086fab.w1/systems/s/components/a/b/b.html");
+    expect(cardUrl("w1", "s", "components/a/b/b.html", 7)).toBe("moonlet-design://2bbb23f838086fab.w1/systems/s/components/a/b/b.html?v=7");
+    expect(cardUrl("w1", "s", "components/a/c/c.html")).toBe("moonlet-design://cd2ade9d37653e73.w1/systems/s/components/a/c/c.html");
   });
 
   it("counts its variants", () => {

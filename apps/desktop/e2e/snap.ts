@@ -15,6 +15,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { browser } from "@wdio/globals";
+import { APP } from "./fixtures";
 
 export const SNAP_DIR = "/tmp/moonlet-snap";
 
@@ -45,12 +46,40 @@ export async function stage(html: string, width = 360): Promise<void> {
   );
 }
 
+// The e2e app's largest window on screen (the main one), by CGWindowID.
+const WINDOW_NUMBER_SCRIPT = `ObjC.import("CoreGraphics");
+function run(pids) {
+  const all = ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo(1 | 16, 0))) || [];
+  const area = (w) => w.kCGWindowBounds.Width * w.kCGWindowBounds.Height;
+  const mine = all.filter((w) => pids.includes(String(w.kCGWindowOwnerPID)) && w.kCGWindowLayer === 0).sort((a, b) => area(b) - area(a));
+  return mine.length ? String(mine[0].kCGWindowNumber) : "";
+}`;
+
+/**
+ * Shoots the app's window as the screen shows it, into `file`; false when it
+ * cannot. WebKit's own snapshot (the driver's screenshot) leaves out frames
+ * that run in another web process, as every design card does (X64), so a
+ * shot of cards needs the OS's.
+ */
+function shootWindow(file: string): boolean {
+  try {
+    const pids = execFileSync("pgrep", ["-f", APP.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")]).toString().trim().split("\n");
+    const id = execFileSync("osascript", ["-l", "JavaScript", "-e", WINDOW_NUMBER_SCRIPT, ...pids]).toString().trim();
+    if (!id) return false;
+    execFileSync("screencapture", ["-x", "-o", "-l", id, file], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Saves a screenshot of the element at `target` (an XPath) as
  * `SNAP_DIR/<name>.png` and returns the box of each XPath in `measure`, null
- * for one that is not on the page. The embedded driver only shoots the whole
- * window, so the shot is cropped to the target with macOS `sips`; without a
- * target on the page it stays whole.
+ * for one that is not on the page. The window is shot by macOS
+ * `screencapture`, so design cards' frames show (the driver's own screenshot,
+ * used when that fails, leaves them blank), and cropped to the target with
+ * `sips`; without a target on the page it stays whole.
  */
 export async function snap(name: string, target: string, measure: Record<string, string> = {}): Promise<Record<string, Box | null>> {
   mkdirSync(SNAP_DIR, { recursive: true });
@@ -58,7 +87,10 @@ export async function snap(name: string, target: string, measure: Record<string,
   // The window is often in the background, where WebKit holds CSS
   // transitions; give them a moment.
   await browser.pause(300);
-  await browser.saveScreenshot(file);
+  if (!shootWindow(file)) {
+    console.warn("snap: macOS could not shoot the window (does the terminal have Screen Recording?); design cards' frames show blank");
+    await browser.saveScreenshot(file);
+  }
   const crop = await browser.execute((xp: string) => {
     const el = document.evaluate(xp, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue as Element | null;
     const r = el?.getBoundingClientRect();
