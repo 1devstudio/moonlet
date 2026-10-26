@@ -40,7 +40,7 @@ import {
   designCanvasKey,
 } from "../../lib/designStore";
 import { isSession, type DesignPlace } from "../../lib/designPlace";
-import { askWithEdits, updateAndTell, toldFolder, type ToldDesign, restoreSnapshot, closeDesign, hasCopy, kitOf, loadKit, sendCommentsWithEdits, copyElementOf, dismissUnsaved, editPage, loadPageSource, pasteInto, pendingOf, redoEdit, sendWithEdits, sourceOf, undoEdit, undoOf, unsavedOf, useEditor } from "../../lib/designEditor";
+import { askWithEdits, updateAndTell, toldFolder, type ToldDesign, restoreSnapshot, closeDesign, hasCopy, kitOf, loadKit, sendCommentsWithEdits, copyElementOf, dismissUnsaved, editPage, loadPageSource, pasteInto, pendingOf, readErrorOf, redoEdit, sendWithEdits, sourceOf, undoEdit, undoOf, unsavedOf, useEditor } from "../../lib/designEditor";
 import { EditRefused, editsChip, inlineStyles, type Edit, type EditOp } from "../../lib/designEdits";
 import { offSystemMids } from "../../lib/designTokens";
 import { selectionOf } from "../../lib/designInspector";
@@ -320,7 +320,8 @@ export function DesignCanvas({
   const [load, onLoadEvent] = useReducer(loadStep, LOADING);
   const framed = page !== null && !previewed && names.includes(page);
   const parse = useEditor((e) => (page === null ? null : (sourceOf(e, host, place, design.slug, page)?.parse_error ?? null)));
-  const notLoaded = framed ? notLoadedOf(load, parse) : null;
+  const readError = useEditor((e) => (page === null ? null : readErrorOf(e, host, place, design.slug, page)));
+  const notLoaded = framed ? notLoadedOf(load, readError, parse) : null;
   const bar = designBar({ working, needsYou: design.needs_you, page, problems, system: systemName, systemRemoved: !!systems && !system, unsaved, preview: previewed ? previewBar(previewed, Date.now()) : null, session, systemUpdated: !!design.system_updated, notLoaded });
   const chip = editsChip(pending);
   // The design system's tokens and snippets, read again when it changes: a
@@ -959,7 +960,7 @@ function PageFrame({
       if (!win || e.source !== win) return;
       const m = bridgeMessage(e.data);
       if (!m) return;
-      if (m.type === "failed") return onLoadEvent({ kind: "refused", reason: m.reason });
+      if (m.type === "failed") return onLoadEvent({ kind: "refused" });
       if (m.type === "mids") {
         onLoadEvent({ kind: "answer" });
         setPageMids(host, place, design.slug, page, m.mids);

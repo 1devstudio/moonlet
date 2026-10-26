@@ -252,15 +252,15 @@ pub fn headers(content_type: &str, host: &str) -> [(&'static str, String); 4] {
 
 /// A request for `url` refused with `status` because of `why`: for the
 /// canvas's page (asked with the bridge), a page of moonlet's that tells
-/// the canvas `why`, so it shows the page did not load and why (X65 entry
-/// 13); for anything else, `why` in plain text.
+/// the canvas it failed, so it shows the page did not load (X65 entry 13),
+/// with no `why`, which the app asks the daemon; for anything else, `why`
+/// in plain text.
 pub fn refusal(url: &str, status: u16, why: &str) -> (u16, Vec<(&'static str, String)>, Vec<u8>) {
     if !bridging(url) {
         return (status, vec![("Content-Type", "text/plain; charset=utf-8".into())], why.as_bytes().to_vec());
     }
-    let why = why.replace('&', "&amp;").replace('"', "&quot;").replace('<', "&lt;").replace('>', "&gt;");
     let page = format!(
-        "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"moonlet-refused\" content=\"{why}\"><script>{REFUSED}</script></head><body></body></html>"
+        "<!doctype html><html><head><meta charset=\"utf-8\"><script>{REFUSED}</script></head><body></body></html>"
     );
     let headers = vec![
         ("Content-Type", "text/html; charset=utf-8".to_string()),
@@ -873,9 +873,9 @@ mod tests {
     }
 
     #[test]
-    fn a_page_the_canvas_asks_for_that_cannot_be_served_comes_as_a_page_that_says_why() {
+    fn a_page_the_canvas_asks_for_that_cannot_be_served_comes_as_a_page_that_says_it_failed() {
         let url = "moonlet-design://0f3c2a1b4d5e6f70.w1/designs/settings-page/pages/index.html?moonlet-bridge=1&v=3";
-        let (status, headers, body) = refusal(url, 404, "the file \"index.html\" <cannot> be read & so");
+        let (status, headers, body) = refusal(url, 404, "no such design file: index.html");
         let body = String::from_utf8(body).unwrap();
         assert_eq!(status, 404);
         assert_eq!(headers[0], ("Content-Type", "text/html; charset=utf-8".to_string()));
@@ -883,11 +883,9 @@ mod tests {
             headers[1],
             ("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'".to_string())
         );
-        assert!(
-            body.starts_with("<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"moonlet-refused\" content=\"the file &quot;index.html&quot; &lt;cannot&gt; be read &amp; so\"><script>"),
-            "{body}"
-        );
         assert!(body.contains("bridge.failed"), "{body}");
+        // Why stays out of the page: the app asks the daemon.
+        assert!(!body.contains("no such design file"), "{body}");
         // Anything else, a file the page links or a card, is refused in plain text.
         let (status, headers, body) = refusal(
             "moonlet-design://0f3c2a1b4d5e6f70.w1/designs/settings-page/assets/logo.png",

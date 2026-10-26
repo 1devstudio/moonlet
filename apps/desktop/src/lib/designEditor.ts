@@ -31,9 +31,12 @@ interface EditorState {
   unsaved: Record<string, string | null>;
   /** Each design's kit: its design system's tokens and snippet cards. */
   kits: Record<string, DesignKit>;
+  /** Why the daemon could not read a page (`pageKey`), as it said it, until
+   *  a read of it succeeds: what the did-not-load bar says (X65). */
+  readErrors: Record<string, string>;
 }
 
-const EMPTY: EditorState = { sources: {}, undo: {}, pending: {}, unsaved: {}, kits: {} };
+const EMPTY: EditorState = { sources: {}, undo: {}, pending: {}, unsaved: {}, kits: {}, readErrors: {} };
 
 export const useEditor = create<EditorState>(() => EMPTY);
 
@@ -93,8 +96,29 @@ async function readPage(host: string, place: DesignPlace, slug: string, page: st
   if (saves.busy(key)) return null;
   const latest = reads.start(key);
   const at = gens[key] ?? 0;
-  const text = await rpc<DesignPageText>(host, M.designPage, { ...designRef(place, slug), page });
+  let text: DesignPageText;
+  try {
+    text = await rpc<DesignPageText>(host, M.designPage, { ...designRef(place, slug), page });
+  } catch (e) {
+    if (latest()) setReadError(key, e instanceof Error ? e.message : String(e));
+    throw e;
+  }
+  if (latest()) setReadError(key, null);
   return latest() && !saves.busy(key) && (gens[key] ?? 0) === at ? text : null;
+}
+
+function setReadError(key: string, error: string | null) {
+  if ((useEditor.getState().readErrors[key] ?? null) === error) return;
+  useEditor.setState((s) => {
+    const { [key]: _, ...rest } = s.readErrors;
+    return { readErrors: error === null ? rest : { ...rest, [key]: error } };
+  });
+}
+
+/** Why the daemon could not read the page, as it said it; null once a read
+ *  of it succeeds, or before any failed. */
+export function readErrorOf(s: EditorState, host: string, place: DesignPlace, slug: string, page: string): string | null {
+  return s.readErrors[pageKey(host, place, slug, page)] ?? null;
 }
 
 function setSource(key: string, text: DesignPageText) {

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { askWithEdits, updateAndTell, restoreSnapshot, kitOf, loadKit, closeDesign, copyElementOf, hasCopy, dismissUnsaved, editPage, pasteInto, sendCommentsWithEdits, sendWithEdits, redoEdit, undoEdit, loadPageSource, pendingOf, resetEditor, startEditor, settleChecks, settleSaves, sourceOf, undoOf, unsavedOf, useEditor } from "./designEditor";
+import { askWithEdits, updateAndTell, restoreSnapshot, kitOf, loadKit, closeDesign, copyElementOf, hasCopy, dismissUnsaved, editPage, pasteInto, sendCommentsWithEdits, sendWithEdits, redoEdit, undoEdit, loadPageSource, pendingOf, readErrorOf, resetEditor, startEditor, settleChecks, settleSaves, sourceOf, undoOf, unsavedOf, useEditor } from "./designEditor";
 import { loadDesigns, pageRevOf, startDesign, useDesign } from "./designStore";
 import { editLines } from "./designEdits";
 import { useStore } from "./store";
@@ -556,3 +556,18 @@ describe("a session's designs, which share its agent (X65)", () => {
     expect(pendingOf(useEditor.getState(), "local", S, "onboarding")).toEqual([]);
   });
 });
+
+describe("a page the daemon could not read (X65)", () => {
+  it("keeps why, as the daemon said it, until a read of the page succeeds", async () => {
+    answers["design.page"] = () => {
+      throw new DaemonError({ code: "unreadable", message: "the file cannot be read" });
+    };
+    await expect(loadPageSource("local", WS, SLUG, "index")).rejects.toThrow("the file cannot be read");
+    expect(readErrorOf(useEditor.getState(), "local", WS, SLUG, "index")).toBe("the file cannot be read");
+    expect(readErrorOf(useEditor.getState(), "local", WS, SLUG, "git-b")).toBeNull();
+    answers["design.page"] = (p) => disk[p.page as string];
+    await loadPageSource("local", WS, SLUG, "index");
+    expect(readErrorOf(useEditor.getState(), "local", WS, SLUG, "index")).toBeNull();
+  });
+});
+
