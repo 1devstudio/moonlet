@@ -421,6 +421,16 @@ pub(crate) fn make_dirs_inside(root: &Path, rel: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Makes the folder `name` in the folder `rel` inside `root` (made when
+/// missing, never through a link); an error of kind `AlreadyExists` when it
+/// is there.
+pub(crate) fn create_dir_in(root: &Path, rel: &Path, name: &str) -> std::io::Result<()> {
+    let dir = open_path(root, rel, true)
+        .map_err(std::io::Error::other)?
+        .ok_or_else(|| std::io::Error::other("a folder went away"))?;
+    dir.create_dir(name)
+}
+
 /// Makes a folder in the folder `rel` inside `root` (made when missing,
 /// never through a link) named after `name`, or `<name> 2` (` 3`, …) when
 /// that one is taken, and returns the name and the folder's slug.

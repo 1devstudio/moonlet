@@ -278,13 +278,14 @@ async fn blocking<T: Send + 'static>(
 /// (X65); a page saved over a version no longer on disk is `stale`;
 /// anything else failed.
 fn store_error(e: anyhow::Error) -> RpcError {
-    use moonlet_core::design::{comments, designs, history, pages, project};
+    use moonlet_core::design::{comments, designs, history, pages, project, session};
     if e.is::<designs::NoSystem>()
         || e.is::<designs::BadViewport>()
         || e.is::<comments::BadComment>()
         || e.is::<pages::BadPage>()
         || e.is::<history::NoSnapshot>()
         || e.is::<project::NoProjectDesign>()
+        || e.is::<session::DesignTaken>()
     {
         return RpcError::new("invalid_params", e.to_string());
     }
@@ -2354,26 +2355,35 @@ impl Daemon {
                 ok(list)
             }
             m::SESSION_CREATE => {
-                let req: m::SessionCreate = params(p)?;
+                let mut req: m::SessionCreate = params(p)?;
                 let Some(pick) = req.design.clone() else {
                     return ok(w.create_session(req).await.map_err(internal)?);
                 };
-                // Build it (X65): the workspace design copied into the worktree
-                // before its agent starts, and recorded as built there.
+                // Build it (X65): the workspace design, its pages and the
+                // session's workspace checked before any worktree is made…
                 let from = self.locate(&m::DesignRef::Workspace { workspace: pick.workspace.clone(), slug: pick.slug.clone() }).await?;
+                match req.workspace_id.as_deref() {
+                    None => req.workspace_id = Some(pick.workspace.clone()),
+                    Some(ws) if ws == pick.workspace => {}
+                    Some(_) => return Err(RpcError::new("invalid_params", "a session builds a design of its own workspace")),
+                }
+                if !self.workspace_projects(&pick.workspace).iter().any(|p| p.id == req.project_id) {
+                    return Err(RpcError::new("invalid_params", "the project is not in the design's workspace"));
+                }
+                let (store, checked, pages) = (self.design.clone(), from.clone(), pick.pages.clone());
+                blocking(move || store.has_pages(&checked, &pages)).await?;
+                // …then copied into the worktree before its agent starts, and
+                // recorded as built there.
                 let store = self.design.clone();
                 let made = w
-                    .create_session_prepared(req, move |s| {
-                        if s.workspace_id.as_deref() != Some(pick.workspace.as_str()) {
-                            anyhow::bail!("the design is not in the session's workspace");
-                        }
-                        let worktree = Path::new(&s.path);
-                        let folder = moonlet_core::design::session::design_folder(&moonlet_core::session::read_config(worktree))?;
-                        store.copy_to_session(&from, &pick.pages, &s.id, worktree, &folder, now_ms())?;
+                    .create_session_prepared(req, move |s| async move {
+                        let folder = moonlet_core::design::session::design_folder(&moonlet_core::session::read_config(Path::new(&s.path)))?;
+                        blocking(move || store.copy_to_session(&from, &pick.pages, &s.id, Path::new(&s.path), &folder, now_ms())).await?;
                         Ok(())
                     })
                     .await;
-                ok(made.map_err(store_error)?)
+                // The copy's own refusal as it said it; anything else failed.
+                ok(made.map_err(|e| e.downcast::<RpcError>().unwrap_or_else(store_error))?)
             }
             m::SESSION_LIST => ok(w.list_sessions()),
             m::SESSION_ARCHIVE => {

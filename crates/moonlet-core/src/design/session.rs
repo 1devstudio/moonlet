@@ -19,6 +19,12 @@ use super::fsx;
 use super::place::{DesignAt, Place};
 use super::store::Store;
 
+/// A design built in a session whose worktree has a folder of its slug
+/// already, such as one merged into the base branch.
+#[derive(Debug, thiserror::Error)]
+#[error("{0} is in the worktree already: rename the design before building it")]
+pub struct DesignTaken(pub String);
+
 /// Where a project's session designs live when its config names no folder.
 pub const DEFAULT_DIR: &str = "docs/design";
 
@@ -60,7 +66,9 @@ impl Store {
             session: None,
             pages: BTreeMap::new(),
         };
-        self.make_session_design(workspace, config, session, worktree, folder, |_| Ok(()))
+        self.make_session_design(workspace, config, session, worktree, folder, None, |_| {
+            Ok(())
+        })
     }
 
     /// Makes a session design from `config` (its name numbered when the
@@ -74,6 +82,7 @@ impl Store {
         session: &str,
         worktree: &Path,
         folder: &str,
+        slug: Option<&str>,
         fill: impl FnOnce(&DesignAt) -> Result<()>,
     ) -> Result<DesignAt> {
         if config.name.is_empty() {
@@ -84,9 +93,27 @@ impl Store {
             return Err(NoSystem(config.system).into());
         };
         config.anchor = self.system_anchor(workspace, &config.system)?;
-        let (name_n, slug) =
-            fsx::create_numbered_inside(worktree, Path::new(folder), &config.name, "design")?;
-        config.name = name_n;
+        // A slug of its own, numbered when the folder has it; or the one
+        // given, which another design never makes way for.
+        let slug = match slug {
+            None => {
+                let (name_n, slug) = fsx::create_numbered_inside(
+                    worktree,
+                    Path::new(folder),
+                    &config.name,
+                    "design",
+                )?;
+                config.name = name_n;
+                slug
+            }
+            Some(slug) => match fsx::create_dir_in(worktree, Path::new(folder), slug) {
+                Ok(()) => slug.to_string(),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    return Err(DesignTaken(format!("{folder}/{slug}")).into());
+                }
+                Err(e) => return Err(e.into()),
+            },
+        };
         let at = session_at(session, worktree, folder, &slug);
         let written = (|| -> Result<()> {
             for sub in ["pages", "assets"] {
@@ -287,21 +314,40 @@ impl Store {
                 .collect(),
             ..config
         };
-        let at = self.make_session_design(workspace, copy, session, worktree, folder, |at| {
-            for (path, text) in &kept {
-                fsx::write_inside(&at.root, &at.root.join(at.in_dir(path)), text)?;
-            }
-            fsx::write_tree(&at.root, &at.dir, Path::new("assets"), &assets, true)
-        })?;
-        // The design it came from records where it is built.
-        fsx::update_inside(&from.root, &from.in_dir(DESIGN_FILE), |text| {
+        // Its own slug, which Build it's attachments name before the copy.
+        let slug = Some(from.slug.as_str());
+        let at =
+            self.make_session_design(workspace, copy, session, worktree, folder, slug, |at| {
+                for (path, text) in &kept {
+                    fsx::write_inside(&at.root, &at.root.join(at.in_dir(path)), text)?;
+                }
+                fsx::write_tree(&at.root, &at.dir, Path::new("assets"), &assets, true)
+            })?;
+        // The design it came from records where it is built; a copy it
+        // cannot record is not kept.
+        let recorded = fsx::update_inside(&from.root, &from.in_dir(DESIGN_FILE), |text| {
             let mut doc: toml_edit::DocumentMut = text
                 .parse()
                 .with_context(|| format!("cannot read {DESIGN_FILE}"))?;
             doc["session"] = toml_edit::value(session);
             Ok(doc.to_string())
-        })?;
+        });
+        if let Err(e) = recorded {
+            let _ = self.remove_design(&at);
+            return Err(e);
+        }
         Ok(at)
+    }
+
+    /// Refuses pages a design does not have, by their names (`index`).
+    pub fn has_pages(&self, at: &DesignAt, pages: &[String]) -> Result<()> {
+        for page in pages {
+            let path = super::pages::page_path(page)?;
+            if fsx::read_file_inside(&at.root, &at.in_dir(&path)).is_err() {
+                return Err(super::pages::BadPage(page.clone()).into());
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1019,5 +1065,44 @@ label = \"cards\"
                 .is_err()
         );
         assert!(!other.path().join("docs/design/settings-page").exists());
+    }
+
+    #[test]
+    fn a_workspace_design_is_copied_into_a_session_under_its_own_slug_never_over_a_folder_the_worktree_has()
+     {
+        let (_home, store) = store_with_synced_system();
+        store
+            .create_design("w1", "Settings page", "moonlet-desktop", "b", 1)
+            .unwrap();
+        let from = store.workspace_design("w1", "settings-page").unwrap();
+        let worktree = tempfile::tempdir().unwrap();
+        // The base branch has a design of that slug already.
+        let merged = worktree.path().join("docs/design/settings-page");
+        std::fs::create_dir_all(&merged).unwrap();
+        std::fs::write(
+            merged.join("design.toml"),
+            "name = \"Settings page\"\nsystem = \"moonlet-desktop\"\n",
+        )
+        .unwrap();
+        let err = store
+            .copy_to_session(&from, &[], "s1", worktree.path(), "docs/design", 2)
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "docs/design/settings-page is in the worktree already: rename the design before building it"
+        );
+        assert!(err.is::<DesignTaken>(), "{err:#}");
+        assert_eq!(
+            std::fs::read_dir(worktree.path().join("docs/design"))
+                .unwrap()
+                .count(),
+            1,
+            "a numbered copy was made beside it"
+        );
+        assert_eq!(
+            std::fs::read_to_string(merged.join("design.toml")).unwrap(),
+            "name = \"Settings page\"\nsystem = \"moonlet-desktop\"\n"
+        );
+        assert_eq!(store.design_config(&from).unwrap().session, None);
     }
 }
