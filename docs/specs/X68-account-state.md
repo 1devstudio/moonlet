@@ -83,12 +83,12 @@ Session records, settings, devices and secrets join the account state in later s
 
 - `$MOONLET_HOME/account.json`: `{member, changes: [Change]}`, mode 0600. The clock and this member's count are worked out again from the changes when it loads, so they never disagree with them.
 - `state.json` keeps its workspaces and sections, written from the account state on every change, so an older daemon reads the current ones.
-- The member id is X41's worker id from `link.json`.
+- Each log has its own id, named after X41's worker id from `link.json` with a random suffix (`7d3f1c2a-….k3x9q2`). A log made again, after the file was lost or unreadable, gets a new one, so it never numbers its changes as the lost log did.
 
 ## Security considerations
 
 - Only linked members, authenticated by their device token (X41), send or receive changes. A phone or the CLI cannot write the log directly; they go through the RPCs, as today.
-- Values are checked again when applied: names are cut and cleaned as `workspace.create` cleans them, colours must be known, a `view` must parse, and project identities are normalized origins without credentials (X41). A change that fails a check is kept in the log, so versions stay in step, but is not applied.
+- Values are checked again when applied: names lose control characters and surrounding space, colours must be known, a `view` must parse, and project identities must parse. A field whose value fails its check takes its default (the name "Personal" or "My projects", the default colour and view, no projects); the change stays in the log, so versions stay in step.
 - The log never holds paths or secrets.
 
 ## Out of scope
