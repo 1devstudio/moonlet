@@ -31,6 +31,18 @@ export function buildProject(sources: string[], projects: { id: string; path: st
   return (first !== undefined && projects.find((p) => p.path === first)?.id) || null;
 }
 
+/** Where Build it builds: the project of the design system's first source,
+ *  or, when the workspace has no such project or the system no source,
+ *  why Build it is disabled. It never falls back to another project, which
+ *  would send the design to an unrelated repository. */
+export function buildItTarget(sources: string[], projects: { id: string; path: string }[]): { project: string } | { unavailable: string } {
+  const project = buildProject(sources, projects);
+  if (project) return { project };
+  if (sources[0] === undefined) return { unavailable: "The design system has no source project to build in" };
+  const name = sources[0].split("/").filter(Boolean).pop() ?? sources[0];
+  return { unavailable: `${name}, the design system's first source, is not a project of this workspace` };
+}
+
 /** The new branches' prefix, as the daemon takes it (X55): the project's
  *  `branch_prefix`, else the host's. */
 export function branchPrefix(config: { branch_prefix?: string | null } | null | undefined, hostPrefix: string): string {

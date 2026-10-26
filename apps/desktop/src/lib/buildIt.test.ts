@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { branchPrefix, buildNames, buildPick, buildProject, buildingIn, createFailure, createReady, designAttachments, designDir, promptAfterDrop } from "./buildIt";
+import { branchPrefix, buildItTarget, buildNames, buildPick, buildProject, buildingIn, createFailure, createReady, designAttachments, designDir, promptAfterDrop } from "./buildIt";
 import { firstMessage } from "./composer";
 
 const settings = {
@@ -35,6 +35,15 @@ describe("Build it's composer (X65)", () => {
     expect(buildProject(["/elsewhere"], [{ id: "p-moon", path: "/Users/marcin/code/moonlet" }])).toBeNull();
     expect(buildProject([], [])).toBeNull();
     expect(buildNames(settings, "").branch).toBe("implement-settings-page");
+  });
+
+  it("opens on the first source's project, and is disabled, saying why, when that project is not one of the workspace's or the design system has no source", () => {
+    const projects = [{ id: "p-moon", path: "/Users/marcin/code/moonlet" }];
+    expect(buildItTarget(["/Users/marcin/code/moonlet"], projects)).toEqual({ project: "p-moon" });
+    expect(buildItTarget(["/Users/marcin/code/storefront", "/Users/marcin/code/moonlet"], projects)).toEqual({
+      unavailable: "storefront, the design system's first source, is not a project of this workspace",
+    });
+    expect(buildItTarget([], projects)).toEqual({ unavailable: "The design system has no source project to build in" });
   });
 
   it("takes the project's branch prefix, else the host's, as the daemon does", () => {
