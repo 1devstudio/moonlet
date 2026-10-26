@@ -65,12 +65,14 @@ fn page_rel(at: &DesignAt, page: &str) -> Result<std::path::PathBuf> {
 }
 
 impl Store {
-    /// A design's page, `pages/<page>.html`, with its version.
+    /// A design's page, `pages/<page>.html`, with its version and the first
+    /// place it goes wrong as HTML, if it does.
     pub fn page(&self, at: &DesignAt, page: &str) -> Result<DesignPageText> {
         let rel = page_rel(at, page)?;
         let html = fsx::read_inside(&at.root, &at.root.join(rel))?;
         Ok(DesignPageText {
             version: version_of(&html),
+            parse_error: super::parse::first_parse_error(&html),
             html,
         })
     }
@@ -167,7 +169,8 @@ mod tests {
                 .unwrap(),
             DesignPageText {
                 html: edited.into(),
-                version: version.clone()
+                version: version.clone(),
+                parse_error: None,
             }
         );
         // A second edit goes over the version the first one gave.
@@ -298,5 +301,25 @@ mod tests {
                 .unwrap_err();
             assert!(err.is::<BadPage>(), "{bad}: {err:#}");
         }
+    }
+
+    #[test]
+    fn a_page_is_read_with_the_first_place_it_goes_wrong_as_html() {
+        let (home, store) = store_with_page();
+        let at = store.workspace_design("w1", "settings-page").unwrap();
+        assert_eq!(store.page(&at, "index").unwrap().parse_error, None);
+        std::fs::write(
+            home.path()
+                .join("design/w1/designs/settings-page/pages/index.html"),
+            "<!doctype html>\n<body data-mid=\"m1\">\n<h1 data-mid=\"m2>Settings</h1>\n</body>\n",
+        )
+        .unwrap();
+        assert_eq!(
+            store.page(&at, "index").unwrap().parse_error,
+            Some(moonlet_proto::methods::DesignParseError {
+                line: 3,
+                message: "an attribute's quote is never closed".into()
+            })
+        );
     }
 }
