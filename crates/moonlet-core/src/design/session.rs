@@ -416,10 +416,13 @@ pub fn session_design(
 /// `<slug>@<n>/pages/…` or `assets/…`, kept in
 /// `.moonlet/design/<slug>/history/<n>/`, at the design's own depth, so its
 /// `../system/styles.css` (`<slug>@<n>/system/…`) is the design's pinned
-/// copy, as its pages' is. No part is empty, `.` or `..`; and the file, its
-/// links followed, must be inside that folder: never elsewhere in the
-/// worktree, nor outside it. Returns the file and the folder it is in, as
-/// real paths, for the opened file to be checked against again.
+/// copy, as its pages' is. No part is empty, `.` or `..`. The folder the
+/// file is in (the design's, or the snapshot's) is reached from the
+/// worktree through folders of its own, never a link, so it is inside the
+/// worktree; and the file, its links followed, must be inside that folder:
+/// never elsewhere in the worktree, nor outside it. Returns the file and the
+/// folder it is in, as real paths, for the opened file to be checked against
+/// again.
 pub fn session_file(
     worktree: &Path,
     folder: &str,
@@ -453,7 +456,12 @@ pub fn session_file(
             .join(n),
         _ => return Err(no_file()),
     };
-    let base = worktree.join(base).canonicalize().map_err(|_| no_file())?;
+    // No link on the way from the worktree, so the worktree's real path
+    // joined with it is the folder's real path, inside the worktree.
+    if !fsx::is_dir_inside(worktree, &base).map_err(|_| no_file())? {
+        return Err(no_file());
+    }
+    let base = worktree.canonicalize().map_err(|_| no_file())?.join(base);
     let file = base
         .join(rest.join("/"))
         .canonicalize()
@@ -1220,5 +1228,58 @@ label = \"cards\"
         ] {
             assert!(file(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn a_session_designs_file_is_never_served_through_a_linked_design_folder_design_or_snapshot() {
+        let (_home, store) = store_with_synced_system();
+        let worktree = tempfile::tempdir().unwrap();
+        let wt = worktree.path().canonicalize().unwrap();
+        store
+            .create_session_design(
+                "w1",
+                "moonlet-desktop",
+                "s1",
+                &wt,
+                "docs/design",
+                "Settings page",
+                "",
+                1,
+            )
+            .unwrap();
+        // A design outside the worktree, with a page and a snapshot's page.
+        let outside = tempfile::tempdir().unwrap();
+        let out = outside.path().canonicalize().unwrap();
+        for dir in ["settings-page/pages", "evil/pages", "snapshot/pages"] {
+            std::fs::create_dir_all(out.join(dir)).unwrap();
+            std::fs::write(out.join(dir).join("index.html"), "<p>outside</p>\n").unwrap();
+        }
+        for design in ["settings-page", "evil"] {
+            std::fs::write(
+                out.join(design).join("design.toml"),
+                "name = \"x\"\nsystem = \"moonlet-desktop\"\n",
+            )
+            .unwrap();
+        }
+        // The design folder a link out, as `[design] dir = "linked"` names it.
+        std::os::unix::fs::symlink(&out, wt.join("linked")).unwrap();
+        // A design that is a link out.
+        std::os::unix::fs::symlink(out.join("evil"), wt.join("docs/design/evil")).unwrap();
+        // A snapshot's folder that is a link out.
+        std::os::unix::fs::symlink(
+            out.join("snapshot"),
+            wt.join(".moonlet/design/settings-page/history/7"),
+        )
+        .unwrap();
+        let served: Vec<String> = [
+            ("linked", "settings-page/pages/index.html"),
+            ("docs/design", "evil/pages/index.html"),
+            ("docs/design", "settings-page@7/pages/index.html"),
+        ]
+        .into_iter()
+        .filter(|(folder, rel)| session_file(&wt, folder, rel).is_ok())
+        .map(|(folder, rel)| format!("{folder}/{rel}"))
+        .collect();
+        assert_eq!(served, Vec::<String>::new());
     }
 }
