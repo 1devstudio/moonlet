@@ -1227,6 +1227,32 @@ impl SessionManager {
     }
 
     pub async fn create_session(&self, req: SessionCreate) -> Result<Session> {
+        self.create_session_prepared(req, |_| async { Ok(()) }, |_| async {})
+            .await
+    }
+
+    /// [`Self::create_session`], with `prepare` run on the new session
+    /// once its worktree is there and before anything starts in it, such
+    /// as the design a session builds copied into it (X65). When `prepare`
+    /// fails or the session cannot be saved, the session is not made: a
+    /// worktree and branch made for it are removed again, and a worktree it
+    /// adopted is left to its owner. So too when this request is dropped
+    /// before the session is saved: `prepare` runs on to its end on a task
+    /// of its own, and only then are they removed, so nothing it writes
+    /// lands in the worktree after. `on_saved` runs, to its end on a task of
+    /// its own, once the session is saved and before anything starts in it,
+    /// so what it records (the session a design is built in) holds even when
+    /// its terminals then fail to start; never for a session not saved.
+    pub async fn create_session_prepared<F, G>(
+        &self,
+        req: SessionCreate,
+        prepare: impl FnOnce(Session) -> F,
+        on_saved: impl FnOnce(Session) -> G,
+    ) -> Result<Session>
+    where
+        F: std::future::Future<Output = Result<()>> + Send + 'static,
+        G: std::future::Future<Output = ()> + Send + 'static,
+    {
         let mut req = req;
         crate::chat::check_mode(req.mode.as_deref())?;
         // Directories widen what the agent may write (X29): only the user
@@ -1387,11 +1413,33 @@ impl SessionManager {
             layout: serde_json::Value::Null,
             restore: vec![],
         };
+        // Until the session is saved, what was made for it goes again,
+        // however this request ends.
+        let mut unmade = Unmade {
+            repo: repo_path.clone(),
+            dir: adopted.is_none().then(|| dir.clone()),
+            branch: (adopted.is_none() && !req.existing_branch).then(|| ws.branch.clone()),
+            preparing: None,
+        };
+        let prepared = unmade
+            .preparing
+            .insert(tokio::spawn(prepare(ws.clone())))
+            .await
+            .unwrap_or_else(|e| Err(anyhow::anyhow!("preparing the session failed: {e}")));
+        unmade.preparing = None;
         let w = ws.clone();
-        self.mutate(|st| {
-            st.sessions.push(w);
-            Ok(())
-        })?;
+        let saved = prepared.and_then(|()| {
+            self.mutate(|st| {
+                st.sessions.push(w);
+                Ok(())
+            })
+        });
+        if let Err(e) = saved {
+            unmade.remove().await;
+            return Err(e);
+        }
+        unmade.keep();
+        let _ = tokio::spawn(on_saved(ws.clone())).await;
 
         if let Some(agent) = &agent
             && !req.tui
@@ -1813,6 +1861,105 @@ pub fn read_config(repo: &Path) -> ProjectConfig {
     }
 }
 
+/// The worktree and branch made for a session that is not saved yet
+/// (X65): removed again unless [`Unmade::keep`] is called, on a drop too,
+/// then once `preparing`, the session's preparing still running, is done.
+struct Unmade {
+    repo: PathBuf,
+    dir: Option<PathBuf>,
+    branch: Option<String>,
+    preparing: Option<tokio::task::JoinHandle<Result<()>>>,
+}
+
+impl Unmade {
+    /// The session is saved: its worktree and branch are its own.
+    fn keep(mut self) {
+        self.dir = None;
+        self.branch = None;
+    }
+
+    /// Removes them now, on a task of their own that owns them to its end:
+    /// this request dropped meanwhile leaves that removal running.
+    async fn remove(mut self) {
+        let (repo, dir, branch) = (self.repo.clone(), self.dir.take(), self.branch.take());
+        let removing = tokio::spawn(async move { remove_unmade(&repo, dir, branch).await });
+        let _ = removing.await;
+    }
+}
+
+impl Drop for Unmade {
+    fn drop(&mut self) {
+        let (dir, branch) = (self.dir.take(), self.branch.take());
+        if dir.is_none() && branch.is_none() {
+            return;
+        }
+        let (repo, preparing) = (self.repo.clone(), self.preparing.take());
+        match tokio::runtime::Handle::try_current() {
+            Ok(rt) => {
+                rt.spawn(async move {
+                    if let Some(preparing) = preparing {
+                        let _ = preparing.await;
+                    }
+                    remove_unmade(&repo, dir, branch).await;
+                });
+            }
+            Err(_) => tracing::warn!(
+                "cannot remove the worktree {dir:?} and branch {branch:?} of a session not made"
+            ),
+        }
+    }
+}
+
+/// A test's hold on the removal of a session not made in a repository:
+/// told when it starts, it waits until let go.
+#[cfg(test)]
+type RemoveHold = (
+    PathBuf,
+    tokio::sync::oneshot::Sender<()>,
+    tokio::sync::oneshot::Receiver<()>,
+);
+
+#[cfg(test)]
+static BEFORE_REMOVE: std::sync::Mutex<Vec<RemoveHold>> = std::sync::Mutex::new(Vec::new());
+
+/// Holds the removal of a session not made in `repo` while a test asks,
+/// so it can be cancelled midway deterministically; nothing outside tests.
+async fn before_remove(repo: &Path) {
+    #[cfg(test)]
+    {
+        let hold = {
+            let mut holds = BEFORE_REMOVE.lock().unwrap();
+            let at = holds.iter().position(|(r, ..)| r == repo);
+            at.map(|i| holds.remove(i))
+        };
+        if let Some((_, started, release)) = hold {
+            let _ = started.send(());
+            let _ = release.await;
+        }
+    }
+    #[cfg(not(test))]
+    let _ = repo;
+}
+
+/// Removes the worktree `dir` and the branch `branch` of a session not
+/// made, logging what it cannot.
+async fn remove_unmade(repo: &Path, dir: Option<PathBuf>, branch: Option<String>) {
+    before_remove(repo).await;
+    if let Some(dir) = dir
+        && let Err(gone) = git::worktree_remove(repo, &dir).await
+    {
+        tracing::warn!(
+            "cannot remove the worktree {} of a session not made: {gone:#}",
+            dir.display()
+        );
+    }
+    if let Some(branch) = branch
+        && let Err(gone) = git::delete_branch(repo, &branch).await
+    {
+        tracing::warn!("cannot delete the branch {branch} of a session not made: {gone:#}");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1861,6 +2008,148 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_session_whose_making_is_cancelled_leaves_no_worktree_or_branch_once_its_preparing_is_done()
+     {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let (repo, _home, mgr) = setup().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let req = SessionCreate {
+            project_id: r.id.clone(),
+            name: Some("Built".into()),
+            branch: None,
+            from: None,
+            existing_branch: false,
+            agent: Some("none".into()),
+            prompt: None,
+            cols: 80,
+            rows: 24,
+            model: None,
+            effort: None,
+            mode: None,
+            pr: None,
+            tui: false,
+            cloud: false,
+            spawned_by: None,
+            add_dirs: vec![],
+            workspace_id: None,
+            task: None,
+            worktree: None,
+            design: None,
+        };
+        let (started, made) = tokio::sync::oneshot::channel::<Session>();
+        let copied = Arc::new(AtomicBool::new(false));
+        let done = copied.clone();
+        // A copy into the new worktree on a blocking thread, as Build it's,
+        // still writing when the request is dropped.
+        let prepare = move |s: Session| async move {
+            let _ = started.send(s.clone());
+            tokio::task::spawn_blocking(move || {
+                std::thread::sleep(Duration::from_millis(300));
+                let dir = Path::new(&s.path).join("docs/design/built");
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(dir.join("design.toml"), "name = \"Built\"\n").unwrap();
+                done.store(true, Ordering::SeqCst);
+            })
+            .await?;
+            Ok(())
+        };
+        let making = mgr.create_session_prepared(req, prepare, |_| async {});
+        // Dropped once its preparing has started, as a client that goes away.
+        let mut making = Box::pin(making);
+        let s = tokio::select! {
+            s = made => s.unwrap(),
+            _ = &mut making => panic!("the session was made before its preparing started"),
+        };
+        drop(making);
+        let branches = || async {
+            crate::git::git(repo.path(), &["branch", "--list", &s.branch])
+                .await
+                .map(|out| String::from_utf8_lossy(&out).trim().to_string())
+                .unwrap()
+        };
+        for _ in 0..100 {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let gone = !Path::new(&s.path).exists() && branches().await.is_empty();
+            if copied.load(Ordering::SeqCst) && gone {
+                break;
+            }
+        }
+        assert!(copied.load(Ordering::SeqCst), "the copy never finished");
+        // Settled: nothing comes back after it is removed.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let left = (Path::new(&s.path).exists(), !branches().await.is_empty());
+        assert_eq!(left, (false, false), "(worktree, branch) left behind");
+        assert!(mgr.list_sessions().is_empty(), "a session was recorded");
+    }
+
+    #[tokio::test]
+    async fn a_session_not_made_whose_removal_is_cancelled_midway_still_leaves_no_worktree_or_branch()
+     {
+        let (repo, _home, mgr) = setup().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let req = SessionCreate {
+            project_id: r.id.clone(),
+            name: Some("Refused".into()),
+            branch: None,
+            from: None,
+            existing_branch: false,
+            agent: Some("none".into()),
+            prompt: None,
+            cols: 80,
+            rows: 24,
+            model: None,
+            effort: None,
+            mode: None,
+            pr: None,
+            tui: false,
+            cloud: false,
+            spawned_by: None,
+            add_dirs: vec![],
+            workspace_id: None,
+            task: None,
+            worktree: None,
+            design: None,
+        };
+        // The removal of what was made is held as it starts.
+        let (started, removing) = tokio::sync::oneshot::channel();
+        let (release, held) = tokio::sync::oneshot::channel();
+        BEFORE_REMOVE
+            .lock()
+            .unwrap()
+            .push((PathBuf::from(&r.path), started, held));
+        let (made, session) = tokio::sync::oneshot::channel::<Session>();
+        let prepare = move |s: Session| async move {
+            let _ = made.send(s);
+            anyhow::bail!("the copy is refused")
+        };
+        let mut making = Box::pin(mgr.create_session_prepared(req, prepare, |_| async {}));
+        tokio::select! {
+            _ = removing => {}
+            r = &mut making => panic!("ended before its removal started: {r:?}"),
+        }
+        let s = session.await.unwrap();
+        // The request goes away while its worktree and branch are removed.
+        drop(making);
+        let _ = release.send(());
+        let branches = || async {
+            crate::git::git(repo.path(), &["branch", "--list", &s.branch])
+                .await
+                .map(|out| String::from_utf8_lossy(&out).trim().to_string())
+                .unwrap()
+        };
+        let mut left = (true, true);
+        for _ in 0..100 {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            left = (Path::new(&s.path).exists(), !branches().await.is_empty());
+            if left == (false, false) {
+                break;
+            }
+        }
+        assert_eq!(left, (false, false), "(worktree, branch) left behind");
+        assert!(mgr.list_sessions().is_empty(), "a session was recorded");
+    }
+
+    #[tokio::test]
     async fn session_mode_is_recorded_and_unknown_modes_create_nothing() {
         let (repo, _home, mgr) = setup().await;
         let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
@@ -1885,6 +2174,7 @@ mod tests {
             workspace_id: None,
             task: None,
             worktree: None,
+            design: None,
         };
         for bad in ["", "yolo"] {
             let err = mgr.create_session(req(bad)).await.unwrap_err();
@@ -1924,6 +2214,7 @@ mod tests {
                 workspace_id: None,
                 task: None,
                 worktree: None,
+                design: None,
             })
             .await
             .unwrap();
@@ -1967,6 +2258,7 @@ mod tests {
                 workspace_id: None,
                 task: None,
                 worktree: None,
+                design: None,
             })
             .await
             .unwrap();
@@ -2604,6 +2896,7 @@ mod tests {
                     workspace_id: None,
                     task: None,
                     worktree: None,
+                    design: None,
                 })
                 .await
                 .unwrap();
@@ -2666,6 +2959,7 @@ mod tests {
                 workspace_id: None,
                 task: None,
                 worktree: None,
+                design: None,
             })
             .await
             .unwrap();
@@ -2704,6 +2998,7 @@ mod tests {
                 workspace_id: None,
                 task: None,
                 worktree: None,
+                design: None,
             })
             .await
             .unwrap();
@@ -2768,6 +3063,7 @@ mod tests {
                 workspace_id: None,
                 task: None,
                 worktree: None,
+                design: None,
             })
             .await
             .unwrap();
@@ -2830,6 +3126,7 @@ mod tests {
                 workspace_id: None,
                 task: None,
                 worktree: None,
+                design: None,
             })
             .await
             .unwrap();
@@ -2898,6 +3195,7 @@ mod tests {
                 workspace_id: None,
                 task: None,
                 worktree: None,
+                design: None,
             })
             .await
             .unwrap();

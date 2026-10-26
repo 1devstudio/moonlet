@@ -395,6 +395,7 @@ Follow the moonlet-design skill's sync: rewrite only these cards, and leave a ca
         let config = DesignConfig {
             name: "Settings page".into(),
             system: "moonlet-desktop".into(),
+            anchor: None,
             brief: "A settings page with General and Git sections".into(),
             viewport: "1440x900".into(),
             created_at: 1,
@@ -468,6 +469,7 @@ Link styles.css.
         let config = DesignConfig {
             name: "x".into(),
             system: "s".into(),
+            anchor: None,
             brief: String::new(),
             viewport: "1440x900".into(),
             created_at: 1,

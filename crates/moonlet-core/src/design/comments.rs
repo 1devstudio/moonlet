@@ -3,13 +3,12 @@
 //! the element's tag and text, the comment, when it was sent and whether it
 //! is open or resolved.
 
-use std::path::Path;
-
 use anyhow::{Context, Result};
 
 use moonlet_proto::types::{CommentChange, CommentState, DesignComment};
 
 use super::fsx;
+use super::place::DesignAt;
 use super::store::Store;
 
 /// The file a design keeps its comments in.
@@ -25,14 +24,13 @@ pub struct BadComment(pub String);
 
 impl Store {
     /// A design's comments, by number; none before it has a `comments.json`.
-    pub fn comments(&self, workspace: &str, slug: &str) -> Result<Vec<DesignComment>> {
-        let dir = self.design_dir(workspace, slug)?;
-        let file = dir.join(COMMENTS_FILE);
+    pub fn comments(&self, at: &DesignAt) -> Result<Vec<DesignComment>> {
+        let file = at.root.join(at.in_side(COMMENTS_FILE));
         if std::fs::symlink_metadata(&file).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
         {
             return Ok(Vec::new());
         }
-        parse(&fsx::read_inside(&dir, &file)?)
+        parse(&fsx::read_inside(&at.root, &file)?)
     }
 
     /// Changes a design's comments and returns the pins changed: a new pin
@@ -43,8 +41,7 @@ impl Store {
     /// when the agent changed the file meanwhile, so its change is kept.
     pub fn put_comment(
         &self,
-        workspace: &str,
-        slug: &str,
+        at: &DesignAt,
         change: &CommentChange,
         now: u64,
     ) -> Result<Vec<DesignComment>> {
@@ -57,7 +54,7 @@ impl Store {
                 comment,
             } => {
                 let pin = new_pin(page, mid, tag, text, comment_text(comment)?)?;
-                self.update_comments(workspace, slug, |pins| {
+                self.update_comments(at, |pins| {
                     let mut pin = pin.clone();
                     pin.n = pins.iter().map(|p| p.n).max().unwrap_or(0) + 1;
                     pins.push(pin.clone());
@@ -66,7 +63,7 @@ impl Store {
             }
             CommentChange::Edit { n, comment } => {
                 let comment = comment_text(comment)?;
-                self.update_comments(workspace, slug, |pins| {
+                self.update_comments(at, |pins| {
                     let pin = find(pins, *n)?;
                     if pin.comment != comment {
                         pin.comment = comment.clone();
@@ -75,7 +72,7 @@ impl Store {
                     Ok(vec![pin.clone()])
                 })
             }
-            CommentChange::Sent { pins: sent } => self.update_comments(workspace, slug, |pins| {
+            CommentChange::Sent { pins: sent } => self.update_comments(at, |pins| {
                 // Every pin is there before any is marked.
                 for s in sent {
                     find(pins, s.n)?;
@@ -94,8 +91,8 @@ impl Store {
     }
 
     /// Marks pin `n` resolved.
-    pub fn resolve_comment(&self, workspace: &str, slug: &str, n: u32) -> Result<DesignComment> {
-        self.update_comments(workspace, slug, |pins| {
+    pub fn resolve_comment(&self, at: &DesignAt, n: u32) -> Result<DesignComment> {
+        self.update_comments(at, |pins| {
             let pin = find(pins, n)?;
             pin.state = CommentState::Resolved;
             Ok(pin.clone())
@@ -107,14 +104,12 @@ impl Store {
     /// change of a design's comments at a time.
     fn update_comments<T>(
         &self,
-        workspace: &str,
-        slug: &str,
+        at: &DesignAt,
         mut change: impl FnMut(&mut Vec<DesignComment>) -> Result<T>,
     ) -> Result<T> {
-        let designs = self.designs_of(workspace, slug)?;
-        let rel = Path::new(slug).join(COMMENTS_FILE);
+        let rel = at.in_side(COMMENTS_FILE);
         let mut out = None;
-        fsx::update_or_create_inside(&designs, &rel, |text| {
+        fsx::update_or_create_inside(&at.root, &rel, |text| {
             let mut pins = parse(text)?;
             out = Some(change(&mut pins)?);
             Ok(format!("{}\n", serde_json::to_string_pretty(&pins)?))
@@ -248,7 +243,11 @@ mod tests {
     /// The one pin a change made or changed.
     fn put(store: &Store, change: CommentChange, now: u64) -> DesignComment {
         let mut pins = store
-            .put_comment("w1", "settings-page", &change, now)
+            .put_comment(
+                &store.workspace_design("w1", "settings-page").unwrap(),
+                &change,
+                now,
+            )
             .unwrap();
         assert_eq!(pins.len(), 1);
         pins.remove(0)
@@ -265,7 +264,9 @@ mod tests {
         );
         assert_eq!((first.n, second.n), (1, 2));
         assert_eq!(
-            store.comments("w1", "settings-page").unwrap(),
+            store
+                .comments(&store.workspace_design("w1", "settings-page").unwrap())
+                .unwrap(),
             vec![
                 DesignComment {
                     n: 1,
@@ -313,8 +314,7 @@ mod tests {
         );
         let marked = store
             .put_comment(
-                "w1",
-                "settings-page",
+                &store.workspace_design("w1", "settings-page").unwrap(),
                 &sent(&[(1, "Collapse into a menu below 600 px"), (2, "Git first")]),
                 1_761_200_100_000,
             )
@@ -323,7 +323,9 @@ mod tests {
             marked.iter().map(|p| (p.n, p.sent_at)).collect::<Vec<_>>(),
             vec![(1, Some(1_761_200_100_000)), (2, Some(1_761_200_100_000))]
         );
-        let resolved = store.resolve_comment("w1", "settings-page", 1).unwrap();
+        let resolved = store
+            .resolve_comment(&store.workspace_design("w1", "settings-page").unwrap(), 1)
+            .unwrap();
         assert_eq!(
             (resolved.state, resolved.sent_at),
             (CommentState::Resolved, Some(1_761_200_100_000))
@@ -333,21 +335,23 @@ mod tests {
         assert_eq!(put(&store, nav(), 3).n, 3);
         assert_eq!(
             store
-                .resolve_comment("w1", "settings-page", 9)
+                .resolve_comment(&store.workspace_design("w1", "settings-page").unwrap(), 9)
                 .unwrap_err()
                 .to_string(),
             "no comment 9"
         );
         // A pin that is not there marks none of them sent.
         let none = store.put_comment(
-            "w1",
-            "settings-page",
+            &store.workspace_design("w1", "settings-page").unwrap(),
             &sent(&[(3, "Collapse into a menu on phone"), (9, "x")]),
             4,
         );
         assert_eq!(none.unwrap_err().to_string(), "no comment 9");
         assert_eq!(
-            store.comments("w1", "settings-page").unwrap()[2].sent_at,
+            store
+                .comments(&store.workspace_design("w1", "settings-page").unwrap())
+                .unwrap()[2]
+                .sent_at,
             None
         );
     }
@@ -358,8 +362,7 @@ mod tests {
         put(&store, nav(), 1);
         store
             .put_comment(
-                "w1",
-                "settings-page",
+                &store.workspace_design("w1", "settings-page").unwrap(),
                 &sent(&[(1, "Collapse into a menu on phone")]),
                 1_761_200_100_000,
             )
@@ -391,8 +394,7 @@ mod tests {
         put(&store, edit(1, "Collapse into a menu below 600 px"), 2);
         let back = store
             .put_comment(
-                "w1",
-                "settings-page",
+                &store.workspace_design("w1", "settings-page").unwrap(),
                 &sent(&[(1, "Collapse into a menu on phone"), (2, "Git first")]),
                 1_761_200_100_000,
             )
@@ -407,7 +409,14 @@ mod tests {
             (2, "Git first".to_string(), Some(1_761_200_100_000)),
         ];
         assert_eq!(shown(&back), want);
-        assert_eq!(shown(&store.comments("w1", "settings-page").unwrap()), want);
+        assert_eq!(
+            shown(
+                &store
+                    .comments(&store.workspace_design("w1", "settings-page").unwrap())
+                    .unwrap()
+            ),
+            want
+        );
     }
 
     #[test]
@@ -418,7 +427,9 @@ mod tests {
             .join("design/w1/designs/settings-page/comments.json");
         std::fs::write(&file, "[{\"n\": 1, \"state\": \"open\"}]\n").unwrap();
         assert_eq!(
-            store.comments("w1", "settings-page").unwrap(),
+            store
+                .comments(&store.workspace_design("w1", "settings-page").unwrap())
+                .unwrap(),
             vec![DesignComment {
                 n: 1,
                 page: String::new(),
@@ -431,11 +442,27 @@ mod tests {
             }]
         );
         std::fs::write(&file, "").unwrap();
-        assert_eq!(store.comments("w1", "settings-page").unwrap(), vec![]);
+        assert_eq!(
+            store
+                .comments(&store.workspace_design("w1", "settings-page").unwrap())
+                .unwrap(),
+            vec![]
+        );
         std::fs::remove_file(&file).unwrap();
-        assert_eq!(store.comments("w1", "settings-page").unwrap(), vec![]);
+        assert_eq!(
+            store
+                .comments(&store.workspace_design("w1", "settings-page").unwrap())
+                .unwrap(),
+            vec![]
+        );
         assert_eq!(put(&store, nav(), 1).n, 1);
-        assert_eq!(store.comments("w1", "settings-page").unwrap().len(), 1);
+        assert_eq!(
+            store
+                .comments(&store.workspace_design("w1", "settings-page").unwrap())
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -445,13 +472,27 @@ mod tests {
             .path()
             .join("design/w1/designs/settings-page/comments.json");
         std::fs::write(&file, "[{\"n\": 1,").unwrap();
-        let err = store.comments("w1", "settings-page").unwrap_err();
+        let err = store
+            .comments(&store.workspace_design("w1", "settings-page").unwrap())
+            .unwrap_err();
         assert!(
             format!("{err:#}").starts_with("cannot read comments.json"),
             "{err:#}"
         );
-        assert!(store.put_comment("w1", "settings-page", &nav(), 1).is_err());
-        assert!(store.resolve_comment("w1", "settings-page", 1).is_err());
+        assert!(
+            store
+                .put_comment(
+                    &store.workspace_design("w1", "settings-page").unwrap(),
+                    &nav(),
+                    1
+                )
+                .is_err()
+        );
+        assert!(
+            store
+                .resolve_comment(&store.workspace_design("w1", "settings-page").unwrap(), 1)
+                .is_err()
+        );
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "[{\"n\": 1,");
         assert_eq!(store.designs("w1").unwrap()[0].open_comments, 0);
     }
@@ -495,12 +536,22 @@ mod tests {
         ] {
             assert_eq!(
                 store
-                    .put_comment("w1", "settings-page", &bad, 1)
+                    .put_comment(
+                        &store.workspace_design("w1", "settings-page").unwrap(),
+                        &bad,
+                        1
+                    )
                     .unwrap_err()
                     .to_string(),
                 message
             );
         }
-        assert_eq!(store.comments("w1", "settings-page").unwrap().len(), 1);
+        assert_eq!(
+            store
+                .comments(&store.workspace_design("w1", "settings-page").unwrap())
+                .unwrap()
+                .len(),
+            1
+        );
     }
 }

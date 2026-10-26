@@ -1065,7 +1065,7 @@ pub fn slug(name: &str) -> String {
 
 /// A folder name from `name`, lowercase letters and digits joined by dashes,
 /// or `fallback` when it has none.
-pub(super) fn slug_or(name: &str, fallback: &str) -> String {
+pub(crate) fn slug_or(name: &str, fallback: &str) -> String {
     let mut out = String::new();
     for c in name.trim().to_lowercase().chars() {
         if c.is_ascii_alphanumeric() {
