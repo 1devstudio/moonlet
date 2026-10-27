@@ -804,28 +804,43 @@ function shownMoved(tasks: Task[]): Task[] {
 }
 
 /** What the board needs of a workspace's sessions (X45). */
-export function boardInput(s: StoreState, host: string, workspaceId: string, data: TasksData, config: TrackersConfig = DEFAULT_CONFIG): BoardInput {
-  const sessions: BoardSession[] = (s.sessions[host] ?? [])
-    .filter((x) => x.workspace_id === workspaceId)
-    .map((x) => ({
-      id: x.id,
-      name: x.name,
-      branch: x.branch,
-      path: x.path,
-      archived: x.archived,
-      task: x.task ?? null,
-      task_unlinked: !!x.task_unlinked,
-      state: sessionState(s, host, x.id),
-      pr: s.prs[sesKey(host, x.id)] ?? null,
-      additions: s.git[sesKey(host, x.id)]?.additions ?? 0,
-      deletions: s.git[sesKey(host, x.id)]?.deletions ?? 0,
-      project: s.projects[host]?.find((p) => p.id === x.project_id)?.name,
-      agents: sessionTerminals(s, host, x.id)
-        .filter((t) => t.kind === "agent")
-        .map((t) => ({ name: t.agent ?? "agent", state: t.agent_state, since: t.last_output_at })),
-      subagents: sessionTerminals(s, host, x.id).reduce((n, t) => n + (t.subagents ?? 0), 0),
-      originRepo: data.repos[x.project_id] ?? null,
-    }));
+/**
+ * What a workspace's board is built from. `members` are the hosts of the
+ * workspace's account that list it, its own host first (X68): their sessions
+ * show too, each with its host, and with the GitHub repository of the
+ * board's own project of the same identity.
+ */
+export function boardInput(s: StoreState, host: string, workspaceId: string, data: TasksData, config: TrackersConfig = DEFAULT_CONFIG, members: string[] = [host]): BoardInput {
+  const repoOf = (h: string, projectId: string) => {
+    if (h === host) return data.repos[projectId] ?? null;
+    const identity = s.projects[h]?.find((p) => p.id === projectId)?.identity;
+    const own = identity?.root ? s.projects[host]?.find((p) => p.identity?.root === identity.root && p.identity?.origin === identity.origin) : undefined;
+    return own ? (data.repos[own.id] ?? null) : null;
+  };
+  const sessions: BoardSession[] = members.flatMap((h) =>
+    (s.sessions[h] ?? [])
+      .filter((x) => x.workspace_id === workspaceId)
+      .map((x) => ({
+        id: x.id,
+        ...(h !== host && { host: h }),
+        name: x.name,
+        branch: x.branch,
+        path: x.path,
+        archived: x.archived,
+        task: x.task ?? null,
+        task_unlinked: !!x.task_unlinked,
+        state: sessionState(s, h, x.id),
+        pr: s.prs[sesKey(h, x.id)] ?? null,
+        additions: s.git[sesKey(h, x.id)]?.additions ?? 0,
+        deletions: s.git[sesKey(h, x.id)]?.deletions ?? 0,
+        project: s.projects[h]?.find((p) => p.id === x.project_id)?.name,
+        agents: sessionTerminals(s, h, x.id)
+          .filter((t) => t.kind === "agent")
+          .map((t) => ({ name: t.agent ?? "agent", state: t.agent_state, since: t.last_output_at })),
+        subagents: sessionTerminals(s, h, x.id).reduce((n, t) => n + (t.subagents ?? 0), 0),
+        originRepo: repoOf(h, x.project_id),
+      })),
+  );
   return {
     // The board's columns as saved now, so a change shows without a sync (X44, X50).
     tasks: placedTasks({ ...data, tasks: shownMoved(data.tasks) }, config),

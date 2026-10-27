@@ -180,6 +180,12 @@ export function currentWorkspace(cur: WorkspaceRef | null, hosts: HostWorkspaces
   return first ? { host: first.host, id: first.workspaces[0].id, account: accountOf(first) } : null;
 }
 
+/** The hosts of workspace `ref`'s account that list it, its own first (X68). */
+export function workspaceMembers(ref: WorkspaceRef, hosts: HostWorkspaces[]): string[] {
+  const listing = hosts.filter((h) => isShown(ref, h.host, ref.id, accountOf(h)) && h.workspaces.some((w) => w.id === ref.id)).map((h) => h.host);
+  return [ref.host, ...listing.filter((h) => h !== ref.host)];
+}
+
 /** Whether a session on any member of the row's account needs you. */
 export function rowNeedsYou(row: SwitcherRow, needing: Set<string>): boolean {
   return row.hosts.some((h) => needing.has(wsKey(h, row.ws.id)));
