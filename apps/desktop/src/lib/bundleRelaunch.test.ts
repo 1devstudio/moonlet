@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useStore } from "./store";
 import { useEditor } from "./designEditor";
 import { checkBundle } from "./bundleRelaunch";
-import { saveChatDraft } from "./chat";
+import { noteChatAttachments, saveChatDraft } from "./chat";
 
 const app = vi.hoisted(() => ({ onDisk: null as string | null, relaunched: 0 }));
 // A relaunch that fails, so the next test starts from a running app.
@@ -48,6 +48,15 @@ describe("following an update another Mac made here (X69)", () => {
     expect(app.relaunched).toBe(0);
     expect(useStore.getState().update).toEqual({ phase: "ready", version: "0.1.34" });
     expect(useStore.getState().updateError).toBeNull();
+  });
+
+  it("offers Restart to update while a chat has an image attached and no text", async () => {
+    app.onDisk = "0.1.34";
+    noteChatAttachments("local", 8, 1);
+    await checkBundle();
+    noteChatAttachments("local", 8, 0);
+    expect(app.relaunched).toBe(0);
+    expect(useStore.getState().update).toEqual({ phase: "ready", version: "0.1.34" });
   });
 
   it("relaunches once into a newer bundle on disk, however many checks overlap", async () => {
