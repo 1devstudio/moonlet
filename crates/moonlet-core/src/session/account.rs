@@ -255,7 +255,13 @@ impl SessionManager {
             let mut account = self.account.lock().unwrap();
             let Some(a) = account.as_mut() else { return Vec::new() };
             let mut log = a.log.clone();
-            let new: Vec<Change> = changes.into_iter().filter(|c| !log.has(&c.stamp.member, c.seq)).collect();
+            // Only the first of two changes under one number counts, as in
+            // the log, so the others are never handed the second.
+            let mut seen = std::collections::HashSet::new();
+            let new: Vec<Change> = changes
+                .into_iter()
+                .filter(|c| !log.has(&c.stamp.member, c.seq) && seen.insert((c.stamp.member.clone(), c.seq)))
+                .collect();
             if new.is_empty() {
                 return Vec::new();
             }
