@@ -259,8 +259,8 @@ async fn route(stream: TcpStream, alias: &str, close: &mut watch::Receiver<bool>
 }
 
 /// Copies a routed phone's frames to the host, except requests to manage
-/// phones, the host's worker link, its cloud workers or its heavy-command
-/// approvals: the host's daemon cannot tell the
+/// phones, the host's worker link, its cloud workers, its heavy-command
+/// approvals or its daemon itself: the host's daemon cannot tell the
 /// phone from the Mac's app, and a phone that paired itself there would
 /// keep access after the Mac removes it. The Mac answers those itself.
 async fn forward_from_phone(
@@ -286,6 +286,12 @@ async fn forward_from_phone(
             }
             Frame::Json(Message::Request { method, .. }) if method == m::HEAVY_APPROVE => {
                 Some("approve heavy commands from the Mac")
+            }
+            Frame::Json(Message::Request { method, .. }) if method == m::DAEMON_UPGRADE => {
+                Some("upgrade moonletd on its own machine")
+            }
+            Frame::Json(Message::Request { method, .. }) if method == m::DAEMON_SHUTDOWN => {
+                Some("stop moonletd on its own machine")
             }
             _ => None,
         };
