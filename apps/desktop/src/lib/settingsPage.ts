@@ -101,9 +101,12 @@ export interface SettingsHost<W> {
   workspaces: W[];
 }
 
-/** Every host's workspaces as the settings lists need them (X68). */
+/** Every host's workspaces as the settings lists need them (X68): every
+ * known host, with none until its workspaces arrive, so this Mac's account
+ * is known before its own list is. */
 export function settingsHosts<W>(s: { hosts: Record<string, Pick<HostInfo, "label" | "remote" | "status">>; workspaces: Record<string, W[]>; accounts: Record<string, Pick<AccountInfo, "account">> }): SettingsHost<W>[] {
-  return Object.keys(s.workspaces).map((h) => ({ host: h, label: s.hosts[h]?.label ?? h, remote: !!s.hosts[h]?.remote, connected: s.hosts[h]?.status === "connected", account: s.accounts[h]?.account, workspaces: s.workspaces[h] ?? [] }));
+  const ids = [...new Set([...Object.keys(s.hosts), ...Object.keys(s.workspaces)])];
+  return ids.map((h) => ({ host: h, label: s.hosts[h]?.label ?? h, remote: !!s.hosts[h]?.remote, connected: s.hosts[h]?.status === "connected", account: s.accounts[h]?.account, workspaces: s.workspaces[h] ?? [] }));
 }
 
 /** The workspaces the nav and the search list: each one of an account once

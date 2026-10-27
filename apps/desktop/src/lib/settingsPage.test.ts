@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { accountNote, hostOrder, installHooksMessage, saveKeySaves, appUpdateLine, claudeUpdateLine, daemonHint, daemonLine, daemonOn, daemonToast, offStopsDaemon, opensLoginItems, escapeAction, hookRows, hooksDone, phoneAccessLine, radioKey, routeKey, settingsCrumbs, hostActions, hostLine, hostNotice, updateCommand, profileLine, removeAsks, profilesNeedSignIn, settingsNav, settingsWorkspaces, activeNavKey } from "./settingsPage";
+import { accountNote, hostOrder, installHooksMessage, saveKeySaves, appUpdateLine, claudeUpdateLine, daemonHint, daemonLine, daemonOn, daemonToast, offStopsDaemon, opensLoginItems, escapeAction, hookRows, hooksDone, phoneAccessLine, radioKey, routeKey, settingsCrumbs, hostActions, hostLine, hostNotice, updateCommand, profileLine, removeAsks, profilesNeedSignIn, settingsHosts, settingsNav, settingsWorkspaces, activeNavKey } from "./settingsPage";
 import type { HookStatus, HostInfo, MobileStatus, ProfileAccount, ProfileInfo, Workspace } from "./protocol";
 
 describe("settings nav (X43)", () => {
@@ -102,6 +102,17 @@ describe("the workspaces settings lists (X68)", () => {
         { host: "studio-mini", label: "studio-mini", remote: true, connected: true, account: "8605e2c4", workspaces: onMini.slice(0, 1) },
       ]),
     ).toEqual([{ host: "studio-mini", id: "c05254bf1786", account: "8605e2c4", ws: { id: "c05254bf1786", name: "Personal (mini)", color: "clay", section_ids: [], created_at: 0, claude_profile: null }, remote: null }]);
+  });
+
+  it("leaves a shared workspace untagged when another member's workspaces arrive before this Mac's", () => {
+    const listed = settingsWorkspaces(
+      settingsHosts({
+        hosts: { local: { label: "This Mac", remote: false, status: "connected" }, "studio-mini": { label: "studio-mini", remote: true, status: "connected" } },
+        workspaces: { "studio-mini": onMini.slice(0, 1) },
+        accounts: { local: { account: "8605e2c4" }, "studio-mini": { account: "8605e2c4" } },
+      }),
+    );
+    expect(listed.map(({ host, id, remote }) => ({ host, id, remote }))).toEqual([{ host: "studio-mini", id: "c05254bf1786", remote: null }]);
   });
 
   it("highlights a shared workspace's entry when its page is open on another member's copy", () => {
