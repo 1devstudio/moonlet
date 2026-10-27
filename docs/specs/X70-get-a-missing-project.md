@@ -1,6 +1,6 @@
 # X70 — Get a project this host does not have: clone it from its origin, or locate a copy
 
-- **Status:** draft
+- **Status:** implemented (2026-10-27; daemon and Vitest tests, the dialog seen in the e2e app; a real private repository and a remote host untried)
 - **Priority / phase:** P1 · phase 4 (sessions across machines)
 - **PRD refs:** none (new scope)
 - **Related ADRs:** [0014](../adr/0014-one-account-across-hosts.md) (one account across hosts)
@@ -25,52 +25,55 @@ Test citations: Rust tests by function name, Vitest by `describe › it`, e2e by
 
 ### Opening the dialog
 
-- [ ] Clicking a project group marked "not on <host>" opens **Get <name> on <host>** for that project and section, in place of X68's toast. <host> is the shown host's label, or "This Mac". <name> is the label the sidebar shows for the group.
-- [ ] The dialog acts on the shown host: the lookup, the clone and the located folder are all on that host, as X59's dialog does for its chosen host. For a remote host, Browse… is absent and the hint reads "A path on <host>. No Browse… for remote hosts."
-- [ ] When the shown host's daemon predates X70, the dialog shows only "<host>'s moonletd is too old to get this project. Update moonlet there." and a Close button.
+- [x] Clicking a project group marked "not on <host>" opens **Get <name> on <host>** for that project and section, in place of X68's toast. <host> is the shown host's label, or "This Mac". <name> is the label the sidebar shows for the group. (sidebar.test.ts › arrangeShared › "shows each project once with every member's sessions, newest first, and says where the rest are"; getProject.test.ts › getProjectTitle › "names the project and the host it is got on"; the click *manual*)
+- [x] The dialog acts on the shown host: the lookup, the clone and the located folder are all on that host, as X59's dialog does for its chosen host. For a remote host, Browse… is absent and the hint reads "A path on <host>. No Browse… for remote hosts." (*manual*)
+- [x] When the shown host's daemon predates X70, the dialog shows only "<host>'s moonletd is too old to get this project. Update moonlet there." and a Close button. Such a daemon answers the lookup with "missing field `repo`". (getProject.test.ts › isTooOld › "reads a daemon that wants a repository as one from before X70")
 
 ### Which address to clone from
 
-- [ ] The daemon accepts an origin only as `host[:port]/path`. The host is letters, digits, `.` and `-`, with an optional port of digits. The path is one or more segments of letters, digits, `.`, `_`, `~` and `-`, separated by `/`; no segment is empty, `.` or `..`, or starts with `-`. Anything else is refused with "not a project origin: <text>" before `git` runs. A root must be 40 or 64 hex digits.
+- [x] The daemon accepts an origin only as `host[:port]/path`. The host is letters, digits, `.` and `-`, with an optional port of digits. The path is one or more segments of letters, digits, `.`, `_`, `~` and `-`, separated by `/`; no segment is empty, `.` or `..`, or starts with `-`. Anything else is refused with "not a project origin: <text>" before `git` runs. A root must be 40 or 64 hex digits, else "not a root commit: <text>". (`accepts_only_an_origin_as_a_project_identity_holds_it`, `accepts_only_a_commit_id_as_a_root`, `an_origin_clones_only_from_its_own_addresses`)
   - Accepted: `github.com/acme/shop`, `gitlab.com/group/sub/shop`, `git.example.com:2222/acme/shop`.
   - Refused: `-oProxyCommand=x/a`, `github.com/../etc`, `github.com/acme/-shop`, `github.com//shop`, `example.com/a b`, `github.com`.
-- [ ] For an origin on `github.com`, the dialog works as X59 does for `owner/repo`: the lookup and the clone use `gh` when it is signed in on the host, else git over HTTPS. When neither reaches it, git over SSH (`git@github.com:owner/repo.git`) is tried as well.
-- [ ] For any other origin, the daemon tries these addresses in order, and uses the first one that `git ls-remote --symref <address> HEAD` reaches:
+- [x] For an origin `github.com/<owner>/<name>`, the lookup asks `gh repo view` when gh is signed in on the host, and the clone then runs `gh repo clone`, as in X59. When gh is not signed in or cannot see it, git tries `https://github.com/<owner>/<name>.git`, then `git@github.com:<owner>/<name>.git`. (`tries_ssh_then_https_and_https_first_on_github`, `a_github_origin_of_owner_and_name_can_go_through_gh`, `clones_an_origin_only_from_one_of_its_addresses`)
+- [x] For any other origin, the daemon tries these addresses in order, and uses the first one that `git ls-remote --symref <address> HEAD` reaches:
   - `git@gitlab.com:acme/ledger.git` for `gitlab.com/acme/ledger`, or `ssh://git@git.example.com:2222/acme/shop.git` for `git.example.com:2222/acme/shop`;
   - `https://gitlab.com/acme/ledger.git`, or `https://git.example.com:2222/acme/shop.git`.
-- [ ] Git never prompts: the lookup and the clone run with `GIT_TERMINAL_PROMPT=0` and `GIT_SSH_COMMAND="ssh -o BatchMode=yes"`.
-- [ ] When the lookup finds the repository, the card shows "Found · <default branch>" in green and the address it reached, in small mono.
-- [ ] When no address answers, the card shows "<host> can't reach <origin>" in red. Under it is "This Mac tried <SSH address> and <HTTPS address>. Check that this Mac can read the repository, with an SSH key or a signed-in credential helper, then retry." Each address's failure follows in git's words (X59's last `fatal:` line). **Retry** looks it up again. Locate a copy stays available.
+  (`tries_ssh_then_https_and_https_first_on_github`, `a_project_from_another_member_is_cloned_from_its_origin_into_its_section`)
+- [x] Git never prompts: the lookup and the clone run with `GIT_TERMINAL_PROMPT=0`, and with `GIT_SSH_COMMAND="ssh -o BatchMode=yes"` unless the user has an ssh command of their own (`GIT_SSH_COMMAND`, `GIT_SSH` or `core.sshCommand`), which git would otherwise lose. (*manual*)
+- [x] When the lookup finds the repository, the card shows "Found · <default branch>" in green and the address it reached, in small mono. (getProject.test.ts › foundLine › "says found, with the default branch when git gave one"; `a_project_from_another_member_is_cloned_from_its_origin_into_its_section`)
+- [x] When no address answers, a red box under the card reads "<host> can't reach <origin>". Under it is "<host> tried <first address> and <second address>. Check that this Mac can read the repository, with an SSH key or a signed-in credential helper, then retry." Each address follows in mono with why it failed: the line ssh or git printed before git's first `fatal:`, else that `fatal:` line. **Retry** looks it up again. Locate a copy stays available. (getProject.test.ts › cantReach › "names both addresses tried and why each failed", "says what the daemon said when it tried no address"; `says_why_an_address_could_not_be_reached`)
 
 ### Cloning
 
-- [ ] **Clone into** works as in X59: a parent folder and a folder name, the parent starting at the last one used for a clone on that host (`moonlet.cloneParents`, shared with X59), else `~/moonlet`. The name starts as the origin's last path segment.
-- [ ] The target is checked as in X59. A folder that already exists and holds the same project (same identity) offers **Add existing folder** and "Use <name>-2". Any other existing folder offers only "Use <name>-2". **Clone and add** is disabled until the lookup has found the repository and the target is free.
-- [ ] **Clone and add** starts the clone on the host with the address the lookup reached. It shows X59's progress card and footer, and **Cancel clone** works as in X59: git stops and the folder the clone created is removed.
-- [ ] When git is done, the daemon reads the clone's identity. When its root commit differs from the project's, the daemon removes the folder, and the dialog says "<address> holds another repository: its first commit is not the one ledger starts with on the other Macs." Nothing is added.
-- [ ] When the root matches, the folder is added as a project in the section the dialog was opened from. The section keeps the project in the place it had, and the project is no longer in the section's `missing`, on this member and on the others once they sync. A toast says "Added <name>". If the dialog is still showing, it becomes the new session composer for the project.
-- [ ] A clone left to run after the dialog closes ends as in X59: a toast, and nothing opens.
+- [x] **Clone into** works as in X59: a parent folder and a folder name, the parent starting at the last one used for a clone on that host (`moonlet.cloneParents`, shared with X59), else `~/moonlet`. The name starts as the origin's last path segment. (getProject.test.ts › originName › "starts the folder name as the origin's last path segment")
+- [x] The target is checked as in X59. A folder that already exists and holds the same project (same identity) offers **Add existing folder** and "Use <name>-2". Any other existing folder offers only "Use <name>-2". **Clone and add** is disabled until the lookup has found the repository and the target is free. (`a_folder_is_the_same_project_by_its_identity`)
+- [x] **Clone and add** starts the clone on the host with the address the lookup reached. The daemon clones only from one of the origin's own addresses, or through gh for github.com: any other is refused with "<address> is not an address of <origin>". It shows X59's progress card and footer, and **Cancel clone** works as in X59: git stops and the folder the clone created is removed. (`clones_an_origin_only_from_one_of_its_addresses`, `an_origin_clones_only_from_its_own_addresses`)
+- [x] When git is done, the daemon reads the clone's root commit. When it differs from the project's, the daemon removes the folder, and the dialog says "<address> holds another repository: its first commit is not the one ledger starts with on the other Macs." Nothing is added. (`a_clone_whose_address_holds_another_repository_is_not_added`)
+- [x] When the root matches, the folder is added as a project in the section the dialog was opened from. The section keeps the project in the place it had, and the project is no longer in the section's `missing`, on this member and on the others once they sync. A toast says "Added <name>". If the dialog is still showing, it becomes the new session composer for the project. (`a_project_from_another_member_is_cloned_from_its_origin_into_its_section`, `a_clone_of_a_missing_project_keeps_its_place_in_the_section`, `a_clone_added_here_is_no_longer_missing`; the toast and the composer as X59's addProject.test.ts › clone runs)
+- [x] A clone left to run after the dialog closes ends as in X59: a toast, and nothing opens. (addProject.test.ts › clone runs › "adds the project: a toast, the parent remembered, the composer when the dialog watched")
 
 ### Locating a copy
 
-- [ ] **Locate a copy** shows a Folder field, with Browse… on This Mac, and **Add this folder**. When the folder is typed or picked, the dialog reads its identity on the host (`project.identity`). It says "This is a clone of <origin>." in green when the identities are the same project (X41's `same_project`: equal known roots and equal origins). Otherwise it shows the reason in red, and Add this folder is disabled:
+- [x] **Locate a copy** shows a Folder field, with Browse… on This Mac, and **Add this folder**; for a project with an origin, "Clone it instead" goes back. When the folder is typed or picked, the dialog reads its identity on the host (`project.identity`). It says "This is a clone of <origin>." in green when the identities are the same project (X41's `same_project`: equal known roots and equal origins), or "This is a copy of <name>." for a project without an origin. Otherwise it shows the reason in red, and Add this folder is disabled:
   - "<folder> is not a git repository."
   - "<folder> holds another repository." (another root)
-  - "<folder> has the same history but its origin is <its origin>, not <origin>." (same root, another origin; "no origin" when it has none)
-- [ ] **Add this folder** adds the folder to the section (`section.add_project` with the expected identity). The daemon checks the identity again and refuses a folder that is not the same project with the same reason, so a folder changed after the check is not added. On success the dialog closes with a toast "Added <name>", and the project keeps its place in the section.
+  - "<folder> has the same history but its origin is <its origin>, not <origin>." (same root, another origin)
+  - "<folder> has the same history but no origin; the project's is <origin>." and "<folder> has the same history but its origin is <its origin>; the project has none."
+  (getProject.test.ts › copyCheck › "accepts a folder of the same project, in green", "says why any other folder is not a copy"; `says_why_a_folder_is_not_a_copy_of_the_project`)
+- [x] **Add this folder** adds the folder to the section (`section.add_project` with the expected identity). The daemon checks the identity again and refuses a folder that is not the same project with the same reason, so a folder changed after the check is not added. On success the dialog closes with a toast "Added <name>", and the project keeps its place in the section. (`a_located_folder_joins_a_section_only_as_a_copy_of_the_project`, `a_clone_of_a_missing_project_keeps_its_place_in_the_section`)
 
 ### A project without an origin
 
-- [ ] For an identity whose origin is `null`, the dialog shows no lookup and no Clone into. It says "<name> has no remote, so <host> can't clone it. Push it to a remote from the Mac that has it, or locate a copy here." Locate a copy is open from the start.
+- [x] For an identity whose origin is `null`, the dialog shows no lookup and no Clone into. It says "<name> has no remote, so <host> can't clone it. Push it to a remote from the Mac that has it, or locate a copy here." Locate a copy is open from the start. (getProject.test.ts › noOrigin › "says a project without a remote can only be located")
 
 ## UI
 
 The dialog is 560px wide, like Add project, and reuses its parts:
 
-- Header: **Get <name> on <host>**, with a dashed square as the project mark.
-- Project card: the name in bold, the origin in mono, the lookup state on the right ("Looking up…", "Found · main", or the red failure box under the card), and the address reached in small mono under the origin.
+- Header: **Get <name> on <host>**.
+- Project card: a dashed square as the project mark, the name in bold, the origin in mono (or "no remote"), the lookup state on the right ("Looking up…", "Found · main", or the red failure box under the card), and the address reached in small mono under the origin.
 - **Clone into**: X59's two fields, its hints and its amber "already exists" box.
-- Below, a divider and a link-style button **Locate a copy**. It opens the Folder field with Browse… and its green or red line under the field.
+- Below, a divider and a link-style button **Locate a copy**. It opens the Folder field with Browse… and its green or red line under the field, and "Clone it instead" under them.
 - Footer: **Cancel** and **Clone and add**, or **Add this folder** while Locate a copy is open. While cloning, X59's footer: "Closing keeps the clone running in the background.", **Cancel clone** and a disabled "Cloning…".
 
 States: looking up, found, not reachable, no origin, target taken, cloning, failed clone (the red box under the form, as in X59), wrong root, located folder matching or not.
@@ -111,12 +114,13 @@ Changed methods. `repo` and `origin` are alternatives: a call carries one of the
 
 ## Test plan
 
-- **Rust unit (`moonlet-core/src/repo_clone.rs`):** origin checks against the accepted and refused literals above; the addresses tried for `gitlab.com/acme/ledger`, `git.example.com:2222/acme/shop` and `github.com/acme/shop`, as literals; a lookup failure message from captured `git ls-remote` stderr for SSH (`Permission denied (publickey)`) and HTTPS (`could not read Username`).
-- **Rust unit (`moonlet-core/src/session/account.rs`):** a section with a missing project, then that project added with an identity: it is no longer missing, and the project order the other member sees is unchanged; a folder with another root or another origin is refused with the reasons above.
-- **Daemon (`moonletd/tests/daemon.rs`):** a scratch home whose `.gitconfig` maps `ssh://git@example.test/acme/shop.git` to a local bare repository with `url.<bare>.insteadOf`. `repo.lookup {origin}` reports that address; `repo.clone` sends progress and done, and `section.list` no longer lists the identity in `missing`. A bare repository with another root is cloned, removed, and reported as another repository. `repo.clone` with a `url` that is not one of the origin's addresses is refused.
-- **Vitest (`apps/desktop/src/lib/`):** what clicking a missing project opens; the dialog's states and messages (found, not reachable with both addresses, no origin, located folder matching or not, too old a daemon); the folder name from an origin.
-- **e2e (`apps/desktop/e2e/specs/get-missing-project.e2e.ts`):** with the app's daemon given a section that lists a missing project through the account log, click the row, clone it from the `insteadOf` bare repository, and land in the new session composer with the row no longer marked "not on This Mac". Locate a copy of a second missing project from a folder.
-- **Manual:** clone a private GitLab repository over SSH on This Mac; clone on a remote host into a path on that host.
+- **Rust unit (`moonlet-core/src/repo_clone.rs`):** origin and root checks against the accepted and refused literals above; the addresses tried for `gitlab.com/acme/ledger`, `git.example.com:2222/acme/shop` and `github.com/acme/shop`, as literals; the clone command only from an origin's own addresses; why an address failed, from captured `git ls-remote` stderr for SSH without a key, an unknown SSH host and HTTPS without credentials; a folder that is the same project by its identity.
+- **Rust unit (`moonlet-core/src/identity.rs`):** why a folder is not a copy of the project.
+- **Rust unit (`moonlet-core/src/session/account.rs`):** a section with a missing project, then a clone of it added on this member: it keeps its place, the member sends no change for the section, and the other member keeps the order.
+- **Daemon (`moonletd/tests/daemon.rs`):** a scratch home whose `.gitconfig` maps `git@example.test:acme/ledger.git` to a local bare repository with `url.<bare>.insteadOf`. `repo.lookup {origin}` reports that address; `repo.clone` adds the project to the section with the origin's root, and its remote keeps the address. A clone whose root is not the project's is removed and reported. `repo.clone` with an address that is not the origin's, or an origin of another shape, is refused. `section.add_project` with an identity refuses a folder of another repository.
+- **Vitest (`apps/desktop/src/lib/getProject.test.ts`, `sidebar.test.ts`):** the title, the folder name from an origin, the found line, the unreachable box, the no-remote text, the located folder's check, a daemon from before X70; a missing project's group carries its identity.
+- **No e2e spec:** getting a missing project is not one of AGENTS.md's crucial features, and a missing project needs a second member of the account. The dialog was checked in the e2e app with a throwaway snap spec, the section's `missing` given through a `sections.changed` event and the origin mapped to a local bare repository.
+- **Manual:** clone a private GitLab repository over SSH on This Mac; clone on a remote host into a path on that host; the user's own `core.sshCommand` is kept.
 
 ## Open questions
 

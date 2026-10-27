@@ -241,6 +241,8 @@ export interface RepoInfo {
   pushed_at: string | null;
   /** gh's `diskUsage`, in KB. */
   disk_kb: number | null;
+  /** The address git reached a project's origin at (X70); absent through gh. */
+  url?: string;
 }
 
 /** One of the user's repositories (X59). */
