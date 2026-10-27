@@ -3,11 +3,12 @@
 //! (`MOONLET_MOBILE_ADDRS`) instead of a Tailscale address, and two Macs
 //! pair with it and link, as the desktop app makes them do.
 
-use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+mod common;
+
 use std::time::{Duration, Instant};
 
-use moonlet_core::client::{Client, wait_for_socket};
+use common::*;
+use moonlet_core::client::Client;
 use moonlet_proto::methods::{DeviceKind, MobilePairing};
 use moonlet_proto::types::{Section, Workspace};
 use moonlet_proto::{Frame, Message};
@@ -16,61 +17,8 @@ use serde_json::{Value, json};
 const BOOK: &str = "7d3f1c2a-5b8e-4e61-9a0f-2c4d6e8b1f37";
 const AIR: &str = "0b9e4f61-2a7c-4d3e-8f15-6c2a9d0e7b48";
 
-struct Daemon {
-    home: tempfile::TempDir,
-    env: Vec<(String, String)>,
-    socket: PathBuf,
-    child: Child,
-}
-
-fn spawn(home: &std::path::Path, socket: &std::path::Path, env: &[(String, String)]) -> Child {
-    Command::new(env!("CARGO_BIN_EXE_moonletd"))
-        .arg("daemon")
-        .env("MOONLET_HOME", home)
-        .env("MOONLET_SOCK", socket)
-        .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap()
-}
-
+/// What these tests read of a daemon's workspaces.
 impl Daemon {
-    async fn start(home: tempfile::TempDir, env: &[(&str, &str)]) -> Daemon {
-        let socket = home.path().join("run").join("d.sock");
-        let env: Vec<(String, String)> = env
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
-        let child = spawn(home.path(), &socket, &env);
-        wait_for_socket(&socket, Duration::from_secs(15))
-            .await
-            .unwrap();
-        Daemon {
-            home,
-            env,
-            socket,
-            child,
-        }
-    }
-
-    /// Stops the daemon and starts it again on the same home.
-    async fn restart(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        let _ = std::fs::remove_file(&self.socket);
-        self.child = spawn(self.home.path(), &self.socket, &self.env);
-        wait_for_socket(&self.socket, Duration::from_secs(15))
-            .await
-            .unwrap();
-    }
-
-    async fn call<T: serde::de::DeserializeOwned>(&self, method: &str, params: Value) -> T {
-        let mut app = Client::connect(&self.socket, "moonlet-app").await.unwrap();
-        app.request(method, params).await.unwrap()
-    }
-
     async fn workspaces(&self) -> Vec<Workspace> {
         self.call("workspace.list", json!({})).await
     }
@@ -85,21 +33,6 @@ impl Daemon {
         n.sort();
         n
     }
-}
-
-impl Drop for Daemon {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
 }
 
 /// The central host `studio-mini`, with tailnet access on.
@@ -183,34 +116,6 @@ async fn link(mac: &Daemon, central: &Daemon, addr: &str, name: &str) {
             json!({ "central": { "name": "studio-mini", "addrs": [addr], "token": token } }),
         )
         .await;
-}
-
-/// Waits up to `limit` for `ok`; returns how long it took.
-async fn within<F, Fut>(limit: Duration, what: &str, mut ok: F) -> Duration
-where
-    F: FnMut() -> Fut,
-    Fut: std::future::Future<Output = bool>,
-{
-    let start = Instant::now();
-    while start.elapsed() < limit {
-        if ok().await {
-            return start.elapsed();
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    panic!("{what} did not happen within {limit:?}");
-}
-
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as u64
-}
-
-/// What a worker's daemon sends to register as `id`.
-fn registration(id: &str, name: &str) -> Value {
-    json!({ "id": id, "name": name, "os": "macos", "arch": "arm64", "cores": 10, "version": "0.1.32", "projects": [] })
 }
 
 /// A change by log `member` that names workspace `id` `name`, stamped now.
@@ -421,34 +326,6 @@ async fn a_phone_never_hears_the_accounts_changes() {
     let names: Vec<&str> = heard.iter().map(|(n, _)| n.as_str()).collect();
     assert!(names.contains(&"workspaces.changed"), "{names:?}");
     assert!(!names.contains(&"account.changed"), "{names:?}");
-}
-
-/// A connection by hand: authenticated with `token`, hello as `client`.
-async fn raw(addr: &str, token: &str, client: &str) -> tokio::net::TcpStream {
-    use moonlet_proto::{read_frame, write_frame};
-    let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
-    let auth = Message::Auth {
-        token: Some(token.into()),
-        pair: None,
-        device: None,
-        route: None,
-        kind: None,
-    };
-    write_frame(&mut s, &Frame::Json(auth)).await.unwrap();
-    assert!(matches!(
-        read_frame(&mut s).await.unwrap(),
-        Some(Frame::Json(Message::Authed { .. }))
-    ));
-    let hello = Message::Hello {
-        protocol: moonlet_proto::PROTOCOL_VERSION,
-        client: client.into(),
-    };
-    write_frame(&mut s, &Frame::Json(hello)).await.unwrap();
-    assert!(matches!(
-        read_frame(&mut s).await.unwrap(),
-        Some(Frame::Json(Message::Welcome { .. }))
-    ));
-    s
 }
 
 /// The error code of request `account.sync` sent on `s`.

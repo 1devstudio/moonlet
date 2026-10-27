@@ -3,88 +3,19 @@
 //! instead of a Tailscale address, and the worker pairs with its code, as
 //! the desktop app does.
 
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+mod common;
+
+use std::path::Path;
+use std::process::Command;
 use std::time::{Duration, Instant};
 
-use moonlet_core::client::{Client, wait_for_socket};
+use common::*;
+use moonlet_core::client::Client;
 use moonlet_proto::methods::{DeviceKind, LinkInfo, LinkState, MobilePairing, WorkerInfo};
 use moonlet_proto::{Frame, Message};
 use serde_json::{Value, json};
 
 const WORKER_ID: &str = "7d3f1c2a-5b8e-4e61-9a0f-2c4d6e8b1f37";
-
-struct Daemon {
-    home: tempfile::TempDir,
-    socket: PathBuf,
-    env: Vec<(String, String)>,
-    child: Child,
-}
-
-impl Daemon {
-    async fn start(home: tempfile::TempDir, env: &[(&str, &str)]) -> Daemon {
-        let socket = home.path().join("run").join("d.sock");
-        let env: Vec<(String, String)> = env
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
-        let child = spawn(home.path(), &socket, &env).await;
-        Daemon {
-            home,
-            socket,
-            env,
-            child,
-        }
-    }
-
-    async fn restart(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        self.child = spawn(self.home.path(), &self.socket, &self.env).await;
-    }
-
-    async fn app(&self) -> Client {
-        Client::connect(&self.socket, "moonlet-app").await.unwrap()
-    }
-
-    async fn call<T: serde::de::DeserializeOwned>(&self, method: &str, params: Value) -> T {
-        self.app().await.request(method, params).await.unwrap()
-    }
-}
-
-impl Drop for Daemon {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
-async fn spawn(home: &Path, socket: &Path, env: &[(String, String)]) -> Child {
-    let child = Command::new(env!("CARGO_BIN_EXE_moonletd"))
-        .arg("daemon")
-        .env("MOONLET_HOME", home)
-        .env("MOONLET_SOCK", socket)
-        .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
-    wait_for_socket(&socket.to_path_buf(), Duration::from_secs(15))
-        .await
-        .unwrap();
-    child
-}
-
-/// A port nothing listens on yet, so a restarted central host keeps its
-/// address.
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
-}
 
 /// The central host `studio-mini`: tailnet access on, pinging every 200 ms.
 /// It keeps its port across restarts, so the port is fixed. Another test's
@@ -476,38 +407,6 @@ async fn a_mac_the_central_host_removed_says_so_and_waits_for_a_retry() {
     eventually("refused", || async { link_state(&worker).await == want }).await;
     tokio::time::sleep(Duration::from_millis(1500)).await;
     assert_eq!(link_state(&worker).await, want, "it retried by itself");
-}
-
-/// A worker by hand: authenticated with `token`, hello as `client`.
-async fn raw(addr: &str, token: &str, client: &str) -> tokio::net::TcpStream {
-    use moonlet_proto::{read_frame, write_frame};
-    let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
-    let auth = Message::Auth {
-        token: Some(token.into()),
-        pair: None,
-        device: None,
-        route: None,
-        kind: None,
-    };
-    write_frame(&mut s, &Frame::Json(auth)).await.unwrap();
-    assert!(matches!(
-        read_frame(&mut s).await.unwrap(),
-        Some(Frame::Json(Message::Authed { .. }))
-    ));
-    let hello = Message::Hello {
-        protocol: moonlet_proto::PROTOCOL_VERSION,
-        client: client.into(),
-    };
-    write_frame(&mut s, &Frame::Json(hello)).await.unwrap();
-    assert!(matches!(
-        read_frame(&mut s).await.unwrap(),
-        Some(Frame::Json(Message::Welcome { .. }))
-    ));
-    s
-}
-
-fn registration(id: &str, name: &str) -> Value {
-    json!({ "id": id, "name": name, "os": "macos", "arch": "arm64", "cores": 10, "version": "0.1.28", "projects": [] })
 }
 
 /// Sends request `id` and returns its reply; answers the central host's
