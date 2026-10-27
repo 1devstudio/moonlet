@@ -21,3 +21,11 @@ export function jobFooter(job: Job, session: string, hostLabel: string): { note:
   if (s.kind === "running" || s.kind === "bringing_back") return { note: null, runHere: null, stop: "Changes made so far still come back." };
   return null;
 }
+
+/** The tab shown: the one asked for while the session has it, else Chat, as
+ * when a reload lists no jobs any more. */
+export const shownTab = (tab: SessionTab, tabs: SessionTab[]): SessionTab => (tabs.includes(tab) ? tab : "chat");
+
+/** Whether an output box is scrolled to its end, give or take a line, so new
+ * output keeps it there; a reader scrolled up stays where they are. */
+export const atEnd = (el: { scrollTop: number; clientHeight: number; scrollHeight: number }): boolean => el.scrollHeight - el.scrollTop - el.clientHeight <= 24;

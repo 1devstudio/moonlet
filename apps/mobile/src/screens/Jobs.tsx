@@ -1,7 +1,7 @@
 // A session's Jobs tab (X62, X63): its routed commands, newest first, or one
 // in detail with its output, as the desktop's Jobs tab shows them.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronLeft, Circle, Cloud, Cpu, Laptop, LoaderCircle, RotateCw, Server } from "lucide-react";
 import { rpc } from "@desktop/lib/daemon";
 import { type JobIcon, type JobTone, chipFromJob, going, dur, jobRowLine, jobStateLine, jobsSummary, outputLines, phaseList, workerLine } from "@desktop/lib/jobs";
@@ -9,7 +9,7 @@ import { loadOutput, useJobs } from "@desktop/lib/jobsStore";
 import { M, type Job, type Session } from "@desktop/lib/protocol";
 import { clock } from "@desktop/lib/subagents";
 import { useApp } from "../lib/app";
-import { jobFooter } from "../lib/jobsView";
+import { atEnd, jobFooter } from "../lib/jobsView";
 import { useNow } from "../lib/now";
 import { Btn, cx } from "../components/ui";
 
@@ -82,9 +82,12 @@ function JobDetail({ host, session, job, now, onBack }: { host: string; session:
   }, [host, job.id]);
   const lines = useMemo(() => (chunks ? outputLines(chunks) : null), [chunks]);
   const box = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (box.current) box.current.scrollTop = box.current.scrollHeight;
-  }, [lines?.length]);
+  // Follows new output, also a line that grows, while the reader is at the end.
+  const follow = useRef(true);
+  const size = chunks?.reduce((n, c) => n + c.text.length, 0) ?? 0;
+  useLayoutEffect(() => {
+    if (box.current && follow.current) box.current.scrollTop = box.current.scrollHeight;
+  }, [size]);
   const state = jobStateLine(job, now, session.name);
   const footer = jobFooter(job, session.name, hostLabel);
   const chip = chipFromJob(job);
@@ -133,7 +136,7 @@ function JobDetail({ host, session, job, now, onBack }: { host: string; session:
           <span>Output</span>
           <span className="text-faint">{lines ? `${lines.length} ${lines.length === 1 ? "line" : "lines"}` : ""}</span>
         </div>
-        <div ref={box} className="mt-2 max-h-[50vh] min-h-[160px] overflow-y-auto rounded-[10px] border border-border bg-bg px-3 py-2 font-mono text-[12px] leading-[1.55]">
+        <div ref={box} onScroll={(e) => (follow.current = atEnd(e.currentTarget))} className="mt-2 max-h-[50vh] min-h-[160px] overflow-y-auto rounded-[10px] border border-border bg-bg px-3 py-2 font-mono text-[12px] leading-[1.55]">
           {lines?.map((l) => (
             <div key={l.n} className={cx("break-all whitespace-pre-wrap", l.tone ? LINE_TONE[l.tone] : "text-fg")}>
               {l.text || " "}

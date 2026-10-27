@@ -164,9 +164,9 @@ Added 2026-10-27. Before [X68](X68-account-state.md) the chip matched workspaces
 
 Added 2026-10-27.
 
-- [x] A session with routed commands has a fifth tab, **Jobs**, with their number; a session without any keeps the four. (`sessionTabs` in `lib/jobsView.test.ts`)
-- [x] Jobs lists the session's jobs, newest first, as the desktop's Jobs tab does: the summary line ("1 waiting · 3 done · 3m 53s on workers"), **Stop all** while any runs (`job.stop_all`), and per job its dot, command, clock and where it ran. They follow `job.changed`. (The desktop's `lib/jobs.test.ts`)
-- [x] Tapping a job shows its state line, its phases, the worker it ran on and its output, following `job.output`. A running job has **Stop** with "Changes made so far still come back."; one waiting for a cloud machine says why ("Fix checkout runs its heavy commands in the cloud, so this one waits for its machine instead of running on studio-mini.") and has **Run on <host> now** (`job.run_here`) and **Stop**. (`jobFooter` in `lib/jobsView.test.ts`)
+- [x] A session with routed commands has a fifth tab, **Jobs**, with their number; a session without any keeps the four, and shows Chat when its jobs went while Jobs was open. (`lib/jobsView.test.ts` "adds Jobs only while the session has jobs", "falls back to Chat when the Jobs tab went, as when a reload lists no jobs")
+- [x] Jobs lists the session's jobs, newest first, as the desktop's Jobs tab does: the summary line ("1 waiting · 3 done · 3m 53s on workers"), **Stop all** while any runs (`job.stop_all`), and per job its dot, command, clock and where it ran. They follow `job.changed`, and are read again when the host reconnects, also after a first read that failed. (The desktop's `lib/jobs.test.ts`; `lib/jobsStore.test.ts` "reads a list that failed while the host was away once it reconnects", "reads again the jobs of a host whose id has a slash, as an SSH host reached through a phone's Mac")
+- [x] Tapping a job shows its state line, its phases, the worker it ran on and its output, following `job.output` and keeping the end in view while the reader is there (`atEnd`, "follows the output only while the reader is at its end"). A running job has **Stop** with "Changes made so far still come back."; one waiting for a cloud machine says why ("Fix checkout runs its heavy commands in the cloud, so this one waits for its machine instead of running on studio-mini.") and has **Run on <host> now** (`job.run_here`) and **Stop**. (`jobFooter` in `lib/jobsView.test.ts`)
 
 ## UI
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Job } from "@desktop/lib/protocol";
-import { jobFooter, sessionTabs } from "./jobsView";
+import { atEnd, jobFooter, sessionTabs, shownTab } from "./jobsView";
 
 const job = (extra: Partial<Job> = {}): Job => ({
   id: "j1",
@@ -44,5 +44,21 @@ describe("jobFooter (X62, X63)", () => {
 
   it("offers nothing for a job that ended", () => {
     expect(jobFooter(job({ state: { kind: "done", exit: 1 }, ended_at: 9000 }), "Fix checkout", "studio-mini")).toBeNull();
+  });
+});
+
+describe("shownTab (X62)", () => {
+  it("falls back to Chat when the Jobs tab went, as when a reload lists no jobs", () => {
+    expect(shownTab("jobs", ["chat", "terminal", "changes", "pr"])).toBe("chat");
+    expect(shownTab("pr", ["chat", "terminal", "changes", "pr"])).toBe("pr");
+    expect(shownTab("jobs", ["chat", "terminal", "changes", "pr", "jobs"])).toBe("jobs");
+  });
+});
+
+describe("atEnd (X62)", () => {
+  it("follows the output only while the reader is at its end", () => {
+    expect(atEnd({ scrollTop: 600, clientHeight: 400, scrollHeight: 1000 })).toBe(true);
+    expect(atEnd({ scrollTop: 590, clientHeight: 400, scrollHeight: 1000 })).toBe(true);
+    expect(atEnd({ scrollTop: 200, clientHeight: 400, scrollHeight: 1000 })).toBe(false);
   });
 });
