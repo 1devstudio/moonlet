@@ -1456,6 +1456,38 @@ pub struct NamedItem {
     pub description: String,
 }
 
+/// When an account change was made (X68): a hybrid logical clock and the
+/// member that made it. Ordered by time, then counter, then member, so
+/// every member orders changes the same way.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct Stamp {
+    pub ms: u64,
+    pub n: u32,
+    pub member: String,
+}
+
+/// One change to the account state (X68): one field of one record set, or
+/// the record deleted. `seq` counts the changes its member has made.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Change {
+    pub stamp: Stamp,
+    pub seq: u64,
+    pub kind: String,
+    pub id: String,
+    pub op: ChangeOp,
+}
+
+/// What a [`Change`] does to its record (X68).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChangeOp {
+    /// Sets one field; the change with the latest stamp gives the field
+    /// its value.
+    Set { field: String, value: serde_json::Value },
+    /// Deletes the record, for good: later changes to it are ignored.
+    Delete,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

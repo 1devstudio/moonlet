@@ -26,14 +26,15 @@ Session records, settings, devices and secrets join the account state in later s
 
 ### The account log (core)
 
-- [ ] The account state is a set of **records**, each with a kind (`workspace`, `section`), an id and named fields. A change sets one field of one record, or deletes a record.
-- [ ] Every change carries a **stamp**: a hybrid logical clock (wall time in ms, a counter) and the member's id. Stamps are totally ordered: time, then counter, then member id.
-- [ ] A member's clock never goes backwards: a change it makes is stamped later than every change it has seen, from itself or others, even when its wall clock is behind.
-- [ ] A field's value is the one with the latest stamp, whatever order the changes arrive in. Applying the same change twice changes nothing.
-- [ ] Deleting a record wins over every change to it with an earlier stamp, and a deleted record stays deleted: later field changes do not bring it back.
-- [ ] Two members that have seen the same changes have the same state.
-- [ ] Each member keeps a **version**: for every member, the counter of the newest change from it that it has seen. Given another member's version, it returns exactly the changes the other has not seen.
-- [ ] Order inside a list (sections in a workspace) comes from **sort keys**: a key can always be made between two keys, before the first or after the last, and two members ordering sections at once never lose a section.
+- [x] The account state is a set of **records**, each with a kind (`workspace`, `section`), an id and named fields. A change sets one field of one record, or deletes a record; its wire form is `{stamp, seq, kind, id, op}`. (`a_change_reads_and_writes_as_the_protocol_says`)
+- [x] Every change carries a **stamp**: a hybrid logical clock (wall time in ms, a counter) and the name of the log that made it. Stamps are totally ordered: time, then counter, then log name. (`changes_stamped_at_the_same_time_are_ordered_by_member`)
+- [x] A member's clock never goes backwards: a change it makes is stamped later than every change it has seen, from itself or others, even when its wall clock is behind. A counter at its limit moves on to the next millisecond. (`a_change_made_here_comes_after_every_change_seen_even_with_a_clock_behind`, `a_counter_at_its_limit_moves_the_clock_on_instead_of_overflowing`)
+- [x] A field's value is the one with the latest stamp, whatever order the changes arrive in. Applying the same change twice changes nothing. (`a_field_takes_the_latest_change_whatever_order_the_changes_come_in`, `a_member_that_missed_a_change_gets_exactly_what_it_lacks_and_both_agree`)
+- [x] Deleting a record wins over every change to it with an earlier stamp, and a deleted record stays deleted: later field changes do not bring it back. (`a_deleted_record_stays_deleted_whatever_changes_it_later`)
+- [x] Two members that have seen the same changes have the same state. (`a_member_that_missed_a_change_gets_exactly_what_it_lacks_and_both_agree`)
+- [x] Each member keeps a **version**: for every log, the number of its changes seen, up to the first one missing. Given another member's version, it returns the changes the other has not seen; a change the other already holds past a gap is sent again and counts once. (`a_member_that_missed_a_change_gets_exactly_what_it_lacks_and_both_agree`)
+- [x] Order inside a list (sections in a workspace) comes from **sort keys**: a key can always be made between two keys, before the first or after the last, and never ends in `0`. Two members placing a section at once can give two sections the same key; neither is lost, and a key asked for between equal keys comes after them. A bound with a character outside base 36, from another member, still gets a key between it and the other bound. (`sort_keys_fit_between_before_and_after_any_keys`, `a_key_between_keys_that_leave_little_room_stays_between_them`, `a_key_from_another_member_outside_base_36_still_gets_a_key_between`)
+- [x] A saved log loads with its changes and goes on numbering its own. (`a_saved_log_reloads_with_its_changes_and_goes_on_counting`)
 
 ### Workspaces and sections from the log (daemon)
 
