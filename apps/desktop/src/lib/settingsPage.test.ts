@@ -68,41 +68,40 @@ describe("settings nav (X43)", () => {
 
 describe("the workspaces settings lists (X68)", () => {
   const ws = (id: string, name: string): Workspace => ({ id, name, color: "clay", section_ids: [], created_at: 0, claude_profile: null });
-  const personal = ws("c05254bf1786", "Personal");
-  const mini = ws("fe2837aa4788", "Personal Mini");
+  // Each Mac's copy is its own object, named apart, so a test sees which one is listed.
+  const local = [ws("c05254bf1786", "Personal"), ws("fe2837aa4788", "Personal Mini")];
+  const onMini = [ws("c05254bf1786", "Personal (mini)"), ws("fe2837aa4788", "Personal Mini (mini)")];
 
   it("lists each workspace of an account once, this Mac's copy first and untagged, and a host outside the account apart under its name", () => {
-    const devbox = ws("c05254bf1786", "Personal");
     expect(
       settingsWorkspaces([
-        { host: "studio-mini", label: "studio-mini", remote: true, connected: true, account: "8605e2c4", workspaces: [personal, mini] },
-        { host: "devbox", label: "devbox", remote: true, connected: true, workspaces: [devbox] },
-        { host: "local", label: "This Mac", remote: false, connected: true, account: "8605e2c4", workspaces: [personal, mini] },
+        { host: "studio-mini", label: "studio-mini", remote: true, connected: true, account: "8605e2c4", workspaces: onMini },
+        { host: "devbox", label: "devbox", remote: true, connected: true, workspaces: [ws("c05254bf1786", "Personal (devbox)")] },
+        { host: "local", label: "This Mac", remote: false, connected: true, account: "8605e2c4", workspaces: local },
       ]),
     ).toEqual([
-      { host: "local", id: "c05254bf1786", account: "8605e2c4", ws: personal, remote: null },
-      { host: "local", id: "fe2837aa4788", account: "8605e2c4", ws: mini, remote: null },
-      { host: "devbox", id: "c05254bf1786", account: "devbox", ws: devbox, remote: "devbox" },
+      { host: "local", id: "c05254bf1786", account: "8605e2c4", ws: { id: "c05254bf1786", name: "Personal", color: "clay", section_ids: [], created_at: 0, claude_profile: null }, remote: null },
+      { host: "local", id: "fe2837aa4788", account: "8605e2c4", ws: { id: "fe2837aa4788", name: "Personal Mini", color: "clay", section_ids: [], created_at: 0, claude_profile: null }, remote: null },
+      { host: "devbox", id: "c05254bf1786", account: "devbox", ws: { id: "c05254bf1786", name: "Personal (devbox)", color: "clay", section_ids: [], created_at: 0, claude_profile: null }, remote: "devbox" },
     ]);
   });
 
   it("lists a shared workspace from another member, untagged, while this Mac does not list it yet", () => {
-    const fresh = ws("a1b2c3d4e5f6", "Acme");
     expect(
       settingsWorkspaces([
         { host: "local", label: "This Mac", remote: false, connected: true, account: "8605e2c4", workspaces: [] },
-        { host: "studio-mini", label: "studio-mini", remote: true, connected: true, account: "8605e2c4", workspaces: [fresh] },
+        { host: "studio-mini", label: "studio-mini", remote: true, connected: true, account: "8605e2c4", workspaces: [ws("a1b2c3d4e5f6", "Acme")] },
       ]),
-    ).toEqual([{ host: "studio-mini", id: "a1b2c3d4e5f6", account: "8605e2c4", ws: fresh, remote: null }]);
+    ).toEqual([{ host: "studio-mini", id: "a1b2c3d4e5f6", account: "8605e2c4", ws: { id: "a1b2c3d4e5f6", name: "Acme", color: "clay", section_ids: [], created_at: 0, claude_profile: null }, remote: null }]);
   });
 
   it("lists a shared workspace from a connected member while this Mac's daemon is disconnected", () => {
     expect(
       settingsWorkspaces([
-        { host: "local", label: "This Mac", remote: false, connected: false, account: "8605e2c4", workspaces: [personal] },
-        { host: "studio-mini", label: "studio-mini", remote: true, connected: true, account: "8605e2c4", workspaces: [personal] },
+        { host: "local", label: "This Mac", remote: false, connected: false, account: "8605e2c4", workspaces: local.slice(0, 1) },
+        { host: "studio-mini", label: "studio-mini", remote: true, connected: true, account: "8605e2c4", workspaces: onMini.slice(0, 1) },
       ]),
-    ).toEqual([{ host: "studio-mini", id: "c05254bf1786", account: "8605e2c4", ws: personal, remote: null }]);
+    ).toEqual([{ host: "studio-mini", id: "c05254bf1786", account: "8605e2c4", ws: { id: "c05254bf1786", name: "Personal (mini)", color: "clay", section_ids: [], created_at: 0, claude_profile: null }, remote: null }]);
   });
 
   it("highlights a shared workspace's entry when its page is open on another member's copy", () => {
