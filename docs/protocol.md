@@ -42,7 +42,7 @@ Every JSON message is an object with a `t` tag:
 
 Method names and parameter structs are in `crates/moonlet-proto/src/methods.rs`; result types are in `types.rs`. Groups:
 
-- `daemon.*`: info (with `data_dir`, the daemon's data folder, X55), shutdown, upgrade.
+- `daemon.*`: info (with `data_dir`, the daemon's data folder, X55), shutdown, upgrade. `daemon.shutdown` and `daemon.upgrade` answer only clients on the host's own socket: a paired phone or Mac over the tailnet, and a phone routed to an SSH host, get `forbidden`.
 - `terminal.*`: create, list, attach, detach, resize, kill, write, search.
 - `agent.report`: state reports from agent hooks (`moonlet hook …`).
 - `workspace.*`, `section.*`, `project.*` and `session.*`: workspaces, their sections, projects, worktree sessions, scripts (X32). Each project has an `identity {origin, root}`, its normalized origin without credentials and its root commit, and `project.identity {path}` returns that of any folder (X41). `session.archive` takes `delete_remote` and returns `{ remote_error }` (X55; older daemons return `true`).

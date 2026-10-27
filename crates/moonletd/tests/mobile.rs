@@ -164,12 +164,16 @@ async fn hello(s: &mut TcpStream, client: &str) -> Option<Message> {
 }
 
 async fn call(s: &mut TcpStream, id: u64, method: &str) -> Message {
+    call_with(s, id, method, json!({})).await
+}
+
+async fn call_with(s: &mut TcpStream, id: u64, method: &str, params: Value) -> Message {
     write_frame(
         s,
         &Frame::Json(Message::Request {
             id,
             method: method.into(),
-            params: json!({}),
+            params,
         }),
     )
     .await
@@ -471,6 +475,51 @@ async fn a_paired_mac_can_remove_itself_but_manage_nothing_else() {
         .await
         .unwrap_err();
     assert_eq!(e.to_string(), "invalid_params: not a paired device");
+}
+
+/// Only the host itself may stop or swap its daemon: a paired phone or Mac
+/// over the tailnet could otherwise end every session there, or make it run
+/// any program on that machine.
+#[tokio::test]
+async fn paired_devices_cannot_stop_or_upgrade_the_daemon() {
+    let mac = Mac::start(None).await;
+    let addr = mac.allow_phones().await;
+    let mut app = mac.app().await;
+    let phone_token = mac.pair(&addr).await;
+    let p: MobilePairing = app.request("mobile.pair_start", json!({ "kind": "desktop" })).await.unwrap();
+    let (_, reply) = auth(
+        &addr,
+        json!({ "pair": p.code, "device": "Alex's MacBook Pro", "kind": "desktop" }),
+    )
+    .await;
+    let Some(Message::Authed {
+        token: Some(desktop_token),
+        ..
+    }) = reply
+    else {
+        panic!("{reply:?}")
+    };
+    let before: DaemonInfo = app.request("daemon.info", json!({})).await.unwrap();
+
+    for (token, client) in [(&phone_token, "moonlet-mobile"), (&desktop_token, "moonlet-app")] {
+        let (mut device, _) = auth(&addr, json!({ "token": token })).await;
+        hello(&mut device, client).await;
+        let upgrade = call_with(&mut device, 1, "daemon.upgrade", json!({ "binary": "/nonexistent/moonletd" })).await;
+        let Message::Response { error: Some(e), .. } = upgrade else {
+            panic!("daemon.upgrade worked from {client}: {upgrade:?}")
+        };
+        assert_eq!((e.code.as_str(), e.message.as_str()), ("forbidden", "upgrade moonletd on its own machine"));
+        let shutdown = call(&mut device, 2, "daemon.shutdown").await;
+        let Message::Response { error: Some(e), .. } = shutdown else {
+            panic!("daemon.shutdown worked from {client}: {shutdown:?}")
+        };
+        assert_eq!((e.code.as_str(), e.message.as_str()), ("forbidden", "stop moonletd on its own machine"));
+    }
+
+    // The same daemon still serves.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let after: DaemonInfo = app.request("daemon.info", json!({})).await.unwrap();
+    assert_eq!(after.pid, before.pid);
 }
 
 /// Where a `moonlet_link::Host`'s statuses go.
@@ -809,6 +858,17 @@ async fn a_phone_reaches_an_ssh_host_through_the_mac() {
         panic!("heavy.approve worked through a route")
     };
     assert_eq!(e.message, "approve heavy commands from the Mac");
+    // Nor stop or swap the host's daemon.
+    let Message::Response { error: Some(e), .. } =
+        call_with(&mut phone, 10, "daemon.upgrade", json!({ "binary": "/nonexistent/moonletd" })).await
+    else {
+        panic!("daemon.upgrade worked through a route")
+    };
+    assert_eq!(e.message, "upgrade moonletd on its own machine");
+    let Message::Response { error: Some(e), .. } = call(&mut phone, 11, "daemon.shutdown").await else {
+        panic!("daemon.shutdown worked through a route")
+    };
+    assert_eq!(e.message, "stop moonletd on its own machine");
 
     // Only the desktop's hosts can be reached.
     let (_, r) = auth(
