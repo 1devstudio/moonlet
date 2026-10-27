@@ -25,8 +25,9 @@ export interface SearchContext {
   profiles: number;
   remoteHosts: number;
   phones: number;
-  /** `profile`: the name of the profile the workspace uses. */
-  workspaces: { host: string; id: string; name: string; color: WorkspaceColor; profile: string }[];
+  /** `profile`: the name of the profile the workspace uses; `remote`: the
+   * host of one outside this Mac's account (X68). */
+  workspaces: { host: string; id: string; name: string; color: WorkspaceColor; profile: string; remote?: string | null }[];
   /** `config`: the project's `.moonlet/config.toml`, once read. */
   projects: { host: string; id: string; name: string; base_branch: string; config?: ProjectConfig | null }[];
   /** This Mac's Git settings (X55), once read. */
@@ -167,7 +168,7 @@ function index(c: SearchContext): Entry[] {
     app("phones", "Machines › Phones", "phones", "Allow connections from my tailnet", "", "mobile phone pair Tailscale"),
     ...c.workspaces.flatMap((w): Entry[] => {
       const route: SettingsRoute = { page: "workspace", host: w.host, id: w.id };
-      const path = `Workspaces › ${w.name}`;
+      const path = `Workspaces › ${w.name}${w.remote ? ` (${w.remote})` : ""}`;
       return [
         { label: "Workspace name", path, route, setting: "ws-name", value: w.name },
         { label: "Workspace colour", also: "color", path, route, setting: "ws-color", value: labelOf(WORKSPACE_COLORS, w.color) },

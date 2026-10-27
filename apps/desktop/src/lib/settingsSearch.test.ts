@@ -51,6 +51,15 @@ describe("searching settings (X43)", () => {
     ]);
   });
 
+  it("names the host of a workspace outside this Mac's account, so two of one name differ (X68)", () => {
+    const two = { ...ctx, workspaces: [...ctx.workspaces, { host: "devbox", id: "personal", name: "Personal", color: "clay" as const, profile: "Default", remote: "devbox" }] };
+    expect(searchSettings("workspace name", two).map((r) => [r.path, r.route])).toEqual([
+      ["Workspaces › Personal", { page: "workspace", host: "local", id: "personal" }],
+      ["Workspaces › Acme", { page: "workspace", host: "local", id: "acme" }],
+      ["Workspaces › Personal (devbox)", { page: "workspace", host: "devbox", id: "personal" }],
+    ]);
+  });
+
   it("finds This Mac's Git settings with their values (X55)", () => {
     const git = { ...ctx, git: { branch_prefix: "marcin/", start_from: "origin" as const, archive_worktree: "remove" as const, archive_branch: "merged" as const, delete_remote_branch: false, warn_unpushed: true, stage_all: true, draft_prs: true, fetch_minutes: 15, fast_forward_base: false } };
     expect(searchSettings("draft", git).map((r) => [r.before + r.hit + r.after, r.path, r.value, r.route, r.setting])).toEqual([

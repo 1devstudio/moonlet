@@ -46,7 +46,7 @@ export function useSearchContext(phones: number, searching: boolean): SearchCont
       profiles: (profiles.local?.length ?? 0) + 1,
       remoteHosts: Object.values(hosts).filter((h) => h.remote).length,
       phones,
-      workspaces: settingsWorkspaces(settingsHosts({ hosts, workspaces, accounts })).map(({ host, id, ws }) => ({ host, id, name: ws.name, color: ws.color, profile: profileName(ws, profiles[host] ?? []) })),
+      workspaces: settingsWorkspaces(settingsHosts({ hosts, workspaces, accounts })).map(({ host, id, ws, remote }) => ({ host, id, name: ws.name, color: ws.color, profile: profileName(ws, profiles[host] ?? []), remote })),
       projects: Object.entries(projects).flatMap(([host, list]) => list.map((p) => ({ host, id: p.id, name: p.name, base_branch: p.base_branch, config: configs[`${host}/${p.id}`] }))),
       git,
       trackers,
