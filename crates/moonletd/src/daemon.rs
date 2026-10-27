@@ -2267,6 +2267,40 @@ impl Daemon {
     /// writes could go with them; none does on a design with edits waiting
     /// (the first message comes as the design is made, and a queued one
     /// after the turn's snapshot). Runs for the daemon's life.
+    /// Moves the design systems and designs of each merged workspace into
+    /// the one it merged into (X71): now, and whenever the workspaces
+    /// change, as they do when a merge comes from another member. Runs for
+    /// the daemon's life.
+    pub fn follow_merges(self: &Arc<Self>) {
+        let mut events = self.terminals.subscribe_events();
+        let d = self.clone();
+        tokio::spawn(async move {
+            d.move_merged_designs().await;
+            loop {
+                match events.recv().await {
+                    Ok(Message::Event { name, .. }) if name == m::EV_WORKSPACES_CHANGED => {}
+                    Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(_) => return,
+                }
+                d.move_merged_designs().await;
+            }
+        });
+    }
+
+    async fn move_merged_designs(&self) {
+        for (from, into) in self.sessions.merged_workspaces() {
+            let store = self.design.clone();
+            let (f, i) = (from.clone(), into.clone());
+            match blocking(move || store.move_workspace(&f, &i)).await {
+                Ok(moved) if !moved.is_empty() => {
+                    tracing::info!(%from, %into, "moved {} design items of a merged workspace", moved.len());
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!(%from, %into, "cannot move a merged workspace's designs: {}", e.message),
+            }
+        }
+    }
+
     pub fn snapshot_agent_turns(self: &Arc<Self>) {
         use moonlet_proto::types::{AgentState, TerminalInfo};
         let mut events = self.terminals.subscribe_events();

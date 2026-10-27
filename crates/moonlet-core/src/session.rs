@@ -725,6 +725,27 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Each workspace merged into another (X68) that is gone, with the
+    /// workspace it now lives in: the end of its chain of merges.
+    pub fn merged_workspaces(&self) -> Vec<(String, String)> {
+        let st = self.state.lock().unwrap();
+        let exists = |w: &str| st.workspaces.iter().any(|x| x.id == w);
+        st.merges
+            .keys()
+            .filter(|from| !exists(from))
+            .filter_map(|from| {
+                let mut at = st.merges.get(from)?;
+                for _ in 0..8 {
+                    if exists(at) {
+                        return Some((from.clone(), at.clone()));
+                    }
+                    at = st.merges.get(at)?;
+                }
+                None
+            })
+            .collect()
+    }
+
     pub fn create_section(&self, workspace_id: &str, name: &str) -> Result<Section> {
         let name = name.trim();
         if name.is_empty() {

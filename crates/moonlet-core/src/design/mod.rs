@@ -12,6 +12,7 @@ pub(crate) mod fsx;
 pub mod history;
 pub mod kit;
 pub mod manifest;
+pub mod merge;
 pub mod mid;
 pub mod pages;
 pub mod parse;

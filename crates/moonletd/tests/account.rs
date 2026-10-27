@@ -759,3 +759,54 @@ async fn only_a_linked_mac_syncs_the_account() {
         .unwrap_err();
     assert!(e.to_string().contains("forbidden"), "{e}");
 }
+
+/// The slugs of workspace `ws`'s design systems on `d` (X64).
+async fn systems(d: &Daemon, ws: &str) -> Vec<String> {
+    let list: Vec<Value> = d.call("design.systems", json!({ "workspace": ws })).await;
+    list.iter().map(|s| s["slug"].as_str().unwrap().to_string()).collect()
+}
+
+#[tokio::test]
+async fn design_systems_follow_a_workspace_merged_on_another_member_and_on_start() {
+    let (mut mini, addr) = central().await;
+    let book = mac(BOOK, "Alex's MacBook Pro").await;
+    link(&book, &mini, &addr, "Alex's MacBook Pro").await;
+    let minis = mini.workspaces().await[0].id.clone();
+    let _: Value = mini
+        .call(
+            "design.system.create",
+            json!({ "workspace": minis, "name": "Acme web", "sources": [], "cover": "none", "agent": false }),
+        )
+        .await;
+    within(
+        Duration::from_secs(10),
+        "both Personal on the MacBook",
+        || async { book.names().await.len() == 2 },
+    )
+    .await;
+    let books = book.workspaces().await.into_iter().find(|w| w.id != minis).unwrap().id;
+    // The MacBook merges studio-mini's "Personal" into its own (X68).
+    let _: Value = book
+        .call("workspace.merge", json!({ "id": minis, "into": books }))
+        .await;
+    within(
+        Duration::from_secs(5),
+        "Acme web under the MacBook's Personal on studio-mini",
+        || async { systems(&mini, &books).await == ["acme-web"] },
+    )
+    .await;
+    assert!(!mini.home.path().join("design").join(&minis).exists());
+
+    // A system left under the merged id, as v0.1.33's merges left them,
+    // moves when the daemon starts.
+    let left = mini.home.path().join("design").join(&minis).join("systems/billing");
+    std::fs::create_dir_all(&left).unwrap();
+    std::fs::write(left.join("config.toml"), "name = \"Billing\"\ncreated_at = 1\n").unwrap();
+    mini.restart().await;
+    within(
+        Duration::from_secs(5),
+        "Billing under the MacBook's Personal after a restart",
+        || async { systems(&mini, &books).await == ["acme-web", "billing"] },
+    )
+    .await;
+}
