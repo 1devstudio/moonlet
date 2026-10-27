@@ -54,13 +54,13 @@ ADR 0009 put every session on the central host, with other machines as windows o
   - **Continue on <member>**, with the owner unreachable for about 30 s (ADR 0009): the member takes its copy's files and the last synced transcript, raises the ownership number and starts the agent. From the phone this means continuing on the central host. A turn the owner had in flight when it went to sleep is not in the copy and is not resumed there.
 - **Only the member with the highest ownership number runs the agent.** This is ADR 0009's rule, now built:
   - The `PreToolUse` hook that moonlet installs already sees every tool call. After the machine wakes, the daemon holds the agent's tool calls until it has asked the central host whether it still owns the session, for up to about 5 s. A Mac that was asleep would otherwise carry on its frozen turn for a few seconds after someone took over.
-  - When the central host cannot be reached at all, the owner keeps working: offline work is the point.
+  - When the central host cannot be reached at all, the owner keeps working: offline work is the point. So while the network is split, the owner and a member that continued the session can both run its agent, since neither can tell the other. This is accepted rather than fenced: stopping the owner would need the central host it cannot reach. The member that lost the session finds out when it reaches the central host again, and pauses as below.
   - A member that learns it lost the session pauses its agent. Its files from the gap go to `sync-leftovers` (X60), and its conversation from the gap is kept as a fork, not dropped.
 
 ### Managing a host
 
 - **The first desktop paired with a member is its admin.** An admin can change the member's settings, pair and remove devices, set its link to the central host, update moonlet on it, give it secrets, and start the sign-ins of Claude Code and `gh` in a terminal on it. More admins can be added from an admin. Phones and the `moonlet` CLI are never admins. This replaces X57's "a paired desktop cannot manage the remote's devices" and X41's refusal of `link.set` from paired devices.
-- **Pairing a phone from any app pairs it with the central host.** The app asks the central host for the code, so the QR code carries the central host's tailnet addresses. Decided by the user on 2026-10-26. The paired device is recorded in the account state, so every member accepts its token, and moving the central host does not need the phone paired again.
+- **Pairing a phone from any app pairs it with the central host.** The app asks the central host for the code, so the QR code carries the central host's tailnet addresses. Decided by the user on 2026-10-26. The paired device is recorded in the account state, so every member accepts its token, and moving the central host does not need the phone paired again. How a paired phone learns the new central host's addresses is left to the slice that builds pairing from any app.
 
 ### Secrets
 
