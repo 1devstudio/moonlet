@@ -482,7 +482,8 @@ export function HostsPage({ status }: { status: MobileStatus | null }) {
   const local = hosts.local;
   const remotes = Object.values(hosts).filter((h) => h.remote);
   const appVersion = useStore((s) => s.appVersion) ?? "";
-  const stale = olderHosts(remotes, appVersion);
+  const updates = useHostUpdates((s) => s.updates);
+  const stale = olderHosts(remotes, appVersion, updates);
   const heavy = heavyHostIds(remotes, central);
   const macs = status ? devicesOfKind(status, "desktop") : [];
   const canPair = !!status?.enabled && status.listening.length > 0;
@@ -566,7 +567,7 @@ export function HostsPage({ status }: { status: MobileStatus | null }) {
         <Card>
           {stale.length > 0 && (
             <div data-setting="update-all-hosts" className="flex items-center gap-3 px-4 py-3">
-              <span className="min-w-0 flex-1 truncate ui-text-13 text-muted">{olderHostsText(remotes, appVersion)}</span>
+              <span className="min-w-0 flex-1 truncate ui-text-13 text-muted">{olderHostsText(remotes, appVersion, updates)}</span>
               <Button size="sm" variant="primary" onClick={() => updateAll(remotes, appVersion)}>
                 {updateAllLabel(stale.length)}
               </Button>

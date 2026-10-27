@@ -68,7 +68,7 @@ export async function updateHost(h: HostInfo, version: string) {
 
 /** Updates every older host at once; one failing leaves the others going. */
 export function updateAll(hosts: HostInfo[], appVersion: string) {
-  for (const h of olderHosts(hosts, appVersion)) void updateHost(h, appVersion);
+  for (const h of olderHosts(hosts, appVersion, useHostUpdates.getState().updates)) void updateHost(h, appVersion);
 }
 
 /** The toast offering Update all, once per app version. */

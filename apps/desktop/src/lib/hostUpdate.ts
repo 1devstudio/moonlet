@@ -20,15 +20,16 @@ export function updateOffer(h: HostInfo, appVersion: string): string | null {
   return older(h.daemon_version, appVersion) ? appVersion : null;
 }
 
-/** The hosts Update all takes. */
-export const olderHosts = (hosts: HostInfo[], appVersion: string) => hosts.filter((h) => updateOffer(h, appVersion) !== null);
+/** The hosts Update all takes: older ones not updating already. */
+export const olderHosts = (hosts: HostInfo[], appVersion: string, updates: Record<string, HostUpdate> = {}) =>
+  hosts.filter((h) => updateOffer(h, appVersion) !== null && updates[h.id]?.phase !== "updating");
 
 export const updateAllLabel = (n: number) => `Update all (${n})`;
 
 /** What the toast and the Update all row say when hosts run an older
  * moonlet; null when none does. */
-export function olderHostsText(hosts: HostInfo[], appVersion: string): string | null {
-  const stale = olderHosts(hosts, appVersion);
+export function olderHostsText(hosts: HostInfo[], appVersion: string, updates: Record<string, HostUpdate> = {}): string | null {
+  const stale = olderHosts(hosts, appVersion, updates);
   if (stale.length === 0) return null;
   return stale.length === 1 ? `${stale[0].label} runs an older moonlet` : `${stale.length} hosts run an older moonlet`;
 }
@@ -38,7 +39,9 @@ export function olderHostsText(hosts: HostInfo[], appVersion: string): string | 
 export function updateFailed(h: HostInfo, e: RpcError): HostUpdate {
   if (e.code !== "too_old") return { phase: "failed", text: e.message, command: null };
   if (h.os === "linux") return { phase: "failed", text: `${e.message}: run this there`, command: INSTALL_COMMAND };
-  return { phase: "failed", text: `${e.message}. Update it from its Settings › Updates.`, command: null };
+  if (h.os === "macos") return { phase: "failed", text: `${e.message}. Update it from its Settings › Updates.`, command: null };
+  // A connected host's OS is known only after a protocol mismatch (X58).
+  return { phase: "failed", text: `${e.message}. On Linux, run this there; on a Mac, use its Settings › Updates.`, command: INSTALL_COMMAND };
 }
 
 /** The next state of update `u` now that host `h` is as it is, and whether

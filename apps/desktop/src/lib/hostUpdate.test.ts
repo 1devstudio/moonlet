@@ -41,6 +41,8 @@ describe("which hosts can be updated from here (X69)", () => {
       host({ id: "devbox", label: "devbox", kind: "ssh" }),
     ];
     expect(olderHosts(hosts, "0.1.34").map((h) => h.id)).toEqual(["studio-mini", "build-box"]);
+    // A host already updating isn't counted again.
+    expect(olderHosts(hosts, "0.1.34", { "build-box": { phase: "updating", to: "0.1.34", since: 0 } }).map((h) => h.id)).toEqual(["studio-mini"]);
     expect(updateAllLabel(2)).toBe("Update all (2)");
   });
 
@@ -91,6 +93,15 @@ describe("following an update (X69)", () => {
     expect(updateFailed(host({ id: "build-box", label: "build-box", os: "linux" }), tooOld("build-box", "0.1.32"))).toEqual({
       phase: "failed",
       text: "build-box runs moonlet 0.1.32, which can't be updated from here: run this there",
+      command: "curl -fsSL https://github.com/1devstudio/moonlet/releases/latest/download/install.sh | sh",
+    });
+  });
+
+  it("gives both manual ways when it isn't known whether the host is a Mac", () => {
+    // A connected host's OS comes only with a protocol mismatch (X58).
+    expect(updateFailed(host({ os: null }), { code: "too_old", message: "studio-mini runs moonlet 0.1.33, which can't be updated from here" })).toEqual({
+      phase: "failed",
+      text: "studio-mini runs moonlet 0.1.33, which can't be updated from here. On Linux, run this there; on a Mac, use its Settings › Updates.",
       command: "curl -fsSL https://github.com/1devstudio/moonlet/releases/latest/download/install.sh | sh",
     });
   });
