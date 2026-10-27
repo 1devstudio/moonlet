@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { accountNote, hostOrder, installHooksMessage, saveKeySaves, appUpdateLine, claudeUpdateLine, daemonHint, daemonLine, daemonOn, daemonToast, offStopsDaemon, opensLoginItems, escapeAction, hookRows, hooksDone, phoneAccessLine, radioKey, routeKey, settingsCrumbs, hostActions, hostLine, hostNotice, updateCommand, profileLine, removeAsks, profilesNeedSignIn, settingsNav } from "./settingsPage";
+import { accountNote, hostOrder, installHooksMessage, saveKeySaves, appUpdateLine, claudeUpdateLine, daemonHint, daemonLine, daemonOn, daemonToast, offStopsDaemon, opensLoginItems, escapeAction, hookRows, hooksDone, phoneAccessLine, radioKey, routeKey, settingsCrumbs, hostActions, hostLine, hostNotice, updateCommand, profileLine, removeAsks, profilesNeedSignIn, settingsHosts, settingsNav, settingsWorkspaces, activeNavKey } from "./settingsPage";
 import type { HookStatus, HostInfo, MobileStatus, ProfileAccount, ProfileInfo, Workspace } from "./protocol";
 
 describe("settings nav (X43)", () => {
@@ -63,6 +63,66 @@ describe("settings nav (X43)", () => {
         ],
       },
     ]);
+  });
+});
+
+describe("the workspaces settings lists (X68)", () => {
+  const ws = (id: string, name: string): Workspace => ({ id, name, color: "clay", section_ids: [], created_at: 0, claude_profile: null });
+  // Each Mac's copy is its own object, named apart, so a test sees which one is listed.
+  const local = [ws("c05254bf1786", "Personal"), ws("fe2837aa4788", "Personal Mini")];
+  const onMini = [ws("c05254bf1786", "Personal (mini)"), ws("fe2837aa4788", "Personal Mini (mini)")];
+
+  it("lists each workspace of an account once, this Mac's copy first and untagged, and a host outside the account apart under its name", () => {
+    expect(
+      settingsWorkspaces([
+        { host: "studio-mini", label: "studio-mini", remote: true, connected: true, account: "8605e2c4", workspaces: onMini },
+        { host: "devbox", label: "devbox", remote: true, connected: true, workspaces: [ws("c05254bf1786", "Personal (devbox)")] },
+        { host: "local", label: "This Mac", remote: false, connected: true, account: "8605e2c4", workspaces: local },
+      ]),
+    ).toEqual([
+      { host: "local", id: "c05254bf1786", account: "8605e2c4", ws: { id: "c05254bf1786", name: "Personal", color: "clay", section_ids: [], created_at: 0, claude_profile: null }, remote: null },
+      { host: "local", id: "fe2837aa4788", account: "8605e2c4", ws: { id: "fe2837aa4788", name: "Personal Mini", color: "clay", section_ids: [], created_at: 0, claude_profile: null }, remote: null },
+      { host: "devbox", id: "c05254bf1786", account: "devbox", ws: { id: "c05254bf1786", name: "Personal (devbox)", color: "clay", section_ids: [], created_at: 0, claude_profile: null }, remote: "devbox" },
+    ]);
+  });
+
+  it("lists a shared workspace from another member, untagged, while this Mac does not list it yet", () => {
+    expect(
+      settingsWorkspaces([
+        { host: "local", label: "This Mac", remote: false, connected: true, account: "8605e2c4", workspaces: [] },
+        { host: "studio-mini", label: "studio-mini", remote: true, connected: true, account: "8605e2c4", workspaces: [ws("a1b2c3d4e5f6", "Acme")] },
+      ]),
+    ).toEqual([{ host: "studio-mini", id: "a1b2c3d4e5f6", account: "8605e2c4", ws: { id: "a1b2c3d4e5f6", name: "Acme", color: "clay", section_ids: [], created_at: 0, claude_profile: null }, remote: null }]);
+  });
+
+  it("lists a shared workspace from a connected member while this Mac's daemon is disconnected", () => {
+    expect(
+      settingsWorkspaces([
+        { host: "local", label: "This Mac", remote: false, connected: false, account: "8605e2c4", workspaces: local.slice(0, 1) },
+        { host: "studio-mini", label: "studio-mini", remote: true, connected: true, account: "8605e2c4", workspaces: onMini.slice(0, 1) },
+      ]),
+    ).toEqual([{ host: "studio-mini", id: "c05254bf1786", account: "8605e2c4", ws: { id: "c05254bf1786", name: "Personal (mini)", color: "clay", section_ids: [], created_at: 0, claude_profile: null }, remote: null }]);
+  });
+
+  it("leaves a shared workspace untagged when another member's workspaces arrive before this Mac's", () => {
+    const listed = settingsWorkspaces(
+      settingsHosts({
+        hosts: { local: { label: "This Mac", remote: false, status: "connected" }, "studio-mini": { label: "studio-mini", remote: true, status: "connected" } },
+        workspaces: { "studio-mini": onMini.slice(0, 1) },
+        accounts: { local: { account: "8605e2c4" }, "studio-mini": { account: "8605e2c4" } },
+      }),
+    );
+    expect(listed.map(({ host, id, remote }) => ({ host, id, remote }))).toEqual([{ host: "studio-mini", id: "c05254bf1786", remote: null }]);
+  });
+
+  it("highlights a shared workspace's entry when its page is open on another member's copy", () => {
+    const listed = [
+      { host: "local", id: "c05254bf1786", account: "8605e2c4" },
+      { host: "devbox", id: "c05254bf1786", account: "devbox" },
+    ];
+    expect(activeNavKey({ page: "workspace", host: "studio-mini", id: "c05254bf1786" }, listed, "8605e2c4")).toBe("ws:local:c05254bf1786");
+    expect(activeNavKey({ page: "workspace", host: "devbox", id: "c05254bf1786" }, listed, "devbox")).toBe("ws:devbox:c05254bf1786");
+    expect(activeNavKey({ page: "hooks" }, listed, "local")).toBe("hooks");
   });
 });
 

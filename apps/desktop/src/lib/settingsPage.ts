@@ -3,10 +3,11 @@
 // components/settings/.
 
 import { accountLabel, accountState, tildePath } from "./profiles";
-import type { DaemonService, HookStatus, HostInfo, MobileStatus, ProfileAccount, ProfileInfo, Workspace, WorkspaceColor } from "./protocol";
+import type { AccountInfo, DaemonService, HookStatus, HostInfo, MobileStatus, ProfileAccount, ProfileInfo, Workspace, WorkspaceColor } from "./protocol";
 import { claudeOffer, claudeStatus, type ClaudeUpdateState, type ClaudeVersions } from "./claudeUpdate";
 import { mobileLine } from "./mobile";
 import { DEV_BUILD_NOTE, updateButton, updateStatus, type UpdateState } from "./updater";
+import { accountOf, ownWorkspaces } from "./workspaces";
 
 /** The app-wide pages, in nav order. */
 export type AppPage = "general" | "appearance" | "terminal" | "agents" | "git" | "notifications" | "trackers" | "shortcuts" | "profiles" | "hooks" | "hosts" | "workers" | "cloud" | "phones";
@@ -87,6 +88,49 @@ export function settingsNav(input: NavInput): NavGroup[] {
       entries: input.projects.map((p) => ({ key: routeKey({ page: "project", host: p.host, id: p.id }), route: { page: "project", host: p.host, id: p.id }, label: p.name, ...onHost(p.remote) })),
     });
   return groups;
+}
+
+/** A host as the settings lists of workspaces need it. */
+export interface SettingsHost<W> {
+  host: string;
+  label: string;
+  remote: boolean;
+  connected: boolean;
+  /** The account it shares (X68). */
+  account?: string;
+  workspaces: W[];
+}
+
+/** Every host's workspaces as the settings lists need them (X68): every
+ * known host, with none until its workspaces arrive, so this Mac's account
+ * is known before its own list is. */
+export function settingsHosts<W>(s: { hosts: Record<string, Pick<HostInfo, "label" | "remote" | "status">>; workspaces: Record<string, W[]>; accounts: Record<string, Pick<AccountInfo, "account">> }): SettingsHost<W>[] {
+  const ids = [...new Set([...Object.keys(s.hosts), ...Object.keys(s.workspaces)])];
+  return ids.map((h) => ({ host: h, label: s.hosts[h]?.label ?? h, remote: !!s.hosts[h]?.remote, connected: s.hosts[h]?.status === "connected", account: s.accounts[h]?.account, workspaces: s.workspaces[h] ?? [] }));
+}
+
+/** The workspaces the nav and the search list: each one of an account once
+ * (X68), this Mac's copy while it lists it and is connected, else a
+ * connected member's. `remote` names the host of a workspace outside this
+ * Mac's account. */
+export function settingsWorkspaces<W extends { id: string }>(hosts: SettingsHost<W>[]): { host: string; id: string; account: string; ws: W; remote: string | null }[] {
+  const ordered = hostOrder(hosts.map((h) => h.host))
+    .map((id) => hosts.find((h) => h.host === id)!)
+    .sort((a, b) => Number(b.connected) - Number(a.connected));
+  const local = hosts.find((h) => h.host === "local");
+  const here = local ? accountOf(local) : "local";
+  return ownWorkspaces(ordered).flatMap(({ h, list }) =>
+    list.map((ws) => ({ host: h.host, id: ws.id, account: accountOf(h), ws, remote: h.remote && accountOf(h) !== here ? h.label : null })),
+  );
+}
+
+/** The key of the nav entry open for `route`: a workspace page opened on
+ * another member's copy is its account's entry (X68). `account` is the
+ * account of the route's host. */
+export function activeNavKey(route: SettingsRoute, listed: { host: string; id: string; account: string }[], account: string): string {
+  if (route.page !== "workspace") return routeKey(route);
+  const entry = listed.find((w) => w.id === route.id && (w.host === route.host || w.account === account));
+  return routeKey(entry ? { page: "workspace", host: entry.host, id: entry.id } : route);
 }
 
 /** The key of the nav entry for `route`. */

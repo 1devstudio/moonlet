@@ -59,17 +59,24 @@ export interface SwitcherRow {
 /** `1 section`, `2 sections`. */
 export const count = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
 
+/** Each host's workspaces that no host before it of its account lists
+ * (X68): every member holds the same ones, so each shows once, from the
+ * first. A host outside the account keeps its own, whatever their ids. */
+export function ownWorkspaces<H extends { host: string; account?: string; workspaces: { id: string }[] }>(hosts: H[]): { h: H; list: H["workspaces"] }[] {
+  const seen = new Set<string>();
+  return hosts.map((h) => {
+    const list = h.workspaces.filter((ws) => !seen.has(wsKey(accountOf(h), ws.id)));
+    list.forEach((ws) => seen.add(wsKey(accountOf(h), ws.id)));
+    return { h, list };
+  });
+}
+
 /** The switcher menu's rows, in order: hosts as given, workspaces in each.
  * A workspace the members of one account list (X68) shows once, under the
  * first of them, with the sessions of all; a host outside the account keeps
  * its own, whatever their ids. */
 export function switcherRows(hosts: HostWorkspaces[]): SwitcherRow[] {
-  const seen = new Set<string>();
-  const own = hosts.map((h) => {
-    const list = h.workspaces.filter((ws) => !seen.has(wsKey(accountOf(h), ws.id)));
-    list.forEach((ws) => seen.add(wsKey(accountOf(h), ws.id)));
-    return { h, list };
-  });
+  const own = ownWorkspaces(hosts);
   const labelled = own.filter((o) => o.list.length).length > 1;
   const rows: SwitcherRow[] = [];
   for (const { h, list } of own) {

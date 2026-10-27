@@ -4,7 +4,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Bell, Bot, ChevronRight, Cloud, Cpu, Folder, GitBranch, Keyboard, Link2, Palette, Search, Server, Settings, Smartphone, SquareTerminal, User, X, ListChecks } from "lucide-react";
-import { escapeAction, hostOrder, profilesNeedSignIn, routeFocus, routeKey, settingsCrumbs, settingsNav, type AppPage, type NavEntry, type SettingsRoute } from "../../lib/settingsPage";
+import { escapeAction, hostOrder, profilesNeedSignIn, routeFocus, routeKey, activeNavKey, settingsCrumbs, settingsHosts, settingsNav, settingsWorkspaces, type AppPage, type NavEntry, type SettingsRoute } from "../../lib/settingsPage";
 import { goSettings } from "../../lib/settingsNavigation";
 import { moveSelection, searchSettings, type SearchResult } from "../../lib/settingsSearch";
 import { updateStatus } from "../../lib/updater";
@@ -69,6 +69,7 @@ interface SearchField {
 function Nav({ route, phones, search }: { route: SettingsRoute; phones: number; search: SearchField }) {
   const hosts = useStore((s) => s.hosts);
   const allWorkspaces = useStore((s) => s.workspaces);
+  const accounts = useStore((s) => s.accounts);
   const allProjects = useStore((s) => s.projects);
   const workspaces = allWorkspaces.local;
   const profiles = useStore((s) => s.profiles.local);
@@ -78,6 +79,9 @@ function Nav({ route, phones, search }: { route: SettingsRoute; phones: number; 
   const status = useStore((s) => updateStatus(s.update, s.updateChecking, s.updateError));
   const central = useSync((s) => s.central);
   const cloudRemovalFailed = useCloud((s) => !!s.machines?.machines.some((m) => removalError(m, m.provider)));
+  // Each workspace of an account once (X68).
+  const listedWorkspaces = useMemo(() => settingsWorkspaces(settingsHosts({ hosts, workspaces: allWorkspaces, accounts })), [hosts, allWorkspaces, accounts]);
+  const activeKey = activeNavKey(route, listedWorkspaces, route.page === "workspace" ? (accounts[route.host]?.account ?? route.host) : "");
   const groups = useMemo(
     () =>
       settingsNav({
@@ -85,14 +89,12 @@ function Nav({ route, phones, search }: { route: SettingsRoute; phones: number; 
         phones,
         profilesNeedSignIn: profilesNeedSignIn(workspaces ?? [], profiles ?? [], defaultAccount ?? null),
         trackersNeedAttention: attention,
-        workspaces: hostOrder(Object.keys(allWorkspaces)).flatMap((h) =>
-          (allWorkspaces[h] ?? []).map((w) => ({ host: h, id: w.id, name: w.name, color: w.color, remote: hosts[h]?.remote ? (hosts[h]?.label ?? h) : null })),
-        ),
+        workspaces: listedWorkspaces.map(({ host, id, ws, remote }) => ({ host, id, name: ws.name, color: ws.color, remote })),
         projects: hostOrder(Object.keys(allProjects)).flatMap((h) => (allProjects[h] ?? []).map((p) => ({ host: h, id: p.id, name: p.name, remote: hosts[h]?.remote ? (hosts[h]?.label ?? h) : null }))),
         central,
         cloudRemovalFailed,
       }),
-    [hosts, phones, workspaces, profiles, defaultAccount, allWorkspaces, allProjects, attention, central, cloudRemovalFailed],
+    [hosts, phones, workspaces, profiles, defaultAccount, listedWorkspaces, allProjects, attention, central, cloudRemovalFailed],
   );
   return (
     <nav aria-label="Settings" className="flex h-full w-[248px] shrink-0 flex-col border-r border-border bg-panel">
@@ -126,7 +128,7 @@ function Nav({ route, phones, search }: { route: SettingsRoute; phones: number; 
           <div key={g.title} className="flex flex-col gap-px">
             <span className="flex h-6 items-center px-2 ui-text-11 font-medium uppercase tracking-[0.1em] text-faint">{g.title}</span>
             {g.entries.map((e) => {
-              const active = !search.query.trim() && e.key === routeKey(route);
+              const active = !search.query.trim() && e.key === activeKey;
               return (
                 <button
                   key={e.key}
