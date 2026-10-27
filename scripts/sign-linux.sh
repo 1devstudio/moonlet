@@ -8,10 +8,11 @@
 # TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD hold the
 # key, as for the app's updater archive.
 set -euo pipefail
-cd "$(dirname "$0")/.."
 
-dir=$1
-moonletd=$2
+# Both paths as the caller gave them, before moving to the repository.
+dir=$(cd "$1" && pwd)
+moonletd=$(cd "$(dirname "$2")" && pwd)/$(basename "$2")
+cd "$(dirname "$0")/.."
 shopt -s nullglob
 archives=("$dir"/moonlet-linux-*.tar.gz)
 [ ${#archives[@]} -gt 0 ] || {
