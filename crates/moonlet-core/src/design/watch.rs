@@ -44,6 +44,11 @@ pub fn group(root: &Path, paths: &[PathBuf]) -> Vec<Change> {
         let [workspace, rest @ ..] = parts.as_slice() else {
             continue;
         };
+        // moonlet's own folders beside the workspaces, such as the store
+        // of every item's snapshots (`.store`, X71).
+        if workspace.starts_with('.') {
+            continue;
+        }
         let (system, design, path) = match rest {
             // The system's folder itself (made or removed) counts for the system.
             [kind, slug, inner @ ..] if kind == "systems" => {
@@ -476,6 +481,25 @@ mod tests {
         };
         assert_eq!(group_of("w1/systems/pricing"), vec![change(true)]);
         assert_eq!(group_of("w1/.records/pricing.toml"), vec![change(false)]);
+    }
+
+    #[test]
+    fn the_design_stores_own_repository_is_no_workspace() {
+        let root = Path::new("/d");
+        let paths: Vec<PathBuf> = ["w1/systems/pricing/styles.css", ".store/objects/ab/cdef", ".store/applied.json"]
+            .iter()
+            .map(|p| root.join(p))
+            .collect();
+        assert_eq!(
+            group(root, &paths),
+            vec![Change {
+                whole: false,
+                workspace: "w1".into(),
+                system: Some("pricing".into()),
+                design: None,
+                paths: vec!["styles.css".into()]
+            }]
+        );
     }
 
     #[test]

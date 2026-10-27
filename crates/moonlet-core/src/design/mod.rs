@@ -18,6 +18,7 @@ pub mod pages;
 pub mod parse;
 pub mod place;
 pub mod project;
+pub mod replica;
 pub mod readme;
 pub mod render;
 pub mod session;

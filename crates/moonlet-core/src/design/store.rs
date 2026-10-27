@@ -301,7 +301,7 @@ impl Store {
 
     /// A new file renamed over the old record: a write cut short leaves the
     /// old record whole, and a reader never sees half of one.
-    fn write_record(&self, workspace: &str, slug: &str, record: &Record) -> Result<()> {
+    pub(super) fn write_record(&self, workspace: &str, slug: &str, record: &Record) -> Result<()> {
         let path = self.record_path(workspace, slug)?;
         fsx::write_inside(
             &self.workspace(workspace)?,

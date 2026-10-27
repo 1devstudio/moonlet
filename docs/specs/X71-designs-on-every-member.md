@@ -34,7 +34,7 @@ An **item** is one design system (`systems/<slug>/`) or one workspace design (`d
 - [ ] A design system's snapshot also carries the portable part of its record as `record.toml`. That part is each source's identity, subdir and commit, plus `synced_at`, `last_sync` and `kept`. It never carries a source's project id or folder, the agent's terminal or launch, or `sync_start`.
 - [ ] A workspace design's snapshot holds `design.toml` without `session`, and its pages, assets, comments and history.
 - [ ] The same folder content gives the same tree id on every member.
-- [ ] A snapshot taken from a folder holding a symbolic link refuses it (X64's folders never hold one).
+- [ ] A link in an item's folder is left out of its snapshot, never followed (X64's folders never hold one).
 
 ### Owners and copies (daemon)
 
@@ -102,8 +102,8 @@ The sidebar row of a copy carries the owner's host label in the muted style of t
 ## Security considerations
 
 - `design.offer` and `design.fetch` take only connections from a member's worker link. Phones, the CLI and cloud workers are refused. This is the gate `sync.*` uses (X60).
-- An offered pack is checked before its tree is accepted. It must hold only regular files and folders: no links, no submodules, no `..`, no absolute paths. It must not exceed 256 MiB unpacked, and it must not hold `.cache/` or `.claude/`. A copy is written through the item's `cap-std` handle (`fsx`), which never follows a link.
-- `record.toml` from a snapshot gives only the portable fields. A copy's source folders come from this member's own projects. A copied record never names a folder that the next sync agent would get as `--add-dir`.
+- An offered pack is unpacked into a quarantine repository and checked there; only the objects a tree that passes reaches go to the store, so a refused pack, or anything else a pack carries, leaves nothing behind. A pack over 256 MiB is refused before it is read. It must hold only regular files and folders: no links, no submodules, no `..`, no absolute paths, and no file an agent takes as instructions (a `.md` file whose name starts with `claude` or `agents`, in any case), which the sync agent would read after **Move here**. It must not exceed 256 MiB unpacked, and it must not hold `.cache/` or `.claude/`. A copy is written through the item's `cap-std` handle (`fsx`), which never follows a link.
+- `record.toml` from a snapshot gives only the portable fields, and a source's `subdir` that is empty, absolute or has a `..` refuses the snapshot. A copy's source folders come from this member's own projects. A copied record never names a folder that the next sync agent would get as `--add-dir`.
 - Settings that grant an agent permissions are never copied, because `.claude/` is left out. After **Move here**, the new owner installs its own, as at creation.
 - ADR 0014's trust note applies: any member can publish items that every other member renders. Cards render in the sandboxed, no-network `moonlet-design://` frames, with site isolation (ADR 0013).
 
@@ -120,7 +120,7 @@ The sidebar row of a copy carries the owner's host label in the muted style of t
 - Core unit tests (`design/replica.rs`):
   - a snapshot's tree id for a fixed folder, compared with a literal;
   - `.cache/` and `.claude/` are left out;
-  - a link is refused;
+  - a link is left out;
   - the portable record has no paths;
   - applying a tree replaces the folder and keeps no stale file;
   - a pack with a link, a `..` path or `.claude/` is refused.
