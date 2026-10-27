@@ -13,9 +13,9 @@ An iPhone app for following agents away from the desk. It pairs with the user's 
 ## User journey
 
 1. The user pairs the phone with the Mac (X39). The app opens on the Inbox.
-2. The Inbox says "3 need you · 2 working · 2 ready to review · 2 hosts online". The first card asks "Allow Bash?" for `pnpm test --filter search` in "Add search to the product list". The user taps **Allow**, confirms with Face ID, and the card leaves.
+2. The Inbox says "3 need you · 2 working · 2 hosts online". The first card asks "Allow Bash?" for `pnpm test --filter search` in "Add search to the product list". The user taps **Allow**, confirms with Face ID, and the card leaves.
 3. The next card says "Claude has a plan: Idempotent refund webhooks". The user taps **Review plan**, reads it in a sheet, and taps **Approve, auto mode**.
-4. Under "Ready to review", the user taps "Fix checkout button on mobile". The Changes tab lists 4 files. The user opens a file, long-presses line 15, writes "SKU match should be prefix and case-insensitive", and taps **Send to Claude**. The session's chat shows the comment as the user's message.
+4. In Sessions, under the **Review** filter, the user taps "Fix checkout button on mobile" and opens its Changes tab, which lists 4 files. The user opens a file, long-presses line 15, writes "SKU match should be prefix and case-insensitive", and taps **Send to Claude**. The session's chat shows the comment as the user's message.
 5. In the Sessions tab the user taps **New**, types a task, picks the project, and taps **Start session**. The new session's chat opens.
 6. The PR tab of a session shows `#147 open · Review required` and "1 failing". The user taps **Ask Claude to fix ci / test**.
 
@@ -34,16 +34,15 @@ An iPhone app for following agents away from the desk. It pairs with the user's 
 
 ### Inbox
 
-- [x] The Inbox lists, newest first within each group (`lib/inbox.test.ts`):
-  - **Needs you**: every pending tool permission (`chat.state.pending` of every chat terminal), every plan (`ExitPlanMode` ask, X20), every waiting question (`AskUserQuestion`), and every terminal read request (X31), across all connected hosts in the current workspace.
-  - **Ready to review**: sessions whose agent is `done`, not archived, most recently active first, with their diff stat and file count once `git.status` answers.
-- [x] The summary line counts these: `<n> need you · <n> working · <n> ready to review · <n> hosts online`, leaving out zero counts except hosts. (`lib/inbox.test.ts`)
+- [x] The Inbox lists, newest first, under **Needs you**: every pending tool permission (`chat.state.pending` of every chat terminal), every plan (`ExitPlanMode` ask, X20), every waiting question (`AskUserQuestion`), and every terminal read request (X31), across all connected hosts in the current workspace. (`lib/inbox.test.ts`)
+- [x] The Inbox does not list sessions whose agent is `done`; those are under the Sessions tab's **Review** filter.
+- [x] The summary line counts these: `<n> need you · <n> working · <n> hosts online`, leaving out zero counts except hosts. Sessions whose agent is `done` are not counted. (`lib/inbox.test.ts`)
 - [x] A permission card shows the session name, the agent, the project, the host, the age (`now`, `2m`, `3h`, `2d`, from the ask's `asked_at`), the tool's question ("Allow Bash?"; an MCP tool reads "Allow linear · create_issue?") and its summary, plus **Allow**, **Always** (disabled unless `can_always`) and **Deny**. These call `chat.permission` with `allow`, `always` or `deny`. (`lib/cards.test.ts`)
 - [x] A plan card shows the plan's title (the ask's summary) and the first sentence after its heading, without Markdown and at most 140 characters, the project and the host, plus **Review plan** (opens the plan sheet) and **Approve, auto** (`chat.permission` with `allow` and mode `auto`). (`cards.test.ts`)
 - [x] A terminal read card shows the X31 message (`<agent> in <session> wants the output of <command> (exit <code>, <n> lines) from terminal <title>.`) with **Preview output** (a sheet with the exact text, **Allow** and **Deny**) and **Deny**.
 - [x] A question card opens the session's chat, where the question is answered.
 - [x] A card leaves the Inbox as soon as the daemon reports the ask answered, from the phone or from the Mac (`chat.state`, `terminal.read_done`).
-- [x] With nothing waiting, the Inbox says "Nothing needs you." and still shows Ready to review.
+- [x] With nothing waiting, the Inbox says "Nothing needs you."
 
 ### Face ID
 

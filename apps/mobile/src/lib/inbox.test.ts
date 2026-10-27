@@ -86,8 +86,8 @@ describe("buildInbox", () => {
   });
 });
 
-describe("ready to review and the counts", () => {
-  /** Two done sessions (one archived), one working, one host offline. */
+describe("the counts", () => {
+  /** A done session, an archived one, one more working, one host offline. */
   const counted = () => {
     const w = world();
     w.data.mac.sessions.push(
@@ -103,33 +103,18 @@ describe("ready to review and the counts", () => {
     return w;
   };
 
-  it("lists the sessions ready to review most recently active first", () => {
-    const w = counted();
-    w.data.mac.sessions.push(session("later", "Later work"));
-    w.data.mac.terminals[43] = terminal(43, "later", { agent_state: "done", last_output_at: NOW });
-    w.data.mac.terminals[40] = terminal(40, "checkout", { agent_state: "done", last_output_at: NOW - 30 * MIN });
-    expect(buildInbox(w.hosts, w.data, null).review.map((r) => r.session.name)).toEqual(["Later work", "Fix checkout button on mobile"]);
-  });
-
-  it("lists sessions whose agent is done, not archived ones", () => {
-    const w = counted();
-    expect(buildInbox(w.hosts, w.data, null).review.map((r) => [r.host, r.session.name, r.project])).toEqual([
-      ["mac", "Fix checkout button on mobile", "storefront"],
-    ]);
-  });
-
-  it("counts what needs the user, what works, what waits for review, and the hosts online", () => {
+  it("counts what needs the user, what works and the hosts online, not the sessions done", () => {
     const w = counted();
     const hosts = { ...w.hosts, gpu: { id: "gpu", label: "gpu-box", status: "error" as const, via: "This Mac" } };
     const inbox = buildInbox(hosts, w.data, null);
     // "Fix login" (30) and "Dark mode" (42) are working.
     expect(inbox.working).toBe(2);
     expect(inbox.hostsOnline).toBe(2);
-    expect(summaryLine(inbox)).toBe("3 need you · 2 working · 1 ready to review · 2 hosts online");
+    expect(summaryLine(inbox)).toBe("3 need you · 2 working · 2 hosts online");
   });
 
   it("leaves zero counts out of the line, except the hosts", () => {
-    expect(summaryLine({ needs: [], review: [], working: 0, hostsOnline: 1 })).toBe("1 host online");
-    expect(summaryLine({ needs: [], review: [], working: 1, hostsOnline: 0 })).toBe("1 working · 0 hosts online");
+    expect(summaryLine({ needs: [], working: 0, hostsOnline: 1 })).toBe("1 host online");
+    expect(summaryLine({ needs: [], working: 1, hostsOnline: 0 })).toBe("1 working · 0 hosts online");
   });
 });
