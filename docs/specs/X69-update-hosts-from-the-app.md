@@ -55,19 +55,19 @@ Updating a tailnet host is manual today. When the MacBook updates and the Mac mi
 
 - [x] A tailnet host row gets **Update to <this Mac's version>** when the host's `daemon_version` is older than the app's, whether it is `needs_update` or `connected` (same protocol, older version). A host that is newer, a host with no `daemon_version`, an SSH host (which has **Reinstall**, R2) and a phone get no button.
 - [x] While an update runs, the button reads "Updating…" and is disabled, and the app asks a host that waits for a retry (`needs_update`, an error) to connect again every 2 s. A host that comes back on the new version clears it. A minute after the reply, the row shows "<host> did not come back after the update", or, for a host back on its old version (the handoff failed after the reply), "<host> still runs moonlet 0.1.33: the update did not finish there (see its moonletd log)". (`hostUpdate.test.ts`, `hostUpdateStore.test.ts`)
-- [x] An error shows on the row with its message. `too_old` keeps today's manual text (the `install.sh` command with **Copy** for Linux, Settings › Updates for a Mac).
+- [x] An error shows on the row with its message. `too_old` keeps today's manual text (the `install.sh` command with **Copy** for Linux, Settings › Updates for a Mac; both when the host's OS isn't known, as for a connected host).
 - [x] The sidebar notice for a host (R4) offers the same button. A connected older host, which had no notice, gets one: "studio-mini runs moonlet 0.1.33". (`offerNotice`)
 
 ### Update all
 
-- [x] When at least one tailnet host could get the button above, Settings › Machines › Hosts shows **Update all (<n>)** above the list. It starts `daemon.update` on every such host at once; each row then shows its own state, as if its button had been clicked. A host that fails doesn't stop the others.
+- [x] When at least one tailnet host could get the button above, and is not updating already, Settings › Machines › Hosts shows **Update all (<n>)** above the list. It starts `daemon.update` on every such host at once; each row then shows its own state, as if its button had been clicked. A host that fails doesn't stop the others.
 - [x] The first time the app finds older hosts after it starts as a new version, a toast says "<n> hosts run an older moonlet" ("studio-mini runs an older moonlet" for one) with **Update all**. It doesn't come back for that app version, as X35's update toast doesn't.
 
 ### The app on an updated Mac restarts itself
 
 - [x] Each time the app connects to its own daemon (at launch and after every reconnect, which a live upgrade causes), it reads the version of its bundle on disk (`Contents/Info.plist`, `CFBundleShortVersionString`). It reads it the same way when the connection is refused with `protocol_mismatch`, so this works when the protocol changed too.
 - [x] When the bundle on disk is newer than the running app, the app relaunches into it (`relaunch`, as X35's "Restart to update"). Sessions are the daemon's, so every terminal and agent is still there after the relaunch. This Mac's own update (X35 downloading, installing or ready) is never turned into a relaunch: the user restarts when they choose. One check runs at a time. While the bundle on disk is newer, or can't be read, the app doesn't hand the local daemon to the bundled `moonletd`.
-- [x] Before relaunching, the app checks for work a relaunch would lose: a dirty file tab (X26), design edits a save has not taken yet or a save going (X65), and a chat with text not sent. If there is any, it doesn't relaunch. Text typed in a terminal's input editor is not checked. Its footer button reads "Restart to update", as X35's does, and nothing is lost.
+- [x] Before relaunching, the app checks for work a relaunch would lose: a dirty file tab (X26), design edits a save has not taken yet or a save going (X65), and a chat with text or images not sent. If there is any, it doesn't relaunch. Text typed in a terminal's input editor is not checked. Its footer button reads "Restart to update", as X35's does, and nothing is lost.
 - [x] A dev or e2e build, which has no bundle to read, never relaunches this way.
 
 ## UI
