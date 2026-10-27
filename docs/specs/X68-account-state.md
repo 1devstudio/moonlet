@@ -75,6 +75,7 @@ Session records, settings, devices and secrets join the account state in later s
 - [x] ⌘1–9 go through the sessions in the sidebar's order, every member's merged, skipping folded sections and groups. (`orders sessions for ⌘1–9 as the sidebar shows them, skipping collapsed sections and groups`)
 - [x] Switching back to a shared workspace reopens the session last open in it, on the member it is on. (`reopens the session last open in a shared workspace on the member it is on`)
 - [x] A session started from the composer goes into the shown workspace on whichever member has the project. (`starts a session in the shown workspace on whichever member has the project`)
+- [x] A workspace's Tasks board, and the task lines in the sidebar, take the sessions of every member of its account, each opened on its own member and matched to the board's GitHub repository by project identity. Keep in step (X46) acts on this Mac's own sessions only, so two apps never move one issue twice. (`takes every member's sessions of the workspace, each with its host and its project's repository`, `lists the hosts of a workspace's account that list it, its own host first`)
 - [x] A shared workspace shows the attention dot when a session on any member needs you. (`marks a shared workspace when a session on any member needs you`)
 - [x] Two workspaces with the same name on different members are both shown until the user merges them, each saying which Mac made it ("from studio-mini"): each member gives the account its name, and a workspace's maker is the member whose change made it. **Merge with…** in the switcher lists the other workspaces of the same account, asks first, saying what a new Claude profile does to running agents, and merges on a member that lists both. A merge moves the merged workspace's sessions into the chosen one on every member. (`a_workspace_says_which_member_made_it`, `merges a workspace only into another of its account, on a member that lists both`, `asks before merging, saying what moves and what goes, and what a new profile does to running agents`, `warns of a new Claude profile only when merging moves running agents to another one`, `sessions_of_a_merged_workspace_join_the_chosen_one_on_the_other_member_too`)
 - [x] The first time this Mac shares an account, the app says "Workspaces are now shared with studio-mini", once. (`says once that this Mac's workspaces are now shared with its central host`)
@@ -125,7 +126,6 @@ Session records, settings, devices and secrets join the account state in later s
 - Cloning a project that a member does not have.
 - Settings, paired devices and secrets in the account state.
 - Merging workspaces automatically by name.
-- Task lines (X46) for sessions on another member: the sidebar shows them for the shown member's sessions only, as the Tasks board is that member's.
 - Adding a project that another member has on this one (a clone from its origin).
 - Shortening the log. It grows with every change; compaction comes once it matters.
 

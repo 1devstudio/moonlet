@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { composerWorkspace, isShown, lastSessionKey, mergeHost, mergeProfileChange, mergePrompt, sharedNotice, mergeTargets, parseWsKey, restoreTarget, rowNeedsYou, wsKey, composerOptions, composerPick, composerProjects, composerTarget, createRequest, newSectionWorkspace, currentWorkspace, deleteBlocked, switcherRows, workspaceDirty, workspaceInitial, sectionRows, syncWorkspaceForm, workspaceCanSave, workspacesNeedingYou, workspaceSummary } from "./workspaces";
+import { composerWorkspace, isShown, workspaceMembers, lastSessionKey, mergeHost, mergeProfileChange, mergePrompt, sharedNotice, mergeTargets, parseWsKey, restoreTarget, rowNeedsYou, wsKey, composerOptions, composerPick, composerProjects, composerTarget, createRequest, newSectionWorkspace, currentWorkspace, deleteBlocked, switcherRows, workspaceDirty, workspaceInitial, sectionRows, syncWorkspaceForm, workspaceCanSave, workspacesNeedingYou, workspaceSummary } from "./workspaces";
 import type { Section, Session, Workspace } from "./protocol";
 
 const w = (id: string, name: string, section_ids: string[], color: Workspace["color"] = "clay", claude_profile: string | null = null): Workspace => ({ id, name, color, section_ids, claude_profile, created_at: 0 });
@@ -147,6 +147,12 @@ describe("workspaces of an account (X68)", () => {
     expect(mergeProfileChange(book, acme, [work], 1)).toEqual({ agents: 1, profile: "Work profile" });
     expect(mergeProfileChange(book, mini, [work], 3)).toBeUndefined();
     expect(mergeProfileChange(acme, book, [work], 0)).toBeUndefined();
+  });
+
+  it("lists the hosts of a workspace's account that list it, its own host first", () => {
+    const ref = { host: "studio-mini", id: "b1", account: "acct-mini" };
+    expect(workspaceMembers(ref, [...members, devbox])).toEqual(["studio-mini", "local"]);
+    expect(workspaceMembers({ host: "devbox", id: "b1", account: "devbox" }, [...members, devbox])).toEqual(["devbox"]);
   });
 
   it("marks a shared workspace when a session on any member needs you", () => {
