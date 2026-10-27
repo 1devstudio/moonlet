@@ -113,6 +113,12 @@ describe("the counts", () => {
     expect(summaryLine(inbox)).toBe("3 need you · 2 working · 2 hosts online");
   });
 
+  it("lists only the asks, not the sessions done", () => {
+    const inbox = buildInbox(counted().hosts, counted().data, null);
+    expect(inbox).toEqual({ needs: expect.any(Array), working: 2, hostsOnline: 2 });
+    expect(inbox.needs.map((c) => c.title)).toEqual(["Add search to the product list", "Idempotent refund webhooks", "Fix login"]);
+  });
+
   it("leaves zero counts out of the line, except the hosts", () => {
     expect(summaryLine({ needs: [], working: 0, hostsOnline: 1 })).toBe("1 host online");
     expect(summaryLine({ needs: [], working: 1, hostsOnline: 0 })).toBe("1 working · 0 hosts online");
