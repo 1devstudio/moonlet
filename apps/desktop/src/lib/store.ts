@@ -51,7 +51,7 @@ import { focusThrottle, latestPerKey, needsPrPoll } from "./prPoll";
 import type { ChatItem, ChatState, CloneDone, CloneProgress, ReadRequest } from "./protocol";
 import { readWaits, type ReadQueue } from "./terminalRead";
 import type { Shortcuts } from "./runActions";
-import type { SettingsHost, SettingsRoute } from "./settingsPage";
+import type { SettingsRoute } from "./settingsPage";
 import { readStored, writeStored } from "./storage";
 import { disposeEntry, findEntry, reattachHost, setTermSettings, type TermSettings, defaultTermSettings } from "./terminals";
 
@@ -714,11 +714,6 @@ export function selectSession(host: string, id: string, keepMode = false) {
   doneBursts.seen(sesKey(host, id));
   updateBadge();
   void refreshGit(host, id);
-}
-
-/** Every host's workspaces as the settings lists need them (X68). */
-export function settingsHosts(s: Pick<State, "hosts" | "workspaces" | "accounts">): SettingsHost<Workspace>[] {
-  return Object.keys(s.workspaces).map((h) => ({ host: h, label: s.hosts[h]?.label ?? h, remote: !!s.hosts[h]?.remote, connected: s.hosts[h]?.status === "connected", account: s.accounts[h]?.account, workspaces: s.workspaces[h] ?? [] }));
 }
 
 /** Every host's workspaces, local first, as the switcher lists them (X32). */

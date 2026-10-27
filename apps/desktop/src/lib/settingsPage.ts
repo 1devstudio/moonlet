@@ -3,7 +3,7 @@
 // components/settings/.
 
 import { accountLabel, accountState, tildePath } from "./profiles";
-import type { DaemonService, HookStatus, HostInfo, MobileStatus, ProfileAccount, ProfileInfo, Workspace, WorkspaceColor } from "./protocol";
+import type { AccountInfo, DaemonService, HookStatus, HostInfo, MobileStatus, ProfileAccount, ProfileInfo, Workspace, WorkspaceColor } from "./protocol";
 import { claudeOffer, claudeStatus, type ClaudeUpdateState, type ClaudeVersions } from "./claudeUpdate";
 import { mobileLine } from "./mobile";
 import { DEV_BUILD_NOTE, updateButton, updateStatus, type UpdateState } from "./updater";
@@ -99,6 +99,11 @@ export interface SettingsHost<W> {
   /** The account it shares (X68). */
   account?: string;
   workspaces: W[];
+}
+
+/** Every host's workspaces as the settings lists need them (X68). */
+export function settingsHosts<W>(s: { hosts: Record<string, Pick<HostInfo, "label" | "remote" | "status">>; workspaces: Record<string, W[]>; accounts: Record<string, Pick<AccountInfo, "account">> }): SettingsHost<W>[] {
+  return Object.keys(s.workspaces).map((h) => ({ host: h, label: s.hosts[h]?.label ?? h, remote: !!s.hosts[h]?.remote, connected: s.hosts[h]?.status === "connected", account: s.accounts[h]?.account, workspaces: s.workspaces[h] ?? [] }));
 }
 
 /** The workspaces the nav and the search list: each one of an account once

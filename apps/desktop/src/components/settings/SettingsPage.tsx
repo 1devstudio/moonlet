@@ -4,11 +4,11 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Bell, Bot, ChevronRight, Cloud, Cpu, Folder, GitBranch, Keyboard, Link2, Palette, Search, Server, Settings, Smartphone, SquareTerminal, User, X, ListChecks } from "lucide-react";
-import { escapeAction, hostOrder, profilesNeedSignIn, routeFocus, routeKey, activeNavKey, settingsCrumbs, settingsNav, settingsWorkspaces, type AppPage, type NavEntry, type SettingsRoute } from "../../lib/settingsPage";
+import { escapeAction, hostOrder, profilesNeedSignIn, routeFocus, routeKey, activeNavKey, settingsCrumbs, settingsHosts, settingsNav, settingsWorkspaces, type AppPage, type NavEntry, type SettingsRoute } from "../../lib/settingsPage";
 import { goSettings } from "../../lib/settingsNavigation";
 import { moveSelection, searchSettings, type SearchResult } from "../../lib/settingsSearch";
 import { updateStatus } from "../../lib/updater";
-import { settingsHosts, useStore } from "../../lib/store";
+import { useStore } from "../../lib/store";
 import { useTasks } from "../../lib/tasksStore";
 import { IconButton, Kbd, cx } from "../ui";
 import { WorkspaceMark } from "../WorkspaceSwitcher";
