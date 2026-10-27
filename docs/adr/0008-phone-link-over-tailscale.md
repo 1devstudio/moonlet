@@ -1,6 +1,7 @@
 # ADR 0008: The phone app is a Tauri 2 iOS app that talks to the Mac's daemon over Tailscale
 
 - **Status:** accepted (2026-10-13)
+- **Changed by:** [ADR 0014](0014-one-account-across-hosts.md) (proposed, 2026-10-26). Phones pair with the central host, whichever app shows the code, and every member of the account accepts a paired device.
 - **Related:** [X39](../specs/X39-phone-pairing-and-link.md) (pairing and the phone link), [X40](../specs/X40-mobile-app.md) (the phone app's screens), [R1](../specs/R1-ssh-hosts.md)–[R4](../specs/R4-unified-hosts-sidebar.md) (remote hosts)
 
 ## Context

@@ -105,3 +105,4 @@ Each feature of moonlet has its own spec in this directory. Write the spec befor
 | X65 | Design mode: workspace and session designs beside a live canvas, comments to the chat, a visual editor, snapshots, Build it, design → spec → PR | P1 | 4 | draft | [X65-design-mode.md](X65-design-mode.md) |
 | X66 | Task comments (read and post a tracker issue's comments in the Task detail and Task tab) | P1 | 3 | implemented (Linear and ClickUp untried on a real account) | [X66-task-comments.md](X66-task-comments.md) |
 | X67 | Google Cloud workers: a Compute Engine adapter for cloud machines | P1 | 4 | implemented (untried with a real Google Cloud project; provisional API captures) | [X67-google-cloud-workers.md](X67-google-cloud-workers.md) |
+| X68 | One account: the same workspaces and sections on every host (ADR 0014, slice 1) | P1 | 4 | draft | [X68-account-state.md](X68-account-state.md) |
