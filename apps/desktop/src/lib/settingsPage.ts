@@ -95,16 +95,20 @@ export interface SettingsHost<W> {
   host: string;
   label: string;
   remote: boolean;
+  connected: boolean;
   /** The account it shares (X68). */
   account?: string;
   workspaces: W[];
 }
 
 /** The workspaces the nav and the search list: each one of an account once
- * (X68), this Mac's copy while it lists it. `remote` names the host of a
- * workspace outside this Mac's account. */
+ * (X68), this Mac's copy while it lists it and is connected, else a
+ * connected member's. `remote` names the host of a workspace outside this
+ * Mac's account. */
 export function settingsWorkspaces<W extends { id: string }>(hosts: SettingsHost<W>[]): { host: string; id: string; account: string; ws: W; remote: string | null }[] {
-  const ordered = hostOrder(hosts.map((h) => h.host)).map((id) => hosts.find((h) => h.host === id)!);
+  const ordered = hostOrder(hosts.map((h) => h.host))
+    .map((id) => hosts.find((h) => h.host === id)!)
+    .sort((a, b) => Number(b.connected) - Number(a.connected));
   const local = hosts.find((h) => h.host === "local");
   const here = local ? accountOf(local) : "local";
   return ownWorkspaces(ordered).flatMap(({ h, list }) =>
