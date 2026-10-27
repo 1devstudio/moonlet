@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { accountNote, hostOrder, installHooksMessage, saveKeySaves, appUpdateLine, claudeUpdateLine, daemonHint, daemonLine, daemonOn, daemonToast, offStopsDaemon, opensLoginItems, escapeAction, hookRows, hooksDone, phoneAccessLine, radioKey, routeKey, settingsCrumbs, hostActions, hostLine, hostNotice, updateCommand, profileLine, removeAsks, profilesNeedSignIn, settingsNav } from "./settingsPage";
+import { accountNote, hostOrder, installHooksMessage, saveKeySaves, appUpdateLine, claudeUpdateLine, daemonHint, daemonLine, daemonOn, daemonToast, offStopsDaemon, opensLoginItems, escapeAction, hookRows, hooksDone, phoneAccessLine, radioKey, routeKey, settingsCrumbs, hostActions, hostLine, hostNotice, updateCommand, profileLine, removeAsks, profilesNeedSignIn, settingsNav, settingsWorkspaces } from "./settingsPage";
 import type { HookStatus, HostInfo, MobileStatus, ProfileAccount, ProfileInfo, Workspace } from "./protocol";
 
 describe("settings nav (X43)", () => {
@@ -63,6 +63,37 @@ describe("settings nav (X43)", () => {
         ],
       },
     ]);
+  });
+});
+
+describe("the workspaces settings lists (X68)", () => {
+  const ws = (id: string, name: string): Workspace => ({ id, name, color: "clay", section_ids: [], created_at: 0, claude_profile: null });
+
+  it("lists each workspace of an account once, from this Mac first, and a host outside the account apart", () => {
+    const personal = ws("c05254bf1786", "Personal");
+    const mini = ws("fe2837aa4788", "Personal Mini");
+    const devbox = ws("c05254bf1786", "Personal");
+    expect(
+      settingsWorkspaces([
+        { host: "local", account: "8605e2c4", workspaces: [personal, mini] },
+        { host: "studio-mini", account: "8605e2c4", workspaces: [personal, mini] },
+        { host: "devbox", workspaces: [devbox] },
+      ]),
+    ).toEqual([
+      { host: "local", ws: personal },
+      { host: "local", ws: mini },
+      { host: "devbox", ws: devbox },
+    ]);
+  });
+
+  it("lists a shared workspace from another member while this Mac does not list it yet", () => {
+    const fresh = ws("a1b2c3d4e5f6", "Acme");
+    expect(
+      settingsWorkspaces([
+        { host: "local", account: "8605e2c4", workspaces: [] },
+        { host: "studio-mini", account: "8605e2c4", workspaces: [fresh] },
+      ]),
+    ).toEqual([{ host: "studio-mini", ws: fresh }]);
   });
 });
 

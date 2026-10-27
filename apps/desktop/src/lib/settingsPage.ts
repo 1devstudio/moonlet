@@ -7,6 +7,7 @@ import type { DaemonService, HookStatus, HostInfo, MobileStatus, ProfileAccount,
 import { claudeOffer, claudeStatus, type ClaudeUpdateState, type ClaudeVersions } from "./claudeUpdate";
 import { mobileLine } from "./mobile";
 import { DEV_BUILD_NOTE, updateButton, updateStatus, type UpdateState } from "./updater";
+import { accountOf, wsKey } from "./workspaces";
 
 /** The app-wide pages, in nav order. */
 export type AppPage = "general" | "appearance" | "terminal" | "agents" | "git" | "notifications" | "trackers" | "shortcuts" | "profiles" | "hooks" | "hosts" | "workers" | "cloud" | "phones";
@@ -87,6 +88,21 @@ export function settingsNav(input: NavInput): NavGroup[] {
       entries: input.projects.map((p) => ({ key: routeKey({ page: "project", host: p.host, id: p.id }), route: { page: "project", host: p.host, id: p.id }, label: p.name, ...onHost(p.remote) })),
     });
   return groups;
+}
+
+/** The workspaces the nav and the search list, hosts as given: each one of
+ * an account once (X68), from the first of its members listing it, as every
+ * member holds the same ones; a host outside the account keeps its own. */
+export function settingsWorkspaces<W extends { id: string }>(hosts: { host: string; account?: string; workspaces: W[] }[]): { host: string; ws: W }[] {
+  const seen = new Set<string>();
+  return hosts.flatMap((h) =>
+    h.workspaces.flatMap((ws) => {
+      const key = wsKey(accountOf(h), ws.id);
+      if (seen.has(key)) return [];
+      seen.add(key);
+      return [{ host: h.host, ws }];
+    }),
+  );
 }
 
 /** The key of the nav entry for `route`. */
