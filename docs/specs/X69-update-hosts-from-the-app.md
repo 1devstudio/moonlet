@@ -27,12 +27,12 @@ Updating a tailnet host is manual today. When the MacBook updates and the Mac mi
 - [x] A `version` that is not newer than the daemon's own fails with `not_newer` and changes nothing. A version that is not `X.Y.Z` fails with `invalid_params`.
 - [x] **Linux and `~/.moonlet/bin`:** a daemon that runs as `~/.moonlet/bin/moonletd` takes `moonlet-linux-<arch>.tar.gz` and its `.sig`. It installs each binary the way `install.sh` does (X58): created as `~/.moonlet/bin/<name>.new` with mode 0700, then renamed into place. The binaries it replaces stay as `<name>.prev` until the new daemon has taken over, and come back when the handoff fails, so the disk never holds a version the daemon doesn't run. It then runs the live upgrade. (`the_app_updates_its_host_and_every_session_carries_on`, `an_old_binary_comes_back_when_the_handoff_fails_and_goes_once_it_succeeds`)
 - [ ] Under systemd the unit stays `active` and follows the new pid (`MAINPID=`, X58). The handoff is the one `systemd_hears_ready_and_follows_the_upgrade` tests; untried through `daemon.update`.
-- [x] **Mac app bundle:** a daemon that runs from `<bundle>.app/Contents/MacOS/moonletd` takes `latest.json`'s `darwin-<arch>` entry (`darwin-aarch64` for the Apple Silicon releases) from the `v<version>` release, the same `.app.tar.gz` and signature that the app's updater (X35) uses. It unpacks the archive next to the bundle, swaps the two folders, and hands over to the new bundle's `moonletd`. The old bundle is removed only after the new daemon answers. If the handoff fails, the old bundle is put back.
+- [x] **Mac app bundle:** a daemon that runs from `<bundle>.app/Contents/MacOS/moonletd` takes `latest.json`'s `darwin-<arch>` entry (`darwin-aarch64` for the Apple Silicon releases) from the `v<version>` release, the same `.app.tar.gz` and signature that the app's updater (X35) uses. It unpacks the archive next to the bundle, swaps the two folders in one step (`renamex_np` with `RENAME_SWAP`, so the app's path never stands empty), and hands over to the new bundle's `moonletd`. The old bundle is removed only after the new daemon answers. If the handoff fails, the old bundle is put back.
 - [x] A daemon that runs from anywhere else (a dev build, `cargo run`, a test) fails with `unsupported` and changes nothing.
 - [x] A signature says moonlet made an archive, not which release it is, so the daemon also checks the version inside: a bundle's archive must come from `…/v<version>/` and its `Info.plist` must say `<version>`; the new `moonletd --version` must print `moonletd <version>` before anything is renamed into place. Otherwise it fails with `install_failed` ("the release holds moonletd 0.1.33, not 0.1.34") and changes nothing. (`a_signed_release_of_another_version_is_refused`, `an_app_of_another_version_is_refused_and_changes_nothing`, `a_bundle_archive_comes_only_from_the_release_asked_for`)
 - [x] Every archive is checked against the minisign public key compiled into `moonletd` (the same key as `tauri.conf.json`) before anything is unpacked. A missing or wrong signature fails with `bad_signature`, and nothing is written outside a temporary folder that is then removed.
 - [x] A download that fails, or is not a release asset (404), fails with `download_failed` and its message. The download and its check take at most 5 minutes in all; a Mac waits 6 for the answer.
-- [x] One update or upgrade at a time: during one, another `daemon.update`, or a `daemon.upgrade` on the local socket, fails with `busy`. An update that fails before the handoff leaves the daemon serving, as a failed S3 upgrade does.
+- [x] One update or upgrade at a time: during one, another `daemon.update`, or a `daemon.upgrade` on the local socket, fails with `busy`, and so does `daemon.shutdown`, which would drop the sessions on their way. An update that fails before the handoff leaves the daemon serving, as a failed S3 upgrade does. The handoff starts 300 ms after the reply is queued, so the reply reaches the Mac first.
 - [x] Every session keeps its id and its processes, and an agent working through the update carries on.
 
 ### The release
@@ -56,7 +56,7 @@ Updating a tailnet host is manual today. When the MacBook updates and the Mac mi
 - [x] A tailnet host row gets **Update to <this Mac's version>** when the host's `daemon_version` is older than the app's, whether it is `needs_update` or `connected` (same protocol, older version). A host that is newer, a host with no `daemon_version`, an SSH host (which has **Reinstall**, R2) and a phone get no button.
 - [x] While an update runs, the button reads "Updating…" and is disabled, and the app asks a host that waits for a retry (`needs_update`, an error) to connect again every 2 s. A host that comes back on the new version clears it. A minute after the reply, the row shows "<host> did not come back after the update", or, for a host back on its old version (the handoff failed after the reply), "<host> still runs moonlet 0.1.33: the update did not finish there (see its moonletd log)". (`hostUpdate.test.ts`, `hostUpdateStore.test.ts`)
 - [x] An error shows on the row with its message. `too_old` keeps today's manual text (the `install.sh` command with **Copy** for Linux, Settings › Updates for a Mac).
-- [x] The sidebar notice for a host (R4) offers the same button.
+- [x] The sidebar notice for a host (R4) offers the same button. A connected older host, which had no notice, gets one: "studio-mini runs moonlet 0.1.33". (`offerNotice`)
 
 ### Update all
 
@@ -66,8 +66,8 @@ Updating a tailnet host is manual today. When the MacBook updates and the Mac mi
 ### The app on an updated Mac restarts itself
 
 - [x] Each time the app connects to its own daemon (at launch and after every reconnect, which a live upgrade causes), it reads the version of its bundle on disk (`Contents/Info.plist`, `CFBundleShortVersionString`). It reads it the same way when the connection is refused with `protocol_mismatch`, so this works when the protocol changed too.
-- [x] When the bundle on disk is newer than the running app, the app relaunches into it (`relaunch`, as X35's "Restart to update"). Sessions are the daemon's, so every terminal and agent is still there after the relaunch.
-- [x] Before relaunching, the app checks for unsaved edits (a dirty file tab, X26, or a design page with unsaved changes, X65). If there are any, it doesn't relaunch. Its footer button reads "Restart to update", as X35's does, and nothing is lost.
+- [x] When the bundle on disk is newer than the running app, the app relaunches into it (`relaunch`, as X35's "Restart to update"). Sessions are the daemon's, so every terminal and agent is still there after the relaunch. This Mac's own update (X35 downloading, installing or ready) is never turned into a relaunch: the user restarts when they choose. One check runs at a time. While the bundle on disk is newer, or can't be read, the app doesn't hand the local daemon to the bundled `moonletd`.
+- [x] Before relaunching, the app checks for work a relaunch would lose: a dirty file tab (X26), design edits a save has not taken yet or a save going (X65), and a chat with text not sent. If there is any, it doesn't relaunch. Text typed in a terminal's input editor is not checked. Its footer button reads "Restart to update", as X35's does, and nothing is lost.
 - [x] A dev or e2e build, which has no bundle to read, never relaunches this way.
 
 ## UI
@@ -104,6 +104,7 @@ A connected but older host (same protocol):
 
 - The request is a version, not a path or URL. The host decides where it downloads from and checks the signature itself, so a paired Mac can only make the host install a release signed by moonlet's key, and only one newer than it runs.
 - Only `desktop` devices may ask. A phone that holds a token can't swap the code a headless host runs.
+- On the local socket, the boundary is the user's own socket, as for every method (`docs/protocol.md`): refusing the CLI's and a worker's client names keeps agents from updating by accident, but any process of the user could claim another name, and could run `moonletd upgrade` anyway.
 - Without signed Linux archives, the HTTPS download from GitHub would be the only guard, so this spec requires them.
 - Downgrades are refused (`not_newer`), so an old release with a known bug can't be pushed onto a host.
 - The `MOONLET_RELEASES` seam is compiled out of release builds, so an environment variable can't change the source or the key.
