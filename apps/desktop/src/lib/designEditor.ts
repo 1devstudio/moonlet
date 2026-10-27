@@ -69,6 +69,17 @@ function changed(key: string, step: number, said: string) {
   (notSaved[key] ??= []).push({ step, gen: gens[key], said });
 }
 
+/** Whether any design has edits by hand a save has not taken yet, a save
+ * going, or edits its agent was not told about: a relaunch would lose them. */
+export function editsInFlight(): boolean {
+  return (
+    Object.values(notSaved).some((c) => c.length > 0) ||
+    saves.anyBusy() ||
+    Object.values(useEditor.getState().pending).some((p) => p.length > 0) ||
+    Object.values(useEditor.getState().unsaved).some((u) => u !== null)
+  );
+}
+
 /** Forgets every page, change and edit (tests). */
 export function resetEditor() {
   useEditor.setState(EMPTY, true);

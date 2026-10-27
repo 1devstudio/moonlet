@@ -136,6 +136,9 @@ const drafts = new Map<string, string>();
 
 export const chatDraft = (host: string, id: number) => drafts.get(chatKey(host, id)) ?? "";
 
+/** Whether any chat has text typed but not sent. */
+export const hasChatDrafts = () => drafts.size > 0;
+
 export function saveChatDraft(host: string, id: number, text: string) {
   if (text) drafts.set(chatKey(host, id), text);
   else drafts.delete(chatKey(host, id));

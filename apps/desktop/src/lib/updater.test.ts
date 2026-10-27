@@ -171,19 +171,26 @@ describe("why a check failed (X35, X43)", () => {
 
 describe("the app on a host updated from another Mac (X69)", () => {
   it("relaunches into a newer bundle on disk", () => {
-    expect(afterBundleCheck("0.1.33", "0.1.34", false)).toBe("relaunch");
+    expect(afterBundleCheck("0.1.33", "0.1.34", false, "idle")).toBe("relaunch");
     // 0.1.9 is older than 0.1.10.
-    expect(afterBundleCheck("0.1.9", "0.1.10", false)).toBe("relaunch");
+    expect(afterBundleCheck("0.1.9", "0.1.10", false, "current")).toBe("relaunch");
   });
 
   it("offers Restart to update instead while there are unsaved edits", () => {
-    expect(afterBundleCheck("0.1.33", "0.1.34", true)).toBe("offer");
+    expect(afterBundleCheck("0.1.33", "0.1.34", true, "idle")).toBe("offer");
+  });
+
+  it("leaves this Mac's own update alone: the user restarts when they choose", () => {
+    expect(afterBundleCheck("0.1.33", "0.1.34", false, "ready")).toBeNull();
+    expect(afterBundleCheck("0.1.33", "0.1.34", false, "downloading")).toBeNull();
+    expect(afterBundleCheck("0.1.33", "0.1.34", false, "installing")).toBeNull();
+    expect(afterBundleCheck("0.1.33", "0.1.34", false, "available")).toBe("relaunch");
   });
 
   it("does nothing when the bundle is not newer, or there is none (a dev build)", () => {
-    expect(afterBundleCheck("0.1.34", "0.1.34", false)).toBeNull();
-    expect(afterBundleCheck("0.1.34", "0.1.33", false)).toBeNull();
-    expect(afterBundleCheck("0.1.34", null, false)).toBeNull();
-    expect(afterBundleCheck("", "0.1.34", false)).toBeNull();
+    expect(afterBundleCheck("0.1.34", "0.1.34", false, "idle")).toBeNull();
+    expect(afterBundleCheck("0.1.34", "0.1.33", false, "idle")).toBeNull();
+    expect(afterBundleCheck("0.1.34", null, false, "idle")).toBeNull();
+    expect(afterBundleCheck("", "0.1.34", false, "idle")).toBeNull();
   });
 });

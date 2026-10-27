@@ -116,8 +116,10 @@ export function checkError(raw: string): string {
 /** The app found its bundle on disk at `onDisk` (null for a dev build) while
  * it runs `running`, as after another Mac updated this host (X69): relaunch
  * into it, offer Restart to update while there are unsaved edits, or nothing
- * when the bundle is not newer. */
-export function afterBundleCheck(running: string, onDisk: string | null, unsaved: boolean): "relaunch" | "offer" | null {
+ * when the bundle is not newer. This Mac's own update (`phase` downloading,
+ * installing or ready) is left alone: the user restarts when they choose. */
+export function afterBundleCheck(running: string, onDisk: string | null, unsaved: boolean, phase: UpdateState["phase"]): "relaunch" | "offer" | null {
   if (!running || !onDisk || !older(running, onDisk)) return null;
+  if (phase === "downloading" || phase === "installing" || phase === "ready") return null;
   return unsaved ? "offer" : "relaunch";
 }

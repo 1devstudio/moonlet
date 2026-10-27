@@ -102,9 +102,16 @@ impl Connector for LocalDaemon {
                 }
                 _ => false,
             };
-            let on_disk = moonlet_core::bundle::this_version();
+            let exe = std::env::current_exe().ok();
+            let in_bundle = exe.as_deref().and_then(moonlet_core::bundle::app_of).is_some();
+            let version = moonlet_core::bundle::this_version();
+            let on_disk = match (in_bundle, version.as_deref()) {
+                (false, _) => Bundle::None,
+                (true, None) => Bundle::Unreadable,
+                (true, Some(v)) => Bundle::Version(v),
+            };
             if mismatch
-                && upgrade_on_mismatch(env!("CARGO_PKG_VERSION"), on_disk.as_deref())
+                && upgrade_on_mismatch(env!("CARGO_PKG_VERSION"), on_disk)
                 && !UPGRADE_TRIED.swap(true, Ordering::SeqCst)
             {
                 tracing::info!("local daemon is a different version; upgrading it in place");
@@ -398,12 +405,33 @@ async fn upgrade_local() -> Result<()> {
     Ok(())
 }
 
+/// The app's bundle on disk, as `welcomed` sees it.
+#[derive(Debug, Clone, Copy)]
+enum Bundle<'a> {
+    /// Not in a bundle: a dev build.
+    None,
+    /// In a bundle whose version can't be read, as while it is replaced.
+    Unreadable,
+    Version(&'a str),
+}
+
 /// Whether the app hands the local daemon to its bundled `moonletd` when
 /// their versions differ: not while the bundle on disk is newer than this
-/// app, as after another Mac updated this one (X69). The daemon already runs
-/// the bundle's `moonletd` then, and the app relaunches into the bundle.
-fn upgrade_on_mismatch(app: &str, on_disk: Option<&str>) -> bool {
-    on_disk.is_none_or(|v| v == app)
+/// app, as after another Mac updated this one (X69), since the daemon
+/// already runs the bundle's `moonletd` and the app relaunches into it; nor
+/// while the bundle can't be read.
+fn upgrade_on_mismatch(app: &str, on_disk: Bundle) -> bool {
+    match on_disk {
+        Bundle::None => true,
+        Bundle::Unreadable => false,
+        Bundle::Version(v) => !newer(v, app),
+    }
+}
+
+/// Whether version `a` (`x.y.z`) is newer than `b`.
+fn newer(a: &str, b: &str) -> bool {
+    let parts = |v: &str| v.split('.').map(|p| p.parse::<u64>().unwrap_or(0)).collect::<Vec<_>>();
+    parts(a) > parts(b)
 }
 
 static UPGRADE_TRIED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -599,13 +627,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_local_daemon_is_upgraded_only_while_the_bundle_on_disk_is_this_app() {
-        assert!(upgrade_on_mismatch("0.1.34", Some("0.1.34")));
+    fn the_local_daemon_is_upgraded_unless_the_bundle_on_disk_is_newer() {
+        assert!(upgrade_on_mismatch("0.1.34", Bundle::Version("0.1.34")));
         // A dev build has no bundle.
-        assert!(upgrade_on_mismatch("0.1.34", None));
+        assert!(upgrade_on_mismatch("0.1.34", Bundle::None));
         // Another Mac updated this one (X69): its daemon already runs the
         // bundle's moonletd, and the app relaunches into it.
-        assert!(!upgrade_on_mismatch("0.1.33", Some("0.1.34")));
+        assert!(!upgrade_on_mismatch("0.1.33", Bundle::Version("0.1.34")));
+        assert!(!upgrade_on_mismatch("0.1.9", Bundle::Version("0.1.10")));
+        // An older bundle on disk than this app still gets this app's daemon.
+        assert!(upgrade_on_mismatch("0.1.34", Bundle::Version("0.1.33")));
+        // A bundle whose version can't be read, as while it is replaced:
+        // wait rather than hand the daemon to whatever binary is there.
+        assert!(!upgrade_on_mismatch("0.1.34", Bundle::Unreadable));
     }
 
     #[test]
