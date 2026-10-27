@@ -1807,6 +1807,123 @@ async fn a_cancelled_clone_stops_and_leaves_no_folder() {
     assert!(projects.is_empty(), "{projects:?}");
 }
 
+/// A bare repository with one commit, its root commit, and a daemon whose
+/// git reads `example.test/acme/<name>`'s SSH address as that repository,
+/// as a real host's git config can map one (X70).
+async fn origin_daemon(name: &str) -> (TestDaemon, Vec<tempfile::TempDir>, String) {
+    let origin = tempfile::tempdir().unwrap();
+    let src = origin.path().join("src");
+    std::fs::create_dir(&src).unwrap();
+    git_in(&src, &["init", "-q", "-b", "main"]).unwrap();
+    git_in(&src, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"]).unwrap();
+    let root = git_in(&src, &["rev-list", "--max-parents=0", "HEAD"]).unwrap().trim().to_string();
+    git_in(origin.path(), &["clone", "-q", "--bare", "src", &format!("{name}.git")]).unwrap();
+    let bare = origin.path().join(format!("{name}.git"));
+    let (d, mut dirs) = fake_gh_daemon("#!/bin/sh\nexit 1\n").await;
+    std::fs::write(
+        dirs[1].path().join(".gitconfig"),
+        format!("[url \"file://{}\"]\n\tinsteadOf = git@example.test:acme/{name}.git\n", bare.display()),
+    )
+    .unwrap();
+    dirs.push(origin);
+    (d, dirs, root)
+}
+
+#[tokio::test]
+async fn a_project_from_another_member_is_cloned_from_its_origin_into_its_section() {
+    let (d, dirs, root) = origin_daemon("ledger").await;
+    let mut c = d.client().await;
+    let mut watcher = d.client().await;
+    let info: serde_json::Value = c.request(methods::REPO_LOOKUP, serde_json::json!({"origin": "example.test/acme/ledger"})).await.unwrap();
+    assert_eq!((info["url"].as_str(), info["default_branch"].as_str()), (Some("git@example.test:acme/ledger.git"), Some("main")));
+
+    let sections: Vec<moonlet_proto::types::Section> = c.request(methods::SECTION_LIST, ()).await.unwrap();
+    let parent = dirs[1].path().join("moonlet");
+    let job: serde_json::Value = c
+        .request(
+            methods::REPO_CLONE,
+            serde_json::json!({"id": "c-1", "origin": "example.test/acme/ledger", "root": root, "url": "git@example.test:acme/ledger.git", "parent": parent, "name": "ledger", "section_id": sections[0].id}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(job["repo"], "example.test/acme/ledger");
+    let (_, done) = clone_events(&mut watcher).await;
+    assert_eq!(done["error"], serde_json::Value::Null);
+    // The test's git reads the address as the bare repository's path, so
+    // the project's origin is that path here; the remote keeps the address.
+    assert_eq!(done["project"]["identity"]["root"], root);
+    let folder = parent.join("ledger");
+    assert_eq!(git_in(&folder, &["config", "remote.origin.url"]).unwrap().trim(), "git@example.test:acme/ledger.git");
+    let sections: Vec<moonlet_proto::types::Section> = c.request(methods::SECTION_LIST, ()).await.unwrap();
+    assert!(sections[0].project_ids.contains(&done["project"]["id"].as_str().unwrap().to_string()));
+
+}
+
+#[tokio::test]
+async fn a_clone_whose_address_holds_another_repository_is_not_added() {
+    let (d, dirs, _root) = origin_daemon("ledger").await;
+    let mut c = d.client().await;
+    let mut watcher = d.client().await;
+    let parent = dirs[1].path().join("moonlet");
+    let other_root = "4171b03ff0d2bd434751f17bc9d34da784f97e72";
+    let _: serde_json::Value = c
+        .request(
+            methods::REPO_CLONE,
+            serde_json::json!({"id": "c-1", "origin": "example.test/acme/ledger", "root": other_root, "url": "git@example.test:acme/ledger.git", "parent": parent, "name": "ledger"}),
+        )
+        .await
+        .unwrap();
+    let (_, done) = clone_events(&mut watcher).await;
+    assert_eq!(
+        done["error"],
+        "git@example.test:acme/ledger.git holds another repository: its first commit is not the one ledger starts with on the other Macs."
+    );
+    assert!(!parent.join("ledger").exists());
+    let projects: Vec<moonlet_proto::types::Project> = c.request(methods::PROJECT_LIST, ()).await.unwrap();
+    assert!(projects.is_empty(), "{projects:?}");
+}
+
+#[tokio::test]
+async fn an_origin_clones_only_from_its_own_addresses() {
+    let (d, dirs, root) = origin_daemon("ledger").await;
+    let mut c = d.client().await;
+    let parent = dirs[1].path().join("moonlet");
+    let clone = |origin: &str, url: &str| serde_json::json!({"id": "c-1", "origin": origin, "root": root, "url": url, "parent": parent, "name": "x"});
+    let elsewhere = c
+        .request::<_, serde_json::Value>(methods::REPO_CLONE, clone("example.test/acme/ledger", "file:///tmp/evil.git"))
+        .await
+        .unwrap_err();
+    assert!(elsewhere.to_string().contains("file:///tmp/evil.git is not an address of example.test/acme/ledger"), "{elsewhere}");
+    let bad = c
+        .request::<_, serde_json::Value>(methods::REPO_CLONE, clone("-oProxyCommand=x/a", "git@-oProxyCommand=x:a.git"))
+        .await
+        .unwrap_err();
+    assert!(bad.to_string().contains("not a project origin: -oProxyCommand=x/a"), "{bad}");
+    let lookup = c
+        .request::<_, serde_json::Value>(methods::REPO_LOOKUP, serde_json::json!({"origin": "example.test/../etc"}))
+        .await
+        .unwrap_err();
+    assert!(lookup.to_string().contains("not a project origin: example.test/../etc"), "{lookup}");
+}
+
+#[tokio::test]
+async fn a_located_folder_joins_a_section_only_as_a_copy_of_the_project() {
+    let (d, dirs, root) = origin_daemon("ledger").await;
+    let mut c = d.client().await;
+    let repo = dirs[1].path().join("work").join("other");
+    std::fs::create_dir_all(&repo).unwrap();
+    git_in(&repo, &["init", "-q", "-b", "main"]).unwrap();
+    git_in(&repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "another project"]).unwrap();
+    let repo = repo.display().to_string();
+    let sections: Vec<moonlet_proto::types::Section> = c.request(methods::SECTION_LIST, ()).await.unwrap();
+    let want = serde_json::json!({"origin": "example.test/acme/ledger", "root": root});
+    let refused = c
+        .request::<_, serde_json::Value>(methods::SECTION_ADD_PROJECT, serde_json::json!({"id": sections[0].id, "path": repo, "identity": want}))
+        .await
+        .unwrap_err();
+    assert!(refused.to_string().contains(&format!("{repo} holds another repository.")), "{refused}");
+}
+
 #[tokio::test]
 async fn looks_repositories_up_and_lists_them_through_gh() {
     let fixtures = concat!(env!("CARGO_MANIFEST_DIR"), "/../moonlet-core/tests/fixtures");

@@ -805,7 +805,11 @@ impl Daemon {
             m::REPO_GH_STATUS => ok(moonlet_core::repo_clone::gh_status().await),
             m::REPO_LOOKUP => {
                 let r: m::RepoRef = params(p)?;
-                ok(moonlet_core::repo_clone::lookup(&r.repo, r.ssh.as_deref()).await.map_err(internal)?)
+                let found = match &r.origin {
+                    Some(origin) => moonlet_core::repo_clone::lookup_origin(origin).await,
+                    None => moonlet_core::repo_clone::lookup(&r.repo, r.ssh.as_deref()).await,
+                };
+                ok(found.map_err(internal)?)
             }
             m::REPO_LIST => {
                 let folders: Vec<String> = self.sessions.list_projects().into_iter().map(|p| p.path).collect();
@@ -814,7 +818,15 @@ impl Daemon {
             }
             m::REPO_CLONE_TARGET => {
                 let r: m::RepoCloneTarget = params(p)?;
-                ok(moonlet_core::repo_clone::clone_target(&r.repo, &r.parent, &r.name).await.map_err(internal)?)
+                let target = match &r.origin {
+                    Some(origin) => {
+                        moonlet_core::repo_clone::checked_origin(origin).map_err(internal)?;
+                        let want = moonlet_proto::types::ProjectIdentity { origin: Some(origin.clone()), root: r.root.clone() };
+                        moonlet_core::repo_clone::origin_clone_target(&want, &r.parent, &r.name).await
+                    }
+                    None => moonlet_core::repo_clone::clone_target(&r.repo, &r.parent, &r.name).await,
+                };
+                ok(target.map_err(internal)?)
             }
             m::REPO_CLONE => ok(self.clones.start(params(p)?).map_err(internal)?),
             m::REPO_CLONE_CANCEL => {
@@ -2439,6 +2451,16 @@ impl Daemon {
             }
             m::SECTION_ADD_PROJECT => {
                 let r: m::SectionAddProject = params(p)?;
+                // A folder located for another member's project must be a
+                // copy of it, checked here as the folder may have changed
+                // since the app looked (X70).
+                if let Some(want) = &r.identity {
+                    let folder = moonlet_core::terminal::expand_home(&r.path);
+                    let found = moonlet_core::identity::identity(&folder).await;
+                    if let Some(why) = moonlet_core::identity::not_a_copy(&found, want) {
+                        return Err(RpcError::new("invalid_params", format!("{} {why}", r.path)));
+                    }
+                }
                 ok(w.section_add_project(&r.id, &r.path)
                     .await
                     .map_err(internal)?)

@@ -54,8 +54,19 @@ impl Clones {
     /// `repo.clone_done` events follow.
     pub fn start(self: &Arc<Self>, r: RepoClone) -> Result<CloneJob> {
         checked_id(&r.id)?;
-        repo_clone::checked_ref(&r.repo, r.ssh.as_deref())?;
         let path = repo_clone::clone_dest(&r.parent, &r.name)?;
+        // The clone names its repository by the project's origin (X70).
+        let repo = match &r.origin {
+            Some(origin) => {
+                repo_clone::checked_root(r.root.as_deref().unwrap_or_default())?;
+                repo_clone::origin_clone_command(origin, r.url.as_deref(), "")?;
+                origin.clone()
+            }
+            None => {
+                repo_clone::checked_ref(&r.repo, r.ssh.as_deref())?;
+                r.repo.clone()
+            }
+        };
         let shown = path.display().to_string();
         let mut running = self.running.lock().unwrap();
         if running.contains_key(&r.id) {
@@ -69,7 +80,7 @@ impl Clones {
         }
         let job = CloneJob {
             id: r.id.clone(),
-            repo: r.repo.clone(),
+            repo,
             path: shown.clone(),
         };
         let (cancel, cancelled) = oneshot::channel();
@@ -104,8 +115,7 @@ impl Clones {
             error,
             cancelled,
         };
-        let gh = r.ssh.is_none() && repo_clone::gh_status().await.login.is_some();
-        let clone = repo_clone::clone(&r.repo, r.ssh.as_deref(), gh, &path, |p| {
+        let progress = |p: repo_clone::Progress| {
             let progress = CloneProgress {
                 job: job.clone(),
                 step: p.step,
@@ -116,7 +126,29 @@ impl Clones {
             };
             self.terminals
                 .emit(Message::event(m::EV_REPO_CLONE_PROGRESS, progress));
-        });
+        };
+        let clone = async {
+            match &r.origin {
+                Some(origin) => {
+                    repo_clone::clone_origin(origin, r.url.as_deref(), &path, progress).await?;
+                    // Its address may hold another repository by now; that
+                    // one is not the project (X70).
+                    let root = moonlet_core::identity::root(&path).await;
+                    if root != r.root {
+                        bail!(
+                            "{} holds another repository: its first commit is not the one {} starts with on the other Macs.",
+                            r.url.as_deref().unwrap_or(origin),
+                            repo_clone::origin_name(origin)
+                        );
+                    }
+                    Ok(())
+                }
+                None => {
+                    let gh = r.ssh.is_none() && repo_clone::gh_status().await.login.is_some();
+                    repo_clone::clone(&r.repo, r.ssh.as_deref(), gh, &path, progress).await
+                }
+            }
+        };
         // Cancelling drops the clone, which kills git.
         let cloned = tokio::select! {
             r = clone => Some(r),
