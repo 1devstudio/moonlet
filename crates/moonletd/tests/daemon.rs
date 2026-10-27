@@ -741,6 +741,30 @@ async fn archiving_a_session_whose_branch_is_already_deleted_archives_it() {
 }
 
 #[tokio::test]
+async fn archiving_stops_when_git_cannot_read_the_branch() {
+    use moonlet_proto::types::Session;
+    use std::os::unix::fs::PermissionsExt;
+    let d = TestDaemon::start().await;
+    let mut c = d.client().await;
+    let (repo, p) = project_with_repo(&d, &mut c).await;
+    let s = new_session(&mut c, &p.id, "Unreadable").await;
+    let dot_git = repo.join(".git");
+    std::fs::set_permissions(&dot_git, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let err = c
+        .request::<_, serde_json::Value>(
+            methods::SESSION_ARCHIVE,
+            serde_json::json!({"id": s.id, "remove_worktree": false, "delete_branch": true}),
+        )
+        .await
+        .unwrap_err();
+    std::fs::set_permissions(&dot_git, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(err.to_string().contains("not a git repository"), "{err}");
+    let list: Vec<Session> = c.request(methods::SESSION_LIST, ()).await.unwrap();
+    assert!(!list.iter().find(|x| x.id == s.id).unwrap().archived);
+}
+
+#[tokio::test]
 async fn archiving_reports_no_origin_error_when_origin_already_deleted_the_branch() {
     use moonlet_proto::types::{Project, SessionArchived};
     let d = TestDaemon::start().await;

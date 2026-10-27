@@ -1022,13 +1022,17 @@ pub async fn delete_remote_branch(repo: &Path, branch: &str) -> Result<()> {
 }
 
 /// Deletes the local `branch`. One already gone, as `gh pr merge
-/// --delete-branch` leaves it, is not an error.
+/// --delete-branch` leaves it, is not an error; git failing to read the
+/// repository still is.
 pub async fn delete_branch(repo: &Path, branch: &str) -> Result<()> {
-    if known_branch(repo, branch).await.is_none() {
+    let Err(failed) = git(repo, &["branch", "-D", branch]).await else {
         return Ok(());
+    };
+    let head = format!("refs/heads/{branch}");
+    match git_text(repo, &["for-each-ref", "--format=%(refname)", &head]).await {
+        Ok(found) if found.is_empty() => Ok(()),
+        _ => Err(failed),
     }
-    git(repo, &["branch", "-D", branch]).await?;
-    Ok(())
 }
 
 /// Turns a task name into a branch-safe slug.
