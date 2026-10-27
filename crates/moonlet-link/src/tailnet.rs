@@ -7,13 +7,16 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use moonlet_proto::methods::DeviceKind;
-use moonlet_proto::{Frame, Message, PROTOCOL_VERSION, read_frame, write_frame};
+use moonlet_proto::{Frame, Message, PROTOCOL_VERSION, RpcError, read_frame, write_frame};
+use serde_json::{Value, json};
 use tokio::net::TcpStream;
 
 use crate::{BoxFuture, Connector, NeedsUpdate, Reader, Refused, Writer};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const AUTH_TIMEOUT: Duration = Duration::from_secs(10);
+/// A host downloads a release before it answers `daemon.update`.
+const UPDATE_TIMEOUT: Duration = Duration::from_secs(360);
 
 /// What a daemon handed out when a device paired with it.
 #[derive(Debug, Clone, PartialEq)]
@@ -105,6 +108,61 @@ pub fn pair_error_text(name: &str, error: &anyhow::Error) -> String {
     }
 }
 
+/// Asks a paired daemon to update itself to `version` (X69). The request
+/// goes in place of `hello`, so it works whatever protocol either side
+/// speaks; this exchange never changes. A daemon from before X69 closes the
+/// connection instead of answering, which gives `too_old`.
+pub async fn update(addrs: &[String], token: &str, version: &str) -> Result<Value, RpcError> {
+    let unreachable = |e: anyhow::Error| RpcError::new("unreachable", format!("{e:#}"));
+    let mut stream = dial(addrs).await.map_err(unreachable)?;
+    let auth = Message::Auth {
+        token: Some(token.into()),
+        pair: None,
+        device: None,
+        route: None,
+        kind: None,
+    };
+    let authed = authenticate(&mut stream, auth).await.map_err(|e| match e.downcast_ref::<Refused>() {
+        Some(Refused(m)) => RpcError::new("refused", m.clone()),
+        None => unreachable(e),
+    })?;
+    let Message::Authed { daemon_version, host, .. } = authed else {
+        return Err(RpcError::new("unreachable", "the host did not authenticate"));
+    };
+    let request = Message::Request {
+        id: 1,
+        method: moonlet_proto::methods::DAEMON_UPDATE.into(),
+        params: json!({ "version": version }),
+    };
+    write_frame(&mut stream, &Frame::Json(request)).await.map_err(|e| unreachable(e.into()))?;
+    let too_old = || {
+        RpcError::new(
+            "too_old",
+            format!(
+                "{} runs moonlet {}, which can't be updated from here",
+                host.as_deref().unwrap_or("The host"),
+                daemon_version.as_deref().unwrap_or("from before 0.1.26")
+            ),
+        )
+    };
+    let answer = tokio::time::timeout(UPDATE_TIMEOUT, async {
+        loop {
+            match read_frame(&mut stream).await {
+                Ok(Some(Frame::Json(Message::Response { id: 1, result, error }))) => {
+                    return match error {
+                        Some(e) => Err(e),
+                        None => Ok(result.unwrap_or(Value::Null)),
+                    };
+                }
+                Ok(Some(_)) => {}
+                Ok(None) | Err(_) => return Err(too_old()),
+            }
+        }
+    })
+    .await;
+    answer.unwrap_or_else(|_| Err(RpcError::new("timeout", "the host did not answer")))
+}
+
 /// Reaches a paired daemon with its device token. With `route`, the daemon
 /// connects through to one of its SSH hosts (X39).
 pub struct TailnetConnector {
@@ -168,5 +226,46 @@ mod tests {
             pair_error_text("studio-mini", &unreachable),
             "Cannot pair with studio-mini: cannot reach the host over Tailscale: 100.101.102.103:47428: Connection refused"
         );
+    }
+
+    /// A daemon from before X69 authenticates, then closes the connection on
+    /// anything but `hello`.
+    #[tokio::test]
+    async fn a_host_from_before_the_update_request_is_too_old() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        tokio::spawn(async move {
+            let (mut s, _) = listener.accept().await.unwrap();
+            let _auth = read_frame(&mut s).await.unwrap();
+            let authed = Message::Authed {
+                device_id: "d1".into(),
+                token: None,
+                protocol: Some(6),
+                daemon_version: Some("0.1.33".into()),
+                host: Some("studio-mini".into()),
+                os: Some("macos".into()),
+            };
+            write_frame(&mut s, &Frame::Json(authed)).await.unwrap();
+            let _request = read_frame(&mut s).await.unwrap();
+        });
+        let e = update(&[addr], "token", "0.1.34").await.unwrap_err();
+        assert_eq!(
+            (e.code.as_str(), e.message.as_str()),
+            ("too_old", "studio-mini runs moonlet 0.1.33, which can't be updated from here")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_host_that_no_longer_knows_this_mac_refuses() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        tokio::spawn(async move {
+            let (mut s, _) = listener.accept().await.unwrap();
+            let _auth = read_frame(&mut s).await.unwrap();
+            let no = Message::err(0, RpcError::new("unauthorized", "this device is not paired"));
+            write_frame(&mut s, &Frame::Json(no)).await.unwrap();
+        });
+        let e = update(&[addr], "token", "0.1.34").await.unwrap_err();
+        assert_eq!((e.code.as_str(), e.message.as_str()), ("refused", "this device is not paired"));
     }
 }

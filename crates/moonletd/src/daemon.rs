@@ -605,6 +605,20 @@ impl Daemon {
         crate::update::update(self, &r.version).await
     }
 
+    /// `daemon.update` sent in place of `hello` by paired device `device`
+    /// (X69): only a Mac may ask.
+    pub async fn update_before_hello(self: &Arc<Self>, device: &str, p: Value) -> HandlerResult {
+        if self.mobile.kind_of(device) != Some(moonlet_proto::methods::DeviceKind::Desktop) {
+            return Err(RpcError::new("forbidden", "update moonlet from a Mac"));
+        }
+        #[derive(serde::Deserialize)]
+        struct Req {
+            version: String,
+        }
+        let r: Req = params(p)?;
+        crate::update::update(self, &r.version).await
+    }
+
     pub async fn handle(self: &Arc<Self>, conn: &Arc<Conn>, method: &str, p: Value) -> HandlerResult {
         // A cloud machine reaches only what a worker needs (X63).
         if let Some(device) = conn.phone.as_deref()
