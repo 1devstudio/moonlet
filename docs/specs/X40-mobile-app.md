@@ -179,7 +179,7 @@ Added 2026-10-27. Until then only the Mac's app approved a copy's setup.
 
 Added 2026-10-27. Design mode stays on the Mac: the phone lists no design systems or designs.
 
-- [x] An ask from a design's agent is titled as the desktop names it, "Design · <design>"; one from a design system's sync agent, which has no session either, by its terminal's title. (`lib/inbox.test.ts`)
+- [x] An ask from a design's agent is titled as the desktop names it, "Design · <design>"; one from a design system's sync agent, which has no session either, by its terminal's title. It shows only while its design's workspace is shown, or All workspaces; a sync agent from a daemon that does not name its workspace shows in every one. (`lib/inbox.test.ts`)
 - [x] Tapping an ask's title, or a question card, opens its chat: the session's for a session's agent, else the agent's own chat screen, with a back button, the agent's name and the chat as a session's Chat tab shows it. (`cardChat` in `lib/inbox.test.ts`)
 
 ## UI

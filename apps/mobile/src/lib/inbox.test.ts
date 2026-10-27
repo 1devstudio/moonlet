@@ -149,6 +149,13 @@ describe("design agents (X64, X65)", () => {
     ]);
   });
 
+  it("shows a design agent's ask only in its design's workspace", () => {
+    const w = designs();
+    const titles = (id: string) => buildInbox(w.hosts, w.data, { host: "mac", id, account: "mac" }).needs.map((c) => c.title);
+    expect(titles("personal")).toContain("Design · Checkout");
+    expect(titles("work")).not.toContain("Design · Checkout");
+  });
+
   it("opens a session's chat for a session's agent, else the agent's own", () => {
     const w = designs();
     const cards = buildInbox(w.hosts, w.data, null).needs;

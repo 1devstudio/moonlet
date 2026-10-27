@@ -3,7 +3,7 @@
 import { agentPlace } from "@desktop/lib/alerts";
 import { planOf } from "@desktop/lib/chat";
 import { askerName } from "@desktop/lib/subagents";
-import type { AgentState, HostStatus, PermissionAsk, ReadRequest, Session } from "@desktop/lib/protocol";
+import type { AgentState, DesignTag, HostStatus, PermissionAsk, ReadRequest, Session } from "@desktop/lib/protocol";
 import type { WorkspaceRef } from "@desktop/lib/workspaces";
 import type { HostData, Screen } from "./app";
 import { inShown } from "./workspaceChoices";
@@ -104,6 +104,8 @@ export function buildInbox(hosts: Record<string, InboxHost>, data: Record<string
       const t = Number(id);
       const s = sessionOf(d.terminals[t]?.session_id);
       if (!inWorkspace(h.id, d, s, shown)) continue;
+      const design = designWorkspace(d.terminals[t]?.design);
+      if (!s && design !== null && !inShown(shown, h.id, d.account, design)) continue;
       for (const ask of st.pending) {
         needs.push({ ...base(t, s), kind: kindOf(ask), key: `${h.id}:${t}:${ask.id}`, askedAt: ask.asked_at ?? null, ask, asker: askerName(ask, st.subagents ?? []) });
       }
@@ -117,6 +119,12 @@ export function buildInbox(hosts: Record<string, InboxHost>, data: Record<string
   needs.push(...setupCards(hosts, data));
   needs.sort((a, b) => (b.askedAt ?? 0) - (a.askedAt ?? 0));
   return { needs, working, hostsOnline };
+}
+
+/** The workspace a Design mode agent works in (X64, X65); null for any
+ * other agent, and for a sync agent from a daemon that did not say. */
+function designWorkspace(tag: DesignTag | undefined): string | null {
+  return typeof tag === "object" && tag.workspace ? tag.workspace : null;
 }
 
 /** The chat a card's agent talks in: its session's, else the agent's own,
