@@ -13,11 +13,13 @@ use moonlet_proto::types::{Change, ProjectIdentity};
 use serde_json::{Value, json};
 
 use super::*;
-use crate::account::{Log, LogFile, Record, Version, key_between, log_owner, new_log_name};
+use crate::account::{
+    Log, LogFile, Record, RecordKind, Version, key_between, log_owner, new_log_name,
+};
 use crate::identity::same_project;
 
-const WORKSPACE: &str = "workspace";
-const SECTION: &str = "section";
+const WORKSPACE: RecordKind = RecordKind::Workspace;
+const SECTION: RecordKind = RecordKind::Section;
 /// The prefix of a section's project fields.
 const PROJECT: &str = "project:";
 /// The ids of the workspace and the section every member makes when changes
@@ -26,9 +28,9 @@ const PROJECT: &str = "project:";
 const DEFAULT_WORKSPACE_ID: &str = "default";
 const DEFAULT_SECTION_ID: &str = "default-section";
 /// A workspace merged into another: its `into` (X68).
-const MERGE: &str = "merge";
+const MERGE: RecordKind = RecordKind::Merge;
 /// A member, by its log's name: its `name`, as it calls itself.
-const MEMBER: &str = "member";
+const MEMBER: RecordKind = RecordKind::Member;
 
 type Listener = Arc<dyn Fn(Vec<Change>) + Send + Sync>;
 
@@ -473,7 +475,7 @@ fn diff(old: &State, new: &State, log: &mut Log, now: u64) -> Vec<Change> {
 fn set_changed(
     log: &mut Log,
     now: u64,
-    kind: &str,
+    kind: RecordKind,
     id: &str,
     before: Option<Record>,
     after: Record,
@@ -582,7 +584,7 @@ fn diff_projects(
 }
 
 /// The first of `base`, `base-2`, `base-3`… that `log` has not deleted.
-fn repair_id(log: &Log, kind: &str, base: &str) -> String {
+fn repair_id(log: &Log, kind: RecordKind, base: &str) -> String {
     (1..)
         .map(|n| {
             if n == 1 {

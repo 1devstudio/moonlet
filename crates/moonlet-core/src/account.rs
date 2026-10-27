@@ -10,6 +10,29 @@ use moonlet_proto::types::{Change, ChangeOp, Stamp};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// What kind of record a change is about (X68). Changes carry it as text,
+/// so a kind a newer moonlet adds is kept and passed on, never read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordKind {
+    Workspace,
+    Section,
+    /// A workspace merged into another: its `into`.
+    Merge,
+    /// A member, by its log's name: its `name`.
+    Member,
+}
+
+impl RecordKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RecordKind::Workspace => "workspace",
+            RecordKind::Section => "section",
+            RecordKind::Merge => "merge",
+            RecordKind::Member => "member",
+        }
+    }
+}
+
 /// A record's fields by name.
 pub type Record = BTreeMap<String, Value>;
 
@@ -142,7 +165,14 @@ impl Log {
     }
 
     /// Sets a field of a record here, at wall time `now_ms`.
-    pub fn set(&mut self, now_ms: u64, kind: &str, id: &str, field: &str, value: Value) -> Change {
+    pub fn set(
+        &mut self,
+        now_ms: u64,
+        kind: RecordKind,
+        id: &str,
+        field: &str,
+        value: Value,
+    ) -> Change {
         self.stamped(
             now_ms,
             kind,
@@ -155,13 +185,13 @@ impl Log {
     }
 
     /// Deletes a record here, at wall time `now_ms`.
-    pub fn delete(&mut self, now_ms: u64, kind: &str, id: &str) -> Change {
+    pub fn delete(&mut self, now_ms: u64, kind: RecordKind, id: &str) -> Change {
         self.stamped(now_ms, kind, id, ChangeOp::Delete)
     }
 
     /// A change stamped later than every change seen, even when this
     /// machine's clock is behind another member's.
-    fn stamped(&mut self, now_ms: u64, kind: &str, id: &str, op: ChangeOp) -> Change {
+    fn stamped(&mut self, now_ms: u64, kind: RecordKind, id: &str, op: ChangeOp) -> Change {
         let (ms, n) = self.clock;
         self.clock = if now_ms > ms {
             (now_ms, 0)
@@ -180,7 +210,7 @@ impl Log {
                 member: self.member.clone(),
             },
             seq: self.seq,
-            kind: kind.into(),
+            kind: kind.as_str().into(),
             id: id.into(),
             op,
         };
@@ -219,24 +249,24 @@ impl Log {
     }
 
     /// The earliest change to record `id` of `kind`: the one that made it.
-    pub fn first_change(&self, kind: &str, id: &str) -> Option<&Change> {
+    pub fn first_change(&self, kind: RecordKind, id: &str) -> Option<&Change> {
         self.changes
             .values()
-            .filter(|c| c.kind == kind && c.id == id)
+            .filter(|c| c.kind == kind.as_str() && c.id == id)
             .min_by(|a, b| a.stamp.cmp(&b.stamp))
     }
 
     /// Whether record `id` of `kind` was deleted: it never comes back.
-    pub fn is_deleted(&self, kind: &str, id: &str) -> bool {
+    pub fn is_deleted(&self, kind: RecordKind, id: &str) -> bool {
         self.changes
             .values()
-            .any(|c| c.kind == kind && c.id == id && c.op == ChangeOp::Delete)
+            .any(|c| c.kind == kind.as_str() && c.id == id && c.op == ChangeOp::Delete)
     }
 
     /// The records of `kind` by id, each field at its latest change.
-    pub fn records(&self, kind: &str) -> BTreeMap<String, Record> {
+    pub fn records(&self, kind: RecordKind) -> BTreeMap<String, Record> {
         let mut latest: BTreeMap<(&str, &str), &Change> = BTreeMap::new();
-        for c in self.changes.values().filter(|c| c.kind == kind) {
+        for c in self.changes.values().filter(|c| c.kind == kind.as_str()) {
             if let ChangeOp::Set { field, .. } = &c.op {
                 let slot = latest.entry((c.id.as_str(), field.as_str())).or_insert(c);
                 if c.stamp > slot.stamp {
@@ -249,7 +279,7 @@ impl Log {
         let deleted: BTreeSet<&str> = self
             .changes
             .values()
-            .filter(|c| c.kind == kind && c.op == ChangeOp::Delete)
+            .filter(|c| c.kind == kind.as_str() && c.op == ChangeOp::Delete)
             .map(|c| c.id.as_str())
             .collect();
         let mut out: BTreeMap<String, Record> = BTreeMap::new();
@@ -377,8 +407,14 @@ mod tests {
         a.apply(vec![older.clone(), newer.clone()]);
         let mut b = Log::new("b");
         b.apply(vec![newer, older]);
-        assert_eq!(a.records("workspace")["w1"]["name"], json!("Home"));
-        assert_eq!(b.records("workspace")["w1"]["name"], json!("Home"));
+        assert_eq!(
+            a.records(RecordKind::Workspace)["w1"]["name"],
+            json!("Home")
+        );
+        assert_eq!(
+            b.records(RecordKind::Workspace)["w1"]["name"],
+            json!("Home")
+        );
     }
 
     #[test]
@@ -389,9 +425,9 @@ mod tests {
         let mut log = Log::new("a");
         log.apply(vec![renamed_later, deleted, made]);
         assert!(
-            !log.records("workspace").contains_key("w1"),
+            !log.records(RecordKind::Workspace).contains_key("w1"),
             "{:?}",
-            log.records("workspace")
+            log.records(RecordKind::Workspace)
         );
     }
 
@@ -408,9 +444,24 @@ mod tests {
             json!("Personal"),
         )]);
         // This Mac's clock says 10:00:01 when the user renames it.
-        let first = book.set(36_001_000, "workspace", "w1", "name", json!("Home"));
-        let second = book.set(36_001_000, "workspace", "w1", "color", json!("blue"));
-        assert_eq!(book.records("workspace")["w1"]["name"], json!("Home"));
+        let first = book.set(
+            36_001_000,
+            RecordKind::Workspace,
+            "w1",
+            "name",
+            json!("Home"),
+        );
+        let second = book.set(
+            36_001_000,
+            RecordKind::Workspace,
+            "w1",
+            "color",
+            json!("blue"),
+        );
+        assert_eq!(
+            book.records(RecordKind::Workspace)["w1"]["name"],
+            json!("Home")
+        );
         assert_eq!(
             first.stamp,
             Stamp {
@@ -429,7 +480,7 @@ mod tests {
         );
         assert_eq!((first.seq, second.seq), (1, 2));
         // Once the wall clock passes it, stamps follow the wall clock again.
-        let later = book.delete(36_009_000, "workspace", "w1");
+        let later = book.delete(36_009_000, RecordKind::Workspace, "w1");
         assert_eq!(
             later.stamp,
             Stamp {
@@ -439,17 +490,29 @@ mod tests {
             }
         );
         assert_eq!(later.seq, 3);
-        assert!(book.records("workspace").is_empty());
+        assert!(book.records(RecordKind::Workspace).is_empty());
     }
 
     #[test]
     fn a_member_that_missed_a_change_gets_exactly_what_it_lacks_and_both_agree() {
         let mut mini = Log::new("mini");
-        let m1 = mini.set(1_000, "workspace", "w1", "name", json!("Personal"));
-        mini.set(2_000, "workspace", "w1", "color", json!("blue"));
-        let m3 = mini.set(3_000, "section", "s1", "name", json!("1devstudio"));
+        let m1 = mini.set(
+            1_000,
+            RecordKind::Workspace,
+            "w1",
+            "name",
+            json!("Personal"),
+        );
+        mini.set(2_000, RecordKind::Workspace, "w1", "color", json!("blue"));
+        let m3 = mini.set(
+            3_000,
+            RecordKind::Section,
+            "s1",
+            "name",
+            json!("1devstudio"),
+        );
         let mut book = Log::new("book");
-        book.set(2_500, "workspace", "w1", "name", json!("Home"));
+        book.set(2_500, RecordKind::Workspace, "w1", "name", json!("Home"));
         // The event carrying the colour never arrived.
         book.apply(vec![m1, m3.clone()]);
         assert_eq!(
@@ -474,11 +537,11 @@ mod tests {
         assert_eq!((book.version(), mini.version()), (both.clone(), both));
         assert!(mini.missing_for(&book.version()).is_empty());
         assert!(book.missing_for(&mini.version()).is_empty());
-        for kind in ["workspace", "section"] {
+        for kind in [RecordKind::Workspace, RecordKind::Section] {
             assert_eq!(book.records(kind), mini.records(kind));
         }
         assert_eq!(
-            mini.records("workspace")["w1"],
+            mini.records(RecordKind::Workspace)["w1"],
             Record::from([
                 ("name".into(), json!("Home")),
                 ("color".into(), json!("blue"))
@@ -507,7 +570,10 @@ mod tests {
             "name",
             json!("Forged"),
         )]);
-        assert_eq!(log.records("workspace")["w1"]["name"], json!("Personal"));
+        assert_eq!(
+            log.records(RecordKind::Workspace)["w1"]["name"],
+            json!("Personal")
+        );
     }
 
     #[test]
@@ -576,7 +642,10 @@ mod tests {
         for order in [vec![a.clone(), b.clone()], vec![b, a]] {
             let mut log = Log::new("mini.f0e1d2");
             log.apply(order);
-            assert_eq!(log.records("workspace")["w1"]["name"], json!("Book"));
+            assert_eq!(
+                log.records(RecordKind::Workspace)["w1"]["name"],
+                json!("Book")
+            );
         }
     }
 
@@ -606,7 +675,7 @@ mod tests {
             },
             ..set(5_000, "mini.a1b2c3", 1, "w1", "name", json!("Personal"))
         }]);
-        let c = log.set(1_000, "workspace", "w1", "name", json!("Home"));
+        let c = log.set(1_000, RecordKind::Workspace, "w1", "name", json!("Home"));
         assert_eq!(
             c.stamp,
             Stamp {
@@ -615,7 +684,10 @@ mod tests {
                 member: "book.k3x9q2".into()
             }
         );
-        assert_eq!(log.records("workspace")["w1"]["name"], json!("Home"));
+        assert_eq!(
+            log.records(RecordKind::Workspace)["w1"]["name"],
+            json!("Home")
+        );
     }
 
     #[test]
@@ -643,13 +715,13 @@ mod tests {
     fn a_saved_log_reloads_with_its_changes_and_goes_on_counting() {
         let mut book = Log::new("book");
         book.apply(vec![set(9_000, "mini", 1, "w1", "name", json!("Personal"))]);
-        book.set(1_000, "workspace", "w1", "name", json!("Home"));
-        book.set(1_000, "workspace", "w1", "color", json!("blue"));
+        book.set(1_000, RecordKind::Workspace, "w1", "name", json!("Home"));
+        book.set(1_000, RecordKind::Workspace, "w1", "color", json!("blue"));
         let text = serde_json::to_string(&book.to_file()).unwrap();
 
         let mut again = Log::from_file(serde_json::from_str(&text).unwrap());
         assert_eq!(
-            again.records("workspace")["w1"],
+            again.records(RecordKind::Workspace)["w1"],
             Record::from([
                 ("name".into(), json!("Home")),
                 ("color".into(), json!("blue"))
@@ -659,7 +731,7 @@ mod tests {
             again.version(),
             BTreeMap::from([("book".to_string(), 2), ("mini".to_string(), 1)])
         );
-        let next = again.set(1_000, "workspace", "w1", "name", json!("Studio"));
+        let next = again.set(1_000, RecordKind::Workspace, "w1", "name", json!("Studio"));
         assert_eq!(
             (next.seq, next.stamp),
             (
