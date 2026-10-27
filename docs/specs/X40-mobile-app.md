@@ -175,6 +175,13 @@ Added 2026-10-27. Until then only the Mac's app approved a copy's setup.
 - [x] Needs you lists, on every connected Mac, each copy whose setup waits for approval: a live copy of a session on its central host (`sync.list`, `sync.changed`), named after the session and its project while the central host is connected, and a routing copy (`exec.setups`, `exec.setup`), named "<project>'s routing copy". The card says "Run <project>'s setup in the copy on <Mac>? (from .moonlet/config.toml)" (or "in its routing copy"), shows the exact command, and has **Skip** and **Run setup**. Copies belong to no workspace, so the cards show in every workspace. (`lib/setups.test.ts`)
 - [x] **Run setup** asks for Face ID first while "Require Face ID to allow" is on, then calls `sync.run_setup` with the command shown; the Mac refuses a command that changed meanwhile (`setup_changed`), nothing runs, and the card says "The setup changed on <Mac> meanwhile, to: <command>. Nothing ran; check the new command before running it.", and from then on shows and runs that command. **Skip** calls `sync.skip_setup`. A routing copy's card leaves once answered, and a re-read that overlapped the answer does not bring it back; one answered on the Mac leaves within 30 s, when the phone reads `exec.setups` again. (`lib/setups.test.ts` "runs exactly the command shown, or skips", "says when the command changed meanwhile, or the copy lost its setup", "shows the command the Mac now has, on the copy's card, once it refused the old one"; `lib/app.test.ts` "does not bring back a setup answered while the list was read"; daemon: `a_paired_phone_approves_a_copys_setup`, `a_paired_phone_skips_a_copys_setup`, `a_paired_phone_hears_and_runs_a_routing_copys_setup_and_a_paired_mac_does_not`)
 
+### Design agents (X64, X65)
+
+Added 2026-10-27. Design mode stays on the Mac: the phone lists no design systems or designs.
+
+- [x] An ask from a design's agent is titled as the desktop names it, "Design · <design>"; one from a design system's sync agent, which has no session either, by its terminal's title. (`lib/inbox.test.ts`)
+- [x] Tapping an ask's title, or a question card, opens its chat: the session's for a session's agent, else the agent's own chat screen, with a back button, the agent's name and the chat as a session's Chat tab shows it. (`cardChat` in `lib/inbox.test.ts`)
+
 ## UI
 
 The design board "Moonlet Mobile" is the reference: 390 × 844 points, safe areas respected, dark theme only.
