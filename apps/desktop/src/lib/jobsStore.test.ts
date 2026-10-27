@@ -51,6 +51,28 @@ describe("the jobs the app keeps (X62)", () => {
     expect(ids("h1", "s1")).toEqual(["j1:lost"]);
   });
 
+  it("reads a list that failed while the host was away once it reconnects", async () => {
+    loadJobs("h3", "s1");
+    await settle();
+    expect(ids("h3", "s1")).toEqual([]);
+    answers["job.list"] = () => [job("j1")];
+    hostStatus.emit({ id: "h3", status: "connected" });
+    await settle();
+    await settle();
+    expect(ids("h3", "s1")).toEqual(["j1:running"]);
+  });
+
+  it("reads again the jobs of a host whose id has a slash, as an SSH host reached through a phone's Mac", async () => {
+    answers["job.list"] = () => [job("j1")];
+    loadJobs("mac/devbox", "s1");
+    await settle();
+    answers["job.list"] = () => [job("j1", { state: { kind: "lost" } })];
+    hostStatus.emit({ id: "mac/devbox", status: "connected" });
+    await settle();
+    await settle();
+    expect(ids("mac/devbox", "s1")).toEqual(["j1:lost"]);
+  });
+
   it("keeps a job that changes while the list is read", async () => {
     let answer: (list: Job[]) => void = () => {};
     answers["job.list"] = () => new Promise<Job[]>((r) => (answer = r));

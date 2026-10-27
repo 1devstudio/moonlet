@@ -18,6 +18,9 @@ export const useJobs = create<JobsState>(() => ({ jobs: {}, output: {} }));
 
 const key = (host: string, session: string) => `${host}/${session}`;
 const loading = new Set<string>();
+/** Every session whose jobs were asked for, read or not, by key: a host
+ * that reconnects reads them again. Host ids may hold a slash. */
+const wanted = new Map<string, { host: string; session: string }>();
 /** Jobs that changed while their session's list was being read, by key. */
 const early: Record<string, Job[]> = {};
 /** The central host keeps a session's last 50 jobs; a job past them leaves. */
@@ -35,6 +38,7 @@ function upsert(list: Job[], job: Job): Job[] {
  * list is read again when its host reconnects. */
 export function loadJobs(host: string, session: string, again = false) {
   const k = key(host, session);
+  wanted.set(k, { host, session });
   if (loading.has(k) && !again) return;
   loading.add(k);
   early[k] = [];
@@ -136,9 +140,6 @@ export function startJobs() {
   // A host that comes back may have ended or lost jobs meanwhile.
   void onHostStatus((h) => {
     if (h.status !== "connected") return;
-    for (const k of Object.keys(useJobs.getState().jobs)) {
-      const [host, ...rest] = k.split("/");
-      if (host === h.id) loadJobs(host, rest.join("/"), true);
-    }
+    for (const w of wanted.values()) if (w.host === h.id) loadJobs(w.host, w.session, true);
   });
 }
