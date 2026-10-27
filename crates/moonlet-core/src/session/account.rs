@@ -328,6 +328,16 @@ impl SessionManager {
         self.account_changed(vec![change]);
     }
 
+    /// Each member's name as it calls itself, by worker id (X71).
+    pub fn member_names(&self) -> Map<String, String> {
+        self.with_log(|log| {
+            log.records(MEMBER)
+                .into_iter()
+                .filter_map(|(name, r)| Some((log_owner(&name)?.to_string(), r.get("name")?.as_str()?.to_string())))
+                .collect()
+        })
+    }
+
     /// Called with the changes this member takes from the others.
     pub fn on_account_applied(&self, f: impl Fn(&[Change]) + Send + Sync + 'static) {
         if let Some(a) = self.account.lock().unwrap().as_mut() {

@@ -285,6 +285,12 @@ pub const DESIGN_OFFER: &str = "design.offer";
 /// [`DesignFetch`] → [`DesignFetched`]: the objects of a tree a member's
 /// copy needs, from the central host (X71). Members' daemons only.
 pub const DESIGN_FETCH: &str = "design.fetch";
+/// [`DesignMove`] → `true`: this member becomes the owner of a design
+/// system or workspace design it holds a copy of, so its agent runs here
+/// (X71). Refused with `not_current` while the copy is older than the
+/// owner's latest snapshot, and with `busy` while the owner's agent works,
+/// unless `force`.
+pub const DESIGN_MOVE: &str = "design.move";
 
 // Phones (X39)
 /// Phone access, the Tailscale addresses and the paired phones: [`MobileStatus`].
@@ -2248,6 +2254,17 @@ pub struct DesignOffer {
     pub tree: String,
     #[serde(default)]
     pub pack: Option<u32>,
+}
+
+/// `design.move`: the item to own here.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DesignMove {
+    pub workspace: String,
+    /// `system` or `design`.
+    pub kind: String,
+    pub slug: String,
+    #[serde(default)]
+    pub force: bool,
 }
 
 /// `design.fetch`: a tree, and the trees the member's copies hold already.

@@ -45,7 +45,7 @@ An **item** is one design system (`systems/<slug>/`) or one workspace design (`d
 - [ ] Every other member that sees a `tree` it has not applied fetches the missing objects from the central host (`design.fetch`). It then replaces its copy's folder with that tree in one step, so a reader never sees half of a snapshot.
 - [ ] A copy of a design system gets a record of its own. Each source maps to this member's project with the same identity (X41), and a source with no such project has no folder.
 - [ ] Changes are carried by git objects, so a new snapshot sends only the files that changed.
-- [ ] A copy is read only. Every RPC that changes an item, or starts or messages its agent, answers `not_owner` naming the owner. This covers `design.system.sync`, `.update` and `.remove`, `design.settle`, `design.check` with `fix`, `design.create` into a copied system, `design.copy` into this workspace from a copy, `design.write_page`, `design.comment.put` and `.resolve`, `design.snapshot.restore`, `design.viewport` and `design.remove`. Reading RPCs work on copies.
+- [ ] A copy is read only. Every RPC that changes an item, or starts or messages its agent, answers `not_owner` naming the owner. This covers `design.system.sync` and `.remove`, the sync agent's `design.system.progress` and `.synced`, `design.settle`, `design.check` of a design system (it rewrites the generated files) and of a design with `fix`, `design.write_page`, `design.comment.put` and `.resolve`, `design.snapshot.restore`, `design.viewport` and `design.remove`. Reading RPCs work on copies, and so do calls that make a new item of this member's own, such as `design.create` on a copied design system.
 - [ ] A copy's sync or design agent never starts.
 - [ ] A copy edited on disk by hand is replaced at the next snapshot it applies.
 - [ ] When the owner removes an item, every copy of it is deleted.
@@ -58,6 +58,7 @@ An **item** is one design system (`systems/<slug>/`) or one workspace design (`d
 - [ ] After a move, the new owner's copy becomes its own item. Its sources stay mapped to its own clones, and its next sync works from them.
 - [ ] A member that learns it no longer owns an item stops that item's agent. It then compares its folder with the record's `tree`. If its folder holds changes the new owner never received, they are kept under `$MOONLET_HOME/sync-leftovers/design-<workspace>-<slug>-<YYYYMMDD-HHMMSS>/` (X60's leftovers folder). Its folder then becomes a copy of the new owner's tree.
 - [ ] When two members move the same item at once, both end with the same owner: the one with the later stamp (X68's last-writer-wins).
+- [ ] An owner whose record names a tree it did not publish (a former owner's change sent late) takes that tree into its folder when its own folder has not changed since its last snapshot; otherwise it keeps its folder and writes the late tree to its leftovers. So a change made offline by the former owner is never lost.
 
 ### Merged workspaces
 

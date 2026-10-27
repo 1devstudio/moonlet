@@ -254,6 +254,69 @@ fn ok<T: Serialize>(v: T) -> HandlerResult {
     serde_json::to_value(v).map_err(|e| RpcError::new("internal", e.to_string()))
 }
 
+/// Design calls that work on a copy of another member's item (X71): they
+/// read it, or make a new item of this member's own. Every other call that
+/// names a design system or workspace design is refused on a copy.
+const ON_COPIES: &[&str] = &[
+    m::DESIGN_SYSTEMS,
+    m::DESIGN_SYSTEM_CREATE,
+    m::DESIGN_LIST,
+    m::DESIGN_CARDS,
+    m::DESIGN_FILE,
+    m::DESIGN_COMMENTS,
+    m::DESIGN_HISTORY,
+    m::DESIGN_PAGE,
+    m::DESIGN_KIT,
+    m::DESIGN_DETECT,
+    m::DESIGN_OPEN,
+    m::DESIGN_CREATE,
+    m::DESIGN_COPY,
+    m::DESIGN_MOVE,
+    // A card's screenshot for the app, in the folder's `.cache/`, which
+    // copies leave out.
+    m::DESIGN_SNAP,
+    m::DESIGN_RENDER_READY,
+    m::DESIGN_RENDER_DONE,
+];
+
+/// The design system or workspace design a design call names, when the
+/// call is one a copy refuses (X71).
+fn changed_item(method: &str, p: &Value) -> Option<moonlet_core::design::replica::Item> {
+    use moonlet_core::design::replica::Item;
+    if ON_COPIES.contains(&method) {
+        return None;
+    }
+    let text = |v: &Value, f: &str| v.get(f).and_then(Value::as_str).map(String::from);
+    // A design's check names it in `design`, and reads it unless it fixes
+    // its ids; a design system's check rewrites its generated files.
+    if method == m::DESIGN_CHECK {
+        if let Some(design) = p.get("design").filter(|d| !d.is_null()) {
+            let fix = p.get("fix").and_then(Value::as_bool).unwrap_or(false);
+            return fix.then(|| Some(Item::design(&text(design, "workspace")?, &text(design, "slug")?))).flatten();
+        }
+        return Some(Item::system(&text(p, "workspace")?, &text(p, "slug")?));
+    }
+    let (workspace, slug) = (text(p, "workspace")?, text(p, "slug")?);
+    let system = method.starts_with("design.system.") || method == m::DESIGN_SETTLE;
+    Some(if system { Item::system(&workspace, &slug) } else { Item::design(&workspace, &slug) })
+}
+
+/// Adds who owns an item to its listing (X71): `owner` is null for this
+/// member's own, else `{worker, name}`, and `owner_agent` says whether
+/// the owner's agent works on it.
+fn add_owner(v: &mut Value, owner: Option<(String, String, bool)>) {
+    match owner {
+        Some((worker, name, agent)) => {
+            v["owner"] = serde_json::json!({ "worker": worker, "name": name });
+            v["owner_agent"] = Value::Bool(agent);
+        }
+        None => {
+            v["owner"] = Value::Null;
+            v["owner_agent"] = Value::Bool(false);
+        }
+    }
+}
+
 /// The chat of a design system's sync agent, while it still is that
 /// system's: the chat its record names, still a sessionless chat in its
 /// folder (X64). Never found through its title, which comes from the name the
@@ -1369,12 +1432,34 @@ impl Daemon {
         if !DESIGN_ADDRESSED.contains(&method) && !DESIGN_SELF_GATED.contains(&method) {
             self.workspace_exists(&workspace)?;
         }
+        // Another member's design system or design is read only here (X71).
+        if let Some(item) = changed_item(method, &p)
+            && let Some((_, owner, _)) = self.copies.owner_of(&item)
+        {
+            return Err(RpcError::new(
+                "not_owner",
+                format!("{} is a copy from {owner}: change it there, or move it here", item.slug),
+            ));
+        }
         match method {
+            m::DESIGN_MOVE => {
+                // The user's choice, never an agent's.
+                app_only(conn, "moving a design")?;
+                let r: m::DesignMove = params(p)?;
+                let item = match r.kind.as_str() {
+                    "system" => moonlet_core::design::replica::Item::system(&r.workspace, &r.slug),
+                    "design" => moonlet_core::design::replica::Item::design(&r.workspace, &r.slug),
+                    _ => return Err(RpcError::new("invalid_params", "kind is system or design")),
+                };
+                self.copies.move_here(&item, r.force).await?;
+                ok(true)
+            }
             m::DESIGN_SYSTEMS => {
                 let r: m::DesignWorkspace = params(p)?;
                 // The store reads (the list, each system's record and config)
                 // run off the async workers; the chats give only their pending asks.
                 let terminals = self.terminals.list();
+                let ws = r.workspace.clone();
                 let systems = blocking(move || {
                     let list = store.systems(&r.workspace)?;
                     Ok(list
@@ -1394,6 +1479,8 @@ impl Daemon {
                             .and_then(|pending| moonlet_core::design::agent::needs_you(&pending));
                         let mut v = serde_json::to_value(&sys).unwrap_or_default();
                         v["needs_you"] = serde_json::to_value(waiting).unwrap_or_default();
+                        let item = moonlet_core::design::replica::Item::system(&ws, &sys.slug);
+                        add_owner(&mut v, self.copies.owner_of(&item));
                         v
                     })
                     .collect();
@@ -1604,7 +1691,19 @@ impl Daemon {
                 designs.extend(self.session_designs_of_workspace(&r.workspace).await);
                 designs.extend(self.project_designs_of_workspace(&r.workspace).await);
                 let terminals = self.terminals.list();
-                ok(designs.into_iter().map(|d| self.design_info(d, &terminals)).collect::<Vec<_>>())
+                let list: Vec<Value> = designs
+                    .into_iter()
+                    .map(|d| {
+                        let d = self.design_info(d, &terminals);
+                        let owner = (d.kind == moonlet_proto::types::DesignKind::Workspace)
+                            .then(|| self.copies.owner_of(&moonlet_core::design::replica::Item::design(&r.workspace, &d.slug)))
+                            .flatten();
+                        let mut v = serde_json::to_value(&d).unwrap_or_default();
+                        add_owner(&mut v, owner);
+                        v
+                    })
+                    .collect();
+                ok(list)
             }
             m::DESIGN_CREATE => {
                 let r: m::DesignCreate = params(p)?;
@@ -2400,6 +2499,25 @@ impl Daemon {
                     t.id == id && matches!(t.agent_state, moonlet_proto::types::AgentState::Working | moonlet_proto::types::AgentState::Blocked)
                 })
             })
+        });
+        // An item another member owns now: its agent here stops.
+        let d = Arc::downgrade(self);
+        self.copies.on_lost(move |item| {
+            let Some(d) = d.upgrade() else { return };
+            match item.kind {
+                moonlet_core::design::replica::Kind::System => d.stop_sync_agent(&item.workspace, &item.slug),
+                moonlet_core::design::replica::Kind::Design => {
+                    let agent = d
+                        .design
+                        .workspace_design(&item.workspace, &item.slug)
+                        .and_then(|at| d.design.design_record(&at))
+                        .ok()
+                        .and_then(|r| r.agent);
+                    if let Some(id) = agent {
+                        let _ = d.terminals.kill(id, true);
+                    }
+                }
+            }
         });
         let mut events = self.terminals.subscribe_events();
         let copies = self.copies.clone();

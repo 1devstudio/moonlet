@@ -579,8 +579,26 @@ impl DesignCopies {
             }
             Step::Publish { id, item } => {
                 let had = kept.get(id).and_then(|l| l.tree.clone());
-                kept.insert(id.clone(), Local::of(item, had, true));
+                kept.insert(id.clone(), Local::of(item, had.clone(), true));
                 let published = round.records.get(id).and_then(|r| r.tree.clone());
+                // A tree this member did not publish: a member that owned
+                // the item before sent it late. Taken in while this
+                // member's folder has not changed since; else kept aside.
+                if let Some(late) = published
+                    .clone()
+                    .filter(|t| had.is_some() && Some(t) != had.as_ref())
+                {
+                    let now = self.replicas.snapshot(item).await?;
+                    if Some(&now) == had.as_ref() && now != late {
+                        self.fetch(&late, kept).await?;
+                        self.replicas.apply(item, &late, &self.locate()).await?;
+                        kept.insert(id.clone(), Local::of(item, Some(late), true));
+                        return Ok(());
+                    }
+                    if now != late && self.fetch(&late, kept).await.is_ok() {
+                        self.leftovers(item, &late).await?;
+                    }
+                }
                 self.publish(round, id, item, published, kept).await?;
                 let busy = self.is_busy(item);
                 if round.records.get(id).is_some_and(|r| r.agent != busy) {
@@ -601,6 +619,14 @@ impl DesignCopies {
             Step::Lost { id, item } => {
                 if let Some(f) = self.lost.lock().unwrap().as_ref() {
                     f(item);
+                }
+                // What this member changed after it last published, which
+                // the new owner never got, is kept aside.
+                let published = kept.get(id).and_then(|l| l.tree.clone());
+                if let Ok(now) = self.replicas.snapshot(item).await
+                    && Some(&now) != published.as_ref()
+                {
+                    self.leftovers(item, &now).await?;
                 }
                 if let Some(l) = kept.get_mut(id) {
                     l.owned = false;
@@ -677,6 +703,91 @@ impl DesignCopies {
                 .find(|p| moonlet_core::identity::same_project(&p.identity, identity))
                 .map(|p| (p.id.clone(), p.path.clone()))
         }
+    }
+
+    /// Writes tree `tree` of item `item` to
+    /// `$MOONLET_HOME/sync-leftovers/design-<workspace>-<slug>-<time>/`
+    /// (X60's leftovers folder), for the user to take what they need.
+    async fn leftovers(&self, item: &Item, tree: &str) -> Result<()> {
+        let files = self.replicas.files(tree).await?;
+        let root = self.home.join("sync-leftovers");
+        let name = format!("design-{}-{}", item.workspace, item.slug);
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let dir = crate::sync::make_leftovers_folder(&root, &name)?;
+            for (path, bytes) in files {
+                // `check` let only plain paths into the tree.
+                let Some(rel) = path.strip_prefix("files/") else {
+                    continue;
+                };
+                let to = dir.join(rel);
+                std::fs::create_dir_all(to.parent().context("no folder")?)?;
+                std::fs::write(to, bytes)?;
+            }
+            Ok(())
+        })
+        .await??;
+        tracing::info!(item = ?item, "kept changes the new owner never got in sync-leftovers");
+        Ok(())
+    }
+
+    /// The owner of an item this member holds a copy of: its worker id,
+    /// its name and whether its agent works; none for this member's own.
+    pub fn owner_of(&self, item: &Item) -> Option<(String, String, bool)> {
+        let (id, local) = self.kept(item)?;
+        if local.owned {
+            return None;
+        }
+        let rec = self.records().remove(&id)?;
+        let name = self
+            .sessions
+            .member_names()
+            .remove(&rec.owner)
+            .unwrap_or_else(|| rec.owner.clone());
+        Some((rec.owner, name, rec.agent))
+    }
+
+    /// `design.move`: this member becomes the owner of an item it holds a
+    /// copy of.
+    pub async fn move_here(&self, item: &Item, force: bool) -> Result<(), RpcError> {
+        let me = self.link.info().worker.id;
+        let _one = self.round.lock().await;
+        let mut kept = self
+            .load()
+            .map_err(|e| RpcError::new("internal", format!("{e:#}")))?;
+        let Some((id, local)) = kept
+            .iter()
+            .find(|(_, l)| l.item() == *item)
+            .map(|(i, l)| (i.clone(), l.clone()))
+        else {
+            return Err(RpcError::new(
+                "not_found",
+                format!("no copy of {} here", item.slug),
+            ));
+        };
+        if local.owned {
+            return Ok(());
+        }
+        let rec = self
+            .records()
+            .remove(&id)
+            .ok_or_else(|| RpcError::new("not_found", "its record is gone"))?;
+        if rec.tree.is_some() && rec.tree != local.tree {
+            return Err(RpcError::new(
+                "not_current",
+                "this copy is older than the owner's latest: wait for it to arrive",
+            ));
+        }
+        if rec.agent && !force {
+            return Err(RpcError::new("busy", "the owner's agent is working on it"));
+        }
+        self.sessions.set_design(&id, &[("owner", json!(me))]);
+        if let Some(l) = kept.get_mut(&id) {
+            l.owned = true;
+        }
+        self.save(&kept)
+            .map_err(|e| RpcError::new("internal", format!("{e:#}")))?;
+        self.kick();
+        Ok(())
     }
 
     /// The item's name, as its folder gives it.

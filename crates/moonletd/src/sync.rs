@@ -4040,7 +4040,7 @@ fn leftovers_folder(root: &Path, name: &str) -> PathBuf {
 /// Makes the leftovers folder: `leftovers_folder`'s name, or the first of
 /// `-2`, `-3`… nobody made yet. Made with `create_dir`, so two copies
 /// stopped in the same second never share one.
-fn make_leftovers_folder(root: &Path, name: &str) -> std::io::Result<PathBuf> {
+pub(crate) fn make_leftovers_folder(root: &Path, name: &str) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(root)?;
     let first = leftovers_folder(root, name);
     let mut folder = first.clone();
