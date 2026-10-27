@@ -112,6 +112,12 @@ describe("chips and filters", () => {
     expect(groups.map((g) => [g.project.name, g.rows.map((r) => r.session.name)])).toEqual([["storefront", ["Dark mode for account pages"]]]);
   });
 
+  it("lists the sessions whose agent is done under Review", () => {
+    const w = world();
+    const groups = filterGroups(sessionGroups(w.hosts, w.data, null, NOW), "review", "");
+    expect(groups.map((g) => [g.project.name, g.rows.map((r) => r.session.name)])).toEqual([["storefront", ["Fix checkout button on mobile"]]]);
+  });
+
   it("searches titles, branches and projects", () => {
     const w = world();
     const names = (q: string) => filterGroups(sessionGroups(w.hosts, w.data, null, NOW), "all", q).flatMap((g) => g.rows.map((r) => r.session.name));

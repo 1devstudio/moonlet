@@ -1,8 +1,6 @@
-// The Inbox (X40): what needs the user across every connected host, and the
-// sessions ready to review.
+// The Inbox (X40): what needs the user across every connected host.
 
 import { planOf } from "@desktop/lib/chat";
-import { lastActive } from "@desktop/lib/sidebar";
 import { askerName } from "@desktop/lib/subagents";
 import type { AgentState, HostStatus, PermissionAsk, ReadRequest, Session } from "@desktop/lib/protocol";
 import type { HostData } from "./app";
@@ -37,16 +35,8 @@ export interface InboxHost {
   via: string | null;
 }
 
-export interface ReviewRow {
-  host: string;
-  session: Session;
-  project: string | null;
-}
-
 export interface Inbox {
   needs: InboxCard[];
-  /** Sessions whose agent finished, waiting for the user's review. */
-  review: ReviewRow[];
   /** Sessions whose agent is working. */
   working: number;
   /** Connected hosts, whatever the workspace. */
@@ -76,7 +66,6 @@ function kindOf(ask: PermissionAsk): CardKind {
 
 export function buildInbox(hosts: Record<string, InboxHost>, data: Record<string, HostData>, workspace: string | null): Inbox {
   const needs: InboxCard[] = [];
-  const review: ReviewRow[] = [];
   let working = 0;
   let hostsOnline = 0;
   for (const h of Object.values(hosts)) {
@@ -85,9 +74,7 @@ export function buildInbox(hosts: Record<string, InboxHost>, data: Record<string
     hostsOnline++;
     for (const s of d.sessions) {
       if (s.archived || !inWorkspace(d, s, workspace)) continue;
-      const st = sessionState(d, s);
-      if (st === "working") working++;
-      if (st === "done") review.push({ host: h.id, session: s, project: d.projects.find((p) => p.id === s.project_id)?.name ?? null });
+      if (sessionState(d, s) === "working") working++;
     }
     const sessionOf = (id?: string | null) => d.sessions.find((s) => s.id === id) ?? null;
     const base = (terminal: number, s: Session | null) => ({
@@ -115,18 +102,16 @@ export function buildInbox(hosts: Record<string, InboxHost>, data: Record<string
     }
   }
   needs.sort((a, b) => (b.askedAt ?? 0) - (a.askedAt ?? 0));
-  review.sort((a, b) => lastActive(data[b.host]!.terminals, b.session) - lastActive(data[a.host]!.terminals, a.session));
-  return { needs, review, working, hostsOnline };
+  return { needs, working, hostsOnline };
 }
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
-/** `3 need you · 2 working · 2 ready to review · 2 hosts online` */
+/** `3 need you · 2 working · 2 hosts online` */
 export function summaryLine(i: Inbox): string {
   const parts = [
     i.needs.length ? `${i.needs.length} need you` : "",
     i.working ? `${i.working} working` : "",
-    i.review.length ? `${i.review.length} ready to review` : "",
     `${plural(i.hostsOnline, "host")} online`,
   ];
   return parts.filter(Boolean).join(" · ");

@@ -1,17 +1,16 @@
 // Inbox (X40): every ask waiting for the user across hosts, answerable in
-// place, and the sessions ready to review.
+// place.
 
 import { useState } from "react";
-import { ChevronRight, ListChecks, MessageCircleQuestion, Server, SquareTerminal, Terminal } from "lucide-react";
+import { ListChecks, MessageCircleQuestion, Server, SquareTerminal, Terminal } from "lucide-react";
 import { planOf } from "@desktop/lib/chat";
 import { showScreen, useApp } from "../lib/app";
-import { useGitStatus } from "../lib/rowDetails";
 import { answerAsk, answerPlan, answerRead } from "../lib/answers";
 import { ageText, askHeadline, planBlurb, readMessage } from "../lib/cards";
 import { type InboxCard, buildInbox, summaryLine } from "../lib/inbox";
 import { useBusy } from "../lib/busy";
 import { useNow } from "../lib/now";
-import { AgentIcon, Btn, DiffStat, Moon, StateGlyph, Title } from "../components/ui";
+import { AgentIcon, Btn, Moon, StateGlyph, Title } from "../components/ui";
 import { Sheet } from "../components/Sheet";
 import { AskerLine } from "../components/chat";
 import { WorkspacePill } from "../components/WorkspacePill";
@@ -165,26 +164,6 @@ function ReadCard({ card, now }: { card: InboxCard; now: number }) {
   );
 }
 
-function ReviewRow({ host, id, title, project }: { host: string; id: string; title: string; project: string | null }) {
-  const session = useApp((s) => s.data[host]?.sessions.find((x) => x.id === id));
-  // Through the shared cache, which drops a reply for another session.
-  const [stat] = useGitStatus(host, session);
-  return (
-    <button type="button" onClick={() => showScreen({ kind: "session", host, id, tab: "changes" })} className="flex min-h-[60px] items-center gap-2.5 rounded-[14px] bg-panel px-3.5 text-left">
-      <StateGlyph state="done" />
-      <span className="flex min-w-0 flex-1 flex-col gap-[3px]">
-        <span className="truncate text-[15px] font-medium">{title}</span>
-        <span className="flex items-center gap-2 text-[12px] text-muted">
-          {stat && <DiffStat add={stat.additions} del={stat.deletions} />}
-          {stat && `${stat.files.length} file${stat.files.length === 1 ? "" : "s"} · `}
-          {project}
-        </span>
-      </span>
-      <ChevronRight size={18} className="text-faint" />
-    </button>
-  );
-}
-
 export function InboxScreen() {
   const inbox = useInbox();
   const now = useNow();
@@ -212,10 +191,6 @@ export function InboxScreen() {
             <ReadCard key={c.key} card={c} now={now} />
           ),
         )}
-        {inbox.review.length > 0 && <div className="eyebrow mt-2.5">Ready to review</div>}
-        {inbox.review.map((r) => (
-          <ReviewRow key={`${r.host}:${r.session.id}`} host={r.host} id={r.session.id} title={r.session.name} project={r.project} />
-        ))}
       </div>
     </div>
   );
