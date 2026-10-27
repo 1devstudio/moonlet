@@ -180,16 +180,23 @@ jobs:
 
       # The Linux helpers and the install script (X58), uploaded while the
       # release is still a draft. The checksums are checked before upload.
+      # Each archive is signed with the updater key and checked with the
+      # moonletd in the app (X69), which is what a host checks an update with.
       - name: Upload the Linux install
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           scripts/package-linux.sh dist
           (cd dist && shasum -a 256 -c SHA256SUMS)
-          for f in moonlet-linux-x86_64.tar.gz moonlet-linux-aarch64.tar.gz SHA256SUMS install.sh; do
+          scripts/sign-linux.sh dist target/release/bundle/macos/moonlet.app/Contents/MacOS/moonletd
+          for f in moonlet-linux-x86_64.tar.gz moonlet-linux-aarch64.tar.gz \
+                   moonlet-linux-x86_64.tar.gz.sig moonlet-linux-aarch64.tar.gz.sig SHA256SUMS install.sh; do
             [ -f "dist/$f" ] || { echo "::error::dist/$f is missing"; exit 1; }
           done
-          gh release upload "$GITHUB_REF_NAME" dist/moonlet-linux-x86_64.tar.gz dist/moonlet-linux-aarch64.tar.gz dist/SHA256SUMS dist/install.sh --clobber
+          gh release upload "$GITHUB_REF_NAME" dist/moonlet-linux-x86_64.tar.gz dist/moonlet-linux-aarch64.tar.gz \
+            dist/moonlet-linux-x86_64.tar.gz.sig dist/moonlet-linux-aarch64.tar.gz.sig dist/SHA256SUMS dist/install.sh --clobber
 
       - name: Publish
         env:

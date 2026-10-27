@@ -125,6 +125,18 @@ pub fn verify(key: &minisign_verify::PublicKey, data: &[u8], signature: &str) ->
     key.verify(data, &sig, false).map_err(|_| bad())
 }
 
+/// Checks `archive` against `<archive>.sig` with the release key.
+pub fn verify_file(archive: &Path) -> anyhow::Result<()> {
+    let mut sig = archive.as_os_str().to_owned();
+    sig.push(".sig");
+    let sig = PathBuf::from(sig);
+    let signature = std::fs::read_to_string(&sig).map_err(|e| anyhow::anyhow!("{}: {e}", sig.display()))?;
+    let data = std::fs::read(archive).map_err(|e| anyhow::anyhow!("{}: {e}", archive.display()))?;
+    let (_, key) = source()?;
+    verify(&key, &data, &signature)?;
+    Ok(())
+}
+
 async fn fetch(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, RpcError> {
     let failed = |e: String| err("download_failed", format!("{url}: {e}"));
     let resp = client.get(url).send().await.map_err(|e| failed(e.to_string()))?;
