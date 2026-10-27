@@ -3,6 +3,7 @@
 - **Status:** accepted (2026-10-20); built in [X57](../specs/X57-tailnet-hosts.md) and [X58](../specs/X58-linux-install-script.md)
 - **Changes:** [ADR 0009](0009-central-host-workers-live-copies.md)'s transport (workers no longer dial out over SSH), and the default way to add a remote host ([R1](../specs/R1-ssh-hosts.md)–[R3](../specs/R3-remote-sessions-reconnect.md)).
 - **Changed by:** [ADR 0012](0012-cloud-workers.md) (2026-10-22). moonlet installs Tailscale on the cloud machines it creates; the user still sets up their own machines.
+- **Changed by:** [ADR 0014](0014-one-account-across-hosts.md) (proposed, 2026-10-26). The first desktop paired with a host is its admin and may manage its devices and link.
 - **Builds on:** [ADR 0008](0008-phone-link-over-tailscale.md) and [X39](../specs/X39-phone-pairing-and-link.md) (the daemon's tailnet listener and device tokens).
 
 ## Context
