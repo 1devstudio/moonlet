@@ -5,7 +5,8 @@
 import { Command, Lock, MessageSquare, Plus, SwatchBook } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { errorToast, shownWorkspace, toast, useStore } from "../../lib/store";
+import { errorToast, hostWorkspaces, shownWorkspace, toast, useStore } from "../../lib/store";
+import { copyLabel, designHost, ownerWorking } from "../../lib/designCopies";
 import { type DesignCover } from "../../lib/protocol";
 import { designAgentState, designRow, designsEmpty, picksInWorkspace, systemFolder, systemLabel } from "../../lib/design";
 import { designCanvasKey, createSystem, designsOf, openNewDesign, openSessionDesign, sessionDesignsIn, detectStack, indexShownIn, loadDesigns, showIndex, loadSystems, shownDesign, shownSystem, showDesign, showSystem, systemsOf, useDesign } from "../../lib/designStore";
@@ -23,7 +24,11 @@ import { DesignsIndex } from "./DesignsIndex";
  * `load` lists them when the workspace is shown (the sidebar does, so a
  * failure shows once). */
 function useWorkspaceDesign(load = false) {
-  const ws = useStore((s) => shownWorkspace(s));
+  const shownWs = useStore((s) => shownWorkspace(s));
+  // This Mac's copies of a shared workspace's designs, whichever member
+  // shows it (X71): the canvas frames this Mac's folders.
+  const host = useStore((s) => (shownWs ? designHost(shownWs, hostWorkspaces(s)) : null));
+  const ws = useMemo(() => (shownWs && host ? { ...shownWs, host } : null), [shownWs, host]);
   const systems = useDesign((d) => (ws ? systemsOf(d, ws.host, ws.id) : undefined));
   const shown = useDesign((d) => (ws ? shownSystem(d, ws.host, ws.id) : null));
   const designs = useDesign((d) => (ws ? designsOf(d, ws.host, ws.id) : undefined));
@@ -107,7 +112,10 @@ export function DesignSidebar() {
         <nav aria-label="Design systems" className="px-2">
           {systems?.length === 0 && <p className="px-2 py-1 ui-text-12.5 text-faint">None yet. Build one from a project's code.</p>}
           {systems?.map((sys, i) => {
-            const label = systemLabel(sys, now, !!working[i]);
+            const own = systemLabel(sys, now, !!working[i]);
+            const elsewhere = ownerWorking(sys, "system");
+            const label = elsewhere ? { ...own, text: elsewhere, tone: "muted" as const } : own;
+            const from = copyLabel(sys);
             const current = !design && !indexed && sys.slug === shown?.slug;
             return (
               <button
@@ -118,7 +126,10 @@ export function DesignSidebar() {
               >
                 {current && <span className="absolute inset-y-0 left-0 w-[2px] bg-accent" />}
                 <SwatchBook size={14} className="shrink-0 text-muted" />
-                <span className="min-w-0 flex-1 truncate">{sys.name}</span>
+                <span className="min-w-0 flex-1 truncate">
+                  {sys.name}
+                  {from && <span className="ml-1.5 ui-text-11.5 text-faint">{from}</span>}
+                </span>
                 <span title={sys.error ?? sys.needs_you?.text} className={cx("shrink-0 ui-text-11.5 tabular-nums", TONES[label.tone])}>
                   {label.text}
                 </span>
@@ -143,7 +154,10 @@ export function DesignSidebar() {
               >
                 {current && <span className="absolute inset-y-0 left-0 w-[2px] bg-accent" />}
                 <span className="flex w-[14px] shrink-0 justify-center">{label.state ? <StateGlyph state={label.state} size={14} /> : <span className="h-1.5 w-1.5 rounded-full bg-idle" />}</span>
-                <span className="min-w-0 flex-1 truncate">{d.name}</span>
+                <span className="min-w-0 flex-1 truncate">
+                  {d.name}
+                  {copyLabel(d) && <span className="ml-1.5 ui-text-11.5 text-faint">{ownerWorking(d, "design") ?? copyLabel(d)}</span>}
+                </span>
                 <span title={d.error ?? d.needs_you?.text} className={cx("flex shrink-0 items-center gap-1 ui-text-11.5 tabular-nums", TONES[label.tone])}>
                   {label.comments && <MessageSquare size={11} />}
                   {label.text}

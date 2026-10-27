@@ -8,6 +8,8 @@ import { onDaemonEvent, onHostStatus, rpc } from "./daemon";
 import { EV, M, type ChatState, type Design, type DesignCard, type CommentChange, type DesignComment, type DesignChanged, type DesignSnapshot, type DesignCover, type DesignCreated, type DesignOpen, type DesignSystem, type DesignSystemCreated, type DesignSystemUpdated } from "./protocol";
 import { parseWsKey, wsKey } from "./workspaces";
 import { syncNotice } from "./designSync";
+import { moveConfirm, type Owned } from "./designCopies";
+import { askConfirm } from "./confirm";
 import { agentSeen, errorMessage, notify, registerAgentsElsewhere, selectSession, shownWorkspace, switchWorkspace, toast, useStore } from "./store";
 import { alertFor } from "./alerts";
 import { modeOf, setMode } from "./mode";
@@ -801,6 +803,16 @@ const systemListing = listing(async (host, workspace, key) => {
     if (notice && bannerFor(notice.state, host, workspace, sys.slug)) void notify(notice.title, notice.body);
   }
 });
+
+/** **Move here** (X71): after the user confirms, this host becomes the
+ *  owner of a design system or workspace design it holds a copy of. */
+export async function moveHere(host: string, workspace: string, kind: "system" | "design", item: { slug: string; name: string } & Owned) {
+  const ask = moveConfirm(item.name, item, kind);
+  const ok = await askConfirm({ title: ask.title, message: ask.body, action: ask.confirm });
+  if (!ok) return;
+  await rpc(host, M.designMove, { workspace, kind, slug: item.slug, force: ask.force });
+  await (kind === "system" ? loadSystems(host, workspace, true) : loadDesigns(host, workspace, true));
+}
 
 /** Lists a workspace's design systems. `fresh`: something just changed, so a
  * listing already on its way is followed by one more. */

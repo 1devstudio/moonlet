@@ -21,6 +21,7 @@ import { AgentIcon, Button, IconButton } from "../ui";
 import { Menu } from "../Menu";
 import { AfterSyncBar, ChangedSection, NeedsYouSection, StepBar } from "./SyncParts";
 import { agentShown, rewritingCard, stepBar } from "../../lib/designSync";
+import { CopyBar } from "./CopyBar";
 import { chatKey, useChat } from "../../lib/chat";
 import { askConfirm } from "../../lib/confirm";
 import { AgentView } from "../AgentView";
@@ -102,6 +103,8 @@ export function DesignSystemView({ host, workspace, sys, label, working, inset }
   const showAgent = agent !== null && agentShown(hidden, sys);
   const stop = () => agent !== null && void stopAgent(host, agent).catch(errorToast);
   const sync = () => void rpc(host, M.designSystemSync, { workspace, slug: sys.slug }).catch(errorToast);
+  // Another member's (X71): read only here, its agent runs there.
+  const copy = !!sys.owner;
   const remove = async () => {
     const ok = await askConfirm({ title: `Remove ${sys.name}?`, message: `Its folder, systems/${sys.slug}, and its cards are deleted. Designs that use it keep their copies.`, action: "Remove", variant: "danger" });
     if (ok) void rpc(host, M.designSystemRemove, { workspace, slug: sys.slug }).catch(errorToast);
@@ -131,7 +134,7 @@ export function DesignSystemView({ host, workspace, sys, label, working, inset }
                   <ShieldAlert size={12} /> {problemsLabel(problems)}
                 </button>
               )}
-              {syncing ? (
+              {copy ? null : syncing ? (
                 <Button key="stop" size="sm" variant="danger" className="no-drag" onClick={stop}>
                   Stop sync
                 </Button>
@@ -145,16 +148,19 @@ export function DesignSystemView({ host, workspace, sys, label, working, inset }
                   Show agent
                 </Button>
               )}
-              <Menu
-                align="right"
-                trigger={(open) => (
-                  <IconButton title="More" className="no-drag" onClick={open}>
-                    <MoreHorizontal size={14} />
-                  </IconButton>
-                )}
-                items={[{ label: "Remove design system…", icon: <Trash2 size={14} />, danger: true, onSelect: () => void remove() }]}
-              />
+              {!copy && (
+                <Menu
+                  align="right"
+                  trigger={(open) => (
+                    <IconButton title="More" className="no-drag" onClick={open}>
+                      <MoreHorizontal size={14} />
+                    </IconButton>
+                  )}
+                  items={[{ label: "Remove design system…", icon: <Trash2 size={14} />, danger: true, onSelect: () => void remove() }]}
+                />
+              )}
             </header>
+            <CopyBar host={host} workspace={workspace} kind="system" item={sys} />
             {steps && !sys.error ? (
               <StepBar cells={steps} />
             ) : (
@@ -190,7 +196,7 @@ export function DesignSystemView({ host, workspace, sys, label, working, inset }
                 </nav>
                 <div {...{ [NEAR_ROOT]: "" }} className="min-w-0 flex-1 overflow-y-auto p-6">
                   {cards?.length === 0 && <p className="ui-text-13 text-muted">No cards yet. The sync agent writes them in the Cards step.</p>}
-                  {!syncing && cards && (
+                  {!syncing && !copy && cards && (
                     <>
                       <NeedsYouSection host={host} workspace={workspace} sys={sys} cards={cards} revs={revs} />
                       <ChangedSection host={host} workspace={workspace} sys={sys} cards={cards} />
@@ -321,10 +327,10 @@ function CardPage({ host, workspace, sys, rev, card, agent, inset }: { host: str
             ))}
             {card.problems.length > 0 && (
               <>
-                <Button size="sm" className="w-full justify-center" disabled={!fix.enabled} onClick={() => void askToFix()}>
+                <Button size="sm" className="w-full justify-center" disabled={!fix.enabled || !!sys.owner} onClick={() => void askToFix()}>
                   Ask the sync agent to fix
                 </Button>
-                {fix.hint && <p className="mt-1.5 ui-text-11.5 text-faint">{fix.hint}</p>}
+                {sys.owner ? <p className="mt-1.5 ui-text-11.5 text-faint">Its sync agent runs on {sys.owner.name}.</p> : fix.hint && <p className="mt-1.5 ui-text-11.5 text-faint">{fix.hint}</p>}
               </>
             )}
           </section>

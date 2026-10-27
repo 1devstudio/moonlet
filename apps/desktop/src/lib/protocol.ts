@@ -1033,6 +1033,11 @@ export interface DesignSystem {
   last_sync: DesignSyncChange[];
   /** What its sync agent waits for from the user. */
   needs_you: { kind: "question" | "approval"; text: string } | null;
+  /** The member that owns it, when this host holds a copy (X71); null for
+   *  the host's own, absent from a daemon before X71. */
+  owner?: { worker: string; name: string } | null;
+  /** Whether the owner's agent works on it now. */
+  owner_agent?: boolean;
 }
 
 /** A sync's steps, in order (X64). */
@@ -1085,6 +1090,9 @@ export type DesignRef = { workspace: string; slug: string } | { session: string;
 
 /** One design of a workspace, from `design.list` (X65). */
 export interface Design {
+  /** A workspace design's owner, when this host holds a copy (X71). */
+  owner?: { worker: string; name: string } | null;
+  owner_agent?: boolean;
   slug: string;
   name: string;
   kind: DesignKind;
@@ -1450,6 +1458,7 @@ export const M = {
   designViewport: "design.viewport",
   designSystemUpdate: "design.system.update",
   designCopy: "design.copy",
+  designMove: "design.move",
 } as const;
 
 export const EV = {

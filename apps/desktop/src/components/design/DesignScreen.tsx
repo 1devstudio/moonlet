@@ -40,6 +40,7 @@ import {
   designCanvasKey,
 } from "../../lib/designStore";
 import { isSession, type DesignPlace } from "../../lib/designPlace";
+import { CopyBar } from "./CopyBar";
 import { askWithEdits, updateAndTell, toldFolder, type ToldDesign, restoreSnapshot, closeDesign, hasCopy, kitOf, loadKit, sendCommentsWithEdits, copyElementOf, dismissUnsaved, editPage, loadPageSource, loadParseError, parseErrorOf, pasteInto, pendingOf, readErrorOf, redoEdit, sendWithEdits, sourceOf, undoEdit, undoOf, unsavedOf, useEditor } from "../../lib/designEditor";
 import { EditRefused, editsChip, inlineStyles, type Edit, type EditOp } from "../../lib/designEdits";
 import { offSystemMids } from "../../lib/designTokens";
@@ -135,19 +136,22 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
                 </Button>
               </span>
             )}
-            <Menu
-              align="right"
-              trigger={(open) => (
-                <IconButton title="More" className="no-drag" onClick={open}>
-                  <MoreHorizontal size={14} />
-                </IconButton>
-              )}
-              items={[{ label: "Remove design…", icon: <Trash2 size={14} />, danger: true, onSelect: () => void remove() }]}
-            />
+            {!design.owner && (
+              <Menu
+                align="right"
+                trigger={(open) => (
+                  <IconButton title="More" className="no-drag" onClick={open}>
+                    <MoreHorizontal size={14} />
+                  </IconButton>
+                )}
+                items={[{ label: "Remove design…", icon: <Trash2 size={14} />, danger: true, onSelect: () => void remove() }]}
+              />
+            )}
             <IconButton title="Hide chat (⌘\)" className="no-drag" onClick={() => setChatOpen(false)}>
               <PanelLeftClose size={14} />
             </IconButton>
           </header>
+          <CopyBar host={host} workspace={workspace} kind="design" item={design} />
           {building && (
             // Built (X65): its session design is the one that changes now.
             <button
@@ -306,7 +310,8 @@ export function DesignCanvas({
   const previewed = (preview && snapshots?.find((s) => s.n === preview.n)) || null;
   // A snapshot previewed is read only (canvasStep, editorStep, undoOpen,
   // layerPick), and the Inspector and the Palette edit nothing then.
-  const readOnly = previewed !== null;
+  // So is another member's design (X71): its agent runs there.
+  const readOnly = previewed !== null || !!design.owner;
   const editLocked = working || readOnly;
 
   const names = previewed ? previewed.pages : design.pages.map((p) => p.name);
@@ -830,7 +835,7 @@ export function DesignCanvas({
               }}
             />
           ) : railTab === "history" ? (
-            <HistoryTab snapshots={snapshots} previewed={previewed?.n ?? null} locked={working} onPick={pickSnapshot} onBack={() => setPreview(null)} onRestore={restore} />
+            <HistoryTab snapshots={snapshots} previewed={previewed?.n ?? null} locked={working || !!design.owner} onPick={pickSnapshot} onBack={() => setPreview(null)} onRestore={restore} />
           ) : railTab === "palette" ? (
             kitError && !kit ? (
               <p className="px-4 py-6 text-center ui-text-12.5 text-faint">The design system's snippets could not be read: {kitError}</p>

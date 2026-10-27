@@ -1,6 +1,6 @@
 # X71 — Design systems and workspace designs on every member
 
-- **Status:** draft
+- **Status:** implemented (untried between two real Macs over Tailscale)
 - **Priority / phase:** P1 · phase 4 (sessions across machines)
 - **PRD refs:** none (new scope)
 - **Related ADRs:** [0014](../adr/0014-one-account-across-hosts.md) (one account across hosts, delivery slice 7), [0013](../adr/0013-design-systems-and-designs.md) (design systems and designs)
@@ -69,7 +69,7 @@ An **item** is one design system (`systems/<slug>/`) or one workspace design (`d
 ### The app
 
 - [ ] Design mode reads a shown workspace's design systems and designs from the app's own host whenever that host is a member of the workspace's account, since it holds a copy of every item. Otherwise it reads them from the shown host, as today.
-- [ ] A copied item's row says "from <owner's host label>". The design system view and the design screen show "A copy from <host> · read only" and **Move here**. They hide **Sync**, the settle actions, the card settings, the visual editor's saving, comments' **Send** and snapshot restore.
+- [ ] A copied item's row says "from <owner's name>". The design system view and the design screen show "A copy from <owner's name> · read only" and **Move here**. The design system view hides **Sync**, **Remove**, the settle actions and **Ask the sync agent to fix**; the design screen opens read only, as a snapshot preview does (no editing, no new comments, no restore), and hides **Remove**.
 - [ ] While the owner's agent is working, a copy's row shows "Syncing on <host>" or "Working on <host>".
 - [ ] **Move here** opens a confirmation naming the current owner. If the owner's agent is working, it says the owner looks busy and offers **Move anyway**.
 - [ ] A copied design system with a source this host has not cloned says which project is missing after a move, and refuses **Sync** until it is cloned.
