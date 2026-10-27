@@ -33,6 +33,14 @@ dirs = "6"
 uuid = { version = "1", features = ["v4", "serde"] }
 tempfile = "3"
 
+# Debug builds keep file and line numbers for backtraces in our own crates and
+# drop the rest of the debug info, which is most of each worktree's target/.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 [profile.release]
 lto = "thin"
 codegen-units = 1
