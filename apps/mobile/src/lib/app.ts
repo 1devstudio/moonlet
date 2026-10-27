@@ -6,6 +6,7 @@ import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { onDaemonEvent, onHostStatus, rpc, subscribeHost, type DaemonEvent } from "@desktop/lib/daemon";
 import { onChatItem, onChatState } from "@desktop/lib/chat";
+import { startJobs } from "@desktop/lib/jobsStore";
 import {
   EV,
   M,
@@ -54,7 +55,7 @@ export interface HostData {
 export const emptyData = (): HostData => ({ terminals: {}, sessions: [], projects: [], workspaces: [], sections: [], reads: [], chats: {}, git: null });
 
 export type Tab = "inbox" | "sessions" | "new" | "hosts";
-export type SessionTab = "chat" | "terminal" | "changes" | "pr";
+export type SessionTab = "chat" | "terminal" | "changes" | "pr" | "jobs";
 
 /** A screen over the tabs. */
 export type Screen =
@@ -243,6 +244,8 @@ export async function startApp() {
   started = true;
   await onHostStatus((h) => onStatus(h as HostEntry));
   await onDaemonEvent(onEvent);
+  // A session's jobs follow `job.changed` and `job.output` (X62).
+  startJobs();
   const list = await invoke<HostEntry[]>("host_list");
   set({ hosts: Object.fromEntries(list.map((h) => [h.id, h])), ready: true });
   // Hosts that connected before the listeners were up load now.
