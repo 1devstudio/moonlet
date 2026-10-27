@@ -116,6 +116,10 @@ enum Cmd {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    // The release check needs no home, socket or runtime (X69).
+    if let Some(Cmd::VerifyRelease { archive }) = &cli.cmd {
+        return update::verify_file(archive);
+    }
     moonlet_core::paths::migrate_legacy_home();
     let socket = cli.socket.unwrap_or_else(moonlet_core::paths::socket_path);
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -124,7 +128,7 @@ fn main() -> Result<()> {
     match cli.cmd.unwrap_or(Cmd::Daemon { handoff: None }) {
         Cmd::Daemon { handoff } => run_daemon(rt, socket, handoff),
         Cmd::Upgrade => rt.block_on(upgrade::request_upgrade(&socket, std::env::current_exe()?)),
-        Cmd::VerifyRelease { archive } => update::verify_file(&archive),
+        Cmd::VerifyRelease { .. } => unreachable!("handled before the home is set up"),
         Cmd::Service { action } => {
             match action {
                 ServiceAction::Install => service::install()?,

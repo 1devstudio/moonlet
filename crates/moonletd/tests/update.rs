@@ -528,3 +528,27 @@ fn the_release_check_accepts_only_an_archive_signed_with_the_key() {
     std::fs::write(&file, b"tampered").unwrap();
     assert_eq!(check(&file), (false, "Error: bad_signature: the release's signature does not match moonlet's key".into()));
 }
+
+/// The release check touches nothing of the user's: not even an old
+/// `~/.jaunt` that any other `moonletd` command would move (X27).
+#[test]
+fn the_release_check_leaves_the_users_folders_alone() {
+    let key = Key::new();
+    let home = tempfile::tempdir().unwrap();
+    std::fs::create_dir(home.path().join(".jaunt")).unwrap();
+    let file = home.path().join("moonlet-linux-x86_64.tar.gz");
+    std::fs::write(&file, b"archive").unwrap();
+    std::fs::write(home.path().join("moonlet-linux-x86_64.tar.gz.sig"), key.sign(b"archive")).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_moonletd"))
+        .arg("verify-release")
+        .arg(&file)
+        .env_remove("MOONLET_HOME")
+        .env_remove("JAUNT_HOME")
+        .env("HOME", home.path())
+        .env("MOONLET_RELEASE_KEY", key.public())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(home.path().join(".jaunt").is_dir());
+    assert!(!home.path().join(".moonlet").exists());
+}
