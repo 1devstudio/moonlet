@@ -117,6 +117,20 @@ describe("mergeChoices and mergeAsk (X68)", () => {
     });
   });
 
+  it("leaves the profile out when the member could not list its profiles", () => {
+    const list = world();
+    const d = {
+      mini: data({
+        workspaces: [{ ...workspace("p1", "Personal"), claude_profile: "work" }, { ...workspace("p2", "Personal"), section_ids: ["b"] }],
+        sessions: [session("refund", "Idempotent refund webhooks", { workspace_id: "p2" })],
+        terminals: { 5: terminal(5, "refund") },
+      }),
+    };
+    expect(mergeAsk(choice(list, "mini", "p2"), choice(list, "mac", "p1"), d, null).prompt.message).toBe(
+      "Move the 1 section of this Personal, with its sessions, into the other Personal, and delete this one? Every Mac sharing them gets the change.",
+    );
+  });
+
   it("says what a new Claude profile does to agents running in the merged workspace", () => {
     const list = world();
     const d = {

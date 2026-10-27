@@ -2,7 +2,7 @@
 // members of one account share shows once, as in the desktop's switcher, and
 // Merge with… joins two of them (X68).
 
-import { Fragment, useState } from "react";
+import { Fragment, useRef, useState } from "react";
 import { Check, ChevronDown, Merge } from "lucide-react";
 import { rpc } from "@desktop/lib/daemon";
 import { confirmView, type ConfirmOptions } from "@desktop/lib/confirmOptions";
@@ -13,7 +13,7 @@ import { hostWorkspaces, isChosen, mergeAsk, mergeChoices, workspaceChoices, typ
 import { Sheet } from "./Sheet";
 import { Btn, cx } from "./ui";
 
-type Step = { kind: "pick" } | { kind: "merge" } | { kind: "confirm"; into: WorkspaceChoice; host: string; prompt: ConfirmOptions };
+type Step = { kind: "pick" } | { kind: "merge" } | { kind: "confirm"; from: WorkspaceChoice; into: WorkspaceChoice; host: string; prompt: ConfirmOptions };
 
 export function WorkspacePill() {
   const data = useApp((s) => s.data);
@@ -23,10 +23,15 @@ export function WorkspacePill() {
   const [step, setStep] = useState<Step>({ kind: "pick" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Each target picked numbers its profile lookup; only the latest may ask.
+  const asking = useRef(0);
   const choices = workspaceChoices(hostWorkspaces(hosts, data));
   const current = choices.find((c) => isChosen(c.ref, shown));
   const targets = current ? mergeChoices(choices, current) : [];
+  // A merge on its way cannot be called back, so the sheet stays until it ends.
   const close = () => {
+    if (busy) return;
+    asking.current++;
     setOpen(false);
     setStep({ kind: "pick" });
     setError(null);
@@ -34,20 +39,25 @@ export function WorkspacePill() {
 
   const ask = async (into: WorkspaceChoice) => {
     if (!current) return;
+    const from = current;
+    const turn = ++asking.current;
     // The question names what a new Claude profile does, in the terms of the
     // member asked; without its profiles it leaves that out.
-    const profiles = await rpc<ProfileInfo[]>(mergeHost(current.row, into.row), M.profileList).catch(() => []);
-    setStep({ kind: "confirm", into, ...mergeAsk(current, into, data, profiles) });
+    const profiles = await rpc<ProfileInfo[]>(mergeHost(from.row, into.row), M.profileList).catch(() => null);
+    // Backed out, closed or picked another target meanwhile.
+    if (turn !== asking.current) return;
+    setStep({ kind: "confirm", from, into, ...mergeAsk(from, into, data, profiles) });
   };
 
+  // Merges the workspace the question named, whatever is shown since.
   const merge = async (s: Extract<Step, { kind: "confirm" }>) => {
-    if (!current) return;
     setBusy(true);
     setError(null);
     try {
-      await rpc(s.host, M.workspaceMerge, { id: current.ref.id, into: s.into.ref.id });
+      await rpc(s.host, M.workspaceMerge, { id: s.from.ref.id, into: s.into.ref.id });
       updateSettings({ workspace: s.into.ref });
-      close();
+      setOpen(false);
+      setStep({ kind: "pick" });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -99,7 +109,13 @@ export function WorkspacePill() {
                   <ChoiceLine c={c} />
                 </button>
               ))}
-              <Btn tone="ghost" onClick={() => setStep({ kind: "pick" })}>
+              <Btn
+                tone="ghost"
+                onClick={() => {
+                  asking.current++;
+                  setStep({ kind: "pick" });
+                }}
+              >
                 Back
               </Btn>
             </div>
@@ -112,7 +128,7 @@ export function WorkspacePill() {
               <Btn tone="primary" disabled={busy} onClick={() => void merge(step)}>
                 <Merge size={16} /> {step.prompt.action}
               </Btn>
-              <Btn tone="ghost" onClick={close}>
+              <Btn tone="ghost" disabled={busy} onClick={close}>
                 Cancel
               </Btn>
             </div>

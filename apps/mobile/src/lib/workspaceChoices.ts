@@ -62,9 +62,11 @@ export function mergeChoices(choices: WorkspaceChoice[], cur: WorkspaceChoice): 
 /**
  * Where merging `from` into `into` is asked, a member listing both, and the
  * question, in that member's terms: its workspaces and Claude profiles, and
- * the Claude agents running in `from` on every member.
+ * the Claude agents running in `from` on every member. Without its
+ * profiles (`null`: it could not list them) the question leaves out what a
+ * new profile does, rather than name the wrong one.
  */
-export function mergeAsk(from: WorkspaceChoice, into: WorkspaceChoice, data: Record<string, HostData>, profiles: ProfileInfo[]): { host: string; prompt: ConfirmOptions } {
+export function mergeAsk(from: WorkspaceChoice, into: WorkspaceChoice, data: Record<string, HostData>, profiles: ProfileInfo[] | null): { host: string; prompt: ConfirmOptions } {
   const host = mergeHost(from.row, into.row);
   const listed = (id: string) => data[host]?.workspaces.find((w) => w.id === id);
   const [f, t] = [listed(from.row.ws.id) ?? from.row.ws, listed(into.row.ws.id) ?? into.row.ws];
@@ -74,7 +76,7 @@ export function mergeAsk(from: WorkspaceChoice, into: WorkspaceChoice, data: Rec
     const ids = d.sessions.filter((s) => s.workspace_id === f.id).map((s) => s.id);
     return n + runningClaudeAgents(d.sessions, Object.values(d.terminals), ids);
   }, 0);
-  return { host, prompt: mergePrompt(f, t, mergeProfileChange(f, t, profiles, agents)) };
+  return { host, prompt: mergePrompt(f, t, profiles ? mergeProfileChange(f, t, profiles, agents) : undefined) };
 }
 
 /**
