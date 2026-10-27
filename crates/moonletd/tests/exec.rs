@@ -1309,20 +1309,23 @@ async fn heard_setup(s: &mut tokio::net::TcpStream, wait: Duration) -> Option<Va
 }
 
 #[tokio::test]
-async fn a_paired_phone_hears_a_routing_copys_setup_and_a_paired_mac_does_not() {
+async fn a_paired_phone_hears_and_runs_a_routing_copys_setup_and_a_paired_mac_does_not() {
     let config = format!("setup = \"touch set-up\"\n{RUN_CONFIG}");
     let port = std::net::TcpListener::bind("[::1]:0").unwrap().local_addr().unwrap().port();
     // The Mac listens on ::1: one on the central host's 127.0.0.1 takes
     // itself for its central host.
     let (c, mac) = linked_in(&config, &[("MOONLET_MOBILE_ADDRS", "::1")], true, Some(port)).await;
     let addr = format!("[::1]:{port}");
+    let mut listening = false;
     for _ in 0..100 {
         let st: Value = mac.call("mobile.status", json!({})).await;
         if st["listening"].as_array().is_some_and(|l| l.contains(&json!(addr))) {
+            listening = true;
             break;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+    assert!(listening, "the Mac never listened for paired devices");
     let token_for = async |name: &str, kind: DeviceKind| {
         let p: MobilePairing = mac.call("mobile.pair_start", json!({ "kind": kind })).await;
         moonlet_link::tailnet::pair(&[addr.clone()], &p.code, name, kind).await.unwrap().token
@@ -1333,6 +1336,19 @@ async fn a_paired_phone_hears_a_routing_copys_setup_and_a_paired_mac_does_not() 
     let asked = heard_setup(&mut phone, Duration::from_secs(10)).await.expect("the phone was never asked");
     assert_eq!(asked["command"], "touch set-up");
     assert_eq!(heard_setup(&mut other_mac, Duration::from_millis(500)).await, None, "a paired Mac heard it");
+    // The phone answers it, and the Mac runs the command from then on.
+    let copy = asked["copy"].clone();
+    assert_eq!(refusal(&mut phone, 7, "sync.run_setup", json!({ "copy": copy, "command": "touch set-up" })).await, None);
+    let mut on = String::new();
+    for _ in 0..50 {
+        on = ran_on(&c.run(&["sh", "run.sh"]).await).to_string();
+        if on == "Alex's MacBook Pro" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    assert_eq!(on, "Alex's MacBook Pro");
+    assert!(routing_copy(&c, &mac).join("set-up").exists(), "setup did not run");
 }
 
 #[tokio::test]

@@ -506,7 +506,7 @@ impl Daemon {
     /// Refuses all but who approves what runs on this Mac (X60, X62): its
     /// app, or a paired phone, where the user confirms with Face ID (X40).
     /// Never a paired Mac, a worker, nor an agent through the CLI.
-    fn setup_approvers(&self, conn: &Conn) -> Result<(), RpcError> {
+    fn app_or_paired_phone(&self, conn: &Conn) -> Result<(), RpcError> {
         match conn.phone.as_deref() {
             Some(device) if self.is_phone(device) => Ok(()),
             _ => app_only(conn, "setup"),
@@ -992,7 +992,7 @@ impl Daemon {
                 ok(self.reached(info))
             }
             m::EXEC_SETUPS => {
-                self.setup_approvers(conn)?;
+                self.app_or_paired_phone(conn)?;
                 ok(self.sync.run_setups())
             }
             m::EXEC_STATUS => {
@@ -1173,7 +1173,7 @@ impl Daemon {
                 // The user approves what runs on this Mac: from its app or
                 // a paired phone, not a paired Mac, nor an agent through
                 // the CLI.
-                self.setup_approvers(conn)?;
+                self.app_or_paired_phone(conn)?;
                 if method == m::SYNC_RUN_SETUP {
                     let r: m::SyncRunSetup = params(p)?;
                     ok(self.sync.run_setup(&r.copy, &r.command).await?)
