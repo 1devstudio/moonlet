@@ -4,7 +4,7 @@
 
 import { create } from "zustand";
 import { DaemonError, hostsApi } from "./daemon";
-import { followUpdate, olderHosts, olderHostsToast, updateFailed, type HostUpdate } from "./hostUpdate";
+import { followUpdate, olderHosts, olderHostsText, updateFailed, type HostUpdate } from "./hostUpdate";
 import type { HostInfo } from "./protocol";
 import { readStored, writeStored } from "./storage";
 import { toast, useStore } from "./store";
@@ -34,6 +34,8 @@ export async function updateHost(h: HostInfo, version: string) {
     put(h.id, updateFailed(h, err));
     return;
   }
+  // The minute to come back counts from the reply, not the click: the
+  // download before it can take minutes.
   put(h.id, { phase: "updating", to: version, since: Date.now() });
   const timer = setInterval(() => {
     const u = useHostUpdates.getState().updates[h.id];
@@ -57,7 +59,7 @@ export function updateAll(hosts: HostInfo[], appVersion: string) {
 /** The toast offering Update all, once per app version. */
 export function announceOlderHosts(hosts: HostInfo[], appVersion: string) {
   if (!appVersion || readStored(ANNOUNCED_KEY) === appVersion) return;
-  const text = olderHostsToast(hosts, appVersion);
+  const text = olderHostsText(hosts, appVersion);
   if (!text) return;
   writeStored(ANNOUNCED_KEY, appVersion);
   toast(text, "info", { label: "Update all", run: () => updateAll(Object.values(useStore.getState().hosts), appVersion) });

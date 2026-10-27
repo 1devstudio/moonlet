@@ -25,11 +25,12 @@ export const olderHosts = (hosts: HostInfo[], appVersion: string) => hosts.filte
 
 export const updateAllLabel = (n: number) => `Update all (${n})`;
 
-/** The toast's text when hosts run an older moonlet; null when none does. */
-export function olderHostsToast(hosts: HostInfo[], appVersion: string): string | null {
-  const older = olderHosts(hosts, appVersion);
-  if (older.length === 0) return null;
-  return older.length === 1 ? `${older[0].label} runs an older moonlet` : `${older.length} hosts run an older moonlet`;
+/** What the toast and the Update all row say when hosts run an older
+ * moonlet; null when none does. */
+export function olderHostsText(hosts: HostInfo[], appVersion: string): string | null {
+  const stale = olderHosts(hosts, appVersion);
+  if (stale.length === 0) return null;
+  return stale.length === 1 ? `${stale[0].label} runs an older moonlet` : `${stale.length} hosts run an older moonlet`;
 }
 
 /** What a failed `daemon.update` leaves on the host's row. A host from
@@ -47,7 +48,12 @@ export function followUpdate(u: HostUpdate, h: HostInfo, now: number): { next: H
   if (u.phase !== "updating") return { next: u, reconnect: false };
   if (h.status === "connected" && h.daemon_version && !older(h.daemon_version, u.to)) return { next: null, reconnect: false };
   if (now - u.since > COME_BACK_MS) {
-    return { next: { phase: "failed", text: `${h.label} did not come back after the update`, command: null }, reconnect: false };
+    // Back, but the old daemon kept serving: the handoff failed after the reply.
+    const text =
+      h.status === "connected" && h.daemon_version
+        ? `${h.label} still runs moonlet ${h.daemon_version}: the update did not finish there (see its moonletd log)`
+        : `${h.label} did not come back after the update`;
+    return { next: { phase: "failed", text, command: null }, reconnect: false };
   }
   return { next: u, reconnect: h.status === "needs_update" || h.status === "error" };
 }

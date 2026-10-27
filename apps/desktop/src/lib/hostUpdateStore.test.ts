@@ -24,7 +24,6 @@ vi.mock("./daemon", () => {
       update: (id: string) => app.answers[id](),
       reconnect: (id: string) => (app.reconnected.push(id), Promise.resolve()),
     },
-    tooOld: (message: string) => new DaemonError({ code: "too_old", message }),
   };
 });
 vi.mock("./store", () => ({
@@ -75,7 +74,8 @@ describe("updating a host from the app (X69)", () => {
   });
 
   it("shows why an update failed on its host, and Update all carries on with the others", async () => {
-    const { tooOld } = (await import("./daemon")) as unknown as { tooOld: (m: string) => Error };
+    const { DaemonError } = await import("./daemon");
+    const tooOld = (message: string) => new DaemonError({ code: "too_old", message });
     const box = host({ id: "build-box", label: "build-box", os: "linux", daemon_version: "0.1.32" });
     const mini = host({});
     app.hosts = { [box.id]: box, [mini.id]: mini };

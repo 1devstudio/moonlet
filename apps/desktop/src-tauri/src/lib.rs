@@ -77,7 +77,7 @@ fn host_reconnect(hosts: Hosts, id: String) -> Result<(), RpcError> {
 
 /// Updates a tailnet host to `version` (X69).
 #[tauri::command]
-async fn host_update(hosts: Hosts<'_>, id: String, version: String) -> Result<Value, RpcError> {
+async fn host_update(hosts: Hosts<'_>, id: String, version: String) -> Result<moonlet_proto::types::DaemonUpdated, RpcError> {
     hosts.update(&id, &version).await
 }
 

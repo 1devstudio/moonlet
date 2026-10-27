@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { HostInfo } from "./protocol";
-import { followUpdate, olderHosts, olderHostsToast, updateAllLabel, updateFailed, updateOffer } from "./hostUpdate";
+import { followUpdate, olderHosts, olderHostsText, updateAllLabel, updateFailed, updateOffer } from "./hostUpdate";
 
 const host = (patch: Partial<HostInfo>): HostInfo => ({
   id: "studio-mini",
@@ -45,9 +45,9 @@ describe("which hosts can be updated from here (X69)", () => {
   });
 
   it("tells once that hosts run an older moonlet", () => {
-    expect(olderHostsToast([host({})], "0.1.34")).toBe("studio-mini runs an older moonlet");
-    expect(olderHostsToast([host({}), host({ id: "build-box", label: "build-box" })], "0.1.34")).toBe("2 hosts run an older moonlet");
-    expect(olderHostsToast([host({ daemon_version: "0.1.34" })], "0.1.34")).toBeNull();
+    expect(olderHostsText([host({})], "0.1.34")).toBe("studio-mini runs an older moonlet");
+    expect(olderHostsText([host({}), host({ id: "build-box", label: "build-box" })], "0.1.34")).toBe("2 hosts run an older moonlet");
+    expect(olderHostsText([host({ daemon_version: "0.1.34" })], "0.1.34")).toBeNull();
   });
 });
 
@@ -64,6 +64,14 @@ describe("following an update (X69)", () => {
     expect(followUpdate(updating, host({ status: "reconnecting" }), 5_000)).toEqual({ next: updating, reconnect: false });
     // Still the old daemon, before the handoff.
     expect(followUpdate(updating, host({ status: "connected", daemon_version: "0.1.33" }), 5_000)).toEqual({ next: updating, reconnect: false });
+  });
+
+  it("says when the host is back but still on the old version", () => {
+    // The handoff failed after the reply, so the old daemon kept serving.
+    expect(followUpdate(updating, host({ status: "connected", daemon_version: "0.1.33" }), 61_001)).toEqual({
+      next: { phase: "failed", text: "studio-mini still runs moonlet 0.1.33: the update did not finish there (see its moonletd log)", command: null },
+      reconnect: false,
+    });
   });
 
   it("gives up a minute after the reply", () => {

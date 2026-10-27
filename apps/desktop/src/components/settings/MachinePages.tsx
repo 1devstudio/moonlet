@@ -13,7 +13,7 @@ import { errorToast, toast, useStore } from "../../lib/store";
 import { hostActions, hostLine, phoneAccessLine, removeAsks, updateCommand } from "../../lib/settingsPage";
 import { Button, Dialog, Field, IconButton, cx, inputCls } from "../ui";
 import { HostUpdateButton } from "../HostUpdate";
-import { olderHosts, olderHostsToast, updateAllLabel, updateOffer } from "../../lib/hostUpdate";
+import { olderHosts, olderHostsText, updateAllLabel, updateOffer } from "../../lib/hostUpdate";
 import { updateAll, useHostUpdates } from "../../lib/hostUpdateStore";
 import { centralHostButton, centralHostId, clampSlots, heavyHostIds, linkLine, linkRetries, pairThenLink, pickCentral, remoteLinkAction, remoteLinkError, remoteLinkLine, remoteSwitchOn, slotsHint, turnOnNeeds, watchLink, withRunning } from "../../lib/workerLink";
 import { changeCentral } from "../../lib/syncStore";
@@ -482,7 +482,7 @@ export function HostsPage({ status }: { status: MobileStatus | null }) {
   const local = hosts.local;
   const remotes = Object.values(hosts).filter((h) => h.remote);
   const appVersion = useStore((s) => s.appVersion) ?? "";
-  const older = olderHosts(remotes, appVersion);
+  const stale = olderHosts(remotes, appVersion);
   const heavy = heavyHostIds(remotes, central);
   const macs = status ? devicesOfKind(status, "desktop") : [];
   const canPair = !!status?.enabled && status.listening.length > 0;
@@ -564,11 +564,11 @@ export function HostsPage({ status }: { status: MobileStatus | null }) {
       )}
       <Section title="Remote hosts">
         <Card>
-          {older.length > 0 && (
+          {stale.length > 0 && (
             <div data-setting="update-all-hosts" className="flex items-center gap-3 px-4 py-3">
-              <span className="min-w-0 flex-1 truncate ui-text-13 text-muted">{olderHostsToast(remotes, appVersion)}</span>
+              <span className="min-w-0 flex-1 truncate ui-text-13 text-muted">{olderHostsText(remotes, appVersion)}</span>
               <Button size="sm" variant="primary" onClick={() => updateAll(remotes, appVersion)}>
-                {updateAllLabel(older.length)}
+                {updateAllLabel(stale.length)}
               </Button>
             </div>
           )}
