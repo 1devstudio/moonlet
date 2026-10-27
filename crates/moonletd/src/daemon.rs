@@ -584,6 +584,19 @@ impl Daemon {
         }
     }
 
+    /// Who may update this host (X69): the Mac's own app and a paired Mac,
+    /// never a phone, an agent's CLI or a worker's link.
+    fn may_update(&self, conn: &Conn) -> Result<(), RpcError> {
+        if conn.client == CLI_CLIENT || conn.client == crate::link::WORKER_CLIENT {
+            return Err(RpcError::new("forbidden", "update moonlet from the app"));
+        }
+        match conn.phone.as_deref() {
+            None => Ok(()),
+            Some(d) if self.mobile.kind_of(d) == Some(moonlet_proto::methods::DeviceKind::Desktop) => Ok(()),
+            Some(_) => Err(RpcError::new("forbidden", "update moonlet from a Mac")),
+        }
+    }
+
     pub async fn handle(self: &Arc<Self>, conn: &Arc<Conn>, method: &str, p: Value) -> HandlerResult {
         // A cloud machine reaches only what a worker needs (X63).
         if let Some(device) = conn.phone.as_deref()
@@ -620,6 +633,15 @@ impl Daemon {
                     }
                 });
                 ok(true)
+            }
+            m::DAEMON_UPDATE => {
+                #[derive(serde::Deserialize)]
+                struct Req {
+                    version: String,
+                }
+                self.may_update(conn)?;
+                let r: Req = params(p)?;
+                crate::update::update(self, &r.version).await
             }
             m::TERMINAL_CREATE => {
                 let req: m::TerminalCreate = params(p)?;

@@ -23,6 +23,7 @@ mod server;
 mod service;
 mod sync;
 mod tailnet_cli;
+mod update;
 mod upgrade;
 mod workers;
 
@@ -253,6 +254,7 @@ fn run_daemon(
             }
         };
         upgrade::write_pid(&socket);
+        update::clean_leftovers();
         let chats = daemon.chats.restore();
         if chats > 0 {
             tracing::info!(chats, "restored structured agent conversations");

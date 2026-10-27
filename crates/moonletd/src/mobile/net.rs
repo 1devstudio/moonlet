@@ -287,6 +287,9 @@ async fn forward_from_phone(
             Frame::Json(Message::Request { method, .. }) if method == m::HEAVY_APPROVE => {
                 Some("approve heavy commands from the Mac")
             }
+            Frame::Json(Message::Request { method, .. }) if method == m::DAEMON_UPDATE => {
+                Some("update moonlet from a Mac")
+            }
             _ => None,
         };
         if let (Frame::Json(Message::Request { id, .. }), Some(refusal)) = (&frame, refusal) {
