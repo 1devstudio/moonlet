@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { accountNote, hostOrder, installHooksMessage, saveKeySaves, appUpdateLine, claudeUpdateLine, daemonHint, daemonLine, daemonOn, daemonToast, offStopsDaemon, opensLoginItems, escapeAction, hookRows, hooksDone, phoneAccessLine, radioKey, routeKey, settingsCrumbs, hostActions, hostLine, hostNotice, updateCommand, profileLine, removeAsks, profilesNeedSignIn, settingsNav, settingsWorkspaces } from "./settingsPage";
+import { accountNote, hostOrder, installHooksMessage, saveKeySaves, appUpdateLine, claudeUpdateLine, daemonHint, daemonLine, daemonOn, daemonToast, offStopsDaemon, opensLoginItems, escapeAction, hookRows, hooksDone, phoneAccessLine, radioKey, routeKey, settingsCrumbs, hostActions, hostLine, hostNotice, updateCommand, profileLine, removeAsks, profilesNeedSignIn, settingsNav, settingsWorkspaces, activeNavKey } from "./settingsPage";
 import type { HookStatus, HostInfo, MobileStatus, ProfileAccount, ProfileInfo, Workspace } from "./protocol";
 
 describe("settings nav (X43)", () => {
@@ -68,32 +68,42 @@ describe("settings nav (X43)", () => {
 
 describe("the workspaces settings lists (X68)", () => {
   const ws = (id: string, name: string): Workspace => ({ id, name, color: "clay", section_ids: [], created_at: 0, claude_profile: null });
+  const personal = ws("c05254bf1786", "Personal");
+  const mini = ws("fe2837aa4788", "Personal Mini");
 
-  it("lists each workspace of an account once, from this Mac first, and a host outside the account apart", () => {
-    const personal = ws("c05254bf1786", "Personal");
-    const mini = ws("fe2837aa4788", "Personal Mini");
+  it("lists each workspace of an account once, this Mac's copy first and untagged, and a host outside the account apart under its name", () => {
     const devbox = ws("c05254bf1786", "Personal");
     expect(
       settingsWorkspaces([
-        { host: "local", account: "8605e2c4", workspaces: [personal, mini] },
-        { host: "studio-mini", account: "8605e2c4", workspaces: [personal, mini] },
-        { host: "devbox", workspaces: [devbox] },
+        { host: "studio-mini", label: "studio-mini", remote: true, account: "8605e2c4", workspaces: [personal, mini] },
+        { host: "devbox", label: "devbox", remote: true, workspaces: [devbox] },
+        { host: "local", label: "This Mac", remote: false, account: "8605e2c4", workspaces: [personal, mini] },
       ]),
     ).toEqual([
-      { host: "local", ws: personal },
-      { host: "local", ws: mini },
-      { host: "devbox", ws: devbox },
+      { host: "local", id: "c05254bf1786", account: "8605e2c4", ws: personal, remote: null },
+      { host: "local", id: "fe2837aa4788", account: "8605e2c4", ws: mini, remote: null },
+      { host: "devbox", id: "c05254bf1786", account: "devbox", ws: devbox, remote: "devbox" },
     ]);
   });
 
-  it("lists a shared workspace from another member while this Mac does not list it yet", () => {
+  it("lists a shared workspace from another member, untagged, while this Mac does not list it yet", () => {
     const fresh = ws("a1b2c3d4e5f6", "Acme");
     expect(
       settingsWorkspaces([
-        { host: "local", account: "8605e2c4", workspaces: [] },
-        { host: "studio-mini", account: "8605e2c4", workspaces: [fresh] },
+        { host: "local", label: "This Mac", remote: false, account: "8605e2c4", workspaces: [] },
+        { host: "studio-mini", label: "studio-mini", remote: true, account: "8605e2c4", workspaces: [fresh] },
       ]),
-    ).toEqual([{ host: "studio-mini", ws: fresh }]);
+    ).toEqual([{ host: "studio-mini", id: "a1b2c3d4e5f6", account: "8605e2c4", ws: fresh, remote: null }]);
+  });
+
+  it("highlights a shared workspace's entry when its page is open on another member's copy", () => {
+    const listed = [
+      { host: "local", id: "c05254bf1786", account: "8605e2c4" },
+      { host: "devbox", id: "c05254bf1786", account: "devbox" },
+    ];
+    expect(activeNavKey({ page: "workspace", host: "studio-mini", id: "c05254bf1786" }, listed, "8605e2c4")).toBe("ws:local:c05254bf1786");
+    expect(activeNavKey({ page: "workspace", host: "devbox", id: "c05254bf1786" }, listed, "devbox")).toBe("ws:devbox:c05254bf1786");
+    expect(activeNavKey({ page: "hooks" }, listed, "local")).toBe("hooks");
   });
 });
 

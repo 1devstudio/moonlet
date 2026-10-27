@@ -6,9 +6,9 @@ import { ChevronRight } from "lucide-react";
 import { rpc } from "../../lib/daemon";
 import { profileName } from "../../lib/profiles";
 import { M, type ProjectConfig } from "../../lib/protocol";
-import { hostOrder, settingsWorkspaces } from "../../lib/settingsPage";
+import { settingsWorkspaces } from "../../lib/settingsPage";
 import type { SearchContext, SearchResult } from "../../lib/settingsSearch";
-import { useStore } from "../../lib/store";
+import { settingsHosts, useStore } from "../../lib/store";
 import { cx } from "../ui";
 import { PageBody, PageHeading } from "./controls";
 import { trackersConfig, useTasks } from "../../lib/tasksStore";
@@ -46,13 +46,7 @@ export function useSearchContext(phones: number, searching: boolean): SearchCont
       profiles: (profiles.local?.length ?? 0) + 1,
       remoteHosts: Object.values(hosts).filter((h) => h.remote).length,
       phones,
-      workspaces: settingsWorkspaces(hostOrder(Object.keys(workspaces)).map((host) => ({ host, account: accounts[host]?.account, workspaces: workspaces[host] ?? [] }))).map(({ host, ws: w }) => ({
-        host,
-        id: w.id,
-        name: w.name,
-        color: w.color,
-        profile: profileName(w, profiles[host] ?? []),
-      })),
+      workspaces: settingsWorkspaces(settingsHosts({ hosts, workspaces, accounts })).map(({ host, id, ws }) => ({ host, id, name: ws.name, color: ws.color, profile: profileName(ws, profiles[host] ?? []) })),
       projects: Object.entries(projects).flatMap(([host, list]) => list.map((p) => ({ host, id: p.id, name: p.name, base_branch: p.base_branch, config: configs[`${host}/${p.id}`] }))),
       git,
       trackers,
