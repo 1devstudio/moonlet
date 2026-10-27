@@ -717,6 +717,8 @@ export interface Section {
   project_ids: string[];
   view: SectionView;
   created_at: number;
+  /** Projects the section holds on other members that this host lacks (X68). */
+  missing?: ProjectIdentity[];
 }
 
 export interface SectionView {

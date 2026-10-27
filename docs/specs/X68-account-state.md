@@ -38,13 +38,21 @@ Session records, settings, devices and secrets join the account state in later s
 
 ### Workspaces and sections from the log (daemon)
 
-- [ ] A workspace is a record with `name`, `color`, `claude_profile` (a profile name, mapped to a folder on each member) and `created_at`. A section is a record with `workspace`, `order` (a sort key), `name`, `view`, `projects` (project identities) and `created_at`.
-- [ ] Every RPC that changes workspaces or sections (`workspace.create`, `.update`, `.delete`, `section.create`, `.update`, `.delete`, `.move`, `.add_project`, `.remove_project`) writes changes to the log, and `workspace.list` and `section.list` are worked out from it. Their requests and replies keep their current shape, so older apps keep working.
-- [ ] `section.list` gives each section's `project_ids` as this member's project ids, for the identities it has a project for. Identities it has no project for are listed in a new field, `missing: [ProjectIdentity]`.
-- [ ] The rules X32 checks before a change (the last workspace cannot be deleted, a workspace with sections cannot be deleted, a section's projects move to another section) are checked against this member's state when the change is made.
-- [ ] Changes from different members can break those rules together, for example two members each deleting a different one of the last two workspaces. Every member then repairs the state the same way: with no workspace left, the workspace with the id `default`, named "Personal", is made; a section whose workspace is deleted moves to the workspace with the earliest `created_at`.
-- [ ] The log is saved in `$MOONLET_HOME/account.json`, written atomically. A file that cannot be read is moved aside to `account.json.bad` and the member starts from its `state.json`.
-- [ ] **Migration:** the first start with this slice turns `state.json`'s workspaces and sections into changes stamped by this member, keeping their ids. `state.json` keeps them as well, so going back to an older moonlet loses nothing made before the upgrade.
+- [x] A workspace is a record with `name`, `color`, `claude_profile` (a profile name, mapped to a folder on each member) and `created_at`. A section is a record with `workspace`, `order` (a sort key), `name`, `view` and `created_at`, and one field per project, `project:<origin>|<root>`, holding the project's identity with its own sort key, or `null` once it is removed. So two members adding projects to one section at once both keep theirs, and a change touches only the projects it is about. (`a_workspace_renamed_on_one_member_is_renamed_on_the_other`, `projects_two_members_add_to_one_section_at_once_are_both_kept`, `a_project_kept_here_for_its_sessions_does_not_come_back_on_the_other_member`)
+- [x] Every RPC that changes workspaces or sections (`workspace.create`, `.update`, `.delete`, `section.create`, `.update`, `.delete`, `.move`, `.add_project`, `.remove_project`) writes changes to the log, and `workspace.list` and `section.list` are worked out from it. Their requests and replies keep their current shape, so older apps keep working; the X32 tests in `session.rs` run unchanged. (`sections_reordered_on_one_member_are_in_that_order_on_the_other`)
+- [x] `section.list` gives each section's `project_ids` as this member's project ids, for the identities it has a project for. Identities it has no project for are listed in a new field, `missing: [ProjectIdentity]`; one leaves `missing` as soon as a clone of it is added here. A project without a root commit is this member's alone and stays out of the log. Two checkouts of one repository on one member are one project to the account, and both stay in the sections that hold them. (`a_sections_projects_are_this_members_clones_and_the_rest_are_missing`, `a_clone_added_here_is_no_longer_missing`, `two_checkouts_of_one_repository_on_one_member_both_stay`)
+- [x] The rules X32 checks before a change (the last workspace cannot be deleted, a workspace with sections cannot be deleted, a section's projects move to another section) are checked against this member's state when the change is made. A deleted section's projects that this member lacks move with the rest. (`a_section_deleted_with_projects_this_member_lacks_hands_them_on`)
+- [x] A shared project no section holds any more was removed on another member, and goes here too, unless it has live sessions here: then it stays, in this member's own first section, without coming back on the others. (`a_project_removed_on_one_member_goes_on_the_other`, `a_project_removed_elsewhere_stays_while_it_has_live_sessions_here`, `a_project_kept_here_for_its_sessions_does_not_come_back_on_the_other_member`)
+- [x] Changes from different members can break those rules together, for example two members each deleting a different one of the last two workspaces. Every member then repairs the state the same way:
+  - with no workspace left, or while a section names it, the workspace with the id `default`, named "Personal", is made; once `default` was deleted, `default-2`, and so on;
+  - with no section left, the section `default-section`, "My projects", in the first workspace;
+  - a section whose workspace is deleted moves to the workspace with the earliest `created_at`.
+
+  (`members_that_deleted_the_last_workspaces_apart_make_the_same_one_and_fill_it_alike`, `a_section_moved_into_a_workspace_deleted_meanwhile_lands_in_the_same_place_on_both`)
+- [x] The log is saved in `$MOONLET_HOME/account.json`, mode 0600, written through a temporary file. A request's changes are written beside it and moved into place only once `state.json` is saved, so an edit whose state could not be saved does not come back after a restart. (`the_log_is_readable_only_by_the_user`, `an_edit_whose_state_could_not_be_saved_does_not_come_back_after_a_restart`)
+- [x] A file that cannot be read is moved aside to `account.json.<ms>.bad`, never over an earlier one, and the member makes its log again from `state.json` under a new name. Those changes are stamped as old as can be, so they give way to every change other members made meanwhile. (`an_unreadable_log_is_kept_aside_and_made_again_from_the_state`, `a_log_made_again_gives_way_to_changes_it_had_not_seen_and_keeps_every_bad_file`)
+- [x] **Migration:** the first start with this slice turns `state.json`'s workspaces and sections into changes stamped by this member, keeping their ids. `state.json` keeps them as well, so going back to an older moonlet loses nothing made before the upgrade. Changes an older moonlet makes after that are not in the log, and the next start with this slice lays the log over them. (`a_state_from_before_the_account_becomes_its_changes_with_the_same_ids`)
+- [x] A field whose value does not fit takes its default, and names lose control characters and surrounding space. (`a_field_that_does_not_fit_takes_its_default`)
 
 ### Syncing between members
 
@@ -83,12 +91,12 @@ Session records, settings, devices and secrets join the account state in later s
 
 - `$MOONLET_HOME/account.json`: `{member, changes: [Change]}`, mode 0600. The clock and this member's count are worked out again from the changes when it loads, so they never disagree with them.
 - `state.json` keeps its workspaces and sections, written from the account state on every change, so an older daemon reads the current ones.
-- The member id is X41's worker id from `link.json`.
+- Each log has its own id, named after X41's worker id from `link.json` with a random suffix (`7d3f1c2a-….k3x9q2`). A log made again, after the file was lost or unreadable, gets a new one, so it never numbers its changes as the lost log did.
 
 ## Security considerations
 
 - Only linked members, authenticated by their device token (X41), send or receive changes. A phone or the CLI cannot write the log directly; they go through the RPCs, as today.
-- Values are checked again when applied: names are cut and cleaned as `workspace.create` cleans them, colours must be known, a `view` must parse, and project identities are normalized origins without credentials (X41). A change that fails a check is kept in the log, so versions stay in step, but is not applied.
+- Values are checked again when applied: names lose control characters and surrounding space, colours must be known, a `view` must parse, and project identities must parse. A field whose value fails its check takes its default (the name "Personal" or "My projects", the default colour and view, no projects); the change stays in the log, so versions stay in step.
 - The log never holds paths or secrets.
 
 ## Out of scope
