@@ -28,8 +28,18 @@ describe("workspaceChoices", () => {
     ]);
   });
 
+  it("offers no workspace only a disconnected host lists, from the data it left", () => {
+    const hosts = {
+      mac: { id: "mac", label: "This Mac", status: "connected" as const },
+      mini: { id: "mini", label: "studio-mini", status: "reconnecting" as const },
+    };
+    const d = { mac: data({ account: "w-mini", workspaces: [workspace("p1", "Personal")] }), mini: data({ account: "w-mini", workspaces: [workspace("p1", "Personal"), workspace("p2", "Experiments")] }) };
+    expect(workspaceChoices(hostWorkspaces(hosts, d)).map((c) => c.name)).toEqual(["Personal"]);
+    expect(shownWorkspace({ host: "mini", id: "p2", account: "w-mini" }, hostWorkspaces(hosts, d))).toBeNull();
+  });
+
   it("names no host while one host has every row", () => {
-    const one = hostWorkspaces({ mac: { id: "mac", label: "This Mac" } }, { mac: data({ workspaces: [workspace("p1", "Personal"), workspace("w", "Work")] }) });
+    const one = hostWorkspaces({ mac: { id: "mac", label: "This Mac", status: "connected" } }, { mac: data({ workspaces: [workspace("p1", "Personal"), workspace("w", "Work")] }) });
     expect(workspaceChoices(one).map((c) => [c.name, c.hostLabel])).toEqual([
       ["Personal", null],
       ["Work", null],

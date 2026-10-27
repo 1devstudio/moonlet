@@ -1,7 +1,7 @@
 // The workspace chip's choices (X40, X68): each workspace of an account
 // once, whichever members list it, as the desktop's switcher lists them.
 
-import type { WorkspaceColor } from "@desktop/lib/protocol";
+import type { HostStatus, WorkspaceColor } from "@desktop/lib/protocol";
 import { accountOf, isShown, switcherRows, type HostWorkspaces, type WorkspaceRef } from "@desktop/lib/workspaces";
 import type { HostData } from "./app";
 
@@ -16,12 +16,14 @@ export interface WorkspaceChoice {
   hostLabel: string | null;
 }
 
-/** Each host with data, as the desktop's switcher takes it. The phone loads
- * no Claude profiles, which only the switcher's summary names. */
-export function hostWorkspaces(hosts: Record<string, { id: string; label: string }>, data: Record<string, HostData>): HostWorkspaces[] {
+/** Each connected host with data, as the desktop's switcher takes it: a
+ * disconnected host's data stays, but its sessions do not show, so its
+ * workspaces are not offered either. The phone loads no Claude profiles,
+ * which only the switcher's summary names. */
+export function hostWorkspaces(hosts: Record<string, { id: string; label: string; status: HostStatus }>, data: Record<string, HostData>): HostWorkspaces[] {
   return Object.values(hosts).flatMap((h) => {
     const d = data[h.id];
-    return d ? [{ host: h.id, label: h.label, account: d.account, workspaces: d.workspaces, sections: d.sections, sessions: d.sessions, profiles: [] }] : [];
+    return d && h.status === "connected" ? [{ host: h.id, label: h.label, account: d.account, workspaces: d.workspaces, sections: d.sections, sessions: d.sessions, profiles: [] }] : [];
   });
 }
 

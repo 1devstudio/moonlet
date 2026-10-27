@@ -22,6 +22,8 @@ export function WorkspacePill() {
       <button type="button" onClick={() => setOpen(true)} className="flex h-9 items-center gap-[7px] rounded-[18px] border border-border-strong bg-panel px-3 text-[13.5px]">
         <span className="h-2 w-2 rounded-full" style={{ background: current ? colorHex(current.color) : "var(--color-muted)" }} />
         {current?.name ?? "All workspaces"}
+        {/* Two of one name in one account (X68): which one is chosen. */}
+        {current?.from && <span className="max-w-[96px] truncate text-[12px] text-faint">from {current.from}</span>}
         <ChevronDown size={14} className="text-muted" />
       </button>
       {open && (
