@@ -168,6 +168,13 @@ Added 2026-10-27.
 - [x] Jobs lists the session's jobs, newest first, as the desktop's Jobs tab does: the summary line ("1 waiting · 3 done · 3m 53s on workers"), **Stop all** while any runs (`job.stop_all`), and per job its dot, command, clock and where it ran. They follow `job.changed`, and are read again when the host reconnects, also after a first read that failed. (The desktop's `lib/jobs.test.ts`; `lib/jobsStore.test.ts` "reads a list that failed while the host was away once it reconnects", "reads again the jobs of a host whose id has a slash, as an SSH host reached through a phone's Mac")
 - [x] Tapping a job shows its state line, its phases, the worker it ran on and its output, following `job.output` and keeping the end in view while the reader is there (`atEnd`, "follows the output only while the reader is at its end"). A running job has **Stop** with "Changes made so far still come back."; one waiting for a cloud machine says why ("Fix checkout runs its heavy commands in the cloud, so this one waits for its machine instead of running on studio-mini.") and has **Run on <host> now** (`job.run_here`) and **Stop**. (`jobFooter` in `lib/jobsView.test.ts`)
 
+### Setup approvals (X60, X62)
+
+Added 2026-10-27. Until then only the Mac's app approved a copy's setup.
+
+- [x] Needs you lists, on every connected Mac, each copy whose setup waits for approval: a live copy of a session on its central host (`sync.list`, `sync.changed`), named after the session and its project while the central host is connected, and a routing copy (`exec.setups`, `exec.setup`), named "<project>'s routing copy". The card says "Run <project>'s setup in the copy on <Mac>? (from .moonlet/config.toml)" (or "in its routing copy"), shows the exact command, and has **Skip** and **Run setup**. Copies belong to no workspace, so the cards show in every workspace. (`lib/setups.test.ts`)
+- [x] **Run setup** asks for Face ID first while "Require Face ID to allow" is on, then calls `sync.run_setup` with the command shown; the Mac refuses a command that changed meanwhile (`setup_changed`) and the card says so. **Skip** calls `sync.skip_setup`. A routing copy's card leaves once answered; one answered on the Mac leaves within 30 s, when the phone reads `exec.setups` again. (`lib/setups.test.ts`; daemon: `a_paired_phone_approves_a_copys_setup`, `a_paired_phone_skips_a_copys_setup`)
+
 ## UI
 
 The design board "Moonlet Mobile" is the reference: 390 × 844 points, safe areas respected, dark theme only.
