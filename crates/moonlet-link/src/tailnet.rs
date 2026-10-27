@@ -160,7 +160,9 @@ pub async fn update(addrs: &[String], token: &str, version: &str) -> Result<Daem
                     };
                 }
                 Ok(Some(_)) => {}
-                Ok(None) | Err(_) => return Err(too_old()),
+                // A daemon from before X69 closes cleanly instead of answering.
+                Ok(None) => return Err(too_old()),
+                Err(e) => return Err(RpcError::new("unreachable", format!("the connection to the host broke: {e}"))),
             }
         }
     })
@@ -258,6 +260,34 @@ mod tests {
             (e.code.as_str(), e.message.as_str()),
             ("too_old", "studio-mini runs moonlet 0.1.33, which can't be updated from here")
         );
+    }
+
+    /// Only a clean close means a host from before X69; a connection cut
+    /// mid-frame says what went wrong.
+    #[tokio::test]
+    async fn a_reply_cut_off_is_not_taken_for_an_old_host() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        tokio::spawn(async move {
+            use tokio::io::AsyncWriteExt;
+            let (mut s, _) = listener.accept().await.unwrap();
+            let _auth = read_frame(&mut s).await.unwrap();
+            let authed = Message::Authed {
+                device_id: "d1".into(),
+                token: None,
+                protocol: Some(7),
+                daemon_version: Some("0.1.34".into()),
+                host: Some("studio-mini".into()),
+                os: Some("linux".into()),
+            };
+            write_frame(&mut s, &Frame::Json(authed)).await.unwrap();
+            let _request = read_frame(&mut s).await.unwrap();
+            // A frame header promising 100 bytes, then the end.
+            s.write_all(&[0, 0, 0, 100, 1, b'{']).await.unwrap();
+        });
+        let e = update(&[addr], "token", "0.1.35").await.unwrap_err();
+        assert_eq!(e.code, "unreachable", "{e:?}");
+        assert!(e.message.starts_with("the connection to the host broke: "), "{}", e.message);
     }
 
     #[tokio::test]
