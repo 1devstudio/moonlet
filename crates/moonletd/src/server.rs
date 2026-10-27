@@ -262,7 +262,7 @@ where
             if method == moonlet_proto::methods::DAEMON_UPDATE && phone.is_some() =>
         {
             let device = phone.as_deref().unwrap_or_default();
-            let reply = match daemon.update_before_hello(device, params).await {
+            let reply = match daemon.update_from(None, Some(device), params).await {
                 Ok(v) => Message::ok(id, v),
                 Err(e) => Message::err(id, e),
             };

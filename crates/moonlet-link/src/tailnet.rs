@@ -8,15 +8,19 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow, bail};
 use moonlet_proto::methods::DeviceKind;
 use moonlet_proto::{Frame, Message, PROTOCOL_VERSION, RpcError, read_frame, write_frame};
-use serde_json::{Value, json};
+use moonlet_proto::types::DaemonUpdated;
+use serde_json::json;
 use tokio::net::TcpStream;
 
 use crate::{BoxFuture, Connector, NeedsUpdate, Reader, Refused, Writer};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const AUTH_TIMEOUT: Duration = Duration::from_secs(10);
-/// A host downloads a release before it answers `daemon.update`.
+/// A host downloads a release before it answers `daemon.update`, for at most
+/// 5 minutes; a minute more covers installing it.
 const UPDATE_TIMEOUT: Duration = Duration::from_secs(360);
+/// What `authed` leaves out the version of: daemons before X57 (0.1.26).
+const BEFORE_X57: &str = "from before 0.1.26";
 
 /// What a daemon handed out when a device paired with it.
 #[derive(Debug, Clone, PartialEq)]
@@ -112,7 +116,7 @@ pub fn pair_error_text(name: &str, error: &anyhow::Error) -> String {
 /// goes in place of `hello`, so it works whatever protocol either side
 /// speaks; this exchange never changes. A daemon from before X69 closes the
 /// connection instead of answering, which gives `too_old`.
-pub async fn update(addrs: &[String], token: &str, version: &str) -> Result<Value, RpcError> {
+pub async fn update(addrs: &[String], token: &str, version: &str) -> Result<DaemonUpdated, RpcError> {
     let unreachable = |e: anyhow::Error| RpcError::new("unreachable", format!("{e:#}"));
     let mut stream = dial(addrs).await.map_err(unreachable)?;
     let auth = Message::Auth {
@@ -141,7 +145,7 @@ pub async fn update(addrs: &[String], token: &str, version: &str) -> Result<Valu
             format!(
                 "{} runs moonlet {}, which can't be updated from here",
                 host.as_deref().unwrap_or("The host"),
-                daemon_version.as_deref().unwrap_or("from before 0.1.26")
+                daemon_version.as_deref().unwrap_or(BEFORE_X57)
             ),
         )
     };
@@ -151,7 +155,8 @@ pub async fn update(addrs: &[String], token: &str, version: &str) -> Result<Valu
                 Ok(Some(Frame::Json(Message::Response { id: 1, result, error }))) => {
                     return match error {
                         Some(e) => Err(e),
-                        None => Ok(result.unwrap_or(Value::Null)),
+                        None => serde_json::from_value(result.unwrap_or_default())
+                            .map_err(|e| RpcError::new("unreachable", format!("the host answered oddly: {e}"))),
                     };
                 }
                 Ok(Some(_)) => {}

@@ -499,6 +499,6 @@ async fn a_mac_on_another_protocol_updates_its_host_before_hello() {
 
     let (addr, mac) = host.pair("desktop").await;
     let reply = moonlet_link::tailnet::update(&[addr], &mac, "9.9.9").await.unwrap();
-    assert_eq!(reply, json!({ "from": env!("CARGO_PKG_VERSION"), "to": "9.9.9" }));
+    assert_eq!((reply.from.as_str(), reply.to.as_str()), (env!("CARGO_PKG_VERSION"), "9.9.9"));
     host.next_daemon(pid).await;
 }
