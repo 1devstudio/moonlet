@@ -383,6 +383,17 @@ impl WorkerLink {
         })
     }
 
+    /// The account this machine shares (X68): its central host's, once it
+    /// has said so, else its own.
+    pub fn account_info(&self) -> m::AccountInfo {
+        let info = self.info();
+        let central = info.central.map(|c| c.name);
+        match self.sessions.central_account().filter(|_| central.is_some()) {
+            Some(account) => m::AccountInfo { account, central },
+            None => m::AccountInfo { account: info.worker.id, central: None },
+        }
+    }
+
     pub fn info(&self) -> LinkInfo {
         let store = self.store.lock().unwrap();
         LinkInfo {
@@ -437,8 +448,12 @@ impl WorkerLink {
         // One link.changed for the whole change, at the end.
         self.quiet.store(true, Ordering::SeqCst);
         if moved {
-            // A new central host, or new addresses or token: link again.
+            // A new central host, or new addresses or token: link again,
+            // and share its account once it says which (X68).
             self.close();
+            if self.sessions.set_central_account(None) {
+                (self.emit)(Message::event(m::EV_ACCOUNT_INFO, self.account_info()));
+            }
         }
         self.apply();
         // A link waiting for the user tries again on new settings, too.
@@ -449,6 +464,9 @@ impl WorkerLink {
         // not at the next link.
         if renamed && !moved {
             self.register_again();
+        }
+        if renamed {
+            self.sessions.name_member(&self.info().worker.name);
         }
         self.quiet.store(false, Ordering::SeqCst);
         self.changed();
@@ -760,6 +778,9 @@ impl WorkerLink {
             return Err(RpcError::new("gone", "the central host changed meanwhile"));
         }
         self.sessions.apply_account(got.changes);
+        if got.account.is_some() && self.sessions.set_central_account(got.account) {
+            (self.emit)(Message::event(m::EV_ACCOUNT_INFO, self.account_info()));
+        }
         Ok(got.version)
     }
 
@@ -987,6 +1008,7 @@ pub fn attach_account(daemon: &Arc<crate::daemon::Daemon>) {
         tracing::warn!("cannot share workspaces with the account: {e:#}");
         return;
     }
+    daemon.sessions.name_member(&worker.name);
     let workers = Arc::downgrade(&daemon.workers);
     let link = Arc::downgrade(&daemon.link);
     daemon.sessions.on_account_change(move |changes| {

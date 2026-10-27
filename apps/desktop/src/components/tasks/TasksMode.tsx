@@ -3,7 +3,7 @@
 import { Bot, ChevronDown, ChevronRight, ChevronUp, Copy, ExternalLink, Filter, GitBranch, LayoutGrid, List, MoreHorizontal, PenTool, Plus, RotateCw, Search, Settings, SquareTerminal, Trash2, X } from "lucide-react";
 import { type DragEvent, useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { errorToast, selectSession, shownWorkspace, toast, useStore } from "../../lib/store";
+import { errorToast, hostWorkspaces, selectSession, shownWorkspace, toast, useStore } from "../../lib/store";
 import { rpc } from "../../lib/daemon";
 import { M } from "../../lib/protocol";
 import { askConfirm } from "../../lib/confirm";
@@ -49,7 +49,7 @@ import { keepCard, modeSwitch } from "../../lib/tasksView";
 import { modeOf, setMode } from "../../lib/mode";
 import { useNow } from "../../lib/useNow";
 import { TaskComments } from "./TaskComments";
-import { parseWsKey, wsKey } from "../../lib/workspaces";
+import { parseWsKey, workspaceMembers, wsKey, type WorkspaceRef } from "../../lib/workspaces";
 import { assigneeOf, type BoardColumn, type BoardConfig, type Category, CATEGORY_BAR, CATEGORY_LABEL, type CardField, cardFields, footerTracker, NO_STATUS, projectMoveLock, syncedColumns, workspaceBoards } from "../../lib/boards";
 import { type ColumnView, switcherGroups } from "../../lib/boardColumns";
 import { asBoard, boardHeader, boardProblem, boardStats, footerLine, cardFace, columnCounts, dropTarget, mapCards, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "../../lib/boardScreen";
@@ -127,7 +127,7 @@ function useWorkspaceTasks() {
  * out of sync, for the Tasks button, Keep in step and session rows; `shown`
  * is the board the workspace shows, column by column.
  */
-export function useWorkspaceBoard(ws: { host: string; id: string } | null) {
+export function useWorkspaceBoard(ws: WorkspaceRef | null) {
   const data = useTasks((t) => (ws ? t.data[wsKey(ws.host, ws.id)] : undefined));
   const notNow = useTasks((t) => t.notNow);
   const config = useTasks((t) => trackersConfig(t));
@@ -136,11 +136,13 @@ export function useWorkspaceBoard(ws: { host: string; id: string } | null) {
   const moving = useTasks((t) => t.moving);
   const shownId = useTasks((t) => (ws ? (t.shownBoard[wsKey(ws.host, ws.id)] ?? null) : null));
   // What the board reads of the main store; other changes (terminal output) don't rebuild it.
-  const deps = useStore(useShallow((s) => [s.sessions, s.prs, s.git, s.terminals, s.reads]));
+  const deps = useStore(useShallow((s) => [s.sessions, s.prs, s.git, s.terminals, s.reads, s.accounts, s.workspaces]));
   return useMemo(() => {
     if (!ws || !data) return { ws, data, board: null, unlinked: [], shown: null, all: [] };
     const key = wsKey(ws.host, ws.id);
-    const input = boardInput(useStore.getState(), ws.host, ws.id, data, config);
+    // Every member's sessions of the workspace (X68).
+    const st = useStore.getState();
+    const input = boardInput(st, ws.host, ws.id, data, config, workspaceMembers(ws, hostWorkspaces(st)));
     // A chip whose rule is Off, or that the user put off with Not now, is not shown.
     const clean = (c: Card) => withoutPutOffCard(withRules(c, (x) => rulesFor(config, x.task)), notNow);
     const all = workspaceViews(workspaceBoards(config.boards, key, shownId), data, input).map((b) => ({ ...b, views: mapCards(b.views, clean) }));
@@ -280,7 +282,7 @@ function TaskCard({ host, workspaceId, card, fields, estimate, selected, onDrag 
         <div className="flex flex-col gap-2">
           <div className="-mx-1.5 flex flex-col gap-px">
             {card.rows.map((r) => (
-              <button key={r.session.id} onClick={() => openSession(host, r.session.id)} className="flex h-[26px] items-center gap-[7px] rounded-md bg-bg px-1.5 text-left hover:bg-panel-2">
+              <button key={r.session.id} onClick={() => openSession(r.session.host ?? host, r.session.id)} className="flex h-[26px] items-center gap-[7px] rounded-md bg-bg px-1.5 text-left hover:bg-panel-2">
                 <StateGlyph state={r.session.state} size={12} />
                 <span className="min-w-0 flex-1 truncate ui-text-12.5 text-fg">{r.session.name}</span>
                 <span className={cx("whitespace-nowrap font-mono ui-text-11 tabular-nums", TONE[r.meta.tone])}>{r.meta.text}</span>
@@ -318,6 +320,7 @@ function TaskDetail({ host, workspaceId, card }: { host: string; workspaceId: st
   const now = useNow(true);
   // ↵ opens the first session (X45).
   const first = card.rows[0]?.session.id;
+  const firstHost = card.rows[0]?.session.host ?? host;
   useEffect(() => {
     if (!first) return;
     const onKey = (e: KeyboardEvent) => {
@@ -326,11 +329,11 @@ function TaskDetail({ host, workspaceId, card }: { host: string; workspaceId: st
       const covered = !!st.dialog || !!st.settingsPage || !!t.closest?.('[role="dialog"]') || !!document.querySelector('[role="dialog"]');
       const modifier = e.metaKey || e.ctrlKey || e.altKey || e.shiftKey;
       if (enterOpensFirst({ key: e.key, tagName: t.tagName, isContentEditable: t.isContentEditable, modifier, defaultPrevented: e.defaultPrevented, covered: covered || e.isComposing }))
-        openSession(host, first);
+        openSession(firstHost, first);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [host, first]);
+  }, [host, first, firstHost]);
   return (
     <aside aria-label="Task detail" className="flex w-[360px] shrink-0 flex-col overflow-y-auto border-l border-border bg-panel">
       <div className="flex items-center gap-2 border-b border-border px-4 py-2.5">
@@ -409,7 +412,7 @@ function TaskDetail({ host, workspaceId, card }: { host: string; workspaceId: st
               <div className="flex items-center gap-2">
                 <StateGlyph state={r.session.state} size={13} />
                 <span className="min-w-0 flex-1 truncate ui-text-13 text-fg">{r.session.name}</span>
-                <button className="rounded-md border border-border-strong px-2 py-0.5 ui-text-12 text-fg hover:bg-panel-2" onClick={() => openSession(host, r.session.id)}>
+                <button className="rounded-md border border-border-strong px-2 py-0.5 ui-text-12 text-fg hover:bg-panel-2" onClick={() => openSession(r.session.host ?? host, r.session.id)}>
                   Open{i === 0 && <> <Kbd>↵</Kbd></>}
                 </button>
               </div>
@@ -940,7 +943,7 @@ function TasksList({ host, workspaceId, views, unlinked }: { host: string; works
                       {c.rows.map((row) => (
                         <div key={row.session.id} className="flex items-center gap-2 ui-text-12.5">
                           <StateGlyph state={row.session.state} size={12} />
-                          <button className="text-fg hover:underline" onClick={() => openSession(host, row.session.id)}>
+                          <button className="text-fg hover:underline" onClick={() => openSession(row.session.host ?? host, row.session.id)}>
                             {row.session.name}
                           </button>
                           <span className="font-mono ui-text-11.5 text-faint">{row.session.branch}</span>
@@ -975,13 +978,13 @@ function TasksList({ host, workspaceId, views, unlinked }: { host: string; works
         </div>
         {unlinked.map((u) => (
           <div key={u.session.id} className="flex w-full items-center gap-3 border-b border-border py-2">
-            <button onClick={() => openSession(host, u.session.id)} className="flex min-w-0 items-center gap-3 text-left hover:underline">
+            <button onClick={() => openSession(u.session.host ?? host, u.session.id)} className="flex min-w-0 items-center gap-3 text-left hover:underline">
               <StateGlyph state={u.session.state} size={13} />
               <span className="ui-text-13.5 text-fg">{u.session.name}</span>
             </button>
             <span className="font-mono ui-text-12 text-faint">{u.session.branch}</span>
             <span className="ml-auto ui-text-12 text-faint">{u.hint}</span>
-            <button className="ui-text-12 text-accent hover:underline" onClick={() => useStore.setState({ dialog: { kind: "link-task", host, session: u.session.id } })}>
+            <button className="ui-text-12 text-accent hover:underline" onClick={() => useStore.setState({ dialog: { kind: "link-task", host: u.session.host ?? host, session: u.session.id } })}>
               Link to task
             </button>
           </div>

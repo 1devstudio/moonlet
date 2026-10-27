@@ -57,6 +57,9 @@ pub const WORKSPACE_CREATE: &str = "workspace.create";
 pub const WORKSPACE_LIST: &str = "workspace.list";
 pub const WORKSPACE_UPDATE: &str = "workspace.update";
 pub const WORKSPACE_DELETE: &str = "workspace.delete";
+/// [`WorkspaceMerge`] → `true`: moves a workspace's sections and sessions
+/// into another, and deletes it (X68).
+pub const WORKSPACE_MERGE: &str = "workspace.merge";
 pub const PROFILE_LIST: &str = "profile.list";
 pub const PROFILE_CREATE: &str = "profile.create";
 pub const PROFILE_UPDATE: &str = "profile.update";
@@ -316,6 +319,10 @@ pub const EV_WORKERS_CHANGED: &str = "workers.changed";
 pub const ACCOUNT_SYNC: &str = "account.sync";
 /// X68: the central host passes on account changes to its members.
 pub const EV_ACCOUNT_CHANGED: &str = "account.changed";
+/// X68: which account this host shares: [`AccountInfo`].
+pub const ACCOUNT_GET: &str = "account.get";
+/// X68: [`AccountInfo`], when the account this host shares changes.
+pub const EV_ACCOUNT_INFO: &str = "account.info";
 
 // Live copies of sessions on the central host (X60)
 /// [`SyncStart`] → [`Copy`]: keep a session on the central host in sync
@@ -904,6 +911,12 @@ pub struct WorkspaceCreate {
     /// The Claude profile its sessions use (X33); absent for the default.
     #[serde(default)]
     pub claude_profile: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceMerge {
+    pub id: String,
+    pub into: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2008,6 +2021,18 @@ pub struct AccountSync {
 pub struct AccountSynced {
     pub changes: Vec<crate::types::Change>,
     pub version: BTreeMap<String, u64>,
+    /// The account the central host shares, which its members share too.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
+}
+
+/// `account.get` (X68): the account this host shares, named after the
+/// worker id of the central host that holds it (this host's own when it has
+/// none), and its central host's name.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AccountInfo {
+    pub account: String,
+    pub central: Option<String>,
 }
 
 /// `account.changed` (X68).

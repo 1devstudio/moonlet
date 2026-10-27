@@ -1101,8 +1101,10 @@ impl Daemon {
                 ok(m::AccountSynced {
                     changes: self.sessions.account_changes_for(&r.version),
                     version: self.sessions.account_version(),
+                    account: Some(self.link.account_info().account),
                 })
             }
+            m::ACCOUNT_GET => ok(self.link.account_info()),
             m::WORKER_REGISTER => {
                 // Only a worker's daemon, over the tailnet with a paired
                 // device's token, registers.
@@ -2412,6 +2414,11 @@ impl Daemon {
             m::WORKSPACE_DELETE => {
                 let r: m::IdRef = params(p)?;
                 w.delete_workspace(&r.id).map_err(internal)?;
+                ok(true)
+            }
+            m::WORKSPACE_MERGE => {
+                let r: m::WorkspaceMerge = params(p)?;
+                w.merge_workspace(&r.id, &r.into).map_err(internal)?;
                 ok(true)
             }
             m::SECTION_LIST => ok(w.list_sections()),

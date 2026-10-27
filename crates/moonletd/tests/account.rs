@@ -3,11 +3,12 @@
 //! (`MOONLET_MOBILE_ADDRS`) instead of a Tailscale address, and two Macs
 //! pair with it and link, as the desktop app makes them do.
 
-use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+mod common;
+
 use std::time::{Duration, Instant};
 
-use moonlet_core::client::{Client, wait_for_socket};
+use common::*;
+use moonlet_core::client::Client;
 use moonlet_proto::methods::{DeviceKind, MobilePairing};
 use moonlet_proto::types::{Section, Workspace};
 use moonlet_proto::{Frame, Message};
@@ -16,61 +17,8 @@ use serde_json::{Value, json};
 const BOOK: &str = "7d3f1c2a-5b8e-4e61-9a0f-2c4d6e8b1f37";
 const AIR: &str = "0b9e4f61-2a7c-4d3e-8f15-6c2a9d0e7b48";
 
-struct Daemon {
-    home: tempfile::TempDir,
-    env: Vec<(String, String)>,
-    socket: PathBuf,
-    child: Child,
-}
-
-fn spawn(home: &std::path::Path, socket: &std::path::Path, env: &[(String, String)]) -> Child {
-    Command::new(env!("CARGO_BIN_EXE_moonletd"))
-        .arg("daemon")
-        .env("MOONLET_HOME", home)
-        .env("MOONLET_SOCK", socket)
-        .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap()
-}
-
+/// What these tests read of a daemon's workspaces.
 impl Daemon {
-    async fn start(home: tempfile::TempDir, env: &[(&str, &str)]) -> Daemon {
-        let socket = home.path().join("run").join("d.sock");
-        let env: Vec<(String, String)> = env
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
-        let child = spawn(home.path(), &socket, &env);
-        wait_for_socket(&socket, Duration::from_secs(15))
-            .await
-            .unwrap();
-        Daemon {
-            home,
-            env,
-            socket,
-            child,
-        }
-    }
-
-    /// Stops the daemon and starts it again on the same home.
-    async fn restart(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        let _ = std::fs::remove_file(&self.socket);
-        self.child = spawn(self.home.path(), &self.socket, &self.env);
-        wait_for_socket(&self.socket, Duration::from_secs(15))
-            .await
-            .unwrap();
-    }
-
-    async fn call<T: serde::de::DeserializeOwned>(&self, method: &str, params: Value) -> T {
-        let mut app = Client::connect(&self.socket, "moonlet-app").await.unwrap();
-        app.request(method, params).await.unwrap()
-    }
-
     async fn workspaces(&self) -> Vec<Workspace> {
         self.call("workspace.list", json!({})).await
     }
@@ -85,21 +33,6 @@ impl Daemon {
         n.sort();
         n
     }
-}
-
-impl Drop for Daemon {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
 }
 
 /// The central host `studio-mini`, with tailnet access on.
@@ -185,34 +118,6 @@ async fn link(mac: &Daemon, central: &Daemon, addr: &str, name: &str) {
         .await;
 }
 
-/// Waits up to `limit` for `ok`; returns how long it took.
-async fn within<F, Fut>(limit: Duration, what: &str, mut ok: F) -> Duration
-where
-    F: FnMut() -> Fut,
-    Fut: std::future::Future<Output = bool>,
-{
-    let start = Instant::now();
-    while start.elapsed() < limit {
-        if ok().await {
-            return start.elapsed();
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    panic!("{what} did not happen within {limit:?}");
-}
-
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as u64
-}
-
-/// What a worker's daemon sends to register as `id`.
-fn registration(id: &str, name: &str) -> Value {
-    json!({ "id": id, "name": name, "os": "macos", "arch": "arm64", "cores": 10, "version": "0.1.32", "projects": [] })
-}
-
 /// A change by log `member` that names workspace `id` `name`, stamped now.
 fn renamed(member: &str, seq: u64, id: &str, name: &str) -> Value {
     json!({ "stamp": { "ms": now_ms(), "n": 0, "member": member }, "seq": seq, "kind": "workspace", "id": id, "op": { "set": { "field": "name", "value": name } } })
@@ -260,6 +165,35 @@ async fn a_rename_on_one_member_reaches_the_others_within_three_seconds() {
     )
     .await;
     assert_eq!(mini.names().await, ["Home", "Personal", "Personal"]);
+}
+
+#[tokio::test]
+async fn workspaces_merged_on_one_member_are_one_on_the_others() {
+    let (mini, addr) = central().await;
+    let book = mac(BOOK, "Alex's MacBook Pro").await;
+    link(&book, &mini, &addr, "Alex's MacBook Pro").await;
+    within(
+        Duration::from_secs(10),
+        "both Personal on the MacBook",
+        || async { book.names().await.len() == 2 },
+    )
+    .await;
+    let books = book.workspaces().await;
+    let _: Value = book
+        .call(
+            "workspace.merge",
+            json!({ "id": books[1].id, "into": books[0].id }),
+        )
+        .await;
+    within(
+        Duration::from_secs(3),
+        "one Personal on studio-mini",
+        || async {
+            let ws = mini.workspaces().await;
+            ws.len() == 1 && ws[0].id == books[0].id && ws[0].section_ids.len() == 2
+        },
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -392,34 +326,6 @@ async fn a_phone_never_hears_the_accounts_changes() {
     let names: Vec<&str> = heard.iter().map(|(n, _)| n.as_str()).collect();
     assert!(names.contains(&"workspaces.changed"), "{names:?}");
     assert!(!names.contains(&"account.changed"), "{names:?}");
-}
-
-/// A connection by hand: authenticated with `token`, hello as `client`.
-async fn raw(addr: &str, token: &str, client: &str) -> tokio::net::TcpStream {
-    use moonlet_proto::{read_frame, write_frame};
-    let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
-    let auth = Message::Auth {
-        token: Some(token.into()),
-        pair: None,
-        device: None,
-        route: None,
-        kind: None,
-    };
-    write_frame(&mut s, &Frame::Json(auth)).await.unwrap();
-    assert!(matches!(
-        read_frame(&mut s).await.unwrap(),
-        Some(Frame::Json(Message::Authed { .. }))
-    ));
-    let hello = Message::Hello {
-        protocol: moonlet_proto::PROTOCOL_VERSION,
-        client: client.into(),
-    };
-    write_frame(&mut s, &Frame::Json(hello)).await.unwrap();
-    assert!(matches!(
-        read_frame(&mut s).await.unwrap(),
-        Some(Frame::Json(Message::Welcome { .. }))
-    ));
-    s
 }
 
 /// The error code of request `account.sync` sent on `s`.
@@ -708,6 +614,42 @@ async fn a_central_host_whose_worker_id_changed_goes_on_under_the_new_one_and_ke
     )
     .await;
     assert_eq!(mini.names().await, ["Studio mini"]);
+}
+
+async fn account(d: &Daemon) -> Value {
+    d.call("account.get", json!({})).await
+}
+
+#[tokio::test]
+async fn a_host_says_which_account_it_shares() {
+    let (mini, addr) = central().await;
+    let book = mac(BOOK, "Alex's MacBook Pro").await;
+    let mini_id = {
+        let info: Value = mini.call("link.get", json!({})).await;
+        info["worker"]["id"].as_str().unwrap().to_string()
+    };
+    // Each is its own account until the MacBook links.
+    assert_eq!(account(&mini).await["account"], json!(mini_id));
+    assert_eq!(
+        account(&book).await,
+        json!({ "account": BOOK, "central": null })
+    );
+    link(&book, &mini, &addr, "Alex's MacBook Pro").await;
+    within(
+        Duration::from_secs(10),
+        "the MacBook in studio-mini's account",
+        || async { account(&book).await["account"] == json!(mini_id) },
+    )
+    .await;
+    assert_eq!(account(&book).await["central"], json!("studio-mini"));
+    // Without a central host it is its own account again, and keeps the
+    // workspaces it shared.
+    let _: Value = book.call("link.set", json!({ "central": null })).await;
+    assert_eq!(
+        account(&book).await,
+        json!({ "account": BOOK, "central": null })
+    );
+    assert_eq!(book.names().await.len(), 2);
 }
 
 fn refused(reply: &Message) -> Option<&str> {

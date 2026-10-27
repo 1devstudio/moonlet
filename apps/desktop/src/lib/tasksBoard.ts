@@ -7,6 +7,8 @@ import { type Column, DEFAULT_LINK, type LinkRules, type Task, taskForSession } 
 /** What the board needs of a session. */
 export interface BoardSession {
   id: string;
+  /** The member of the account it is on, when not the board's own host (X68). */
+  host?: string;
   name: string;
   branch: string;
   path: string;

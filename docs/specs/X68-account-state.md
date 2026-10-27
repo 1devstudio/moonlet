@@ -17,10 +17,10 @@ Session records, settings, devices and secrets join the account state in later s
 ## User journey
 
 1. The MacBook is linked to `studio-mini` (X41). Both have had moonlet for a while: the MacBook has the workspaces "Personal" and "Acme", `studio-mini` has "Personal".
-2. The MacBook's app shows a one-time notice: "Workspaces are now shared with studio-mini". The switcher lists "Personal", "Personal" and "Acme" once each, with no host headers; each "Personal" row says which host it came from.
-3. The user picks **Merge with…** on the second "Personal" and chooses the first. One "Personal" remains, holding the sections of both.
+2. The switcher lists "Personal", "Personal" and "Acme" once each, with no host headers; the two "Personal" rows differ in their summaries. Sessions running on `studio-mini` show in the MacBook's sidebar, marked "on studio-mini".
+3. With the second "Personal" shown, the user picks **Merge with…** in the switcher, chooses the first, and confirms. One "Personal" remains, holding the sections of both, on both Macs.
 4. On the MacBook the user renames section "Side projects" to "Experiments". A few seconds later the phone, connected to `studio-mini`, shows "Experiments".
-5. On a train, offline, the user adds project `shop` to section "1devstudio" on the MacBook. At home, when the MacBook links again, `studio-mini` shows `shop` in "1devstudio" as well, marked "Not on studio-mini" if it has no clone of it.
+5. On a train, offline, the user adds project `shop` to section "1devstudio" on the MacBook. At home, when the MacBook links again, `studio-mini` shows `shop` in "1devstudio" as well, marked "not on studio-mini" if it has no clone of it and the MacBook is not connected.
 
 ## Behaviour and acceptance criteria
 
@@ -38,7 +38,7 @@ Session records, settings, devices and secrets join the account state in later s
 
 ### Workspaces and sections from the log (daemon)
 
-- [x] A workspace is a record with `name`, `color`, `claude_profile` (a profile name, mapped to a folder on each member) and `created_at`. A section is a record with `workspace`, `order` (a sort key), `name`, `view` and `created_at`, and one field per project, `project:<origin>|<root>`, holding the project's identity with its own sort key, or `null` once it is removed. So two members adding projects to one section at once both keep theirs, and a change touches only the projects it is about. (`a_workspace_renamed_on_one_member_is_renamed_on_the_other`, `projects_two_members_add_to_one_section_at_once_are_both_kept`, `a_project_kept_here_for_its_sessions_does_not_come_back_on_the_other_member`)
+- [x] A workspace is a record with `name`, `color`, `claude_profile` (a profile name, mapped to a folder on each member) and `created_at`. A section is a record with `workspace`, `order` (a sort key), `name`, `view` and `created_at`, and one field per project, `project:<origin>|<root>`, holding the project's identity with its own sort key, or `null` once it is removed. So two members adding projects to one section at once both keep theirs, and a change touches only the projects it is about. A project added goes after the last one; only putting one's own projects in another order gives them new keys, so a member that lacks some of a section's projects never reorders it by changing something else. (`a_workspace_renamed_on_one_member_is_renamed_on_the_other`, `projects_two_members_add_to_one_section_at_once_are_both_kept`, `a_project_kept_here_for_its_sessions_does_not_come_back_on_the_other_member`, `another_members_section_keeps_its_project_order_through_this_members_changes`, `projects_reordered_on_one_member_are_in_that_order_on_the_other`)
 - [x] Every RPC that changes workspaces or sections (`workspace.create`, `.update`, `.delete`, `section.create`, `.update`, `.delete`, `.move`, `.add_project`, `.remove_project`) writes changes to the log, and `workspace.list` and `section.list` are worked out from it. Their requests and replies keep their current shape, so older apps keep working; the X32 tests in `session.rs` run unchanged. (`sections_reordered_on_one_member_are_in_that_order_on_the_other`)
 - [x] `section.list` gives each section's `project_ids` as this member's project ids, for the identities it has a project for. Identities it has no project for are listed in a new field, `missing: [ProjectIdentity]`; one leaves `missing` as soon as a clone of it is added here. A project without a root commit is this member's alone and stays out of the log. Two checkouts of one repository on one member are one project to the account, and both stay in the sections that hold them. (`a_sections_projects_are_this_members_clones_and_the_rest_are_missing`, `a_clone_added_here_is_no_longer_missing`, `two_checkouts_of_one_repository_on_one_member_both_stay`)
 - [x] The rules X32 checks before a change (the last workspace cannot be deleted, a workspace with sections cannot be deleted, a section's projects move to another section) are checked against this member's state when the change is made. A deleted section's projects that this member lacks move with the rest. (`a_section_deleted_with_projects_this_member_lacks_hands_them_on`)
@@ -68,17 +68,25 @@ Session records, settings, devices and secrets join the account state in later s
 
 ### The app
 
-- [ ] Each workspace shows once in the switcher, whichever connected members list it, without host headers. Sessions of a workspace come from every connected member that lists it, and a session row from another member names it ("on studio-mini").
-- [ ] A section lists its projects from every connected member, once per identity. A project that only some members have is shown on the members that have it; one that the shown member does not have is marked "Not on <host>".
-- [ ] Two workspaces with the same name on different members are both shown until the user merges them. **Merge with…** in a workspace's menu moves its sections into the chosen workspace and deletes it.
-- [ ] Members that are not linked to the same central host (a remote host added over SSH, a host with no central host) keep their own workspaces and show under a host header, as today.
+- [x] Each host says which account it shares, `account.get`: its central host's, named after that host's worker id, once the central host has said so in `account.sync`, else its own worker id. `account.info` says when it changes, as when a Mac links or its central host is removed. A daemon from before X68 says none, and the app takes it as its own account. (`a_host_says_which_account_it_shares`)
+- [x] Each workspace of an account shows once in the switcher, whichever connected members of the account list it, with the sessions of all of them in its summary. A host outside the account keeps its own workspaces under its name, even one whose id matches, and the headers show only when more than one host has rows of its own. (`lists the account's workspaces once with every member's sessions, and a host outside it apart`)
+- [x] A workspace is shown on every member of its account, never on a host outside it; the shown workspace stays while a member of its account lists it, and moves to that member. (`shows a shared workspace on every member of its account, never on a host outside it`, `keeps showing a shared workspace from a member that still lists it`)
+- [x] Each section of the shown workspace shows once, from the shown member first, with the sessions of every member of the account holding it. A project's sessions from several members are one group, matched by identity; the shown member's project filter picks the same projects on every member. A project only another member has shows there, marked "on studio-mini", as are session rows from another member; a project no connected member has is marked "not on <shown host>", and clicking it says how to work on it here. A section several members hold has no `@host` tag. (`shows each project once with every member's sessions, newest first, and says where the rest are`, `filters every member by the projects picked on the shown one`, `lists the shown workspace's sections once, from the shown member first, with every member of its account holding each`, `builds each member's side of a section from what that member lists`, `says how to work on a project this Mac does not have`)
+- [x] ⌘1–9 go through the sessions in the sidebar's order, every member's merged, skipping folded sections and groups. (`orders sessions for ⌘1–9 as the sidebar shows them, skipping collapsed sections and groups`)
+- [x] Switching back to a shared workspace reopens the session last open in it, on the member it is on. (`reopens the session last open in a shared workspace on the member it is on`)
+- [x] A session started from the composer goes into the shown workspace on whichever member has the project. (`starts a session in the shown workspace on whichever member has the project`)
+- [x] A workspace's Tasks board, and the task lines in the sidebar, take the sessions of every member of its account, each opened on its own member and matched to the board's GitHub repository by project identity. Keep in step (X46) acts on this Mac's own sessions only, so two apps never move one issue twice. (`takes every member's sessions of the workspace, each with its host and its project's repository`, `lists the hosts of a workspace's account that list it, its own host first`)
+- [x] A shared workspace shows the attention dot when a session on any member needs you. (`marks a shared workspace when a session on any member needs you`)
+- [x] Two workspaces with the same name on different members are both shown until the user merges them, each saying which Mac made it ("from studio-mini"): each member gives the account its name, and a workspace's maker is the member whose change made it. **Merge with…** in the switcher lists the other workspaces of the same account, asks first, saying what a new Claude profile does to running agents, and merges on a member that lists both. A merge moves the merged workspace's sessions into the chosen one on every member. (`a_workspace_says_which_member_made_it`, `merges a workspace only into another of its account, on a member that lists both`, `asks before merging, saying what moves and what goes, and what a new profile does to running agents`, `warns of a new Claude profile only when merging moves running agents to another one`, `sessions_of_a_merged_workspace_join_the_chosen_one_on_the_other_member_too`)
+- [x] The first time this Mac shares an account, the app says "Workspaces are now shared with studio-mini", once. (`says once that this Mac's workspaces are now shared with its central host`)
+- [x] A Mac whose central host is removed is its own account again and keeps the workspaces it got while it was a member, as every member keeps the whole account. They can be merged or deleted like any other. The e2e specs that link the app's daemon remove them afterwards, so later specs see only their own. (`a_host_says_which_account_it_shares`)
 
 ## UI
 
-- Switcher: one list. A workspace that came from only one member before a merge shows that member under its name ("from studio-mini") until merged. Hosts that are not members keep their headers below.
-- Workspace menu: **Merge with…**, a list of the other workspaces.
-- Section: a project missing on the shown member has a dotted avatar and "Not on studio-mini"; clicking it says that adding it there comes in a later slice.
-- The first time the app sees a member's workspaces shared, it shows the notice "Workspaces are now shared with <central host>" once.
+- Switcher: one list for the account's workspaces, no host headers; a host outside the account keeps its header and its workspaces below. Two workspaces of one name each say "from <Mac>" under their name.
+- Switcher menu: **Merge with…** under Workspace settings…, which opens the list of the account's other workspaces; picking one asks "Move the 1 section of this Personal, with its sessions, into the other Personal, and delete this one? Every Mac sharing them gets the change." and, when the target uses another Claude profile and agents run, what that does to them.
+- Section: one block per shared section. Rows and project groups from another member end with "on studio-mini" in the faint mono style of the old `@host` tag; a project no connected member has shows a dashed square for its mark and "not on <host>", and clicking it shows "blog is not on This Mac. Add a clone of it to this section to work on it here; moonlet will clone it for you in a later version."
+- A toast, once per account: "Workspaces are now shared with studio-mini".
 
 ## Protocol and RPCs
 
@@ -86,8 +94,12 @@ Session records, settings, devices and secrets join the account state in later s
 - Event `account.changed {changes: [Change]}`, from the central host to members.
 - `Change`: `{stamp: {ms, n, member}, seq, kind, id, op}`, where `op` is `{"set": {field, value}}` or `"delete"`, and `seq` counts the changes its member has made, from 1; versions are built from it.
 - `section.list`: each section gains `missing: [ProjectIdentity]`.
-- `workspace.merge {id, into}`: moves the sections of `id` into `into`, after its own, and deletes `id`.
-- No protocol change: `account.sync` is a new method and `missing` an optional field. A central host from before X68 answers `unknown_method`, and the member keeps its workspaces to itself until moonlet is updated there.
+- `workspace.merge {id, into}` → `true`: moves the sections of `id` into `into`, after its own, with every session of `id`, and deletes `id`. Merging a workspace into itself, or with one that does not exist, fails and changes nothing. (`a_merged_workspace_hands_its_sections_and_sessions_to_the_chosen_one_on_every_member`, `a_workspace_merges_only_into_another_existing_one`, `workspaces_merged_on_one_member_are_one_on_the_others`)
+- `account.sync`'s reply gains `account`, the account the central host shares.
+- `account.get` → `{account, central}`, and the event `account.info` with the same, when it changes.
+- `workspace.list`: each workspace gains `made_by`, the name of the member that made it.
+- The log gains two kinds of record: `member` (by log name: `name`) and `merge` (by merged workspace: `into`).
+- No protocol change: the methods are new and the fields optional. A central host from before X68 answers `unknown_method`, and the member keeps its workspaces to itself until moonlet is updated there.
 
 ## Data and config
 
@@ -114,6 +126,7 @@ Session records, settings, devices and secrets join the account state in later s
 - Cloning a project that a member does not have.
 - Settings, paired devices and secrets in the account state.
 - Merging workspaces automatically by name.
+- Adding a project that another member has on this one (a clone from its origin).
 - Shortening the log. It grows with every change; compaction comes once it matters.
 
 ## Test plan
@@ -127,4 +140,6 @@ Session records, settings, devices and secrets join the account state in later s
 
 ## Open questions
 
-- **Same-name workspaces:** shown twice until merged by hand (this spec), or merged automatically on the first link? Proposed: by hand, as two "Personal" workspaces may not be the same.
+None open. Decided by the user on 2026-10-26:
+
+- **Same-name workspaces stay apart until the user merges them** with **Merge with…**, never merged by name on their own: two "Personal" workspaces on different machines may not be the same.

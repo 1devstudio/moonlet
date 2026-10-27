@@ -1,10 +1,14 @@
 // The workspace switcher in the sidebar's title bar (X32).
 
 import { useEffect, useMemo, useState } from "react";
-import { Check, ChevronsUpDown, Plus, Settings } from "lucide-react";
-import { hostWorkspaces, sessionNeedsYou, shownWorkspace, switchWorkspace, useStore } from "../lib/store";
+import { Check, ChevronsUpDown, Merge, Plus, Settings } from "lucide-react";
+import { errorToast, hostWorkspaces, sessionNeedsYou, shownWorkspace, switchWorkspace, useStore } from "../lib/store";
+import { rpc } from "../lib/daemon";
+import { askConfirm } from "../lib/confirm";
+import { M } from "../lib/protocol";
 import { goSettings } from "../lib/settingsNavigation";
-import { colorHex, isShown, switcherRows, workspaceInitial, workspacesNeedingYou, wsKey } from "../lib/workspaces";
+import { colorHex, isShown, mergeHost, mergeProfileChange, mergePrompt, mergeTargets, parseWsKey, rowNeedsYou, switcherRows, workspaceInitial, workspacesNeedingYou, wsKey, type SwitcherRow } from "../lib/workspaces";
+import { runningClaudeAgents } from "../lib/profiles";
 import type { WorkspaceColor } from "../lib/protocol";
 import { cx } from "./ui";
 
@@ -35,8 +39,31 @@ export function WorkspaceSwitcher() {
   // Joined into one string, so the selector's value is stable between renders.
   const needingKey = useStore((s) => [...workspacesNeedingYou(hostWorkspaces(s), (h, x) => sessionNeedsYou(s, h, x.id))].sort().join("\n"));
   const needing = useMemo(() => new Set(needingKey ? needingKey.split("\n") : []), [needingKey]);
-  const cur = rows.find((r) => isShown(current, r.host, r.ws.id));
-  const othersNeedYou = [...needing].some((k) => !current || k !== wsKey(current.host, current.id));
+  const cur = rows.find((r) => isShown(current, r.host, r.ws.id, r.account));
+  const othersNeedYou = [...needing].some((k) => !current || parseWsKey(k).id !== current.id);
+  const [merging, setMerging] = useState(false);
+  const merge = async (from: SwitcherRow, into: SwitcherRow) => {
+    setOpen(false);
+    setMerging(false);
+    // Asked of a member that lists both, in that member's own terms: its
+    // profiles and its running agents.
+    const host = mergeHost(from, into);
+    const st = useStore.getState();
+    const listed = (id: string) => st.workspaces[host]?.find((w) => w.id === id);
+    const [f, t] = [listed(from.ws.id) ?? from.ws, listed(into.ws.id) ?? into.ws];
+    const agents = from.hosts.reduce((n, h) => {
+      const sessions = st.sessions[h] ?? [];
+      const ids = sessions.filter((x) => x.workspace_id === from.ws.id).map((x) => x.id);
+      return n + runningClaudeAgents(sessions, Object.values(st.terminals[h] ?? {}), ids);
+    }, 0);
+    if (!(await askConfirm(mergePrompt(f, t, mergeProfileChange(f, t, st.profiles[host] ?? [], agents))))) return;
+    try {
+      await rpc(host, M.workspaceMerge, { id: from.ws.id, into: into.ws.id });
+      switchWorkspace({ host: into.host, id: into.ws.id, account: into.account });
+    } catch (e) {
+      errorToast(e);
+    }
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -75,7 +102,7 @@ export function WorkspaceSwitcher() {
                     aria-checked={isCur}
                     onClick={() => {
                       setOpen(false);
-                      switchWorkspace({ host: r.host, id: r.ws.id });
+                      switchWorkspace({ host: r.host, id: r.ws.id, account: r.account });
                     }}
                     className={cx("flex w-full items-center gap-2.5 rounded-lg px-2 py-[7px] text-left hover:bg-[#222]", isCur && "bg-[#222]")}
                   >
@@ -83,8 +110,10 @@ export function WorkspaceSwitcher() {
                     <span className="flex min-w-0 flex-1 flex-col gap-px">
                       <span className="flex items-center gap-1.5 ui-text-13 font-semibold text-fg">
                         {r.ws.name}
-                        {needing.has(wsKey(r.host, r.ws.id)) && !isCur && <AttentionDot />}
+                        {rowNeedsYou(r, needing) && !isCur && <AttentionDot />}
                       </span>
+                      {/* Which Mac made it, while another has its name (X68). */}
+                      {r.from && <span className="truncate ui-text-11 text-faint">from {r.from}</span>}
                       <span className="truncate ui-text-11.5 text-muted">{r.summary}</span>
                     </span>
                     {isCur && <Check size={14} strokeWidth={2.5} className="text-accent" />}
@@ -114,6 +143,21 @@ export function WorkspaceSwitcher() {
             >
               <Settings size={14} className="text-muted" /> Workspace settings…
             </button>
+            {mergeTargets(rows, cur).length > 0 && (
+              <button role="menuitem" aria-expanded={merging} className="flex h-8 items-center gap-2.5 rounded-lg px-2 text-left ui-text-13 hover:bg-[#222]" onClick={() => setMerging(!merging)}>
+                <Merge size={14} className="text-muted" /> Merge with…
+              </button>
+            )}
+            {merging &&
+              mergeTargets(rows, cur).map((r) => (
+                <button key={wsKey(r.host, r.ws.id)} role="menuitem" className="flex items-center gap-2.5 rounded-lg py-[5px] pl-7 pr-2 text-left hover:bg-[#222]" onClick={() => void merge(cur, r)}>
+                  <WorkspaceMark name={r.ws.name} color={r.ws.color} size={18} />
+                  <span className="flex min-w-0 flex-1 flex-col">
+                    <span className="truncate ui-text-13 text-fg">{r.ws.name}</span>
+                    <span className="truncate ui-text-11.5 text-muted">{r.summary}</span>
+                  </span>
+                </button>
+              ))}
             <div className="flex justify-between px-2 pb-1 pt-1.5 ui-text-11 text-faint">
               <span>Switch</span>
               <span className="font-mono">⌃⌘1–9</span>

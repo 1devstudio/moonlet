@@ -27,7 +27,7 @@ export function NewSectionDialog() {
   const create = async () => {
     try {
       const st = useStore.getState();
-      const workspaceId = newSectionWorkspace(shownWorkspace(st), host, st.workspaces[host] ?? []);
+      const workspaceId = newSectionWorkspace(shownWorkspace(st), host, st.workspaces[host] ?? [], st.accounts[host]?.account ?? host);
       if (!workspaceId) return;
       await rpc(host, M.sectionCreate, { workspace_id: workspaceId, name });
       close();
