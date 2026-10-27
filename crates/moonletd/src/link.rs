@@ -701,7 +701,10 @@ impl WorkerLink {
     /// `host` is the link and this is the newest loop: at once, then every
     /// minute (X68).
     async fn keep_account(self: Arc<Self>, host: Arc<Host>) {
-        if !self.sessions.has_account() {
+        // A machine that joined as a cloud machine after the daemon started
+        // has an account attached, but is no member. A registration with a
+        // former central host that ends late leaves the newer loop running.
+        if !self.sessions.has_account() || self.is_cloud() || !self.is_current(&host) {
             return;
         }
         let generation = self.account_loop.fetch_add(1, Ordering::SeqCst) + 1;
@@ -709,8 +712,9 @@ impl WorkerLink {
         while self.account_loop.load(Ordering::SeqCst) == generation && self.is_current(&host) {
             if let Err(e) = self.sync_account(&host).await {
                 // A central host from before X68, or one whose account
-                // could not be read, has none to share.
-                if e.code == "unknown_method" || e.code == "no_account" {
+                // could not be read, has none to share; one that takes this
+                // machine for no member shares none with it.
+                if e.code == "unknown_method" || e.code == "no_account" || e.code == "forbidden" {
                     tracing::info!("the central host shares no account: {}", e.message);
                     return;
                 }
@@ -718,6 +722,12 @@ impl WorkerLink {
             }
             tokio::time::sleep(every).await;
         }
+    }
+
+    /// Whether this is a cloud machine (X63), which is never a member of
+    /// the account (X68).
+    fn is_cloud(&self) -> bool {
+        self.store.lock().unwrap().worker().cloud
     }
 
     /// Whether `host` is still this link's connection: a reply from a
@@ -752,7 +762,7 @@ impl WorkerLink {
     /// Sends changes made on this member to its central host, when linked.
     /// A change that does not get there now goes at the next exchange.
     pub fn push_account(self: &Arc<Self>, changes: Vec<moonlet_proto::types::Change>) {
-        if !matches!(*self.state.lock().unwrap(), LinkState::Connected { .. }) {
+        if self.is_cloud() || !matches!(*self.state.lock().unwrap(), LinkState::Connected { .. }) {
             return;
         }
         let Some(host) = self.host() else { return };
