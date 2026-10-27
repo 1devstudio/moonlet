@@ -20,6 +20,7 @@ import {
   ghLine,
   matchingRepos,
   moveHighlight,
+  newCloneId,
   pushedAgo,
   repoOwners,
   repoParts,
@@ -35,9 +36,6 @@ const close = () => useStore.setState({ dialog: null });
 
 type Tab = "folder" | "github";
 type Lookup = { repo: string; state: "looking" } | { repo: string; state: "found"; info: RepoInfo } | { repo: string; state: "missing"; error: string };
-
-/** An id for a new clone, chosen here so its events are known before the daemon answers. */
-const newCloneId = () => `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 
 const monoInputCls = cx(inputCls, "font-mono ui-text-12.5");
 

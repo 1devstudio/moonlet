@@ -116,7 +116,8 @@ export interface SharedGroup {
   sessions: HostSession[];
 }
 
-const identityKey = (i: ProjectIdentity | undefined) => (i?.root ? `${i.origin ?? ""}|${i.root}` : null);
+/** A project identity as one key, `<origin>|<root>`; null without a root. */
+export const identityKey = (i: ProjectIdentity | undefined) => (i?.root ? `${i.origin ?? ""}|${i.root}` : null);
 
 /** A project's name from its identity: the last part of its origin. */
 const identityName = (i: ProjectIdentity) => i.origin?.split("/").pop() ?? i.root?.slice(0, 7) ?? "project";

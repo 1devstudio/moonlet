@@ -7,15 +7,14 @@ import { Check, FolderSearch, Loader2, RotateCw, ShieldAlert } from "lucide-reac
 import { DaemonError, rpc } from "../lib/daemon";
 import { M, type CloneTarget, type Project, type ProjectIdentity, type RepoInfo } from "../lib/protocol";
 import { errorToast, toast, useStore } from "../lib/store";
-import { hostSections } from "../lib/sidebar";
-import { cloneKey, cloneParent, clonePath, targetTaken } from "../lib/addProject";
-import { cantReach, copyCheck, foundLine, getProjectTitle, isTooOld, noOrigin, originName } from "../lib/getProject";
+import { hostSections, identityKey } from "../lib/sidebar";
+import { cloneKey, cloneParent, clonePath, newCloneId, targetTaken } from "../lib/addProject";
+import { PROBE_ORIGIN, canCloneInto, cantReach, copyCheck, foundLine, getProjectTitle, isTooOld, noOrigin, originName, type CheckedTarget } from "../lib/getProject";
 import { CloneInto, CloneProgressCard, TakenBox } from "./AddProject";
 import { Button, Dialog, Field, cx, inputCls } from "./ui";
 
 type Lookup = { state: "looking" } | { state: "found"; info: RepoInfo } | { state: "unreachable"; error: string } | { state: "too-old" };
 
-const newCloneId = () => `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export function GetProjectDialog({ host, section, identity, name, clone: watching }: { host: string; section: string; identity: ProjectIdentity; name: string; clone?: string }) {
@@ -31,41 +30,63 @@ export function GetProjectDialog({ host, section, identity, name, clone: watchin
   const [retry, setRetry] = useState(0);
   const [parent, setParent] = useState(() => cloneParent(host));
   const [folderName, setFolderName] = useState(() => (origin ? originName(origin) : name));
-  const [target, setTarget] = useState<CloneTarget | null>(null);
+  const [checked, setChecked] = useState<CheckedTarget | null>(null);
   const [targetError, setTargetError] = useState<string | null>(null);
   const [locating, setLocating] = useState(!origin);
   const [folder, setFolder] = useState("");
   const [copy, setCopy] = useState<{ folder: string; ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
 
+  const dialogState = (clone?: string) => ({ kind: "get-project" as const, host, section, identity, name, clone });
+  /** Whether this dialog still shows, watching `clone` when one is given: a late answer leaves another dialog alone. */
+  const stillShown = (clone?: string) => {
+    const d = useStore.getState().dialog;
+    return d?.kind === "get-project" && d.host === host && d.section === section && identityKey(d.identity) === identityKey(identity) && (clone === undefined || d.clone === clone);
+  };
+  const forgetRun = (key: string) =>
+    useStore.setState((s) => {
+      const { [key]: _, ...rest } = s.clones;
+      return { clones: rest };
+    });
+  /** Forgets a failed clone the dialog shows, once the user edits the form or closes it. */
+  const clearFailure = () => {
+    if (!run?.error || !watching) return;
+    forgetRun(watching);
+    if (stillShown(watching)) useStore.setState({ dialog: dialogState() });
+  };
   const close = () => {
-    if (run?.error && watching) useStore.setState((s) => ({ clones: Object.fromEntries(Object.entries(s.clones).filter(([k]) => k !== watching)) }));
+    clearFailure();
     useStore.setState({ dialog: null });
   };
-  const dialogState = (clone?: string) => ({ kind: "get-project" as const, host, section, identity, name, clone });
 
   useEffect(() => {
-    if (!origin || cloning) return;
-    setLookup({ state: "looking" });
     let live = true;
-    rpc<RepoInfo>(host, M.repoLookup, { origin }).then(
-      (info) => live && setLookup({ state: "found", info }),
-      (e) => live && setLookup(e instanceof DaemonError && isTooOld(e) ? { state: "too-old" } : { state: "unreachable", error: message(e) }),
-    );
+    const tooOld = (e: unknown) => e instanceof DaemonError && isTooOld(e);
+    if (!origin) {
+      // Nothing to look up; only tell a daemon from before X70, which would
+      // add any folder without checking it.
+      rpc(host, M.repoLookup, { origin: PROBE_ORIGIN }).catch((e) => live && tooOld(e) && setLookup({ state: "too-old" }));
+    } else {
+      setLookup({ state: "looking" });
+      rpc<RepoInfo>(host, M.repoLookup, { origin }).then(
+        (info) => live && setLookup({ state: "found", info }),
+        (e) => live && setLookup(tooOld(e) ? { state: "too-old" } : { state: "unreachable", error: message(e) }),
+      );
+    }
     return () => {
       live = false;
     };
-  }, [host, origin, retry, cloning]);
+  }, [host, origin, retry]);
 
   const found = lookup?.state === "found" ? lookup.info : null;
   useEffect(() => {
-    setTarget(null);
+    setChecked(null);
     setTargetError(null);
     if (!found || !origin || !parent.trim() || !folderName.trim() || cloning) return;
     let live = true;
     const timer = setTimeout(() => {
       rpc<CloneTarget>(host, M.repoCloneTarget, { origin, root: identity.root, parent, name: folderName }).then(
-        (t) => live && setTarget(t),
+        (target) => live && setChecked({ parent, name: folderName, target }),
         (e) => live && setTargetError(message(e)),
       );
     }, 300);
@@ -99,7 +120,7 @@ export function GetProjectDialog({ host, section, identity, name, clone: watchin
     try {
       const project = await rpc<Project>(host, M.sectionAddProject, { id: section, path, identity });
       toast(`Added ${project.name}`);
-      useStore.setState({ dialog: null });
+      if (stillShown()) useStore.setState({ dialog: null });
     } catch (e) {
       errorToast(e);
     } finally {
@@ -107,7 +128,9 @@ export function GetProjectDialog({ host, section, identity, name, clone: watchin
     }
   };
 
-  const canClone = !!found && !!target && !target.exists && !busy && !cloning;
+  const canClone = canCloneInto({ found: !!found, checked, parent, name: folderName, busy, cloning });
+  // The check for the folder typed now; an older one says nothing about it.
+  const target = checked && checked.parent === parent && checked.name === folderName ? checked.target : null;
   const startClone = async () => {
     if (!found || !origin || !canClone) return;
     setBusy(true);
@@ -121,10 +144,8 @@ export function GetProjectDialog({ host, section, identity, name, clone: watchin
     try {
       await rpc(host, M.repoClone, { id, origin, root: identity.root, url: found.url ?? null, parent, name: folderName, section_id: section });
     } catch (e) {
-      useStore.setState((s) => {
-        const { [key]: _, ...rest } = s.clones;
-        return { clones: rest, dialog: dialogState() };
-      });
+      forgetRun(key);
+      if (stillShown(key)) useStore.setState({ dialog: dialogState() });
       errorToast(e);
     } finally {
       setBusy(false);
@@ -135,7 +156,7 @@ export function GetProjectDialog({ host, section, identity, name, clone: watchin
   };
 
   const taken = found && origin && target ? targetTaken(target, origin, clonePath(parent, folderName)) : null;
-  const reach = lookup?.state === "unreachable" && origin ? cantReach(hostLabel, origin, lookup.error) : null;
+  const reach = lookup?.state === "unreachable" && origin ? cantReach(hostLabel, host === "local", origin, lookup.error) : null;
   const tooOld = lookup?.state === "too-old";
 
   const footer = tooOld ? (
@@ -221,8 +242,14 @@ export function GetProjectDialog({ host, section, identity, name, clone: watchin
                 cloning={cloning}
                 hostLabel={hostLabel}
                 warn={!!taken}
-                onParent={setParent}
-                onName={setFolderName}
+                onParent={(p) => {
+                  clearFailure();
+                  setParent(p);
+                }}
+                onName={(n) => {
+                  clearFailure();
+                  setFolderName(n);
+                }}
                 onEnter={() => canClone && void startClone()}
               >
                 {targetError && (
@@ -230,14 +257,37 @@ export function GetProjectDialog({ host, section, identity, name, clone: watchin
                     {targetError}
                   </span>
                 )}
-                {taken && <TakenBox {...taken} onAddExisting={() => target && void addCopy(target.path)} onUseName={() => setFolderName(taken.useName)} />}
+                {taken && (
+                  <TakenBox
+                    {...taken}
+                    onAddExisting={() => {
+                      clearFailure();
+                      if (target) void addCopy(target.path);
+                    }}
+                    onUseName={() => {
+                      clearFailure();
+                      setFolderName(taken.useName);
+                    }}
+                  />
+                )}
               </CloneInto>
             </fieldset>
           )}
           {locating ? (
             <Field label="Folder" hint={host === "local" ? undefined : `A path on ${hostLabel}. No Browse… for remote hosts.`}>
               <div className="flex gap-2">
-                <input autoFocus spellCheck={false} aria-label="Folder" className={inputCls} value={folder} onChange={(e) => setFolder(e.target.value)} placeholder={`~/code/${originName(origin ?? name)}`} />
+                <input
+                  autoFocus
+                  spellCheck={false}
+                  aria-label="Folder"
+                  className={inputCls}
+                  value={folder}
+                  onChange={(e) => {
+                    clearFailure();
+                    setFolder(e.target.value);
+                  }}
+                  placeholder={`~/code/${originName(origin ?? name)}`}
+                />
                 {host === "local" && (
                   <Button
                     onClick={async () => {
@@ -255,7 +305,14 @@ export function GetProjectDialog({ host, section, identity, name, clone: watchin
                 </span>
               )}
               {origin && (
-                <button type="button" className="mt-2 self-start ui-text-12 text-muted hover:text-fg" onClick={() => setLocating(false)}>
+                <button
+                  type="button"
+                  className="mt-2 self-start ui-text-12 text-muted hover:text-fg"
+                  onClick={() => {
+                    clearFailure();
+                    setLocating(false);
+                  }}
+                >
                   Clone it instead
                 </button>
               )}
@@ -263,7 +320,14 @@ export function GetProjectDialog({ host, section, identity, name, clone: watchin
           ) : (
             !cloning && (
               <div className="mt-1 border-t border-border pt-3">
-                <button type="button" className="flex items-center gap-1.5 ui-text-12.5 text-muted hover:text-fg" onClick={() => setLocating(true)}>
+                <button
+                  type="button"
+                  className="flex items-center gap-1.5 ui-text-12.5 text-muted hover:text-fg"
+                  onClick={() => {
+                    clearFailure();
+                    setLocating(true);
+                  }}
+                >
                   <FolderSearch size={13} /> Locate a copy
                 </button>
               </div>
