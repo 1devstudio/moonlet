@@ -518,6 +518,104 @@ async fn a_member_sends_only_its_own_changes() {
     assert_eq!(mini.names().await, ["Home"]);
 }
 
+/// A raw connection of a Mac paired with `central` that registered as
+/// worker `id`, as a member's daemon does.
+async fn member(central: &Daemon, addr: &str, id: &str, name: &str) -> tokio::net::TcpStream {
+    let token = pair(central, addr, name, DeviceKind::Desktop).await;
+    let mut s = raw(addr, &token, "moonletd-worker").await;
+    let reg = registration(id, name);
+    assert!(matches!(
+        ask(&mut s, 1, "worker.register", reg).await,
+        Message::Response { error: None, .. }
+    ));
+    s
+}
+
+/// The changes of the next `account.changed` that `s` hears.
+async fn next_account_changed(s: &mut tokio::net::TcpStream) -> Vec<Value> {
+    use moonlet_proto::read_frame;
+    loop {
+        match tokio::time::timeout(Duration::from_secs(10), read_frame(s))
+            .await
+            .expect("no account.changed")
+        {
+            Ok(Some(Frame::Json(Message::Event { name, data }))) if name == "account.changed" => {
+                return data["changes"].as_array().unwrap().clone();
+            }
+            Ok(Some(_)) => {}
+            other => panic!("the connection ended: {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn two_changes_sent_under_one_number_reach_the_others_as_the_first_only() {
+    let (mini, addr) = central().await;
+    let mut book = member(&mini, &addr, BOOK, "Alex's MacBook Pro").await;
+    let mut air = member(&mini, &addr, AIR, "Alex's MacBook Air").await;
+    let w = mini.workspaces().await[0].clone();
+    let log = format!("{BOOK}.k3x9q2");
+    ask(
+        &mut book,
+        2,
+        "account.sync",
+        json!({ "version": {}, "changes": [renamed(&log, 1, &w.id, "Home"), renamed(&log, 1, &w.id, "Away")] }),
+    )
+    .await;
+    let heard = next_account_changed(&mut air).await;
+    let names: Vec<&Value> = heard.iter().map(|c| &c["op"]["set"]["value"]).collect();
+    assert_eq!(names, [&json!("Home")]);
+    assert_eq!(mini.names().await, ["Home"]);
+}
+
+#[tokio::test]
+async fn a_change_the_central_host_already_holds_is_not_passed_on_again() {
+    let (mini, addr) = central().await;
+    let mut book = member(&mini, &addr, BOOK, "Alex's MacBook Pro").await;
+    let mut air = member(&mini, &addr, AIR, "Alex's MacBook Air").await;
+    let w = mini.workspaces().await[0].clone();
+    let log = format!("{BOOK}.k3x9q2");
+    let home = renamed(&log, 1, &w.id, "Home");
+    for id in [2, 3] {
+        ask(
+            &mut book,
+            id,
+            "account.sync",
+            json!({ "version": {}, "changes": [home] }),
+        )
+        .await;
+    }
+    ask(
+        &mut book,
+        4,
+        "account.sync",
+        json!({ "version": {}, "changes": [renamed(&log, 2, &w.id, "Away")] }),
+    )
+    .await;
+    // The MacBook Air hears the first and the third, never the second.
+    let seqs = |changes: Vec<Value>| -> Vec<u64> {
+        changes.iter().map(|c| c["seq"].as_u64().unwrap()).collect()
+    };
+    assert_eq!(seqs(next_account_changed(&mut air).await), [1]);
+    assert_eq!(seqs(next_account_changed(&mut air).await), [2]);
+}
+
+#[tokio::test]
+async fn a_central_host_whose_account_cannot_be_read_answers_no_account() {
+    // A folder where the log should be cannot be read, nor moved aside.
+    let (mini, addr) =
+        central_with(|home| std::fs::create_dir(home.join("account.json")).unwrap()).await;
+    let mut book = member(&mini, &addr, BOOK, "Alex's MacBook Pro").await;
+    let reply = ask(
+        &mut book,
+        2,
+        "account.sync",
+        json!({ "version": {}, "changes": [] }),
+    )
+    .await;
+    assert_eq!(refused(&reply), Some("no_account"));
+}
+
 #[tokio::test]
 async fn no_member_sends_changes_as_the_central_host() {
     let (mini, addr) = central().await;
