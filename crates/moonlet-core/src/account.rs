@@ -211,7 +211,7 @@ fn midpoint(a: &[u8], b: Option<&[u8]>) -> String {
     let high = b
         .and_then(|b| b.first())
         .map_or(DIGITS.len(), |&d| digit(d));
-    if high - low > 1 {
+    if high > low + 1 {
         return (DIGITS[(low + high) / 2] as char).to_string();
     }
     match b {
@@ -429,6 +429,12 @@ mod tests {
         // keys came in the wrong order: a key after the first, never a panic.
         assert_eq!(key_between(Some("r"), Some("r")), "v");
         assert_eq!(key_between(Some("r"), Some("i")), "v");
+    }
+
+    #[test]
+    fn a_key_from_another_member_outside_base_36_still_gets_a_key_between() {
+        // CodeRabbit's case: `A` is no base-36 digit here, but sorts after `9`.
+        assert_eq!(key_between(Some("9"), Some("A")), "9i");
     }
 
     #[test]
