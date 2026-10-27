@@ -23,6 +23,10 @@ use moonlet_proto::types::DaemonUpdated;
 /// Where releases are published, one folder per tag.
 const RELEASES: &str = "https://github.com/1devstudio/moonlet/releases/download";
 
+/// How long the handoff waits after the reply is queued, so the reply
+/// reaches the Mac before the old daemon exits.
+const REPLY_GRACE: Duration = Duration::from_millis(300);
+
 /// How long a download and its check may take in all; a Mac waits a minute
 /// longer for the answer (`moonlet_link::tailnet::update`).
 const DOWNLOAD_LIMIT: Duration = Duration::from_secs(300);
@@ -294,10 +298,18 @@ pub fn install_bin(dir: &Path, archive: &[u8], version: &str) -> Result<Installe
             std::fs::hard_link(dir.join(name), prev(dir, name)).map_err(install_failed)?;
         }
     }
+    let installed = Installed::Bin { dir: dir.to_path_buf() };
     for name in BINARIES {
-        std::fs::rename(dir.join(format!("{name}.new")), dir.join(name)).map_err(install_failed)?;
+        if let Err(e) = std::fs::rename(dir.join(format!("{name}.new")), dir.join(name)) {
+            // Never one new binary beside an old one.
+            for name in BINARIES {
+                let _ = std::fs::remove_file(dir.join(format!("{name}.new")));
+            }
+            installed.undo();
+            return Err(install_failed(e));
+        }
     }
-    Ok(Installed::Bin { dir: dir.to_path_buf() })
+    Ok(installed)
 }
 
 /// Where a swap moves the old bundle: `<app>.old-<pid>`.
@@ -340,28 +352,49 @@ pub fn install_bundle(app: &Path, archive: &[u8], version: &str) -> Result<Insta
         }
         let old = aside(app);
         let _ = std::fs::remove_dir_all(&old);
-        std::fs::rename(app, &old).map_err(install_failed)?;
-        if let Err(e) = std::fs::rename(&new, app) {
-            let _ = std::fs::rename(&old, app);
-            return Err(install_failed(e));
-        }
+        swap(&new, app).map_err(install_failed)?;
+        // `new` now holds the old bundle.
+        std::fs::rename(&new, &old).map_err(install_failed)?;
         Ok(Installed::Bundle { app: app.to_path_buf(), old })
     })();
     let _ = std::fs::remove_dir_all(&unpacked);
     result
 }
 
+/// Swaps two folders. On macOS in one step (`renamex_np` with `RENAME_SWAP`),
+/// so the app's path never stands empty; elsewhere in two renames.
+fn swap(a: &Path, b: &Path) -> std::io::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let a = std::ffi::CString::new(a.as_os_str().as_bytes())?;
+        let b = std::ffi::CString::new(b.as_os_str().as_bytes())?;
+        // SAFETY: two NUL-terminated paths that outlive the call.
+        if unsafe { libc::renamex_np(a.as_ptr(), b.as_ptr(), libc::RENAME_SWAP) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let tmp = b.with_extension("swap");
+        std::fs::rename(b, &tmp)?;
+        if let Err(e) = std::fs::rename(a, b) {
+            let _ = std::fs::rename(&tmp, b);
+            return Err(e);
+        }
+        std::fs::rename(&tmp, a)
+    }
+}
+
 /// Puts the bundle moved aside back, after a failed handoff.
 fn restore_bundle(app: &Path, old: &Path) {
-    let failed = app.with_file_name(format!(
-        ".{}.failed-{}",
-        app.file_name().unwrap_or_default().to_string_lossy(),
-        std::process::id()
-    ));
-    if std::fs::rename(app, &failed).is_ok() && std::fs::rename(old, app).is_ok() {
-        let _ = std::fs::remove_dir_all(&failed);
-    } else {
-        tracing::error!(app = %app.display(), old = %old.display(), "cannot put the old app back");
+    match swap(old, app) {
+        // `old` now holds the bundle that failed.
+        Ok(()) => {
+            let _ = std::fs::remove_dir_all(old);
+        }
+        Err(e) => tracing::error!(app = %app.display(), old = %old.display(), "cannot put the old app back: {e}"),
     }
 }
 
@@ -426,6 +459,7 @@ pub async fn update(daemon: &Arc<Daemon>, version: &str) -> Result<DaemonUpdated
     tracing::info!(from, to = version, binary = %binary.display(), "updating");
     let me = daemon.clone();
     tokio::spawn(async move {
+        tokio::time::sleep(REPLY_GRACE).await;
         match crate::upgrade::hand_off_claimed(me, Some(binary)).await {
             Ok(()) => installed.keep(),
             Err(e) => {

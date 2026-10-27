@@ -385,6 +385,9 @@ async fn one_update_at_a_time() {
     tokio::time::sleep(Duration::from_millis(500)).await;
     let e = host.app().await.request::<_, Value>("daemon.update", json!({ "version": "9.9.9" })).await.unwrap_err();
     assert_eq!(e.to_string(), "busy: an update or upgrade is already in progress");
+    // Stopping now would drop the sessions the update is about to hand over.
+    let e = host.app().await.request::<_, Value>("daemon.shutdown", json!({})).await.unwrap_err();
+    assert_eq!(e.to_string(), "busy: an update is handing this daemon's sessions over");
     assert!(first.await.unwrap().is_ok());
     host.next_daemon(pid).await;
 }
@@ -417,4 +420,42 @@ async fn a_signed_release_of_another_version_is_refused() {
     left.sort();
     assert_eq!(left, ["moonlet", "moonletd"]);
     assert_eq!(host.pid().await, pid);
+}
+
+/// A new `moonletd` that fails to start leaves the old one serving, with the
+/// binaries it replaced back in place.
+#[tokio::test]
+async fn an_update_whose_new_daemon_fails_puts_the_old_binaries_back() {
+    let key = Key::new();
+    let broken = b"#!/bin/sh\n[ \"$1\" = --version ] && { echo \"moonletd 9.9.9\"; exit 0; }\nexit 1\n";
+    let data = tgz(broken);
+    let a = asset();
+    let releases = release_server(
+        HashMap::from([(format!("/v9.9.9/{a}"), data.clone()), (format!("/v9.9.9/{a}.sig"), key.sign(&data))]),
+        Duration::ZERO,
+    )
+    .await;
+    let host = Host::start(&releases, &key).await;
+    let pid = host.pid().await;
+    let installed = std::fs::read(host.home.path().join("bin/moonletd")).unwrap();
+    let reply: Value = host.app().await.request("daemon.update", json!({ "version": "9.9.9" })).await.unwrap();
+    assert_eq!(reply["to"], "9.9.9");
+
+    let mut back = false;
+    for _ in 0..200 {
+        let left: Vec<String> = std::fs::read_dir(host.home.path().join("bin"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into())
+            .collect();
+        if left.len() == 2 && std::fs::read(host.home.path().join("bin/moonletd")).unwrap() == installed {
+            back = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(back, "the old moonletd did not come back");
+    assert_eq!(host.pid().await, pid);
+    // And it takes the next update.
+    let e = host.app().await.request::<_, Value>("daemon.update", json!({ "version": "0.0.1" })).await.unwrap_err();
+    assert!(e.to_string().starts_with("not_newer"), "{e}");
 }

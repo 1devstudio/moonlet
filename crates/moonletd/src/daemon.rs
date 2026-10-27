@@ -611,6 +611,11 @@ impl Daemon {
         match method {
             m::DAEMON_INFO => ok(self.info()),
             m::DAEMON_SHUTDOWN => {
+                // Stopping mid-handoff would drop the sessions on their way
+                // to the new daemon (X69, S3).
+                if self.upgrading.load(Ordering::SeqCst) {
+                    return Err(RpcError::new("busy", "an update is handing this daemon's sessions over"));
+                }
                 let me = self.clone();
                 tokio::spawn(async move {
                     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
