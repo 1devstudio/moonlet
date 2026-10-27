@@ -621,6 +621,11 @@ impl Mobile {
 
     /// Whether device `id` is still paired. A device that removed itself
     /// keeps its connection a moment longer, for the reply.
+    /// What kind of device `id` is, while it is paired.
+    pub fn kind_of(&self, id: &str) -> Option<DeviceKind> {
+        self.data.lock().unwrap().devices.iter().find(|d| d.id == id).map(|d| d.kind)
+    }
+
     pub fn is_paired(&self, id: &str) -> bool {
         self.data.lock().unwrap().devices.iter().any(|d| d.id == id)
     }

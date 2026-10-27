@@ -17,32 +17,53 @@ const BOOK: &str = "7d3f1c2a-5b8e-4e61-9a0f-2c4d6e8b1f37";
 const AIR: &str = "0b9e4f61-2a7c-4d3e-8f15-6c2a9d0e7b48";
 
 struct Daemon {
-    _home: tempfile::TempDir,
+    home: tempfile::TempDir,
+    env: Vec<(String, String)>,
     socket: PathBuf,
     child: Child,
+}
+
+fn spawn(home: &std::path::Path, socket: &std::path::Path, env: &[(String, String)]) -> Child {
+    Command::new(env!("CARGO_BIN_EXE_moonletd"))
+        .arg("daemon")
+        .env("MOONLET_HOME", home)
+        .env("MOONLET_SOCK", socket)
+        .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap()
 }
 
 impl Daemon {
     async fn start(home: tempfile::TempDir, env: &[(&str, &str)]) -> Daemon {
         let socket = home.path().join("run").join("d.sock");
-        let child = Command::new(env!("CARGO_BIN_EXE_moonletd"))
-            .arg("daemon")
-            .env("MOONLET_HOME", home.path())
-            .env("MOONLET_SOCK", &socket)
-            .envs(env.iter().copied())
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
+        let env: Vec<(String, String)> = env
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        let child = spawn(home.path(), &socket, &env);
         wait_for_socket(&socket, Duration::from_secs(15))
             .await
             .unwrap();
         Daemon {
-            _home: home,
+            home,
+            env,
             socket,
             child,
         }
+    }
+
+    /// Stops the daemon and starts it again on the same home.
+    async fn restart(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        let _ = std::fs::remove_file(&self.socket);
+        self.child = spawn(self.home.path(), &self.socket, &self.env);
+        wait_for_socket(&self.socket, Duration::from_secs(15))
+            .await
+            .unwrap();
     }
 
     async fn call<T: serde::de::DeserializeOwned>(&self, method: &str, params: Value) -> T {
@@ -83,8 +104,14 @@ fn free_port() -> u16 {
 
 /// The central host `studio-mini`, with tailnet access on.
 async fn central() -> (Daemon, String) {
+    central_with(|_| {}).await
+}
+
+/// [`central`], with `prepare` filling its home first.
+async fn central_with(prepare: impl Fn(&std::path::Path)) -> (Daemon, String) {
     for _ in 0..5 {
         let home = tempfile::tempdir().unwrap();
+        prepare(home.path());
         let port = free_port();
         std::fs::write(
             home.path().join("mobile.json"),
@@ -172,6 +199,34 @@ where
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     panic!("{what} did not happen within {limit:?}");
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+}
+
+/// What a worker's daemon sends to register as `id`.
+fn registration(id: &str, name: &str) -> Value {
+    json!({ "id": id, "name": name, "os": "macos", "arch": "arm64", "cores": 10, "version": "0.1.32", "projects": [] })
+}
+
+/// A change by log `member` that names workspace `id` `name`, stamped now.
+fn renamed(member: &str, seq: u64, id: &str, name: &str) -> Value {
+    json!({ "stamp": { "ms": now_ms(), "n": 0, "member": member }, "seq": seq, "kind": "workspace", "id": id, "op": { "set": { "field": "name", "value": name } } })
+}
+
+/// Waits until `d` listens on its tailnet address again.
+async fn listening_again(d: &Daemon, addr: &str) {
+    within(Duration::from_secs(10), "listening again", || async {
+        let st: Value = d.call("mobile.status", json!({})).await;
+        st["listening"]
+            .as_array()
+            .is_some_and(|l| l.contains(&json!(addr)))
+    })
+    .await;
 }
 
 async fn rename(d: &Daemon, id: &str, name: &str) {
@@ -390,11 +445,370 @@ async fn sync_refused(s: &mut tokio::net::TcpStream) -> Option<String> {
     }
 }
 
+/// Sends request `id` on `s` and returns its reply.
+async fn ask(s: &mut tokio::net::TcpStream, id: u64, method: &str, params: Value) -> Message {
+    use moonlet_proto::{read_frame, write_frame};
+    let req = Message::Request {
+        id,
+        method: method.into(),
+        params,
+    };
+    write_frame(s, &Frame::Json(req)).await.unwrap();
+    loop {
+        match tokio::time::timeout(Duration::from_secs(10), read_frame(s))
+            .await
+            .expect("no reply")
+        {
+            Ok(Some(Frame::Json(m @ Message::Response { id: rid, .. }))) if rid == id => return m,
+            Ok(Some(_)) => {}
+            other => panic!("the connection ended: {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_member_sends_only_its_own_changes() {
+    let (mini, addr) = central().await;
+    let token = pair(&mini, &addr, "Alex's MacBook Pro", DeviceKind::Desktop).await;
+    let mut s = raw(&addr, &token, "moonletd-worker").await;
+    let reg = registration(BOOK, "Alex's MacBook Pro");
+    assert!(matches!(
+        ask(&mut s, 1, "worker.register", reg).await,
+        Message::Response { error: None, .. }
+    ));
+    let w = mini.workspaces().await[0].clone();
+    // Stamped now, so it is the latest change to the name.
+    let now = now_ms();
+    let rename = |member: &str, name: &str| json!({ "stamp": { "ms": now, "n": 0, "member": member }, "seq": 1, "kind": "workspace", "id": w.id, "op": { "set": { "field": "name", "value": name } } });
+    // Stamped as another member: dropped, so it cannot take that member's
+    // numbers before it does.
+    let other = format!("{AIR}.a1b2c3");
+    ask(
+        &mut s,
+        2,
+        "account.sync",
+        json!({ "version": {}, "changes": [rename(&other, "Forged")] }),
+    )
+    .await;
+    assert_eq!(mini.names().await, ["Personal"]);
+    // Nor under a name that only starts like its own.
+    for name in [
+        format!("{BOOK}.toolongsuffix"),
+        format!("{BOOK}."),
+        format!("{BOOK}.k3x9q2.extra"),
+    ] {
+        ask(
+            &mut s,
+            9,
+            "account.sync",
+            json!({ "version": {}, "changes": [renamed(&name, 1, &w.id, "Forged")] }),
+        )
+        .await;
+    }
+    assert_eq!(mini.names().await, ["Personal"]);
+    // Its own change is taken.
+    let own = format!("{BOOK}.k3x9q2");
+    ask(
+        &mut s,
+        3,
+        "account.sync",
+        json!({ "version": {}, "changes": [rename(&own, "Home")] }),
+    )
+    .await;
+    assert_eq!(mini.names().await, ["Home"]);
+}
+
+/// A raw connection of a Mac paired with `central` that registered as
+/// worker `id`, as a member's daemon does.
+async fn member(central: &Daemon, addr: &str, id: &str, name: &str) -> tokio::net::TcpStream {
+    let token = pair(central, addr, name, DeviceKind::Desktop).await;
+    let mut s = raw(addr, &token, "moonletd-worker").await;
+    let reg = registration(id, name);
+    assert!(matches!(
+        ask(&mut s, 1, "worker.register", reg).await,
+        Message::Response { error: None, .. }
+    ));
+    s
+}
+
+/// The changes of the next `account.changed` that `s` hears.
+async fn next_account_changed(s: &mut tokio::net::TcpStream) -> Vec<Value> {
+    use moonlet_proto::read_frame;
+    loop {
+        match tokio::time::timeout(Duration::from_secs(10), read_frame(s))
+            .await
+            .expect("no account.changed")
+        {
+            Ok(Some(Frame::Json(Message::Event { name, data }))) if name == "account.changed" => {
+                return data["changes"].as_array().unwrap().clone();
+            }
+            Ok(Some(_)) => {}
+            other => panic!("the connection ended: {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn two_changes_sent_under_one_number_reach_the_others_as_the_first_only() {
+    let (mini, addr) = central().await;
+    let mut book = member(&mini, &addr, BOOK, "Alex's MacBook Pro").await;
+    let mut air = member(&mini, &addr, AIR, "Alex's MacBook Air").await;
+    let w = mini.workspaces().await[0].clone();
+    let log = format!("{BOOK}.k3x9q2");
+    ask(
+        &mut book,
+        2,
+        "account.sync",
+        json!({ "version": {}, "changes": [renamed(&log, 1, &w.id, "Home"), renamed(&log, 1, &w.id, "Away")] }),
+    )
+    .await;
+    let heard = next_account_changed(&mut air).await;
+    let names: Vec<&Value> = heard.iter().map(|c| &c["op"]["set"]["value"]).collect();
+    assert_eq!(names, [&json!("Home")]);
+    assert_eq!(mini.names().await, ["Home"]);
+}
+
+#[tokio::test]
+async fn a_change_the_central_host_already_holds_is_not_passed_on_again() {
+    let (mini, addr) = central().await;
+    let mut book = member(&mini, &addr, BOOK, "Alex's MacBook Pro").await;
+    let mut air = member(&mini, &addr, AIR, "Alex's MacBook Air").await;
+    let w = mini.workspaces().await[0].clone();
+    let log = format!("{BOOK}.k3x9q2");
+    let home = renamed(&log, 1, &w.id, "Home");
+    for id in [2, 3] {
+        ask(
+            &mut book,
+            id,
+            "account.sync",
+            json!({ "version": {}, "changes": [home] }),
+        )
+        .await;
+    }
+    ask(
+        &mut book,
+        4,
+        "account.sync",
+        json!({ "version": {}, "changes": [renamed(&log, 2, &w.id, "Away")] }),
+    )
+    .await;
+    // The MacBook Air hears the first and the third, never the second.
+    let seqs = |changes: Vec<Value>| -> Vec<u64> {
+        changes.iter().map(|c| c["seq"].as_u64().unwrap()).collect()
+    };
+    assert_eq!(seqs(next_account_changed(&mut air).await), [1]);
+    assert_eq!(seqs(next_account_changed(&mut air).await), [2]);
+}
+
+#[tokio::test]
+async fn a_central_host_whose_account_cannot_be_read_answers_no_account() {
+    // A folder where the log should be cannot be read, nor moved aside.
+    let (mini, addr) =
+        central_with(|home| std::fs::create_dir(home.join("account.json")).unwrap()).await;
+    let mut book = member(&mini, &addr, BOOK, "Alex's MacBook Pro").await;
+    let reply = ask(
+        &mut book,
+        2,
+        "account.sync",
+        json!({ "version": {}, "changes": [] }),
+    )
+    .await;
+    assert_eq!(refused(&reply), Some("no_account"));
+}
+
+#[tokio::test]
+async fn no_member_sends_changes_as_the_central_host() {
+    let (mini, addr) = central().await;
+    // The central host's worker id is no secret: its log is named after it.
+    let info: Value = mini.call("link.get", json!({})).await;
+    let central_id = info["worker"]["id"].as_str().unwrap().to_string();
+    let token = pair(&mini, &addr, "Alex's MacBook Pro", DeviceKind::Desktop).await;
+    let mut s = raw(&addr, &token, "moonletd-worker").await;
+    let reg = registration(&central_id, "studio-mini");
+    ask(&mut s, 1, "worker.register", reg).await;
+    let w = mini.workspaces().await[0].clone();
+    let now = now_ms();
+    let change = json!({ "stamp": { "ms": now, "n": 0, "member": format!("{central_id}.k3x9q2") }, "seq": 1, "kind": "workspace", "id": w.id, "op": { "set": { "field": "name", "value": "Forged" } } });
+    ask(
+        &mut s,
+        2,
+        "account.sync",
+        json!({ "version": {}, "changes": [change] }),
+    )
+    .await;
+    assert_eq!(mini.names().await, ["Personal"]);
+}
+
+#[tokio::test]
+async fn a_central_host_whose_worker_id_changed_goes_on_under_the_new_one_and_keeps_its_history() {
+    // The central host's log was made before its link.json was lost, so it
+    // is named after a worker id it no longer has.
+    let old = "5e0c2b7d-91a4-4f3e-b6d8-2a7f0c9e1d35";
+    let named = |seq: u64, field: &str, value: Value| json!({ "stamp": { "ms": 1_793_000_000_000u64 + seq, "n": 0, "member": format!("{old}.k3x9q2") }, "seq": seq, "kind": "workspace", "id": "w1", "op": { "set": { "field": field, "value": value } } });
+    let history = vec![
+        named(1, "name", json!("Studio")),
+        named(2, "created_at", json!(1)),
+    ];
+    let (mini, addr) = central_with(|home| {
+        std::fs::write(
+            home.join("account.json"),
+            json!({ "member": format!("{old}.k3x9q2"), "changes": history }).to_string(),
+        )
+        .unwrap();
+    })
+    .await;
+    assert_eq!(mini.names().await, ["Studio"]);
+    // Its new changes go under its current worker id.
+    let info: Value = mini.call("link.get", json!({})).await;
+    let id = info["worker"]["id"].as_str().unwrap().to_string();
+    let w = mini.workspaces().await[0].clone();
+    rename(&mini, &w.id, "Studio mini").await;
+    let token = pair(&mini, &addr, "Alex's MacBook Pro", DeviceKind::Desktop).await;
+    let mut s = raw(&addr, &token, "moonletd-worker").await;
+    let reg = registration(&old, "studio-mini");
+    ask(&mut s, 1, "worker.register", reg).await;
+    let got = ask(
+        &mut s,
+        2,
+        "account.sync",
+        json!({ "version": {}, "changes": [] }),
+    )
+    .await;
+    let Message::Response {
+        result: Some(r), ..
+    } = got
+    else {
+        panic!("{got:?}")
+    };
+    let version: std::collections::BTreeMap<String, u64> =
+        serde_json::from_value(r["version"].clone()).unwrap();
+    assert!(
+        version.keys().any(|k| k.starts_with(&format!("{id}."))),
+        "{version:?}"
+    );
+    // A Mac under the old id cannot rewrite what the old log said.
+    let now = now_ms();
+    let mut forged = named(1, "name", json!("Forged"));
+    forged["stamp"]["ms"] = json!(now);
+    ask(
+        &mut s,
+        3,
+        "account.sync",
+        json!({ "version": {}, "changes": [forged] }),
+    )
+    .await;
+    assert_eq!(mini.names().await, ["Studio mini"]);
+    // Nor add new changes under it: the name stays this host's.
+    let more = renamed(&format!("{old}.k3x9q2"), 3, &w.id, "Forged again");
+    ask(
+        &mut s,
+        4,
+        "account.sync",
+        json!({ "version": {}, "changes": [more] }),
+    )
+    .await;
+    assert_eq!(mini.names().await, ["Studio mini"]);
+}
+
+fn refused(reply: &Message) -> Option<&str> {
+    match reply {
+        Message::Response { error: Some(e), .. } => Some(e.code.as_str()),
+        _ => None,
+    }
+}
+
+#[tokio::test]
+async fn a_worker_id_stays_with_its_mac_across_a_restart_of_the_central_host() {
+    let (mut mini, addr) = central().await;
+    let book = pair(&mini, &addr, "Alex's MacBook Pro", DeviceKind::Desktop).await;
+    let mut s = raw(&addr, &book, "moonletd-worker").await;
+    assert_eq!(
+        refused(
+            &ask(
+                &mut s,
+                1,
+                "worker.register",
+                registration(BOOK, "Alex's MacBook Pro")
+            )
+            .await
+        ),
+        None
+    );
+    drop(s);
+    mini.restart().await;
+    listening_again(&mini, &addr).await;
+    // Another paired Mac that knows the MacBook's worker id cannot take it,
+    // and with it the MacBook's account changes.
+    let other = pair(&mini, &addr, "Another Mac", DeviceKind::Desktop).await;
+    let mut t = raw(&addr, &other, "moonletd-worker").await;
+    assert_eq!(
+        refused(
+            &ask(
+                &mut t,
+                1,
+                "worker.register",
+                registration(BOOK, "Another Mac")
+            )
+            .await
+        ),
+        Some("forbidden")
+    );
+    let mut s = raw(&addr, &book, "moonletd-worker").await;
+    assert_eq!(
+        refused(
+            &ask(
+                &mut s,
+                1,
+                "worker.register",
+                registration(BOOK, "Alex's MacBook Pro")
+            )
+            .await
+        ),
+        None
+    );
+}
+
+#[tokio::test]
+async fn a_phone_never_registers_as_a_worker() {
+    let (mini, addr) = central().await;
+    let phone = pair(&mini, &addr, "iPhone", DeviceKind::Phone).await;
+    let mut s = raw(&addr, &phone, "moonletd-worker").await;
+    assert_eq!(
+        refused(&ask(&mut s, 1, "worker.register", registration(BOOK, "iPhone")).await),
+        Some("forbidden")
+    );
+}
+
+#[tokio::test]
+async fn edits_made_before_a_macs_worker_id_changed_reach_the_central_host() {
+    let (mini, addr) = central().await;
+    let mut book = mac(BOOK, "Alex's MacBook Pro").await;
+    let w = book.workspaces().await[0].clone();
+    rename(&book, &w.id, "Train").await;
+    // link.json is made again, with a new worker id, before it ever links.
+    std::fs::write(book.home.path().join("link.json"), json!({ "central": null, "worker": { "id": AIR, "name": "Alex's MacBook Pro", "enabled": false } }).to_string()).unwrap();
+    book.restart().await;
+    link(&book, &mini, &addr, "Alex's MacBook Pro").await;
+    within(
+        Duration::from_secs(10),
+        "the rename on studio-mini",
+        || async { mini.names().await.contains(&"Train".to_string()) },
+    )
+    .await;
+}
+
 #[tokio::test]
 async fn only_a_linked_mac_syncs_the_account() {
     let (mini, addr) = central().await;
     let phone = pair(&mini, &addr, "iPhone", DeviceKind::Phone).await;
     let mut s = raw(&addr, &phone, "moonlet-mobile").await;
+    assert_eq!(sync_refused(&mut s).await.as_deref(), Some("forbidden"));
+    // Saying it is a worker's daemon is not enough: a phone is no member.
+    let mut s = raw(&addr, &phone, "moonletd-worker").await;
+    assert_eq!(sync_refused(&mut s).await.as_deref(), Some("forbidden"));
+    // Nor a Mac's connection that never registered as a worker.
+    let mac = pair(&mini, &addr, "Alex's MacBook Pro", DeviceKind::Desktop).await;
+    let mut s = raw(&addr, &mac, "moonletd-worker").await;
     assert_eq!(sync_refused(&mut s).await.as_deref(), Some("forbidden"));
     let mut cli = Client::connect(&mini.socket, "moonlet-cli").await.unwrap();
     let e = cli
