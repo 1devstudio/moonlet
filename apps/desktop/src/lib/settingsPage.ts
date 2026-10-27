@@ -222,7 +222,7 @@ export function daemonLine(st: DaemonService, home: string | null): StatusLine {
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
 
 /** Is version `a` older than `b`? Compares `x.y.z` numerically. */
-function older(a: string, b: string): boolean {
+export function older(a: string, b: string): boolean {
   const pa = a.split(".").map(Number);
   const pb = b.split(".").map(Number);
   for (let i = 0; i < Math.max(pa.length, pb.length); i++) {

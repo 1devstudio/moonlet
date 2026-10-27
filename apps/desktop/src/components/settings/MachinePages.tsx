@@ -12,6 +12,9 @@ import { EV, M, type DeviceKind, type ExecStatus, type HostInfo, type LinkInfo, 
 import { errorToast, toast, useStore } from "../../lib/store";
 import { hostActions, hostLine, phoneAccessLine, removeAsks, updateCommand } from "../../lib/settingsPage";
 import { Button, Dialog, Field, IconButton, cx, inputCls } from "../ui";
+import { HostUpdateButton } from "../HostUpdate";
+import { olderHosts, olderHostsToast, updateAllLabel, updateOffer } from "../../lib/hostUpdate";
+import { updateAll, useHostUpdates } from "../../lib/hostUpdateStore";
 import { centralHostButton, centralHostId, clampSlots, heavyHostIds, linkLine, linkRetries, pairThenLink, pickCentral, remoteLinkAction, remoteLinkError, remoteLinkLine, remoteSwitchOn, slotsHint, turnOnNeeds, watchLink, withRunning } from "../../lib/workerLink";
 import { changeCentral } from "../../lib/syncStore";
 import { Card, PageHeading, Row, Section, Status, Switch, SwitchRow } from "./controls";
@@ -20,7 +23,10 @@ const iconBox = "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg
 
 function HostRow({ host, sessions, central, children }: { host: HostInfo; sessions: number; central?: boolean; children?: React.ReactNode }) {
   const appVersion = useStore((s) => s.appVersion) ?? "";
-  const command = updateCommand(host, appVersion);
+  const update = useHostUpdates((s) => s.updates[host.id]);
+  // A failure stops showing once the host no longer needs the update.
+  const failed = update?.phase === "failed" && updateOffer(host, appVersion) ? update : null;
+  const command = failed ? failed.command : updateCommand(host, appVersion);
   return (
     <div data-setting={`host-${host.id}`} className="flex items-center gap-3.5 px-4 py-3.5">
       <span aria-hidden="true" className={iconBox}>
@@ -32,7 +38,7 @@ function HostRow({ host, sessions, central, children }: { host: HostInfo; sessio
           {host.kind === "tailnet" && <span className="rounded bg-raised px-1.5 py-px ui-text-11 font-normal text-muted">Tailnet</span>}
           {central && <span className="rounded bg-raised px-1.5 py-px ui-text-11 font-normal text-muted">Central host</span>}
         </span>
-        <Status line={hostLine(host, sessions, appVersion)} />
+        <Status line={failed ? { tone: "error", text: failed.text } : hostLine(host, sessions, appVersion)} />
         {command && (
           <div className="flex items-center gap-1.5">
             <code className="min-w-0 flex-1 truncate rounded bg-raised px-1.5 py-0.5 font-mono ui-text-11" title={command}>
@@ -475,6 +481,8 @@ export function HostsPage({ status }: { status: MobileStatus | null }) {
   const open = (h: string) => (sessions[h] ?? []).filter((s) => !s.archived).length;
   const local = hosts.local;
   const remotes = Object.values(hosts).filter((h) => h.remote);
+  const appVersion = useStore((s) => s.appVersion) ?? "";
+  const older = olderHosts(remotes, appVersion);
   const heavy = heavyHostIds(remotes, central);
   const macs = status ? devicesOfKind(status, "desktop") : [];
   const canPair = !!status?.enabled && status.listening.length > 0;
@@ -556,9 +564,18 @@ export function HostsPage({ status }: { status: MobileStatus | null }) {
       )}
       <Section title="Remote hosts">
         <Card>
+          {older.length > 0 && (
+            <div data-setting="update-all-hosts" className="flex items-center gap-3 px-4 py-3">
+              <span className="min-w-0 flex-1 truncate ui-text-13 text-muted">{olderHostsToast(remotes, appVersion)}</span>
+              <Button size="sm" variant="primary" onClick={() => updateAll(remotes, appVersion)}>
+                {updateAllLabel(older.length)}
+              </Button>
+            </div>
+          )}
           {remotes.map((h) => (
             <Fragment key={h.id}>
               <HostRow host={h} sessions={open(h.id)} central={h.id === central}>
+                <HostUpdateButton host={h} />
                 {h.kind === "tailnet" && <CentralHostButton host={h.id} central={central} onPick={pickCentralHost} />}
                 {hostActions(h).map((a) =>
                   a === "install" || a === "reinstall" ? (

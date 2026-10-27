@@ -28,6 +28,7 @@ import { ProfileFooter } from "./Profiles";
 import { movingSessions, runningClaudeAgents, switchConfirm } from "../lib/profiles";
 import { AgentIcon, Button, IconButton, Kbd, StateGlyph, cx, prTone } from "./ui";
 import { updateButton } from "../lib/updater";
+import { HostUpdateButton, OlderHostsAnnouncer } from "./HostUpdate";
 import { claudeBanner, type ClaudeBanner, type StepState } from "../lib/claudeUpdate";
 
 // ------------------------------------------------------------------ helpers
@@ -837,9 +838,10 @@ function HostNotice({ host }: { host: HostInfo }) {
   return (
     <div className="mx-3 mb-2 flex items-center gap-2 rounded-md bg-panel-2 px-2.5 py-1.5 ui-text-12">
       <span className={cx("h-1.5 w-1.5 shrink-0 rounded-full", host.status === "reconnecting" || host.status === "connecting" ? "bg-blocked" : "bg-error")} />
-      <span className="truncate text-muted" title={text}>
+      <span className="min-w-0 flex-1 truncate text-muted" title={text}>
         {text}
       </span>
+      <HostUpdateButton host={host} />
     </div>
   );
 }
@@ -902,6 +904,7 @@ export function Sidebar() {
           <HistoryList />
         ) : (
           <>
+            <OlderHostsAnnouncer />
             {ordered.map((h) => (
               <HostNotice key={h.id} host={h} />
             ))}
