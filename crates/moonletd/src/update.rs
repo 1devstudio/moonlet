@@ -7,8 +7,8 @@
 //! which takes `moonlet-<os>-<arch>.tar.gz`, and a Mac app bundle, which takes
 //! the archive the app's own updater uses (X35).
 
-use std::io::Read;
-use std::os::unix::fs::PermissionsExt;
+use std::io::{Read, Write};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -18,9 +18,14 @@ use moonlet_proto::RpcError;
 use serde_json::Value;
 
 use crate::daemon::Daemon;
+use moonlet_proto::types::DaemonUpdated;
 
 /// Where releases are published, one folder per tag.
 const RELEASES: &str = "https://github.com/1devstudio/moonlet/releases/download";
+
+/// How long a download and its check may take in all; a Mac waits a minute
+/// longer for the answer (`moonlet_link::tailnet::update`).
+const DOWNLOAD_LIMIT: Duration = Duration::from_secs(300);
 
 /// The app's `tauri.conf.json`, whose updater key signs every release.
 const TAURI_CONF: &str = include_str!("../../../apps/desktop/src-tauri/tauri.conf.json");
@@ -60,8 +65,8 @@ pub fn version(s: &str) -> Option<(u64, u64, u64)> {
     parts.next().is_none().then_some(v)
 }
 
-/// The archive and its signature's names in release `layout`, for this
-/// machine. A bundle's come from the release's `latest.json`.
+/// The archive a daemon in `~/.moonlet/bin` takes, for this machine; its
+/// signature is `<archive>.sig`. A bundle's comes from `latest.json`.
 fn bin_asset() -> String {
     format!("moonlet-{}-{}.tar.gz", std::env::consts::OS, std::env::consts::ARCH)
 }
@@ -133,15 +138,14 @@ async fn download(layout: &Layout, version: &str) -> Result<Vec<u8>, RpcError> {
         .timeout(Duration::from_secs(300))
         .build()
         .map_err(|e| err("download_failed", e.to_string()))?;
-    let base = format!("{releases}/v{version}");
     let (url, signature) = match layout {
         Layout::Bin(_) => {
-            let url = format!("{base}/{}", bin_asset());
+            let url = release_url(&releases, version, &bin_asset());
             let sig = fetch(&client, &format!("{url}.sig")).await?;
             (url, String::from_utf8_lossy(&sig).to_string())
         }
         Layout::Bundle(_) => {
-            let latest = fetch(&client, &format!("{base}/latest.json")).await?;
+            let latest = fetch(&client, &release_url(&releases, version, "latest.json")).await?;
             let latest: Value = serde_json::from_slice(&latest)
                 .map_err(|e| err("download_failed", format!("latest.json: {e}")))?;
             let entry = &latest["platforms"][updater_platform()];
@@ -161,9 +165,14 @@ async fn download(layout: &Layout, version: &str) -> Result<Vec<u8>, RpcError> {
     Ok(data)
 }
 
+/// File `name` of release `version`.
+fn release_url(releases: &str, version: &str, name: &str) -> String {
+    format!("{releases}/v{version}/{name}")
+}
+
 /// Whether `url` is a file of release `version` itself.
 fn in_release(url: &str, releases: &str, version: &str) -> bool {
-    url.strip_prefix(&format!("{releases}/v{version}/"))
+    url.strip_prefix(&release_url(releases, version, ""))
         .is_some_and(|name| !name.is_empty() && !name.contains('/') && !name.contains(".."))
 }
 
@@ -179,9 +188,65 @@ fn install_failed(e: impl std::fmt::Display) -> RpcError {
     err("install_failed", e.to_string())
 }
 
+/// What an install put in place: kept once the new daemon has taken over,
+/// undone when the handoff fails.
+#[derive(Debug)]
+pub enum Installed {
+    /// New binaries in `dir`; the ones they replaced kept as `<name>.prev`.
+    Bin { dir: PathBuf },
+    /// A swapped bundle; the old one moved aside to `old`.
+    Bundle { app: PathBuf, old: PathBuf },
+}
+
+const BINARIES: [&str; 2] = ["moonletd", "moonlet"];
+
+impl Installed {
+    /// The `moonletd` to hand over to.
+    pub fn binary(&self) -> PathBuf {
+        match self {
+            Installed::Bin { dir } => dir.join("moonletd"),
+            Installed::Bundle { app, .. } => app.join("Contents/MacOS/moonletd"),
+        }
+    }
+
+    /// Drops what the install replaced.
+    pub fn keep(self) {
+        match self {
+            Installed::Bin { dir } => {
+                for name in BINARIES {
+                    let _ = std::fs::remove_file(prev(&dir, name));
+                }
+            }
+            Installed::Bundle { old, .. } => {
+                let _ = std::fs::remove_dir_all(old);
+            }
+        }
+    }
+
+    /// Puts back what the install replaced.
+    pub fn undo(self) {
+        match self {
+            Installed::Bin { dir } => {
+                for name in BINARIES {
+                    if let Err(e) = std::fs::rename(prev(&dir, name), dir.join(name)) {
+                        tracing::error!(name, "cannot put the old binary back: {e}");
+                    }
+                }
+            }
+            Installed::Bundle { app, old } => restore_bundle(&app, &old),
+        }
+    }
+}
+
+/// Where `install_bin` keeps the binary `name` it replaces.
+fn prev(dir: &Path, name: &str) -> PathBuf {
+    dir.join(format!("{name}.prev"))
+}
+
 /// Puts `moonletd` and `moonlet` from `archive` into `dir`, each written
 /// beside its place first and then renamed over it, as `install.sh` does.
-pub fn install_bin(dir: &Path, archive: &[u8], version: &str) -> Result<PathBuf, RpcError> {
+/// The replaced ones stay as `<name>.prev` until [`Installed::keep`].
+pub fn install_bin(dir: &Path, archive: &[u8], version: &str) -> Result<Installed, RpcError> {
     let mut found = std::collections::HashMap::new();
     let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(archive));
     for entry in tar.entries().map_err(install_failed)? {
@@ -194,15 +259,21 @@ pub fn install_bin(dir: &Path, archive: &[u8], version: &str) -> Result<PathBuf,
             found.insert(name, data);
         }
     }
-    for name in ["moonletd", "moonlet"] {
+    for name in BINARIES {
         if !found.contains_key(name) {
             return Err(install_failed(format!("the release has no {name}")));
         }
     }
     for (name, data) in &found {
         let new = dir.join(format!("{name}.new"));
-        std::fs::write(&new, data).map_err(install_failed)?;
-        std::fs::set_permissions(&new, std::fs::Permissions::from_mode(0o700)).map_err(install_failed)?;
+        let _ = std::fs::remove_file(&new);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o700)
+            .open(&new)
+            .and_then(|mut f| f.write_all(data))
+            .map_err(install_failed)?;
     }
     // The signature says moonlet made it, not which release it is.
     let says = std::process::Command::new(dir.join("moonletd.new"))
@@ -217,21 +288,33 @@ pub fn install_bin(dir: &Path, archive: &[u8], version: &str) -> Result<PathBuf,
         let held = says.strip_prefix("moonletd ").unwrap_or("of an unknown version");
         return Err(install_failed(format!("the release holds moonletd {held}, not {version}")));
     }
-    for name in found.keys() {
+    for name in BINARIES {
+        let _ = std::fs::remove_file(prev(dir, name));
+        if dir.join(name).exists() {
+            std::fs::hard_link(dir.join(name), prev(dir, name)).map_err(install_failed)?;
+        }
+    }
+    for name in BINARIES {
         std::fs::rename(dir.join(format!("{name}.new")), dir.join(name)).map_err(install_failed)?;
     }
-    Ok(dir.join("moonletd"))
+    Ok(Installed::Bin { dir: dir.to_path_buf() })
 }
 
-/// The bundle a swap moved aside: `<app>.old-<pid>`.
+/// Where a swap moves the old bundle: `<app>.old-<pid>`.
 fn aside(app: &Path) -> PathBuf {
     let name = app.file_name().unwrap_or_default().to_string_lossy();
     app.with_file_name(format!("{name}.old-{}", std::process::id()))
 }
 
-/// Unpacks the app archive next to `app` and swaps the two bundles. Returns
-/// where the old bundle went, to [`restore_bundle`] or remove.
-pub fn install_bundle(app: &Path, archive: &[u8], version: &str) -> Result<PathBuf, RpcError> {
+/// Whether file `name` beside `app` is a bundle [`aside`] moved there.
+fn is_aside(app: &Path, name: &str) -> bool {
+    let prefix = format!("{}.old-", app.file_name().unwrap_or_default().to_string_lossy());
+    name.strip_prefix(&prefix).is_some_and(|pid| !pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// Unpacks the app archive next to `app` and swaps the two bundles; the old
+/// one stays aside until [`Installed::keep`] or [`Installed::undo`].
+pub fn install_bundle(app: &Path, archive: &[u8], version: &str) -> Result<Installed, RpcError> {
     let parent = app.parent().ok_or_else(|| install_failed("the app has no folder"))?;
     let name = app.file_name().unwrap_or_default().to_string_lossy().to_string();
     let unpacked = parent.join(format!(".{name}.update-{}", std::process::id()));
@@ -262,14 +345,14 @@ pub fn install_bundle(app: &Path, archive: &[u8], version: &str) -> Result<PathB
             let _ = std::fs::rename(&old, app);
             return Err(install_failed(e));
         }
-        Ok(old)
+        Ok(Installed::Bundle { app: app.to_path_buf(), old })
     })();
     let _ = std::fs::remove_dir_all(&unpacked);
     result
 }
 
 /// Puts the bundle moved aside back, after a failed handoff.
-pub fn restore_bundle(app: &Path, old: &Path) {
+fn restore_bundle(app: &Path, old: &Path) {
     let failed = app.with_file_name(format!(
         ".{}.failed-{}",
         app.file_name().unwrap_or_default().to_string_lossy(),
@@ -282,24 +365,35 @@ pub fn restore_bundle(app: &Path, old: &Path) {
     }
 }
 
-/// Removes bundles earlier updates moved aside and could not remove (the
-/// old daemon exits right after its handoff).
+/// Where this daemon runs from, if it can update itself.
+fn this_layout() -> Result<Layout, RpcError> {
+    let exe = std::env::current_exe()
+        .and_then(|e| e.canonicalize())
+        .map_err(|e| err("unsupported", e.to_string()))?;
+    layout(&exe, &moonlet_core::paths::home())
+        .ok_or_else(|| err("unsupported", format!("moonletd runs from {}, which it cannot update", exe.display())))
+}
+
+/// Removes what earlier updates replaced and could not remove, as the old
+/// daemon exits right after its handoff.
 pub fn clean_leftovers() {
-    let Ok(exe) = std::env::current_exe().and_then(|e| e.canonicalize()) else { return };
-    let Some(Layout::Bundle(app)) = layout(&exe, &moonlet_core::paths::home()) else { return };
-    let (Some(parent), Some(name)) = (app.parent(), app.file_name()) else { return };
-    let prefix = format!("{}.old-", name.to_string_lossy());
-    for entry in std::fs::read_dir(parent).into_iter().flatten().filter_map(Result::ok) {
-        let n = entry.file_name().to_string_lossy().to_string();
-        if n.strip_prefix(&prefix).is_some_and(|pid| !pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit())) {
-            let _ = std::fs::remove_dir_all(entry.path());
+    match this_layout() {
+        Ok(Layout::Bin(dir)) => Installed::Bin { dir }.keep(),
+        Ok(Layout::Bundle(app)) => {
+            let Some(parent) = app.parent() else { return };
+            for entry in std::fs::read_dir(parent).into_iter().flatten().filter_map(Result::ok) {
+                if is_aside(&app, &entry.file_name().to_string_lossy()) {
+                    let _ = std::fs::remove_dir_all(entry.path());
+                }
+            }
         }
+        Err(_) => {}
     }
 }
 
 /// `daemon.update {version}`: installs `version` and starts the handoff;
 /// answers `{from, to}` once the new files are in place.
-pub async fn update(daemon: &Arc<Daemon>, version: &str) -> Result<Value, RpcError> {
+pub async fn update(daemon: &Arc<Daemon>, version: &str) -> Result<DaemonUpdated, RpcError> {
     let from = env!("CARGO_PKG_VERSION");
     let Some(wanted) = self::version(version) else {
         return Err(err("invalid_params", format!("not a version: {version}")));
@@ -307,54 +401,40 @@ pub async fn update(daemon: &Arc<Daemon>, version: &str) -> Result<Value, RpcErr
     if wanted <= self::version(from).unwrap_or_default() {
         return Err(err("not_newer", format!("moonlet {from} is not older than {version}")));
     }
-    let exe = std::env::current_exe()
-        .and_then(|e| e.canonicalize())
-        .map_err(|e| err("unsupported", e.to_string()))?;
-    let Some(layout) = layout(&exe, &moonlet_core::paths::home()) else {
-        return Err(err("unsupported", format!("moonletd runs from {}, which it cannot update", exe.display())));
-    };
+    let layout = this_layout()?;
     if !daemon.begin_upgrade() {
         return Err(err("busy", "an update or upgrade is already in progress"));
     }
     let installed = async {
-        let archive = download(&layout, version).await?;
+        let archive = tokio::time::timeout(DOWNLOAD_LIMIT, download(&layout, version))
+            .await
+            .map_err(|_| err("download_failed", "the download took longer than 5 minutes"))??;
         match &layout {
-            Layout::Bin(dir) => install_bin(dir, &archive, version).map(|b| (b, None)),
-            Layout::Bundle(app) => {
-                install_bundle(app, &archive, version).map(|old| (app.join("Contents/MacOS/moonletd"), Some(old)))
-            }
+            Layout::Bin(dir) => install_bin(dir, &archive, version),
+            Layout::Bundle(app) => install_bundle(app, &archive, version),
         }
     }
     .await;
-    let (binary, old) = match installed {
+    let installed = match installed {
         Ok(v) => v,
         Err(e) => {
             daemon.end_upgrade();
             return Err(e);
         }
     };
+    let binary = installed.binary();
     tracing::info!(from, to = version, binary = %binary.display(), "updating");
     let me = daemon.clone();
-    let app = match &layout {
-        Layout::Bundle(app) => Some(app.clone()),
-        Layout::Bin(_) => None,
-    };
     tokio::spawn(async move {
-        let result = crate::upgrade::hand_off_claimed(me, Some(binary)).await;
-        match (result, app, old) {
-            (Ok(()), Some(_), Some(old)) => {
-                let _ = std::fs::remove_dir_all(&old);
-            }
-            (Err(e), app, old) => {
+        match crate::upgrade::hand_off_claimed(me, Some(binary)).await {
+            Ok(()) => installed.keep(),
+            Err(e) => {
                 tracing::error!("update failed, still serving: {e:#}");
-                if let (Some(app), Some(old)) = (app, old) {
-                    restore_bundle(&app, &old);
-                }
+                installed.undo();
             }
-            _ => {}
         }
     });
-    Ok(serde_json::json!({ "from": from, "to": version }))
+    Ok(DaemonUpdated { from: from.into(), to: version.into() })
 }
 
 #[cfg(test)]
@@ -425,7 +505,7 @@ mod tests {
         let info = plist("0.1.34");
         let archive = tgz(&[("moonlet.app/Contents/MacOS/moonletd", b"new"), ("moonlet.app/Contents/Info.plist", &info)]);
 
-        let old = install_bundle(&app, &archive, "0.1.34").unwrap();
+        let Installed::Bundle { old, .. } = install_bundle(&app, &archive, "0.1.34").unwrap() else { panic!("not a bundle") };
         assert_eq!(std::fs::read_to_string(app.join("Contents/MacOS/moonletd")).unwrap(), "new");
         assert_eq!(std::fs::read_to_string(old.join("Contents/MacOS/moonletd")).unwrap(), "old");
 
@@ -475,11 +555,40 @@ mod tests {
         assert!(!in_release(&format!("{base}/v0.1.34/../v0.1.20/moonlet.app.tar.gz"), base, "0.1.34"));
     }
 
+    /// Without the debug seams, releases come from GitHub and only moonlet's
+    /// updater key is trusted: an archive signed by any other key is refused.
     #[test]
-    fn the_app_key_is_read_from_tauri_conf() {
-        let key = public_key(
-            serde_json::from_str::<Value>(TAURI_CONF).unwrap()["plugins"]["updater"]["pubkey"].as_str().unwrap(),
-        );
-        assert!(key.is_ok());
+    fn a_release_build_trusts_only_github_and_moonlets_key() {
+        let (releases, key) = source().unwrap();
+        assert_eq!(releases, "https://github.com/1devstudio/moonlet/releases/download");
+        let minisign::KeyPair { pk, sk } = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
+        let sig = minisign::sign(Some(&pk), &sk, &b"moonlet"[..], None, None).unwrap().into_string();
+        let sig = base64::engine::general_purpose::STANDARD.encode(sig);
+        let e = verify(&key, b"moonlet", &sig).unwrap_err();
+        assert_eq!(e.code, "bad_signature");
+    }
+
+    #[test]
+    fn an_old_binary_comes_back_when_the_handoff_fails_and_goes_once_it_succeeds() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in BINARIES {
+            std::fs::write(dir.path().join(name), "old").unwrap();
+        }
+        // `--version` of the new `moonletd` must say what was asked for.
+        let new_daemon = b"#!/bin/sh\necho moonletd 0.1.34\n";
+        let archive = tgz(&[("moonletd", new_daemon), ("moonlet", b"new")]);
+
+        let installed = install_bin(dir.path(), &archive, "0.1.34").unwrap();
+        assert_eq!(std::fs::read(dir.path().join("moonletd")).unwrap(), new_daemon);
+        installed.undo();
+        assert_eq!(std::fs::read_to_string(dir.path().join("moonletd")).unwrap(), "old");
+        assert_eq!(std::fs::read_to_string(dir.path().join("moonlet")).unwrap(), "old");
+
+        install_bin(dir.path(), &archive, "0.1.34").unwrap().keep();
+        let mut left: Vec<String> =
+            std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into()).collect();
+        left.sort();
+        assert_eq!(left, ["moonlet", "moonletd"]);
+        assert_eq!(std::fs::read_to_string(dir.path().join("moonlet")).unwrap(), "new");
     }
 }

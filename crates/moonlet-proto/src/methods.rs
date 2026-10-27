@@ -503,6 +503,12 @@ pub const EV_REPO_CLONE_PROGRESS: &str = "repo.clone_progress";
 pub const EV_REPO_CLONE_DONE: &str = "repo.clone_done";
 pub const EV_FS_CHANGED: &str = "fs.changed";
 
+/// `daemon.update` (X69): the release to install.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DaemonUpdate {
+    pub version: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TerminalCreate {
     pub cwd: String,

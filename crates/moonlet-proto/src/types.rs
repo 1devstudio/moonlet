@@ -1188,6 +1188,14 @@ pub struct CheckRun {
     pub url: Option<String>,
 }
 
+/// `daemon.update`'s answer (X69): this daemon's version and the one it
+/// hands over to.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DaemonUpdated {
+    pub from: String,
+    pub to: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DaemonInfo {
     pub version: String,
