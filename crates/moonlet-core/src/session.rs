@@ -519,7 +519,10 @@ impl SessionManager {
         };
         // The state as every member lays the account onto theirs, so that
         // a project added here leaves `missing`, and repairs match (X68).
-        if let Some(s) = staged.as_ref().filter(|s| !s.changes.is_empty()) {
+        if let Some(s) = staged
+            .as_ref()
+            .filter(|s| !s.changes.is_empty() || account::found_missing(&next))
+        {
             account::lay_onto(&mut next, s.log());
         }
         if let Err(e) = self.save(&next) {
