@@ -9,7 +9,7 @@ import { CLAUDE_MODELS, CLAUDE_MODES, EFFORTS } from "@desktop/lib/agents";
 import { type AsideAnswer, type ChatState, M, type PermissionAsk, type QueuedMessage, type Session } from "@desktop/lib/protocol";
 import { type Aside, asideFooter, asideSettled, queuedHeader, waitingOn } from "@desktop/lib/queued";
 import { askerName } from "@desktop/lib/subagents";
-import { showScreen, useApp } from "../lib/app";
+import { type Screen, showScreen, useApp } from "../lib/app";
 import { answerAsk, answerQuestion } from "../lib/answers";
 import { STATE_COLOR } from "../lib/palette";
 import { ageText, askHeadline } from "../lib/cards";
@@ -220,7 +220,13 @@ function Ring({ percent }: { percent: number }) {
 export function ChatTab({ host, session }: { host: string; session: Session }) {
   const d = useApp((s) => s.data[host]);
   const terminal = d ? sessionChat(d, session.id) : null;
-  const st = useChat((s) => (terminal === null ? undefined : s.chats[chatKey(host, terminal)]));
+  if (terminal === null) return <div className="p-6 text-[14px] text-muted">This session has no agent conversation. Its terminal is in the Terminal tab.</div>;
+  return <ChatView host={host} terminal={terminal} cwd={session.path} from={{ kind: "session", host, id: session.id, tab: "chat" }} />;
+}
+
+/** A chat terminal's conversation; `from` is the screen a plan sheet opens over. */
+export function ChatView({ host, terminal, cwd, from }: { host: string; terminal: number; cwd: string; from: Screen }) {
+  const st = useChat((s) => s.chats[chatKey(host, terminal)]);
   const [picker, setPicker] = useState<"model" | "mode" | null>(null);
   // The subagent whose sheet is open, by its key (X42).
   const [agentOpen, setAgentOpen] = useState<string | null>(null);
@@ -229,7 +235,7 @@ export function ChatTab({ host, session }: { host: string; session: Session }) {
   const [aside, setAside] = useState<Aside | null>(null);
   const [queueNote, setQueueNote] = useState<string | null>(null);
   useEffect(() => {
-    if (!unqueuing || !st || terminal === null) return;
+    if (!unqueuing || !st) return;
     const step = asideStep(st, unqueuing);
     if (step.kind === "wait") return;
     setUnqueuing(null);
@@ -246,7 +252,7 @@ export function ChatTab({ host, session }: { host: string; session: Session }) {
   }, [st, unqueuing]); // eslint-disable-line react-hooks/exhaustive-deps
   const scroller = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (terminal !== null) void loadChat(host, terminal).catch(console.error);
+    void loadChat(host, terminal).catch(console.error);
   }, [host, terminal]);
   const blocks = st ? chatBlocks(st.items, "collapsed") : [];
   // Follow the conversation's end as it grows.
@@ -255,7 +261,6 @@ export function ChatTab({ host, session }: { host: string; session: Session }) {
     if (el) el.scrollTop = el.scrollHeight;
   }, [blocks.length, st?.items[st.items.length - 1]?.text.length, st?.queued.length]);
 
-  if (terminal === null) return <div className="p-6 text-[14px] text-muted">This session has no agent conversation. Its terminal is in the Terminal tab.</div>;
   if (!st) return <div className="p-6 text-[14px] text-muted">Loading the conversation…</div>;
   const ask = st.pending[0];
   const agents = { id: terminal, st };
@@ -266,7 +271,7 @@ export function ChatTab({ host, session }: { host: string; session: Session }) {
     <div className="flex h-full flex-col">
       <main ref={scroller} className="scroll flex min-h-0 flex-1 flex-col gap-2 px-4 py-3">
         {blocks.map((b) => (
-          <ChatBlockView key={blockKey(b)} block={b} cwd={session.path} agents={agents} onAgent={setAgentOpen} />
+          <ChatBlockView key={blockKey(b)} block={b} cwd={cwd} agents={agents} onAgent={setAgentOpen} />
         ))}
         {/* Messages Claude has not read yet (X49). */}
         {st.queued.length > 0 && (
@@ -292,7 +297,7 @@ export function ChatTab({ host, session }: { host: string; session: Session }) {
           <section className="flex items-center gap-3 border-t border-[rgba(242,201,76,0.28)] bg-panel px-4 py-3">
             <ListChecks size={17} className="text-blocked" />
             <span className="flex-1 text-[14.5px] font-medium">Claude has a plan</span>
-            <Btn tone="primary" onClick={() => showScreen({ kind: "plan", host, terminal, ask: ask.id, from: { kind: "session", host, id: session.id, tab: "chat" } })}>
+            <Btn tone="primary" onClick={() => showScreen({ kind: "plan", host, terminal, ask: ask.id, from })}>
               Review plan
             </Btn>
           </section>

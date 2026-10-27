@@ -9,6 +9,7 @@ import { SessionsScreen } from "./screens/Sessions";
 import { PlanSheet } from "./screens/PlanSheet";
 import { SessionScreen } from "./screens/Session";
 import { DiffScreen } from "./screens/Diff";
+import { AgentScreen } from "./screens/Agent";
 import { PairScreen, PairedScreen } from "./screens/Pair";
 
 export default function App() {
@@ -26,12 +27,20 @@ export default function App() {
   if (!paired) return <PairScreen first />;
   if (screen?.kind === "pair") return <PairScreen first={false} />;
   if (screen?.kind === "session") return <SessionScreen host={screen.host} id={screen.id} tab={screen.tab} />;
+  if (screen?.kind === "agent") return <AgentScreen host={screen.host} terminal={screen.terminal} />;
   if (screen?.kind === "diff") return <DiffScreen host={screen.host} id={screen.id} path={screen.path} against={screen.against} />;
   // A plan opened from a session's chat sits over that session.
   if (screen?.kind === "plan" && screen.from?.kind === "session")
     return (
       <>
         <SessionScreen host={screen.from.host} id={screen.from.id} tab={screen.from.tab} />
+        <PlanSheet host={screen.host} terminal={screen.terminal} ask={screen.ask} from={screen.from} />
+      </>
+    );
+  if (screen?.kind === "plan" && screen.from?.kind === "agent")
+    return (
+      <>
+        <AgentScreen host={screen.from.host} terminal={screen.from.terminal} />
         <PlanSheet host={screen.host} terminal={screen.terminal} ask={screen.ask} from={screen.from} />
       </>
     );

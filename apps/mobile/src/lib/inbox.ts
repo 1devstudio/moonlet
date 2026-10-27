@@ -1,10 +1,11 @@
 // The Inbox (X40): what needs the user across every connected host.
 
+import { agentPlace } from "@desktop/lib/alerts";
 import { planOf } from "@desktop/lib/chat";
 import { askerName } from "@desktop/lib/subagents";
 import type { AgentState, HostStatus, PermissionAsk, ReadRequest, Session } from "@desktop/lib/protocol";
 import type { WorkspaceRef } from "@desktop/lib/workspaces";
-import type { HostData } from "./app";
+import type { HostData, Screen } from "./app";
 import { inShown } from "./workspaceChoices";
 
 export type CardKind = "permission" | "plan" | "question" | "read" | "setup";
@@ -27,7 +28,8 @@ export interface InboxCard {
   /** The chat terminal that asks, or the terminal that wants to read. */
   terminal: number;
   session: Session | null;
-  /** The session's name, else the terminal's title. */
+  /** The session's name, "Design · <name>" for a design's agent (X65),
+   * else the terminal's title. */
   title: string;
   project: string | null;
   agent: string | null;
@@ -94,7 +96,7 @@ export function buildInbox(hosts: Record<string, InboxHost>, data: Record<string
       remote: !!h.via,
       terminal,
       session: s,
-      title: s?.name ?? d.terminals[terminal]?.title ?? "Agent",
+      title: d.terminals[terminal] ? agentPlace(d.terminals[terminal], s?.name).label : (s?.name ?? "Agent"),
       project: d.projects.find((p) => p.id === s?.project_id)?.name ?? null,
       agent: d.terminals[terminal]?.agent ?? null,
     });
@@ -115,6 +117,13 @@ export function buildInbox(hosts: Record<string, InboxHost>, data: Record<string
   needs.push(...setupCards(hosts, data));
   needs.sort((a, b) => (b.askedAt ?? 0) - (a.askedAt ?? 0));
   return { needs, working, hostsOnline };
+}
+
+/** The chat a card's agent talks in: its session's, else the agent's own,
+ * as a design's agent has no session (X65). */
+export function cardChat(card: InboxCard): Screen {
+  if (card.session) return { kind: "session", host: card.host, id: card.session.id, tab: "chat" };
+  return { kind: "agent", host: card.host, terminal: card.terminal };
 }
 
 /** Every copy's setup waiting on a connected Mac, live copies (X60) and

@@ -70,6 +70,8 @@ export type Screen =
   /** "Paired with <Mac>", right after pairing (X39). */
   | { kind: "paired"; name: string }
   | { kind: "session"; host: string; id: string; tab: SessionTab }
+  /** An agent without a session, such as a design's (X65), by its chat terminal. */
+  | { kind: "agent"; host: string; terminal: number }
   | { kind: "diff"; host: string; id: string; path: string; against: "base" | "head" }
   | { kind: "plan"; host: string; terminal: number; ask: string; from?: Screen };
 

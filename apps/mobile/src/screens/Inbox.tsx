@@ -7,7 +7,7 @@ import { planOf } from "@desktop/lib/chat";
 import { showScreen, useApp, useShownWorkspace } from "../lib/app";
 import { answerAsk, answerPlan, answerRead, answerSetup } from "../lib/answers";
 import { ageText, askHeadline, planBlurb, readMessage } from "../lib/cards";
-import { type InboxCard, buildInbox, summaryLine } from "../lib/inbox";
+import { type InboxCard, buildInbox, cardChat, summaryLine } from "../lib/inbox";
 import { useBusy } from "../lib/busy";
 import { useNow } from "../lib/now";
 import { AgentIcon, Btn, Moon, StateGlyph, Title } from "../components/ui";
@@ -46,7 +46,7 @@ function PermissionCard({ card, now }: { card: InboxCard; now: number }) {
     <div className="flex flex-col gap-3 rounded-[14px] border border-[rgba(242,201,76,0.28)] bg-panel p-3.5">
       <div className="flex items-center gap-2">
         <StateGlyph state="blocked" />
-        <button type="button" onClick={() => card.session && showScreen({ kind: "session", host: card.host, id: card.session.id, tab: "chat" })} className="min-w-0 flex-1 truncate text-left text-[15px] font-medium">
+        <button type="button" onClick={() => showScreen(cardChat(card))} className="min-w-0 flex-1 truncate text-left text-[15px] font-medium">
           {card.title}
         </button>
         <span className="text-[12px] text-faint">{ageText(card.askedAt, now)}</span>
@@ -108,7 +108,7 @@ function QuestionCard({ card, now }: { card: InboxCard; now: number }) {
   return (
     <button
       type="button"
-      onClick={() => card.session && showScreen({ kind: "session", host: card.host, id: card.session.id, tab: "chat" })}
+      onClick={() => showScreen(cardChat(card))}
       className="flex flex-col gap-2.5 rounded-[14px] border border-border-strong bg-panel p-3.5 text-left"
     >
       <div className="flex items-center gap-2">
