@@ -55,7 +55,6 @@ function Row({ r }: { r: SessionRow }) {
         <span className="flex items-center gap-2 text-[12px] text-faint">
           {task && <span className="flex-none font-mono text-muted">{task.label}</span>}
           <span className="truncate font-mono">{r.session.branch}</span>
-          {r.on && <span className="flex-none font-mono">on {r.on}</span>}
           {stat && <DiffStat add={stat.additions} del={stat.deletions} />}
           {r.agents && (
             <span className="flex flex-none items-center gap-1">
@@ -69,6 +68,7 @@ function Row({ r }: { r: SessionRow }) {
               {pr.state.toLowerCase() === "merged" ? " merged" : ""}
             </span>
           )}
+          {r.on && <span className="flex-none font-mono">on {r.on}</span>}
         </span>
       </span>
     </button>

@@ -147,7 +147,19 @@ describe("sessionGroups across an account's members (X68)", () => {
 
   it("shows a shared workspace once among all workspaces", () => {
     const w = shared();
-    expect(view(sessionGroups(w.hosts, w.data, null, NOW))).toEqual(view(sessionGroups(w.hosts, w.data, shown, NOW)));
+    expect(view(sessionGroups(w.hosts, w.data, null, NOW))).toEqual([
+      [
+        "1devstudio",
+        "storefront",
+        "This Mac",
+        [
+          ["Add search to the product list", null],
+          ["Retry the flaky checkout test", "studio-mini"],
+          ["Fix checkout button on mobile", null],
+        ],
+      ],
+      ["1devstudio", "payments-api", "studio-mini", [["Idempotent refund webhooks", null]]],
+    ]);
   });
 
   it("keeps a member's sessions out once it no longer shares the account", () => {
