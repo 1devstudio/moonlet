@@ -102,7 +102,7 @@ impl Connector for LocalDaemon {
                 }
                 _ => false,
             };
-            let on_disk = std::env::current_exe().ok().and_then(|e| moonlet_core::bundle::version_of(&e));
+            let on_disk = moonlet_core::bundle::this_version();
             if mismatch
                 && upgrade_on_mismatch(env!("CARGO_PKG_VERSION"), on_disk.as_deref())
                 && !UPGRADE_TRIED.swap(true, Ordering::SeqCst)

@@ -25,6 +25,8 @@ import { sessionDesignsOf, startDesign, useDesign } from "./lib/designStore";
 import { designPanelWidth } from "./lib/sessionDesign";
 import { startEditor } from "./lib/designEditor";
 import { DesignMain } from "./components/design/DesignMode";
+import { OlderHostsAnnouncer } from "./components/HostUpdate";
+import { BundleWatcher } from "./components/BundleWatcher";
 
 function FindBar({ onClose }: { onClose: () => void }) {
   const [q, setQ] = useState("");
@@ -168,6 +170,9 @@ export default function App() {
 
   return (
     <div className="flex h-full w-full">
+      {/* Mounted whatever the mode, and with the sidebar hidden (X69). */}
+      <OlderHostsAnnouncer />
+      <BundleWatcher />
       {s.sidebarOpen && (
         <>
           <div style={{ width: s.sidebarWidth }} className="shrink-0" inert={!!s.settingsPage}>

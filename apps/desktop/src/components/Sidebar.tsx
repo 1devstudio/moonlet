@@ -28,9 +28,8 @@ import { ProfileFooter } from "./Profiles";
 import { movingSessions, runningClaudeAgents, switchConfirm } from "../lib/profiles";
 import { AgentIcon, Button, IconButton, Kbd, StateGlyph, cx, prTone } from "./ui";
 import { updateButton } from "../lib/updater";
-import { HostUpdateButton, OlderHostsAnnouncer } from "./HostUpdate";
+import { HostUpdateButton } from "./HostUpdate";
 import { offerNotice } from "../lib/hostUpdate";
-import { BundleWatcher } from "./BundleWatcher";
 import { claudeBanner, type ClaudeBanner, type StepState } from "../lib/claudeUpdate";
 
 // ------------------------------------------------------------------ helpers
@@ -896,8 +895,6 @@ export function Sidebar() {
         <DesignSidebar />
       ) : (
       <>
-      <OlderHostsAnnouncer />
-      <BundleWatcher />
       <nav className="px-2 pb-3">
         <NavRow icon={<Plus size={15} strokeWidth={1.75} />} label="New session" hint="⇧⌘N" onClick={() => useStore.setState({ dialog: { kind: "new-session", host: shown?.host, workspace: shown?.id } })} />
         <NavRow icon={<Command size={15} strokeWidth={1.75} />} label="Run action" hint="⌘K" onClick={() => useStore.setState({ dialog: { kind: "palette" } })} />

@@ -2,7 +2,7 @@
 //! checks an update's bundle with it, and the app compares the bundle on disk
 //! with itself after another Mac updated this one.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// `CFBundleShortVersionString` of an `Info.plist`.
 pub fn short_version(plist: &str) -> Option<String> {
@@ -12,15 +12,24 @@ pub fn short_version(plist: &str) -> Option<String> {
     Some(after[start..start + end].trim().to_string())
 }
 
-/// The version of the bundle that holds binary `exe`
-/// (`<app>/Contents/MacOS/<exe>`); `None` outside a bundle, as for a dev build.
-pub fn version_of(exe: &Path) -> Option<String> {
+/// The app bundle that holds binary `exe` (`<app>.app/Contents/MacOS/<exe>`);
+/// `None` outside a bundle, as for a dev build.
+pub fn app_of(exe: &Path) -> Option<PathBuf> {
     let macos = exe.parent()?;
     let contents = macos.parent()?;
-    if macos.file_name()? != "MacOS" || contents.file_name()? != "Contents" {
-        return None;
-    }
-    short_version(&std::fs::read_to_string(contents.join("Info.plist")).ok()?)
+    let app = contents.parent()?;
+    let bundle = macos.file_name()? == "MacOS" && contents.file_name()? == "Contents" && app.extension()? == "app";
+    bundle.then(|| app.to_path_buf())
+}
+
+/// The version of the bundle that holds binary `exe`; `None` outside one.
+pub fn version_of(exe: &Path) -> Option<String> {
+    short_version(&std::fs::read_to_string(app_of(exe)?.join("Contents/Info.plist")).ok()?)
+}
+
+/// The version of the bundle this process runs from, as it is on disk now.
+pub fn this_version() -> Option<String> {
+    version_of(&std::env::current_exe().ok()?)
 }
 
 #[cfg(test)]
@@ -55,5 +64,7 @@ mod tests {
         std::fs::write(app.join("Contents/Info.plist"), PLIST).unwrap();
         assert_eq!(version_of(&app.join("Contents/MacOS/moonlet")).as_deref(), Some("0.1.34"));
         assert_eq!(version_of(&dir.path().join("target/debug/moonlet")), None);
+        assert_eq!(app_of(&app.join("Contents/MacOS/moonlet")), Some(app.clone()));
+        assert_eq!(app_of(Path::new("/opt/moonlet/Contents/MacOS/moonletd")), None);
     }
 }

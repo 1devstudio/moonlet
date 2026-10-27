@@ -50,12 +50,7 @@ pub fn layout(exe: &Path, home: &Path) -> Option<Layout> {
     if home.canonicalize().ok().is_some_and(|h| dir == h.join("bin")) {
         return Some(Layout::Bin(dir.to_path_buf()));
     }
-    let contents = dir.parent()?;
-    let app = contents.parent()?;
-    let bundle = dir.file_name()? == "MacOS"
-        && contents.file_name()? == "Contents"
-        && app.extension().is_some_and(|e| e == "app");
-    bundle.then(|| Layout::Bundle(app.to_path_buf()))
+    moonlet_core::bundle::app_of(exe).map(Layout::Bundle)
 }
 
 /// `X.Y.Z` as numbers; `None` for anything else.
