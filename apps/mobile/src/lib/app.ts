@@ -166,6 +166,8 @@ export async function loadHost(host: string) {
   loads.set(host, during);
   try {
     const fetched = await fetchHostData(host);
+    // A newer load started meanwhile: its replies are newer than these.
+    if (loads.get(host) !== during) return;
     // What events changed meanwhile wins over the replies they overtook.
     const kept = (cur: HostData) => ({ git: fetched.git === undefined ? cur.git : fetched.git, account: fetched.account === "keep" ? cur.account : (fetched.account ?? undefined) });
     patchData(host, (cur) => applyChanges({ ...fetched, ...kept(cur) }, during));

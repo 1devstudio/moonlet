@@ -43,6 +43,11 @@ describe("shownWorkspace", () => {
     expect(shownWorkspace({ host: "mac", id: "p1", account: "w-mini" }, list)).toEqual({ host: "mini", id: "p1", account: "w-mini" });
   });
 
+  it("stays in its account when its own host left it, while another member lists it", () => {
+    const list = world().map((h) => (h.host === "mac" ? { ...h, account: undefined } : h));
+    expect(shownWorkspace({ host: "mac", id: "p1", account: "w-mini" }, list)).toEqual({ host: "mini", id: "p1", account: "w-mini" });
+  });
+
   it("takes a name kept before X68 as the first workspace of that name", () => {
     expect(shownWorkspace("Personal", world())).toEqual({ host: "mac", id: "p1", account: "w-mini" });
   });

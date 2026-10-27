@@ -36,8 +36,8 @@ export function workspaceChoices(list: HostWorkspaces[]): WorkspaceChoice[] {
 }
 
 /**
- * The workspace shown, from the one kept: on its own host while it lists
- * it, else on another member of its account. A name, kept before X68, is
+ * The workspace shown, from the one kept: on its own host while that lists
+ * it in the kept account, else on another member of that account. A name, kept before X68, is
  * the first workspace of that name. Null shows all workspaces, as when the
  * kept one is gone.
  */
@@ -45,8 +45,11 @@ export function shownWorkspace(kept: WorkspaceRef | string | null, list: HostWor
   if (kept === null) return null;
   if (typeof kept === "string") return workspaceChoices(list).find((c) => c.name === kept)?.ref ?? null;
   const lists = (h: HostWorkspaces) => h.workspaces.some((w) => w.id === kept.id);
-  const own = list.find((h) => h.host === kept.host && lists(h));
-  const member = own ?? list.find((h) => !!kept.account && accountOf(h) === kept.account && lists(h));
+  const inAccount = (h: HostWorkspaces) => !!kept.account && accountOf(h) === kept.account && lists(h);
+  // Its own host while that is still in its account, else another member of
+  // it; a host that left the account keeps the workspace as its own.
+  const member =
+    list.find((h) => h.host === kept.host && inAccount(h)) ?? list.find(inAccount) ?? list.find((h) => h.host === kept.host && lists(h));
   return member ? { host: member.host, id: kept.id, account: accountOf(member) } : null;
 }
 
