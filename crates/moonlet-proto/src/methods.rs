@@ -311,6 +311,11 @@ pub const WORKER_PING: &str = "worker.ping";
 pub const EV_LINK_CHANGED: &str = "link.changed";
 /// [`WorkerInfo`]s, when a worker registers or goes away.
 pub const EV_WORKERS_CHANGED: &str = "workers.changed";
+/// X68: a member and its central host exchange the account's changes.
+/// Only a linked Mac's daemon calls it.
+pub const ACCOUNT_SYNC: &str = "account.sync";
+/// X68: the central host passes on account changes to its members.
+pub const EV_ACCOUNT_CHANGED: &str = "account.changed";
 
 // Live copies of sessions on the central host (X60)
 /// [`SyncStart`] → [`Copy`]: keep a session on the central host in sync
@@ -1985,6 +1990,30 @@ pub struct LinkInfo {
 pub struct WorkerProject {
     pub identity: crate::types::ProjectIdentity,
     pub path: String,
+}
+
+/// `account.sync` params (X68): what the member has seen, and changes it
+/// believes the central host lacks.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AccountSync {
+    #[serde(default)]
+    pub version: BTreeMap<String, u64>,
+    #[serde(default)]
+    pub changes: Vec<crate::types::Change>,
+}
+
+/// `account.sync`'s reply: the changes the member lacks, and what the
+/// central host has seen, so the member can send what it lacks.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AccountSynced {
+    pub changes: Vec<crate::types::Change>,
+    pub version: BTreeMap<String, u64>,
+}
+
+/// `account.changed` (X68).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AccountChanged {
+    pub changes: Vec<crate::types::Change>,
 }
 
 /// `worker.register` params, sent again on every link.

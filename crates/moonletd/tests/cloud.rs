@@ -1041,6 +1041,8 @@ async fn a_cloud_device_may_call_only_worker_methods() {
         "cloud.set",
         "heavy.approve",
         "mobile.status",
+        // A cloud machine is a worker, never a member of the account (X68).
+        "account.sync",
     ] {
         assert_eq!(
             as_device_client(&c.addr, &token, "moonletd-worker", method, json!({}))

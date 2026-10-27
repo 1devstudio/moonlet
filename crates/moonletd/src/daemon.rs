@@ -1061,6 +1061,31 @@ impl Daemon {
                 ok(self.heavy.route(&r))
             }
             m::WORKER_LIST => ok(self.workers.list()),
+            m::ACCOUNT_SYNC => {
+                // Only a linked Mac's daemon, over the tailnet with a paired
+                // device's token: never a phone, nor an agent's CLI (X68).
+                // Cloud machines never get here (`CLOUD_METHODS`).
+                let Some(device) = conn.phone.as_deref().filter(|_| conn.client == crate::link::WORKER_CLIENT) else {
+                    return Err(RpcError::new("forbidden", "only a member of the account syncs it"));
+                };
+                if !self.mobile.is_paired(device) {
+                    return Err(RpcError::new("forbidden", "this Mac is no longer paired"));
+                }
+                if !self.sessions.has_account() {
+                    return Err(RpcError::new("no_account", "this host shares no account"));
+                }
+                let r: m::AccountSync = params(p)?;
+                // The other members take what this host newly kept from
+                // here; the one that sent them already has them.
+                let taken = self.sessions.apply_account(r.changes);
+                if !taken.is_empty() {
+                    self.workers.send_to_members(Message::event(m::EV_ACCOUNT_CHANGED, m::AccountChanged { changes: taken }), Some(conn.id));
+                }
+                ok(m::AccountSynced {
+                    changes: self.sessions.account_changes_for(&r.version),
+                    version: self.sessions.account_version(),
+                })
+            }
             m::WORKER_REGISTER => {
                 // Only a worker's daemon, over the tailnet with a paired
                 // device's token, registers.

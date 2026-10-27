@@ -261,6 +261,9 @@ fn run_daemon(
         // Before anything can ask, phones and the socket alike, so
         // `project.list` never lacks one (X41).
         daemon.sessions.fill_identities().await;
+        // Workspaces shared with the account's other members (X68), once
+        // projects have the identities its sections name them by.
+        link::attach_account(&daemon);
         let restored = daemon.sessions.restore_after_restart();
         if restored > 0 {
             tracing::info!(restored, "restarted workspace sessions after daemon restart");
