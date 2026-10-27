@@ -820,8 +820,9 @@ impl Daemon {
                 let r: m::RepoCloneTarget = params(p)?;
                 let target = match &r.origin {
                     Some(origin) => {
-                        moonlet_core::repo_clone::checked_origin(origin).map_err(internal)?;
-                        let want = moonlet_proto::types::ProjectIdentity { origin: Some(origin.clone()), root: r.root.clone() };
+                        moonlet_core::repo_clone::Origin::parse(origin).map_err(internal)?;
+                        let root = moonlet_core::repo_clone::checked_root(r.root.as_deref().unwrap_or_default()).map_err(internal)?;
+                        let want = moonlet_proto::types::ProjectIdentity { origin: Some(origin.clone()), root: Some(root.to_string()) };
                         moonlet_core::repo_clone::origin_clone_target(&want, &r.parent, &r.name).await
                     }
                     None => moonlet_core::repo_clone::clone_target(&r.repo, &r.parent, &r.name).await,
@@ -2451,19 +2452,11 @@ impl Daemon {
             }
             m::SECTION_ADD_PROJECT => {
                 let r: m::SectionAddProject = params(p)?;
-                // A folder located for another member's project must be a
-                // copy of it, checked here as the folder may have changed
-                // since the app looked (X70).
-                if let Some(want) = &r.identity {
-                    let folder = moonlet_core::terminal::expand_home(&r.path);
-                    let found = moonlet_core::identity::identity(&folder).await;
-                    if let Some(why) = moonlet_core::identity::not_a_copy(&found, want) {
-                        return Err(RpcError::new("invalid_params", format!("{} {why}", r.path)));
-                    }
-                }
-                ok(w.section_add_project(&r.id, &r.path)
-                    .await
-                    .map_err(internal)?)
+                let added = match &r.identity {
+                    Some(want) => w.section_add_copy(&r.id, &r.path, want).await,
+                    None => w.section_add_project(&r.id, &r.path).await,
+                };
+                ok(added.map_err(internal)?)
             }
             m::SECTION_REMOVE_PROJECT => {
                 let r: m::SectionRemoveProject = params(p)?;

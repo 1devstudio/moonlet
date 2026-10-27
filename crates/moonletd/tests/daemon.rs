@@ -1876,7 +1876,7 @@ async fn a_clone_whose_address_holds_another_repository_is_not_added() {
     let (_, done) = clone_events(&mut watcher).await;
     assert_eq!(
         done["error"],
-        "git@example.test:acme/ledger.git holds another repository: its first commit is not the one ledger starts with on the other Macs."
+        "git@example.test:acme/ledger.git holds another repository: its first commit is not the one ledger starts with on the account's other hosts."
     );
     assert!(!parent.join("ledger").exists());
     let projects: Vec<moonlet_proto::types::Project> = c.request(methods::PROJECT_LIST, ()).await.unwrap();
@@ -1922,6 +1922,20 @@ async fn a_located_folder_joins_a_section_only_as_a_copy_of_the_project() {
         .await
         .unwrap_err();
     assert!(refused.to_string().contains(&format!("{repo} holds another repository.")), "{refused}");
+
+    // A copy of the project, whose remote points at the project's origin,
+    // joins the section.
+    let copy = dirs[1].path().join("work").join("ledger");
+    git_in(&dirs[1].path().join("work"), &["clone", "-q", &dirs[2].path().join("src").display().to_string(), "ledger"]).unwrap();
+    git_in(&copy, &["remote", "set-url", "origin", "git@other.test:acme/ledger.git"]).unwrap();
+    let want = serde_json::json!({"origin": "other.test/acme/ledger", "root": root});
+    let added: moonlet_proto::types::Project = c
+        .request(methods::SECTION_ADD_PROJECT, serde_json::json!({"id": sections[0].id, "path": copy, "identity": want}))
+        .await
+        .unwrap();
+    assert_eq!(added.identity.origin.as_deref(), Some("other.test/acme/ledger"));
+    let sections: Vec<moonlet_proto::types::Section> = c.request(methods::SECTION_LIST, ()).await.unwrap();
+    assert!(sections[0].project_ids.contains(&added.id));
 }
 
 #[tokio::test]

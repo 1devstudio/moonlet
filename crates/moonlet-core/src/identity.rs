@@ -55,17 +55,25 @@ pub fn not_a_copy(found: &ProjectIdentity, want: &ProjectIdentity) -> Option<Str
     if same_project(found, want) {
         return None;
     }
+    let same_root = found.root == want.root;
     Some(match (&found.root, &found.origin, &want.origin) {
-        (None, _, _) => "is not a git repository.".into(),
-        _ if found.root != want.root => "holds another repository.".into(),
-        (_, Some(has), Some(wants)) => {
+        (None, _, _) => NO_HISTORY.into(),
+        (_, Some(has), Some(wants)) if same_root => {
             format!("has the same history but its origin is {has}, not {wants}.")
         }
-        (_, None, Some(wants)) => format!("has the same history but no origin; the project's is {wants}."),
-        (_, Some(has), None) => format!("has the same history but its origin is {has}; the project has none."),
-        (_, None, None) => "holds another repository.".into(),
+        (_, None, Some(wants)) if same_root => {
+            format!("has the same history but no origin; the project's is {wants}.")
+        }
+        (_, Some(has), None) if same_root => {
+            format!("has the same history but its origin is {has}; the project has none.")
+        }
+        _ => "holds another repository.".into(),
     })
 }
+
+/// Why a folder without a known root matches no project.
+const NO_HISTORY: &str =
+    "has no history to match: it is not a git repository, or a shallow clone, or has no commits.";
 
 /// `host[:port]/path` of a remote URL: no scheme, user, credentials, query
 /// or fragment, the host lowercased, a port only when not the scheme's
@@ -233,7 +241,7 @@ mod tests {
         assert_eq!(not_a_copy(&id(shop, root), &id(shop, root)), None);
         assert_eq!(
             not_a_copy(&id(None, None), &id(shop, root)).as_deref(),
-            Some("is not a git repository.")
+            Some("has no history to match: it is not a git repository, or a shallow clone, or has no commits.")
         );
         assert_eq!(
             not_a_copy(&id(shop, other), &id(shop, root)).as_deref(),

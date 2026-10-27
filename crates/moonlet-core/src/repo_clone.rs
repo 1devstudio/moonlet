@@ -354,25 +354,58 @@ pub async fn lookup(repo: &str, ssh: Option<&str>) -> Result<RepoInfo> {
     Ok(parse_ls_remote(repo, &String::from_utf8_lossy(&out)))
 }
 
-/// X70: `origin` when it is a project identity's normalized origin,
-/// `host[:port]/path`: a host of letters, digits, `.` and `-`, a port of
-/// digits, and path segments of letters, digits, `.`, `_`, `~` and `-`, none
-/// empty, `.` or `..`, or starting with `-`. It comes from another member's
-/// changes, so nothing else may reach git.
-pub fn checked_origin(origin: &str) -> Result<&str> {
-    let ok = (|| {
+/// A project identity's normalized origin, `host[:port]/path` (X70), read
+/// once. It comes from another member's changes, so only this shape is
+/// accepted, and nothing else may reach git: a host of letters, digits,
+/// `.`, `-` and `_` (or a bracketed IPv6 address), a port of digits, and
+/// path segments of letters, digits, `.`, `_`, `~` and `-`, none empty,
+/// `.` or `..`, or starting with `-`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Origin<'a> {
+    pub host: &'a str,
+    pub port: Option<&'a str>,
+    pub path: &'a str,
+}
+
+impl<'a> Origin<'a> {
+    pub fn parse(origin: &'a str) -> Result<Self> {
+        Self::read(origin).with_context(|| format!("not a project origin: {origin}"))
+    }
+
+    fn read(origin: &'a str) -> Option<Self> {
         let (hostport, path) = origin.split_once('/')?;
-        let (host, port) = match hostport.split_once(':') {
-            Some((h, p)) => (h, Some(p)),
-            None => (hostport, None),
+        let (host, port) = match hostport.strip_prefix('[') {
+            // `[::1]` or `[::1]:2222`.
+            Some(v6) => {
+                let (inner, rest) = v6.split_once(']')?;
+                let inner_ok = !inner.is_empty()
+                    && inner.bytes().all(|b| b.is_ascii_hexdigit() || b":.".contains(&b));
+                if !inner_ok {
+                    return None;
+                }
+                let port = match rest {
+                    "" => None,
+                    r => Some(r.strip_prefix(':')?),
+                };
+                (&hostport[..inner.len() + 2], port)
+            }
+            None => {
+                let (host, port) = match hostport.split_once(':') {
+                    Some((h, p)) => (h, Some(p)),
+                    None => (hostport, None),
+                };
+                let host_ok = !host.is_empty()
+                    && !host.starts_with(['-', '.'])
+                    && host
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b".-_".contains(&b));
+                if !host_ok {
+                    return None;
+                }
+                (host, port)
+            }
         };
-        let host_ok = !host.is_empty()
-            && !host.starts_with(['-', '.'])
-            && host
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b".-".contains(&b));
-        let port_ok =
-            port.is_none_or(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
+        let port_ok = port.is_none_or(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
         let path_ok = path.split('/').all(|seg| {
             !seg.is_empty()
                 && seg != "."
@@ -382,51 +415,55 @@ pub fn checked_origin(origin: &str) -> Result<&str> {
                     .bytes()
                     .all(|b| b.is_ascii_alphanumeric() || b"._~-".contains(&b))
         });
-        (host_ok && port_ok && path_ok).then_some(())
-    })();
-    match ok {
-        Some(()) => Ok(origin),
-        None => bail!("not a project origin: {origin}"),
+        (port_ok && path_ok).then_some(Origin { host, port, path })
+    }
+
+    /// The folder name a clone starts with: the last path segment.
+    pub fn name(&self) -> &'a str {
+        self.path.rsplit('/').next().unwrap_or(self.path)
+    }
+
+    /// `owner/name` of an origin on github.com with just those two parts,
+    /// which gh can look up and clone.
+    pub fn github_repo(&self) -> Option<&'a str> {
+        (self.host == "github.com" && self.port.is_none())
+            .then(|| checked_repo(self.path).ok())
+            .flatten()
+    }
+
+    /// The addresses a clone is tried from, in order: SSH, then HTTPS; on
+    /// github.com HTTPS first, as X59 clones public repositories that way.
+    /// The scheme of the member's own remote is not in the log, so a port
+    /// may be either one's: HTTPS is also tried on its own port.
+    pub fn urls(&self) -> Vec<String> {
+        let Origin { host, port, path } = *self;
+        let hostport = port.map_or_else(|| host.to_string(), |p| format!("{host}:{p}"));
+        let ssh = if port.is_some() || host.starts_with('[') {
+            format!("ssh://git@{hostport}/{path}.git")
+        } else {
+            format!("git@{host}:{path}.git")
+        };
+        let https = format!("https://{hostport}/{path}.git");
+        let mut urls = if self.github_repo().is_some() {
+            vec![https, ssh]
+        } else {
+            vec![ssh, https]
+        };
+        if port.is_some() {
+            urls.push(format!("https://{host}/{path}.git"));
+        }
+        urls
     }
 }
 
-/// `root` when it is a commit id: 40 or 64 hex digits.
+/// `root` when it is a commit id as git prints it: 40 or 64 lowercase hex
+/// digits, so the clone's own root compares equal.
 pub fn checked_root(root: &str) -> Result<&str> {
-    if matches!(root.len(), 40 | 64) && root.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if matches!(root.len(), 40 | 64) && root.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
         Ok(root)
     } else {
         bail!("not a root commit: {root}")
     }
-}
-
-/// `owner/name` of an origin on github.com with just those two parts, which
-/// gh can look up and clone.
-pub fn github_repo(origin: &str) -> Option<&str> {
-    let repo = origin.strip_prefix("github.com/")?;
-    checked_repo(repo).ok()
-}
-
-/// The folder name a clone of `origin` starts with: its last path segment.
-pub fn origin_name(origin: &str) -> &str {
-    origin.rsplit('/').next().unwrap_or(origin)
-}
-
-/// The addresses a clone of `origin` is tried from, in order: SSH, then
-/// HTTPS; on github.com HTTPS first, as X59 clones public repositories
-/// that way. The scheme of the member's own remote is not in the log.
-pub fn origin_urls(origin: &str) -> Result<Vec<String>> {
-    checked_origin(origin)?;
-    let (hostport, path) = origin.split_once('/').unwrap_or((origin, ""));
-    let ssh = match hostport.split_once(':') {
-        Some(_) => format!("ssh://git@{hostport}/{path}.git"),
-        None => format!("git@{hostport}:{path}.git"),
-    };
-    let https = format!("https://{origin}.git");
-    Ok(if github_repo(origin).is_some() {
-        vec![https, ssh]
-    } else {
-        vec![ssh, https]
-    })
 }
 
 /// Why git could not reach an address: the line before git's first
@@ -451,30 +488,41 @@ pub fn reach_reason(stderr: &str) -> String {
         .unwrap_or_else(|| failure_reason(stderr))
 }
 
-/// What `program` runs a clone of `origin` from `url` into `dest` with:
-/// gh for github.com when `url` is none, else git, and only from one of
-/// the origin's own addresses, so the app cannot pick another.
+/// Where a clone of `origin` may come from: `url`, one of its own
+/// addresses, or gh for github.com when `url` is none, so the app cannot
+/// pick another.
+pub fn checked_source(origin: &str, url: Option<&str>) -> Result<()> {
+    let o = Origin::parse(origin)?;
+    match url {
+        None if o.github_repo().is_some() => Ok(()),
+        None => bail!("{origin} is not on GitHub: pick one of its addresses"),
+        Some(url) if o.urls().iter().any(|u| u == url) => Ok(()),
+        Some(url) => bail!("{url} is not an address of {origin}"),
+    }
+}
+
+/// What `program` runs a clone of `origin` from `url` into `dest` with,
+/// once [`checked_source`] allows it.
 pub fn origin_clone_command(
     origin: &str,
     url: Option<&str>,
     dest: &str,
 ) -> Result<(&'static str, Vec<String>)> {
-    match url {
-        None => match github_repo(checked_origin(origin)?) {
-            Some(repo) => Ok(clone_command(repo, None, true, dest)),
-            None => bail!("{origin} is not on GitHub: pick one of its addresses"),
-        },
-        Some(url) if origin_urls(origin)?.iter().any(|u| u == url) => Ok((
+    checked_source(origin, url)?;
+    Ok(match (url, Origin::parse(origin)?.github_repo()) {
+        (Some(url), _) => (
             "git",
             vec!["clone".into(), "--progress".into(), url.into(), dest.into()],
-        )),
-        Some(url) => bail!("{url} is not an address of {origin}"),
-    }
+        ),
+        (None, repo) => clone_command(repo.unwrap_or_default(), None, true, dest),
+    })
 }
 
 /// Batch mode for ssh, so an unknown host or a missing key fails at once
-/// instead of waiting on a prompt nobody sees; unless the user has an ssh
-/// command of their own, which git would otherwise lose.
+/// instead of waiting on a prompt nobody sees, and a host that never
+/// answers gives up after 10 s; unless the user has an ssh command of their
+/// own (in the environment or any git config), which git would otherwise
+/// lose.
 async fn batch_ssh() -> Vec<(&'static str, &'static str)> {
     let own_env = ["GIT_SSH_COMMAND", "GIT_SSH"]
         .iter()
@@ -482,7 +530,7 @@ async fn batch_ssh() -> Vec<(&'static str, &'static str)> {
     let own_config = run_raw(
         "git",
         Path::new("/"),
-        &["config", "--global", "--get", "core.sshCommand"],
+        &["config", "--get", "core.sshCommand"],
         None,
         Duration::from_secs(10),
     )
@@ -491,17 +539,17 @@ async fn batch_ssh() -> Vec<(&'static str, &'static str)> {
     if own_env || own_config {
         Vec::new()
     } else {
-        vec![("GIT_SSH_COMMAND", "ssh -o BatchMode=yes")]
+        vec![("GIT_SSH_COMMAND", "ssh -o BatchMode=yes -o ConnectTimeout=10")]
     }
 }
 
 /// `origin`'s default branch and the address that reached it: through gh
 /// for a github.com repository when gh is signed in, else the first of
 /// its addresses git can read. When none answers, the error has one line
-/// per address tried, with why it failed.
+/// per address tried, with why it failed, a timeout included.
 pub async fn lookup_origin(origin: &str) -> Result<RepoInfo> {
-    let urls = origin_urls(origin)?;
-    if let Some(repo) = github_repo(origin)
+    let o = Origin::parse(origin)?;
+    if let Some(repo) = o.github_repo()
         && gh_status().await.login.is_some()
         && let Ok(out) = run_ok("gh", &["repo", "view", repo, "--json", VIEW_FIELDS]).await
     {
@@ -511,7 +559,7 @@ pub async fn lookup_origin(origin: &str) -> Result<RepoInfo> {
     }
     let env = batch_ssh().await;
     let mut failed = Vec::new();
-    for url in urls {
+    for url in o.urls() {
         let out = crate::git::run_raw_env(
             "git",
             Path::new("/"),
@@ -520,13 +568,16 @@ pub async fn lookup_origin(origin: &str) -> Result<RepoInfo> {
             None,
             Duration::from_secs(60),
         )
-        .await?;
-        if out.status == 0 {
-            let mut info = parse_ls_remote(origin, &String::from_utf8_lossy(&out.stdout));
-            info.url = Some(url);
-            return Ok(info);
+        .await;
+        match out {
+            Ok(out) if out.status == 0 => {
+                let mut info = parse_ls_remote(origin, &String::from_utf8_lossy(&out.stdout));
+                info.url = Some(url);
+                return Ok(info);
+            }
+            Ok(out) => failed.push(format!("{url}: {}", reach_reason(&out.stderr))),
+            Err(e) => failed.push(format!("{url}: {e:#}")),
         }
-        failed.push(format!("{url}: {}", reach_reason(&out.stderr)));
     }
     bail!("{}", failed.join("\n"))
 }
@@ -1126,14 +1177,18 @@ mod tests {
 
     #[test]
     fn accepts_only_an_origin_as_a_project_identity_holds_it() {
-        for ok in [
-            "github.com/acme/shop",
-            "gitlab.com/group/sub/shop",
-            "git.example.com:2222/acme/shop",
-            "codeberg.org/acme/shop.js",
-        ] {
-            assert_eq!(checked_origin(ok).unwrap(), ok);
-        }
+        let parts = |o: &str| {
+            let o = Origin::parse(o).unwrap();
+            (o.host.to_string(), o.port.map(String::from), o.path.to_string())
+        };
+        let owned = |h: &str, p: Option<&str>, path: &str| (h.to_string(), p.map(String::from), path.to_string());
+        assert_eq!(parts("github.com/acme/shop"), owned("github.com", None, "acme/shop"));
+        assert_eq!(parts("gitlab.com/group/sub/shop"), owned("gitlab.com", None, "group/sub/shop"));
+        assert_eq!(parts("git.example.com:2222/acme/shop"), owned("git.example.com", Some("2222"), "acme/shop"));
+        assert_eq!(parts("codeberg.org/acme/shop.js"), owned("codeberg.org", None, "acme/shop.js"));
+        // An ssh host alias, and an IPv6 address, as normalize_origin keeps them.
+        assert_eq!(parts("gh_work/acme/shop"), owned("gh_work", None, "acme/shop"));
+        assert_eq!(parts("[fe80::1]:2222/acme/shop"), owned("[fe80::1]", Some("2222"), "acme/shop"));
         for bad in [
             "-oProxyCommand=x/a",
             "github.com/../etc",
@@ -1145,10 +1200,13 @@ mod tests {
             "github.com:22x/acme/shop",
             "github.com/acme/./shop",
             "user@github.com/acme/shop",
+            "[fe80::1/acme/shop",
+            "[x]/acme/shop",
+            "[::1]x/acme/shop",
             "",
         ] {
             assert_eq!(
-                checked_origin(bad).unwrap_err().to_string(),
+                Origin::parse(bad).unwrap_err().to_string(),
                 format!("not a project origin: {bad}"),
                 "{bad}"
             );
@@ -1161,7 +1219,9 @@ mod tests {
         let sha256 = "a".repeat(64);
         assert_eq!(checked_root(sha1).unwrap(), sha1);
         assert_eq!(checked_root(&sha256).unwrap(), sha256);
-        for bad in ["41f5b5f", "--all", &"g".repeat(40), ""] {
+        // git prints lowercase; an uppercase root would never match a clone.
+        let upper = sha1.to_uppercase();
+        for bad in ["41f5b5f", "--all", &"g".repeat(40), upper.as_str(), ""] {
             assert_eq!(
                 checked_root(bad).unwrap_err().to_string(),
                 format!("not a root commit: {bad}"),
@@ -1172,36 +1232,47 @@ mod tests {
 
     #[test]
     fn tries_ssh_then_https_and_https_first_on_github() {
+        let urls = |o: &str| Origin::parse(o).unwrap().urls();
         assert_eq!(
-            origin_urls("gitlab.com/acme/ledger").unwrap(),
+            urls("gitlab.com/acme/ledger"),
             [
                 "git@gitlab.com:acme/ledger.git",
                 "https://gitlab.com/acme/ledger.git"
             ]
         );
+        // The port may be SSH's or HTTPS's: HTTPS is tried without it too.
         assert_eq!(
-            origin_urls("git.example.com:2222/acme/shop").unwrap(),
+            urls("git.example.com:2222/acme/shop"),
             [
                 "ssh://git@git.example.com:2222/acme/shop.git",
-                "https://git.example.com:2222/acme/shop.git"
+                "https://git.example.com:2222/acme/shop.git",
+                "https://git.example.com/acme/shop.git"
             ]
         );
         assert_eq!(
-            origin_urls("github.com/acme/shop").unwrap(),
+            urls("github.com/acme/shop"),
             [
                 "https://github.com/acme/shop.git",
                 "git@github.com:acme/shop.git"
             ]
         );
-        assert!(origin_urls("github.com/../etc").is_err());
+        assert_eq!(
+            urls("[fe80::1]/acme/shop"),
+            [
+                "ssh://git@[fe80::1]/acme/shop.git",
+                "https://[fe80::1]/acme/shop.git"
+            ]
+        );
     }
 
     #[test]
     fn a_github_origin_of_owner_and_name_can_go_through_gh() {
-        assert_eq!(github_repo("github.com/acme/shop"), Some("acme/shop"));
-        assert_eq!(github_repo("github.com/acme/shop/wiki"), None);
-        assert_eq!(github_repo("gitlab.com/acme/shop"), None);
-        assert_eq!(origin_name("gitlab.com/group/sub/ledger"), "ledger");
+        let gh = |o: &str| Origin::parse(o).unwrap().github_repo().map(String::from);
+        assert_eq!(gh("github.com/acme/shop").as_deref(), Some("acme/shop"));
+        assert_eq!(gh("github.com/acme/shop/wiki"), None);
+        assert_eq!(gh("github.com:8443/acme/shop"), None);
+        assert_eq!(gh("gitlab.com/acme/shop"), None);
+        assert_eq!(Origin::parse("gitlab.com/group/sub/ledger").unwrap().name(), "ledger");
     }
 
     #[test]

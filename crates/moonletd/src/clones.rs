@@ -59,7 +59,7 @@ impl Clones {
         let repo = match &r.origin {
             Some(origin) => {
                 repo_clone::checked_root(r.root.as_deref().unwrap_or_default())?;
-                repo_clone::origin_clone_command(origin, r.url.as_deref(), "")?;
+                repo_clone::checked_source(origin, r.url.as_deref())?;
                 origin.clone()
             }
             None => {
@@ -136,9 +136,9 @@ impl Clones {
                     let root = moonlet_core::identity::root(&path).await;
                     if root != r.root {
                         bail!(
-                            "{} holds another repository: its first commit is not the one {} starts with on the other Macs.",
+                            "{} holds another repository: its first commit is not the one {} starts with on the account's other hosts.",
                             r.url.as_deref().unwrap_or(origin),
-                            repo_clone::origin_name(origin)
+                            repo_clone::Origin::parse(origin)?.name()
                         );
                     }
                     Ok(())
