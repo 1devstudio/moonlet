@@ -27,6 +27,7 @@ import { readStored, writeStored } from "@desktop/lib/storage";
 import type { WorkspaceRef } from "@desktop/lib/workspaces";
 import type { HostSeen } from "./hosts";
 import { hostWorkspaces, shownWorkspace } from "./workspaceChoices";
+import { withSetupCommand } from "./setups";
 import { type Change, accountAfterError, applyChanges, eventChanges, gitAfterError } from "./events";
 
 /** A host as the phone's core lists it (`host_list`). */
@@ -144,15 +145,30 @@ function patchData(host: string, patch: Partial<HostData> | ((d: HostData) => Pa
   });
 }
 
+/** Per host, a number that moves on whenever its setups change here, so a
+ * re-read that overlapped a change does not undo it. */
+const setupTurns = new Map<string, number>();
+const nextSetupTurn = (host: string) => setupTurns.set(host, (setupTurns.get(host) ?? 0) + 1);
+
 /** Drops a routing copy's setup answered from the phone (X62): the daemon
  * says nothing more of it. */
-export const dropSetup = (host: string, copy: string) => patchData(host, (d) => applyChanges(d, [{ kind: "setup", copy, value: null }]));
+export function dropSetup(host: string, copy: string) {
+  nextSetupTurn(host);
+  patchData(host, (d) => applyChanges(d, [{ kind: "setup", copy, value: null }]));
+}
+
+/** Asks about the command the Mac now has for `copy` (X60, X62). */
+export function changeSetupCommand(host: string, copy: string, command: string) {
+  nextSetupTurn(host);
+  patchData(host, (d) => withSetupCommand(d, copy, command));
+}
 
 /** Re-reads the routing copies waiting for setup (X62), which the Mac may
  * have answered without an event. */
 export async function refreshSetups(host: string) {
+  const turn = setupTurns.get(host);
   const setups = await rpc<ExecSetup[]>(host, M.execSetups).catch(() => null);
-  if (setups) patchData(host, { setups });
+  if (setups && setupTurns.get(host) === turn) patchData(host, { setups });
 }
 
 function patchSeen(host: string, patch: Partial<HostSeen>) {
@@ -230,6 +246,7 @@ async function fetchHostData(host: string): Promise<Omit<HostData, "git" | "acco
 function onEvent(e: DaemonEvent) {
   const { host, name, data } = e;
   const changes = eventChanges(name, data);
+  if (name === EV.execSetup) nextSetupTurn(host);
   if (changes === "reload") {
     void loadHost(host).catch(() => {});
   } else if (changes.length) {

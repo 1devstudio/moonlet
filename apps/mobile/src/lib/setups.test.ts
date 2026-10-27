@@ -3,7 +3,7 @@ import type { Copy } from "@desktop/lib/protocol";
 import { buildInbox } from "./inbox";
 import { needsFaceId } from "./cards";
 import { applyChanges, eventChanges } from "./events";
-import { setupAnswer, setupError } from "./setups";
+import { setupAnswer, setupError, withSetupCommand } from "./setups";
 import { DaemonError } from "@desktop/lib/daemon";
 import { data, project, session } from "./fixtures";
 
@@ -93,5 +93,18 @@ describe("answering a setup (X60, X62)", () => {
     );
     expect(setupError(new DaemonError({ code: "no_setup", message: "no setup" }), "This Mac")).toBe("This copy has no setup script any more.");
     expect(setupError(new DaemonError({ code: "failed", message: "connection reset" }), "This Mac")).toBe("connection reset");
+  });
+});
+
+describe("withSetupCommand (X60, X62)", () => {
+  it("shows the command the Mac now has, on the copy's card, once it refused the old one", () => {
+    const d = data({
+      copies: [copy("c1", { state: { kind: "needs_approval" }, command: "pnpm install", approved: false })],
+      setups: [{ copy: "r1", host: "studio-mini", project: "shop", command: "make deps" }],
+    });
+    const live = withSetupCommand(d, "c1", "pnpm install --frozen-lockfile");
+    expect(live.copies[0].setup?.command).toBe("pnpm install --frozen-lockfile");
+    const routing = withSetupCommand(d, "r1", "make deps && make test-deps");
+    expect(routing.setups[0].command).toBe("make deps && make test-deps");
   });
 });
