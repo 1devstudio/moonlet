@@ -102,7 +102,11 @@ impl Connector for LocalDaemon {
                 }
                 _ => false,
             };
-            if mismatch && !UPGRADE_TRIED.swap(true, Ordering::SeqCst) {
+            let on_disk = std::env::current_exe().ok().and_then(|e| moonlet_core::bundle::version_of(&e));
+            if mismatch
+                && upgrade_on_mismatch(env!("CARGO_PKG_VERSION"), on_disk.as_deref())
+                && !UPGRADE_TRIED.swap(true, Ordering::SeqCst)
+            {
                 tracing::info!("local daemon is a different version; upgrading it in place");
                 upgrade_local().await?;
                 bail!("daemon upgraded; reconnecting");
@@ -394,6 +398,14 @@ async fn upgrade_local() -> Result<()> {
     Ok(())
 }
 
+/// Whether the app hands the local daemon to its bundled `moonletd` when
+/// their versions differ: not while the bundle on disk is newer than this
+/// app, as after another Mac updated this one (X69). The daemon already runs
+/// the bundle's `moonletd` then, and the app relaunches into the bundle.
+fn upgrade_on_mismatch(app: &str, on_disk: Option<&str>) -> bool {
+    on_disk.is_none_or(|v| v == app)
+}
+
 static UPGRADE_TRIED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 async fn connect_local() -> Result<(Reader, Writer)> {
@@ -585,6 +597,16 @@ fn central_to_clear(id: &str, link: Result<Value, RpcError>) -> Result<bool, Rpc
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_local_daemon_is_upgraded_only_while_the_bundle_on_disk_is_this_app() {
+        assert!(upgrade_on_mismatch("0.1.34", Some("0.1.34")));
+        // A dev build has no bundle.
+        assert!(upgrade_on_mismatch("0.1.34", None));
+        // Another Mac updated this one (X69): its daemon already runs the
+        // bundle's moonletd, and the app relaunches into it.
+        assert!(!upgrade_on_mismatch("0.1.33", Some("0.1.34")));
+    }
 
     #[test]
     fn choosing_a_central_host_hands_its_name_addresses_and_token_to_link_set() {

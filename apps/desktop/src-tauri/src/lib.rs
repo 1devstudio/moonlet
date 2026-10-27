@@ -75,6 +75,12 @@ fn host_reconnect(hosts: Hosts, id: String) -> Result<(), RpcError> {
     hosts.reconnect(&id)
 }
 
+/// The version of this app's bundle on disk (X69); none for a dev build.
+#[tauri::command]
+fn bundle_version() -> Option<String> {
+    moonlet_core::bundle::version_of(&std::env::current_exe().ok()?)
+}
+
 /// Updates a tailnet host to `version` (X69).
 #[tauri::command]
 async fn host_update(hosts: Hosts<'_>, id: String, version: String) -> Result<moonlet_proto::types::DaemonUpdated, RpcError> {
@@ -561,6 +567,7 @@ pub fn run() {
             host_set_central,
             host_reconnect,
             host_update,
+            bundle_version,
             host_subscribe,
             rpc,
             send_input,

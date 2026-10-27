@@ -38,6 +38,8 @@ export const hostsApi = {
   pair: (name: string, addrs: string[] | null, code: string) => invoke<HostInfo>("host_pair", { name, addrs, code }),
   remove: (id: string) => invoke("host_remove", { id }),
   reconnect: (id: string) => invoke("host_reconnect", { id }),
+  /** The version of this app's bundle on disk (X69); null for a dev build. */
+  bundleVersion: () => invoke<string | null>("bundle_version"),
   /** Updates a tailnet host to `version` (X69): `{from, to}` once it hands over. */
   update: (id: string, version: string) => invoke<{ from: string; to: string }>("host_update", { id, version }),
   /** Makes a tailnet host this Mac's central host, or clears it; the app passes the token on (X41). */

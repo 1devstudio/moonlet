@@ -192,14 +192,6 @@ fn in_release(url: &str, releases: &str, version: &str) -> bool {
         .is_some_and(|name| !name.is_empty() && !name.contains('/') && !name.contains(".."))
 }
 
-/// `CFBundleShortVersionString` of an app's `Info.plist`.
-pub fn bundle_version(plist: &str) -> Option<String> {
-    let after = &plist[plist.find("<key>CFBundleShortVersionString</key>")?..];
-    let start = after.find("<string>")? + "<string>".len();
-    let end = after[start..].find("</string>")?;
-    Some(after[start..start + end].trim().to_string())
-}
-
 fn install_failed(e: impl std::fmt::Display) -> RpcError {
     err("install_failed", e.to_string())
 }
@@ -358,7 +350,7 @@ pub fn install_bundle(app: &Path, archive: &[u8], version: &str) -> Result<Insta
             return Err(install_failed("the release's app has no moonletd"));
         }
         let plist = std::fs::read_to_string(new.join("Contents/Info.plist")).unwrap_or_default();
-        let held = bundle_version(&plist).unwrap_or_else(|| "of an unknown version".into());
+        let held = moonlet_core::bundle::short_version(&plist).unwrap_or_else(|| "of an unknown version".into());
         if held != version {
             return Err(install_failed(format!("the release holds moonlet {held}, not {version}")));
         }

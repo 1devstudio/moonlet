@@ -4,7 +4,8 @@
 
 import type { RpcError } from "./daemon";
 import type { HostInfo } from "./protocol";
-import { INSTALL_COMMAND, older } from "./settingsPage";
+import { INSTALL_COMMAND } from "./settingsPage";
+import { older } from "./versions";
 
 /** How long after the reply the host has to come back. */
 export const COME_BACK_MS = 60_000;
