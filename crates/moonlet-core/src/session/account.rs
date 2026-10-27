@@ -31,8 +31,11 @@ const DEFAULT_SECTION_ID: &str = "default-section";
 const MERGE: RecordKind = RecordKind::Merge;
 /// A member, by its log's name: its `name`, as it calls itself.
 const MEMBER: RecordKind = RecordKind::Member;
+/// A design system or workspace design shared with every member (X71).
+const DESIGN: RecordKind = RecordKind::Design;
 
 type Listener = Arc<dyn Fn(Vec<Change>) + Send + Sync>;
+type Applied = Arc<dyn Fn(&[Change]) + Send + Sync>;
 
 /// How far ahead of this machine's clock a change may be stamped. One
 /// further ahead would win every field from then on and pull every
@@ -44,6 +47,8 @@ pub(super) struct Account {
     log: Log,
     path: PathBuf,
     listener: Option<Listener>,
+    /// Called with the changes taken from other members.
+    applied: Option<Applied>,
 }
 
 /// A log with the changes of one request, written beside the log until the
@@ -199,6 +204,7 @@ impl SessionManager {
             log,
             path,
             listener: None,
+            applied: None,
         });
         Ok(())
     }
@@ -264,6 +270,69 @@ impl SessionManager {
         };
         self.emit_workspaces();
         self.account_changed(changes);
+    }
+
+    /// The design systems and workspace designs of the account (X71), by
+    /// record id; none without an account.
+    pub fn design_records(&self) -> Map<String, Record> {
+        self.with_log(|log| log.records(DESIGN))
+    }
+
+    /// Sets the fields of design record `id` that differ from `fields`, as
+    /// this member's changes, and sends them on; true when one changed.
+    pub fn set_design(&self, id: &str, fields: &[(&str, Value)]) -> bool {
+        let changes = {
+            let mut account = self.account.lock().unwrap();
+            let Some(a) = account.as_mut() else { return false };
+            if a.log.is_deleted(DESIGN, id) {
+                return false;
+            }
+            let now = a.log.records(DESIGN).remove(id).unwrap_or_default();
+            let mut log = a.log.clone();
+            let changes: Vec<Change> = fields
+                .iter()
+                .filter(|(field, value)| now.get(*field) != Some(value))
+                .map(|(field, value)| log.set(now_ms(), DESIGN, id, field, value.clone()))
+                .collect();
+            if changes.is_empty() {
+                return false;
+            }
+            if let Err(e) = write_private(&a.path, &log) {
+                tracing::warn!("cannot save a design's record: {e:#}");
+                return false;
+            }
+            a.log = log;
+            changes
+        };
+        self.account_changed(changes);
+        true
+    }
+
+    /// Deletes design record `id` for good, and sends that on.
+    pub fn delete_design(&self, id: &str) {
+        let change = {
+            let mut account = self.account.lock().unwrap();
+            let Some(a) = account.as_mut() else { return };
+            if a.log.is_deleted(DESIGN, id) {
+                return;
+            }
+            let mut log = a.log.clone();
+            let change = log.delete(now_ms(), DESIGN, id);
+            if let Err(e) = write_private(&a.path, &log) {
+                tracing::warn!("cannot save a design's removal: {e:#}");
+                return;
+            }
+            a.log = log;
+            change
+        };
+        self.account_changed(vec![change]);
+    }
+
+    /// Called with the changes this member takes from the others.
+    pub fn on_account_applied(&self, f: impl Fn(&[Change]) + Send + Sync + 'static) {
+        if let Some(a) = self.account.lock().unwrap().as_mut() {
+            a.applied = Some(Arc::new(f));
+        }
     }
 
     /// Whether this member shares an account (X68).
@@ -352,6 +421,10 @@ impl SessionManager {
         };
         if changed {
             self.emit_all();
+            let applied = self.account.lock().unwrap().as_ref().and_then(|a| a.applied.clone());
+            if let Some(f) = applied {
+                f(&taken);
+            }
         }
         taken
     }
@@ -1408,6 +1481,29 @@ mod tests {
         // An hour fast is a clock that drifted, and is taken.
         book.apply_account(vec![at(now_ms() + 60 * 60 * 1000, 1, "Home")]);
         assert_eq!(book.list_workspaces()[0].name, "Home");
+    }
+
+    #[tokio::test]
+    async fn a_design_record_set_on_one_member_reads_the_same_on_another_and_a_deleted_one_is_gone() {
+        use serde_json::json;
+        let (_h1, book) = member("book").await;
+        let (_h2, mini) = member("mini").await;
+        let heard = Arc::new(Mutex::new(Vec::<String>::new()));
+        let out = heard.clone();
+        mini.on_account_applied(move |c| out.lock().unwrap().extend(c.iter().map(|c| c.kind.clone())));
+        assert!(book.set_design("d-acme", &[("workspace", json!("w-1")), ("slug", json!("acme-web")), ("owner", json!("book"))]));
+        // Setting what is already there changes nothing.
+        assert!(!book.set_design("d-acme", &[("owner", json!("book"))]));
+        sync(&book, &mini);
+        let records = mini.design_records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records["d-acme"]["slug"], json!("acme-web"));
+        assert_eq!(records["d-acme"]["owner"], json!("book"));
+        assert!(heard.lock().unwrap().iter().all(|k| k == "design" || k == "member" || k == "workspace" || k == "section"));
+        assert!(heard.lock().unwrap().iter().any(|k| k == "design"));
+        mini.delete_design("d-acme");
+        sync(&book, &mini);
+        assert!(book.design_records().is_empty());
     }
 
     #[tokio::test]

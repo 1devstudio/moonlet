@@ -38,7 +38,7 @@ An **item** is one design system (`systems/<slug>/`) or one workspace design (`d
 
 ### Owners and copies (daemon)
 
-- [ ] Each item has an account record of kind `design`, keyed by workspace, kind (`system` or `design`) and slug. Its fields are `owner` (the owner's worker id), `tree` (the latest published snapshot), `name`, and `agent` (whether the owner's agent is working). A removed item leaves a tombstone.
+- [ ] Each item has an account record of kind `design` under an id of its own, since a deleted record never comes back (X68). Its fields are `workspace`, `kind` (`system` or `design`), `slug`, `name`, `owner` (the owner's worker id), `tree` (the latest published snapshot) and `agent` (whether the owner's agent is working). A removed item's record is deleted.
 - [ ] On first start with X71, each item on disk that has no record gets one, owned by this member. When another member already owns that key, this member's item is renamed to the next free slug (`<slug>-2`) before it is published, so neither is lost.
 - [ ] A member with no central host owns every item it holds, as today.
 - [ ] The owner publishes a new snapshot within 3 s of a change to the item's folder settling. A member owner first sends the objects the central host lacks (`design.offer`). Only once the central host holds the tree does it change `tree` in its record.
@@ -62,7 +62,7 @@ An **item** is one design system (`systems/<slug>/`) or one workspace design (`d
 ### Merged workspaces
 
 - [ ] `workspace.merge` moves the merged workspace's items into the workspace it merges into, on the member that owns them. A slug already taken there gets the next free suffix.
-- [ ] The owner republishes each moved item under its new key and leaves a tombstone under the old key. Copies follow on every member.
+- [ ] The owner changes each moved item's record to its new workspace and slug. Members drop their copies under the merged workspace, and copies at the new place follow on every member.
 - [ ] On start, items left under a workspace id that the account's `merges` maps to another workspace move the same way. This repairs merges made with v0.1.33.
 
 ### The app
@@ -95,7 +95,7 @@ The sidebar row of a copy carries the owner's host label in the muted style of t
 
 ## Data and config
 
-- `~/.moonlet/design/.store/` is a bare git repository holding every item's snapshots. `~/.moonlet/design/.store/applied.json` maps each item's key to the tree its folder holds. Both are host-local.
+- `~/.moonlet/design/.store/` is a bare git repository holding every item's snapshots. `~/.moonlet/design/.store/copies.json` maps each item's record id to where its folder is, the tree it holds and whether this member owns it. Both are host-local.
 - `$MOONLET_HOME/account.json` holds the `design` records (X68).
 - The leftovers go in `$MOONLET_HOME/sync-leftovers/` (X60).
 

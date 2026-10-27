@@ -20,6 +20,9 @@ pub enum RecordKind {
     Merge,
     /// A member, by its log's name: its `name`.
     Member,
+    /// A design system or workspace design (X71): its `workspace`, `kind`,
+    /// `slug`, `name`, `owner` (a worker id), `tree` and `agent`.
+    Design,
 }
 
 impl RecordKind {
@@ -29,6 +32,7 @@ impl RecordKind {
             RecordKind::Section => "section",
             RecordKind::Merge => "merge",
             RecordKind::Member => "member",
+            RecordKind::Design => "design",
         }
     }
 }

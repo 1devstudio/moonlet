@@ -607,6 +607,47 @@ mod tests {
     }
 
     #[test]
+    fn a_renamed_system_takes_the_next_number_and_only_the_designs_asked_follow_it() {
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::new(home.path());
+        store
+            .create_system("w-mac", "Acme web", vec![], Cover::Core, 1)
+            .unwrap();
+        store
+            .create_design("w-mac", "Checkout", "acme-web", "", 2)
+            .unwrap();
+        store
+            .create_design("w-mac", "Billing", "acme-web", "", 3)
+            .unwrap();
+
+        let to = store
+            .rename_item("w-mac", "systems", "acme-web", &|d| d == "checkout")
+            .unwrap();
+
+        assert_eq!(to, "acme-web-2");
+        let names: Vec<(String, String)> = store
+            .systems("w-mac")
+            .unwrap()
+            .into_iter()
+            .map(|s| (s.slug, s.name))
+            .collect();
+        assert_eq!(names, vec![("acme-web-2".into(), "Acme web 2".into())]);
+        let systems: Vec<(String, String)> = store
+            .designs("w-mac")
+            .unwrap()
+            .into_iter()
+            .map(|d| (d.slug, d.system))
+            .collect();
+        assert_eq!(
+            systems,
+            vec![
+                ("billing".into(), "acme-web".into()),
+                ("checkout".into(), "acme-web-2".into())
+            ]
+        );
+    }
+
+    #[test]
     fn a_workspace_with_no_design_folder_moves_nothing() {
         let home = tempfile::tempdir().unwrap();
         let store = Store::new(home.path());
