@@ -770,6 +770,7 @@ async fn archiving_reports_no_origin_error_when_origin_already_deleted_the_branc
         .unwrap();
     assert_eq!(done.remote_error, None);
     assert_eq!(git(&repo, &["branch", "--list", &s.branch]), "");
+    assert_eq!(git(&repo, &["branch", "-r", "--list", &format!("origin/{}", s.branch)]), "");
 }
 
 #[tokio::test]

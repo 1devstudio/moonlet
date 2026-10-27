@@ -1004,16 +1004,20 @@ pub async fn push(dir: &Path, branch: Option<&str>, merged_head: Option<&str>) -
 
 /// Deletes `branch` on origin, as GitHub's "Delete branch" would (X55).
 /// One origin no longer has, as after GitHub deleted a merged PR's branch,
-/// is not an error.
+/// is not an error: only its stale `origin/<branch>` goes.
 pub async fn delete_remote_branch(repo: &Path, branch: &str) -> Result<()> {
     let pushed = git(repo, &["push", "--quiet", "--delete", "--", "origin", branch]).await;
-    let Err(refused) = pushed else {
+    let Err(failed) = pushed else {
         return Ok(());
     };
     let head = format!("refs/heads/{branch}");
     match git_text(repo, &["ls-remote", "--", "origin", &head]).await {
-        Ok(found) if found.is_empty() => Ok(()),
-        _ => Err(refused),
+        Ok(found) if found.is_empty() => {
+            let tracking = format!("refs/remotes/origin/{branch}");
+            git(repo, &["update-ref", "-d", &tracking]).await?;
+            Ok(())
+        }
+        _ => Err(failed),
     }
 }
 
