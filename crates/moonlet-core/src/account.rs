@@ -144,6 +144,11 @@ impl Log {
             .collect()
     }
 
+    /// Whether this log holds change `seq` of log `member`.
+    pub fn has(&self, member: &str, seq: u64) -> bool {
+        self.changes.contains_key(&(member.to_string(), seq))
+    }
+
     /// Whether record `id` of `kind` was deleted: it never comes back.
     pub fn is_deleted(&self, kind: &str, id: &str) -> bool {
         self.changes

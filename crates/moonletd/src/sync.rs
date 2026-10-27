@@ -946,6 +946,16 @@ impl LiveCopies {
         if k.base.is_some() || k.paused.is_some() {
             return;
         }
+        // A link that is up but not registered yet would be refused: the
+        // copy waits, and `link_up` makes it once this Mac is registered.
+        // The link opens before any copy starts since X68, so a copy can
+        // start in that gap. A routing copy is made when the central host
+        // asks, which it does of registered workers only, and nothing
+        // would make it later.
+        if k.kind != CopyKind::Run && !self.registered.load(std::sync::atomic::Ordering::SeqCst) {
+            self.set_state(&id, CopyState::Waiting);
+            return;
+        }
         self.set_state(&id, CopyState::Copying);
         match self.make_copy(&k).await {
             Ok(path) => {

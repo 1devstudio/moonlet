@@ -294,6 +294,11 @@ async fn worker_with(origin: Option<&Path>) -> Daemon {
 
 /// [`worker_with`], as the worker `id` named `name`.
 async fn worker_as(origin: Option<&Path>, id: &str, name: &str) -> Daemon {
+    worker_env(origin, id, name, &[]).await
+}
+
+/// [`worker_as`], with more of the daemon's environment.
+async fn worker_env(origin: Option<&Path>, id: &str, name: &str, extra: &[(&str, &str)]) -> Daemon {
     let home = tempfile::tempdir().unwrap();
     let config = home.path().join("gitconfig");
     write(
@@ -307,21 +312,19 @@ async fn worker_as(origin: Option<&Path>, id: &str, name: &str) -> Daemon {
         &json!({ "central": null, "worker": { "id": id, "name": name, "enabled": false } })
             .to_string(),
     );
-    Daemon::start(
-        home,
-        &[
-            ("MOONLET_MOBILE_ADDRS", "127.0.0.2"),
-            ("GIT_CONFIG_GLOBAL", config.to_str().unwrap()),
-            // ORIGIN_URL leads to a local folder through `insteadOf`.
-            ("MOONLET_SYNC_LOCAL_ORIGINS", "1"),
-            // Setups run in a login shell: not the user's own, with its rc
-            // files.
-            ("SHELL", "/bin/sh"),
-            // A token in the daemon's own environment, which no setup gets.
-            ("AGENT_TOKEN", "sk-leak"),
-        ],
-    )
-    .await
+    let mut env = vec![
+        ("MOONLET_MOBILE_ADDRS", "127.0.0.2"),
+        ("GIT_CONFIG_GLOBAL", config.to_str().unwrap()),
+        // ORIGIN_URL leads to a local folder through `insteadOf`.
+        ("MOONLET_SYNC_LOCAL_ORIGINS", "1"),
+        // Setups run in a login shell: not the user's own, with its rc
+        // files.
+        ("SHELL", "/bin/sh"),
+        // A token in the daemon's own environment, which no setup gets.
+        ("AGENT_TOKEN", "sk-leak"),
+    ];
+    env.extend_from_slice(extra);
+    Daemon::start(home, &env).await
 }
 
 /// Pairs `worker` with `central` and sets it as the central host, without
@@ -432,6 +435,26 @@ async fn synced() -> (Central, Daemon, PathBuf) {
 /// [`synced`], with no other test of this file running meanwhile.
 async fn synced_alone() -> (Central, Daemon, PathBuf) {
     synced_to(central_alone().await).await
+}
+
+#[tokio::test]
+async fn a_copy_started_before_this_mac_is_registered_waits_for_it() {
+    let central = central().await;
+    // Linked, this Mac takes two seconds to register (X68 opens the link
+    // before any copy starts, so a copy can start in that gap).
+    let worker = worker_env(Some(&central.origin), "7d3f1c2a-5b8e-4e61-9a0f-2c4d6e8b1f37", "Alex's MacBook Pro", &[("MOONLET_TEST_REGISTER_DELAY_MS", "2000")]).await;
+    link(&central, &worker).await;
+    let start = Instant::now();
+    loop {
+        let info: Value = worker.call("link.get", json!({})).await;
+        if info["state"]["kind"] == "connected" {
+            break;
+        }
+        assert!(start.elapsed() < Duration::from_secs(15), "never connected: {info}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let _: Copy = worker.call("sync.start", json!({ "session": central.session_id() })).await;
+    in_sync(&worker).await;
 }
 
 async fn synced_to(central: Central) -> (Central, Daemon, PathBuf) {

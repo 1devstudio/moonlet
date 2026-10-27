@@ -174,6 +174,11 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Whether this member shares an account (X68).
+    pub fn has_account(&self) -> bool {
+        self.account.lock().unwrap().is_some()
+    }
+
     /// Called with every change this member makes, to send it on.
     pub fn on_account_change(&self, f: impl Fn(Vec<Change>) + Send + Sync + 'static) {
         if let Some(a) = self.account.lock().unwrap().as_mut() {
@@ -213,38 +218,36 @@ impl SessionManager {
     }
 
     /// Takes in changes from other members, and shows what they change.
-    pub fn apply_account(&self, changes: Vec<Change>) {
-        if changes.is_empty() {
-            return;
-        }
-        let changed = {
+    /// Returns those it had not seen and kept: the ones to pass on.
+    pub fn apply_account(&self, changes: Vec<Change>) -> Vec<Change> {
+        let (taken, changed) = {
             let mut st = self.state.lock().unwrap();
             let mut account = self.account.lock().unwrap();
-            let Some(a) = account.as_mut() else { return };
+            let Some(a) = account.as_mut() else { return Vec::new() };
             let mut log = a.log.clone();
-            let before = log.version();
-            log.apply(changes);
-            if log.version() == before {
-                false
-            } else {
-                let mut next = st.clone();
-                lay_onto(&mut next, &log);
-                match write_private(&a.path, &log).and_then(|()| self.save(&next)) {
-                    Ok(()) => {
-                        a.log = log;
-                        *st = next;
-                        true
-                    }
-                    Err(e) => {
-                        tracing::warn!("cannot save the account's changes: {e:#}");
-                        false
-                    }
+            let new: Vec<Change> = changes.into_iter().filter(|c| !log.has(&c.stamp.member, c.seq)).collect();
+            if new.is_empty() {
+                return Vec::new();
+            }
+            log.apply(new.clone());
+            let mut next = st.clone();
+            lay_onto(&mut next, &log);
+            match write_private(&a.path, &log).and_then(|()| self.save(&next)) {
+                Ok(()) => {
+                    a.log = log;
+                    *st = next;
+                    (new, true)
+                }
+                Err(e) => {
+                    tracing::warn!("cannot save the account's changes: {e:#}");
+                    (Vec::new(), false)
                 }
             }
         };
         if changed {
             self.emit_all();
         }
+        taken
     }
 }
 
