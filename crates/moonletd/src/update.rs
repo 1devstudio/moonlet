@@ -23,9 +23,9 @@ use moonlet_proto::types::DaemonUpdated;
 /// Where releases are published, one folder per tag.
 const RELEASES: &str = "https://github.com/1devstudio/moonlet/releases/download";
 
-/// How long the handoff waits after the reply is queued, so the reply
-/// reaches the Mac before the old daemon exits.
-const REPLY_GRACE: Duration = Duration::from_millis(300);
+/// How long the handoff waits after a reply only queued (`Handoff::start_after`),
+/// so it reaches the client before the old daemon exits.
+pub const REPLY_GRACE: Duration = Duration::from_millis(300);
 
 /// How long a download and its check may take in all; a Mac waits a minute
 /// longer for the answer (`moonlet_link::tailnet::update`).
@@ -354,7 +354,15 @@ pub fn install_bundle(app: &Path, archive: &[u8], version: &str) -> Result<Insta
         let _ = std::fs::remove_dir_all(&old);
         swap(&new, app).map_err(install_failed)?;
         // `new` now holds the old bundle.
-        std::fs::rename(&new, &old).map_err(install_failed)?;
+        if let Err(e) = std::fs::rename(&new, &old) {
+            // Put the old app back before the staging folder goes.
+            if let Err(back) = swap(&new, app) {
+                let kept = app.with_file_name(format!(".{name}.kept-{}", std::process::id()));
+                let _ = std::fs::rename(&new, &kept);
+                tracing::error!(old = %kept.display(), "cannot put the old app back: {back}");
+            }
+            return Err(install_failed(e));
+        }
         Ok(Installed::Bundle { app: app.to_path_buf(), old })
     })();
     let _ = std::fs::remove_dir_all(&unpacked);
@@ -424,9 +432,43 @@ pub fn clean_leftovers() {
     }
 }
 
-/// `daemon.update {version}`: installs `version` and starts the handoff;
-/// answers `{from, to}` once the new files are in place.
-pub async fn update(daemon: &Arc<Daemon>, version: &str) -> Result<DaemonUpdated, RpcError> {
+/// A handoff to an installed release, started once the reply is on its way:
+/// the old daemon exits after it, cutting off any reply not yet written.
+#[must_use = "a handoff the caller never starts leaves the update claimed"]
+pub struct Handoff {
+    daemon: Arc<Daemon>,
+    installed: Installed,
+}
+
+impl Handoff {
+    /// Hands every session to the new `moonletd`; keeps the install when it
+    /// takes over, undoes it when it doesn't.
+    pub fn start(self) {
+        let Handoff { daemon, installed } = self;
+        let binary = installed.binary();
+        tokio::spawn(async move {
+            match crate::upgrade::hand_off_claimed(daemon, Some(binary)).await {
+                Ok(()) => installed.keep(),
+                Err(e) => {
+                    tracing::error!("update failed, still serving: {e:#}");
+                    installed.undo();
+                }
+            }
+        });
+    }
+
+    /// [`Handoff::start`] after `wait`, for a reply the caller can only queue.
+    pub fn start_after(self, wait: Duration) {
+        tokio::spawn(async move {
+            tokio::time::sleep(wait).await;
+            self.start();
+        });
+    }
+}
+
+/// `daemon.update {version}`: installs `version`; answers `{from, to}` once
+/// the new files are in place, with the handoff for the caller to start.
+pub async fn update(daemon: &Arc<Daemon>, version: &str) -> Result<(DaemonUpdated, Handoff), RpcError> {
     let from = env!("CARGO_PKG_VERSION");
     let Some(wanted) = self::version(version) else {
         return Err(err("invalid_params", format!("not a version: {version}")));
@@ -455,20 +497,8 @@ pub async fn update(daemon: &Arc<Daemon>, version: &str) -> Result<DaemonUpdated
             return Err(e);
         }
     };
-    let binary = installed.binary();
-    tracing::info!(from, to = version, binary = %binary.display(), "updating");
-    let me = daemon.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(REPLY_GRACE).await;
-        match crate::upgrade::hand_off_claimed(me, Some(binary)).await {
-            Ok(()) => installed.keep(),
-            Err(e) => {
-                tracing::error!("update failed, still serving: {e:#}");
-                installed.undo();
-            }
-        }
-    });
-    Ok(DaemonUpdated { from: from.into(), to: version.into() })
+    tracing::info!(from, to = version, binary = %installed.binary().display(), "updating");
+    Ok((DaemonUpdated { from: from.into(), to: version.into() }, Handoff { daemon: daemon.clone(), installed }))
 }
 
 #[cfg(test)]
@@ -549,6 +579,23 @@ mod tests {
             std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into()).collect();
         left.sort();
         assert_eq!(left, ["moonlet.app"]);
+    }
+
+    /// Moving the old bundle aside fails (here a file is in its way): the
+    /// bundles are swapped back, and the old app stays.
+    #[test]
+    fn a_swap_that_cannot_finish_leaves_the_old_app() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = dir.path().join("moonlet.app");
+        std::fs::create_dir_all(app.join("Contents/MacOS")).unwrap();
+        std::fs::write(app.join("Contents/MacOS/moonletd"), "old").unwrap();
+        std::fs::write(aside(&app), "in the way").unwrap();
+        let info = plist("0.1.34");
+        let archive = tgz(&[("moonlet.app/Contents/MacOS/moonletd", b"new"), ("moonlet.app/Contents/Info.plist", &info)]);
+
+        let e = install_bundle(&app, &archive, "0.1.34").unwrap_err();
+        assert_eq!(e.code, "install_failed");
+        assert_eq!(std::fs::read_to_string(app.join("Contents/MacOS/moonletd")).unwrap(), "old");
     }
 
     #[test]
