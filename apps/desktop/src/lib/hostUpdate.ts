@@ -57,3 +57,17 @@ export function followUpdate(u: HostUpdate, h: HostInfo, now: number): { next: H
   }
   return { next: u, reconnect: h.status === "needs_update" || h.status === "error" };
 }
+
+/** The failure to show on host `h`'s row: kept until the host runs this
+ * Mac's version, whether it is connected, reconnecting or in error. */
+export function failureShown(u: HostUpdate | undefined, h: HostInfo, appVersion: string): HostUpdate | null {
+  if (u?.phase !== "failed") return null;
+  const current = h.status === "connected" && !!h.daemon_version && !older(h.daemon_version, appVersion);
+  return current ? null : u;
+}
+
+/** The sidebar line for a connected host this Mac can update, which has no
+ * notice otherwise; null for any other host. */
+export function offerNotice(h: HostInfo, appVersion: string): string | null {
+  return h.status === "connected" && updateOffer(h, appVersion) ? `${h.label} runs moonlet ${h.daemon_version}` : null;
+}

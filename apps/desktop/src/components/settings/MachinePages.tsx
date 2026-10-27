@@ -13,7 +13,7 @@ import { errorToast, toast, useStore } from "../../lib/store";
 import { hostActions, hostLine, phoneAccessLine, removeAsks, updateCommand } from "../../lib/settingsPage";
 import { Button, Dialog, Field, IconButton, cx, inputCls } from "../ui";
 import { HostUpdateButton } from "../HostUpdate";
-import { olderHosts, olderHostsText, updateAllLabel, updateOffer } from "../../lib/hostUpdate";
+import { failureShown, olderHosts, olderHostsText, updateAllLabel } from "../../lib/hostUpdate";
 import { updateAll, useHostUpdates } from "../../lib/hostUpdateStore";
 import { centralHostButton, centralHostId, clampSlots, heavyHostIds, linkLine, linkRetries, pairThenLink, pickCentral, remoteLinkAction, remoteLinkError, remoteLinkLine, remoteSwitchOn, slotsHint, turnOnNeeds, watchLink, withRunning } from "../../lib/workerLink";
 import { changeCentral } from "../../lib/syncStore";
@@ -24,8 +24,8 @@ const iconBox = "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg
 function HostRow({ host, sessions, central, children }: { host: HostInfo; sessions: number; central?: boolean; children?: React.ReactNode }) {
   const appVersion = useStore((s) => s.appVersion) ?? "";
   const update = useHostUpdates((s) => s.updates[host.id]);
-  // A failure stops showing once the host no longer needs the update.
-  const failed = update?.phase === "failed" && updateOffer(host, appVersion) ? update : null;
+  const shown = failureShown(update, host, appVersion);
+  const failed = shown?.phase === "failed" ? shown : null;
   const command = failed ? failed.command : updateCommand(host, appVersion);
   return (
     <div data-setting={`host-${host.id}`} className="flex items-center gap-3.5 px-4 py-3.5">

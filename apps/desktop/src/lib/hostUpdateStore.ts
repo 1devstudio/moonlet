@@ -23,6 +23,16 @@ function put(id: string, u: HostUpdate | null) {
   });
 }
 
+/** The code and message of a failed `host_update`: Tauri hands the
+ * command's error back as a plain object. */
+function rpcError(e: unknown): { code: string; message: string } {
+  if (e instanceof DaemonError) return { code: e.code, message: e.message };
+  if (e && typeof e === "object" && typeof (e as { code?: unknown }).code === "string" && typeof (e as { message?: unknown }).message === "string") {
+    return e as { code: string; message: string };
+  }
+  return { code: "failed", message: String(e) };
+}
+
 /** Updates `h` to `version`, then follows it until it is back. */
 export async function updateHost(h: HostInfo, version: string) {
   if (useHostUpdates.getState().updates[h.id]?.phase === "updating") return;
@@ -30,8 +40,12 @@ export async function updateHost(h: HostInfo, version: string) {
   try {
     await hostsApi.update(h.id, version);
   } catch (e) {
-    const err = e instanceof DaemonError ? { code: e.code, message: e.message } : { code: "failed", message: String(e) };
-    put(h.id, updateFailed(h, err));
+    put(h.id, updateFailed(h, rpcError(e)));
+    return;
+  }
+  // Removed while it answered: nothing to follow.
+  if (!useStore.getState().hosts[h.id]) {
+    put(h.id, null);
     return;
   }
   // The minute to come back counts from the reply, not the click: the
@@ -41,6 +55,7 @@ export async function updateHost(h: HostInfo, version: string) {
     const u = useHostUpdates.getState().updates[h.id];
     const now = useStore.getState().hosts[h.id];
     if (!u || !now) {
+      put(h.id, null);
       clearInterval(timer);
       return;
     }

@@ -29,6 +29,7 @@ import { movingSessions, runningClaudeAgents, switchConfirm } from "../lib/profi
 import { AgentIcon, Button, IconButton, Kbd, StateGlyph, cx, prTone } from "./ui";
 import { updateButton } from "../lib/updater";
 import { HostUpdateButton, OlderHostsAnnouncer } from "./HostUpdate";
+import { offerNotice } from "../lib/hostUpdate";
 import { claudeBanner, type ClaudeBanner, type StepState } from "../lib/claudeUpdate";
 
 // ------------------------------------------------------------------ helpers
@@ -833,11 +834,11 @@ function HistoryList() {
 
 function HostNotice({ host }: { host: HostInfo }) {
   const appVersion = useStore((s) => s.appVersion);
-  const text = hostNotice(host, appVersion ?? "");
+  const text = hostNotice(host, appVersion ?? "") ?? offerNotice(host, appVersion ?? "");
   if (text === null) return null;
   return (
     <div className="mx-3 mb-2 flex items-center gap-2 rounded-md bg-panel-2 px-2.5 py-1.5 ui-text-12">
-      <span className={cx("h-1.5 w-1.5 shrink-0 rounded-full", host.status === "reconnecting" || host.status === "connecting" ? "bg-blocked" : "bg-error")} />
+      <span className={cx("h-1.5 w-1.5 shrink-0 rounded-full", host.status === "reconnecting" || host.status === "connecting" || host.status === "connected" ? "bg-blocked" : "bg-error")} />
       <span className="min-w-0 flex-1 truncate text-muted" title={text}>
         {text}
       </span>

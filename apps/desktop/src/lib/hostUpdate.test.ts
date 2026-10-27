@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { HostInfo } from "./protocol";
-import { followUpdate, olderHosts, olderHostsText, updateAllLabel, updateFailed, updateOffer } from "./hostUpdate";
+import { failureShown, followUpdate, olderHosts, olderHostsText, offerNotice, updateAllLabel, updateFailed, updateOffer } from "./hostUpdate";
 
 const host = (patch: Partial<HostInfo>): HostInfo => ({
   id: "studio-mini",
@@ -101,5 +101,23 @@ describe("following an update (X69)", () => {
       text: "the release's signature does not match moonlet's key",
       command: null,
     });
+  });
+});
+
+describe("what stays on a host's row after an update (X69)", () => {
+  const failed = { phase: "failed" as const, text: "studio-mini did not come back after the update", command: null };
+
+  it("keeps a failure until the host runs this Mac's version, whatever its state", () => {
+    expect(failureShown(failed, host({ status: "reconnecting" }), "0.1.34")).toBe(failed);
+    expect(failureShown(failed, host({ status: "error", message: "connection refused" }), "0.1.34")).toBe(failed);
+    expect(failureShown(failed, host({ status: "connected", daemon_version: "0.1.33" }), "0.1.34")).toBe(failed);
+    expect(failureShown(failed, host({ status: "connected", daemon_version: "0.1.34" }), "0.1.34")).toBeNull();
+    expect(failureShown(undefined, host({}), "0.1.34")).toBeNull();
+  });
+
+  it("puts a connected older host in the sidebar, where only hosts in trouble showed", () => {
+    expect(offerNotice(host({ status: "connected", daemon_version: "0.1.33" }), "0.1.34")).toBe("studio-mini runs moonlet 0.1.33");
+    expect(offerNotice(host({ status: "connected", daemon_version: "0.1.34" }), "0.1.34")).toBeNull();
+    expect(offerNotice(host({ status: "needs_update" }), "0.1.34")).toBeNull();
   });
 });

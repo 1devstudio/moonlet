@@ -90,6 +90,36 @@ describe("updating a host from the app (X69)", () => {
     });
   });
 
+  it("reads the error Tauri hands back as a plain object", async () => {
+    const box = host({ id: "build-box", label: "build-box", os: "linux", daemon_version: "0.1.32" });
+    app.hosts = { [box.id]: box };
+    app.answers[box.id] = () => Promise.reject({ code: "too_old", message: "build-box runs moonlet 0.1.32, which can't be updated from here" });
+    await updateHost(box, "0.1.34");
+    expect(useHostUpdates.getState().updates["build-box"]).toEqual({
+      phase: "failed",
+      text: "build-box runs moonlet 0.1.32, which can't be updated from here: run this there",
+      command: "curl -fsSL https://github.com/1devstudio/moonlet/releases/latest/download/install.sh | sh",
+    });
+  });
+
+  it("forgets the update of a host removed meanwhile, so the same host can update again", async () => {
+    const mini = host({});
+    app.hosts = { [mini.id]: mini };
+    let answer = (_: unknown) => {};
+    app.answers[mini.id] = () => new Promise((resolve) => (answer = resolve));
+    const running = updateHost(mini, "0.1.34");
+    app.hosts = {};
+    answer({ from: "0.1.33", to: "0.1.34" });
+    await running;
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(useHostUpdates.getState().updates).toEqual({});
+
+    app.hosts = { [mini.id]: mini };
+    app.answers[mini.id] = () => Promise.resolve({ from: "0.1.33", to: "0.1.34" });
+    await updateHost(mini, "0.1.34");
+    expect(useHostUpdates.getState().updates["studio-mini"]).toMatchObject({ phase: "updating" });
+  });
+
   it("offers Update all once per app version", () => {
     const hosts = [host({}), host({ id: "build-box", label: "build-box" })];
     announceOlderHosts(hosts, "0.1.34");
