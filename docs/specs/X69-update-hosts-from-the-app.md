@@ -13,9 +13,9 @@ Updating a tailnet host is manual today. When the MacBook updates and the Mac mi
 ## User journey
 
 1. The MacBook updates to 0.1.34. The Mac mini and `build-box` (Linux) still run 0.1.33.
-2. Settings › Machines › Hosts shows each host's row as today, with an **Update to 0.1.34** button next to **Retry**. The sidebar notice under each host gets the same button.
+2. A toast says "2 hosts run an older moonlet" with **Update all**. Settings › Machines › Hosts shows **Update all (2)** above the list, and each host's row has an **Update to 0.1.34** button next to **Retry**. The sidebar notice under each host gets the same button.
 3. The user clicks it on `build-box`. The button reads "Updating…". About 10 seconds later the row reconnects and reads "Connected · moonletd 0.1.34 · 3 sessions". The agents that ran on `build-box` are still running.
-4. The user does the same on the Mac mini. The daemon there replaces `/Applications/moonlet.app` and hands over to the new bundle's `moonletd`. If the moonlet app is open on the mini, it keeps running 0.1.33 until it is restarted, and its own footer offers "Restart to update" (see open questions).
+4. The user does the same on the Mac mini (or clicked **Update all** and both run at once). The daemon there replaces `/Applications/moonlet.app` and hands over to the new bundle's `moonletd`. The moonlet app open on the mini notices that its bundle on disk is now 0.1.34 and restarts itself into it. If it has unsaved edits (a file tab, a design page), it doesn't restart: its footer shows "Restart to update" until someone there clicks it.
 5. A host still on 0.1.33 or older came before this spec, so it cannot update itself. Clicking the button there shows the manual way, as today: "studio-mini runs 0.1.33, which can't be updated from here. Update it from its Settings › Updates.", or the `install.sh` command with **Copy** for Linux.
 
 ## Behaviour and acceptance criteria
@@ -51,6 +51,18 @@ Updating a tailnet host is manual today. When the MacBook updates and the Mac mi
 - [ ] An error shows on the row with its message. `too_old` keeps today's manual text (the `install.sh` command with **Copy** for Linux, Settings › Updates for a Mac).
 - [ ] The sidebar notice for a host (R4) offers the same button.
 
+### Update all
+
+- [ ] When at least one tailnet host could get the button above, Settings › Machines › Hosts shows **Update all (<n>)** above the list. It starts `daemon.update` on every such host at once; each row then shows its own state, as if its button had been clicked. A host that fails doesn't stop the others.
+- [ ] The first time the app finds older hosts after it starts as a new version, a toast says "<n> hosts run an older moonlet" ("studio-mini runs an older moonlet" for one) with **Update all**. It doesn't come back for that app version, as X35's update toast doesn't.
+
+### The app on an updated Mac restarts itself
+
+- [ ] Each time the app connects to its own daemon (at launch and after every reconnect, which a live upgrade causes), it reads the version of its bundle on disk (`Contents/Info.plist`, `CFBundleShortVersionString`). It reads it the same way when the connection is refused with `protocol_mismatch`, so this works when the protocol changed too.
+- [ ] When the bundle on disk is newer than the running app, the app relaunches into it (`relaunch`, as X35's "Restart to update"). Sessions are the daemon's, so every terminal and agent is still there after the relaunch.
+- [ ] Before relaunching, the app checks for unsaved edits (a dirty file tab, X26, or a design page with unsaved changes, X65). If there are any, it doesn't relaunch. Its footer button reads "Restart to update", as X35's does, and nothing is lost.
+- [ ] A dev or e2e build, which has no bundle to read, never relaunches this way.
+
 ## UI
 
 Settings › Machines › Hosts, a tailnet host row:
@@ -67,7 +79,7 @@ A connected but older host (same protocol):
 
 ## Protocol and RPCs
 
-- **`daemon.update {version}` → `{from, to}`**, new. Errors: `forbidden`, `invalid_params`, `not_newer`, `unsupported`, `download_failed`, `bad_signature`, `install_failed`, `busy`, `too_old` (client side only).
+- **`daemon.update {version}` → `{from, to}`**, new. The app's relaunch needs no RPC: the app reads its own bundle. Errors: `forbidden`, `invalid_params`, `not_newer`, `unsupported`, `download_failed`, `bad_signature`, `install_failed`, `busy`, `too_old` (client side only).
 - **Before `hello`:** the one request above, on a tailnet connection after `authed`.
 - `PROTOCOL_VERSION` stays: the method is new, and the pre-`hello` request only adds to what a daemon accepts.
 - `docs/protocol.md` documents both forms and states that the pre-`hello` form never changes.
@@ -91,11 +103,10 @@ A connected but older host (same protocol):
 ## Out of scope
 
 - SSH hosts: **Reinstall** (R2) already updates them over SSH.
-- Updating the moonlet app's window on the host. It keeps its version until restarted (open question 1).
 - Updating a host from the phone (X40).
 - Hosts that are not this Mac's Hosts rows, such as other members of the account (X68) seen only through the central host.
 - Release channels, skipping a version, and updating to a version other than this Mac's.
-- Updating hosts automatically when the Mac updates (open question 3).
+- Updating hosts automatically without a click when the Mac updates. **Update all** and its toast still need the user.
 
 ## Test plan
 
@@ -106,14 +117,22 @@ A connected but older host (same protocol):
   - A tampered archive gives `bad_signature`, and the binary and pid are unchanged; a 404 gives `download_failed`; `0.0.1` gives `not_newer`; a daemon run from `target/debug` gives `unsupported`; a second request during the first gives `busy`.
 - **Rust unit (`moonletd`):** the Mac bundle swap on a fake `.app` folder in a temp dir (new bundle in place, old one restored when the handoff fails, removed after it succeeds), and the asset choice per layout, os and arch.
 - **Rust unit (`moonlet-proto`):** the pre-`hello` request and its reply, pinned as literal JSON.
+- **Vitest (`hostUpdate.test.ts` or `settingsPage.test.ts`):** which hosts **Update all** takes and its count; the toast's text for one and for several hosts, and that it shows once per app version; one failed host leaves the others running.
+- **Vitest (`updater.test.ts`):** the decision to relaunch: a newer bundle on disk relaunches; the same or an older one doesn't; unsaved edits give "Restart to update" instead; a dev build (no bundle version) never relaunches.
 - **Vitest (`settingsPage.test.ts`):** `hostActions`/`updateAction` show **Update to 0.1.34** for older tailnet hosts in `needs_update` and `connected`, and not for newer, unknown, SSH or phone hosts; the "Updating…" state, its timeout line, and the `too_old` text for Linux and Mac with the literal strings above.
 - **Release:** the workflow fails when a Linux archive has no `.sig`, or its `.sig` doesn't verify against the public key.
 - **No e2e spec:** e2e builds are debug builds without a release to fetch. The Rust integration tests drive the whole path with a real daemon.
-- **Manual, once two releases carry X69:** update the user's Mac mini and a Linux VPS from the MacBook over Tailscale; sessions and the login item (X56) survive, and `systemctl --user is-active moonletd` stays `active`.
+- **Manual, once two releases carry X69:** update the user's Mac mini and a Linux VPS from the MacBook over Tailscale with **Update all**; sessions and the login item (X56) survive; the mini's open app restarts into the new version, and with an unsaved file tab it shows "Restart to update" instead; `systemctl --user is-active moonletd` stays `active`.
+
+## Decided
+
+User decisions, 2026-10-27:
+
+1. **The app window on an updated Mac host restarts.** The app relaunches into the new bundle by itself, unless it has unsaved edits, in which case it shows "Restart to update" (see "The app on an updated Mac restarts itself").
+2. **Phones may not update a host.** Only a paired Mac, and the Mac's own app on the local socket.
+3. **Update all.** One action updates every older tailnet host at once, offered in Settings and as a toast once per app version.
+4. **The Mac's own app may call `daemon.update` on the local socket.**
 
 ## Open questions
 
-1. **The app window on an updated Mac host.** If the moonlet app is open on the Mac mini, it keeps running the old version against a newer daemon. When the protocol changed, that window shows its own "Update moonlet on this Mac". Proposed: leave it alone. The app's own updater (X35) then finds the version already installed on disk and offers "Restart to update". An alternative is for the daemon to tell the app to relaunch.
-2. **Phones.** Proposed: no phone may update a host. ADR 0014 wants headless hosts managed from "client apps", which could include the phone. Allowing a phone would only change one check.
-3. **Automatic updates.** When this Mac updates, should it offer to update every older host at once, for example with an "Update all hosts" toast? Proposed: no; a button per host comes first.
-4. **The app as a target.** The Mac's own app also calls `daemon.update` on the local socket. Is that useful, for example for a Mac whose app isn't running? Proposed: allow it, since it costs nothing; the app's own updater stays the normal way.
+- None.
