@@ -95,6 +95,12 @@ export function shownWorkspace(kept: WorkspaceRef | string | null, list: HostWor
   return member ? { host: member.host, id: kept.id, account: accountOf(member) } : null;
 }
 
+/** Whether a sheet row, a workspace or null for All workspaces, is the one
+ * shown: the same workspace of the same account, on whichever member. */
+export function isChosen(ref: WorkspaceChoice["ref"] | null, shown: WorkspaceRef | null): boolean {
+  return ref === null ? shown === null : shown?.id === ref.id && shown.account === ref.account;
+}
+
 /** Whether workspace `id` of `host`, which shares `account`, is in what is
  * shown: everything, or the shown workspace on every member of its account. */
 export function inShown(shown: WorkspaceRef | null, host: string, account: string | undefined, id: string): boolean {

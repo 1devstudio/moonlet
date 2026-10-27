@@ -7,9 +7,9 @@ import { Check, ChevronDown, Merge } from "lucide-react";
 import { rpc } from "@desktop/lib/daemon";
 import { confirmView, type ConfirmOptions } from "@desktop/lib/confirmOptions";
 import { M, type ProfileInfo } from "@desktop/lib/protocol";
-import { colorHex } from "@desktop/lib/workspaces";
+import { colorHex, mergeHost } from "@desktop/lib/workspaces";
 import { updateSettings, useApp, useShownWorkspace } from "../lib/app";
-import { hostWorkspaces, mergeAsk, mergeChoices, workspaceChoices, type WorkspaceChoice } from "../lib/workspaceChoices";
+import { hostWorkspaces, isChosen, mergeAsk, mergeChoices, workspaceChoices, type WorkspaceChoice } from "../lib/workspaceChoices";
 import { Sheet } from "./Sheet";
 import { Btn, cx } from "./ui";
 
@@ -24,8 +24,7 @@ export function WorkspacePill() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const choices = workspaceChoices(hostWorkspaces(hosts, data));
-  const isCurrent = (ref: { id: string; account: string } | null) => (ref === null ? shown === null : shown?.id === ref.id && shown.account === ref.account);
-  const current = choices.find((c) => isCurrent(c.ref));
+  const current = choices.find((c) => isChosen(c.ref, shown));
   const targets = current ? mergeChoices(choices, current) : [];
   const close = () => {
     setOpen(false);
@@ -37,8 +36,7 @@ export function WorkspacePill() {
     if (!current) return;
     // The question names what a new Claude profile does, in the terms of the
     // member asked; without its profiles it leaves that out.
-    const host = mergeAsk(current, into, data, []).host;
-    const profiles = await rpc<ProfileInfo[]>(host, M.profileList).catch(() => []);
+    const profiles = await rpc<ProfileInfo[]>(mergeHost(current.row, into.row), M.profileList).catch(() => []);
     setStep({ kind: "confirm", into, ...mergeAsk(current, into, data, profiles) });
   };
 
@@ -82,7 +80,7 @@ export function WorkspacePill() {
                     className="flex min-h-12 items-center gap-3 rounded-[10px] px-3 text-left text-[15px]"
                   >
                     <ChoiceLine c={c} />
-                    {isCurrent(c.ref) && <Check size={16} className="text-accent" />}
+                    {isChosen(c.ref, shown) && <Check size={16} className="text-accent" />}
                   </button>
                 </Fragment>
               ))}

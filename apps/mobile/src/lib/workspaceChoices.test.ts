@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hostWorkspaces, inShown, mergeAsk, mergeChoices, shownWorkspace, workspaceChoices } from "./workspaceChoices";
+import { hostWorkspaces, inShown, isChosen, mergeAsk, mergeChoices, shownWorkspace, workspaceChoices } from "./workspaceChoices";
 import { data, session, terminal, workspace } from "./fixtures";
 
 /** X68's journey: the MacBook and studio-mini share studio-mini's account,
@@ -66,6 +66,16 @@ describe("shownWorkspace", () => {
     expect(shownWorkspace({ host: "mac", id: "gone", account: "w-mini" }, world())).toBeNull();
     expect(shownWorkspace("Nowhere", world())).toBeNull();
     expect(shownWorkspace(null, world())).toBeNull();
+  });
+});
+
+describe("isChosen", () => {
+  it("ticks the workspace shown, on whichever member of its account, or All workspaces", () => {
+    const shown = { host: "mini", id: "p1", account: "w-mini" };
+    expect(isChosen({ host: "mac", id: "p1", account: "w-mini" }, shown)).toBe(true);
+    expect(isChosen({ host: "mac/devbox", id: "p1", account: "mac/devbox" }, shown)).toBe(false);
+    expect(isChosen(null, shown)).toBe(false);
+    expect(isChosen(null, null)).toBe(true);
   });
 });
 
