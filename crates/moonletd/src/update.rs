@@ -148,6 +148,11 @@ async fn download(layout: &Layout, version: &str) -> Result<Vec<u8>, RpcError> {
             let (Some(url), Some(sig)) = (entry["url"].as_str(), entry["signature"].as_str()) else {
                 return Err(err("download_failed", format!("release {version} has no {}", updater_platform())));
             };
+            // The signature says moonlet made the archive, not which release
+            // it is: take it only from the release asked for.
+            if !in_release(url, &releases, version) {
+                return Err(err("download_failed", format!("latest.json points outside release {version}: {url}")));
+            }
             (url.to_string(), sig.to_string())
         }
     };
@@ -156,13 +161,27 @@ async fn download(layout: &Layout, version: &str) -> Result<Vec<u8>, RpcError> {
     Ok(data)
 }
 
+/// Whether `url` is a file of release `version` itself.
+fn in_release(url: &str, releases: &str, version: &str) -> bool {
+    url.strip_prefix(&format!("{releases}/v{version}/"))
+        .is_some_and(|name| !name.is_empty() && !name.contains('/') && !name.contains(".."))
+}
+
+/// `CFBundleShortVersionString` of an app's `Info.plist`.
+pub fn bundle_version(plist: &str) -> Option<String> {
+    let after = &plist[plist.find("<key>CFBundleShortVersionString</key>")?..];
+    let start = after.find("<string>")? + "<string>".len();
+    let end = after[start..].find("</string>")?;
+    Some(after[start..start + end].trim().to_string())
+}
+
 fn install_failed(e: impl std::fmt::Display) -> RpcError {
     err("install_failed", e.to_string())
 }
 
 /// Puts `moonletd` and `moonlet` from `archive` into `dir`, each written
 /// beside its place first and then renamed over it, as `install.sh` does.
-pub fn install_bin(dir: &Path, archive: &[u8]) -> Result<PathBuf, RpcError> {
+pub fn install_bin(dir: &Path, archive: &[u8], version: &str) -> Result<PathBuf, RpcError> {
     let mut found = std::collections::HashMap::new();
     let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(archive));
     for entry in tar.entries().map_err(install_failed)? {
@@ -185,6 +204,19 @@ pub fn install_bin(dir: &Path, archive: &[u8]) -> Result<PathBuf, RpcError> {
         std::fs::write(&new, data).map_err(install_failed)?;
         std::fs::set_permissions(&new, std::fs::Permissions::from_mode(0o700)).map_err(install_failed)?;
     }
+    // The signature says moonlet made it, not which release it is.
+    let says = std::process::Command::new(dir.join("moonletd.new"))
+        .arg("--version")
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+    if says != format!("moonletd {version}") {
+        for name in found.keys() {
+            let _ = std::fs::remove_file(dir.join(format!("{name}.new")));
+        }
+        let held = says.strip_prefix("moonletd ").unwrap_or("of an unknown version");
+        return Err(install_failed(format!("the release holds moonletd {held}, not {version}")));
+    }
     for name in found.keys() {
         std::fs::rename(dir.join(format!("{name}.new")), dir.join(name)).map_err(install_failed)?;
     }
@@ -199,7 +231,7 @@ fn aside(app: &Path) -> PathBuf {
 
 /// Unpacks the app archive next to `app` and swaps the two bundles. Returns
 /// where the old bundle went, to [`restore_bundle`] or remove.
-pub fn install_bundle(app: &Path, archive: &[u8]) -> Result<PathBuf, RpcError> {
+pub fn install_bundle(app: &Path, archive: &[u8], version: &str) -> Result<PathBuf, RpcError> {
     let parent = app.parent().ok_or_else(|| install_failed("the app has no folder"))?;
     let name = app.file_name().unwrap_or_default().to_string_lossy().to_string();
     let unpacked = parent.join(format!(".{name}.update-{}", std::process::id()));
@@ -217,6 +249,11 @@ pub fn install_bundle(app: &Path, archive: &[u8]) -> Result<PathBuf, RpcError> {
             .ok_or_else(|| install_failed("the release has no app"))?;
         if !new.join("Contents/MacOS/moonletd").is_file() {
             return Err(install_failed("the release's app has no moonletd"));
+        }
+        let plist = std::fs::read_to_string(new.join("Contents/Info.plist")).unwrap_or_default();
+        let held = bundle_version(&plist).unwrap_or_else(|| "of an unknown version".into());
+        if held != version {
+            return Err(install_failed(format!("the release holds moonlet {held}, not {version}")));
         }
         let old = aside(app);
         let _ = std::fs::remove_dir_all(&old);
@@ -282,9 +319,9 @@ pub async fn update(daemon: &Arc<Daemon>, version: &str) -> Result<Value, RpcErr
     let installed = async {
         let archive = download(&layout, version).await?;
         match &layout {
-            Layout::Bin(dir) => install_bin(dir, &archive).map(|b| (b, None)),
+            Layout::Bin(dir) => install_bin(dir, &archive, version).map(|b| (b, None)),
             Layout::Bundle(app) => {
-                install_bundle(app, &archive).map(|old| (app.join("Contents/MacOS/moonletd"), Some(old)))
+                install_bundle(app, &archive, version).map(|old| (app.join("Contents/MacOS/moonletd"), Some(old)))
             }
         }
     }
@@ -360,15 +397,35 @@ mod tests {
         tar.into_inner().unwrap().finish().unwrap()
     }
 
+    /// `Info.plist` as Tauri writes it, trimmed.
+    fn plist(version: &str) -> Vec<u8> {
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+	<key>CFBundleExecutable</key>
+	<string>moonlet</string>
+	<key>CFBundleShortVersionString</key>
+	<string>{version}</string>
+	<key>CFBundleVersion</key>
+	<string>{version}</string>
+</dict>
+</plist>
+"#
+        )
+        .into_bytes()
+    }
+
     #[test]
     fn an_app_bundle_is_swapped_and_the_old_one_can_be_put_back() {
         let dir = tempfile::tempdir().unwrap();
         let app = dir.path().join("moonlet.app");
         std::fs::create_dir_all(app.join("Contents/MacOS")).unwrap();
         std::fs::write(app.join("Contents/MacOS/moonletd"), "old").unwrap();
-        let archive = tgz(&[("moonlet.app/Contents/MacOS/moonletd", b"new")]);
+        let info = plist("0.1.34");
+        let archive = tgz(&[("moonlet.app/Contents/MacOS/moonletd", b"new"), ("moonlet.app/Contents/Info.plist", &info)]);
 
-        let old = install_bundle(&app, &archive).unwrap();
+        let old = install_bundle(&app, &archive, "0.1.34").unwrap();
         assert_eq!(std::fs::read_to_string(app.join("Contents/MacOS/moonletd")).unwrap(), "new");
         assert_eq!(std::fs::read_to_string(old.join("Contents/MacOS/moonletd")).unwrap(), "old");
 
@@ -387,11 +444,35 @@ mod tests {
         std::fs::create_dir_all(app.join("Contents/MacOS")).unwrap();
         std::fs::write(app.join("Contents/MacOS/moonletd"), "old").unwrap();
 
-        let e = install_bundle(&app, &tgz(&[("README", b"hi")])).unwrap_err();
+        let e = install_bundle(&app, &tgz(&[("README", b"hi")]), "0.1.34").unwrap_err();
         assert_eq!((e.code.as_str(), e.message.as_str()), ("install_failed", "the release has no app"));
         assert_eq!(std::fs::read_to_string(app.join("Contents/MacOS/moonletd")).unwrap(), "old");
         let left: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
         assert_eq!(left.len(), 1);
+    }
+
+    #[test]
+    fn an_app_of_another_version_is_refused_and_changes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = dir.path().join("moonlet.app");
+        std::fs::create_dir_all(app.join("Contents/MacOS")).unwrap();
+        std::fs::write(app.join("Contents/MacOS/moonletd"), "old").unwrap();
+        let info = plist("0.1.20");
+        let archive = tgz(&[("moonlet.app/Contents/MacOS/moonletd", b"new"), ("moonlet.app/Contents/Info.plist", &info)]);
+
+        let e = install_bundle(&app, &archive, "0.1.34").unwrap_err();
+        assert_eq!((e.code.as_str(), e.message.as_str()), ("install_failed", "the release holds moonlet 0.1.20, not 0.1.34"));
+        assert_eq!(std::fs::read_to_string(app.join("Contents/MacOS/moonletd")).unwrap(), "old");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn a_bundle_archive_comes_only_from_the_release_asked_for() {
+        let base = "https://github.com/1devstudio/moonlet/releases/download";
+        assert!(in_release(&format!("{base}/v0.1.34/moonlet.app.tar.gz"), base, "0.1.34"));
+        assert!(!in_release(&format!("{base}/v0.1.20/moonlet.app.tar.gz"), base, "0.1.34"));
+        assert!(!in_release("https://example.com/v0.1.34/moonlet.app.tar.gz", base, "0.1.34"));
+        assert!(!in_release(&format!("{base}/v0.1.34/../v0.1.20/moonlet.app.tar.gz"), base, "0.1.34"));
     }
 
     #[test]

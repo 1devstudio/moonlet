@@ -82,13 +82,26 @@ impl Key {
     }
 }
 
-/// `moonlet-<os>-<arch>.tar.gz` holding `moonletd` (the built daemon, so the
-/// handoff works) and a `moonlet` that says 9.9.9.
+/// `moonlet-<os>-<arch>.tar.gz` holding a `moonletd` that says it is 9.9.9
+/// and runs the built daemon otherwise (so the handoff works), and a
+/// `moonlet` that says 9.9.9.
 fn archive() -> Vec<u8> {
+    tgz(&daemon_saying("9.9.9"))
+}
+
+/// A `moonletd` whose `--version` says `version`.
+fn daemon_saying(version: &str) -> Vec<u8> {
+    format!(
+        "#!/bin/sh\n[ \"$1\" = --version ] && {{ echo \"moonletd {version}\"; exit 0; }}\nexec '{}' \"$@\"\n",
+        env!("CARGO_BIN_EXE_moonletd")
+    )
+    .into_bytes()
+}
+
+fn tgz(daemon: &[u8]) -> Vec<u8> {
     let gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
     let mut tar = tar::Builder::new(gz);
-    let daemon = std::fs::read(env!("CARGO_BIN_EXE_moonletd")).unwrap();
-    for (name, data) in [("moonletd", daemon.as_slice()), ("moonlet", NEW_CLI)] {
+    for (name, data) in [("moonletd", daemon), ("moonlet", NEW_CLI)] {
         let mut h = tar::Header::new_gnu();
         h.set_size(data.len() as u64);
         h.set_mode(0o755);
@@ -370,4 +383,34 @@ async fn one_update_at_a_time() {
     assert_eq!(e.to_string(), "busy: an update or upgrade is already in progress");
     assert!(first.await.unwrap().is_ok());
     host.next_daemon(pid).await;
+}
+
+/// A release signed with moonlet's key but holding another version (an old
+/// release served under a new tag) is refused.
+#[tokio::test]
+async fn a_signed_release_of_another_version_is_refused() {
+    let key = Key::new();
+    let old = tgz(&daemon_saying(env!("CARGO_PKG_VERSION")));
+    let a = asset();
+    let releases = release_server(
+        HashMap::from([(format!("/v9.9.9/{a}"), old.clone()), (format!("/v9.9.9/{a}.sig"), key.sign(&old))]),
+        Duration::ZERO,
+    )
+    .await;
+    let host = Host::start(&releases, &key).await;
+    let pid = host.pid().await;
+    let installed = std::fs::read(host.home.path().join("bin/moonletd")).unwrap();
+    let e = host.app().await.request::<_, Value>("daemon.update", json!({ "version": "9.9.9" })).await.unwrap_err();
+    assert_eq!(
+        e.to_string(),
+        format!("install_failed: the release holds moonletd {}, not 9.9.9", env!("CARGO_PKG_VERSION"))
+    );
+    assert_eq!(std::fs::read(host.home.path().join("bin/moonletd")).unwrap(), installed);
+    let mut left: Vec<String> = std::fs::read_dir(host.home.path().join("bin"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into())
+        .collect();
+    left.sort();
+    assert_eq!(left, ["moonlet", "moonletd"]);
+    assert_eq!(host.pid().await, pid);
 }
