@@ -722,6 +722,57 @@ async fn archiving_can_delete_the_branch_on_origin_too() {
 }
 
 #[tokio::test]
+async fn archiving_a_session_whose_branch_is_already_deleted_archives_it() {
+    use moonlet_proto::types::{Session, SessionArchived};
+    let d = TestDaemon::start().await;
+    let mut c = d.client().await;
+    let (repo, p) = project_with_repo(&d, &mut c).await;
+    let s = new_session(&mut c, &p.id, "Merged elsewhere").await;
+    // The PR merged and its branch was deleted outside moonlet.
+    git_in(std::path::Path::new(&s.path), &["checkout", "-q", "--detach"]).unwrap();
+    git_in(&repo, &["branch", "-q", "-D", &s.branch]).unwrap();
+
+    let _: SessionArchived = c
+        .request(methods::SESSION_ARCHIVE, serde_json::json!({"id": s.id, "delete_branch": true}))
+        .await
+        .unwrap();
+    let list: Vec<Session> = c.request(methods::SESSION_LIST, ()).await.unwrap();
+    assert!(list.iter().find(|x| x.id == s.id).unwrap().archived);
+}
+
+#[tokio::test]
+async fn archiving_reports_no_origin_error_when_origin_already_deleted_the_branch() {
+    use moonlet_proto::types::{Project, SessionArchived};
+    let d = TestDaemon::start().await;
+    let root = d.home.path();
+    let git = |dir: &std::path::Path, args: &[&str]| git_in(dir, args).unwrap();
+    let (origin, repo) = (root.join("origin.git"), root.join("repo"));
+    git(root, &["init", "-q", "--bare", "-b", "main", origin.to_str().unwrap()]);
+    git(root, &["clone", "-q", origin.to_str().unwrap(), repo.to_str().unwrap()]);
+    git(&repo, &["commit", "-q", "--allow-empty", "-m", "init"]);
+    git(&repo, &["push", "-q", "origin", "main"]);
+    let mut c = d.client().await;
+    let p: Project = c
+        .request(methods::PROJECT_ADD, serde_json::json!({"path": repo}))
+        .await
+        .unwrap();
+    let s = new_session(&mut c, &p.id, "Merged on GitHub").await;
+    git(std::path::Path::new(&s.path), &["push", "-q", "-u", "origin", "HEAD"]);
+    // GitHub deleted the merged PR's branch.
+    git(&origin, &["branch", "-q", "-D", &s.branch]);
+
+    let done: SessionArchived = c
+        .request(
+            methods::SESSION_ARCHIVE,
+            serde_json::json!({"id": s.id, "delete_branch": true, "delete_remote": true}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(done.remote_error, None);
+    assert_eq!(git(&repo, &["branch", "--list", &s.branch]), "");
+}
+
+#[tokio::test]
 async fn archiving_never_deletes_the_projects_base_branch() {
     use moonlet_proto::types::{Project, Session, SessionArchived};
     let d = TestDaemon::start().await;
