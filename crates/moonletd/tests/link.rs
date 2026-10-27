@@ -452,30 +452,33 @@ fn refused(reply: &Option<Message>) -> Option<String> {
 
 #[tokio::test]
 async fn the_central_hosts_requests_start_at_id_1_and_a_worker_manages_no_devices() {
-    use moonlet_proto::read_frame;
+    use moonlet_proto::{read_frame, write_frame};
     let (central, addr) = central().await;
     let token = pair(&central, &addr, "Alex's MacBook Pro").await;
     let mut w = raw(&addr, &token, "moonletd-worker").await;
-    assert_eq!(
-        refused(
-            &ask(
-                &mut w,
-                1,
-                "worker.register",
-                registration(WORKER_ID, "Alex's MacBook Pro")
-            )
-            .await
-        ),
-        None
-    );
-    let first = loop {
-        match read_frame(&mut w).await.unwrap() {
-            Some(Frame::Json(Message::Request { id, method, .. })) => break (id, method),
-            Some(_) => {}
-            None => panic!("closed"),
-        }
+    let register = Message::Request {
+        id: 1,
+        method: "worker.register".into(),
+        params: registration(WORKER_ID, "Alex's MacBook Pro"),
     };
-    assert_eq!(first, (1, "worker.ping".to_string()));
+    write_frame(&mut w, &Frame::Json(register)).await.unwrap();
+    // The first ping can come before the reply to the registration.
+    let (mut reply, mut first) = (None, None);
+    while reply.is_none() || first.is_none() {
+        match tokio::time::timeout(Duration::from_secs(10), read_frame(&mut w))
+            .await
+            .expect("no reply")
+        {
+            Ok(Some(Frame::Json(m @ Message::Response { id: 1, .. }))) => reply = Some(m),
+            Ok(Some(Frame::Json(Message::Request { id, method, .. }))) => {
+                first.get_or_insert((id, method));
+            }
+            Ok(Some(_)) => {}
+            other => panic!("the connection ended: {other:?}"),
+        }
+    }
+    assert_eq!(refused(&reply), None);
+    assert_eq!(first, Some((1, "worker.ping".to_string())));
     assert_eq!(
         refused(&ask(&mut w, 2, "mobile.status", json!({})).await).as_deref(),
         Some("forbidden")
