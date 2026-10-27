@@ -101,7 +101,7 @@ ADR 0009 put every session on the central host, with other machines as windows o
   4. ownership: the number, the hold after a wake, **Move to…** and **Continue on…**;
   5. secrets passed to members, and OAuth refreshes on the central host only;
   6. the rendering spike, then rendering on members without the app;
-  7. design systems and workspace designs with owners and copies.
+  7. design systems and workspace designs with owners and copies ([X71](../specs/X71-designs-on-every-member.md), built before slice 6: copies are read on any member, and only the owner needs the app to render).
 
 ## Open questions
 
