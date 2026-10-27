@@ -4,7 +4,7 @@
 import { rpc } from "@desktop/lib/daemon";
 import { type PlanChoice, planAnswer } from "@desktop/lib/chat";
 import { M } from "@desktop/lib/protocol";
-import { useApp } from "./app";
+import { dropSetup, useApp } from "./app";
 import { needsFaceId } from "./cards";
 import { confirmWithFaceId, tap } from "./native";
 
@@ -39,3 +39,16 @@ export const answerQuestion = (host: string, terminal: number, ask: string, answ
 /** Answers an agent's request to read a terminal (X31). */
 export const answerRead = (host: string, requestId: number, allow: boolean) =>
   answer(allow ? "read" : "deny", "Share the terminal's output with the agent", () => rpc(host, M.terminalReadAnswer, { request_id: requestId, allow, remember: false }), allow ? "success" : "warning");
+
+/** Runs or skips a copy's setup on its Mac (X60, X62): Run names the exact
+ * command shown, which the Mac refuses once it changed. */
+export const answerSetup = (host: string, copy: string, command: string, runIt: boolean) =>
+  answer(
+    runIt ? "setup" : "deny",
+    "Run this setup on the Mac",
+    async () => {
+      await rpc(host, runIt ? M.syncRunSetup : M.syncSkipSetup, runIt ? { copy, command } : { copy });
+      dropSetup(host, copy);
+    },
+    runIt ? "success" : "warning",
+  );

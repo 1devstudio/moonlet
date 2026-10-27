@@ -12,6 +12,8 @@ import {
   M,
   type AccountInfo,
   type ChatState,
+  type Copy,
+  type ExecSetup,
   type GitSettings,
   type HostInfo,
   type Project,
@@ -50,9 +52,13 @@ export interface HostData {
   chats: Record<number, ChatSummary>;
   /** The host's Git settings (X55); null until loaded, or from a daemon too old to have them. */
   git: GitSettings | null;
+  /** Its live copies of sessions on its central host (X60). */
+  copies: Copy[];
+  /** Its routing copies whose setup waits for approval (X62). */
+  setups: ExecSetup[];
 }
 
-export const emptyData = (): HostData => ({ terminals: {}, sessions: [], projects: [], workspaces: [], sections: [], reads: [], chats: {}, git: null });
+export const emptyData = (): HostData => ({ terminals: {}, sessions: [], projects: [], workspaces: [], sections: [], reads: [], chats: {}, git: null, copies: [], setups: [] });
 
 export type Tab = "inbox" | "sessions" | "new" | "hosts";
 export type SessionTab = "chat" | "terminal" | "changes" | "pr" | "jobs";
@@ -138,6 +144,17 @@ function patchData(host: string, patch: Partial<HostData> | ((d: HostData) => Pa
   });
 }
 
+/** Drops a routing copy's setup answered from the phone (X62): the daemon
+ * says nothing more of it. */
+export const dropSetup = (host: string, copy: string) => patchData(host, (d) => applyChanges(d, [{ kind: "setup", copy, value: null }]));
+
+/** Re-reads the routing copies waiting for setup (X62), which the Mac may
+ * have answered without an event. */
+async function refreshSetups(host: string) {
+  const setups = await rpc<ExecSetup[]>(host, M.execSetups).catch(() => null);
+  if (setups) patchData(host, { setups });
+}
+
 function patchSeen(host: string, patch: Partial<HostSeen>) {
   set((s) => {
     const prev: HostSeen = s.seen[host] ?? { latencyMs: null, lastSeen: null };
@@ -181,7 +198,7 @@ export async function loadHost(host: string) {
  * failed, so what was already loaded stays. */
 async function fetchHostData(host: string): Promise<Omit<HostData, "git" | "account"> & { git?: HostData["git"]; account: string | null | "keep" }> {
   const call = <T>(method: string, params: object = {}) => rpc<T>(host, method, params);
-  const [terminals, sessions, projects, workspaces, sections, reads, chats, git, account] = await Promise.all([
+  const [terminals, sessions, projects, workspaces, sections, reads, chats, git, account, copies, setups] = await Promise.all([
     call<TerminalInfo[]>(M.terminalList),
     call<Session[]>(M.sessionList),
     call<Project[]>(M.projectList),
@@ -191,6 +208,9 @@ async function fetchHostData(host: string): Promise<Omit<HostData, "git" | "acco
     call<{ id: number; state: ChatSummary }[]>(M.chatSummaries).catch(() => []),
     call<GitSettings>(M.gitSettings).catch(gitAfterError),
     call<AccountInfo>(M.accountGet).then((a) => a.account, accountAfterError),
+    // A daemon before X60, or X62, or one that refuses a phone, has none to show.
+    call<Copy[]>(M.syncList).catch(() => []),
+    call<ExecSetup[]>(M.execSetups).catch(() => []),
   ]);
   return {
     terminals: Object.fromEntries(terminals.map((t) => [t.id, t])),
@@ -202,6 +222,8 @@ async function fetchHostData(host: string): Promise<Omit<HostData, "git" | "acco
     chats: Object.fromEntries(chats.map((c) => [c.id, c.state])),
     ...(git !== "keep" && { git }),
     account,
+    copies,
+    setups,
   };
 }
 
@@ -257,7 +279,11 @@ export async function startApp() {
   });
   // Round trips and "last seen" stay fresh while the app is open.
   setInterval(() => {
-    for (const h of Object.values(get().hosts)) if (h.status === "connected") void measure(h.id);
+    for (const h of Object.values(get().hosts)) {
+      if (h.status !== "connected") continue;
+      void measure(h.id);
+      void refreshSetups(h.id);
+    }
   }, 30_000);
 }
 
