@@ -4,7 +4,8 @@
 import { rpc } from "@desktop/lib/daemon";
 import { type PlanChoice, planAnswer } from "@desktop/lib/chat";
 import { M } from "@desktop/lib/protocol";
-import { dropSetup, useApp } from "./app";
+import { dropSetup, refreshSetups, useApp } from "./app";
+import { setupAnswer, setupError } from "./setups";
 import { needsFaceId } from "./cards";
 import { confirmWithFaceId, tap } from "./native";
 
@@ -40,14 +41,20 @@ export const answerQuestion = (host: string, terminal: number, ask: string, answ
 export const answerRead = (host: string, requestId: number, allow: boolean) =>
   answer(allow ? "read" : "deny", "Share the terminal's output with the agent", () => rpc(host, M.terminalReadAnswer, { request_id: requestId, allow, remember: false }), allow ? "success" : "warning");
 
-/** Runs or skips a copy's setup on its Mac (X60, X62): Run names the exact
- * command shown, which the Mac refuses once it changed. */
-export const answerSetup = (host: string, copy: string, command: string, runIt: boolean) =>
+/** Runs or skips a copy's setup on its Mac (X60, X62). A refusal says why,
+ * and the routing copies waiting are read again, as one may have changed. */
+export const answerSetup = (host: string, hostLabel: string, copy: string, command: string, runIt: boolean) =>
   answer(
     runIt ? "setup" : "deny",
     "Run this setup on the Mac",
     async () => {
-      await rpc(host, runIt ? M.syncRunSetup : M.syncSkipSetup, runIt ? { copy, command } : { copy });
+      const { method, params } = setupAnswer(copy, command, runIt);
+      try {
+        await rpc(host, method, params);
+      } catch (e) {
+        void refreshSetups(host);
+        throw new Error(setupError(e, hostLabel));
+      }
       dropSetup(host, copy);
     },
     runIt ? "success" : "warning",

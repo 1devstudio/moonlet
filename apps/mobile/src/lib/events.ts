@@ -77,6 +77,12 @@ export function accountAfterError(e: unknown): null | "keep" {
   return gitAfterError(e);
 }
 
+/** `list` without the items `same` picks, then `value` last, if any. */
+function replaceBy<T>(list: T[], same: (x: T) => boolean, value: T | null): T[] {
+  const rest = list.filter((x) => !same(x));
+  return value ? [...rest, value] : rest;
+}
+
 function setRecord<T>(base: Record<number, T>, id: number, value: T | null): Record<number, T> {
   const out = { ...base };
   if (value === null) delete out[id];
@@ -91,17 +97,9 @@ export function applyChanges(d: HostData, changes: readonly Change[]): HostData 
     else if (c.kind === "chats") out = { ...out, chats: setRecord(out.chats, c.id, c.value) };
     else if (c.kind === "git") out = { ...out, git: c.value };
     else if (c.kind === "account") out = { ...out, account: c.value };
-    else if (c.kind === "copy") {
-      const rest = out.copies.filter((x) => x.id !== c.id);
-      out = { ...out, copies: c.value ? [...rest, c.value] : rest };
-    } else if (c.kind === "setup") {
-      const rest = out.setups.filter((x) => x.copy !== c.copy);
-      out = { ...out, setups: c.value ? [...rest, c.value] : rest };
-    }
-    else {
-      const reads = out.reads.filter((r) => r.request_id !== c.id);
-      out = { ...out, reads: c.value ? [...reads, c.value] : reads };
-    }
+    else if (c.kind === "copy") out = { ...out, copies: replaceBy(out.copies, (x) => x.id === c.id, c.value) };
+    else if (c.kind === "setup") out = { ...out, setups: replaceBy(out.setups, (x) => x.copy === c.copy, c.value) };
+    else out = { ...out, reads: replaceBy(out.reads, (r) => r.request_id === c.id, c.value) };
   }
   return out;
 }

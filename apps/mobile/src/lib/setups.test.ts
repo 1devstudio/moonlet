@@ -3,6 +3,8 @@ import type { Copy } from "@desktop/lib/protocol";
 import { buildInbox } from "./inbox";
 import { needsFaceId } from "./cards";
 import { applyChanges, eventChanges } from "./events";
+import { setupAnswer, setupError } from "./setups";
+import { DaemonError } from "@desktop/lib/daemon";
 import { data, project, session } from "./fixtures";
 
 const copy = (id: string, setup: Copy["setup"]): Copy => ({
@@ -75,5 +77,21 @@ describe("setup events (X60, X62)", () => {
     let d = applyChanges(data({}), eventChanges("exec.setup", ask) as never);
     d = applyChanges(d, eventChanges("exec.setup", ask) as never);
     expect(d.setups).toEqual([ask]);
+  });
+});
+
+describe("answering a setup (X60, X62)", () => {
+  it("runs exactly the command shown, or skips", () => {
+    expect(setupAnswer("c1", "pnpm install", true)).toEqual({ method: "sync.run_setup", params: { copy: "c1", command: "pnpm install" } });
+    expect(setupAnswer("c1", "pnpm install", false)).toEqual({ method: "sync.skip_setup", params: { copy: "c1" } });
+  });
+
+  it("says when the command changed meanwhile, or the copy lost its setup", () => {
+    // The daemon's `setup_changed` message is the current command (sync.rs).
+    expect(setupError(new DaemonError({ code: "setup_changed", message: "pnpm install --frozen-lockfile" }), "This Mac")).toBe(
+      "The setup changed on This Mac meanwhile, to: pnpm install --frozen-lockfile. Nothing ran; check the new command before running it.",
+    );
+    expect(setupError(new DaemonError({ code: "no_setup", message: "no setup" }), "This Mac")).toBe("This copy has no setup script any more.");
+    expect(setupError(new DaemonError({ code: "failed", message: "connection reset" }), "This Mac")).toBe("connection reset");
   });
 });

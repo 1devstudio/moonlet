@@ -179,10 +179,10 @@ function SetupCard({ card }: { card: InboxCard }) {
       <pre className="selectable m-0 rounded-[10px] bg-bg px-3 py-2.5 font-mono text-[12.5px] break-all whitespace-pre-wrap">{setup.command}</pre>
       {error && <span className="text-[12.5px] text-error">{error}</span>}
       <div className="grid grid-cols-2 gap-2">
-        <Btn tone="ghost" disabled={busy} onClick={() => void run(() => answerSetup(card.host, setup.copy, setup.command, false))}>
+        <Btn tone="ghost" disabled={busy} onClick={() => void run(() => answerSetup(card.host, card.hostLabel, setup.copy, setup.command, false))}>
           Skip
         </Btn>
-        <Btn tone="primary" disabled={busy} onClick={() => void run(() => answerSetup(card.host, setup.copy, setup.command, true))}>
+        <Btn tone="primary" disabled={busy} onClick={() => void run(() => answerSetup(card.host, card.hostLabel, setup.copy, setup.command, true))}>
           Run setup
         </Btn>
       </div>

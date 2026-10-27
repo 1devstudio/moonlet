@@ -141,6 +141,8 @@ function setupCards(hosts: Record<string, InboxHost>, data: Record<string, HostD
     if (h.status !== "connected" || !d) continue;
     for (const c of d.copies) {
       if (c.setup?.state.kind !== "needs_approval") continue;
+      // A copy names its central host as the Mac knows it, which is the name
+      // the phone paired with it under; the phone's host ids are device ids.
       const central = Object.values(hosts).find((x) => x.label === c.host && x.status === "connected");
       const s = central && data[central.id]?.sessions.find((x) => x.id === c.session);
       const project = (s && data[central.id].projects.find((p) => p.id === s.project_id)?.name) ?? null;

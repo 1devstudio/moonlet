@@ -150,7 +150,7 @@ export const dropSetup = (host: string, copy: string) => patchData(host, (d) => 
 
 /** Re-reads the routing copies waiting for setup (X62), which the Mac may
  * have answered without an event. */
-async function refreshSetups(host: string) {
+export async function refreshSetups(host: string) {
   const setups = await rpc<ExecSetup[]>(host, M.execSetups).catch(() => null);
   if (setups) patchData(host, { setups });
 }
