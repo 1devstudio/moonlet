@@ -24,6 +24,8 @@ use crate::paths::now_ms;
 use crate::pty::user_shell;
 use crate::terminal::{TerminalManager, expand_home};
 
+mod account;
+
 const STATE_VERSION: u32 = 3;
 /// The workspace every install starts with, and that X5's workspaces are
 /// migrated into (X32).
@@ -321,6 +323,7 @@ fn new_section(name: &str) -> Section {
         project_ids: Vec::new(),
         view: SectionView::default(),
         created_at: now_ms(),
+        missing: Vec::new(),
     }
 }
 
@@ -338,6 +341,9 @@ pub struct SessionManager {
     /// archived, so an archive never runs between a creation's look at the
     /// session and its terminals starting (X65).
     lifecycles: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// The account state this member shares (X68), once the daemon has
+    /// attached it; tests without it keep the state to themselves.
+    account: Mutex<Option<account::Account>>,
 }
 
 fn new_id() -> String {
@@ -462,6 +468,7 @@ impl SessionManager {
             chats: std::sync::OnceLock::new(),
             save_blocked,
             lifecycles: Mutex::new(HashMap::new()),
+            account: Mutex::new(None),
         });
         tokio::spawn(track_removed_sessions(Arc::downgrade(&mgr)));
         mgr
@@ -500,8 +507,32 @@ impl SessionManager {
         let mut st = self.state.lock().unwrap();
         let mut next = st.clone();
         let out = f(&mut next)?;
-        self.save(&next)?;
+        let mut account = self.account.lock().unwrap();
+        let staged = match account.as_ref() {
+            Some(a) => Some(a.stage(&st, &next)?),
+            None => None,
+        };
+        // The state as every member lays the account onto theirs, so that
+        // a project added here leaves `missing`, and repairs match (X68).
+        if let Some(s) = staged.as_ref().filter(|s| !s.changes.is_empty()) {
+            account::lay_onto(&mut next, s.log());
+        }
+        if let Err(e) = self.save(&next) {
+            if let Some(s) = staged {
+                s.discard();
+            }
+            return Err(e);
+        }
         *st = next;
+        let changes = match (account.as_mut(), staged) {
+            (Some(a), Some(s)) => a.commit(s),
+            _ => Vec::new(),
+        };
+        drop(account);
+        drop(st);
+        if !changes.is_empty() {
+            self.account_changed(changes);
+        }
         Ok(out)
     }
 
@@ -719,6 +750,12 @@ impl SessionManager {
                 Some(other) => {
                     let o = st.sections.iter_mut().find(|s| s.id == other).unwrap();
                     o.project_ids.extend(held_only_here);
+                    // Those other members have but this one lacks, too (X68).
+                    for m in &sec.missing {
+                        if !o.missing.contains(m) {
+                            o.missing.push(m.clone());
+                        }
+                    }
                 }
                 None if held_only_here.iter().any(|p| st.has_live_sessions(&ws, p)) => {
                     bail!("archive the sessions of this section's projects first")
