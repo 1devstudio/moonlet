@@ -13,11 +13,13 @@ use moonlet_proto::types::{Change, ProjectIdentity};
 use serde_json::{Value, json};
 
 use super::*;
-use crate::account::{Log, LogFile, Record, Version, key_between, log_owner, new_log_name};
+use crate::account::{
+    Log, LogFile, Record, RecordKind, Version, key_between, log_owner, new_log_name,
+};
 use crate::identity::same_project;
 
-const WORKSPACE: &str = "workspace";
-const SECTION: &str = "section";
+const WORKSPACE: RecordKind = RecordKind::Workspace;
+const SECTION: RecordKind = RecordKind::Section;
 /// The prefix of a section's project fields.
 const PROJECT: &str = "project:";
 /// The ids of the workspace and the section every member makes when changes
@@ -25,6 +27,10 @@ const PROJECT: &str = "project:";
 /// ones. A deleted one stays deleted, so the next is `default-2` and so on.
 const DEFAULT_WORKSPACE_ID: &str = "default";
 const DEFAULT_SECTION_ID: &str = "default-section";
+/// A workspace merged into another: its `into` (X68).
+const MERGE: RecordKind = RecordKind::Merge;
+/// A member, by its log's name: its `name`, as it calls itself.
+const MEMBER: RecordKind = RecordKind::Member;
 
 type Listener = Arc<dyn Fn(Vec<Change>) + Send + Sync>;
 
@@ -160,7 +166,11 @@ impl SessionManager {
                 let old = f.member.clone();
                 let renamed = log_owner(&old) != Some(member);
                 let mut log = Log::from_file(LogFile {
-                    member: if renamed { new_log_name(member) } else { old.clone() },
+                    member: if renamed {
+                        new_log_name(member)
+                    } else {
+                        old.clone()
+                    },
                     ..f
                 });
                 if renamed {
@@ -196,7 +206,64 @@ impl SessionManager {
     /// The names of this member's log, now and before: no other member
     /// may send changes under them.
     pub fn account_names(&self) -> Vec<String> {
-        self.with_log(|log| log.former().iter().cloned().chain([log.member().to_string()]).collect())
+        self.with_log(|log| {
+            log.former()
+                .iter()
+                .cloned()
+                .chain([log.member().to_string()])
+                .collect()
+        })
+    }
+
+    /// The account this member shares, as its central host named it.
+    pub fn central_account(&self) -> Option<String> {
+        self.with_log(|log| log.account().map(String::from))
+    }
+
+    /// Keeps the account its central host names, or none once it has no
+    /// central host; true when that changed.
+    pub fn set_central_account(&self, account: Option<String>) -> bool {
+        let mut guard = self.account.lock().unwrap();
+        let Some(a) = guard.as_mut() else {
+            return false;
+        };
+        if a.log.account() == account.as_deref() {
+            return false;
+        }
+        let mut log = a.log.clone();
+        log.set_account(account);
+        if let Err(e) = write_private(&a.path, &log) {
+            tracing::warn!("cannot save the account's name: {e:#}");
+        }
+        a.log = log;
+        true
+    }
+
+    /// Gives this member's name to the account, as the Mac calls itself,
+    /// so the others can say which one made a workspace.
+    pub fn name_member(&self, name: &str) {
+        let changes = {
+            let mut st = self.state.lock().unwrap();
+            let mut account = self.account.lock().unwrap();
+            let Some(a) = account.as_mut() else { return };
+            let me = a.log.member().to_string();
+            if a.log.records(MEMBER).get(&me).and_then(|r| r.get("name")) == Some(&json!(name)) {
+                return;
+            }
+            let mut log = a.log.clone();
+            let change = log.set(now_ms(), MEMBER, &me, "name", json!(name));
+            let mut next = st.clone();
+            lay_onto(&mut next, &log);
+            if let Err(e) = write_private(&a.path, &log).and_then(|()| self.save(&next)) {
+                tracing::warn!("cannot save this member's name: {e:#}");
+                return;
+            }
+            a.log = log;
+            *st = next;
+            vec![change]
+        };
+        self.emit_workspaces();
+        self.account_changed(changes);
     }
 
     /// Whether this member shares an account (X68).
@@ -246,14 +313,17 @@ impl SessionManager {
     /// Returns those it had not seen and kept: the ones to pass on.
     pub fn apply_account(&self, changes: Vec<Change>) -> Vec<Change> {
         let limit = now_ms() + AHEAD_MS;
-        let (changes, ahead): (Vec<Change>, Vec<Change>) = changes.into_iter().partition(|c| c.stamp.ms <= limit);
+        let (changes, ahead): (Vec<Change>, Vec<Change>) =
+            changes.into_iter().partition(|c| c.stamp.ms <= limit);
         if let Some(c) = ahead.first() {
             tracing::warn!(member = %c.stamp.member, "refused {} account changes stamped more than a day ahead", ahead.len());
         }
         let (taken, changed) = {
             let mut st = self.state.lock().unwrap();
             let mut account = self.account.lock().unwrap();
-            let Some(a) = account.as_mut() else { return Vec::new() };
+            let Some(a) = account.as_mut() else {
+                return Vec::new();
+            };
             let mut log = a.log.clone();
             // Only the first of two changes under one number counts, as in
             // the log, so the others are never handed the second.
@@ -394,13 +464,18 @@ fn diff(old: &State, new: &State, log: &mut Log, now: u64) -> Vec<Change> {
     for w in &new.workspaces {
         order_sections(log, now, w, &mut out);
     }
+    for (from, into) in &new.merges {
+        if old.merges.get(from) != Some(into) {
+            out.push(log.set(now, MERGE, from, "into", json!(into)));
+        }
+    }
     out
 }
 
 fn set_changed(
     log: &mut Log,
     now: u64,
-    kind: &str,
+    kind: RecordKind,
     id: &str,
     before: Option<Record>,
     after: Record,
@@ -509,7 +584,7 @@ fn diff_projects(
 }
 
 /// The first of `base`, `base-2`, `base-3`… that `log` has not deleted.
-fn repair_id(log: &Log, kind: &str, base: &str) -> String {
+fn repair_id(log: &Log, kind: RecordKind, base: &str) -> String {
     (1..)
         .map(|n| {
             if n == 1 {
@@ -520,6 +595,21 @@ fn repair_id(log: &Log, kind: &str, base: &str) -> String {
         })
         .find(|id| !log.is_deleted(kind, id))
         .unwrap()
+}
+
+/// The name of the member that made workspace `id`: the member record of
+/// the log of its first change, or of that log's worker under a later name.
+fn maker(log: &Log, id: &str) -> Option<String> {
+    let made = &log.first_change(WORKSPACE, id)?.stamp.member;
+    let members = log.records(MEMBER);
+    let name = |r: &Record| r.get("name")?.as_str().map(String::from);
+    members.get(made).and_then(name).or_else(|| {
+        let worker = log_owner(made)?;
+        members
+            .iter()
+            .filter(|(m, _)| log_owner(m) == Some(worker))
+            .find_map(|(_, r)| name(r))
+    })
 }
 
 /// Field `f` of `r` as a `T`, when it is one.
@@ -571,6 +661,7 @@ pub(super) fn lay_onto(st: &mut State, log: &Log) {
                 .map(|p| p.id.clone()),
             created_at: number(&r, "created_at"),
             section_ids: Vec::new(),
+            made_by: maker(log, &id),
             id,
         })
         .collect();
@@ -695,6 +786,32 @@ pub(super) fn lay_onto(st: &mut State, log: &Log) {
     }
     st.workspaces = workspaces;
     st.sections = placed.into_iter().map(|p| p.section).collect();
+
+    // Sessions of a merged workspace follow it, on every member alike.
+    st.merges = log
+        .records(MERGE)
+        .into_iter()
+        .filter_map(|(from, r)| Some((from, r.get("into")?.as_str()?.to_string())))
+        .collect();
+    for s in &mut st.sessions {
+        let mut at = s.workspace_id.clone();
+        for _ in 0..8 {
+            match at
+                .as_ref()
+                .filter(|w| !st.workspaces.iter().any(|x| &x.id == *w))
+                .and_then(|w| st.merges.get(w))
+            {
+                Some(into) => at = Some(into.clone()),
+                None => break,
+            }
+        }
+        if at
+            .as_ref()
+            .is_some_and(|w| st.workspaces.iter().any(|x| &x.id == w))
+        {
+            s.workspace_id = at;
+        }
+    }
 
     // A shared project no section holds any more was removed on another
     // member, and goes here too, unless it still has live sessions here. A
@@ -1204,6 +1321,63 @@ mod tests {
             sent.iter().all(|c| c.stamp.member.starts_with("mini2.")),
             "{sent:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn a_merged_workspace_hands_its_sections_and_sessions_to_the_chosen_one_on_every_member()
+    {
+        let shop = crate::git::tests::repo().await;
+        let (_h1, book) = member("book").await;
+        let (_h2, mini) = member("mini").await;
+        let minis = mini.list_workspaces()[0].clone();
+        let mini_section = mini.list_sections()[0].clone();
+        let p = mini
+            .section_add_project(&mini_section.id, &shop.path().display().to_string())
+            .await
+            .unwrap();
+        let req = SessionCreate {
+            name: Some("Fix cart".into()),
+            agent: Some("none".into()),
+            workspace_id: Some(minis.id.clone()),
+            cols: 80,
+            rows: 24,
+            ..SessionCreate::new(&p.id)
+        };
+        let session = mini.create_session(req).await.unwrap();
+        let books = book.list_workspaces()[0].clone();
+        let book_section = book.list_sections()[0].clone();
+        sync(&book, &mini);
+
+        // On the MacBook: studio-mini's "Personal" into its own.
+        book.merge_workspace(&minis.id, &books.id).unwrap();
+        sync(&book, &mini);
+        for m in [&book, &mini] {
+            let ws = m.list_workspaces();
+            assert_eq!(
+                ws.iter().map(|w| w.id.clone()).collect::<Vec<_>>(),
+                [books.id.clone()]
+            );
+            assert_eq!(
+                ws[0].section_ids,
+                [book_section.id.clone(), mini_section.id.clone()]
+            );
+        }
+        let moved = mini
+            .list_sessions()
+            .into_iter()
+            .find(|s| s.id == session.id)
+            .unwrap();
+        assert_eq!(moved.workspace_id, Some(books.id.clone()));
+    }
+
+    #[tokio::test]
+    async fn a_workspace_merges_only_into_another_existing_one() {
+        let (_h1, book) = member("book").await;
+        let ws = book.list_workspaces()[0].clone();
+        assert!(book.merge_workspace(&ws.id, &ws.id).is_err());
+        assert!(book.merge_workspace(&ws.id, "nowhere").is_err());
+        assert!(book.merge_workspace("nowhere", &ws.id).is_err());
+        assert_eq!(book.list_workspaces().len(), 1);
     }
 
     #[tokio::test]
@@ -1791,5 +1965,94 @@ mod tests {
                     .unwrap_or_default()
             })
             .collect()
+    }
+
+    #[tokio::test]
+    async fn sessions_of_a_merged_workspace_join_the_chosen_one_on_the_other_member_too() {
+        let shop = repo_named("shop").await;
+        // studio-mini's "Personal" is made first, so it comes before the
+        // MacBook's.
+        let (_h2, mini) = member("mini").await;
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let (_h1, book) = member("book").await;
+        let minis = mini.list_workspaces()[0].clone();
+        let mine = mini.list_sections()[0].clone();
+        let p = mini
+            .section_add_project(&mine.id, &shop.path().display().to_string())
+            .await
+            .unwrap();
+        // Acme holds shop too, and a session works in it.
+        let acme = mini
+            .create_workspace(WorkspaceCreate {
+                name: "Acme".into(),
+                color: WorkspaceColor::Blue,
+                move_sections: vec![],
+                claude_profile: None,
+            })
+            .unwrap();
+        let work = mini.create_section(&acme.id, "Shop work").unwrap();
+        mini.section_add_project(&work.id, &shop.path().display().to_string())
+            .await
+            .unwrap();
+        let req = SessionCreate {
+            name: Some("Fix cart".into()),
+            agent: Some("none".into()),
+            workspace_id: Some(acme.id.clone()),
+            cols: 80,
+            rows: 24,
+            ..SessionCreate::new(&p.id)
+        };
+        let session = mini.create_session(req).await.unwrap();
+        sync(&book, &mini);
+        // The MacBook merges Acme into its own "Personal".
+        let books = book
+            .list_workspaces()
+            .into_iter()
+            .find(|w| w.id != minis.id && w.id != acme.id)
+            .unwrap();
+        book.merge_workspace(&acme.id, &books.id).unwrap();
+        sync(&book, &mini);
+        let moved = mini
+            .list_sessions()
+            .into_iter()
+            .find(|s| s.id == session.id)
+            .unwrap();
+        assert_eq!(moved.workspace_id, Some(books.id.clone()));
+    }
+
+    #[tokio::test]
+    async fn a_workspace_says_which_member_made_it() {
+        let (_h1, book) = member("book").await;
+        let (_h2, mini) = member("mini").await;
+        book.name_member("Alex's MacBook Pro");
+        mini.name_member("studio-mini");
+        let acme = book
+            .create_workspace(WorkspaceCreate {
+                name: "Acme".into(),
+                color: WorkspaceColor::Blue,
+                move_sections: vec![],
+                claude_profile: None,
+            })
+            .unwrap();
+        sync(&book, &mini);
+        let made_by = |m: &SessionManager, id: &str| {
+            m.list_workspaces()
+                .into_iter()
+                .find(|w| w.id == id)
+                .unwrap()
+                .made_by
+        };
+        assert_eq!(
+            made_by(&mini, &acme.id).as_deref(),
+            Some("Alex's MacBook Pro")
+        );
+        let minis = mini.list_workspaces().into_iter().find(|w| {
+            w.name == "Personal" && made_by(&mini, &w.id).as_deref() == Some("studio-mini")
+        });
+        assert!(minis.is_some(), "{:?}", mini.list_workspaces());
+        // A new name for the Mac follows.
+        book.name_member("Alex's MacBook");
+        sync(&book, &mini);
+        assert_eq!(made_by(&mini, &acme.id).as_deref(), Some("Alex's MacBook"));
     }
 }

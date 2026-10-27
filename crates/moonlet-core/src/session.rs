@@ -50,6 +50,10 @@ pub struct State {
     pub projects: Vec<Project>,
     #[serde(default)]
     pub sessions: Vec<Session>,
+    /// Workspaces merged into another, by id: their sessions on every
+    /// member follow them there (X68). Kept in the account, not here.
+    #[serde(skip)]
+    pub merges: BTreeMap<String, String>,
 }
 
 impl State {
@@ -313,6 +317,7 @@ fn new_workspace(name: &str, color: WorkspaceColor) -> Workspace {
         section_ids: Vec::new(),
         claude_profile: None,
         created_at: now_ms(),
+        made_by: None,
     }
 }
 
@@ -690,6 +695,33 @@ impl SessionManager {
         })?;
         self.emit_workspaces();
         self.emit_sessions();
+        Ok(())
+    }
+
+    /// Merges workspace `id` into `into` (X68): its sections move in after
+    /// `into`'s own, with every session of `id`, and `id` is deleted.
+    pub fn merge_workspace(&self, id: &str, into: &str) -> Result<()> {
+        if id == into {
+            bail!("a workspace cannot merge into itself");
+        }
+        self.mutate(|st| {
+            st.workspace_mut(into)?;
+            let sections = st.workspaces.iter().find(|w| w.id == id).context("no such workspace")?.section_ids.clone();
+            for s in &sections {
+                st.move_section(s, into)?;
+            }
+            st.merges.insert(id.to_string(), into.to_string());
+            // Archived sessions, and those of projects held elsewhere too.
+            for s in &mut st.sessions {
+                if s.workspace_id.as_deref() == Some(id) {
+                    s.workspace_id = Some(into.to_string());
+                }
+            }
+            st.workspaces.retain(|w| w.id != id);
+            st.ensure();
+            Ok(())
+        })?;
+        self.emit_all();
         Ok(())
     }
 

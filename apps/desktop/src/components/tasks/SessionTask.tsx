@@ -33,7 +33,7 @@ export function TaskBar({ host, ws }: { host: string; ws: Session }) {
   const card = useSessionTask(host, ws);
   if (!card) return null;
   const at = card.rows.findIndex((r) => r.session.id === ws.id);
-  const go = (d: number) => selectSession(host, card.rows[(at + d + card.rows.length) % card.rows.length].session.id);
+  const go = (d: number) => selectSession(card.rows[(at + d + card.rows.length) % card.rows.length].session.host ?? host, card.rows[(at + d + card.rows.length) % card.rows.length].session.id);
   return (
     <div role="region" aria-label="Task" className="flex min-h-[40px] shrink-0 items-center gap-2.5 border-b border-border bg-panel py-1.5 pr-3 pl-4 ui-text-12.5">
       <TaskGlyph column={card.column} size={14} />
@@ -115,7 +115,7 @@ export function TaskTab({ host, ws }: { host: string; ws: Session }) {
             {r.session.id === ws.id ? (
               <span className="text-faint">this session</span>
             ) : (
-              <button className="text-muted hover:text-fg" onClick={() => selectSession(host, r.session.id)}>
+              <button className="text-muted hover:text-fg" onClick={() => selectSession(r.session.host ?? host, r.session.id)}>
                 Open
               </button>
             )}

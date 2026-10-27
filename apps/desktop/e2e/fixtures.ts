@@ -140,6 +140,30 @@ export function rpc<T = unknown>(w: World, method: string, params: object): T {
   return JSON.parse(out.toString() || "null") as T;
 }
 
+/** The workspaces and sections on the app's daemon. A spec that links it
+ * with another daemon takes one first, as the members of an account share
+ * their workspaces (X68) and the daemon keeps them across specs. */
+export function accountSnapshot(w: World): { workspaces: string[]; sections: string[] } {
+  const ids = (method: string) => rpc<{ id: string }[]>(w, method, {}).map((x) => x.id);
+  return { workspaces: ids("workspace.list"), sections: ids("section.list") };
+}
+
+/** Removes the workspaces and sections the app's daemon got since `before`,
+ * once it is no longer linked, so the next spec sees only its own. */
+export function restoreAccount(w: World, before: { workspaces: string[]; sections: string[] }) {
+  // One that cannot go (a section with live sessions, say) stays, and the
+  // rest still go: a cleanup never fails the spec it follows.
+  const tryRpc = (method: string, id: string) => {
+    try {
+      rpc(w, method, { id });
+    } catch (e) {
+      console.warn(`restoreAccount: ${method} ${id}: ${e}`);
+    }
+  };
+  for (const s of rpc<{ id: string }[]>(w, "section.list", {})) if (!before.sections.includes(s.id)) tryRpc("section.delete", s.id);
+  for (const ws of rpc<{ id: string }[]>(w, "workspace.list", {})) if (!before.workspaces.includes(ws.id)) tryRpc("workspace.delete", ws.id);
+}
+
 /** One JSON frame of the daemon's protocol: `[u32 len][u8 kind 1][json]`. */
 export function jsonFrame(msg: object): Buffer {
   const json = Buffer.from(JSON.stringify(msg));

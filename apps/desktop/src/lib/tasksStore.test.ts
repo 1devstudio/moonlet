@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { GhTask, Section, Workspace } from "./protocol";
+import type { GhTask, Section, Session, Workspace } from "./protocol";
 import { migrateSources } from "./boards";
 import { workspaceViews } from "./boardScreen";
 import { DEFAULT_RULES } from "./keepInStep";
@@ -7,7 +7,7 @@ import { useStore } from "./store";
 import { answerConfirm } from "./confirm";
 import { rpc } from "./daemon";
 import { createIssue, setColumnShow } from "./tasksStore";
-import { type TrackersConfig, activityOf, autoFixed, boardInput, openBoard, removeBoard, previewBoard, showBoard, branchUser, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, lookUpPasted, moveTask, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, pollTasks, saveTrackersConfig, settleSaves, setAssignee, setExpanded, setFilters, setKeepInStep, startedFromTask, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
+import { type TasksData, type TrackersConfig, activityOf, autoFixed, boardInput, openBoard, removeBoard, previewBoard, showBoard, branchUser, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, lookUpPasted, moveTask, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, pollTasks, saveTrackersConfig, settleSaves, setAssignee, setExpanded, setFilters, setKeepInStep, startedFromTask, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
 
 const answers: Record<string, (params: { path?: string; id?: string }) => unknown> = {};
 vi.mock("./daemon", () => ({
@@ -709,7 +709,7 @@ describe("boards (X50 Sync)", () => {
   it("opens a board of another workspace there, in Tasks mode", () => {
     useStore.setState({ workspace: { host: "local", id: "personal" }, mode: { "local/personal": "tasks" } });
     openBoard("local", "acme", "acme-board");
-    expect(useStore.getState().workspace).toEqual({ host: "local", id: "acme" });
+    expect(useStore.getState().workspace).toEqual({ host: "local", id: "acme", account: "local" });
     expect(useStore.getState().mode["local/acme"]).toBe("tasks");
     expect(useTasks.getState().shownBoard["local/acme"]).toBe("acme-board");
     useTasks.setState({ shownBoard: {} });
@@ -1686,3 +1686,28 @@ describe("errors as the user reads them", () => {
     useTasks.setState({ config: null });
   });
 });
+
+describe("a board's sessions across the members of an account (X68)", () => {
+  const identity = { origin: "github.com/acme/web", root: "r1" };
+  const session = (id: string, project_id: string): Session => ({ id, project_id, name: id, branch: `moonlet/${id}`, base: "main", path: `/w/${id}`, agent: null, archived: false, created_at: 0, workspace_id: "W", terminals: [], layout: null });
+  const data: TasksData = { tasks: [], worktrees: [], sources: [], repos: { p1: "acme/web" }, syncedAt: null, error: null };
+
+  it("takes every member's sessions of the workspace, each with its host and its project's repository", () => {
+    const state = {
+      ...useStore.getState(),
+      sessions: { local: [session("s1", "p1")], "studio-mini": [session("s2", "q1"), { ...session("s3", "q1"), workspace_id: "other" }] },
+      projects: {
+        local: [{ id: "p1", name: "web", path: "/web", base_branch: "main", identity }],
+        "studio-mini": [{ id: "q1", name: "web", path: "/code/web", base_branch: "main", identity }],
+      },
+    };
+    const input = boardInput(state, "local", "W", data, DEFAULT_CONFIG, ["local", "studio-mini"]);
+    expect(input.sessions.map((x) => [x.id, x.host ?? null, x.project, x.originRepo])).toEqual([
+      ["s1", null, "web", "acme/web"],
+      ["s2", "studio-mini", "web", "acme/web"],
+    ]);
+    // Without members, the host's own as before.
+    expect(boardInput(state, "local", "W", data, DEFAULT_CONFIG).sessions.map((x) => x.id)).toEqual(["s1"]);
+  });
+});
+

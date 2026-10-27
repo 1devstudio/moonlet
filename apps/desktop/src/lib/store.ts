@@ -13,6 +13,7 @@ import { afterClaudeCheck, afterClaudeUpdateExit, afterClaudeUpdateLine, closeCl
 import { DaemonError, hostsApi, onDaemonEvent, onHostStatus, rpc, subscribeHost, type DaemonEvent } from "./daemon";
 import { type Layout, emptyLayout, parseLayout, reconcile, removeSession, tabOf } from "./layout";
 import {
+  type AccountInfo,
   type AgentState,
   type Attention,
   type BasePull,
@@ -45,7 +46,7 @@ import type { PendingConfirm } from "./confirm";
 import type { TaskStart } from "./tasks";
 import type { BuildDesign } from "./buildIt";
 import { spawnedNotices } from "./spawned";
-import { currentWorkspace, isShown, sessionToRestore, switcherRows, wsKey, type HostWorkspaces, type WorkspaceRef } from "./workspaces";
+import { currentWorkspace, isShown, lastSessionKey, restoreTarget, sharedNotice, switcherRows, wsKey, type HostWorkspaces, type WorkspaceRef } from "./workspaces";
 import { focusThrottle, latestPerKey, needsPrPoll } from "./prPoll";
 import type { ChatItem, ChatState, CloneDone, CloneProgress, ReadRequest } from "./protocol";
 import { readWaits, type ReadQueue } from "./terminalRead";
@@ -98,6 +99,8 @@ export interface Settings {
   syncBanner?: boolean;
   /** The user's custom design canvas sizes, `WxH`, newest first; none when missing (X65). */
   designViewports?: string[];
+  /** Accounts this Mac was told it shares (X68), so it is told once. */
+  sharedNotices?: string[];
 }
 
 export const sesKey = (host: string, id: string) => `${host}/${id}`;
@@ -203,6 +206,8 @@ interface State extends UiPersist {
   sessions: Record<string, Session[]>;
   /** Workspaces per host (X32). */
   workspaces: Record<string, Workspace[]>;
+  /** The account each host shares (X68); a host that says none is its own. */
+  accounts: Record<string, AccountInfo>;
   /** Sections (sets of projects) per host, in no particular order: a
    * workspace's `section_ids` orders its own. */
   sections: Record<string, Section[]>;
@@ -314,6 +319,7 @@ function makeStore() {
   sessions: {},
   terminals: {},
   workspaces: {},
+  accounts: {},
   sections: {},
   profiles: {},
   defaultAccounts: {},
@@ -601,6 +607,7 @@ export async function loadHost(host: string, attempt = 0): Promise<void> {
     void refreshAllBases(host, { fetch: true });
     void refreshAvatars(host);
     void loadGitSettings(host);
+    void loadAccount(host);
     // Apart from the rest: a daemon from before X31 does not know these.
     void Promise.all([
       rpc<ReadRequest[]>(host, M.terminalReadRequests),
@@ -658,7 +665,10 @@ function showSessionWorkspace(s: State, host: string, id: string, keepMode = fal
   if (!wsId) return {};
   const key = wsKey(host, wsId);
   const toSessions = !keepMode && s.mode[key] && s.mode[key] !== "sessions";
-  return { workspace: isShown(s.workspace, host, wsId) ? s.workspace : { host, id: wsId }, lastSession: { ...s.lastSession, [key]: id }, ...(toSessions && { mode: { ...s.mode, [key]: "sessions" as const } }) };
+  const account = s.accounts[host]?.account ?? host;
+  const workspace = isShown(s.workspace, host, wsId, account) ? s.workspace! : { host, id: wsId, account };
+  // Kept for the account, so every member of it reopens it (X68).
+  return { workspace, lastSession: { ...s.lastSession, [lastSessionKey(workspace)]: sesKey(host, id) }, ...(toSessions && { mode: { ...s.mode, [key]: "sessions" as const } }) };
 }
 
 /** A session needs you while one of its agents is blocked or a terminal of
@@ -710,7 +720,27 @@ export function selectSession(host: string, id: string, keepMode = false) {
 export function hostWorkspaces(s: State): HostWorkspaces[] {
   return Object.values(s.hosts)
     .sort((a, b) => Number(a.remote) - Number(b.remote) || a.id.localeCompare(b.id))
-    .map((h) => ({ host: h.id, label: h.label, workspaces: s.workspaces[h.id] ?? [], sections: s.sections[h.id] ?? [], sessions: s.sessions[h.id] ?? [], profiles: s.profiles[h.id] ?? [] }));
+    .map((h) => ({ host: h.id, label: h.label, account: s.accounts[h.id]?.account, workspaces: s.workspaces[h.id] ?? [], sections: s.sections[h.id] ?? [], sessions: s.sessions[h.id] ?? [], profiles: s.profiles[h.id] ?? [] }));
+}
+
+/** Which account `host` shares (X68). A daemon from before X68 says none,
+ * and is its own. The first time this Mac shares one, it says so. */
+export async function loadAccount(host: string) {
+  try {
+    onAccount(host, await rpc<AccountInfo>(host, M.accountGet));
+  } catch {
+    // A daemon from before X68.
+  }
+}
+
+function onAccount(host: string, info: AccountInfo) {
+  set((s) => ({ accounts: { ...s.accounts, [host]: info } }));
+  const seen = get().settings.sharedNotices ?? [];
+  const notice = host === "local" ? sharedNotice(info, seen) : null;
+  if (notice) {
+    toast(notice);
+    updateSettings({ sharedNotices: [...seen, info.account] });
+  }
 }
 
 /** Asks `claude auth status` who a profile (`null`: the default) is signed
@@ -731,7 +761,7 @@ let fallback: WorkspaceRef | null = null;
 export function shownWorkspace(s: State): WorkspaceRef | null {
   const r = currentWorkspace(s.workspace, hostWorkspaces(s));
   if (!r || r === s.workspace) return r;
-  if (fallback?.host !== r.host || fallback.id !== r.id) fallback = r;
+  if (fallback?.host !== r.host || fallback.id !== r.id || fallback.account !== r.account) fallback = r;
   return fallback;
 }
 
@@ -740,17 +770,19 @@ export function switchWorkspace(ref: WorkspaceRef) {
   const s = get();
   // Remember what was open in the workspace being left.
   const from = shownWorkspace(s);
-  const lastSession = from && s.selected ? { ...s.lastSession, [wsKey(from.host, from.id)]: s.selected.session } : s.lastSession;
-  const restore = sessionToRestore(lastSession[wsKey(ref.host, ref.id)], s.sessions[ref.host] ?? [], ref.id);
-  set({ workspace: ref, lastSession, showHistory: false });
-  if (restore) selectSession(ref.host, restore, true);
+  const lastSession = from && s.selected ? { ...s.lastSession, [lastSessionKey(from)]: sesKey(s.selected.host, s.selected.session) } : s.lastSession;
+  const to = { ...ref, account: ref.account ?? s.accounts[ref.host]?.account ?? ref.host };
+  // Kept before X68 under the host's key, as an id alone.
+  const restore = restoreTarget(lastSession[lastSessionKey(to)] ?? lastSession[wsKey(ref.host, ref.id)], hostWorkspaces(s), to);
+  set({ workspace: to, lastSession, showHistory: false });
+  if (restore) selectSession(restore.host, restore.session, true);
   else set({ selected: null });
 }
 
 /** ⌃⌘1–9: the n-th workspace in the switcher's order. */
 export function switchWorkspaceByIndex(n: number) {
   const row = switcherRows(hostWorkspaces(get()))[n];
-  if (row) switchWorkspace({ host: row.host, id: row.ws.id });
+  if (row) switchWorkspace({ host: row.host, id: row.ws.id, account: row.account });
 }
 
 const gitInflight: Record<string, boolean> = {};
@@ -1103,6 +1135,9 @@ function handleEvent(e: DaemonEvent) {
       break;
     case EV.workspacesChanged:
       set((s) => ({ workspaces: { ...s.workspaces, [host]: data as Workspace[] } }));
+      break;
+    case EV.accountInfo:
+      onAccount(host, data as AccountInfo);
       break;
     case EV.gitSettingsChanged:
       set((s) => ({ gitSettings: { ...s.gitSettings, [host]: data as GitSettings } }));
