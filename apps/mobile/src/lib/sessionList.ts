@@ -1,13 +1,16 @@
 // Sessions (X40): the current workspace's sessions on every connected host,
-// grouped by section and project as the desktop sidebar does (X32).
+// grouped by section and project as the desktop sidebar does (X32), each
+// shared section and project once across an account's members (X68).
 
 import { planOf } from "@desktop/lib/chat";
-import { lastActive, workspaceSections } from "@desktop/lib/sidebar";
+import { arrangeShared, lastActive, sectionParts, shownSections } from "@desktop/lib/sidebar";
 import { agentCount } from "@desktop/lib/subagents";
 import { splitKey } from "@desktop/lib/sessionRows";
-import type { AgentState, Project, Session } from "@desktop/lib/protocol";
+import type { AgentState, Project, Section, Session } from "@desktop/lib/protocol";
+import type { WorkspaceRef } from "@desktop/lib/workspaces";
 import type { HostData, Screen } from "./app";
 import { type InboxHost, sessionState } from "./inbox";
+import { hostWorkspaces, workspaceChoices } from "./workspaceChoices";
 
 export interface SessionRow {
   host: string;
@@ -19,10 +22,15 @@ export interface SessionRow {
   plan: { terminal: number; ask: string } | null;
   /** `2 agents` while the session's chats run subagents (X42), else empty. */
   agents: string;
+  /** The host's name when the session is on another member than its
+   * group's project (X68), else null. */
+  on: string | null;
 }
 
 export interface ProjectGroup {
   key: string;
+  /** The section the group is in, the same on every member holding it. */
+  sectionKey: string;
   host: string;
   hostLabel: string;
   remote: boolean;
@@ -52,40 +60,53 @@ function workingFor(d: HostData, s: Session, now: number): string {
   return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h`;
 }
 
-function row(host: string, d: HostData, s: Session, now: number): SessionRow {
+function row(host: string, d: HostData, s: Session, now: number, on: string | null = null): SessionRow {
   const state = sessionState(d, s);
   const plan = state === "blocked" ? waitingPlan(d, s) : null;
   const word = plan ? "plan" : { blocked: "needs you", working: workingFor(d, s, now), done: "done", error: "failed", idle: "" }[state];
   const running = Object.values(d.terminals).reduce((n, t) => n + (t.session_id === s.id ? (t.subagents ?? 0) : 0), 0);
-  return { host, session: s, state, word, plan, agents: running ? agentCount(running) : "" };
+  return { host, session: s, state, word, plan, agents: running ? agentCount(running) : "", on };
 }
 
-export function sessionGroups(hosts: Record<string, InboxHost>, data: Record<string, HostData>, workspace: string | null, now: number): ProjectGroup[] {
+/** The phone groups every section by project, most recently active first,
+ * whatever view the desktop gives it. */
+const BY_PROJECT: Section["view"] = { group_by: "project", sort_by: "recent", filter: [] };
+
+/** The shown workspace's groups, or every workspace's for null: each shared
+ * section once, each project once by identity with every member's sessions. */
+export function sessionGroups(hosts: Record<string, InboxHost>, data: Record<string, HostData>, shown: WorkspaceRef | null, now: number): ProjectGroup[] {
+  const live = Object.fromEntries(Object.values(hosts).flatMap((h) => (h.status === "connected" && data[h.id] ? [[h.id, h]] : [])));
+  const list = hostWorkspaces(live, data);
+  const of = {
+    sections: Object.fromEntries(list.map((h) => [h.host, h.sections])),
+    projects: Object.fromEntries(list.map((h) => [h.host, data[h.host].projects])),
+    sessions: Object.fromEntries(list.map((h) => [h.host, h.sessions])),
+  };
   const groups: ProjectGroup[] = [];
-  for (const h of Object.values(hosts)) {
-    const d = data[h.id];
-    if (h.status !== "connected" || !d) continue;
-    for (const ws of d.workspaces) {
-      if (workspace !== null && ws.name !== workspace) continue;
-      for (const sec of workspaceSections(ws, d.sections)) {
-        for (const pid of sec.project_ids) {
-          const project = d.projects.find((p) => p.id === pid);
-          if (!project) continue;
-          const sessions = d.sessions
-            .filter((s) => !s.archived && s.workspace_id === ws.id && s.project_id === pid)
-            .sort((a, b) => lastActive(d.terminals, b) - lastActive(d.terminals, a) || b.created_at - a.created_at);
-          if (!sessions.length) continue;
-          groups.push({
-            key: `${h.id}:${ws.id}:${sec.id}:${pid}`,
-            host: h.id,
-            hostLabel: h.label,
-            remote: !!h.via,
-            section: sec.name,
-            project,
-            letter: project.name.charAt(0).toUpperCase(),
-            rows: sessions.map((s) => row(h.id, d, s, now)),
-          });
-        }
+  for (const ref of shown ? [shown] : workspaceChoices(list).map((c) => c.ref)) {
+    for (const { ws, sec, hosts: holding } of shownSections(ref, list)) {
+      const sectionKey = `${ref.account ?? ref.host}:${ws.id}:${sec.id}`;
+      const shared = arrangeShared(ws.id, sectionParts(holding, { ...sec, view: BY_PROJECT }, of), {
+        stateOf: () => null,
+        activeAt: (h, s) => lastActive(data[h].terminals, s),
+        archiving: () => false,
+        taskOf: () => null,
+      });
+      for (const g of shared) {
+        const project = data[g.host].projects.find((p) => p.id === g.projectId);
+        if (!project || !g.sessions.length) continue;
+        const h = hosts[g.host];
+        groups.push({
+          key: `${sectionKey}:${g.key}`,
+          sectionKey,
+          host: g.host,
+          hostLabel: h.label,
+          remote: !!h.via,
+          section: sec.name,
+          project,
+          letter: project.name.charAt(0).toUpperCase(),
+          rows: g.sessions.map((e) => row(e.host, data[e.host], e.session, now, e.host === g.host ? null : hosts[e.host].label)),
+        });
       }
     }
   }

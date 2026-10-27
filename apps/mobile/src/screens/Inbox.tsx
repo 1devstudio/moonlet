@@ -4,7 +4,7 @@
 import { useState } from "react";
 import { ListChecks, MessageCircleQuestion, Server, SquareTerminal, Terminal } from "lucide-react";
 import { planOf } from "@desktop/lib/chat";
-import { showScreen, useApp } from "../lib/app";
+import { showScreen, useApp, useShownWorkspace } from "../lib/app";
 import { answerAsk, answerPlan, answerRead } from "../lib/answers";
 import { ageText, askHeadline, planBlurb, readMessage } from "../lib/cards";
 import { type InboxCard, buildInbox, summaryLine } from "../lib/inbox";
@@ -19,8 +19,7 @@ import { WorkspacePill } from "../components/WorkspacePill";
 export function useInbox() {
   const hosts = useApp((s) => s.hosts);
   const data = useApp((s) => s.data);
-  const workspace = useApp((s) => s.settings.workspace);
-  return buildInbox(hosts, data, workspace);
+  return buildInbox(hosts, data, useShownWorkspace());
 }
 
 function Meta({ card }: { card: InboxCard }) {

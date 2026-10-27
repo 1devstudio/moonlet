@@ -1,21 +1,22 @@
-// The workspace chip at the top of Inbox and Sessions. Workspaces are matched
-// by name across hosts: every daemon has its own "Personal" (X32).
+// The workspace chip at the top of Inbox and Sessions. A workspace the
+// members of one account share shows once, as in the desktop's switcher (X68).
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { Check, ChevronDown } from "lucide-react";
 import { colorHex } from "@desktop/lib/workspaces";
-import { updateSettings, useApp } from "../lib/app";
-import { workspaceChoices } from "../lib/workspaceChoices";
+import { updateSettings, useApp, useShownWorkspace } from "../lib/app";
+import { hostWorkspaces, workspaceChoices } from "../lib/workspaceChoices";
 import { Sheet } from "./Sheet";
 import { cx } from "./ui";
 
 export function WorkspacePill() {
   const data = useApp((s) => s.data);
   const hosts = useApp((s) => s.hosts);
-  const shown = useApp((s) => s.settings.workspace);
+  const shown = useShownWorkspace();
   const [open, setOpen] = useState(false);
-  const choices = workspaceChoices(Object.keys(hosts).map((h) => data[h]?.workspaces ?? []));
-  const current = choices.find((c) => c.name === shown);
+  const choices = workspaceChoices(hostWorkspaces(hosts, data));
+  const isCurrent = (ref: { id: string; account: string } | null) => (ref === null ? shown === null : shown?.id === ref.id && shown.account === ref.account);
+  const current = choices.find((c) => isCurrent(c.ref));
   return (
     <>
       <button type="button" onClick={() => setOpen(true)} className="flex h-9 items-center gap-[7px] rounded-[18px] border border-border-strong bg-panel px-3 text-[13.5px]">
@@ -26,20 +27,25 @@ export function WorkspacePill() {
       {open && (
         <Sheet label="Workspace" onClose={() => setOpen(false)}>
           <div className="flex flex-col px-2 pb-2">
-            {[{ name: null as string | null, color: null }, ...choices].map((c) => (
-              <button
-                key={c.name ?? ""}
-                type="button"
-                onClick={() => {
-                  updateSettings({ workspace: c.name });
-                  setOpen(false);
-                }}
-                className="flex min-h-12 items-center gap-3 rounded-[10px] px-3 text-left text-[15px]"
-              >
-                <span className={cx("h-2.5 w-2.5 rounded-full", !c.color && "border border-muted")} style={c.color ? { background: colorHex(c.color) } : undefined} />
-                <span className="flex-1">{c.name ?? "All workspaces"}</span>
-                {c.name === shown && <Check size={16} className="text-accent" />}
-              </button>
+            {[{ ref: null, name: "All workspaces", color: null, from: null, hostLabel: null }, ...choices].map((c) => (
+              <Fragment key={c.ref ? `${c.ref.account}/${c.ref.id}` : ""}>
+                {c.hostLabel && <div className="eyebrow px-3 pt-3 pb-1">{c.hostLabel}</div>}
+                <button
+                  type="button"
+                  onClick={() => {
+                    updateSettings({ workspace: c.ref });
+                    setOpen(false);
+                  }}
+                  className="flex min-h-12 items-center gap-3 rounded-[10px] px-3 text-left text-[15px]"
+                >
+                  <span className={cx("h-2.5 w-2.5 rounded-full", !c.color && "border border-muted")} style={c.color ? { background: colorHex(c.color) } : undefined} />
+                  <span className="flex-1">
+                    {c.name}
+                    {c.from && <span className="ml-2 text-[12.5px] text-faint">from {c.from}</span>}
+                  </span>
+                  {isCurrent(c.ref) && <Check size={16} className="text-accent" />}
+                </button>
+              </Fragment>
             ))}
           </div>
         </Sheet>

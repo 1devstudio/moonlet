@@ -5,8 +5,10 @@ import { workspaceSections } from "@desktop/lib/sidebar";
 import { DEFAULT_GIT_SETTINGS } from "@desktop/lib/gitSettings";
 import { type Attachment, attachments, firstMessage, placeholder, sessionName } from "@desktop/lib/composer";
 import type { GitSettings, IssueRef, Project, ProjectConfig } from "@desktop/lib/protocol";
+import type { WorkspaceRef } from "@desktop/lib/workspaces";
 import type { HostData } from "./app";
 import type { InboxHost } from "./inbox";
+import { inShown } from "./workspaceChoices";
 
 /** The session's name: the prompt's first line, at most 48 characters, cut
  * at a word (the daemon's `derive_name`). */
@@ -117,14 +119,14 @@ export interface ProjectChoice {
 }
 
 /** The projects a new session can start in: those of the shown workspace
- * (by name, X40) on connected hosts, each once. */
-export function projectChoices(hosts: Record<string, InboxHost>, data: Record<string, HostData>, workspace: string | null): ProjectChoice[] {
+ * on the connected members of its account (X68), each once. */
+export function projectChoices(hosts: Record<string, InboxHost>, data: Record<string, HostData>, shown: WorkspaceRef | null): ProjectChoice[] {
   const out: ProjectChoice[] = [];
   for (const h of Object.values(hosts)) {
     const d = data[h.id];
     if (h.status !== "connected" || !d) continue;
     for (const ws of d.workspaces) {
-      if (workspace !== null && ws.name !== workspace) continue;
+      if (!inShown(shown, h.id, d.account, ws.id)) continue;
       for (const sec of workspaceSections(ws, d.sections)) {
         for (const pid of sec.project_ids) {
           const project = d.projects.find((p) => p.id === pid);

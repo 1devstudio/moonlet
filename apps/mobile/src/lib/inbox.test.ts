@@ -47,12 +47,17 @@ describe("buildInbox", () => {
     expect(buildInbox(w.hosts, w.data, null).needs[0].kind).toBe("question");
   });
 
-  it("keeps to the shown workspace, by name on every host", () => {
+  it("keeps to the shown workspace on every member of its account, never a same-id one outside it (X68)", () => {
     const w = world();
-    expect(buildInbox(w.hosts, w.data, "Personal").needs).toHaveLength(3);
+    const titles = (shown: { host: string; id: string; account: string }) => buildInbox(w.hosts, w.data, shown).needs.map((c) => c.title);
+    const personal = { host: "mac", id: "personal", account: "w-mini" };
+    w.data.mac.account = "w-mini";
+    expect(titles(personal)).toEqual(["Add search to the product list", "Fix login"]);
+    w.data["mac/devbox"].account = "w-mini";
+    expect(titles(personal)).toEqual(["Add search to the product list", "Idempotent refund webhooks", "Fix login"]);
     w.data["mac/devbox"].sessions[0].workspace_id = "work";
-    expect(buildInbox(w.hosts, w.data, "Personal").needs.map((c) => c.title)).toEqual(["Add search to the product list", "Fix login"]);
-    expect(buildInbox(w.hosts, w.data, "Work").needs.map((c) => c.title)).toEqual(["Idempotent refund webhooks"]);
+    expect(titles(personal)).toEqual(["Add search to the product list", "Fix login"]);
+    expect(titles({ host: "mac/devbox", id: "work", account: "w-mini" })).toEqual(["Idempotent refund webhooks"]);
   });
 
   it("names the subagent that asks, and none for the main agent (X42)", () => {
