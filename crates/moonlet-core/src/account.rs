@@ -23,6 +23,9 @@ pub type Version = BTreeMap<String, u64>;
 pub struct LogFile {
     pub member: String,
     pub changes: Vec<Change>,
+    /// The names this member's logs had before, newest last (X68).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub former: Vec<String>,
 }
 
 /// One member's copy of the account state: every change it has seen.
@@ -36,6 +39,8 @@ pub struct Log {
     /// Every change seen, by member and `seq`, so one that arrives twice
     /// is kept once.
     changes: BTreeMap<(String, u64), Change>,
+    /// The names this machine's logs had before this one.
+    former: Vec<String>,
 }
 
 impl Log {
@@ -45,30 +50,69 @@ impl Log {
             clock: (0, 0),
             seq: 0,
             changes: BTreeMap::new(),
+            former: Vec::new(),
         }
     }
 
     pub fn from_file(file: LogFile) -> Log {
         let mut log = Log::new(&file.member);
         log.apply(file.changes);
+        log.former = file.former;
         log
+    }
+
+    /// This log's name.
+    pub fn member(&self) -> &str {
+        &self.member
+    }
+
+    /// The names this machine's logs had before this one.
+    pub fn former(&self) -> &[String] {
+        &self.former
+    }
+
+    /// Takes over the changes of `old`, this machine's log before a rename:
+    /// each one again as this log's own, with its time and counter, so the
+    /// changes it made before reach its central host, which takes a
+    /// member's changes only under its current name. `old` becomes a former
+    /// name.
+    pub fn adopt(&mut self, old: &str) {
+        let theirs: Vec<Change> = self.changes.values().filter(|c| c.stamp.member == old).cloned().collect();
+        for c in theirs {
+            self.seq = self.seq.saturating_add(1);
+            let mine = Change {
+                stamp: Stamp { member: self.member.clone(), ..c.stamp },
+                seq: self.seq,
+                ..c
+            };
+            self.changes.insert((self.member.clone(), self.seq), mine);
+        }
+        self.former.push(old.to_string());
     }
 
     pub fn to_file(&self) -> LogFile {
         LogFile {
             member: self.member.clone(),
             changes: self.changes.values().cloned().collect(),
+            former: self.former.clone(),
         }
     }
 
     /// Takes in changes from any member.
     pub fn apply(&mut self, changes: impl IntoIterator<Item = Change>) {
         for c in changes {
+            // The first copy of a change stays: one under a number already
+            // seen never rewrites what it said, nor moves the clock.
+            let std::collections::btree_map::Entry::Vacant(slot) =
+                self.changes.entry((c.stamp.member.clone(), c.seq))
+            else {
+                continue;
+            };
             self.clock = self.clock.max((c.stamp.ms, c.stamp.n));
             if c.stamp.member == self.member {
                 self.seq = self.seq.max(c.seq);
             }
-            self.changes.insert((c.stamp.member.clone(), c.seq), c);
+            slot.insert(c);
         }
     }
 
@@ -407,6 +451,30 @@ mod tests {
                 ("color".into(), json!("blue"))
             ])
         );
+    }
+
+    #[test]
+    fn a_change_that_comes_again_with_other_content_does_not_replace_the_first() {
+        let mut log = Log::new("book.k3x9q2");
+        log.apply(vec![set(
+            1_000,
+            "mini.a1b2c3",
+            1,
+            "w1",
+            "name",
+            json!("Personal"),
+        )]);
+        // Another change under the same member and number: never history
+        // rewritten after the fact.
+        log.apply(vec![set(
+            1_000,
+            "mini.a1b2c3",
+            1,
+            "w1",
+            "name",
+            json!("Forged"),
+        )]);
+        assert_eq!(log.records("workspace")["w1"]["name"], json!("Personal"));
     }
 
     #[test]

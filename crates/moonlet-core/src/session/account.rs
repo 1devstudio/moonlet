@@ -13,7 +13,7 @@ use moonlet_proto::types::{Change, ProjectIdentity};
 use serde_json::{Value, json};
 
 use super::*;
-use crate::account::{Log, LogFile, Record, Version, key_between, new_log_name};
+use crate::account::{Log, LogFile, Record, Version, key_between, log_owner, new_log_name};
 use crate::identity::same_project;
 
 const WORKSPACE: &str = "workspace";
@@ -27,6 +27,12 @@ const DEFAULT_WORKSPACE_ID: &str = "default";
 const DEFAULT_SECTION_ID: &str = "default-section";
 
 type Listener = Arc<dyn Fn(Vec<Change>) + Send + Sync>;
+
+/// How far ahead of this machine's clock a change may be stamped. One
+/// further ahead would win every field from then on and pull every
+/// member's clock forward with it, so it is refused, and stays with its
+/// member until its clock is right.
+const AHEAD_MS: u64 = 24 * 60 * 60 * 1000;
 
 pub(super) struct Account {
     log: Log,
@@ -146,8 +152,21 @@ impl SessionManager {
         let mut st = self.state.lock().unwrap();
         let log = match file {
             Some(f) => {
-                let mut log = Log::new(&f.member);
-                log.apply(f.changes);
+                // A log named after another worker id (link.json was made
+                // again) goes on under a new name: its central host takes
+                // changes only under this machine's worker id. It takes over
+                // the old log's changes, so those made before still get
+                // there, and the old name stays reserved.
+                let old = f.member.clone();
+                let renamed = log_owner(&old) != Some(member);
+                let mut log = Log::from_file(LogFile {
+                    member: if renamed { new_log_name(member) } else { old.clone() },
+                    ..f
+                });
+                if renamed {
+                    log.adopt(&old);
+                    write_private(&path, &log)?;
+                }
                 let mut next = st.clone();
                 lay_onto(&mut next, &log);
                 self.save(&next)?;
@@ -172,6 +191,12 @@ impl SessionManager {
             listener: None,
         });
         Ok(())
+    }
+
+    /// The names of this member's log, now and before: no other member
+    /// may send changes under them.
+    pub fn account_names(&self) -> Vec<String> {
+        self.with_log(|log| log.former().iter().cloned().chain([log.member().to_string()]).collect())
     }
 
     /// Whether this member shares an account (X68).
@@ -220,12 +245,23 @@ impl SessionManager {
     /// Takes in changes from other members, and shows what they change.
     /// Returns those it had not seen and kept: the ones to pass on.
     pub fn apply_account(&self, changes: Vec<Change>) -> Vec<Change> {
+        let limit = now_ms() + AHEAD_MS;
+        let (changes, ahead): (Vec<Change>, Vec<Change>) = changes.into_iter().partition(|c| c.stamp.ms <= limit);
+        if let Some(c) = ahead.first() {
+            tracing::warn!(member = %c.stamp.member, "refused {} account changes stamped more than a day ahead", ahead.len());
+        }
         let (taken, changed) = {
             let mut st = self.state.lock().unwrap();
             let mut account = self.account.lock().unwrap();
             let Some(a) = account.as_mut() else { return Vec::new() };
             let mut log = a.log.clone();
-            let new: Vec<Change> = changes.into_iter().filter(|c| !log.has(&c.stamp.member, c.seq)).collect();
+            // Only the first of two changes under one number counts, as in
+            // the log, so the others are never handed the second.
+            let mut seen = std::collections::HashSet::new();
+            let new: Vec<Change> = changes
+                .into_iter()
+                .filter(|c| !log.has(&c.stamp.member, c.seq) && seen.insert((c.stamp.member.clone(), c.seq)))
+                .collect();
             if new.is_empty() {
                 return Vec::new();
             }
@@ -1146,6 +1182,58 @@ mod tests {
         assert_eq!(names(&book), ["Home", "Personal"]);
         assert_eq!(layout(&book), layout(&mini));
         assert_eq!((logs(&book), logs(&mini)), (2, 2));
+    }
+
+    #[tokio::test]
+    async fn a_log_named_after_an_older_worker_id_goes_on_under_the_new_one() {
+        let (_h1, book) = member("book").await;
+        let (h2, mini) = member("mini").await;
+        sync(&book, &mini);
+        drop(mini);
+        // link.json was made again, with a new worker id.
+        let mini = reload(h2.path(), "mini2");
+        assert_eq!(names(&mini), ["Personal", "Personal"]);
+        let sent = Arc::new(Mutex::new(Vec::<Change>::new()));
+        let out = sent.clone();
+        mini.on_account_change(move |c| out.lock().unwrap().extend(c));
+        let ws = mini.list_workspaces()[0].clone();
+        mini.create_section(&ws.id, "Clients").unwrap();
+        let sent = sent.lock().unwrap().clone();
+        assert!(!sent.is_empty());
+        assert!(
+            sent.iter().all(|c| c.stamp.member.starts_with("mini2.")),
+            "{sent:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_change_stamped_more_than_a_day_ahead_is_refused() {
+        use moonlet_proto::types::{ChangeOp, Stamp};
+        let (_h1, book) = member("book").await;
+        let w = book.list_workspaces()[0].clone();
+        let at = |ms: u64, seq: u64, name: &str| Change {
+            stamp: Stamp {
+                ms,
+                n: 0,
+                member: "mini.a1b2c3".into(),
+            },
+            seq,
+            kind: "workspace".into(),
+            id: w.id.clone(),
+            op: ChangeOp::Set {
+                field: "name".into(),
+                value: serde_json::json!(name),
+            },
+        };
+        let day = 24 * 60 * 60 * 1000;
+        // A clock two days fast would win every field from now on, and drag
+        // every member's clock with it.
+        book.apply_account(vec![at(now_ms() + 2 * day, 1, "From the future")]);
+        assert_eq!(book.list_workspaces()[0].name, "Personal");
+        assert!(!book.account_version().contains_key("mini.a1b2c3"));
+        // An hour fast is a clock that drifted, and is taken.
+        book.apply_account(vec![at(now_ms() + 60 * 60 * 1000, 1, "Home")]);
+        assert_eq!(book.list_workspaces()[0].name, "Home");
     }
 
     #[tokio::test]
