@@ -26,13 +26,7 @@ import { jobsTabCount } from "@desktop/lib/jobs";
 import { useSessionJobs } from "@desktop/lib/jobsStore";
 import { sessionTabs } from "../lib/jobsView";
 
-const TABS: { id: SessionTab; label: string }[] = [
-  { id: "chat", label: "Chat" },
-  { id: "terminal", label: "Terminal" },
-  { id: "changes", label: "Changes" },
-  { id: "pr", label: "PR" },
-  { id: "jobs", label: "Jobs" },
-];
+const TAB_LABEL: Record<SessionTab, string> = { chat: "Chat", terminal: "Terminal", changes: "Changes", pr: "PR", jobs: "Jobs" };
 
 /** Archiving, as the host's Git settings say (X55): what happens to the
  * folder and branch, and work that is only on the host. */
@@ -190,7 +184,7 @@ export function SessionScreen({ host, id, tab }: { host: string; id: string; tab
         </button>
       </header>
       <nav className={cx("grid flex-none border-b border-border px-2", tabs.length > 4 ? "grid-cols-5" : "grid-cols-4")}>
-        {TABS.filter((t) => tabs.includes(t.id)).map((t) => (
+        {tabs.map((id) => ({ id, label: TAB_LABEL[id] })).map((t) => (
           <button
             key={t.id}
             type="button"

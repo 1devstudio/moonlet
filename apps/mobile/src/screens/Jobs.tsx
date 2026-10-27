@@ -4,7 +4,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronLeft, Circle, Cloud, Cpu, Laptop, LoaderCircle, RotateCw, Server } from "lucide-react";
 import { rpc } from "@desktop/lib/daemon";
-import { type JobIcon, type JobTone, chipFromJob, dur, jobRowLine, jobStateLine, jobsSummary, outputLines, phaseList, workerLine } from "@desktop/lib/jobs";
+import { type JobIcon, type JobTone, chipFromJob, going, dur, jobRowLine, jobStateLine, jobsSummary, outputLines, phaseList, workerLine } from "@desktop/lib/jobs";
 import { loadOutput, useJobs } from "@desktop/lib/jobsStore";
 import { M, type Job, type Session } from "@desktop/lib/protocol";
 import { clock } from "@desktop/lib/subagents";
@@ -16,8 +16,6 @@ import { Btn, cx } from "../components/ui";
 const TONE: Record<JobTone, string> = { muted: "text-muted", accent: "text-accent", blocked: "text-blocked", error: "text-error", done: "text-done" };
 const ICONS = { mac: Laptop, host: Server, central: Server, cloud: Cloud, rerun: RotateCw, worker: Cpu };
 const LINE_TONE = { moonlet: "text-accent", warn: "text-blocked", stderr: "text-blocked" };
-
-const going = (j: Job) => j.state.kind === "waiting" || j.state.kind === "running" || j.state.kind === "bringing_back";
 
 function WorkerIcon({ icon, className }: { icon: JobIcon; className?: string }) {
   const Icon = ICONS[icon];
