@@ -59,6 +59,7 @@ import {
   questionAnswers,
   rememberPrompt,
   saveChatDraft,
+  noteChatAttachments,
   thinkingBody,
   thinkingPreview,
   toolCommand,
@@ -946,6 +947,11 @@ function ChatEditor({
   const [dismissed, setDismissed] = useState<number | null>(null);
   const [walk, setWalk] = useState<number | null>(null);
   const [images, setImages] = useState<ChatImage[]>([]);
+  // The relaunch into a newer bundle waits while images wait to be sent (X69).
+  useEffect(() => {
+    noteChatAttachments(host, id, images.length);
+    return () => noteChatAttachments(host, id, 0);
+  }, [host, id, images.length]);
   const ta = useRef<HTMLTextAreaElement>(null);
   const history = promptHistory();
 

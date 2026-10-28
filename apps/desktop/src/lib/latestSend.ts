@@ -37,6 +37,10 @@ export function latestSends() {
       });
       return run.busy;
     },
+    /** Whether any key has a send going. */
+    anyBusy(): boolean {
+      return Object.keys(going).length > 0;
+    },
     /** Whether a send of `key` is on its way. */
     busy(key: string): boolean {
       return key in going;

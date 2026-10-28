@@ -136,6 +136,18 @@ const drafts = new Map<string, string>();
 
 export const chatDraft = (host: string, id: number) => drafts.get(chatKey(host, id)) ?? "";
 
+// How many images each chat's composer holds, not sent yet: they live in the
+// composer, so this only counts them for the relaunch check (X69).
+const attached = new Map<string, number>();
+
+export function noteChatAttachments(host: string, id: number, count: number) {
+  if (count > 0) attached.set(chatKey(host, id), count);
+  else attached.delete(chatKey(host, id));
+}
+
+/** Whether any chat has text typed or images attached but not sent. */
+export const hasChatDrafts = () => drafts.size > 0 || attached.size > 0;
+
 export function saveChatDraft(host: string, id: number, text: string) {
   if (text) drafts.set(chatKey(host, id), text);
   else drafts.delete(chatKey(host, id));

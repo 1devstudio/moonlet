@@ -50,12 +50,7 @@ pub fn layout(exe: &Path, home: &Path) -> Option<Layout> {
     if home.canonicalize().ok().is_some_and(|h| dir == h.join("bin")) {
         return Some(Layout::Bin(dir.to_path_buf()));
     }
-    let contents = dir.parent()?;
-    let app = contents.parent()?;
-    let bundle = dir.file_name()? == "MacOS"
-        && contents.file_name()? == "Contents"
-        && app.extension().is_some_and(|e| e == "app");
-    bundle.then(|| Layout::Bundle(app.to_path_buf()))
+    moonlet_core::bundle::app_of(exe).map(Layout::Bundle)
 }
 
 /// `X.Y.Z` as numbers; `None` for anything else.
@@ -190,14 +185,6 @@ fn release_url(releases: &str, version: &str, name: &str) -> String {
 fn in_release(url: &str, releases: &str, version: &str) -> bool {
     url.strip_prefix(&release_url(releases, version, ""))
         .is_some_and(|name| !name.is_empty() && !name.contains('/') && !name.contains(".."))
-}
-
-/// `CFBundleShortVersionString` of an app's `Info.plist`.
-pub fn bundle_version(plist: &str) -> Option<String> {
-    let after = &plist[plist.find("<key>CFBundleShortVersionString</key>")?..];
-    let start = after.find("<string>")? + "<string>".len();
-    let end = after[start..].find("</string>")?;
-    Some(after[start..start + end].trim().to_string())
 }
 
 fn install_failed(e: impl std::fmt::Display) -> RpcError {
@@ -358,7 +345,7 @@ pub fn install_bundle(app: &Path, archive: &[u8], version: &str) -> Result<Insta
             return Err(install_failed("the release's app has no moonletd"));
         }
         let plist = std::fs::read_to_string(new.join("Contents/Info.plist")).unwrap_or_default();
-        let held = bundle_version(&plist).unwrap_or_else(|| "of an unknown version".into());
+        let held = moonlet_core::bundle::short_version(&plist).unwrap_or_else(|| "of an unknown version".into());
         if held != version {
             return Err(install_failed(format!("the release holds moonlet {held}, not {version}")));
         }

@@ -28,7 +28,7 @@ import { ProfileFooter } from "./Profiles";
 import { movingSessions, runningClaudeAgents, switchConfirm } from "../lib/profiles";
 import { AgentIcon, Button, IconButton, Kbd, StateGlyph, cx, prTone } from "./ui";
 import { updateButton } from "../lib/updater";
-import { HostUpdateButton, OlderHostsAnnouncer } from "./HostUpdate";
+import { HostUpdateButton } from "./HostUpdate";
 import { offerNotice } from "../lib/hostUpdate";
 import { claudeBanner, type ClaudeBanner, type StepState } from "../lib/claudeUpdate";
 
@@ -905,7 +905,6 @@ export function Sidebar() {
           <HistoryList />
         ) : (
           <>
-            <OlderHostsAnnouncer />
             {ordered.map((h) => (
               <HostNotice key={h.id} host={h} />
             ))}

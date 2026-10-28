@@ -8,6 +8,7 @@ import { claudeOffer, claudeStatus, type ClaudeUpdateState, type ClaudeVersions 
 import { mobileLine } from "./mobile";
 import { DEV_BUILD_NOTE, updateButton, updateStatus, type UpdateState } from "./updater";
 import { accountOf, ownWorkspaces } from "./workspaces";
+import { older } from "./versions";
 
 /** The app-wide pages, in nav order. */
 export type AppPage = "general" | "appearance" | "terminal" | "agents" | "git" | "notifications" | "trackers" | "shortcuts" | "profiles" | "hooks" | "hosts" | "workers" | "cloud" | "phones";
@@ -221,16 +222,6 @@ export function daemonLine(st: DaemonService, home: string | null): StatusLine {
 
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
 
-/** Is version `a` older than `b`? Compares `x.y.z` numerically. */
-export function older(a: string, b: string): boolean {
-  const pa = a.split(".").map(Number);
-  const pb = b.split(".").map(Number);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
-    if (d) return d < 0;
-  }
-  return false;
-}
 
 /** The command that installs or updates moonlet on a Linux host (X58). */
 export const INSTALL_COMMAND = "curl -fsSL https://github.com/1devstudio/moonlet/releases/latest/download/install.sh | sh";
