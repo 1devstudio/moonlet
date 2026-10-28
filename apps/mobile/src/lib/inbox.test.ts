@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildInbox, summaryLine } from "./inbox";
+import { buildInbox, cardChat, summaryLine } from "./inbox";
 import { MIN, NOW, ask, chat, data, project, read, session, terminal, workspace } from "./fixtures";
 
 const PLAN = `# Idempotent refund webhooks\n\nStore event ids, retry with backoff, add a replay script. Then backfill.`;
@@ -127,5 +127,39 @@ describe("the counts", () => {
   it("leaves zero counts out of the line, except the hosts", () => {
     expect(summaryLine({ needs: [], working: 0, hostsOnline: 1 })).toBe("1 host online");
     expect(summaryLine({ needs: [], working: 1, hostsOnline: 0 })).toBe("1 working · 0 hosts online");
+  });
+});
+
+describe("design agents (X64, X65)", () => {
+  const designs = () => {
+    const w = world();
+    w.data.mac.terminals[40] = terminal(40, "", { session_id: undefined, title: "Claude", design: { kind: "design", workspace: "personal", slug: "checkout", name: "Checkout" } });
+    w.data.mac.terminals[41] = terminal(41, "", { session_id: undefined, title: "Sync Acme UI", design: { kind: "sync", workspace: "personal", slug: "acme-ui", name: "Acme UI" } });
+    w.data.mac.chats[40] = chat([ask("d1", "AskUserQuestion", { asked_at: NOW - MIN })]);
+    w.data.mac.chats[41] = chat([ask("s1", "Bash", { asked_at: NOW - 3 * MIN })]);
+    return w;
+  };
+
+  it("titles a design's agent as the desktop does, and a sync agent by its terminal", () => {
+    const w = designs();
+    const cards = buildInbox(w.hosts, w.data, null).needs.filter((c) => c.terminal === 40 || c.terminal === 41);
+    expect(cards.map((c) => [c.kind, c.title, c.project])).toEqual([
+      ["question", "Design · Checkout", null],
+      ["permission", "Sync Acme UI", null],
+    ]);
+  });
+
+  it("shows a design agent's ask only in its design's workspace", () => {
+    const w = designs();
+    const titles = (id: string) => buildInbox(w.hosts, w.data, { host: "mac", id, account: "mac" }).needs.map((c) => c.title);
+    expect(titles("personal")).toContain("Design · Checkout");
+    expect(titles("work")).not.toContain("Design · Checkout");
+  });
+
+  it("opens a session's chat for a session's agent, else the agent's own", () => {
+    const w = designs();
+    const cards = buildInbox(w.hosts, w.data, null).needs;
+    expect(cardChat(cards.find((c) => c.terminal === 40)!)).toEqual({ kind: "agent", host: "mac", terminal: 40 });
+    expect(cardChat(cards.find((c) => c.terminal === 10)!)).toEqual({ kind: "session", host: "mac", id: "add-search", tab: "chat" });
   });
 });
