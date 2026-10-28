@@ -544,6 +544,23 @@ impl Daemon {
         })
     }
 
+    /// Refuses to message the agent of a design system or design another
+    /// member owns now (X71): until this member's round stops it, its
+    /// turns would change a copy.
+    fn not_a_copys_agent(&self, id: u32) -> Result<(), RpcError> {
+        use moonlet_core::design::replica::Item;
+        let Some(t) = self.terminals.list().into_iter().find(|t| t.id == id) else { return Ok(()) };
+        let Some(d) = t.design else { return Ok(()) };
+        let item = match d.kind {
+            moonlet_proto::types::DesignAgentKind::Design => Item::design(&d.workspace, &d.slug),
+            _ => Item::system(&d.workspace, &d.slug),
+        };
+        match self.copies.owner_of(&item) {
+            Some((_, owner, _)) => Err(RpcError::new("not_owner", format!("{} is a copy from {owner}: its agent runs there", d.slug))),
+            None => Ok(()),
+        }
+    }
+
     /// Profiles with their last known account and hook state (X33).
     fn profile_infos(&self) -> Vec<moonlet_proto::types::ProfileInfo> {
         let accounts = self.accounts.lock().unwrap().clone();
@@ -776,6 +793,7 @@ impl Daemon {
                 .collect::<Vec<_>>()),
             m::CHAT_SEND => {
                 let r: m::ChatSend = params(p)?;
+                self.not_a_copys_agent(r.id)?;
                 self.keep_before_message(r.id).await;
                 self.chats.send(r.id, &r.text, &r.images).map_err(internal)?;
                 ok(true)
@@ -1471,6 +1489,9 @@ impl Daemon {
                         .collect::<Vec<_>>())
                 })
                 .await?;
+                // Who owns each copy, read once for the list, off the async workers.
+                let copies = self.copies.clone();
+                let owners = tokio::task::spawn_blocking(move || copies.owners()).await.map_err(internal)?;
                 let list: Vec<Value> = systems
                     .into_iter()
                     .map(|(sys, agent)| {
@@ -1480,7 +1501,7 @@ impl Daemon {
                         let mut v = serde_json::to_value(&sys).unwrap_or_default();
                         v["needs_you"] = serde_json::to_value(waiting).unwrap_or_default();
                         let item = moonlet_core::design::replica::Item::system(&ws, &sys.slug);
-                        add_owner(&mut v, self.copies.owner_of(&item));
+                        add_owner(&mut v, owners.get(&item).cloned());
                         v
                     })
                     .collect();
@@ -1691,12 +1712,14 @@ impl Daemon {
                 designs.extend(self.session_designs_of_workspace(&r.workspace).await);
                 designs.extend(self.project_designs_of_workspace(&r.workspace).await);
                 let terminals = self.terminals.list();
+                let copies = self.copies.clone();
+                let owners = tokio::task::spawn_blocking(move || copies.owners()).await.map_err(internal)?;
                 let list: Vec<Value> = designs
                     .into_iter()
                     .map(|d| {
                         let d = self.design_info(d, &terminals);
                         let owner = (d.kind == moonlet_proto::types::DesignKind::Workspace)
-                            .then(|| self.copies.owner_of(&moonlet_core::design::replica::Item::design(&r.workspace, &d.slug)))
+                            .then(|| owners.get(&moonlet_core::design::replica::Item::design(&r.workspace, &d.slug)).cloned())
                             .flatten();
                         let mut v = serde_json::to_value(&d).unwrap_or_default();
                         add_owner(&mut v, owner);
