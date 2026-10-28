@@ -350,6 +350,17 @@ impl HostManager {
         self.get(id)?.reconnect();
         Ok(())
     }
+
+    /// Asks tailnet host `id` to update itself to `version` (X69), in place
+    /// of `hello`, so it works whatever protocol the host speaks. The token
+    /// stays in the app, never in the webview.
+    pub async fn update(&self, id: &str, version: &str) -> Result<moonlet_proto::types::DaemonUpdated, RpcError> {
+        let saved = self.tailnet.lock().unwrap().get(id).cloned();
+        let Some(saved) = saved else {
+            return Err(RpcError::new("invalid_params", format!("{id} is not a tailnet host")));
+        };
+        moonlet_link::tailnet::update(&saved.addrs, &saved.token, version).await
+    }
 }
 
 /// Finds a bundled binary: next to the app executable (bundle `Contents/MacOS`,

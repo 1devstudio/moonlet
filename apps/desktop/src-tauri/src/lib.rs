@@ -75,6 +75,12 @@ fn host_reconnect(hosts: Hosts, id: String) -> Result<(), RpcError> {
     hosts.reconnect(&id)
 }
 
+/// Updates a tailnet host to `version` (X69).
+#[tauri::command]
+async fn host_update(hosts: Hosts<'_>, id: String, version: String) -> Result<moonlet_proto::types::DaemonUpdated, RpcError> {
+    hosts.update(&id, &version).await
+}
+
 /// Registers the binary channel that receives this host's PTY output.
 #[tauri::command]
 fn host_subscribe(
@@ -554,6 +560,7 @@ pub fn run() {
             host_remove,
             host_set_central,
             host_reconnect,
+            host_update,
             host_subscribe,
             rpc,
             send_input,
