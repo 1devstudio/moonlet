@@ -13,7 +13,7 @@ use moonlet_proto::methods::{
     WorkspaceUpdate,
 };
 use moonlet_proto::types::{
-    ClaudeProfile, Project, ProjectConfig, ProjectConfigFile, PullRequest, RestoreEntry, Section, SectionView, Session, SessionArchived, StartFrom,
+    ClaudeProfile, Project, ProjectConfig, ProjectIdentity, ProjectConfigFile, PullRequest, RestoreEntry, Section, SectionView, Session, SessionArchived, StartFrom,
     TerminalInfo, TerminalKind, Workspace, WorkspaceColor,
 };
 use moonlet_proto::{Message, TerminalId};
@@ -519,7 +519,10 @@ impl SessionManager {
         };
         // The state as every member lays the account onto theirs, so that
         // a project added here leaves `missing`, and repairs match (X68).
-        if let Some(s) = staged.as_ref().filter(|s| !s.changes.is_empty()) {
+        if let Some(s) = staged
+            .as_ref()
+            .filter(|s| !s.changes.is_empty() || account::found_missing(&next))
+        {
             account::lay_onto(&mut next, s.log());
         }
         if let Err(e) = self.save(&next) {
@@ -819,7 +822,14 @@ impl SessionManager {
 
     /// Adds a project (or finds it) and attaches it to a section.
     pub async fn section_add_project(&self, id: &str, path: &str) -> Result<Project> {
-        self.add_project_to(path, Some(id)).await
+        self.add_project_to(path, Some(id), None).await
+    }
+
+    /// Adds the folder at `path` to a section as a copy of another member's
+    /// project `want` (X70), refusing it when its repository is not that
+    /// project; checked on the repository it adds, as it adds it.
+    pub async fn section_add_copy(&self, id: &str, path: &str, want: &ProjectIdentity) -> Result<Project> {
+        self.add_project_to(path, Some(id), Some(want)).await
     }
 
     /// Detaches a project from a section. It must not leave live sessions
@@ -899,13 +909,30 @@ impl SessionManager {
     }
 
     pub async fn add_project(&self, path: &str) -> Result<Project> {
-        self.add_project_to(path, None).await
+        self.add_project_to(path, None, None).await
     }
 
     /// A new project joins `section` in the same update, so the orphan sweep
     /// in `State::ensure` does not also file it under the first one.
-    async fn add_project_to(&self, path: &str, section: Option<&str>) -> Result<Project> {
-        let root = git::toplevel(&expand_home(path)).await?;
+    async fn add_project_to(
+        &self,
+        path: &str,
+        section: Option<&str>,
+        copy_of: Option<&ProjectIdentity>,
+    ) -> Result<Project> {
+        let root = match git::toplevel(&expand_home(path)).await {
+            Ok(root) => root,
+            Err(_) if copy_of.is_some() => bail!("{path} is not a git repository."),
+            Err(e) => return Err(e),
+        };
+        let mut identity = None;
+        if let Some(want) = copy_of {
+            let found = crate::identity::identity(&root).await;
+            if let Some(why) = crate::identity::not_a_copy(&found, want) {
+                bail!("{path} {why}");
+            }
+            identity = Some(found);
+        }
         let root_s = root.display().to_string();
         if let Some(r) = self.list_projects().into_iter().find(|r| r.path == root_s) {
             if let Some(id) = section {
@@ -933,7 +960,10 @@ impl SessionManager {
                 .unwrap_or_else(|| root_s.clone()),
             path: root_s,
             base_branch: base,
-            identity: crate::identity::identity(&root).await,
+            identity: match identity {
+                Some(found) => found,
+                None => crate::identity::identity(&root).await,
+            },
         };
         let r = repo.clone();
         self.mutate(|st| {

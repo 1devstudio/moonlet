@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState, type R
 import { Archive, ArrowDown, ArrowLeftRight, Bell, BellOff, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, Command, Download, FolderPlus, History, Link2, Loader2, MoreHorizontal, PenTool, Plus, RotateCcw, RotateCw, Settings, ShieldAlert, X } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { M, type Copy, type HostInfo, type Project, type Section, type SectionView, type Session, type Workspace } from "../lib/protocol";
-import { arrangeShared, groupCollapseKey, groupHeading, lastActive, missingProjectNote, projectRemoval, sectionCollapseKey, sectionParts, sessionBadge, sessionMenu, shownSections, type HostSession, type SharedGroup } from "../lib/sidebar";
+import { arrangeShared, groupCollapseKey, groupHeading, lastActive, projectRemoval, sectionCollapseKey, sectionParts, sessionBadge, sessionMenu, shownSections, type HostSession, type SharedGroup } from "../lib/sidebar";
 import { closeClaudeUpdate, errorToast, projKey, pullBase, selectSession, updateActions, updateClaude, sesKey, sessionState, sessionTerminals, shownWorkspace, termKey, toast, updateSettings, useStore } from "../lib/store";
 import { hostNotice } from "../lib/settingsPage";
 import { gitSettingsOf } from "../lib/gitSettings";
@@ -504,6 +504,8 @@ function GroupBlock({ primary, workspaceId, sec, g, onRowMenu }: { primary: stri
   const collapsed = useStore((s) => !!s.collapsed[key]);
   const toggle = () => useStore.setState((s) => ({ collapsed: { ...s.collapsed, [key]: !collapsed } }));
   const heading = groupHeading(g);
+  // A project no connected member has: clicking it gets it here (X70).
+  const missing = g.on && "missing" in g.on ? g.on.missing : null;
   // How rows show their task (X48): A, a number column; B, task lines.
   const style = useStore((s) => rowStyle(s.settings.sessionRows));
   const { lines, sources } = useContext(TaskLines);
@@ -535,7 +537,7 @@ function GroupBlock({ primary, workspaceId, sec, g, onRowMenu }: { primary: stri
             onRowMenu({ host, projectId: g.projectId }, e);
           }}
         >
-          <button onClick={g.on && "missing" in g.on ? () => toast(missingProjectNote(g.label, labelOf(primary))) : toggle} className={cx("flex min-w-0 items-center gap-2 text-left", g.kind !== "project" && "flex-1")}>
+          <button onClick={missing ? () => useStore.setState({ dialog: { kind: "get-project", host: primary, section: sec.id, identity: missing, name: g.label } }) : toggle} className={cx("flex min-w-0 items-center gap-2 text-left", g.kind !== "project" && "flex-1")}>
             {header}
             {collapsed && <ChevronRight size={12} className="text-faint" />}
           </button>

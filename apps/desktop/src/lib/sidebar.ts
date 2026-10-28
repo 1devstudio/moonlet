@@ -111,12 +111,13 @@ export interface SharedGroup {
   host: string;
   projectId?: string;
   /** Where the project is when the shown member lacks it: on another
-   * member, or on none that is connected. */
-  on: { host: string } | { missing: true } | null;
+   * member, or on none that is connected, with its identity (X70). */
+  on: { host: string } | { missing: ProjectIdentity } | null;
   sessions: HostSession[];
 }
 
-const identityKey = (i: ProjectIdentity | undefined) => (i?.root ? `${i.origin ?? ""}|${i.root}` : null);
+/** A project identity as one key, `<origin>|<root>`; null without a root. */
+export const identityKey = (i: ProjectIdentity | undefined) => (i?.root ? `${i.origin ?? ""}|${i.root}` : null);
 
 /** A project's name from its identity: the last part of its origin. */
 const identityName = (i: ProjectIdentity) => i.origin?.split("/").pop() ?? i.root?.slice(0, 7) ?? "project";
@@ -180,7 +181,7 @@ export function arrangeShared(
   for (const i of view.group_by === "project" ? (parts[0].sec.missing ?? []) : []) {
     const key = identityKey(i);
     if (!key || byKey.has(key) || (picked.length > 0 && !picked.includes(key))) continue;
-    const g: SharedGroup = { key: `proj:${key}`, kind: "project", label: identityName(i), host: parts[0].host, on: { missing: true }, sessions: [] };
+    const g: SharedGroup = { key: `proj:${key}`, kind: "project", label: identityName(i), host: parts[0].host, on: { missing: i }, sessions: [] };
     byKey.set(key, g);
     out.push(g);
   }
@@ -198,10 +199,6 @@ export function arrangeShared(
   }
   return out;
 }
-
-/** What clicking a project no connected member has says (X68). */
-export const missingProjectNote = (name: string, host: string) =>
-  `${name} is not on ${host}. Add a clone of it to this section to work on it here; moonlet will clone it for you in a later version.`;
 
 /** A host with the account it shares and what it lists (X68). */
 export interface ListingHost {

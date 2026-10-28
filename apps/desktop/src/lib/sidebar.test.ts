@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { arrange, arrangeShared, compact, missingProjectNote, sectionParts, sharedSessionOrder, shownSections, groupHeading, holdsProject, hostSections, projectRemoval, sessionBadge, sessionMenu, workspaceSections } from "./sidebar";
+import { arrange, arrangeShared, compact, sectionParts, sharedSessionOrder, shownSections, groupHeading, holdsProject, hostSections, projectRemoval, sessionBadge, sessionMenu, workspaceSections } from "./sidebar";
 import type { Project, Section, Session, Workspace } from "./protocol";
 
 const p = (id: string, name: string): Project => ({ id, name, path: `/${name}`, base_branch: "main" });
@@ -97,8 +97,9 @@ describe("arrangeShared (a section on every member of an account, X68)", () => {
       ["shop", "local", "a", null, ["local:s4", "studio-mini:s3", "local:s1"]],
       // Only on studio-mini: its sessions, and its project row, are there.
       ["blog", "studio-mini", "y", { host: "studio-mini" }, ["studio-mini:s2"]],
-      // On no connected member: named from its origin.
-      ["docs", "local", null, { missing: true }, []],
+      // On no connected member: named from its origin, with its identity
+      // for Get docs on This Mac (X70).
+      ["docs", "local", null, { missing: { origin: "github.com/acme/docs", root: "docs-root" } }, []],
     ]);
   });
 
@@ -117,14 +118,6 @@ describe("arrangeShared (a section on every member of an account, X68)", () => {
     const g = arrangeShared("personal", [filtered, mini], none);
     // Nor does a project no member has, which was not picked either.
     expect(g.map((x) => [x.label, x.sessions.map((e) => e.session.id)])).toEqual([["shop", ["s4", "s3", "s1"]]]);
-  });
-});
-
-describe("missingProjectNote (X68)", () => {
-  it("says how to work on a project this Mac does not have", () => {
-    expect(missingProjectNote("blog", "This Mac")).toBe(
-      "blog is not on This Mac. Add a clone of it to this section to work on it here; moonlet will clone it for you in a later version.",
-    );
   });
 });
 

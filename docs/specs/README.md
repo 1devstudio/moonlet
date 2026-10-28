@@ -106,3 +106,4 @@ Each feature of moonlet has its own spec in this directory. Write the spec befor
 | X66 | Task comments (read and post a tracker issue's comments in the Task detail and Task tab) | P1 | 3 | implemented (Linear and ClickUp untried on a real account) | [X66-task-comments.md](X66-task-comments.md) |
 | X67 | Google Cloud workers: a Compute Engine adapter for cloud machines | P1 | 4 | implemented (untried with a real Google Cloud project; provisional API captures) | [X67-google-cloud-workers.md](X67-google-cloud-workers.md) |
 | X68 | One account: the same workspaces and sections on every host (ADR 0014, slice 1) | P1 | 4 | draft | [X68-account-state.md](X68-account-state.md) |
+| X70 | Get a project this host does not have: clone it from its origin on any forge, or locate a copy | P1 | 4 | implemented (a real private repository and a remote host untried) | [X70-get-a-missing-project.md](X70-get-a-missing-project.md) |

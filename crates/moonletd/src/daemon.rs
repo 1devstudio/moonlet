@@ -805,7 +805,11 @@ impl Daemon {
             m::REPO_GH_STATUS => ok(moonlet_core::repo_clone::gh_status().await),
             m::REPO_LOOKUP => {
                 let r: m::RepoRef = params(p)?;
-                ok(moonlet_core::repo_clone::lookup(&r.repo, r.ssh.as_deref()).await.map_err(internal)?)
+                let found = match &r.origin {
+                    Some(origin) => moonlet_core::repo_clone::lookup_origin(origin).await,
+                    None => moonlet_core::repo_clone::lookup(&r.repo, r.ssh.as_deref()).await,
+                };
+                ok(found.map_err(internal)?)
             }
             m::REPO_LIST => {
                 let folders: Vec<String> = self.sessions.list_projects().into_iter().map(|p| p.path).collect();
@@ -814,7 +818,16 @@ impl Daemon {
             }
             m::REPO_CLONE_TARGET => {
                 let r: m::RepoCloneTarget = params(p)?;
-                ok(moonlet_core::repo_clone::clone_target(&r.repo, &r.parent, &r.name).await.map_err(internal)?)
+                let target = match &r.origin {
+                    Some(origin) => {
+                        moonlet_core::repo_clone::Origin::parse(origin).map_err(internal)?;
+                        let root = moonlet_core::repo_clone::checked_root(r.root.as_deref().unwrap_or_default()).map_err(internal)?;
+                        let want = moonlet_proto::types::ProjectIdentity { origin: Some(origin.clone()), root: Some(root.to_string()) };
+                        moonlet_core::repo_clone::origin_clone_target(&want, &r.parent, &r.name).await
+                    }
+                    None => moonlet_core::repo_clone::clone_target(&r.repo, &r.parent, &r.name).await,
+                };
+                ok(target.map_err(internal)?)
             }
             m::REPO_CLONE => ok(self.clones.start(params(p)?).map_err(internal)?),
             m::REPO_CLONE_CANCEL => {
@@ -2439,9 +2452,11 @@ impl Daemon {
             }
             m::SECTION_ADD_PROJECT => {
                 let r: m::SectionAddProject = params(p)?;
-                ok(w.section_add_project(&r.id, &r.path)
-                    .await
-                    .map_err(internal)?)
+                let added = match &r.identity {
+                    Some(want) => w.section_add_copy(&r.id, &r.path, want).await,
+                    None => w.section_add_project(&r.id, &r.path).await,
+                };
+                ok(added.map_err(internal)?)
             }
             m::SECTION_REMOVE_PROJECT => {
                 let r: m::SectionRemoveProject = params(p)?;

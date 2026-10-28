@@ -983,20 +983,35 @@ pub struct SectionUpdate {
 pub struct SectionAddProject {
     pub id: String,
     pub path: String,
+    /// The project the folder must be a copy of (X70): another member's,
+    /// missing here.
+    #[serde(default)]
+    pub identity: Option<crate::types::ProjectIdentity>,
 }
 
 /// A GitHub repository as `owner/name`, and the SSH address the user
-/// typed for it, if any (X59).
+/// typed for it, if any (X59); or a project's origin, `host[:port]/path`,
+/// in place of `repo` (X70).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepoRef {
+    #[serde(default)]
     pub repo: String,
     #[serde(default)]
     pub ssh: Option<String>,
+    #[serde(default)]
+    pub origin: Option<String>,
 }
 
+/// With `origin` and `root` in place of `repo`, a folder is the same
+/// repository when it is a copy of that project (X70).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepoCloneTarget {
+    #[serde(default)]
     pub repo: String,
+    #[serde(default)]
+    pub origin: Option<String>,
+    #[serde(default)]
+    pub root: Option<String>,
     pub parent: String,
     pub name: String,
 }
@@ -1005,9 +1020,19 @@ pub struct RepoCloneTarget {
 pub struct RepoClone {
     /// Chosen by the app, so it can tell the clone's events from the start.
     pub id: String,
+    #[serde(default)]
     pub repo: String,
     #[serde(default)]
     pub ssh: Option<String>,
+    /// A project another member has, in place of `repo` (X70): its origin,
+    /// its root commit, which the clone must start with, and the address
+    /// `repo.lookup` reached, or none for gh.
+    #[serde(default)]
+    pub origin: Option<String>,
+    #[serde(default)]
+    pub root: Option<String>,
+    #[serde(default)]
+    pub url: Option<String>,
     pub parent: String,
     pub name: String,
     /// The section the new project joins; none: the default section.
