@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assigneeOf, type BoardColumn, type BoardConfig, boardRows, byDefaultHint, projectMove, projectMoveLock, footerTracker, linkedProjects, localDay, pickAssignee, withPinned, syncedColumns, withColumnShow, firstColumns, withStates, rowsToBoards, GITHUB_REPO_COLUMNS, matchColumns, migrateSources, startProjects, taskFromBoardIssue, workspaceBoards } from "./boards";
+import { assigneeOf, type BoardColumn, type BoardConfig, boardRows, byDefaultHint, projectMove, projectMoveLock, footerTracker, linkedProjects, localDay, pickAssignee, withPinned, syncedColumns, withColumnShow, firstColumns, withStates, rowsToBoards, GITHUB_REPO_COLUMNS, matchColumns, migrateSources, startProjects, taskFromBoardIssue, taskWorkspace, workspaceBoards } from "./boards";
 import type { Task } from "./tasks";
 import { DEFAULT_CONFIG, type TrackersConfig } from "./tasksStore";
 
@@ -233,6 +233,40 @@ describe("workspaceBoards (X50 Sync)", () => {
     const boards = [b("a", "local/w"), b("b", "local/w", false), b("c", "local/other"), b("d", "local/w", false)];
     expect(workspaceBoards(boards, "local/w", "d").map((x) => x.id)).toEqual(["a", "d"]);
     expect(workspaceBoards(boards, "local/w", null).map((x) => x.id)).toEqual(["a"]);
+  });
+});
+
+describe("taskWorkspace (X46 a session's task, X68 members)", () => {
+  const b = (workspace: string): BoardConfig => ({ id: workspace, name: "AI Ops", connection: "jira:acme.atlassian.net", workspace, origin: { kind: "jira_board", board: 1 } });
+  const host = (id: string, account: string, workspaces: string[]) => ({
+    host: id,
+    label: id,
+    account,
+    workspaces: workspaces.map((w) => ({ id: w, name: w, color: "clay" as const, section_ids: [], claude_profile: null, created_at: 0 })),
+    sections: [],
+    sessions: [],
+    profiles: [],
+  });
+  const hosts = [host("local", "acct-mini", ["personal"]), host("studio-mini", "acct-mini", ["personal"]), host("devbox", "devbox", ["personal"])];
+
+  it("finds a session on the central host the boards this Mac pinned to their shared workspace", () => {
+    expect(taskWorkspace("studio-mini", "personal", hosts, [b("local/personal")])).toEqual({ host: "local", id: "personal", account: "acct-mini" });
+  });
+
+  it("keeps the session's own host when its boards are there, or when no member has any", () => {
+    expect(taskWorkspace("studio-mini", "personal", hosts, [b("local/personal"), b("studio-mini/personal")])).toEqual({ host: "studio-mini", id: "personal", account: "acct-mini" });
+    expect(taskWorkspace("studio-mini", "personal", hosts, [])).toEqual({ host: "studio-mini", id: "personal", account: "acct-mini" });
+  });
+
+  it("takes the member whose boards are on the task's tracker when its own host has boards of another one", () => {
+    const linear: BoardConfig = { ...b("studio-mini/personal"), id: "linear", connection: "linear:acme" };
+    expect(taskWorkspace("studio-mini", "personal", hosts, [linear, b("local/personal")], "jira:acme.atlassian.net")).toEqual({ host: "local", id: "personal", account: "acct-mini" });
+    // No member has a board on that tracker: the first with boards, as before.
+    expect(taskWorkspace("studio-mini", "personal", hosts, [linear, b("local/personal")], "clickup:9012")).toEqual({ host: "studio-mini", id: "personal", account: "acct-mini" });
+  });
+
+  it("never takes the boards of a host outside the session's account", () => {
+    expect(taskWorkspace("studio-mini", "personal", hosts, [b("devbox/personal")])).toEqual({ host: "studio-mini", id: "personal", account: "acct-mini" });
   });
 });
 

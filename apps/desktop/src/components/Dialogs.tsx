@@ -5,7 +5,8 @@ import { useEffect, useState } from "react";
 import { rpc } from "../lib/daemon";
 import { gitSettingsOf } from "../lib/gitSettings";
 import { M, type Commit, type PullRequest } from "../lib/protocol";
-import { errorToast, refreshGit, selectedSession, shownWorkspace, toast, useStore } from "../lib/store";
+import { errorToast, hostWorkspaces, refreshGit, selectedSession, shownWorkspace, toast, useStore } from "../lib/store";
+import { taskWorkspace } from "../lib/boards";
 import { Button, Dialog, Field, cx, inputCls } from "./ui";
 import { Composer } from "./Composer";
 import { newSectionWorkspace, wsKey } from "../lib/workspaces";
@@ -131,8 +132,10 @@ export function CreatePrDialog() {
   useEffect(() => {
     if (!ws) return;
     // The GitHub issue the session works on gets `Closes #N` (X46 Keep in step).
-    const tasks = useTasks.getState().data[wsKey(host, ws.workspace_id ?? "")]?.tasks ?? [];
     const config = trackersConfig(useTasks.getState());
+    // On the boards of whichever member holds them (X68).
+    const board = ws.workspace_id ? taskWorkspace(host, ws.workspace_id, hostWorkspaces(useStore.getState()), config.boards, ws.task?.connection) : null;
+    const tasks = board ? (useTasks.getState().data[wsKey(board.host, board.id)]?.tasks ?? []) : [];
     const issue = rpc<string | null>(host, M.gitOriginUrl, { path: ws.path })
       .then((url) => closesIssue(ws, githubRepo(url), tasks, config.link, (t) => rulesFor(config, t).pr_comment))
       .catch(() => null);

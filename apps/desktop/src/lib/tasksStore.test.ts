@@ -7,7 +7,7 @@ import { useStore } from "./store";
 import { answerConfirm } from "./confirm";
 import { rpc } from "./daemon";
 import { createIssue, setColumnShow } from "./tasksStore";
-import { type TasksData, type TrackersConfig, activityOf, autoFixed, boardInput, openBoard, removeBoard, previewBoard, showBoard, branchUser, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, lookUpPasted, moveTask, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, pollTasks, saveTrackersConfig, settleSaves, setAssignee, setExpanded, setFilters, setKeepInStep, startedFromTask, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
+import { type TasksData, type TrackersConfig, activityOf, autoFixed, boardInput, openBoard, removeBoard, previewBoard, showBoard, branchUser, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, lookUpPasted, moveTask, originRepoOf, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, pollTasks, saveTrackersConfig, settleSaves, setAssignee, setExpanded, setFilters, setKeepInStep, startedFromTask, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
 
 const answers: Record<string, (params: { path?: string; id?: string }) => unknown> = {};
 vi.mock("./daemon", () => ({
@@ -1708,6 +1708,23 @@ describe("a board's sessions across the members of an account (X68)", () => {
     ]);
     // Without members, the host's own as before.
     expect(boardInput(state, "local", "W", data, DEFAULT_CONFIG).sessions.map((x) => x.id)).toEqual(["s1"]);
+  });
+
+  it("gives a session on another member the repository of the board's project of the same identity, for its link dialog", () => {
+    const state = {
+      ...useStore.getState(),
+      projects: {
+        local: [{ id: "p1", name: "web", path: "/web", base_branch: "main", identity }],
+        "studio-mini": [
+          { id: "q1", name: "web", path: "/code/web", base_branch: "main", identity },
+          { id: "p1", name: "api", path: "/code/api", base_branch: "main", identity: { origin: "github.com/acme/api", root: "r2" } },
+        ],
+      },
+    };
+    expect(originRepoOf(state, "local", data, "studio-mini", "q1")).toBe("acme/web");
+    // The same id on another host is another project.
+    expect(originRepoOf(state, "local", data, "studio-mini", "p1")).toBeNull();
+    expect(originRepoOf(state, "local", data, "local", "p1")).toBe("acme/web");
   });
 });
 
