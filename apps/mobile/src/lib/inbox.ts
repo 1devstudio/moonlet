@@ -3,7 +3,9 @@
 import { planOf } from "@desktop/lib/chat";
 import { askerName } from "@desktop/lib/subagents";
 import type { AgentState, HostStatus, PermissionAsk, ReadRequest, Session } from "@desktop/lib/protocol";
+import type { WorkspaceRef } from "@desktop/lib/workspaces";
 import type { HostData } from "./app";
+import { inShown } from "./workspaceChoices";
 
 export type CardKind = "permission" | "plan" | "question" | "read";
 
@@ -52,10 +54,10 @@ export function sessionState(d: HostData, s: Session): AgentState {
   return "idle";
 }
 
-/** The session belongs to the workspace shown, matched by name on its own host. */
-export function inWorkspace(d: HostData, s: Session | null, workspace: string | null): boolean {
-  if (workspace === null || !s) return true;
-  return d.workspaces.some((w) => w.id === s.workspace_id && w.name === workspace);
+/** The session on `host` belongs to the workspace shown, on any member of
+ * its account (X68). An agent without a session shows in every workspace. */
+export function inWorkspace(host: string, d: HostData, s: Session | null, shown: WorkspaceRef | null): boolean {
+  return !s || inShown(shown, host, d.account, s.workspace_id ?? "");
 }
 
 function kindOf(ask: PermissionAsk): CardKind {
@@ -64,7 +66,7 @@ function kindOf(ask: PermissionAsk): CardKind {
   return "permission";
 }
 
-export function buildInbox(hosts: Record<string, InboxHost>, data: Record<string, HostData>, workspace: string | null): Inbox {
+export function buildInbox(hosts: Record<string, InboxHost>, data: Record<string, HostData>, shown: WorkspaceRef | null): Inbox {
   const needs: InboxCard[] = [];
   let working = 0;
   let hostsOnline = 0;
@@ -73,7 +75,7 @@ export function buildInbox(hosts: Record<string, InboxHost>, data: Record<string
     if (h.status !== "connected" || !d) continue;
     hostsOnline++;
     for (const s of d.sessions) {
-      if (s.archived || !inWorkspace(d, s, workspace)) continue;
+      if (s.archived || !inWorkspace(h.id, d, s, shown)) continue;
       if (sessionState(d, s) === "working") working++;
     }
     const sessionOf = (id?: string | null) => d.sessions.find((s) => s.id === id) ?? null;
@@ -90,14 +92,14 @@ export function buildInbox(hosts: Record<string, InboxHost>, data: Record<string
     for (const [id, st] of Object.entries(d.chats)) {
       const t = Number(id);
       const s = sessionOf(d.terminals[t]?.session_id);
-      if (!inWorkspace(d, s, workspace)) continue;
+      if (!inWorkspace(h.id, d, s, shown)) continue;
       for (const ask of st.pending) {
         needs.push({ ...base(t, s), kind: kindOf(ask), key: `${h.id}:${t}:${ask.id}`, askedAt: ask.asked_at ?? null, ask, asker: askerName(ask, st.subagents ?? []) });
       }
     }
     for (const r of d.reads) {
       const s = sessionOf(r.session_id);
-      if (!inWorkspace(d, s, workspace)) continue;
+      if (!inWorkspace(h.id, d, s, shown)) continue;
       needs.push({ ...base(r.caller, s), kind: "read", key: `${h.id}:read:${r.request_id}`, askedAt: r.asked_at ?? null, read: r });
     }
   }

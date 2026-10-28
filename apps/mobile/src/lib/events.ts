@@ -2,7 +2,7 @@
 // applied to the data shown and, when they arrive while a load is on its
 // way, to the load's result: an event can overtake a reply sent before it.
 
-import { EV, type ChatState, type GitSettings, type ReadRequest, type TerminalInfo } from "@desktop/lib/protocol";
+import { EV, type AccountInfo, type ChatState, type GitSettings, type ReadRequest, type TerminalInfo } from "@desktop/lib/protocol";
 import { DaemonError } from "@desktop/lib/daemon";
 import type { ChatSummary, HostData } from "./app";
 
@@ -11,7 +11,8 @@ export type Change =
   | { kind: "terminals"; id: number; value: TerminalInfo | null }
   | { kind: "chats"; id: number; value: ChatSummary | null }
   | { kind: "reads"; id: number; value: ReadRequest | null }
-  | { kind: "git"; value: GitSettings };
+  | { kind: "git"; value: GitSettings }
+  | { kind: "account"; value: string };
 
 /** The changes `name` makes, or "reload" when only a fresh load tells. */
 export function eventChanges(name: string, data: unknown): Change[] | "reload" {
@@ -40,6 +41,8 @@ export function eventChanges(name: string, data: unknown): Change[] | "reload" {
       return [{ kind: "reads", id: (data as { request_id: number }).request_id, value: null }];
     case EV.gitSettingsChanged:
       return [{ kind: "git", value: data as GitSettings }];
+    case EV.accountInfo:
+      return [{ kind: "account", value: (data as AccountInfo).account }];
     case EV.sessionsChanged:
     case EV.projectsChanged:
     case EV.workspacesChanged:
@@ -56,6 +59,12 @@ export function gitAfterError(e: unknown): null | "keep" {
   return e instanceof DaemonError && e.code === "unknown_method" ? null : "keep";
 }
 
+/** What a failed `account.get` leaves (X68): no account, so the host is its
+ * own, for a daemon too old to have one, else the one already known. */
+export function accountAfterError(e: unknown): null | "keep" {
+  return gitAfterError(e);
+}
+
 function setRecord<T>(base: Record<number, T>, id: number, value: T | null): Record<number, T> {
   const out = { ...base };
   if (value === null) delete out[id];
@@ -69,6 +78,7 @@ export function applyChanges(d: HostData, changes: readonly Change[]): HostData 
     if (c.kind === "terminals") out = { ...out, terminals: setRecord(out.terminals, c.id, c.value) };
     else if (c.kind === "chats") out = { ...out, chats: setRecord(out.chats, c.id, c.value) };
     else if (c.kind === "git") out = { ...out, git: c.value };
+    else if (c.kind === "account") out = { ...out, account: c.value };
     else {
       const reads = out.reads.filter((r) => r.request_id !== c.id);
       out = { ...out, reads: c.value ? [...reads, c.value] : reads };

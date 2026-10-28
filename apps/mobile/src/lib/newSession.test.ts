@@ -76,11 +76,13 @@ describe("projectChoices", () => {
   };
   const d = {
     mac: data({
+      account: "w-mini",
       workspaces: [{ ...workspace("p", "Personal"), section_ids: ["a"] }, { ...workspace("w", "Work"), section_ids: ["b"] }],
       sections: [section("a", ["storefront", "changedeck"]), section("b", ["storefront"])],
       projects: [project("storefront", "storefront"), project("changedeck", "changedeck")],
     }),
     "mac/devbox": data({
+      account: "w-mini",
       workspaces: [{ ...workspace("p", "Personal"), section_ids: ["c"] }],
       sections: [section("c", ["payments"])],
       projects: [project("payments", "payments-api")],
@@ -88,14 +90,21 @@ describe("projectChoices", () => {
     gpu: data({ workspaces: [{ ...workspace("p", "Personal"), section_ids: ["d"] }], sections: [section("d", ["ml"])], projects: [project("ml", "ml")] }),
   };
 
-  it("lists the workspace's projects on connected hosts, once each, with the workspace to create in", () => {
-    expect(projectChoices(hosts, d, "Personal").map((c) => [c.host, c.project.name, c.workspaceId])).toEqual([
+  const personal = { host: "mac", id: "p", account: "w-mini" };
+
+  it("lists the workspace's projects on connected members of its account, once each, with the workspace to create in", () => {
+    expect(projectChoices(hosts, d, personal).map((c) => [c.host, c.project.name, c.workspaceId])).toEqual([
       ["mac", "storefront", "p"],
       ["mac", "changedeck", "p"],
       ["mac/devbox", "payments-api", "p"],
     ]);
-    expect(projectChoices(hosts, d, "Work").map((c) => c.project.name)).toEqual(["storefront"]);
+    expect(projectChoices(hosts, d, { host: "mac", id: "w", account: "w-mini" }).map((c) => c.project.name)).toEqual(["storefront"]);
     expect(projectChoices(hosts, d, null).map((c) => c.project.name)).toEqual(["storefront", "changedeck", "payments-api"]);
+  });
+
+  it("leaves out a host outside the workspace's account, whatever its workspace ids (X68)", () => {
+    const apart = { ...d, "mac/devbox": { ...d["mac/devbox"], account: undefined } };
+    expect(projectChoices(hosts, apart, personal).map((c) => c.project.name)).toEqual(["storefront", "changedeck"]);
   });
 });
 

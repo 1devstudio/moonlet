@@ -8,7 +8,7 @@ import { latestOnly } from "@desktop/lib/prStack";
 import { CLAUDE_MODELS, EFFORTS } from "@desktop/lib/agents";
 import { type IssueRef, M, type Project, type ProjectConfig, type Session } from "@desktop/lib/protocol";
 import { type Attachment, type PickerList, type PickerTab, pickerBranches, pickerHint, pickerSearch } from "@desktop/lib/composer";
-import { loadHost, showScreen, showTab, useApp } from "../lib/app";
+import { loadHost, showScreen, showTab, useApp, useShownWorkspace } from "../lib/app";
 import { MODES, branchPrefix, composer, modeHelp, projectChoices, setupLine } from "../lib/newSession";
 import { useBusy } from "../lib/busy";
 import { AgentIcon, Btn, cx } from "../components/ui";
@@ -149,8 +149,7 @@ function AttachmentCard({ a, onRemove }: { a: Attachment; onRemove: () => void }
 export function NewSessionScreen() {
   const hosts = useApp((s) => s.hosts);
   const data = useApp((s) => s.data);
-  const workspace = useApp((s) => s.settings.workspace);
-  const choices = projectChoices(hosts, data, workspace);
+  const choices = projectChoices(hosts, data, useShownWorkspace());
   const [prompt, setPrompt] = useState("");
   const [pick, setPick] = useState(0);
   const [agent, setAgent] = useState("claude");

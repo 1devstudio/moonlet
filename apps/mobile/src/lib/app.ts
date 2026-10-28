@@ -9,6 +9,7 @@ import { onChatItem, onChatState } from "@desktop/lib/chat";
 import {
   EV,
   M,
+  type AccountInfo,
   type ChatState,
   type GitSettings,
   type HostInfo,
@@ -20,8 +21,10 @@ import {
   type Workspace,
 } from "@desktop/lib/protocol";
 import { readStored, writeStored } from "@desktop/lib/storage";
+import type { WorkspaceRef } from "@desktop/lib/workspaces";
 import type { HostSeen } from "./hosts";
-import { type Change, applyChanges, eventChanges, gitAfterError } from "./events";
+import { hostWorkspaces, shownWorkspace } from "./workspaceChoices";
+import { type Change, accountAfterError, applyChanges, eventChanges, gitAfterError } from "./events";
 
 /** A host as the phone's core lists it (`host_list`). */
 export interface HostEntry extends HostInfo {
@@ -38,6 +41,8 @@ export interface HostData {
   terminals: Record<number, TerminalInfo>;
   sessions: Session[];
   projects: Project[];
+  /** The account the host shares (X68), from `account.get`; none from a daemon before X68. */
+  account?: string;
   workspaces: Workspace[];
   sections: Section[];
   reads: ReadRequest[];
@@ -63,8 +68,9 @@ export type Screen =
 export type NotifyKey = "blocked" | "done" | "error" | "checks";
 
 export interface Settings {
-  /** The workspace shown in Inbox and Sessions, `<host>/<id>`. */
-  workspace: string | null;
+  /** The workspace shown in Inbox and Sessions, by its account and id
+   * (X68); a name kept before X68; null for all workspaces. */
+  workspace: WorkspaceRef | string | null;
   /** "Notify me when" switches that are off. */
   notifyOff: NotifyKey[];
   /** Face ID before Allow and plan approvals. */
@@ -113,6 +119,14 @@ export function updateSettings(patch: Partial<Settings>) {
   writeStored(SETTINGS, JSON.stringify(settings));
 }
 
+/** The workspace Inbox, Sessions and New session show; null for all. */
+export function useShownWorkspace(): WorkspaceRef | null {
+  const hosts = useApp((s) => s.hosts);
+  const data = useApp((s) => s.data);
+  const kept = useApp((s) => s.settings.workspace);
+  return shownWorkspace(kept, hostWorkspaces(hosts, data));
+}
+
 export const showTab = (tab: Tab) => set({ tab, screen: null });
 export const showScreen = (screen: Screen | null) => set({ screen });
 
@@ -152,17 +166,21 @@ export async function loadHost(host: string) {
   loads.set(host, during);
   try {
     const fetched = await fetchHostData(host);
+    // A newer load started meanwhile: its replies are newer than these.
+    if (loads.get(host) !== during) return;
     // What events changed meanwhile wins over the replies they overtook.
-    patchData(host, (cur) => applyChanges({ ...fetched, git: fetched.git === undefined ? cur.git : fetched.git }, during));
+    const kept = (cur: HostData) => ({ git: fetched.git === undefined ? cur.git : fetched.git, account: fetched.account === "keep" ? cur.account : (fetched.account ?? undefined) });
+    patchData(host, (cur) => applyChanges({ ...fetched, ...kept(cur) }, during));
   } finally {
     if (loads.get(host) === during) loads.delete(host);
   }
 }
 
-/** The host's data; `git` left out when its reply failed, so the settings already loaded stay. */
-async function fetchHostData(host: string): Promise<Omit<HostData, "git"> & { git?: HostData["git"] }> {
+/** The host's data; `git` left out and `account` "keep" when their replies
+ * failed, so what was already loaded stays. */
+async function fetchHostData(host: string): Promise<Omit<HostData, "git" | "account"> & { git?: HostData["git"]; account: string | null | "keep" }> {
   const call = <T>(method: string, params: object = {}) => rpc<T>(host, method, params);
-  const [terminals, sessions, projects, workspaces, sections, reads, chats, git] = await Promise.all([
+  const [terminals, sessions, projects, workspaces, sections, reads, chats, git, account] = await Promise.all([
     call<TerminalInfo[]>(M.terminalList),
     call<Session[]>(M.sessionList),
     call<Project[]>(M.projectList),
@@ -171,6 +189,7 @@ async function fetchHostData(host: string): Promise<Omit<HostData, "git"> & { gi
     call<ReadRequest[]>(M.terminalReadRequests).catch(() => []),
     call<{ id: number; state: ChatSummary }[]>(M.chatSummaries).catch(() => []),
     call<GitSettings>(M.gitSettings).catch(gitAfterError),
+    call<AccountInfo>(M.accountGet).then((a) => a.account, accountAfterError),
   ]);
   return {
     terminals: Object.fromEntries(terminals.map((t) => [t.id, t])),
@@ -181,6 +200,7 @@ async function fetchHostData(host: string): Promise<Omit<HostData, "git"> & { gi
     reads,
     chats: Object.fromEntries(chats.map((c) => [c.id, c.state])),
     ...(git !== "keep" && { git }),
+    account,
   };
 }
 

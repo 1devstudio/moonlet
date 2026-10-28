@@ -6,7 +6,7 @@ import { Bot, GitBranch, GitPullRequest, Laptop, Search, Server, X } from "lucid
 import { rpc } from "@desktop/lib/daemon";
 import { M, type Project } from "@desktop/lib/protocol";
 import { prTone } from "@desktop/components/ui";
-import { showScreen, useApp } from "../lib/app";
+import { showScreen, useApp, useShownWorkspace } from "../lib/app";
 import { useBase, useGitStatus, usePr, useSeen } from "../lib/rowDetails";
 import { type ChipId, type ProjectGroup, type SessionRow, chips, filterGroups, rowTarget, sessionGroups, taskChip } from "../lib/sessionList";
 import { useBusy } from "../lib/busy";
@@ -68,6 +68,7 @@ function Row({ r }: { r: SessionRow }) {
               {pr.state.toLowerCase() === "merged" ? " merged" : ""}
             </span>
           )}
+          {r.on && <span className="flex-none font-mono">on {r.on}</span>}
         </span>
       </span>
     </button>
@@ -91,7 +92,7 @@ function Group({ g, showSection, index }: { g: ProjectGroup; showSection: boolea
         <BehindButton host={g.host} project={g.project} />
       </div>
       {g.rows.map((r) => (
-        <Row key={r.session.id} r={r} />
+        <Row key={`${r.host}/${r.session.id}`} r={r} />
       ))}
     </div>
   );
@@ -100,7 +101,7 @@ function Group({ g, showSection, index }: { g: ProjectGroup; showSection: boolea
 export function SessionsScreen() {
   const hosts = useApp((s) => s.hosts);
   const data = useApp((s) => s.data);
-  const workspace = useApp((s) => s.settings.workspace);
+  const workspace = useShownWorkspace();
   const now = useNow();
   const [chip, setChip] = useState<ChipId>("all");
   const [query, setQuery] = useState<string | null>(null);
@@ -140,7 +141,7 @@ export function SessionsScreen() {
       <div className="flex flex-col pb-6">
         {groups.length === 0 && <div className="px-4 pt-6 text-[14px] text-muted">{all.length ? "No sessions match." : "No sessions yet. Start one with New."}</div>}
         {groups.map((g, i) => (
-          <Group key={g.key} g={g} index={i} showSection={i === 0 || groups[i - 1].section !== g.section || groups[i - 1].host !== g.host} />
+          <Group key={g.key} g={g} index={i} showSection={i === 0 || groups[i - 1].sectionKey !== g.sectionKey} />
         ))}
       </div>
     </div>

@@ -54,7 +54,7 @@ const world = () => ({
 describe("sessionGroups", () => {
   it("groups by host, section and project, most recently active first", () => {
     const w = world();
-    const groups = sessionGroups(w.hosts, w.data, "Personal", NOW);
+    const groups = sessionGroups(w.hosts, w.data, null, NOW);
     expect(groups.map((g) => [g.section, g.project.name, g.hostLabel, g.rows.map((r) => r.session.name)])).toEqual([
       ["1devstudio", "storefront", "This Mac", ["Add search to the product list", "Dark mode for account pages", "Fix checkout button on mobile"]],
       ["Side projects", "changedeck", "This Mac", ["Fix login"]],
@@ -91,6 +91,90 @@ describe("sessionGroups", () => {
       ["Fix login", "1 agent"],
       ["Idempotent refund webhooks", ""],
       ["Bump Node to 22", ""],
+    ]);
+  });
+});
+
+describe("sessionGroups across an account's members (X68)", () => {
+  const storefront = { origin: "github.com/acme/storefront", root: "a1b2c3" };
+  /** X68's journey: the MacBook and studio-mini share one Personal. */
+  const shared = () => ({
+    hosts: {
+      mac: { id: "mac", label: "This Mac", status: "connected" as const, via: null },
+      mini: { id: "mini", label: "studio-mini", status: "connected" as const, via: null },
+    },
+    data: {
+      mac: data({
+        account: "w-mini",
+        workspaces: [{ ...workspace("personal", "Personal"), section_ids: ["dev", "side"] }],
+        sections: [section("dev", "1devstudio", ["storefront"]), section("side", "Side projects", ["changedeck"])],
+        projects: [{ ...project("storefront", "storefront"), identity: storefront }, project("changedeck", "changedeck")],
+        sessions: [session("add-search", "Add search to the product list"), session("checkout", "Fix checkout button on mobile")],
+        terminals: { 1: terminal(1, "add-search", { last_output_at: NOW - MIN }), 2: terminal(2, "checkout", { last_output_at: NOW - 30 * MIN }) },
+      }),
+      mini: data({
+        account: "w-mini",
+        workspaces: [{ ...workspace("personal", "Personal"), section_ids: ["dev"] }],
+        sections: [section("dev", "1devstudio", ["sf", "payments"])],
+        projects: [{ ...project("sf", "storefront"), identity: storefront }, { ...project("payments", "payments-api"), identity: { origin: "github.com/acme/payments-api", root: "d4e5f6" } }],
+        sessions: [session("flaky", "Retry the flaky checkout test", { project_id: "sf" }), session("refund", "Idempotent refund webhooks", { project_id: "payments" })],
+        terminals: { 3: terminal(3, "flaky", { last_output_at: NOW - 10 * MIN }), 4: terminal(4, "refund", { last_output_at: NOW - 5 * MIN }) },
+      }),
+    },
+  });
+  const shown = { host: "mac", id: "personal", account: "w-mini" };
+  const view = (groups: ReturnType<typeof sessionGroups>) => groups.map((g) => [g.section, g.project.name, g.hostLabel, g.rows.map((r) => [r.session.name, r.on])]);
+
+  it("shows a shared section once, and a project once by identity with every member's sessions, saying where the others are", () => {
+    const w = shared();
+    const groups = sessionGroups(w.hosts, w.data, shown, NOW);
+    expect(view(groups)).toEqual([
+      [
+        "1devstudio",
+        "storefront",
+        "This Mac",
+        [
+          ["Add search to the product list", null],
+          ["Retry the flaky checkout test", "studio-mini"],
+          ["Fix checkout button on mobile", null],
+        ],
+      ],
+      ["1devstudio", "payments-api", "studio-mini", [["Idempotent refund webhooks", null]]],
+    ]);
+    expect(groups[0].sectionKey).toBe(groups[1].sectionKey);
+    expect(rowTarget(groups[0].rows[1])).toEqual({ kind: "session", host: "mini", id: "flaky", tab: "chat" });
+  });
+
+  it("shows a shared workspace once among all workspaces", () => {
+    const w = shared();
+    expect(view(sessionGroups(w.hosts, w.data, null, NOW))).toEqual([
+      [
+        "1devstudio",
+        "storefront",
+        "This Mac",
+        [
+          ["Add search to the product list", null],
+          ["Retry the flaky checkout test", "studio-mini"],
+          ["Fix checkout button on mobile", null],
+        ],
+      ],
+      ["1devstudio", "payments-api", "studio-mini", [["Idempotent refund webhooks", null]]],
+    ]);
+  });
+
+  it("keeps a member's sessions out once it no longer shares the account", () => {
+    const w = shared();
+    w.data.mini.account = undefined;
+    expect(view(sessionGroups(w.hosts, w.data, shown, NOW))).toEqual([
+      [
+        "1devstudio",
+        "storefront",
+        "This Mac",
+        [
+          ["Add search to the product list", null],
+          ["Fix checkout button on mobile", null],
+        ],
+      ],
     ]);
   });
 });

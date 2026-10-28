@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ChatState, ReadRequest, TerminalInfo } from "@desktop/lib/protocol";
 import { type HostData, emptyData } from "./app";
 import { DaemonError } from "@desktop/lib/daemon";
-import { applyChanges, eventChanges, gitAfterError } from "./events";
+import { accountAfterError, applyChanges, eventChanges, gitAfterError } from "./events";
 
 const term = (id: number, agent_state: TerminalInfo["agent_state"]) => ({ id, agent_state }) as TerminalInfo;
 const read = (request_id: number) => ({ request_id }) as ReadRequest;
@@ -64,6 +64,12 @@ describe("events", () => {
     expect(d.git).toEqual(settings);
   });
 
+  it("keep the account the host shares as it says (X68)", () => {
+    expect(start().account).toBeUndefined();
+    const d = apply(start(), "account.info", { account: "w-mini", central: "studio-mini" }) as HostData;
+    expect(d.account).toBe("w-mini");
+  });
+
   it("win over a load that started before them", () => {
     // The load's replies left the daemon before these events did.
     const loaded: HostData = { ...emptyData(), terminals: { 1: term(1, "working") }, reads: [read(7), read(8)] };
@@ -78,5 +84,12 @@ describe("gitAfterError (X55)", () => {
   it("drops the settings only for a daemon too old to have them, and keeps them through a failed reply", () => {
     expect(gitAfterError(new DaemonError({ code: "unknown_method", message: "unknown method git.settings" }))).toBeNull();
     expect(gitAfterError(new DaemonError({ code: "failed", message: "connection reset" }))).toBe("keep");
+  });
+});
+
+describe("accountAfterError (X68)", () => {
+  it("makes a daemon from before X68 its own account, and keeps the account through a failed reply", () => {
+    expect(accountAfterError(new DaemonError({ code: "unknown_method", message: "unknown method account.get" }))).toBeNull();
+    expect(accountAfterError(new DaemonError({ code: "failed", message: "connection reset" }))).toBe("keep");
   });
 });
