@@ -541,11 +541,16 @@ fn diff_projects(
     for (key, _, _) in had.iter().filter(|(k, _, _)| !held(has, k)) {
         out.push(log.set(now, SECTION, id, &format!("{PROJECT}{key}"), Value::Null));
     }
+    // A project this member just got a clone of was not its own before, so
+    // it changes no order: it keeps the place the account gives it (X70).
+    let own = |list: &[(String, ProjectIdentity, bool)], key: &str| {
+        list.iter().any(|(k, _, mine)| k == key && *mine)
+    };
     let own_order = |list: &[(String, ProjectIdentity, bool)],
                      other: &[(String, ProjectIdentity, bool)]|
      -> Vec<String> {
         list.iter()
-            .filter(|(k, _, mine)| *mine && held(other, k))
+            .filter(|(k, _, mine)| *mine && own(other, k))
             .map(|(k, _, _)| k.clone())
             .collect()
     };
@@ -623,6 +628,17 @@ struct Placed {
     workspace: String,
     order: String,
     section: Section,
+}
+
+/// Whether this member now has a project a section lists as missing: a
+/// clone added for it changes nothing in the log, yet the section must take
+/// it in the place the log gives it (X70).
+pub(super) fn found_missing(st: &State) -> bool {
+    st.sections.iter().any(|s| {
+        s.missing
+            .iter()
+            .any(|i| st.projects.iter().any(|p| same_project(&p.identity, i)))
+    })
 }
 
 /// Lays the account's workspaces and sections onto this member's state.
@@ -1590,6 +1606,52 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(holds(&mini, &work.id), ["github.com/acme/shop"]);
+    }
+
+    #[tokio::test]
+    async fn a_clone_of_a_missing_project_keeps_its_place_in_the_section() {
+        let (blog, shop, ledger) = (
+            repo_named("blog").await,
+            repo_named("shop").await,
+            repo_named("ledger").await,
+        );
+        let (_h1, book) = member("book").await;
+        let (_h2, mini) = member("mini").await;
+        let first = book.list_sections()[0].clone();
+        for repo in [&blog, &shop, &ledger] {
+            book.section_add_project(&first.id, &repo.path().display().to_string())
+                .await
+                .unwrap();
+        }
+        // studio-mini has blog and ledger, not shop.
+        let (mini_blog, mini_ledger) = (clone_of(&blog).await, clone_of(&ledger).await);
+        for clone in [&mini_blog, &mini_ledger] {
+            mini.add_project(&clone.path().display().to_string())
+                .await
+                .unwrap();
+        }
+        sync(&book, &mini);
+        let before = mini.account_version();
+        let mini_shop = clone_of(&shop).await;
+        mini.section_add_project(&first.id, &mini_shop.path().display().to_string())
+            .await
+            .unwrap();
+        let order = [
+            "github.com/acme/blog",
+            "github.com/acme/shop",
+            "github.com/acme/ledger",
+        ];
+        assert_eq!(holds_in_order(&mini, &first.id), order);
+        assert!(section(&mini, &first.name).missing.is_empty());
+        let sent: Vec<String> = mini
+            .account_changes_for(&before)
+            .into_iter()
+            .filter(|c| c.id == first.id)
+            .map(|c| format!("{:?}", c.op))
+            .collect();
+        assert!(sent.is_empty(), "{sent:?}");
+        sync(&book, &mini);
+        assert_eq!(holds_in_order(&book, &first.id), order);
     }
 
     #[tokio::test]
