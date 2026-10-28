@@ -220,6 +220,29 @@ impl Host {
         Client::connect(&self.socket, "moonlet-app").await.unwrap()
     }
 
+    /// The tailnet listener's address, and a token paired as `kind`.
+    async fn pair(&self, kind: &str) -> (String, String) {
+        let addr = self.listening().await;
+        let mut app = self.app().await;
+        let p: MobilePairing = app.request("mobile.pair_start", json!({ "kind": kind })).await.unwrap();
+        let mut s = TcpStream::connect(&addr).await.unwrap();
+        send(&mut s, Message::Auth { token: None, pair: Some(p.code), device: Some(format!("a {kind}")), route: None, kind: Some(serde_json::from_value(json!(kind)).unwrap()) }).await;
+        let Some(Message::Authed { token: Some(token), .. }) = next(&mut s).await else { panic!("no token") };
+        (addr, token)
+    }
+
+    async fn listening(&self) -> String {
+        let mut app = self.app().await;
+        for _ in 0..100 {
+            let st: MobileStatus = app.request("mobile.status", json!({})).await.unwrap();
+            if let Some(a) = st.listening.first() {
+                return a.clone();
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        panic!("the daemon never listened");
+    }
+
     /// Pairs a device of `kind` over the tailnet listener and returns a
     /// connection past `hello`.
     async fn paired(&self, kind: &str) -> TcpStream {
@@ -458,4 +481,24 @@ async fn an_update_whose_new_daemon_fails_puts_the_old_binaries_back() {
     // And it takes the next update.
     let e = host.app().await.request::<_, Value>("daemon.update", json!({ "version": "0.0.1" })).await.unwrap_err();
     assert!(e.to_string().starts_with("not_newer"), "{e}");
+}
+
+/// A Mac whose moonlet speaks another protocol asks before `hello` (X69),
+/// through the same client the app uses.
+#[tokio::test]
+async fn a_mac_on_another_protocol_updates_its_host_before_hello() {
+    let key = Key::new();
+    let releases = release(&key).await;
+    let host = Host::start(&releases, &key).await;
+    let pid = host.pid().await;
+
+    let (addr, phone) = host.pair("phone").await;
+    let e = moonlet_link::tailnet::update(std::slice::from_ref(&addr), &phone, "9.9.9").await.unwrap_err();
+    assert_eq!((e.code.as_str(), e.message.as_str()), ("forbidden", "update moonlet from a Mac"));
+    assert_eq!(host.pid().await, pid);
+
+    let (addr, mac) = host.pair("desktop").await;
+    let reply = moonlet_link::tailnet::update(&[addr], &mac, "9.9.9").await.unwrap();
+    assert_eq!((reply.from.as_str(), reply.to.as_str()), (env!("CARGO_PKG_VERSION"), "9.9.9"));
+    host.next_daemon(pid).await;
 }

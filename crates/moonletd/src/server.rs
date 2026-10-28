@@ -256,6 +256,26 @@ where
             }
             client
         }
+        // A paired Mac may ask for an update in place of `hello`, whatever
+        // protocol it speaks (X69). This exchange never changes.
+        Some(Frame::Json(Message::Request { id, method, params }))
+            if method == moonlet_proto::methods::DAEMON_UPDATE && phone.is_some() =>
+        {
+            let device = phone.as_deref().unwrap_or_default();
+            let (reply, handoff) = match daemon.update_from(None, Some(device), params).await {
+                Ok((v, handoff)) => (Message::ok(id, v), Some(handoff)),
+                Err(e) => (Message::err(id, e), None),
+            };
+            let _ = tx.send(Frame::Json(reply));
+            drop(tx);
+            // The reply is written and the connection closed: only now may
+            // the old daemon hand over and exit.
+            let _ = writer_task.await;
+            if let Some(handoff) = handoff {
+                handoff.start();
+            }
+            return Ok(());
+        }
         _ => bail!("expected hello"),
     };
     let _ = tx.send(Frame::Json(Message::Welcome {

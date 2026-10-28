@@ -220,6 +220,31 @@ mod tests {
         assert_eq!(out, sample());
     }
 
+    /// X69: the update request a Mac sends in place of `hello`, and the
+    /// daemon's replies. Every protocol version reads and writes exactly these.
+    #[test]
+    fn the_update_request_before_hello_never_changes() {
+        let request = Message::Request {
+            id: 1,
+            method: crate::methods::DAEMON_UPDATE.into(),
+            params: json!({ "version": "0.1.34" }),
+        };
+        assert_eq!(
+            serde_json::to_string(&request).unwrap(),
+            r#"{"t":"request","id":1,"method":"daemon.update","params":{"version":"0.1.34"}}"#
+        );
+        let updated = r#"{"t":"response","id":1,"result":{"from":"0.1.33","to":"0.1.34"}}"#;
+        assert_eq!(
+            serde_json::from_str::<Message>(updated).unwrap(),
+            Message::ok(1, json!({ "from": "0.1.33", "to": "0.1.34" }))
+        );
+        let refused = r#"{"t":"response","id":1,"error":{"code":"not_newer","message":"moonlet 0.1.34 is not older than 0.1.34"}}"#;
+        assert_eq!(
+            serde_json::from_str::<Message>(refused).unwrap(),
+            Message::err(1, crate::RpcError::new("not_newer", "moonlet 0.1.34 is not older than 0.1.34"))
+        );
+    }
+
     #[test]
     fn rejects_oversized_frames() {
         let mut decoder = FrameDecoder::new();
