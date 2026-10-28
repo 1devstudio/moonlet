@@ -50,6 +50,12 @@ impl Daemon {
         }
     }
 
+    /// Stops the daemon; [`Self::restart`] starts it again.
+    pub fn stop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+
     /// Stops the daemon and starts it again on the same home.
     pub async fn restart(&mut self) {
         let _ = self.child.kill();

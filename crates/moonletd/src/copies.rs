@@ -83,6 +83,14 @@ pub struct Local {
     /// Whether this member owns it.
     #[serde(default)]
     pub owned: bool,
+    /// The tree its folder held when this member moved it here, while it
+    /// has published nothing since: a former owner's late tree is taken in
+    /// only then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub taken: Option<String>,
+    /// A former owner's late tree already kept in the leftovers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aside: Option<String>,
 }
 
 impl Local {
@@ -93,6 +101,8 @@ impl Local {
             slug: item.slug.clone(),
             tree,
             owned,
+            taken: None,
+            aside: None,
         }
     }
 
@@ -139,6 +149,39 @@ pub enum Step {
     Repoint { id: String, item: Item },
     /// An item whose record is gone: its copy goes.
     Drop { id: String, item: Item, owned: bool },
+}
+
+/// What an owner does with a tree a former owner published late (X71):
+/// `now` is its folder's tree, `had` the tree it last published or took,
+/// `taken` the tree it moved the item here with while it published nothing
+/// since, and `aside` a late tree already in its leftovers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Late {
+    /// Its folder takes the late tree: nothing of this member's own since
+    /// the move would be lost.
+    Take,
+    /// Its folder stays; the late tree goes to the leftovers.
+    Aside,
+    /// Nothing to do: the folder holds it already, or it is aside already.
+    Nothing,
+}
+
+pub fn late(
+    late: &str,
+    now: &str,
+    had: Option<&str>,
+    taken: Option<&str>,
+    aside: Option<&str>,
+) -> Late {
+    if now == late {
+        Late::Nothing
+    } else if Some(now) == had && had == taken {
+        Late::Take
+    } else if aside == Some(late) {
+        Late::Nothing
+    } else {
+        Late::Aside
+    }
 }
 
 /// What to do, given the account's records (by id), what this member keeps
@@ -424,15 +467,6 @@ impl DesignCopies {
         Ok(())
     }
 
-    /// What this member keeps of item `item`, when it keeps it: its record
-    /// id and whether it owns it.
-    pub fn kept(&self, item: &Item) -> Option<(String, Local)> {
-        self.load()
-            .ok()?
-            .into_iter()
-            .find(|(_, l)| l.item() == *item)
-    }
-
     /// The account's records of items, by id.
     pub fn records(&self) -> BTreeMap<String, Rec> {
         self.sessions
@@ -499,7 +533,10 @@ impl DesignCopies {
             if let Err(e) = self.step(&mut round, &step, &mut kept).await {
                 tracing::warn!(?step, "design copies: {e:#}");
                 // A place still held by this member's own item takes no copy.
-                if let Step::Claim { item, .. } | Step::Rename { item, .. } = &step {
+                if let Step::Claim { item, .. }
+                | Step::Rename { item, .. }
+                | Step::Lost { item, .. } = &step
+                {
                     round.blocked.insert(item.clone());
                 }
                 if matches!(step, Step::Publish { .. } | Step::Claim { .. }) {
@@ -578,10 +615,55 @@ impl DesignCopies {
                 Ok(())
             }
             Step::Publish { id, item } => {
-                let had = kept.get(id).and_then(|l| l.tree.clone());
-                kept.insert(id.clone(), Local::of(item, had, true));
+                let entry = kept
+                    .entry(id.clone())
+                    .or_insert_with(|| Local::of(item, None, true));
+                (entry.workspace, entry.kind, entry.slug, entry.owned) = (
+                    item.workspace.clone(),
+                    item.kind.as_str().into(),
+                    item.slug.clone(),
+                    true,
+                );
+                let (had, taken, aside) =
+                    (entry.tree.clone(), entry.taken.clone(), entry.aside.clone());
                 let published = round.records.get(id).and_then(|r| r.tree.clone());
-                self.publish(round, id, item, published, kept).await?;
+                // A tree this member did not publish: a member that owned
+                // the item before sent it late. Taken in while this member
+                // has neither changed the folder nor published since it
+                // moved the item here; else kept aside, once.
+                let mut took_late = false;
+                if let Some(late) = published
+                    .clone()
+                    .filter(|t| had.is_some() && Some(t) != had.as_ref())
+                {
+                    // Without it, nothing is published this round.
+                    self.fetch(&late, kept).await?;
+                    let now = self.replicas.snapshot(item).await?;
+                    let action = self::late(
+                        &late,
+                        &now,
+                        had.as_deref(),
+                        taken.as_deref(),
+                        aside.as_deref(),
+                    );
+                    if action == Late::Take {
+                        took_late = true;
+                        self.replicas.apply(item, &late, &self.locate()).await?;
+                        if let Some(l) = kept.get_mut(id) {
+                            l.tree = Some(late.clone());
+                            l.taken = Some(late);
+                        }
+                    } else if action == Late::Aside {
+                        self.leftovers(item, &late).await?;
+                        if let Some(l) = kept.get_mut(id) {
+                            l.aside = Some(late);
+                        }
+                    }
+                }
+                let took = took_late;
+                if !took {
+                    self.publish(round, id, item, published, kept).await?;
+                }
                 let busy = self.is_busy(item);
                 if round.records.get(id).is_some_and(|r| r.agent != busy) {
                     self.sessions
@@ -602,8 +684,20 @@ impl DesignCopies {
                 if let Some(f) = self.lost.lock().unwrap().as_ref() {
                     f(item);
                 }
+                // What this member changed after it last published, which
+                // the new owner never got, is kept aside before the copy
+                // replaces it; until it is, no copy comes (see `round`).
+                let published = kept.get(id).and_then(|l| l.tree.clone());
+                let now = self.replicas.snapshot(item).await?;
+                if Some(&now) != published.as_ref() {
+                    self.leftovers(item, &now).await?;
+                }
                 if let Some(l) = kept.get_mut(id) {
                     l.owned = false;
+                    // Copied again from the new owner's tree, whatever it is.
+                    l.tree = None;
+                    l.taken = None;
+                    l.aside = None;
                 }
                 Ok(())
             }
@@ -677,6 +771,124 @@ impl DesignCopies {
                 .find(|p| moonlet_core::identity::same_project(&p.identity, identity))
                 .map(|p| (p.id.clone(), p.path.clone()))
         }
+    }
+
+    /// Writes tree `tree` of item `item` to
+    /// `$MOONLET_HOME/sync-leftovers/design-<workspace>-<slug>-<time>/`
+    /// (X60's leftovers folder), for the user to take what they need.
+    async fn leftovers(&self, item: &Item, tree: &str) -> Result<()> {
+        let files = self.replicas.files(tree).await?;
+        let root = self.home.join("sync-leftovers");
+        let name = format!("design-{}-{}", item.workspace, item.slug);
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let dir = crate::sync::make_leftovers_folder(&root, &name)?;
+            let written = (|| -> Result<()> {
+                for (path, bytes) in &files {
+                    // `check` let only plain paths into the tree; a design
+                    // system's record goes beside its files.
+                    let rel = path.strip_prefix("files/").unwrap_or(path);
+                    let to = dir.join(rel);
+                    std::fs::create_dir_all(to.parent().context("no folder")?)?;
+                    std::fs::write(to, bytes)?;
+                }
+                Ok(())
+            })();
+            // All of it or none, so a retry never leaves half a copy.
+            if written.is_err() {
+                let _ = std::fs::remove_dir_all(&dir);
+            }
+            written
+        })
+        .await??;
+        tracing::info!(item = ?item, "kept changes the new owner never got in sync-leftovers");
+        Ok(())
+    }
+
+    /// The owner of each item another member owns, by where its copy is
+    /// here: its worker id, its name and whether its agent works. The
+    /// account's record decides, not what this member noted, so a member
+    /// that lost an item refuses changes to it at once.
+    pub fn owners(&self) -> BTreeMap<Item, (String, String, bool)> {
+        let me = self.link.info().worker.id;
+        let (Ok(kept), records, names) =
+            (self.load(), self.records(), self.sessions.member_names())
+        else {
+            return BTreeMap::new();
+        };
+        kept.iter()
+            .filter_map(|(id, l)| {
+                let rec = records.get(id).filter(|r| r.owner != me)?;
+                let name = names
+                    .get(&rec.owner)
+                    .cloned()
+                    .unwrap_or_else(|| rec.owner.clone());
+                Some((l.item(), (rec.owner.clone(), name, rec.agent)))
+            })
+            .collect()
+    }
+
+    /// [`Self::owners`] of one item.
+    pub fn owner_of(&self, item: &Item) -> Option<(String, String, bool)> {
+        self.owners().remove(item)
+    }
+
+    /// `design.move`: this member becomes the owner of an item it holds a
+    /// copy of. What it keeps says so first, so the record never names it
+    /// while it would not act as the owner; a record that did not take the
+    /// change puts that back.
+    pub async fn move_here(&self, item: &Item, force: bool) -> Result<(), RpcError> {
+        let internal = |e: anyhow::Error| RpcError::new("internal", format!("{e:#}"));
+        let me = self.link.info().worker.id;
+        let _one = self.round.lock().await;
+        let mut kept = self.load().map_err(internal)?;
+        let Some((id, local)) = kept
+            .iter()
+            .find(|(_, l)| l.item() == *item)
+            .map(|(i, l)| (i.clone(), l.clone()))
+        else {
+            return Err(RpcError::new(
+                "not_found",
+                format!("no copy of {} here", item.slug),
+            ));
+        };
+        let rec = self
+            .records()
+            .remove(&id)
+            .ok_or_else(|| RpcError::new("not_found", "its record is gone"))?;
+        if rec.owner == me {
+            return Ok(());
+        }
+        if self.replicas.dir(item).is_err() {
+            return Err(RpcError::new(
+                "not_found",
+                format!("no copy of {} here", item.slug),
+            ));
+        }
+        if rec.item != *item || (rec.tree.is_some() && rec.tree != local.tree) {
+            return Err(RpcError::new(
+                "not_current",
+                "this copy is older than the owner's latest: wait for it to arrive",
+            ));
+        }
+        if rec.agent && !force {
+            return Err(RpcError::new("busy", "the owner's agent is working on it"));
+        }
+        if let Some(l) = kept.get_mut(&id) {
+            l.owned = true;
+            l.taken = local.tree.clone();
+        }
+        self.save(&kept).map_err(internal)?;
+        self.sessions.set_design(&id, &[("owner", json!(me))]);
+        if self.records().get(&id).is_none_or(|r| r.owner != me) {
+            if let Some(l) = kept.get_mut(&id) {
+                l.owned = false;
+                l.taken = None;
+            }
+            let _ = self.save(&kept);
+            return Err(RpcError::new("internal", "the move could not be recorded"));
+        }
+        self.kick();
+        Ok(())
     }
 
     /// The item's name, as its folder gives it.
@@ -754,6 +966,10 @@ impl DesignCopies {
                 .set_design(id, &[("tree", json!(tree)), ("name", json!(name))]);
         }
         if let Some(l) = kept.get_mut(id) {
+            if changed {
+                l.taken = None;
+                l.aside = None;
+            }
             l.tree = Some(tree);
         }
         Ok(())
@@ -1250,6 +1466,25 @@ mod tests {
                 id: "d-1".into(),
                 item: moved
             }]
+        );
+    }
+
+    #[test]
+    fn a_late_tree_is_taken_only_while_nothing_of_the_new_owners_own_would_go() {
+        // Moved here at t1, nothing changed or published since: taken.
+        assert_eq!(late("t0", "t1", Some("t1"), Some("t1"), None), Late::Take);
+        // Published t2 since the move: the late tree goes aside instead.
+        assert_eq!(late("t0", "t2", Some("t2"), None, None), Late::Aside);
+        // Edited since, not yet published: aside too.
+        assert_eq!(late("t0", "t3", Some("t1"), Some("t1"), None), Late::Aside);
+        // Already aside, or already the folder's: nothing.
+        assert_eq!(
+            late("t0", "t2", Some("t2"), None, Some("t0")),
+            Late::Nothing
+        );
+        assert_eq!(
+            late("t0", "t0", Some("t1"), Some("t1"), None),
+            Late::Nothing
         );
     }
 

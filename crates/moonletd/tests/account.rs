@@ -761,8 +761,14 @@ async fn only_a_linked_mac_syncs_the_account() {
 }
 
 /// The slugs of workspace `ws`'s design systems on `d` (X64).
+/// None while `d` does not know the workspace yet.
 async fn systems(d: &Daemon, ws: &str) -> Vec<String> {
-    let list: Vec<Value> = d.call("design.systems", json!({ "workspace": ws })).await;
+    let list: Vec<Value> = d
+        .app()
+        .await
+        .request("design.systems", json!({ "workspace": ws }))
+        .await
+        .unwrap_or_default();
     list.iter().map(|s| s["slug"].as_str().unwrap().to_string()).collect()
 }
 
@@ -893,6 +899,120 @@ async fn a_workspace_design_and_its_comments_reach_the_other_members() {
         .await;
     assert_eq!(comments.len(), 1);
     assert_eq!(comments[0]["comment"], "Bigger button");
+    // The copy is read only, however a call names it.
+    for (method, params) in [
+        ("design.write_page", json!({ "workspace": minis, "slug": "checkout", "page": "index", "html": "<main>Changed</main>" })),
+        ("design.check", json!({ "design": { "workspace": minis, "slug": "checkout" }, "fix": true })),
+        ("design.comment.resolve", json!({ "workspace": minis, "slug": "checkout", "n": 1 })),
+    ] {
+        let refused = try_call(&book, method, params).await.unwrap_err();
+        assert!(refused.contains("not_owner"), "{method}: {refused}");
+    }
+}
+
+/// `method` on `d`, with its error's code when it fails.
+async fn try_call(d: &Daemon, method: &str, params: Value) -> Result<Value, String> {
+    d.app()
+        .await
+        .request::<Value, Value>(method, params)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The owner `d` names for design system `slug` of `ws`: null when it is
+/// `d`'s own.
+async fn owner_of(d: &Daemon, ws: &str, slug: &str) -> Value {
+    let list: Vec<Value> = d.call("design.systems", json!({ "workspace": ws })).await;
+    list.into_iter().find(|s| s["slug"] == slug).map(|s| s["owner"].clone()).unwrap_or(Value::Null)
+}
+
+#[tokio::test]
+async fn a_copy_is_read_only_until_moved_here_and_the_old_owner_keeps_a_copy() {
+    let (mini, addr) = central().await;
+    let book = mac(BOOK, "Alex's MacBook Pro").await;
+    link(&book, &mini, &addr, "Alex's MacBook Pro").await;
+    let books = book.workspaces().await[0].id.clone();
+    let _: Value = book
+        .call(
+            "design.system.create",
+            json!({ "workspace": books, "name": "Acme web", "sources": [], "cover": "none", "agent": false }),
+        )
+        .await;
+    within(Duration::from_secs(10), "Acme web on studio-mini", || async {
+        systems(&mini, &books).await == ["acme-web"]
+    })
+    .await;
+    let check = json!({ "workspace": books, "slug": "acme-web" });
+    assert_eq!(owner_of(&book, &books, "acme-web").await, Value::Null);
+    assert_eq!(owner_of(&mini, &books, "acme-web").await["name"], "Alex's MacBook Pro");
+    let refused = try_call(&mini, "design.check", check.clone()).await.unwrap_err();
+    assert!(refused.contains("not_owner"), "{refused}");
+    try_call(&book, "design.check", check.clone()).await.unwrap();
+
+    let _: Value = mini
+        .call("design.move", json!({ "workspace": books, "kind": "system", "slug": "acme-web" }))
+        .await;
+    assert_eq!(owner_of(&mini, &books, "acme-web").await, Value::Null);
+    try_call(&mini, "design.check", check.clone()).await.unwrap();
+    within(Duration::from_secs(5), "the MacBook's folder a copy", || async {
+        owner_of(&book, &books, "acme-web").await != Value::Null
+    })
+    .await;
+    let refused = try_call(&book, "design.check", check).await.unwrap_err();
+    assert!(refused.contains("not_owner"), "{refused}");
+    // An edit on the new owner reaches the old one's copy.
+    let folder = mini.home.path().join("design").join(&books).join("systems/acme-web");
+    std::fs::write(folder.join("styles.css"), "@import \"tokens/brand.css\";\n").unwrap();
+    within(Duration::from_secs(5), "the edit on the MacBook", || async {
+        design_file(&book, &books, "acme-web", "styles.css").as_deref() == Some("@import \"tokens/brand.css\";\n")
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_change_the_old_owner_made_offline_is_never_lost_when_its_item_moved() {
+    let (mini, addr) = central().await;
+    let mut book = mac(BOOK, "Alex's MacBook Pro").await;
+    link(&book, &mini, &addr, "Alex's MacBook Pro").await;
+    let books = book.workspaces().await[0].id.clone();
+    let _: Value = book
+        .call(
+            "design.system.create",
+            json!({ "workspace": books, "name": "Acme web", "sources": [], "cover": "none", "agent": false }),
+        )
+        .await;
+    within(Duration::from_secs(10), "Acme web on studio-mini", || async {
+        systems(&mini, &books).await == ["acme-web"]
+    })
+    .await;
+    // The MacBook sleeps with an edit not yet sent; studio-mini takes the
+    // system over meanwhile.
+    book.stop();
+    let folder = book.home.path().join("design").join(&books).join("systems/acme-web");
+    std::fs::write(folder.join("NOTES.md"), "Made on the plane.\n").unwrap();
+    let _: Value = mini
+        .call("design.move", json!({ "workspace": books, "kind": "system", "slug": "acme-web", "force": true }))
+        .await;
+    book.restart().await;
+    // The edit either reached studio-mini, which had not changed the
+    // system since, or waits in the MacBook's leftovers.
+    within(Duration::from_secs(10), "the edit kept", || async {
+        let on_mini = design_file(&mini, &books, "acme-web", "NOTES.md").as_deref() == Some("Made on the plane.\n");
+        let left = std::fs::read_dir(book.home.path().join("sync-leftovers"))
+            .map(|d| {
+                d.flatten().any(|e| {
+                    e.file_name().to_string_lossy().starts_with(&format!("design-{books}-acme-web-"))
+                        && std::fs::read_to_string(e.path().join("NOTES.md")).ok().as_deref() == Some("Made on the plane.\n")
+                })
+            })
+            .unwrap_or(false);
+        on_mini || left
+    })
+    .await;
+    within(Duration::from_secs(10), "the MacBook's folder a copy", || async {
+        owner_of(&book, &books, "acme-web").await != Value::Null
+    })
+    .await;
 }
 
 #[tokio::test]
