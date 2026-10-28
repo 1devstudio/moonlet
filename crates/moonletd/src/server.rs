@@ -291,6 +291,8 @@ where
     // (X62): neither an agent's CLI nor a worker hears it.
     let no_jobs = is_cli || conn.client == crate::link::WORKER_CLIENT;
     let phone = conn.phone.is_some();
+    // A paired phone answers setup questions too (X40); a paired Mac does not.
+    let approves_setup = conn.phone.as_deref().is_some_and(|d| daemon.is_phone(d));
     // A cloud machine (X63) reaches only what a worker needs: no terminal,
     // and none of the central host's events.
     let cloud = conn
@@ -308,9 +310,11 @@ where
                     if no_jobs
                         && (name == moonlet_proto::methods::EV_JOB_OUTPUT
                             || name == moonlet_proto::methods::EV_JOB_CHANGED) => {}
-                // Setup questions go where they are answered: the app (X62).
+                // Setup questions go where they are answered: the app and
+                // paired phones (X62, X40).
                 Ok(Message::Event { name, .. })
-                    if (no_jobs || phone) && name == moonlet_proto::methods::EV_EXEC_SETUP => {}
+                    if (no_jobs || (phone && !approves_setup))
+                        && name == moonlet_proto::methods::EV_EXEC_SETUP => {}
                 // Design systems and designs stay on the Mac (X64, X65): a
                 // paired device hears none of the Mac-only events.
                 Ok(Message::Event { name, .. }) if phone && MAC_ONLY_EVENTS.contains(&name.as_str()) => {}

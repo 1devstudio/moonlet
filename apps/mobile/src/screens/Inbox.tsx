@@ -2,10 +2,10 @@
 // place.
 
 import { useState } from "react";
-import { ListChecks, MessageCircleQuestion, Server, SquareTerminal, Terminal } from "lucide-react";
+import { ListChecks, MessageCircleQuestion, Server, SquareTerminal, Terminal, Wrench } from "lucide-react";
 import { planOf } from "@desktop/lib/chat";
 import { showScreen, useApp, useShownWorkspace } from "../lib/app";
-import { answerAsk, answerPlan, answerRead } from "../lib/answers";
+import { answerAsk, answerPlan, answerRead, answerSetup } from "../lib/answers";
 import { ageText, askHeadline, planBlurb, readMessage } from "../lib/cards";
 import { type InboxCard, buildInbox, summaryLine } from "../lib/inbox";
 import { useBusy } from "../lib/busy";
@@ -163,6 +163,33 @@ function ReadCard({ card, now }: { card: InboxCard; now: number }) {
   );
 }
 
+function SetupCard({ card }: { card: InboxCard }) {
+  const setup = card.setup!;
+  const { busy, error, run } = useBusy();
+  return (
+    <div className="flex flex-col gap-2.5 rounded-[14px] border border-border-strong bg-panel p-3.5">
+      <div className="flex items-center gap-2">
+        <Wrench size={16} className="text-blocked" />
+        <span className="min-w-0 flex-1 truncate text-[15px] font-medium">Run setup?</span>
+        <span className="text-[12px] text-faint">{card.hostLabel}</span>
+      </div>
+      <div className="text-[13.5px] leading-[1.45] text-muted">
+        <span className="text-fg">{card.title}</span>. {setup.message}
+      </div>
+      <pre className="selectable m-0 rounded-[10px] bg-bg px-3 py-2.5 font-mono text-[12.5px] break-all whitespace-pre-wrap">{setup.command}</pre>
+      {error && <span className="text-[12.5px] text-error">{error}</span>}
+      <div className="grid grid-cols-2 gap-2">
+        <Btn tone="ghost" disabled={busy} onClick={() => void run(() => answerSetup(card.host, card.hostLabel, setup.copy, setup.command, false))}>
+          Skip
+        </Btn>
+        <Btn tone="primary" disabled={busy} onClick={() => void run(() => answerSetup(card.host, card.hostLabel, setup.copy, setup.command, true))}>
+          Run setup
+        </Btn>
+      </div>
+    </div>
+  );
+}
+
 export function InboxScreen() {
   const inbox = useInbox();
   const now = useNow();
@@ -186,6 +213,8 @@ export function InboxScreen() {
             <PlanCard key={c.key} card={c} now={now} />
           ) : c.kind === "question" ? (
             <QuestionCard key={c.key} card={c} now={now} />
+          ) : c.kind === "setup" ? (
+            <SetupCard key={c.key} card={c} />
           ) : (
             <ReadCard key={c.key} card={c} now={now} />
           ),

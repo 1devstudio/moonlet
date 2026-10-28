@@ -498,6 +498,21 @@ impl Daemon {
         info
     }
 
+    /// Whether paired device `device` is a phone, not a Mac or a cloud machine.
+    pub(crate) fn is_phone(&self, device: &str) -> bool {
+        self.mobile.kind_of(device) == Some(m::DeviceKind::Phone)
+    }
+
+    /// Refuses all but who approves what runs on this Mac (X60, X62): its
+    /// app, or a paired phone, where the user confirms with Face ID (X40).
+    /// Never a paired Mac, a worker, nor an agent through the CLI.
+    fn app_or_paired_phone(&self, conn: &Conn) -> Result<(), RpcError> {
+        match conn.phone.as_deref() {
+            Some(device) if self.is_phone(device) => Ok(()),
+            _ => app_only(conn, "setup"),
+        }
+    }
+
     /// Refuses all but the Mac's app and a paired Mac over the tailnet
     /// (X61): never a phone, nor an agent's CLI.
     fn app_or_paired_mac(&self, conn: &Conn, what: &str) -> Result<(), RpcError> {
@@ -977,7 +992,7 @@ impl Daemon {
                 ok(self.reached(info))
             }
             m::EXEC_SETUPS => {
-                app_only(conn, "setup")?;
+                self.app_or_paired_phone(conn)?;
                 ok(self.sync.run_setups())
             }
             m::EXEC_STATUS => {
@@ -1155,9 +1170,10 @@ impl Daemon {
                 ok(self.sync.project_set(&r.identity, r.keep_new)?)
             }
             m::SYNC_RUN_SETUP | m::SYNC_SKIP_SETUP => {
-                // The user approves what runs on this Mac: not a paired
-                // device, nor an agent through the CLI.
-                app_only(conn, "setup")?;
+                // The user approves what runs on this Mac: from its app or
+                // a paired phone, not a paired Mac, nor an agent through
+                // the CLI.
+                self.app_or_paired_phone(conn)?;
                 if method == m::SYNC_RUN_SETUP {
                     let r: m::SyncRunSetup = params(p)?;
                     ok(self.sync.run_setup(&r.copy, &r.command).await?)

@@ -1,10 +1,11 @@
 // Answering asks from the phone (X40): tool permissions, plans and terminal
 // reads, behind Face ID when the user wants it.
 
-import { rpc } from "@desktop/lib/daemon";
+import { DaemonError, rpc } from "@desktop/lib/daemon";
 import { type PlanChoice, planAnswer } from "@desktop/lib/chat";
 import { M } from "@desktop/lib/protocol";
-import { useApp } from "./app";
+import { changeSetupCommand, dropSetup, refreshSetups, useApp } from "./app";
+import { setupAnswer, setupError } from "./setups";
 import { needsFaceId } from "./cards";
 import { confirmWithFaceId, tap } from "./native";
 
@@ -39,3 +40,24 @@ export const answerQuestion = (host: string, terminal: number, ask: string, answ
 /** Answers an agent's request to read a terminal (X31). */
 export const answerRead = (host: string, requestId: number, allow: boolean) =>
   answer(allow ? "read" : "deny", "Share the terminal's output with the agent", () => rpc(host, M.terminalReadAnswer, { request_id: requestId, allow, remember: false }), allow ? "success" : "warning");
+
+/** Runs or skips a copy's setup on its Mac (X60, X62). A refusal says why,
+ * and the routing copies waiting are read again, as one may have changed. */
+export const answerSetup = (host: string, hostLabel: string, copy: string, command: string, runIt: boolean) =>
+  answer(
+    runIt ? "setup" : "deny",
+    "Run this setup on the Mac",
+    async () => {
+      const { method, params } = setupAnswer(copy, command, runIt);
+      try {
+        await rpc(host, method, params);
+      } catch (e) {
+        // The card asks about the command the Mac has now, for the user to check.
+        if (e instanceof DaemonError && e.code === "setup_changed") changeSetupCommand(host, copy, e.message);
+        else void refreshSetups(host);
+        throw new Error(setupError(e, hostLabel));
+      }
+      dropSetup(host, copy);
+    },
+    runIt ? "success" : "warning",
+  );

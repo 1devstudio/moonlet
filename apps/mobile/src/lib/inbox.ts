@@ -7,7 +7,15 @@ import type { WorkspaceRef } from "@desktop/lib/workspaces";
 import type { HostData } from "./app";
 import { inShown } from "./workspaceChoices";
 
-export type CardKind = "permission" | "plan" | "question" | "read";
+export type CardKind = "permission" | "plan" | "question" | "read" | "setup";
+
+/** A copy's setup waiting for the user's approval on a Mac (X60, X62). */
+export interface SetupAsk {
+  copy: string;
+  /** The exact command, as `sync.run_setup` must name it. */
+  command: string;
+  message: string;
+}
 
 export interface InboxCard {
   kind: CardKind;
@@ -28,6 +36,7 @@ export interface InboxCard {
   /** The subagent that asks (X42); null for the main agent. */
   asker?: string | null;
   read?: ReadRequest;
+  setup?: SetupAsk;
 }
 
 export interface InboxHost {
@@ -103,8 +112,48 @@ export function buildInbox(hosts: Record<string, InboxHost>, data: Record<string
       needs.push({ ...base(r.caller, s), kind: "read", key: `${h.id}:read:${r.request_id}`, askedAt: r.asked_at ?? null, read: r });
     }
   }
+  needs.push(...setupCards(hosts, data));
   needs.sort((a, b) => (b.askedAt ?? 0) - (a.askedAt ?? 0));
   return { needs, working, hostsOnline };
+}
+
+/** Every copy's setup waiting on a connected Mac, live copies (X60) and
+ * routing copies (X62). A copy belongs to no workspace on its Mac. A live
+ * copy's session is named from its central host, while that is connected. */
+function setupCards(hosts: Record<string, InboxHost>, data: Record<string, HostData>): InboxCard[] {
+  const out: InboxCard[] = [];
+  const card = (h: InboxHost, title: string, project: string | null, ask: Omit<SetupAsk, "message">, where: string): InboxCard => ({
+    kind: "setup",
+    key: `${h.id}:setup:${ask.copy}`,
+    host: h.id,
+    hostLabel: h.label,
+    remote: !!h.via,
+    terminal: 0,
+    session: null,
+    title,
+    project,
+    agent: null,
+    askedAt: null,
+    setup: { ...ask, message: `Run ${project ?? "the project"}'s setup in ${where} on ${h.label}? (from .moonlet/config.toml)` },
+  });
+  for (const h of Object.values(hosts)) {
+    const d = data[h.id];
+    if (h.status !== "connected" || !d) continue;
+    for (const c of d.copies) {
+      if (c.setup?.state.kind !== "needs_approval") continue;
+      // A copy names its central host as the Mac knows it, which is the name
+      // the phone paired with it under; the phone's host ids are device ids.
+      const central = Object.values(hosts).find((x) => x.label === c.host && x.status === "connected");
+      const s = central && data[central.id]?.sessions.find((x) => x.id === c.session);
+      const project = (s && data[central.id].projects.find((p) => p.id === s.project_id)?.name) ?? null;
+      out.push(card(h, s?.name ?? "The session", project, { copy: c.id, command: c.setup.command }, "the copy"));
+    }
+    for (const a of d.setups) {
+      const project = a.project || null;
+      out.push(card(h, `${project ?? "The project"}'s routing copy`, project, { copy: a.copy, command: a.command }, "its routing copy"));
+    }
+  }
+  return out;
 }
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;

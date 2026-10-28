@@ -299,7 +299,15 @@ async fn worker_as(origin: Option<&Path>, id: &str, name: &str) -> Daemon {
 
 /// [`worker_as`], with more of the daemon's environment.
 async fn worker_env(origin: Option<&Path>, id: &str, name: &str, extra: &[(&str, &str)]) -> Daemon {
+    worker_env_with(origin, id, name, extra, None).await
+}
+
+/// [`worker_env`], with `mobile.json` when given.
+async fn worker_env_with(origin: Option<&Path>, id: &str, name: &str, extra: &[(&str, &str)], mobile: Option<&str>) -> Daemon {
     let home = tempfile::tempdir().unwrap();
+    if let Some(m) = mobile {
+        write(&home.path().join("mobile.json"), m);
+    }
     let config = home.path().join("gitconfig");
     write(
         &config,
@@ -325,6 +333,36 @@ async fn worker_env(origin: Option<&Path>, id: &str, name: &str, extra: &[(&str,
     ];
     env.extend_from_slice(extra);
     Daemon::start(home, &env).await
+}
+
+/// [`worker`], letting paired phones in on `::1`, with that address: the
+/// central host has 127.0.0.1, and a Mac that listens there takes itself
+/// for its central host.
+async fn worker_with_phones(origin: &Path) -> (Daemon, String) {
+    for _ in 0..5 {
+        let port = free_port();
+        let mobile = format!(r#"{{ "enabled": true, "port": {port} }}"#);
+        let d = worker_env_with(
+            Some(origin),
+            "7d3f1c2a-5b8e-4e61-9a0f-2c4d6e8b1f37",
+            "Alex's MacBook Pro",
+            &[("MOONLET_MOBILE_ADDRS", "::1")],
+            Some(&mobile),
+        )
+        .await;
+        let addr = format!("[::1]:{port}");
+        for _ in 0..40 {
+            let st: Value = d.call("mobile.status", json!({})).await;
+            if st["listening"]
+                .as_array()
+                .is_some_and(|l| l.contains(&json!(addr)))
+            {
+                return (d, addr);
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+    panic!("the worker never listened for phones");
 }
 
 /// Pairs `worker` with `central` and sets it as the central host, without
@@ -3190,18 +3228,24 @@ async fn the_setup_knows_the_sessions_name() {
 
 /// A paired device's connection to `central` over its tailnet listener.
 async fn paired_device(central: &Central) -> tokio::net::TcpStream {
+    paired_as(&central.daemon, &central.addr, DeviceKind::Phone).await
+}
+
+/// A device of `kind` paired with `daemon`, which listens on `addr`, and
+/// connected to it.
+async fn paired_as(daemon: &Daemon, addr: &str, kind: DeviceKind) -> tokio::net::TcpStream {
     use moonlet_proto::{Frame, Message, read_frame, write_frame};
-    let p: MobilePairing = central.daemon.call("mobile.pair_start", json!({})).await;
-    let token = moonlet_link::tailnet::pair(
-        std::slice::from_ref(&central.addr),
-        &p.code,
-        "Alex's iPhone",
-        DeviceKind::Phone,
-    )
-    .await
-    .unwrap()
-    .token;
-    let mut s = tokio::net::TcpStream::connect(&central.addr).await.unwrap();
+    let start = match kind {
+        DeviceKind::Desktop => json!({ "kind": "desktop" }),
+        _ => json!({}),
+    };
+    let p: MobilePairing = daemon.call("mobile.pair_start", start).await;
+    let name = if kind == DeviceKind::Desktop { "Sam's MacBook Air" } else { "Alex's iPhone" };
+    let token = moonlet_link::tailnet::pair(&[addr.to_string()], &p.code, name, kind)
+        .await
+        .unwrap()
+        .token;
+    let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
     let auth = Message::Auth {
         token: Some(token),
         pair: None,
@@ -3220,34 +3264,75 @@ async fn paired_device(central: &Central) -> tokio::net::TcpStream {
     s
 }
 
-#[tokio::test]
-async fn a_paired_device_cannot_run_or_skip_a_setup() {
+/// Sends `method` on a paired device's connection and returns its reply,
+/// skipping events.
+async fn device_call(s: &mut tokio::net::TcpStream, id: u64, method: &str, params: Value) -> Result<Value, (String, String)> {
     use moonlet_proto::{Frame, Message, read_frame, write_frame};
-    let central = central().await;
-    let mut phone = paired_device(&central).await;
-    for (id, method) in [(1, "sync.run_setup"), (2, "sync.skip_setup")] {
-        let req = Message::Request {
-            id,
-            method: method.into(),
-            params: json!({ "copy": "any", "command": "touch x" }),
-        };
-        write_frame(&mut phone, &Frame::Json(req)).await.unwrap();
-        let reply = loop {
-            match read_frame(&mut phone).await.unwrap() {
-                Some(Frame::Json(m @ Message::Response { .. })) => break m,
-                Some(_) => {}
-                None => panic!("closed"),
-            }
-        };
-        let Message::Response { error: Some(e), .. } = reply else {
-            panic!("{method} worked from a paired device")
-        };
-        assert_eq!(
-            (e.code.as_str(), e.message.as_str()),
-            ("forbidden", "manage setup from the Mac"),
-            "{method}"
-        );
+    let req = Message::Request { id, method: method.into(), params };
+    write_frame(s, &Frame::Json(req)).await.unwrap();
+    loop {
+        match read_frame(s).await.unwrap() {
+            Some(Frame::Json(Message::Response { error: Some(e), .. })) => return Err((e.code, e.message)),
+            Some(Frame::Json(Message::Response { result, .. })) => return Ok(result.unwrap_or(Value::Null)),
+            Some(_) => {}
+            None => panic!("closed"),
+        }
     }
+}
+
+#[tokio::test]
+async fn a_paired_mac_cannot_run_or_skip_a_setup() {
+    let central = central().await;
+    let mut mac = paired_as(&central.daemon, &central.addr, DeviceKind::Desktop).await;
+    for (id, method) in [(1, "exec.setups"), (2, "sync.run_setup"), (3, "sync.skip_setup")] {
+        let e = device_call(&mut mac, id, method, json!({ "copy": "any", "command": "touch x" }))
+            .await
+            .expect_err(method);
+        assert_eq!(e, ("forbidden".into(), "manage setup from the Mac".into()), "{method}");
+    }
+}
+
+#[tokio::test]
+async fn a_paired_phone_approves_a_copys_setup() {
+    let central = central().await;
+    give_setup(&central, "touch ignored-by-setup");
+    let (worker, addr) = worker_with_phones(&central.origin).await;
+    link(&central, &worker).await;
+    let _: Copy = worker
+        .call("sync.start", json!({ "session": central.session_id() }))
+        .await;
+    let copy = setup_is(&worker, json!({ "kind": "needs_approval" })).await;
+
+    let mut phone = paired_as(&worker, &addr, DeviceKind::Phone).await;
+    assert_eq!(device_call(&mut phone, 1, "exec.setups", json!({})).await, Ok(json!([])));
+    device_call(
+        &mut phone,
+        2,
+        "sync.run_setup",
+        json!({ "copy": copy.id, "command": "touch ignored-by-setup" }),
+    )
+    .await
+    .unwrap();
+    setup_is(&worker, json!({ "kind": "done" })).await;
+    assert!(PathBuf::from(&copy.path).join("ignored-by-setup").exists(), "setup did not run");
+}
+
+#[tokio::test]
+async fn a_paired_phone_skips_a_copys_setup() {
+    let central = central().await;
+    give_setup(&central, "touch ignored-by-setup");
+    let (worker, addr) = worker_with_phones(&central.origin).await;
+    link(&central, &worker).await;
+    let _: Copy = worker
+        .call("sync.start", json!({ "session": central.session_id() }))
+        .await;
+    let copy = setup_is(&worker, json!({ "kind": "needs_approval" })).await;
+
+    let mut phone = paired_as(&worker, &addr, DeviceKind::Phone).await;
+    device_call(&mut phone, 1, "sync.skip_setup", json!({ "copy": copy.id }))
+        .await
+        .unwrap();
+    setup_is(&worker, json!({ "kind": "skipped" })).await;
 }
 
 #[tokio::test]

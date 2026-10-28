@@ -37,6 +37,6 @@ export function planBlurb(plan: string): string {
 export const readMessage = (req: ReadRequest, sessionName: string) => readPrompt(req, sessionName).message;
 
 /** Answers that let an agent act wait for Face ID when the setting is on. */
-export function needsFaceId(answer: "allow" | "always" | "approve" | "question" | "read" | "deny" | "feedback", faceId: boolean): boolean {
-  return faceId && (answer === "allow" || answer === "always" || answer === "approve" || answer === "question" || answer === "read");
+export function needsFaceId(answer: "allow" | "always" | "approve" | "question" | "read" | "setup" | "deny" | "feedback", faceId: boolean): boolean {
+  return faceId && (answer === "allow" || answer === "always" || answer === "approve" || answer === "question" || answer === "read" || answer === "setup");
 }

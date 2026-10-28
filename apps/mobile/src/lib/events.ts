@@ -2,7 +2,7 @@
 // applied to the data shown and, when they arrive while a load is on its
 // way, to the load's result: an event can overtake a reply sent before it.
 
-import { EV, type AccountInfo, type ChatState, type GitSettings, type ReadRequest, type TerminalInfo } from "@desktop/lib/protocol";
+import { EV, type AccountInfo, type ChatState, type CopyChanged, type ExecSetup, type GitSettings, type ReadRequest, type TerminalInfo } from "@desktop/lib/protocol";
 import { DaemonError } from "@desktop/lib/daemon";
 import type { ChatSummary, HostData } from "./app";
 
@@ -12,7 +12,11 @@ export type Change =
   | { kind: "chats"; id: number; value: ChatSummary | null }
   | { kind: "reads"; id: number; value: ReadRequest | null }
   | { kind: "git"; value: GitSettings }
-  | { kind: "account"; value: string };
+  | { kind: "account"; value: string }
+  /** A live copy (X60), or removed when it went. */
+  | { kind: "copy"; id: string; value: Omit<CopyChanged, "newly_differing" | "removed"> | null }
+  /** A routing copy's setup waiting for approval (X62), or answered (null). */
+  | { kind: "setup"; copy: string; value: ExecSetup | null };
 
 /** The changes `name` makes, or "reload" when only a fresh load tells. */
 export function eventChanges(name: string, data: unknown): Change[] | "reload" {
@@ -41,6 +45,14 @@ export function eventChanges(name: string, data: unknown): Change[] | "reload" {
       return [{ kind: "reads", id: (data as { request_id: number }).request_id, value: null }];
     case EV.gitSettingsChanged:
       return [{ kind: "git", value: data as GitSettings }];
+    case EV.syncChanged: {
+      const { newly_differing: _n, removed, ...copy } = data as CopyChanged;
+      return [{ kind: "copy", id: copy.id, value: removed ? null : copy }];
+    }
+    case EV.execSetup: {
+      const ask = data as ExecSetup;
+      return [{ kind: "setup", copy: ask.copy, value: ask }];
+    }
     case EV.accountInfo:
       return [{ kind: "account", value: (data as AccountInfo).account }];
     case EV.sessionsChanged:
@@ -65,6 +77,12 @@ export function accountAfterError(e: unknown): null | "keep" {
   return gitAfterError(e);
 }
 
+/** `list` without the items `same` picks, then `value` last, if any. */
+function replaceBy<T>(list: T[], same: (x: T) => boolean, value: T | null): T[] {
+  const rest = list.filter((x) => !same(x));
+  return value ? [...rest, value] : rest;
+}
+
 function setRecord<T>(base: Record<number, T>, id: number, value: T | null): Record<number, T> {
   const out = { ...base };
   if (value === null) delete out[id];
@@ -79,10 +97,9 @@ export function applyChanges(d: HostData, changes: readonly Change[]): HostData 
     else if (c.kind === "chats") out = { ...out, chats: setRecord(out.chats, c.id, c.value) };
     else if (c.kind === "git") out = { ...out, git: c.value };
     else if (c.kind === "account") out = { ...out, account: c.value };
-    else {
-      const reads = out.reads.filter((r) => r.request_id !== c.id);
-      out = { ...out, reads: c.value ? [...reads, c.value] : reads };
-    }
+    else if (c.kind === "copy") out = { ...out, copies: replaceBy(out.copies, (x) => x.id === c.id, c.value) };
+    else if (c.kind === "setup") out = { ...out, setups: replaceBy(out.setups, (x) => x.copy === c.copy, c.value) };
+    else out = { ...out, reads: replaceBy(out.reads, (r) => r.request_id === c.id, c.value) };
   }
   return out;
 }
