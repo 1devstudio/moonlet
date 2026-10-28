@@ -857,8 +857,14 @@ impl Daemon {
                 let refused = || RpcError::new("forbidden", "only a member of the account keeps design copies");
                 let device = conn.phone.as_deref().ok_or_else(refused)?;
                 let mac = self.mobile.kind_of(device) == Some(m::DeviceKind::Desktop);
-                if !mac || self.workers.worker_on(conn.id).is_none() {
+                let cloud = conn.cloud.load(std::sync::atomic::Ordering::Relaxed);
+                if !mac || cloud || self.workers.worker_on(conn.id).is_none() {
                     return Err(refused());
+                }
+                // A linked Mac is a member of this host's account (X68), and
+                // a host sharing none keeps no copies.
+                if !self.sessions.has_account() {
+                    return Err(RpcError::new("no_account", "this host shares no account"));
                 }
                 if method == m::DESIGN_OFFER {
                     let r: m::DesignOffer = params(p)?;
@@ -2302,13 +2308,19 @@ impl Daemon {
         let d = self.clone();
         tokio::spawn(async move {
             d.move_merged_designs().await;
+            // Again every minute, for a move that failed.
+            let mut retry = tokio::time::interval(std::time::Duration::from_secs(60));
+            retry.tick().await;
             loop {
-                match events.recv().await {
-                    // A lagged watch may have missed the change: look again.
-                    Ok(Message::Event { name, .. }) if name == m::EV_WORKSPACES_CHANGED => {}
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
-                    Ok(_) => continue,
-                    Err(_) => return,
+                tokio::select! {
+                    event = events.recv() => match event {
+                        // A lagged watch may have missed the change: look again.
+                        Ok(Message::Event { name, .. }) if name == m::EV_WORKSPACES_CHANGED => {}
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                        Ok(_) => continue,
+                        Err(_) => return,
+                    },
+                    _ = retry.tick() => {}
                 }
                 d.move_merged_designs().await;
             }
@@ -2318,23 +2330,13 @@ impl Daemon {
     async fn move_merged_designs(&self) {
         for (from, into) in self.sessions.merged_workspaces() {
             self.stop_agents_in(&from).await;
-            // Copies go: their owners move them, and every member follows.
-            if let Err(e) = self.copies.before_merge(&from).await {
-                tracing::warn!(%from, "cannot remove the copies of a merged workspace: {e:#}");
-                continue;
-            }
-            let store = self.design.clone();
-            let (f, i) = (from.clone(), into.clone());
-            match blocking(move || store.move_workspace(&f, &i)).await {
+            match self.copies.merge(&from, &into).await {
                 Ok(moved) if !moved.is_empty() => {
                     tracing::info!(%from, %into, "moved {} design items of a merged workspace", moved.len());
-                    if let Err(e) = self.copies.after_merge(&from, &into, &moved) {
-                        tracing::warn!(%from, "cannot move the records of a merged workspace's designs: {e:#}");
-                    }
                     self.copies.kick();
                 }
                 Ok(_) => {}
-                Err(e) => tracing::warn!(%from, %into, "cannot move a merged workspace's designs: {}", e.message),
+                Err(e) => tracing::warn!(%from, %into, "cannot move a merged workspace's designs: {e:#}"),
             }
         }
     }
@@ -2403,8 +2405,30 @@ impl Daemon {
         let copies = self.copies.clone();
         tokio::spawn(async move {
             loop {
+                use moonlet_core::design::replica::Item;
                 match events.recv().await {
-                    Ok(Message::Event { name, .. }) if name == m::EV_DESIGN_CHANGED || name == m::EV_LINK_CHANGED => copies.kick(),
+                    // The item whose folder changed is read again.
+                    Ok(Message::Event { name, data }) if name == m::EV_DESIGN_CHANGED => {
+                        let ws = data.get("workspace").and_then(Value::as_str).unwrap_or_default();
+                        let text = |f: &str| data.get(f).and_then(Value::as_str);
+                        match (text("system"), text("design")) {
+                            (Some(slug), _) => copies.changed(Item::system(ws, slug)),
+                            (None, Some(slug)) => copies.changed(Item::design(ws, slug)),
+                            _ => {}
+                        }
+                        copies.kick();
+                    }
+                    Ok(Message::Event { name, .. }) if name == m::EV_LINK_CHANGED => {
+                        copies.link_changed();
+                        copies.kick();
+                    }
+                    // A design or sync agent starting or stopping: its
+                    // record says so soon, for another member's Move here.
+                    Ok(Message::Event { name, data }) if name == m::EV_TERMINAL_UPDATED => {
+                        if data.get("design").is_some_and(|d| !d.is_null()) {
+                            copies.kick();
+                        }
+                    }
                     Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                     Err(_) => return,
                 }

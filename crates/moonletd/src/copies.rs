@@ -131,6 +131,12 @@ pub enum Step {
     },
     /// An item this member owned that another member owns now.
     Lost { id: String, item: Item },
+    /// An item of this member's own whose place another member's record
+    /// had first (the lower id keeps it): it moves to `to`.
+    Rename { id: String, item: Item, to: String },
+    /// An item this member owns whose workspace was merged away, found in
+    /// the workspace it merged into: its record names its new place.
+    Repoint { id: String, item: Item },
     /// An item whose record is gone: its copy goes.
     Drop { id: String, item: Item, owned: bool },
 }
@@ -143,6 +149,7 @@ pub fn plan(
     records: &BTreeMap<String, Rec>,
     kept: &BTreeMap<String, Local>,
     folders: &BTreeSet<Item>,
+    merged: &BTreeMap<String, String>,
 ) -> Vec<Step> {
     let mut steps = Vec::new();
     let tracked: BTreeSet<Item> = kept.values().map(Local::item).collect();
@@ -151,23 +158,75 @@ pub fn plan(
         .cloned()
         .chain(records.values().map(|r| r.item.clone()))
         .collect();
-    for item in folders.iter().filter(|i| !tracked.contains(i)) {
+    let free = |item: &Item, taken: &BTreeSet<Item>| {
+        (2..)
+            .map(|n| Item {
+                slug: format!("{}-{n}", item.slug),
+                ..item.clone()
+            })
+            .find(|i| !taken.contains(i))
+            .expect("a free slug")
+    };
+    // Each place's records: the lowest id keeps it, as on every member.
+    let mut at: BTreeMap<&Item, Vec<&String>> = BTreeMap::new();
+    for (id, r) in records {
+        at.entry(&r.item).or_default().push(id);
+    }
+    let keeper = |id: &String, r: &Rec| at.get(&r.item).is_none_or(|ids| ids.first() == Some(&id));
+    // An item this member keeps whose workspace was merged away, found in
+    // the one it merged into: its folder, not a new item there.
+    let mut repoints = Vec::new();
+    let mut found: BTreeSet<Item> = BTreeSet::new();
+    for (id, l) in kept {
+        let item = l.item();
+        if folders.contains(&item) {
+            continue;
+        }
+        let Some(into) = merged.get(&item.workspace) else {
+            continue;
+        };
+        let numbered = |slug: &str| {
+            slug.strip_prefix(&format!("{}-", item.slug))
+                .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        };
+        let candidates: Vec<&Item> = folders
+            .iter()
+            .filter(|i| {
+                i.workspace == *into
+                    && i.kind == item.kind
+                    && !tracked.contains(i)
+                    && !found.contains(*i)
+            })
+            .filter(|i| !records.values().any(|o| o.item == **i))
+            .filter(|i| i.slug == item.slug || numbered(&i.slug))
+            .collect();
+        let Some(to) = candidates
+            .iter()
+            .find(|i| i.slug == item.slug)
+            .or(candidates.first())
+        else {
+            continue;
+        };
+        found.insert((*to).clone());
+        repoints.push(Step::Repoint {
+            id: id.clone(),
+            item: (*to).clone(),
+        });
+    }
+    for item in folders
+        .iter()
+        .filter(|i| !tracked.contains(i) && !found.contains(*i))
+    {
         let placed = records.values().find(|r| r.item == *item);
         match placed {
             // This member's own, its record already made: kept again.
             Some(r) if r.owner == me => continue,
             Some(_) => {
-                let free = (2..)
-                    .map(|n| Item {
-                        slug: format!("{}-{n}", item.slug),
-                        ..item.clone()
-                    })
-                    .find(|i| !taken.contains(i))
-                    .expect("a free slug");
-                taken.insert(free.clone());
+                let to = free(item, &taken);
+                taken.insert(to.clone());
                 steps.push(Step::Claim {
                     item: item.clone(),
-                    rename: Some(free.slug),
+                    rename: Some(to.slug),
                 });
             }
             None => steps.push(Step::Claim {
@@ -176,15 +235,37 @@ pub fn plan(
             }),
         }
     }
+    steps.extend(repoints.iter().cloned());
+    let repointed: BTreeSet<&String> = repoints
+        .iter()
+        .filter_map(|s| match s {
+            Step::Repoint { id, .. } => Some(id),
+            _ => None,
+        })
+        .collect();
     for (id, r) in records {
         let local = kept.get(id);
+        if !keeper(id, r) {
+            // Another record has this place: the one of this member's own
+            // moves; another member's waits for its owner to move it.
+            if r.owner == me && folders.contains(&r.item) {
+                let to = free(&r.item, &taken);
+                taken.insert(to.clone());
+                steps.push(Step::Rename {
+                    id: id.clone(),
+                    item: r.item.clone(),
+                    to: to.slug,
+                });
+            }
+            continue;
+        }
         if r.owner == me {
             if folders.contains(&r.item) {
                 steps.push(Step::Publish {
                     id: id.clone(),
                     item: r.item.clone(),
                 });
-            } else {
+            } else if !repointed.contains(id) {
                 steps.push(Step::Unpublish { id: id.clone() });
             }
             continue;
@@ -194,6 +275,15 @@ pub fn plan(
                 id: id.clone(),
                 item: l.item(),
             });
+        }
+        // Not over an item of this member's own still in its place, nor
+        // into a merged-away workspace before its owner moves it, nor over
+        // a copy that is moving with a merge.
+        let mine_here = records
+            .iter()
+            .any(|(o, x)| o != id && x.owner == me && x.item == r.item);
+        if mine_here || merged.contains_key(&r.item.workspace) || repointed.contains(id) {
+            continue;
         }
         let Some(tree) = &r.tree else { continue };
         let current = local.is_some_and(|l| {
@@ -249,6 +339,12 @@ pub struct DesignCopies {
     lost: Mutex<Option<OnLost>>,
     /// Whether an item's agent works on it, for its record's `agent`.
     busy: Mutex<Option<OnBusy>>,
+    /// Items whose folders changed since the last round.
+    dirty: Mutex<BTreeSet<Item>>,
+    /// The link changed: offer every owned tree whole next round.
+    reoffer: std::sync::atomic::AtomicBool,
+    /// When a round last read every owned folder.
+    full_at: Mutex<Option<std::time::Instant>>,
 }
 
 impl DesignCopies {
@@ -267,6 +363,9 @@ impl DesignCopies {
             kick: tokio::sync::Notify::new(),
             lost: Mutex::new(None),
             busy: Mutex::new(None),
+            dirty: Mutex::new(BTreeSet::new()),
+            reoffer: std::sync::atomic::AtomicBool::new(true),
+            full_at: Mutex::new(None),
         })
     }
 
@@ -303,11 +402,17 @@ impl DesignCopies {
         self.home.join("design").join(".store").join("copies.json")
     }
 
-    fn load(&self) -> BTreeMap<String, Local> {
-        std::fs::read(self.copies_file())
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default()
+    /// What this member keeps, by record id. A file that is there but
+    /// cannot be read stops the round: read as empty, every copy would
+    /// look like an item of this member's own.
+    fn load(&self) -> Result<BTreeMap<String, Local>> {
+        match std::fs::read(self.copies_file()) {
+            Ok(bytes) => serde_json::from_slice(&bytes)
+                .with_context(|| format!("cannot read {}", self.copies_file().display())),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(BTreeMap::new()),
+            Err(e) => Err(anyhow::Error::from(e)
+                .context(format!("cannot read {}", self.copies_file().display()))),
+        }
     }
 
     fn save(&self, kept: &BTreeMap<String, Local>) -> Result<()> {
@@ -322,7 +427,10 @@ impl DesignCopies {
     /// What this member keeps of item `item`, when it keeps it: its record
     /// id and whether it owns it.
     pub fn kept(&self, item: &Item) -> Option<(String, Local)> {
-        self.load().into_iter().find(|(_, l)| l.item() == *item)
+        self.load()
+            .ok()?
+            .into_iter()
+            .find(|(_, l)| l.item() == *item)
     }
 
     /// The account's records of items, by id.
@@ -332,6 +440,19 @@ impl DesignCopies {
             .iter()
             .filter_map(|(id, fields)| Some((id.clone(), Rec::parse(fields)?)))
             .collect()
+    }
+
+    /// Notes that item `item`'s folder changed, so the next round
+    /// snapshots it.
+    pub fn changed(&self, item: Item) {
+        self.dirty.lock().unwrap().insert(item);
+    }
+
+    /// Notes that the link changed: the next round offers the central host
+    /// every tree this member owns, whole, in case it lost them.
+    pub fn link_changed(&self) {
+        self.reoffer
+            .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// One round: the records and this member's folders brought together.
@@ -346,17 +467,51 @@ impl DesignCopies {
         let me = info.worker.id;
         let _one = self.round.lock().await;
         let records = self.records();
-        let mut kept = self.load();
+        let mut kept = self.load()?;
         let folders = {
             let me = self.clone_ref();
             tokio::task::spawn_blocking(move || me.folders()).await??
         };
-        for step in plan(&me, &records, &kept, &folders) {
-            let done = self.step(&me, &step, &records, &mut kept).await;
-            if let Err(e) = done {
+        let merged: BTreeMap<String, String> =
+            self.sessions.merged_workspaces().into_iter().collect();
+        let reoffer = self
+            .reoffer
+            .swap(false, std::sync::atomic::Ordering::SeqCst);
+        let full = {
+            let mut last = self.full_at.lock().unwrap();
+            let due = last.is_none_or(|t| t.elapsed() >= FULL);
+            if due {
+                *last = Some(std::time::Instant::now());
+            }
+            due
+        };
+        let dirty = std::mem::take(&mut *self.dirty.lock().unwrap());
+        let mut round = Round {
+            me: &me,
+            records: &records,
+            reoffer,
+            full,
+            dirty,
+            blocked: BTreeSet::new(),
+            offered: true,
+        };
+        for step in plan(&me, &records, &kept, &folders, &merged) {
+            if let Err(e) = self.step(&mut round, &step, &mut kept).await {
                 tracing::warn!(?step, "design copies: {e:#}");
+                // A place still held by this member's own item takes no copy.
+                if let Step::Claim { item, .. } | Step::Rename { item, .. } = &step {
+                    round.blocked.insert(item.clone());
+                }
+                if matches!(step, Step::Publish { .. } | Step::Claim { .. }) {
+                    round.offered = false;
+                }
             }
             self.save(&kept)?;
+        }
+        // Tried again next round, until every tree reached the central host.
+        if reoffer && !round.offered {
+            self.reoffer
+                .store(true, std::sync::atomic::Ordering::SeqCst);
         }
         Ok(())
     }
@@ -370,40 +525,20 @@ impl DesignCopies {
 
     async fn step(
         &self,
-        me: &str,
+        round: &mut Round<'_>,
         step: &Step,
-        records: &BTreeMap<String, Rec>,
         kept: &mut BTreeMap<String, Local>,
     ) -> Result<()> {
+        let me = round.me;
         match step {
             Step::Claim { item, rename } => {
                 let item = match rename {
-                    Some(_) => {
-                        let store = self.store.clone();
-                        let (ws, kind, slug) = (
-                            item.workspace.clone(),
-                            item.kind.folder(),
-                            item.slug.clone(),
-                        );
-                        // Only this member's own designs follow its renamed system.
-                        let copies: BTreeSet<String> = kept
-                            .values()
-                            .filter(|l| !l.owned && l.workspace == ws && l.kind == "design")
-                            .map(|l| l.slug.clone())
-                            .collect();
-                        let to = tokio::task::spawn_blocking(move || {
-                            store.rename_item(&ws, kind, &slug, &|d| !copies.contains(d))
-                        })
-                        .await??;
-                        Item {
-                            slug: to,
-                            ..item.clone()
-                        }
-                    }
+                    Some(to) => self.rename(item, to, kept).await?,
                     None => item.clone(),
                 };
                 let id = format!("d-{}", uuid::Uuid::new_v4().simple());
                 let name = self.name_of(&item).unwrap_or_default();
+                let busy = self.is_busy(&item);
                 self.sessions.set_design(
                     &id,
                     &[
@@ -412,25 +547,54 @@ impl DesignCopies {
                         ("slug", json!(item.slug)),
                         ("name", json!(name)),
                         ("owner", json!(me)),
+                        (agent_field(me).as_str(), json!(busy)),
                     ],
                 );
                 kept.insert(id.clone(), Local::of(&item, None, true));
-                self.publish(&id, &item, None, kept).await
+                self.publish(round, &id, &item, None, kept).await
+            }
+            Step::Rename { id, item, to } => {
+                let moved = self.rename(item, to, kept).await?;
+                self.sessions.set_design(id, &[("slug", json!(moved.slug))]);
+                let tree = kept.get(id).and_then(|l| l.tree.clone());
+                kept.insert(id.clone(), Local::of(&moved, tree, true));
+                Ok(())
+            }
+            Step::Repoint { id, item } => {
+                let Some(l) = kept.get_mut(id) else {
+                    return Ok(());
+                };
+                l.workspace = item.workspace.clone();
+                l.slug = item.slug.clone();
+                if l.owned {
+                    self.sessions.set_design(
+                        id,
+                        &[
+                            ("workspace", json!(item.workspace)),
+                            ("slug", json!(item.slug)),
+                        ],
+                    );
+                }
+                Ok(())
             }
             Step::Publish { id, item } => {
                 let had = kept.get(id).and_then(|l| l.tree.clone());
                 kept.insert(id.clone(), Local::of(item, had, true));
-                let published = records.get(id).and_then(|r| r.tree.clone());
-                self.publish(id, item, published, kept).await?;
-                let busy = self.busy.lock().unwrap().as_ref().is_some_and(|f| f(item));
-                if records.get(id).is_some_and(|r| r.agent != busy) {
+                let published = round.records.get(id).and_then(|r| r.tree.clone());
+                self.publish(round, id, item, published, kept).await?;
+                let busy = self.is_busy(item);
+                if round.records.get(id).is_some_and(|r| r.agent != busy) {
                     self.sessions
                         .set_design(id, &[(agent_field(me).as_str(), json!(busy))]);
                 }
                 Ok(())
             }
             Step::Unpublish { id } => {
-                self.sessions.delete_design(id);
+                // Still this member's, as the record says now: another
+                // member may have taken it over since the round began.
+                if self.records().get(id).is_some_and(|r| r.owner == me) {
+                    self.sessions.delete_design(id);
+                }
                 kept.remove(id);
                 Ok(())
             }
@@ -449,18 +613,15 @@ impl DesignCopies {
                 tree,
                 from,
             } => {
+                if round.blocked.contains(item) {
+                    bail!("{} is still this member's own item", item.slug);
+                }
                 self.fetch(tree, kept).await?;
+                self.replicas.apply(item, tree, &self.locate()).await?;
+                // The old place goes once the new one holds the copy.
                 if let Some(from) = from {
                     self.remove_folder(from).await?;
                 }
-                let projects = self.sessions.list_projects();
-                let locate = move |identity: &moonlet_proto::types::ProjectIdentity| {
-                    projects
-                        .iter()
-                        .find(|p| moonlet_core::identity::same_project(&p.identity, identity))
-                        .map(|p| (p.id.clone(), p.path.clone()))
-                };
-                self.replicas.apply(item, tree, &locate).await?;
                 kept.insert(id.clone(), Local::of(item, Some(tree.clone()), false));
                 Ok(())
             }
@@ -471,6 +632,50 @@ impl DesignCopies {
                 kept.remove(id);
                 Ok(())
             }
+        }
+    }
+
+    /// Moves this member's own item to slug `to`, which the plan picked
+    /// free of every record; this member's own designs follow a renamed
+    /// system, its copies do not.
+    async fn rename(&self, item: &Item, to: &str, kept: &BTreeMap<String, Local>) -> Result<Item> {
+        let store = self.store.clone();
+        let (ws, kind, slug, to) = (
+            item.workspace.clone(),
+            item.kind.folder(),
+            item.slug.clone(),
+            to.to_string(),
+        );
+        let copies: BTreeSet<String> = kept
+            .values()
+            .filter(|l| !l.owned && l.workspace == ws && l.kind == "design")
+            .map(|l| l.slug.clone())
+            .collect();
+        let moved = tokio::task::spawn_blocking(move || {
+            store.rename_item(&ws, kind, &slug, Some(&to), &|d| !copies.contains(d))
+        })
+        .await??;
+        Ok(Item {
+            slug: moved,
+            ..item.clone()
+        })
+    }
+
+    fn is_busy(&self, item: &Item) -> bool {
+        self.busy.lock().unwrap().as_ref().is_some_and(|f| f(item))
+    }
+
+    /// This member's project with an identity: its id and folder.
+    fn locate(
+        &self,
+    ) -> impl Fn(&moonlet_proto::types::ProjectIdentity) -> Option<(String, String)> + Send + Sync + use<>
+    {
+        let projects = self.sessions.list_projects();
+        move |identity| {
+            projects
+                .iter()
+                .find(|p| moonlet_core::identity::same_project(&p.identity, identity))
+                .map(|p| (p.id.clone(), p.path.clone()))
         }
     }
 
@@ -508,40 +713,42 @@ impl DesignCopies {
         .await?
     }
 
-    /// Snapshots an item this member owns and, when the tree changed,
-    /// publishes it: a member first sends the central host the objects it
-    /// lacks, so a member reading the record can always fetch the tree.
+    /// Publishes an item this member owns when its tree changed. Its folder
+    /// is read again only when it changed since, nothing was published yet,
+    /// or every [`FULL`] (a change the watch missed). A member first sends
+    /// the central host the objects it lacks, so a member reading the record
+    /// can always fetch the tree; after the link changed, the whole tree,
+    /// even unchanged, in case the central host lost it.
     async fn publish(
         &self,
+        round: &Round<'_>,
         id: &str,
         item: &Item,
         published: Option<String>,
         kept: &mut BTreeMap<String, Local>,
     ) -> Result<()> {
-        let tree = self.replicas.snapshot(item).await?;
-        if published.as_deref() != Some(tree.as_str()) {
-            if self.link.central_name().is_some() {
-                let host = self
-                    .link
-                    .host()
-                    .context("the central host is not connected")?;
-                let have: Vec<String> = published.into_iter().collect();
-                let pack = self.replicas.pack(&tree, &have).await?;
-                let pack = if pack.is_empty() {
-                    None
-                } else {
-                    Some(host.send_pack(&pack).map_err(rpc)?)
-                };
-                host.request(
-                    m::DESIGN_OFFER,
-                    serde_json::to_value(m::DesignOffer {
-                        tree: tree.clone(),
-                        pack,
-                    })?,
-                )
-                .await
-                .map_err(rpc)?;
+        let had = kept.get(id).and_then(|l| l.tree.clone());
+        let read = round.full || had.is_none() || had != published || round.dirty.contains(item);
+        let tree = match (read, had) {
+            (false, Some(t)) => t,
+            _ => self.replicas.snapshot(item).await?,
+        };
+        let changed = published.as_deref() != Some(tree.as_str());
+        if (changed || round.reoffer) && self.link.central_name().is_some() {
+            let have: Vec<String> = if round.reoffer {
+                Vec::new()
+            } else {
+                published.into_iter().collect()
+            };
+            if let Err(e) = self.offer(&tree, &have).await {
+                // The central host may lack the base too: then all of it.
+                if have.is_empty() {
+                    return Err(e);
+                }
+                self.offer(&tree, &[]).await?;
             }
+        }
+        if changed {
             let name = self.name_of(item).unwrap_or_default();
             self.sessions
                 .set_design(id, &[("tree", json!(tree)), ("name", json!(name))]);
@@ -549,6 +756,31 @@ impl DesignCopies {
         if let Some(l) = kept.get_mut(id) {
             l.tree = Some(tree);
         }
+        Ok(())
+    }
+
+    /// `design.offer`: sends the central host tree `tree`, without what a
+    /// holder of the trees `have` has.
+    async fn offer(&self, tree: &str, have: &[String]) -> Result<()> {
+        let host = self
+            .link
+            .host()
+            .context("the central host is not connected")?;
+        let pack = self.replicas.pack(tree, have).await?;
+        let pack = if pack.is_empty() {
+            None
+        } else {
+            Some(host.send_pack(&pack).map_err(rpc)?)
+        };
+        host.request(
+            m::DESIGN_OFFER,
+            serde_json::to_value(m::DesignOffer {
+                tree: tree.to_string(),
+                pack,
+            })?,
+        )
+        .await
+        .map_err(rpc)?;
         Ok(())
     }
 
@@ -597,6 +829,8 @@ impl DesignCopies {
             .accept(&pack.unwrap_or_default(), tree)
             .await
             .map_err(|e| RpcError::new("refused", format!("{e:#}")))?;
+        // A copy here may have waited for this tree.
+        self.kick();
         Ok(true)
     }
 
@@ -613,52 +847,57 @@ impl DesignCopies {
             .map_err(|e| RpcError::new("failed", format!("{e:#}")))
     }
 
-    /// Moves this member's items of merged workspace `from` into `into`
-    /// (X68): its own move with the folder, under their new place; its
-    /// copies go, as their owners move them.
-    pub async fn before_merge(&self, from: &str) -> Result<()> {
-        let _one = self.round.lock().await;
-        let mut kept = self.load();
-        let copies: Vec<(String, Item)> = kept
-            .iter()
-            .filter(|(_, l)| !l.owned && l.workspace == from)
-            .map(|(id, l)| (id.clone(), l.item()))
-            .collect();
-        for (id, item) in copies {
-            self.remove_folder(&item).await?;
-            kept.remove(&id);
-        }
-        self.save(&kept)
-    }
-
-    /// After a merge moved this member's own items (`moved`, from workspace
-    /// `from` into `into`): their records name their new place.
-    pub fn after_merge(
+    /// Moves the design systems and designs of merged workspace `from` into
+    /// `into` (X68), between rounds: copies too, and what this member keeps
+    /// follows each; the records of its own name their new place. A stop
+    /// before that is finished by the next round (see [`Step::Repoint`]).
+    pub async fn merge(
         &self,
         from: &str,
         into: &str,
-        moved: &[moonlet_core::design::merge::Moved],
-    ) -> Result<()> {
-        let mut kept = self.load();
-        for mv in moved {
-            let kind = if mv.kind == "system" {
-                "system"
-            } else {
-                "design"
-            };
-            let Some((id, l)) = kept.iter_mut().find(|(_, l)| {
-                l.owned && l.workspace == from && l.kind == kind && l.slug == mv.from
-            }) else {
+    ) -> Result<Vec<moonlet_core::design::merge::Moved>> {
+        let _one = self.round.lock().await;
+        let store = self.store.clone();
+        let (f, i) = (from.to_string(), into.to_string());
+        let moved = tokio::task::spawn_blocking(move || store.move_workspace(&f, &i)).await??;
+        let mut kept = self.load()?;
+        for mv in &moved {
+            let Some((id, l)) = kept
+                .iter_mut()
+                .find(|(_, l)| l.workspace == from && l.kind == mv.kind && l.slug == mv.from)
+            else {
                 continue;
             };
             l.workspace = into.to_string();
             l.slug = mv.to.clone();
-            self.sessions
-                .set_design(id, &[("workspace", json!(into)), ("slug", json!(mv.to))]);
+            if l.owned {
+                self.sessions
+                    .set_design(id, &[("workspace", json!(into)), ("slug", json!(mv.to))]);
+            }
         }
-        self.save(&kept)
+        self.save(&kept)?;
+        Ok(moved)
     }
 }
+
+/// What one round knows as it goes.
+struct Round<'a> {
+    me: &'a str,
+    records: &'a BTreeMap<String, Rec>,
+    /// Offer the central host every owned tree whole.
+    reoffer: bool,
+    /// Read every owned folder again.
+    full: bool,
+    /// The items whose folders changed since the last round.
+    dirty: BTreeSet<Item>,
+    /// Places a step of this member's own failed to clear: no copy there.
+    blocked: BTreeSet<Item>,
+    /// Whether every publication reached the central host.
+    offered: bool,
+}
+
+/// How often a round reads every owned folder, changed or not.
+const FULL: Duration = Duration::from_secs(600);
 
 /// What a scan of the design folders needs, off the async workers.
 struct Scan {
@@ -712,6 +951,16 @@ mod tests {
     use super::*;
 
     const ME: &str = "7d3f1c2a";
+
+    /// [`super::plan`] with no merged workspaces.
+    fn plan(
+        me: &str,
+        records: &BTreeMap<String, Rec>,
+        kept: &BTreeMap<String, Local>,
+        folders: &BTreeSet<Item>,
+    ) -> Vec<Step> {
+        super::plan(me, records, kept, folders, &BTreeMap::new())
+    }
     const MINI: &str = "studio-mini";
 
     fn acme() -> Item {
@@ -820,7 +1069,7 @@ mod tests {
         let records = records(&[("d-1", rec(acme(), ME, Some("t1")))]);
         let kept = kept(&[("d-1", Local::of(&acme(), Some("t1".into()), true))]);
         assert_eq!(
-            plan(ME, &records, &kept, &folders(&[acme()])),
+            super::plan(ME, &records, &kept, &folders(&[acme()]), &BTreeMap::new()),
             vec![Step::Publish {
                 id: "d-1".into(),
                 item: acme()
@@ -937,6 +1186,69 @@ mod tests {
             vec![Step::Publish {
                 id: "d-1".into(),
                 item: acme()
+            }]
+        );
+    }
+
+    #[test]
+    fn two_records_in_one_place_keep_the_first_id_there_and_mine_moves_with_no_copy_meanwhile() {
+        let records = records(&[
+            ("d-1", rec(acme(), MINI, Some("t1"))),
+            ("d-2", rec(acme(), ME, Some("t2"))),
+        ]);
+        let kept = kept(&[("d-2", Local::of(&acme(), Some("t2".into()), true))]);
+        assert_eq!(
+            super::plan(ME, &records, &kept, &folders(&[acme()]), &BTreeMap::new()),
+            vec![Step::Rename {
+                id: "d-2".into(),
+                item: acme(),
+                to: "acme-web-2".into()
+            }]
+        );
+        // On a third member, neither is copied until the second moved.
+        assert_eq!(
+            super::plan(
+                "air",
+                &records,
+                &BTreeMap::new(),
+                &folders(&[]),
+                &BTreeMap::new()
+            ),
+            vec![Step::Copy {
+                id: "d-1".into(),
+                item: acme(),
+                tree: "t1".into(),
+                from: None
+            },]
+        );
+    }
+
+    #[test]
+    fn an_owned_item_of_a_merged_workspace_follows_its_folder_instead_of_going() {
+        // w-1 merged into w-2, which had studio-mini's acme-web, so this
+        // member's acme-web moved to acme-web-2.
+        let theirs = Item::system("w-2", "acme-web");
+        let moved = Item::system("w-2", "acme-web-2");
+        let records = records(&[
+            ("d-0", rec(theirs.clone(), MINI, Some("t0"))),
+            ("d-1", rec(acme(), ME, Some("t1"))),
+        ]);
+        let kept = kept(&[
+            ("d-0", Local::of(&theirs, Some("t0".into()), false)),
+            ("d-1", Local::of(&acme(), Some("t1".into()), true)),
+        ]);
+        let merged = BTreeMap::from([("w-1".to_string(), "w-2".to_string())]);
+        assert_eq!(
+            super::plan(
+                ME,
+                &records,
+                &kept,
+                &folders(&[theirs, moved.clone()]),
+                &merged
+            ),
+            vec![Step::Repoint {
+                id: "d-1".into(),
+                item: moved
             }]
         );
     }

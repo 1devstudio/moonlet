@@ -183,14 +183,15 @@ impl Store {
     }
 
     /// Renames item `slug` of `kind` (`systems` or `designs`) in
-    /// `workspace` to the next free slug (`acme-web-2`, named "Acme web 2"),
-    /// with its record; a renamed system's designs for which `follows`
-    /// holds point at its new slug. Gives the new slug.
+    /// `workspace` to `to`, or else the next free slug (`acme-web-2`, named
+    /// "Acme web 2"), with its record; a renamed system's designs for which
+    /// `follows` holds point at its new slug. Gives the new slug.
     pub fn rename_item(
         &self,
         workspace: &str,
         kind: &str,
         slug: &str,
+        to: Option<&str>,
         follows: &dyn Fn(&str) -> bool,
     ) -> Result<String> {
         let records = if kind == "systems" {
@@ -199,7 +200,12 @@ impl Store {
             ".records/designs"
         };
         let root = self.root()?.to_path_buf();
-        let to = self.free_slug(workspace, kind, records, slug)?;
+        // A slug asked for must be free here too, as a folder and as a record.
+        let to = match to {
+            Some(to) if self.free_slug(workspace, kind, records, to)? == to => to.to_string(),
+            Some(to) => bail!("{to} is taken here"),
+            None => self.free_slug(workspace, kind, records, slug)?,
+        };
         self.move_item(&root, workspace, workspace, kind, slug, &to, records)?;
         let dir = self.kind_dir(workspace, kind, false)?.join(&to);
         if kind == "systems" {
@@ -621,7 +627,7 @@ mod tests {
             .unwrap();
 
         let to = store
-            .rename_item("w-mac", "systems", "acme-web", &|d| d == "checkout")
+            .rename_item("w-mac", "systems", "acme-web", None, &|d| d == "checkout")
             .unwrap();
 
         assert_eq!(to, "acme-web-2");
