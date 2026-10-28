@@ -725,6 +725,29 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Each workspace merged into another (X68) that is gone, with the
+    /// workspace it now lives in: the end of its chain of merges.
+    pub fn merged_workspaces(&self) -> Vec<(String, String)> {
+        let st = self.state.lock().unwrap();
+        let exists = |w: &str| st.workspaces.iter().any(|x| x.id == w);
+        st.merges
+            .keys()
+            .filter(|from| !exists(from))
+            .filter_map(|from| {
+                // However long the chain; a loop ends it.
+                let mut seen = std::collections::HashSet::from([from.as_str()]);
+                let mut at = st.merges.get(from)?;
+                while !exists(at) {
+                    if !seen.insert(at.as_str()) {
+                        return None;
+                    }
+                    at = st.merges.get(at)?;
+                }
+                Some((from.clone(), at.clone()))
+            })
+            .collect()
+    }
+
     pub fn create_section(&self, workspace_id: &str, name: &str) -> Result<Section> {
         let name = name.trim();
         if name.is_empty() {
@@ -2056,6 +2079,25 @@ async fn remove_unmade(repo: &Path, dir: Option<PathBuf>, branch: Option<String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_workspace_merged_ten_times_over_still_ends_in_the_last() {
+        let home = tempfile::tempdir().unwrap();
+        let env: BTreeMap<String, String> = std::env::vars().collect();
+        let terminals = TerminalManager::new(home.path().join("s.sock"), env);
+        let mgr = SessionManager::load(home.path().join("state.json"), home.path().join("worktrees"), terminals);
+        let ids: Vec<String> = (0..11)
+            .map(|n| mgr.create_workspace(moonlet_proto::methods::WorkspaceCreate { name: format!("W{n}"), color: moonlet_proto::types::WorkspaceColor::Blue, move_sections: vec![], claude_profile: None }).unwrap().id)
+            .collect();
+        for pair in ids.windows(2) {
+            mgr.merge_workspace(&pair[0], &pair[1]).unwrap();
+        }
+        let mut merged = mgr.merged_workspaces();
+        merged.sort();
+        let mut want: Vec<(String, String)> = ids[..10].iter().map(|id| (id.clone(), ids[10].clone())).collect();
+        want.sort();
+        assert_eq!(merged, want);
+    }
     use std::time::Duration;
 
     #[test]

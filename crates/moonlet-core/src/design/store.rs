@@ -989,7 +989,7 @@ fn inside_dir(base: &Path, rel: &str) -> Option<PathBuf> {
     Some(out)
 }
 
-fn read_config(dir: &Path) -> Result<SystemConfig> {
+pub(super) fn read_config(dir: &Path) -> Result<SystemConfig> {
     Ok(toml::from_str(&fsx::read_inside(dir, &dir.join(CONFIG))?)?)
 }
 
