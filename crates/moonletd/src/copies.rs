@@ -30,7 +30,9 @@ pub struct Rec {
     pub owner: String,
     /// The latest snapshot the owner published.
     pub tree: Option<String>,
-    /// Whether the owner's agent is working on it.
+    /// Whether the owner's agent is working on it: the owner's own
+    /// `agent:<worker id>` field, so a former owner's late word never
+    /// counts.
     pub agent: bool,
 }
 
@@ -52,12 +54,19 @@ impl Rec {
             name: text("name").unwrap_or_default(),
             owner: text("owner")?,
             tree: text("tree"),
+            // Only the owner's own field: each member writes its own.
             agent: fields
-                .get("agent")
+                .get(&agent_field(&text("owner")?))
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
         })
     }
+}
+
+/// The field in which member `worker` says whether its agent works on an
+/// item: one per member, so members never overwrite each other's.
+pub fn agent_field(worker: &str) -> String {
+    format!("agent:{worker}")
 }
 
 /// What this member keeps of an item, by its record's id, in
@@ -415,7 +424,8 @@ impl DesignCopies {
                 self.publish(id, item, published, kept).await?;
                 let busy = self.busy.lock().unwrap().as_ref().is_some_and(|f| f(item));
                 if records.get(id).is_some_and(|r| r.agent != busy) {
-                    self.sessions.set_design(id, &[("agent", json!(busy))]);
+                    self.sessions
+                        .set_design(id, &[(agent_field(me).as_str(), json!(busy))]);
                 }
                 Ok(())
             }
@@ -738,7 +748,7 @@ mod tests {
     fn a_record_reads_its_fields_and_one_missing_its_owner_is_none() {
         let fields: BTreeMap<String, Value> = serde_json::from_value(serde_json::json!({
             "workspace": "w-1", "kind": "design", "slug": "checkout", "name": "Checkout",
-            "owner": MINI, "tree": "06441c7ba8234cb1db38b4de7e2351bbced1745d", "agent": true
+            "owner": MINI, "tree": "06441c7ba8234cb1db38b4de7e2351bbced1745d", "agent:studio-mini": true
         }))
         .unwrap();
         assert_eq!(
@@ -754,6 +764,25 @@ mod tests {
         let mut no_owner = fields.clone();
         no_owner.remove("owner");
         assert_eq!(Rec::parse(&no_owner), None);
+    }
+
+    // Each member says only whether its own agent works: a former owner's
+    // late "not working" never hides the new owner's agent.
+    #[test]
+    fn only_the_owners_own_agent_field_says_its_agent_works() {
+        let fields = |extra: serde_json::Value| -> BTreeMap<String, Value> {
+            let mut v = serde_json::json!({ "workspace": "w-1", "kind": "system", "slug": "acme-web", "owner": MINI });
+            v.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            serde_json::from_value(v).unwrap()
+        };
+        let agent = |extra| Rec::parse(&fields(extra)).unwrap().agent;
+        assert!(agent(
+            serde_json::json!({ "agent:studio-mini": true, "agent:7d3f1c2a": false })
+        ));
+        assert!(!agent(serde_json::json!({ "agent:7d3f1c2a": true })));
+        assert!(!agent(serde_json::json!({ "agent": true })));
     }
 
     #[test]

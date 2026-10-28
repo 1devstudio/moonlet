@@ -38,7 +38,7 @@ An **item** is one design system (`systems/<slug>/`) or one workspace design (`d
 
 ### Owners and copies (daemon)
 
-- [ ] Each item has an account record of kind `design` under an id of its own, since a deleted record never comes back (X68). Its fields are `workspace`, `kind` (`system` or `design`), `slug`, `name`, `owner` (the owner's worker id), `tree` (the latest published snapshot) and `agent` (whether the owner's agent is working). A removed item's record is deleted.
+- [ ] Each item has an account record of kind `design` under an id of its own, since a deleted record never comes back (X68). Its fields are `workspace`, `kind` (`system` or `design`), `slug`, `name`, `owner` (the owner's worker id), `tree` (the latest published snapshot) and one `agent:<worker id>` field per member that owned it, in which that member says whether its agent is working. Only the current owner's field counts, so a former owner's late "not working" never hides the new owner's agent. A removed item's record is deleted.
 - [ ] On first start with X71, each item on disk that has no record gets one, owned by this member. When another member already owns that key, this member's item is renamed to the next free slug (`<slug>-2`) before it is published, so neither is lost.
 - [ ] A member with no central host owns every item it holds, as today.
 - [ ] The owner publishes a new snapshot within 3 s of a change to the item's folder settling. A member owner first sends the objects the central host lacks (`design.offer`). Only once the central host holds the tree does it change `tree` in its record.
