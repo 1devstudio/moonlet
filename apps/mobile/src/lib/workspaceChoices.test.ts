@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { hostWorkspaces, inShown, shownWorkspace, workspaceChoices } from "./workspaceChoices";
-import { data, workspace } from "./fixtures";
+import { hostWorkspaces, inShown, isChosen, mergeAsk, mergeChoices, shownWorkspace, workspaceChoices } from "./workspaceChoices";
+import { data, session, terminal, workspace } from "./fixtures";
 
 /** X68's journey: the MacBook and studio-mini share studio-mini's account,
  * devbox has none. */
@@ -69,6 +69,16 @@ describe("shownWorkspace", () => {
   });
 });
 
+describe("isChosen", () => {
+  it("ticks the workspace shown, on whichever member of its account, or All workspaces", () => {
+    const shown = { host: "mini", id: "p1", account: "w-mini" };
+    expect(isChosen({ host: "mac", id: "p1", account: "w-mini" }, shown)).toBe(true);
+    expect(isChosen({ host: "mac/devbox", id: "p1", account: "mac/devbox" }, shown)).toBe(false);
+    expect(isChosen(null, shown)).toBe(false);
+    expect(isChosen(null, null)).toBe(true);
+  });
+});
+
 describe("inShown", () => {
   const shown = { host: "mac", id: "p1", account: "w-mini" };
 
@@ -80,5 +90,59 @@ describe("inShown", () => {
 
   it("takes everything while all workspaces show", () => {
     expect(inShown(null, "mac/devbox", undefined, "p1")).toBe(true);
+  });
+});
+
+describe("mergeChoices and mergeAsk (X68)", () => {
+  const choice = (list: ReturnType<typeof world>, host: string, id: string) => workspaceChoices(list).find((c) => c.row.host === host && c.ref.id === id)!;
+
+  it("offers the other workspaces of the same account only", () => {
+    const list = world();
+    expect(mergeChoices(workspaceChoices(list), choice(list, "mini", "p2")).map((c) => [c.ref.host, c.name])).toEqual([
+      ["mac", "Personal"],
+      ["mac", "Acme"],
+    ]);
+    expect(mergeChoices(workspaceChoices(list), choice(list, "mac/devbox", "p1"))).toEqual([]);
+  });
+
+  it("asks a member that lists both, in the desktop's words", () => {
+    const list = world();
+    const d = { mini: data({ workspaces: [{ ...workspace("p1", "Personal"), section_ids: ["a"] }, { ...workspace("p2", "Personal"), section_ids: ["b"] }] }) };
+    const ask = mergeAsk(choice(list, "mini", "p2"), choice(list, "mac", "p1"), d, []);
+    expect(ask.host).toBe("mini");
+    expect(ask.prompt).toEqual({
+      title: "Merge workspaces",
+      message: "Move the 1 section of this Personal, with its sessions, into the other Personal, and delete this one? Every Mac sharing them gets the change.",
+      action: "Merge",
+    });
+  });
+
+  it("leaves the profile out when the member could not list its profiles", () => {
+    const list = world();
+    const d = {
+      mini: data({
+        workspaces: [{ ...workspace("p1", "Personal"), claude_profile: "work" }, { ...workspace("p2", "Personal"), section_ids: ["b"] }],
+        sessions: [session("refund", "Idempotent refund webhooks", { workspace_id: "p2" })],
+        terminals: { 5: terminal(5, "refund") },
+      }),
+    };
+    expect(mergeAsk(choice(list, "mini", "p2"), choice(list, "mac", "p1"), d, null).prompt.message).toBe(
+      "Move the 1 section of this Personal, with its sessions, into the other Personal, and delete this one? Every Mac sharing them gets the change.",
+    );
+  });
+
+  it("says what a new Claude profile does to agents running in the merged workspace", () => {
+    const list = world();
+    const d = {
+      mini: data({
+        workspaces: [{ ...workspace("p1", "Personal"), claude_profile: "work" }, { ...workspace("p2", "Personal"), section_ids: ["b"] }],
+        sessions: [session("refund", "Idempotent refund webhooks", { workspace_id: "p2" })],
+        terminals: { 5: terminal(5, "refund") },
+      }),
+    };
+    const profiles = [{ id: "work", name: "Work", path: "/p/work", created_at: 0, account: null, hooks_installed: true }];
+    expect(mergeAsk(choice(list, "mini", "p2"), choice(list, "mac", "p1"), d, profiles).prompt.message).toBe(
+      "Move the 1 section of this Personal, with its sessions, into the other Personal, and delete this one? Every Mac sharing them gets the change. 1 session in this workspace has an agent. A running agent keeps its account until it restarts, then signs in with Work and starts a new conversation.",
+    );
   });
 });
