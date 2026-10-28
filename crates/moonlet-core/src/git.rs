@@ -1007,18 +1007,23 @@ pub async fn push(dir: &Path, branch: Option<&str>, merged_head: Option<&str>) -
 /// is not an error: only its stale `origin/<branch>` goes.
 pub async fn delete_remote_branch(repo: &Path, branch: &str) -> Result<()> {
     let pushed = git(repo, &["push", "--quiet", "--delete", "--", "origin", branch]).await;
-    let Err(failed) = pushed else {
-        return Ok(());
-    };
-    let head = format!("refs/heads/{branch}");
-    match git_text(repo, &["ls-remote", "--", "origin", &head]).await {
-        Ok(found) if found.is_empty() => {
+    match pushed {
+        Ok(_) => Ok(()),
+        Err(failed) if gone_on_origin(&format!("{failed:#}"), branch) => {
             let tracking = format!("refs/remotes/origin/{branch}");
             git(repo, &["update-ref", "-d", &tracking]).await?;
             Ok(())
         }
-        _ => Err(failed),
+        Err(failed) => Err(failed),
     }
+}
+
+/// Whether `git push --delete` of `branch` failed because origin no longer
+/// has it. git says so before sending anything, and in English: every git
+/// here runs under LC_ALL=C. An origin not reached fails otherwise, so it is
+/// told apart without asking origin a second time.
+fn gone_on_origin(failure: &str, branch: &str) -> bool {
+    failure.contains(&format!("unable to delete '{branch}': remote ref does not exist"))
 }
 
 /// Deletes the local `branch`. One already gone, as `gh pr merge
@@ -1595,6 +1600,25 @@ fn parse_stack(v: &serde_json::Value, current: u64) -> Option<PrStack> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn a_branch_origin_already_deleted_is_told_from_an_origin_not_reached() {
+        // `git push --delete` output under LC_ALL=C, captured 2026-10-28.
+        let gone = "git push --quiet --delete -- origin moonlet/merged-on-github: \
+            error: unable to delete 'moonlet/merged-on-github': remote ref does not exist\n\
+            error: failed to push some refs to '/tmp/o.git'";
+        assert!(gone_on_origin(gone, "moonlet/merged-on-github"));
+        assert!(!gone_on_origin(gone, "moonlet/merged"));
+        for unreached in [
+            "git push --quiet --delete -- origin x: ssh: connect to host 127.0.0.1 port 1: Connection refused\n\
+             fatal: Could not read from remote repository.",
+            "git push --quiet --delete -- origin x: fatal: unable to access 'https://127.0.0.1:1/acme/shop.git/': \
+             Failed to connect to 127.0.0.1 port 1 after 3 ms: Couldn't connect to server",
+            "git push --quiet --delete -- origin x: fatal: '/nonexistent/o.git' does not appear to be a git repository",
+        ] {
+            assert!(!gone_on_origin(unreached, "x"), "{unreached}");
+        }
+    }
 
     #[tokio::test]
     async fn a_long_input_and_a_long_answer_never_wait_on_each_other() {
