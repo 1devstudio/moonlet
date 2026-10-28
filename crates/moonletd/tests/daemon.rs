@@ -642,11 +642,8 @@ async fn starting_from_origin_fetches_and_does_not_track_the_base() {
     let d = TestDaemon::start().await;
     let root = d.home.path();
     let git = |dir: &std::path::Path, args: &[&str]| git_in(dir, args).unwrap();
-    let (origin, repo, other) = (root.join("origin.git"), root.join("repo"), root.join("other"));
-    git(root, &["init", "-q", "--bare", "-b", "main", origin.to_str().unwrap()]);
-    git(root, &["clone", "-q", origin.to_str().unwrap(), repo.to_str().unwrap()]);
-    git(&repo, &["commit", "-q", "--allow-empty", "-m", "init"]);
-    git(&repo, &["push", "-q", "origin", "main"]);
+    let (origin, repo) = repo_with_origin(root);
+    let other = root.join("other");
     let local = git(&repo, &["rev-parse", "HEAD"]);
     git(root, &["clone", "-q", origin.to_str().unwrap(), other.to_str().unwrap()]);
     git(&other, &["commit", "-q", "--allow-empty", "-m", "Merge pull request #7"]);
@@ -691,20 +688,11 @@ async fn starting_from_origin_without_one_starts_from_the_local_base() {
 
 #[tokio::test]
 async fn archiving_can_delete_the_branch_on_origin_too() {
-    use moonlet_proto::types::{Project, SessionArchived};
+    use moonlet_proto::types::SessionArchived;
     let d = TestDaemon::start().await;
-    let root = d.home.path();
     let git = |dir: &std::path::Path, args: &[&str]| git_in(dir, args).unwrap();
-    let (origin, repo) = (root.join("origin.git"), root.join("repo"));
-    git(root, &["init", "-q", "--bare", "-b", "main", origin.to_str().unwrap()]);
-    git(root, &["clone", "-q", origin.to_str().unwrap(), repo.to_str().unwrap()]);
-    git(&repo, &["commit", "-q", "--allow-empty", "-m", "init"]);
-    git(&repo, &["push", "-q", "origin", "main"]);
     let mut c = d.client().await;
-    let p: Project = c
-        .request(methods::PROJECT_ADD, serde_json::json!({"path": repo}))
-        .await
-        .unwrap();
+    let (origin, repo, p) = project_with_origin(&d, &mut c).await;
     let s = new_session(&mut c, &p.id, "Merged work").await;
     git(std::path::Path::new(&s.path), &["push", "-q", "-u", "origin", "HEAD"]);
     assert_eq!(git(&origin, &["branch", "--list", &s.branch]).trim_start_matches(['*', ' ']), s.branch);
@@ -766,20 +754,11 @@ async fn archiving_stops_when_git_cannot_read_the_branch() {
 
 #[tokio::test]
 async fn archiving_reports_no_origin_error_when_origin_already_deleted_the_branch() {
-    use moonlet_proto::types::{Project, SessionArchived};
+    use moonlet_proto::types::SessionArchived;
     let d = TestDaemon::start().await;
-    let root = d.home.path();
     let git = |dir: &std::path::Path, args: &[&str]| git_in(dir, args).unwrap();
-    let (origin, repo) = (root.join("origin.git"), root.join("repo"));
-    git(root, &["init", "-q", "--bare", "-b", "main", origin.to_str().unwrap()]);
-    git(root, &["clone", "-q", origin.to_str().unwrap(), repo.to_str().unwrap()]);
-    git(&repo, &["commit", "-q", "--allow-empty", "-m", "init"]);
-    git(&repo, &["push", "-q", "origin", "main"]);
     let mut c = d.client().await;
-    let p: Project = c
-        .request(methods::PROJECT_ADD, serde_json::json!({"path": repo}))
-        .await
-        .unwrap();
+    let (origin, repo, p) = project_with_origin(&d, &mut c).await;
     let s = new_session(&mut c, &p.id, "Merged on GitHub").await;
     git(std::path::Path::new(&s.path), &["push", "-q", "-u", "origin", "HEAD"]);
     // GitHub deleted the merged PR's branch.
@@ -829,20 +808,11 @@ async fn archiving_never_deletes_the_projects_base_branch() {
 
 #[tokio::test]
 async fn unpushed_work_is_read_and_pushed_over_rpc() {
-    use moonlet_proto::types::{Project, UnpushedWork};
+    use moonlet_proto::types::UnpushedWork;
     let d = TestDaemon::start().await;
-    let root = d.home.path();
     let git = |dir: &std::path::Path, args: &[&str]| git_in(dir, args).unwrap();
-    let (origin, repo) = (root.join("origin.git"), root.join("repo"));
-    git(root, &["init", "-q", "--bare", "-b", "main", origin.to_str().unwrap()]);
-    git(root, &["clone", "-q", origin.to_str().unwrap(), repo.to_str().unwrap()]);
-    git(&repo, &["commit", "-q", "--allow-empty", "-m", "init"]);
-    git(&repo, &["push", "-q", "origin", "main"]);
     let mut c = d.client().await;
-    let p: Project = c
-        .request(methods::PROJECT_ADD, serde_json::json!({"path": repo}))
-        .await
-        .unwrap();
+    let (_, _, p) = project_with_origin(&d, &mut c).await;
     let s = new_session(&mut c, &p.id, "Search").await;
     let dir = std::path::Path::new(&s.path);
     git(dir, &["commit", "-q", "--allow-empty", "-m", "ranking"]);
@@ -866,20 +836,11 @@ async fn unpushed_work_is_read_and_pushed_over_rpc() {
 
 #[tokio::test]
 async fn unpushed_work_is_read_from_the_session_branch_over_rpc() {
-    use moonlet_proto::types::{Project, UnpushedWork};
+    use moonlet_proto::types::UnpushedWork;
     let d = TestDaemon::start().await;
-    let root = d.home.path();
     let git = |dir: &std::path::Path, args: &[&str]| git_in(dir, args).unwrap();
-    let (origin, repo) = (root.join("origin.git"), root.join("repo"));
-    git(root, &["init", "-q", "--bare", "-b", "main", origin.to_str().unwrap()]);
-    git(root, &["clone", "-q", origin.to_str().unwrap(), repo.to_str().unwrap()]);
-    git(&repo, &["commit", "-q", "--allow-empty", "-m", "init"]);
-    git(&repo, &["push", "-q", "origin", "main"]);
     let mut c = d.client().await;
-    let p: Project = c
-        .request(methods::PROJECT_ADD, serde_json::json!({"path": repo}))
-        .await
-        .unwrap();
+    let (origin, _, p) = project_with_origin(&d, &mut c).await;
     let s = new_session(&mut c, &p.id, "Search").await;
     let dir = std::path::Path::new(&s.path);
     git(dir, &["commit", "-q", "--allow-empty", "-m", "ranking"]);
@@ -1337,6 +1298,31 @@ esac
     assert_eq!(run.await.unwrap(), result);
     let version: serde_json::Value = second.request(methods::CLAUDE_VERSION, ()).await.unwrap();
     assert_eq!(version["updating"], false);
+}
+
+/// A clone `repo` of the bare `origin.git`, both under `root`, with one
+/// commit on `main` pushed.
+fn repo_with_origin(root: &std::path::Path) -> (PathBuf, PathBuf) {
+    let git = |dir: &std::path::Path, args: &[&str]| git_in(dir, args).unwrap();
+    let (origin, repo) = (root.join("origin.git"), root.join("repo"));
+    git(root, &["init", "-q", "--bare", "-b", "main", origin.to_str().unwrap()]);
+    git(root, &["clone", "-q", origin.to_str().unwrap(), repo.to_str().unwrap()]);
+    git(&repo, &["commit", "-q", "--allow-empty", "-m", "init"]);
+    git(&repo, &["push", "-q", "origin", "main"]);
+    (origin, repo)
+}
+
+/// [`repo_with_origin`] in the daemon's home, added as a project.
+async fn project_with_origin(
+    d: &TestDaemon,
+    c: &mut Client,
+) -> (PathBuf, PathBuf, moonlet_proto::types::Project) {
+    let (origin, repo) = repo_with_origin(d.home.path());
+    let p = c
+        .request(methods::PROJECT_ADD, serde_json::json!({"path": repo}))
+        .await
+        .unwrap();
+    (origin, repo, p)
 }
 
 /// A git repository with one commit, added as a project.
