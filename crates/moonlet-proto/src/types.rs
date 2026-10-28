@@ -730,6 +730,9 @@ pub struct RepoInfo {
     pub pushed_at: Option<String>,
     /// gh's `diskUsage`, in KB.
     pub disk_kb: Option<u64>,
+    /// The address git reached a project's origin at (X70); none through gh.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
 }
 
 /// One of the user's repositories (X59).

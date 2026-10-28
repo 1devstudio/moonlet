@@ -7,7 +7,9 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
-use moonlet_proto::types::{CloneStep, CloneTarget, GhStatus, RepoInfo, RepoSummary};
+use moonlet_proto::types::{
+    CloneStep, CloneTarget, GhStatus, ProjectIdentity, RepoInfo, RepoSummary,
+};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
@@ -90,6 +92,7 @@ pub fn parse_repo_view(json: &[u8]) -> Result<RepoInfo> {
         default_branch: json_text(&v["defaultBranchRef"]["name"]),
         pushed_at: json_text(&v["pushedAt"]),
         disk_kb: v["diskUsage"].as_u64(),
+        url: None,
     })
 }
 
@@ -107,6 +110,7 @@ pub fn parse_ls_remote(repo: &str, out: &str) -> RepoInfo {
         default_branch,
         pushed_at: None,
         disk_kb: None,
+        url: None,
     }
 }
 
@@ -220,6 +224,34 @@ pub fn clone_dest(parent: &str, name: &str) -> Result<PathBuf> {
 
 /// What is at the folder a clone of `repo` would go to.
 pub async fn clone_target(repo: &str, parent: &str, name: &str) -> Result<CloneTarget> {
+    let (mut target, own_repo) = target_at(parent, name).await?;
+    if own_repo {
+        let origin = git::origin_url(Path::new(&target.path)).await;
+        target.same_repo = origin
+            .and_then(|u| origin_repo(&u))
+            .is_some_and(|r| r.eq_ignore_ascii_case(repo));
+    }
+    Ok(target)
+}
+
+/// What is at the folder a clone of the project `want` would go to (X70):
+/// `same_repo` when it is a copy of that project.
+pub async fn origin_clone_target(
+    want: &ProjectIdentity,
+    parent: &str,
+    name: &str,
+) -> Result<CloneTarget> {
+    let (mut target, own_repo) = target_at(parent, name).await?;
+    if own_repo {
+        let found = crate::identity::identity(Path::new(&target.path)).await;
+        target.same_repo = crate::identity::same_project(&found, want);
+    }
+    Ok(target)
+}
+
+/// The folder at `parent`/`name`, without `same_repo`, and whether it is a
+/// repository's own top folder.
+async fn target_at(parent: &str, name: &str) -> Result<(CloneTarget, bool)> {
     let path = clone_dest(parent, name)?;
     let exists = path.exists();
     // Only a repository's own top folder counts, not a folder inside one.
@@ -227,32 +259,28 @@ pub async fn clone_target(repo: &str, parent: &str, name: &str) -> Result<CloneT
         Ok(top) if exists => same_folder(&top, &path),
         _ => false,
     };
-    let (same_repo, branch) = if own_repo {
-        let origin = git::origin_url(&path).await;
-        let same = origin
-            .and_then(|u| origin_repo(&u))
-            .is_some_and(|r| r.eq_ignore_ascii_case(repo));
-        (
-            same,
-            git::git_text(&path, &["symbolic-ref", "--short", "HEAD"])
-                .await
-                .ok(),
-        )
+    let branch = if own_repo {
+        git::git_text(&path, &["symbolic-ref", "--short", "HEAD"])
+            .await
+            .ok()
     } else {
-        (false, None)
+        None
     };
     let name = name.trim();
     let free_name = std::iter::once(name.to_string())
         .chain((2..).map(|n| format!("{name}-{n}")))
         .find(|n| !path.with_file_name(n).exists())
         .unwrap_or_default();
-    Ok(CloneTarget {
-        path: path.display().to_string(),
-        exists,
-        same_repo,
-        branch,
-        free_name,
-    })
+    Ok((
+        CloneTarget {
+            path: path.display().to_string(),
+            exists,
+            same_repo: false,
+            branch,
+            free_name,
+        },
+        own_repo,
+    ))
 }
 
 fn same_folder(a: &Path, b: &Path) -> bool {
@@ -324,6 +352,234 @@ pub async fn lookup(repo: &str, ssh: Option<&str>) -> Result<RepoInfo> {
     let url = ssh.map_or_else(|| https_url(repo), String::from);
     let out = run_ok("git", &["ls-remote", "--symref", &url, "HEAD"]).await?;
     Ok(parse_ls_remote(repo, &String::from_utf8_lossy(&out)))
+}
+
+/// A project identity's normalized origin, `host[:port]/path` (X70), read
+/// once. It comes from another member's changes, so only this shape is
+/// accepted, and nothing else may reach git: a host of letters, digits,
+/// `.`, `-` and `_` (or a bracketed IPv6 address), a port of digits, and
+/// path segments of letters, digits, `.`, `_`, `~` and `-`, none empty,
+/// `.` or `..`, or starting with `-`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Origin<'a> {
+    pub host: &'a str,
+    pub port: Option<&'a str>,
+    pub path: &'a str,
+}
+
+impl<'a> Origin<'a> {
+    pub fn parse(origin: &'a str) -> Result<Self> {
+        Self::read(origin).with_context(|| format!("not a project origin: {origin}"))
+    }
+
+    fn read(origin: &'a str) -> Option<Self> {
+        let (hostport, path) = origin.split_once('/')?;
+        let (host, port) = match hostport.strip_prefix('[') {
+            // `[::1]` or `[::1]:2222`.
+            Some(v6) => {
+                let (inner, rest) = v6.split_once(']')?;
+                let inner_ok = !inner.is_empty()
+                    && inner.bytes().all(|b| b.is_ascii_hexdigit() || b":.".contains(&b));
+                if !inner_ok {
+                    return None;
+                }
+                let port = match rest {
+                    "" => None,
+                    r => Some(r.strip_prefix(':')?),
+                };
+                (&hostport[..inner.len() + 2], port)
+            }
+            None => {
+                let (host, port) = match hostport.split_once(':') {
+                    Some((h, p)) => (h, Some(p)),
+                    None => (hostport, None),
+                };
+                let host_ok = !host.is_empty()
+                    && !host.starts_with(['-', '.'])
+                    && host
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b".-_".contains(&b));
+                if !host_ok {
+                    return None;
+                }
+                (host, port)
+            }
+        };
+        let port_ok = port.is_none_or(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
+        let path_ok = path.split('/').all(|seg| {
+            !seg.is_empty()
+                && seg != "."
+                && seg != ".."
+                && !seg.starts_with('-')
+                && seg
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"._~-".contains(&b))
+        });
+        (port_ok && path_ok).then_some(Origin { host, port, path })
+    }
+
+    /// The folder name a clone starts with: the last path segment.
+    pub fn name(&self) -> &'a str {
+        self.path.rsplit('/').next().unwrap_or(self.path)
+    }
+
+    /// `owner/name` of an origin on github.com with just those two parts,
+    /// which gh can look up and clone.
+    pub fn github_repo(&self) -> Option<&'a str> {
+        (self.host == "github.com" && self.port.is_none())
+            .then(|| checked_repo(self.path).ok())
+            .flatten()
+    }
+
+    /// The addresses a clone is tried from, in order: SSH, then HTTPS; on
+    /// github.com HTTPS first, as X59 clones public repositories that way.
+    /// The scheme of the member's own remote is not in the log, so a port
+    /// may be either one's: HTTPS is also tried on its own port.
+    pub fn urls(&self) -> Vec<String> {
+        let Origin { host, port, path } = *self;
+        let hostport = port.map_or_else(|| host.to_string(), |p| format!("{host}:{p}"));
+        let ssh = if port.is_some() || host.starts_with('[') {
+            format!("ssh://git@{hostport}/{path}.git")
+        } else {
+            format!("git@{host}:{path}.git")
+        };
+        let https = format!("https://{hostport}/{path}.git");
+        let mut urls = if self.github_repo().is_some() {
+            vec![https, ssh]
+        } else {
+            vec![ssh, https]
+        };
+        if port.is_some() {
+            urls.push(format!("https://{host}/{path}.git"));
+        }
+        urls
+    }
+}
+
+/// `root` when it is a commit id as git prints it: 40 or 64 lowercase hex
+/// digits, so the clone's own root compares equal.
+pub fn checked_root(root: &str) -> Result<&str> {
+    if matches!(root.len(), 40 | 64) && root.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
+        Ok(root)
+    } else {
+        bail!("not a root commit: {root}")
+    }
+}
+
+/// Why git could not reach an address: the line before git's first
+/// `fatal:`, where ssh says what went wrong, else that `fatal:` line.
+pub fn reach_reason(stderr: &str) -> String {
+    let lines: Vec<&str> = stderr
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    let fatal = lines.iter().position(|l| l.starts_with("fatal: "));
+    let said = fatal
+        .and_then(|i| {
+            lines[..i]
+                .iter()
+                .rev()
+                .find(|l| !l.starts_with("Warning: ") && !l.starts_with("Load key "))
+        })
+        .copied();
+    said.map(String::from)
+        .or_else(|| fatal.map(|i| lines[i]["fatal: ".len()..].to_string()))
+        .unwrap_or_else(|| failure_reason(stderr))
+}
+
+/// Where a clone of `origin` may come from: `url`, one of its own
+/// addresses, or gh for github.com when `url` is none, so the app cannot
+/// pick another.
+pub fn checked_source(origin: &str, url: Option<&str>) -> Result<()> {
+    let o = Origin::parse(origin)?;
+    match url {
+        None if o.github_repo().is_some() => Ok(()),
+        None => bail!("{origin} is not on GitHub: pick one of its addresses"),
+        Some(url) if o.urls().iter().any(|u| u == url) => Ok(()),
+        Some(url) => bail!("{url} is not an address of {origin}"),
+    }
+}
+
+/// What `program` runs a clone of `origin` from `url` into `dest` with,
+/// once [`checked_source`] allows it.
+pub fn origin_clone_command(
+    origin: &str,
+    url: Option<&str>,
+    dest: &str,
+) -> Result<(&'static str, Vec<String>)> {
+    checked_source(origin, url)?;
+    Ok(match (url, Origin::parse(origin)?.github_repo()) {
+        (Some(url), _) => (
+            "git",
+            vec!["clone".into(), "--progress".into(), url.into(), dest.into()],
+        ),
+        (None, repo) => clone_command(repo.unwrap_or_default(), None, true, dest),
+    })
+}
+
+/// Batch mode for ssh, so an unknown host or a missing key fails at once
+/// instead of waiting on a prompt nobody sees, and a host that never
+/// answers gives up after 10 s; unless the user has an ssh command of their
+/// own (in the environment or any git config), which git would otherwise
+/// lose.
+async fn batch_ssh() -> Vec<(&'static str, &'static str)> {
+    let own_env = ["GIT_SSH_COMMAND", "GIT_SSH"]
+        .iter()
+        .any(|v| std::env::var_os(v).is_some());
+    let own_config = run_raw(
+        "git",
+        Path::new("/"),
+        &["config", "--get", "core.sshCommand"],
+        None,
+        Duration::from_secs(10),
+    )
+    .await
+    .is_ok_and(|o| o.status == 0);
+    if own_env || own_config {
+        Vec::new()
+    } else {
+        vec![("GIT_SSH_COMMAND", "ssh -o BatchMode=yes -o ConnectTimeout=10")]
+    }
+}
+
+/// `origin`'s default branch and the address that reached it: through gh
+/// for a github.com repository when gh is signed in, else the first of
+/// its addresses git can read. When none answers, the error has one line
+/// per address tried, with why it failed, a timeout included.
+pub async fn lookup_origin(origin: &str) -> Result<RepoInfo> {
+    let o = Origin::parse(origin)?;
+    if let Some(repo) = o.github_repo()
+        && gh_status().await.login.is_some()
+        && let Ok(out) = run_ok("gh", &["repo", "view", repo, "--json", VIEW_FIELDS]).await
+    {
+        let mut info = parse_repo_view(&out)?;
+        info.repo = origin.into();
+        return Ok(info);
+    }
+    let env = batch_ssh().await;
+    let mut failed = Vec::new();
+    for url in o.urls() {
+        let out = crate::git::run_raw_env(
+            "git",
+            Path::new("/"),
+            &["ls-remote", "--symref", &url, "HEAD"],
+            &env,
+            None,
+            Duration::from_secs(60),
+        )
+        .await;
+        match out {
+            Ok(out) if out.status == 0 => {
+                let mut info = parse_ls_remote(origin, &String::from_utf8_lossy(&out.stdout));
+                info.url = Some(url);
+                return Ok(info);
+            }
+            Ok(out) => failed.push(format!("{url}: {}", reach_reason(&out.stderr))),
+            Err(e) => failed.push(format!("{url}: {e:#}")),
+        }
+    }
+    bail!("{}", failed.join("\n"))
 }
 
 /// The `owner/name` each folder's `origin` points at, for those on GitHub.
@@ -399,9 +655,32 @@ pub async fn clone(
     ssh: Option<&str>,
     gh_signed_in: bool,
     dest: &Path,
-    mut on_progress: impl FnMut(Progress),
+    on_progress: impl FnMut(Progress),
 ) -> Result<()> {
     checked_ref(repo, ssh)?;
+    let (program, args) = clone_command(repo, ssh, gh_signed_in, &dest.display().to_string());
+    run_clone(program, args, &[], dest, on_progress).await
+}
+
+/// Clones a project's `origin` from `url`, one of its addresses, or with
+/// gh when `url` is none (X70). As [`clone`] otherwise.
+pub async fn clone_origin(
+    origin: &str,
+    url: Option<&str>,
+    dest: &Path,
+    on_progress: impl FnMut(Progress),
+) -> Result<()> {
+    let (program, args) = origin_clone_command(origin, url, &dest.display().to_string())?;
+    run_clone(program, args, &batch_ssh().await, dest, on_progress).await
+}
+
+async fn run_clone(
+    program: &str,
+    args: Vec<String>,
+    env: &[(&str, &str)],
+    dest: &Path,
+    mut on_progress: impl FnMut(Progress),
+) -> Result<()> {
     if !dest.is_absolute() {
         bail!("{} is not a full path", dest.display());
     }
@@ -409,9 +688,8 @@ pub async fn clone(
         std::fs::create_dir_all(parent)
             .with_context(|| format!("cannot create {}", parent.display()))?;
     }
-    let (program, args) = clone_command(repo, ssh, gh_signed_in, &dest.display().to_string());
     let mut cmd = Command::new(program);
-    cmd.args(args);
+    cmd.args(args).envs(env.iter().copied());
     for var in [
         "GIT_DIR",
         "GIT_WORK_TREE",
@@ -546,6 +824,7 @@ mod tests {
                 default_branch: Some("main".into()),
                 pushed_at: Some("2026-10-21T10:08:17Z".into()),
                 disk_kb: Some(4911),
+                url: None,
             }
         );
         // An empty repository: no branch, no description.
@@ -558,6 +837,7 @@ mod tests {
                 default_branch: None,
                 pushed_at: Some("2026-10-18T12:12:49Z".into()),
                 disk_kb: Some(0),
+                url: None,
             }
         );
     }
@@ -572,7 +852,8 @@ mod tests {
                 description: None,
                 default_branch: Some("main".into()),
                 pushed_at: None,
-                disk_kb: None
+                disk_kb: None,
+                url: None,
             }
         );
         assert_eq!(parse_ls_remote("acme/empty", "").default_branch, None);
@@ -857,5 +1138,202 @@ mod tests {
                 )
             );
         }
+    }
+
+    #[tokio::test]
+    async fn a_folder_is_the_same_project_by_its_identity() {
+        let tmp = tempfile::tempdir().unwrap();
+        let parent = tmp.path().to_str().unwrap();
+        sh(
+            tmp.path(),
+            "git init -q -b main ledger && git -C ledger -c user.name=t -c user.email=t@t commit -q --allow-empty -m ledger && git -C ledger remote add origin git@gitlab.com:acme/ledger.git",
+        );
+        let root = git::git_text(&tmp.path().join("ledger"), &["rev-list", "--max-parents=0", "HEAD"])
+            .await
+            .unwrap();
+        let want = |origin: &str, root: &str| ProjectIdentity {
+            origin: Some(origin.into()),
+            root: Some(root.into()),
+        };
+        let same = origin_clone_target(&want("gitlab.com/acme/ledger", &root), parent, "ledger")
+            .await
+            .unwrap();
+        assert_eq!(
+            same,
+            CloneTarget {
+                path: format!("{parent}/ledger"),
+                exists: true,
+                same_repo: true,
+                branch: Some("main".into()),
+                free_name: "ledger-2".into()
+            }
+        );
+        let other_root = "4171b03ff0d2bd434751f17bc9d34da784f97e72";
+        let other = origin_clone_target(&want("gitlab.com/acme/ledger", other_root), parent, "ledger")
+            .await
+            .unwrap();
+        assert!(other.exists && !other.same_repo, "{other:?}");
+    }
+
+    #[test]
+    fn accepts_only_an_origin_as_a_project_identity_holds_it() {
+        let parts = |o: &str| {
+            let o = Origin::parse(o).unwrap();
+            (o.host.to_string(), o.port.map(String::from), o.path.to_string())
+        };
+        let owned = |h: &str, p: Option<&str>, path: &str| (h.to_string(), p.map(String::from), path.to_string());
+        assert_eq!(parts("github.com/acme/shop"), owned("github.com", None, "acme/shop"));
+        assert_eq!(parts("gitlab.com/group/sub/shop"), owned("gitlab.com", None, "group/sub/shop"));
+        assert_eq!(parts("git.example.com:2222/acme/shop"), owned("git.example.com", Some("2222"), "acme/shop"));
+        assert_eq!(parts("codeberg.org/acme/shop.js"), owned("codeberg.org", None, "acme/shop.js"));
+        // An ssh host alias, and an IPv6 address, as normalize_origin keeps them.
+        assert_eq!(parts("gh_work/acme/shop"), owned("gh_work", None, "acme/shop"));
+        assert_eq!(parts("[fe80::1]:2222/acme/shop"), owned("[fe80::1]", Some("2222"), "acme/shop"));
+        for bad in [
+            "-oProxyCommand=x/a",
+            "github.com/../etc",
+            "github.com/acme/-shop",
+            "github.com//shop",
+            "example.com/a b",
+            "github.com",
+            "github.com/",
+            "github.com:22x/acme/shop",
+            "github.com/acme/./shop",
+            "user@github.com/acme/shop",
+            "[fe80::1/acme/shop",
+            "[x]/acme/shop",
+            "[::1]x/acme/shop",
+            "",
+        ] {
+            assert_eq!(
+                Origin::parse(bad).unwrap_err().to_string(),
+                format!("not a project origin: {bad}"),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_only_a_commit_id_as_a_root() {
+        let sha1 = "41f5b5f0a1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6";
+        let sha256 = "a".repeat(64);
+        assert_eq!(checked_root(sha1).unwrap(), sha1);
+        assert_eq!(checked_root(&sha256).unwrap(), sha256);
+        // git prints lowercase; an uppercase root would never match a clone.
+        let upper = sha1.to_uppercase();
+        for bad in ["41f5b5f", "--all", &"g".repeat(40), upper.as_str(), ""] {
+            assert_eq!(
+                checked_root(bad).unwrap_err().to_string(),
+                format!("not a root commit: {bad}"),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn tries_ssh_then_https_and_https_first_on_github() {
+        let urls = |o: &str| Origin::parse(o).unwrap().urls();
+        assert_eq!(
+            urls("gitlab.com/acme/ledger"),
+            [
+                "git@gitlab.com:acme/ledger.git",
+                "https://gitlab.com/acme/ledger.git"
+            ]
+        );
+        // The port may be SSH's or HTTPS's: HTTPS is tried without it too.
+        assert_eq!(
+            urls("git.example.com:2222/acme/shop"),
+            [
+                "ssh://git@git.example.com:2222/acme/shop.git",
+                "https://git.example.com:2222/acme/shop.git",
+                "https://git.example.com/acme/shop.git"
+            ]
+        );
+        assert_eq!(
+            urls("github.com/acme/shop"),
+            [
+                "https://github.com/acme/shop.git",
+                "git@github.com:acme/shop.git"
+            ]
+        );
+        assert_eq!(
+            urls("[fe80::1]/acme/shop"),
+            [
+                "ssh://git@[fe80::1]/acme/shop.git",
+                "https://[fe80::1]/acme/shop.git"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_github_origin_of_owner_and_name_can_go_through_gh() {
+        let gh = |o: &str| Origin::parse(o).unwrap().github_repo().map(String::from);
+        assert_eq!(gh("github.com/acme/shop").as_deref(), Some("acme/shop"));
+        assert_eq!(gh("github.com/acme/shop/wiki"), None);
+        assert_eq!(gh("github.com:8443/acme/shop"), None);
+        assert_eq!(gh("gitlab.com/acme/shop"), None);
+        assert_eq!(Origin::parse("gitlab.com/group/sub/ledger").unwrap().name(), "ledger");
+    }
+
+    #[test]
+    fn says_why_an_address_could_not_be_reached() {
+        assert_eq!(
+            reach_reason(&fixture("git-ls-remote-ssh-denied.txt")),
+            "git@gitlab.com: Permission denied (publickey)."
+        );
+        assert_eq!(
+            reach_reason(&fixture("git-ls-remote-ssh-unresolved.txt")),
+            "ssh: Could not resolve hostname git.example.com: nodename nor servname provided, or not known"
+        );
+        assert_eq!(
+            reach_reason(&fixture("git-ls-remote-https-no-credentials.txt")),
+            "could not read Username for 'https://gitlab.com': terminal prompts disabled"
+        );
+    }
+
+    #[test]
+    fn clones_an_origin_only_from_one_of_its_addresses() {
+        let dest = "/Users/sam/moonlet/ledger";
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            origin_clone_command(
+                "gitlab.com/acme/ledger",
+                Some("git@gitlab.com:acme/ledger.git"),
+                dest
+            )
+            .unwrap(),
+            (
+                "git",
+                args(&[
+                    "clone",
+                    "--progress",
+                    "git@gitlab.com:acme/ledger.git",
+                    dest
+                ])
+            )
+        );
+        assert_eq!(
+            origin_clone_command("github.com/acme/shop", None, dest).unwrap(),
+            (
+                "gh",
+                args(&["repo", "clone", "acme/shop", dest, "--", "--progress"])
+            )
+        );
+        assert_eq!(
+            origin_clone_command(
+                "gitlab.com/acme/ledger",
+                Some("ext::sh -c touch% /tmp/x"),
+                dest
+            )
+            .unwrap_err()
+            .to_string(),
+            "ext::sh -c touch% /tmp/x is not an address of gitlab.com/acme/ledger"
+        );
+        assert_eq!(
+            origin_clone_command("gitlab.com/acme/ledger", None, dest)
+                .unwrap_err()
+                .to_string(),
+            "gitlab.com/acme/ledger is not on GitHub: pick one of its addresses"
+        );
     }
 }
