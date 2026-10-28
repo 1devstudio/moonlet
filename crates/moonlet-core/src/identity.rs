@@ -49,6 +49,32 @@ pub fn same_project(a: &ProjectIdentity, b: &ProjectIdentity) -> bool {
     a.root.is_some() && a.root == b.root && a.origin == b.origin
 }
 
+/// Why a folder whose identity is `found` is not a copy of the project
+/// `want` (X70), said after the folder's path; `None` when it is one.
+pub fn not_a_copy(found: &ProjectIdentity, want: &ProjectIdentity) -> Option<String> {
+    if same_project(found, want) {
+        return None;
+    }
+    let same_root = found.root == want.root;
+    Some(match (&found.root, &found.origin, &want.origin) {
+        (None, _, _) => NO_HISTORY.into(),
+        (_, Some(has), Some(wants)) if same_root => {
+            format!("has the same history but its origin is {has}, not {wants}.")
+        }
+        (_, None, Some(wants)) if same_root => {
+            format!("has the same history but no origin; the project's is {wants}.")
+        }
+        (_, Some(has), None) if same_root => {
+            format!("has the same history but its origin is {has}; the project has none.")
+        }
+        _ => "holds another repository.".into(),
+    })
+}
+
+/// Why a folder without a known root matches no project.
+const NO_HISTORY: &str =
+    "has no history to match: it is not a git repository, or a shallow clone, or has no commits.";
+
 /// `host[:port]/path` of a remote URL: no scheme, user, credentials, query
 /// or fragment, the host lowercased, a port only when not the scheme's
 /// default, no trailing `.git` or `/`. A local path (or `file://`) has none.
@@ -205,6 +231,34 @@ mod tests {
         assert!(!same_project(&id(shop, root), &id(None, root)));
         assert!(same_project(&id(None, root), &id(None, root)));
         assert!(!same_project(&id(shop, None), &id(shop, None)));
+    }
+
+    #[test]
+    fn says_why_a_folder_is_not_a_copy_of_the_project() {
+        let shop = Some("github.com/acme/shop");
+        let root = Some("4171b03ff0d2bd434751f17bc9d34da784f97e72");
+        let other = Some("d58b70923e9f8c1a2b3c4d5e6f708192a3b4c5d6");
+        assert_eq!(not_a_copy(&id(shop, root), &id(shop, root)), None);
+        assert_eq!(
+            not_a_copy(&id(None, None), &id(shop, root)).as_deref(),
+            Some("has no history to match: it is not a git repository, or a shallow clone, or has no commits.")
+        );
+        assert_eq!(
+            not_a_copy(&id(shop, other), &id(shop, root)).as_deref(),
+            Some("holds another repository.")
+        );
+        assert_eq!(
+            not_a_copy(&id(Some("github.com/sam/shop"), root), &id(shop, root)).as_deref(),
+            Some("has the same history but its origin is github.com/sam/shop, not github.com/acme/shop.")
+        );
+        assert_eq!(
+            not_a_copy(&id(None, root), &id(shop, root)).as_deref(),
+            Some("has the same history but no origin; the project's is github.com/acme/shop.")
+        );
+        assert_eq!(
+            not_a_copy(&id(shop, root), &id(None, root)).as_deref(),
+            Some("has the same history but its origin is github.com/acme/shop; the project has none.")
+        );
     }
 
     async fn git(dir: &Path, args: &[&str]) {
