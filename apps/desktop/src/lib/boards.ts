@@ -261,8 +261,7 @@ export const GITHUB_REPO_COLUMNS: BoardColumn[] = [
  * for it, since a shared workspace's boards are kept under the host that
  * showed it when they were added (X68). */
 export function taskWorkspace(host: string, id: string, hosts: HostWorkspaces[], boards: BoardConfig[] | undefined): WorkspaceRef {
-  const own = hosts.find((h) => h.host === host);
-  const ref = { host, id, account: own ? accountOf(own) : host };
+  const ref = { host, id, account: accountOf(hosts.find((h) => h.host === host) ?? { host }) };
   const member = workspaceMembers(ref, hosts).find((m) => (boards ?? []).some((b) => b.workspace === wsKey(m, id)));
   return member ? { ...ref, host: member } : ref;
 }

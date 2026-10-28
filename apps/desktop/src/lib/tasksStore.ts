@@ -803,6 +803,18 @@ function shownMoved(tasks: Task[]): Task[] {
   });
 }
 
+/**
+ * The GitHub repository of project `projectId` on host `h`, from the tasks of
+ * workspace data kept under `host`: on another member, that of `host`'s
+ * project of the same identity (X68).
+ */
+export function originRepoOf(s: Pick<StoreState, "projects">, host: string, data: Pick<TasksData, "repos">, h: string, projectId: string): string | null {
+  if (h === host) return data.repos[projectId] ?? null;
+  const identity = s.projects[h]?.find((p) => p.id === projectId)?.identity;
+  const own = identity?.root ? s.projects[host]?.find((p) => p.identity?.root === identity.root && p.identity?.origin === identity.origin) : undefined;
+  return own ? (data.repos[own.id] ?? null) : null;
+}
+
 /** What the board needs of a workspace's sessions (X45). */
 /**
  * What a workspace's board is built from. `members` are the hosts of the
@@ -811,12 +823,7 @@ function shownMoved(tasks: Task[]): Task[] {
  * board's own project of the same identity.
  */
 export function boardInput(s: StoreState, host: string, workspaceId: string, data: TasksData, config: TrackersConfig = DEFAULT_CONFIG, members: string[] = [host]): BoardInput {
-  const repoOf = (h: string, projectId: string) => {
-    if (h === host) return data.repos[projectId] ?? null;
-    const identity = s.projects[h]?.find((p) => p.id === projectId)?.identity;
-    const own = identity?.root ? s.projects[host]?.find((p) => p.identity?.root === identity.root && p.identity?.origin === identity.origin) : undefined;
-    return own ? (data.repos[own.id] ?? null) : null;
-  };
+  const repoOf = (h: string, projectId: string) => originRepoOf(s, host, data, h, projectId);
   const sessions: BoardSession[] = members.flatMap((h) =>
     (s.sessions[h] ?? [])
       .filter((x) => x.workspace_id === workspaceId)

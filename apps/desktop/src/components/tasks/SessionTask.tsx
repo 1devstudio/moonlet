@@ -11,42 +11,46 @@ import { hostWorkspaces, selectSession, useStore } from "../../lib/store";
 import { acceptanceCriteria, findPasted, linkChoices, pasteLookup } from "../../lib/taskLinking";
 import { type Task, trackerName } from "../../lib/tasks";
 import type { Card } from "../../lib/tasksBoard";
-import { ensureTasks, linkTask, lookUpPasted, placedTasks, setKeepInStep, trackersConfig, useTasks } from "../../lib/tasksStore";
+import { ensureTasks, linkTask, lookUpPasted, originRepoOf, placedTasks, setKeepInStep, trackersConfig, useTasks } from "../../lib/tasksStore";
 import { type WorkspaceRef, wsKey } from "../../lib/workspaces";
 import { Markdown } from "../AgentView";
 import { Button, cx, Dialog, IconButton, inputCls, StateGlyph } from "../ui";
 import { StateMenu, startSession, TaskGlyph, useWorkspaceBoard } from "./TasksMode";
 import { TaskComments } from "./TaskComments";
 
-const COLUMN_LABEL: Record<Card["column"], string> = { todo: "Todo", in_progress: "In Progress", in_review: "In Review", done: "Done" };
-
 /** The workspace whose boards hold a session's task: on another member of its account when the boards are there (X68). */
 function useTaskWorkspace(host: string, workspaceId: string | null | undefined): WorkspaceRef | null {
   const boards = useTasks((t) => trackersConfig(t).boards);
-  const [member, account] = useStore(
-    useShallow((s) => {
-      if (!workspaceId) return [null, null];
-      const ref = taskWorkspace(host, workspaceId, hostWorkspaces(s), boards);
-      return [ref.host, ref.account ?? null];
-    }),
-  );
-  return useMemo(() => (member && workspaceId ? { host: member, id: workspaceId, ...(account && { account }) } : null), [member, account, workspaceId]);
+  // What the members of the workspace's account read of the store; other changes (terminal output) don't recompute it.
+  const deps = useStore(useShallow((s) => [s.hosts, s.accounts, s.workspaces]));
+  return useMemo(() => (workspaceId ? taskWorkspace(host, workspaceId, hostWorkspaces(useStore.getState()), boards) : null), [host, workspaceId, boards, ...deps]);
+}
+
+/** The task a session works on, and the workspace whose boards it is on: its
+ * state menu, comments and worktrees act there (X68). */
+export interface SessionTask {
+  card: Card;
+  board: WorkspaceRef;
 }
 
 /** The card of the task a session works on, loading its workspace's tasks when needed. */
-export function useSessionTask(host: string, ws: Session): Card | null {
+export function useSessionTask(host: string, ws: Session): SessionTask | null {
   const ref = useTaskWorkspace(host, ws.workspace_id);
   useEffect(() => {
     if (ref && (ws.task || !ws.task_unlinked)) ensureTasks(ref.host, ref.id);
   }, [ref, ws.task, ws.task_unlinked]);
   const { board } = useWorkspaceBoard(ref);
-  return useMemo(() => (board ? (Object.values(board).flat().find((c) => c.rows.some((r) => r.session.id === ws.id)) ?? null) : null), [board, ws.id]);
+  return useMemo(() => {
+    const card = board ? Object.values(board).flat().find((c) => c.rows.some((r) => r.session.id === ws.id)) : undefined;
+    return card && ref ? { card, board: ref } : null;
+  }, [board, ref, ws.id]);
 }
 
 /** Above the conversation: the task, its state and its other sessions. */
 export function TaskBar({ host, ws }: { host: string; ws: Session }) {
-  const card = useSessionTask(host, ws);
-  if (!card) return null;
+  const linked = useSessionTask(host, ws);
+  if (!linked) return null;
+  const { card, board } = linked;
   const at = card.rows.findIndex((r) => r.session.id === ws.id);
   const go = (d: number) => selectSession(card.rows[(at + d + card.rows.length) % card.rows.length].session.host ?? host, card.rows[(at + d + card.rows.length) % card.rows.length].session.id);
   return (
@@ -54,7 +58,7 @@ export function TaskBar({ host, ws }: { host: string; ws: Session }) {
       <TaskGlyph column={card.column} size={14} />
       <span className="shrink-0 whitespace-nowrap font-mono ui-text-12 text-muted">{card.task.key}</span>
       <span className="min-w-0 truncate font-medium text-fg">{card.task.title}</span>
-      {ws.workspace_id ? <StateMenu host={host} workspaceId={ws.workspace_id} task={card.task} chip /> : <span className="shrink-0 whitespace-nowrap text-faint">{COLUMN_LABEL[card.column]}</span>}
+      <StateMenu host={board.host} workspaceId={board.id} task={card.task} chip />
       <span className="flex-1" />
       {card.rows.length > 1 && (
         <div role="group" aria-label="Sessions on this task" className="flex shrink-0 items-center gap-0.5 whitespace-nowrap ui-text-12 text-muted">
@@ -78,8 +82,9 @@ export function TaskBar({ host, ws }: { host: string; ws: Session }) {
 
 /** The right panel's Task tab (X46). */
 export function TaskTab({ host, ws }: { host: string; ws: Session }) {
-  const card = useSessionTask(host, ws);
-  if (!card) return <p className="p-4 ui-text-12.5 text-muted">Not linked to a task.</p>;
+  const linked = useSessionTask(host, ws);
+  if (!linked) return <p className="p-4 ui-text-12.5 text-muted">Not linked to a task.</p>;
+  const { card, board } = linked;
   const criteria = acceptanceCriteria(card.task.description);
   const done = criteria.filter((c) => c.done).length;
   return (
@@ -88,11 +93,9 @@ export function TaskTab({ host, ws }: { host: string; ws: Session }) {
         <div className="flex items-center gap-2 font-mono ui-text-12 text-muted">
           <TaskGlyph column={card.column} size={13} />
           {card.task.key}
-          {ws.workspace_id && (
-            <span className="ml-auto font-sans">
-              <StateMenu host={host} workspaceId={ws.workspace_id} task={card.task} />
-            </span>
-          )}
+          <span className="ml-auto font-sans">
+            <StateMenu host={board.host} workspaceId={board.id} task={card.task} />
+          </span>
         </div>
         <h2 className="mt-1 ui-text-15 font-medium text-fg">{card.task.title}</h2>
         <div className="mt-1 ui-text-12 text-faint">
@@ -140,7 +143,7 @@ export function TaskTab({ host, ws }: { host: string; ws: Session }) {
           <div key={w.path} className="mt-1.5 flex items-center gap-2 ui-text-12.5 text-muted">
             <GitBranch size={13} />
             <span className="min-w-0 flex-1 truncate font-mono">{w.branch}</span>
-            <button className="hover:text-fg" onClick={() => ws.workspace_id && startSession(host, ws.workspace_id, card, w)}>
+            <button className="hover:text-fg" onClick={() => startSession(board.host, board.id, card, w)}>
               Start session
             </button>
           </div>
@@ -155,7 +158,7 @@ export function TaskTab({ host, ws }: { host: string; ws: Session }) {
           Unlink
         </Button>
       </div>
-      <TaskComments host={host} workspaceId={ws.workspace_id ?? null} task={card.task} />
+      <TaskComments host={board.host} workspaceId={board.id} task={card.task} />
     </div>
   );
 }
@@ -171,7 +174,8 @@ export function LinkTaskDialog({ host, sessionId }: { host: string; sessionId: s
   const close = () => useStore.setState({ dialog: null });
   const config = useTasks((t) => t.config);
   const tasks = useMemo(() => placedTasks(data ?? { tasks: [] }), [data, config]); // eslint-disable-line react-hooks/exhaustive-deps
-  const originRepo = ws ? (data?.repos[ws.project_id] ?? null) : null;
+  // The repository of the session's project, which on another member has another id (X68).
+  const originRepo = useStore((s) => (ws && data && boardRef ? originRepoOf(s, boardRef.host, data, host, ws.project_id) : null));
   const { board } = useWorkspaceBoard(boardRef);
   const sessionsOf = useMemo(() => {
     const n = new Map(Object.values(board ?? {}).flat().map((c) => [`${c.task.connection} ${c.task.key}`, c.rows.length]));
