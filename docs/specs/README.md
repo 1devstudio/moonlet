@@ -106,4 +106,4 @@ Each feature of moonlet has its own spec in this directory. Write the spec befor
 | X66 | Task comments (read and post a tracker issue's comments in the Task detail and Task tab) | P1 | 3 | implemented (Linear and ClickUp untried on a real account) | [X66-task-comments.md](X66-task-comments.md) |
 | X67 | Google Cloud workers: a Compute Engine adapter for cloud machines | P1 | 4 | implemented (untried with a real Google Cloud project; provisional API captures) | [X67-google-cloud-workers.md](X67-google-cloud-workers.md) |
 | X68 | One account: the same workspaces and sections on every host (ADR 0014, slice 1) | P1 | 4 | draft | [X68-account-state.md](X68-account-state.md) |
-| X69 | Update a tailnet host from the app (the host fetches this Mac's release, checks its signature and upgrades live) | P1 | 4 | draft | [X69-update-hosts-from-the-app.md](X69-update-hosts-from-the-app.md) |
+| X69 | Update a tailnet host from the app (the host fetches this Mac's release, checks its signature and upgrades live) | P1 | 4 | implemented (untried between real machines and on a real release) | [X69-update-hosts-from-the-app.md](X69-update-hosts-from-the-app.md) |
