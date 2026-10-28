@@ -28,7 +28,7 @@ pub struct Snapshot {
 const GIT_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Runs git in `cwd` with `env`, failing on a non-zero exit.
-async fn git_env(
+pub(crate) async fn git_env(
     cwd: &Path,
     env: &[(&str, &str)],
     args: &[&str],
