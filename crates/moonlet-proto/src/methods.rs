@@ -12,6 +12,8 @@ pub const DAEMON_INFO: &str = "daemon.info";
 pub const DAEMON_SHUTDOWN: &str = "daemon.shutdown";
 /// Hands every PTY to a freshly started daemon binary, then exits (S3).
 pub const DAEMON_UPGRADE: &str = "daemon.upgrade";
+/// Installs a newer moonlet release on this host, then upgrades into it (X69).
+pub const DAEMON_UPDATE: &str = "daemon.update";
 
 // Sessions
 pub const TERMINAL_CREATE: &str = "terminal.create";
@@ -500,6 +502,12 @@ pub const EV_REPO_CLONE_PROGRESS: &str = "repo.clone_progress";
 /// How a clone ended: a `CloneDone` (X59).
 pub const EV_REPO_CLONE_DONE: &str = "repo.clone_done";
 pub const EV_FS_CHANGED: &str = "fs.changed";
+
+/// `daemon.update` (X69): the release to install.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DaemonUpdate {
+    pub version: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TerminalCreate {

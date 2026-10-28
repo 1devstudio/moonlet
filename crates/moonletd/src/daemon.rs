@@ -599,6 +599,27 @@ impl Daemon {
         }
     }
 
+    /// `daemon.update` (X69) from `client` (unknown before `hello`) on paired
+    /// `device`'s connection, or on the local socket without one. Only the
+    /// Mac's own app and a paired Mac may ask: never a phone, an agent's CLI
+    /// or a worker's link. The caller starts the handoff once its reply is on
+    /// its way.
+    pub async fn update_from(
+        self: &Arc<Self>,
+        client: Option<&str>,
+        device: Option<&str>,
+        p: Value,
+    ) -> Result<(moonlet_proto::types::DaemonUpdated, crate::update::Handoff), RpcError> {
+        if client.is_some_and(|c| c == CLI_CLIENT || c == crate::link::WORKER_CLIENT) {
+            return Err(RpcError::new("forbidden", "update moonlet from the app"));
+        }
+        if device.is_some_and(|d| self.mobile.kind_of(d) != Some(moonlet_proto::methods::DeviceKind::Desktop)) {
+            return Err(RpcError::new("forbidden", "update moonlet from a Mac"));
+        }
+        let r: m::DaemonUpdate = params(p)?;
+        crate::update::update(self, &r.version).await
+    }
+
     pub async fn handle(self: &Arc<Self>, conn: &Arc<Conn>, method: &str, p: Value) -> HandlerResult {
         // A cloud machine reaches only what a worker needs (X63).
         if let Some(device) = conn.phone.as_deref()
@@ -611,6 +632,11 @@ impl Daemon {
         match method {
             m::DAEMON_INFO => ok(self.info()),
             m::DAEMON_SHUTDOWN => {
+                // Stopping mid-handoff would drop the sessions on their way
+                // to the new daemon (X69, S3).
+                if self.upgrading.load(Ordering::SeqCst) {
+                    return Err(RpcError::new("busy", "an update is handing this daemon's sessions over"));
+                }
                 let me = self.clone();
                 tokio::spawn(async move {
                     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -635,6 +661,12 @@ impl Daemon {
                     }
                 });
                 ok(true)
+            }
+            m::DAEMON_UPDATE => {
+                let (reply, handoff) = self.update_from(Some(&conn.client), conn.phone.as_deref(), p).await?;
+                // The connection's writer sends the reply after this returns.
+                handoff.start_after(crate::update::REPLY_GRACE);
+                ok(reply)
             }
             m::TERMINAL_CREATE => {
                 let req: m::TerminalCreate = params(p)?;

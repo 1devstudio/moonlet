@@ -809,6 +809,11 @@ async fn a_phone_reaches_an_ssh_host_through_the_mac() {
         panic!("heavy.approve worked through a route")
     };
     assert_eq!(e.message, "approve heavy commands from the Mac");
+    // Nor update the host (X69): the host would take the phone for the app.
+    let Message::Response { error: Some(e), .. } = call(&mut phone, 12, "daemon.update").await else {
+        panic!("daemon.update worked through a route")
+    };
+    assert_eq!(e.message, "update moonlet from a Mac");
 
     // Only the desktop's hosts can be reached.
     let (_, r) = auth(
