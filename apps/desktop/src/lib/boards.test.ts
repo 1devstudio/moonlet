@@ -258,6 +258,13 @@ describe("taskWorkspace (X46 a session's task, X68 members)", () => {
     expect(taskWorkspace("studio-mini", "personal", hosts, [])).toEqual({ host: "studio-mini", id: "personal", account: "acct-mini" });
   });
 
+  it("takes the member whose boards are on the task's tracker when its own host has boards of another one", () => {
+    const linear: BoardConfig = { ...b("studio-mini/personal"), id: "linear", connection: "linear:acme" };
+    expect(taskWorkspace("studio-mini", "personal", hosts, [linear, b("local/personal")], "jira:acme.atlassian.net")).toEqual({ host: "local", id: "personal", account: "acct-mini" });
+    // No member has a board on that tracker: the first with boards, as before.
+    expect(taskWorkspace("studio-mini", "personal", hosts, [linear, b("local/personal")], "clickup:9012")).toEqual({ host: "studio-mini", id: "personal", account: "acct-mini" });
+  });
+
   it("never takes the boards of a host outside the session's account", () => {
     expect(taskWorkspace("studio-mini", "personal", hosts, [b("devbox/personal")])).toEqual({ host: "studio-mini", id: "personal", account: "acct-mini" });
   });

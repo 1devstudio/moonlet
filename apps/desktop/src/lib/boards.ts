@@ -257,12 +257,15 @@ export const GITHUB_REPO_COLUMNS: BoardColumn[] = [
 ];
 
 /** The workspace whose boards hold the task of a session on `host` (X46):
- * its own host's, else the first other member of its account with boards
- * for it, since a shared workspace's boards are kept under the host that
- * showed it when they were added (X68). */
-export function taskWorkspace(host: string, id: string, hosts: HostWorkspaces[], boards: BoardConfig[] | undefined): WorkspaceRef {
+ * its own host's, else another member's of its account, since a shared
+ * workspace's boards are kept under the host that showed it when they were
+ * added (X68). The first member with a board on the task's tracker
+ * (`connection`) is taken, else the first with any board. */
+export function taskWorkspace(host: string, id: string, hosts: HostWorkspaces[], boards: BoardConfig[] | undefined, connection?: string): WorkspaceRef {
   const ref = { host, id, account: accountOf(hosts.find((h) => h.host === host) ?? { host }) };
-  const member = workspaceMembers(ref, hosts).find((m) => (boards ?? []).some((b) => b.workspace === wsKey(m, id)));
+  const members = workspaceMembers(ref, hosts);
+  const has = (m: string, b: BoardConfig) => b.workspace === wsKey(m, id) && (!connection || b.connection === connection);
+  const member = members.find((m) => (boards ?? []).some((b) => has(m, b))) ?? members.find((m) => (boards ?? []).some((b) => b.workspace === wsKey(m, id)));
   return member ? { ...ref, host: member } : ref;
 }
 

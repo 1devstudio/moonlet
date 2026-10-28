@@ -19,11 +19,11 @@ import { StateMenu, startSession, TaskGlyph, useWorkspaceBoard } from "./TasksMo
 import { TaskComments } from "./TaskComments";
 
 /** The workspace whose boards hold a session's task: on another member of its account when the boards are there (X68). */
-function useTaskWorkspace(host: string, workspaceId: string | null | undefined): WorkspaceRef | null {
+function useTaskWorkspace(host: string, workspaceId: string | null | undefined, connection?: string): WorkspaceRef | null {
   const boards = useTasks((t) => trackersConfig(t).boards);
   // What the members of the workspace's account read of the store; other changes (terminal output) don't recompute it.
   const deps = useStore(useShallow((s) => [s.hosts, s.accounts, s.workspaces]));
-  return useMemo(() => (workspaceId ? taskWorkspace(host, workspaceId, hostWorkspaces(useStore.getState()), boards) : null), [host, workspaceId, boards, ...deps]);
+  return useMemo(() => (workspaceId ? taskWorkspace(host, workspaceId, hostWorkspaces(useStore.getState()), boards, connection) : null), [host, workspaceId, boards, connection, ...deps]);
 }
 
 /** The task a session works on, and the workspace whose boards it is on: its
@@ -35,7 +35,7 @@ export interface SessionTask {
 
 /** The card of the task a session works on, loading its workspace's tasks when needed. */
 export function useSessionTask(host: string, ws: Session): SessionTask | null {
-  const ref = useTaskWorkspace(host, ws.workspace_id);
+  const ref = useTaskWorkspace(host, ws.workspace_id, ws.task?.connection);
   useEffect(() => {
     if (ref && (ws.task || !ws.task_unlinked)) ensureTasks(ref.host, ref.id);
   }, [ref, ws.task, ws.task_unlinked]);

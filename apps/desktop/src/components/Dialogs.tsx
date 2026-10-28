@@ -134,7 +134,7 @@ export function CreatePrDialog() {
     // The GitHub issue the session works on gets `Closes #N` (X46 Keep in step).
     const config = trackersConfig(useTasks.getState());
     // On the boards of whichever member holds them (X68).
-    const board = ws.workspace_id ? taskWorkspace(host, ws.workspace_id, hostWorkspaces(useStore.getState()), config.boards) : null;
+    const board = ws.workspace_id ? taskWorkspace(host, ws.workspace_id, hostWorkspaces(useStore.getState()), config.boards, ws.task?.connection) : null;
     const tasks = board ? (useTasks.getState().data[wsKey(board.host, board.id)]?.tasks ?? []) : [];
     const issue = rpc<string | null>(host, M.gitOriginUrl, { path: ws.path })
       .then((url) => closesIssue(ws, githubRepo(url), tasks, config.link, (t) => rulesFor(config, t).pr_comment))
