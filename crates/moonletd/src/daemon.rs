@@ -2278,8 +2278,10 @@ impl Daemon {
             d.move_merged_designs().await;
             loop {
                 match events.recv().await {
+                    // A lagged watch may have missed the change: look again.
                     Ok(Message::Event { name, .. }) if name == m::EV_WORKSPACES_CHANGED => {}
-                    Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Ok(_) => continue,
                     Err(_) => return,
                 }
                 d.move_merged_designs().await;
@@ -2289,6 +2291,7 @@ impl Daemon {
 
     async fn move_merged_designs(&self) {
         for (from, into) in self.sessions.merged_workspaces() {
+            self.stop_agents_in(&from).await;
             let store = self.design.clone();
             let (f, i) = (from.clone(), into.clone());
             match blocking(move || store.move_workspace(&f, &i)).await {
@@ -2297,6 +2300,34 @@ impl Daemon {
                 }
                 Ok(_) => {}
                 Err(e) => tracing::warn!(%from, %into, "cannot move a merged workspace's designs: {}", e.message),
+            }
+        }
+    }
+
+    /// Stops the agents of workspace `from`'s design systems and designs,
+    /// whose folders a merge is about to move: their records forget them,
+    /// and a new one starts in the new place.
+    async fn stop_agents_in(&self, from: &str) {
+        let store = self.design.clone();
+        let ws = from.to_string();
+        let (systems, designs) = blocking(move || {
+            let systems: Vec<String> = store.systems(&ws).unwrap_or_default().into_iter().map(|s| s.slug).collect();
+            let designs: Vec<String> = store.designs(&ws).unwrap_or_default().into_iter().map(|d| d.slug).collect();
+            Ok((systems, designs))
+        })
+        .await
+        .unwrap_or_default();
+        // Each only while it is still that item's agent, as its terminal
+        // says: a record's id may name a terminal since given to another.
+        for slug in systems {
+            self.stop_sync_agent(from, &slug);
+        }
+        for slug in designs {
+            let store = self.design.clone();
+            let (ws, s) = (from.to_string(), slug.clone());
+            let Ok(at) = blocking(move || store.workspace_design(&ws, &s)).await else { continue };
+            if let Ok(Some(agent)) = self.design_agent(&at).await {
+                let _ = self.terminals.kill(agent.id, true);
             }
         }
     }
