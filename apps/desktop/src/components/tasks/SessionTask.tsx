@@ -167,7 +167,7 @@ export function TaskTab({ host, ws }: { host: string; ws: Session }) {
 export function LinkTaskDialog({ host, sessionId }: { host: string; sessionId: string }) {
   const ws = useStore((s) => s.sessions[host]?.find((x) => x.id === sessionId));
   // The tasks of the boards the session's task is on, whichever member holds them (X68).
-  const boardRef = useTaskWorkspace(host, ws?.workspace_id);
+  const boardRef = useTaskWorkspace(host, ws?.workspace_id, ws?.task?.connection);
   const data = useTasks((t) => (boardRef ? t.data[wsKey(boardRef.host, boardRef.id)] : undefined));
   const [query, setQuery] = useState("");
   const [pasted, setPasted] = useState<Task | null>(null);
