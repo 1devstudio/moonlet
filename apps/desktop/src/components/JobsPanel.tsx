@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUpRight, Check, ChevronLeft, Circle, Cloud, Copy, Cpu, Laptop, LoaderCircle, RotateCw, Server } from "lucide-react";
 import { copyJobOutput, openJobTab, stopJob } from "../lib/actions";
 import { rpc } from "../lib/daemon";
-import { type JobIcon, type JobTone, type OutputLine, chipFromJob, jobRowLine, jobStateLine, jobsSummary, dur, outputLines, phaseList, workerLine } from "../lib/jobs";
+import { type JobIcon, type JobTone, type OutputLine, chipFromJob, going, jobRowLine, jobStateLine, jobsSummary, dur, outputLines, phaseList, workerLine } from "../lib/jobs";
 import { loadOutput, useJobs } from "../lib/jobsStore";
 import { startupCard, waitingNote, type StartupCard } from "../lib/cloudMachines";
 import { useCloud } from "../lib/cloudStore";
@@ -30,7 +30,7 @@ export function WorkerIcon({ icon, size = 12, className }: { icon: JobIcon; size
   return <Icon size={size} aria-hidden="true" className={cx("shrink-0", className)} />;
 }
 
-export const going = (j: Job) => j.state.kind === "waiting" || j.state.kind === "running" || j.state.kind === "bringing_back";
+export { going };
 
 /** Accent while it waits or runs, green for exit 0, red for any other end. */
 export function JobDot({ job }: { job: Job }) {

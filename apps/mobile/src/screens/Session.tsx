@@ -21,13 +21,12 @@ import { ChatTab } from "./Chat";
 import { TerminalTab } from "./Terminal";
 import { ChangesTab } from "./Changes";
 import { PrTab } from "./Pr";
+import { JobsTab } from "./Jobs";
+import { jobsTabCount } from "@desktop/lib/jobs";
+import { useSessionJobs } from "@desktop/lib/jobsStore";
+import { sessionTabs, shownTab } from "../lib/jobsView";
 
-const TABS: { id: SessionTab; label: string }[] = [
-  { id: "chat", label: "Chat" },
-  { id: "terminal", label: "Terminal" },
-  { id: "changes", label: "Changes" },
-  { id: "pr", label: "PR" },
-];
+const TAB_LABEL: Record<SessionTab, string> = { chat: "Chat", terminal: "Terminal", changes: "Changes", pr: "PR", jobs: "Jobs" };
 
 /** Archiving, as the host's Git settings say (X55): what happens to the
  * folder and branch, and work that is only on the host. */
@@ -134,6 +133,7 @@ export function SessionScreen({ host, id, tab }: { host: string; id: string; tab
   const [git] = useGitStatus(host, session);
   const [pr] = usePr(host, session);
   const dot = pr ? checksDot(pr.checks) : null;
+  const jobs = useSessionJobs(host, id);
   const [menu, setMenu] = useState(false);
   const [archiving, setArchiving] = useState(false);
   if (!d || !session) {
@@ -153,7 +153,10 @@ export function SessionScreen({ host, id, tab }: { host: string; id: string; tab
     terminal: shellTerminals(d, id).length || null,
     changes: git?.files.length || null,
     pr: dot ? <span className="h-[7px] w-[7px] rounded-full" style={{ background: CHECK_COLOR[dot] }} /> : null,
+    jobs: jobsTabCount(jobs) || null,
   };
+  const tabs = sessionTabs(jobs);
+  const shown = shownTab(tab, tabs);
   const go = (t: SessionTab) => showScreen({ kind: "session", host, id, tab: t });
 
   return (
@@ -181,20 +184,26 @@ export function SessionScreen({ host, id, tab }: { host: string; id: string; tab
           <MoreHorizontal size={20} />
         </button>
       </header>
-      <nav className="grid flex-none grid-cols-4 border-b border-border px-2">
-        {TABS.map((t) => (
-          <button key={t.id} type="button" onClick={() => go(t.id)} className={cx("relative flex h-10 items-center justify-center gap-1.5 text-[14px]", tab === t.id ? "font-semibold text-fg" : "text-muted")}>
+      <nav className={cx("grid flex-none border-b border-border px-2", tabs.length > 4 ? "grid-cols-5" : "grid-cols-4")}>
+        {tabs.map((id) => ({ id, label: TAB_LABEL[id] })).map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            onClick={() => go(t.id)}
+            className={cx("relative flex h-10 items-center justify-center gap-1", tabs.length > 4 ? "text-[13px]" : "gap-1.5 text-[14px]", shown === t.id ? "font-semibold text-fg" : "text-muted")}
+          >
             {t.label}
             {badge[t.id] && (t.id === "pr" ? badge[t.id] : <span className="rounded-full bg-raised px-1.5 text-[11px] text-muted">{badge[t.id]}</span>)}
-            {tab === t.id && <span className="absolute right-3 bottom-0 left-3 h-[2px] rounded-full bg-accent" />}
+            {shown === t.id && <span className="absolute right-3 bottom-0 left-3 h-[2px] rounded-full bg-accent" />}
           </button>
         ))}
       </nav>
       <div className="min-h-0 flex-1">
-        {tab === "chat" && <ChatTab host={host} session={session} />}
-        {tab === "terminal" && <TerminalTab host={host} session={session} />}
-        {tab === "changes" && <ChangesTab host={host} session={session} />}
-        {tab === "pr" && <PrTab host={host} session={session} />}
+        {shown === "chat" && <ChatTab host={host} session={session} />}
+        {shown === "terminal" && <TerminalTab host={host} session={session} />}
+        {shown === "changes" && <ChangesTab host={host} session={session} />}
+        {shown === "pr" && <PrTab host={host} session={session} />}
+        {shown === "jobs" && <JobsTab host={host} session={session} jobs={jobs} />}
       </div>
       {menu && (
         <Sheet label="Session actions" onClose={() => setMenu(false)}>

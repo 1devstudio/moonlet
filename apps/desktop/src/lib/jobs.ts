@@ -17,6 +17,9 @@ const ran = (j: Job, now: number) => (j.ended_at ?? now) - j.started_at;
 const reran = (j: Job) => j.timeline.some((e) => e.text.endsWith(" went away"));
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
+/** Whether a job waits, runs or brings its changes back. */
+export const going = (j: Job) => j.state.kind === "waiting" || j.state.kind === "running" || j.state.kind === "bringing_back";
+
 export const jobsTabCount = (jobs: Job[]): number => jobs.length;
 
 /** "1 waiting · 3 done · 3m 53s on workers"; null with no jobs. */
