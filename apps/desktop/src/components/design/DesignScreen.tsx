@@ -40,6 +40,7 @@ import {
   designCanvasKey,
 } from "../../lib/designStore";
 import { isSession, type DesignPlace } from "../../lib/designPlace";
+import { CopyBar } from "./CopyBar";
 import { askWithEdits, updateAndTell, toldFolder, type ToldDesign, restoreSnapshot, closeDesign, hasCopy, kitOf, loadKit, sendCommentsWithEdits, copyElementOf, dismissUnsaved, editPage, loadPageSource, loadParseError, parseErrorOf, pasteInto, pendingOf, readErrorOf, redoEdit, sendWithEdits, sourceOf, undoEdit, undoOf, unsavedOf, useEditor } from "../../lib/designEditor";
 import { EditRefused, editsChip, inlineStyles, type Edit, type EditOp } from "../../lib/designEdits";
 import { offSystemMids } from "../../lib/designTokens";
@@ -135,15 +136,17 @@ export function DesignScreen({ host, workspace, design, inset }: { host: string;
                 </Button>
               </span>
             )}
-            <Menu
-              align="right"
-              trigger={(open) => (
-                <IconButton title="More" className="no-drag" onClick={open}>
-                  <MoreHorizontal size={14} />
-                </IconButton>
-              )}
-              items={[{ label: "Remove design…", icon: <Trash2 size={14} />, danger: true, onSelect: () => void remove() }]}
-            />
+            {!design.owner && (
+              <Menu
+                align="right"
+                trigger={(open) => (
+                  <IconButton title="More" className="no-drag" onClick={open}>
+                    <MoreHorizontal size={14} />
+                  </IconButton>
+                )}
+                items={[{ label: "Remove design…", icon: <Trash2 size={14} />, danger: true, onSelect: () => void remove() }]}
+              />
+            )}
             <IconButton title="Hide chat (⌘\)" className="no-drag" onClick={() => setChatOpen(false)}>
               <PanelLeftClose size={14} />
             </IconButton>
@@ -306,13 +309,16 @@ export function DesignCanvas({
   const previewed = (preview && snapshots?.find((s) => s.n === preview.n)) || null;
   // A snapshot previewed is read only (canvasStep, editorStep, undoOpen,
   // layerPick), and the Inspector and the Palette edit nothing then.
-  const readOnly = previewed !== null;
+  // So is another member's design (X71): its agent runs there.
+  const readOnly = previewed !== null || !!design.owner;
   const editLocked = working || readOnly;
 
   const names = previewed ? previewed.pages : design.pages.map((p) => p.name);
   // A page that went away shows the first one; before any, index (being written).
   const page = canvasPage(picked, names);
-  const viewport = viewportOf(design);
+  // On another member's design a viewport picked shows here only (X71).
+  const [localViewport, setLocalViewport] = useState<string | null>(null);
+  const viewport = viewportOf(localViewport ? { ...design, viewport: localViewport } : design);
   const scale = canvasScale(zoom, viewport, fitBox([cw, ch]));
   const writing = writingPage(lastWritten, working);
   // Whether the page framed with the bridge loaded (lib/designLoad.ts), and
@@ -338,7 +344,7 @@ export function DesignCanvas({
   useEffect(() => {
     if (unreadable) toast(unreadable, "error");
   }, [unreadable]);
-  const bar = designBar({ working, needsYou: design.needs_you, page, problems, system: systemName, systemRemoved: !!systems && !system, unsaved, preview: previewed ? previewBar(previewed, Date.now()) : null, session, systemUpdated: !!design.system_updated, notLoaded });
+  const bar = designBar({ copy: !!design.owner, working, needsYou: design.needs_you, page, problems, system: systemName, systemRemoved: !!systems && !system, unsaved, preview: previewed ? previewBar(previewed, Date.now()) : null, session, systemUpdated: !!design.system_updated, notLoaded });
   const chip = editsChip(pending);
   // The design system's tokens and snippets, read again when it changes: a
   // session design's own copy of it, as Update writes it.
@@ -536,6 +542,8 @@ export function DesignCanvas({
 
   const setViewport = (size: Size) => {
     setZoom(null);
+    // Another member's design keeps its own: the pick shows here only.
+    if (design.owner) return setLocalViewport(viewportText(size));
     void saveViewport(host, place, design.slug, viewportText(size)).catch(errorToast);
   };
   const sendPins = (pins: DesignComment[]) => {
@@ -713,6 +721,8 @@ export function DesignCanvas({
             <PanelRight size={14} />
           </IconButton>
         </div>
+        {/* Over the canvas, whether the chat is open or not (X71). */}
+        <CopyBar host={host} workspace={workspace} kind="design" item={design} />
         {bar && <BarView bar={bar} onAct={onBarAction} />}
         <div className="flex h-9 shrink-0 items-center gap-2 px-4 ui-text-12">
           {page === null ? (
@@ -830,7 +840,7 @@ export function DesignCanvas({
               }}
             />
           ) : railTab === "history" ? (
-            <HistoryTab snapshots={snapshots} previewed={previewed?.n ?? null} locked={working} onPick={pickSnapshot} onBack={() => setPreview(null)} onRestore={restore} />
+            <HistoryTab snapshots={snapshots} previewed={previewed?.n ?? null} locked={working || !!design.owner} onPick={pickSnapshot} onBack={() => setPreview(null)} onRestore={restore} />
           ) : railTab === "palette" ? (
             kitError && !kit ? (
               <p className="px-4 py-6 text-center ui-text-12.5 text-faint">The design system's snippets could not be read: {kitError}</p>
@@ -1065,6 +1075,7 @@ function PageFrame({
           scale={scale}
           size={[viewport[0] * scale, viewport[1] * scale]}
           canSend={canSend}
+          canKeep={!design.owner}
           onKeep={onKeep}
           onSend={onSend}
           onClose={onCloseBox}

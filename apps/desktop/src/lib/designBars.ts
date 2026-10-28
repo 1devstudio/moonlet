@@ -15,6 +15,9 @@ export interface PageProblem {
 }
 
 export interface BarState {
+  /** Another member's design, read only here (X71): nothing its agent
+   *  would do is offered. */
+  copy?: boolean;
   /** The design's agent is at work. */
   working: boolean;
   /** What its agent waits for from the user. */
@@ -100,6 +103,12 @@ export const RESTORE_WAITS = "Restore opens when Claude stops.";
  *  then shows it and not the current pages they are about; while the agent
  *  works its bar has Stop in place of Restore. */
 export function designBar(s: BarState): Bar | null {
+  const b = bar(s);
+  // A copy's agent runs on its owner: no restore, fix or update here.
+  return b && s.copy ? { ...b, actions: b.actions.filter((a) => a === "back" || a === "details") } : b;
+}
+
+function bar(s: BarState): Bar | null {
   if (s.working && !s.preview) return { tone: "orange", text: `Claude is ${s.session ? "working in this session" : "changing the design"}. Edit mode opens when it stops; comments still work`, detail: null, actions: ["stop"] };
   if (s.needsYou) return { tone: "orange", text: s.needsYou.kind === "question" ? "Claude asks…" : "Claude needs your approval", detail: s.needsYou.text, actions: [] };
   if (s.preview) {

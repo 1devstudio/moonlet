@@ -4,11 +4,13 @@
 // its pages' reloads, the page its agent is writing and its check problems.
 
 import { create } from "zustand";
-import { onDaemonEvent, onHostStatus, rpc } from "./daemon";
+import { DaemonError, onDaemonEvent, onHostStatus, rpc } from "./daemon";
 import { EV, M, type ChatState, type Design, type DesignCard, type CommentChange, type DesignComment, type DesignChanged, type DesignSnapshot, type DesignCover, type DesignCreated, type DesignOpen, type DesignSystem, type DesignSystemCreated, type DesignSystemUpdated } from "./protocol";
-import { parseWsKey, wsKey } from "./workspaces";
+import { isShown, parseWsKey, wsKey } from "./workspaces";
 import { syncNotice } from "./designSync";
-import { agentSeen, errorMessage, notify, registerAgentsElsewhere, selectSession, shownWorkspace, switchWorkspace, toast, useStore } from "./store";
+import { moveConfirm, type Owned } from "./designCopies";
+import { askConfirm } from "./confirm";
+import { agentSeen, designHostOf, errorMessage, notify, registerAgentsElsewhere, selectSession, shownWorkspace, switchWorkspace, toast, useStore } from "./store";
 import { alertFor } from "./alerts";
 import { modeOf, setMode } from "./mode";
 import { latestPerKey } from "./prPoll";
@@ -513,10 +515,13 @@ export function showDesign(host: string, workspace: string, slug: string) {
 export async function openDesign(host: string, workspace: string, slug: string) {
   const s = useStore.getState();
   const ws = shownWorkspace(s);
-  if (ws?.host !== host || ws.id !== workspace) switchWorkspace({ host, id: workspace });
+  if (!isShown(ws, host, workspace, s.accounts[host]?.account)) switchWorkspace({ host, id: workspace, account: s.accounts[host]?.account });
   setMode("design");
-  await loadDesigns(host, workspace, true).catch(() => {});
-  showDesign(host, workspace, slug);
+  // Shown where Design mode reads the workspace's designs: this Mac's copy
+  // of another member's (X71).
+  const at = designHostOf(useStore.getState()) ?? host;
+  await loadDesigns(at, workspace, true).catch(() => {});
+  showDesign(at, workspace, slug);
 }
 
 /** A listing per workspace (`wsKey`), as the design systems' and the
@@ -801,6 +806,24 @@ const systemListing = listing(async (host, workspace, key) => {
     if (notice && bannerFor(notice.state, host, workspace, sys.slug)) void notify(notice.title, notice.body);
   }
 });
+
+/** **Move here** (X71): after the user confirms, this host becomes the
+ *  owner of a design system or workspace design it holds a copy of. */
+export async function moveHere(host: string, workspace: string, kind: "system" | "design", item: { slug: string; name: string } & Owned) {
+  const ask = moveConfirm(item.name, item, kind);
+  const ok = await askConfirm({ title: ask.title, message: ask.body, action: ask.confirm });
+  if (!ok) return;
+  try {
+    await rpc(host, M.designMove, { workspace, kind, slug: item.slug, force: ask.force });
+  } catch (e) {
+    // The owner's agent started meanwhile: asked again, with Move anyway.
+    if (!(e instanceof DaemonError) || e.code !== "busy" || ask.force) throw e;
+    const again = moveConfirm(item.name, { ...item, owner_agent: true }, kind);
+    if (!(await askConfirm({ title: again.title, message: again.body, action: again.confirm }))) return;
+    await rpc(host, M.designMove, { workspace, kind, slug: item.slug, force: true });
+  }
+  await (kind === "system" ? loadSystems(host, workspace, true) : loadDesigns(host, workspace, true));
+}
 
 /** Lists a workspace's design systems. `fresh`: something just changed, so a
  * listing already on its way is followed by one more. */

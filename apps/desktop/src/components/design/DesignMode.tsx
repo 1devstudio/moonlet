@@ -5,7 +5,8 @@
 import { Command, Lock, MessageSquare, Plus, SwatchBook } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { errorToast, shownWorkspace, toast, useStore } from "../../lib/store";
+import { designHostOf, designMembersOf, errorToast, shownWorkspace, toast, useStore } from "../../lib/store";
+import { copyLabel, ownerWorking, sessionDesignsAcross } from "../../lib/designCopies";
 import { type DesignCover } from "../../lib/protocol";
 import { designAgentState, designRow, designsEmpty, picksInWorkspace, systemFolder, systemLabel } from "../../lib/design";
 import { designCanvasKey, createSystem, designsOf, openNewDesign, openSessionDesign, sessionDesignsIn, detectStack, indexShownIn, loadDesigns, showIndex, loadSystems, shownDesign, shownSystem, showDesign, showSystem, systemsOf, useDesign } from "../../lib/designStore";
@@ -23,19 +24,28 @@ import { DesignsIndex } from "./DesignsIndex";
  * `load` lists them when the workspace is shown (the sidebar does, so a
  * failure shows once). */
 function useWorkspaceDesign(load = false) {
-  const ws = useStore((s) => shownWorkspace(s));
+  const shownWs = useStore((s) => shownWorkspace(s));
+  // This Mac's copies of a shared workspace's designs, whichever member
+  // shows it (X71): the canvas frames this Mac's folders.
+  const host = useStore((s) => designHostOf(s));
+  const ws = useMemo(() => (shownWs && host ? { ...shownWs, host } : null), [shownWs, host]);
+  // Session designs live on the host each session runs on: every member's.
+  const members = useStore(useShallow((s) => designMembersOf(s)));
   const systems = useDesign((d) => (ws ? systemsOf(d, ws.host, ws.id) : undefined));
   const shown = useDesign((d) => (ws ? shownSystem(d, ws.host, ws.id) : null));
   const designs = useDesign((d) => (ws ? designsOf(d, ws.host, ws.id) : undefined));
-  const inSessions = useDesign((d) => (ws ? sessionDesignsIn(d, ws.host, ws.id) : undefined));
+  const sessionLists = useDesign(useShallow((d) => (ws ? members.map((h) => sessionDesignsIn(d, h, ws.id)) : [])));
+  const inSessions = useMemo(() => sessionDesignsAcross(members, (h) => sessionLists[members.indexOf(h)]), [members, sessionLists]);
   const design = useDesign((d) => (ws ? shownDesign(d, ws.host, ws.id) : null));
   const indexed = useDesign((d) => !!ws && indexShownIn(d, ws.host, ws.id));
   useEffect(() => {
     if (ws && load) {
       void loadSystems(ws.host, ws.id).catch(errorToast);
       void loadDesigns(ws.host, ws.id).catch(errorToast);
+      // Another member's own listing, for its sessions' designs.
+      for (const m of members) if (m !== ws.host) void loadDesigns(m, ws.id).catch(() => {});
     }
-  }, [ws, load]);
+  }, [ws, load, members]);
   return { ws, systems, shown, designs, inSessions, design, indexed };
 }
 
@@ -70,11 +80,13 @@ function Heading({ label, add, open }: { label: string; add?: { title: string; r
 /** The sidebar body in Design mode. */
 export function DesignSidebar() {
   const { ws, systems, shown, designs: own, inSessions, design, indexed } = useWorkspaceDesign(true);
-  // The workspace designs, then the session designs, which open in their sessions (X65).
-  const designs = useMemo(() => own && [...own, ...(inSessions ?? [])], [own, inSessions]);
+  // The workspace designs, then the session designs, which open in their
+  // sessions on the host each runs on (X65, X71).
+  const entries = useMemo(() => own && ws && [...own.map((d) => ({ host: ws.host, design: d })), ...(inSessions ?? [])], [own, inSessions, ws]);
+  const designs = useMemo(() => entries?.map((e) => e.design), [entries]);
   const working = useStore(useShallow((s) => (ws ? (systems ?? []).map((sys) => agentWorking(s, ws.host, sys.agent)) : [])));
   // Each design's agent's live state, for its dot.
-  const states = useStore(useShallow((s) => (ws ? (designs ?? []).map((d) => designAgentState(d, d.agent === null ? undefined : s.terminals[ws.host]?.[d.agent]?.agent_state)) : [])));
+  const states = useStore(useShallow((s) => (ws ? (entries ?? []).map(({ host, design: d }) => designAgentState(d, d.agent === null ? undefined : s.terminals[host]?.[d.agent]?.agent_state)) : [])));
   const now = useNow(true);
   const empty = designsEmpty(designs, systems);
   const row = "flex h-[34px] w-full items-center gap-3 rounded-md px-3 text-left ui-text-14";
@@ -107,7 +119,10 @@ export function DesignSidebar() {
         <nav aria-label="Design systems" className="px-2">
           {systems?.length === 0 && <p className="px-2 py-1 ui-text-12.5 text-faint">None yet. Build one from a project's code.</p>}
           {systems?.map((sys, i) => {
-            const label = systemLabel(sys, now, !!working[i]);
+            const own = systemLabel(sys, now, !!working[i]);
+            const elsewhere = ownerWorking(sys, "system");
+            const label = elsewhere ? { ...own, text: elsewhere, tone: "muted" as const } : own;
+            const from = copyLabel(sys);
             const current = !design && !indexed && sys.slug === shown?.slug;
             return (
               <button
@@ -118,7 +133,10 @@ export function DesignSidebar() {
               >
                 {current && <span className="absolute inset-y-0 left-0 w-[2px] bg-accent" />}
                 <SwatchBook size={14} className="shrink-0 text-muted" />
-                <span className="min-w-0 flex-1 truncate">{sys.name}</span>
+                <span className="min-w-0 flex-1 truncate">
+                  {sys.name}
+                  {from && <span className="ml-1.5 ui-text-11.5 text-faint">{from}</span>}
+                </span>
                 <span title={sys.error ?? sys.needs_you?.text} className={cx("shrink-0 ui-text-11.5 tabular-nums", TONES[label.tone])}>
                   {label.text}
                 </span>
@@ -129,21 +147,24 @@ export function DesignSidebar() {
         <Heading label="Designs" open={{ title: "Every design of the workspace, as cards", current: indexed, run: () => ws && showIndex(ws.host, ws.id) }} />
         <nav aria-label="Designs" className="px-2">
           {empty && <p className="px-2 py-1 ui-text-12.5 text-faint">{empty}</p>}
-          {designs?.map((d, i) => {
+          {entries?.map(({ host: on, design: d }, i) => {
             const label = designRow(d, now, states[i] ?? null);
             const session = d.kind === "session" ? d.session : undefined;
             const current = !session && d.slug === design?.slug;
             return (
               <button
-                key={`${session ?? ""}/${d.slug}`}
+                key={`${on}/${session ?? ""}/${d.slug}`}
                 aria-current={current ? "page" : undefined}
                 title={session ? "Its pages live in the session's branch; this opens the session" : undefined}
-                onClick={() => ws && (session ? void openSessionDesign(ws.host, ws.id, session, d.slug, true) : showDesign(ws.host, ws.id, d.slug))}
+                onClick={() => ws && (session ? void openSessionDesign(on, ws.id, session, d.slug, true) : showDesign(ws.host, ws.id, d.slug))}
                 className={cx("relative flex h-[30px] w-full items-center gap-2.5 rounded-md px-2 text-left ui-text-13 text-fg", current ? "bg-selected" : "hover:bg-panel-2")}
               >
                 {current && <span className="absolute inset-y-0 left-0 w-[2px] bg-accent" />}
                 <span className="flex w-[14px] shrink-0 justify-center">{label.state ? <StateGlyph state={label.state} size={14} /> : <span className="h-1.5 w-1.5 rounded-full bg-idle" />}</span>
-                <span className="min-w-0 flex-1 truncate">{d.name}</span>
+                <span className="min-w-0 flex-1 truncate">
+                  {d.name}
+                  {copyLabel(d) && <span className="ml-1.5 ui-text-11.5 text-faint">{ownerWorking(d, "design") ?? copyLabel(d)}</span>}
+                </span>
                 <span title={d.error ?? d.needs_you?.text} className={cx("flex shrink-0 items-center gap-1 ui-text-11.5 tabular-nums", TONES[label.tone])}>
                   {label.comments && <MessageSquare size={11} />}
                   {label.text}
@@ -159,7 +180,7 @@ export function DesignSidebar() {
 
 /** The main area in Design mode: the open design system, or how to start. */
 export function DesignMain() {
-  const { ws, systems, shown, design, indexed } = useWorkspaceDesign();
+  const { ws, systems, shown, design, indexed, inSessions } = useWorkspaceDesign();
   const working = useStore((s) => !!ws && !!shown && agentWorking(s, ws.host, shown.agent));
   const sidebarOpen = useStore((s) => s.sidebarOpen);
   const wsName = useStore((s) => (ws ? (s.workspaces[ws.host]?.find((w) => w.id === ws.id)?.name ?? "") : ""));
@@ -174,7 +195,7 @@ export function DesignMain() {
   if (indexed && ws) {
     return (
       <div className="flex h-full flex-col bg-bg">
-        <DesignsIndex host={ws.host} workspace={ws.id} name={wsName} systems={systems} inset={sidebarOpen ? 0 : 84} />
+        <DesignsIndex host={ws.host} workspace={ws.id} name={wsName} systems={systems} inSessions={inSessions} inset={sidebarOpen ? 0 : 84} />
       </div>
     );
   }

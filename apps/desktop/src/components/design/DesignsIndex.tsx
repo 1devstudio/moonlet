@@ -10,7 +10,7 @@ import { useShallow } from "zustand/react/shallow";
 import type { Design, DesignSystem } from "../../lib/protocol";
 import { designsEmpty, shortAge } from "../../lib/design";
 import { designsIndex, type CardAction, type IndexCard } from "../../lib/designsIndex";
-import { designsOf, openNewDesign, openSessionDesign, pageRevReader, projectDesignsIn, sessionDesignsIn, showDesign, startFromProjectDesign, useDesign } from "../../lib/designStore";
+import { designsOf, openNewDesign, openSessionDesign, pageRevReader, projectDesignsIn, showDesign, startFromProjectDesign, useDesign } from "../../lib/designStore";
 import { viewportOf } from "../../lib/designViewport";
 import { errorToast, useStore } from "../../lib/store";
 import { NEAR_ROOT, useNear } from "../../lib/useNear";
@@ -22,11 +22,28 @@ import { CardFrame } from "./Frame";
 
 const NO_DESIGNS: Design[] = [];
 
-export function DesignsIndex({ host, workspace, name, systems, inset }: { host: string; workspace: string; name: string; systems: DesignSystem[] | undefined; inset: number }) {
+export function DesignsIndex({
+  host,
+  workspace,
+  name,
+  systems,
+  inSessions: across,
+  inset,
+}: {
+  host: string;
+  workspace: string;
+  name: string;
+  systems: DesignSystem[] | undefined;
+  /** Every member's session designs, with the host each session runs on (X71). */
+  inSessions: { host: string; design: Design }[] | undefined;
+  inset: number;
+}) {
   const own = useDesign((d) => designsOf(d, host, workspace));
-  const inSessions = useDesign((d) => sessionDesignsIn(d, host, workspace)) ?? NO_DESIGNS;
+  const inSessions = useMemo(() => across?.map((e) => e.design) ?? NO_DESIGNS, [across]);
   const inProjects = useDesign((d) => projectDesignsIn(d, host, workspace)) ?? NO_DESIGNS;
-  const sessions = useStore((s) => s.sessions[host]);
+  // Every member's sessions, which name the session designs' cards.
+  const hostsOfSessions = useMemo(() => [...new Set([host, ...(across ?? []).map((e) => e.host)])], [host, across]);
+  const sessions = useStore(useShallow((s) => hostsOfSessions.flatMap((h) => s.sessions[h] ?? [])));
   const projects = useStore(useShallow((s) => workspaceProjects(s, host, workspace)));
   const list = useMemo(() => (own ? [...inSessions, ...own, ...inProjects] : undefined), [own, inSessions, inProjects]);
   // A changed first page is framed again: its thumbnail's address carries its revision.
@@ -40,7 +57,7 @@ export function DesignsIndex({ host, workspace, name, systems, inset }: { host: 
   const [starting, setStarting] = useState<string | null>(null);
   // What each kind of card's button does.
   const acts: { [K in CardAction["kind"]]: (a: Extract<CardAction, { kind: K }>, key: string) => void } = {
-    session: (a) => void openSessionDesign(host, workspace, a.session, a.slug, true),
+    session: (a) => void openSessionDesign(across?.find((e) => e.design.session === a.session)?.host ?? host, workspace, a.session, a.slug, true),
     workspace: (a) => showDesign(host, workspace, a.slug),
     project: (a, key) => {
       setStarting(key);
