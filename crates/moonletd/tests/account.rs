@@ -810,3 +810,147 @@ async fn design_systems_follow_a_workspace_merged_on_another_member_and_on_start
     )
     .await;
 }
+
+/// What `d` holds of a design system's file `path` (X71).
+fn design_file(d: &Daemon, ws: &str, slug: &str, path: &str) -> Option<String> {
+    std::fs::read_to_string(d.home.path().join("design").join(ws).join("systems").join(slug).join(path)).ok()
+}
+
+#[tokio::test]
+async fn a_design_system_made_on_one_member_is_copied_to_every_member_and_follows_its_edits() {
+    let (mini, addr) = central().await;
+    let book = mac(BOOK, "Alex's MacBook Pro").await;
+    let air = mac(AIR, "Alex's MacBook Air").await;
+    link(&book, &mini, &addr, "Alex's MacBook Pro").await;
+    link(&air, &mini, &addr, "Alex's MacBook Air").await;
+    let books = book.workspaces().await[0].id.clone();
+    let _: Value = book
+        .call(
+            "design.system.create",
+            json!({ "workspace": books, "name": "Acme web", "sources": [], "cover": "none", "agent": false }),
+        )
+        .await;
+    let folder = book.home.path().join("design").join(&books).join("systems/acme-web");
+    std::fs::write(folder.join("styles.css"), "@import \"tokens/colors.css\";\n").unwrap();
+    for d in [&mini, &air] {
+        within(Duration::from_secs(10), "Acme web copied", || async {
+            design_file(d, &books, "acme-web", "styles.css").as_deref() == Some("@import \"tokens/colors.css\";\n")
+        })
+        .await;
+        assert_eq!(systems(d, &books).await, ["acme-web"]);
+    }
+
+    // An edit on the MacBook reaches the Air.
+    std::fs::write(folder.join("styles.css"), "@import \"tokens/brand.css\";\n").unwrap();
+    within(Duration::from_secs(5), "the edit on the Air", || async {
+        design_file(&air, &books, "acme-web", "styles.css").as_deref() == Some("@import \"tokens/brand.css\";\n")
+    })
+    .await;
+
+    // Removed on the MacBook, it goes from every copy.
+    let _: Value = book
+        .call("design.system.remove", json!({ "workspace": books, "slug": "acme-web" }))
+        .await;
+    for d in [&mini, &air] {
+        within(Duration::from_secs(5), "Acme web gone", || async { systems(d, &books).await.is_empty() }).await;
+    }
+}
+
+#[tokio::test]
+async fn a_workspace_design_and_its_comments_reach_the_other_members() {
+    let (mini, addr) = central().await;
+    let book = mac(BOOK, "Alex's MacBook Pro").await;
+    link(&book, &mini, &addr, "Alex's MacBook Pro").await;
+    let minis = mini.workspaces().await[0].id.clone();
+    let _: Value = mini
+        .call(
+            "design.system.create",
+            json!({ "workspace": minis, "name": "Acme web", "sources": [], "cover": "none", "agent": false }),
+        )
+        .await;
+    let checkout = mini.home.path().join("design").join(&minis).join("designs/checkout");
+    std::fs::create_dir_all(checkout.join("pages")).unwrap();
+    std::fs::write(checkout.join("design.toml"), "name = \"Checkout\"\nsystem = \"acme-web\"\n").unwrap();
+    std::fs::write(checkout.join("pages/index.html"), "<main data-mid=\"m1\">Pay</main>\n").unwrap();
+    std::fs::write(
+        checkout.join("comments.json"),
+        r#"[{"n":1,"page":"index","mid":"m1","tag":"main","text":"Pay","comment":"Bigger button"}]"#,
+    )
+    .unwrap();
+    within(
+        Duration::from_secs(10),
+        "both Personal on the MacBook",
+        || async { book.names().await.len() == 2 },
+    )
+    .await;
+    within(Duration::from_secs(10), "Checkout on the MacBook", || async {
+        let list: Vec<Value> = book.call("design.list", json!({ "workspace": minis })).await;
+        list.iter().any(|d| d["slug"] == "checkout")
+    })
+    .await;
+    let comments: Vec<Value> = book
+        .call("design.comments", json!({ "workspace": minis, "slug": "checkout" }))
+        .await;
+    assert_eq!(comments.len(), 1);
+    assert_eq!(comments[0]["comment"], "Bigger button");
+}
+
+#[tokio::test]
+async fn a_copies_file_that_cannot_be_read_turns_no_copy_into_a_new_item() {
+    let (mini, addr) = central().await;
+    let book = mac(BOOK, "Alex's MacBook Pro").await;
+    link(&book, &mini, &addr, "Alex's MacBook Pro").await;
+    for d in [&mini, &book] {
+        within(Duration::from_secs(10), "both Personal on both", || async { d.names().await.len() == 2 }).await;
+    }
+    let minis = mini.workspaces().await[0].id.clone();
+    let _: Value = mini
+        .call(
+            "design.system.create",
+            json!({ "workspace": minis, "name": "Acme web", "sources": [], "cover": "none", "agent": false }),
+        )
+        .await;
+    within(Duration::from_secs(10), "Acme web on the MacBook", || async {
+        systems(&book, &minis).await == ["acme-web"]
+    })
+    .await;
+    std::fs::write(book.home.path().join("design/.store/copies.json"), "{ not json").unwrap();
+    // A change to the copy's folder asks for a round.
+    std::fs::write(
+        book.home.path().join("design").join(&minis).join("systems/acme-web/NOTES.md"),
+        "by hand\n",
+    )
+    .unwrap();
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(systems(&book, &minis).await, ["acme-web"]);
+    assert_eq!(systems(&mini, &minis).await, ["acme-web"]);
+}
+
+#[tokio::test]
+async fn a_central_host_that_lost_its_design_store_gets_every_tree_again_when_the_owner_links() {
+    let (mut mini, addr) = central().await;
+    let book = mac(BOOK, "Alex's MacBook Pro").await;
+    link(&book, &mini, &addr, "Alex's MacBook Pro").await;
+    for d in [&mini, &book] {
+        within(Duration::from_secs(10), "both Personal on both", || async { d.names().await.len() == 2 }).await;
+    }
+    let books = book.workspaces().await[0].id.clone();
+    let _: Value = book
+        .call(
+            "design.system.create",
+            json!({ "workspace": books, "name": "Acme web", "sources": [], "cover": "none", "agent": false }),
+        )
+        .await;
+    within(Duration::from_secs(10), "Acme web on studio-mini", || async {
+        systems(&mini, &books).await == ["acme-web"]
+    })
+    .await;
+    // studio-mini loses its design folder, store and copy alike.
+    std::fs::remove_dir_all(mini.home.path().join("design")).unwrap();
+    mini.restart().await;
+    listening_again(&mini, &addr).await;
+    within(Duration::from_secs(20), "Acme web on studio-mini again", || async {
+        systems(&mini, &books).await == ["acme-web"]
+    })
+    .await;
+}

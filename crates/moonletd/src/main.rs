@@ -7,6 +7,7 @@
 //! * `moonletd stop` / `moonletd status`.
 
 mod clones;
+mod copies;
 mod cloud;
 mod cloud_fake;
 mod daemon;
@@ -306,6 +307,8 @@ fn run_daemon(
         daemon.snapshot_agent_turns();
         // Design systems and designs follow a merged workspace (X71).
         daemon.follow_merges();
+        // Design systems and designs on every member of the account (X71).
+        daemon.keep_design_copies();
         // The session designs saved before a restart, watched again at once.
         daemon.watch_saved_session_designs();
         // Cloud machines: the sweep and the startup deadlines (X63).

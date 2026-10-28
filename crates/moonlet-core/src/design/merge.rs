@@ -183,14 +183,15 @@ impl Store {
     }
 
     /// Renames item `slug` of `kind` (`systems` or `designs`) in
-    /// `workspace` to the next free slug (`acme-web-2`, named "Acme web 2"),
-    /// with its record; a renamed system's designs for which `follows`
-    /// holds point at its new slug. Gives the new slug.
+    /// `workspace` to `to`, or else the next free slug (`acme-web-2`, named
+    /// "Acme web 2"), with its record; a renamed system's designs for which
+    /// `follows` holds point at its new slug. Gives the new slug.
     pub fn rename_item(
         &self,
         workspace: &str,
         kind: &str,
         slug: &str,
+        to: Option<&str>,
         follows: &dyn Fn(&str) -> bool,
     ) -> Result<String> {
         let records = if kind == "systems" {
@@ -199,7 +200,12 @@ impl Store {
             ".records/designs"
         };
         let root = self.root()?.to_path_buf();
-        let to = self.free_slug(workspace, kind, records, slug)?;
+        // A slug asked for must be free here too, as a folder and as a record.
+        let to = match to {
+            Some(to) if self.free_slug(workspace, kind, records, to)? == to => to.to_string(),
+            Some(to) => bail!("{to} is taken here"),
+            None => self.free_slug(workspace, kind, records, slug)?,
+        };
         self.move_item(&root, workspace, workspace, kind, slug, &to, records)?;
         let dir = self.kind_dir(workspace, kind, false)?.join(&to);
         if kind == "systems" {
@@ -604,6 +610,47 @@ mod tests {
         let designs = store.designs("w-mini").unwrap();
         assert_eq!(designs[0].system, "acme-web-2");
         assert!(!home.path().join("design/w-mac").exists());
+    }
+
+    #[test]
+    fn a_renamed_system_takes_the_next_number_and_only_the_designs_asked_follow_it() {
+        let home = tempfile::tempdir().unwrap();
+        let store = Store::new(home.path());
+        store
+            .create_system("w-mac", "Acme web", vec![], Cover::Core, 1)
+            .unwrap();
+        store
+            .create_design("w-mac", "Checkout", "acme-web", "", 2)
+            .unwrap();
+        store
+            .create_design("w-mac", "Billing", "acme-web", "", 3)
+            .unwrap();
+
+        let to = store
+            .rename_item("w-mac", "systems", "acme-web", None, &|d| d == "checkout")
+            .unwrap();
+
+        assert_eq!(to, "acme-web-2");
+        let names: Vec<(String, String)> = store
+            .systems("w-mac")
+            .unwrap()
+            .into_iter()
+            .map(|s| (s.slug, s.name))
+            .collect();
+        assert_eq!(names, vec![("acme-web-2".into(), "Acme web 2".into())]);
+        let systems: Vec<(String, String)> = store
+            .designs("w-mac")
+            .unwrap()
+            .into_iter()
+            .map(|d| (d.slug, d.system))
+            .collect();
+        assert_eq!(
+            systems,
+            vec![
+                ("billing".into(), "acme-web".into()),
+                ("checkout".into(), "acme-web-2".into())
+            ]
+        );
     }
 
     #[test]

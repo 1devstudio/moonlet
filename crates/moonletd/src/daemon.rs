@@ -32,6 +32,8 @@ pub struct Daemon {
     pub sessions: Arc<SessionManager>,
     /// Design systems and designs under `~/.moonlet/design` (X64, X65).
     design: moonlet_core::design::store::Store,
+    /// Design systems and workspace designs on every member (X71).
+    pub copies: Arc<crate::copies::DesignCopies>,
     /// Per design system (X64): one start of its agent, or one change of its
     /// record or folder, at a time.
     design_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
@@ -441,7 +443,9 @@ impl Daemon {
                 .inspect_err(|e| tracing::warn!("cannot watch the design folder: {e:#}"))
                 .ok()
         };
+        let copies = crate::copies::DesignCopies::new(&moonlet_core::paths::home(), sessions.clone(), link.clone());
         Arc::new(Self {
+            copies,
             heavy,
             cloud,
             machines,
@@ -848,6 +852,34 @@ impl Daemon {
                 None => Err(RpcError::new("invalid_params", "not a paired device")),
             },
             method if method.starts_with("mobile.") => self.handle_mobile(conn, method, p),
+            m::DESIGN_OFFER | m::DESIGN_FETCH => {
+                // Only a linked Mac's daemon, as for `account.sync` (X71).
+                let refused = || RpcError::new("forbidden", "only a member of the account keeps design copies");
+                let device = conn.phone.as_deref().ok_or_else(refused)?;
+                let mac = self.mobile.kind_of(device) == Some(m::DeviceKind::Desktop);
+                let cloud = conn.cloud.load(std::sync::atomic::Ordering::Relaxed);
+                if !mac || cloud || self.workers.worker_on(conn.id).is_none() {
+                    return Err(refused());
+                }
+                // A linked Mac is a member of this host's account (X68), and
+                // a host sharing none keeps no copies.
+                if !self.sessions.has_account() {
+                    return Err(RpcError::new("no_account", "this host shares no account"));
+                }
+                if method == m::DESIGN_OFFER {
+                    let r: m::DesignOffer = params(p)?;
+                    let pack = match r.pack {
+                        Some(t) => Some(conn.take_pack(t).ok_or_else(|| RpcError::new("invalid_params", "the pack did not arrive"))?),
+                        None => None,
+                    };
+                    ok(self.copies.offered(&r.tree, pack).await?)
+                } else {
+                    let r: m::DesignFetch = params(p)?;
+                    let pack = self.copies.pack_for(&r.tree, &r.have).await?;
+                    let pack = if pack.is_empty() { None } else { Some(conn.send_pack(&pack)?) };
+                    ok(m::DesignFetched { pack })
+                }
+            }
             method if method.starts_with("design.") => self.handle_design(conn, method, p).await,
             m::REPO_GH_STATUS => ok(moonlet_core::repo_clone::gh_status().await),
             m::REPO_LOOKUP => {
@@ -2276,13 +2308,19 @@ impl Daemon {
         let d = self.clone();
         tokio::spawn(async move {
             d.move_merged_designs().await;
+            // Again every minute, for a move that failed.
+            let mut retry = tokio::time::interval(std::time::Duration::from_secs(60));
+            retry.tick().await;
             loop {
-                match events.recv().await {
-                    // A lagged watch may have missed the change: look again.
-                    Ok(Message::Event { name, .. }) if name == m::EV_WORKSPACES_CHANGED => {}
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
-                    Ok(_) => continue,
-                    Err(_) => return,
+                tokio::select! {
+                    event = events.recv() => match event {
+                        // A lagged watch may have missed the change: look again.
+                        Ok(Message::Event { name, .. }) if name == m::EV_WORKSPACES_CHANGED => {}
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                        Ok(_) => continue,
+                        Err(_) => return,
+                    },
+                    _ = retry.tick() => {}
                 }
                 d.move_merged_designs().await;
             }
@@ -2292,14 +2330,13 @@ impl Daemon {
     async fn move_merged_designs(&self) {
         for (from, into) in self.sessions.merged_workspaces() {
             self.stop_agents_in(&from).await;
-            let store = self.design.clone();
-            let (f, i) = (from.clone(), into.clone());
-            match blocking(move || store.move_workspace(&f, &i)).await {
+            match self.copies.merge(&from, &into).await {
                 Ok(moved) if !moved.is_empty() => {
                     tracing::info!(%from, %into, "moved {} design items of a merged workspace", moved.len());
+                    self.copies.kick();
                 }
                 Ok(_) => {}
-                Err(e) => tracing::warn!(%from, %into, "cannot move a merged workspace's designs: {}", e.message),
+                Err(e) => tracing::warn!(%from, %into, "cannot move a merged workspace's designs: {e:#}"),
             }
         }
     }
@@ -2330,6 +2367,74 @@ impl Daemon {
                 let _ = self.terminals.kill(agent.id, true);
             }
         }
+    }
+
+    /// Keeps this member's design copies (X71): a round when the design
+    /// folders change, when the link changes, and when another member's
+    /// change to a design's record comes.
+    pub fn keep_design_copies(self: &Arc<Self>) {
+        let copies = Arc::downgrade(&self.copies);
+        self.sessions.on_account_applied(move |changes| {
+            if let Some(c) = copies.upgrade()
+                && changes.iter().any(|c| c.kind == "design")
+            {
+                c.kick();
+            }
+        });
+        // Its record says while its agent works, so another member's Move
+        // here can tell the owner looks busy.
+        let d = Arc::downgrade(self);
+        self.copies.on_busy(move |item| {
+            let Some(d) = d.upgrade() else { return false };
+            let agent = match item.kind {
+                moonlet_core::design::replica::Kind::System => d.design.record(&item.workspace, &item.slug).ok().and_then(|r| r.agent),
+                moonlet_core::design::replica::Kind::Design => d
+                    .design
+                    .workspace_design(&item.workspace, &item.slug)
+                    .and_then(|at| d.design.design_record(&at))
+                    .ok()
+                    .and_then(|r| r.agent),
+            };
+            agent.is_some_and(|id| {
+                d.terminals.list().iter().any(|t| {
+                    t.id == id && matches!(t.agent_state, moonlet_proto::types::AgentState::Working | moonlet_proto::types::AgentState::Blocked)
+                })
+            })
+        });
+        let mut events = self.terminals.subscribe_events();
+        let copies = self.copies.clone();
+        tokio::spawn(async move {
+            loop {
+                use moonlet_core::design::replica::Item;
+                match events.recv().await {
+                    // The item whose folder changed is read again.
+                    Ok(Message::Event { name, data }) if name == m::EV_DESIGN_CHANGED => {
+                        let ws = data.get("workspace").and_then(Value::as_str).unwrap_or_default();
+                        let text = |f: &str| data.get(f).and_then(Value::as_str);
+                        match (text("system"), text("design")) {
+                            (Some(slug), _) => copies.changed(Item::system(ws, slug)),
+                            (None, Some(slug)) => copies.changed(Item::design(ws, slug)),
+                            _ => {}
+                        }
+                        copies.kick();
+                    }
+                    Ok(Message::Event { name, .. }) if name == m::EV_LINK_CHANGED => {
+                        copies.link_changed();
+                        copies.kick();
+                    }
+                    // A design or sync agent starting or stopping: its
+                    // record says so soon, for another member's Move here.
+                    Ok(Message::Event { name, data }) if name == m::EV_TERMINAL_UPDATED => {
+                        if data.get("design").is_some_and(|d| !d.is_null()) {
+                            copies.kick();
+                        }
+                    }
+                    Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(_) => return,
+                }
+            }
+        });
+        self.copies.spawn();
     }
 
     pub fn snapshot_agent_turns(self: &Arc<Self>) {

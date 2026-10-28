@@ -277,6 +277,14 @@ pub const DESIGN_COPY: &str = "design.copy";
 /// made the design's `pages/` and `assets/`. Refused with `busy` while the
 /// design's agent works.
 pub const DESIGN_SNAPSHOT_RESTORE: &str = "design.snapshot.restore";
+/// [`DesignOffer`] → `true` once the central host holds every object of
+/// the offered tree: a member's snapshot of a design system or workspace
+/// design it owns, sent before it names the tree in its record (X71).
+/// Members' daemons only.
+pub const DESIGN_OFFER: &str = "design.offer";
+/// [`DesignFetch`] → [`DesignFetched`]: the objects of a tree a member's
+/// copy needs, from the central host (X71). Members' daemons only.
+pub const DESIGN_FETCH: &str = "design.fetch";
 
 // Phones (X39)
 /// Phone access, the Tailscale addresses and the paired phones: [`MobileStatus`].
@@ -2231,6 +2239,30 @@ pub struct SyncFetch {
     pub have: Vec<String>,
     #[serde(default)]
     pub again: bool,
+}
+
+/// `design.offer`: a snapshot's tree and, in `pack` (a transfer id), the
+/// objects of it the central host lacks (X71).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DesignOffer {
+    pub tree: String,
+    #[serde(default)]
+    pub pack: Option<u32>,
+}
+
+/// `design.fetch`: a tree, and the trees the member's copies hold already.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DesignFetch {
+    pub tree: String,
+    #[serde(default)]
+    pub have: Vec<String>,
+}
+
+/// The objects a `design.fetch` asked for, in `pack` (a transfer id), or
+/// none when nothing is missing.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DesignFetched {
+    pub pack: Option<u32>,
 }
 
 /// The session's files (`tree`) and commit (`head`) now; their objects
