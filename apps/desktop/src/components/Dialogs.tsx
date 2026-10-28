@@ -1,6 +1,8 @@
 import { AddBoardDialog } from "./tasks/AddBoard";
 import { JobLeftoverCompare, SyncCompare } from "./SyncCompare";
 import { AddProjectDialog } from "./AddProject";
+import { GetProjectDialog } from "./GetProject";
+import { identityKey } from "../lib/sidebar";
 import { useEffect, useState } from "react";
 import { rpc } from "../lib/daemon";
 import { gitSettingsOf } from "../lib/gitSettings";
@@ -196,6 +198,8 @@ export function Dialogs() {
   switch (dialog?.kind) {
     case "add-project":
       return <AddProjectDialog host={dialog.host} section={dialog.section} clone={dialog.clone} />;
+    case "get-project":
+      return <GetProjectDialog key={`${dialog.host}/${dialog.section}/${identityKey(dialog.identity)}`} host={dialog.host} section={dialog.section} identity={dialog.identity} name={dialog.name} clone={dialog.clone} />;
     case "new-section":
       return <NewSectionDialog />;
     case "new-workspace":

@@ -20,6 +20,7 @@ import {
   ghLine,
   matchingRepos,
   moveHighlight,
+  newCloneId,
   pushedAgo,
   repoOwners,
   repoParts,
@@ -35,9 +36,6 @@ const close = () => useStore.setState({ dialog: null });
 
 type Tab = "folder" | "github";
 type Lookup = { repo: string; state: "looking" } | { repo: string; state: "found"; info: RepoInfo } | { repo: string; state: "missing"; error: string };
-
-/** An id for a new clone, chosen here so its events are known before the daemon answers. */
-const newCloneId = () => `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 
 const monoInputCls = cx(inputCls, "font-mono ui-text-12.5");
 
@@ -579,7 +577,7 @@ function CantSee({ title, body, signIn, detail, onRetry }: { title: string; body
   );
 }
 
-function CloneInto({
+export function CloneInto({
   parent,
   name,
   local,
@@ -636,7 +634,7 @@ function CloneInto({
   );
 }
 
-function TakenBox({ path, body, addExisting, useName, onAddExisting, onUseName }: { path: string; body: string; addExisting: boolean; useName: string; onAddExisting: () => void; onUseName: () => void }) {
+export function TakenBox({ path, body, addExisting, useName, onAddExisting, onUseName }: { path: string; body: string; addExisting: boolean; useName: string; onAddExisting: () => void; onUseName: () => void }) {
   return (
     <div role="alert" className="flex flex-col gap-2 rounded-lg border border-[#4a3b17] bg-[#2a2210] px-3 py-2.5">
       <span className="flex items-center gap-2 ui-text-12.5 font-medium text-blocked">
@@ -666,7 +664,7 @@ function GhLine({ text, ok }: { text: string; ok: boolean }) {
   );
 }
 
-function CloneProgressCard({ run }: { run: CloneRun }) {
+export function CloneProgressCard({ run }: { run: CloneRun }) {
   const percent = clonePercent(run.steps);
   const shownPath = run.job.path;
   return (
