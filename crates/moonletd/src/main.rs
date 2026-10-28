@@ -101,6 +101,10 @@ enum Cmd {
         #[arg(long)]
         name: String,
     },
+    /// Check a release archive against `<archive>.sig` with moonlet's
+    /// updater key (X69); the release workflow runs it.
+    #[command(hide = true)]
+    VerifyRelease { archive: PathBuf },
     /// Show a one-time code that pairs a Mac or a phone with this host.
     Pair {
         /// The name to type on the other Mac, such as the host's MagicDNS
@@ -112,6 +116,10 @@ enum Cmd {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    // The release check needs no home, socket or runtime (X69).
+    if let Some(Cmd::VerifyRelease { archive }) = &cli.cmd {
+        return update::verify_file(archive);
+    }
     moonlet_core::paths::migrate_legacy_home();
     let socket = cli.socket.unwrap_or_else(moonlet_core::paths::socket_path);
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -120,6 +128,7 @@ fn main() -> Result<()> {
     match cli.cmd.unwrap_or(Cmd::Daemon { handoff: None }) {
         Cmd::Daemon { handoff } => run_daemon(rt, socket, handoff),
         Cmd::Upgrade => rt.block_on(upgrade::request_upgrade(&socket, std::env::current_exe()?)),
+        Cmd::VerifyRelease { .. } => unreachable!("handled before the home is set up"),
         Cmd::Service { action } => {
             match action {
                 ServiceAction::Install => service::install()?,

@@ -502,3 +502,53 @@ async fn a_mac_on_another_protocol_updates_its_host_before_hello() {
     assert_eq!((reply.from.as_str(), reply.to.as_str()), (env!("CARGO_PKG_VERSION"), "9.9.9"));
     host.next_daemon(pid).await;
 }
+
+/// The release workflow checks each Linux archive's signature with the
+/// `moonletd` it ships, so a release can't go out that hosts would refuse.
+#[test]
+fn the_release_check_accepts_only_an_archive_signed_with_the_key() {
+    let key = Key::new();
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("moonlet-linux-x86_64.tar.gz");
+    let check = |file: &Path| {
+        let out = Command::new(env!("CARGO_BIN_EXE_moonletd"))
+            .arg("verify-release")
+            .arg(file)
+            .env("MOONLET_HOME", dir.path())
+            .env("MOONLET_RELEASE_KEY", key.public())
+            .output()
+            .unwrap();
+        (out.status.success(), String::from_utf8_lossy(&out.stderr).trim().to_string())
+    };
+
+    std::fs::write(&file, archive()).unwrap();
+    assert_eq!(check(&file), (false, format!("Error: {}.sig: No such file or directory (os error 2)", file.display())));
+    std::fs::write(dir.path().join("moonlet-linux-x86_64.tar.gz.sig"), key.sign(&archive())).unwrap();
+    assert_eq!(check(&file), (true, String::new()));
+    std::fs::write(&file, b"tampered").unwrap();
+    assert_eq!(check(&file), (false, "Error: bad_signature: the release's signature does not match moonlet's key".into()));
+}
+
+/// The release check touches nothing of the user's: not even an old
+/// `~/.jaunt` that any other `moonletd` command would move (X27).
+#[test]
+fn the_release_check_leaves_the_users_folders_alone() {
+    let key = Key::new();
+    let home = tempfile::tempdir().unwrap();
+    std::fs::create_dir(home.path().join(".jaunt")).unwrap();
+    let file = home.path().join("moonlet-linux-x86_64.tar.gz");
+    std::fs::write(&file, b"archive").unwrap();
+    std::fs::write(home.path().join("moonlet-linux-x86_64.tar.gz.sig"), key.sign(b"archive")).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_moonletd"))
+        .arg("verify-release")
+        .arg(&file)
+        .env_remove("MOONLET_HOME")
+        .env_remove("JAUNT_HOME")
+        .env("HOME", home.path())
+        .env("MOONLET_RELEASE_KEY", key.public())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(home.path().join(".jaunt").is_dir());
+    assert!(!home.path().join(".moonlet").exists());
+}
