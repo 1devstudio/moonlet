@@ -190,7 +190,7 @@ mod tests {
     fn a_viewport_is_a_width_and_a_height() {
         assert_eq!(parse_viewport("900x700"), Ok((900, 700)));
         assert_eq!(parse_viewport("1440x900"), Ok((1440, 900)));
-        for bad in ["900", "0x700", "900x", "x700", "900X700", "-1x700", "wide"] {
+        for bad in ["900", "0x700", "900x", "x700", "900X710", "-1x700", "wide"] {
             assert_eq!(
                 parse_viewport(bad),
                 Err(format!("{bad} is not a viewport such as 900x700")),
