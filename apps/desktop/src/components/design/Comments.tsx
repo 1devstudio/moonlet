@@ -70,6 +70,7 @@ export function CommentBox({
   scale,
   size,
   canSend,
+  canKeep = true,
   onKeep,
   onSend,
   onClose,
@@ -79,6 +80,8 @@ export function CommentBox({
   scale: number;
   size: [number, number];
   canSend: boolean;
+  /** False on another member's design (X71): its comments change there. */
+  canKeep?: boolean;
   onKeep: (comment: string) => void;
   onSend: (comment: string) => void;
   onClose: () => void;
@@ -119,7 +122,7 @@ export function CommentBox({
       />
       <div className="flex items-center gap-1.5 border-t border-border px-2.5 py-1.5">
         <span className="min-w-0 flex-1 truncate ui-text-11.5 text-faint">⌘↵ sends to the chat</span>
-        <Button size="sm" variant="ghost" disabled={!ok} onClick={() => onKeep(text)}>
+        <Button size="sm" variant="ghost" disabled={!ok || !canKeep} onClick={() => onKeep(text)}>
           Keep
         </Button>
         <span title={canSend ? undefined : "The design's agent is not running"}>

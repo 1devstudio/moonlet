@@ -180,4 +180,13 @@ describe("Update of a session design's design system (X65)", () => {
       "The design system moonlet desktop was updated for the design settings-page: its copy in .moonlet/design/settings-page/system/ and the pinned styles are the synced ones now. No card changed, only its styles.",
     );
   });
+
+  it("offers a copy of another member's design nothing its agent there would do (X71)", () => {
+    const preview = { time: "10:33", type: "edits by hand" };
+    expect(designBar({ ...calm, copy: true, preview })?.actions).toEqual(["back"]);
+    const problems = [problem("pages/index.html", "missing_mid", "<h1> has no data-mid")];
+    expect(designBar({ ...calm, copy: true, problems })?.actions).toEqual(["details"]);
+    expect(designBar({ ...calm, copy: true, notLoaded: { kind: "missing" } as never })?.actions).toEqual([]);
+    expect(designBar({ ...calm, copy: true, systemUpdated: true })?.actions).toEqual([]);
+  });
 });

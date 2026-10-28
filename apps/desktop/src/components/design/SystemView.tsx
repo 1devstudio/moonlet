@@ -278,6 +278,7 @@ function CardPage({ host, workspace, sys, rev, card, agent, inset }: { host: str
           <span className="truncate text-fg">{card.name}</span>
         </nav>
       </header>
+      <CopyBar host={host} workspace={workspace} kind="system" item={sys} />
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3 ui-text-12">

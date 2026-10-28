@@ -14,11 +14,22 @@ export interface Owned {
 /** The host whose daemon Design mode reads workspace `ref`'s designs from:
  * this Mac whenever it is a member of the workspace's account and lists
  * it, since it holds a copy of each and the canvas frames this Mac's
- * folders; else the shown host, as before X71. */
-export function designHost(ref: WorkspaceRef, hosts: HostWorkspaces[]): string {
+ * folders, while its daemon is connected; else the shown host, as before
+ * X71. */
+export function designHost(ref: WorkspaceRef, hosts: HostWorkspaces[], localUp = true): string {
   const local = hosts.find((h) => h.host === "local");
-  const member = !!local && (ref.host === "local" || (!!ref.account && accountOf(local) === ref.account));
+  const member = !!local && localUp && (ref.host === "local" || (!!ref.account && accountOf(local) === ref.account));
   return member && local.workspaces.some((w) => w.id === ref.id) ? "local" : ref.host;
+}
+
+/** The session designs of a workspace on each of `hosts`, its members:
+ *  session designs live in their session's worktree, on the host the
+ *  session runs on, so each comes with that host. Undefined while no host
+ *  has listed them. */
+export function sessionDesignsAcross<D>(hosts: string[], listOf: (host: string) => D[] | undefined): { host: string; design: D }[] | undefined {
+  const lists = hosts.map((host) => ({ host, list: listOf(host) }));
+  if (lists.every((l) => l.list === undefined)) return undefined;
+  return lists.flatMap(({ host, list }) => (list ?? []).map((design) => ({ host, design })));
 }
 
 /** `from studio-mini` for a copy; null for this host's own. */

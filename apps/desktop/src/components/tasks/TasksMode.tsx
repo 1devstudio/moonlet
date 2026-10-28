@@ -3,7 +3,7 @@
 import { Bot, ChevronDown, ChevronRight, ChevronUp, Copy, ExternalLink, Filter, GitBranch, LayoutGrid, List, MoreHorizontal, PenTool, Plus, RotateCw, Search, Settings, SquareTerminal, Trash2, X } from "lucide-react";
 import { type DragEvent, useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { errorToast, hostWorkspaces, selectSession, shownWorkspace, toast, useStore } from "../../lib/store";
+import { errorToast, hostWorkspaces, selectSession, shownWorkspace, toast, useStore, designHostOf } from "../../lib/store";
 import { rpc } from "../../lib/daemon";
 import { M } from "../../lib/protocol";
 import { askConfirm } from "../../lib/confirm";
@@ -774,7 +774,9 @@ export function ModeSwitch() {
   // The switch's shortcuts as the user has them (Settings › Shortcuts).
   const keys = effectiveKeys(useStore((s) => s.settings.shortcuts));
   // Designs an agent started from a session, not seen yet (X65).
-  const unseen = useDesign((d) => (ws ? unseenOf(d, ws.host, ws.id) : 0));
+  // Counted where Design mode lists them (X71).
+  const designHost = useStore((s) => designHostOf(s));
+  const unseen = useDesign((d) => (ws && designHost ? unseenOf(d, designHost, ws.id) : 0));
   const m = modeSwitch({ tasks: keyLabel(keys.tasks ?? ""), design: keyLabel(keys.design ?? "") }, mode, board ? outOfSync(board).length : 0, unseen);
   const item = (on: boolean) => cx("no-drag relative flex h-[26px] w-[26px] items-center justify-center rounded-[5px]", on ? "bg-raised text-fg" : "text-muted hover:text-fg");
   return (

@@ -34,6 +34,7 @@ import {
   type Workspace,
 } from "./protocol";
 import { sanitize } from "./sanitize";
+import { designHost } from "./designCopies";
 import { DEFAULT_MODE } from "./agents";
 import { DEFAULT_SOUNDS, type SoundSettings } from "./sounds";
 import { DoneBursts, agentPlace, alertFor, alertsLikeASession, type BannerSettings } from "./alerts";
@@ -46,7 +47,7 @@ import type { PendingConfirm } from "./confirm";
 import type { TaskStart } from "./tasks";
 import type { BuildDesign } from "./buildIt";
 import { spawnedNotices } from "./spawned";
-import { currentWorkspace, isShown, lastSessionKey, restoreTarget, sharedNotice, switcherRows, wsKey, type HostWorkspaces, type WorkspaceRef } from "./workspaces";
+import { currentWorkspace, isShown, lastSessionKey, restoreTarget, sharedNotice, switcherRows, workspaceMembers, wsKey, type HostWorkspaces, type WorkspaceRef } from "./workspaces";
 import { focusThrottle, latestPerKey, needsPrPoll } from "./prPoll";
 import type { ChatItem, ChatState, CloneDone, CloneProgress, ReadRequest } from "./protocol";
 import { readWaits, type ReadQueue } from "./terminalRead";
@@ -763,6 +764,23 @@ export function shownWorkspace(s: State): WorkspaceRef | null {
   if (!r || r === s.workspace) return r;
   if (fallback?.host !== r.host || fallback.id !== r.id || fallback.account !== r.account) fallback = r;
   return fallback;
+}
+
+/** The host Design mode reads the shown workspace's designs from (X71):
+ *  this Mac when it holds copies of them, else the shown host. */
+export function designHostOf(s: State): string | null {
+  const ws = shownWorkspace(s);
+  return ws ? designHost(ws, hostWorkspaces(s), s.hosts.local?.status === "connected") : null;
+}
+
+/** Where the shown workspace's session designs are (X71): the design host
+ *  first, then every other member listing the workspace, each holding its
+ *  own sessions' worktrees. */
+export function designMembersOf(s: State): string[] {
+  const ws = shownWorkspace(s);
+  const host = designHostOf(s);
+  if (!ws || !host) return [];
+  return [host, ...workspaceMembers(ws, hostWorkspaces(s)).filter((h) => h !== host)];
 }
 
 /** Shows workspace `ref` and reopens the session last open in it. */

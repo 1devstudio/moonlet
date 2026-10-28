@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { copyLabel, copyNotice, designHost, moveConfirm, ownerWorking } from "./designCopies";
+import { copyLabel, copyNotice, designHost, moveConfirm, ownerWorking, sessionDesignsAcross } from "./designCopies";
 import type { HostWorkspaces } from "./workspaces";
 
 const host = (id: string, account: string | undefined, ids: string[]): HostWorkspaces => ({
@@ -21,6 +21,11 @@ describe("designHost (X71)", () => {
   it("reads them from the shown host when this Mac is not of its account", () => {
     const hosts = [host("local", "acct-1", ["w-book"]), host("lab-vps", "acct-2", ["w-lab"])];
     expect(designHost({ host: "lab-vps", id: "w-lab", account: "acct-2" }, hosts)).toBe("lab-vps");
+  });
+
+  it("reads them from the shown host while this Mac's daemon is not connected", () => {
+    const hosts = [host("local", "acct-1", ["w-mini"]), host("studio-mini", "acct-1", ["w-mini"])];
+    expect(designHost({ host: "studio-mini", id: "w-mini", account: "acct-1" }, hosts, false)).toBe("studio-mini");
   });
 
   it("reads them from the shown host while this Mac does not list the workspace yet", () => {
@@ -61,5 +66,17 @@ describe("a copy's labels (X71)", () => {
       confirm: "Move anyway",
       force: true,
     });
+  });
+});
+
+describe("session designs across members (X71)", () => {
+  it("lists each member's session designs with the host its session runs on, and waits for this Mac's", () => {
+    const d = (session: string, slug: string) => ({ session, slug }) as never;
+    const lists: Record<string, never[] | undefined> = { local: [d("s-1", "checkout")], "studio-mini": [d("s-7", "billing")], "lab-vps": undefined };
+    expect(sessionDesignsAcross(["local", "studio-mini", "lab-vps"], (h) => lists[h])).toEqual([
+      { host: "local", design: d("s-1", "checkout") },
+      { host: "studio-mini", design: d("s-7", "billing") },
+    ]);
+    expect(sessionDesignsAcross(["lab-vps"], (h) => lists[h])).toBeUndefined();
   });
 });

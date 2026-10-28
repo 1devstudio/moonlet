@@ -4,7 +4,7 @@
 import { rpc, sendInput } from "./daemon";
 import { addTab, closeFile, closeJob, cycleFocus, openFile, openJob, splitLeaf, tabOf } from "./layout";
 import { M, type ProjectConfig, type TerminalInfo, type Session, type SessionArchived, type UnpushedWork } from "./protocol";
-import { checkForUpdates, errorToast, focusTerminal, getLayout, selectedSession, sesKey, sessionState, setLayout, termKey, toast, useStore, sessionTerminals, shownWorkspace } from "./store";
+import { checkForUpdates, errorToast, focusTerminal, getLayout, selectedSession, sesKey, sessionState, setLayout, termKey, toast, useStore, sessionTerminals, shownWorkspace, designHostOf } from "./store";
 import { lastActive, sharedSessionOrder } from "./sidebar";
 import { findEntry, outputToCopy } from "./terminals";
 import { agentReadiness, isStructured, tabAgent } from "./agents";
@@ -390,10 +390,13 @@ export function copyOutput() {
 /** New design… (⇧⌘N in Design mode): New design for the shown workspace,
  *  in Design mode, where the design it makes shows (X65). */
 function newDesign() {
-  const ws = shownWorkspace(useStore.getState());
-  if (!ws) return;
+  const s = useStore.getState();
+  const ws = shownWorkspace(s);
+  const host = designHostOf(s);
+  if (!ws || !host) return;
   setMode("design");
-  openNewDesign(ws);
+  // On the host Design mode reads, so the new design shows there (X71).
+  openNewDesign({ ...ws, host });
 }
 
 /** Handlers of the Run action modal's actions, by id (X19). */
