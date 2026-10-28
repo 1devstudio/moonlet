@@ -3,14 +3,16 @@
 
 import { ChevronLeft, ChevronRight, ExternalLink, GitBranch, Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
+import { taskWorkspace } from "../../lib/boards";
 import { hostsApi } from "../../lib/daemon";
 import type { Session } from "../../lib/protocol";
-import { selectSession, useStore } from "../../lib/store";
+import { hostWorkspaces, selectSession, useStore } from "../../lib/store";
 import { acceptanceCriteria, findPasted, linkChoices, pasteLookup } from "../../lib/taskLinking";
 import { type Task, trackerName } from "../../lib/tasks";
 import type { Card } from "../../lib/tasksBoard";
-import { ensureTasks, linkTask, lookUpPasted, placedTasks, setKeepInStep, useTasks } from "../../lib/tasksStore";
-import { wsKey } from "../../lib/workspaces";
+import { ensureTasks, linkTask, lookUpPasted, placedTasks, setKeepInStep, trackersConfig, useTasks } from "../../lib/tasksStore";
+import { type WorkspaceRef, wsKey } from "../../lib/workspaces";
 import { Markdown } from "../AgentView";
 import { Button, cx, Dialog, IconButton, inputCls, StateGlyph } from "../ui";
 import { StateMenu, startSession, TaskGlyph, useWorkspaceBoard } from "./TasksMode";
@@ -18,9 +20,22 @@ import { TaskComments } from "./TaskComments";
 
 const COLUMN_LABEL: Record<Card["column"], string> = { todo: "Todo", in_progress: "In Progress", in_review: "In Review", done: "Done" };
 
+/** The workspace whose boards hold a session's task: on another member of its account when the boards are there (X68). */
+function useTaskWorkspace(host: string, workspaceId: string | null | undefined): WorkspaceRef | null {
+  const boards = useTasks((t) => trackersConfig(t).boards);
+  const [member, account] = useStore(
+    useShallow((s) => {
+      if (!workspaceId) return [null, null];
+      const ref = taskWorkspace(host, workspaceId, hostWorkspaces(s), boards);
+      return [ref.host, ref.account ?? null];
+    }),
+  );
+  return useMemo(() => (member && workspaceId ? { host: member, id: workspaceId, ...(account && { account }) } : null), [member, account, workspaceId]);
+}
+
 /** The card of the task a session works on, loading its workspace's tasks when needed. */
 export function useSessionTask(host: string, ws: Session): Card | null {
-  const ref = useMemo(() => (ws.workspace_id ? { host, id: ws.workspace_id } : null), [host, ws.workspace_id]);
+  const ref = useTaskWorkspace(host, ws.workspace_id);
   useEffect(() => {
     if (ref && (ws.task || !ws.task_unlinked)) ensureTasks(ref.host, ref.id);
   }, [ref, ws.task, ws.task_unlinked]);
@@ -148,22 +163,23 @@ export function TaskTab({ host, ws }: { host: string; ws: Session }) {
 /** Link "<session>" to a task: suggestions, the workspace's tasks, or a pasted key or URL (X46). */
 export function LinkTaskDialog({ host, sessionId }: { host: string; sessionId: string }) {
   const ws = useStore((s) => s.sessions[host]?.find((x) => x.id === sessionId));
-  const data = useTasks((t) => (ws?.workspace_id ? t.data[wsKey(host, ws.workspace_id)] : undefined));
+  // The tasks of the boards the session's task is on, whichever member holds them (X68).
+  const boardRef = useTaskWorkspace(host, ws?.workspace_id);
+  const data = useTasks((t) => (boardRef ? t.data[wsKey(boardRef.host, boardRef.id)] : undefined));
   const [query, setQuery] = useState("");
   const [pasted, setPasted] = useState<Task | null>(null);
   const close = () => useStore.setState({ dialog: null });
   const config = useTasks((t) => t.config);
   const tasks = useMemo(() => placedTasks(data ?? { tasks: [] }), [data, config]); // eslint-disable-line react-hooks/exhaustive-deps
   const originRepo = ws ? (data?.repos[ws.project_id] ?? null) : null;
-  const boardRef = useMemo(() => (ws?.workspace_id ? { host, id: ws.workspace_id } : null), [host, ws?.workspace_id]);
   const { board } = useWorkspaceBoard(boardRef);
   const sessionsOf = useMemo(() => {
     const n = new Map(Object.values(board ?? {}).flat().map((c) => [`${c.task.connection} ${c.task.key}`, c.rows.length]));
     return (t: Task) => n.get(`${t.connection} ${t.key}`) ?? 0;
   }, [board]);
   useEffect(() => {
-    if (ws?.workspace_id) ensureTasks(host, ws.workspace_id);
-  }, [host, ws?.workspace_id]);
+    if (boardRef) ensureTasks(boardRef.host, boardRef.id);
+  }, [boardRef]);
   // The latest tasks, read when a lookup runs, so a background sync does not
   // throw away what was pasted.
   const latest = useRef(tasks);
