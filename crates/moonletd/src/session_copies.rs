@@ -532,11 +532,30 @@ impl SessionCopies {
         // The copy's branch is its own (`copy_branch`), never one of this
         // host's, so moving it, even back after an amend, touches nothing
         // else. The member's branch name stays in the session's record.
-        let at = git_sync::head(dir).await.map_err(internal)?;
-        if at != r.head {
-            git_sync::reset_branch(dir, &at, &r.head)
+        let want = format!("refs/heads/{}", copy_branch(&r.session));
+        let on = moonlet_core::git::git_text(dir, &["symbolic-ref", "-q", "HEAD"])
+            .await
+            .unwrap_or_default();
+        if on.trim() != want {
+            // Switched by hand to another branch, or detached: back onto the
+            // copy's own branch, leaving that one where it is. Only refs
+            // move here; the files follow below.
+            moonlet_core::git::git(dir, &["update-ref", &want, &r.head])
                 .await
                 .map_err(internal)?;
+            moonlet_core::git::git(dir, &["symbolic-ref", "HEAD", &want])
+                .await
+                .map_err(internal)?;
+            moonlet_core::git::git(dir, &["reset", "-q"])
+                .await
+                .map_err(internal)?;
+        } else {
+            let at = git_sync::head(dir).await.map_err(internal)?;
+            if at != r.head {
+                git_sync::reset_branch(dir, &at, &r.head)
+                    .await
+                    .map_err(internal)?;
+            }
         }
         let from = git_sync::snapshot(dir, git_sync::MAX_FILE)
             .await

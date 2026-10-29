@@ -576,3 +576,49 @@ async fn a_copy_never_moves_a_branch_of_the_central_hosts_own() {
     .unwrap();
     assert_eq!(after, mine);
 }
+
+#[tokio::test]
+async fn a_copy_switched_by_hand_to_another_branch_goes_back_without_moving_it() {
+    let origin = Origin::new();
+    let (mini, _addr, book) = pair_of(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = new_session(&book, &project, "fix-cart").await;
+    let copy = copy_of(&mini, &made).await;
+    reads(&copy.join("src/cart.ts"), "a\n").await;
+    git(&copy, &["switch", "-q", "-c", "by-hand"]);
+    let before = head(&copy);
+
+    let path = path_of(&made);
+    std::fs::write(path.join("src/cart.ts"), "f\n").unwrap();
+    git(&path, &["add", "-A"]);
+    git(
+        &path,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-qm",
+            "cart",
+        ],
+    );
+    let commit = head(&path);
+    within(
+        Duration::from_secs(15),
+        "the copy at the member's commit",
+        || async { head(&copy) == commit },
+    )
+    .await;
+    let after = String::from_utf8(
+        std::process::Command::new("git")
+            .args(["rev-parse", "by-hand"])
+            .current_dir(&copy)
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    assert_eq!(after.trim(), before);
+}
