@@ -119,6 +119,74 @@ fn transcript_files(folder: &Path, id: &str) -> Vec<String> {
     out
 }
 
+/// What a request passed on for a session may reach (X72), and its params
+/// aimed at that session: its own chats and terminals, git and GitHub in
+/// its worktree `path`, and its own archive. Anything else is refused, so
+/// a client of the central host never reaches more of the member than
+/// that session.
+pub fn scope(
+    method: &str,
+    params: Value,
+    session: &str,
+    path: &str,
+    terminals: &[TerminalId],
+) -> Result<Value, RpcError> {
+    let refused = || {
+        RpcError::new(
+            "forbidden",
+            format!("{method} is not for a session on another member"),
+        )
+    };
+    let mut params = match params {
+        Value::Object(o) => o,
+        Value::Null => serde_json::Map::new(),
+        _ => return Err(RpcError::new("invalid_params", "params must be an object")),
+    };
+    match method {
+        m::CHAT_SUMMARIES | m::TERMINAL_LIST => {}
+        _ if method.starts_with("chat.") => {
+            let id = params.get("id").and_then(Value::as_u64);
+            if !id.is_some_and(|id| terminals.iter().any(|t| u64::from(*t) == id)) {
+                return Err(RpcError::new(
+                    "forbidden",
+                    "that chat is not one of the session's",
+                ));
+            }
+        }
+        _ if method.starts_with("git.") || matches!(method, m::GH_PRS | m::GH_PR_CONTEXT) => {
+            params.insert("path".to_string(), Value::String(path.to_string()));
+        }
+        m::SESSION_ARCHIVE => {
+            if params.get("id").and_then(Value::as_str) != Some(session) {
+                return Err(refused());
+            }
+        }
+        _ => return Err(refused()),
+    }
+    Ok(Value::Object(params))
+}
+
+/// Keeps of `reply` to `method` only the session's own terminals, for the
+/// methods that list every terminal of the member.
+pub fn only_terminals(method: &str, reply: Value, terminals: &[TerminalId]) -> Value {
+    if !matches!(method, m::CHAT_SUMMARIES | m::TERMINAL_LIST) {
+        return reply;
+    }
+    let Value::Array(items) = reply else {
+        return reply;
+    };
+    Value::Array(
+        items
+            .into_iter()
+            .filter(|i| {
+                i.get("id")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|id| terminals.iter().any(|t| u64::from(*t) == id))
+            })
+            .collect(),
+    )
+}
+
 /// The branch a copy's worktree is on: its own, named after the session,
 /// so a member never moves one of the central host's own branches.
 fn copy_branch(session: &str) -> String {
@@ -179,6 +247,7 @@ pub struct SessionCopies {
     watched: Mutex<Vec<PathBuf>>,
     data: Mutex<Data>,
     chats: Arc<ChatManager>,
+    terminals: Arc<moonlet_core::terminal::TerminalManager>,
     /// The Claude Code folder agents get without a workspace profile: the
     /// terminals' `CLAUDE_CONFIG_DIR`, else `~/.claude`.
     claude: PathBuf,
@@ -198,6 +267,7 @@ impl SessionCopies {
         link: Arc<WorkerLink>,
         chats: Arc<ChatManager>,
         claude: PathBuf,
+        terminals: Arc<moonlet_core::terminal::TerminalManager>,
     ) -> Arc<SessionCopies> {
         let file = home.join("session-copies.json");
         let data: Data = std::fs::read(&file)
@@ -216,6 +286,7 @@ impl SessionCopies {
             SessionCopies {
                 chats,
                 claude,
+                terminals,
                 talk: Mutex::new(BTreeMap::new()),
                 home: home.to_path_buf(),
                 file,
@@ -238,6 +309,7 @@ impl SessionCopies {
     /// Sends this member's sessions to its central host whenever they
     /// change, for as long as the daemon runs.
     pub fn spawn(self: &Arc<Self>) {
+        self.pass_events();
         let me = self.clone();
         tokio::spawn(async move {
             loop {
@@ -248,6 +320,74 @@ impl SessionCopies {
                 tokio::time::sleep(QUIET).await;
             }
         });
+    }
+
+    /// Passes the chat events of this member's sessions to its central
+    /// host, for the phones and apps that follow them there (X72).
+    fn pass_events(self: &Arc<Self>) {
+        let me = self.clone();
+        let mut events = self.terminals.subscribe_events();
+        tokio::spawn(async move {
+            loop {
+                let msg = match events.recv().await {
+                    Ok(msg) => msg,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(_) => break,
+                };
+                let Message::Event { name, data } = &msg else {
+                    continue;
+                };
+                if name != m::EV_CHAT_ITEM && name != m::EV_CHAT_STATE {
+                    continue;
+                }
+                let info = me.link.info();
+                if info.central.is_none() || info.worker.cloud {
+                    continue;
+                }
+                let Some(id) = data.get("id").and_then(Value::as_u64) else {
+                    continue;
+                };
+                let Some(session) = me.sessions.list_sessions().into_iter().find(|s| {
+                    s.owner.is_none()
+                        && !s.archived
+                        && s.terminals.iter().any(|t| u64::from(*t) == id)
+                }) else {
+                    continue;
+                };
+                let Some(host) = me.link.host() else { continue };
+                let event = m::SessionEvent {
+                    session: session.id,
+                    event: msg.clone(),
+                };
+                let Ok(params) = serde_json::to_value(event) else {
+                    continue;
+                };
+                // In the background, so a slow link never holds events up.
+                tokio::spawn(async move {
+                    let _ = host.request(m::SESSION_EVENT, params).await;
+                });
+            }
+        });
+    }
+
+    /// `session.event` from member `worker`: one of its session's events,
+    /// for this host's clients as `session.event {session, event}`.
+    pub fn event_offered(&self, worker: &str, r: m::SessionEvent) -> Result<bool, RpcError> {
+        self.owned_by(&r.session, worker)?;
+        self.terminals.emit(Message::event(
+            m::EV_SESSION_EVENT,
+            serde_json::json!({ "session": r.session, "event": r.event }),
+        ));
+        Ok(true)
+    }
+
+    /// The copy's chat of terminal `id`, as last sent, when it has one.
+    pub fn copy_chat(&self, session: &str, id: TerminalId) -> Option<ChatState> {
+        let file = self
+            .talk_dir(session)
+            .join("chats")
+            .join(format!("{id}.json"));
+        serde_json::from_slice(&std::fs::read(file).ok()?).ok()
     }
 
     fn save(&self, data: &Data) {
@@ -1145,6 +1285,66 @@ impl SessionCopies {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_request_passed_on_reaches_only_its_sessions_chats_and_worktree() {
+        let terminals = [3, 7];
+        let ok = |method: &str, params: Value| {
+            scope(
+                method,
+                params,
+                "s1",
+                "/Users/alex/.moonlet/worktrees/shop/fix-cart",
+                &terminals,
+            )
+        };
+        assert_eq!(
+            ok(m::CHAT_SEND, serde_json::json!({ "id": 7, "text": "go" })).unwrap(),
+            serde_json::json!({ "id": 7, "text": "go" })
+        );
+        assert_eq!(
+            ok(m::CHAT_SEND, serde_json::json!({ "id": 9, "text": "go" }))
+                .unwrap_err()
+                .code,
+            "forbidden"
+        );
+        assert_eq!(
+            ok(m::GIT_STATUS, serde_json::json!({ "path": "/etc" })).unwrap(),
+            serde_json::json!({ "path": "/Users/alex/.moonlet/worktrees/shop/fix-cart" })
+        );
+        assert_eq!(
+            ok(m::SESSION_ARCHIVE, serde_json::json!({ "id": "s1" })).unwrap(),
+            serde_json::json!({ "id": "s1" })
+        );
+        assert_eq!(
+            ok(m::SESSION_ARCHIVE, serde_json::json!({ "id": "s2" }))
+                .unwrap_err()
+                .code,
+            "forbidden"
+        );
+        for method in [
+            "terminal.create",
+            "mobile.pair_start",
+            "link.set",
+            "fs.read",
+            "session.create",
+        ] {
+            assert_eq!(
+                ok(method, serde_json::json!({})).unwrap_err().code,
+                "forbidden",
+                "{method}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_list_of_every_chat_keeps_only_the_sessions_own() {
+        let reply = serde_json::json!([{ "id": 3, "state": {} }, { "id": 5, "state": {} }]);
+        assert_eq!(
+            only_terminals(m::CHAT_SUMMARIES, reply, &[3, 7]),
+            serde_json::json!([{ "id": 3, "state": {} }])
+        );
+    }
 
     #[test]
     fn a_clone_url_is_taken_only_for_the_projects_own_origin() {

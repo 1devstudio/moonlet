@@ -119,6 +119,27 @@ pub struct Conn {
 }
 
 impl Conn {
+    /// A connection with no client behind it, for a request this daemon
+    /// handles on another's behalf: what it would send goes nowhere.
+    pub fn detached(id: ClientId, client: &str, phone: Option<String>) -> Arc<Conn> {
+        let (raw_tx, _) = mpsc::unbounded_channel();
+        let (urgent, _) = mpsc::unbounded_channel();
+        Arc::new(Conn {
+            id,
+            tx: ClientTx::new(raw_tx),
+            urgent,
+            client: client.to_string(),
+            phone,
+            pending: Mutex::new(HashMap::new()),
+            next_request: AtomicU64::new(1),
+            closed: Notify::new(),
+            packs: Mutex::new(PackAssembler::default()),
+            next_transfer: AtomicU32::new(1),
+            gone: std::sync::atomic::AtomicBool::new(true),
+            cloud: std::sync::atomic::AtomicBool::new(false),
+        })
+    }
+
     /// Sends the client a request and waits for its reply (X41).
     pub async fn request(&self, method: &str, params: Value, timeout: Duration) -> Result<Value, RpcError> {
         let id = self.next_request.fetch_add(1, Ordering::Relaxed);
@@ -339,6 +360,10 @@ where
                 // Design systems and designs stay on the Mac (X64, X65): a
                 // paired device hears none of the Mac-only events.
                 Ok(Message::Event { name, .. }) if phone && MAC_ONLY_EVENTS.contains(&name.as_str()) => {}
+                // Another member's session events are for the central host's
+                // apps and phones (X72), never an agent's CLI or a worker.
+                Ok(Message::Event { name, .. })
+                    if no_jobs && name == moonlet_proto::methods::EV_SESSION_EVENT => {}
                 Ok(m) => {
                     if !ev_tx.send(Frame::Json(m)) {
                         break;
