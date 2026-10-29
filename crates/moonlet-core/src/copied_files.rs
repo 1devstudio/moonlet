@@ -179,6 +179,58 @@ pub async fn untracked(dir: &Path) -> Result<Vec<String>> {
     Ok(out)
 }
 
+/// Which of `paths` git tracks in worktree `dir`: those are git's to
+/// carry, never written or removed as copied files.
+pub async fn tracked(dir: &Path, paths: &[String]) -> Result<std::collections::BTreeSet<String>> {
+    if paths.is_empty() {
+        return Ok(Default::default());
+    }
+    let specs: Vec<String> = paths.iter().map(|p| format!(":(literal){p}")).collect();
+    let mut args = vec!["ls-files", "--cached", "-z", "--"];
+    args.extend(specs.iter().map(String::as_str));
+    let bytes = crate::git::git(dir, &args).await?;
+    Ok(bytes
+        .split(|b| *b == 0)
+        .filter(|p| !p.is_empty())
+        .filter_map(|p| std::str::from_utf8(p).ok().map(str::to_string))
+        .collect())
+}
+
+/// Of the files another member sent, by path with the size of the bytes
+/// that came along (0 when none did), those this side takes: plain paths
+/// inside the worktree, named by its own list, within its limits, and not
+/// tracked by its git. A path the list does not name is refused; one over
+/// the limits or tracked here is left out.
+pub async fn receivable(
+    dir: &Path,
+    patterns: &[String],
+    sent: &[(String, u64)],
+) -> Result<std::collections::BTreeSet<String>> {
+    for (path, _) in sent {
+        check_path(path)?;
+    }
+    let paths: Vec<String> = sent.iter().map(|(p, _)| p.clone()).collect();
+    let picked = select(patterns, &paths, |p| {
+        sent.iter().find(|(q, _)| q == p).map(|(_, n)| *n)
+    })?;
+    let named: std::collections::BTreeSet<&str> = picked
+        .files
+        .iter()
+        .map(|(p, _)| p.as_str())
+        .chain(picked.skipped.iter().map(|(p, _)| p.as_str()))
+        .collect();
+    if let Some(p) = paths.iter().find(|p| !named.contains(p.as_str())) {
+        bail!("{p} is not a copied file here");
+    }
+    let tracked = tracked(dir, &paths).await?;
+    Ok(picked
+        .files
+        .into_iter()
+        .map(|(p, _)| p)
+        .filter(|p| !tracked.contains(p))
+        .collect())
+}
+
 /// What the list names in worktree `dir`, sized from the disk.
 pub async fn in_worktree(dir: &Path, patterns: &[String]) -> Result<Matched> {
     let candidates = untracked(dir).await?;
@@ -414,23 +466,16 @@ pub async fn apply(
     had: &std::collections::BTreeSet<String>,
     mut keep: impl FnMut(&str, &[u8]) -> Result<()>,
 ) -> Result<Applied> {
-    // The list and the limits as this side has them: a file over them is
-    // left alone, whatever the other side sent.
-    let size = |path: &str| {
-        manifest
-            .iter()
-            .find(|e| e.path == path)
-            .map(|e| e.bytes.as_ref().map_or(0, |b| b.len() as u64))
-    };
-    let picked = select(
-        patterns,
-        &manifest.iter().map(|e| e.path.clone()).collect::<Vec<_>>(),
-        size,
-    )?;
-    let named: std::collections::BTreeSet<&str> =
-        picked.files.iter().map(|(p, _)| p.as_str()).collect();
-    let over: std::collections::BTreeSet<&str> =
-        picked.skipped.iter().map(|(p, _)| p.as_str()).collect();
+    let sent: Vec<(String, u64)> = manifest
+        .iter()
+        .map(|e| {
+            (
+                e.path.clone(),
+                e.bytes.as_ref().map_or(0, |b| b.len() as u64),
+            )
+        })
+        .collect();
+    let takes = receivable(dir, patterns, &sent).await?;
     let mut here = std::collections::BTreeMap::new();
     for (path, _) in in_worktree(dir, patterns).await?.files {
         if let Some(bytes) = read(dir, &path)? {
@@ -440,20 +485,13 @@ pub async fn apply(
     // What stays as it is counts toward the total first.
     let mut total: u64 = manifest
         .iter()
-        .filter(|e| here.get(&e.path).map(|b| sha(b)).as_deref() == Some(e.sha.as_str()))
-        .map(|e| here[&e.path].len() as u64)
+        .filter_map(|e| here.get(&e.path).filter(|b| sha(b) == e.sha))
+        .map(|b| b.len() as u64)
         .sum();
     let mut done = Applied::default();
     for e in manifest {
-        if check_path(&e.path).is_err()
-            || !(named.contains(e.path.as_str()) || over.contains(e.path.as_str()))
-        {
-            bail!("{} is not a copied file here", e.path);
-        }
         let old = here.remove(&e.path);
-        if over.contains(e.path.as_str())
-            || old.as_deref().map(sha).as_deref() == Some(e.sha.as_str())
-        {
+        if !takes.contains(&e.path) || old.as_deref().map(sha).as_deref() == Some(e.sha.as_str()) {
             continue;
         }
         match &e.bytes {
@@ -860,6 +898,39 @@ mod tests {
             .unwrap();
         assert_eq!(done.changed.len(), 16);
         assert!(!copy.path().join("a16/.env").exists());
+    }
+
+    #[tokio::test]
+    async fn a_file_git_tracks_on_this_side_is_never_written() {
+        let copy = repo();
+        let run = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(copy.path())
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        std::fs::write(copy.path().join(".env.example"), "EXAMPLE=1\n").unwrap();
+        run(&["add", ".env.example"]);
+        let entry = Entry {
+            path: ".env.example".into(),
+            sha: sha(b"EVIL=1\n"),
+            bytes: Some(b"EVIL=1\n".to_vec()),
+        };
+        let done = apply(copy.path(), &pats(&DEFAULT), &[entry], |_, _| Ok(()))
+            .await
+            .unwrap();
+        assert_eq!(done, Applied::default());
+        assert_eq!(
+            std::fs::read_to_string(copy.path().join(".env.example")).unwrap(),
+            "EXAMPLE=1\n"
+        );
     }
 
     #[tokio::test]

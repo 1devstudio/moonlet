@@ -13,6 +13,14 @@ use base64::Engine;
 use moonlet_core::copied_files::{self as files, Entry, MAX_TOTAL, Version};
 use moonlet_proto::methods as m;
 
+/// On a cloud machine: the central host's list for each session it has a
+/// routed copy of, as last fetched.
+pub fn lists() -> &'static std::sync::Mutex<BTreeMap<String, Vec<String>>> {
+    static LISTS: std::sync::OnceLock<std::sync::Mutex<BTreeMap<String, Vec<String>>>> =
+        std::sync::OnceLock::new();
+    LISTS.get_or_init(Default::default)
+}
+
 /// How many bytes of copied files go in one message; the rest go in the
 /// next round.
 const BUDGET: u64 = 4 * 1024 * 1024;
@@ -346,6 +354,19 @@ impl Checkouts {
             .await
             .map_err(|e| anyhow::anyhow!("{}: {}", e.code, e.message))?;
         let answer: m::FilesCheckedOut = serde_json::from_value(answer)?;
+        // Only what this side's own list names, within its limits, and not
+        // tracked by its git.
+        let sizes: Vec<(String, u64)> = answer
+            .files
+            .iter()
+            .map(|f| {
+                (
+                    f.path.clone(),
+                    f.content.as_ref().map_or(0, |c| c.len() as u64 * 3 / 4),
+                )
+            })
+            .collect();
+        let takes = files::receivable(dir, patterns, &sizes).await?;
         let label = crate::sync::segment(&format!("{name}-checkout"));
         let mut folder = None;
         let mut t = self.tables.lock().unwrap();
@@ -361,7 +382,9 @@ impl Checkouts {
             sent.remove(path);
         }
         for f in answer.files {
-            files::check_path(&f.path)?;
+            if !takes.contains(&f.path) {
+                continue;
+            }
             let content = f.content.as_deref().and_then(decode);
             if f.sha.is_some() && content.as_deref().map(files::sha) != f.sha {
                 // Its bytes come next time.
@@ -400,15 +423,17 @@ impl Checkouts {
         let key = identity_key(&r.identity).context("a project without a root commit")?;
         let _one = self.one.lock().await;
         let bytes = self.look(&key, dir, patterns, me).await?;
-        let named: std::collections::BTreeSet<String> = files::select(
-            patterns,
-            &r.files.iter().map(|f| f.path.clone()).collect::<Vec<_>>(),
-            |_| Some(0),
-        )?
-        .files
-        .into_iter()
-        .map(|(p, _)| p)
-        .collect();
+        let sizes: Vec<(String, u64)> = r
+            .files
+            .iter()
+            .map(|f| {
+                (
+                    f.path.clone(),
+                    f.content.as_ref().map_or(0, |c| c.len() as u64 * 3 / 4),
+                )
+            })
+            .collect();
+        let takes = files::receivable(dir, patterns, &sizes).await?;
         let label = crate::sync::segment(&format!("{name}-checkout"));
         let mut folder = None;
         let mut out = m::FilesCheckedOut::default();
@@ -417,11 +442,10 @@ impl Checkouts {
         let latest = now_ms() + AHEAD_MS;
         let mut seen = std::collections::BTreeSet::new();
         for f in r.files {
-            files::check_path(&f.path)?;
-            if !named.contains(&f.path) {
-                anyhow::bail!("{} is not a copied file here", f.path);
-            }
             seen.insert(f.path.clone());
+            if !takes.contains(&f.path) {
+                continue;
+            }
             // A change is the member's own, and never stamped far ahead.
             let theirs = Version {
                 sha: f.sha.clone(),
