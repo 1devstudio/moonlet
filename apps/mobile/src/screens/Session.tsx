@@ -18,6 +18,8 @@ import { STATE_COLOR } from "../lib/palette";
 import { sessionLine, shellTerminals } from "../lib/chatView";
 import { useGitStatus, usePr } from "../lib/rowDetails";
 import { checksDot } from "../lib/checks";
+import { readOnlyLine } from "../lib/copies";
+import { parseCopyHost } from "@desktop/lib/copyHost";
 import { archiveSheet, archivedNote } from "../lib/archive";
 import { useBusy } from "../lib/busy";
 import { CHECK_COLOR } from "../lib/palette";
@@ -134,6 +136,10 @@ function ArchiveSheet({ host, session, pr, onClose }: { host: string; session: S
 
 export function SessionScreen({ host, id, tab }: { host: string; id: string; tab: SessionTab }) {
   const d = useApp((s) => s.data[host]);
+  // Another member's session, through its central host (X72): named after
+  // the member running it.
+  const central = parseCopyHost(host)?.host;
+  const centralLabel = useApp((s) => (central ? (s.hosts[central]?.label ?? central) : null));
   const hostLabel = useApp((s) => s.hosts[host]?.label ?? host);
   const session = d?.sessions.find((s) => s.id === id);
   const [git] = useGitStatus(host, session);
@@ -198,7 +204,7 @@ export function SessionScreen({ host, id, tab }: { host: string; id: string; tab
                 {task.key}
               </button>
             )}
-            <span className="min-w-0 truncate font-mono">{task ? `· ${[project?.name, session.branch].filter(Boolean).join(" · ")}` : sessionLine(session, project, hostLabel)}</span>
+            <span className="min-w-0 truncate font-mono">{task ? `· ${[project?.name, session.branch].filter(Boolean).join(" · ")}` : sessionLine(session, project, session.owner?.name ?? hostLabel)}</span>
           </span>
         </div>
         <button type="button" aria-label="Session actions" onClick={() => setMenu(true)} className="flex h-10 w-10 items-center justify-center text-muted">
@@ -232,6 +238,11 @@ export function SessionScreen({ host, id, tab }: { host: string; id: string; tab
           </button>
         ))}
       </nav>
+      {centralLabel && readOnlyLine(session, centralLabel) && (
+        <p role="status" className="flex-none border-b border-border bg-panel px-4 py-2 text-[13px] text-muted">
+          {readOnlyLine(session, centralLabel)}
+        </p>
+      )}
       <div className="min-h-0 flex-1">
         {shown === "chat" && <ChatTab host={host} session={session} />}
         {shown === "terminal" && <TerminalTab host={host} session={session} />}

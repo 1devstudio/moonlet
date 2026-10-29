@@ -1,0 +1,39 @@
+import { describe, expect, it } from "vitest";
+import { copyHostId, parseCopyHost, routeCall, unwrapEvent } from "./copyHost";
+
+describe("copy hosts (X72)", () => {
+  it("names a session another member owns by its central host and its id", () => {
+    const id = copyHostId("studio-mini", "5e7f9a1b3c5d");
+    expect(id).toBe("studio-mini#copy:5e7f9a1b3c5d");
+    expect(parseCopyHost(id)).toEqual({ host: "studio-mini", session: "5e7f9a1b3c5d" });
+    expect(parseCopyHost("studio-mini")).toBeNull();
+    expect(parseCopyHost("#copy:5e7f9a1b3c5d")).toBeNull();
+  });
+
+  it("sends a call through the central host, the session's terminals by relay", () => {
+    const id = "studio-mini#copy:5e7f9a1b3c5d";
+    expect(routeCall(id, "chat.send", { id: 3, text: "go" }, () => undefined)).toEqual({
+      host: "studio-mini",
+      method: "session.forward",
+      params: { session: "5e7f9a1b3c5d", method: "chat.send", params: { id: 3, text: "go" } },
+    });
+    expect(routeCall(id, "terminal.attach", { id: 4, cols: 80, rows: 24 }, () => undefined)).toEqual({
+      host: "studio-mini",
+      method: "session.attach",
+      params: { session: "5e7f9a1b3c5d", terminal: 4, cols: 80, rows: 24 },
+    });
+    expect(routeCall(id, "terminal.detach", { id: 4 }, (t) => (t === 4 ? 0x4000_0007 : undefined))).toEqual({
+      host: "studio-mini",
+      method: "session.detach",
+      params: { relay: 0x4000_0007 },
+    });
+    // Not attached: nothing to detach.
+    expect(routeCall(id, "terminal.detach", { id: 5 }, () => undefined)).toBeNull();
+  });
+
+  it("gives a session event as the copy host's own event", () => {
+    const e = { host: "studio-mini", name: "session.event", data: { session: "5e7f9a1b3c5d", event: { t: "event", name: "chat.item", data: { id: 3, item: { id: "i1" } } } } };
+    expect(unwrapEvent(e)).toEqual({ host: "studio-mini#copy:5e7f9a1b3c5d", name: "chat.item", data: { id: 3, item: { id: "i1" } } });
+    expect(unwrapEvent({ host: "studio-mini", name: "chat.item", data: {} })).toBeNull();
+  });
+});

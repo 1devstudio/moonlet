@@ -2,6 +2,8 @@
 // grouped by section and project as the desktop sidebar does (X32), each
 // shared section and project once across an account's members (X68).
 
+import { copyHostId } from "@desktop/lib/copyHost";
+import { ownerLine } from "./copies";
 import { planOf } from "@desktop/lib/chat";
 import { arrangeShared, lastActive, sectionParts, shownSections } from "@desktop/lib/sidebar";
 import { agentCount } from "@desktop/lib/subagents";
@@ -110,7 +112,7 @@ export function sessionGroups(hosts: Record<string, InboxHost>, data: Record<str
           section: sec.name,
           project,
           letter: project.name.charAt(0).toUpperCase(),
-          rows: g.sessions.map((e) => row(e.host, data[e.host], e.session, now, e.host === g.host ? null : hosts[e.host].label)),
+          rows: g.sessions.map((e) => row(e.host, data[e.host], e.session, now, ownerLine(e.session) ?? (e.host === g.host ? null : hosts[e.host].label))),
         });
       }
     }
@@ -152,7 +154,9 @@ export function filterGroups(groups: ProjectGroup[], chip: ChipId, query: string
 /** Where a tap on a row goes. */
 export function rowTarget(r: SessionRow): Screen {
   if (r.plan) return { kind: "plan", host: r.host, terminal: r.plan.terminal, ask: r.plan.ask };
-  return { kind: "session", host: r.host, id: r.session.id, tab: r.state === "done" ? "changes" : "chat" };
+  // Another member's session goes through the central host (X72).
+  const host = r.session.owner ? copyHostId(r.host, r.session.id) : r.host;
+  return { kind: "session", host, id: r.session.id, tab: r.state === "done" ? "changes" : "chat" };
 }
 
 /** A session's stored task link (X46): a tracker's key whole, a GitHub

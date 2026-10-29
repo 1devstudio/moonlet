@@ -4,6 +4,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { DaemonService, HostInfo, LinkInfo } from "./protocol";
+import { parseCopyHost, routeCall, unwrapEvent } from "./copyHost";
 
 export interface RpcError {
   code: string;
@@ -19,6 +20,7 @@ export class DaemonError extends Error {
 }
 
 export async function rpc<T = unknown>(host: string, method: string, params: unknown = {}): Promise<T> {
+  if (parseCopyHost(host)) return rpcCopy<T>(host, method, params);
   try {
     return await invoke<T>("rpc", { host, method, params });
   } catch (e) {
@@ -28,7 +30,41 @@ export async function rpc<T = unknown>(host: string, method: string, params: unk
 }
 
 export function sendInput(host: string, session: number, data: string) {
+  const copy = parseCopyHost(host);
+  if (copy) {
+    // A terminal of another member: typed into through its relay (X72).
+    const relay = relays.get(sinkKey(host, session));
+    if (relay === undefined) return Promise.resolve();
+    return invoke("send_input", { host: copy.host, session: relay, data }).catch(() => {});
+  }
   return invoke("send_input", { host, session, data }).catch(() => {});
+}
+
+/** A copy host's terminals (X72): the relay id of each attached one, and
+ * the copy host terminal each relay's output is for. */
+const relays = new Map<string, number>();
+const relayed = new Map<string, string>();
+
+/** A call to a copy host, through its central host (X72). An attached
+ * terminal keeps its own id here; its output comes under its relay id. */
+async function rpcCopy<T>(host: string, method: string, params: unknown): Promise<T> {
+  const copy = parseCopyHost(host)!;
+  const route = routeCall(host, method, params, (t) => relays.get(sinkKey(host, t)));
+  const terminal = (params as { id?: number } | null)?.id;
+  if (!route) return true as T;
+  const out = await rpc<T>(route.host, route.method, route.params);
+  if (method === "terminal.attach" && terminal !== undefined) {
+    const reply = out as unknown as { info: { id: number } };
+    relays.set(sinkKey(host, terminal), reply.info.id);
+    relayed.set(sinkKey(copy.host, reply.info.id), sinkKey(host, terminal));
+    reply.info.id = terminal;
+  }
+  if (method === "terminal.detach" && terminal !== undefined) {
+    const relay = relays.get(sinkKey(host, terminal));
+    relays.delete(sinkKey(host, terminal));
+    if (relay !== undefined) relayed.delete(sinkKey(copy.host, relay));
+  }
+  return out;
 }
 
 export const hostsApi = {
@@ -156,13 +192,17 @@ export function parseBatch(buf: ArrayBuffer, emit: (session: number, reset: bool
 
 /** Opens the output channel for a host once; safe to call repeatedly. */
 export async function subscribeHost(host: string) {
+  // A copy host's output comes on its central host's channel (X72).
+  const copy = parseCopyHost(host);
+  if (copy) return subscribeHost(copy.host);
   if (subscribed.has(host)) return;
   subscribed.add(host);
   const channel = new Channel<ArrayBuffer>();
   channel.onmessage = (msg) => {
     const buf = msg instanceof ArrayBuffer ? msg : new Uint8Array(msg as unknown as number[]).buffer;
     parseBatch(buf, (session, reset, data) => {
-      const sink = sinks.get(sinkKey(host, session));
+      const key = sinkKey(host, session);
+      const sink = sinks.get(key) ?? sinks.get(relayed.get(key) ?? "");
       if (!sink) return;
       if (reset) sink.reset(data);
       else sink.write(data);
@@ -183,7 +223,12 @@ export interface DaemonEvent {
 }
 
 export function onDaemonEvent(cb: (e: DaemonEvent) => void): Promise<UnlistenFn> {
-  return listen<DaemonEvent>("daemon-event", (e) => cb(e.payload));
+  return listen<DaemonEvent>("daemon-event", (e) => {
+    cb(e.payload);
+    // Another member's session events, as its copy host's own (X72).
+    const copy = unwrapEvent(e.payload);
+    if (copy) cb(copy);
+  });
 }
 
 export function onHostStatus(cb: (h: HostInfo) => void): Promise<UnlistenFn> {

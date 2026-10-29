@@ -30,6 +30,8 @@ import type { HostSeen } from "./hosts";
 import { hostWorkspaces, shownWorkspace } from "./workspaceChoices";
 import { withSetupCommand } from "./setups";
 import { type Change, accountAfterError, applyChanges, eventChanges, gitAfterError } from "./events";
+import { parseCopyHost } from "@desktop/lib/copyHost";
+import { copyData } from "./copies";
 
 /** A host as the phone's core lists it (`host_list`). */
 export interface HostEntry extends HostInfo {
@@ -165,7 +167,25 @@ export const showTab = (tab: Tab) => set({ tab, screen: null, ...(tab !== "new" 
 
 /** New session, started from a task on a board (X76), in its worktree without a session if given. */
 export const startFromTask = (from: NonNullable<AppState["newFrom"]>) => set({ tab: "new", screen: null, newFrom: from });
-export const showScreen = (screen: Screen | null) => set({ screen });
+export const showScreen = (screen: Screen | null) => {
+  set({ screen });
+  // A session another member owns opens under its copy host (X72).
+  if (screen && "host" in screen && parseCopyHost(screen.host)) void loadCopy(screen.host).catch(() => {});
+};
+
+/** Loads what copy host `id` shows (X72): the session's terminals and chats,
+ * through the central host. */
+export async function loadCopy(id: string) {
+  const copy = parseCopyHost(id);
+  const central = copy && useApp.getState().data[copy.host];
+  if (!copy || !central) return;
+  const [terminals, chats] = await Promise.all([
+    rpc<TerminalInfo[]>(id, M.terminalList).catch(() => []),
+    rpc<{ id: number; state: ChatSummary }[]>(id, M.chatSummaries).catch(() => []),
+  ]);
+  const d = copyData(useApp.getState().data[copy.host] ?? central, copy.session, terminals, chats);
+  if (d) patchData(id, d);
+}
 
 function patchData(host: string, patch: Partial<HostData> | ((d: HostData) => Partial<HostData>)) {
   set((s) => {
@@ -245,7 +265,8 @@ async function fetchHostData(host: string): Promise<Omit<HostData, "git" | "acco
   const call = <T>(method: string, params: object = {}) => rpc<T>(host, method, params);
   const [terminals, sessions, projects, workspaces, sections, reads, chats, git, account, copies, setups, tasks, macOpen] = await Promise.all([
     call<TerminalInfo[]>(M.terminalList),
-    call<Session[]>(M.sessionList),
+    // With the sessions other members own, from the central host (X72).
+    call<Session[]>(M.sessionList, { copies: true }),
     call<Project[]>(M.projectList),
     call<Workspace[]>(M.workspaceList),
     call<Section[]>(M.sectionList),
