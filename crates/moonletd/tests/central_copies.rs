@@ -1811,3 +1811,64 @@ async fn a_continue_that_cannot_record_the_new_owner_keeps_the_copy_to_try_again
         .await;
     assert_eq!(st["items"][0]["text"], json!("Fix the cart"));
 }
+
+#[tokio::test]
+async fn a_member_that_lost_its_session_keeps_its_gap_and_follows_the_new_owner() {
+    let origin = Origin::new();
+    let (mini, mut book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    let agent = made["terminals"][0].clone();
+    let copy = copy_of(&mini, &made).await;
+    reads(&copy.join("src/cart.ts"), "b\n").await;
+    within(
+        Duration::from_secs(30),
+        "the checkpoint on studio-mini",
+        || async {
+            mini.try_call("session.copy", json!({ "session": made["id"] }))
+                .await
+                .is_ok_and(|i| !i["checkpoint"].is_null())
+        },
+    )
+    .await;
+
+    // The MacBook goes away; meanwhile its worktree changes on its own.
+    book.stop();
+    std::fs::write(path_of(&made).join("src/cart.ts"), "while away\n").unwrap();
+    unreachable(&mini, &made).await;
+    let _: Value = mini
+        .call("session.continue_here", json!({ "session": made["id"] }))
+        .await;
+
+    book.restart().await;
+    within(
+        Duration::from_secs(30),
+        "fix-cart no longer the MacBook's own",
+        || async {
+            let own: Vec<Value> = book.call("session.list", json!({})).await;
+            own.iter().all(|s| s["id"] != made["id"])
+        },
+    )
+    .await;
+    // Its agent stopped, and what it did meanwhile is kept.
+    let terminals: Vec<Value> = book.call("terminal.list", json!({})).await;
+    assert!(terminals.iter().all(|t| t["id"] != agent));
+    let kept: Vec<PathBuf> = std::fs::read_dir(book.home.path().join("sync-leftovers"))
+        .unwrap()
+        .map(|e| e.unwrap().path().join("src/cart.ts"))
+        .filter(|p| p.exists())
+        .collect();
+    assert_eq!(kept.len(), 1, "{kept:?}");
+    assert_eq!(std::fs::read_to_string(&kept[0]).unwrap(), "while away\n");
+    // It keeps a live copy of the session studio-mini runs now (X60).
+    within(
+        Duration::from_secs(30),
+        "a live copy on the MacBook",
+        || async {
+            let copies: Vec<Value> = book.call("sync.list", json!({})).await;
+            copies.iter().any(|c| c["session"] == made["id"])
+        },
+    )
+    .await;
+}

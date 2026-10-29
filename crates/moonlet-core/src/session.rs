@@ -1194,6 +1194,28 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Lets go of session `id`, which the central host gave another member
+    /// (X73): it leaves this member's state, its terminals end, and its
+    /// worktree goes. Its record is the new owner's, so it is not touched.
+    pub async fn let_go_session(&self, id: &str) -> Result<()> {
+        let s = self.session(id)?;
+        for t in &s.terminals {
+            let _ = self.terminals.kill(*t, true);
+            if let Some(chats) = self.chats.get() {
+                chats.stop(*t, true);
+            }
+        }
+        self.mutate(|st| {
+            st.sessions.retain(|o| o.id != id);
+            Ok(())
+        })?;
+        if let Ok(repo) = self.project(&s.project_id) {
+            let _ = git::git(Path::new(&repo.path), &["worktree", "remove", "--force", &s.path]).await;
+        }
+        self.emit_sessions();
+        Ok(())
+    }
+
     /// A chat in session `ws` that goes on from `history`, another member's
     /// chat of it (X73), resuming the same conversation.
     pub fn continue_chat(&self, ws: &Session, mut history: moonlet_proto::types::ChatState) -> Result<TerminalInfo> {

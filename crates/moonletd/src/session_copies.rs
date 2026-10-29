@@ -375,6 +375,31 @@ pub fn cut_off_note(from: &str, to: &str, why: &str, old_path: &str, new_path: &
     note
 }
 
+/// `YYYYMMDD-HHMMSS` now, in UTC, for a fork's name.
+fn chrono_stamp() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let (days, rest) = (secs / 86_400, secs % 86_400);
+    // Days since 1970-01-01 to a civil date (Howard Hinnant's algorithm).
+    let z = days as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!(
+        "{y:04}{m:02}{d:02}-{:02}{:02}{:02}",
+        rest / 3600,
+        rest % 3600 / 60,
+        rest % 60
+    )
+}
+
 /// The branch a copy's worktree is on: its own, named after the session,
 /// so a member never moves one of the central host's own branches.
 fn copy_branch(session: &str) -> String {
@@ -462,6 +487,8 @@ pub struct SessionCopies {
     /// On a member: what the central host has of each session's chats.
     talk: Mutex<BTreeMap<String, Talk>>,
     kick: Notify,
+    /// Sessions to send again whatever was sent before: a new link's.
+    stale: Mutex<std::collections::HashSet<String>>,
     /// Set when a round sent the central host anything.
     sent_any: std::sync::atomic::AtomicBool,
     /// One round at a time on a member; one offer at a time on the
@@ -512,6 +539,7 @@ impl SessionCopies {
                 data: Mutex::new(data),
                 kick: Notify::new(),
                 sent_any: std::sync::atomic::AtomicBool::new(false),
+                stale: Mutex::new(std::collections::HashSet::new()),
                 round: tokio::sync::Mutex::new(()),
                 apply: tokio::sync::Mutex::new(()),
                 cloning: tokio::sync::Mutex::new(()),
@@ -568,11 +596,11 @@ impl SessionCopies {
                 // everything again, and what the old one relayed has no
                 // client.
                 if let Some(me) = reset.upgrade() {
-                    {
-                        let mut data = me.data.lock().unwrap();
-                        data.sent.clear();
-                        me.save(&data);
-                    }
+                    // What was sent stays known, for a gap to be kept
+                    // against (X73); every session is sent again, from
+                    // what the central host says it has.
+                    let known: Vec<String> = me.data.lock().unwrap().sent.keys().cloned().collect();
+                    me.stale.lock().unwrap().extend(known);
                     me.talk.lock().unwrap().clear();
                     let gone: Vec<(TerminalId, u64)> =
                         std::mem::take(&mut *me.relayed.lock().unwrap())
@@ -1006,15 +1034,16 @@ impl SessionCopies {
             .unwrap_or_else(|| s.branch.clone());
         let now = Sent { tree, head, branch };
         let before = self.data.lock().unwrap().sent.get(&s.id).cloned();
-        if before.as_ref() == Some(&now) {
+        let stale = self.stale.lock().unwrap().contains(&s.id);
+        if before.as_ref() == Some(&now) && !stale {
             return Ok(());
         }
-        // The first time, or after the central host lost the copy, it says
-        // what it has, so the pack leaves that out.
+        // The first time, after the central host lost the copy, or on a new
+        // link, it says what it has, so the pack leaves that out.
         let mut not: Vec<String> = Vec::new();
         match &before {
-            Some(b) => not.extend([b.tree.clone(), b.head.clone()]),
-            None => not.extend(self.open(host, s).await?),
+            Some(b) if !stale => not.extend([b.tree.clone(), b.head.clone()]),
+            _ => not.extend(self.open(host, s).await?),
         }
         match self.offer(host, s, &now, &not).await {
             Ok(()) => {}
@@ -1034,6 +1063,7 @@ impl SessionCopies {
                 anyhow::bail!("{}: {}", e.code, e.message)
             }
         }
+        self.stale.lock().unwrap().remove(&s.id);
         let mut data = self.data.lock().unwrap();
         data.sent.insert(s.id.clone(), now);
         self.sent_any
@@ -1700,12 +1730,12 @@ impl SessionCopies {
 
     /// Saves the files of `dir` that differ between tree `was` (the last
     /// offer) and `now` (the folder as it is) to a leftovers folder.
-    async fn keep_edits(&self, dir: &Path, was: &str, now: &str) -> Result<()> {
+    async fn keep_edits(&self, dir: &Path, was: &str, now: &str) -> Result<Option<PathBuf>> {
         let a = git_sync::read_files(dir, was).await?;
         let b = git_sync::read_files(dir, now).await?;
         let changed: Vec<&String> = b.keys().filter(|p| a.get(*p) != b.get(*p)).collect();
         if changed.is_empty() {
-            return Ok(());
+            return Ok(None);
         }
         let name = dir
             .file_name()
@@ -1724,7 +1754,7 @@ impl SessionCopies {
             dir.display(),
             folder.display()
         );
-        Ok(())
+        Ok(Some(folder))
     }
 
     /// The folder of the central host's copy of `session`'s chats.
@@ -1942,6 +1972,54 @@ impl SessionCopies {
         })
     }
 
+    /// On a member that lost session `s` to another (X73): keeps what it
+    /// did meanwhile that the central host never got. Files changed since
+    /// the last snapshot sent go to a leftovers folder; each transcript's
+    /// lines past what was sent are kept as a fork beside it. Gives the
+    /// leftovers folder, when there was anything to keep.
+    pub async fn keep_gap(&self, s: &moonlet_proto::types::Session) -> Result<Option<PathBuf>> {
+        let dir = Path::new(&s.path);
+        let mut folder = None;
+        let sent = self.data.lock().unwrap().sent.get(&s.id).cloned();
+        if let Some(sent) = sent
+            && dir.is_dir()
+        {
+            let now = git_sync::snapshot(dir, git_sync::MAX_FILE).await?.tree;
+            if now != sent.tree {
+                folder = self.keep_edits(dir, &sent.tree, &now).await?;
+            }
+        }
+        let stamp = chrono_stamp();
+        for t in &s.terminals {
+            let Ok(state) = self.chats.state(*t) else {
+                continue;
+            };
+            let Some(id) = state.agent_session else {
+                continue;
+            };
+            let projects = config_dir(self.sessions.config_dir(&s.id), &self.claude)
+                .join("projects")
+                .join(transcript::project_folder(dir));
+            let main = projects.join(format!("{id}.jsonl"));
+            let sent = self
+                .talk
+                .lock()
+                .unwrap()
+                .get(&s.id)
+                .and_then(|t| t.files.get(&format!("{id}.jsonl")).copied())
+                .unwrap_or(0);
+            let len = std::fs::metadata(&main).map(|m| m.len()).unwrap_or(0);
+            if len > sent {
+                let _ = std::fs::copy(&main, projects.join(format!("{id}.fork-{stamp}.jsonl")));
+            }
+        }
+        let mut data = self.data.lock().unwrap();
+        data.sent.remove(&s.id);
+        self.save(&data);
+        self.talk.lock().unwrap().remove(&s.id);
+        Ok(folder)
+    }
+
     /// Stops keeping `session` as a copy because this host is taking it
     /// over (X73): its worktree stays where it is and becomes the session's
     /// own, on `branch` when given, renamed from the copy's own branch. No
@@ -2032,7 +2110,7 @@ impl SessionCopies {
                 // cannot be kept stays, and is tried again later.
                 let kept = match git_sync::snapshot(dir, git_sync::MAX_FILE).await {
                     Ok(now) if !h.tree.is_empty() && now.tree != h.tree => {
-                        self.keep_edits(dir, &h.tree, &now.tree).await
+                        self.keep_edits(dir, &h.tree, &now.tree).await.map(|_| ())
                     }
                     Ok(_) => Ok(()),
                     Err(e) => Err(e),
