@@ -10,8 +10,9 @@ import type { AgentState, Project, PullRequest, Section, Session } from "@deskto
 import type { WorkspaceRef } from "@desktop/lib/workspaces";
 import { holds } from "@desktop/lib/boardColumns";
 import { type Category, syncedColumns } from "@desktop/lib/boards";
-import { taskForSession, taskId } from "@desktop/lib/tasks";
+import { type Task, taskForSession, taskId } from "@desktop/lib/tasks";
 import { linkChoices } from "@desktop/lib/taskLinking";
+import type { TaskSnapshot } from "@desktop/lib/taskSnapshot";
 import type { HostData, Screen } from "./app";
 import { type InboxHost, sessionState } from "./inbox";
 import { hostWorkspaces, workspaceChoices } from "./workspaceChoices";
@@ -169,9 +170,17 @@ export function taskChip(s: Session): { label: string; url: string } | null {
  * its column on the board and the project. Without the Mac's boards, the
  * stored link alone (`taskChip`).
  */
-export function sessionTask(d: HostData, s: Session, pr: PullRequest | null | undefined): { key: string; state: string | null; category: Category | null; project: string | null; url: string } | null {
-  const snap = s.workspace_id ? d.tasks[s.workspace_id] : undefined;
-  const task = snap ? taskForSession(s, pr, snap.repos[s.project_id] ?? null, snap.tasks, snap.link) : null;
+export function sessionTask(d: HostData, s: Session, pr: PullRequest | null | undefined, shared: TaskSnapshot[] = []): { key: string; state: string | null; category: Category | null; project: string | null; url: string } | null {
+  let snap: TaskSnapshot | undefined;
+  let task: Task | null = null;
+  // Its host's boards first, then those another member of its account shares (X68).
+  for (const sn of snapshotsOf(d, s, shared)) {
+    task = taskForSession(s, pr, sn.repos[s.project_id] ?? null, sn.tasks, sn.link);
+    if (task) {
+      snap = sn;
+      break;
+    }
+  }
   if (!task) {
     const chip = taskChip(s);
     return chip && { key: chip.label, state: null, category: null, project: null, url: chip.url };
@@ -188,9 +197,15 @@ export function sessionTask(d: HostData, s: Session, pr: PullRequest | null | un
  * board tasks whose title is the session's name. Rows show its key with "?",
  * opening Link to a task; never once the user unlinked the session's task.
  */
-export function suggestedTask(d: HostData, s: Session): { key: string; id: string } | null {
+export function suggestedTask(d: HostData, s: Session, shared: TaskSnapshot[] = []): { key: string; id: string } | null {
   if (s.task || s.task_unlinked) return null;
-  const snap = s.workspace_id ? d.tasks[s.workspace_id] : undefined;
-  const t = snap ? linkChoices({ name: s.name, branch: "" }, snap.tasks, "").suggested[0]?.task : undefined;
+  const tasks = snapshotsOf(d, s, shared).flatMap((sn) => sn.tasks);
+  const t = linkChoices({ name: s.name, branch: "" }, tasks, "").suggested[0]?.task;
   return t ? { key: t.key, id: taskId(t) } : null;
+}
+
+/** The snapshots a session's task may be in: its host's for its workspace, then `shared` ones. */
+function snapshotsOf(d: HostData, s: Session, shared: TaskSnapshot[]): TaskSnapshot[] {
+  const own = s.workspace_id ? d.tasks[s.workspace_id] : undefined;
+  return [...(own ? [own] : []), ...shared.filter((x) => x !== own)];
 }

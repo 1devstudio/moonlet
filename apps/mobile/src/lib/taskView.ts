@@ -110,9 +110,10 @@ export function taskDetail(b: PhoneBoard, id: string, d: HostData, details: Deta
     const agent = (own && own !== "none" ? own : null) ?? terminals.find((t) => t.agent)?.agent ?? null;
     const asks = terminals.flatMap((t) => d.chats[t.id]?.pending ?? []);
     const started = terminals.map((t) => d.chats[t.id]?.turn_started_at).find((x): x is number => typeof x === "number");
+    // Zero when it has said nothing yet: then plain "idle".
     const last = Math.max(0, ...terminals.map((t) => t.last_output_at ?? 0));
     const state =
-      s.state === "blocked" ? "needs you" : s.state === "working" ? (started ? `working ${clock(now - started)}` : "working") : s.state === "done" ? "done" : s.state === "error" ? "failed" : `idle for ${idleFor(now - last)}`;
+      s.state === "blocked" ? "needs you" : s.state === "working" ? (started ? `working ${clock(now - started)}` : "working") : s.state === "done" ? "done" : s.state === "error" ? "failed" : (last ? `idle for ${idleFor(now - last)}` : "idle");
     const ask = asks[0];
     return {
       id: s.id,

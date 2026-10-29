@@ -158,7 +158,7 @@ export function SessionScreen({ host, id, tab }: { host: string; id: string; tab
   }
   const project = d.projects.find((p) => p.id === session.project_id);
   // The task the session works on and where it is (X46, X76).
-  const task = sessionTask(d, session, pr);
+  const task = sessionTask(d, session, pr, sessionBoards(hosts, data, host, session).map((b) => b.snapshot));
   // Its subagents at a glance (X76).
   const chat = sessionChat(d, session.id);
   const strip = chat !== null && d.chats[chat] ? agentStrip(d.chats[chat], now) : null;

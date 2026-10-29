@@ -2,7 +2,7 @@
 // branch, loaded when a row shows and kept for a minute (detailsCache.ts):
 // the daemon sends no events about them.
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { latestOnly } from "@desktop/lib/prStack";
 import { rpc } from "@desktop/lib/daemon";
 import { detailsCache } from "./detailsCache";
@@ -61,11 +61,22 @@ export function useSessionsDetails(host: string | null, sessions: Session[], opt
   const [, setTick] = useState(0);
   // Read again once the cache lets them go (a minute), while the board shows.
   const [round, setRound] = useState(0);
+  const seen = useRef("");
   useEffect(() => {
-    // Reading only the cache costs nothing: it looks again every few seconds.
-    const t = setInterval(() => setRound((r) => r + 1), load ? 60_000 : 3_000);
+    // Reading only the cache costs nothing: it looks every few seconds, and
+    // shows again only when what others loaded changed.
+    const t = setInterval(() => {
+      if (load) return setRound((r) => r + 1);
+      if (!host) return;
+      const now = sessions.map((s) => `${s.id}:${JSON.stringify(cache.peek(`pr:${host}:${s.id}`) ?? null)}:${JSON.stringify(cache.peek(`git:${host}:${s.id}:base`) ?? null)}`).join("|");
+      if (now !== seen.current) {
+        seen.current = now;
+        setTick((x) => x + 1);
+      }
+    }, load ? 60_000 : 3_000);
     return () => clearInterval(t);
-  }, [load]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [load, host, sessions.map((s) => s.id).join(",")]);
   const ids = sessions.map((s) => s.id).join(",");
   useEffect(() => {
     if (!host || !load) return;

@@ -10,6 +10,7 @@ import { showScreen, useApp, useShownWorkspace } from "../lib/app";
 import { useBase, useGitStatus, usePr, useSeen } from "../lib/rowDetails";
 import { type ChipId, type ProjectGroup, type SessionRow, chips, filterGroups, rowTarget, sessionGroups, sessionTask, suggestedTask } from "../lib/sessionList";
 import { LinkSheet } from "../components/LinkSheet";
+import { sessionBoards } from "../lib/board";
 import { useBusy } from "../lib/busy";
 import { STATE_COLOR } from "../lib/palette";
 import { DiffStat, StateGlyph, Title, cx } from "../components/ui";
@@ -41,10 +42,14 @@ function Row({ r }: { r: SessionRow }) {
   const [stat] = useGitStatus(r.host, seen ? r.session : undefined);
   const [pr] = usePr(r.host, seen ? r.session : undefined);
   const d = useApp((s) => s.data[r.host]);
+  const hosts = useApp((s) => s.hosts);
+  const data = useApp((s) => s.data);
+  // Boards another member of the account shares count too (X68).
+  const shared = sessionBoards(hosts, data, r.host, r.session).map((b) => b.snapshot);
   // The task the session works on: its link, or the one its branch or PR names (X46, X76).
-  const task = d ? sessionTask(d, r.session, pr) : null;
+  const task = d ? sessionTask(d, r.session, pr, shared) : null;
   // A task its name suggests, to link from here (X76).
-  const suggested = d && !task ? suggestedTask(d, r.session) : null;
+  const suggested = d && !task ? suggestedTask(d, r.session, shared) : null;
   const [linking, setLinking] = useState(false);
   return (
     <>

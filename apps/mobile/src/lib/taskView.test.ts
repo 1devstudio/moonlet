@@ -88,11 +88,18 @@ describe("taskDetail (X76)", () => {
     ]);
   });
 
+  it("says idle without a time for a session that has said nothing yet", () => {
+    const d = mac();
+    d.sessions.push(session("quiet", "Quiet one", { branch: "moon-142-quiet", project_id: "moonlet", agent: "codex" }));
+    const [b] = phoneBoards(hosts, { mac: d }, null);
+    expect(taskDetail(b, `${LINEAR} MOON-142`, d, details, {}, NOW)!.sessions.find((s) => s.id === "quiet")?.word).toBe("Codex · idle");
+  });
+
   it("says a session has no agent instead of naming one", () => {
     const d = mac();
     d.sessions.push(session("plain", "Plain shell", { branch: "moon-142-plain", project_id: "moonlet", agent: null }));
     const [b] = phoneBoards(hosts, { mac: d }, null);
-    expect(taskDetail(b, `${LINEAR} MOON-142`, d, details, {}, NOW)!.sessions.find((s) => s.id === "plain")?.word).toMatch(/^No agent · idle for /);
+    expect(taskDetail(b, `${LINEAR} MOON-142`, d, details, {}, NOW)!.sessions.find((s) => s.id === "plain")?.word).toBe("No agent · idle");
   });
 
   it("offers its worktrees without a session, and its activity, newest first", () => {

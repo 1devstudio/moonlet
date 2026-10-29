@@ -2,7 +2,7 @@
 // people and labels and creates the issue in the tracker.
 
 import { useEffect, useState } from "react";
-import { fitDraft, newIssueDraft, type NewIssue } from "@desktop/lib/newIssue";
+import { fitDraft, isJira, newIssueDraft, type NewIssue } from "@desktop/lib/newIssue";
 import { showScreen } from "../lib/app";
 import type { PhoneBoard } from "../lib/board";
 import { useBusy } from "../lib/busy";
@@ -31,6 +31,7 @@ export function NewIssueSheet({ b, column, onClose }: { b: PhoneBoard; column: s
   const [draft, setDraft] = useState<NewIssue>(() => newIssueDraft(b.board));
   const [options, setOptions] = useState<IssueOptions | null>(null);
   const [optionsError, setOptionsError] = useState<string | null>(null);
+  const [newLabel, setNewLabel] = useState("");
   const { busy, error, run } = useBusy();
   const form = issueForm(b.board, b.snapshot, draft, options);
   const place = form.draft.place;
@@ -51,7 +52,8 @@ export function NewIssueSheet({ b, column, onClose }: { b: PhoneBoard; column: s
     return () => {
       live = false;
     };
-  }, [b.key, place, draft.issueType]); // eslint-disable-line react-hooks/exhaustive-deps
+    // Again when another Mac serves the board: its lists are its own.
+  }, [b.key, b.host, b.board.connection, place, draft.issueType]); // eslint-disable-line react-hooks/exhaustive-deps
   const set = (patch: Partial<NewIssue>) => setDraft((d) => ({ ...d, ...patch }));
   const create = () =>
     run(async () => {
@@ -79,11 +81,11 @@ export function NewIssueSheet({ b, column, onClose }: { b: PhoneBoard; column: s
             onPick={(id) => set({ assignee: id })}
           />
         )}
-        {form.labels && options && options.labels.length > 0 && (
+        {form.labels && options && (options.labels.length > 0 || isJira(b.board)) && (
           <div className="flex flex-col gap-1.5">
             <span className="text-[13px] text-muted">Labels</span>
             <div className="flex flex-wrap gap-1.5">
-              {options.labels.map((l) => {
+              {[...options.labels, ...draft.labels.filter((x) => !options.labels.some((l) => l.id === x)).map((x) => ({ id: x, name: x }))].map((l) => {
                 const on = draft.labels.includes(l.id);
                 return (
                   <button key={l.id} type="button" onClick={() => set({ labels: on ? draft.labels.filter((x) => x !== l.id) : [...draft.labels, l.id] })} className={cx("h-8 rounded-full border px-3 text-[13px]", on ? "border-accent bg-selected" : "border-border-strong")}>
@@ -92,6 +94,23 @@ export function NewIssueSheet({ b, column, onClose }: { b: PhoneBoard; column: s
                 );
               })}
             </div>
+            {/* Jira takes a new label by its name (X52). */}
+            {isJira(b.board) && (
+              <input
+                aria-label="Add a label"
+                value={newLabel}
+                onChange={(e) => setNewLabel(e.target.value)}
+                onKeyDown={(e) => {
+                  const l = newLabel.trim();
+                  if (e.key !== "Enter" || !l) return;
+                  e.preventDefault();
+                  if (!draft.labels.includes(l)) set({ labels: [...draft.labels, l] });
+                  setNewLabel("");
+                }}
+                placeholder="Add a label"
+                className="h-10 rounded-[10px] border border-border-strong bg-bg px-3 text-[14.5px] outline-none"
+              />
+            )}
           </div>
         )}
         {options?.missing?.length ? <span className="text-[12.5px] text-error">Jira needs {options.missing.join(", ")}: create this issue in Jira.</span> : null}

@@ -87,7 +87,7 @@ export function CleanUpSheet({ c, b, onClose }: { c: CardView; b: PhoneBoard; on
         <h2 className="m-0 text-[17px] font-semibold">Clean up {c.key}?</h2>
         <p className="m-0 text-[14px] leading-[1.45] text-muted">{cleanUpMessage(c.card.rows.length, c.card.orphans.length, [])}</p>
         {error && <p className="m-0 text-[13px] text-error">{error}</p>}
-        <Btn tone="primary" disabled={busy} onClick={() => void run(() => fixOnMac(b, c.task)).then((ok) => ok && onClose())}>
+        <Btn tone="primary" disabled={busy} onClick={() => void run(() => fixOnMac(b, c.task, c.driftKey ?? "")).then((ok) => ok && onClose())}>
           {busy ? "Cleaning up…" : "Clean up"}
         </Btn>
         <Btn tone="ghost" onClick={onClose}>
@@ -103,7 +103,7 @@ export function fixCard(b: PhoneBoard, c: CardView, askCleanUp: () => void) {
   const to = syncedColumns(b.board, null).find((x) => x.name === c.drift?.to);
   if (to?.statuses[0]) void moveOnMac(b, c.task, { label: to.name, status: to.statuses[0] }).catch(() => {});
   else if (c.drift?.kind === "done_open") askCleanUp();
-  else void fixOnMac(b, c.task).catch(() => {});
+  else void fixOnMac(b, c.task, c.driftKey ?? "").catch(() => {});
 }
 
 function TaskCard({ c, b, failure }: { c: CardView; b: PhoneBoard; failure: string | null }) {

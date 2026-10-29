@@ -269,6 +269,15 @@ describe("sessionTask (X76)", () => {
     expect(sessionTask(host, s, null)).toBeNull();
   });
 
+  it("finds a session's task on a board another member of its account shares (X68)", () => {
+    const s = session("remote", "Remote hosts sidebar", { branch: "moon-142-remote-hosts", project_id: "moonlet" });
+    // This member has no snapshot; the account's board came from another.
+    const host = data({ projects: [project("moonlet", "moonlet")], sessions: [s] });
+    expect(sessionTask(host, s, null)).toBeNull();
+    expect(sessionTask(host, s, null, [snap])?.key).toBe("MOON-142");
+    expect(suggestedTask(host, { ...s, branch: "x", name: "Remote hosts sidebar" }, [snap])).toEqual({ key: "MOON-142", id: `${LINEAR} MOON-142` });
+  });
+
   it("suggests a task whose title is the session's name, for a session with no task (shown as MOON-142?)", () => {
     const { s, ...host } = d(session("dark", "Remote hosts sidebar", { branch: "moonlet/sidebar", project_id: "moonlet" }));
     expect(sessionTask(host, s, null)).toBeNull();

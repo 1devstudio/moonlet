@@ -155,12 +155,14 @@ function AttachmentCard({ a, onRemove }: { a: Attachment; onRemove: () => void }
 export function NewSessionScreen() {
   const hosts = useApp((s) => s.hosts);
   const data = useApp((s) => s.data);
-  const choices = projectChoices(hosts, data, useShownWorkspace());
+  const shownWs = useShownWorkspace();
   const [prompt, setPrompt] = useState("");
   const [pick, setPick] = useState(0);
   // Started from a task (X76): its board, the task and the Mac's preset for it.
   const newFrom = useApp((s) => s.newFrom);
   const fromBoard = newFrom ? (phoneBoards(hosts, data, null).find((b) => b.key === newFrom.board) ?? null) : null;
+  // From a task: the projects of its board's workspace, so the session goes where the task is.
+  const choices = projectChoices(hosts, data, fromBoard ? { host: fromBoard.host, id: fromBoard.workspace, account: data[fromBoard.host]?.account ?? "" } : shownWs);
   const fromTask = fromBoard?.snapshot.tasks.find((t) => taskId(t) === newFrom?.task) ?? null;
   const preset = fromBoard && fromTask ? taskPreset(fromBoard, fromTask) : null;
   const [taskBranch, setTaskBranch] = useState<string | null>(null);

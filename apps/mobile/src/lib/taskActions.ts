@@ -17,7 +17,8 @@ import { pruneMoves } from "./taskView";
 export const moveAction = (board: BoardConfig, task: Task, to: { label: string; status: string }): TaskAction => ({ kind: "move", board: board.id, task: taskId(task), column: to.label, status: to.status });
 export const createAction = (board: BoardConfig, column: string, issue: NewIssue): TaskAction => ({ kind: "create", board: board.id, column, issue });
 export const startedAction = (task: Task, session: string, assign: boolean): TaskAction => ({ kind: "started", task: taskId(task), session, assign });
-export const fixAction = (board: BoardConfig, task: Task): TaskAction => ({ kind: "fix", board: board.id, task: taskId(task) });
+/** `plan`: the chip the phone showed, so the Mac runs only that fix. */
+export const fixAction = (board: BoardConfig, task: Task, plan: string): TaskAction => ({ kind: "fix", board: board.id, task: taskId(task), plan });
 export const syncAction = (board: BoardConfig): TaskAction => ({ kind: "sync", board: board.id });
 export const commentsAction = (board: BoardConfig, task: Task): TaskAction => ({ kind: "comments", board: board.id, task: taskId(task) });
 export const commentAction = (board: BoardConfig, task: Task, body: string): TaskAction => ({ kind: "comment", board: board.id, task: taskId(task), body });
@@ -97,26 +98,34 @@ async function send(host: string, workspace: string, id: string, action: TaskAct
   }
 }
 
+// Waiting moves being sent now, by task id.
+const sending = new Set<string>();
+
 /** Sends the moves that waited for moonlet on `host`, now open there. */
 function sendWaiting(host: string) {
-  const all = loadWaiting();
-  const now = all.filter((w) => w.host === host);
-  if (!now.length) return;
-  saveWaiting(all.filter((w) => w.host !== host));
+  const now = loadWaiting().filter((w) => w.host === host && !sending.has(w.id));
   for (const w of now) {
     // Shown from now on as any move, until the snapshot has it.
     const move: Move = { ...w.move, waiting: false, at: Date.now() };
     useTaskStore.setState((s) => (s.moving[w.id] === undefined || s.moving[w.id].at === w.move.at ? { moving: { ...s.moving, [w.id]: move } } : s));
-    void send(w.host, w.workspace, w.id, w.action, move).catch(() => {});
+    sending.add(w.id);
+    // Kept until the Mac answered: a phone app that quits meanwhile sends it again on its next start.
+    void send(w.host, w.workspace, w.id, w.action, move)
+      .then(
+        () => saveWaiting(loadWaiting().filter((x) => x.id !== w.id || x.move.at !== w.move.at)),
+        // Refused: it went back on the board; no point sending it again.
+        () => saveWaiting(loadWaiting().filter((x) => x.id !== w.id || x.move.at !== w.move.at)),
+      )
+      .finally(() => sending.delete(w.id));
   }
 }
 
 /** Runs a card's out-of-sync fix on the Mac (X76): Clean up, or a fix that is not a move. */
-export async function fixOnMac(b: Pick<PhoneBoard, "host" | "workspace" | "board">, task: Task) {
+export async function fixOnMac(b: Pick<PhoneBoard, "host" | "workspace" | "board">, task: Task, plan: string) {
   const id = taskId(task);
   useTaskStore.setState((s) => ({ failures: without(s.failures, id) }));
   try {
-    await askMac(b, fixAction(b.board, task));
+    await askMac(b, fixAction(b.board, task, plan));
   } catch (e) {
     useTaskStore.setState((s) => ({ failures: { ...s.failures, [id]: e instanceof Error ? e.message : String(e) } }));
     throw e;

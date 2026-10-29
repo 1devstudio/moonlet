@@ -35,7 +35,7 @@ describe("what the phone asks the Mac (X76)", () => {
   });
 
   it("asks for fixes, syncs and comments the Mac's app understands", () => {
-    expect(resolveTaskRequest(fixAction(board, task), mac)).toEqual({ kind: "fix", board, task });
+    expect(resolveTaskRequest(fixAction(board, task, "chip"), mac)).toEqual({ kind: "fix", board, task, plan: "chip" });
     expect(resolveTaskRequest(syncAction(board), mac)).toEqual({ kind: "sync", board });
     expect(resolveTaskRequest(commentsAction(board, task), mac)).toEqual({ kind: "comments", task });
     expect(resolveTaskRequest(commentAction(board, task, "Picked this up."), mac)).toEqual({ kind: "comment", task, body: "Picked this up." });
@@ -74,7 +74,10 @@ describe("a move while moonlet is closed on the Mac (X76)", () => {
     expect(JSON.parse(localStorage.getItem("moonlet.mobile.tasks.waiting") ?? "[]")).toMatchObject([{ host: "mac", workspace: "personal", id, action: { kind: "move", column: "In Progress" } }]);
 
     useApp.setState({ data: { mac: { ...emptyData(), macOpen: true } } });
+    // Kept until the Mac has answered: a phone app that quits meanwhile sends it again.
+    expect(JSON.parse(localStorage.getItem("moonlet.mobile.tasks.waiting") ?? "[]")).toHaveLength(1);
     await vi.waitFor(() => expect(calls).toHaveLength(1));
+    await vi.waitFor(() => expect(JSON.parse(localStorage.getItem("moonlet.mobile.tasks.waiting") ?? "[]")).toEqual([]));
     expect(calls[0]).toEqual(["mac", "tasks.request", { workspace: "personal", action: { kind: "move", board: "moon", task: id, column: "In Progress", status: "s-progress" } }]);
     expect(useTaskStore.getState().moving[id]).toMatchObject({ waiting: false });
     expect(JSON.parse(localStorage.getItem("moonlet.mobile.tasks.waiting") ?? "[]")).toEqual([]);
