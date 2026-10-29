@@ -163,7 +163,13 @@ pub struct Host {
     failure: Mutex<Option<String>>,
     events: Arc<dyn Events>,
     rt: Handle,
+    /// What takes input the daemon relays for one of this machine's
+    /// terminals (X72).
+    relayed_input: Mutex<Option<RelayedInput>>,
 }
+
+/// Takes input for relay `id`, from the central host (X72).
+pub type RelayedInput = Arc<dyn Fn(TerminalId, Vec<u8>) + Send + Sync>;
 
 /// What a new [`Host`] is called and how it introduces itself.
 pub struct HostOptions {
@@ -212,6 +218,7 @@ impl Host {
             failure: Mutex::new(None),
             events,
             rt: rt.clone(),
+            relayed_input: Mutex::new(None),
         });
         rt.spawn(flush_loop(Arc::downgrade(&host)));
         rt.spawn(connection_loop(host.clone(), connector, stop_rx));
@@ -229,6 +236,26 @@ impl Host {
     /// Where batched PTY output goes from now on.
     pub fn set_output(&self, sink: impl Fn(Vec<u8>) + Send + Sync + 'static) {
         *self.output.lock().unwrap() = Some(Box::new(sink));
+    }
+
+    /// What takes the input the daemon relays for one of this machine's
+    /// terminals from now on (X72).
+    pub fn set_relayed_input(&self, sink: RelayedInput) {
+        *self.relayed_input.lock().unwrap() = Some(sink);
+    }
+
+    /// Sends output of a terminal of this machine that the central host
+    /// relays to one of its clients as `relay` (X72).
+    pub fn send_output(&self, relay: TerminalId, data: Vec<u8>) -> Result<(), RpcError> {
+        let link = self.link.lock().unwrap();
+        let link = link
+            .as_ref()
+            .ok_or_else(|| RpcError::new("disconnected", "not connected"))?;
+        let bytes = encode_frame(&Frame::Output { terminal: relay, data })
+            .map_err(|e| RpcError::new("too_large", e.to_string()))?;
+        link.tx
+            .send(bytes)
+            .map_err(|_| RpcError::new("disconnected", "connection closed"))
     }
 
     /// What answers the daemon's requests from now on (X41).
@@ -637,6 +664,14 @@ async fn write_link<W: AsyncWrite + Unpin>(
 fn dispatch(host: &Arc<Host>, frame: Frame) -> Result<(), moonlet_proto::PackError> {
     match frame {
         Frame::Output { terminal, data } => host.push_output(terminal, &data),
+        // Input a client of the central host typed into a terminal of this
+        // machine it relays (X72).
+        Frame::Input { terminal, data } => {
+            let sink = host.relayed_input.lock().unwrap().clone();
+            if let Some(sink) = sink {
+                sink(terminal, data);
+            }
+        }
         Frame::Pack { transfer, data } => host.packs.lock().unwrap().push(transfer, data)?,
         // An error no request asked for: the daemon says why it ends the link.
         Frame::Json(Message::Response {

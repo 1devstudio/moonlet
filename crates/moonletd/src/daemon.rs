@@ -1020,6 +1020,28 @@ impl Daemon {
                 None => Err(RpcError::new("invalid_params", "not a paired device")),
             },
             method if method.starts_with("mobile.") => self.handle_mobile(conn, method, p),
+            m::SESSION_ATTACH | m::SESSION_DETACH => {
+                if conn.client == crate::link::WORKER_CLIENT || conn.client == CLI_CLIENT || conn.cloud.load(std::sync::atomic::Ordering::Relaxed) {
+                    return Err(RpcError::new("forbidden", "only an app or a phone follows another member's session"));
+                }
+                if method == m::SESSION_DETACH {
+                    let r: m::SessionDetach = params(p)?;
+                    self.session_copies.detach(conn.id, Some(r.relay));
+                    return ok(true);
+                }
+                let r: m::SessionAttach = params(p)?;
+                let owner = self
+                    .sessions
+                    .session_records()
+                    .remove(&r.session)
+                    .and_then(|rec| rec.get("owner").and_then(Value::as_str).map(str::to_string))
+                    .ok_or_else(|| RpcError::new("not_found", "no such session in the account"))?;
+                let member = self.workers.conn(&owner).ok_or_else(|| {
+                    let name = self.sessions.member_names().remove(&owner).unwrap_or(owner.clone());
+                    RpcError::new("owner_offline", format!("{name} is not reachable"))
+                })?;
+                self.session_copies.attach(conn, &member, r).await
+            }
             m::SESSION_FORWARD => {
                 // The central host's apps and phones (X72): never a worker,
                 // a cloud machine or an agent's CLI.
@@ -2676,12 +2698,32 @@ impl Daemon {
     /// session, handled as for a paired device, never as the Mac's app.
     pub async fn forwarded(self: &Arc<Self>, r: m::SessionForward) -> HandlerResult {
         use crate::session_copies::{only_terminals, scope};
+        if r.method == m::TERMINAL_DETACH {
+            if let Some(relay) = r.params.get("relay").and_then(Value::as_u64).and_then(|i| u32::try_from(i).ok()) {
+                self.session_copies.relay_detach(relay);
+            }
+            return ok(true);
+        }
         let s = self
             .sessions
             .list_sessions()
             .into_iter()
             .find(|s| s.id == r.session && s.owner.is_none() && !s.archived)
             .ok_or_else(|| RpcError::new("not_found", "no such session here"))?;
+        // A terminal the central host relays to one of its clients (X72).
+        if r.method == m::TERMINAL_ATTACH {
+            let id = r.params.get("id").and_then(Value::as_u64).and_then(|i| u32::try_from(i).ok());
+            let relay = r.params.get("relay").and_then(Value::as_u64).and_then(|i| u32::try_from(i).ok());
+            let (Some(id), Some(relay)) = (id, relay) else {
+                return Err(RpcError::new("invalid_params", "a terminal and a relay"));
+            };
+            if !s.terminals.contains(&id) {
+                return Err(RpcError::new("forbidden", "that terminal is not one of the session's"));
+            }
+            let size = r.params.get("cols").and_then(Value::as_u64).zip(r.params.get("rows").and_then(Value::as_u64));
+            let size = size.map(|(c, r)| (c.min(u16::MAX as u64) as u16, r.min(u16::MAX as u64) as u16));
+            return self.session_copies.relay_attach(relay, id, size);
+        }
         let p = scope(&r.method, r.params, &s.id, &s.path, &s.terminals)?;
         let conn = Conn::detached(self.terminals.new_client_id(), "moonlet-forwarded", Some("forwarded".to_string()));
         let reply = Box::pin(self.handle(&conn, &r.method, p)).await?;

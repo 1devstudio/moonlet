@@ -1029,3 +1029,111 @@ async fn the_owners_chat_events_reach_the_central_hosts_clients() {
     assert_eq!(event["session"], made["id"]);
     assert_eq!(event["event"]["data"]["id"], agent);
 }
+
+// --- Terminals through the central host ----------------------------------
+
+/// A shell in `session`'s worktree on `d`; gives its terminal id.
+async fn shell(d: &Daemon, session: &Value) -> Value {
+    let info: Value = d
+        .call(
+            "terminal.create",
+            json!({ "cwd": session["path"], "command": ["/bin/sh"], "session_id": session["id"] }),
+        )
+        .await;
+    info["id"].clone()
+}
+
+#[tokio::test]
+async fn a_terminal_of_the_owners_session_is_followed_and_typed_into_through_the_central_host() {
+    use moonlet_proto::{Frame, Message};
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = new_session(&book, &project, "fix-cart").await;
+    let term = shell(&book, &made).await;
+    within(
+        Duration::from_secs(10),
+        "the shell on studio-mini's list",
+        || async {
+            mini.try_call("session.list", json!({ "copies": true }))
+                .await
+                .is_ok()
+                && with_copies(&mini)
+                    .await
+                    .iter()
+                    .any(|s| s["id"] == made["id"])
+        },
+    )
+    .await;
+
+    let mut phone = mini.app().await;
+    let attached: Value = phone
+        .request(
+            "session.attach",
+            json!({ "session": made["id"], "terminal": term }),
+        )
+        .await
+        .unwrap();
+    let relay = attached["info"]["id"].as_u64().unwrap();
+    // Not one of studio-mini's own terminals, nor the MacBook's id.
+    assert!(relay >= 0x4000_0000, "{relay}");
+    assert!(attached["snapshot"].is_string());
+
+    phone
+        .send(&Frame::Input {
+            terminal: relay as u32,
+            data: b"echo relayed-$((40+2))\n".to_vec(),
+        })
+        .await
+        .unwrap();
+    let seen = tokio::time::timeout(Duration::from_secs(15), async {
+        let mut out = String::new();
+        loop {
+            match phone.next_frame().await.unwrap() {
+                Some(Frame::Output { terminal, data }) if u64::from(terminal) == relay => {
+                    out.push_str(&String::from_utf8_lossy(&data));
+                    if out.contains("relayed-42") {
+                        return out;
+                    }
+                }
+                Some(Frame::Json(Message::Event { .. })) | Some(_) => {}
+                None => panic!("the connection ended"),
+            }
+        }
+    })
+    .await
+    .expect("no relayed output");
+    assert!(seen.contains("relayed-42"));
+}
+
+#[tokio::test]
+async fn a_terminal_that_is_not_the_sessions_is_not_followed_through_it() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = new_session(&book, &project, "fix-cart").await;
+    let other = new_session(&book, &project, "other").await;
+    let theirs = shell(&book, &other).await;
+    within(
+        Duration::from_secs(10),
+        "fix-cart on studio-mini",
+        || async {
+            with_copies(&mini)
+                .await
+                .iter()
+                .any(|s| s["id"] == made["id"])
+        },
+    )
+    .await;
+
+    let refused = mini
+        .try_call(
+            "session.attach",
+            json!({ "session": made["id"], "terminal": theirs }),
+        )
+        .await
+        .unwrap_err();
+    assert!(refused.starts_with("forbidden"), "{refused}");
+}

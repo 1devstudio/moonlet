@@ -48,6 +48,16 @@ fn clone_url_names(url: &str, origin: &str) -> bool {
     moonlet_core::identity::normalize_origin(url).as_deref() == Some(origin)
 }
 
+/// The first relay id: far above the ids of a host's own terminals, so a
+/// client never mistakes one for the other.
+const RELAY_BASE: TerminalId = 0x4000_0000;
+
+/// A terminal of another member the central host relays to one client.
+struct Relay {
+    owner: Weak<crate::server::Conn>,
+    client: Weak<crate::server::Conn>,
+}
+
 /// How many bytes of a transcript file go in one `session.transcript`.
 const CHUNK: usize = 4 * 1024 * 1024;
 
@@ -296,6 +306,13 @@ pub struct SessionCopies {
     data: Mutex<Data>,
     chats: Arc<ChatManager>,
     terminals: Arc<moonlet_core::terminal::TerminalManager>,
+    /// On the central host: the terminals it relays to its clients, by
+    /// relay id (X72).
+    relays: Mutex<BTreeMap<TerminalId, Relay>>,
+    next_relay: std::sync::atomic::AtomicU32,
+    /// On a member: its terminals the central host relays, by relay id:
+    /// the terminal and the client id it is attached under.
+    relayed: Arc<Mutex<BTreeMap<TerminalId, (TerminalId, u64)>>>,
     /// The Claude Code folder agents get without a workspace profile: the
     /// terminals' `CLAUDE_CONFIG_DIR`, else `~/.claude`.
     claude: PathBuf,
@@ -335,6 +352,9 @@ impl SessionCopies {
                 chats,
                 claude,
                 terminals,
+                relays: Mutex::new(BTreeMap::new()),
+                next_relay: std::sync::atomic::AtomicU32::new(RELAY_BASE),
+                relayed: Arc::new(Mutex::new(BTreeMap::new())),
                 talk: Mutex::new(BTreeMap::new()),
                 home: home.to_path_buf(),
                 file,
@@ -358,6 +378,7 @@ impl SessionCopies {
     /// change, for as long as the daemon runs.
     pub fn spawn(self: &Arc<Self>) {
         self.pass_events();
+        self.take_relayed_input();
         let me = self.clone();
         tokio::spawn(async move {
             loop {
@@ -366,6 +387,31 @@ impl SessionCopies {
                 }
                 let _ = tokio::time::timeout(EVERY, me.kick.notified()).await;
                 tokio::time::sleep(QUIET).await;
+            }
+        });
+    }
+
+    /// Hands input the central host relays to the terminal it is for, on
+    /// every link this member makes (X72).
+    fn take_relayed_input(self: &Arc<Self>) {
+        let me = Arc::downgrade(self);
+        let mut last: Option<usize> = None;
+        let me2 = self.clone();
+        tokio::spawn(async move {
+            loop {
+                if let Some(host) = me2.link.host() {
+                    let at = Arc::as_ptr(&host) as usize;
+                    if last != Some(at) {
+                        let me = me.clone();
+                        host.set_relayed_input(Arc::new(move |relay, data| {
+                            if let Some(me) = me.upgrade() {
+                                me.relay_typed(relay, data);
+                            }
+                        }));
+                        last = Some(at);
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(500)).await;
             }
         });
     }
@@ -427,6 +473,187 @@ impl SessionCopies {
             serde_json::json!({ "session": r.session, "event": r.event }),
         ));
         Ok(true)
+    }
+
+    /// `session.attach` on the central host (X72): asks the owner, linked
+    /// as `owner`, to attach to terminal `r.terminal` of its session for
+    /// `client`, under a new relay id, and gives `terminal.attach`'s reply
+    /// with that id.
+    pub async fn attach(
+        &self,
+        client: &Arc<crate::server::Conn>,
+        owner: &Arc<crate::server::Conn>,
+        r: m::SessionAttach,
+    ) -> Result<Value, RpcError> {
+        let relay = self
+            .next_relay
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.relays.lock().unwrap().insert(
+            relay,
+            Relay {
+                owner: Arc::downgrade(owner),
+                client: Arc::downgrade(client),
+            },
+        );
+        let asked = owner
+            .request(
+                m::SESSION_FORWARD,
+                serde_json::to_value(m::SessionForward {
+                    session: r.session,
+                    method: m::TERMINAL_ATTACH.to_string(),
+                    params: serde_json::json!({ "id": r.terminal, "cols": r.cols, "rows": r.rows, "relay": relay }),
+                })
+                .unwrap_or_default(),
+                Duration::from_secs(30),
+            )
+            .await;
+        let mut reply = match asked {
+            Ok(v) => v,
+            Err(e) => {
+                self.relays.lock().unwrap().remove(&relay);
+                return Err(e);
+            }
+        };
+        reply["info"]["id"] = serde_json::json!(relay);
+        Ok(reply)
+    }
+
+    /// Output from the member linked as `from` for relay `relay`, to the
+    /// client following it.
+    pub fn relay_output(&self, from: u64, relay: TerminalId, data: Vec<u8>) {
+        let client = self
+            .relays
+            .lock()
+            .unwrap()
+            .get(&relay)
+            .filter(|r| r.owner.upgrade().is_some_and(|o| o.id == from))
+            .and_then(|r| r.client.upgrade());
+        if let Some(c) = client {
+            let _ = c.tx.send(moonlet_proto::Frame::Output {
+                terminal: relay,
+                data,
+            });
+        }
+    }
+
+    /// Input client `from` typed into relay `relay`, to the member; false
+    /// when `relay` is not one this client follows.
+    pub fn relay_input(&self, from: u64, relay: TerminalId, data: Vec<u8>) -> bool {
+        let owner = self
+            .relays
+            .lock()
+            .unwrap()
+            .get(&relay)
+            .filter(|r| r.client.upgrade().is_some_and(|c| c.id == from))
+            .and_then(|r| r.owner.upgrade());
+        match owner {
+            Some(o) => {
+                let _ = o.tx.send(moonlet_proto::Frame::Input {
+                    terminal: relay,
+                    data,
+                });
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// `session.detach` from client `from`, or every relay of a client or
+    /// member that is gone: the member detaches too.
+    pub fn detach(&self, from: u64, relay: Option<TerminalId>) {
+        let gone: Vec<(TerminalId, Relay)> = {
+            let mut relays = self.relays.lock().unwrap();
+            let ids: Vec<TerminalId> = relays
+                .iter()
+                .filter(|(id, r)| {
+                    relay.is_none_or(|x| x == **id)
+                        && [&r.client, &r.owner]
+                            .iter()
+                            .any(|c| c.upgrade().is_none_or(|c| c.id == from))
+                })
+                .map(|(id, _)| *id)
+                .collect();
+            ids.into_iter()
+                .filter_map(|id| relays.remove(&id).map(|r| (id, r)))
+                .collect()
+        };
+        for (id, r) in gone {
+            if let Some(owner) = r.owner.upgrade().filter(|o| o.id != from) {
+                tokio::spawn(async move {
+                    let _ = owner
+                        .request(
+                            m::SESSION_FORWARD,
+                            serde_json::json!({ "session": "", "method": m::TERMINAL_DETACH, "params": { "relay": id } }),
+                            Duration::from_secs(10),
+                        )
+                        .await;
+                });
+            }
+        }
+    }
+
+    /// On a member: attaches to its terminal `terminal` for the central
+    /// host, whose client follows it as `relay`; gives the snapshot.
+    pub fn relay_attach(
+        &self,
+        relay: TerminalId,
+        terminal: TerminalId,
+        size: Option<(u16, u16)>,
+    ) -> Result<Value, RpcError> {
+        let host = self
+            .link
+            .host()
+            .ok_or_else(|| RpcError::new("gone", "the link closed"))?;
+        let client = self.terminals.new_client_id();
+        let (raw, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let tx = moonlet_core::terminal::ClientTx::new(raw);
+        let queued = tx.counter();
+        let mut first = None;
+        self.terminals
+            .attach_with(terminal, client, tx, size, |info, snapshot| {
+                first = Some((info, snapshot));
+                None
+            })
+            .map_err(|e| RpcError::new("failed", format!("{e:#}")))?;
+        let (info, snapshot) = first.ok_or_else(|| RpcError::new("failed", "no snapshot"))?;
+        self.relayed
+            .lock()
+            .unwrap()
+            .insert(relay, (terminal, client));
+        let relayed = self.relayed.clone();
+        tokio::spawn(async move {
+            while let Some(frame) = rx.recv().await {
+                moonlet_core::terminal::dequeued(&queued, &frame);
+                if !relayed.lock().unwrap().contains_key(&relay) {
+                    break;
+                }
+                if let moonlet_proto::Frame::Output { data, .. } = frame
+                    && host.send_output(relay, data).is_err()
+                {
+                    break;
+                }
+            }
+        });
+        Ok(serde_json::to_value(m::AttachResult {
+            info,
+            snapshot: String::from_utf8_lossy(&snapshot).into_owned(),
+        })
+        .unwrap_or_default())
+    }
+
+    /// On a member: the central host stopped relaying `relay`.
+    pub fn relay_detach(&self, relay: TerminalId) {
+        if let Some((terminal, client)) = self.relayed.lock().unwrap().remove(&relay) {
+            self.terminals.detach(terminal, client);
+        }
+    }
+
+    /// On a member: input for a terminal the central host relays.
+    fn relay_typed(&self, relay: TerminalId, data: Vec<u8>) {
+        let terminal = self.relayed.lock().unwrap().get(&relay).map(|(t, _)| *t);
+        if let Some(t) = terminal {
+            let _ = self.terminals.write(t, data);
+        }
     }
 
     /// The copy's chat of terminal `id`, as last sent, when it has one.

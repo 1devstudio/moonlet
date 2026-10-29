@@ -120,6 +120,11 @@ pub const SESSION_COPY: &str = "session.copy";
 pub const SESSION_FORWARD: &str = "session.forward";
 /// An event of a member's session, for the central host's clients (X72).
 pub const SESSION_EVENT: &str = "session.event";
+/// A client of the central host attaches to a terminal of a session
+/// another member owns, through the central host (X72).
+pub const SESSION_ATTACH: &str = "session.attach";
+/// It stops following that terminal (X72).
+pub const SESSION_DETACH: &str = "session.detach";
 /// The central host's clients hear another member's session events as
 /// this, `{session, event}` (X72).
 pub const EV_SESSION_EVENT: &str = "session.event";
@@ -1103,6 +1108,26 @@ pub struct SessionForward {
 pub struct SessionEvent {
     pub session: String,
     pub event: crate::Message,
+}
+
+/// `session.attach {session, terminal, cols?, rows?}` (X72). The reply is
+/// `terminal.attach`'s, with the terminal under a relay id of the central
+/// host's: its output comes as `Frame::Output` of that id, and input sent
+/// to it reaches the terminal on its member.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionAttach {
+    pub session: String,
+    pub terminal: TerminalId,
+    #[serde(default)]
+    pub cols: Option<u16>,
+    #[serde(default)]
+    pub rows: Option<u16>,
+}
+
+/// `session.detach {relay}` (X72).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionDetach {
+    pub relay: TerminalId,
 }
 
 /// `session.list`'s request. With `copies`, the list also holds the

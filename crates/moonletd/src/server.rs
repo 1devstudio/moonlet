@@ -389,9 +389,15 @@ where
             };
             match frame {
                 Frame::Input { terminal, data } => {
-                    if !cloud {
+                    // A terminal of another member this client follows
+                    // through this host (X72), else one of this host's.
+                    if !cloud && !daemon.session_copies.relay_input(conn.id, terminal, data.clone()) {
                         let _ = daemon.terminals.write(terminal, data);
                     }
+                }
+                // Output of a member's terminal this host relays (X72).
+                Frame::Output { terminal, data } if conn.client == crate::link::WORKER_CLIENT => {
+                    daemon.session_copies.relay_output(conn.id, terminal, data);
                 }
                 // A worker's routed command's output, for `moonlet exec`
                 // (X62); from anyone else, nothing.
@@ -476,6 +482,7 @@ where
 
     conn.fail_pending();
     daemon.terminals.detach_all(conn.id);
+    daemon.session_copies.detach(conn.id, None);
     daemon.on_disconnect(conn.id);
     event_task.abort();
     drop(conn);
