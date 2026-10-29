@@ -2693,15 +2693,11 @@ impl Daemon {
         }
     }
 
-    /// A request the central host passes on for one of this member's
-    /// sessions (X72): only what [`scope`] lets through, aimed at that
-    /// session, handled as for a paired device, never as the Mac's app.
-    pub async fn forwarded(self: &Arc<Self>, r: m::SessionForward) -> HandlerResult {
-        use crate::session_copies::{only_terminals, scope};
-        if r.method == m::TERMINAL_DETACH {
-            if let Some(relay) = r.params.get("relay").and_then(Value::as_u64).and_then(|i| u32::try_from(i).ok()) {
-                self.session_copies.relay_detach(relay);
-            }
+    /// `session.relay` from the central host (X72): attaches to a terminal
+    /// of one of this member's sessions for a client there, or detaches.
+    pub async fn relayed(self: &Arc<Self>, r: m::SessionRelay) -> HandlerResult {
+        if r.op == "detach" {
+            self.session_copies.relay_detach(r.relay);
             return ok(true);
         }
         let s = self
@@ -2710,20 +2706,23 @@ impl Daemon {
             .into_iter()
             .find(|s| s.id == r.session && s.owner.is_none() && !s.archived)
             .ok_or_else(|| RpcError::new("not_found", "no such session here"))?;
-        // A terminal the central host relays to one of its clients (X72).
-        if r.method == m::TERMINAL_ATTACH {
-            let id = r.params.get("id").and_then(Value::as_u64).and_then(|i| u32::try_from(i).ok());
-            let relay = r.params.get("relay").and_then(Value::as_u64).and_then(|i| u32::try_from(i).ok());
-            let (Some(id), Some(relay)) = (id, relay) else {
-                return Err(RpcError::new("invalid_params", "a terminal and a relay"));
-            };
-            if !s.terminals.contains(&id) {
-                return Err(RpcError::new("forbidden", "that terminal is not one of the session's"));
-            }
-            let size = r.params.get("cols").and_then(Value::as_u64).zip(r.params.get("rows").and_then(Value::as_u64));
-            let size = size.map(|(c, r)| (c.min(u16::MAX as u64) as u16, r.min(u16::MAX as u64) as u16));
-            return self.session_copies.relay_attach(relay, id, size);
+        if !s.terminals.contains(&r.terminal) {
+            return Err(RpcError::new("forbidden", "that terminal is not one of the session's"));
         }
+        self.session_copies.relay_attach(r.relay, r.terminal, r.cols.zip(r.rows))
+    }
+
+    /// A request the central host passes on for one of this member's
+    /// sessions (X72): only what [`scope`] lets through, aimed at that
+    /// session, handled as for a paired device, never as the Mac's app.
+    pub async fn forwarded(self: &Arc<Self>, r: m::SessionForward) -> HandlerResult {
+        use crate::session_copies::{only_terminals, scope};
+        let s = self
+            .sessions
+            .list_sessions()
+            .into_iter()
+            .find(|s| s.id == r.session && s.owner.is_none() && !s.archived)
+            .ok_or_else(|| RpcError::new("not_found", "no such session here"))?;
         let p = scope(&r.method, r.params, &s.id, &s.path, &s.terminals)?;
         let conn = Conn::detached(self.terminals.new_client_id(), "moonlet-forwarded", Some("forwarded".to_string()));
         let reply = Box::pin(self.handle(&conn, &r.method, p)).await?;
@@ -2747,6 +2746,14 @@ impl Daemon {
             Box::pin(async move {
                 let d = d.upgrade().ok_or_else(|| RpcError::new("gone", "the daemon is stopping"))?;
                 d.forwarded(r).await
+            })
+        }));
+        let d = Arc::downgrade(self);
+        self.link.set_relayer(Arc::new(move |r| {
+            let d = d.clone();
+            Box::pin(async move {
+                let d = d.upgrade().ok_or_else(|| RpcError::new("gone", "the daemon is stopping"))?;
+                d.relayed(r).await
             })
         }));
         self.session_copies.spawn();

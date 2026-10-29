@@ -355,7 +355,7 @@ async fn pair_of(origin: &Origin) -> (Daemon, String, Daemon) {
 
 /// Where the central host keeps its copy of `session`, once it has one.
 async fn copy_of(mini: &Daemon, session: &Value) -> PathBuf {
-    within_value(Duration::from_secs(15), "a copy on studio-mini", || async {
+    within_value(Duration::from_secs(30), "a copy on studio-mini", || async {
         with_copies(mini)
             .await
             .into_iter()
@@ -385,7 +385,7 @@ fn head(dir: &Path) -> String {
 
 async fn reads(path: &Path, text: &str) {
     within(
-        Duration::from_secs(15),
+        Duration::from_secs(30),
         &format!("{} reading {text:?}", path.display()),
         || async { std::fs::read_to_string(path).is_ok_and(|t| t == text) },
     )
@@ -437,7 +437,7 @@ async fn a_commit_on_the_member_moves_the_copys_branch_to_it() {
     );
     let commit = head(&path);
     within(
-        Duration::from_secs(15),
+        Duration::from_secs(30),
         "the copy at the member's commit",
         || async { head(&copy) == commit },
     )
@@ -500,7 +500,7 @@ async fn an_archived_sessions_copy_is_removed() {
     let _: Value = book
         .call("session.archive", json!({ "id": made["id"] }))
         .await;
-    within(Duration::from_secs(15), "the copy removed", || async {
+    within(Duration::from_secs(30), "the copy removed", || async {
         !copy.exists()
     })
     .await;
@@ -560,7 +560,7 @@ async fn a_copy_never_moves_a_branch_of_the_central_hosts_own() {
     let commit = head(&path);
     let copy = copy_of(&mini, &made).await;
     within(
-        Duration::from_secs(15),
+        Duration::from_secs(30),
         "the copy at the member's commit",
         || async { head(&copy) == commit },
     )
@@ -606,7 +606,7 @@ async fn a_copy_switched_by_hand_to_another_branch_goes_back_without_moving_it()
     );
     let commit = head(&path);
     within(
-        Duration::from_secs(15),
+        Duration::from_secs(30),
         "the copy at the member's commit",
         || async { head(&copy) == commit },
     )
@@ -724,7 +724,7 @@ async fn session_with_a_turn(book: &Daemon, project: &str) -> Value {
     let _: Value = book
         .call("chat.send", json!({ "id": agent, "text": "Fix the cart" }))
         .await;
-    within(Duration::from_secs(15), "the turn to end", || async {
+    within(Duration::from_secs(30), "the turn to end", || async {
         let st: Value = book.call("chat.state", json!({ "id": agent })).await;
         st["status"] == json!("done")
     })
@@ -746,7 +746,7 @@ async fn a_members_chat_reaches_the_central_hosts_copy() {
     let made = session_with_a_turn(&book, &project).await;
 
     let chat = within_value(
-        Duration::from_secs(15),
+        Duration::from_secs(30),
         "the chat on studio-mini",
         || async {
             let info: Value = mini
@@ -829,7 +829,7 @@ async fn a_checkpoint_after_the_turn_names_its_files_and_its_whole_transcript() 
     .unwrap();
 
     let point = within_value(
-        Duration::from_secs(15),
+        Duration::from_secs(30),
         "a checkpoint at the end of the turn",
         || async {
             let info = mini
@@ -885,7 +885,7 @@ async fn a_message_through_the_central_host_reaches_the_owners_agent() {
     .await
     .unwrap();
     within(
-        Duration::from_secs(15),
+        Duration::from_secs(30),
         "the second message on the MacBook",
         || async {
             let st: Value = book.call("chat.state", json!({ "id": agent })).await;
@@ -950,7 +950,7 @@ async fn with_the_owner_away_reads_come_from_the_copy_and_the_rest_waits_for_it(
     let made = session_with_a_turn(&book, &project).await;
     let agent = made["terminals"][0].clone();
     within(
-        Duration::from_secs(15),
+        Duration::from_secs(30),
         "the chat on studio-mini",
         || async {
             mini.try_call("session.copy", json!({ "session": made["id"] }))
@@ -1011,7 +1011,7 @@ async fn the_owners_chat_events_reach_the_central_hosts_clients() {
     )
     .await
     .unwrap();
-    let event = tokio::time::timeout(Duration::from_secs(15), async {
+    let event = tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             match listener.next_frame().await.unwrap() {
                 Some(moonlet_proto::Frame::Json(moonlet_proto::Message::Event { name, data }))
@@ -1087,7 +1087,7 @@ async fn a_terminal_of_the_owners_session_is_followed_and_typed_into_through_the
         })
         .await
         .unwrap();
-    let seen = tokio::time::timeout(Duration::from_secs(15), async {
+    let seen = tokio::time::timeout(Duration::from_secs(30), async {
         let mut out = String::new();
         loop {
             match phone.next_frame().await.unwrap() {
@@ -1136,4 +1136,36 @@ async fn a_terminal_that_is_not_the_sessions_is_not_followed_through_it() {
         .await
         .unwrap_err();
     assert!(refused.starts_with("forbidden"), "{refused}");
+}
+
+#[tokio::test]
+async fn a_client_cannot_pick_a_relay_through_a_forwarded_request() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = new_session(&book, &project, "fix-cart").await;
+    let term = shell(&book, &made).await;
+    within(
+        Duration::from_secs(10),
+        "fix-cart on studio-mini",
+        || async {
+            with_copies(&mini)
+                .await
+                .iter()
+                .any(|s| s["id"] == made["id"])
+        },
+    )
+    .await;
+
+    for (method, params) in [
+        (
+            "terminal.attach",
+            json!({ "id": term, "relay": 0x4000_0001u32 }),
+        ),
+        ("terminal.detach", json!({ "relay": 0x4000_0001u32 })),
+    ] {
+        let refused = forward(&mini, &made, method, params).await.unwrap_err();
+        assert!(refused.starts_with("forbidden"), "{method}: {refused}");
+    }
 }

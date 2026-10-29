@@ -360,6 +360,8 @@ pub struct WorkerLink {
     runs: std::sync::OnceLock<Weak<crate::exec::Runs>>,
     /// Takes the central host's requests for this member's sessions (X72).
     forwarder: std::sync::OnceLock<Forwarder>,
+    /// Takes the central host's terminal relays (X72).
+    relayer: std::sync::OnceLock<Relayer>,
     sessions: Arc<SessionManager>,
     emit: Box<dyn Fn(Message) + Send + Sync>,
 }
@@ -381,6 +383,7 @@ impl WorkerLink {
             sync: std::sync::OnceLock::new(),
             runs: std::sync::OnceLock::new(),
             forwarder: std::sync::OnceLock::new(),
+            relayer: std::sync::OnceLock::new(),
             sessions,
             emit: Box::new(emit),
         })
@@ -585,6 +588,11 @@ impl WorkerLink {
     /// member's sessions (X72).
     pub fn set_forwarder(&self, f: Forwarder) {
         let _ = self.forwarder.set(f);
+    }
+
+    /// What attaches to the terminals the central host relays (X72).
+    pub fn set_relayer(&self, f: Relayer) {
+        let _ = self.relayer.set(f);
     }
 
     pub fn set_runs(&self, runs: Weak<crate::exec::Runs>) {
@@ -921,6 +929,9 @@ struct WorkerRequests(Weak<WorkerLink>);
 /// sessions (X72).
 pub type Forwarder = Arc<dyn Fn(m::SessionForward) -> BoxFuture<'static, Result<Value, RpcError>> + Send + Sync>;
 
+/// Attaches to or detaches from a terminal the central host relays (X72).
+pub type Relayer = Arc<dyn Fn(m::SessionRelay) -> BoxFuture<'static, Result<Value, RpcError>> + Send + Sync>;
+
 impl Requests for WorkerRequests {
     fn request(
         &self,
@@ -990,6 +1001,17 @@ impl Requests for WorkerRequests {
                     let link = link.ok_or_else(|| RpcError::new("gone", "the link closed"))?;
                     let runs = link.runs().ok_or_else(|| RpcError::new("gone", "no runs"))?;
                     Ok(serde_json::json!(runs.cancel_here(req.run)))
+                }
+                m::SESSION_RELAY => {
+                    let req: m::SessionRelay = serde_json::from_value(params)
+                        .map_err(|e| RpcError::new("invalid_params", e.to_string()))?;
+                    let link = link.ok_or_else(|| RpcError::new("gone", "the link closed"))?;
+                    let f = link
+                        .relayer
+                        .get()
+                        .cloned()
+                        .ok_or_else(|| RpcError::new("gone", "nothing relays terminals"))?;
+                    f(req).await
                 }
                 m::SESSION_FORWARD => {
                     let req: m::SessionForward = serde_json::from_value(params)

@@ -125,6 +125,10 @@ pub const SESSION_EVENT: &str = "session.event";
 pub const SESSION_ATTACH: &str = "session.attach";
 /// It stops following that terminal (X72).
 pub const SESSION_DETACH: &str = "session.detach";
+/// Central host → member (X72): attach to, or detach from, a terminal of
+/// one of its sessions for a client of the central host. Never forwarded
+/// from a client: only `session.attach` and `session.detach` make these.
+pub const SESSION_RELAY: &str = "session.relay";
 /// The central host's clients hear another member's session events as
 /// this, `{session, event}` (X72).
 pub const EV_SESSION_EVENT: &str = "session.event";
@@ -1118,6 +1122,22 @@ pub struct SessionEvent {
 pub struct SessionAttach {
     pub session: String,
     pub terminal: TerminalId,
+    #[serde(default)]
+    pub cols: Option<u16>,
+    #[serde(default)]
+    pub rows: Option<u16>,
+}
+
+/// `session.relay` (X72): `attach` to `terminal` of `session` as relay
+/// `relay`, or `detach` relay `relay`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionRelay {
+    pub op: String,
+    #[serde(default)]
+    pub session: String,
+    #[serde(default)]
+    pub terminal: TerminalId,
+    pub relay: TerminalId,
     #[serde(default)]
     pub cols: Option<u16>,
     #[serde(default)]

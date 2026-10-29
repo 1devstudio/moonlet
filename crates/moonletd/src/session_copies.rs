@@ -52,6 +52,21 @@ fn clone_url_names(url: &str, origin: &str) -> bool {
 /// client never mistakes one for the other.
 const RELAY_BASE: TerminalId = 0x4000_0000;
 
+/// Where this run's relay ids start: at a different point each time the
+/// daemon starts, so an id a member still holds from an earlier run is not
+/// handed out again soon.
+fn first_relay() -> TerminalId {
+    use std::hash::{BuildHasher, Hasher};
+    let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+    h.write_u128(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    );
+    RELAY_BASE + (h.finish() as u32 & 0x1fff_ffff)
+}
+
 /// A terminal of another member the central host relays to one client.
 struct Relay {
     owner: Weak<crate::server::Conn>,
@@ -319,6 +334,8 @@ pub struct SessionCopies {
     /// On a member: what the central host has of each session's chats.
     talk: Mutex<BTreeMap<String, Talk>>,
     kick: Notify,
+    /// Set when a round sent the central host anything.
+    sent_any: std::sync::atomic::AtomicBool,
     /// One round at a time on a member; one offer at a time on the
     /// central host.
     round: tokio::sync::Mutex<()>,
@@ -353,7 +370,7 @@ impl SessionCopies {
                 claude,
                 terminals,
                 relays: Mutex::new(BTreeMap::new()),
-                next_relay: std::sync::atomic::AtomicU32::new(RELAY_BASE),
+                next_relay: std::sync::atomic::AtomicU32::new(first_relay()),
                 relayed: Arc::new(Mutex::new(BTreeMap::new())),
                 talk: Mutex::new(BTreeMap::new()),
                 home: home.to_path_buf(),
@@ -364,6 +381,7 @@ impl SessionCopies {
                 watched: Mutex::new(Vec::new()),
                 data: Mutex::new(data),
                 kick: Notify::new(),
+                sent_any: std::sync::atomic::AtomicBool::new(false),
                 round: tokio::sync::Mutex::new(()),
                 apply: tokio::sync::Mutex::new(()),
             }
@@ -385,7 +403,15 @@ impl SessionCopies {
                 if let Err(e) = me.round().await {
                     tracing::debug!("session copies: {e:#}");
                 }
-                let _ = tokio::time::timeout(EVERY, me.kick.notified()).await;
+                // A round that sent something goes again soon: what it sent
+                // can let the central host take what it could not before,
+                // such as a transcript once its copy is made.
+                let sent = me
+                    .sent_any
+                    .swap(false, std::sync::atomic::Ordering::Relaxed);
+                if !sent {
+                    let _ = tokio::time::timeout(EVERY, me.kick.notified()).await;
+                }
                 tokio::time::sleep(QUIET).await;
             }
         });
@@ -402,6 +428,16 @@ impl SessionCopies {
                 if let Some(host) = me2.link.host() {
                     let at = Arc::as_ptr(&host) as usize;
                     if last != Some(at) {
+                        // A new link: what the old one relayed has no client.
+                        if let Some(me) = me.upgrade() {
+                            let gone: Vec<(TerminalId, u64)> =
+                                std::mem::take(&mut *me.relayed.lock().unwrap())
+                                    .into_values()
+                                    .collect();
+                            for (terminal, client) in gone {
+                                me.terminals.detach(terminal, client);
+                            }
+                        }
                         let me = me.clone();
                         host.set_relayed_input(Arc::new(move |relay, data| {
                             if let Some(me) = me.upgrade() {
@@ -497,11 +533,14 @@ impl SessionCopies {
         );
         let asked = owner
             .request(
-                m::SESSION_FORWARD,
-                serde_json::to_value(m::SessionForward {
+                m::SESSION_RELAY,
+                serde_json::to_value(m::SessionRelay {
+                    op: "attach".to_string(),
                     session: r.session,
-                    method: m::TERMINAL_ATTACH.to_string(),
-                    params: serde_json::json!({ "id": r.terminal, "cols": r.cols, "rows": r.rows, "relay": relay }),
+                    terminal: r.terminal,
+                    relay,
+                    cols: r.cols,
+                    rows: r.rows,
                 })
                 .unwrap_or_default(),
                 Duration::from_secs(30),
@@ -582,8 +621,8 @@ impl SessionCopies {
                 tokio::spawn(async move {
                     let _ = owner
                         .request(
-                            m::SESSION_FORWARD,
-                            serde_json::json!({ "session": "", "method": m::TERMINAL_DETACH, "params": { "relay": id } }),
+                            m::SESSION_RELAY,
+                            serde_json::json!({ "op": "detach", "relay": id }),
                             Duration::from_secs(10),
                         )
                         .await;
@@ -616,15 +655,21 @@ impl SessionCopies {
             })
             .map_err(|e| RpcError::new("failed", format!("{e:#}")))?;
         let (info, snapshot) = first.ok_or_else(|| RpcError::new("failed", "no snapshot"))?;
-        self.relayed
-            .lock()
-            .unwrap()
-            .insert(relay, (terminal, client));
+        {
+            let mut relayed = self.relayed.lock().unwrap();
+            if relayed.contains_key(&relay) {
+                drop(relayed);
+                self.terminals.detach(terminal, client);
+                return Err(RpcError::new("refused", "that relay is taken"));
+            }
+            relayed.insert(relay, (terminal, client));
+        }
         let relayed = self.relayed.clone();
         tokio::spawn(async move {
             while let Some(frame) = rx.recv().await {
                 moonlet_core::terminal::dequeued(&queued, &frame);
-                if !relayed.lock().unwrap().contains_key(&relay) {
+                // Only while this relay is still this attachment.
+                if relayed.lock().unwrap().get(&relay) != Some(&(terminal, client)) {
                     break;
                 }
                 if let moonlet_proto::Frame::Output { data, .. } = frame
@@ -782,6 +827,8 @@ impl SessionCopies {
         }
         let mut data = self.data.lock().unwrap();
         data.sent.insert(s.id.clone(), now);
+        self.sent_any
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         self.save(&data);
         Ok(())
     }
@@ -892,6 +939,8 @@ impl SessionCopies {
                     .or_default()
                     .states
                     .insert(terminal, hash);
+                self.sent_any
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
             }
             let Some(id) = state.agent_session.clone() else {
                 continue;
@@ -999,6 +1048,8 @@ impl SessionCopies {
                 .or_default()
                 .files
                 .insert(file.to_string(), from as u64);
+            self.sent_any
+                .store(true, std::sync::atomic::Ordering::Relaxed);
         }
         Ok(())
     }
