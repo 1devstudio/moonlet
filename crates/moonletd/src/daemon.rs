@@ -1055,6 +1055,10 @@ impl Daemon {
                 })?;
                 self.session_copies.attach(conn, &member, r).await
             }
+            m::SESSION_BRING => {
+                app_only(conn, "sessions")?;
+                ok(self.bring(params(p)?).await?)
+            }
             m::SESSION_CONTINUE_HERE => {
                 if conn.client == crate::link::WORKER_CLIENT || conn.client == CLI_CLIENT || conn.cloud.load(std::sync::atomic::Ordering::Relaxed) {
                     return Err(RpcError::new("forbidden", "only an app or a phone continues a session here"));
@@ -1070,7 +1074,7 @@ impl Daemon {
                 }
                 Box::pin(self.forward(conn, params(p)?)).await
             }
-            m::SESSION_OPEN | m::SESSION_OFFER | m::SESSION_CHAT | m::SESSION_TRANSCRIPT | m::SESSION_CHECKPOINT | m::SESSION_EVENT => {
+            m::SESSION_OPEN | m::SESSION_OFFER | m::SESSION_CHAT | m::SESSION_TRANSCRIPT | m::SESSION_CHECKPOINT | m::SESSION_EVENT | m::SESSION_TAKE | m::SESSION_TRANSCRIPT_FETCH => {
                 // Only a linked Mac's daemon, as for `design.offer` (X72).
                 let refused = || RpcError::new("forbidden", "only a member of the account sends its sessions");
                 let device = conn.phone.as_deref().ok_or_else(refused)?;
@@ -1088,6 +1092,13 @@ impl Daemon {
                     let r: m::SessionTranscript = params(p)?;
                     let bytes = conn.take_pack(r.pack).ok_or_else(|| RpcError::new("invalid_params", "the bytes did not arrive"))?;
                     ok(self.session_copies.transcript_offered(&worker, r, &bytes)?)
+                } else if method == m::SESSION_TAKE {
+                    ok(self.give(&worker, params(p)?).await?)
+                } else if method == m::SESSION_TRANSCRIPT_FETCH {
+                    let r: m::SessionTranscriptFetch = params(p)?;
+                    let bytes = self.session_copies.transcript_bytes(&worker, &r)?;
+                    let pack = if bytes.is_empty() { None } else { Some(conn.send_pack(&bytes)?) };
+                    ok(m::SessionTranscriptFetched { pack })
                 } else if method == m::SESSION_EVENT {
                     ok(self.session_copies.event_offered(&worker, params(p)?)?)
                 } else if method == m::SESSION_CHECKPOINT {
@@ -2821,6 +2832,158 @@ impl Daemon {
             return Err(RpcError::new("internal", "cannot record this host as the session's owner"));
         }
         Ok(adopted)
+    }
+
+    /// `session.take` from member `worker` on the central host (X73): it
+    /// takes a session this host runs, at ownership number `r.epoch`. A
+    /// running turn answers `busy`, unless `now`, which stops it. This host
+    /// becomes the session's copy-keeper and the member its owner.
+    async fn give(self: &Arc<Self>, worker: &str, r: m::SessionTake) -> Result<m::SessionTaken, RpcError> {
+        let me = self.link.info().worker.id;
+        let record = self
+            .sessions
+            .session_records()
+            .remove(&r.session)
+            .ok_or_else(|| RpcError::new("not_found", "no such session in the account"))?;
+        let text = |f: &str| record.get(f).and_then(Value::as_str).map(str::to_string);
+        if text("owner").as_deref() != Some(me.as_str()) {
+            return Err(RpcError::new("elsewhere", "that session runs on another member"));
+        }
+        let epoch = record.get("epoch").and_then(Value::as_u64).unwrap_or(1);
+        if epoch != r.epoch {
+            return Err(RpcError::new("stale", "that session moved meanwhile"));
+        }
+        if text("pinned").is_some_and(|p| p != worker) {
+            return Err(RpcError::new("pinned", "that session is kept where it is"));
+        }
+        let s = self.sessions.session(&r.session).map_err(internal)?;
+        let chats: Vec<moonlet_proto::TerminalId> = s.terminals.iter().copied().filter(|t| self.chats.is_chat(*t)).collect();
+        let running = chats
+            .iter()
+            .any(|t| self.chats.state(*t).is_ok_and(|st| matches!(st.status.as_str(), "working" | "blocked")));
+        if running && !r.now {
+            return Err(RpcError::new("busy", "a turn is running; it moves when the turn ends"));
+        }
+        if running {
+            for t in &chats {
+                let _ = self.chats.interrupt(*t);
+            }
+        }
+        let states: Vec<m::SessionCopyChat> = chats
+            .iter()
+            .filter_map(|t| self.chats.state(*t).ok().map(|state| m::SessionCopyChat { terminal: *t, state }))
+            .collect();
+        let transcripts = self.session_copies.transcripts_of(&s, &states);
+        // Its worktree is the member's copy from now on, on the copy's own
+        // branch, so no branch of the session's name stays checked out here.
+        let path = Path::new(&s.path);
+        let copy_branch = format!("moonlet-copy/{}", r.session);
+        moonlet_core::git::git(path, &["branch", "-m", &s.branch, &copy_branch]).await.map_err(internal)?;
+        let project = self
+            .sessions
+            .list_projects()
+            .into_iter()
+            .find(|p| p.id == s.project_id)
+            .ok_or_else(|| RpcError::new("not_found", "the session's project is gone"))?;
+        self.sessions.set_session_owner(&r.session, worker, epoch + 1, None);
+        self.sessions.give_up_session(&r.session).map_err(internal)?;
+        self.session_copies.hold(&r.session, worker, Path::new(&project.path), path, &s.path, &project.name);
+        Ok(m::SessionTaken { epoch: epoch + 1, chats: states, transcripts })
+    }
+
+    /// `session.bring` on a member (X73): takes the session the central
+    /// host runs to this Mac. Its live copy here becomes the session's own
+    /// worktree, its transcript is fetched, and each chat goes on here,
+    /// resuming its conversation. `busy` while a turn runs there, unless
+    /// `now`.
+    async fn bring(self: &Arc<Self>, r: m::SessionBring) -> Result<moonlet_proto::types::Session, RpcError> {
+        let me = self.link.info().worker.id;
+        let record = self
+            .sessions
+            .session_records()
+            .remove(&r.session)
+            .ok_or_else(|| RpcError::new("not_found", "no such session in the account"))?;
+        let text = |f: &str| record.get(f).and_then(Value::as_str).map(str::to_string);
+        if text("owner").as_deref() == Some(me.as_str()) {
+            return Err(RpcError::new("invalid_params", "that session is this Mac's own"));
+        }
+        if text("pinned").is_some_and(|p| p != me) {
+            return Err(RpcError::new("pinned", "that session is kept where it is"));
+        }
+        let host = self.link.host().ok_or_else(|| RpcError::new("unreachable", "the central host is not connected"))?;
+        let taken = host
+            .request(
+                m::SESSION_TAKE,
+                serde_json::to_value(m::SessionTake {
+                    session: r.session.clone(),
+                    epoch: record.get("epoch").and_then(Value::as_u64).unwrap_or(1),
+                    now: r.now,
+                })
+                .map_err(internal)?,
+            )
+            .await?;
+        let taken: m::SessionTaken = serde_json::from_value(taken).map_err(internal)?;
+        let (path, repo) = self.sync.release(&r.session).await?;
+        let projects = self.sessions.list_projects();
+        let project = match projects.iter().find(|p| Path::new(&p.path) == repo) {
+            Some(p) => p.clone(),
+            None => self.sessions.add_project(&repo.display().to_string()).await.map_err(internal)?,
+        };
+        let adopted = self
+            .sessions
+            .adopt_session(moonlet_proto::types::Session {
+                id: r.session.clone(),
+                project_id: project.id.clone(),
+                name: text("name").unwrap_or_default(),
+                branch: text("branch").unwrap_or_default(),
+                base: project.base_branch.clone(),
+                path: path.display().to_string(),
+                agent: Some("claude".into()),
+                archived: false,
+                created_at: record.get("created_at").and_then(Value::as_u64).unwrap_or(0),
+                workspace_id: text("workspace"),
+                model: None,
+                effort: None,
+                mode: None,
+                pr: None,
+                spawned_by: None,
+                task: None,
+                task_unlinked: false,
+                cloud: false,
+                terminals: Vec::new(),
+                layout: Value::Null,
+                restore: Vec::new(),
+                owner: None,
+            })
+            .map_err(internal)?;
+        for file in &taken.transcripts {
+            let fetched = host
+                .request(
+                    m::SESSION_TRANSCRIPT_FETCH,
+                    serde_json::json!({ "session": r.session, "file": file }),
+                )
+                .await;
+            let bytes = fetched
+                .ok()
+                .and_then(|v| serde_json::from_value::<m::SessionTranscriptFetched>(v).ok())
+                .and_then(|f| f.pack)
+                .and_then(|t| host.take_pack(t))
+                .unwrap_or_default();
+            if let Err(e) = self.session_copies.write_transcript(&r.session, &path, file, &bytes) {
+                tracing::warn!(session = %r.session, "cannot keep transcript {file}: {e:#}");
+            }
+        }
+        let mut first = None;
+        for chat in taken.chats {
+            let started = self.sessions.continue_chat(&adopted, chat.state).map_err(internal)?;
+            first.get_or_insert(started.id);
+        }
+        if let (Some(id), Some(message)) = (first, r.message.as_deref().filter(|m| !m.trim().is_empty()))
+            && let Err(e) = self.chats.send(id, message, &[])
+        {
+            tracing::warn!(session = %r.session, "cannot send the message it was brought for: {e:#}");
+        }
+        self.sessions.session(&r.session).map_err(internal)
     }
 
     /// `session.forward` on the central host (X72): the request goes to the

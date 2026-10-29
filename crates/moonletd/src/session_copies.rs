@@ -2114,6 +2114,120 @@ impl SessionCopies {
             .unwrap()
     }
 
+    /// The transcript files of session `s`'s chats on this host, relative
+    /// to Claude Code's project folder for its worktree (X73).
+    pub fn transcripts_of(
+        &self,
+        s: &moonlet_proto::types::Session,
+        chats: &[m::SessionCopyChat],
+    ) -> Vec<String> {
+        let folder = config_dir(self.sessions.config_dir(&s.id), &self.claude)
+            .join("projects")
+            .join(transcript::project_folder(Path::new(&s.path)));
+        chats
+            .iter()
+            .filter_map(|c| c.state.agent_session.clone())
+            .filter(|id| transcript::is_uuid(id))
+            .flat_map(|id| transcript_files(&folder, &id))
+            .collect()
+    }
+
+    /// Keeps `path`, the worktree of a session this host gave `owner`, as
+    /// that owner's copy (X73): its next offers go here.
+    pub fn hold(
+        &self,
+        session: &str,
+        owner: &str,
+        repo: &Path,
+        path: &Path,
+        from_path: &str,
+        project: &str,
+    ) {
+        let mut data = self.data.lock().unwrap();
+        data.held.insert(
+            session.to_string(),
+            Held {
+                owner: owner.to_string(),
+                repo: repo.display().to_string(),
+                path: path.display().to_string(),
+                from_path: from_path.to_string(),
+                project: project.to_string(),
+                ..Default::default()
+            },
+        );
+        self.save(&data);
+    }
+
+    /// `session.transcript_fetch` from member `worker`, which owns the
+    /// session now: the bytes of one of its transcript files, as this host,
+    /// the session's former owner, has them.
+    pub fn transcript_bytes(
+        &self,
+        worker: &str,
+        r: &m::SessionTranscriptFetch,
+    ) -> Result<Vec<u8>, RpcError> {
+        let record = self.owned_by(&r.session, worker)?;
+        let held = self
+            .data
+            .lock()
+            .unwrap()
+            .held
+            .get(&r.session)
+            .cloned()
+            .ok_or_else(|| RpcError::new("no_copy", "this host holds no copy of that session"))?;
+        let id = r.file.split(['.', '/']).next().unwrap_or_default();
+        if !transcript::file_ok(&r.file, id) {
+            return Err(RpcError::new("invalid_params", "not a transcript file"));
+        }
+        let path = self
+            .transcript_folder(&record, Path::new(&held.path))
+            .join(&r.file);
+        use std::io::Read;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut bytes = Vec::new();
+        std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&path)
+            .and_then(|mut f| f.read_to_end(&mut bytes))
+            .map_err(|e| RpcError::new("not_found", e.to_string()))?;
+        Ok(bytes)
+    }
+
+    /// Writes transcript file `file` of a session this member now owns, at
+    /// worktree `path`, where Claude Code reads it here (X73), mode 0600.
+    pub fn write_transcript(
+        &self,
+        session: &str,
+        path: &Path,
+        file: &str,
+        bytes: &[u8],
+    ) -> Result<()> {
+        let id = file.split(['.', '/']).next().unwrap_or_default();
+        anyhow::ensure!(
+            transcript::file_ok(file, id),
+            "not a transcript file: {file}"
+        );
+        let folder = config_dir(self.sessions.config_dir(session), &self.claude)
+            .join("projects")
+            .join(transcript::project_folder(path));
+        let to = folder.join(file);
+        if let Some(parent) = to.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&to)?;
+        f.write_all(bytes)?;
+        Ok(())
+    }
+
     /// Stops keeping `session` as a copy because this host is taking it
     /// over (X73): its worktree stays where it is and becomes the session's
     /// own, on `branch` when given, renamed from the copy's own branch. No

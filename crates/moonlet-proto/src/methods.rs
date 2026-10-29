@@ -132,6 +132,13 @@ pub const SESSION_RELAY: &str = "session.relay";
 /// The central host continues a session whose member is unreachable,
 /// from its copy (X73): the phone's **Continue on studio-mini**.
 pub const SESSION_CONTINUE_HERE: &str = "session.continue_here";
+/// A member takes a session the central host runs (X73).
+pub const SESSION_TAKE: &str = "session.take";
+/// A member fetches one of a session's transcript files from the central
+/// host, once it owns the session (X73).
+pub const SESSION_TRANSCRIPT_FETCH: &str = "session.transcript_fetch";
+/// The app brings a session another member runs to this Mac (X73).
+pub const SESSION_BRING: &str = "session.bring";
 /// The central host's clients hear another member's session events as
 /// this, `{session, event}` (X72).
 pub const EV_SESSION_EVENT: &str = "session.event";
@@ -1166,6 +1173,48 @@ pub struct SessionDetach {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionContinueHere {
     pub session: String,
+}
+
+/// `session.take {session, epoch, now}`, member → central host (X73): at
+/// ownership number `epoch`. Without `now`, a running turn answers `busy`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionTake {
+    pub session: String,
+    pub epoch: u64,
+    #[serde(default)]
+    pub now: bool,
+}
+
+/// `session.take`'s reply: the new ownership number, the session's chats
+/// as they were, and its transcript files to fetch.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionTaken {
+    pub epoch: u64,
+    pub chats: Vec<SessionCopyChat>,
+    pub transcripts: Vec<String>,
+}
+
+/// `session.transcript_fetch {session, file}` → `{pack}` (X73).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionTranscriptFetch {
+    pub session: String,
+    pub file: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionTranscriptFetched {
+    #[serde(default)]
+    pub pack: Option<u32>,
+}
+
+/// `session.bring {session, now, message?}`, app → its own daemon (X73).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionBring {
+    pub session: String,
+    #[serde(default)]
+    pub now: bool,
+    #[serde(default)]
+    pub message: Option<String>,
 }
 
 /// `session.list`'s request. With `copies`, the list also holds the

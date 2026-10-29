@@ -787,6 +787,7 @@ fn request_timeout(method: &str) -> Duration {
         || method == moonlet_proto::methods::SESSION_OPEN
         || method == moonlet_proto::methods::SESSION_OFFER
         || method == moonlet_proto::methods::SESSION_TRANSCRIPT
+        || method == moonlet_proto::methods::SESSION_TRANSCRIPT_FETCH
     {
         // A copy's first pack can be a whole repository's history (X60,
         // X72), and opening one may clone the project first.

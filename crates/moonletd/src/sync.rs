@@ -1803,6 +1803,44 @@ impl LiveCopies {
         Ok(saved)
     }
 
+    /// Lets go of the live copy of session `session` and keeps its
+    /// worktree: this Mac now owns the session (X73), and the copy's folder
+    /// becomes the session's own. Its central host lets the copy go too.
+    /// Gives the copy's folder and repository.
+    pub async fn release(self: &Arc<Self>, session: &str) -> Result<(PathBuf, PathBuf), RpcError> {
+        let id = self
+            .data
+            .lock()
+            .unwrap()
+            .worker
+            .iter()
+            .find(|k| k.session == session && k.kind == CopyKind::Live && !k.path.is_empty())
+            .map(|k| k.id.clone())
+            .ok_or_else(|| RpcError::new("no_copy", "this Mac keeps no copy of that session"))?;
+        let lock = self.lock(&id);
+        let _one = lock.lock().await;
+        let k = self.kept(&id).ok_or_else(|| RpcError::new("no_copy", "this Mac keeps no copy of that session"))?;
+        self.end_setup(&id);
+        let path = PathBuf::from(&k.path);
+        let repo = PathBuf::from(&k.repo);
+        self.unwatch(&path);
+        let _ = git_sync::delete_base_ref(&repo, &id).await;
+        self.data.lock().unwrap().worker.retain(|w| w.id != id);
+        self.data.lock().unwrap().closed.push(Closed { copy: id.clone(), host: k.host.clone() });
+        self.save();
+        self.states.lock().unwrap().remove(&id);
+        self.send_closed_soon();
+        (self.emit)(Message::event(
+            m::EV_SYNC_CHANGED,
+            CopyChanged {
+                copy: self.copy_of(&k),
+                newly_differing: Vec::new(),
+                removed: Some(CopyRemoved { reason: CloseReason::Stopped, saved: SyncStopped::default() }),
+            },
+        ));
+        Ok((path, repo))
+    }
+
     /// Saves the files of copy `k` that would be lost with it: those that
     /// differ, those changed here since the last round, and those only this
     /// Mac has (secrets, and files that stopped syncing). Plain ignored

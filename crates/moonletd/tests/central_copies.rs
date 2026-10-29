@@ -753,12 +753,19 @@ fn agent_env(home: &Path, origin: Option<&Origin>) -> Vec<(String, String)> {
 
 /// [`pair_of`], both daemons with [`TOOL_CLAUDE`] for an agent.
 async fn pair_with_agents(origin: &Origin) -> (Daemon, Daemon) {
+    pair_with_agents_as(origin, true).await
+}
+
+/// [`pair_with_agents`]; without `clone_rule`, studio-mini has no git rule
+/// that leads the origin to a local folder, so its own project of `shop`
+/// has the identity the MacBook's has, as on real Macs.
+async fn pair_with_agents_as(origin: &Origin, clone_rule: bool) -> (Daemon, Daemon) {
     let scratch = tempfile::tempdir().unwrap();
     let mini_home = scratch.path().join("mini");
     let book_home = scratch.path().join("book");
     std::fs::create_dir_all(&mini_home).unwrap();
     std::fs::create_dir_all(&book_home).unwrap();
-    let mini_env = agent_env(&mini_home, Some(origin));
+    let mini_env = agent_env(&mini_home, clone_rule.then_some(origin));
     let book_env = agent_env(&book_home, None);
     let m: Vec<(&str, &str)> = mini_env
         .iter()
@@ -1887,6 +1894,116 @@ async fn a_member_that_lost_its_session_keeps_its_gap_and_follows_the_new_owner(
         },
     )
     .await;
+}
+
+/// The session continued on `mini` while `book` was away, with `book`
+/// back and keeping a live copy of it.
+async fn continued_and_back(origin: &Origin) -> (Daemon, Daemon, Value) {
+    let (mini, mut book) = pair_with_agents_as(origin, false).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    copy_of(&mini, &made).await;
+    within(
+        Duration::from_secs(30),
+        "the checkpoint on studio-mini",
+        || async {
+            mini.try_call("session.copy", json!({ "session": made["id"] }))
+                .await
+                .is_ok_and(|i| !i["checkpoint"].is_null())
+        },
+    )
+    .await;
+    book.stop();
+    unreachable(&mini, &made).await;
+    let _: Value = mini
+        .call("session.continue_here", json!({ "session": made["id"] }))
+        .await;
+    book.restart().await;
+    within(
+        Duration::from_secs(30),
+        "a live copy on the MacBook",
+        || async {
+            let copies: Vec<Value> = book.call("sync.list", json!({})).await;
+            copies
+                .iter()
+                .any(|c| c["session"] == made["id"] && !c["path"].as_str().unwrap_or("").is_empty())
+        },
+    )
+    .await;
+    (mini, book, made)
+}
+
+#[tokio::test]
+async fn typing_on_the_member_brings_the_session_back_from_the_central_host() {
+    let origin = Origin::new();
+    let (mini, book, made) = continued_and_back(&origin).await;
+
+    let back: Value = book
+        .call(
+            "session.bring",
+            json!({ "session": made["id"], "message": "Back here" }),
+        )
+        .await;
+    assert_eq!(back["id"], made["id"]);
+    assert_eq!(back["branch"], made["branch"]);
+    let own: Vec<Value> = book.call("session.list", json!({})).await;
+    assert!(own.iter().any(|s| s["id"] == made["id"]));
+    // The agent resumes the conversation here and gets the message.
+    within(
+        Duration::from_secs(30),
+        "the message on the MacBook",
+        || async { agent_log(&book, "claude-user").contains("Back here") },
+    )
+    .await;
+    assert!(agent_log(&book, "claude-args").contains(&format!("--resume {CONVERSATION}")));
+    // studio-mini keeps a copy of it again, the MacBook's.
+    within(
+        Duration::from_secs(30),
+        "a copy on studio-mini again",
+        || async {
+            let own: Vec<Value> = mini.call("session.list", json!({})).await;
+            own.iter().all(|s| s["id"] != made["id"])
+                && with_copies(&mini)
+                    .await
+                    .iter()
+                    .any(|s| s["id"] == made["id"] && s["owner"]["worker"] == json!(BOOK))
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn a_session_in_the_middle_of_a_turn_comes_back_only_when_asked_now() {
+    let origin = Origin::new();
+    let (mini, book, made) = continued_and_back(&origin).await;
+    let own: Vec<Value> = mini.call("session.list", json!({})).await;
+    let chat = own.iter().find(|s| s["id"] == made["id"]).unwrap()["terminals"][0].clone();
+    let _: Value = mini
+        .call("chat.send", json!({ "id": chat, "text": "HOLD there" }))
+        .await;
+    within(
+        Duration::from_secs(30),
+        "a turn running on studio-mini",
+        || async {
+            let st: Value = mini.call("chat.state", json!({ "id": chat })).await;
+            st["status"] == json!("working")
+        },
+    )
+    .await;
+
+    let busy = book
+        .try_call("session.bring", json!({ "session": made["id"] }))
+        .await
+        .unwrap_err();
+    assert!(busy.starts_with("busy"), "{busy}");
+    let back: Value = book
+        .call(
+            "session.bring",
+            json!({ "session": made["id"], "now": true }),
+        )
+        .await;
+    assert_eq!(back["id"], made["id"]);
 }
 
 #[tokio::test]
