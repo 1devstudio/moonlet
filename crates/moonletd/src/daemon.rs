@@ -1226,7 +1226,14 @@ impl Daemon {
                 if !self.sessions.has_account() {
                     return Err(RpcError::new("no_account", "this host shares no account"));
                 }
-                ok(self.files_fetched(params(p)?, cloud).await?)
+                let r: m::SessionFilesFetch = params(p)?;
+                if cloud {
+                    // Only for a session the machine may hold a copy of,
+                    // as for `sync.open`.
+                    let machine = conn.phone.as_deref().and_then(|d| self.machines.machine_of(d)).ok_or_else(refused)?;
+                    self.machines.may_open(&machine, &r.session)?;
+                }
+                ok(self.files_fetched(r, cloud).await?)
             }
             m::FILES_CHECKOUT => {
                 // Only a linked Mac's daemon, as for `session.files` (X74).
