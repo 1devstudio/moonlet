@@ -357,6 +357,11 @@ where
                 Ok(Message::Event { name, .. })
                     if (no_jobs || (phone && !approves_setup))
                         && name == moonlet_proto::methods::EV_EXEC_SETUP => {}
+                // A URL to open goes to where the user is: this Mac's app or
+                // a paired phone (X75), never an agent or another Mac.
+                Ok(Message::Event { name, .. })
+                    if (no_jobs || (phone && !approves_setup))
+                        && name == moonlet_proto::methods::EV_BROWSER_SHOW => {}
                 // Design systems and designs stay on the Mac (X64, X65): a
                 // paired device hears none of the Mac-only events.
                 Ok(Message::Event { name, .. }) if phone && MAC_ONLY_EVENTS.contains(&name.as_str()) => {}

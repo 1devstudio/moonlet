@@ -541,6 +541,10 @@ pub const WORKER_RETIRE: &str = "worker.retire";
 pub const EXEC_SETUPS: &str = "exec.setups";
 /// [`ExecSetup`]: a routing copy's setup waits for the user's approval.
 pub const EV_EXEC_SETUP: &str = "exec.setup";
+/// [`BrowserOpen`] → `true`: `moonlet-open` hands a URL to its daemon (X75).
+pub const BROWSER_OPEN: &str = "browser.open";
+/// [`BrowserShow`]: a URL to open, for the app or the phone (X75).
+pub const EV_BROWSER_SHOW: &str = "browser.show";
 /// [`JobList`] → `[Job]`: a session's jobs, newest first (X62).
 pub const JOB_LIST: &str = "job.list";
 /// [`JobOutputGet`] → [`JobOutput`]: a job's stored output from a byte.
@@ -1323,6 +1327,33 @@ pub struct SessionMove {
     pub to: String,
     #[serde(default)]
     pub now: bool,
+}
+
+/// `browser.open`: a URL from a terminal or agent of this daemon (X75).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BrowserOpen {
+    pub url: String,
+    /// The session of the terminal or agent that asked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal: Option<crate::TerminalId>,
+}
+
+/// `browser.show`: a URL for the app or the phone to open (X75): who asked,
+/// and the localhost port forwarded for its sign-in to come back, if any.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BrowserShow {
+    pub url: String,
+    /// The member that asked, by name.
+    pub from: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+    /// The session's name, for the toast.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forward: Option<u16>,
 }
 
 /// A copied file as its side has it (X74): its SHA-256, and its bytes in

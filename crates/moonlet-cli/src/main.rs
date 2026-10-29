@@ -70,6 +70,10 @@ enum Cmd {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
         command: Vec<String>,
     },
+    /// Open a URL where you are (X75): what `moonlet-open`, `$BROWSER`,
+    /// runs. Only http and https URLs.
+    #[command(hide = true)]
+    OpenUrl { url: String },
     /// Install, inspect or remove agent hooks.
     Hooks {
         #[command(subcommand)]
@@ -549,6 +553,20 @@ async fn run(cmd: Cmd, socket: PathBuf) -> Result<()> {
                         message,
                         source: StateSource::Hook,
                         agent: None,
+                    },
+                )
+                .await?;
+        }
+        Cmd::OpenUrl { url } => {
+            moonlet_core::browser::check_url(&url)?;
+            let mut c = connect(&socket).await?;
+            let _: bool = c
+                .request(
+                    methods::BROWSER_OPEN,
+                    methods::BrowserOpen {
+                        url,
+                        session: std::env::var("MOONLET_SESSION").ok().filter(|s| !s.is_empty()),
+                        terminal: terminal_from_env(),
                     },
                 )
                 .await?;

@@ -1,0 +1,233 @@
+//! Sign-ins open where the user is (X75). Every terminal and agent moonlet
+//! starts gets `BROWSER` and `GH_BROWSER` set to `moonlet-open`, and an
+//! `open` (macOS) or `xdg-open` (Linux) first on its `PATH` that hands an
+//! `http` or `https` URL to it. `moonlet-open` gives the URL to its
+//! daemon, which opens it on the client the user used last.
+
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result, bail};
+
+/// The longest URL `moonlet-open` takes.
+pub const MAX_URL: usize = 8 * 1024;
+
+/// Refuses a URL `moonlet-open` does not hand on: one that is not `http`
+/// or `https`, is over [`MAX_URL`], or holds a space or a control
+/// character.
+pub fn check_url(url: &str) -> Result<()> {
+    if url.len() > MAX_URL {
+        bail!("the URL is over 8 KiB");
+    }
+    let lower = url.get(..8).unwrap_or(url).to_ascii_lowercase();
+    if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+        bail!("only http and https URLs open elsewhere");
+    }
+    if url.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        bail!("the URL holds a space or a control character");
+    }
+    Ok(())
+}
+
+/// Where the opener and the shims are.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Opener {
+    /// `$MOONLET_HOME/bin/moonlet-open`.
+    pub open: PathBuf,
+    /// `$MOONLET_HOME/bin/shims`, first on the processes' `PATH`.
+    pub shims: PathBuf,
+}
+
+/// `s` quoted for `sh`.
+fn quoted(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
+/// The shim named `name` (`open` or `xdg-open`): one `http` or `https` URL
+/// alone goes to the opener, anything else to the first of `system` that
+/// exists, unchanged.
+fn shim(open: &Path, name: &str, system: &[&str]) -> String {
+    let others: Vec<String> = system.iter().map(|s| quoted(s)).collect();
+    format!(
+        "#!/bin/sh\n\
+         # moonlet (X75): a URL opens where you are; anything else as usual.\n\
+         if [ \"$#\" -eq 1 ]; then\n\
+         \x20 case \"$1\" in http://*|https://*) exec {open} \"$1\" ;; esac\n\
+         fi\n\
+         for o in {others}; do\n\
+         \x20 [ -x \"$o\" ] && exec \"$o\" \"$@\"\n\
+         done\n\
+         echo \"{name}: not found\" >&2\n\
+         exit 3\n",
+        open = quoted(&open.display().to_string()),
+        others = others.join(" "),
+    )
+}
+
+/// Writes `moonlet-open`, which hands its argument to the `moonlet` CLI at
+/// `cli`, and the shim for this system, under `home/bin`. `system` is where
+/// the system's own opener may be, tried in order.
+pub fn install(home: &Path, cli: &Path, name: &str, system: &[&str]) -> Result<Opener> {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = home.join("bin");
+    let shims = bin.join("shims");
+    std::fs::create_dir_all(&shims).with_context(|| format!("cannot make {}", shims.display()))?;
+    let open = bin.join("moonlet-open");
+    let write = |path: &Path, text: String| -> Result<()> {
+        let tmp = path.with_extension("moonlet-new");
+        std::fs::write(&tmp, text)?;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))?;
+        std::fs::rename(&tmp, path).with_context(|| format!("cannot write {}", path.display()))
+    };
+    write(
+        &open,
+        format!(
+            "#!/bin/sh\n# moonlet (X75): opens the URL where you are.\nexec {} open-url \"$@\"\n",
+            quoted(&cli.display().to_string())
+        ),
+    )?;
+    write(&shims.join(name), shim(&open, name, system))?;
+    Ok(Opener { open, shims })
+}
+
+/// [`install`] for this system: `open` on macOS, `xdg-open` elsewhere.
+pub fn install_here(home: &Path, cli: &Path) -> Result<Opener> {
+    if cfg!(target_os = "macos") {
+        install(home, cli, "open", &["/usr/bin/open"])
+    } else {
+        install(
+            home,
+            cli,
+            "xdg-open",
+            &[
+                "/usr/bin/xdg-open",
+                "/usr/local/bin/xdg-open",
+                "/bin/xdg-open",
+            ],
+        )
+    }
+}
+
+/// What a terminal or agent gets so its URLs open where the user is: the
+/// opener as `BROWSER` and `GH_BROWSER`, and the shims before `path`.
+pub fn env(o: &Opener, path: Option<&str>) -> Vec<(String, String)> {
+    let open = o.open.display().to_string();
+    let shims = o.shims.display().to_string();
+    vec![
+        ("BROWSER".into(), open.clone()),
+        ("GH_BROWSER".into(), open),
+        (
+            "PATH".into(),
+            match path.filter(|p| !p.is_empty()) {
+                Some(p) => format!("{shims}:{p}"),
+                None => shims,
+            },
+        ),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn moonlet_open_takes_only_http_and_https_up_to_8_kib() {
+        assert!(check_url("https://accounts.google.com/o/oauth2/auth?client_id=1").is_ok());
+        assert!(check_url("HTTP://localhost:8085/").is_ok());
+        for bad in [
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "ftp://x",
+            "https://a b",
+            "https://a\nb",
+            "x",
+        ] {
+            assert!(check_url(bad).is_err(), "{bad:?}");
+        }
+        let long = format!("https://example.test/{}", "a".repeat(9 * 1024));
+        assert!(check_url(&long).is_err());
+    }
+
+    /// A folder with the opener and a shim whose CLI and system opener
+    /// record their arguments.
+    fn installed(name: &str) -> (tempfile::TempDir, Opener, PathBuf, PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let recorder = |path: &Path, log: &Path| {
+            std::fs::write(
+                path,
+                format!("#!/bin/sh\nprintf '%s\\n' \"$@\" >> '{}'\n", log.display()),
+            )
+            .unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        let cli_log = dir.path().join("cli.log");
+        let system_log = dir.path().join("system.log");
+        let cli = dir.path().join("moonlet");
+        let system = dir.path().join("system-open");
+        recorder(&cli, &cli_log);
+        recorder(&system, &system_log);
+        let o = install(
+            &dir.path().join("home"),
+            &cli,
+            name,
+            &["/nowhere/open", system.to_str().unwrap()],
+        )
+        .unwrap();
+        (dir, o, cli_log, system_log)
+    }
+
+    fn run(path: &Path, args: &[&str]) -> i32 {
+        std::process::Command::new(path)
+            .args(args)
+            .status()
+            .unwrap()
+            .code()
+            .unwrap()
+    }
+
+    fn read(p: &Path) -> String {
+        std::fs::read_to_string(p).unwrap_or_default()
+    }
+
+    #[test]
+    fn the_open_shim_hands_on_urls_and_passes_everything_else_to_usr_bin_open() {
+        let (_dir, o, cli, system) = installed("open");
+        let shim = o.shims.join("open");
+        assert_eq!(run(&shim, &["https://github.com/login/device"]), 0);
+        assert_eq!(read(&cli), "open-url\nhttps://github.com/login/device\n");
+        assert_eq!(run(&shim, &["."]), 0);
+        assert_eq!(run(&shim, &["-a", "Cursor", "https://x.test"]), 0);
+        assert_eq!(run(&shim, &["file:///tmp/a.html"]), 0);
+        assert_eq!(
+            read(&system),
+            ".\n-a\nCursor\nhttps://x.test\nfile:///tmp/a.html\n"
+        );
+        assert_eq!(read(&cli), "open-url\nhttps://github.com/login/device\n");
+    }
+
+    #[test]
+    fn the_xdg_open_shim_hands_on_urls_and_passes_everything_else_on() {
+        let (_dir, o, cli, system) = installed("xdg-open");
+        let shim = o.shims.join("xdg-open");
+        assert_eq!(run(&shim, &["http://localhost:8085/?code=4"]), 0);
+        assert_eq!(run(&shim, &["/home/me/report.pdf"]), 0);
+        assert_eq!(read(&cli), "open-url\nhttp://localhost:8085/?code=4\n");
+        assert_eq!(read(&system), "/home/me/report.pdf\n");
+    }
+
+    #[test]
+    fn browser_and_gh_browser_name_the_opener_and_the_shims_come_first() {
+        let o = Opener {
+            open: "/h/bin/moonlet-open".into(),
+            shims: "/h/bin/shims".into(),
+        };
+        assert_eq!(
+            env(&o, Some("/usr/bin:/bin")),
+            [
+                ("BROWSER".to_string(), "/h/bin/moonlet-open".to_string()),
+                ("GH_BROWSER".to_string(), "/h/bin/moonlet-open".to_string()),
+                ("PATH".to_string(), "/h/bin/shims:/usr/bin:/bin".to_string()),
+            ]
+        );
+    }
+}

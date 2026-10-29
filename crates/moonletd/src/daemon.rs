@@ -446,6 +446,14 @@ impl Daemon {
         // Agents call the CLI as "$MOONLET_BIN" (X22): it is not on PATH.
         if let Ok(bin) = moonlet_cli_path() {
             base_env.insert("MOONLET_BIN".into(), bin.display().to_string());
+            // A browser any of them opens opens where the user is (X75).
+            match moonlet_core::browser::install_here(&moonlet_core::paths::home(), &bin) {
+                Ok(opener) => {
+                    let path = base_env.get("PATH").cloned().or_else(|| std::env::var("PATH").ok());
+                    base_env.extend(moonlet_core::browser::env(&opener, path.as_deref()));
+                }
+                Err(e) => tracing::warn!("cannot write moonlet-open: {e:#}"),
+            }
         }
         // A daemon with its own data folder (tests, e2e, a custom setup)
         // passes it on, so `moonlet` in its terminals uses the same one and
@@ -1234,6 +1242,17 @@ impl Daemon {
                     self.machines.may_open(&machine, &r.session)?;
                 }
                 ok(self.files_fetched(r, cloud).await?)
+            }
+            m::BROWSER_OPEN => {
+                // From this Mac's own terminals and agents, through the CLI
+                // (X75).
+                if conn.phone.is_some() || conn.client == crate::link::WORKER_CLIENT {
+                    return Err(RpcError::new("forbidden", "only this Mac's terminals open URLs here"));
+                }
+                let r: m::BrowserOpen = params(p)?;
+                moonlet_core::browser::check_url(&r.url).map_err(|e| RpcError::new("invalid_params", e.to_string()))?;
+                self.open_url(r).await?;
+                ok(true)
             }
             m::FILES_CHECKOUT => {
                 // Only a linked Mac's daemon, as for `session.files` (X74).
@@ -3833,6 +3852,21 @@ impl Daemon {
         }));
         self.session_copies.spawn();
         self.keep_copied_files();
+    }
+
+    /// A URL from one of this Mac's terminals or agents (X75), shown to its
+    /// app.
+    async fn open_url(self: &Arc<Self>, r: m::BrowserOpen) -> Result<(), RpcError> {
+        let session_name = r.session.as_deref().and_then(|s| self.sessions.session(s).ok()).map(|s| s.name);
+        let show = m::BrowserShow {
+            url: r.url,
+            from: self.link.info().worker.name,
+            session: r.session,
+            session_name,
+            forward: None,
+        };
+        self.terminals.emit(Message::event(m::EV_BROWSER_SHOW, show));
+        Ok(())
     }
 
     /// The patterns of the project `identity` names; the default without
