@@ -35,6 +35,8 @@ pub struct Daemon {
     design: moonlet_core::design::store::Store,
     /// Design systems and workspace designs on every member (X71).
     pub copies: Arc<crate::copies::DesignCopies>,
+    /// Copies of every member's sessions on the central host (X72).
+    pub session_copies: Arc<crate::session_copies::SessionCopies>,
     /// Per design system (X64): one start of its agent, or one change of its
     /// record or folder, at a time.
     design_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
@@ -520,8 +522,10 @@ impl Daemon {
                 .ok()
         };
         let copies = crate::copies::DesignCopies::new(&moonlet_core::paths::home(), sessions.clone(), link.clone());
+        let session_copies = crate::session_copies::SessionCopies::new(&moonlet_core::paths::home(), sessions.clone(), link.clone());
         Arc::new(Self {
             copies,
+            session_copies,
             heavy,
             cloud,
             machines,
@@ -1002,6 +1006,27 @@ impl Daemon {
                 None => Err(RpcError::new("invalid_params", "not a paired device")),
             },
             method if method.starts_with("mobile.") => self.handle_mobile(conn, method, p),
+            m::SESSION_OPEN | m::SESSION_OFFER => {
+                // Only a linked Mac's daemon, as for `design.offer` (X72).
+                let refused = || RpcError::new("forbidden", "only a member of the account sends its sessions");
+                let device = conn.phone.as_deref().ok_or_else(refused)?;
+                let mac = self.mobile.kind_of(device) == Some(m::DeviceKind::Desktop);
+                let cloud = conn.cloud.load(std::sync::atomic::Ordering::Relaxed);
+                let worker = self.workers.worker_on(conn.id).filter(|_| mac && !cloud).ok_or_else(refused)?;
+                if !self.sessions.has_account() {
+                    return Err(RpcError::new("no_account", "this host shares no account"));
+                }
+                if method == m::SESSION_OPEN {
+                    ok(self.session_copies.opened(&worker, params(p)?).await?)
+                } else {
+                    let r: m::SessionOffer = params(p)?;
+                    let pack = match r.pack {
+                        Some(t) => Some(conn.take_pack(t).ok_or_else(|| RpcError::new("invalid_params", "the pack did not arrive"))?),
+                        None => None,
+                    };
+                    ok(self.session_copies.offered(&worker, r, pack).await?)
+                }
+            }
             m::DESIGN_OFFER | m::DESIGN_FETCH => {
                 // Only a linked Mac's daemon, as for `account.sync` (X71).
                 let refused = || RpcError::new("forbidden", "only a member of the account keeps design copies");
@@ -2565,6 +2590,20 @@ impl Daemon {
     /// Keeps this member's design copies (X71): a round when the design
     /// folders change, when the link changes, and when another member's
     /// change to a design's record comes.
+    /// Sends this member's sessions to the central host, and keeps the
+    /// central host's copies to the sessions that are still live (X72).
+    pub fn keep_session_copies(self: &Arc<Self>) {
+        let copies = Arc::downgrade(&self.session_copies);
+        self.sessions.on_account_applied(move |changes| {
+            if let Some(c) = copies.upgrade()
+                && changes.iter().any(|c| c.kind == "session")
+            {
+                tokio::spawn(async move { c.drop_ended().await });
+            }
+        });
+        self.session_copies.spawn();
+    }
+
     pub fn keep_design_copies(self: &Arc<Self>) {
         let copies = Arc::downgrade(&self.copies);
         self.sessions.on_account_applied(move |changes| {
@@ -2801,13 +2840,14 @@ impl Daemon {
                     })
                     .map(|p| p.id.clone())
                     .unwrap_or_default();
+                let path = self.session_copies.copy_path(&id).unwrap_or_default();
                 Some(Session {
                     id,
                     project_id,
                     name: text("name").unwrap_or_default(),
                     branch: text("branch").unwrap_or_default(),
                     base: String::new(),
-                    path: String::new(),
+                    path,
                     agent: None,
                     archived: false,
                     created_at: r.get("created_at").and_then(Value::as_u64).unwrap_or(0),
