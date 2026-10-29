@@ -719,14 +719,16 @@ impl Daemon {
 
     /// Forgets the boards of workspaces gone by any way, an account's
     /// changes from another member included (X68, X76).
-    fn prune_boards(&self) -> Result<(), RpcError> {
+    /// One that cannot be removed is kept, and logged: it hides no other.
+    fn prune_boards(&self) {
         let live: std::collections::HashSet<String> = self.sessions.list_workspaces().into_iter().map(|w| w.id).collect();
         for ws in self.task_snapshots.workspaces() {
-            if !live.contains(&ws) {
-                self.forget_boards(&ws)?;
+            if !live.contains(&ws)
+                && let Err(e) = self.forget_boards(&ws)
+            {
+                tracing::warn!("cannot remove the boards of workspace {ws}: {}", e.message);
             }
         }
-        Ok(())
     }
 
     /// Removes a deleted or merged workspace's boards, and tells the phones (X76).
@@ -1323,7 +1325,7 @@ impl Daemon {
                 // here; the one that sent them already has them.
                 let taken = self.sessions.apply_account(r.changes);
                 // A workspace another member removed or merged takes its boards along (X76).
-                let _ = self.prune_boards();
+                self.prune_boards();
                 if !taken.is_empty() {
                     self.workers.send_to_members(Message::event(m::EV_ACCOUNT_CHANGED, m::AccountChanged { changes: taken }), Some(conn.id));
                 }
@@ -3178,7 +3180,7 @@ impl Daemon {
             m::TASKS_APP => ok(m::TasksApp { open: !self.apps.lock().unwrap().is_empty() }),
             m::TASKS_SNAPSHOT => {
                 let r: m::TasksSnapshotQuery = params(p)?;
-                self.prune_boards()?;
+                self.prune_boards();
                 ok(self.task_snapshots.get(r.workspace.as_deref()))
             }
             m::TASKS_SET_SNAPSHOT if !self.is_app(conn) => Err(RpcError::new("forbidden", "only the moonlet app shares boards")),

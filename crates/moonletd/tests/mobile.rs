@@ -1236,3 +1236,24 @@ async fn boards_of_a_workspace_gone_another_way_are_not_served() {
     assert_eq!(left, json!([]));
     assert!(!dir.join("gone.json").exists());
 }
+
+/// A board file that cannot be removed keeps its own boards, and hides no
+/// other workspace's (X76).
+#[tokio::test]
+async fn an_undeletable_board_file_hides_no_other_boards() {
+    use std::os::unix::fs::PermissionsExt;
+    let mut mac = Mac::start(None).await;
+    let dir = mac.home.path().join("tasks");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("gone.json"), board_snapshot().to_string()).unwrap();
+    mac.restart().await;
+    let mut app = mac.app().await;
+    let ws = personal_workspace(&mut app).await;
+    let _: bool = app.request("tasks.set_snapshot", json!({ "workspace": ws, "snapshot": board_snapshot() })).await.unwrap();
+    // The folder is read only: gone.json cannot be removed.
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let r: Result<Value, _> = app.request("tasks.snapshot", json!({})).await;
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let list = r.expect("tasks.snapshot failed");
+    assert!(list.as_array().unwrap().iter().any(|s| s["workspace"] == json!(ws)), "{list}");
+}
