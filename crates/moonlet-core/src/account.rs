@@ -272,6 +272,37 @@ impl Log {
             .any(|c| c.kind == kind.as_str() && c.id == id && c.op == ChangeOp::Delete)
     }
 
+    /// The records of `kind` by id, counting only the changes of the
+    /// member that made each record (by worker id, X41): another member's
+    /// change to it is left out, as if it never came.
+    pub fn records_by_maker(&self, kind: RecordKind) -> BTreeMap<String, Record> {
+        let maker: BTreeMap<&str, Option<&str>> = self
+            .changes
+            .values()
+            .filter(|c| c.kind == kind.as_str())
+            .fold(BTreeMap::new(), |mut first: BTreeMap<&str, &Change>, c| {
+                let slot = first.entry(c.id.as_str()).or_insert(c);
+                if c.stamp < slot.stamp {
+                    *slot = c;
+                }
+                first
+            })
+            .into_iter()
+            .map(|(id, c)| (id, log_owner(&c.stamp.member)))
+            .collect();
+        let mut own = Log::new(&self.member);
+        own.changes = self
+            .changes
+            .iter()
+            .filter(|(_, c)| {
+                c.kind == kind.as_str()
+                    && maker.get(c.id.as_str()).copied().flatten().is_some_and(|m| log_owner(&c.stamp.member) == Some(m))
+            })
+            .map(|(k, c)| (k.clone(), c.clone()))
+            .collect();
+        own.records(kind)
+    }
+
     /// The records of `kind` by id, each field at its latest change.
     pub fn records(&self, kind: RecordKind) -> BTreeMap<String, Record> {
         let mut latest: BTreeMap<(&str, &str), &Change> = BTreeMap::new();
