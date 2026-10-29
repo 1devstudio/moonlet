@@ -40,7 +40,7 @@ const TAB_LABEL: Record<SessionTab, string> = { chat: "Chat", terminal: "Termina
  * folder and branch, and work that is only on the host. */
 function ArchiveSheet({ host, session, pr, onClose }: { host: string; session: Session; pr: PullRequest | null | undefined; onClose: () => void }) {
   const d = useApp((s) => s.data[host]);
-  const hostLabel = useApp((s) => s.hosts[host]?.label ?? host);
+  const hostLabel = useApp((s) => session.owner?.name ?? s.hosts[host]?.label ?? host);
   const git = d?.git ?? null;
   const warn = git?.warn_unpushed ?? true;
   // undefined while git.unpushed runs; null when not asked.
@@ -253,14 +253,17 @@ export function SessionScreen({ host, id, tab }: { host: string; id: string; tab
       {menu && (
         <Sheet label="Session actions" onClose={() => setMenu(false)}>
           <div className="flex flex-col gap-2 px-4 pb-2">
-            <Btn
-              onClick={() => {
-                setMenu(false);
-                setArchiving(true);
-              }}
-            >
-              <Archive size={16} /> Archive session
-            </Btn>
+            {/* Archiving needs the Mac running the session (X72). */}
+            {session.owner?.reachable !== false && (
+              <Btn
+                onClick={() => {
+                  setMenu(false);
+                  setArchiving(true);
+                }}
+              >
+                <Archive size={16} /> Archive session
+              </Btn>
+            )}
             <Btn
               onClick={() => {
                 setMenu(false);

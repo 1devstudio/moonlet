@@ -3,7 +3,7 @@
 // shared section and project once across an account's members (X68).
 
 import { copyHostId } from "@desktop/lib/copyHost";
-import { ownerLine } from "./copies";
+import { dropRelisted, ownerLine } from "./copies";
 import { planOf } from "@desktop/lib/chat";
 import { arrangeShared, lastActive, sectionParts, shownSections } from "@desktop/lib/sidebar";
 import { agentCount } from "@desktop/lib/subagents";
@@ -87,7 +87,9 @@ export function sessionGroups(hosts: Record<string, InboxHost>, data: Record<str
   const of = {
     sections: Object.fromEntries(list.map((h) => [h.host, h.sections])),
     projects: Object.fromEntries(list.map((h) => [h.host, data[h.host].projects])),
-    sessions: Object.fromEntries(list.map((h) => [h.host, h.sessions])),
+    // A session the phone gets from its member and from the central host
+    // shows once (X72).
+    sessions: dropRelisted(Object.fromEntries(list.map((h) => [h.host, h.sessions]))),
   };
   const groups: ProjectGroup[] = [];
   for (const ref of shown ? [shown] : workspaceChoices(list).map((c) => c.ref)) {

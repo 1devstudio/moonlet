@@ -30,13 +30,46 @@ export function copyData(
   const session = central.sessions.find((s) => s.id === id);
   if (!session) return null;
   const ids = [...new Set([...terminals.map((t) => t.id), ...chats.map((c) => c.id)])];
+  // While the member is away there is no terminal list: each chat the copy
+  // holds stands for its terminal, so the Chat tab still finds it.
+  const known = new Set(terminals.map((t) => t.id));
+  const standIns: TerminalInfo[] = chats
+    .filter((c) => !known.has(c.id))
+    .map((c) => ({
+      id: c.id,
+      kind: "agent",
+      title: "Claude",
+      cwd: session.path,
+      command: [],
+      session_id: id,
+      agent_state: "idle",
+      cols: 80,
+      rows: 24,
+      pid: null,
+      chat: true,
+      created_at: session.created_at,
+      last_output_at: 0,
+    }));
   return {
     ...central,
     sessions: [{ ...session, terminals: ids }],
-    terminals: Object.fromEntries(terminals.map((t) => [t.id, t])),
+    terminals: Object.fromEntries([...terminals, ...standIns].map((t) => [t.id, t])),
     chats: Object.fromEntries(chats.map((c) => [c.id, c.state as ChatSummary])),
     reads: [],
     copies: [],
     setups: [],
   };
+}
+
+/** Each host's sessions, without the copies of sessions another connected
+ * host lists as its own: the phone paired with both the MacBook and the
+ * central host shows a session once, from the MacBook. */
+export function dropRelisted(sessions: Record<string, Session[]>): Record<string, Session[]> {
+  const own = new Set(
+    Object.values(sessions)
+      .flat()
+      .filter((s) => !s.owner)
+      .map((s) => s.id),
+  );
+  return Object.fromEntries(Object.entries(sessions).map(([host, list]) => [host, list.filter((s) => !s.owner || !own.has(s.id))]));
 }

@@ -4,7 +4,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { DaemonService, HostInfo, LinkInfo } from "./protocol";
-import { parseCopyHost, routeCall, unwrapEvent } from "./copyHost";
+import { EarlyOutput, parseCopyHost, routeCall, unwrapEvent } from "./copyHost";
 
 export interface RpcError {
   code: string;
@@ -44,6 +44,7 @@ export function sendInput(host: string, session: number, data: string) {
  * the copy host terminal each relay's output is for. */
 const relays = new Map<string, number>();
 const relayed = new Map<string, string>();
+const early = new EarlyOutput();
 
 /** A call to a copy host, through its central host (X72). An attached
  * terminal keeps its own id here; its output comes under its relay id. */
@@ -57,6 +58,13 @@ async function rpcCopy<T>(host: string, method: string, params: unknown): Promis
     const reply = out as unknown as { info: { id: number } };
     relays.set(sinkKey(host, terminal), reply.info.id);
     relayed.set(sinkKey(copy.host, reply.info.id), sinkKey(host, terminal));
+    // The snapshot and output that came before this reply was read.
+    const sink = sinks.get(sinkKey(host, terminal));
+    for (const o of early.take(sinkKey(copy.host, reply.info.id))) {
+      if (!sink) break;
+      if (o.reset) sink.reset(o.data);
+      else sink.write(o.data);
+    }
     reply.info.id = terminal;
   }
   if (method === "terminal.detach" && terminal !== undefined) {
@@ -203,7 +211,11 @@ export async function subscribeHost(host: string) {
     parseBatch(buf, (session, reset, data) => {
       const key = sinkKey(host, session);
       const sink = sinks.get(key) ?? sinks.get(relayed.get(key) ?? "");
-      if (!sink) return;
+      if (!sink) {
+        // A relay whose attach reply is not read yet (X72).
+        early.keep(key, session, reset, data);
+        return;
+      }
       if (reset) sink.reset(data);
       else sink.write(data);
     });

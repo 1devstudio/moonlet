@@ -254,6 +254,10 @@ export async function loadHost(host: string) {
     // What events changed meanwhile wins over the replies they overtook.
     const kept = (cur: HostData) => ({ git: fetched.git === undefined ? cur.git : fetched.git, account: fetched.account === "keep" ? cur.account : (fetched.account ?? undefined) });
     patchData(host, (cur) => applyChanges({ ...fetched, ...kept(cur) }, during));
+    // An open session of another member follows its central host (X72).
+    for (const id of Object.keys(useApp.getState().data)) {
+      if (parseCopyHost(id)?.host === host) void loadCopy(id).catch(() => {});
+    }
   } finally {
     if (loads.get(host) === during) loads.delete(host);
   }

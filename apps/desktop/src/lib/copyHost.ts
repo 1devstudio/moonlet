@@ -46,3 +46,30 @@ export function unwrapEvent(e: { host: string; name: string; data: unknown }): {
   if (!d?.session || !d.event?.name) return null;
   return { host: copyHostId(e.host, d.session), name: d.event.name, data: d.event.data };
 }
+
+/** Relay ids start here (X72): above every host's own terminal ids. */
+export const RELAY_MIN = 0x4000_0000;
+
+/** Output for a relay id no screen follows yet: the central host can send
+ * it right after the attach reply, before the reply's relay id is known
+ * here. Kept, a few hundred pieces at most, until it is. */
+export class EarlyOutput {
+  private held = new Map<string, { reset: boolean; data: Uint8Array }[]>();
+
+  /** Keeps output for `key` (`<host>:<relay>`); false when `relay` is not
+   * a relay id, so there is nothing to wait for. */
+  keep(key: string, relay: number, reset: boolean, data: Uint8Array): boolean {
+    if (relay < RELAY_MIN) return false;
+    const list = this.held.get(key) ?? [];
+    if (list.length < 512) list.push({ reset, data: data.slice() });
+    this.held.set(key, list);
+    return true;
+  }
+
+  /** What was kept for `key`, oldest first; once. */
+  take(key: string): { reset: boolean; data: Uint8Array }[] {
+    const list = this.held.get(key) ?? [];
+    this.held.delete(key);
+    return list;
+  }
+}
