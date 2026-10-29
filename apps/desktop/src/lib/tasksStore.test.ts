@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GhTask, Section, Session, Workspace } from "./protocol";
 import { migrateSources } from "./boards";
 import { workspaceViews } from "./boardScreen";
@@ -6,7 +6,7 @@ import { DEFAULT_RULES } from "./keepInStep";
 import { useStore } from "./store";
 import { answerConfirm } from "./confirm";
 import { rpc } from "./daemon";
-import { createIssue, setColumnShow } from "./tasksStore";
+import { answerTaskRequest, createIssue, setColumnShow, workspacesToPoll } from "./tasksStore";
 import { type TasksData, type TrackersConfig, activityOf, autoFixed, boardInput, openBoard, removeBoard, previewBoard, showBoard, branchUser, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, lookUpPasted, moveTask, originRepoOf, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, pollTasks, saveTrackersConfig, settleSaves, setAssignee, setExpanded, setFilters, setKeepInStep, startedFromTask, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
 
 const answers: Record<string, (params: { path?: string; id?: string }) => unknown> = {};
@@ -26,6 +26,8 @@ vi.mock("./daemon", () => ({
         : failNext.length
           ? Promise.reject(failNext.shift())
           : (sent.push(req), Promise.resolve()),
+    trackerComments: (id: string, task: string) => Promise.resolve(answers[`tracker_comments ${id} ${task}`]?.({}) ?? { comments: [], more: false }),
+    trackerComment: (id: string, task: string, body: string) => (posted.push({ id, task, body }), Promise.resolve()),
     trackerTask: (id: string, key: string) => Promise.resolve(answers[`tracker_task ${id} ${key}`]?.({}) ?? null),
     // A Linear team's or ClickUp list's board (X50): that source's issues
     // from the tracker_tasks answers, and its columns when a test gives them.
@@ -73,6 +75,8 @@ const opened = vi.hoisted(() => [] as string[]);
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: (url: string) => (opened.push(url), Promise.resolve()) }));
 /** The tracker_create requests made (X52). */
 const creates = vi.hoisted(() => [] as object[]);
+/** The tracker_comment requests made (X76). */
+const posted = vi.hoisted(() => [] as object[]);
 /** The tracker_board_tasks queries made, in order. */
 const boardQueries = vi.hoisted(() => [] as { id: string; mine: boolean; sync?: number }[]);
 vi.mock("@tauri-apps/plugin-notification", () => ({
@@ -818,6 +822,86 @@ describe("moving Linear, Jira and ClickUp issues (X46 Keep in step)", () => {
     sent.length = 0;
     await startedFromTask("local", "personal", { ref: { connection: "linear:acme", key: "MOON-151", url: "" }, kind: "linear", key: "MOON-151", title: "Drag", description: "", projects: [], tracker: { id: "issue-2", source: "MOON" } }, { session: "Drag", assign: true });
     expect(sent).toEqual([{ id: "linear:acme", task: "issue-2", source: "MOON", column: "in_progress", assign_me: true }]);
+  });
+});
+
+describe("a phone's requests (X76)", () => {
+  const LINEAR_BOARD = { id: "moon", name: "Moonlet", connection: "linear:acme", workspace: "local/personal", origin: { kind: "linear_team" as const, team: "MOON" }, columns: [{ name: "Todo", statuses: ["s-todo"], category: "todo" as const }, { name: "In Progress", statuses: ["s-progress"], category: "in_progress" as const }] };
+  const drag = { connection: "linear:acme", key: "MOON-151", title: "Drag", url: "", column: "todo" as const, priority: 1, assignees: [], labels: [], description: "", updatedMs: 0, tracker: { id: "issue-2", state: "s-todo", source: "MOON" } };
+  const answered: object[] = [];
+  beforeEach(() => {
+    answered.length = 0;
+    sent.length = 0;
+    answers["tasks.answer"] = (p) => (answered.push(p), true);
+    useTasks.setState({ config: { ...DEFAULT_CONFIG, boards: [LINEAR_BOARD] }, data: { "local/personal": { tasks: [drag], worktrees: [], sources: [], repos: {}, syncedAt: 1, error: null, boards: { moon: { keys: ["linear:acme MOON-151"] } } } } });
+  });
+  afterEach(() => useTasks.setState({ config: null, data: {}, activity: {}, failures: {}, moving: {} }));
+
+  it("tells of a session started from a task as the Mac's composer does, and answers", async () => {
+    await answerTaskRequest("local", { request_id: 7, workspace: "personal", action: { kind: "started", task: "linear:acme MOON-151", session: "Drag", assign: true } });
+    expect(answered).toEqual([{ request_id: 7, ok: true, result: {} }]);
+    // The board's In Progress status, as the Mac's own start moves it.
+    expect(sent).toEqual([{ id: "linear:acme", task: "issue-2", source: "MOON", column: "in_progress", status: "s-progress", assign_me: true }]);
+    expect(activityOf(drag).map((e) => e.text)).toContain("Session “Drag” started from it");
+  });
+
+  it("moves a task the phone asks for, and says why the tracker refused", async () => {
+    await answerTaskRequest("local", { request_id: 8, workspace: "personal", action: { kind: "move", board: "moon", task: "linear:acme MOON-151", column: "In Progress" } });
+    expect(answered).toEqual([{ request_id: 8, ok: true, result: { task: "linear:acme MOON-151" } }]);
+    failNext.push(new Error("Linear refused the move"));
+    await answerTaskRequest("local", { request_id: 9, workspace: "personal", action: { kind: "move", board: "moon", task: "linear:acme MOON-151", column: "Todo" } });
+    expect(answered[1]).toEqual({ request_id: 9, ok: false, error: "Linear refused the move" });
+  });
+
+  it("reads a task's comments for the phone, and posts one, noting it in Activity", async () => {
+    answers["tracker_comments linear:acme issue-2"] = () => ({ comments: [{ id: "c1", author: "Ada Lovelace", body: "Prefix match should handle both.", markdown: true, createdMs: 5 }], more: false });
+    await answerTaskRequest("local", { request_id: 10, workspace: "personal", action: { kind: "comments", board: "moon", task: "linear:acme MOON-151" } });
+    expect(answered).toEqual([{ request_id: 10, ok: true, result: { comments: [{ id: "c1", author: "Ada Lovelace", body: "Prefix match should handle both.", markdown: true, createdMs: 5 }], more: false } }]);
+    await answerTaskRequest("local", { request_id: 11, workspace: "personal", action: { kind: "comment", board: "moon", task: "linear:acme MOON-151", body: "Picked this up." } });
+    expect(answered[1]).toEqual({ request_id: 11, ok: true, result: {} });
+    expect(posted).toEqual([{ id: "linear:acme", task: "issue-2", body: "Picked this up." }]);
+    expect(activityOf(drag).map((e) => e.text)).toContain("You commented");
+  });
+
+  it("syncs the board the phone asks for", async () => {
+    answers["git.origin_url"] = () => null;
+    answers["project.worktrees"] = () => [];
+    answers["tracker_tasks linear:acme"] = () => [];
+    await answerTaskRequest("local", { request_id: 12, workspace: "personal", action: { kind: "sync", board: "moon" } });
+    expect(answered).toEqual([{ request_id: 12, ok: true, result: {} }]);
+    expect(useTasks.getState().data["local/personal"].syncedAt).toBeGreaterThan(1);
+  });
+
+  it("runs a clean-up the phone confirmed, without asking again on the Mac", async () => {
+    const done = { ...drag, column: "done" as const, tracker: { ...drag.tracker, state: "s-done" } };
+    const wt = { path: "/w/moon-151-drag", branch: "moon-151-drag", originRepo: null, project: "web" };
+    const withDone = { ...LINEAR_BOARD, columns: [...LINEAR_BOARD.columns, { name: "Done", statuses: ["s-done"], category: "done" as const }] };
+    useTasks.setState({ config: { ...DEFAULT_CONFIG, boards: [withDone] }, data: { "local/personal": { tasks: [done], worktrees: [wt], sources: [], repos: {}, syncedAt: 1, error: null, boards: { moon: { keys: ["linear:acme MOON-151"] } } } } });
+    answers["project.worktree_remove"] = () => true;
+    answers["git.origin_url"] = () => null;
+    answers["project.worktrees"] = () => [];
+    answers["tracker_tasks linear:acme"] = () => [];
+    vi.mocked(rpc).mockClear();
+    await answerTaskRequest("local", { request_id: 13, workspace: "personal", action: { kind: "fix", board: "moon", task: "linear:acme MOON-151" } });
+    expect(useStore.getState().confirm).toBeNull();
+    expect(answered).toEqual([{ request_id: 13, ok: true, result: {} }]);
+    expect(vi.mocked(rpc).mock.calls.filter(([, m]) => m === "project.worktree_remove").map(([, , p]) => p)).toEqual([{ id: "web", path: "/w/moon-151-drag" }]);
+    // In step once its worktree has gone: nothing left to fix.
+    useTasks.setState({ data: { "local/personal": { tasks: [done], worktrees: [], sources: [], repos: {}, syncedAt: 2, error: null, boards: { moon: { keys: ["linear:acme MOON-151"] } } } } });
+    await answerTaskRequest("local", { request_id: 14, workspace: "personal", action: { kind: "fix", board: "moon", task: "linear:acme MOON-151" } });
+    expect(answered[1]).toEqual({ request_id: 14, ok: false, error: "MOON-151 is in step now." });
+  });
+});
+
+describe("workspacesToPoll (X76)", () => {
+  it("keeps every workspace with a board synced while a phone is paired, on connected hosts", () => {
+    const boards = [{ workspace: "local/personal" }, { workspace: "local/personal" }, { workspace: "devbox/acme" }, { workspace: "gpu/ml" }];
+    const hosts = { local: "connected", devbox: "connected", gpu: "error" };
+    expect(workspacesToPoll(boards, 1, hosts)).toEqual([
+      { host: "local", id: "personal" },
+      { host: "devbox", id: "acme" },
+    ]);
+    expect(workspacesToPoll(boards, 0, hosts)).toEqual([]);
   });
 });
 
