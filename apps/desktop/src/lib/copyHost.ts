@@ -73,3 +73,27 @@ export class EarlyOutput {
     return list;
   }
 }
+
+/** Attaches on their way to a copy host's terminals (X72): a screen that
+ * leaves before the reply comes has its relay let go of when it does. */
+export class PendingAttaches {
+  private pending = new Map<string, boolean>();
+
+  start(key: string) {
+    this.pending.set(key, false);
+  }
+
+  /** The screen left `key`; true while its attach is still on its way. */
+  leave(key: string): boolean {
+    if (!this.pending.has(key)) return false;
+    this.pending.set(key, true);
+    return true;
+  }
+
+  /** The attach of `key` answered; true when its screen left meanwhile. */
+  done(key: string): boolean {
+    const left = this.pending.get(key) === true;
+    this.pending.delete(key);
+    return left;
+  }
+}

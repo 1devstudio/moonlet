@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { EarlyOutput, copyHostId, parseCopyHost, routeCall, unwrapEvent } from "./copyHost";
+import { EarlyOutput, PendingAttaches, copyHostId, parseCopyHost, routeCall, unwrapEvent } from "./copyHost";
 
 describe("copy hosts (X72)", () => {
   it("names a session another member owns by its central host and its id", () => {
@@ -50,5 +50,18 @@ describe("relay output before the attach reply (X72)", () => {
       [false, [2]],
     ]);
     expect(early.take("studio-mini:1073741832")).toEqual([]);
+  });
+});
+
+describe("leaving a terminal while its attach is on its way (X72)", () => {
+  it("lets go of the relay once the reply comes", () => {
+    const a = new PendingAttaches();
+    a.start("studio-mini#copy:s1:4");
+    expect(a.leave("studio-mini#copy:s1:4")).toBe(true);
+    expect(a.done("studio-mini#copy:s1:4")).toBe(true);
+    // Left after the reply: nothing pending, the usual detach applies.
+    a.start("studio-mini#copy:s1:5");
+    expect(a.done("studio-mini#copy:s1:5")).toBe(false);
+    expect(a.leave("studio-mini#copy:s1:5")).toBe(false);
   });
 });

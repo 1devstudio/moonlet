@@ -4,7 +4,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { DaemonService, HostInfo, LinkInfo } from "./protocol";
-import { EarlyOutput, parseCopyHost, routeCall, unwrapEvent } from "./copyHost";
+import { EarlyOutput, PendingAttaches, parseCopyHost, routeCall, unwrapEvent } from "./copyHost";
 
 export interface RpcError {
   code: string;
@@ -45,6 +45,7 @@ export function sendInput(host: string, session: number, data: string) {
 const relays = new Map<string, number>();
 const relayed = new Map<string, string>();
 const early = new EarlyOutput();
+const attaching = new PendingAttaches();
 
 /** A call to a copy host, through its central host (X72). An attached
  * terminal keeps its own id here; its output comes under its relay id. */
@@ -52,8 +53,23 @@ async function rpcCopy<T>(host: string, method: string, params: unknown): Promis
   const copy = parseCopyHost(host)!;
   const route = routeCall(host, method, params, (t) => relays.get(sinkKey(host, t)));
   const terminal = (params as { id?: number } | null)?.id;
+  const key = terminal === undefined ? "" : sinkKey(host, terminal);
+  // Left while its attach is on its way: let go of once the reply comes.
+  if (method === "terminal.detach" && attaching.leave(key)) return true as T;
   if (!route) return true as T;
-  const out = await rpc<T>(route.host, route.method, route.params);
+  if (method === "terminal.attach") attaching.start(key);
+  let out: T;
+  try {
+    out = await rpc<T>(route.host, route.method, route.params);
+  } catch (e) {
+    if (method === "terminal.attach") attaching.done(key);
+    throw e;
+  }
+  if (method === "terminal.attach" && terminal !== undefined && attaching.done(key)) {
+    const relay = (out as unknown as { info: { id: number } }).info.id;
+    void rpc(copy.host, "session.detach", { relay }).catch(() => {});
+    return out;
+  }
   if (method === "terminal.attach" && terminal !== undefined) {
     const reply = out as unknown as { info: { id: number } };
     relays.set(sinkKey(host, terminal), reply.info.id);
