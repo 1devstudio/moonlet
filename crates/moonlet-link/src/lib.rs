@@ -733,6 +733,7 @@ fn request_timeout(method: &str) -> Duration {
     } else if method.starts_with("sync.")
         || method == moonlet_proto::methods::SESSION_OPEN
         || method == moonlet_proto::methods::SESSION_OFFER
+        || method == moonlet_proto::methods::SESSION_TRANSCRIPT
     {
         // A copy's first pack can be a whole repository's history (X60,
         // X72), and opening one may clone the project first.

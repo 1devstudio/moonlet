@@ -434,6 +434,13 @@ impl Daemon {
             }
         }
         let (shutdown, _) = watch::channel(false);
+        // Where agents without a workspace profile keep their conversations:
+        // the terminals' environment decides, not the daemon's own (X72).
+        let claude_dir = base_env
+            .get(moonlet_core::profiles::CONFIG_DIR_VAR)
+            .filter(|d| !d.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(base_env.get("HOME").cloned().unwrap_or_default()).join(".claude"));
         let terminals = TerminalManager::new(socket.clone(), base_env);
         let sessions = SessionManager::load(
             moonlet_core::paths::state_file(),
@@ -522,7 +529,13 @@ impl Daemon {
                 .ok()
         };
         let copies = crate::copies::DesignCopies::new(&moonlet_core::paths::home(), sessions.clone(), link.clone());
-        let session_copies = crate::session_copies::SessionCopies::new(&moonlet_core::paths::home(), sessions.clone(), link.clone());
+        let session_copies = crate::session_copies::SessionCopies::new(
+            &moonlet_core::paths::home(),
+            sessions.clone(),
+            link.clone(),
+            chats.clone(),
+            claude_dir,
+        );
         Arc::new(Self {
             copies,
             session_copies,
@@ -1006,7 +1019,7 @@ impl Daemon {
                 None => Err(RpcError::new("invalid_params", "not a paired device")),
             },
             method if method.starts_with("mobile.") => self.handle_mobile(conn, method, p),
-            m::SESSION_OPEN | m::SESSION_OFFER => {
+            m::SESSION_OPEN | m::SESSION_OFFER | m::SESSION_CHAT | m::SESSION_TRANSCRIPT | m::SESSION_CHECKPOINT => {
                 // Only a linked Mac's daemon, as for `design.offer` (X72).
                 let refused = || RpcError::new("forbidden", "only a member of the account sends its sessions");
                 let device = conn.phone.as_deref().ok_or_else(refused)?;
@@ -1018,6 +1031,14 @@ impl Daemon {
                 }
                 if method == m::SESSION_OPEN {
                     ok(self.session_copies.opened(&worker, params(p)?).await?)
+                } else if method == m::SESSION_CHAT {
+                    ok(self.session_copies.chat_offered(&worker, params(p)?)?)
+                } else if method == m::SESSION_TRANSCRIPT {
+                    let r: m::SessionTranscript = params(p)?;
+                    let bytes = conn.take_pack(r.pack).ok_or_else(|| RpcError::new("invalid_params", "the bytes did not arrive"))?;
+                    ok(self.session_copies.transcript_offered(&worker, r, &bytes)?)
+                } else if method == m::SESSION_CHECKPOINT {
+                    ok(self.session_copies.checkpoint_offered(&worker, params(p)?).await?)
                 } else {
                     let r: m::SessionOffer = params(p)?;
                     let pack = match r.pack {
@@ -3181,6 +3202,10 @@ impl Daemon {
                 // Its design folder is there now: watch it.
                 let _ = self.design_session(&made.id);
                 ok(made)
+            }
+            m::SESSION_COPY => {
+                let r: m::SessionCopyReq = params(p)?;
+                ok(self.session_copies.copy_info(&r.session)?)
             }
             m::SESSION_LIST => {
                 let r: m::SessionList = serde_json::from_value(p).unwrap_or_default();

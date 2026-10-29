@@ -74,6 +74,15 @@ impl Daemon {
     pub async fn call<T: serde::de::DeserializeOwned>(&self, method: &str, params: Value) -> T {
         self.app().await.request(method, params).await.unwrap()
     }
+
+    /// [`Self::call`], giving the daemon's error instead of panicking.
+    pub async fn try_call(&self, method: &str, params: Value) -> Result<Value, String> {
+        self.app()
+            .await
+            .request::<Value, Value>(method, params)
+            .await
+            .map_err(|e| e.to_string())
+    }
 }
 
 impl Drop for Daemon {
