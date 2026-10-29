@@ -81,10 +81,14 @@ export async function moveOnMac(b: Pick<PhoneBoard, "host" | "workspace" | "boar
   const open = !!useApp.getState().data[b.host]?.macOpen;
   const move: Move = { status: to.status, name: to.label, at: Date.now(), ...(!open && { waiting: true }) };
   useTaskStore.setState((s) => ({ moving: { ...s.moving, [id]: move }, failures: without(s.failures, id) }));
+  // A task's waiting move, by where it goes: the same task on two workspaces' boards stays apart.
+  const other = (w: Waiting) => w.id !== id || w.host !== b.host || w.workspace !== b.workspace;
   if (!open) {
-    saveWaiting([...loadWaiting().filter((w) => w.id !== id), { host: b.host, workspace: b.workspace, id, action, move }]);
+    saveWaiting([...loadWaiting().filter(other), { host: b.host, workspace: b.workspace, id, action, move }]);
     return;
   }
+  // This move replaces one still stored: never sent after it.
+  saveWaiting(loadWaiting().filter(other));
   try {
     await send(b.host, b.workspace, id, action, move);
   } catch (e) {
@@ -92,7 +96,7 @@ export async function moveOnMac(b: Pick<PhoneBoard, "host" | "workspace" | "boar
     // The Mac did not take it (closed meanwhile, or no answer): it waits for the next open.
     const waiting: Move = { ...move, waiting: true };
     useTaskStore.setState((s) => (s.moving[id] === move ? { moving: { ...s.moving, [id]: waiting } } : s));
-    saveWaiting([...loadWaiting().filter((w) => w.id !== id), { host: b.host, workspace: b.workspace, id, action, move: waiting }]);
+    saveWaiting([...loadWaiting().filter(other), { host: b.host, workspace: b.workspace, id, action, move: waiting }]);
   }
 }
 
@@ -126,19 +130,19 @@ function send(host: string, workspace: string, id: string, action: TaskAction, m
   return p;
 }
 
-// Waiting moves being sent now, by task id.
+// Waiting moves being sent now, by `keyOf`.
 const sending = new Set<string>();
 
 /** Sends the moves that waited for moonlet on `host`, now open there. */
 function sendWaiting(host: string) {
-  const now = loadWaiting().filter((w) => w.host === host && !sending.has(w.id));
+  const now = loadWaiting().filter((w) => w.host === host && !sending.has(keyOf(w)));
   for (const w of now) {
     // Shown from now on as any move, until the snapshot has it.
     const move: Move = { ...w.move, waiting: false, at: Date.now() };
     useTaskStore.setState((s) => (s.moving[w.id] === undefined || s.moving[w.id].at === w.move.at ? { moving: { ...s.moving, [w.id]: move } } : s));
-    sending.add(w.id);
+    sending.add(keyOf(w));
     // Kept until the Mac answered: a phone app that quits meanwhile sends it again on its next start.
-    const done = () => saveWaiting(loadWaiting().filter((x) => x.id !== w.id || x.move.at !== w.move.at));
+    const done = () => saveWaiting(loadWaiting().filter((x) => keyOf(x) !== keyOf(w) || x.move.at !== w.move.at));
     void send(w.host, w.workspace, w.id, w.action, move)
       .then(done, (e) => {
         // Refused: it went back on the board; no point sending it again.
@@ -146,9 +150,16 @@ function sendWaiting(host: string) {
         // Not taken (the Mac closed, or did not answer): it waits again for the next open.
         useTaskStore.setState((s) => (s.moving[w.id] === move ? { moving: { ...s.moving, [w.id]: { ...w.move, waiting: true } } } : s));
       })
-      .finally(() => sending.delete(w.id));
+      .finally(() => {
+        sending.delete(keyOf(w));
+        // A newer move of it, stored while this one was on its way, goes now.
+        if (useApp.getState().data[host]?.macOpen && loadWaiting().some((x) => keyOf(x) === keyOf(w) && x.move.at !== w.move.at)) sendWaiting(host);
+      });
   }
 }
+
+/** A waiting move's place: its Mac, workspace and task. */
+const keyOf = (w: Pick<Waiting, "host" | "workspace" | "id">) => `${w.host}/${w.workspace} ${w.id}`;
 
 /** Tells the Mac a session started from `task`, for Keep in step (X46); a failure shows on the task. */
 export async function startedOnMac(b: Pick<PhoneBoard, "host" | "workspace">, task: Task, session: string, assign: boolean) {

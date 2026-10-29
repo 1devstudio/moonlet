@@ -141,6 +141,22 @@ describe("a move while moonlet is closed on the Mac (X76)", () => {
     delete replies.move;
   });
 
+  it("forgets an older waiting move once a newer one of the task went through", async () => {
+    await moveOnMac(b, task, { label: "In Progress", status: "s-progress" });
+    useApp.setState({ data: { mac: { ...emptyData(), macOpen: true } } });
+    // A newer move while the old one is still stored: it goes, and the old one is not sent after it.
+    await moveOnMac(b, task, { label: "Done", status: "s-done" });
+    await vi.waitFor(() => expect(JSON.parse(localStorage.getItem("moonlet.mobile.tasks.waiting") ?? "[]")).toEqual([]));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(calls.map((c) => (c[2] as { action: { column: string } }).action.column).at(-1)).toBe("Done");
+  });
+
+  it("keeps a task's waiting moves of two workspaces apart", async () => {
+    await moveOnMac(b, task, { label: "In Progress", status: "s-progress" });
+    await moveOnMac({ ...b, workspace: "acme" }, task, { label: "Done", status: "s-done" });
+    expect(JSON.parse(localStorage.getItem("moonlet.mobile.tasks.waiting") ?? "[]").map((w: { workspace: string }) => w.workspace)).toEqual(["personal", "acme"]);
+  });
+
   it("sends a move at once while the app is open", async () => {
     useApp.setState({ data: { mac: { ...emptyData(), macOpen: true } } });
     await moveOnMac(b, task, { label: "Done", status: "s-done" });

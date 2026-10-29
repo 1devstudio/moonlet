@@ -44,10 +44,14 @@ export interface DetailSession {
 const REVIEW: Record<string, string> = { APPROVED: "approved", CHANGES_REQUESTED: "changes requested", REVIEW_REQUIRED: "review required" };
 
 const CRITERIA_HEADING = /^\s*(#{1,6}\s*)?acceptance criteria:?\s*$/i;
+const CHECK_ITEM = /^\s*[-*]\s+\[[ xX]\]\s/;
 
 /** A description without what shows as its acceptance criteria: its checklist items, and an "Acceptance criteria" section's heading and bullets. */
 function withoutChecklist(md: string): string {
   const out: string[] = [];
+  // As `acceptanceCriteria` reads it: a checklist anywhere is the criteria; else a section's bullets are.
+  const checklist = md.split("\n").some((l) => CHECK_ITEM.test(l));
+  if (checklist) return md.split("\n").filter((l) => !CHECK_ITEM.test(l)).join("\n").replace(/\n{3,}/g, "\n\n").trim();
   let inSection = false;
   for (const l of md.split("\n")) {
     if (CRITERIA_HEADING.test(l)) {
@@ -57,7 +61,6 @@ function withoutChecklist(md: string): string {
     // The section ends at the next heading, as `acceptanceCriteria` reads it.
     if (inSection && /^\s*#{1,6}\s/.test(l)) inSection = false;
     if (inSection && /^\s*[-*]\s+/.test(l)) continue;
-    if (/^\s*[-*]\s+\[[ xX]\]\s/.test(l)) continue;
     out.push(l);
   }
   return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();

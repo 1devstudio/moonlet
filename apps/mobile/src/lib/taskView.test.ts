@@ -151,6 +151,11 @@ describe("taskDetail (X76)", () => {
     const [b2] = phoneBoards(hosts, { mac: d }, null);
     const t2 = taskDetail(b2, `${LINEAR} MOON-142`, d, details, {}, NOW)!;
     expect([t2.criteria?.heading, t2.description]).toEqual(["Acceptance criteria · 0 of 2", "Shoppers can't find products.\n\n## Notes\nSee the frame."]);
+    // With a checklist elsewhere, the criteria are the checklist: the section's plain bullets stay in the description.
+    d.tasks.personal = { ...snapshot, tasks: [{ ...MOON142, description: "Intro.\n\n- [ ] Ship it\n\n## Acceptance criteria\n- Works offline" }] };
+    const [b3] = phoneBoards(hosts, { mac: d }, null);
+    const t3 = taskDetail(b3, `${LINEAR} MOON-142`, d, details, {}, NOW)!;
+    expect([t3.criteria?.heading, t3.description]).toEqual(["Acceptance criteria · 0 of 1", "Intro.\n\n## Acceptance criteria\n- Works offline"]);
     expect(t.latest).toBe("Claude launched 5 subagents in Remote hosts sidebar · 20m ago");
   });
 
