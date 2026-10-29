@@ -38,6 +38,18 @@ const QUIET: Duration = Duration::from_millis(300);
 /// in a linked worktree changes nothing the file watcher sees.
 const EVERY: Duration = Duration::from_secs(5);
 
+/// Whether clone URL `url`, from a member, names `origin`, the project
+/// identity's origin (X41), whatever its scheme and user.
+fn clone_url_names(url: &str, origin: &str) -> bool {
+    moonlet_core::identity::normalize_origin(url).as_deref() == Some(origin)
+}
+
+/// The branch a copy's worktree is on: its own, named after the session,
+/// so a member never moves one of the central host's own branches.
+fn copy_branch(session: &str) -> String {
+    format!("moonlet-copy/{}", segment(session))
+}
+
 /// What the central host holds of one of this member's sessions.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 struct Sent {
@@ -389,6 +401,15 @@ impl SessionCopies {
                 "the session's project has no origin to clone from",
             ));
         };
+        // The URL comes from the member: it is cloned only when it names the
+        // origin of the project the record says, so it can never fill the
+        // clone folder of one project with another repository.
+        if !clone_url_names(url, origin) {
+            return Err(RpcError::new(
+                "refused",
+                "the clone URL is not the project's origin",
+            ));
+        }
         let dir = clone_dir(&self.home, origin);
         if !clone_folder_ok(&self.home, &dir) {
             return Err(RpcError::new(
@@ -488,9 +509,14 @@ impl SessionCopies {
                 &taken,
             ),
         );
-        git_sync::add_worktree(Path::new(&held.repo), &dir, &r.branch, &r.head)
-            .await
-            .map_err(|e| RpcError::new("refused", format!("cannot make the copy: {e:?}")))?;
+        git_sync::add_worktree(
+            Path::new(&held.repo),
+            &dir,
+            &copy_branch(&r.session),
+            &r.head,
+        )
+        .await
+        .map_err(|e| RpcError::new("refused", format!("cannot make the copy: {e:?}")))?;
         Ok(dir)
     }
 
@@ -503,17 +529,14 @@ impl SessionCopies {
         r: &m::SessionOffer,
     ) -> Result<(), RpcError> {
         let internal = |e: anyhow::Error| RpcError::new("internal", format!("{e:#}"));
-        if held.branch != r.branch && !r.branch.is_empty() {
-            moonlet_core::git::git(dir, &["checkout", "-q", "-B", &r.branch, &r.head])
+        // The copy's branch is its own (`copy_branch`), never one of this
+        // host's, so moving it, even back after an amend, touches nothing
+        // else. The member's branch name stays in the session's record.
+        let at = git_sync::head(dir).await.map_err(internal)?;
+        if at != r.head {
+            git_sync::reset_branch(dir, &at, &r.head)
                 .await
                 .map_err(internal)?;
-        } else {
-            let at = git_sync::head(dir).await.map_err(internal)?;
-            if at != r.head {
-                git_sync::reset_branch(dir, &at, &r.head)
-                    .await
-                    .map_err(internal)?;
-            }
         }
         let from = git_sync::snapshot(dir, git_sync::MAX_FILE)
             .await
@@ -597,5 +620,23 @@ impl SessionCopies {
             data.held.remove(&id);
             self.save(&data);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_clone_url_is_taken_only_for_the_projects_own_origin() {
+        let origin = "github.com/acme/shop";
+        assert!(clone_url_names("https://github.com/acme/shop.git", origin));
+        assert!(clone_url_names("git@github.com:acme/shop.git", origin));
+        assert!(!clone_url_names("https://github.com/evil/shop.git", origin));
+        assert!(!clone_url_names(
+            "https://evil.example/acme/shop.git",
+            origin
+        ));
+        assert!(!clone_url_names("/Users/alex/src/other", origin));
     }
 }

@@ -505,3 +505,74 @@ async fn an_archived_sessions_copy_is_removed() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn a_copy_never_moves_a_branch_of_the_central_hosts_own() {
+    let origin = Origin::new();
+    let (mini, _addr, book) = pair_of(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = new_session(&book, &project, "fix-cart").await;
+    let branch = made["branch"].as_str().unwrap().to_string();
+    // studio-mini has a branch of that name of its own, ahead of main.
+    let own = mini.home.path().join("src/shop");
+    git(&own, &["switch", "-q", "-c", &branch]);
+    std::fs::write(own.join("mini.txt"), "mini\n").unwrap();
+    git(&own, &["add", "-A"]);
+    git(
+        &own,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-qm",
+            "mini's own",
+        ],
+    );
+    git(&own, &["switch", "-q", "main"]);
+    let mine = String::from_utf8(
+        std::process::Command::new("git")
+            .args(["rev-parse", &branch])
+            .current_dir(&own)
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+
+    let path = path_of(&made);
+    std::fs::write(path.join("src/cart.ts"), "e\n").unwrap();
+    git(&path, &["add", "-A"]);
+    git(
+        &path,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-qm",
+            "cart",
+        ],
+    );
+    let commit = head(&path);
+    let copy = copy_of(&mini, &made).await;
+    within(
+        Duration::from_secs(15),
+        "the copy at the member's commit",
+        || async { head(&copy) == commit },
+    )
+    .await;
+    let after = String::from_utf8(
+        std::process::Command::new("git")
+            .args(["rev-parse", &branch])
+            .current_dir(&own)
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    assert_eq!(after, mine);
+}
