@@ -521,6 +521,20 @@ impl ChatManager {
     }
 
     /// Stops the agent process; `remove` also forgets the conversation.
+    /// Freezes (`true`) or thaws the agent process of chat `id`, its whole
+    /// process group, as the Mac goes to sleep and wakes (X73). False when
+    /// it runs no process.
+    pub fn freeze(&self, id: TerminalId, frozen: bool) -> bool {
+        let Ok(chat) = self.get(id) else { return false };
+        let pid = chat.inner.lock().unwrap().pid;
+        let Some(pid) = pid.and_then(|p| i32::try_from(p).ok()) else {
+            return false;
+        };
+        let sig = if frozen { libc::SIGSTOP } else { libc::SIGCONT };
+        // The agent runs in a process group of its own (`process_group(0)`).
+        unsafe { libc::kill(-pid, sig) == 0 }
+    }
+
     pub fn stop(&self, id: TerminalId, remove: bool) {
         let Ok(chat) = self.get(id) else { return };
         {

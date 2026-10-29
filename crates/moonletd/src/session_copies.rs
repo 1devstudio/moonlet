@@ -593,6 +593,14 @@ impl SessionCopies {
         })
     }
 
+    /// Sends what is new of every session now, as the Mac goes to sleep
+    /// (X73): its files, chats, transcripts and checkpoints.
+    pub async fn send_now(&self) {
+        if let Err(e) = self.round().await {
+            tracing::debug!("session copies: {e:#}");
+        }
+    }
+
     pub fn kick(&self) {
         self.kick.notify_one();
     }

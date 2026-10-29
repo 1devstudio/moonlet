@@ -735,6 +735,8 @@ fn agent_env(home: &Path, origin: Option<&Origin>) -> Vec<(String, String)> {
     let mut env = vec![
         ("HOME".to_string(), home.display().to_string()),
         ("SHELL".to_string(), "/bin/sh".to_string()),
+        // `power.simulate` stands in for the Mac's sleep (X73).
+        ("MOONLET_TEST_POWER".to_string(), "1".to_string()),
         // Continue here after 1 s away instead of 30 (X73).
         (
             "MOONLET_TEST_UNREACHABLE_MS".to_string(),
@@ -2315,6 +2317,90 @@ async fn a_brought_back_transcript_is_never_written_through_a_link_on_the_member
         }
     }
     assert_eq!(files, Vec::<PathBuf>::new(), "nothing written through the link");
+}
+
+#[tokio::test]
+async fn a_member_going_to_sleep_hands_its_running_session_to_the_central_host() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents_as(&origin, false).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    let agent = made["terminals"][0].clone();
+    copy_of(&mini, &made).await;
+    let _: Value = book
+        .call("chat.send", json!({ "id": agent, "text": "HOLD on" }))
+        .await;
+    within(
+        Duration::from_secs(30),
+        "the running turn on studio-mini",
+        || async {
+            mini.try_call("session.copy", json!({ "session": made["id"] }))
+                .await
+                .is_ok_and(|i| i["chats"][0]["state"]["status"] == json!("working"))
+        },
+    )
+    .await;
+
+    // The lid closes.
+    let _: Value = book
+        .call("power.simulate", json!({ "event": "sleep" }))
+        .await;
+    let own: Vec<Value> = mini.call("session.list", json!({})).await;
+    assert!(
+        own.iter().any(|s| s["id"] == made["id"]),
+        "studio-mini runs it now"
+    );
+    within(Duration::from_secs(30), "the note on studio-mini", || async {
+        agent_log(&mini, "claude-user").contains(
+            "This session moved from MacBook to studio-mini because MacBook went to sleep, and your last turn was cut off.",
+        )
+    })
+    .await;
+    // The MacBook lets go of it and keeps a live copy instead.
+    within(
+        Duration::from_secs(30),
+        "the MacBook following it",
+        || async {
+            let own: Vec<Value> = book.call("session.list", json!({})).await;
+            let copies: Vec<Value> = book.call("sync.list", json!({})).await;
+            own.iter().all(|s| s["id"] != made["id"])
+                && copies.iter().any(|c| c["session"] == made["id"])
+        },
+    )
+    .await;
+    let _: Value = book
+        .call("power.simulate", json!({ "event": "wake" }))
+        .await;
+    let own: Vec<Value> = book.call("session.list", json!({})).await;
+    assert!(own.iter().all(|s| s["id"] != made["id"]));
+}
+
+#[tokio::test]
+async fn a_session_not_handed_over_before_sleep_goes_on_here_after_waking() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents_as(&origin, false).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    let agent = made["terminals"][0].clone();
+    // studio-mini is gone: nothing to hand the session to.
+    drop(mini);
+
+    let _: Value = book
+        .call("power.simulate", json!({ "event": "sleep" }))
+        .await;
+    let _: Value = book
+        .call("power.simulate", json!({ "event": "wake" }))
+        .await;
+    let _: Value = book
+        .call("chat.send", json!({ "id": agent, "text": "Again" }))
+        .await;
+    within(Duration::from_secs(30), "a turn after waking", || async {
+        let st: Value = book.call("chat.state", json!({ "id": agent })).await;
+        st["status"] == json!("done") && agent_log(&book, "claude-user").contains("Again")
+    })
+    .await;
 }
 
 #[tokio::test]
