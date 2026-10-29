@@ -1314,6 +1314,7 @@ export const M = {
   projectSetConfig: "project.set_config",
   projectWorktrees: "project.worktrees",
   projectCopiedFilesGet: "project.copied_files.get",
+  presenceActive: "presence.active",
   projectCopiedFilesSet: "project.copied_files.set",
   projectWorktreeRemove: "project.worktree_remove",
   sessionCreate: "session.create",
