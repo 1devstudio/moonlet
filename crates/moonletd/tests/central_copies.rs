@@ -1238,3 +1238,83 @@ async fn a_terminal_can_be_followed_as_soon_as_its_member_links() {
     .expect("no relayed output right after linking");
     drop(scratch);
 }
+
+/// Claude Code's project folder on `d` for worktree `path`.
+fn project_folder(d: &Daemon, path: &Path) -> PathBuf {
+    claude_home(d).join("projects").join(
+        path.canonicalize()
+            .unwrap()
+            .display()
+            .to_string()
+            .replace(|c: char| !c.is_ascii_alphanumeric(), "-"),
+    )
+}
+
+#[tokio::test]
+async fn a_transcript_made_again_shorter_replaces_the_central_hosts() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    let copy = copy_of(&mini, &made).await;
+    let ours = project_folder(&mini, &copy).join(format!("{CONVERSATION}.jsonl"));
+    let theirs = project_folder(&book, &path_of(&made)).join(format!("{CONVERSATION}.jsonl"));
+    reads(&ours, &std::fs::read_to_string(&theirs).unwrap()).await;
+
+    std::fs::write(&theirs, "{\"type\":\"user\"}\n").unwrap();
+    // A chat change makes the member look at its transcript again.
+    let agent = made["terminals"][0].clone();
+    let _: Value = book
+        .call("chat.send", json!({ "id": agent, "text": "Again" }))
+        .await;
+    within(Duration::from_secs(30), "the turn to end", || async {
+        let st: Value = book.call("chat.state", json!({ "id": agent })).await;
+        st["status"] == json!("done")
+    })
+    .await;
+    let now = std::fs::read_to_string(&theirs).unwrap();
+    assert!(now.starts_with("{\"type\":\"user\"}\n"), "{now}");
+    reads(&ours, &now).await;
+}
+
+#[tokio::test]
+async fn a_transcript_is_never_written_through_a_link_on_the_central_host() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made: Value = book
+        .call(
+            "session.create",
+            json!({ "project_id": project, "name": "fix-cart", "agent": "claude" }),
+        )
+        .await;
+    let copy = copy_of(&mini, &made).await;
+    // Something on studio-mini put a link where the transcript goes.
+    let folder = project_folder(&mini, &copy);
+    std::fs::create_dir_all(&folder).unwrap();
+    let elsewhere = tempfile::NamedTempFile::new().unwrap();
+    std::os::unix::fs::symlink(
+        elsewhere.path(),
+        folder.join(format!("{CONVERSATION}.jsonl")),
+    )
+    .unwrap();
+
+    let agent = made["terminals"][0].clone();
+    let _: Value = book
+        .call("chat.send", json!({ "id": agent, "text": "Fix the cart" }))
+        .await;
+    within(
+        Duration::from_secs(30),
+        "the chat on studio-mini",
+        || async {
+            mini.try_call("session.copy", json!({ "session": made["id"] }))
+                .await
+                .is_ok_and(|i| i["chats"][0]["state"]["status"] == json!("done"))
+        },
+    )
+    .await;
+    tokio::time::sleep(Duration::from_secs(6)).await;
+    assert_eq!(std::fs::read_to_string(elsewhere.path()).unwrap(), "");
+}

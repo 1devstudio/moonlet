@@ -849,7 +849,14 @@ impl WorkerLink {
             .unwrap_or_default();
         let state = match info.status {
             HostStatus::Connecting => LinkState::Connecting,
-            HostStatus::Reconnecting => LinkState::Reconnecting,
+            HostStatus::Reconnecting => {
+                // The central host ended this link's relays with it (X72),
+                // and may have lost what it was told.
+                if let Some((_, relink)) = self.relay_input.get() {
+                    relink();
+                }
+                LinkState::Reconnecting
+            }
             HostStatus::Connected => {
                 tokio::spawn(self.clone().register(host));
                 LinkState::Connected { since: now_ms() }

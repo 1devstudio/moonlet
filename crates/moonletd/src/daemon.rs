@@ -2686,7 +2686,7 @@ impl Daemon {
             }
             m::GIT_STATUS | m::GIT_DIFF | m::GIT_LOG | m::GH_PRS => {
                 let path = self.session_copies.copy_path(&r.session).ok_or_else(offline)?;
-                let p = scope(&r.method, r.params, &r.session, &path, &[])?;
+                let p = scope(&r.method, r.params, &r.session, &path, "", &[])?;
                 Box::pin(self.handle(conn, &r.method, p)).await
             }
             _ => Err(offline()),
@@ -2723,7 +2723,7 @@ impl Daemon {
             .into_iter()
             .find(|s| s.id == r.session && s.owner.is_none() && !s.archived)
             .ok_or_else(|| RpcError::new("not_found", "no such session here"))?;
-        let p = scope(&r.method, r.params, &s.id, &s.path, &s.terminals)?;
+        let p = scope(&r.method, r.params, &s.id, &s.path, &s.branch, &s.terminals)?;
         let conn = Conn::detached(self.terminals.new_client_id(), "moonlet-forwarded", Some("forwarded".to_string()));
         let reply = Box::pin(self.handle(&conn, &r.method, p)).await?;
         Ok(only_terminals(&r.method, reply, &s.terminals))

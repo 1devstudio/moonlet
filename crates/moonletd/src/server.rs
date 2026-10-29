@@ -427,6 +427,29 @@ where
                     let e = RpcError::new("forbidden", "a cloud machine only runs heavy commands");
                     let _ = conn.tx.send(Frame::Json(Message::err(id, e)));
                 }
+                // Another member's terminal (X72): its reply, with the
+                // snapshot, goes before any of its output.
+                Frame::Json(Message::Request { id, method, params })
+                    if method == moonlet_proto::methods::SESSION_ATTACH =>
+                {
+                    let daemon = daemon.clone();
+                    let conn = conn.clone();
+                    tokio::spawn(async move {
+                        let reply = daemon.handle(&conn, &method, params).await;
+                        let relay = reply
+                            .as_ref()
+                            .ok()
+                            .and_then(|v| v["info"]["id"].as_u64())
+                            .and_then(|i| u32::try_from(i).ok());
+                        let _ = conn.tx.send(Frame::Json(match reply {
+                            Ok(value) => Message::Response { id, result: Some(value), error: None },
+                            Err(e) => Message::err(id, e),
+                        }));
+                        if let Some(relay) = relay {
+                            daemon.session_copies.relay_ready(relay);
+                        }
+                    });
+                }
                 Frame::Json(Message::Request { id, method, params })
                     if method == moonlet_proto::methods::TERMINAL_ATTACH =>
                 {
