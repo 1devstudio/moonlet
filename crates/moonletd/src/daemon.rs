@@ -61,6 +61,8 @@ pub struct Daemon {
     pub session_copies: Arc<crate::session_copies::SessionCopies>,
     /// One look at a time for sessions another member now owns (X73).
     letting_go: tokio::sync::Mutex<LettingGo>,
+    /// The copied files of this member's checkouts (X74).
+    checkouts: crate::copied_files::Checkouts,
     /// What the Mac's last sleep left to its wake (X73).
     asleep: Mutex<Asleep>,
     /// Per design system (X64): one start of its agent, or one change of its
@@ -570,6 +572,7 @@ impl Daemon {
             copies,
             session_copies,
             letting_go: Default::default(),
+            checkouts: crate::copied_files::Checkouts::new(&moonlet_core::paths::home()),
             asleep: Default::default(),
             heavy,
             cloud,
@@ -1206,6 +1209,32 @@ impl Daemon {
                     };
                     ok(self.session_copies.offered(&worker, r, pack).await?)
                 }
+            }
+            m::FILES_CHECKOUT => {
+                // Only a linked Mac's daemon, as for `session.files` (X74).
+                let refused = || RpcError::new("forbidden", "only a member of the account keeps its checkouts in step");
+                let device = conn.phone.as_deref().ok_or_else(refused)?;
+                let mac = self.mobile.kind_of(device) == Some(m::DeviceKind::Desktop);
+                let cloud = conn.cloud.load(std::sync::atomic::Ordering::Relaxed);
+                let worker = self.workers.worker_on(conn.id).filter(|_| mac && !cloud).ok_or_else(refused)?;
+                if !self.sessions.has_account() {
+                    return Err(RpcError::new("no_account", "this host shares no account"));
+                }
+                let r: m::FilesCheckout = params(p)?;
+                let project = self
+                    .sessions
+                    .list_projects()
+                    .into_iter()
+                    .find(|p| moonlet_core::identity::same_project(&p.identity, &r.identity))
+                    .ok_or_else(|| RpcError::new("no_project", "this host has no checkout of that project"))?;
+                let me = self.link.info().worker.id;
+                let patterns = self.copied_patterns(Some(&project.identity));
+                let answer = self
+                    .checkouts
+                    .take(&worker, &me, r, &project.name, Path::new(&project.path), &patterns)
+                    .await
+                    .map_err(|e| RpcError::new("invalid_params", format!("{e:#}")))?;
+                ok(answer)
             }
             m::DESIGN_OFFER | m::DESIGN_FETCH => {
                 // Only a linked Mac's daemon, as for `account.sync` (X71).
@@ -3756,7 +3785,7 @@ impl Daemon {
         let d = Arc::downgrade(self);
         tokio::spawn(async move {
             loop {
-                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                 let Some(d) = d.upgrade() else { return };
                 d.send_forced().await;
             }
@@ -3810,7 +3839,8 @@ impl Daemon {
     }
 
     /// Keeps the copied files of this Mac's live copies (X60) those of the
-    /// sessions the central host runs (X74), every couple of seconds.
+    /// sessions the central host runs, and its checkouts in step with the
+    /// central host's (X74), every second.
     fn keep_copied_files(self: &Arc<Self>) {
         let d = Arc::downgrade(self);
         tokio::spawn(async move {
@@ -3825,6 +3855,17 @@ impl Daemon {
                 for (session, path, identity) in d.sync.live_copies() {
                     if let Err(e) = d.fetch_copied_files(&host, &session, &path, identity.as_ref()).await {
                         tracing::debug!(%session, "cannot fetch the copied files: {e:#}");
+                    }
+                }
+                // Each checkout in step with the central host's.
+                let me = info.worker.id.clone();
+                for p in d.sessions.list_projects() {
+                    if p.identity.root.is_none() || !Path::new(&p.path).is_dir() {
+                        continue;
+                    }
+                    let patterns = d.copied_patterns(Some(&p.identity));
+                    if let Err(e) = d.checkouts.exchange(&host, &p.identity, &p.name, Path::new(&p.path), &patterns, &me).await {
+                        tracing::debug!(project = %p.name, "cannot keep the checkout's copied files: {e:#}");
                     }
                 }
             }

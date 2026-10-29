@@ -414,30 +414,54 @@ pub async fn apply(
     had: &std::collections::BTreeSet<String>,
     mut keep: impl FnMut(&str, &[u8]) -> Result<()>,
 ) -> Result<Applied> {
-    let named = select(
+    // The list and the limits as this side has them: a file over them is
+    // left alone, whatever the other side sent.
+    let size = |path: &str| {
+        manifest
+            .iter()
+            .find(|e| e.path == path)
+            .map(|e| e.bytes.as_ref().map_or(0, |b| b.len() as u64))
+    };
+    let picked = select(
         patterns,
         &manifest.iter().map(|e| e.path.clone()).collect::<Vec<_>>(),
-        |_| Some(0),
+        size,
     )?;
     let named: std::collections::BTreeSet<&str> =
-        named.files.iter().map(|(p, _)| p.as_str()).collect();
+        picked.files.iter().map(|(p, _)| p.as_str()).collect();
+    let over: std::collections::BTreeSet<&str> =
+        picked.skipped.iter().map(|(p, _)| p.as_str()).collect();
     let mut here = std::collections::BTreeMap::new();
     for (path, _) in in_worktree(dir, patterns).await?.files {
         if let Some(bytes) = read(dir, &path)? {
             here.insert(path, bytes);
         }
     }
+    // What stays as it is counts toward the total first.
+    let mut total: u64 = manifest
+        .iter()
+        .filter(|e| here.get(&e.path).map(|b| sha(b)).as_deref() == Some(e.sha.as_str()))
+        .map(|e| here[&e.path].len() as u64)
+        .sum();
     let mut done = Applied::default();
     for e in manifest {
-        if check_path(&e.path).is_err() || !named.contains(e.path.as_str()) {
+        if check_path(&e.path).is_err()
+            || !(named.contains(e.path.as_str()) || over.contains(e.path.as_str()))
+        {
             bail!("{} is not a copied file here", e.path);
         }
         let old = here.remove(&e.path);
-        if old.as_deref().map(sha).as_deref() == Some(e.sha.as_str()) {
+        if over.contains(e.path.as_str())
+            || old.as_deref().map(sha).as_deref() == Some(e.sha.as_str())
+        {
             continue;
         }
         match &e.bytes {
             Some(bytes) if sha(bytes) == e.sha => {
+                if total + bytes.len() as u64 > MAX_TOTAL {
+                    continue;
+                }
+                total += bytes.len() as u64;
                 if let Some(old) = &old {
                     keep(&e.path, old)?;
                 }
@@ -455,6 +479,64 @@ pub async fn apply(
         done.changed.push(path);
     }
     Ok(done)
+}
+
+/// A checkout's copied file as one member last saw it change (X74): its
+/// SHA-256, or none once deleted, and when and by which member the change
+/// was noticed.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Version {
+    pub sha: Option<String>,
+    /// Milliseconds since the epoch, on the member that noticed it.
+    pub stamp: u64,
+    /// That member's worker id.
+    pub by: String,
+}
+
+impl Version {
+    /// Whether this change came after `other`: the later stamp, and on the
+    /// same stamp, the greater member id, so every member picks the same.
+    pub fn after(&self, other: &Version) -> bool {
+        (self.stamp, &self.by) > (other.stamp, &other.by)
+    }
+}
+
+/// Records in `table` what changed in a checkout whose copied files are now
+/// `now` (path to SHA-256 and the file's change time, in milliseconds): a
+/// new or changed file at its change time, and a deleted one at `stamp`,
+/// all by member `by`. Gives the paths that changed.
+pub fn notice(
+    table: &mut std::collections::BTreeMap<String, Version>,
+    now: &std::collections::BTreeMap<String, (String, u64)>,
+    stamp: u64,
+    by: &str,
+) -> Vec<String> {
+    let mut changed = Vec::new();
+    for (path, (sha, at)) in now {
+        if table.get(path).and_then(|v| v.sha.as_ref()) != Some(sha) {
+            table.insert(
+                path.clone(),
+                Version {
+                    sha: Some(sha.clone()),
+                    stamp: *at,
+                    by: by.to_string(),
+                },
+            );
+            changed.push(path.clone());
+        }
+    }
+    for (path, v) in table.iter_mut() {
+        if v.sha.is_some() && !now.contains_key(path) {
+            *v = Version {
+                sha: None,
+                stamp,
+                by: by.to_string(),
+            };
+            changed.push(path.clone());
+        }
+    }
+    changed.sort();
+    changed
 }
 
 #[cfg(test)]
@@ -751,6 +833,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_file_over_the_limits_is_never_written_whatever_the_other_side_sent() {
+        let copy = repo();
+        let big = vec![b'x'; MAX_FILE as usize + 1];
+        let entry = |path: &str, bytes: Vec<u8>| Entry {
+            path: path.into(),
+            sha: sha(&bytes),
+            bytes: Some(bytes),
+        };
+        let done = apply(
+            copy.path(),
+            &pats(&DEFAULT),
+            &[entry(".env", big)],
+            |_, _| Ok(()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(done, Applied::default());
+        assert!(!copy.path().join(".env").exists());
+        // 17 files of 1 MiB: only 16 are written.
+        let list: Vec<Entry> = (0..17)
+            .map(|n| entry(&format!("a{n:02}/.env"), vec![b'y'; MAX_FILE as usize]))
+            .collect();
+        let done = apply(copy.path(), &pats(&DEFAULT), &list, |_, _| Ok(()))
+            .await
+            .unwrap();
+        assert_eq!(done.changed.len(), 16);
+        assert!(!copy.path().join("a16/.env").exists());
+    }
+
+    #[tokio::test]
     async fn a_path_this_sides_list_does_not_name_is_refused() {
         let copy = repo();
         let entry = |path: &str| Entry {
@@ -781,6 +893,70 @@ mod tests {
     #[test]
     fn a_files_hash_is_its_sha256() {
         assert_eq!(sha(b"A=1\n"), A1);
+    }
+
+    #[test]
+    fn a_conflict_on_a_checkout_goes_to_the_later_stamp() {
+        let v = |stamp, by: &str| Version {
+            sha: Some("a".into()),
+            stamp,
+            by: by.into(),
+        };
+        assert!(v(1_000, "book").after(&v(999, "mini")));
+        assert!(!v(999, "mini").after(&v(1_000, "book")));
+        // The same stamp: the greater member id, on every member alike.
+        assert!(v(1_000, "mini").after(&v(1_000, "book")));
+        assert!(!v(1_000, "book").after(&v(1_000, "mini")));
+    }
+
+    #[test]
+    fn a_checkouts_new_changed_and_deleted_files_are_noticed() {
+        let shas = |list: &[(&str, &str)]| {
+            list.iter()
+                .map(|(p, s)| (p.to_string(), (s.to_string(), 5)))
+                .collect()
+        };
+        let mut table = std::collections::BTreeMap::new();
+        assert_eq!(
+            notice(
+                &mut table,
+                &shas(&[(".env", "a"), (".env.local", "b")]),
+                10,
+                "book"
+            ),
+            [".env", ".env.local"]
+        );
+        assert_eq!(
+            notice(
+                &mut table,
+                &shas(&[(".env", "a"), (".env.local", "b")]),
+                20,
+                "book"
+            ),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            notice(&mut table, &shas(&[(".env", "c")]), 30, "book"),
+            [".env", ".env.local"]
+        );
+        // A change is stamped with the file's change time, a deletion when
+        // it is noticed.
+        assert_eq!(
+            table[".env"],
+            Version {
+                sha: Some("c".into()),
+                stamp: 5,
+                by: "book".into()
+            }
+        );
+        assert_eq!(
+            table[".env.local"],
+            Version {
+                sha: None,
+                stamp: 30,
+                by: "book".into()
+            }
+        );
     }
 
     #[test]

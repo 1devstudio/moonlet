@@ -165,6 +165,9 @@ pub const SESSION_FILES: &str = "session.files";
 /// [`SessionFilesFetch`] → [`SessionFilesFetched`]: the copied files of a
 /// session the central host runs, for a Mac's live copy of it (X74).
 pub const SESSION_FILES_FETCH: &str = "session.files_fetch";
+/// [`FilesCheckout`] → [`FilesCheckedOut`]: a member's checkout of a project
+/// and the central host's, kept in step through it (X74).
+pub const FILES_CHECKOUT: &str = "files.checkout";
 /// Whether the central host could continue each copy it holds (X73).
 pub const SESSION_READY: &str = "session.ready";
 /// Tests only, with `MOONLET_TEST_POWER=1`: as if the Mac went to sleep
@@ -1330,6 +1333,35 @@ pub struct CopiedFile {
     pub sha: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
+}
+
+/// A checkout's copied file as a member last saw it change (X74): its
+/// SHA-256, or none once deleted; when and by whom; and its bytes in base64
+/// when they go along.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CheckoutFile {
+    pub path: String,
+    pub sha: Option<String>,
+    pub stamp: u64,
+    pub by: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+}
+
+/// `files.checkout`: a member's copied files of its checkout of project
+/// `identity`, with the bytes of those changed since it last sent them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FilesCheckout {
+    pub identity: crate::types::ProjectIdentity,
+    pub files: Vec<CheckoutFile>,
+}
+
+/// `files.checkout`'s answer: the central host's versions that won over
+/// the member's, with their bytes, and paths whose bytes it still needs.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct FilesCheckedOut {
+    pub files: Vec<CheckoutFile>,
+    pub want: Vec<String>,
 }
 
 /// `session.files`: every copied file of the session's worktree on the

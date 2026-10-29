@@ -3474,6 +3474,72 @@ async fn the_owners_version_wins_and_the_copys_and_a_deleted_one_are_in_leftover
     }
 }
 
+/// The central host and the MacBook linked, each with a checkout of `shop`
+/// that both name alike; gives the checkouts.
+async fn two_checkouts(origin: &Origin) -> (Daemon, String, Daemon, PathBuf, PathBuf) {
+    let (mini, addr) = central().await;
+    let book = mac(BOOK, "MacBook").await;
+    link(&book, &mini, &addr).await;
+    origin.add_to(&mini).await;
+    origin.add_to(&book).await;
+    let at = |d: &Daemon| d.home.path().join("src/shop");
+    let (on_mini, on_book) = (at(&mini), at(&book));
+    (mini, addr, book, on_mini, on_book)
+}
+
+#[tokio::test]
+async fn an_env_in_one_checkout_reaches_the_other_within_three_seconds_mode_0600() {
+    let origin = Origin::new();
+    let (_mini, _addr, _book, on_mini, on_book) = two_checkouts(&origin).await;
+    std::fs::write(on_book.join(".env"), "DATABASE_URL=postgres://book\n").unwrap();
+    within(
+        Duration::from_secs(3),
+        "the MacBook's .env in studio-mini's checkout",
+        || async {
+            std::fs::read_to_string(on_mini.join(".env"))
+                .is_ok_and(|t| t == "DATABASE_URL=postgres://book\n")
+        },
+    )
+    .await;
+    assert_eq!(mode(&on_mini.join(".env")), 0o600);
+    // And back: an edit on studio-mini reaches the MacBook.
+    std::fs::write(on_mini.join(".env"), "DATABASE_URL=postgres://mini\n").unwrap();
+    reads(&on_book.join(".env"), "DATABASE_URL=postgres://mini\n").await;
+    // A deletion goes too.
+    std::fs::remove_file(on_book.join(".env")).unwrap();
+    within(
+        Duration::from_secs(10),
+        "studio-mini's .env gone",
+        || async { !on_mini.join(".env").exists() },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn both_checkouts_changed_while_unlinked_the_later_change_wins_and_the_other_is_in_leftovers()
+{
+    let origin = Origin::new();
+    let (mini, _addr, mut book, on_mini, on_book) = two_checkouts(&origin).await;
+    std::fs::write(on_book.join(".env"), "A=1\n").unwrap();
+    reads(&on_mini.join(".env"), "A=1\n").await;
+    book.stop();
+    std::fs::write(on_mini.join(".env"), "A=mini\n").unwrap();
+    // A second later, the MacBook's change is the later one.
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    std::fs::write(on_book.join(".env"), "A=book\n").unwrap();
+    book.restart().await;
+    reads(&on_mini.join(".env"), "A=book\n").await;
+    assert_eq!(
+        std::fs::read_to_string(on_book.join(".env")).unwrap(),
+        "A=book\n"
+    );
+    let kept: Vec<(String, String)> = std::fs::read_dir(mini.home.path().join("sync-leftovers"))
+        .unwrap()
+        .flat_map(|e| files_under(&e.unwrap().path()))
+        .collect();
+    assert_eq!(kept, [(".env".to_string(), "A=mini\n".to_string())]);
+}
+
 #[tokio::test]
 async fn an_unarchived_sessions_remade_worktree_starts_with_its_checkouts_env() {
     let book = mac(BOOK, "MacBook").await;
