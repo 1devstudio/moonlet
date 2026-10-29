@@ -129,6 +129,9 @@ pub const SESSION_DETACH: &str = "session.detach";
 /// one of its sessions for a client of the central host. Never forwarded
 /// from a client: only `session.attach` and `session.detach` make these.
 pub const SESSION_RELAY: &str = "session.relay";
+/// The central host continues a session whose member is unreachable,
+/// from its copy (X73): the phone's **Continue on studio-mini**.
+pub const SESSION_CONTINUE_HERE: &str = "session.continue_here";
 /// The central host's clients hear another member's session events as
 /// this, `{session, event}` (X72).
 pub const EV_SESSION_EVENT: &str = "session.event";
@@ -1157,6 +1160,12 @@ pub struct SessionRelay {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionDetach {
     pub relay: TerminalId,
+}
+
+/// `session.continue_here {session}` (X73).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionContinueHere {
+    pub session: String,
 }
 
 /// `session.list`'s request. With `copies`, the list also holds the

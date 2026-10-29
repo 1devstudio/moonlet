@@ -172,6 +172,17 @@ impl ChatManager {
     }
 
     pub fn create(&self, req: ChatCreate) -> Result<TerminalInfo> {
+        self.create_from(req, None)
+    }
+
+    /// A chat that goes on from `history`, another member's chat of the same
+    /// session (X73): its items stay, and its agent resumes the same
+    /// conversation. What it had running or asking is over: it starts idle.
+    pub fn create_continuing(&self, req: ChatCreate, history: ChatState) -> Result<TerminalInfo> {
+        self.create_from(req, Some(history))
+    }
+
+    fn create_from(&self, req: ChatCreate, history: Option<ChatState>) -> Result<TerminalInfo> {
         let adapter = adapter_for(&req.agent).with_context(|| format!("{} has no structured mode", req.agent))?;
         check_mode(req.mode.as_deref())?;
         let cwd = crate::terminal::expand_home(&req.cwd);
@@ -218,7 +229,17 @@ impl ChatManager {
                 info: info.clone(),
                 cfg,
                 env: req.env,
-                state: ChatState { status: "idle".into(), add_dirs, ..Default::default() },
+                state: match history {
+                    Some(h) => ChatState {
+                        status: "idle".into(),
+                        pending: Vec::new(),
+                        queued: Vec::new(),
+                        turn_started_at: None,
+                        add_dirs,
+                        ..h
+                    },
+                    None => ChatState { status: "idle".into(), add_dirs, ..Default::default() },
+                },
                 adapter: None,
                 stdin: None,
                 pid: None,

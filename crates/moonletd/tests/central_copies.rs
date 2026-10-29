@@ -13,6 +13,7 @@ use moonlet_proto::methods::{DeviceKind, MobilePairing};
 use serde_json::{Value, json};
 
 const BOOK: &str = "7d3f1c2a-5b8e-4e61-9a0f-2c4d6e8b1f37";
+const MINI: &str = "3c9a5e71-0d2b-4f86-a1c4-9e7b2d5f8a03";
 
 /// The central host `studio-mini`, with tailnet access on.
 async fn central() -> (Daemon, String) {
@@ -24,6 +25,13 @@ async fn central_with(extra: &[(&str, &str)]) -> (Daemon, String) {
     for _ in 0..5 {
         let home = tempfile::tempdir().unwrap();
         let port = free_port();
+        // A fixed name, as members call it, never this Mac's.
+        std::fs::write(
+            home.path().join("link.json"),
+            json!({ "central": null, "worker": { "id": MINI, "name": "studio-mini", "enabled": false } })
+                .to_string(),
+        )
+        .unwrap();
         std::fs::write(
             home.path().join("mobile.json"),
             format!(r#"{{ "enabled": true, "port": {port} }}"#),
@@ -634,10 +642,16 @@ ID=0d6e2a4c-1b3f-4a5e-9c7d-8e1f2a3b4c5d
 DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$(pwd -P | sed 's/[^A-Za-z0-9]/-/g')"
 mkdir -p "$DIR/$ID/tool-results"
 T="$DIR/$ID.jsonl"
+echo "$@" >> "$HOME/claude-args"
 while IFS= read -r line; do
   case "$line" in
     *'"subtype":"initialize"'*) echo '{"type":"system","subtype":"init","session_id":"'$ID'","model":"fake"}' ;;
+    *'"type":"user"'*HOLD*)
+      echo "$line" >> "$HOME/claude-user"
+      USE='{"type":"assistant","message":{"id":"m9","role":"assistant","content":[{"type":"tool_use","id":"toolu_09","name":"Bash","input":{"command":"sleep 600"}}]},"session_id":"'$ID'"}'
+      echo "$USE"; echo "$USE" >> "$T" ;;
     *'"type":"user"'*)
+      echo "$line" >> "$HOME/claude-user"
       echo '{"type":"user","message":{"role":"user","content":"Fix the cart"},"sessionId":"'$ID'"}' >> "$T"
       USE='{"type":"assistant","message":{"id":"m1","role":"assistant","content":[{"type":"tool_use","id":"toolu_01","name":"Bash","input":{"command":"printf b > src/cart.ts"}}]},"session_id":"'$ID'"}'
       echo "$USE"; echo "$USE" >> "$T"
@@ -1380,4 +1394,130 @@ async fn with_the_owner_away_the_prs_status_is_asked_of_the_copy() {
             .is_none_or(|e| !e.starts_with("owner_offline")),
         "{answer:?}"
     );
+}
+
+// --- X73: continuing a session on the central host ----------------------
+
+/// What the fake agent on `d` was started with, and the messages it got.
+fn agent_log(d: &Daemon, file: &str) -> String {
+    let env: std::collections::HashMap<_, _> = d.env.iter().cloned().collect();
+    std::fs::read_to_string(PathBuf::from(&env["HOME"]).join(file)).unwrap_or_default()
+}
+
+/// Waits until `book` is gone from `mini`'s point of view.
+async fn unreachable(mini: &Daemon, session: &Value) {
+    within(Duration::from_secs(10), "MacBook unreachable", || async {
+        with_copies(mini)
+            .await
+            .iter()
+            .any(|s| s["id"] == session["id"] && s["owner"]["reachable"] == json!(false))
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_session_whose_member_is_away_goes_on_on_the_central_host_from_its_copy() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    let copy = copy_of(&mini, &made).await;
+    within(
+        Duration::from_secs(30),
+        "the checkpoint on studio-mini",
+        || async {
+            mini.try_call("session.copy", json!({ "session": made["id"] }))
+                .await
+                .is_ok_and(|i| !i["checkpoint"].is_null())
+        },
+    )
+    .await;
+    drop(book);
+    unreachable(&mini, &made).await;
+
+    let continued: Value = mini
+        .call("session.continue_here", json!({ "session": made["id"] }))
+        .await;
+    assert_eq!(continued["id"], made["id"]);
+    assert_eq!(continued["branch"], made["branch"]);
+    assert_eq!(PathBuf::from(continued["path"].as_str().unwrap()), copy);
+    // studio-mini's own now, no longer a copy of another member's.
+    let own: Vec<Value> = mini.call("session.list", json!({})).await;
+    assert!(own.iter().any(|s| s["id"] == made["id"]));
+    assert!(
+        with_copies(&mini)
+            .await
+            .iter()
+            .all(|s| s["id"] != made["id"] || s["owner"].is_null())
+    );
+    // Its agent resumes the same conversation, with the chat so far.
+    let chat = continued["terminals"][0].clone();
+    within(
+        Duration::from_secs(30),
+        "the agent resumed on studio-mini",
+        || async { agent_log(&mini, "claude-args").contains(&format!("--resume {CONVERSATION}")) },
+    )
+    .await;
+    let st: Value = mini.call("chat.state", json!({ "id": chat })).await;
+    assert_eq!(st["items"][0]["text"], json!("Fix the cart"));
+    let _: Value = mini
+        .call("chat.send", json!({ "id": chat, "text": "Again" }))
+        .await;
+    within(Duration::from_secs(30), "a turn on studio-mini", || async {
+        agent_log(&mini, "claude-user").contains("Again")
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_turn_cut_off_on_the_member_goes_on_with_a_note_to_the_agent() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    let agent = made["terminals"][0].clone();
+    copy_of(&mini, &made).await;
+    let _: Value = book
+        .call("chat.send", json!({ "id": agent, "text": "HOLD on" }))
+        .await;
+    within(
+        Duration::from_secs(30),
+        "the running turn on studio-mini",
+        || async {
+            mini.try_call("session.copy", json!({ "session": made["id"] }))
+                .await
+                .is_ok_and(|i| i["chats"][0]["state"]["status"] == json!("working"))
+        },
+    )
+    .await;
+    drop(book);
+    unreachable(&mini, &made).await;
+
+    let _: Value = mini
+        .call("session.continue_here", json!({ "session": made["id"] }))
+        .await;
+    within(Duration::from_secs(30), "the note on studio-mini", || async {
+        agent_log(&mini, "claude-user").contains(
+            "This session moved from MacBook to studio-mini because MacBook could not be reached, and your last turn was cut off.",
+        )
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_session_whose_member_is_reachable_is_not_continued_elsewhere() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = new_session(&book, &project, "fix-cart").await;
+    copy_of(&mini, &made).await;
+
+    let refused = mini
+        .try_call("session.continue_here", json!({ "session": made["id"] }))
+        .await
+        .unwrap_err();
+    assert!(refused.starts_with("reachable"), "{refused}");
 }

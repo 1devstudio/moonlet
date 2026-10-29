@@ -1042,6 +1042,13 @@ impl Daemon {
                 })?;
                 self.session_copies.attach(conn, &member, r).await
             }
+            m::SESSION_CONTINUE_HERE => {
+                if conn.client == crate::link::WORKER_CLIENT || conn.client == CLI_CLIENT || conn.cloud.load(std::sync::atomic::Ordering::Relaxed) {
+                    return Err(RpcError::new("forbidden", "only an app or a phone continues a session here"));
+                }
+                let r: m::SessionContinueHere = params(p)?;
+                ok(self.continue_here(&r.session, "could not be reached").await?)
+            }
             m::SESSION_FORWARD => {
                 // The central host's apps and phones (X72): never a worker,
                 // a cloud machine or an agent's CLI.
@@ -2639,6 +2646,95 @@ impl Daemon {
                 let _ = self.terminals.kill(agent.id, true);
             }
         }
+    }
+
+    /// Continues another member's session on this host, the central host,
+    /// from its copy (X73): this host becomes its owner, its copy becomes
+    /// its worktree on the session's own branch, and each copied chat goes
+    /// on, resuming its conversation. A turn the member had running when it
+    /// went away goes on with a note to the agent. `why` says why it moved.
+    async fn continue_here(self: &Arc<Self>, session: &str, why: &str) -> Result<moonlet_proto::types::Session, RpcError> {
+        let me = self.link.info().worker;
+        let record = self
+            .sessions
+            .session_records()
+            .remove(session)
+            .ok_or_else(|| RpcError::new("not_found", "no such session in the account"))?;
+        let text = |f: &str| record.get(f).and_then(Value::as_str).map(str::to_string);
+        let owner = text("owner").unwrap_or_default();
+        if owner == me.id {
+            return Err(RpcError::new("invalid_params", "that session is this host's own"));
+        }
+        if self.workers.conn(&owner).is_some() {
+            return Err(RpcError::new("reachable", "the member running that session is reachable"));
+        }
+        if text("pinned").is_some_and(|p| p != me.id) {
+            return Err(RpcError::new("pinned", "that session is kept on its member"));
+        }
+        let branch = text("branch").unwrap_or_default();
+        let info = self.session_copies.copy_info(session)?;
+        if info.path.is_empty() {
+            return Err(RpcError::new("no_copy", "this host has no copy of that session yet"));
+        }
+        // The copy's branch becomes the session's own, unless this host has
+        // a branch of that name of its own: that one is never touched.
+        let copy_path = Path::new(&info.path);
+        let copy_branch = format!("moonlet-copy/{session}");
+        if !branch.is_empty() && branch != copy_branch {
+            if moonlet_core::sync::branch_exists(copy_path, &branch).await {
+                return Err(RpcError::new("branch_taken", format!("{branch} is a branch of this host's own")));
+            }
+            moonlet_core::git::git(copy_path, &["branch", "-m", &copy_branch, &branch]).await.map_err(internal)?;
+        }
+        let (path, repo, from_path) = self.session_copies.take_copy(session).await?;
+        // The copy's repository is a project here; a clone made for copies
+        // is added as one.
+        let projects = self.sessions.list_projects();
+        let project = match projects.iter().find(|p| Path::new(&p.path) == repo) {
+            Some(p) => p.clone(),
+            None => self.sessions.add_project(&repo.display().to_string()).await.map_err(internal)?,
+        };
+        let epoch = record.get("epoch").and_then(Value::as_u64).unwrap_or(1) + 1;
+        self.sessions.set_session_owner(session, &me.id, epoch, None);
+        let adopted = self
+            .sessions
+            .adopt_session(moonlet_proto::types::Session {
+                id: session.to_string(),
+                project_id: project.id.clone(),
+                name: text("name").unwrap_or_default(),
+                branch: branch.clone(),
+                base: project.base_branch.clone(),
+                path: path.display().to_string(),
+                agent: Some("claude".into()),
+                archived: false,
+                created_at: record.get("created_at").and_then(Value::as_u64).unwrap_or(0),
+                workspace_id: text("workspace"),
+                model: None,
+                effort: None,
+                mode: None,
+                pr: None,
+                spawned_by: None,
+                task: None,
+                task_unlinked: false,
+                cloud: false,
+                terminals: Vec::new(),
+                layout: Value::Null,
+                restore: Vec::new(),
+                owner: None,
+            })
+            .map_err(internal)?;
+        let from = self.sessions.member_names().remove(&owner).unwrap_or(owner);
+        for chat in info.chats {
+            let cut_off = matches!(chat.state.status.as_str(), "working" | "blocked");
+            let started = self.sessions.continue_chat(&adopted, chat.state).map_err(internal)?;
+            if cut_off {
+                let note = crate::session_copies::cut_off_note(&from, &me.name, why, &from_path, &adopted.path);
+                if let Err(e) = self.chats.send(started.id, &note, &[]) {
+                    tracing::warn!(%session, "cannot tell the agent its turn was cut off: {e:#}");
+                }
+            }
+        }
+        self.sessions.session(session).map_err(internal)
     }
 
     /// `session.forward` on the central host (X72): the request goes to the

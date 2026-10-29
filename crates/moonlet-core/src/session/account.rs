@@ -35,6 +35,9 @@ const MEMBER: RecordKind = RecordKind::Member;
 const DESIGN: RecordKind = RecordKind::Design;
 /// A session, so every member knows which member runs it (X72).
 const SESSION: RecordKind = RecordKind::Session;
+/// A session record's fields only its maker and the central host change:
+/// who owns it, the ownership number and the pin (X73).
+const OWNERSHIP: &[&str] = &["owner", "epoch", "pinned"];
 
 type Listener = Arc<dyn Fn(Vec<Change>) + Send + Sync>;
 type Applied = Arc<dyn Fn(&[Change]) + Send + Sync>;
@@ -339,16 +342,78 @@ impl SessionManager {
     /// account. Only the changes of the member that made a session count,
     /// and its `owner` must be that member: a member cannot claim another's
     /// session, nor make one in another's name.
+    ///
+    /// Who owns a session, its ownership number and its pin (X73) are the
+    /// central host's to change: changes to those fields count from the
+    /// session's maker and from the central host, the referee. The other
+    /// fields count from the maker and from the member that owns it now.
     pub fn session_records(&self) -> Map<String, Record> {
         self.with_log(|log| {
-            log.records_by_maker(SESSION)
-                .into_iter()
-                .filter(|(id, r)| {
-                    let maker = log.first_change(SESSION, id).and_then(|c| log_owner(&c.stamp.member));
-                    maker.is_some() && r.get("owner").and_then(Value::as_str) == maker
-                })
-                .collect()
+            let referee = log.account().or_else(|| log_owner(log.member())).map(str::to_string);
+            let author = |c: &Change| log_owner(&c.stamp.member).map(str::to_string);
+            let is_referee = |c: &Change| referee.is_some() && author(c) == referee;
+            let by_maker = |c: &Change| log.maker(SESSION, &c.id).is_some_and(|m| author(c).as_deref() == Some(m));
+            let ownership = log.records_where(SESSION, |c| {
+                let field = match &c.op {
+                    moonlet_proto::types::ChangeOp::Set { field, .. } => field.as_str(),
+                    _ => "",
+                };
+                OWNERSHIP.contains(&field) && (by_maker(c) || is_referee(c))
+            });
+            let owner_of = |id: &str| ownership.get(id).and_then(|r| r.get("owner")).and_then(Value::as_str).map(str::to_string);
+            log.records_where(SESSION, |c| {
+                let field = match &c.op {
+                    moonlet_proto::types::ChangeOp::Set { field, .. } => field.as_str(),
+                    _ => "",
+                };
+                if OWNERSHIP.contains(&field) {
+                    by_maker(c) || is_referee(c)
+                } else {
+                    by_maker(c) || is_referee(c) || (author(c).is_some() && author(c) == owner_of(&c.id))
+                }
+            })
+            .into_iter()
+            .filter(|(id, r)| {
+                // The maker owns what it makes; only the referee moves it
+                // to another member.
+                let owner = r.get("owner").and_then(Value::as_str);
+                let moved_by_referee = log.records_where(SESSION, |c| {
+                    c.id == *id
+                        && is_referee(c)
+                        && matches!(&c.op, moonlet_proto::types::ChangeOp::Set { field, .. } if field == "owner")
+                });
+                owner.is_some()
+                    && owner == owner_of(id).as_deref()
+                    && (owner == log.maker(SESSION, id) || moved_by_referee.get(id.as_str()).and_then(|r| r.get("owner")).and_then(Value::as_str) == owner)
+            })
+            .collect()
         })
+    }
+
+    /// Makes `owner` the owner of session `id` with ownership number
+    /// `epoch`, as this member's changes: the central host, the referee
+    /// (X73). False without an account.
+    pub fn set_session_owner(&self, id: &str, owner: &str, epoch: u64, pinned: Option<&str>) -> bool {
+        let changes = {
+            let mut account = self.account.lock().unwrap();
+            let Some(a) = account.as_mut() else { return false };
+            let mut log = a.log.clone();
+            let now = now_ms();
+            let changes = vec![
+                log.set(now, SESSION, id, "owner", json!(owner)),
+                log.set(now, SESSION, id, "epoch", json!(epoch)),
+                log.set(now, SESSION, id, "pinned", json!(pinned)),
+            ];
+            if let Err(e) = write_private(&a.path, &log) {
+                tracing::warn!("cannot save a session's owner: {e:#}");
+                return false;
+            }
+            a.log = log;
+            changes
+        };
+        self.emit_sessions();
+        self.account_changed(changes);
+        true
     }
 
     /// Each member's name as it calls itself, by worker id (X71).
@@ -604,6 +669,7 @@ fn session_fields(st: &State, s: &Session, owner: &str) -> Record {
         ("workspace".to_string(), json!(s.workspace_id)),
         ("branch".to_string(), json!(s.branch)),
         ("owner".to_string(), json!(owner)),
+        ("epoch".to_string(), json!(1)),
         ("created_at".to_string(), json!(s.created_at)),
         ("archived".to_string(), json!(s.archived)),
     ])
@@ -623,7 +689,17 @@ fn session_changes(st: &State, log: &mut Log, now: u64) -> Vec<Change> {
             continue;
         }
         let had = records.get(&s.id);
+        // A session the central host gave another member is that member's
+        // to record now (X73).
+        if had.and_then(|r| r.get("owner")).and_then(Value::as_str).is_some_and(|o| o != me) {
+            continue;
+        }
         for (field, value) in session_fields(st, s, &me) {
+            // Who owns it is set once, as it is made: later, only the
+            // central host moves it.
+            if had.is_some() && OWNERSHIP.contains(&field.as_str()) {
+                continue;
+            }
             if had.and_then(|r| r.get(&field)) != Some(&value) {
                 out.push(log.set(now, SESSION, &s.id, &field, value));
             }
@@ -1962,6 +2038,7 @@ mod tests {
                 "workspace": "7c1e2a9b0d44",
                 "branch": "moonlet/fix-cart",
                 "owner": "book",
+                "epoch": 1,
                 "created_at": 1790000000002u64,
                 "archived": false,
             })
@@ -2252,6 +2329,53 @@ mod tests {
             book.session_records()[&session.id]["workspace"],
             serde_json::json!(books.id)
         );
+    }
+
+    #[tokio::test]
+    async fn only_its_maker_and_the_central_host_move_a_session_and_its_owner_records_it_then() {
+        let shop = repo_named("shop").await;
+        let (_h1, book) = member("book").await;
+        let (_h2, mini) = member("mini").await;
+        let mine = book.list_sections()[0].clone();
+        let p = book
+            .section_add_project(&mine.id, &shop.path().display().to_string())
+            .await
+            .unwrap();
+        let session = book
+            .create_session(SessionCreate {
+                name: Some("Fix cart".into()),
+                agent: Some("none".into()),
+                cols: 80,
+                rows: 24,
+                ..SessionCreate::new(&p.id)
+            })
+            .await
+            .unwrap();
+        sync(&book, &mini);
+        // studio-mini is the MacBook's central host.
+        book.set_central_account(Some("mini".into()));
+        assert_eq!(mini.session_records()[&session.id]["epoch"], serde_json::json!(1));
+        // studio-mini, the central host (its log names no other account),
+        // takes the session.
+        assert!(mini.set_session_owner(&session.id, "mini", 2, None));
+        sync(&book, &mini);
+        let r = &book.session_records()[&session.id];
+        assert_eq!((&r["owner"], &r["epoch"]), (&serde_json::json!("mini"), &serde_json::json!(2)));
+        // Another member's word on who owns it does not count.
+        let forged = Change {
+            stamp: moonlet_proto::types::Stamp { ms: now_ms() + 5, n: 0, member: "air.k3x9q2".into() },
+            seq: 1,
+            kind: "session".into(),
+            id: session.id.clone(),
+            op: moonlet_proto::types::ChangeOp::Set { field: "owner".into(), value: serde_json::json!("air") },
+        };
+        mini.apply_account(vec![forged]);
+        assert_eq!(mini.session_records()[&session.id]["owner"], serde_json::json!("mini"));
+        // The MacBook no longer records it: a rename there stays there.
+        book.update(moonlet_proto::methods::SessionUpdate { id: session.id.clone(), name: Some("Renamed on the MacBook".into()), layout: None, task: None })
+            .unwrap();
+        sync(&book, &mini);
+        assert_eq!(mini.session_records()[&session.id]["name"], serde_json::json!("Fix cart"));
     }
 
     #[tokio::test]

@@ -1164,6 +1164,61 @@ impl SessionManager {
 
 
 
+    /// Takes in session `s`, which another member made and this member now
+    /// owns (X73): its worktree is already here, at `s.path`. It keeps its id.
+    pub fn adopt_session(&self, s: Session) -> Result<Session> {
+        let id = s.id.clone();
+        self.mutate(|st| {
+            if st.sessions.iter().any(|o| o.id == s.id) {
+                bail!("this host already has that session");
+            }
+            if !st.projects.iter().any(|p| p.id == s.project_id) {
+                bail!("no such project");
+            }
+            st.sessions.push(Session { owner: None, terminals: vec![], restore: vec![], ..s });
+            Ok(())
+        })?;
+        self.emit_sessions();
+        self.session(&id)
+    }
+
+    /// A chat in session `ws` that goes on from `history`, another member's
+    /// chat of it (X73), resuming the same conversation.
+    pub fn continue_chat(&self, ws: &Session, history: moonlet_proto::types::ChatState) -> Result<TerminalInfo> {
+        let chats = self.chat_runtime(Some("claude")).context("no structured chats")?;
+        let repo = self.project(&ws.project_id)?;
+        let info = chats.create_continuing(
+            crate::chat::runtime::ChatCreate {
+                cwd: ws.path.clone(),
+                agent: "claude".into(),
+                model: history.model.clone().or_else(|| ws.model.clone()),
+                effort: history.effort.clone().or_else(|| ws.effort.clone()),
+                mode: history.mode.clone().or_else(|| ws.mode.clone()),
+                name: ws.name.clone(),
+                title: Some("claude".into()),
+                session_id: Some(ws.id.clone()),
+                env: self
+                    .script_env(ws, &repo)
+                    .into_iter()
+                    .filter(|(k, _)| k != crate::profiles::CONFIG_DIR_VAR)
+                    .collect(),
+                add_dirs: Vec::new(),
+                settings: None,
+                workspace: None,
+                design: None,
+            },
+            history,
+        )?;
+        self.mutate(|st| {
+            if let Some(w) = st.sessions.iter_mut().find(|w| w.id == ws.id) {
+                w.terminals.push(info.id);
+            }
+            Ok(())
+        })?;
+        self.emit_sessions();
+        Ok(info)
+    }
+
     /// Starts a session inside a workspace and remembers how to restart it.
     pub fn spawn_in(&self, ws: &Session, mut req: TerminalCreate) -> Result<TerminalInfo> {
         let repo = self.project(&ws.project_id)?;

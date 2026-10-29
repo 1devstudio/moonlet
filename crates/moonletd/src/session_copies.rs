@@ -346,6 +346,27 @@ fn is_repo(dir: &Path) -> bool {
     dir.join(".git").exists()
 }
 
+/// The message a continued agent gets when its last turn was cut off
+/// (X73): moonlet's own words, with only the members' names and the paths.
+pub fn cut_off_note(from: &str, to: &str, why: &str, old_path: &str, new_path: &str) -> String {
+    let clean = |t: &str| t.chars().filter(|c| !c.is_control()).collect::<String>();
+    let mut note = format!(
+        "This session moved from {} to {} because {} {}, and your last turn was cut off. The last tool call may not have finished: check its effects before running it again.",
+        clean(from),
+        clean(to),
+        clean(from),
+        why
+    );
+    if !old_path.is_empty() && old_path != new_path {
+        note.push_str(&format!(
+            " The worktree is now at {}. Earlier messages name {}.",
+            clean(new_path),
+            clean(old_path)
+        ));
+    }
+    note
+}
+
 /// The branch a copy's worktree is on: its own, named after the session,
 /// so a member never moves one of the central host's own branches.
 fn copy_branch(session: &str) -> String {
@@ -1900,6 +1921,38 @@ impl SessionCopies {
         })
     }
 
+    /// Stops keeping `session` as a copy because this host now owns it
+    /// (X73): its worktree stays where it is and becomes the session's own.
+    /// Gives what the copy was: where it is, its repository, and the
+    /// member's folder for it.
+    pub async fn take_copy(&self, session: &str) -> Result<(PathBuf, PathBuf, String), RpcError> {
+        let _one = self.apply.lock().await;
+        let held = self
+            .data
+            .lock()
+            .unwrap()
+            .held
+            .get(session)
+            .cloned()
+            .filter(|h| !h.path.is_empty() && Path::new(&h.path).exists())
+            .ok_or_else(|| RpcError::new("no_copy", "this host holds no copy of that session"))?;
+        let _ = git_sync::delete_base_ref(
+            Path::new(&held.repo),
+            &format!("central-{}", segment(session)),
+        )
+        .await;
+        let mut data = self.data.lock().unwrap();
+        data.held.remove(session);
+        self.save(&data);
+        // The chats were the copy's; the session's own chats take over.
+        let _ = std::fs::remove_dir_all(self.talk_dir(session));
+        Ok((
+            PathBuf::from(held.path),
+            PathBuf::from(held.repo),
+            held.from_path,
+        ))
+    }
+
     /// Removes the copies of sessions that are archived or gone from the
     /// account.
     pub async fn drop_ended(&self) {
@@ -2103,6 +2156,30 @@ mod tests {
         assert_eq!(chunk_end(text, 16, text.len(), true, 12), 24);
         // Any other file is cut at the limit.
         assert_eq!(chunk_end(text, 0, text.len(), false, 12), 12);
+    }
+
+    #[test]
+    fn a_cut_off_turn_is_told_where_it_went_and_why() {
+        assert_eq!(
+            cut_off_note(
+                "MacBook",
+                "studio-mini",
+                "went to sleep",
+                "/Users/alex/.moonlet/worktrees/shop/fix-cart",
+                "/Users/alex/.moonlet/worktrees/shop/fix-cart"
+            ),
+            "This session moved from MacBook to studio-mini because MacBook went to sleep, and your last turn was cut off. The last tool call may not have finished: check its effects before running it again."
+        );
+        assert_eq!(
+            cut_off_note(
+                "MacBook",
+                "studio-mini",
+                "could not be reached",
+                "/Users/alex/w/fix-cart",
+                "/Users/moonlet/.moonlet/copies/MacBook/shop/fix-cart"
+            ),
+            "This session moved from MacBook to studio-mini because MacBook could not be reached, and your last turn was cut off. The last tool call may not have finished: check its effects before running it again. The worktree is now at /Users/moonlet/.moonlet/copies/MacBook/shop/fix-cart. Earlier messages name /Users/alex/w/fix-cart."
+        );
     }
 
     #[test]
