@@ -100,6 +100,11 @@ impl TaskSnapshots {
         Ok(())
     }
 
+    /// The workspaces with a snapshot.
+    pub fn workspaces(&self) -> Vec<String> {
+        self.saved.lock().unwrap().keys().cloned().collect()
+    }
+
     /// Forgets `workspace`'s snapshot; true if it had one. A file that
     /// cannot be removed keeps the snapshot, so a restart does not bring
     /// back boards the phone was told were gone.
@@ -134,6 +139,12 @@ fn write_private(file: &Path, bytes: &[u8]) -> Result<()> {
     std::fs::rename(&tmp, file).with_context(|| format!("cannot save {}", file.display()))
 }
 
+/// A request sent to an app, waiting for its answer.
+pub struct Waiting {
+    pub event: TasksRequestEvent,
+    rx: oneshot::Receiver<TasksAnswer>,
+}
+
 /// Why an app's answer was not taken.
 #[derive(Debug, PartialEq, Eq)]
 pub enum AnswerRefused {
@@ -159,27 +170,27 @@ impl TaskRelay {
         }
     }
 
-    /// Sends `action` with `emit` to app connection `app` and waits for its
-    /// answer. With no app connected it fails at once.
-    pub async fn request(
-        &self,
-        workspace: String,
-        action: Value,
-        app: Option<u64>,
-        emit: impl FnOnce(&TasksRequestEvent),
-    ) -> Result<Value> {
-        let Some(app) = app else {
-            bail!("Open moonlet on the Mac to change tasks.");
-        };
+    /// Registers a request for app connection `app`, to send as the returned
+    /// event; call it while `app` is known to be connected, so that
+    /// [`TaskRelay::closed`] for it cannot run in between.
+    pub fn start(&self, app: u64, workspace: String, action: Value) -> Waiting {
         let request_id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
         self.pending.lock().unwrap().insert(request_id, (app, tx));
-        emit(&TasksRequestEvent {
-            request_id,
-            workspace,
-            action,
-        });
-        let answer = tokio::time::timeout(self.timeout, rx).await;
+        Waiting {
+            event: TasksRequestEvent {
+                request_id,
+                workspace,
+                action,
+            },
+            rx,
+        }
+    }
+
+    /// Waits for the app's answer to a started request.
+    pub async fn wait(&self, w: Waiting) -> Result<Value> {
+        let request_id = w.event.request_id;
+        let answer = tokio::time::timeout(self.timeout, w.rx).await;
         self.pending.lock().unwrap().remove(&request_id);
         match answer {
             Ok(Ok(a)) if a.ok => Ok(a.result.unwrap_or(Value::Null)),

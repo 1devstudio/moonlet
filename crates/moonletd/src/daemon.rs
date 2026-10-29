@@ -717,6 +717,18 @@ impl Daemon {
         }
     }
 
+    /// Forgets the boards of workspaces gone by any way, an account's
+    /// changes from another member included (X68, X76).
+    fn prune_boards(&self) -> Result<(), RpcError> {
+        let live: std::collections::HashSet<String> = self.sessions.list_workspaces().into_iter().map(|w| w.id).collect();
+        for ws in self.task_snapshots.workspaces() {
+            if !live.contains(&ws) {
+                self.forget_boards(&ws)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Removes a deleted or merged workspace's boards, and tells the phones (X76).
     fn forget_boards(&self, workspace: &str) -> Result<(), RpcError> {
         if self.task_snapshots.remove(workspace).map_err(internal)? {
@@ -1310,6 +1322,8 @@ impl Daemon {
                 // The other members take what this host newly kept from
                 // here; the one that sent them already has them.
                 let taken = self.sessions.apply_account(r.changes);
+                // A workspace another member removed or merged takes its boards along (X76).
+                let _ = self.prune_boards();
                 if !taken.is_empty() {
                     self.workers.send_to_members(Message::event(m::EV_ACCOUNT_CHANGED, m::AccountChanged { changes: taken }), Some(conn.id));
                 }
@@ -3164,6 +3178,7 @@ impl Daemon {
             m::TASKS_APP => ok(m::TasksApp { open: !self.apps.lock().unwrap().is_empty() }),
             m::TASKS_SNAPSHOT => {
                 let r: m::TasksSnapshotQuery = params(p)?;
+                self.prune_boards()?;
                 ok(self.task_snapshots.get(r.workspace.as_deref()))
             }
             m::TASKS_SET_SNAPSHOT if !self.is_app(conn) => Err(RpcError::new("forbidden", "only the moonlet app shares boards")),
@@ -3197,16 +3212,18 @@ impl Daemon {
             m::TASKS_REQUEST => {
                 let r: m::TasksRequest = params(p)?;
                 // One app does it, the longest connected: two would create two issues.
-                let app = self.apps.lock().unwrap().iter().next().map(|(id, tx)| (*id, tx.clone()));
-                let result = self
-                    .task_relay
-                    .request(r.workspace, r.action, app.as_ref().map(|(id, _)| *id), |ev| {
-                        if let Some((_, tx)) = app {
-                            tx.send(moonlet_proto::Frame::Json(Message::event(m::EV_TASKS_REQUEST, ev)));
-                        }
-                    })
-                    .await
-                    .map_err(|e| RpcError::new("failed", e.to_string()))?;
+                // Registered under the apps' lock, so the app leaving ends it (X76).
+                let started = {
+                    let apps = self.apps.lock().unwrap();
+                    apps.iter().next().map(|(id, tx)| (*id, tx.clone(), self.task_relay.start(*id, r.workspace, r.action)))
+                };
+                let Some((app, tx, waiting)) = started else {
+                    return Err(RpcError::new("failed", "Open moonlet on the Mac to change tasks."));
+                };
+                if !tx.send(moonlet_proto::Frame::Json(Message::event(m::EV_TASKS_REQUEST, &waiting.event))) {
+                    self.task_relay.closed(app);
+                }
+                let result = self.task_relay.wait(waiting).await.map_err(|e| RpcError::new("failed", e.to_string()))?;
                 ok(result)
             }
             m::TASKS_ANSWER => {

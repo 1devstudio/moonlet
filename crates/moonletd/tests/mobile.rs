@@ -1221,3 +1221,18 @@ async fn a_merged_workspace_takes_its_boards_along() {
     assert_eq!(left, json!([]));
     assert!(!mac.home.path().join("tasks").join(format!("{}.json", other.id)).exists());
 }
+
+/// Boards of a workspace gone by any way, such as another member's merge
+/// (X68), are not served, and their file goes (X76).
+#[tokio::test]
+async fn boards_of_a_workspace_gone_another_way_are_not_served() {
+    let mut mac = Mac::start(None).await;
+    let dir = mac.home.path().join("tasks");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("gone.json"), board_snapshot().to_string()).unwrap();
+    mac.restart().await;
+    let mut app = mac.app().await;
+    let left: Value = app.request("tasks.snapshot", json!({})).await.unwrap();
+    assert_eq!(left, json!([]));
+    assert!(!dir.join("gone.json").exists());
+}
