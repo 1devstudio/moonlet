@@ -1169,8 +1169,13 @@ impl Daemon {
                         if !ok_to_take {
                             continue;
                         }
-                        let why = r.why.clone().unwrap_or_else(|| "went to sleep".into());
-                        match self.continue_here_as(&id, &why, false, r.pin).await {
+                        // A reason by name, in this host's own words: never
+                        // the member's text in the agent's note.
+                        let why = match r.why.as_deref() {
+                            Some("moved") => "moved it there",
+                            _ => "went to sleep",
+                        };
+                        match self.continue_here_as(&id, why, false, r.pin).await {
                             Ok(_) => taken.push(id),
                             Err(e) => tracing::warn!(session = %id, "cannot continue a sleeping member's session: {}", e.message),
                         }
@@ -3394,7 +3399,7 @@ impl Daemon {
                 let taken = host
                     .request(
                         m::SESSION_YIELD,
-                        serde_json::to_value(m::SessionYield { sessions: vec![r.session.clone()], why: Some("moved it there".into()), pin: true })
+                        serde_json::to_value(m::SessionYield { sessions: vec![r.session.clone()], why: Some("moved".into()), pin: true })
                             .map_err(internal)?,
                     )
                     .await?;

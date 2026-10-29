@@ -1260,7 +1260,8 @@ pub struct SessionBring {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionYield {
     pub sessions: Vec<String>,
-    /// Why, for a cut-off turn's note; going to sleep when none.
+    /// Why, by name: `moved` (Move to…), else going to sleep. The central
+    /// host words the note itself.
     #[serde(default)]
     pub why: Option<String>,
     /// Keep them on the central host (Move to…).
