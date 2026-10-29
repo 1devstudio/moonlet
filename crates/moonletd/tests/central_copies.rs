@@ -1521,3 +1521,53 @@ async fn a_session_whose_member_is_reachable_is_not_continued_elsewhere() {
         .unwrap_err();
     assert!(refused.starts_with("reachable"), "{refused}");
 }
+
+#[tokio::test]
+async fn a_continued_chat_never_takes_bypass_permissions_from_the_member() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made: Value = book
+        .call(
+            "session.create",
+            json!({ "project_id": project, "name": "fix-cart", "agent": "claude", "mode": "bypassPermissions" }),
+        )
+        .await;
+    let agent = made["terminals"][0].clone();
+    let _: Value = book
+        .call("chat.send", json!({ "id": agent, "text": "Fix the cart" }))
+        .await;
+    within(
+        Duration::from_secs(30),
+        "the chat on studio-mini",
+        || async {
+            mini.try_call("session.copy", json!({ "session": made["id"] }))
+                .await
+                .is_ok_and(|i| {
+                    i["chats"][0]["state"]["status"] == json!("done")
+                        && !i["path"].as_str().unwrap_or("").is_empty()
+                })
+        },
+    )
+    .await;
+    // The MacBook's own agent did run that way.
+    assert!(agent_log(&book, "claude-args").contains("bypassPermissions"));
+    drop(book);
+    unreachable(&mini, &made).await;
+
+    let continued: Value = mini
+        .call("session.continue_here", json!({ "session": made["id"] }))
+        .await;
+    let st: Value = mini
+        .call("chat.state", json!({ "id": continued["terminals"][0] }))
+        .await;
+    assert_ne!(st["mode"], json!("bypassPermissions"));
+    within(
+        Duration::from_secs(30),
+        "the agent on studio-mini",
+        || async { agent_log(&mini, "claude-args").contains("--resume") },
+    )
+    .await;
+    assert!(!agent_log(&mini, "claude-args").contains("bypassPermissions"));
+}

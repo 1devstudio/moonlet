@@ -1184,8 +1184,17 @@ impl SessionManager {
 
     /// A chat in session `ws` that goes on from `history`, another member's
     /// chat of it (X73), resuming the same conversation.
-    pub fn continue_chat(&self, ws: &Session, history: moonlet_proto::types::ChatState) -> Result<TerminalInfo> {
+    pub fn continue_chat(&self, ws: &Session, mut history: moonlet_proto::types::ChatState) -> Result<TerminalInfo> {
         let chats = self.chat_runtime(Some("claude")).context("no structured chats")?;
+        // Another member's word: a conversation id that is not one starts
+        // a new conversation, and a mode that turns every check off is
+        // never taken from it; it is set here, on this member.
+        if !history.agent_session.as_deref().is_some_and(crate::transcript::is_uuid) {
+            history.agent_session = None;
+        }
+        if history.mode.as_deref() == Some("bypassPermissions") {
+            history.mode = None;
+        }
         let repo = self.project(&ws.project_id)?;
         let info = chats.create_continuing(
             crate::chat::runtime::ChatCreate {
@@ -1193,7 +1202,7 @@ impl SessionManager {
                 agent: "claude".into(),
                 model: history.model.clone().or_else(|| ws.model.clone()),
                 effort: history.effort.clone().or_else(|| ws.effort.clone()),
-                mode: history.mode.clone().or_else(|| ws.mode.clone()),
+                mode: history.mode.clone().or_else(|| ws.mode.clone()).filter(|m| m != "bypassPermissions"),
                 name: ws.name.clone(),
                 title: Some("claude".into()),
                 session_id: Some(ws.id.clone()),

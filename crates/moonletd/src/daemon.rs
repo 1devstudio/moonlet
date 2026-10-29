@@ -2681,6 +2681,12 @@ impl Daemon {
         let copy_path = Path::new(&info.path);
         let copy_branch = format!("moonlet-copy/{session}");
         if !branch.is_empty() && branch != copy_branch {
+            // The name comes from the member: only one git takes as a branch.
+            let valid = !branch.starts_with('-')
+                && moonlet_core::git::git(copy_path, &["check-ref-format", "--branch", &branch]).await.is_ok();
+            if !valid {
+                return Err(RpcError::new("invalid_params", "the session's branch is not a branch name"));
+            }
             if moonlet_core::sync::branch_exists(copy_path, &branch).await {
                 return Err(RpcError::new("branch_taken", format!("{branch} is a branch of this host's own")));
             }
