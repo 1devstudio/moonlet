@@ -45,6 +45,11 @@ export function resolveTaskRequest(
   const board = "board" in a ? ctx.boards.find((b) => b.id === a.board) : undefined;
   const task = "task" in a ? ctx.tasks.find((t) => taskId(t) === a.task) : undefined;
   const keyOf = (id: string) => id.slice(id.indexOf(" ") + 1);
+  // Where the Mac's own form lets a board create: its Jira projects or the workspace's repositories (X52).
+  const placesOf = (b: BoardConfig) => {
+    const keys = ctx.boardKeys?.[b.id] ?? [];
+    return b.origin.kind === "github_project" ? projectRepos(ctx.repos, ctx.tasks, keys) : jiraProjects(ctx.tasks, keys);
+  };
   // A board's own task only: never another board's of the workspace.
   const onBoard = (t: Task | undefined) => (t && board && ctx.boardKeys ? (ctx.boardKeys[board.id] ?? []).includes(taskId(t)) : !!t);
   switch (a.kind) {
@@ -70,9 +75,13 @@ export function resolveTaskRequest(
     case "sync":
       if (!board) return { error: "That board is no longer in moonlet on the Mac." };
       return { kind: "sync", board };
-    case "create_options":
+    case "create_options": {
       if (!board) return { error: "That board is no longer in moonlet on the Mac." };
-      return { kind: "create_options", board, ...(a.place !== undefined && { place: a.place }), ...(a.issue_type !== undefined && { issueType: a.issue_type }) };
+      // Only a place the board creates in: never another project's people and labels (X52).
+      const place = needsPlace(board) ? a.place : undefined;
+      if (place !== undefined && !placesOf(board).some((p) => p.toLowerCase() === place.toLowerCase())) return { error: `${board.name} does not take issues in ${place}.` };
+      return { kind: "create_options", board, ...(place !== undefined && { place }), ...(a.issue_type !== undefined && { issueType: a.issue_type }) };
+    }
     case "create": {
       if (!board) return { error: "That board is no longer in moonlet on the Mac." };
       const column = syncedColumns(board, null).find((c) => c.name === a.column);
@@ -80,8 +89,7 @@ export function resolveTaskRequest(
       if (!a.issue?.title?.trim()) return { error: "A title is needed." };
       // Only where the Mac's own form would put it (X52).
       if (needsPlace(board)) {
-        const keys = ctx.boardKeys?.[board.id] ?? [];
-        const places = board.origin.kind === "github_project" ? projectRepos(ctx.repos, ctx.tasks, keys) : jiraProjects(ctx.tasks, keys);
+        const places = placesOf(board);
         if (!a.issue.place) return { error: "Pick where the issue goes." };
         if (!places.some((p) => p.toLowerCase() === a.issue.place!.toLowerCase())) return { error: `${board.name} does not take issues in ${a.issue.place}.` };
       }

@@ -38,7 +38,7 @@ describe("resolveTaskRequest (X76)", () => {
   });
 
   it("asks for the form's people and labels, and tells of a session started from a task", () => {
-    expect(resolveTaskRequest({ kind: "create_options", board: "ops", place: "OPS", issue_type: "10004" }, ctx)).toEqual({ kind: "create_options", board: ops, place: "OPS", issueType: "10004" });
+    expect(resolveTaskRequest({ kind: "create_options", board: "ops", place: "OPS", issue_type: "10004" }, { ...ctx, boardKeys: { ops: [`${JIRA} OPS-1`] } })).toEqual({ kind: "create_options", board: ops, place: "OPS", issueType: "10004" });
     expect(resolveTaskRequest({ kind: "started", task: `${JIRA} OPS-1`, session: "Retry webhooks", assign: true }, ctx)).toEqual({ kind: "started", task: ops1, session: "Retry webhooks", assign: true });
   });
 });
@@ -95,5 +95,14 @@ describe("resolveTaskRequest moves only to a column that has a status (X76)", ()
 
   it("carries the fix the phone confirmed", () => {
     expect(resolveTaskRequest({ kind: "fix", board: "ops", task: `${JIRA} OPS-1`, plan: "k1" }, ctx)).toEqual({ kind: "fix", board: ops, task: ops1, plan: "k1" });
+  });
+});
+
+describe("resolveTaskRequest asks the form's lists only where the board creates (X76, X52)", () => {
+  const jql: BoardConfig = { id: "q", name: "OPS + PLAT", connection: JIRA, workspace: "local/w", origin: { kind: "jql", query: "project in (OPS, PLAT)" }, columns: OPS };
+  const c = { boards: [jql], tasks: [ops1], boardKeys: { q: [`${JIRA} OPS-1`] } };
+  it("refuses another project's people and labels", () => {
+    expect(resolveTaskRequest({ kind: "create_options", board: "q", place: "SECRET" }, c)).toEqual({ error: "OPS + PLAT does not take issues in SECRET." });
+    expect(resolveTaskRequest({ kind: "create_options", board: "q", place: "OPS" }, c)).toMatchObject({ kind: "create_options", place: "OPS" });
   });
 });
