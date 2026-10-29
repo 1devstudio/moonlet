@@ -1031,7 +1031,13 @@ pub struct SessionOffered {
 pub struct SessionChat {
     pub session: String,
     pub terminal: crate::TerminalId,
-    pub state: crate::types::ChatState,
+    /// None when only `live` is news.
+    #[serde(default)]
+    pub state: Option<crate::types::ChatState>,
+    /// The session's chats that are still open: the central host forgets
+    /// the others.
+    #[serde(default)]
+    pub live: Option<Vec<crate::TerminalId>>,
 }
 
 /// `session.transcript`, member → central host (X72): bytes added to one
@@ -1086,8 +1092,11 @@ pub struct SessionCopyInfo {
     pub tree: String,
     pub head: String,
     pub chats: Vec<SessionCopyChat>,
-    /// The last checkpoint the central host holds in full.
+    /// The latest checkpoint the central host holds in full, of any chat.
     pub checkpoint: Option<SessionCheckpoint>,
+    /// The latest of each chat.
+    #[serde(default)]
+    pub checkpoints: Vec<SessionCheckpoint>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

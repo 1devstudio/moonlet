@@ -2641,9 +2641,6 @@ impl Daemon {
         }
     }
 
-    /// Keeps this member's design copies (X71): a round when the design
-    /// folders change, when the link changes, and when another member's
-    /// change to a design's record comes.
     /// `session.forward` on the central host (X72): the request goes to the
     /// member that owns the session while it is linked. Otherwise reads are
     /// answered from this host's copy, and the rest with `owner_offline`.
@@ -2724,6 +2721,9 @@ impl Daemon {
             .find(|s| s.id == r.session && s.owner.is_none() && !s.archived)
             .ok_or_else(|| RpcError::new("not_found", "no such session here"))?;
         let p = scope(&r.method, r.params, &s.id, &s.path, &s.branch, &s.terminals)?;
+        // A file named in a forwarded call stays inside the worktree, links
+        // resolved, so a link in the session can't reach the rest of the Mac.
+        crate::session_copies::files_inside(&p, Path::new(&s.path))?;
         let conn = Conn::detached(self.terminals.new_client_id(), "moonlet-forwarded", Some("forwarded".to_string()));
         let reply = Box::pin(self.handle(&conn, &r.method, p)).await?;
         Ok(only_terminals(&r.method, reply, &s.terminals))
@@ -2759,6 +2759,9 @@ impl Daemon {
         self.session_copies.spawn();
     }
 
+    /// Keeps this member's design copies (X71): a round when the design
+    /// folders change, when the link changes, and when another member's
+    /// change to a design's record comes.
     pub fn keep_design_copies(self: &Arc<Self>) {
         let copies = Arc::downgrade(&self.copies);
         self.sessions.on_account_applied(move |changes| {

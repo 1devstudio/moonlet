@@ -98,9 +98,14 @@ struct Talk {
     /// Each chat's last look at its transcript: its progress, the bytes
     /// sent, whether its turn was over, and the checkpoint length found.
     scanned: BTreeMap<TerminalId, ((usize, usize), u64, bool, u64)>,
-    /// Each chat's [`progress`] and transcript length at its last
-    /// checkpoint the central host kept.
-    points: BTreeMap<TerminalId, ((usize, usize), u64)>,
+    /// Each chat's [`progress`], transcript length and conversation at its
+    /// last checkpoint the central host kept.
+    points: BTreeMap<TerminalId, ((usize, usize), u64, String)>,
+    /// When each transcript file was last changed, as last sent: a file
+    /// rewritten at the same length is told by it.
+    mtimes: BTreeMap<String, std::time::SystemTime>,
+    /// The session's open chats, as the central host last heard.
+    live: Option<Vec<TerminalId>>,
 }
 
 /// A checkpoint to send once the files are sent.
@@ -278,6 +283,43 @@ pub fn scope(
     Ok(Value::Object(params))
 }
 
+/// Refuses a forwarded call whose `file` or `files` name a path that, with
+/// links resolved, is outside `worktree` (X72).
+pub fn files_inside(params: &Value, worktree: &Path) -> Result<(), RpcError> {
+    let Ok(root) = worktree.canonicalize() else {
+        return Ok(());
+    };
+    let mut names: Vec<&str> = Vec::new();
+    if let Some(f) = params.get("file").and_then(Value::as_str) {
+        names.push(f);
+    }
+    if let Some(list) = params.get("files").and_then(Value::as_array) {
+        names.extend(list.iter().filter_map(Value::as_str));
+    }
+    for name in names {
+        let path = root.join(name);
+        // A file that is gone (a deletion to stage) has nothing to follow:
+        // its folder, as far as it exists, is what must be inside.
+        let mut at = path.clone();
+        while !at.exists() {
+            if !at.pop() {
+                break;
+            }
+        }
+        let real = at.canonicalize().unwrap_or(at);
+        if Path::new(name).is_absolute()
+            || name.split('/').any(|p| p == "..")
+            || !real.starts_with(&root)
+        {
+            return Err(RpcError::new(
+                "forbidden",
+                format!("{name} is not inside the session's worktree"),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Keeps of `reply` to `method` only the session's own terminals, for the
 /// methods that list every terminal of the member.
 pub fn only_terminals(method: &str, reply: Value, terminals: &[TerminalId]) -> Value {
@@ -339,7 +381,7 @@ struct Held {
     project: String,
     /// The last checkpoint held in full.
     #[serde(default)]
-    checkpoint: Option<m::SessionCheckpoint>,
+    checkpoints: BTreeMap<TerminalId, m::SessionCheckpoint>,
     /// The transcript files written for it, where they were written.
     #[serde(default)]
     transcripts: Vec<String>,
@@ -538,11 +580,14 @@ impl SessionCopies {
                 let Some(id) = data.get("id").and_then(Value::as_u64) else {
                     continue;
                 };
-                let Some(session) = me.sessions.list_sessions().into_iter().find(|s| {
-                    s.owner.is_none()
-                        && !s.archived
-                        && s.terminals.iter().any(|t| u64::from(*t) == id)
-                }) else {
+                // The terminal's own session, without listing every session.
+                let Some(session) = u32::try_from(id)
+                    .ok()
+                    .and_then(|t| me.terminals.get(t))
+                    .and_then(|t| t.info().session_id)
+                    .and_then(|sid| me.sessions.session(&sid).ok())
+                    .filter(|s| s.owner.is_none() && !s.archived)
+                else {
                     continue;
                 };
                 let event = m::SessionEvent {
@@ -1035,6 +1080,33 @@ impl SessionCopies {
             .filter_map(|t| self.chats.state(*t).ok().map(|st| (*t, st)))
             .collect();
         let mut points = Vec::new();
+        // The open chats: the central host forgets the others.
+        let live: Vec<TerminalId> = chats.iter().map(|(t, _)| *t).collect();
+        let heard = self
+            .talk
+            .lock()
+            .unwrap()
+            .get(&s.id)
+            .and_then(|t| t.live.clone());
+        if heard.as_ref() != Some(&live) {
+            host.request(
+                m::SESSION_CHAT,
+                serde_json::to_value(m::SessionChat {
+                    session: s.id.clone(),
+                    terminal: 0,
+                    state: None,
+                    live: Some(live.clone()),
+                })?,
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("{}: {}", e.code, e.message))?;
+            self.talk
+                .lock()
+                .unwrap()
+                .entry(s.id.clone())
+                .or_default()
+                .live = Some(live);
+        }
         for (terminal, state) in chats {
             let hash = moonlet_core::hash::sha256_hex(&serde_json::to_vec(&state)?);
             let known = self
@@ -1049,7 +1121,8 @@ impl SessionCopies {
                     serde_json::to_value(m::SessionChat {
                         session: s.id.clone(),
                         terminal,
-                        state: state.clone(),
+                        state: Some(state.clone()),
+                        live: None,
                     })?,
                 )
                 .await
@@ -1073,6 +1146,10 @@ impl SessionCopies {
             let main = format!("{id}.jsonl");
             for file in transcript_files(&folder, &id) {
                 self.send_file(host, s, &id, &folder, &file).await?;
+            }
+            // No transcript yet (or not Claude Code's): nothing to resume.
+            if !folder.join(&main).is_file() {
+                continue;
             }
             let progress = progress(&state);
             let sent = self
@@ -1115,8 +1192,8 @@ impl SessionCopies {
                 .lock()
                 .unwrap()
                 .get(&s.id)
-                .and_then(|t| t.points.get(&terminal).copied());
-            if last == Some((progress, len)) {
+                .and_then(|t| t.points.get(&terminal).cloned());
+            if last == Some((progress, len, id.clone())) {
                 continue;
             }
             points.push(Point {
@@ -1151,10 +1228,26 @@ impl SessionCopies {
         let len = std::fs::metadata(&path)
             .map(|m| m.len() as usize)
             .unwrap_or(0);
-        if len == from {
+        let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+        let sent_mtime = self
+            .talk
+            .lock()
+            .unwrap()
+            .get(&s.id)
+            .and_then(|t| t.mtimes.get(file).copied());
+        if len == from && mtime.is_some() && mtime == sent_mtime {
             return Ok(());
         }
         let bytes = std::fs::read(&path).unwrap_or_default();
+        if let Some(mt) = mtime {
+            self.talk
+                .lock()
+                .unwrap()
+                .entry(s.id.clone())
+                .or_default()
+                .mtimes
+                .insert(file.to_string(), mt);
+        }
         // Made again here, perhaps longer than before: its first bytes are
         // not those sent, and it starts over.
         let head = self
@@ -1242,7 +1335,7 @@ impl SessionCopies {
                 serde_json::to_value(m::SessionCheckpoint {
                     session: s.id.clone(),
                     terminal: point.terminal,
-                    agent_session: point.agent_session,
+                    agent_session: point.agent_session.clone(),
                     tree: sent.tree,
                     head: sent.head,
                     len: point.len,
@@ -1260,7 +1353,10 @@ impl SessionCopies {
                 .entry(s.id.clone())
                 .or_default()
                 .points
-                .insert(point.terminal, (point.progress, point.len));
+                .insert(
+                    point.terminal,
+                    (point.progress, point.len, point.agent_session),
+                );
         }
         Ok(())
     }
@@ -1373,7 +1469,19 @@ impl SessionCopies {
             git_sync::clone(url, &part).await.map_err(|e| {
                 RpcError::new("clone_failed", format!("cannot clone {origin}: {e}"))
             })?;
-            let _ = std::fs::remove_dir_all(&dir);
+            // A folder already there that is not a clone is never removed:
+            // whatever it holds is not this host's to throw away.
+            if std::fs::read_dir(&dir).is_ok_and(|mut d| d.next().is_some()) {
+                let _ = std::fs::remove_dir_all(&part);
+                return Err(RpcError::new(
+                    "refused",
+                    format!(
+                        "{} holds files that are not a clone of {origin}",
+                        dir.display()
+                    ),
+                ));
+            }
+            let _ = std::fs::remove_dir(&dir);
             std::fs::rename(&part, &dir).map_err(|e| {
                 RpcError::new(
                     "clone_failed",
@@ -1588,10 +1696,25 @@ impl SessionCopies {
         let write = || -> Result<()> {
             let dir = self.talk_dir(&r.session).join("chats");
             moonlet_core::paths::ensure_private_dir(&dir)?;
-            let file = dir.join(format!("{}.json", r.terminal));
-            let tmp = file.with_extension("tmp");
-            std::fs::write(&tmp, serde_json::to_vec(&r.state)?)?;
-            std::fs::rename(&tmp, &file)?;
+            if let Some(state) = &r.state {
+                let file = dir.join(format!("{}.json", r.terminal));
+                let tmp = file.with_extension("tmp");
+                std::fs::write(&tmp, serde_json::to_vec(state)?)?;
+                std::fs::rename(&tmp, &file)?;
+            }
+            // Chats closed on the member go here too.
+            if let Some(live) = &r.live {
+                for e in std::fs::read_dir(&dir)?.flatten() {
+                    let name = e.file_name().to_string_lossy().to_string();
+                    let open = name
+                        .strip_suffix(".json")
+                        .and_then(|n| n.parse::<TerminalId>().ok())
+                        .is_some_and(|t| live.contains(&t));
+                    if !open {
+                        let _ = std::fs::remove_file(e.path());
+                    }
+                }
+            }
             Ok(())
         };
         write().map_err(|e| RpcError::new("internal", format!("{e:#}")))?;
@@ -1703,12 +1826,9 @@ impl SessionCopies {
             }
             // Started over shorter than a checkpoint names: that checkpoint
             // no longer holds.
-            if h.checkpoint
-                .as_ref()
-                .is_some_and(|c| format!("{}.jsonl", c.agent_session) == r.file && c.len > written)
-            {
-                h.checkpoint = None;
-            }
+            h.checkpoints.retain(|_, c| {
+                !(format!("{}.jsonl", c.agent_session) == r.file && c.len > written)
+            });
         }
         self.save(&data);
         Ok(m::SessionTranscribed { len: written })
@@ -1731,14 +1851,17 @@ impl SessionCopies {
         let main = self
             .transcript_folder(&record, Path::new(&held.path))
             .join(format!("{}.jsonl", r.agent_session));
+        // A checkpoint names a transcript this host holds, as far as it
+        // says; one with nothing in it names nothing to resume.
         if !transcript::file_ok(&format!("{}.jsonl", r.agent_session), &r.agent_session)
+            || r.len == 0
             || std::fs::metadata(&main).map(|m| m.len()).unwrap_or(0) < r.len
         {
             return Ok(false);
         }
         let mut data = self.data.lock().unwrap();
         if let Some(h) = data.held.get_mut(&r.session) {
-            h.checkpoint = Some(r);
+            h.checkpoints.insert(r.terminal, r);
         }
         self.save(&data);
         Ok(true)
@@ -1772,7 +1895,8 @@ impl SessionCopies {
             tree: held.tree,
             head: held.head,
             chats,
-            checkpoint: held.checkpoint,
+            checkpoint: held.checkpoints.values().max_by_key(|c| c.at).cloned(),
+            checkpoints: held.checkpoints.into_values().collect(),
         })
     }
 
@@ -1797,11 +1921,21 @@ impl SessionCopies {
             let _one = self.apply.lock().await;
             if !h.path.is_empty() && Path::new(&h.path).exists() {
                 let dir = Path::new(&h.path);
-                if let Ok(now) = git_sync::snapshot(dir, git_sync::MAX_FILE).await
-                    && !h.tree.is_empty()
-                    && now.tree != h.tree
-                {
-                    let _ = self.keep_edits(dir, &h.tree, &now.tree).await;
+                // Edits made in the copy are kept first; a copy whose edits
+                // cannot be kept stays, and is tried again later.
+                let kept = match git_sync::snapshot(dir, git_sync::MAX_FILE).await {
+                    Ok(now) if !h.tree.is_empty() && now.tree != h.tree => {
+                        self.keep_edits(dir, &h.tree, &now.tree).await
+                    }
+                    Ok(_) => Ok(()),
+                    Err(e) => Err(e),
+                };
+                if let Err(e) = kept {
+                    tracing::warn!(
+                        "kept the copy {}: cannot save its edits: {e:#}",
+                        dir.display()
+                    );
+                    continue;
                 }
                 if let Err(e) = git_sync::remove_worktree(Path::new(&h.repo), dir).await {
                     tracing::warn!("cannot remove the copy {}: {e:#}", dir.display());
@@ -1920,6 +2054,31 @@ mod tests {
         assert_eq!(
             p,
             serde_json::json!({ "path": "/Users/alex/.moonlet/worktrees/shop/fix-cart", "branch": "moonlet/fix-cart" })
+        );
+    }
+
+    #[test]
+    fn a_forwarded_file_stays_inside_the_worktree_through_links() {
+        let tree = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(tree.path().join("cart.ts"), "a").unwrap();
+        std::os::unix::fs::symlink(outside.path(), tree.path().join("out")).unwrap();
+        let ok = |params: Value| files_inside(&params, tree.path());
+        assert!(ok(serde_json::json!({ "file": "cart.ts" })).is_ok());
+        // Gone, as a deletion to stage is.
+        assert!(ok(serde_json::json!({ "files": ["gone/new.ts"] })).is_ok());
+        for bad in ["out/secret", "../x", "/etc/hosts"] {
+            assert_eq!(
+                ok(serde_json::json!({ "file": bad })).unwrap_err().code,
+                "forbidden",
+                "{bad}"
+            );
+        }
+        assert_eq!(
+            ok(serde_json::json!({ "files": ["cart.ts", "out/secret"] }))
+                .unwrap_err()
+                .code,
+            "forbidden"
         );
     }
 

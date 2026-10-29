@@ -1318,3 +1318,37 @@ async fn a_transcript_is_never_written_through_a_link_on_the_central_host() {
     tokio::time::sleep(Duration::from_secs(6)).await;
     assert_eq!(std::fs::read_to_string(elsewhere.path()).unwrap(), "");
 }
+
+#[tokio::test]
+async fn a_chat_closed_on_the_member_leaves_the_central_hosts_copy() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    let agent = made["terminals"][0].clone();
+    within(
+        Duration::from_secs(30),
+        "the chat on studio-mini",
+        || async {
+            mini.try_call("session.copy", json!({ "session": made["id"] }))
+                .await
+                .is_ok_and(|i| i["chats"].as_array().is_some_and(|c| c.len() == 1))
+        },
+    )
+    .await;
+
+    let _: Value = book
+        .call("terminal.kill", json!({ "id": agent, "remove": true }))
+        .await;
+    within(
+        Duration::from_secs(30),
+        "no chat on studio-mini",
+        || async {
+            mini.try_call("session.copy", json!({ "session": made["id"] }))
+                .await
+                .is_ok_and(|i| i["chats"].as_array().is_some_and(|c| c.is_empty()))
+        },
+    )
+    .await;
+}
