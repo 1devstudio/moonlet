@@ -44,24 +44,26 @@ export function resolveTaskRequest(
   const board = "board" in a ? ctx.boards.find((b) => b.id === a.board) : undefined;
   const task = "task" in a ? ctx.tasks.find((t) => taskId(t) === a.task) : undefined;
   const keyOf = (id: string) => id.slice(id.indexOf(" ") + 1);
+  // A board's own task only: never another board's of the workspace.
+  const onBoard = (t: Task | undefined) => (t && board && ctx.boardKeys ? (ctx.boardKeys[board.id] ?? []).includes(taskId(t)) : !!t);
   switch (a.kind) {
     case "move": {
       if (!board) return { error: "That board is no longer in moonlet on the Mac." };
-      if (!task) return { error: `${keyOf(a.task)} is no longer on ${board.name}.` };
+      if (!onBoard(task)) return { error: `${keyOf(a.task)} is no longer on ${board.name}.` };
       const column = syncedColumns(board, null).find((c) => c.name === a.column);
       if (!column) return { error: `${board.name} has no ${a.column} column.` };
       if (a.status !== undefined && !column.statuses.includes(a.status)) return { error: `${column.name} has no status ${a.status}.` };
-      return { kind: "move", task, category: column.category, status: a.status ?? column.statuses[0] };
+      return { kind: "move", task: task!, category: column.category, status: a.status ?? column.statuses[0] };
     }
     case "fix":
     case "comments":
     case "comment": {
       if (!board) return { error: "That board is no longer in moonlet on the Mac." };
-      if (!task) return { error: `${keyOf(a.task)} is no longer on ${board.name}.` };
-      if (a.kind === "fix") return { kind: "fix", board, task };
-      if (a.kind === "comments") return { kind: "comments", task };
+      if (!onBoard(task)) return { error: `${keyOf(a.task)} is no longer on ${board.name}.` };
+      if (a.kind === "fix") return { kind: "fix", board, task: task! };
+      if (a.kind === "comments") return { kind: "comments", task: task! };
       if (!a.body?.trim()) return { error: "A comment needs some text." };
-      return { kind: "comment", task, body: a.body };
+      return { kind: "comment", task: task!, body: a.body };
     }
     case "sync":
       if (!board) return { error: "That board is no longer in moonlet on the Mac." };

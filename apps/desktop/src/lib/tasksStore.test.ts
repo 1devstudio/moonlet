@@ -6,7 +6,7 @@ import { DEFAULT_RULES } from "./keepInStep";
 import { useStore } from "./store";
 import { answerConfirm } from "./confirm";
 import { rpc } from "./daemon";
-import { answerTaskRequest, createIssue, setColumnShow, workspacesToPoll } from "./tasksStore";
+import { answerTaskRequest, createIssue, pairedPhones, setColumnShow, shareTasks, workspacesToPoll } from "./tasksStore";
 import { type TasksData, type TrackersConfig, activityOf, autoFixed, boardInput, openBoard, removeBoard, previewBoard, showBoard, branchUser, DEFAULT_CONFIG, ensureTasks, failureOf, fixDrift, isTasksMode, loadTrackersConfig, lookUpPasted, moveTask, originRepoOf, reconnected, refreshTasks, retryTask, rulesFor, runAutoFixes, pollTasks, saveTrackersConfig, settleSaves, setAssignee, setExpanded, setFilters, setKeepInStep, startedFromTask, syncTasks, toggleExpanded, toggleTasksMode, trackersConfig, useTasks } from "./tasksStore";
 
 const answers: Record<string, (params: { path?: string; id?: string }) => unknown> = {};
@@ -890,6 +890,80 @@ describe("a phone's requests (X76)", () => {
     useTasks.setState({ data: { "local/personal": { tasks: [done], worktrees: [], sources: [], repos: {}, syncedAt: 2, error: null, boards: { moon: { keys: ["linear:acme MOON-151"] } } } } });
     await answerTaskRequest("local", { request_id: 14, workspace: "personal", action: { kind: "fix", board: "moon", task: "linear:acme MOON-151" } });
     expect(answered[1]).toEqual({ request_id: 14, ok: false, error: "MOON-151 is in step now." });
+  });
+
+  it("refuses a phone's clean-up of worktrees with uncommitted changes, which only the Mac can warn about", async () => {
+    const done = { ...drag, column: "done" as const, tracker: { ...drag.tracker, state: "s-done" } };
+    const wt = { path: "/w/moon-151-drag", branch: "moon-151-drag", originRepo: null, project: "web" };
+    const withDone = { ...LINEAR_BOARD, columns: [...LINEAR_BOARD.columns, { name: "Done", statuses: ["s-done"], category: "done" as const }] };
+    useTasks.setState({ config: { ...DEFAULT_CONFIG, boards: [withDone] }, data: { "local/personal": { tasks: [done], worktrees: [wt], sources: [], repos: {}, syncedAt: 1, error: null, boards: { moon: { keys: ["linear:acme MOON-151"] } } } } });
+    answers["git.status"] = () => ({ files: [{ path: "a.ts" }] });
+    vi.mocked(rpc).mockClear();
+    await answerTaskRequest("local", { request_id: 15, workspace: "personal", action: { kind: "fix", board: "moon", task: "linear:acme MOON-151" } });
+    expect(answered).toEqual([{ request_id: 15, ok: false, error: "MOON-151 has uncommitted changes in /w/moon-151-drag. Clean it up in moonlet on the Mac." }]);
+    expect(vi.mocked(rpc).mock.calls.filter(([, m]) => m === "project.worktree_remove")).toEqual([]);
+    delete answers["git.status"];
+  });
+
+  it("says when the sync the phone asked for failed", async () => {
+    answers["git.origin_url"] = () => null;
+    answers["project.worktrees"] = () => [];
+    answers["tracker_tasks linear:acme"] = () => {
+      throw { auth: false, message: "cannot reach the tracker" };
+    };
+    await answerTaskRequest("local", { request_id: 16, workspace: "personal", action: { kind: "sync", board: "moon" } });
+    expect(answered).toEqual([{ request_id: 16, ok: false, error: "cannot reach the tracker" }]);
+  });
+
+  it("says when a session's start could not move or assign its task", async () => {
+    failNext.push(new Error("Linear refused the move"));
+    await answerTaskRequest("local", { request_id: 17, workspace: "personal", action: { kind: "started", task: "linear:acme MOON-151", session: "Drag", assign: true } });
+    expect(answered).toEqual([{ request_id: 17, ok: false, error: "MOON-151: Linear refused the move" }]);
+  });
+
+  it("says what failed after an issue the phone asked for was created", async () => {
+    const created = { connection: "linear:acme", key: "MOON-160", title: "Hosts health", url: "", column: "todo", priority: 0, assignees: [], labels: [], description: "", updatedMs: 0, tracker: { id: "issue-9", state: "s-todo", source: "MOON" } };
+    answers["tracker_create linear:acme"] = () => ({ issue: created, failed: "; setting its labels failed: no such label" });
+    // In a workspace of its own: the card it adds stays out of the other tests' boards.
+    const elsewhere = { ...LINEAR_BOARD, workspace: "local/side" };
+    useTasks.setState({ config: { ...DEFAULT_CONFIG, boards: [elsewhere] }, data: { "local/side": { tasks: [drag], worktrees: [], sources: [], repos: {}, syncedAt: 1, error: null, boards: { moon: { keys: ["linear:acme MOON-151"] } } } } });
+    await answerTaskRequest("local", { request_id: 18, workspace: "side", action: { kind: "create", board: "moon", column: "Todo", issue: { title: "Hosts health", description: "", assignee: "me", labels: [] } } });
+    expect(answered).toEqual([{ request_id: 18, ok: true, result: { task: "linear:acme MOON-160", failed: "Created MOON-160; setting its labels failed: no such label" } }]);
+  });
+});
+
+describe("sharing with phones (X76)", () => {
+  it("counts only phones among the paired devices", () => {
+    expect(pairedPhones({ devices: [{ kind: "phone" }, { kind: "desktop" }, { kind: "cloud" }] })).toBe(1);
+    expect(pairedPhones({ devices: [{ kind: "desktop" }] })).toBe(0);
+    expect(pairedPhones(null)).toBe(0);
+  });
+
+  it("shares the activity of earlier runs, and one snapshot at a time so the newest is the daemon's last", async () => {
+    const LINEAR_BOARD = { id: "moon", name: "Moonlet", connection: "linear:acme", workspace: "local/personal", origin: { kind: "linear_team" as const, team: "MOON" }, columns: [{ name: "Todo", statuses: ["s-todo"], category: "todo" as const }] };
+    const t = { connection: "linear:acme", key: "MOON-1", title: "One", url: "", column: "todo" as const, priority: 1, assignees: [], labels: [], description: "", updatedMs: 0, tracker: { id: "i1", state: "s-todo", source: "MOON" } };
+    localStorage.setItem("moonlet.tasks.activity", JSON.stringify({ "linear:acme MOON-1": [{ at: 5, text: "moonlet moved it to Todo" }] }));
+    const writes: { title: string }[] = [];
+    let slow = true;
+    answers["tasks.set_snapshot"] = (p) => {
+      const snap = (p as unknown as { snapshot: { tasks: { title: string }[]; activity: Record<string, unknown> } }).snapshot;
+      const write = () => (writes.push({ title: snap.tasks[0].title }), true);
+      // The first write is slow: a newer one must not land before it.
+      if (slow) return ((slow = false), new Promise((r) => setTimeout(() => r(write()), 30)));
+      return write();
+    };
+    useTasks.setState({ config: { ...DEFAULT_CONFIG, boards: [LINEAR_BOARD] }, activity: {}, data: { "local/personal": { tasks: [t], worktrees: [], sources: [], repos: {}, syncedAt: 1, error: null, boards: { moon: { keys: ["linear:acme MOON-1"] } } } } });
+    vi.mocked(rpc).mockClear();
+    const first = shareTasks();
+    // The board changes while the first write is on its way.
+    await vi.waitFor(() => expect(vi.mocked(rpc).mock.calls.filter(([, m]) => m === "tasks.set_snapshot")).toHaveLength(1));
+    useTasks.setState((st) => ({ data: { "local/personal": { ...st.data["local/personal"], tasks: [{ ...t, title: "One, renamed" }] } } }));
+    await Promise.all([first, shareTasks()]);
+    expect(writes.map((w) => w.title)).toEqual(["One", "One, renamed"]);
+    const last = vi.mocked(rpc).mock.calls.filter(([, m]) => m === "tasks.set_snapshot").at(-1)![2] as { snapshot: { activity: Record<string, unknown> } };
+    expect(last.snapshot.activity).toEqual({ "linear:acme MOON-1": [{ at: 5, text: "moonlet moved it to Todo" }] });
+    delete answers["tasks.set_snapshot"];
+    useTasks.setState({ config: null, data: {} });
   });
 });
 

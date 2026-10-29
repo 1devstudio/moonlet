@@ -633,7 +633,7 @@ export async function createOptions(
  * when the board can't show it, a notice says so. A tracker's refusal is
  * thrown, for the form to show.
  */
-export async function createIssue(host: string, workspaceId: string, board: BoardConfig, column: BoardColumn, draft: NewIssue): Promise<Task> {
+export async function createIssue(host: string, workspaceId: string, board: BoardConfig, column: BoardColumn, draft: NewIssue, onFailed?: (text: string) => void): Promise<Task> {
   const target = createTarget(board, column);
   if (!target) throw new Error(`${column.name} takes no new issues`);
   const result = await createInTracker(host, workspaceId, board, column, draft, target.status);
@@ -643,7 +643,10 @@ export async function createIssue(host: string, workspaceId: string, board: Boar
   // The card shows the Markdown typed until a sync reads the tracker's own copy (ClickUp answers with plain text).
   const [task] = categorize(columns, [{ ...result.task, ...(draft.description && { description: draft.description }), mine: draft.assignee === "me" }]);
   // Once the issue exists, a later step that failed is said, with what was done (X52).
-  if (result.failed) toast(`Created ${task.key}${result.failed}`, "error", { label: "Open", run: () => void openUrl(task.url) });
+  if (result.failed) {
+    toast(`Created ${task.key}${result.failed}`, "error", { label: "Open", run: () => void openUrl(task.url) });
+    onFailed?.(`Created ${task.key}${result.failed}`);
+  }
   // Not on the board: nothing of it to show or record here.
   if (result.off) return task;
   recordActivity(task, "moonlet created it", now);
@@ -942,12 +945,13 @@ const COLUMN_LABEL = { todo: "Todo", in_progress: "In Progress", in_review: "In 
 
 /** The "session starts" rule after a session started from a task with the box ticked (X46):
  *  a GitHub issue is assigned; a tracker issue moves to In Progress and is assigned. */
-export async function startedFromTask(host: string, workspaceId: string, start: TaskStart, opts: { session: string; assign: boolean }, now = Date.now()) {
+/** Returns why the task could not be moved or assigned, or null. */
+export async function startedFromTask(host: string, workspaceId: string, start: TaskStart, opts: { session: string; assign: boolean }, now = Date.now()): Promise<string | null> {
   recordActivity({ connection: start.ref.connection, key: start.key }, `Session “${opts.session}” started from it`, now);
   // Keep in step: the "session starts" rule, as the composer's box was left.
-  if (!opts.assign) return;
+  if (!opts.assign) return null;
   if (start.github) return assignToMe(host, workspaceId, start.github);
-  if (!start.tracker) return;
+  if (!start.tracker) return null;
   const id = `${start.ref.connection} ${start.key}`;
   movedByMoonlet.set(id, "in_progress");
   try {
@@ -961,22 +965,26 @@ export async function startedFromTask(host: string, workspaceId: string, start: 
       assign_me: true,
     });
     recordActivity({ connection: start.ref.connection, key: start.key }, `moonlet moved it to ${name} and assigned it to you`, now + 1);
+    return null;
   } catch (e) {
     movedByMoonlet.delete(id);
     toast(`${start.key}: ${errorMessage(e)}`, "error");
+    return `${start.key}: ${errorMessage(e)}`;
   }
 }
 
-/** Assigns a GitHub issue to the user, as the "session starts" rule does (X46). */
-export async function assignToMe(host: string, workspaceId: string, github: { repo: string; number: number }) {
+/** Assigns a GitHub issue to the user, as the "session starts" rule does (X46); returns why it could not, or null. */
+export async function assignToMe(host: string, workspaceId: string, github: { repo: string; number: number }): Promise<string | null> {
   const key = `${github.repo}#${github.number}`;
   try {
     const path = repoPath(host, workspaceId, github.repo);
     if (!path) throw new Error(`No project in this workspace has ${github.repo} as its origin`);
     await rpc(host, M.ghTaskUpdate, { path, number: github.number, assign_me: true });
     recordActivity({ connection: GITHUB, key }, "moonlet assigned it to you");
+    return null;
   } catch (e) {
     toast(`${key}: ${errorMessage(e)}`, "error");
+    return `${key}: ${errorMessage(e)}`;
   }
 }
 
@@ -1028,7 +1036,8 @@ export async function fixDrift(host: string, workspaceId: string, card: Card, op
   // Retry looks again: the task may have moved since, or need another fix.
   retries.set(id, async () => {
     const now = currentCard(host, workspaceId, id);
-    if (now?.drift) await fixDrift(host, workspaceId, now, opts);
+    // Retry on the Mac asks as the Mac does, whoever asked first.
+    if (now?.drift) await fixDrift(host, workspaceId, now);
     else setFailure(card.task, null);
   });
   try {
@@ -1062,7 +1071,9 @@ export async function fixDrift(host: string, workspaceId: string, card: Card, op
         const st = await rpc<{ files: unknown[] }>(host, M.gitStatus, { path }).catch(() => null);
         if (st?.files.length) dirty.push(path);
       }
-      // A phone asked on its own screen first (X76).
+      // A phone asked on its own screen first (X76), but cannot know about
+      // uncommitted changes: those are left for the Mac's own warning.
+      if (opts.confirmed && dirty.length) throw new Error(`${card.task.key} has uncommitted changes in ${dirty.join(", ")}. Clean it up in moonlet on the Mac.`);
       const ok =
         opts.confirmed ||
         (await askConfirm({
@@ -1405,9 +1416,11 @@ export async function answerTaskRequest(host: string, ev: TaskRequestEvent) {
         const why = useTasks.getState().failures[taskId(r.task)];
         return done ? answer(true, {}) : answer(false, undefined, why ?? `moonlet on the Mac could not fix ${r.task.key}.`);
       }
-      case "sync":
+      case "sync": {
         await refreshTasks(host, ev.workspace);
-        return answer(true, {});
+        const failed = useTasks.getState().data[key]?.error;
+        return failed ? answer(false, undefined, failed) : answer(true, {});
+      }
       case "comments":
       case "comment": {
         const { commentFrom, commentsFor } = await import("./taskComments");
@@ -1419,12 +1432,13 @@ export async function answerTaskRequest(host: string, ev: TaskRequestEvent) {
       case "create_options":
         return answer(true, await createOptions(host, r.board, r.place, r.issueType));
       case "create": {
-        const created = await createIssue(host, ev.workspace, r.board, r.column, r.issue);
-        return answer(true, { task: taskId(created) });
+        let failed = null as string | null;
+        const created = await createIssue(host, ev.workspace, r.board, r.column, r.issue, (text) => (failed = text));
+        return answer(true, { task: taskId(created), ...(failed && { failed }) });
       }
       case "started":
-        await startedFromTask(host, ev.workspace, taskStart(r.task, data?.repos ?? {}, data?.sourceProjects), { session: r.session, assign: r.assign });
-        return answer(true, {});
+        const why = await startedFromTask(host, ev.workspace, taskStart(r.task, data?.repos ?? {}, data?.sourceProjects), { session: r.session, assign: r.assign });
+        return why ? answer(false, undefined, why) : answer(true, {});
     }
   } catch (e) {
     return answer(false, undefined, errorMessage(e));
@@ -1434,12 +1448,22 @@ export async function answerTaskRequest(host: string, ev: TaskRequestEvent) {
 /** What each workspace's daemon has of its boards, as JSON by `host/workspaceId` (X76). */
 const shared: Record<string, string> = {};
 
-/** Saves the workspaces' board snapshots that changed in their daemons (X76). */
-async function shareTasks() {
+// One share at a time, so a newer snapshot never lands before an older one.
+let sharing: Promise<void> = Promise.resolve();
+
+/** Saves the workspaces' board snapshots that changed in their daemons (X76), after any share under way. */
+export function shareTasks(): Promise<void> {
+  sharing = sharing.then(shareChanged, shareChanged);
+  return sharing;
+}
+
+async function shareChanged() {
   const t = useTasks.getState();
   if (!t.config) return;
   const from = useStore.getState().hosts.local?.hostname ?? "this Mac";
-  for (const s of snapshotsToShare({ config: t.config, data: t.data, moving: t.moving, activity: t.activity, attention: t.attention, shownBoard: t.shownBoard, from }, shared)) {
+  // Activity of earlier runs too: the store holds only this run's until a line is added.
+  const activity = { ...readActivity(), ...t.activity };
+  for (const s of snapshotsToShare({ config: t.config, data: t.data, moving: t.moving, activity, attention: t.attention, shownBoard: t.shownBoard, from }, shared)) {
     if (useStore.getState().hosts[s.host]?.status !== "connected") continue;
     try {
       await rpc(s.host, M.tasksSetSnapshot, { workspace: s.workspace, snapshot: s.snapshot });
@@ -1459,23 +1483,42 @@ async function shareTasks() {
  */
 export function shareTasksWithPhones(): () => void {
   let timer: ReturnType<typeof setTimeout> | null = null;
-  const unsubscribe = useTasks.subscribe((now, prev) => {
-    if (now.data === prev.data && now.moving === prev.moving && now.activity === prev.activity && now.config === prev.config && now.attention === prev.attention && now.shownBoard === prev.shownBoard) return;
+  const later = () => {
     if (timer) clearTimeout(timer);
     timer = setTimeout(() => void shareTasks(), 1000);
-  });
+  };
   const poll = async () => {
     const status = await rpc<MobileStatus>("local", M.mobileStatus).catch(() => null);
     const hosts = Object.fromEntries(Object.values(useStore.getState().hosts).map((h) => [h.id, h.status]));
-    for (const { host, id } of workspacesToPoll(trackersConfig(useTasks.getState()).boards ?? [], status?.devices.length ?? 0, hosts)) ensureTasks(host, id);
+    for (const { host, id } of workspacesToPoll(trackersConfig(useTasks.getState()).boards ?? [], pairedPhones(status), hosts)) ensureTasks(host, id);
   };
+  const unsubscribe = useTasks.subscribe((now, prev) => {
+    // The boards read from the file: the workspaces not shown sync now, not in 5 minutes.
+    if (now.config && !prev.config) void poll();
+    if (now.data === prev.data && now.moving === prev.moving && now.activity === prev.activity && now.config === prev.config && now.attention === prev.attention && now.shownBoard === prev.shownBoard) return;
+    later();
+  });
+  // A host that connects again gets what changed meanwhile, or failed to send.
+  const offHosts = useStore.subscribe((now, prev) => {
+    const back = Object.values(now.hosts).filter((h) => h.status === "connected" && prev.hosts[h.id]?.status !== "connected");
+    if (!back.length) return;
+    for (const h of back) for (const k of Object.keys(shared)) if (k.startsWith(`${h.id}/`)) delete shared[k];
+    later();
+    void poll();
+  });
   void poll();
   const every = setInterval(() => void poll(), 300_000);
   return () => {
     unsubscribe();
+    offHosts();
     clearInterval(every);
     if (timer) clearTimeout(timer);
   };
+}
+
+/** The phones among the Mac's paired devices: Macs and cloud machines do not count (X76). */
+export function pairedPhones(status: { devices: { kind?: string }[] } | null): number {
+  return status?.devices.filter((d) => (d.kind ?? "phone") === "phone").length ?? 0;
 }
 
 /** The workspaces the app keeps synced for a paired phone (X76): each with a board, on a connected host; none without a phone. */

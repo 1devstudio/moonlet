@@ -76,3 +76,13 @@ describe("resolveTaskRequest: fixes, syncs and comments from the phone (X76)", (
     expect(resolveTaskRequest({ kind: "comments", board: "gone", task: `${JIRA} OPS-1` }, ctx)).toEqual({ error: "That board is no longer in moonlet on the Mac." });
   });
 });
+
+describe("resolveTaskRequest keeps to the board the phone names (X76)", () => {
+  it("refuses a task of another board of the workspace", () => {
+    const keyed = { ...ctx, boardKeys: { ops: [], web: [`${JIRA} OPS-1`] } };
+    for (const kind of ["move", "fix", "comments", "comment"]) {
+      expect(resolveTaskRequest({ kind, board: "ops", task: `${JIRA} OPS-1`, column: "QA", body: "x" }, keyed)).toEqual({ error: "OPS-1 is no longer on OPS · Sprint 42." });
+    }
+    expect(resolveTaskRequest({ kind: "move", board: "ops", task: `${JIRA} OPS-1`, column: "QA" }, { ...keyed, boardKeys: { ops: [`${JIRA} OPS-1`] } })).toMatchObject({ kind: "move" });
+  });
+});
