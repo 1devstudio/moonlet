@@ -1902,11 +1902,21 @@ async fn a_member_that_lost_its_session_keeps_its_gap_and_follows_the_new_owner(
 /// The session continued on `mini` while `book` was away, with `book`
 /// back and keeping a live copy of it.
 async fn continued_and_back(origin: &Origin) -> (Daemon, Daemon, Value) {
+    continued_and_back_with(origin, async |_, _| {}).await
+}
+
+/// [`continued_and_back`], with `prepare` run on the session's worktree
+/// and the central host's copy of it before the MacBook stops.
+async fn continued_and_back_with(
+    origin: &Origin,
+    prepare: impl AsyncFn(&Path, &Path),
+) -> (Daemon, Daemon, Value) {
     let (mini, mut book) = pair_with_agents_as(origin, false).await;
     origin.add_to(&mini).await;
     let project = origin.add_to(&book).await;
     let made = session_with_a_turn(&book, &project).await;
-    copy_of(&mini, &made).await;
+    let copy = copy_of(&mini, &made).await;
+    prepare(&path_of(&made), &copy).await;
     within(
         Duration::from_secs(30),
         "the checkpoint on studio-mini",
@@ -3292,6 +3302,129 @@ async fn a_new_worktree_starts_with_its_checkouts_env() {
         "DATABASE_URL=postgres://localhost/shop\n",
     )
     .await;
+}
+
+/// Where `d` runs session `made`.
+async fn worktree_on(d: &Daemon, made: &Value) -> PathBuf {
+    let own: Vec<Value> = d.call("session.list", json!({})).await;
+    let s = own
+        .iter()
+        .find(|s| s["id"] == made["id"])
+        .expect("the session");
+    path_of(s)
+}
+
+async fn live_copy_on(d: &Daemon, made: &Value) -> PathBuf {
+    let copies: Vec<Value> = d.call("sync.list", json!({})).await;
+    let c = copies
+        .iter()
+        .find(|c| c["session"] == made["id"])
+        .expect("a live copy");
+    PathBuf::from(c["path"].as_str().unwrap())
+}
+
+#[tokio::test]
+async fn a_sessions_env_local_reaches_the_central_copy_and_an_edit_comes_back() {
+    let origin = Origin::new();
+    let (mini, book, made) = continued_and_back_with(&origin, async |tree, copy| {
+        std::fs::write(tree.join(".env.local"), "FLAG=book\n").unwrap();
+        reads(&copy.join(".env.local"), "FLAG=book\n").await;
+        assert_eq!(mode(&copy.join(".env.local")), 0o600);
+    })
+    .await;
+    // The agent on studio-mini, which now runs it, edits the file.
+    let on_mini = worktree_on(&mini, &made).await;
+    assert_eq!(
+        std::fs::read_to_string(on_mini.join(".env.local")).unwrap(),
+        "FLAG=book\n"
+    );
+    std::fs::write(on_mini.join(".env.local"), "FLAG=mini\n").unwrap();
+    reads(
+        &live_copy_on(&book, &made).await.join(".env.local"),
+        "FLAG=mini\n",
+    )
+    .await;
+    let back: Value = book
+        .call("session.bring", json!({ "session": made["id"] }))
+        .await;
+    assert_eq!(
+        std::fs::read_to_string(path_of(&back).join(".env.local")).unwrap(),
+        "FLAG=mini\n"
+    );
+}
+
+/// Every file under `dir`, by its path in it, with its text.
+fn files_under(dir: &Path) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else {
+                let rel = p.strip_prefix(dir).unwrap().display().to_string();
+                out.push((rel, std::fs::read_to_string(&p).unwrap_or_default()));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// Whether any object in the repository of `dir` holds `text`.
+fn in_object_store(dir: &Path, text: &str) -> bool {
+    let out = std::process::Command::new("git")
+        .args(["cat-file", "--batch-all-objects", "--batch", "--unordered"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).contains(text)
+}
+
+#[tokio::test]
+async fn the_owners_version_wins_and_the_copys_and_a_deleted_one_are_in_leftovers() {
+    let origin = Origin::new();
+    let (mini, _addr, book) = pair_of(&origin).await;
+    let project = origin.add_to(&book).await;
+    let made = new_session(&book, &project, "fix-cart").await;
+    let tree = path_of(&made);
+    std::fs::write(tree.join(".env"), "SECRET=one\n").unwrap();
+    let copy = copy_of(&mini, &made).await;
+    reads(&copy.join(".env"), "SECRET=one\n").await;
+    // Both sides change it: the owner's wins, the copy's is kept.
+    std::fs::write(copy.join(".env"), "SECRET=copy\n").unwrap();
+    std::fs::write(tree.join(".env"), "SECRET=two\n").unwrap();
+    reads(&copy.join(".env"), "SECRET=two\n").await;
+    let leftovers = mini.home.path().join("sync-leftovers");
+    let kept: Vec<(String, String)> = std::fs::read_dir(&leftovers)
+        .unwrap()
+        .flat_map(|e| files_under(&e.unwrap().path()))
+        .collect();
+    assert_eq!(kept, [(".env".to_string(), "SECRET=copy\n".to_string())]);
+    // Deleted on the owner, it goes on the copy, its content kept.
+    std::fs::remove_file(tree.join(".env")).unwrap();
+    within(Duration::from_secs(10), "the copy's .env gone", || async {
+        !copy.join(".env").exists()
+    })
+    .await;
+    let mut kept: Vec<(String, String)> = std::fs::read_dir(&leftovers)
+        .unwrap()
+        .flat_map(|e| files_under(&e.unwrap().path()))
+        .collect();
+    kept.sort();
+    assert_eq!(
+        kept,
+        [
+            (".env".to_string(), "SECRET=copy\n".to_string()),
+            (".env".to_string(), "SECRET=two\n".to_string()),
+        ]
+    );
+    for (who, dir) in [("MacBook", &tree), ("studio-mini", &copy)] {
+        for secret in ["SECRET=one", "SECRET=two", "SECRET=copy"] {
+            assert!(!in_object_store(dir, secret), "{secret} in {who}'s git");
+        }
+    }
 }
 
 #[tokio::test]

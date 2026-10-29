@@ -517,6 +517,10 @@ struct Data {
     /// (X73), with the ownership number they had, to send once it is back.
     #[serde(default)]
     forced: BTreeMap<String, u64>,
+    /// On a member: the copied files the central host's copy has of each
+    /// session (X74), by path and SHA-256.
+    #[serde(default)]
+    files: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 pub struct SessionCopies {
@@ -1068,6 +1072,9 @@ impl SessionCopies {
                 failed.insert(s.id.clone());
                 continue;
             }
+            if let Err(e) = self.send_files(&host, &s).await {
+                tracing::debug!(session = %s.id, "cannot send the copied files: {e:#}");
+            }
             for point in said {
                 if let Err(e) = self.checkpoint(&host, &s, point).await {
                     tracing::debug!(session = %s.id, "cannot send a checkpoint: {e:#}");
@@ -1152,11 +1159,63 @@ impl SessionCopies {
         Ok(())
     }
 
+    /// Sends the copied files of session `s` to the central host's copy
+    /// when any changed since it last took them (X74).
+    async fn send_files(
+        &self,
+        host: &moonlet_link::Host,
+        s: &moonlet_proto::types::Session,
+    ) -> Result<()> {
+        let project = self
+            .sessions
+            .list_projects()
+            .into_iter()
+            .find(|p| p.id == s.project_id)
+            .context("the session's project is gone")?;
+        let (patterns, _, _) = self.sessions.copied_files(&project.identity);
+        let known = self.data.lock().unwrap().files.get(&s.id).cloned().unwrap_or_default();
+        let list = crate::copied_files::manifest(Path::new(&s.path), &patterns, &known).await?;
+        let now: BTreeMap<String, String> = list.iter().map(|e| (e.path.clone(), e.sha.clone())).collect();
+        if now == known {
+            return Ok(());
+        }
+        let taken = host
+            .request(
+                m::SESSION_FILES,
+                serde_json::to_value(m::SessionFiles {
+                    session: s.id.clone(),
+                    files: list.into_iter().map(crate::copied_files::to_wire).collect(),
+                })?,
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("{}: {}", e.code, e.message))?;
+        let taken: m::SessionFilesTaken = serde_json::from_value(taken)?;
+        let mut agreed = now;
+        for path in &taken.want {
+            agreed.remove(path);
+        }
+        if !taken.want.is_empty() {
+            self.sent_any.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        let mut data = self.data.lock().unwrap();
+        data.files.insert(s.id.clone(), agreed);
+        self.save(&data);
+        Ok(())
+    }
+
     async fn open(
         &self,
         host: &moonlet_link::Host,
         s: &moonlet_proto::types::Session,
     ) -> Result<Vec<String>> {
+        // A copy opened again may be a new one: its copied files are sent
+        // again too.
+        {
+            let mut data = self.data.lock().unwrap();
+            if data.files.remove(&s.id).is_some() {
+                self.save(&data);
+            }
+        }
         let project = self
             .sessions
             .list_projects()
@@ -2020,6 +2079,41 @@ impl SessionCopies {
     }
 
     /// `session.copy`: what this host holds of another member's session.
+    /// `session.files` from member `worker`: its session's copied files,
+    /// which the copy takes (X74). `not_open` until the copy is made.
+    pub async fn files_offered(
+        &self,
+        worker: &str,
+        r: m::SessionFiles,
+    ) -> Result<m::SessionFilesTaken, RpcError> {
+        let record = self.owned_by(&r.session, worker)?;
+        let _one = self.apply.lock().await;
+        let held = self
+            .data
+            .lock()
+            .unwrap()
+            .held
+            .get(&r.session)
+            .cloned()
+            .filter(|h| h.owner == worker && !h.path.is_empty() && Path::new(&h.path).is_dir())
+            .ok_or_else(|| RpcError::new("not_open", "this host has no copy of that session yet"))?;
+        // The list as this host has it: a path it does not name is refused.
+        let patterns = match record
+            .get("project")
+            .and_then(|p| serde_json::from_value::<moonlet_proto::types::ProjectIdentity>(p.clone()).ok())
+        {
+            Some(identity) => self.sessions.copied_files(&identity).0,
+            None => moonlet_core::copied_files::DEFAULT.iter().map(|s| s.to_string()).collect(),
+        };
+        let name = record.get("name").and_then(Value::as_str).unwrap_or(&r.session);
+        let label = segment(&format!("{}-{name}", held.project));
+        let manifest: Vec<_> = r.files.into_iter().map(crate::copied_files::from_wire).collect();
+        let want = crate::copied_files::take(&self.home, &label, Path::new(&held.path), &patterns, &manifest)
+            .await
+            .map_err(|e| RpcError::new("invalid_params", format!("{e:#}")))?;
+        Ok(m::SessionFilesTaken { want })
+    }
+
     pub fn copy_info(&self, session: &str) -> Result<m::SessionCopyInfo, RpcError> {
         let held = self
             .data
@@ -2158,6 +2252,7 @@ impl SessionCopies {
     pub fn forget_sent(&self, id: &str) {
         let mut data = self.data.lock().unwrap();
         data.sent.remove(id);
+        data.files.remove(id);
         self.save(&data);
         drop(data);
         self.talk.lock().unwrap().remove(id);
