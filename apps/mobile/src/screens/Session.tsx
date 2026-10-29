@@ -18,7 +18,7 @@ import { STATE_COLOR } from "../lib/palette";
 import { sessionLine, shellTerminals } from "../lib/chatView";
 import { useGitStatus, usePr } from "../lib/rowDetails";
 import { checksDot } from "../lib/checks";
-import { readOnlyLine } from "../lib/copies";
+import { continueOffer, readOnlyLine } from "../lib/copies";
 import { parseCopyHost } from "@desktop/lib/copyHost";
 import { archiveSheet, archivedNote } from "../lib/archive";
 import { useBusy } from "../lib/busy";
@@ -239,9 +239,20 @@ export function SessionScreen({ host, id, tab }: { host: string; id: string; tab
         ))}
       </nav>
       {centralLabel && readOnlyLine(session, centralLabel) && (
-        <p role="status" className="flex-none border-b border-border bg-panel px-4 py-2 text-[13px] text-muted">
-          {readOnlyLine(session, centralLabel)}
-        </p>
+        <div role="status" className="flex flex-none items-center gap-3 border-b border-border bg-panel px-4 py-2 text-[13px] text-muted">
+          <span className="min-w-0 flex-1">{readOnlyLine(session, centralLabel)}</span>
+          {central && continueOffer(session, centralLabel) && (
+            <Btn
+              onClick={() =>
+                void rpc(central, M.sessionContinueHere, { session: session.id })
+                  .then(() => showScreen({ kind: "session", host: central, id: session.id, tab: "chat" }))
+                  .catch(console.error)
+              }
+            >
+              {continueOffer(session, centralLabel)}
+            </Btn>
+          )}
+        </div>
       )}
       <div className="min-h-0 flex-1">
         {shown === "chat" && <ChatTab host={host} session={session} />}

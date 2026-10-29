@@ -2493,6 +2493,13 @@ async fn a_session_moved_to_this_mac_stays_through_sleep_until_unpinned() {
         .await;
     let own: Vec<Value> = book.call("session.list", json!({})).await;
     assert!(own.iter().any(|s| s["id"] == made["id"]));
+    // Listed as kept here, once the central host's pin arrives.
+    within(Duration::from_secs(30), "kept on the MacBook", || async {
+        let own: Vec<Value> = book.call("session.list", json!({})).await;
+        own.iter()
+            .any(|s| s["id"] == made["id"] && s["pinned"] == json!(BOOK))
+    })
+    .await;
 
     // Pinned here: going to sleep keeps it.
     let _: Value = book

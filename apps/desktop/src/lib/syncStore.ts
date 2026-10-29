@@ -21,6 +21,10 @@ interface SyncState {
   central: string | null;
   /** The link's state, so a copy can say the central host refused this Mac (X41). */
   link: LinkState | null;
+  /** This Mac's worker id (X41), for Move to… (X73). */
+  me: string | null;
+  /** Since when the central host has been out of reach, while it is (X73). */
+  unreachableSince: number | null;
   /** This Mac's daemon's data folder, for where leftovers go. */
   dataDir: string | null;
   /** The session (`sesKey`) whose sync popover is open. */
@@ -33,6 +37,8 @@ export const useSync = create<SyncState>(() => ({
   copies: {},
   central: null,
   link: null,
+  me: null,
+  unreachableSince: null,
   dataDir: null,
   popover: null,
   noteSeen: readStored(NOTE_KEY) === "1",
@@ -53,7 +59,7 @@ export function syncDataDir(): string {
   return getSync().dataDir ?? (h ? `${h}/.moonlet` : "~/.moonlet");
 }
 
-const fromLink = (link: LinkInfo) => ({ central: link.central?.name ?? null, link: link.state });
+const fromLink = (link: LinkInfo) => ({ central: link.central?.name ?? null, link: link.state, me: link.worker.id, unreachableSince: link.unreachable_since ?? null });
 
 /** Setups asked about in this run, by copy and command, so one event does not ask twice. */
 const asked = new Set<string>();

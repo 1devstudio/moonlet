@@ -1,0 +1,86 @@
+// Sessions follow the user between members (X73): where a session runs,
+// what typing into another member's session does, and what Move to…
+// offers. The daemons move sessions; these say what the app shows.
+
+/** The mark at the end of a session's row: none for a session on this Mac
+ * that is not kept here; the host for one running on another member, with
+ * a pin when kept there with Move to…, dimmed while that member is offline. */
+export function hostMark(
+  s: { pinned?: string | null },
+  host: string,
+  label: string,
+  connected: boolean,
+  offlineSince?: string,
+): { server: boolean; pin: boolean; dim: boolean; tooltip: string } | null {
+  const pin = !!s.pinned;
+  if (host === "local") return pin ? { server: false, pin: true, dim: false, tooltip: "Kept on this Mac" } : null;
+  const where = `${pin ? "Kept on" : "Running on"} ${label}`;
+  return { server: true, pin, dim: !connected, tooltip: connected ? where : `${where} · offline${offlineSince ? ` since ${offlineSince}` : ""}` };
+}
+
+/** Whether typing into a session listed from `host` brings it to this Mac:
+ * `host` is another member of this Mac's account, and the session is not
+ * kept there. A host outside the account is only talked to where it is. */
+export function bringsHere(host: string, accounts: Record<string, { account?: string } | undefined>, s: { pinned?: string | null }): boolean {
+  if (host === "local" || s.pinned) return false;
+  const mine = accounts.local?.account;
+  return !!mine && accounts[host]?.account === mine;
+}
+
+/** The composer's line while a typed message waits for the session to
+ * move here. */
+export const waitingLine = (owner: string) => `Moves here when ${owner}'s turn ends`;
+
+/** `HH:MM` of `ms`, as the user's clock shows it. */
+function clock(ms: number): string {
+  const d = new Date(ms);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+/** The line that says the central host is offline. */
+export const offlineLine = (name: string, since: number) => `${name} is offline since ${clock(since)}`;
+
+/** The time a member went offline, for a row's tooltip. */
+export const offlineSince = (since: number) => clock(since);
+
+/** Move to…'s members: this Mac and the central host, the session's owner
+ * checked. None without a central host. */
+export function moveTargets(o: { thisMac: string; central: { id: string; label: string } | null; owner: string }): { to: string; label: string; current: boolean }[] {
+  if (!o.central) return [];
+  return [
+    { to: o.thisMac, label: "This Mac", current: o.owner === o.thisMac },
+    { to: o.central.id, label: o.central.label, current: o.owner === o.central.id },
+  ];
+}
+
+/** What a session's menu offers to move it (X73): Move to… this Mac and
+ * the central host, Unpin when kept somewhere, and Take over anyway while
+ * the central host, which runs it, has been offline 30 s or more. */
+export function followMenu(o: {
+  host: string;
+  centralHost: string | null;
+  me: string | null;
+  centralId: string | null;
+  centralLabel: string;
+  pinned: boolean;
+  unreachableSince: number | null;
+  now: number;
+}): ({ kind: "move"; to: string; label: string; current: boolean } | { kind: "unpin" } | { kind: "take-over" })[] {
+  if (!o.me || !o.centralId || !o.centralHost) return [];
+  const owner = o.host === "local" ? o.me : o.host === o.centralHost ? o.centralId : null;
+  if (!owner) return [];
+  const moves = moveTargets({ thisMac: o.me, central: { id: o.centralId, label: o.centralLabel }, owner }).map((t) => ({ kind: "move" as const, ...t }));
+  const offline = o.unreachableSince !== null && o.now - o.unreachableSince >= 30_000;
+  return [
+    ...(offline ? [] : moves),
+    ...(o.pinned && !offline ? [{ kind: "unpin" as const }] : []),
+    ...(offline && o.host === o.centralHost ? [{ kind: "take-over" as const }] : []),
+  ];
+}
+
+/** The readiness mark's tooltip: why the central host could not continue
+ * session `name` (X73); none when it could, or does not hold a copy. */
+export function readyMark(r: { session?: string; ready: boolean; reason?: string | null } | undefined, central: string, name: string): string | null {
+  if (!r || r.ready) return null;
+  return `${central} could not continue ${name}: ${r.reason ?? "it is not ready"}.`;
+}

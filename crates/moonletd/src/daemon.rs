@@ -2972,6 +2972,7 @@ impl Daemon {
                 layout: Value::Null,
                 restore: Vec::new(),
                 owner: None,
+                pinned: None,
             })
             .map_err(internal)?;
         if !self.sessions.set_session_owner(session, me, epoch + 1, pin.then_some(me)) {
@@ -3234,6 +3235,7 @@ impl Daemon {
                 layout: Value::Null,
                 restore: Vec::new(),
                 owner: None,
+                pinned: None,
             })
             .map_err(internal)
     }
@@ -4030,6 +4032,7 @@ impl Daemon {
                     terminals: Vec::new(),
                     layout: Value::Null,
                     restore: Vec::new(),
+                    pinned: r.get("pinned").and_then(Value::as_str).map(str::to_string),
                     owner: Some(SessionOwner {
                         name: names.get(&owner).cloned().unwrap_or_else(|| owner.clone()),
                         reachable: self.workers.conn(&owner).is_some(),
@@ -4358,6 +4361,11 @@ impl Daemon {
             m::SESSION_LIST => {
                 let r: m::SessionList = serde_json::from_value(p).unwrap_or_default();
                 let mut list = w.list_sessions();
+                // Each kept with Move to… says where (X73).
+                let records = self.sessions.session_records();
+                for s in &mut list {
+                    s.pinned = records.get(&s.id).and_then(|r| r.get("pinned")).and_then(Value::as_str).map(str::to_string);
+                }
                 if r.copies {
                     list.extend(self.member_sessions());
                 }

@@ -18,6 +18,13 @@ export function readOnlyLine(s: Session, central: string): string | null {
   return `${s.owner.name} is asleep. This is the copy on ${central}, read only.`;
 }
 
+/** The button that continues a session on the central host while its
+ * member is unreachable (X73); none while it is reachable, or kept there. */
+export function continueOffer(s: Session, central: string): string | null {
+  if (!s.owner || s.owner.reachable || s.pinned) return null;
+  return `Continue on ${central}`;
+}
+
 /** What the phone shows of copy host session `id`: the central host's
  * data, with the session holding the terminals and chats its member gave
  * (`terminal.list` and `chat.summaries` through the central host). */

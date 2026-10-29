@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Session } from "@desktop/lib/protocol";
-import { copyData, dropRelisted, ownerLine, readOnlyLine } from "./copies";
+import { continueOffer, copyData, dropRelisted, ownerLine, readOnlyLine } from "./copies";
 
 const session = (owner?: Session["owner"]): Session => ({
   id: "5e7f9a1b3c5d",
@@ -64,5 +64,14 @@ describe("a session listed by its member and by the central host (X72)", () => {
     const copy = { ...session({ worker: "w1", name: "MacBook", reachable: true }), id: "a1" };
     const other = { ...session({ worker: "w2", name: "MacBook Air", reachable: true }), id: "b2" };
     expect(dropRelisted({ book: [own], mini: [copy, other] })).toEqual({ book: [own], mini: [other] });
+  });
+});
+
+describe("continuing a session whose member is away (X73)", () => {
+  it("is offered on the central host while that member is unreachable", () => {
+    expect(continueOffer(session({ worker: "w1", name: "MacBook", reachable: false }), "studio-mini")).toBe("Continue on studio-mini");
+    expect(continueOffer(session({ worker: "w1", name: "MacBook", reachable: true }), "studio-mini")).toBeNull();
+    expect(continueOffer({ ...session({ worker: "w1", name: "MacBook", reachable: false }), pinned: "w1" }, "studio-mini")).toBeNull();
+    expect(continueOffer(session(), "studio-mini")).toBeNull();
   });
 });

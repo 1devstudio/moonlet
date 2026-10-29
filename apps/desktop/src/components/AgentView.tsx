@@ -1,3 +1,4 @@
+import { sendOrBring } from "../lib/followStore";
 import { Fragment, type ReactNode, type Ref, createContext, memo, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -1455,7 +1456,8 @@ export function AgentView({
 
   // A message typed and an aside requeued go the same way: a design's
   // chat puts its edits by hand before them.
-  const sendUser = userSend(sendText, (text, images) => call(M.chatSend, { text, images }));
+  // Another member's session comes here first (X73).
+  const sendUser = userSend(sendText, (text, images) => sendOrBring(host, wsId, text, () => call(M.chatSend, { text, images })));
   const send = (text: string, images: ChatImage[]) => {
     stick.current = true;
     if (revising) {

@@ -14,6 +14,7 @@ import { dismissToast, selectedSession, startStore, useStore } from "./lib/store
 import { startSync } from "./lib/syncStore";
 import { startCloud } from "./lib/cloudStore";
 import { startJobs } from "./lib/jobsStore";
+import { startReadiness } from "./lib/followStore";
 import { installShortcuts } from "./lib/keys";
 import { terminalSearch } from "./lib/actions";
 import { uiScale } from "./lib/uiScale";
@@ -146,6 +147,8 @@ export default function App() {
     void startSync();
     startJobs();
     startCloud();
+    // Whether the central host could continue each session here (X73).
+    const readiness = startReadiness();
     void startDesign();
     startEditor();
     void loadTrackersConfig();
@@ -157,6 +160,7 @@ export default function App() {
     return () => {
       off();
       stopSharing();
+      clearInterval(readiness);
       window.removeEventListener("moonlet:find", onFind);
     };
   }, []);
