@@ -125,6 +125,32 @@ pub fn env(o: &Opener, path: Option<&str>) -> Vec<(String, String)> {
     ]
 }
 
+/// A client the user was active in: a member's app, by worker id, or a
+/// phone, by its device.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Client {
+    Member(String),
+    Phone(String),
+}
+
+/// How long the user counts as being where they were last active.
+pub const ACTIVE_MS: u64 = 15 * 60 * 1000;
+
+/// Where a URL opens on the central host's say: the client the user used
+/// last, and whether that was more than [`ACTIVE_MS`] ago, when the URL
+/// also waits with **Open** in its session. None when the user was never
+/// seen.
+pub fn route(last: Option<&(Client, u64)>, now_ms: u64) -> Option<(Client, bool)> {
+    let (client, at) = last?;
+    Some((client.clone(), now_ms.saturating_sub(*at) > ACTIVE_MS))
+}
+
+/// Whether a member opens a URL of its own at once, without asking the
+/// central host: the user was active in its app within [`ACTIVE_MS`].
+pub fn opens_here(app_active_at: Option<u64>, now_ms: u64) -> bool {
+    app_active_at.is_some_and(|at| now_ms.saturating_sub(at) <= ACTIVE_MS)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -213,6 +239,38 @@ mod tests {
         assert_eq!(run(&shim, &["/home/me/report.pdf"]), 0);
         assert_eq!(read(&cli), "open-url\nhttp://localhost:8085/?code=4\n");
         assert_eq!(read(&system), "/home/me/report.pdf\n");
+    }
+
+    #[test]
+    fn the_url_opens_where_the_user_was_last_active() {
+        let min = 60_000;
+        let now = 100 * min;
+        let book = Client::Member("book".into());
+        let phone = Client::Phone("iphone".into());
+        assert_eq!(
+            route(Some(&(book.clone(), now - min)), now),
+            Some((book.clone(), false))
+        );
+        assert_eq!(
+            route(Some(&(phone.clone(), now - 15 * min)), now),
+            Some((phone.clone(), false))
+        );
+        // Nobody active in the last 15 minutes: the last one, and it waits.
+        assert_eq!(
+            route(Some(&(book.clone(), now - 16 * min)), now),
+            Some((book, true))
+        );
+        assert_eq!(route(None, now), None);
+    }
+
+    #[test]
+    fn with_the_central_host_offline_the_url_opens_only_where_the_user_is_active() {
+        let min = 60_000;
+        let now = 100 * min;
+        assert!(opens_here(Some(now - 14 * min), now));
+        assert!(!opens_here(Some(now - 16 * min), now));
+        // An app merely open, never touched, does not count.
+        assert!(!opens_here(None, now));
     }
 
     #[test]

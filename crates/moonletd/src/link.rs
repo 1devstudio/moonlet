@@ -364,6 +364,8 @@ pub struct WorkerLink {
     forwarder: std::sync::OnceLock<Forwarder>,
     /// Takes the central host's terminal relays (X72).
     relayer: std::sync::OnceLock<Relayer>,
+    /// Shows a URL the central host found the user here for (X75).
+    shower: std::sync::OnceLock<Shower>,
     /// Takes input for those relays, and forgets an earlier link's (X72).
     relay_input: std::sync::OnceLock<(moonlet_link::RelayedInput, Arc<dyn Fn() + Send + Sync>)>,
     sessions: Arc<SessionManager>,
@@ -389,6 +391,7 @@ impl WorkerLink {
             runs: std::sync::OnceLock::new(),
             forwarder: std::sync::OnceLock::new(),
             relayer: std::sync::OnceLock::new(),
+            shower: std::sync::OnceLock::new(),
             relay_input: std::sync::OnceLock::new(),
             sessions,
             emit: Box::new(emit),
@@ -625,6 +628,10 @@ impl WorkerLink {
     /// What attaches to the terminals the central host relays (X72).
     pub fn set_relayer(&self, f: Relayer) {
         let _ = self.relayer.set(f);
+    }
+
+    pub fn set_shower(&self, f: Shower) {
+        let _ = self.shower.set(f);
     }
 
     pub fn set_runs(&self, runs: Weak<crate::exec::Runs>) {
@@ -976,6 +983,9 @@ struct WorkerRequests(Weak<WorkerLink>);
 /// sessions (X72).
 pub type Forwarder = Arc<dyn Fn(m::SessionForward) -> BoxFuture<'static, Result<Value, RpcError>> + Send + Sync>;
 
+/// Shows this Mac's app a URL from another member (X75).
+pub type Shower = Arc<dyn Fn(m::BrowserShow) + Send + Sync>;
+
 /// Attaches to or detaches from a terminal the central host relays (X72).
 pub type Relayer = Arc<dyn Fn(m::SessionRelay) -> BoxFuture<'static, Result<Value, RpcError>> + Send + Sync>;
 
@@ -1059,6 +1069,16 @@ impl Requests for WorkerRequests {
                         .cloned()
                         .ok_or_else(|| RpcError::new("gone", "nothing relays terminals"))?;
                     f(req).await
+                }
+                m::EV_BROWSER_SHOW => {
+                    // The central host found the user at this Mac (X75).
+                    let req: m::BrowserShow = serde_json::from_value(params)
+                        .map_err(|e| RpcError::new("invalid_params", e.to_string()))?;
+                    moonlet_core::browser::check_url(&req.url).map_err(|e| RpcError::new("invalid_params", e.to_string()))?;
+                    let link = link.ok_or_else(|| RpcError::new("gone", "the link closed"))?;
+                    let show = link.shower.get().cloned().ok_or_else(|| RpcError::new("gone", "nothing shows URLs"))?;
+                    show(req);
+                    Ok(serde_json::json!(true))
                 }
                 m::SESSION_FORWARD => {
                     let req: m::SessionForward = serde_json::from_value(params)
