@@ -68,10 +68,12 @@ Tests named here are in `crates/moonletd/tests/central_copies.rs` unless another
 
   Anything else, `chat.add_dir`, `chat.mcp`, git settings and terminal attach included, is `forbidden`. (`a_message_through_the_central_host_reaches_the_owners_agent`, `git_status_through_the_central_host_comes_from_the_owner`, `a_chat_that_is_not_the_sessions_cannot_be_reached_through_it`; unit `a_request_passed_on_reaches_only_its_sessions_chats_and_worktree`)
 - [x] A member passes its sessions' chat events to the central host. The central host gives them to its apps and phones as `session.event {session, event}`, never to an agent's CLI or a worker. (`the_owners_chat_events_reach_the_central_hosts_clients`)
-- [x] While the owner is unreachable, `chat.state`, `chat.summaries`, `git.status`, `git.diff`, `git.log` and `gh.prs` answer from the copy. Anything else answers `owner_offline`, naming the member. (`with_the_owner_away_reads_come_from_the_copy_and_the_rest_waits_for_it`)
+- [x] While the owner is unreachable, `chat.state`, `chat.summaries`, `git.status`, `git.diff`, `git.log`, `gh.prs` and `gh.pr_status` answer from the copy. Anything else answers `owner_offline`, naming the member. (`with_the_owner_away_reads_come_from_the_copy_and_the_rest_waits_for_it`)
 - [x] `session.attach {session, terminal}` follows a terminal of the session through the central host, under a relay id of its own (from `0x4000_0000`, starting at a different point each run). Output comes as output frames of that id, and input sent to it is typed into the member's terminal. Only the central host sets a relay up (`session.relay`): a client cannot name one through `session.forward`, and a member refuses a relay id it already holds. `session.detach`, or either side going away, ends the relay. (`a_terminal_of_the_owners_session_is_followed_and_typed_into_through_the_central_host`, `a_terminal_that_is_not_the_sessions_is_not_followed_through_it`, `a_client_cannot_pick_a_relay_through_a_forwarded_request`)
 - [x] The phone lists the sessions other members own with "on MacBook", or "MacBook is asleep" while that member is unreachable. It opens one under its copy host, `<central host>#copy:<session>`, so every screen's calls go through `session.forward` and `session.attach` (`apps/desktop/src/lib/copyHost.test.ts`). While the member is away, it shows "MacBook is asleep. This is the copy on studio-mini, read only." (`apps/mobile/src/lib/copies.test.ts`)
+- [x] On the phone, a copy offers what its member can be asked through the central host and no more: no new terminal, no jobs, no PR creation, and no archive while its member is away. A session the phone also gets from its member shows once. (`apps/mobile/src/lib/copies.test.ts`)
 - [ ] A session another member owns, of a project the central host has no clone of, is not listed on the phone yet: it has no project there to sit under.
+- [ ] The phone's session list does not show a copy's state (working, needs you) until the session is opened: the central host does not yet add the copied chat's state to `session.list`.
 
 ## UI
 
@@ -90,7 +92,7 @@ Tests named here are in `crates/moonletd/tests/central_copies.rs` unless another
   - `session.event {session, event}`.
 - Central host → member: `session.forward {session, method, params}` and `session.relay {op, session, terminal, relay, cols?, rows?}`.
 - Clients of the central host (its app and phones, never a worker, a cloud machine or the CLI): `session.forward`, `session.attach {session, terminal, cols?, rows?}` → `terminal.attach`'s reply under a relay id, `session.detach {relay}`, `session.copy {session}` → `{path, tree, head, chats, checkpoint}`.
-- `session.list` takes `{copies}`; a session gains `owner: {worker, name, reachable}`. The new error code `owner_offline`. The event `session.event {session, event}`.
+- `session.list` takes `{copies}`; a session gains `owner: {worker, name, reachable}`. Only the changes of the member that made a session record count, and its `owner` must be that member. The new error code `owner_offline`. The event `session.event {session, event}`.
 
 ## Data and config
 
