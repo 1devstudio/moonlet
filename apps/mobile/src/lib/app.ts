@@ -25,6 +25,7 @@ import {
 } from "@desktop/lib/protocol";
 import { readStored, writeStored } from "@desktop/lib/storage";
 import type { WorkspaceRef } from "@desktop/lib/workspaces";
+import type { TaskSnapshot } from "@desktop/lib/taskSnapshot";
 import type { HostSeen } from "./hosts";
 import { hostWorkspaces, shownWorkspace } from "./workspaceChoices";
 import { withSetupCommand } from "./setups";
@@ -57,11 +58,15 @@ export interface HostData {
   copies: Copy[];
   /** Its routing copies whose setup waits for approval (X62). */
   setups: ExecSetup[];
+  /** Each workspace's boards, as the app on the Mac shared them (X76). */
+  tasks: Record<string, TaskSnapshot>;
+  /** Whether moonlet is open on this Mac to act on tasks (X76); moves wait while not. */
+  macOpen: boolean;
 }
 
-export const emptyData = (): HostData => ({ terminals: {}, sessions: [], projects: [], workspaces: [], sections: [], reads: [], chats: {}, git: null, copies: [], setups: [] });
+export const emptyData = (): HostData => ({ terminals: {}, sessions: [], projects: [], workspaces: [], sections: [], reads: [], chats: {}, git: null, copies: [], setups: [], tasks: {}, macOpen: false });
 
-export type Tab = "inbox" | "sessions" | "new" | "hosts";
+export type Tab = "inbox" | "sessions" | "tasks" | "new" | "hosts";
 export type SessionTab = "chat" | "terminal" | "changes" | "pr" | "jobs";
 
 /** A screen over the tabs. */
@@ -73,7 +78,9 @@ export type Screen =
   /** An agent without a session, such as a design's (X65), by its chat terminal. */
   | { kind: "agent"; host: string; terminal: number }
   | { kind: "diff"; host: string; id: string; path: string; against: "base" | "head" }
-  | { kind: "plan"; host: string; terminal: number; ask: string; from?: Screen };
+  | { kind: "plan"; host: string; terminal: number; ask: string; from?: Screen }
+  /** A task on a board (X76): the board's key (`host/workspace/board`) and the task's `connection key`. */
+  | { kind: "task"; board: string; task: string; created?: boolean };
 
 export type NotifyKey = "blocked" | "done" | "error" | "checks";
 
@@ -85,6 +92,14 @@ export interface Settings {
   notifyOff: NotifyKey[];
   /** Face ID before Allow and plan approvals. */
   faceId: boolean;
+  /** The board the Tasks tab shows, `host/workspace/board` (X76). */
+  board?: string | null;
+  /** The column shown on each board, by its key. */
+  columns?: Record<string, string>;
+  /** Boards shown with Assignee: me, by key (X76). */
+  mine?: Record<string, boolean>;
+  /** Out-of-sync chips put off with Not now, by the desktop's `driftKey` (X76). */
+  notNow?: Record<string, true>;
 }
 
 const SETTINGS = "mobile.settings";
@@ -108,6 +123,8 @@ interface AppState {
   settings: Settings;
   /** False until `host_list` answered: tells "no Mac paired" from "not loaded". */
   ready: boolean;
+  /** The task, and maybe its worktree, New session starts from (X76). */
+  newFrom: { board: string; task: string; worktree?: { path: string; branch: string } } | null;
 }
 
 export const useApp = create<AppState>(() => ({
@@ -116,6 +133,7 @@ export const useApp = create<AppState>(() => ({
   data: {},
   tab: "inbox",
   screen: null,
+  newFrom: null,
   settings: loadJson<Settings>(SETTINGS, { workspace: null, notifyOff: ["checks"], faceId: true }),
   ready: false,
 }));
@@ -137,7 +155,10 @@ export function useShownWorkspace(): WorkspaceRef | null {
   return shownWorkspace(kept, hostWorkspaces(hosts, data));
 }
 
-export const showTab = (tab: Tab) => set({ tab, screen: null });
+export const showTab = (tab: Tab) => set({ tab, screen: null, ...(tab !== "new" && { newFrom: null }) });
+
+/** New session, started from a task on a board (X76), in its worktree without a session if given. */
+export const startFromTask = (from: NonNullable<AppState["newFrom"]>) => set({ tab: "new", screen: null, newFrom: from });
 export const showScreen = (screen: Screen | null) => set({ screen });
 
 function patchData(host: string, patch: Partial<HostData> | ((d: HostData) => Partial<HostData>)) {
@@ -216,7 +237,7 @@ export async function loadHost(host: string) {
  * failed, so what was already loaded stays. */
 async function fetchHostData(host: string): Promise<Omit<HostData, "git" | "account"> & { git?: HostData["git"]; account: string | null | "keep" }> {
   const call = <T>(method: string, params: object = {}) => rpc<T>(host, method, params);
-  const [terminals, sessions, projects, workspaces, sections, reads, chats, git, account, copies, setups] = await Promise.all([
+  const [terminals, sessions, projects, workspaces, sections, reads, chats, git, account, copies, setups, tasks, macOpen] = await Promise.all([
     call<TerminalInfo[]>(M.terminalList),
     call<Session[]>(M.sessionList),
     call<Project[]>(M.projectList),
@@ -229,6 +250,8 @@ async function fetchHostData(host: string): Promise<Omit<HostData, "git" | "acco
     // A daemon before X60, or X62, or one that refuses a phone, has none to show.
     call<Copy[]>(M.syncList).catch(() => []),
     call<ExecSetup[]>(M.execSetups).catch(() => []),
+    call<{ workspace: string; snapshot: TaskSnapshot }[]>(M.tasksSnapshot).catch(() => []),
+    call<{ open: boolean }>(M.tasksApp).then((a) => a.open, () => false),
   ]);
   return {
     terminals: Object.fromEntries(terminals.map((t) => [t.id, t])),
@@ -242,6 +265,8 @@ async function fetchHostData(host: string): Promise<Omit<HostData, "git" | "acco
     account,
     copies,
     setups,
+    tasks: Object.fromEntries(tasks.map((t) => [t.workspace, t.snapshot])),
+    macOpen,
   };
 }
 

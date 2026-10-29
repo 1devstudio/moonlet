@@ -6,8 +6,12 @@ import { planOf } from "@desktop/lib/chat";
 import { arrangeShared, lastActive, sectionParts, shownSections } from "@desktop/lib/sidebar";
 import { agentCount } from "@desktop/lib/subagents";
 import { splitKey } from "@desktop/lib/sessionRows";
-import type { AgentState, Project, Section, Session } from "@desktop/lib/protocol";
+import type { AgentState, Project, PullRequest, Section, Session } from "@desktop/lib/protocol";
 import type { WorkspaceRef } from "@desktop/lib/workspaces";
+import { holds } from "@desktop/lib/boardColumns";
+import { type Category, syncedColumns } from "@desktop/lib/boards";
+import { taskForSession, taskId } from "@desktop/lib/tasks";
+import { linkChoices } from "@desktop/lib/taskLinking";
 import type { HostData, Screen } from "./app";
 import { type InboxHost, sessionState } from "./inbox";
 import { hostWorkspaces, workspaceChoices } from "./workspaceChoices";
@@ -157,4 +161,36 @@ export function taskChip(s: Session): { label: string; url: string } | null {
   if (!s.task) return null;
   const { prefix, number } = splitKey(s.task.key);
   return { label: prefix.endsWith("#") ? `#${number}` : s.task.key, url: s.task.url };
+}
+
+/**
+ * The task a session works on (X46, X76) and where it is: its stored link,
+ * or the one its branch or PR names among the tasks the Mac shared, with
+ * its column on the board and the project. Without the Mac's boards, the
+ * stored link alone (`taskChip`).
+ */
+export function sessionTask(d: HostData, s: Session, pr: PullRequest | null | undefined): { key: string; state: string | null; category: Category | null; project: string | null; url: string } | null {
+  const snap = s.workspace_id ? d.tasks[s.workspace_id] : undefined;
+  const task = snap ? taskForSession(s, pr, snap.repos[s.project_id] ?? null, snap.tasks, snap.link) : null;
+  if (!task) {
+    const chip = taskChip(s);
+    return chip && { key: chip.label, state: null, category: null, project: null, url: chip.url };
+  }
+  const id = taskId(task);
+  const board = snap!.boards.find((b) => snap!.boardData[b.id]?.keys.includes(id));
+  const column = board ? syncedColumns(board, null).find((c) => holds(c, task)) : undefined;
+  const { prefix, number } = splitKey(task.key);
+  return { key: prefix.endsWith("#") ? `#${number}` : task.key, state: column?.name ?? null, category: column?.category ?? null, project: d.projects.find((p) => p.id === s.project_id)?.name ?? null, url: task.url };
+}
+
+/**
+ * The task a session without one may be about (X76): one of its workspace's
+ * board tasks whose title is the session's name. Rows show its key with "?",
+ * opening Link to a task; never once the user unlinked the session's task.
+ */
+export function suggestedTask(d: HostData, s: Session): { key: string; id: string } | null {
+  if (s.task || s.task_unlinked) return null;
+  const snap = s.workspace_id ? d.tasks[s.workspace_id] : undefined;
+  const t = snap ? linkChoices({ name: s.name, branch: "" }, snap.tasks, "").suggested[0]?.task : undefined;
+  return t ? { key: t.key, id: taskId(t) } : null;
 }

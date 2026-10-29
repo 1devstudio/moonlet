@@ -4,7 +4,7 @@
 import { workspaceSections } from "@desktop/lib/sidebar";
 import { DEFAULT_GIT_SETTINGS } from "@desktop/lib/gitSettings";
 import { type Attachment, attachments, firstMessage, placeholder, sessionName } from "@desktop/lib/composer";
-import type { GitSettings, IssueRef, Project, ProjectConfig } from "@desktop/lib/protocol";
+import type { GitSettings, IssueRef, Project, ProjectConfig, TaskRef } from "@desktop/lib/protocol";
 import type { WorkspaceRef } from "@desktop/lib/workspaces";
 import type { HostData } from "./app";
 import type { InboxHost } from "./inbox";
@@ -69,6 +69,11 @@ export function composer(o: {
   base: string | null;
   projectBase: string;
   startFrom: GitSettings["start_from"];
+  /** The task New session starts from (X76), and its branch once worked out. */
+  task: { ref: TaskRef; key: string; title: string; description: string } | null;
+  taskBranch: string | null;
+  /** A worktree without a session to start in (X46, X76). */
+  worktree: { path: string; branch: string } | null;
 }): {
   attachments: Attachment[];
   placeholder: string;
@@ -76,35 +81,52 @@ export function composer(o: {
   branch: { name: string; existing: boolean };
   /** Where the worktree starts, for the footer. */
   start: string;
-  /** `session.create`'s prompt, name, PR, start and existing branch; null with nothing to send. */
-  create: { prompt: string; name: string | null; pr: number | null; from: string | null; branch: string | null } | null;
+  /** `session.create`'s prompt, name, PR, start and existing branch, and a task's link, new branch and
+   * worktree without a session; null with nothing to send. */
+  create: { prompt: string; name: string | null; pr: number | null; from: string | null; branch: string | null; task?: TaskRef; newBranch?: string; worktree?: string } | null;
 } {
-  const sent = attachments({ task: null, pr: o.prSend ? o.pr : null, prContext: o.prContext });
+  const sent = attachments({ task: o.task, pr: o.prSend ? o.pr : null, prContext: o.prContext });
   const prompt = firstMessage(sent, o.typed);
   // The daemon names the session, and so its branch, after a given name whole.
-  const name = sessionName({ task: null, pr: o.pr });
-  const picked = o.pr ? null : o.pickedBranch;
-  const newBranch = !o.pr && !picked;
+  const name = sessionName({ task: o.task, pr: o.pr });
+  const picked = o.pr || o.worktree ? null : o.pickedBranch;
+  const newBranch = !o.pr && !picked && !o.worktree;
   return {
     attachments: sent,
     placeholder: placeholder(sent.map((a) => a.id)),
     branch: o.pr
       ? { name: o.pr.head_branch ?? "", existing: true }
-      : picked
-        ? { name: picked, existing: true }
-        : { name: name ? `${o.prefix}${slug(name.trim())}` : branchPreview(o.typed, o.prefix), existing: false },
+      : o.worktree
+        ? { name: o.worktree.branch, existing: true }
+        : picked
+          ? { name: picked, existing: true }
+          : o.task
+            ? { name: o.taskBranch ?? "…", existing: false }
+            : { name: name ? `${o.prefix}${slug(name.trim())}` : branchPreview(o.typed, o.prefix), existing: false },
     start: o.pr ? (o.pr.head_branch ?? `PR #${o.pr.number}`) : (picked ?? startPoint(o.base, o.projectBase, o.startFrom)),
     // The daemon starts from the project's base, or origin's, without a `from`.
-    create: prompt === null ? null : { prompt, name, pr: o.pr?.number ?? null, from: newBranch && o.base && o.base !== o.projectBase ? o.base : null, branch: picked },
+    create:
+      prompt === null || (o.task && newBranch && !o.taskBranch)
+        ? null
+        : {
+            prompt,
+            name,
+            pr: o.pr?.number ?? null,
+            from: newBranch && o.base && o.base !== o.projectBase ? o.base : null,
+            branch: picked,
+            ...(o.task && { task: o.task.ref }),
+            ...(o.task && newBranch && { newBranch: o.taskBranch! }),
+            ...(o.worktree && { worktree: o.worktree.path }),
+          },
   };
 }
 
 /** Claude's permission modes (X7), as the design names them. */
 export const MODES = [
-  { id: "auto", label: "Auto", help: "Claude decides which tools are safe to run without asking." },
-  { id: "manual", label: "Manual", help: "Claude asks before every edit and command. Approve from the Inbox." },
-  { id: "acceptEdits", label: "Edits", help: "File edits go through; commands still ask first." },
-  { id: "plan", label: "Plan", help: "Claude explores and proposes a plan before touching anything." },
+  { id: "auto", label: "Auto", help: "Claude decides which tools are safe to run without asking.", short: "decides what is safe" },
+  { id: "manual", label: "Manual", help: "Claude asks before every edit and command. Approve from the Inbox.", short: "asks before edits" },
+  { id: "acceptEdits", label: "Edits", help: "File edits go through; commands still ask first.", short: "edits without asking" },
+  { id: "plan", label: "Plan", help: "Claude explores and proposes a plan before touching anything.", short: "plans first" },
 ] as const;
 
 export const modeHelp = (id: string) => MODES.find((m) => m.id === id)?.help ?? "";

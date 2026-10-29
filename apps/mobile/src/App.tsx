@@ -6,6 +6,8 @@ import { HostsScreen } from "./screens/Hosts";
 import { InboxScreen, useInbox } from "./screens/Inbox";
 import { NewSessionScreen } from "./screens/NewSession";
 import { SessionsScreen } from "./screens/Sessions";
+import { TasksScreen } from "./screens/Tasks";
+import { TaskScreen } from "./screens/Task";
 import { PlanSheet } from "./screens/PlanSheet";
 import { SessionScreen } from "./screens/Session";
 import { DiffScreen } from "./screens/Diff";
@@ -26,6 +28,7 @@ export default function App() {
   if (screen?.kind === "paired") return <PairedScreen name={screen.name} />;
   if (!paired) return <PairScreen first />;
   if (screen?.kind === "pair") return <PairScreen first={false} />;
+  if (screen?.kind === "task") return <TaskScreen board={screen.board} task={screen.task} created={screen.created} />;
   if (screen?.kind === "session") return <SessionScreen host={screen.host} id={screen.id} tab={screen.tab} />;
   if (screen?.kind === "agent") return <AgentScreen host={screen.host} terminal={screen.terminal} />;
   if (screen?.kind === "diff") return <DiffScreen host={screen.host} id={screen.id} path={screen.path} against={screen.against} />;
@@ -50,6 +53,7 @@ export default function App() {
         {tab === "inbox" && <InboxScreen />}
         {tab === "hosts" && <HostsScreen />}
         {tab === "sessions" && <SessionsScreen />}
+        {tab === "tasks" && <TasksScreen />}
         {tab === "new" && <NewSessionScreen />}
       </main>
       <TabBar badge={inbox.needs.length} />

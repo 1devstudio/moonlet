@@ -93,3 +93,21 @@ describe("accountAfterError (X68)", () => {
     expect(accountAfterError(new DaemonError({ code: "failed", message: "connection reset" }))).toBe("keep");
   });
 });
+
+describe("board snapshots (X76)", () => {
+  it("keep each workspace's snapshot as the app shares it, and drop one whose workspace went", () => {
+    const snap = { version: 1, boards: [], tasks: [] };
+    let d = apply(start(), "tasks.changed", { workspace: "personal", snapshot: snap }) as HostData;
+    expect(d.tasks).toEqual({ personal: snap });
+    d = apply(d, "tasks.changed", { workspace: "acme", snapshot: snap }) as HostData;
+    d = apply(d, "tasks.changed", { workspace: "personal", snapshot: null }) as HostData;
+    expect(Object.keys(d.tasks)).toEqual(["acme"]);
+  });
+
+  it("hear whether moonlet is open on the Mac, for the moves that wait for it", () => {
+    expect(start().macOpen).toBe(false);
+    const d = apply(start(), "tasks.app", { open: true }) as HostData;
+    expect(d.macOpen).toBe(true);
+    expect((apply(d, "tasks.app", { open: false }) as HostData).macOpen).toBe(false);
+  });
+});
