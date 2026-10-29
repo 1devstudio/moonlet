@@ -19,20 +19,19 @@ With this spec, a session's agent runs where the user works, and moves on its ow
 
 Every move raises the session's **ownership number**. Only the member holding the highest number runs the agent (ADR 0009).
 
-## Before building: the sleep spike
+## The sleep notice
 
-How the owner hears of a lid closing decides how much it can do before sleep. A spike measures it on the user's MacBook before this spec is built. The spike is a small program, run the way `moonletd` runs (X56's login item). It registers with `IORegisterForSystemPower`, and on `kIOMessageSystemWillSleep` it:
-- logs the time;
-- holds `IOAllowPowerChange` back for up to 30 s, while sending 1 MB to `studio-mini` over the tailnet every 100 ms and logging each reply.
+The design takes nothing from a spike; it relies only on what macOS documents:
+- a process in the user's session that registers with `IORegisterForSystemPower` gets `kIOMessageSystemWillSleep` before every system sleep;
+- macOS waits for its answer (`IOAllowPowerChange`) for up to 30 s before sleeping anyway.
 
-It logs `kIOMessageSystemHasPoweredOn` and whether the wake is a dark wake (Power Nap) or one with the user present.
+What is not known is whether the network still carries data in that window when the lid closes. So the design works either way:
+- **Stopping the agents needs no network.** The owner stops them first, so a session never runs a step after the notice, whatever happens next.
+- **Checkpoints are sent continuously** (X72, after every tool call). At sleep only the last few changes are left to send, and a failed send loses only those.
+- **When the hand-over cannot be sent,** the sessions stay with the sleeping owner, and the central host's copy shows the cut-off turn. The phone offers **Continue on studio-mini** (below), and a message from the phone continues it too.
+- **A hand-over that could not be sent is sent at the next wake,** dark wakes (Power Nap) included, so a MacBook in a bag usually hands its sessions over within minutes even when the lid closed with no network.
 
-The user runs it through these cases: lid closed on battery, lid closed on power, lid closed with an external display, **Sleep** from the Apple menu, idle sleep, and low battery. For each, the spike records:
-- how long sleep was held;
-- whether the network still carried data;
-- what came on wake.
-
-The results go into this spec's "Decided" section. The design below needs only that the owner gets the notice before sleep and can stop its agents, which macOS allows. How much it can send then decides only how fresh the last checkpoint is.
+Manual check M12 (`docs/manual-checks.md`) measures, on a real MacBook, how long the hold lasts and whether the network works during it. Its results can shorten the hold below; they do not change the design.
 
 ## User journey
 
@@ -60,7 +59,8 @@ The results go into this spec's "Decided" section. The design below needs only t
   1. stops (`SIGSTOP`) the process group of every agent it runs, structured chats and PTY agent tabs alike;
   2. sends each session's last checkpoint (X72): the worktree as it is now, and the transcript up to its last complete tool result;
   3. asks the central host to take its unpinned sessions (`session.yield`);
-  4. lets the Mac sleep once the central host answers, or when the time the spike allows runs out.
+  4. lets the Mac sleep once the central host answers, or after 25 s, inside macOS's 30 s limit.
+- [ ] A hand-over the central host did not answer is kept in `moves.json` and sent again at the next wake, dark wakes included. Until the central host answers it, the stopped agents stay stopped.
 - [ ] The central host takes every session handed to it: it raises `epoch` and makes itself the owner.
 - [ ] A session pinned to the member going to sleep is not handed over. It waits, and the phone shows "Kept on MacBook · asleep".
 - [ ] A session with no turn running moves and stays idle on the central host.
@@ -91,6 +91,7 @@ The results go into this spec's "Decided" section. The design below needs only t
 
 - [ ] An owner whose link to the central host has missed its pings for 30 s (X41's 3 misses) without a sleep notice keeps its sessions while nobody acts on them elsewhere.
 - [ ] A message, an answer to an ask, or **Move now** for such a session, from the phone or another member, makes the central host take it over first. The phone shows "MacBook is not reachable. Continuing on studio-mini."
+- [ ] For a session whose owner is unreachable and whose copy shows a turn that was running, the phone shows "MacBook is not reachable · fix-cart was working" with **Continue on studio-mini**. Pressing it takes the session over as a message would, and continues the turn with the cut-off note.
 - [ ] A pinned session is never taken over this way. The phone shows "Kept on MacBook · not reachable".
 
 ### When the central host is offline: Take over anyway
@@ -161,6 +162,7 @@ The results go into this spec's "Decided" section. The design below needs only t
 - The chat: one muted line where a session moved: "Continued on studio-mini after MacBook went to sleep.", "Moved to MacBook because you typed here.", "Moved to studio-mini (Move now)."
 - The composer, while a typed message waits: "Moves here when studio-mini's turn ends", with **Move now** and **Send to studio-mini instead**.
 - The session menu: **Move to…** › members, **Move now** (while a turn runs), **Unpin**.
+- The phone, for an unreachable owner's session whose turn was running: a line above the composer, "MacBook is not reachable · fix-cart was working", with **Continue on studio-mini**.
 - The readiness mark: a small hollow triangle after the session's name, in the muted colour.
 
 ## Protocol and RPCs
@@ -172,6 +174,7 @@ The results go into this spec's "Decided" section. The design below needs only t
 - `session.move {session, to, now}` and `session.unpin {session}`: app → its own daemon. Only the Mac's own app may call them.
 - `session.take_anyway {session}`: app → its own daemon, only while the central host has been unreachable for 30 s. The forced change goes to the central host as `session.take {session, epoch, reason: "forced", base}` once it is back. Answers `{kept: bool}`.
 - `link.status` gains `unreachable_since`, so the app can say since when the central host is offline.
+- `session.continue_here {session}`: phone → central host. Allowed only while the owner has been unreachable for 30 s. Answers `{epoch}`, or `reachable` or `pinned`.
 - `session.ready` → `[{session, ready, reason?}]`: on the central host.
 - Event `session.moved {session, from, to, epoch, reason}`.
 - The session record gains `epoch` and `pinned`.
@@ -221,5 +224,5 @@ The results go into this spec's "Decided" section. The design below needs only t
 
 ## Open questions
 
-- How long can the daemon hold sleep on a lid close, and does the network carry data then? (The spike above.)
+- Does the network carry data during the hold when the lid closes, on battery and on power? Manual check M12 measures it. If it never does, the hold can be cut to a few seconds, and hand-overs then rely on the next dark wake.
 - Should the composer offer **Send to studio-mini instead**, which keeps the session where it is for that one message? It is in the UI above; drop it if it confuses.

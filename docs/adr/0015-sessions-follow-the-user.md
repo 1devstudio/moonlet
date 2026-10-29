@@ -59,16 +59,15 @@ ADR 0014 already puts a session's agent on the member that made it and keeps a c
 ## Consequences
 
 - **A turn can be cut off in the middle of a command.** The central host continues from its last checkpoint, and the agent is told the last command may not have finished. A command that is not safe to run twice (a push, a migration, a deploy) relies on the agent checking first.
-- **Sleep has to be noticed in time.** How long macOS lets a daemon delay sleep when the lid closes, and whether the network is still up then, is unknown. A spike measures it before X73 is built. Without a notice, the session stays with its owner until the user acts on it elsewhere, so the spike changes how quickly the central host continues, not whether moves are safe.
+- **Sleep has to be noticed in time.** macOS tells a process in the user's session before every sleep, and waits up to 30 s for its answer, but whether the network still works in that window when the lid closes is not known. The design does not depend on it: the owner stops its agents before anything else, checkpoints are sent continuously, and a hand-over that could not be sent goes at the next wake, dark wakes included. Until then, the phone offers to continue the session on the central host. Manual check M12 measures the window on a real MacBook. Decided by the user on 2026-10-29: build without waiting for the measurement.
 - **Paths can differ between members.** A member whose home folder differs (another user name, Linux) keeps its copy elsewhere (X60), and the transcript names the old paths. The agent is told the new path when it continues there.
 - **Secrets travel more.** `.env` files reach every member, which widens ADR 0014's "trust is the weakest member's". Removing a member offers to rotate them, with the other secrets.
 - **The swarm needs to know where the user is.** The central host keeps which client the user used last, for sign-ins, and which member's app the user typed in, for moves.
 - **Delivery,** each with its own spec:
   1. [X72](../specs/X72-session-copies-on-the-central-host.md): copies of every session on the central host, checkpointed after each tool call, and the phone reaching every session through it (ADR 0014's slice 3);
-  2. a spike: sleep notices on a MacBook whose lid closes, on battery and on power;
-  3. [X73](../specs/X73-sessions-follow-you.md): the ownership number, moves on sleep and on typing, Move to… with pinning, and readiness (ADR 0014's slice 4, changed by this ADR);
-  4. [X74](../specs/X74-files-copied-between-members.md): files copied between members by pattern;
-  5. [X75](../specs/X75-sign-ins-open-where-you-are.md): the browser opener, port forwarding for sign-ins, and sign-in on every member.
+  2. [X73](../specs/X73-sessions-follow-you.md): the ownership number, moves on sleep and on typing, Move to… with pinning, and readiness (ADR 0014's slice 4, changed by this ADR);
+  3. [X74](../specs/X74-files-copied-between-members.md): files copied between members by pattern;
+  4. [X75](../specs/X75-sign-ins-open-where-you-are.md): the browser opener, port forwarding for sign-ins, and sign-in on every member.
 
 ## Open questions
 
