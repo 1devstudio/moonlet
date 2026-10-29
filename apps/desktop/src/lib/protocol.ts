@@ -1499,6 +1499,7 @@ export const M = {
 
 export const EV = {
   terminalCreated: "terminal.created",
+  browserShow: "browser.show",
   terminalUpdated: "terminal.updated",
   terminalExited: "terminal.exited",
   terminalRemoved: "terminal.removed",
