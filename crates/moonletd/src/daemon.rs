@@ -15,7 +15,8 @@ use moonlet_core::chat::runtime::{ChatCreate, ChatManager, chats_dir};
 use moonlet_core::session::SessionManager;
 use moonlet_core::terminal::TerminalManager;
 use moonlet_core::terminal_read::{self, TerminalReads};
-use moonlet_core::{fs, git, git_settings};
+use moonlet_core::tasks::{TaskRelay, TaskSnapshots};
+use moonlet_core::{fs, git, git_settings, tasks};
 use moonlet_proto::methods as m;
 use moonlet_proto::types::DaemonInfo;
 use moonlet_proto::{Message, PROTOCOL_VERSION, RpcError};
@@ -85,6 +86,11 @@ pub struct Daemon {
     pub runs: Arc<crate::exec::Runs>,
     /// Every session's routed commands, with their output (X62).
     jobs: Arc<crate::jobs::Jobs>,
+    /// Board snapshots the app shares, and the phone's requests to it (X76).
+    task_snapshots: Arc<TaskSnapshots>,
+    task_relay: TaskRelay,
+    /// Connections of the moonlet app, oldest first, to send a phone's task requests to (X76).
+    apps: Mutex<BTreeMap<u64, moonlet_core::terminal::ClientTx>>,
 }
 
 pub type HandlerResult = Result<Value, RpcError>;
@@ -245,6 +251,8 @@ fn jobs_reader(conn: &Conn) -> Result<(), RpcError> {
     }
     Ok(())
 }
+/// The name the moonlet app gives in its hello.
+pub const APP_CLIENT: &str = "moonlet-app";
 
 fn params<T: DeserializeOwned>(v: Value) -> Result<T, RpcError> {
     serde_json::from_value(v).map_err(|e| RpcError::new("invalid_params", e.to_string()))
@@ -449,6 +457,11 @@ impl Daemon {
             .and_then(|v| v.parse().ok())
             .map_or(terminal_read::DEFAULT_TIMEOUT, std::time::Duration::from_millis);
         let reads = TerminalReads::new(terminals.clone(), read_timeout);
+        // Tests shorten how long a phone's task request waits for the app (X76).
+        let tasks_timeout = std::env::var("MOONLET_TASKS_REQUEST_TIMEOUT_MS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .map_or(tasks::REQUEST_TIMEOUT, std::time::Duration::from_millis);
         let emitter = terminals.clone();
         let mobile = Arc::new(crate::mobile::Mobile::load(crate::mobile::Mobile::default_file(), move |m| emitter.emit(m)));
         let clones = crate::clones::Clones::new(sessions.clone(), terminals.clone());
@@ -541,6 +554,9 @@ impl Daemon {
             link,
             workers,
             sync,
+            task_snapshots: Arc::new(TaskSnapshots::load(tasks::dir())),
+            task_relay: TaskRelay::new(tasks_timeout),
+            apps: Mutex::new(BTreeMap::new()),
         })
     }
 
@@ -664,10 +680,37 @@ impl Daemon {
         self.handed_off.store(true, Ordering::SeqCst);
     }
 
+    /// Whether `conn` is the moonlet app, which acts for the user. Like X31's
+    /// reads, this trusts the name the client gives in its hello.
+    pub fn is_app(conn: &Conn) -> bool {
+        conn.phone.is_none() && conn.client == APP_CLIENT
+    }
+
+    pub fn on_connect(&self, conn: &Conn) {
+        if Self::is_app(conn) {
+            let first = {
+                let mut apps = self.apps.lock().unwrap();
+                apps.insert(conn.id, conn.tx.clone());
+                apps.len() == 1
+            };
+            // The phone's waiting moves go once moonlet is open (X76).
+            if first {
+                self.terminals.emit(Message::event(m::EV_TASKS_APP, &m::TasksApp { open: true }));
+            }
+        }
+    }
+
     pub fn on_disconnect(&self, client: u64) {
         self.watchers.release_client(client);
         self.workers.disconnected(client);
         self.renders.disconnected(client);
+        let last = {
+            let mut apps = self.apps.lock().unwrap();
+            apps.remove(&client).is_some() && apps.is_empty()
+        };
+        if last {
+            self.terminals.emit(Message::event(m::EV_TASKS_APP, &m::TasksApp { open: false }));
+        }
     }
 
     pub fn info(&self) -> DaemonInfo {
@@ -2773,6 +2816,10 @@ impl Daemon {
             m::WORKSPACE_DELETE => {
                 let r: m::IdRef = params(p)?;
                 w.delete_workspace(&r.id).map_err(internal)?;
+                // Its boards go with it (X76).
+                if self.task_snapshots.remove(&r.id) {
+                    self.terminals.emit(Message::event(m::EV_TASKS_CHANGED, serde_json::json!({ "workspace": r.id, "snapshot": null })));
+                }
                 ok(true)
             }
             m::WORKSPACE_MERGE => {
@@ -3102,6 +3149,54 @@ impl Daemon {
             m::GIT_PUSH => {
                 let r: m::GitUnpushed = params(p)?;
                 git::push(&path(&r.path), r.branch.as_deref(), r.merged_head.as_deref()).await.map_err(internal)?;
+                ok(true)
+            }
+            m::TASKS_APP => ok(m::TasksApp { open: !self.apps.lock().unwrap().is_empty() }),
+            m::TASKS_SNAPSHOT => {
+                let r: m::TasksSnapshotQuery = params(p)?;
+                ok(self.task_snapshots.get(r.workspace.as_deref()))
+            }
+            m::TASKS_SET_SNAPSHOT if !Self::is_app(conn) => Err(RpcError::new("forbidden", "only the moonlet app shares boards")),
+            m::TASKS_ANSWER if !Self::is_app(conn) => Err(RpcError::new("forbidden", "only the moonlet app answers task requests")),
+            // The app acts as the user on the tracker: only for a paired phone,
+            // never a local client, whatever name it gives (X76).
+            m::TASKS_REQUEST if !conn.phone.as_deref().is_some_and(|d| self.is_phone(d)) => {
+                Err(RpcError::new("forbidden", "only a paired phone asks the app to change tasks"))
+            }
+            m::TASKS_SET_SNAPSHOT => {
+                let r: m::TasksSetSnapshot = params(p)?;
+                if !self.sessions.list_workspaces().iter().any(|ws| ws.id == r.workspace) {
+                    return Err(RpcError::new("not_found", format!("no workspace {}", r.workspace)));
+                }
+                let snapshot = r.snapshot.clone();
+                let workspace = r.workspace.clone();
+                let store = self.task_snapshots.clone();
+                // Up to 4 MB written and synced: off the async workers.
+                tokio::task::spawn_blocking(move || store.set(&workspace, snapshot))
+                    .await
+                    .map_err(internal)?
+                    .map_err(internal)?;
+                self.terminals.emit(Message::event(m::EV_TASKS_CHANGED, &r));
+                ok(true)
+            }
+            m::TASKS_REQUEST => {
+                let r: m::TasksRequest = params(p)?;
+                // One app does it, the longest connected: two would create two issues.
+                let app = self.apps.lock().unwrap().values().next().cloned();
+                let result = self
+                    .task_relay
+                    .request(r.workspace, r.action, app.is_some(), |ev| {
+                        if let Some(tx) = app {
+                            tx.send(moonlet_proto::Frame::Json(Message::event(m::EV_TASKS_REQUEST, ev)));
+                        }
+                    })
+                    .await
+                    .map_err(|e| RpcError::new("failed", e.to_string()))?;
+                ok(result)
+            }
+            m::TASKS_ANSWER => {
+                let r: m::TasksAnswer = params(p)?;
+                self.task_relay.answer(r).map_err(internal)?;
                 ok(true)
             }
             m::GIT_SETTINGS => ok(git_settings::load(&git_settings::path())),

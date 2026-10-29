@@ -116,6 +116,31 @@ fn log_js(level: String, message: String) {
     }
 }
 
+/// The branch of a session started from a task (X76), as the desktop's
+/// `task_branch_name` makes it.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn task_branch_name(
+    kind: moonlet_trackers::TrackerKind,
+    template: Option<String>,
+    key: String,
+    title: String,
+    number: Option<u64>,
+    max_len: Option<usize>,
+    user: Option<String>,
+    issue_type: Option<String>,
+) -> String {
+    use moonlet_trackers::branch;
+    let vars = branch::BranchVars {
+        key: &key,
+        title: &title,
+        number,
+        user: user.as_deref().unwrap_or(""),
+        issue_type: issue_type.as_deref().unwrap_or(""),
+    };
+    branch::task_branch(kind, template.as_deref(), &vars, max_len)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _ = tracing_subscriber::fmt()
@@ -153,7 +178,8 @@ pub fn run() {
             send_input,
             pair,
             mac_forget,
-            log_js
+            log_js,
+            task_branch_name
         ])
         .run(tauri::generate_context!())
         .expect("error while running moonlet");
