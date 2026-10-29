@@ -1456,6 +1456,16 @@ const shared: Record<string, string> = {};
 // One share at a time, so a newer snapshot never lands before an older one.
 let sharing: Promise<void> = Promise.resolve();
 
+/** The workspaces each daemon has boards for (`host/workspaceId`), read when the app starts and a host connects (X76). */
+const onDaemons = new Set<string>();
+
+/** Reads which workspaces `host`'s daemon keeps boards for, so ones removed meanwhile get emptied. */
+async function readDaemonBoards(host: string) {
+  const list = await rpc<{ workspace: string }[]>(host, M.tasksSnapshot, {}).catch(() => []);
+  for (const k of [...onDaemons]) if (k.startsWith(`${host}/`)) onDaemons.delete(k);
+  for (const w of list) onDaemons.add(`${host}/${w.workspace}`);
+}
+
 /** Saves the workspaces' board snapshots that changed in their daemons (X76), after any share under way. */
 export function shareTasks(): Promise<void> {
   sharing = sharing.then(shareChanged, shareChanged);
@@ -1468,7 +1478,7 @@ async function shareChanged() {
   const from = useStore.getState().hosts.local?.hostname ?? "this Mac";
   // Activity of earlier runs too: the store holds only this run's until a line is added.
   const activity = { ...readActivity(), ...t.activity };
-  for (const s of snapshotsToShare({ config: t.config, data: t.data, moving: t.moving, activity, attention: t.attention, shownBoard: t.shownBoard, from }, shared)) {
+  for (const s of snapshotsToShare({ config: t.config, data: t.data, moving: t.moving, activity, attention: t.attention, shownBoard: t.shownBoard, from }, shared, [...onDaemons])) {
     if (useStore.getState().hosts[s.host]?.status !== "connected") continue;
     try {
       await rpc(s.host, M.tasksSetSnapshot, { workspace: s.workspace, snapshot: s.snapshot });
@@ -1508,10 +1518,13 @@ export function shareTasksWithPhones(): () => void {
     const back = Object.values(now.hosts).filter((h) => h.status === "connected" && prev.hosts[h.id]?.status !== "connected");
     if (!back.length) return;
     for (const h of back) for (const k of Object.keys(shared)) if (k.startsWith(`${h.id}/`)) delete shared[k];
-    later();
+    // What it still has, so boards removed meanwhile are emptied there too.
+    void Promise.all(back.map((h) => readDaemonBoards(h.id))).then(later);
     void poll();
   });
   void poll();
+  // Hosts already connected: what their daemons kept from the app's last run.
+  void Promise.all(Object.values(useStore.getState().hosts).filter((h) => h.status === "connected").map((h) => readDaemonBoards(h.id))).then(later);
   const every = setInterval(() => void poll(), 300_000);
   return () => {
     unsubscribe();

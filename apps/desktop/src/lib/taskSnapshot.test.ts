@@ -96,20 +96,31 @@ describe("snapshotsToShare (X76)", () => {
   const base = { config, data: { "local/w": data }, moving: {}, activity: {}, attention: {}, shownBoard: { "local/w": "ops" }, from: "studio" };
 
   it("shares each workspace with boards, by host and workspace id, once until it changes", () => {
-    const first = snapshotsToShare(base, {});
+    const loaded = { ...base, data: { ...base.data, "local/other": data } };
+    const first = snapshotsToShare(loaded, {});
     expect(first.map((s) => [s.host, s.workspace, s.snapshot.boards.length])).toEqual([
       ["local", "w", 1],
       ["local", "other", 1],
     ]);
     const shared = Object.fromEntries(first.map((s) => [`${s.host}/${s.workspace}`, s.json]));
-    expect(snapshotsToShare(base, shared)).toEqual([]);
-    const changed = snapshotsToShare({ ...base, activity: { [`${JIRA} OPS-2`]: [{ at: 9, text: "PR #12 opened" }] } }, shared);
+    expect(snapshotsToShare(loaded, shared)).toEqual([]);
+    const changed = snapshotsToShare({ ...loaded, activity: { [`${JIRA} OPS-2`]: [{ at: 9, text: "PR #12 opened" }] } }, shared);
     expect(changed.map((s) => s.workspace)).toEqual(["w"]);
   });
 
   it("empties a workspace it shared before once its boards are gone", () => {
-    const shared = Object.fromEntries(snapshotsToShare(base, {}).map((s) => [`${s.host}/${s.workspace}`, s.json]));
-    const gone = snapshotsToShare({ ...base, config: { ...config, boards: [config.boards![0]] } }, shared);
+    const loaded = { ...base, data: { ...base.data, "local/other": data } };
+    const shared = Object.fromEntries(snapshotsToShare(loaded, {}).map((s) => [`${s.host}/${s.workspace}`, s.json]));
+    const gone = snapshotsToShare({ ...loaded, config: { ...config, boards: [config.boards![0]] } }, shared);
     expect(gone.map((s) => [s.workspace, s.snapshot.boards])).toEqual([["other", []]]);
+  });
+
+  it("shares no workspace whose tasks have not loaded yet: the phone keeps the last boards meanwhile", () => {
+    expect(snapshotsToShare(base, {}).map((s) => s.workspace)).toEqual(["w"]);
+  });
+
+  it("empties a workspace the daemon still has boards for, after a restart or a reconnect", () => {
+    const gone = snapshotsToShare({ ...base, config: { ...config, boards: [config.boards![0]] } }, {}, ["local/old"]);
+    expect(gone.map((s) => [s.workspace, s.snapshot.boards])).toEqual([["w", gone[0].snapshot.boards], ["old", []]]);
   });
 });

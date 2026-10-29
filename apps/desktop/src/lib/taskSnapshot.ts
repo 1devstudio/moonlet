@@ -91,13 +91,17 @@ export interface Share {
 
 /**
  * The snapshots that changed since `shared` (JSON by `host/workspaceId`):
- * every workspace with a board, and one shared before whose boards are
- * gone, emptied.
+ * every workspace with a board once its tasks loaded, and one shared before,
+ * or that a daemon still has (`onDaemons`), whose boards are gone, emptied.
  */
-export function snapshotsToShare(s: ShareInput & { data: Record<string, TasksData>; shownBoard: Record<string, string> }, shared: Record<string, string>): Share[] {
-  const keys = new Set([...(s.config.boards ?? []).map((b) => b.workspace), ...Object.keys(shared)]);
+export function snapshotsToShare(s: ShareInput & { data: Record<string, TasksData>; shownBoard: Record<string, string> }, shared: Record<string, string>, onDaemons: string[] = []): Share[] {
+  const withBoards = new Set((s.config.boards ?? []).map((b) => b.workspace));
+  // `onDaemons`: workspaces the daemons have boards for, which this run may not have shared.
+  const keys = new Set([...withBoards, ...Object.keys(shared), ...onDaemons]);
   const out: Share[] = [];
   for (const key of keys) {
+    // Not before its tasks loaded: an empty board would blank the phone's last one.
+    if (withBoards.has(key) && !s.data[key]) continue;
     const snapshot = taskSnapshot({ ...s, wsKey: key, data: s.data[key], shownBoard: s.shownBoard[key] ?? null });
     const json = JSON.stringify(snapshot);
     if (shared[key] === json) continue;
