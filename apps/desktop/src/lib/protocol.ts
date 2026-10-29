@@ -1313,6 +1313,8 @@ export const M = {
   projectConfigFile: "project.config_file",
   projectSetConfig: "project.set_config",
   projectWorktrees: "project.worktrees",
+  projectCopiedFilesGet: "project.copied_files.get",
+  projectCopiedFilesSet: "project.copied_files.set",
   projectWorktreeRemove: "project.worktree_remove",
   sessionCreate: "session.create",
   sessionList: "session.list",
