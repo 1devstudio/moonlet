@@ -64,7 +64,7 @@ describe("resolveTaskRequest checks a create as the form does (X76, X52)", () =>
 
 describe("resolveTaskRequest: fixes, syncs and comments from the phone (X76)", () => {
   it("runs a card's fix, syncs a board, and reads or posts a task's comments", () => {
-    expect(resolveTaskRequest({ kind: "fix", board: "ops", task: `${JIRA} OPS-1` }, ctx)).toEqual({ kind: "fix", board: ops, task: ops1 });
+    expect(resolveTaskRequest({ kind: "fix", board: "ops", task: `${JIRA} OPS-1` }, ctx)).toEqual({ kind: "fix", board: ops, task: ops1, plan: null });
     expect(resolveTaskRequest({ kind: "sync", board: "ops" }, ctx)).toEqual({ kind: "sync", board: ops });
     expect(resolveTaskRequest({ kind: "comments", board: "ops", task: `${JIRA} OPS-1` }, ctx)).toEqual({ kind: "comments", task: ops1 });
     expect(resolveTaskRequest({ kind: "comment", board: "ops", task: `${JIRA} OPS-1`, body: "Picked this up." }, ctx)).toEqual({ kind: "comment", task: ops1, body: "Picked this up." });
@@ -84,5 +84,16 @@ describe("resolveTaskRequest keeps to the board the phone names (X76)", () => {
       expect(resolveTaskRequest({ kind, board: "ops", task: `${JIRA} OPS-1`, column: "QA", body: "x" }, keyed)).toEqual({ error: "OPS-1 is no longer on OPS · Sprint 42." });
     }
     expect(resolveTaskRequest({ kind: "move", board: "ops", task: `${JIRA} OPS-1`, column: "QA" }, { ...keyed, boardKeys: { ops: [`${JIRA} OPS-1`] } })).toMatchObject({ kind: "move" });
+  });
+});
+
+describe("resolveTaskRequest moves only to a column that has a status (X76)", () => {
+  it("refuses a column with no statuses", () => {
+    const empty: BoardConfig = { ...ops, columns: [...OPS, { name: "Blocked", statuses: [], category: "in_progress" }] };
+    expect(resolveTaskRequest({ kind: "move", board: "ops", task: `${JIRA} OPS-1`, column: "Blocked" }, { ...ctx, boards: [empty] })).toEqual({ error: "Blocked has no status to move to." });
+  });
+
+  it("carries the fix the phone confirmed", () => {
+    expect(resolveTaskRequest({ kind: "fix", board: "ops", task: `${JIRA} OPS-1`, plan: "k1" }, ctx)).toEqual({ kind: "fix", board: ops, task: ops1, plan: "k1" });
   });
 });

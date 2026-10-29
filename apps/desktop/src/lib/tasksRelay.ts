@@ -8,7 +8,8 @@ import { type Task, taskId } from "./tasks";
 /** A request a phone sends through the daemon (`tasks.request`'s `action`). */
 export type TaskAction =
   | { kind: "move"; board: string; task: string; column: string; status?: string }
-  | { kind: "fix"; board: string; task: string }
+  /** `plan`: the chip the phone showed and confirmed (the desktop's `driftKey`). */
+  | { kind: "fix"; board: string; task: string; plan?: string }
   | { kind: "sync"; board: string }
   | { kind: "comments"; board: string; task: string }
   | { kind: "comment"; board: string; task: string; body: string }
@@ -26,7 +27,7 @@ export interface TaskRequestEvent {
 /** What the app does for a request, or why it will not. */
 export type Resolved =
   | { kind: "move"; task: Task; category: Category; status: string }
-  | { kind: "fix"; board: BoardConfig; task: Task }
+  | { kind: "fix"; board: BoardConfig; task: Task; plan: string | null }
   | { kind: "sync"; board: BoardConfig }
   | { kind: "comments"; task: Task }
   | { kind: "comment"; task: Task; body: string }
@@ -53,6 +54,7 @@ export function resolveTaskRequest(
       const column = syncedColumns(board, null).find((c) => c.name === a.column);
       if (!column) return { error: `${board.name} has no ${a.column} column.` };
       if (a.status !== undefined && !column.statuses.includes(a.status)) return { error: `${column.name} has no status ${a.status}.` };
+      if (!column.statuses.length) return { error: `${column.name} has no status to move to.` };
       return { kind: "move", task: task!, category: column.category, status: a.status ?? column.statuses[0] };
     }
     case "fix":
@@ -60,7 +62,7 @@ export function resolveTaskRequest(
     case "comment": {
       if (!board) return { error: "That board is no longer in moonlet on the Mac." };
       if (!onBoard(task)) return { error: `${keyOf(a.task)} is no longer on ${board.name}.` };
-      if (a.kind === "fix") return { kind: "fix", board, task: task! };
+      if (a.kind === "fix") return { kind: "fix", board, task: task!, plan: a.plan ?? null };
       if (a.kind === "comments") return { kind: "comments", task: task! };
       if (!a.body?.trim()) return { error: "A comment needs some text." };
       return { kind: "comment", task: task!, body: a.body };

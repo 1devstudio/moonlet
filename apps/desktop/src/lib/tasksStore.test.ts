@@ -873,23 +873,54 @@ describe("a phone's requests (X76)", () => {
   });
 
   it("runs a clean-up the phone confirmed, without asking again on the Mac", async () => {
+    // The out-of-sync chip the phone showed: the desktop's driftKey of the card.
+    const PLAN = "linear:acme MOON-151|done_open|done||1";
     const done = { ...drag, column: "done" as const, tracker: { ...drag.tracker, state: "s-done" } };
     const wt = { path: "/w/moon-151-drag", branch: "moon-151-drag", originRepo: null, project: "web" };
     const withDone = { ...LINEAR_BOARD, columns: [...LINEAR_BOARD.columns, { name: "Done", statuses: ["s-done"], category: "done" as const }] };
     useTasks.setState({ config: { ...DEFAULT_CONFIG, boards: [withDone] }, data: { "local/personal": { tasks: [done], worktrees: [wt], sources: [], repos: {}, syncedAt: 1, error: null, boards: { moon: { keys: ["linear:acme MOON-151"] } } } } });
     answers["project.worktree_remove"] = () => true;
+    // Clean: nothing uncommitted in the worktree.
+    answers["git.status"] = () => ({ files: [] });
     answers["git.origin_url"] = () => null;
     answers["project.worktrees"] = () => [];
     answers["tracker_tasks linear:acme"] = () => [];
     vi.mocked(rpc).mockClear();
-    await answerTaskRequest("local", { request_id: 13, workspace: "personal", action: { kind: "fix", board: "moon", task: "linear:acme MOON-151" } });
+    await answerTaskRequest("local", { request_id: 13, workspace: "personal", action: { kind: "fix", board: "moon", task: "linear:acme MOON-151", plan: PLAN } });
     expect(useStore.getState().confirm).toBeNull();
     expect(answered).toEqual([{ request_id: 13, ok: true, result: {} }]);
     expect(vi.mocked(rpc).mock.calls.filter(([, m]) => m === "project.worktree_remove").map(([, , p]) => p)).toEqual([{ id: "web", path: "/w/moon-151-drag" }]);
     // In step once its worktree has gone: nothing left to fix.
     useTasks.setState({ data: { "local/personal": { tasks: [done], worktrees: [], sources: [], repos: {}, syncedAt: 2, error: null, boards: { moon: { keys: ["linear:acme MOON-151"] } } } } });
-    await answerTaskRequest("local", { request_id: 14, workspace: "personal", action: { kind: "fix", board: "moon", task: "linear:acme MOON-151" } });
+    await answerTaskRequest("local", { request_id: 14, workspace: "personal", action: { kind: "fix", board: "moon", task: "linear:acme MOON-151", plan: PLAN } });
     expect(answered[1]).toEqual({ request_id: 14, ok: false, error: "MOON-151 is in step now." });
+    delete answers["git.status"];
+  });
+
+  it("runs no fix the phone did not see: the chip changed on the Mac", async () => {
+    const done = { ...drag, column: "done" as const, tracker: { ...drag.tracker, state: "s-done" } };
+    const wt = { path: "/w/moon-151-drag", branch: "moon-151-drag", originRepo: null, project: "web" };
+    const withDone = { ...LINEAR_BOARD, columns: [...LINEAR_BOARD.columns, { name: "Done", statuses: ["s-done"], category: "done" as const }] };
+    useTasks.setState({ config: { ...DEFAULT_CONFIG, boards: [withDone] }, data: { "local/personal": { tasks: [done], worktrees: [wt], sources: [], repos: {}, syncedAt: 1, error: null, boards: { moon: { keys: ["linear:acme MOON-151"] } } } } });
+    vi.mocked(rpc).mockClear();
+    await answerTaskRequest("local", { request_id: 20, workspace: "personal", action: { kind: "fix", board: "moon", task: "linear:acme MOON-151", plan: "linear:acme MOON-151|pr_open|in_progress|s9:131:open|0" } });
+    expect(answered).toEqual([{ request_id: 20, ok: false, error: "MOON-151 changed on the Mac: look again." }]);
+    expect(vi.mocked(rpc).mock.calls.filter(([, m]) => m === "project.worktree_remove")).toEqual([]);
+  });
+
+  it("refuses a phone's clean-up when a worktree's changes cannot be checked", async () => {
+    const done = { ...drag, column: "done" as const, tracker: { ...drag.tracker, state: "s-done" } };
+    const wt = { path: "/w/moon-151-drag", branch: "moon-151-drag", originRepo: null, project: "web" };
+    const withDone = { ...LINEAR_BOARD, columns: [...LINEAR_BOARD.columns, { name: "Done", statuses: ["s-done"], category: "done" as const }] };
+    useTasks.setState({ config: { ...DEFAULT_CONFIG, boards: [withDone] }, data: { "local/personal": { tasks: [done], worktrees: [wt], sources: [], repos: {}, syncedAt: 1, error: null, boards: { moon: { keys: ["linear:acme MOON-151"] } } } } });
+    answers["git.status"] = () => {
+      throw new Error("not a git repository");
+    };
+    vi.mocked(rpc).mockClear();
+    await answerTaskRequest("local", { request_id: 21, workspace: "personal", action: { kind: "fix", board: "moon", task: "linear:acme MOON-151", plan: "linear:acme MOON-151|done_open|done||1" } });
+    expect(answered).toEqual([{ request_id: 21, ok: false, error: "MOON-151: moonlet could not check /w/moon-151-drag for uncommitted changes. Clean it up in moonlet on the Mac." }]);
+    expect(vi.mocked(rpc).mock.calls.filter(([, m]) => m === "project.worktree_remove")).toEqual([]);
+    delete answers["git.status"];
   });
 
   it("refuses a phone's clean-up of worktrees with uncommitted changes, which only the Mac can warn about", async () => {
@@ -899,7 +930,7 @@ describe("a phone's requests (X76)", () => {
     useTasks.setState({ config: { ...DEFAULT_CONFIG, boards: [withDone] }, data: { "local/personal": { tasks: [done], worktrees: [wt], sources: [], repos: {}, syncedAt: 1, error: null, boards: { moon: { keys: ["linear:acme MOON-151"] } } } } });
     answers["git.status"] = () => ({ files: [{ path: "a.ts" }] });
     vi.mocked(rpc).mockClear();
-    await answerTaskRequest("local", { request_id: 15, workspace: "personal", action: { kind: "fix", board: "moon", task: "linear:acme MOON-151" } });
+    await answerTaskRequest("local", { request_id: 15, workspace: "personal", action: { kind: "fix", board: "moon", task: "linear:acme MOON-151", plan: "linear:acme MOON-151|done_open|done||1" } });
     expect(answered).toEqual([{ request_id: 15, ok: false, error: "MOON-151 has uncommitted changes in /w/moon-151-drag. Clean it up in moonlet on the Mac." }]);
     expect(vi.mocked(rpc).mock.calls.filter(([, m]) => m === "project.worktree_remove")).toEqual([]);
     delete answers["git.status"];

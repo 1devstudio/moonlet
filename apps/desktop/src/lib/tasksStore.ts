@@ -1067,10 +1067,13 @@ export async function fixDrift(host: string, workspaceId: string, card: Card, op
       const sessions = useStore.getState().sessions[host]?.filter((s) => plan.sessions.includes(s.id)) ?? [];
       const paths = [...sessions.map((s) => s.path), ...plan.worktrees];
       const dirty: string[] = [];
+      const unchecked: string[] = [];
       for (const path of paths) {
         const st = await rpc<{ files: unknown[] }>(host, M.gitStatus, { path }).catch(() => null);
-        if (st?.files.length) dirty.push(path);
+        if (!st) unchecked.push(path);
+        else if (st.files.length) dirty.push(path);
       }
+      if (opts.confirmed && unchecked.length) throw new Error(`${card.task.key}: moonlet could not check ${unchecked.join(", ")} for uncommitted changes. Clean it up in moonlet on the Mac.`);
       // A phone asked on its own screen first (X76), but cannot know about
       // uncommitted changes: those are left for the Mac's own warning.
       if (opts.confirmed && dirty.length) throw new Error(`${card.task.key} has uncommitted changes in ${dirty.join(", ")}. Clean it up in moonlet on the Mac.`);
@@ -1412,6 +1415,8 @@ export async function answerTaskRequest(host: string, ev: TaskRequestEvent) {
       case "fix": {
         const card = currentCard(host, ev.workspace, taskId(r.task));
         if (!card?.drift) return answer(false, undefined, `${r.task.key} is in step now.`);
+        // Only the fix the phone showed and confirmed: another one now is looked at again.
+        if (driftKey(card) !== r.plan) return answer(false, undefined, `${r.task.key} changed on the Mac: look again.`);
         const done = await fixDrift(host, ev.workspace, card, { confirmed: true });
         const why = useTasks.getState().failures[taskId(r.task)];
         return done ? answer(true, {}) : answer(false, undefined, why ?? `moonlet on the Mac could not fix ${r.task.key}.`);
