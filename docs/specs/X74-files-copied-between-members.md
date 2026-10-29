@@ -1,6 +1,6 @@
 # X74 — Files copied between members although git ignores them, `.env` by default
 
-- **Status:** draft
+- **Status:** implemented (untried on real Macs; see Implementation notes)
 - **Priority / phase:** P1 · phase 4 (sessions across machines)
 - **PRD refs:** none (new scope)
 - **Related ADRs:** [0015](../adr/0015-sessions-follow-the-user.md) (sessions follow the user), [0014](../adr/0014-one-account-across-hosts.md) (one account across hosts)
@@ -112,6 +112,39 @@ Test names are planned. Each criterion cites its test once it is built, with the
   - `a_cloud_machine_gets_copied_files_only_when_the_switch_is_on`: a routed command's copy (X62) lacks `.env` with the switch off and has it with the switch on.
 - **Desktop Vitest** (`lib/copiedFiles.test.ts`): `the_default_list_is_env_and_env_star`, `a_refused_pattern_says_why`, `the_popover_counts_copied_files_and_lists_skipped_ones`.
 - **Manual:** the journey with the MacBook and `studio-mini` over a real tailnet.
+
+## Implementation notes
+
+Built as the gh stack branches `x74/list`, `x74/worktree`, `x74/sessions` and `x74/checkouts`. The daemon tests are in `crates/moonletd/tests/central_copies.rs` unless another file is named, and the core tests in `crates/moonlet-core/src/copied_files.rs`.
+
+What works as specified:
+- **The list.** Each project's list is in the account state, with `.env` and `.env.*` by default. It reaches every member, and only the Mac's own app changes it. (`a_project_without_a_list_copies_env_and_env_star`, `the_list_set_on_one_member_reaches_the_others`, `only_the_macs_app_changes_the_list`; core `a_pattern_matches_as_one_gitignore_line`, `a_negation_an_absolute_path_or_dotdot_is_refused`)
+- **What is copied.** Only files that match the list and that git does not track. Links, files under `.git/` and files over 1 MiB never go. At most 200 files and 16 MiB go, taken in path order. (core `a_tracked_file_is_left_to_git`, `links_git_files_and_files_over_a_mebibyte_are_never_copied`, `matches_are_taken_in_path_order_before_the_limits`, `the_file_that_passes_sixteen_mebibytes_and_every_later_one_are_skipped`)
+- **The receiving side checks too.** It takes only paths its own list names and its own git does not track, within its own limits. (core `a_path_this_sides_list_does_not_name_is_refused`, `a_file_git_tracks_on_this_side_is_never_written`, `a_file_over_the_limits_is_never_written_whatever_the_other_side_sent`)
+- **Writing.** A file is written mode 0600 through a temporary file in its folder, and a missing folder is made mode 0700. A link at the file is replaced, never followed, and a linked folder on the way is refused. (core `a_copied_file_is_written_0600_in_a_0700_folder_and_never_through_a_link`)
+- **New worktrees** start with their checkout's files, before the setup runs. (`a_new_worktree_starts_with_its_checkouts_env`)
+- **Sessions.** The owner's files reach the central host's copy. When the central host runs the session, its files reach the MacBook's live copy, and they come with the session when it is brought back. (`a_sessions_env_local_reaches_the_central_copy_and_an_edit_comes_back`)
+- **Conflicts and deletions on a copy.** The owner's version wins, a deleted file goes on the other side too, and the other side's version is kept in leftovers. The files never enter a git object store. (`the_owners_version_wins_and_the_copys_and_a_deleted_one_are_in_leftovers`)
+- **Checkouts** are kept in step through the central host, both ways and with deletions. A change made while unlinked goes when the link is back, and the later change wins. (`an_env_in_one_checkout_reaches_the_other_within_three_seconds_mode_0600`, `both_checkouts_changed_while_unlinked_the_later_change_wins_and_the_other_is_in_leftovers`; core `a_conflict_on_a_checkout_goes_to_the_later_stamp`, `a_checkouts_new_changed_and_deleted_files_are_noticed`)
+- **Cloud machines** get the files only with **Also to cloud machines** on. (`crates/moonletd/tests/cloud.rs` `a_cloud_machine_gets_copied_files_only_when_the_switch_is_on`)
+- **Settings › Projects** shows the list, a remove button for each pattern, the input to add one, and the switch. (`apps/desktop/src/lib/copiedFiles.test.ts`)
+
+Where it differs from the draft above:
+- **RPCs.** `project.copied_files.get` and `.set` take the project's `id` on this Mac, as other `project.*` methods do. In place of one `files.update`, three messages between members:
+  - `session.files`: the owner sends the central host's copy every file's hash, with the bytes of those that changed. The copy answers the paths whose bytes it still needs.
+  - `session.files_fetch`: a live copy (X60), or a cloud machine's routed copy, sends what it has and gets what differs.
+  - `files.checkout`: the checkout exchange.
+- **A session's copy never wins.** The session's owner is the only writer. An edit made in a copy is put back, and the copy's version kept in leftovers, as X72 does with its other files. Edits made where the session runs come back with the session.
+- **Stamps.** A changed file is stamped with its change time on its member, and a deletion with when it was noticed, with the member's id breaking ties. Stamps are not X68's hybrid logical clock. A stamp more than a day ahead of the central host's clock is taken as a day ahead.
+- **A leading `/`** anchors a pattern at the worktree's root, as in `.gitignore`. Patterns that start with `~` or `//` are refused as absolute.
+- **A project without a root commit** keeps the default list and cannot be given another.
+- **Files.** `$MOONLET_HOME/copied-files.json` holds each checkout's hashes and stamps. A session's are kept in `session-copies.json`.
+- **Paused copies.** A paused live copy neither fetches nor applies. On resume it fetches the owner's versions, which win.
+- **Timing.** Members look every second. A change reaches the other side within about 2 s.
+- **Not built yet:**
+  - the sync popover's "3 copied files" line and its list of skipped files;
+  - the leftovers toast with **Show in Finder**;
+  - naming copied files in the offer to rotate secrets when a member is removed (ADR 0014).
 
 ## Open questions
 
