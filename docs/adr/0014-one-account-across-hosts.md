@@ -1,6 +1,7 @@
 # ADR 0014: Hosts share one account; a session's agent runs on the host that made it, and the central host keeps a copy
 
 - **Status:** proposed (2026-10-26); its first slice is [X68](../specs/X68-account-state.md)
+- **Changed by:** [ADR 0015](0015-sessions-follow-the-user.md) (proposed, 2026-10-29). Sessions move between members on their own (on sleep, and when the user types on another member), Move to… pins a session, a project's listed ignored files are copied between members, and sign-ins open where the user is.
 - **Changes:** [ADR 0009](0009-central-host-workers-live-copies.md)'s "the central host owns every session" and the direction of its live copies; [ADR 0008](0008-phone-link-over-tailscale.md) and [X39](../specs/X39-phone-pairing-and-link.md)'s pairing, which the central host now does for every app; [ADR 0011](0011-machines-connect-over-the-tailnet.md) and [X57](../specs/X57-tailnet-hosts.md)'s "a paired desktop cannot manage the remote's devices"; [ADR 0013](0013-design-systems-and-designs.md)'s "rendering needs the moonlet app open".
 - **Builds on:** [ADR 0011](0011-machines-connect-over-the-tailnet.md) (the tailnet transport and pairing), [X41](../specs/X41-worker-link-and-project-identity.md) (the worker link and project identity), [X60](../specs/X60-keep-in-sync.md) (live copies), [X62](../specs/X62-routed-commands.md) and [ADR 0012](0012-cloud-workers.md) (routing and cloud workers).
 

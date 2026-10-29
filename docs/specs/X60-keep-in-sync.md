@@ -5,12 +5,13 @@
 - **PRD refs:** none (new scope)
 - **Related ADRs:** [0009](../adr/0009-central-host-workers-live-copies.md) (live copies), [0011](../adr/0011-machines-connect-over-the-tailnet.md) (the tailnet transport)
 - **Depends on:** [X41](X41-worker-link-and-project-identity.md): the worker link, requests from the central host to a worker, and project identity.
+- **Changed by:** [X74](X74-files-copied-between-members.md) (draft). Files matching a project's copied-files list (`.env` and `.env.*` by default) are copied between members in messages of their own. Snapshots still leave them out, as below, so this spec's rules and tests are unchanged: X74 is a separate channel beside them.
 
 ## Summary
 
 A session on the central host, such as the Mac mini `studio-mini`, can be **kept in sync with this Mac**. This Mac's daemon then holds a **live copy** of the session's worktree: a real git worktree on the local disk, at the same path when it can be, kept in sync both ways while the two machines can reach each other. The agent keeps running on the central host. The user can open the copy in VS Code or Cursor, run commands in it, and edit it, and the edits reach the agent within a second. Edits made while the link is down sync when it comes back.
 
-Git's own rules decide what syncs, as ADR 0009 decided: tracked files and untracked files that are not ignored. `node_modules`, `target/` and `.env` stay on each machine, so the copy runs the project's `setup` script once it is made, after the user approves the command. Commits sync too, as git objects. When both sides change the same file differently, neither side's version is lost: the user is notified, and the file stays different on each side until they pick one.
+Git's own rules decide what syncs, as ADR 0009 decided: tracked files and untracked files that are not ignored. `node_modules`, `target/` and `.env` stay out of the snapshot (since X74, `.env` and other listed files are copied apart from it), so the copy runs the project's `setup` script once it is made, after the user approves the command. Commits sync too, as git objects. When both sides change the same file differently, neither side's version is lost: the user is notified, and the file stays different on each side until they pick one.
 
 A project on the central host can be set to keep its new sessions in sync with this Mac, so the user doesn't turn it on for each session.
 
