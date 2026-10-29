@@ -3250,6 +3250,50 @@ async fn only_the_macs_app_changes_the_list() {
     assert_eq!(copied_files(&book, &project).await["default"], json!(true));
 }
 
+fn mode(path: &Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+}
+
+#[tokio::test]
+async fn a_new_worktree_starts_with_its_checkouts_env() {
+    let book = mac(BOOK, "MacBook").await;
+    let project = shop(&book).await;
+    let checkout = book.home.path().join("src/shop");
+    std::fs::write(
+        checkout.join(".env"),
+        "DATABASE_URL=postgres://localhost/shop\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(checkout.join("apps/web")).unwrap();
+    std::fs::write(checkout.join("apps/web/.env.local"), "FLAG=1\n").unwrap();
+    std::fs::write(checkout.join("notes.txt"), "not on the list\n").unwrap();
+    std::fs::create_dir_all(checkout.join(".moonlet")).unwrap();
+    std::fs::write(
+        checkout.join(".moonlet/config.toml"),
+        "setup = \"cp .env setup-saw\"\n",
+    )
+    .unwrap();
+    let session = new_session(&book, &project, "fix-cart").await;
+    let tree = path_of(&session);
+    assert_eq!(
+        std::fs::read_to_string(tree.join(".env")).unwrap(),
+        "DATABASE_URL=postgres://localhost/shop\n"
+    );
+    assert_eq!(mode(&tree.join(".env")), 0o600);
+    assert_eq!(
+        std::fs::read_to_string(tree.join("apps/web/.env.local")).unwrap(),
+        "FLAG=1\n"
+    );
+    assert!(!tree.join("notes.txt").exists());
+    // The setup ran after the files were there.
+    reads(
+        &tree.join("setup-saw"),
+        "DATABASE_URL=postgres://localhost/shop\n",
+    )
+    .await;
+}
+
 #[tokio::test]
 async fn a_closed_chats_conversation_does_not_make_a_new_chat_ready() {
     let origin = Origin::new();

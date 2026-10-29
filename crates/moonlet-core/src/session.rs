@@ -1616,7 +1616,14 @@ impl SessionManager {
             git::worktree_add(&repo_path, &dir, &branch, &from, req.existing_branch).await?;
             // The path as `git worktree list` prints it (no /var → /private/var
             // symlink), so the session's worktree is recognised as its own (X45).
-            std::fs::canonicalize(&dir).unwrap_or(dir)
+            let dir = std::fs::canonicalize(&dir).unwrap_or(dir);
+            // The files git ignores that it needs to run, such as `.env`,
+            // copied from the checkout before its setup runs (X74).
+            let (patterns, _, _) = self.copied_files(&repo.identity);
+            if let Err(e) = crate::copied_files::seed(&repo_path, &dir, &patterns).await {
+                tracing::warn!("cannot copy {}'s copied files into {}: {e:#}", repo.name, dir.display());
+            }
+            dir
         };
 
         // Absent means "the repo default"; "none" (or empty) means a plain shell.
