@@ -1390,6 +1390,10 @@ pub struct SessionFilesFetch {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SessionFilesFetched {
     pub files: Vec<CopiedFile>,
+    /// The project's list on the central host, for a cloud machine, which
+    /// keeps no account of its own.
+    #[serde(default)]
+    pub patterns: Vec<String>,
 }
 
 /// `session.pin {session, pinned}`, member → central host (X73).

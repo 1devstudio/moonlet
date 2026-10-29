@@ -617,12 +617,17 @@ impl LiveCopies {
     /// This Mac's live copies that are made and not paused (X74): each
     /// one's session, worktree, and project.
     pub fn live_copies(&self) -> Vec<(String, PathBuf, Option<ProjectIdentity>)> {
+        self.copies_of(CopyKind::Live)
+    }
+
+    /// As [`Self::live_copies`], for this machine's copies of `kind`.
+    pub fn copies_of(&self, kind: CopyKind) -> Vec<(String, PathBuf, Option<ProjectIdentity>)> {
         self.data
             .lock()
             .unwrap()
             .worker
             .iter()
-            .filter(|k| k.kind == CopyKind::Live && !k.path.is_empty() && k.paused.is_none())
+            .filter(|k| k.kind == kind && !k.path.is_empty() && k.paused.is_none())
             .map(|k| (k.session.clone(), PathBuf::from(&k.path), k.identity.clone()))
             .collect()
     }
