@@ -139,6 +139,11 @@ describe("taskDetail (X76)", () => {
     expect(t.criteria).toEqual({ heading: "Acceptance criteria · 1 of 2", items: [{ text: "Search box above the grid", done: true }, { text: "Waits 200 ms after typing", done: false }] });
     // The description leaves its checklist to the criteria.
     expect(t.description).toBe("Shoppers can't find products.");
+    // Plain bullets under an Acceptance criteria heading leave the description too.
+    d.tasks.personal = { ...snapshot, tasks: [{ ...MOON142, description: "Shoppers can't find products.\n\n## Acceptance criteria\n- Search box above the grid\n- Waits 200 ms\n\n## Notes\nSee the frame." }] };
+    const [b2] = phoneBoards(hosts, { mac: d }, null);
+    const t2 = taskDetail(b2, `${LINEAR} MOON-142`, d, details, {}, NOW)!;
+    expect([t2.criteria?.heading, t2.description]).toEqual(["Acceptance criteria · 0 of 2", "Shoppers can't find products.\n\n## Notes\nSee the frame."]);
     expect(t.latest).toBe("Claude launched 5 subagents in Remote hosts sidebar · 20m ago");
   });
 
@@ -196,6 +201,11 @@ describe("linkSheet (X76)", () => {
     const s = { name: "Spike", branch: "spike" };
     expect(linkSheet(boards, d(), s, "price", NOW).recent.map((r) => r.key)).toEqual(["MOON-285"]);
     expect(linkSheet(boards, d(), s, "https://linear.app/acme/issue/MOON-142/remote-hosts", NOW).recent.map((r) => r.key)).toEqual(["MOON-142"]);
+    // A GitHub issue's URL finds it by its key.
+    const gh = mac();
+    gh.tasks.personal = { ...snapshot, tasks: [{ ...MOON142, connection: "github:github.com", key: "acme/web#12", title: "Fix login", url: "https://github.com/acme/web/issues/12", tracker: undefined, github: { repo: "acme/web", number: 12, closingPrs: [] } }], boardData: { moon: { keys: ["github:github.com acme/web#12"] } } };
+    const ghBoards = phoneBoards(hosts, { mac: gh }, null);
+    expect(linkSheet(ghBoards, gh, s, "https://github.com/acme/web/issues/12", NOW).recent.map((r) => r.key)).toEqual(["acme/web#12"]);
   });
 });
 
@@ -220,6 +230,18 @@ describe("pruneMoves (X76)", () => {
     // A move waiting for moonlet on the Mac stays, however long it waits.
     const waiting = { [`${LINEAR} MOON-152`]: { status: "s-review", name: "In Review", at: NOW - 3 * 60 * MIN, waiting: true } };
     expect(Object.keys(pruneMoves(waiting, tasks, NOW))).toEqual([`${LINEAR} MOON-152`]);
+  });
+});
+
+describe("issueForm refuses what Jira would (X76, as X52)", () => {
+  it("keeps Create off for a Jira label with a space, and says why", () => {
+    const JIRA = "jira:acme.atlassian.net";
+    const OPS: BoardConfig = { id: "ops", name: "OPS", connection: JIRA, workspace: "local/acme", origin: { kind: "jira_board", board: 1 }, columns: COLUMNS };
+    const jiraTask: Task = { ...MOON142, connection: JIRA, key: "OPS-1", tracker: { id: "OPS-1", state: "3", source: "OPS" } };
+    const snap: TaskSnapshot = { ...snapshot, boards: [OPS], tasks: [jiraTask], boardData: { ops: { keys: [`${JIRA} OPS-1`] } } };
+    const options = { me: "u1", people: [], labels: [], canSet: true, issueTypes: [{ id: "10004", name: "Task" }] };
+    const form = issueForm(OPS, snap, { title: "Retry", description: "", assignee: "me", labels: ["needs review"], place: "OPS", issueType: "10004" }, options);
+    expect([form.ready, form.problem]).toEqual([false, "Jira labels can't have spaces: needs review"]);
   });
 });
 

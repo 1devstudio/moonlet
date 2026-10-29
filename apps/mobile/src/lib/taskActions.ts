@@ -159,14 +159,20 @@ const putComments = (task: Task, patch: Partial<PhoneComments>) =>
   useComments.setState((s) => ({ byTask: { ...s.byTask, [taskId(task)]: { ...NO_COMMENTS, ...s.byTask[taskId(task)], ...patch } } }));
 const commentsOf = (task: Task) => useComments.getState().byTask[taskId(task)];
 
+// The latest load per task: an older one's answer is dropped.
+const latestLoad = new Map<string, number>();
+let loads = 0;
+
 /** Reads the task's comments through the Mac, keeping the ones shown meanwhile. */
 export async function loadComments(b: Pick<PhoneBoard, "host" | "workspace" | "board">, task: Task) {
+  const n = ++loads;
+  latestLoad.set(taskId(task), n);
   putComments(task, { loading: true });
   try {
     const got = await askMac<{ comments: TaskComment[]; more: boolean }>(b, commentsAction(b.board, task));
-    putComments(task, { comments: got.comments, more: got.more, loading: false, error: null });
+    if (latestLoad.get(taskId(task)) === n) putComments(task, { comments: got.comments, more: got.more, loading: false, error: null });
   } catch (e) {
-    putComments(task, { loading: false, error: e instanceof Error ? e.message : String(e) });
+    if (latestLoad.get(taskId(task)) === n) putComments(task, { loading: false, error: e instanceof Error ? e.message : String(e) });
   }
 }
 

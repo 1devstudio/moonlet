@@ -186,7 +186,9 @@ export function NewSessionScreen() {
   const presetKey = preset ? `${fromBoard!.key} ${preset.key}` : null;
   useEffect(() => {
     if (!preset || !fromBoard) return;
-    const i = choices.findIndex((c) => c.host === fromBoard.host && preset.projects.includes(c.project.id));
+    // A worktree's own project, else the task's.
+    const own = newFrom?.worktree?.project;
+    const i = choices.findIndex((c) => c.host === fromBoard.host && (own ? c.project.id === own : preset.projects.includes(c.project.id)));
     if (i >= 0) setPick(i);
     setAssign(!!preset.assign?.checked);
     setTaskBranch(null);

@@ -2,7 +2,7 @@
 // people and labels and creates the issue in the tracker.
 
 import { useEffect, useState } from "react";
-import { newIssueDraft, type NewIssue } from "@desktop/lib/newIssue";
+import { fitDraft, newIssueDraft, type NewIssue } from "@desktop/lib/newIssue";
 import { showScreen } from "../lib/app";
 import type { PhoneBoard } from "../lib/board";
 import { useBusy } from "../lib/busy";
@@ -36,9 +36,16 @@ export function NewIssueSheet({ b, column, onClose }: { b: PhoneBoard; column: s
   const place = form.draft.place;
   useEffect(() => {
     let live = true;
+    // The old place's lists no longer hold: Create waits for the new ones.
+    setOptions(null);
     setOptionsError(null);
     askMac<IssueOptions>(b, { kind: "create_options", board: b.board.id, ...(place && { place }), ...(draft.issueType && { issue_type: draft.issueType }) }).then(
-      (o) => live && setOptions(o),
+      (o) => {
+        if (!live) return;
+        setOptions(o);
+        // Someone the new place does not have is not sent.
+        setDraft((d) => fitDraft(d, o.people.map((p) => p.id)));
+      },
       (e) => live && setOptionsError(e instanceof Error ? e.message : String(e)),
     );
     return () => {
@@ -62,7 +69,7 @@ export function NewIssueSheet({ b, column, onClose }: { b: PhoneBoard; column: s
         </div>
         <input autoFocus value={draft.title} onChange={(e) => set({ title: e.target.value })} placeholder="Title" className="h-11 rounded-[10px] border border-border-strong bg-bg px-3 text-[15px] outline-none" />
         <textarea rows={4} value={draft.description} onChange={(e) => set({ description: e.target.value })} placeholder="Description (Markdown)" className="rounded-[10px] border border-border-strong bg-bg p-3 text-[14.5px] outline-none" />
-        {form.askPlace && <Picker label={b.board.origin.kind === "github_project" ? "Repository" : "Project"} value={draft.place} options={form.places.map((p) => ({ id: p, name: p }))} onPick={(id) => set({ place: id })} />}
+        {form.askPlace && <Picker label={b.board.origin.kind === "github_project" ? "Repository" : "Project"} value={draft.place} options={form.places.map((p) => ({ id: p, name: p }))} onPick={(id) => set({ place: id, issueType: undefined })} />}
         {form.askType && options?.issueTypes && <Picker label="Issue type" value={draft.issueType} options={options.issueTypes} onPick={(id) => set({ issueType: id })} />}
         {form.assignee && (
           <Picker
@@ -88,6 +95,7 @@ export function NewIssueSheet({ b, column, onClose }: { b: PhoneBoard; column: s
           </div>
         )}
         {options?.missing?.length ? <span className="text-[12.5px] text-error">Jira needs {options.missing.join(", ")}: create this issue in Jira.</span> : null}
+        {form.problem && <span className="text-[12.5px] text-error">{form.problem}</span>}
         {(error || optionsError) && <span className="text-[12.5px] text-error">{error ?? optionsError}</span>}
         {error === "moonlet on the Mac did not answer." && <span className="text-[12.5px] text-muted">The Mac may still create it: check the board before you try again.</span>}
         <Btn tone="primary" disabled={busy || !form.ready} onClick={() => void create()}>

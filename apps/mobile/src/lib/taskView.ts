@@ -5,7 +5,7 @@ import { agentLabel } from "@desktop/lib/agents";
 import { holds } from "@desktop/lib/boardColumns";
 import { boardTitle, stateChoices } from "@desktop/lib/boardScreen";
 import { type BoardConfig, type Category, CATEGORY_LABEL, syncedColumns } from "@desktop/lib/boards";
-import { canSubmit, jiraProjects, type NewIssue, needsPlace, needsType, projectRepos, withAccess } from "@desktop/lib/newIssue";
+import { canSubmit, jiraProjects, labelProblem, type NewIssue, needsPlace, needsType, projectRepos, withAccess } from "@desktop/lib/newIssue";
 import type { TaskSnapshot } from "@desktop/lib/taskSnapshot";
 import { withoutComments } from "@desktop/lib/markdown";
 import type { AgentState } from "@desktop/lib/protocol";
@@ -43,13 +43,25 @@ export interface DetailSession {
 
 const REVIEW: Record<string, string> = { APPROVED: "approved", CHANGES_REQUESTED: "changes requested", REVIEW_REQUIRED: "review required" };
 
-/** A description without its checklist items, nor an "Acceptance criteria" heading over them. */
-const withoutChecklist = (md: string) =>
-  md
-    .split("\n")
-    .filter((l) => !/^\s*[-*]\s+\[[ xX]\]\s/.test(l) && !/^\s*(#{1,6}\s*)?acceptance criteria:?\s*$/i.test(l))
-    .join("\n")
-    .trim();
+const CRITERIA_HEADING = /^\s*(#{1,6}\s*)?acceptance criteria:?\s*$/i;
+
+/** A description without what shows as its acceptance criteria: its checklist items, and an "Acceptance criteria" section's heading and bullets. */
+function withoutChecklist(md: string): string {
+  const out: string[] = [];
+  let inSection = false;
+  for (const l of md.split("\n")) {
+    if (CRITERIA_HEADING.test(l)) {
+      inSection = true;
+      continue;
+    }
+    // The section ends at the next heading, as `acceptanceCriteria` reads it.
+    if (inSection && /^\s*#{1,6}\s/.test(l)) inSection = false;
+    if (inSection && /^\s*[-*]\s+/.test(l)) continue;
+    if (/^\s*[-*]\s+\[[ xX]\]\s/.test(l)) continue;
+    out.push(l);
+  }
+  return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
 
 /** A session's PR line in the task detail. */
 function prLine(pr: PullRequest | null | undefined): DetailSession["pr"] {
@@ -145,7 +157,7 @@ export function taskDetail(b: PhoneBoard, id: string, d: HostData, details: Deta
     // Its checklist shows as the acceptance criteria instead.
     description: criteria.length ? withoutChecklist(withoutComments(task.description)) : withoutComments(task.description).trim(),
     sessions,
-    worktrees: (card?.card.orphans ?? []).map((w) => ({ path: w.path, branch: w.branch ?? "" })),
+    worktrees: (card?.card.orphans ?? []).map((w) => ({ path: w.path, branch: w.branch ?? "", ...(w.project && { project: w.project }) })),
     activity: (b.snapshot.activity[id] ?? []).map((e) => ({ when: activityTime(e.at, now), text: e.text })),
     drift: card?.drift ?? null,
   };
@@ -192,6 +204,8 @@ export function issueForm(board: BoardConfig, snapshot: Pick<TaskSnapshot, "task
   // A Jira board of one project puts it there without asking.
   const placed = needsPlace(board) && !draft.place && places.length === 1 && board.origin.kind !== "github_project" ? { ...draft, place: places[0] } : draft;
   const access = withAccess(placed, { canSet: options?.canSet ?? true, fields: options?.fields });
+  // Jira refuses a label with a space (X52).
+  const problem = access.labels ? labelProblem(board, access.draft.labels) : null;
   return {
     places,
     askPlace: needsPlace(board) && (board.origin.kind === "github_project" || places.length !== 1),
@@ -199,8 +213,9 @@ export function issueForm(board: BoardConfig, snapshot: Pick<TaskSnapshot, "task
     assignee: access.assignee,
     labels: access.labels,
     draft: access.draft,
+    problem,
     // Not before the Mac's lists: a field Jira requires shows only in them.
-    ready: options !== null && canSubmit(access.draft, { busy: false, needsPlace: needsPlace(board), needsType: needsType(board), missing: options.missing }),
+    ready: options !== null && canSubmit(access.draft, { busy: false, needsPlace: needsPlace(board), needsType: needsType(board), missing: options.missing, problem }),
   };
 }
 
@@ -249,8 +264,14 @@ export function moveSheet(b: PhoneBoard, t: Detail) {
   };
 }
 
-/** A Jira or Linear key in a pasted URL: `…/issue/MOON-142/remote-hosts` finds MOON-142. */
-const pastedKey = (query: string) => (/^https?:\/\//.test(query.trim()) ? (/([A-Z][A-Z0-9]+-\d+)(?!.*[A-Z][A-Z0-9]+-\d+)/.exec(query)?.[1] ?? query) : query);
+/** The key in a pasted URL: `…/issue/MOON-142/remote-hosts` finds MOON-142, `github.com/acme/web/issues/12` acme/web#12. */
+function pastedKey(query: string): string {
+  const q = query.trim();
+  if (!/^https?:\/\//.test(q)) return query;
+  const gh = /^https?:\/\/github\.com\/([^/]+\/[^/]+)\/(?:issues|pull)\/(\d+)/.exec(q);
+  if (gh) return `${gh[1]}#${gh[2]}`;
+  return /([A-Z][A-Z0-9]+-\d+)(?!.*[A-Z][A-Z0-9]+-\d+)/.exec(q)?.[1] ?? query;
+}
 
 export interface LinkRow {
   id: string;

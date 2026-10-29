@@ -124,7 +124,7 @@ interface AppState {
   /** False until `host_list` answered: tells "no Mac paired" from "not loaded". */
   ready: boolean;
   /** The task, and maybe its worktree, New session starts from (X76). */
-  newFrom: { board: string; task: string; worktree?: { path: string; branch: string } } | null;
+  newFrom: { board: string; task: string; worktree?: { path: string; branch: string; project?: string } } | null;
 }
 
 export const useApp = create<AppState>(() => ({

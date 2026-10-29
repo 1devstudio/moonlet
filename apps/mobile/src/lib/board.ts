@@ -6,7 +6,7 @@ import { boardHeader, boardProblem, boardTitle, cardFace, workspaceViews } from 
 import { type BoardConfig, type Category, CATEGORY_LABEL, cardFields } from "@desktop/lib/boards";
 import { driftKey, withoutPutOffCard } from "@desktop/lib/keepInStep";
 import { keepCard } from "@desktop/lib/tasksView";
-import type { AgentState, GitStatus, PullRequest } from "@desktop/lib/protocol";
+import type { AgentState, GitStatus, PullRequest, Session } from "@desktop/lib/protocol";
 import { type Task, taskId, trackerName, trackerOf } from "@desktop/lib/tasks";
 import { count } from "@desktop/lib/workspaces";
 import type { BoardInput, BoardSession, Card, RowMeta } from "@desktop/lib/tasksBoard";
@@ -47,11 +47,18 @@ export function phoneBoards(hosts: Record<string, InboxHost>, data: Record<strin
         const same = `${owner}/${ws.id}/${board.id}`;
         const had = byKey.get(same);
         if (had && (had.snapshot.syncedAt ?? 0) >= (snapshot.syncedAt ?? 0)) continue;
-        byKey.set(same, { host: h.id, hostLabel: h.label, workspace: ws.id, workspaceName: ws.name, key: `${h.id}/${ws.id}/${board.id}`, board, snapshot });
+        // Keyed by the account, so it stays the same board whichever member synced last.
+        byKey.set(same, { host: h.id, hostLabel: h.label, workspace: ws.id, workspaceName: ws.name, key: same, board, snapshot });
       }
     }
   }
   return [...byKey.values()];
+}
+
+/** The boards of a session's workspace: its host's, or another member's of its account (X68). */
+export function sessionBoards(hosts: Record<string, InboxHost>, data: Record<string, HostData>, host: string, s: Pick<Session, "workspace_id">): PhoneBoard[] {
+  if (!s.workspace_id) return [];
+  return phoneBoards(hosts, data, { host, id: s.workspace_id, account: data[host]?.account ?? "" });
 }
 
 /** What the phone has loaded of each session: its PR and diff stat. */

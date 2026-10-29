@@ -67,13 +67,15 @@ export function useShownBoard() {
   return { current, d, sessions };
 }
 
-/** The Tasks tab's badge: the shown board's cards out of sync. */
+/** The Tasks tab's badge: the shown board's cards out of sync, as the board shows them. It reads the
+ * PRs the board or rows loaded, and loads none itself. */
 export function useTasksBadge(): number {
   const { current, d, sessions } = useShownBoard();
   const moving = useTaskMoves();
   const notNow = useApp((s) => s.settings.notNow);
-  const details = useSessionsDetails(current?.host ?? null, sessions);
-  return current && d ? boardScreen(current, d, details, moving, { notNow }).outOfSync : 0;
+  const mine = useApp((s) => (current ? !!s.settings.mine?.[current.key] : false));
+  const details = useSessionsDetails(current?.host ?? null, sessions, { load: false });
+  return current && d ? boardScreen(current, d, details, moving, { mine, notNow }).outOfSync : 0;
 }
 
 /** Clean up asks on the phone first; the Mac then runs it without asking again (X76). */
@@ -135,7 +137,7 @@ function TaskCard({ c, b, failure }: { c: CardView; b: PhoneBoard; failure: stri
           <span className="flex-1 text-[12.5px] text-faint">{c.empty}</span>
           <button
             type="button"
-            onClick={() => startFromTask({ board: b.key, task: c.id, ...(c.card.orphans[0] && { worktree: { path: c.card.orphans[0].path, branch: c.card.orphans[0].branch ?? "" } }) })}
+            onClick={() => startFromTask({ board: b.key, task: c.id, ...(c.card.orphans[0] && { worktree: { path: c.card.orphans[0].path, branch: c.card.orphans[0].branch ?? "", project: c.card.orphans[0].project } }) })}
             className="flex h-9 items-center gap-1.5 rounded-[9px] border border-border-strong bg-raised px-3 text-[13.5px]"
           >
             <Play size={12} />

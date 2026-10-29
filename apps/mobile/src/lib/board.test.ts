@@ -4,7 +4,7 @@ import { DEFAULT_RULES } from "@desktop/lib/keepInStep";
 import type { Task } from "@desktop/lib/tasks";
 import type { TaskSnapshot } from "@desktop/lib/taskSnapshot";
 import type { PullRequest } from "@desktop/lib/protocol";
-import { boardScreen, firstColumn, phoneBoards, switcher, syncLine } from "./board";
+import { boardScreen, firstColumn, phoneBoards, sessionBoards, switcher, syncLine } from "./board";
 import { MIN, NOW, data, project, session, terminal, workspace } from "./fixtures";
 
 const LINEAR = "linear:acme";
@@ -97,7 +97,10 @@ describe("phoneBoards (X76)", () => {
       box: { ...mac(), account: "else" },
     };
     const shown = phoneBoards({ ...hosts, air, box: other }, d, { host: "mac", id: "personal", account: "acc" });
-    expect(shown.map((b) => [b.key, b.snapshot.from])).toEqual([["air/personal/moon", "air"]]);
+    // Keyed by the account, so the board stays open whichever member synced last.
+    expect(shown.map((b) => [b.key, b.host, b.snapshot.from])).toEqual([["acc/personal/moon", "air", "air"]]);
+    // A session on the older member finds that board too, for its task line and Link.
+    expect(sessionBoards({ ...hosts, air, box: other }, d, "mac", { workspace_id: "personal" }).map((b) => b.key)).toEqual(["acc/personal/moon"]);
   });
 });
 

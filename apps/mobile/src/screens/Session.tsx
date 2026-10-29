@@ -10,7 +10,7 @@ import { type SessionTab, showScreen, useApp } from "../lib/app";
 import { sessionState } from "../lib/inbox";
 import { sessionTask } from "../lib/sessionList";
 import { agentStrip, sessionChat } from "../lib/chatView";
-import { phoneBoards } from "../lib/board";
+import { sessionBoards } from "../lib/board";
 import { taskId } from "@desktop/lib/tasks";
 import { LinkSheet } from "../components/LinkSheet";
 import { useNow } from "../lib/now";
@@ -174,8 +174,9 @@ export function SessionScreen({ host, id, tab }: { host: string; id: string; tab
   // The task in the app when a board has it, else in its tracker.
   const openTask = () => {
     if (!task) return;
-    const b = phoneBoards(hosts, data, null).find((x) => x.host === host && x.snapshot.tasks.some((t) => t.key === task.key && t.url === task.url));
-    const t = b?.snapshot.tasks.find((x) => x.key === task.key && x.url === task.url);
+    // By its URL: a GitHub key shows shortened (#12).
+    const b = sessionBoards(hosts, data, host, session).find((x) => x.snapshot.tasks.some((t) => t.url === task.url));
+    const t = b?.snapshot.tasks.find((x) => x.url === task.url);
     if (b && t) showScreen({ kind: "task", board: b.key, task: taskId(t) });
     else void openUrl(task.url).catch(console.error);
   };

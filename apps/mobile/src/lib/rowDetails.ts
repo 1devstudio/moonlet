@@ -55,17 +55,20 @@ export function useSeen(): [(el: HTMLElement | null) => void, boolean] {
 export const forget = (prefix: string) => cache.forget(prefix);
 
 /** The PRs and diff stats of `sessions` on `host`, as each loads, for a board's rows (X76). */
-export function useSessionsDetails(host: string | null, sessions: Session[]): { prs: Record<string, PullRequest | null | undefined>; git: Record<string, GitStatus | undefined> } {
+export function useSessionsDetails(host: string | null, sessions: Session[], opts: { load?: boolean } = {}): { prs: Record<string, PullRequest | null | undefined>; git: Record<string, GitStatus | undefined> } {
+  // `load: false` reads only what others loaded, and looks again each minute.
+  const load = opts.load ?? true;
   const [, setTick] = useState(0);
   // Read again once the cache lets them go (a minute), while the board shows.
   const [round, setRound] = useState(0);
   useEffect(() => {
-    const t = setInterval(() => setRound((r) => r + 1), 60_000);
+    // Reading only the cache costs nothing: it looks again every few seconds.
+    const t = setInterval(() => setRound((r) => r + 1), load ? 60_000 : 3_000);
     return () => clearInterval(t);
-  }, []);
+  }, [load]);
   const ids = sessions.map((s) => s.id).join(",");
   useEffect(() => {
-    if (!host) return;
+    if (!host || !load) return;
     let live = true;
     const bump = () => live && setTick((t) => t + 1);
     for (const s of sessions) {
@@ -77,7 +80,7 @@ export function useSessionsDetails(host: string | null, sessions: Session[]): { 
       live = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [host, ids, round]);
+  }, [host, ids, round, load]);
   if (!host) return { prs: {}, git: {} };
   return {
     prs: Object.fromEntries(sessions.map((s) => [s.id, cache.peek<PullRequest | null>(`pr:${host}:${s.id}`)])),

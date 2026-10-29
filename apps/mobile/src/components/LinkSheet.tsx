@@ -6,7 +6,7 @@ import { Search, X } from "lucide-react";
 import { rpc } from "@desktop/lib/daemon";
 import { M, type Session } from "@desktop/lib/protocol";
 import { useApp } from "../lib/app";
-import { phoneBoards } from "../lib/board";
+import { sessionBoards } from "../lib/board";
 import { useBusy } from "../lib/busy";
 import { type LinkRow, linkSheet } from "../lib/taskView";
 import { CategoryGlyph } from "../screens/Tasks";
@@ -19,7 +19,7 @@ export function LinkSheet({ host, session, onClose }: { host: string; session: S
   const [q, setQ] = useState("");
   const { busy, error, run } = useBusy();
   const d = data[host];
-  const boards = phoneBoards(hosts, data, null).filter((b) => b.host === host && b.workspace === session.workspace_id);
+  const boards = sessionBoards(hosts, data, host, session);
   if (!d) return null;
   const sheet = linkSheet(boards, d, session, q, Date.now());
   const link = (r: LinkRow) => void run(() => rpc(host, M.sessionUpdate, { id: session.id, task: { connection: r.task.connection, key: r.task.key, url: r.task.url } })).then((ok) => ok && onClose());

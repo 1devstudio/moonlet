@@ -290,7 +290,7 @@ export function TaskScreen({ board, task, created }: { board: string; task: stri
                 <span className="truncate font-mono text-[13px]">{w.branch}</span>
                 <span className="text-[12px] text-faint">Worktree without a session</span>
               </span>
-              <Btn className="h-9" onClick={() => startFromTask({ board, task, worktree: w })}>
+              <Btn className="h-9" onClick={() => startFromTask({ board, task, worktree: { path: w.path, branch: w.branch, project: w.project } })}>
                 Start
               </Btn>
             </div>

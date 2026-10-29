@@ -111,6 +111,19 @@ describe("a task's comments through the Mac (X76)", () => {
     expect(useComments.getState().byTask[id]).toMatchObject({ draft: "", posting: false, postError: null });
   });
 
+  it("keeps the newest load's comments when an older answer comes last", async () => {
+    let release: (v: unknown) => void = () => {};
+    let n = 0;
+    // The first load's answer is held back; the second answers at once.
+    replies.comments = () => (n++ === 0 ? new Promise((r) => (release = r)) : { comments: [ada], more: false });
+    const older = loadComments(b, task);
+    await vi.waitFor(() => expect(n).toBe(1));
+    await loadComments(b, task);
+    release({ comments: [], more: true });
+    await older;
+    expect(useComments.getState().byTask[id]).toMatchObject({ comments: [ada], more: false });
+  });
+
   it("keeps a refused comment with its reason, and says why comments did not load", async () => {
     replies.comment = () => {
       throw new Error("Linear refused the comment");
