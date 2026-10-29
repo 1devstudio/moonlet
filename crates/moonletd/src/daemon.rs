@@ -2931,10 +2931,13 @@ impl Daemon {
                     continue;
                 }
             }
-            if let Err(e) = self.sessions.let_go_session(&s.id).await {
+            let keep_at = self.session_copies.worktree_keep_folder(&s.path);
+            if let Err(e) = self.sessions.let_go_session(&s.id, &keep_at).await {
                 tracing::warn!(session = %s.id, "cannot let go of a session another member owns: {e:#}");
                 continue;
             }
+            tracing::info!(session = %s.id, "its worktree, as it was here, is kept in {}", keep_at.display());
+            self.session_copies.forget_sent(&s.id);
             tracing::info!(session = %s.id, %owner, "another member runs this session now; keeping a copy of it");
             if let Err(e) = self.sync.start(s.id.clone()) {
                 tracing::warn!(session = %s.id, "cannot keep a copy of it: {}", e.message);

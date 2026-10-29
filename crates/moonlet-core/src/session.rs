@@ -1195,10 +1195,19 @@ impl SessionManager {
     }
 
     /// Lets go of session `id`, which the central host gave another member
-    /// (X73): it leaves this member's state, its terminals end, and its
-    /// worktree goes. Its record is the new owner's, so it is not touched.
-    pub async fn let_go_session(&self, id: &str) -> Result<()> {
+    /// (X73): it leaves this member's state and its terminals end. Its
+    /// worktree is never deleted: it moves, whole, to `keep_at`, ignored
+    /// files and all, and git forgets it. Its record is the new owner's,
+    /// so it is not touched.
+    pub async fn let_go_session(&self, id: &str, keep_at: &Path) -> Result<()> {
         let s = self.session(id)?;
+        if Path::new(&s.path).exists() {
+            if let Some(parent) = keep_at.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::rename(&s.path, keep_at)
+                .with_context(|| format!("cannot move {} to {}", s.path, keep_at.display()))?;
+        }
         for t in &s.terminals {
             let _ = self.terminals.kill(*t, true);
             if let Some(chats) = self.chats.get() {
@@ -1210,7 +1219,7 @@ impl SessionManager {
             Ok(())
         })?;
         if let Ok(repo) = self.project(&s.project_id) {
-            let _ = git::git(Path::new(&repo.path), &["worktree", "remove", "--force", &s.path]).await;
+            let _ = git::git(Path::new(&repo.path), &["worktree", "prune"]).await;
         }
         self.emit_sessions();
         Ok(())

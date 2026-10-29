@@ -1981,12 +1981,19 @@ impl SessionCopies {
         let dir = Path::new(&s.path);
         let mut folder = None;
         let sent = self.data.lock().unwrap().sent.get(&s.id).cloned();
-        if let Some(sent) = sent
-            && dir.is_dir()
-        {
+        if dir.is_dir() {
             let now = git_sync::snapshot(dir, git_sync::MAX_FILE).await?.tree;
-            if now != sent.tree {
-                folder = self.keep_edits(dir, &sent.tree, &now).await?;
+            // Against what was last sent; with nothing sent, against the
+            // last commit, so nothing changed here is left out.
+            let was = match sent {
+                Some(sent) => sent.tree,
+                None => moonlet_core::git::git_text(dir, &["rev-parse", "HEAD^{tree}"])
+                    .await?
+                    .trim()
+                    .to_string(),
+            };
+            if now != was {
+                folder = self.keep_edits(dir, &was, &now).await?;
             }
         }
         let stamp = chrono_stamp();
@@ -2013,11 +2020,31 @@ impl SessionCopies {
                 let _ = std::fs::copy(&main, projects.join(format!("{id}.fork-{stamp}.jsonl")));
             }
         }
-        let mut data = self.data.lock().unwrap();
-        data.sent.remove(&s.id);
-        self.save(&data);
-        self.talk.lock().unwrap().remove(&s.id);
         Ok(folder)
+    }
+
+    /// Forgets what was sent of session `id`, once it is let go of (X73).
+    pub fn forget_sent(&self, id: &str) {
+        let mut data = self.data.lock().unwrap();
+        data.sent.remove(id);
+        self.save(&data);
+        drop(data);
+        self.talk.lock().unwrap().remove(id);
+    }
+
+    /// Where a let-go session's worktree is kept: a new folder under
+    /// `sync-leftovers`, named after it.
+    pub fn worktree_keep_folder(&self, path: &str) -> PathBuf {
+        let name = Path::new(path)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let base = self.home.join("sync-leftovers");
+        let first = base.join(format!("{}-worktree-{}", segment(&name), chrono_stamp()));
+        std::iter::once(first.clone())
+            .chain((2..).map(|n| PathBuf::from(format!("{}-{n}", first.display()))))
+            .find(|p| !p.exists())
+            .unwrap()
     }
 
     /// Stops keeping `session` as a copy because this host is taking it

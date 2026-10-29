@@ -1856,11 +1856,27 @@ async fn a_member_that_lost_its_session_keeps_its_gap_and_follows_the_new_owner(
     assert!(terminals.iter().all(|t| t["id"] != agent));
     let kept: Vec<PathBuf> = std::fs::read_dir(book.home.path().join("sync-leftovers"))
         .unwrap()
-        .map(|e| e.unwrap().path().join("src/cart.ts"))
-        .filter(|p| p.exists())
+        .map(|e| e.unwrap().path())
         .collect();
-    assert_eq!(kept.len(), 1, "{kept:?}");
-    assert_eq!(std::fs::read_to_string(&kept[0]).unwrap(), "while away\n");
+    // The changed file on its own, and the whole worktree beside it.
+    let files: Vec<&PathBuf> = kept
+        .iter()
+        .filter(|p| !p.display().to_string().contains("-worktree-"))
+        .collect();
+    assert_eq!(files.len(), 1, "{kept:?}");
+    assert_eq!(
+        std::fs::read_to_string(files[0].join("src/cart.ts")).unwrap(),
+        "while away\n"
+    );
+    let whole: Vec<&PathBuf> = kept
+        .iter()
+        .filter(|p| p.display().to_string().contains("-worktree-"))
+        .collect();
+    assert_eq!(whole.len(), 1, "{kept:?}");
+    assert_eq!(
+        std::fs::read_to_string(whole[0].join("src/cart.ts")).unwrap(),
+        "while away\n"
+    );
     // It keeps a live copy of the session studio-mini runs now (X60).
     within(
         Duration::from_secs(30),
