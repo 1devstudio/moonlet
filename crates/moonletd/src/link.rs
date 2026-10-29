@@ -342,6 +342,8 @@ pub fn computer_name() -> String {
 pub struct WorkerLink {
     store: Mutex<LinkStore>,
     state: Mutex<LinkState>,
+    /// Since when the link has been down, while it is (X73).
+    down_since: Mutex<Option<u64>>,
     host: Mutex<Option<Arc<Host>>>,
     /// Which host is current: a stopped host's late news carries an older
     /// number and is ignored.
@@ -377,6 +379,7 @@ impl WorkerLink {
         Arc::new(WorkerLink {
             store: Mutex::new(store),
             state: Mutex::new(LinkState::Off),
+            down_since: Mutex::new(None),
             host: Mutex::new(None),
             generation: AtomicU64::new(0),
             synced: AtomicUsize::new(0),
@@ -409,6 +412,7 @@ impl WorkerLink {
             central: store.central_info(),
             worker: store.worker().clone(),
             state: self.state.lock().unwrap().clone(),
+            unreachable_since: *self.down_since.lock().unwrap(),
         }
     }
 
@@ -423,6 +427,14 @@ impl WorkerLink {
             let mut s = self.state.lock().unwrap();
             if *s == state {
                 return;
+            }
+            // Since when the central host has been out of reach (X73).
+            let mut down = self.down_since.lock().unwrap();
+            match &state {
+                LinkState::Connected { .. } | LinkState::Off => *down = None,
+                _ => {
+                    down.get_or_insert_with(now_ms);
+                }
             }
             *s = state;
         }
