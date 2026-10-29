@@ -10,7 +10,7 @@ import type { AgentState, Project, PullRequest, Section, Session } from "@deskto
 import type { WorkspaceRef } from "@desktop/lib/workspaces";
 import { holds } from "@desktop/lib/boardColumns";
 import { type Category, syncedColumns } from "@desktop/lib/boards";
-import { type Task, taskForSession, taskId } from "@desktop/lib/tasks";
+import { githubRepo, type Task, taskForSession, taskId } from "@desktop/lib/tasks";
 import { linkChoices } from "@desktop/lib/taskLinking";
 import type { TaskSnapshot } from "@desktop/lib/taskSnapshot";
 import type { HostData, Screen } from "./app";
@@ -174,8 +174,11 @@ export function sessionTask(d: HostData, s: Session, pr: PullRequest | null | un
   let snap: TaskSnapshot | undefined;
   let task: Task | null = null;
   // Its host's boards first, then those another member of its account shares (X68).
+  // The session's repository from its own host: another member's snapshot keys repositories by that member's project ids.
+  const project = d.projects.find((p) => p.id === s.project_id);
+  const ownRepo = (s.workspace_id ? d.tasks[s.workspace_id]?.repos[s.project_id] : null) ?? githubRepo(project?.identity?.origin ?? null);
   for (const sn of snapshotsOf(d, s, shared)) {
-    task = taskForSession(s, pr, sn.repos[s.project_id] ?? null, sn.tasks, sn.link);
+    task = taskForSession(s, pr, ownRepo ?? sn.repos[s.project_id] ?? null, sn.tasks, sn.link);
     if (task) {
       snap = sn;
       break;

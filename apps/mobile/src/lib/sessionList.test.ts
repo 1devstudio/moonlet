@@ -278,6 +278,15 @@ describe("sessionTask (X76)", () => {
     expect(suggestedTask(host, { ...s, branch: "x", name: "Remote hosts sidebar" }, [snap])).toEqual({ key: "MOON-142", id: `${LINEAR} MOON-142` });
   });
 
+  it("matches a GitHub issue on another member's board by the session's own repository, whatever that member's project ids", () => {
+    const gh = { ...moon142, connection: "github:github.com", key: "acme/web#12", url: "https://github.com/acme/web/issues/12", tracker: undefined, github: { repo: "acme/web", number: 12, closingPrs: [] } };
+    // The other member keys its repositories by its own project id.
+    const theirs = { ...snap, tasks: [gh], repos: { "p-on-air": "acme/web" }, boardData: { moon: { keys: [] } } };
+    const s = session("fix", "Fix", { branch: "12-fix-login", project_id: "moonlet" });
+    const host = data({ projects: [{ ...project("moonlet", "moonlet"), identity: { origin: "git@github.com:acme/web.git", root: "abc" } }], sessions: [s] });
+    expect(sessionTask(host, s, null, [theirs])?.key).toBe("#12");
+  });
+
   it("suggests a task whose title is the session's name, for a session with no task (shown as MOON-142?)", () => {
     const { s, ...host } = d(session("dark", "Remote hosts sidebar", { branch: "moonlet/sidebar", project_id: "moonlet" }));
     expect(sessionTask(host, s, null)).toBeNull();

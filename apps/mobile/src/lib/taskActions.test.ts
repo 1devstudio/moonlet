@@ -3,7 +3,7 @@ import type { BoardColumn, BoardConfig } from "@desktop/lib/boards";
 import type { Task } from "@desktop/lib/tasks";
 import { resolveTaskRequest } from "@desktop/lib/tasksRelay";
 import { emptyData, useApp } from "./app";
-import { commentAction, commentsAction, createAction, fixAction, loadComments, moveAction, moveOnMac, moveRefused, postComment, setCommentDraft, startedAction, syncAction, useComments, useTaskStore } from "./taskActions";
+import { commentAction, commentsAction, createAction, fixAction, loadComments, moveAction, moveOnMac, moveRefused, postComment, setCommentDraft, startedAction, startedOnMac, syncAction, useComments, useTaskStore } from "./taskActions";
 
 const calls = vi.hoisted(() => [] as unknown[][]);
 /** The Mac's answer per action kind; a function throws to refuse. */
@@ -81,6 +81,64 @@ describe("a move while moonlet is closed on the Mac (X76)", () => {
     expect(calls[0]).toEqual(["mac", "tasks.request", { workspace: "personal", action: { kind: "move", board: "moon", task: id, column: "In Progress", status: "s-progress" } }]);
     expect(useTaskStore.getState().moving[id]).toMatchObject({ waiting: false });
     expect(JSON.parse(localStorage.getItem("moonlet.mobile.tasks.waiting") ?? "[]")).toEqual([]);
+  });
+
+  it("keeps a waiting move when the Mac could not take it, and drops it only when the Mac refused", async () => {
+    replies.move = () => {
+      throw new Error("moonlet on the Mac did not answer.");
+    };
+    await moveOnMac(b, task, { label: "In Progress", status: "s-progress" });
+    useApp.setState({ data: { mac: { ...emptyData(), macOpen: true } } });
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    await vi.waitFor(() => expect(useTaskStore.getState().moving[id]).toMatchObject({ waiting: true }));
+    expect(JSON.parse(localStorage.getItem("moonlet.mobile.tasks.waiting") ?? "[]")).toHaveLength(1);
+    expect(useTaskStore.getState().failures[id]).toBeUndefined();
+    // Open again: sent again, and this time the Mac refuses it.
+    replies.move = () => {
+      throw new Error("Linear refused the move");
+    };
+    useApp.setState({ data: { mac: { ...emptyData(), macOpen: false } } });
+    useApp.setState({ data: { mac: { ...emptyData(), macOpen: true } } });
+    await vi.waitFor(() => expect(useTaskStore.getState().failures[id]).toBe("Linear refused the move"));
+    expect(JSON.parse(localStorage.getItem("moonlet.mobile.tasks.waiting") ?? "[]")).toEqual([]);
+    delete replies.move;
+  });
+
+  it("sends a newer move of a task only after the waiting one it replaces", async () => {
+    let release: (v: unknown) => void = () => {};
+    let n = 0;
+    replies.move = () => (n++ === 0 ? new Promise((r) => (release = r)) : {});
+    await moveOnMac(b, task, { label: "In Progress", status: "s-progress" });
+    useApp.setState({ data: { mac: { ...emptyData(), macOpen: true } } });
+    await vi.waitFor(() => expect(n).toBe(1));
+    const newer = moveOnMac(b, task, { label: "Done", status: "s-done" });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(n).toBe(1);
+    release({});
+    await newer;
+    expect(calls.map((c) => (c[2] as { action: { column: string } }).action.column)).toEqual(["In Progress", "Done"]);
+    delete replies.move;
+  });
+
+  it("says on the task when its start could not be told to the Mac", async () => {
+    replies.started = () => {
+      throw new Error("MOON-151: Linear refused the move");
+    };
+    useApp.setState({ data: { mac: { ...emptyData(), macOpen: true } } });
+    await startedOnMac(b, task, "Drag sessions", true);
+    expect(useTaskStore.getState().failures[id]).toBe("MOON-151: Linear refused the move");
+    delete replies.started;
+  });
+
+  it("keeps a move the Mac did not take while open, for the next open", async () => {
+    useApp.setState({ data: { mac: { ...emptyData(), macOpen: true } } });
+    replies.move = () => {
+      throw new Error("moonlet on the Mac closed before it answered.");
+    };
+    await moveOnMac(b, task, { label: "Done", status: "s-done" });
+    expect(useTaskStore.getState().moving[id]).toMatchObject({ status: "s-done", waiting: true });
+    expect(JSON.parse(localStorage.getItem("moonlet.mobile.tasks.waiting") ?? "[]")).toMatchObject([{ id, action: { column: "Done" } }]);
+    delete replies.move;
   });
 
   it("sends a move at once while the app is open", async () => {

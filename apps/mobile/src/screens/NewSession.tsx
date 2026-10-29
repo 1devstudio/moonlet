@@ -12,7 +12,7 @@ import { loadHost, showScreen, showTab, useApp, useShownWorkspace } from "../lib
 import { hostsApi } from "@desktop/lib/daemon";
 import { taskId, trackerOf } from "@desktop/lib/tasks";
 import { phoneBoards } from "../lib/board";
-import { askMac, startedAction } from "../lib/taskActions";
+import { startedOnMac } from "../lib/taskActions";
 import { taskPreset } from "../lib/taskView";
 import { MODES, branchPrefix, composer, modeHelp, projectChoices, setupLine } from "../lib/newSession";
 import { useBusy } from "../lib/busy";
@@ -268,7 +268,8 @@ export function NewSessionScreen() {
       });
       await loadHost(choice.host).catch(() => {});
       // The Mac records it and runs Keep in step's "session starts" (X46).
-      if (fromBoard && fromTask) void askMac(fromBoard, startedAction(fromTask, s.name, assign && !!preset?.assign)).catch(() => {});
+      // Its failure shows on the task's card and detail.
+      if (fromBoard && fromTask) void startedOnMac(fromBoard, fromTask, s.name, assign && !!preset?.assign);
       useApp.setState({ newFrom: null });
       setPrompt("");
       setPicked(null);

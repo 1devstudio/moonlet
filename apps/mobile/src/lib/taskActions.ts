@@ -85,17 +85,45 @@ export async function moveOnMac(b: Pick<PhoneBoard, "host" | "workspace" | "boar
     saveWaiting([...loadWaiting().filter((w) => w.id !== id), { host: b.host, workspace: b.workspace, id, action, move }]);
     return;
   }
-  await send(b.host, b.workspace, id, action, move);
+  try {
+    await send(b.host, b.workspace, id, action, move);
+  } catch (e) {
+    if (refusedByMac(e)) throw e;
+    // The Mac did not take it (closed meanwhile, or no answer): it waits for the next open.
+    const waiting: Move = { ...move, waiting: true };
+    useTaskStore.setState((s) => (s.moving[id] === move ? { moving: { ...s.moving, [id]: waiting } } : s));
+    saveWaiting([...loadWaiting().filter((w) => w.id !== id), { host: b.host, workspace: b.workspace, id, action, move: waiting }]);
+  }
 }
 
-async function send(host: string, workspace: string, id: string, action: TaskAction, move: Move) {
-  try {
-    await askMac({ host, workspace }, action);
-  } catch (e) {
-    const why = e instanceof Error ? e.message : String(e);
-    useTaskStore.setState((s) => moveRefused(s, id, move, why));
-    throw e;
-  }
+/** The relay's own errors: the Mac did not take the request, so it never refused it. */
+const NOT_TAKEN = new Set(["moonlet on the Mac did not answer.", "moonlet on the Mac closed before it answered.", "Open moonlet on the Mac to change tasks."]);
+
+/** Whether `e` says the Mac's app answered and refused, rather than that the request did not get there. */
+const refusedByMac = (e: unknown) => {
+  const code = e && typeof e === "object" && "code" in e ? String((e as { code: unknown }).code) : "failed";
+  return code === "failed" && !NOT_TAKEN.has(e instanceof Error ? e.message : String(e));
+};
+
+// Each task's last move on its way: a newer one goes after it, so the tracker ends where the user chose.
+const inFlight = new Map<string, Promise<unknown>>();
+
+/** Sends a move after any of the same task on its way; a refusal moves the card back and says why. */
+function send(host: string, workspace: string, id: string, action: TaskAction, move: Move): Promise<void> {
+  const before = inFlight.get(id) ?? Promise.resolve();
+  const p = before
+    .catch(() => {})
+    .then(() => askMac({ host, workspace }, action))
+    .then(
+      () => {},
+      (e) => {
+        if (refusedByMac(e)) useTaskStore.setState((s) => moveRefused(s, id, move, e instanceof Error ? e.message : String(e)));
+        throw e;
+      },
+    );
+  inFlight.set(id, p);
+  void p.catch(() => {}).finally(() => inFlight.get(id) === p && inFlight.delete(id));
+  return p;
 }
 
 // Waiting moves being sent now, by task id.
@@ -110,13 +138,24 @@ function sendWaiting(host: string) {
     useTaskStore.setState((s) => (s.moving[w.id] === undefined || s.moving[w.id].at === w.move.at ? { moving: { ...s.moving, [w.id]: move } } : s));
     sending.add(w.id);
     // Kept until the Mac answered: a phone app that quits meanwhile sends it again on its next start.
+    const done = () => saveWaiting(loadWaiting().filter((x) => x.id !== w.id || x.move.at !== w.move.at));
     void send(w.host, w.workspace, w.id, w.action, move)
-      .then(
-        () => saveWaiting(loadWaiting().filter((x) => x.id !== w.id || x.move.at !== w.move.at)),
+      .then(done, (e) => {
         // Refused: it went back on the board; no point sending it again.
-        () => saveWaiting(loadWaiting().filter((x) => x.id !== w.id || x.move.at !== w.move.at)),
-      )
+        if (refusedByMac(e)) return done();
+        // Not taken (the Mac closed, or did not answer): it waits again for the next open.
+        useTaskStore.setState((s) => (s.moving[w.id] === move ? { moving: { ...s.moving, [w.id]: { ...w.move, waiting: true } } } : s));
+      })
       .finally(() => sending.delete(w.id));
+  }
+}
+
+/** Tells the Mac a session started from `task`, for Keep in step (X46); a failure shows on the task. */
+export async function startedOnMac(b: Pick<PhoneBoard, "host" | "workspace">, task: Task, session: string, assign: boolean) {
+  try {
+    await askMac(b, startedAction(task, session, assign));
+  } catch (e) {
+    useTaskStore.setState((s) => ({ failures: { ...s.failures, [taskId(task)]: e instanceof Error ? e.message : String(e) } }));
   }
 }
 
