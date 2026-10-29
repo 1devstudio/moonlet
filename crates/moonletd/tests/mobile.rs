@@ -1153,3 +1153,71 @@ async fn a_phone_hears_when_the_app_opens_and_closes() {
     drop(second);
     assert_eq!(phone_event(&mut phone, "tasks.app").await, json!({ "open": false }));
 }
+
+/// The desktop app reaching this daemon over the tailnet, paired as a Mac,
+/// is an app too (X76): it shares boards and answers a phone's requests.
+#[tokio::test]
+async fn the_app_on_a_paired_mac_shares_boards_and_answers_over_the_tailnet() {
+    let mac = Mac::start(None).await;
+    let addr = mac.allow_phones().await;
+    let token = mac.pair(&addr).await;
+    let (mut phone, _) = auth(&addr, json!({ "token": token })).await;
+    hello(&mut phone, "moonlet-mobile").await;
+    let mut local = mac.app().await;
+    let ws = personal_workspace(&mut local).await;
+    let p: MobilePairing = local.request("mobile.pair_start", json!({ "kind": "desktop" })).await.unwrap();
+    drop(local);
+    let Some(Message::Authed { token: Some(desk), .. }) = auth(&addr, json!({ "pair": p.code, "device": "Alex's MacBook Pro", "kind": "desktop" })).await.1 else {
+        panic!("no desktop pairing")
+    };
+    let (mut desktop, _) = auth(&addr, json!({ "token": desk })).await;
+    hello(&mut desktop, "moonlet-app").await;
+
+    let Message::Response { result: Some(r), error: None, .. } = call_with(&mut desktop, 1, "tasks.set_snapshot", json!({ "workspace": ws, "snapshot": board_snapshot() })).await else {
+        panic!("the paired Mac's app could not share boards")
+    };
+    assert_eq!(r, json!(true));
+    let Message::Response { result: Some(r), .. } = call_with(&mut phone, 2, "tasks.app", json!({})).await else { panic!("no answer") };
+    assert_eq!(r, json!({ "open": true }));
+}
+
+/// Only the app a request went to answers it, and its leaving ends the
+/// phone's wait at once instead of after the timeout (X76).
+#[tokio::test]
+async fn only_the_app_asked_answers_and_its_leaving_ends_the_wait() {
+    let mac = Mac::start(None).await;
+    let addr = mac.allow_phones().await;
+    let token = mac.pair(&addr).await;
+    let (mut phone, _) = auth(&addr, json!({ "token": token })).await;
+    hello(&mut phone, "moonlet-mobile").await;
+    let mut first = mac.app().await;
+    let mut second = mac.app().await;
+
+    let asking = tokio::spawn(async move {
+        let started = std::time::Instant::now();
+        let m = call_with(&mut phone, 1, "tasks.request", json!({ "workspace": "personal", "action": { "kind": "started" } })).await;
+        (m, started.elapsed())
+    });
+    let ev = app_event(&mut first, "tasks.request").await;
+    let e = second.request::<_, bool>("tasks.answer", json!({ "request_id": ev["request_id"], "ok": true })).await.unwrap_err();
+    assert_eq!(e.to_string(), "forbidden: another app was asked");
+    drop(first);
+    let (m, took) = asking.await.unwrap();
+    let Message::Response { error: Some(e), .. } = m else { panic!("answered") };
+    assert_eq!(e.message, "moonlet on the Mac closed before it answered.");
+    assert!(took < Duration::from_millis(1400), "waited {took:?}");
+}
+
+/// A workspace merged into another takes its boards along (X76).
+#[tokio::test]
+async fn a_merged_workspace_takes_its_boards_along() {
+    let mac = Mac::start(None).await;
+    let mut app = mac.app().await;
+    let ws = personal_workspace(&mut app).await;
+    let other: moonlet_proto::types::Workspace = app.request("workspace.create", json!({ "name": "Acme", "color": "clay" })).await.unwrap();
+    let _: bool = app.request("tasks.set_snapshot", json!({ "workspace": other.id, "snapshot": board_snapshot() })).await.unwrap();
+    let _: bool = app.request("workspace.merge", json!({ "id": other.id, "into": ws })).await.unwrap();
+    let left: Value = app.request("tasks.snapshot", json!({})).await.unwrap();
+    assert_eq!(left, json!([]));
+    assert!(!mac.home.path().join("tasks").join(format!("{}.json", other.id)).exists());
+}

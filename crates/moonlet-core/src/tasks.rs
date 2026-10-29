@@ -100,13 +100,19 @@ impl TaskSnapshots {
         Ok(())
     }
 
-    /// Forgets `workspace`'s snapshot; true if it had one.
-    pub fn remove(&self, workspace: &str) -> bool {
+    /// Forgets `workspace`'s snapshot; true if it had one. A file that
+    /// cannot be removed keeps the snapshot, so a restart does not bring
+    /// back boards the phone was told were gone.
+    pub fn remove(&self, workspace: &str) -> Result<bool> {
         let mut saved = self.saved.lock().unwrap();
         if let Ok(name) = file_name(workspace) {
-            let _ = std::fs::remove_file(self.dir.join(name));
+            match std::fs::remove_file(self.dir.join(name)) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e).context("cannot remove the workspace's boards"),
+            }
         }
-        saved.remove(workspace).is_some()
+        Ok(saved.remove(workspace).is_some())
     }
 }
 
@@ -128,8 +134,18 @@ fn write_private(file: &Path, bytes: &[u8]) -> Result<()> {
     std::fs::rename(&tmp, file).with_context(|| format!("cannot save {}", file.display()))
 }
 
+/// Why an app's answer was not taken.
+#[derive(Debug, PartialEq, Eq)]
+pub enum AnswerRefused {
+    /// No request waits under that id: answered, timed out, or never sent.
+    NotWaiting,
+    /// The request went to another app connection.
+    NotYours,
+}
+
 pub struct TaskRelay {
-    pending: Mutex<BTreeMap<u64, oneshot::Sender<TasksAnswer>>>,
+    /// Each waiting request: the app connection it went to, and the phone's reply.
+    pending: Mutex<BTreeMap<u64, (u64, oneshot::Sender<TasksAnswer>)>>,
     next_id: AtomicU64,
     timeout: Duration,
 }
@@ -143,21 +159,21 @@ impl TaskRelay {
         }
     }
 
-    /// Sends `action` to the apps with `emit` and waits for the first
-    /// answer. `apps` is false when no app is connected: it fails at once.
+    /// Sends `action` with `emit` to app connection `app` and waits for its
+    /// answer. With no app connected it fails at once.
     pub async fn request(
         &self,
         workspace: String,
         action: Value,
-        apps: bool,
+        app: Option<u64>,
         emit: impl FnOnce(&TasksRequestEvent),
     ) -> Result<Value> {
-        if !apps {
+        let Some(app) = app else {
             bail!("Open moonlet on the Mac to change tasks.");
-        }
+        };
         let request_id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
-        self.pending.lock().unwrap().insert(request_id, tx);
+        self.pending.lock().unwrap().insert(request_id, (app, tx));
         emit(&TasksRequestEvent {
             request_id,
             workspace,
@@ -175,15 +191,33 @@ impl TaskRelay {
         }
     }
 
-    /// An app's answer; the first one wins.
-    pub fn answer(&self, answer: TasksAnswer) -> Result<()> {
-        let tx = self
-            .pending
-            .lock()
-            .unwrap()
-            .remove(&answer.request_id)
-            .ok_or_else(|| anyhow!("already answered"))?;
+    /// App connection `from`'s answer: only the app the request went to
+    /// answers it, once.
+    pub fn answer(&self, from: u64, answer: TasksAnswer) -> std::result::Result<(), AnswerRefused> {
+        let mut pending = self.pending.lock().unwrap();
+        match pending.get(&answer.request_id) {
+            None => return Err(AnswerRefused::NotWaiting),
+            Some((app, _)) if *app != from => return Err(AnswerRefused::NotYours),
+            Some(_) => {}
+        }
+        let (_, tx) = pending.remove(&answer.request_id).expect("checked above");
         let _ = tx.send(answer);
         Ok(())
+    }
+
+    /// App connection `app` went: the requests it had end now, not at the timeout.
+    pub fn closed(&self, app: u64) {
+        let mut pending = self.pending.lock().unwrap();
+        let ids: Vec<u64> = pending.iter().filter(|(_, (a, _))| *a == app).map(|(id, _)| *id).collect();
+        for id in ids {
+            if let Some((_, tx)) = pending.remove(&id) {
+                let _ = tx.send(TasksAnswer {
+                    request_id: id,
+                    ok: false,
+                    result: None,
+                    error: Some("moonlet on the Mac closed before it answered.".into()),
+                });
+            }
+        }
     }
 }
