@@ -1169,3 +1169,72 @@ async fn a_client_cannot_pick_a_relay_through_a_forwarded_request() {
         assert!(refused.starts_with("forbidden"), "{method}: {refused}");
     }
 }
+
+#[tokio::test]
+async fn a_terminal_can_be_followed_as_soon_as_its_member_links() {
+    use moonlet_proto::{Frame, Message};
+    let origin = Origin::new();
+    let scratch = tempfile::tempdir().unwrap();
+    let (mini_home, book_home) = (scratch.path().join("mini"), scratch.path().join("book"));
+    std::fs::create_dir_all(&mini_home).unwrap();
+    std::fs::create_dir_all(&book_home).unwrap();
+    let m = agent_env(&mini_home, Some(&origin));
+    let b = agent_env(&book_home, None);
+    let m: Vec<(&str, &str)> = m.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    let b: Vec<(&str, &str)> = b.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    let (mini, addr) = central_with(&m).await;
+    let book = mac_with(BOOK, "MacBook", &b).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    // Made before the Mac links, so the session is listed on studio-mini
+    // as soon as the link is up.
+    let made = new_session(&book, &project, "fix-cart").await;
+    let term = shell(&book, &made).await;
+    link(&book, &mini, &addr).await;
+    within(
+        Duration::from_secs(30),
+        "fix-cart on studio-mini",
+        || async {
+            with_copies(&mini)
+                .await
+                .iter()
+                .any(|s| s["id"] == made["id"] && s["owner"]["reachable"] == json!(true))
+        },
+    )
+    .await;
+
+    let mut phone = mini.app().await;
+    let attached: Value = phone
+        .request(
+            "session.attach",
+            json!({ "session": made["id"], "terminal": term }),
+        )
+        .await
+        .unwrap();
+    let relay = attached["info"]["id"].as_u64().unwrap() as u32;
+    phone
+        .send(&Frame::Input {
+            terminal: relay,
+            data: b"echo early-$((6*7))\n".to_vec(),
+        })
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let mut out = String::new();
+        loop {
+            match phone.next_frame().await.unwrap() {
+                Some(Frame::Output { terminal, data }) if terminal == relay => {
+                    out.push_str(&String::from_utf8_lossy(&data));
+                    if out.contains("early-42") {
+                        return;
+                    }
+                }
+                Some(Frame::Json(Message::Event { .. })) | Some(_) => {}
+                None => panic!("the connection ended"),
+            }
+        }
+    })
+    .await
+    .expect("no relayed output right after linking");
+    drop(scratch);
+}

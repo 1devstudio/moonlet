@@ -418,38 +418,29 @@ impl SessionCopies {
     }
 
     /// Hands input the central host relays to the terminal it is for, on
-    /// every link this member makes (X72).
+    /// every link this member makes, from the link's first frame (X72).
     fn take_relayed_input(self: &Arc<Self>) {
-        let me = Arc::downgrade(self);
-        let mut last: Option<usize> = None;
-        let me2 = self.clone();
-        tokio::spawn(async move {
-            loop {
-                if let Some(host) = me2.link.host() {
-                    let at = Arc::as_ptr(&host) as usize;
-                    if last != Some(at) {
-                        // A new link: what the old one relayed has no client.
-                        if let Some(me) = me.upgrade() {
-                            let gone: Vec<(TerminalId, u64)> =
-                                std::mem::take(&mut *me.relayed.lock().unwrap())
-                                    .into_values()
-                                    .collect();
-                            for (terminal, client) in gone {
-                                me.terminals.detach(terminal, client);
-                            }
-                        }
-                        let me = me.clone();
-                        host.set_relayed_input(Arc::new(move |relay, data| {
-                            if let Some(me) = me.upgrade() {
-                                me.relay_typed(relay, data);
-                            }
-                        }));
-                        last = Some(at);
+        let typed = Arc::downgrade(self);
+        let reset = Arc::downgrade(self);
+        self.link.set_relay_input(
+            Arc::new(move |relay, data| {
+                if let Some(me) = typed.upgrade() {
+                    me.relay_typed(relay, data);
+                }
+            }),
+            Arc::new(move || {
+                // A new link: what the old one relayed has no client.
+                if let Some(me) = reset.upgrade() {
+                    let gone: Vec<(TerminalId, u64)> =
+                        std::mem::take(&mut *me.relayed.lock().unwrap())
+                            .into_values()
+                            .collect();
+                    for (terminal, client) in gone {
+                        me.terminals.detach(terminal, client);
                     }
                 }
-                tokio::time::sleep(Duration::from_millis(500)).await;
-            }
-        });
+            }),
+        );
     }
 
     /// Passes the chat events of this member's sessions to its central

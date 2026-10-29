@@ -362,6 +362,8 @@ pub struct WorkerLink {
     forwarder: std::sync::OnceLock<Forwarder>,
     /// Takes the central host's terminal relays (X72).
     relayer: std::sync::OnceLock<Relayer>,
+    /// Takes input for those relays, and forgets an earlier link's (X72).
+    relay_input: std::sync::OnceLock<(moonlet_link::RelayedInput, Arc<dyn Fn() + Send + Sync>)>,
     sessions: Arc<SessionManager>,
     emit: Box<dyn Fn(Message) + Send + Sync>,
 }
@@ -384,6 +386,7 @@ impl WorkerLink {
             runs: std::sync::OnceLock::new(),
             forwarder: std::sync::OnceLock::new(),
             relayer: std::sync::OnceLock::new(),
+            relay_input: std::sync::OnceLock::new(),
             sessions,
             emit: Box::new(emit),
         })
@@ -590,6 +593,13 @@ impl WorkerLink {
         let _ = self.forwarder.set(f);
     }
 
+    /// What takes input for the terminals the central host relays, and
+    /// what forgets an earlier link's relays, each time a link is made
+    /// (X72). Set before the link starts.
+    pub fn set_relay_input(&self, sink: moonlet_link::RelayedInput, relink: Arc<dyn Fn() + Send + Sync>) {
+        let _ = self.relay_input.set((sink, relink));
+    }
+
     /// What attaches to the terminals the central host relays (X72).
     pub fn set_relayer(&self, f: Relayer) {
         let _ = self.relayer.set(f);
@@ -659,6 +669,13 @@ impl WorkerLink {
                     tokio::runtime::Handle::current(),
                 );
                 h.set_requests(Arc::new(WorkerRequests(Arc::downgrade(self))));
+                // Before the link can carry a relay (X72): what an earlier
+                // link relayed has no client any more, and input for the
+                // new link's relays has somewhere to go from its first frame.
+                if let Some((sink, relink)) = self.relay_input.get() {
+                    relink();
+                    h.set_relayed_input(sink.clone());
+                }
                 *host = Some(h);
             }
             _ => {
