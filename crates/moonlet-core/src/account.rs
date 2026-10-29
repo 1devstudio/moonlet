@@ -23,6 +23,10 @@ pub enum RecordKind {
     /// A design system or workspace design (X71): its `workspace`, `kind`,
     /// `slug`, `name`, `owner` (a worker id), `tree` and `agent`.
     Design,
+    /// A session (X72): its `name`, `project` (an identity), `workspace`,
+    /// `branch`, `owner` (the worker id of the member running its agent),
+    /// `created_at` and `archived`.
+    Session,
 }
 
 impl RecordKind {
@@ -33,6 +37,7 @@ impl RecordKind {
             RecordKind::Merge => "merge",
             RecordKind::Member => "member",
             RecordKind::Design => "design",
+            RecordKind::Session => "session",
         }
     }
 }

@@ -648,6 +648,21 @@ pub struct Session {
     /// Commands to restart after a daemon restart (S4).
     #[serde(default)]
     pub restore: Vec<RestoreEntry>,
+    /// The member that runs this session's agent, for a session another
+    /// member owns (X72); none for this host's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<SessionOwner>,
+}
+
+/// The member that owns a session another member lists (X72).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionOwner {
+    /// Its worker id (X41).
+    pub worker: String,
+    /// Its name, as it calls itself.
+    pub name: String,
+    /// Whether its link to this host is up, so requests can reach it.
+    pub reachable: bool,
 }
 
 /// A named, coloured scope with its own sections, sessions and (X33) Claude

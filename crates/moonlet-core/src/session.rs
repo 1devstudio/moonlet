@@ -1509,6 +1509,7 @@ impl SessionManager {
             terminals: vec![],
             layout: serde_json::Value::Null,
             restore: vec![],
+            owner: None,
         };
         // Until the session is saved, what was made for it goes again,
         // however this request ends.
@@ -3899,6 +3900,7 @@ mod tests {
             terminals: vec![],
             layout: serde_json::Value::Null,
             restore: vec![],
+            owner: None,
         };
         assert_eq!(
             agent_flags("claude", &s),

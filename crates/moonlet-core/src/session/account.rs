@@ -33,6 +33,8 @@ const MERGE: RecordKind = RecordKind::Merge;
 const MEMBER: RecordKind = RecordKind::Member;
 /// A design system or workspace design shared with every member (X71).
 const DESIGN: RecordKind = RecordKind::Design;
+/// A session, so every member knows which member runs it (X72).
+const SESSION: RecordKind = RecordKind::Session;
 
 type Listener = Arc<dyn Fn(Vec<Change>) + Send + Sync>;
 type Applied = Arc<dyn Fn(&[Change]) + Send + Sync>;
@@ -186,6 +188,11 @@ impl SessionManager {
                 lay_onto(&mut next, &log);
                 self.save(&next)?;
                 *st = next;
+                // Sessions made before X72, or while the log was away,
+                // get their records now.
+                if !session_changes(&st, &mut log, now_ms()).is_empty() {
+                    write_private(&path, &log)?;
+                }
                 log
             }
             None => {
@@ -326,6 +333,12 @@ impl SessionManager {
             change
         };
         self.account_changed(vec![change]);
+    }
+
+    /// The sessions of the account (X72), by session id; none without an
+    /// account.
+    pub fn session_records(&self) -> Map<String, Record> {
+        self.with_log(|log| log.records(SESSION))
     }
 
     /// Each member's name as it calls itself, by worker id (X71).
@@ -551,6 +564,58 @@ fn diff(old: &State, new: &State, log: &mut Log, now: u64) -> Vec<Change> {
         if old.merges.get(from) != Some(into) {
             out.push(log.set(now, MERGE, from, "into", json!(into)));
         }
+    }
+    out.extend(session_changes(new, log, now));
+    out
+}
+
+/// This member's own session as account fields (X72): what the other
+/// members show of it, with `owner` this member's worker id. A project
+/// without an identity gives `null`, as it is this member's alone.
+fn session_fields(st: &State, s: &Session, owner: &str) -> Record {
+    let project = st
+        .projects
+        .iter()
+        .find(|p| p.id == s.project_id)
+        .filter(|p| identity_key(&p.identity).is_some())
+        .map(|p| json!({ "origin": p.identity.origin, "root": p.identity.root }))
+        .unwrap_or(Value::Null);
+    Record::from([
+        ("name".to_string(), json!(s.name)),
+        ("project".to_string(), project),
+        ("workspace".to_string(), json!(s.workspace_id)),
+        ("branch".to_string(), json!(s.branch)),
+        ("owner".to_string(), json!(owner)),
+        ("created_at".to_string(), json!(s.created_at)),
+        ("archived".to_string(), json!(s.archived)),
+    ])
+}
+
+/// Records in `log` what changed of this member's own sessions since their
+/// records: their fields, and the records of sessions it no longer has.
+/// Sessions another member owns are that member's to record.
+fn session_changes(st: &State, log: &mut Log, now: u64) -> Vec<Change> {
+    let Some(me) = log_owner(log.member()).map(str::to_string) else {
+        return Vec::new();
+    };
+    let records = log.records(SESSION);
+    let mut out = Vec::new();
+    for s in st.sessions.iter().filter(|s| s.owner.is_none()) {
+        if log.is_deleted(SESSION, &s.id) {
+            continue;
+        }
+        let had = records.get(&s.id);
+        for (field, value) in session_fields(st, s, &me) {
+            if had.and_then(|r| r.get(&field)) != Some(&value) {
+                out.push(log.set(now, SESSION, &s.id, &field, value));
+            }
+        }
+    }
+    for (id, _) in records.iter().filter(|(id, r)| {
+        r.get("owner").and_then(Value::as_str) == Some(me.as_str())
+            && !st.sessions.iter().any(|s| &s.id == *id)
+    }) {
+        out.push(log.delete(now, SESSION, id));
     }
     out
 }
@@ -1843,6 +1908,46 @@ mod tests {
             .find(|w| w.id == "w9")
             .unwrap();
         assert_eq!(w.name, "Personal");
+    }
+
+    #[tokio::test]
+    async fn sessions_from_before_x72_get_records_the_other_members_read() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::write(
+            home.path().join("state.json"),
+            r#"{"version":3,"workspaces":[{"id":"7c1e2a9b0d44","name":"Acme","color":"blue","section_ids":["3f6b8c2d1e90"],"claude_profile":null,"created_at":1790000000000}],"sections":[{"id":"3f6b8c2d1e90","name":"Clients","project_ids":["a1b2c3d4e5f6"],"view":{"group_by":"status","sort_by":"name","filter":[]},"created_at":1790000000001}],"profiles":[],"projects":[{"id":"a1b2c3d4e5f6","name":"shop","path":"/Users/alex/src/shop","base_branch":"main","identity":{"origin":"github.com/acme/shop","root":"9f2c4e1a7b3d5f6e8a0c2e4f6a8b0c2d4e6f8a0b"}}],"sessions":[{"id":"5e7f9a1b3c5d","project_id":"a1b2c3d4e5f6","name":"fix-cart","branch":"moonlet/fix-cart","base":"main","path":"/Users/alex/.moonlet/worktrees/shop/fix-cart","agent":"claude","archived":false,"created_at":1790000000002,"workspace_id":"7c1e2a9b0d44"}]}"#,
+        )
+        .unwrap();
+        // A log from before X72: it has the workspace, but no session.
+        std::fs::write(
+            home.path().join("account.json"),
+            r#"{"member":"book.k3x9q2","changes":[{"stamp":{"ms":1790000000003,"n":0,"member":"book.k3x9q2"},"seq":1,"kind":"workspace","id":"7c1e2a9b0d44","op":{"set":{"field":"name","value":"Acme"}}}]}"#,
+        )
+        .unwrap();
+        let env: BTreeMap<String, String> = std::env::vars().collect();
+        let book = SessionManager::load(
+            home.path().join("state.json"),
+            home.path().join("worktrees"),
+            TerminalManager::new(home.path().join("s.sock"), env),
+        );
+        book.attach_account(home.path().join("account.json"), "book")
+            .unwrap();
+        let (_h2, mini) = member("mini").await;
+        sync(&book, &mini);
+        let records = mini.session_records();
+        let fix_cart = records.get("5e7f9a1b3c5d").expect("fix-cart's record");
+        assert_eq!(
+            serde_json::Value::Object(fix_cart.clone().into_iter().collect()),
+            serde_json::json!({
+                "name": "fix-cart",
+                "project": { "origin": "github.com/acme/shop", "root": "9f2c4e1a7b3d5f6e8a0c2e4f6a8b0c2d4e6f8a0b" },
+                "workspace": "7c1e2a9b0d44",
+                "branch": "moonlet/fix-cart",
+                "owner": "book",
+                "created_at": 1790000000002u64,
+                "archived": false,
+            })
+        );
     }
 
     #[tokio::test]
