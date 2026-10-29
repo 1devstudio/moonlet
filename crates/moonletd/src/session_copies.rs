@@ -119,6 +119,45 @@ fn transcript_files(folder: &Path, id: &str) -> Vec<String> {
     out
 }
 
+/// The chat methods a request passed on for a session may call, on one of
+/// its chats (X72): what the phone does with a chat. Never `chat.add_dir`
+/// nor `chat.mcp`, which give the agent more of the member.
+const FORWARDED_CHAT: &[&str] = &[
+    m::CHAT_STATE,
+    m::CHAT_SEND,
+    m::CHAT_SEND_NOW,
+    m::CHAT_UNQUEUE,
+    m::CHAT_INTERRUPT,
+    m::CHAT_PERMISSION,
+    m::CHAT_ASIDE,
+    m::CHAT_STOP_AGENT,
+    m::CHAT_SETTINGS,
+];
+
+/// The git and GitHub methods a request passed on for a session may call,
+/// in its worktree (X72): what the phone does with a session's changes and
+/// PR. Never the member's own git settings.
+const FORWARDED_GIT: &[&str] = &[
+    m::GIT_STATUS,
+    m::GIT_DIFF,
+    m::GIT_FILE_VERSIONS,
+    m::GIT_LOG,
+    m::GIT_STAGE,
+    m::GIT_UNSTAGE,
+    m::GIT_REVERT,
+    m::GIT_APPLY_PATCH,
+    m::GIT_COMMIT,
+    m::GIT_BRANCHES,
+    m::GIT_BASE_STATUS,
+    m::GIT_PULL_BASE,
+    m::GIT_UNPUSHED,
+    m::GIT_PUSH,
+    m::GH_PRS,
+    m::GH_PR_CONTEXT,
+    m::GH_PR_STATUS,
+    m::GH_PR_STACK,
+];
+
 /// What a request passed on for a session may reach (X72), and its params
 /// aimed at that session: its own chats and terminals, git and GitHub in
 /// its worktree `path`, and its own archive. Anything else is refused, so
@@ -144,7 +183,7 @@ pub fn scope(
     };
     match method {
         m::CHAT_SUMMARIES | m::TERMINAL_LIST => {}
-        _ if method.starts_with("chat.") => {
+        _ if FORWARDED_CHAT.contains(&method) => {
             let id = params.get("id").and_then(Value::as_u64);
             if !id.is_some_and(|id| terminals.iter().any(|t| u64::from(*t) == id)) {
                 return Err(RpcError::new(
@@ -152,8 +191,17 @@ pub fn scope(
                     "that chat is not one of the session's",
                 ));
             }
+            // Turning every permission check off waits for the Mac itself.
+            if method == m::CHAT_SETTINGS
+                && params.get("mode").and_then(Value::as_str) == Some("bypassPermissions")
+            {
+                return Err(RpcError::new(
+                    "forbidden",
+                    "bypassing permissions is set on the Mac",
+                ));
+            }
         }
-        _ if method.starts_with("git.") || matches!(method, m::GH_PRS | m::GH_PR_CONTEXT) => {
+        _ if FORWARDED_GIT.contains(&method) => {
             params.insert("path".to_string(), Value::String(path.to_string()));
         }
         m::SESSION_ARCHIVE => {
@@ -1322,12 +1370,37 @@ mod tests {
                 .code,
             "forbidden"
         );
+        assert_eq!(
+            ok(m::CHAT_ADD_DIR, serde_json::json!({ "id": 7, "path": "/" }))
+                .unwrap_err()
+                .code,
+            "forbidden"
+        );
+        assert_eq!(
+            ok(
+                m::CHAT_SETTINGS,
+                serde_json::json!({ "id": 7, "mode": "bypassPermissions" })
+            )
+            .unwrap_err()
+            .code,
+            "forbidden"
+        );
+        assert!(
+            ok(
+                m::CHAT_SETTINGS,
+                serde_json::json!({ "id": 7, "mode": "plan" })
+            )
+            .is_ok()
+        );
         for method in [
             "terminal.create",
             "mobile.pair_start",
             "link.set",
             "fs.read",
             "session.create",
+            "git.settings",
+            "git.set_settings",
+            "chat.mcp",
         ] {
             assert_eq!(
                 ok(method, serde_json::json!({})).unwrap_err().code,
