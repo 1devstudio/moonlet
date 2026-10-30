@@ -102,11 +102,19 @@ pub fn select(
     Ok(out)
 }
 
+/// Folders never looked into for copied files: build output each member
+/// makes with its setup command, and git's own.
+const NEVER_WALKED: [&str; 3] = ["node_modules", "target", ".git"];
+/// At most this many entries are looked at inside ignored folders, nearest
+/// the root first, so a big ignored folder cannot slow every scan down.
+const MAX_WALKED: usize = 20_000;
+
 /// The files of worktree `dir` that git does not track: untracked ones, and
-/// ignored ones not inside an ignored folder (`node_modules/` is never
-/// walked).
+/// ignored ones, also inside an ignored folder. Folders named in
+/// [`NEVER_WALKED`] are never looked into, and links are never followed.
 pub async fn untracked(dir: &Path) -> Result<Vec<String>> {
     let mut out = Vec::new();
+    let mut ignored_dirs = std::collections::VecDeque::new();
     for args in [
         &["ls-files", "--others", "--exclude-standard", "-z"][..],
         &[
@@ -118,13 +126,52 @@ pub async fn untracked(dir: &Path) -> Result<Vec<String>> {
             "-z",
         ][..],
     ] {
+        let walk_folders = args.contains(&"--ignored");
         let bytes = crate::git::git(dir, args).await?;
-        out.extend(
-            bytes
-                .split(|b| *b == 0)
-                .filter(|p| !p.is_empty() && !p.ends_with(b"/"))
-                .filter_map(|p| std::str::from_utf8(p).ok().map(str::to_string)),
-        );
+        for p in bytes.split(|b| *b == 0).filter(|p| !p.is_empty()) {
+            let Ok(p) = std::str::from_utf8(p) else {
+                continue;
+            };
+            match p.strip_suffix('/') {
+                Some(folder) if walk_folders => ignored_dirs.push_back(folder.to_string()),
+                Some(_) => {}
+                None => out.push(p.to_string()),
+            }
+        }
+    }
+    // Breadth first, so a file near the root is found before the walk
+    // limit, whatever lies deep in another ignored folder.
+    let mut walked = 0;
+    while let Some(folder) = ignored_dirs.pop_front() {
+        let name = folder.rsplit('/').next().unwrap_or(&folder);
+        if NEVER_WALKED.contains(&name) {
+            continue;
+        }
+        let Ok(entries) = std::fs::read_dir(dir.join(&folder)) else {
+            continue;
+        };
+        let mut entries: Vec<_> = entries
+            .filter_map(|e| e.ok())
+            .filter_map(|e| Some((e.file_name().into_string().ok()?, e.file_type().ok()?)))
+            .collect();
+        // Another repository or worktree inside an ignored folder is not
+        // this worktree's.
+        if entries.iter().any(|(n, _)| n == ".git") {
+            continue;
+        }
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        for (name, kind) in entries {
+            if walked >= MAX_WALKED {
+                return Ok(out);
+            }
+            walked += 1;
+            let path = format!("{folder}/{name}");
+            if kind.is_dir() {
+                ignored_dirs.push_back(path);
+            } else {
+                out.push(path);
+            }
+        }
     }
     Ok(out)
 }
@@ -226,6 +273,44 @@ mod tests {
             vec![
                 (".env.local".to_string(), 10),
                 (".env.test".to_string(), 12)
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_file_inside_an_ignored_folder_is_copied_but_build_output_is_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(dir.path())
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        std::fs::write(
+            dir.path().join(".gitignore"),
+            "secrets/\nnode_modules/\ntarget/\n",
+        )
+        .unwrap();
+        for (path, body) in [
+            ("secrets/.env", "API_KEY=1\n"),
+            ("secrets/deep/.env.local", "DEEP=1\n"),
+            ("node_modules/x/.env", "DEP=1\n"),
+            ("secrets/node_modules/y/.env", "DEP=1\n"),
+            ("target/debug/.env", "BUILD=1\n"),
+            ("secrets/other/.git", "gitdir: /elsewhere\n"),
+            ("secrets/other/.env", "OTHER=1\n"),
+        ] {
+            let p = dir.path().join(path);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, body).unwrap();
+        }
+        let m = in_worktree(dir.path(), &pats(&DEFAULT)).await.unwrap();
+        assert_eq!(
+            m.files,
+            vec![
+                ("secrets/.env".to_string(), 10),
+                ("secrets/deep/.env.local".to_string(), 7)
             ]
         );
     }
