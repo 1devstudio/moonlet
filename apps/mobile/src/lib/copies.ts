@@ -25,6 +25,19 @@ export function continueOffer(s: Session, central: string): string | null {
   return `Continue on ${central}`;
 }
 
+/** What the phone says when Continue on <central> failed (X73), by the
+ * central host's error: the member came back, the session is kept on it,
+ * the central host holds no copy yet, or the request did not get through. */
+export function continueFailed(e: unknown, s: Session, central: string): string {
+  const code = e && typeof e === "object" && "code" in e ? String(e.code) : null;
+  const owner = s.owner?.name ?? "its member";
+  if (code === "reachable") return `${owner} is back: ${s.name} goes on there.`;
+  if (code === "pinned") return `${s.name} is kept on ${owner}.`;
+  if (code === "no_copy") return `${central} has no copy of ${s.name} yet.`;
+  const message = e && typeof e === "object" && "message" in e ? String(e.message) : String(e);
+  return `Could not continue on ${central}: ${message}`;
+}
+
 /** What the phone shows of copy host session `id`: the central host's
  * data, with the session holding the terminals and chats its member gave
  * (`terminal.list` and `chat.summaries` through the central host). */

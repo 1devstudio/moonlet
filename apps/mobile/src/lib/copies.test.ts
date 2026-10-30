@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Session } from "@desktop/lib/protocol";
-import { continueOffer, copyData, dropRelisted, ownerLine, readOnlyLine } from "./copies";
+import { continueFailed, continueOffer, copyData, dropRelisted, ownerLine, readOnlyLine } from "./copies";
 
 const session = (owner?: Session["owner"]): Session => ({
   id: "5e7f9a1b3c5d",
@@ -73,5 +73,17 @@ describe("continuing a session whose member is away (X73)", () => {
     expect(continueOffer(session({ worker: "w1", name: "MacBook", reachable: true }), "studio-mini")).toBeNull();
     expect(continueOffer({ ...session({ worker: "w1", name: "MacBook", reachable: false }), pinned: "w1" }, "studio-mini")).toBeNull();
     expect(continueOffer(session(), "studio-mini")).toBeNull();
+  });
+
+  it("says why it could not continue, so the user can try again", () => {
+    const away = session({ worker: "w1", name: "MacBook", reachable: false });
+    expect(continueFailed({ code: "reachable", message: "the member running that session is reachable" }, away, "studio-mini")).toBe(
+      "MacBook is back: fix-cart goes on there.",
+    );
+    expect(continueFailed({ code: "pinned", message: "that session is kept on its member" }, away, "studio-mini")).toBe("fix-cart is kept on MacBook.");
+    expect(continueFailed({ code: "no_copy", message: "this host has no copy of that session yet" }, away, "studio-mini")).toBe(
+      "studio-mini has no copy of fix-cart yet.",
+    );
+    expect(continueFailed(new Error("the connection closed"), away, "studio-mini")).toBe("Could not continue on studio-mini: the connection closed");
   });
 });

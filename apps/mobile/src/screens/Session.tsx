@@ -18,7 +18,7 @@ import { STATE_COLOR } from "../lib/palette";
 import { sessionLine, shellTerminals } from "../lib/chatView";
 import { useGitStatus, usePr } from "../lib/rowDetails";
 import { checksDot } from "../lib/checks";
-import { continueOffer, readOnlyLine } from "../lib/copies";
+import { continueFailed, continueOffer, readOnlyLine } from "../lib/copies";
 import { parseCopyHost } from "@desktop/lib/copyHost";
 import { archiveSheet, archivedNote } from "../lib/archive";
 import { useBusy } from "../lib/busy";
@@ -152,6 +152,9 @@ export function SessionScreen({ host, id, tab }: { host: string; id: string; tab
   const [linking, setLinking] = useState(false);
   const hosts = useApp((s) => s.hosts);
   const data = useApp((s) => s.data);
+  // Continue on <central> (X73): in progress, and why it failed.
+  const [continuing, setContinuing] = useState(false);
+  const [continueError, setContinueError] = useState<string | null>(null);
   if (!d || !session) {
     return (
       <div className="p-6 text-muted" style={{ paddingTop: "calc(var(--safe-top) + 20px)" }}>
@@ -243,16 +246,25 @@ export function SessionScreen({ host, id, tab }: { host: string; id: string; tab
           <span className="min-w-0 flex-1">{readOnlyLine(session, centralLabel)}</span>
           {central && continueOffer(session, centralLabel) && (
             <Btn
-              onClick={() =>
+              disabled={continuing}
+              onClick={() => {
+                setContinuing(true);
+                setContinueError(null);
                 void rpc(central, M.sessionContinueHere, { session: session.id })
                   .then(() => showScreen({ kind: "session", host: central, id: session.id, tab: "chat" }))
-                  .catch(console.error)
-              }
+                  .catch((e) => setContinueError(continueFailed(e, session, centralLabel)))
+                  .finally(() => setContinuing(false));
+              }}
             >
               {continueOffer(session, centralLabel)}
             </Btn>
           )}
         </div>
+      )}
+      {continueError && (
+        <p role="alert" className="m-0 flex-none border-b border-border bg-panel px-4 py-2 text-[13px] leading-snug text-error">
+          {continueError}
+        </p>
       )}
       <div className="min-h-0 flex-1">
         {shown === "chat" && <ChatTab host={host} session={session} />}
