@@ -231,6 +231,22 @@ pub async fn receivable(
         .collect())
 }
 
+/// Which of `paths`, sent by another member, the `patterns` name, whatever
+/// their size; a path that is not a plain path inside the worktree is
+/// refused.
+pub fn named(patterns: &[String], paths: &[String]) -> Result<std::collections::BTreeSet<String>> {
+    for path in paths {
+        check_path(path)?;
+    }
+    let picked = select(patterns, paths, |_| Some(0))?;
+    Ok(picked
+        .files
+        .into_iter()
+        .map(|(p, _)| p)
+        .chain(picked.skipped.into_iter().map(|(p, _)| p))
+        .collect())
+}
+
 /// What the list names in worktree `dir`, sized from the disk.
 pub async fn in_worktree(dir: &Path, patterns: &[String]) -> Result<Matched> {
     let candidates = untracked(dir).await?;

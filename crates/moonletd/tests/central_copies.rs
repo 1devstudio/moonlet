@@ -3554,6 +3554,44 @@ async fn a_copied_file_of_exactly_one_mebibyte_reaches_the_other_checkout() {
     .await;
 }
 
+/// Sets `shop`'s list on the MacBook and waits until studio-mini has it.
+async fn list_is(book: &Daemon, mini: &Daemon, patterns: &[&str]) {
+    async fn shop_id(d: &Daemon) -> String {
+        let projects: Vec<Value> = d.call("project.list", json!({})).await;
+        projects[0]["id"].as_str().unwrap().to_string()
+    }
+    let (on_book, on_mini) = (shop_id(book).await, shop_id(mini).await);
+    let _: Value = book
+        .call(
+            "project.copied_files.set",
+            json!({ "id": on_book, "patterns": patterns }),
+        )
+        .await;
+    within(Duration::from_secs(10), "the list on studio-mini", || async {
+        copied_files(mini, &on_mini).await["patterns"] == json!(patterns)
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_pattern_taken_off_the_list_leaves_the_other_files_in_step() {
+    let origin = Origin::new();
+    let (mini, _addr, book, on_mini, on_book) = two_checkouts(&origin).await;
+    list_is(&book, &mini, &[".env", ".env.local"]).await;
+    std::fs::write(on_book.join(".env.local"), "FLAG=1\n").unwrap();
+    std::fs::write(on_book.join(".env"), "A=1\n").unwrap();
+    reads(&on_mini.join(".env.local"), "FLAG=1\n").await;
+    reads(&on_mini.join(".env"), "A=1\n").await;
+    list_is(&book, &mini, &[".env"]).await;
+    std::fs::write(on_book.join(".env"), "A=2\n").unwrap();
+    reads(&on_mini.join(".env"), "A=2\n").await;
+    // Off the list is not deleted: each side keeps its own.
+    assert_eq!(
+        std::fs::read_to_string(on_mini.join(".env.local")).unwrap(),
+        "FLAG=1\n"
+    );
+}
+
 #[tokio::test]
 async fn an_unarchived_sessions_remade_worktree_starts_with_its_checkouts_env() {
     let book = mac(BOOK, "MacBook").await;

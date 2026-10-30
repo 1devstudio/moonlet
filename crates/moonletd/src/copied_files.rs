@@ -260,14 +260,15 @@ impl Checkouts {
             })
             .collect();
         let mut t = self.tables.lock().unwrap();
-        if !files::notice(
-            t.checkouts.entry(key.to_string()).or_default(),
-            &now,
-            now_ms(),
-            me,
-        )
-        .is_empty()
-        {
+        let table = t.checkouts.entry(key.to_string()).or_default();
+        // A path the list no longer names is no longer kept in step; it
+        // stays on each side as it is.
+        let paths: Vec<String> = table.keys().cloned().collect();
+        let named = files::named(patterns, &paths)?;
+        let before = table.len();
+        table.retain(|p, _| named.contains(p));
+        let pruned = table.len() != before;
+        if !files::notice(table, &now, now_ms(), me).is_empty() || pruned {
             self.save(&t);
         }
         Ok(bytes)
@@ -362,9 +363,14 @@ impl Checkouts {
         let answer: m::FilesCheckedOut = serde_json::from_value(answer)?;
         // Only what this side's own list names, within its limits, and not
         // tracked by its git.
+        // A path its list no longer names, or does not name yet, is left
+        // out, not refused, so the others still go.
+        let paths: Vec<String> = answer.files.iter().map(|f| f.path.clone()).collect();
+        let named = files::named(patterns, &paths)?;
         let sizes: Vec<(String, u64)> = answer
             .files
             .iter()
+            .filter(|f| named.contains(&f.path))
             .map(|f| (f.path.clone(), f.content.as_deref().map_or(0, decoded_len)))
             .collect();
         let takes = files::receivable(dir, patterns, &sizes).await?;
@@ -424,9 +430,12 @@ impl Checkouts {
         let key = identity_key(&r.identity).context("a project without a root commit")?;
         let _one = self.one.lock().await;
         let bytes = self.look(&key, dir, patterns, me).await?;
+        let paths: Vec<String> = r.files.iter().map(|f| f.path.clone()).collect();
+        let named = files::named(patterns, &paths)?;
         let sizes: Vec<(String, u64)> = r
             .files
             .iter()
+            .filter(|f| named.contains(&f.path))
             .map(|f| (f.path.clone(), f.content.as_deref().map_or(0, decoded_len)))
             .collect();
         let takes = files::receivable(dir, patterns, &sizes).await?;
