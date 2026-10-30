@@ -1432,6 +1432,32 @@ impl Daemon {
                 self.open_url(r, conn.peer_pid).await?;
                 ok(true)
             }
+            m::SESSION_COPIED_FILES => {
+                let r: m::SessionCopiedFiles = params(p)?;
+                // This Mac's own session, or its live copy of the central
+                // host's.
+                let (path, identity) = match self.sessions.session(&r.session) {
+                    Ok(s) if s.owner.is_none() => {
+                        let identity = self.sessions.list_projects().into_iter().find(|p| p.id == s.project_id).map(|p| p.identity);
+                        (std::path::PathBuf::from(s.path), identity)
+                    }
+                    _ => {
+                        let (_, path, identity) = self
+                            .sync
+                            .live_copies()
+                            .into_iter()
+                            .find(|(id, _, _)| *id == r.session)
+                            .ok_or_else(|| RpcError::new("not_found", "no such session here"))?;
+                        (path, identity)
+                    }
+                };
+                let patterns = self.copied_patterns(identity.as_ref());
+                let m = moonlet_core::copied_files::in_worktree(&path, &patterns).await.map_err(internal)?;
+                ok(m::CopiedFilesStatus {
+                    files: m.files.into_iter().map(|(p, _)| p).collect(),
+                    skipped: m.skipped.into_iter().map(|(path, reason)| m::SkippedFile { path, reason }).collect(),
+                })
+            }
             m::FILES_CHECKOUT => {
                 // Only a linked Mac's daemon, as for `session.files` (X74).
                 let refused = || RpcError::new("forbidden", "only a member of the account keeps its checkouts in step");
@@ -4052,6 +4078,12 @@ impl Daemon {
                 let d = d.upgrade().ok_or_else(|| RpcError::new("gone", "the daemon is stopping"))?;
                 Ok(serde_json::to_value(d.tunnel_here(r).await?).unwrap_or_default())
             })
+        }));
+        let d = Arc::downgrade(self);
+        crate::copied_files::on_kept(Arc::new(move |k| {
+            if let Some(d) = d.upgrade() {
+                d.terminals.emit(Message::event(m::EV_FILES_KEPT, k));
+            }
         }));
         self.session_copies.spawn();
         self.keep_copied_files();

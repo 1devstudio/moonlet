@@ -388,6 +388,10 @@ where
                     if phone
                         && name == moonlet_proto::methods::EV_BROWSER_SHOW
                         && data.get("device").and_then(Value::as_str).is_some_and(|d| Some(d) != device.as_deref()) => {}
+                // Where a secret's other version went is for this Mac's
+                // app alone (X74).
+                Ok(Message::Event { name, .. })
+                    if (no_jobs || phone) && name == moonlet_proto::methods::EV_FILES_KEPT => {}
                 // Design systems and designs stay on the Mac (X64, X65): a
                 // paired device hears none of the Mac-only events.
                 Ok(Message::Event { name, .. }) if phone && MAC_ONLY_EVENTS.contains(&name.as_str()) => {}

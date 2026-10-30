@@ -3522,6 +3522,7 @@ async fn both_checkouts_changed_while_unlinked_the_later_change_wins_and_the_oth
     let (mini, _addr, mut book, on_mini, on_book) = two_checkouts(&origin).await;
     std::fs::write(on_book.join(".env"), "A=1\n").unwrap();
     reads(&on_mini.join(".env"), "A=1\n").await;
+    let mut mini_app = mini.app().await;
     book.stop();
     std::fs::write(on_mini.join(".env"), "A=mini\n").unwrap();
     // A second later, the MacBook's change is the later one.
@@ -3538,6 +3539,51 @@ async fn both_checkouts_changed_while_unlinked_the_later_change_wins_and_the_oth
         .flat_map(|e| files_under(&e.unwrap().path()))
         .collect();
     assert_eq!(kept, [(".env".to_string(), "A=mini\n".to_string())]);
+    // studio-mini's app hears of it, for its toast.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let event = loop {
+        let f = tokio::time::timeout_at(deadline, mini_app.next_frame())
+            .await
+            .expect("no files.kept")
+            .unwrap()
+            .unwrap();
+        if let moonlet_proto::Frame::Json(moonlet_proto::Message::Event { name, data }) = f
+            && name == "files.kept"
+        {
+            break data;
+        }
+    };
+    assert_eq!(event["label"], json!("shop"));
+    assert_eq!(event["path"], json!(".env"));
+    assert!(
+        event["folder"]
+            .as_str()
+            .unwrap()
+            .contains("/sync-leftovers/shop-checkout-"),
+        "{event}"
+    );
+}
+
+#[tokio::test]
+async fn a_sessions_copied_files_are_listed_with_those_left_out_and_why() {
+    let book = mac(BOOK, "MacBook").await;
+    let project = shop(&book).await;
+    let made = new_session(&book, &project, "fix-cart").await;
+    let tree = path_of(&made);
+    std::fs::write(tree.join(".env"), "A=1\n").unwrap();
+    std::fs::create_dir_all(tree.join("apps/web")).unwrap();
+    std::fs::write(tree.join("apps/web/.env.local"), "B=2\n").unwrap();
+    std::fs::write(tree.join(".env.big"), vec![b'x'; 1024 * 1024 + 1]).unwrap();
+    let status: Value = book
+        .call("session.copied_files", json!({ "session": made["id"] }))
+        .await;
+    assert_eq!(
+        status,
+        json!({
+            "files": [".env", "apps/web/.env.local"],
+            "skipped": [{ "path": ".env.big", "reason": "is over 1 MiB" }],
+        })
+    );
 }
 
 #[tokio::test]

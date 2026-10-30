@@ -168,6 +168,12 @@ pub const SESSION_FILES_FETCH: &str = "session.files_fetch";
 /// [`FilesCheckout`] → [`FilesCheckedOut`]: a member's checkout of a project
 /// and the central host's, kept in step through it (X74).
 pub const FILES_CHECKOUT: &str = "files.checkout";
+/// [`SessionRef`]-like `{session}` → [`CopiedFilesStatus`]: the copied files
+/// of this Mac's session, or of its live copy of one (X74).
+pub const SESSION_COPIED_FILES: &str = "session.copied_files";
+/// [`FilesKept`]: this side's version of a copied file went to leftovers,
+/// as the other side's won (X74).
+pub const EV_FILES_KEPT: &str = "files.kept";
 /// Whether the central host could continue each copy it holds (X73).
 pub const SESSION_READY: &str = "session.ready";
 /// Tests only, with `MOONLET_TEST_POWER=1`: as if the Mac went to sleep
@@ -1505,6 +1511,36 @@ pub struct CopiedFile {
     pub sha: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
+}
+
+/// `session.copied_files` params.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionCopiedFiles {
+    pub session: String,
+}
+
+/// What the list names in a worktree (X74): the files copied, and those
+/// left out with why.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CopiedFilesStatus {
+    pub files: Vec<String>,
+    pub skipped: Vec<SkippedFile>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SkippedFile {
+    pub path: String,
+    /// Such as "is over 1 MiB".
+    pub reason: String,
+}
+
+/// `files.kept`: what was kept, and where.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FilesKept {
+    /// The session's or checkout's name.
+    pub label: String,
+    pub path: String,
+    pub folder: String,
 }
 
 /// A checkout's copied file as a member last saw it change (X74): its
