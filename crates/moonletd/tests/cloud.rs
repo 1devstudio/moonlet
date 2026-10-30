@@ -2473,3 +2473,48 @@ async fn a_cloud_machine_gets_copied_files_only_when_the_switch_is_on() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
+
+/// Waits until `ok` holds, for up to 10 s.
+async fn until_true(what: &str, ok: impl Fn() -> bool) {
+    let start = std::time::Instant::now();
+    while !ok() {
+        assert!(start.elapsed() < Duration::from_secs(10), "{what}");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+#[tokio::test]
+async fn a_file_taken_off_the_list_leaves_the_cloud_machine() {
+    let c = routing(&[]).await;
+    c.ready().await;
+    let s = c.session("fix-cart", true).await;
+    let tree = PathBuf::from(s["path"].as_str().unwrap());
+    std::fs::write(tree.join(".env"), "API_KEY=secret\n").unwrap();
+    std::fs::write(tree.join(".env.local"), "TOKEN=t0k3n\n").unwrap();
+    c.run(&s, &["sh", "run.sh"]).await;
+    let copy = copies_on(&c)[0].clone();
+    let _: Value =
+        c.d.call(
+            "project.copied_files.set",
+            json!({ "id": c.project, "patterns": [".env", ".env.local"], "cloud": true }),
+        )
+        .await;
+    until_true("no .env.local on the cloud machine", || {
+        std::fs::read_to_string(copy.join(".env.local")).ok().as_deref() == Some("TOKEN=t0k3n\n")
+    })
+    .await;
+    let _: Value =
+        c.d.call(
+            "project.copied_files.set",
+            json!({ "id": c.project, "patterns": [".env"], "cloud": true }),
+        )
+        .await;
+    until_true(".env.local still on the cloud machine", || {
+        !copy.join(".env.local").exists()
+    })
+    .await;
+    assert_eq!(
+        std::fs::read_to_string(copy.join(".env")).unwrap(),
+        "API_KEY=secret\n"
+    );
+}

@@ -104,8 +104,11 @@ fn received_lock() -> &'static std::sync::Mutex<()> {
 /// Makes copy `copy`'s copied files, in `dir`, those of `manifest`, the
 /// owner's. A version of this side's that is replaced or removed is saved
 /// under `$MOONLET_HOME/sync-leftovers/<label>-<when>/` first (X60's
-/// folder), made only when one is. Gives the paths whose bytes did not come
-/// along.
+/// folder), made only when one is. With `only_sent`, on a cloud machine,
+/// a file it had from the owner that `manifest` no longer names is removed
+/// whatever the list now says, and kept nowhere: a secret taken off the
+/// list, or no longer let go to cloud machines, leaves it. Gives the paths
+/// whose bytes did not come along.
 pub async fn take(
     home: &Path,
     label: &str,
@@ -113,6 +116,7 @@ pub async fn take(
     dir: &Path,
     patterns: &[String],
     manifest: &[Entry],
+    only_sent: bool,
 ) -> Result<Vec<String>> {
     let mut folder: Option<PathBuf> = None;
     let keep = |path: &str, bytes: &[u8]| -> Result<()> {
@@ -137,6 +141,17 @@ pub async fn take(
     let want = files::apply(dir, patterns, manifest, &had, keep)
         .await?
         .want;
+    if only_sent {
+        let gone: Vec<String> = had
+            .iter()
+            .filter(|p| !manifest.iter().any(|e| &e.path == *p))
+            .cloned()
+            .collect();
+        let tracked = files::tracked(dir, &gone).await?;
+        for path in gone.iter().filter(|p| !tracked.contains(*p)) {
+            files::remove(dir, path)?;
+        }
+    }
     let now = manifest
         .iter()
         .map(|e| e.path.clone())
