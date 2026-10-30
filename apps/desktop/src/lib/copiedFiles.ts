@@ -82,3 +82,11 @@ export const skippedLine = (s: { path: string; reason: string }) => `${s.path} $
 /** The toast when this Mac's version of a copied file went to leftovers. */
 export const keptToast = (k: { label: string; path: string; folder: string }, home: string | null) =>
   `${k.label}: ${k.path} changed on both Macs. This Mac's version is in ${tildePath(k.folder, home)}`;
+
+/** The confirmation when a paired Mac is removed: the copied files it held,
+ * by project, whose secrets to rotate (ADR 0014). */
+export function removeMacMessage(lists: { project: string; patterns: string[] }[]): string {
+  const held = lists.filter((l) => l.patterns.length).map((l) => `${l.project} (${l.patterns.join(", ")})`);
+  const base = "It will need to be paired again.";
+  return held.length ? `${base} It held copies of the files your projects copy between your Macs: ${held.join(", ")}. Rotate the secrets in them.` : base;
+}

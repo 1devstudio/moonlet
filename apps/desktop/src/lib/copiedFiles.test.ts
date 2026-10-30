@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addPattern, copiedLine, keptToast, listNote, listSaver, loadFailedNote, removePattern, skippedLine } from "./copiedFiles";
+import { addPattern, copiedLine, keptToast, listNote, listSaver, loadFailedNote, removeMacMessage, removePattern, skippedLine } from "./copiedFiles";
 
 describe("a project's copied files (X74)", () => {
   it("the_default_list_is_env_and_env_star", () => {
@@ -73,5 +73,18 @@ describe("copied files in the sync popover and toasts (X74)", () => {
     expect(keptToast({ label: "fix-cart", path: ".env.local", folder: "/Users/me/.moonlet/sync-leftovers/fix-cart-20261030-0102" }, "/Users/me")).toBe(
       "fix-cart: .env.local changed on both Macs. This Mac's version is in ~/.moonlet/sync-leftovers/fix-cart-20261030-0102",
     );
+  });
+});
+
+describe("removing a Mac that held copied files (X74, ADR 0014)", () => {
+  it("names each project's copied files to rotate", () => {
+    expect(
+      removeMacMessage([
+        { project: "shop", patterns: [".env", ".env.*"] },
+        { project: "blog", patterns: [] },
+        { project: "api", patterns: ["config/local.yaml"] },
+      ]),
+    ).toBe("It will need to be paired again. It held copies of the files your projects copy between your Macs: shop (.env, .env.*), api (config/local.yaml). Rotate the secrets in them.");
+    expect(removeMacMessage([])).toBe("It will need to be paired again.");
   });
 });
