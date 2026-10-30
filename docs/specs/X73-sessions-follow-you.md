@@ -250,7 +250,7 @@ What works as specified:
 Where it differs from the draft above:
 - **Moves.** A session moves between a member and the central host. Bringing back a session that a third member runs, or moving one to it, answers `elsewhere` or `unsupported`.
 - **Take over anyway** starts a new conversation on the member: the transcript stayed on the central host. When the central host is back, it keeps its own work from the gap, files and conversation, before the member's work replaces it.
-- **The waiting message** is a toast with Move now, not a line above the composer. The chat's muted "Continued on…" line is not built: the agent's note says it instead.
+- **The waiting message** is a toast with Move now, not a line above the composer. It waits up to ten minutes; then, or when the session cannot be brought, it goes where the session runs. More typed into the same chat meanwhile goes with it. Move to… during a turn waits the same way. The chat's muted "Continued on…" line is not built: the agent's note says it instead.
 - **Only structured chats** are frozen and moved. A PTY agent tab is not.
 - **Setup** does not run when a session continues on the central host.
 - **Waking:** the member waits up to 5 s for its link, and half a second for the account's news, before it lets agents go on.
