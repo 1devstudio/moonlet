@@ -59,7 +59,7 @@ export function syncDataDir(): string {
   return getSync().dataDir ?? (h ? `${h}/.moonlet` : "~/.moonlet");
 }
 
-const fromLink = (link: LinkInfo) => ({ central: link.central?.name ?? null, link: link.state, me: link.worker.id, unreachableSince: link.unreachable_since ?? null });
+const fromLink = (link: LinkInfo) => ({ central: link.central?.name ?? null, link: link.state, me: link.worker?.id ?? null, unreachableSince: link.unreachable_since ?? null });
 
 /** Setups asked about in this run, by copy and command, so one event does not ask twice. */
 const asked = new Set<string>();
