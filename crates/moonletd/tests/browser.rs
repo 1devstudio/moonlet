@@ -404,14 +404,22 @@ async fn linked_book_one_along(central: &Daemon, addr: &str) -> Daemon {
     book
 }
 
-/// Two free ports in a row.
+/// Two free ports in a row, below the range the system hands out to
+/// other tests' listeners, so none of those takes the second meanwhile.
 fn two_free_ports() -> u16 {
-    loop {
-        let port = free_port();
-        if port < u16::MAX && std::net::TcpListener::bind(("127.0.0.1", port + 1)).is_ok() {
+    let seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .subsec_nanos();
+    for n in 0..5000u32 {
+        let port = 20_000 + ((seed / 7 + n * 2) % 9_998) as u16;
+        if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
+            && std::net::TcpListener::bind(("127.0.0.1", port + 1)).is_ok()
+        {
             return port;
         }
     }
+    panic!("no two free ports in a row");
 }
 
 #[tokio::test]
