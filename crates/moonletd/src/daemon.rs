@@ -3353,8 +3353,11 @@ impl Daemon {
             if running && !r.now {
                 return Err(RpcError::new("busy", "a turn is running; it moves when the turn ends"));
             }
-            // What is new goes first, so the central host continues from it.
-            self.session_copies.send_now().await;
+            // What is new goes first, so the central host continues from it;
+            // one it would continue from an older copy stays here.
+            if self.session_copies.send_now().await.contains(&r.session) {
+                return Err(RpcError::new("unsent", "what is new of it could not be sent to the central host; it stays here"));
+            }
             let host = self.link.host().ok_or_else(|| RpcError::new("unreachable", "the central host is not connected"))?;
             host.request(
                 m::SESSION_YIELD,

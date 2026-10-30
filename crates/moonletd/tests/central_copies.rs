@@ -2518,6 +2518,35 @@ async fn a_session_moved_to_this_mac_stays_through_sleep_until_unpinned() {
 }
 
 #[tokio::test]
+async fn a_session_whose_last_copy_cannot_be_sent_is_not_moved_to_the_central_host() {
+    use std::os::unix::fs::PermissionsExt;
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents_as(&origin, false).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    copy_of(&mini, &made).await;
+    // A file git cannot read: the session's last copy cannot be made.
+    let locked = path_of(&made).join("locked.txt");
+    std::fs::write(&locked, "new work").unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let moved = book
+        .try_call("session.move", json!({ "session": made["id"], "to": MINI }))
+        .await;
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let refused = moved.unwrap_err();
+    assert!(refused.starts_with("unsent"), "{refused}");
+    let theirs: Vec<Value> = mini.call("session.list", json!({})).await;
+    assert!(
+        theirs.iter().all(|s| s["id"] != made["id"]),
+        "studio-mini does not continue from an older copy"
+    );
+    let own: Vec<Value> = book.call("session.list", json!({})).await;
+    assert!(own.iter().any(|s| s["id"] == made["id"]), "the MacBook keeps it");
+}
+
+#[tokio::test]
 async fn a_session_taken_over_while_the_central_host_was_offline_is_kept_when_it_is_back() {
     let origin = Origin::new();
     let (mut mini, book, made) = continued_and_back(&origin).await;
