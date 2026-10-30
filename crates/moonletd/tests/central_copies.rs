@@ -2813,3 +2813,48 @@ async fn a_lost_session_that_cannot_be_let_go_of_yet_keeps_its_gap_once() {
         .collect();
     assert_eq!(jsonl.len(), 1, "{forks:?}");
 }
+
+#[tokio::test]
+async fn a_takeover_the_central_host_could_not_take_yet_is_sent_again() {
+    let origin = Origin::new();
+    let (mut mini, book, made) = continued_and_back(&origin).await;
+    let mini_own: Vec<Value> = mini.call("session.list", json!({})).await;
+    let on_mini = path_of(mini_own.iter().find(|s| s["id"] == made["id"]).unwrap());
+    mini.stop();
+    within(Duration::from_secs(30), "studio-mini offline", || async {
+        let link: Value = book.call("link.get", json!({})).await;
+        link["unreachable_since"].is_u64()
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    let _: Value = book
+        .call("session.take_anyway", json!({ "session": made["id"] }))
+        .await;
+    // studio-mini comes back while another git holds its worktree's
+    // snapshot index, so it cannot keep its own work first yet.
+    let git_dir = {
+        let out = std::process::Command::new("git")
+            .args(["rev-parse", "--absolute-git-dir"])
+            .current_dir(&on_mini)
+            .output()
+            .unwrap();
+        PathBuf::from(String::from_utf8_lossy(&out.stdout).trim())
+    };
+    let lock = git_dir.join("moonlet-sync-index.lock");
+    std::fs::write(&lock, "").unwrap();
+    mini.restart().await;
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    std::fs::remove_file(&lock).unwrap();
+    // The MacBook sends it again, and studio-mini keeps it then.
+    within(
+        Duration::from_secs(30),
+        "the takeover kept on studio-mini",
+        || async {
+            let mini_own: Vec<Value> = mini.call("session.list", json!({})).await;
+            let copies = with_copies(&mini).await;
+            mini_own.iter().all(|s| s["id"] != made["id"])
+                && owner_of_copy(&copies, &made).is_some_and(|o| o["worker"] == json!(BOOK))
+        },
+    )
+    .await;
+}

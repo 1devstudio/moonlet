@@ -3457,7 +3457,15 @@ impl Daemon {
             match asked {
                 Ok(_) => tracing::info!(%session, "the central host kept the takeover made while it was offline"),
                 Err(e) if e.code == "disconnected" => return,
-                Err(e) => tracing::info!(%session, "the central host refused the takeover: {}", e.message),
+                // A refusal is final; anything else, such as its worktree
+                // held by a git of its own just then, is sent again later.
+                Err(e) if matches!(e.code.as_str(), "not_found" | "elsewhere" | "stale" | "pinned" | "forbidden") => {
+                    tracing::info!(%session, "the central host refused the takeover: {}", e.message)
+                }
+                Err(e) => {
+                    tracing::info!(%session, "the central host could not take the takeover yet: {}", e.message);
+                    continue;
+                }
             }
             self.session_copies.set_forced(&session, None);
         }
