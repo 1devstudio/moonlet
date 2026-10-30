@@ -1982,9 +1982,10 @@ impl SessionCopies {
         // snapshot index, and one would find the other's lock.
         let _one = self.round.lock().await;
         let dir = Path::new(&s.path);
-        let mut folder = None;
         let sent = self.data.lock().unwrap().sent.get(&s.id).cloned();
-        if dir.is_dir() {
+        // The snapshot first, which a busy worktree can refuse: then nothing
+        // is kept yet, and a later try keeps it all once.
+        let trees = if dir.is_dir() {
             let now = git_sync::snapshot(dir, git_sync::MAX_FILE).await?.tree;
             // Against what was last sent; with nothing sent, against the
             // last commit, so nothing changed here is left out.
@@ -1995,10 +1996,10 @@ impl SessionCopies {
                     .trim()
                     .to_string(),
             };
-            if now != was {
-                folder = self.keep_edits(dir, &was, &now).await?;
-            }
-        }
+            (now != was).then_some((was, now))
+        } else {
+            None
+        };
         let stamp = chrono_stamp();
         for t in &s.terminals {
             let Ok(state) = self.chats.state(*t) else {
@@ -2020,10 +2021,16 @@ impl SessionCopies {
                 .unwrap_or(0);
             let len = std::fs::metadata(&main).map(|m| m.len()).unwrap_or(0);
             if len > sent {
-                let _ = std::fs::copy(&main, projects.join(format!("{id}.fork-{stamp}.jsonl")));
+                let fork = projects.join(format!("{id}.fork-{stamp}.jsonl"));
+                std::fs::copy(&main, &fork).with_context(|| {
+                    format!("cannot fork the conversation to {}", fork.display())
+                })?;
             }
         }
-        Ok(folder)
+        match trees {
+            Some((was, now)) => self.keep_edits(dir, &was, &now).await,
+            None => Ok(None),
+        }
     }
 
     /// Forgets what was sent of session `id`, once it is let go of (X73).

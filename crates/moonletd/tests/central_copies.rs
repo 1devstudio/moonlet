@@ -1943,3 +1943,81 @@ async fn a_member_lets_go_of_a_lost_session_once_its_worktree_is_free_again() {
     )
     .await;
 }
+
+/// Sets `dir` read-only (`0o555`), or writable again.
+fn read_only(dir: &Path, yes: bool) {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = if yes { 0o555 } else { 0o755 };
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(mode)).unwrap();
+}
+
+/// A member whose session was continued on studio-mini while it was away,
+/// back again: `made` is the session, its record studio-mini's now.
+async fn lost_while_away(mini: &Daemon, book: &mut Daemon, made: &Value, meanwhile: impl FnOnce()) {
+    copy_of(mini, made).await;
+    within(
+        Duration::from_secs(30),
+        "the checkpoint on studio-mini",
+        || async {
+            mini.try_call("session.copy", json!({ "session": made["id"] }))
+                .await
+                .is_ok_and(|i| !i["checkpoint"].is_null())
+        },
+    )
+    .await;
+    book.stop();
+    meanwhile();
+    unreachable(mini, made).await;
+    let _: Value = mini
+        .call("session.continue_here", json!({ "session": made["id"] }))
+        .await;
+    book.restart().await;
+}
+
+/// The files in `dir` whose names hold `part`.
+fn named(dir: &Path, part: &str) -> Vec<PathBuf> {
+    std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .map(|e| e.unwrap().path())
+                .filter(|p| p.file_name().unwrap().to_string_lossy().contains(part))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[tokio::test]
+async fn a_member_keeps_a_lost_session_until_its_conversation_is_forked() {
+    let origin = Origin::new();
+    let (mini, mut book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    let folder = project_folder(&book, &path_of(&made));
+    let transcript = std::fs::read_to_string(folder.join(format!("{CONVERSATION}.jsonl"))).unwrap();
+    // Nothing can be written beside the transcript as the MacBook comes back.
+    lost_while_away(&mini, &mut book, &made, || read_only(&folder, true)).await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let own: Vec<Value> = book.call("session.list", json!({})).await;
+    read_only(&folder, false);
+    assert!(
+        own.iter().any(|s| s["id"] == made["id"]),
+        "let go of before its conversation was forked"
+    );
+    within(
+        Duration::from_secs(30),
+        "fix-cart no longer the MacBook's own",
+        || async {
+            let own: Vec<Value> = book.call("session.list", json!({})).await;
+            own.iter().all(|s| s["id"] != made["id"])
+        },
+    )
+    .await;
+    let forks = named(&folder, ".fork-");
+    let jsonl: Vec<&PathBuf> = forks
+        .iter()
+        .filter(|p| p.extension().is_some_and(|e| e == "jsonl"))
+        .collect();
+    assert_eq!(jsonl.len(), 1, "{forks:?}");
+    assert_eq!(std::fs::read_to_string(jsonl[0]).unwrap(), transcript);
+}
