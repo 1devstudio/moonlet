@@ -235,6 +235,28 @@ async fn read_request(stream: &mut tokio::net::TcpStream) -> Result<Vec<u8>> {
     Ok(buf)
 }
 
+/// `request` with its `Connection` header made `close`: the browser asks
+/// to keep its connection, but the command's answer ends where it closes.
+fn closing(request: &[u8]) -> Vec<u8> {
+    let Some(end) = request.windows(4).position(|w| w == b"\r\n\r\n") else {
+        return request.to_vec();
+    };
+    let head = String::from_utf8_lossy(&request[..end]);
+    let mut lines = head.split("\r\n");
+    let mut out = String::from(lines.next().unwrap_or_default());
+    for line in lines {
+        let name = line.split(':').next().unwrap_or_default().trim();
+        if !name.eq_ignore_ascii_case("connection") && !name.eq_ignore_ascii_case("keep-alive") {
+            out.push_str("\r\n");
+            out.push_str(line);
+        }
+    }
+    out.push_str("\r\nConnection: close\r\n\r\n");
+    let mut out = out.into_bytes();
+    out.extend_from_slice(&request[end + 4..]);
+    out
+}
+
 /// Hands `request` to this machine's `127.0.0.1:<port>` and gives what it
 /// answered, until it closes the connection.
 pub async fn answer(port: u16, request: &[u8]) -> Result<Vec<u8>> {
@@ -242,7 +264,7 @@ pub async fn answer(port: u16, request: &[u8]) -> Result<Vec<u8>> {
         let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port))
             .await
             .with_context(|| format!("nothing answers on port {port}"))?;
-        s.write_all(request).await?;
+        s.write_all(&closing(request)).await?;
         let mut out = Vec::new();
         let mut chunk = [0u8; 8192];
         loop {
@@ -350,6 +372,59 @@ mod tests {
         assert!(listens_itself(&[85399], &lineage));
         // A database's port, held by an unrelated process.
         assert!(!listens_itself(&[312], &lineage));
+    }
+
+    /// Starts `script`, a Python server that prints its port, and gives the
+    /// process and the port.
+    fn python_server(script: &str) -> (std::process::Child, u16) {
+        let mut child = std::process::Command::new("python3")
+            .args(["-c", script])
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut line = String::new();
+        std::io::BufRead::read_line(
+            &mut std::io::BufReader::new(child.stdout.as_mut().unwrap()),
+            &mut line,
+        )
+        .unwrap();
+        (child, line.trim().parse().unwrap())
+    }
+
+    /// An HTTP/1.1 callback server, which keeps a connection open after
+    /// its answer unless the request asks it to close, as Node's and Go's do.
+    const KEEP_ALIVE_SERVER: &str = r#"
+import http.server
+class H(http.server.BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    def do_GET(self):
+        body = b"You are now authenticated"
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def log_message(self, *a):
+        pass
+srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+print(srv.server_address[1], flush=True)
+srv.serve_forever()
+"#;
+
+    #[tokio::test]
+    async fn a_command_that_keeps_its_connection_open_answers_at_once() {
+        let (mut server, port) = python_server(KEEP_ALIVE_SERVER);
+        // As a browser sends it.
+        let request =
+            b"GET /?code=4 HTTP/1.1\r\nHost: localhost:8085\r\nConnection: keep-alive\r\n\r\n";
+        let got = tokio::time::timeout(Duration::from_secs(5), answer(port, request)).await;
+        let _ = server.kill();
+        let got = got.expect("an answer within 5 s").unwrap();
+        let got = String::from_utf8_lossy(&got);
+        assert!(got.starts_with("HTTP/1.1 200"), "{got:?}");
+        assert!(
+            got.ends_with("\r\n\r\nYou are now authenticated"),
+            "{got:?}"
+        );
     }
 
     #[tokio::test]
