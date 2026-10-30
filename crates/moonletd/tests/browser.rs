@@ -59,7 +59,7 @@ async fn browser_and_gh_browser_are_set_for_terminals_and_agents() {
         ),
     )
     .await;
-    let bin = d.home.path().join("bin");
+    let bin = d.home.path().join("opener");
     let want = format!(
         "{0}/moonlet-open\n{0}/moonlet-open\n{0}/shims/{1}\n",
         bin.display(),

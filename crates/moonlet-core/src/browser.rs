@@ -31,9 +31,9 @@ pub fn check_url(url: &str) -> Result<()> {
 /// Where the opener and the shims are.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Opener {
-    /// `$MOONLET_HOME/bin/moonlet-open`.
+    /// `$MOONLET_HOME/opener/moonlet-open`.
     pub open: PathBuf,
-    /// `$MOONLET_HOME/bin/shims`, first on the processes' `PATH`.
+    /// `$MOONLET_HOME/opener/shims`, first on the processes' `PATH`.
     pub shims: PathBuf,
 }
 
@@ -64,11 +64,12 @@ fn shim(open: &Path, name: &str, system: &[&str]) -> String {
 }
 
 /// Writes `moonlet-open`, which hands its argument to the `moonlet` CLI at
-/// `cli`, and the shim for this system, under `home/bin`. `system` is where
+/// `cli`, and the shim for this system, under `home/opener`. `system` is where
 /// the system's own opener may be, tried in order.
 pub fn install(home: &Path, cli: &Path, name: &str, system: &[&str]) -> Result<Opener> {
     use std::os::unix::fs::PermissionsExt;
-    let bin = home.join("bin");
+    // Its own folder: `bin` holds moonlet's binaries, which updates replace.
+    let bin = home.join("opener");
     let shims = bin.join("shims");
     std::fs::create_dir_all(&shims).with_context(|| format!("cannot make {}", shims.display()))?;
     let open = bin.join("moonlet-open");
@@ -276,15 +277,15 @@ mod tests {
     #[test]
     fn browser_and_gh_browser_name_the_opener_and_the_shims_come_first() {
         let o = Opener {
-            open: "/h/bin/moonlet-open".into(),
-            shims: "/h/bin/shims".into(),
+            open: "/h/opener/moonlet-open".into(),
+            shims: "/h/opener/shims".into(),
         };
         assert_eq!(
             env(&o, Some("/usr/bin:/bin")),
             [
-                ("BROWSER".to_string(), "/h/bin/moonlet-open".to_string()),
-                ("GH_BROWSER".to_string(), "/h/bin/moonlet-open".to_string()),
-                ("PATH".to_string(), "/h/bin/shims:/usr/bin:/bin".to_string()),
+                ("BROWSER".to_string(), "/h/opener/moonlet-open".to_string()),
+                ("GH_BROWSER".to_string(), "/h/opener/moonlet-open".to_string()),
+                ("PATH".to_string(), "/h/opener/shims:/usr/bin:/bin".to_string()),
             ]
         );
     }
