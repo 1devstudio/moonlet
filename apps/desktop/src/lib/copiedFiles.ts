@@ -2,6 +2,8 @@
 // between the user's Macs, `.env` and `.env.*` by default. The daemon
 // checks each pattern again; these say why one is refused before it asks.
 
+import { tildePath } from "./profiles";
+
 export interface CopiedFiles {
   patterns: string[];
   cloud: boolean;
@@ -64,3 +66,19 @@ export function listSaver<T>(saved: T, send: (value: T) => Promise<unknown>) {
     );
   };
 }
+
+/** What the list names in a session's worktree. */
+export interface CopiedFilesStatus {
+  files: string[];
+  skipped: { path: string; reason: string }[];
+}
+
+/** The sync popover's line, none without copied files. */
+export const copiedLine = (s: CopiedFilesStatus): string | null => (s.files.length === 0 ? null : s.files.length === 1 ? "1 copied file" : `${s.files.length} copied files`);
+
+/** Why a matching file is not copied. */
+export const skippedLine = (s: { path: string; reason: string }) => `${s.path} ${s.reason} and stays on each Mac.`;
+
+/** The toast when this Mac's version of a copied file went to leftovers. */
+export const keptToast = (k: { label: string; path: string; folder: string }, home: string | null) =>
+  `${k.label}: ${k.path} changed on both Macs. This Mac's version is in ${tildePath(k.folder, home)}`;

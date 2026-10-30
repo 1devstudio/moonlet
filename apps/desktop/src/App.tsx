@@ -16,6 +16,7 @@ import { startCloud } from "./lib/cloudStore";
 import { startJobs } from "./lib/jobsStore";
 import { startReadiness } from "./lib/followStore";
 import { startBrowser } from "./lib/browserStore";
+import { startCopiedFiles } from "./lib/copiedFilesStore";
 import { installShortcuts } from "./lib/keys";
 import { terminalSearch } from "./lib/actions";
 import { uiScale } from "./lib/uiScale";
@@ -152,6 +153,8 @@ export default function App() {
     const readiness = startReadiness();
     // Sign-ins open where the user is (X75).
     startBrowser();
+    // Where this Mac's version of a copied file went (X74).
+    startCopiedFiles();
     void startDesign();
     startEditor();
     void loadTrackersConfig();

@@ -1316,6 +1316,7 @@ export const M = {
   projectCopiedFilesGet: "project.copied_files.get",
   presenceActive: "presence.active",
   browserPending: "browser.pending",
+  sessionCopiedFiles: "session.copied_files",
   browserRetry: "browser.retry",
   signinsList: "signins.list",
   signinsSet: "signins.set",
@@ -1508,6 +1509,7 @@ export const M = {
 export const EV = {
   terminalCreated: "terminal.created",
   browserShow: "browser.show",
+  filesKept: "files.kept",
   terminalUpdated: "terminal.updated",
   terminalExited: "terminal.exited",
   terminalRemoved: "terminal.removed",

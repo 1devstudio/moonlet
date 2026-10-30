@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addPattern, listNote, listSaver, loadFailedNote, removePattern } from "./copiedFiles";
+import { addPattern, copiedLine, keptToast, listNote, listSaver, loadFailedNote, removePattern, skippedLine } from "./copiedFiles";
 
 describe("a project's copied files (X74)", () => {
   it("the_default_list_is_env_and_env_star", () => {
@@ -58,5 +58,20 @@ describe("a project's copied files (X74)", () => {
 
   it("a list that could not be loaded says why", () => {
     expect(loadFailedNote("unknown method: project.copied_files.get")).toBe("Could not load this project's copied files: unknown method: project.copied_files.get");
+  });
+});
+
+describe("copied files in the sync popover and toasts (X74)", () => {
+  it("the_popover_counts_copied_files_and_lists_skipped_ones", () => {
+    expect(copiedLine({ files: [".env", ".env.local", "apps/web/.env"], skipped: [] })).toBe("3 copied files");
+    expect(copiedLine({ files: [".env"], skipped: [] })).toBe("1 copied file");
+    expect(copiedLine({ files: [], skipped: [] })).toBeNull();
+    expect(skippedLine({ path: "secrets.json", reason: "is over 1 MiB" })).toBe("secrets.json is over 1 MiB and stays on each Mac.");
+  });
+
+  it("says where this Mac's version went when the other side's won", () => {
+    expect(keptToast({ label: "fix-cart", path: ".env.local", folder: "/Users/me/.moonlet/sync-leftovers/fix-cart-20261030-0102" }, "/Users/me")).toBe(
+      "fix-cart: .env.local changed on both Macs. This Mac's version is in ~/.moonlet/sync-leftovers/fix-cart-20261030-0102",
+    );
   });
 });
