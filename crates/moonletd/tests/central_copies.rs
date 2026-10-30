@@ -2641,6 +2641,55 @@ async fn a_session_taken_over_while_the_central_host_was_offline_is_kept_when_it
 }
 
 #[tokio::test]
+async fn a_session_kept_on_the_central_host_can_be_taken_over_anyway_and_is_kept_here_then() {
+    let origin = Origin::new();
+    let (mut mini, book, made) = continued_and_back(&origin).await;
+    // Kept on studio-mini, where it runs.
+    let _: Value = book
+        .call("session.move", json!({ "session": made["id"], "to": MINI }))
+        .await;
+    mini.stop();
+    within(Duration::from_secs(30), "studio-mini offline", || async {
+        let link: Value = book.call("link.get", json!({})).await;
+        link["unreachable_since"].is_u64()
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    let _: Value = book
+        .call("session.take_anyway", json!({ "session": made["id"] }))
+        .await;
+
+    mini.restart().await;
+    within(
+        Duration::from_secs(30),
+        "the takeover kept on studio-mini",
+        || async {
+            let copies = with_copies(&mini).await;
+            owner_of_copy(&copies, &made).is_some_and(|o| o["worker"] == json!(BOOK))
+        },
+    )
+    .await;
+    within(
+        Duration::from_secs(30),
+        "the MacBook to hear it runs it",
+        || async {
+            let copies = with_copies(&book).await;
+            copies
+                .iter()
+                .filter(|s| s["id"] == made["id"])
+                .all(|s| s["owner"].is_null())
+        },
+    )
+    .await;
+    // Kept on the MacBook now: going to sleep keeps it.
+    let _: Value = book
+        .call("power.simulate", json!({ "event": "sleep" }))
+        .await;
+    let mini_own: Vec<Value> = mini.call("session.list", json!({})).await;
+    assert!(mini_own.iter().all(|s| s["id"] != made["id"]));
+}
+
+#[tokio::test]
 async fn a_wake_cut_short_by_another_sleep_leaves_the_agents_stopped() {
     let origin = Origin::new();
     let (mini, book) = pair_with_agents_as(&origin, false).await;

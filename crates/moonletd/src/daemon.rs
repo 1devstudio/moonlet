@@ -2993,9 +2993,13 @@ impl Daemon {
         if epoch != r.epoch {
             return Err(RpcError::new("stale", "that session moved meanwhile"));
         }
-        if text("pinned").is_some_and(|p| p != worker) {
+        // Take over anyway takes a pinned session too, and keeps it on the
+        // member that took it.
+        let pinned = text("pinned").is_some();
+        if pinned && !r.forced && text("pinned").as_deref() != Some(worker) {
             return Err(RpcError::new("pinned", "that session is kept where it is"));
         }
+        let pin = r.pin || (r.forced && pinned);
         let s = self.sessions.session(&r.session).map_err(internal)?;
         let chats: Vec<moonlet_proto::TerminalId> = s.terminals.iter().copied().filter(|t| self.chats.is_chat(*t)).collect();
         let running = chats
@@ -3049,7 +3053,7 @@ impl Daemon {
         }
         // Given up only once the account names its new owner: otherwise it
         // stays this host's, as it was.
-        if !self.sessions.set_session_owner(&r.session, worker, epoch + 1, r.pin.then_some(worker)) {
+        if !self.sessions.set_session_owner(&r.session, worker, epoch + 1, pin.then_some(worker)) {
             back().await;
             return Err(RpcError::new("internal", "cannot record the session's new owner"));
         }
