@@ -3295,6 +3295,31 @@ async fn a_new_worktree_starts_with_its_checkouts_env() {
 }
 
 #[tokio::test]
+async fn an_unarchived_sessions_remade_worktree_starts_with_its_checkouts_env() {
+    let book = mac(BOOK, "MacBook").await;
+    let project = shop(&book).await;
+    let checkout = book.home.path().join("src/shop");
+    std::fs::write(checkout.join(".env"), "API_KEY=one\n").unwrap();
+    let session = new_session(&book, &project, "fix-cart").await;
+    let tree = path_of(&session);
+    let _: Value = book
+        .call(
+            "session.archive",
+            json!({ "id": session["id"], "remove_worktree": true }),
+        )
+        .await;
+    assert!(!tree.exists());
+    std::fs::write(checkout.join(".env"), "API_KEY=two\n").unwrap();
+    let _: Value = book
+        .call("session.unarchive", json!({ "id": session["id"] }))
+        .await;
+    assert_eq!(
+        std::fs::read_to_string(tree.join(".env")).unwrap(),
+        "API_KEY=two\n"
+    );
+}
+
+#[tokio::test]
 async fn a_closed_chats_conversation_does_not_make_a_new_chat_ready() {
     let origin = Origin::new();
     let (mini, book) = pair_with_agents_as(&origin, false).await;

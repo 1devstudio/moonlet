@@ -1889,6 +1889,12 @@ impl SessionManager {
                 true,
             )
             .await?;
+            // A remade worktree starts with its checkout's copied files, as
+            // a new one does (X74).
+            let (patterns, _, _) = self.copied_files(&repo.identity);
+            if let Err(e) = crate::copied_files::seed(Path::new(&repo.path), Path::new(&ws.path), &patterns).await {
+                tracing::warn!("cannot copy {}'s copied files into {}: {e:#}", repo.name, ws.path);
+            }
         }
         self.mutate(|st| {
             if let Some(w) = st.sessions.iter_mut().find(|w| w.id == id) {
