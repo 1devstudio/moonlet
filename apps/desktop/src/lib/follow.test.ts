@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bringsHere, followMenu, hostMark, rowMark, moveTargets, offlineLine, readyMark, waitingLine } from "./follow";
+import { bringsHere, followMenu, hostMark, rowMark, moveTargets, offlineLine, readinessOf, readyMark, waitingLine } from "./follow";
 
 const accounts = { local: { account: "mini-id" }, mini: { account: "mini-id" }, vps: { account: "other" } };
 
@@ -90,5 +90,31 @@ describe("the readiness mark (X73)", () => {
     );
     expect(readyMark({ session: "s1", ready: true }, "studio-mini", "fix-cart")).toBeNull();
     expect(readyMark(undefined, "studio-mini", "fix-cart")).toBeNull();
+  });
+});
+
+describe("asking the central host for readiness (X73)", () => {
+  const notReady = { session: "s1", ready: false, reason: "setup is not approved there" };
+  it("keeps its answer by session", async () => {
+    expect(await readinessOf({ central: "mini", connected: true, ask: async () => [notReady], current: () => "mini" })).toEqual({ s1: notReady });
+  });
+
+  it("shows no marks while the central host is away or does not answer", async () => {
+    expect(await readinessOf({ central: "mini", connected: false, ask: async () => [notReady], current: () => "mini" })).toEqual({});
+    expect(await readinessOf({ central: null, connected: false, ask: async () => [notReady], current: () => null })).toEqual({});
+    expect(
+      await readinessOf({
+        central: "mini",
+        connected: true,
+        ask: async () => {
+          throw new Error("unknown method");
+        },
+        current: () => "mini",
+      }),
+    ).toEqual({});
+  });
+
+  it("drops an answer from a central host that is no longer this Mac's", async () => {
+    expect(await readinessOf({ central: "mini", connected: true, ask: async () => [notReady], current: () => "studio" })).toBeNull();
   });
 });

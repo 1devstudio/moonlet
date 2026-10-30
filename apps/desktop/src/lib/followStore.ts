@@ -3,7 +3,7 @@
 
 import { create } from "zustand";
 import { DaemonError, rpc } from "./daemon";
-import { bringsHere, waitingLine } from "./follow";
+import { bringsHere, readinessOf, waitingLine, type ReadyRow } from "./follow";
 import { M } from "./protocol";
 import { errorToast, selectSession, toast, useStore } from "./store";
 import { useSync } from "./syncStore";
@@ -65,19 +65,19 @@ export async function moveSession(host: string, sessionId: string, to: string, n
 
 /** Whether the central host could continue each of this Mac's sessions
  * (X73), by session id, from its `session.ready`. */
-export const useReady = create<{ ready: Record<string, { ready: boolean; reason?: string | null }> }>(() => ({ ready: {} }));
+export const useReady = create<{ ready: Record<string, ReadyRow> }>(() => ({ ready: {} }));
 
 /** Asks the central host every 30 s, for the readiness mark. */
 export function startReadiness() {
   const ask = async () => {
     const central = useSync.getState().central;
-    if (!central || useStore.getState().hosts[central]?.status !== "connected") return;
-    try {
-      const list = await rpc<{ session: string; ready: boolean; reason?: string | null }[]>(central, M.sessionReady);
-      useReady.setState({ ready: Object.fromEntries(list.map((r) => [r.session, r])) });
-    } catch {
-      // A central host from before X73 has no answer: no marks.
-    }
+    const ready = await readinessOf({
+      central,
+      connected: !!central && useStore.getState().hosts[central]?.status === "connected",
+      ask: (c) => rpc<ReadyRow[]>(c, M.sessionReady),
+      current: () => useSync.getState().central,
+    });
+    if (ready) useReady.setState({ ready });
   };
   void ask();
   return setInterval(() => void ask(), 30_000);

@@ -100,3 +100,28 @@ export function readyMark(r: { session?: string; ready: boolean; reason?: string
   if (!r || r.ready) return null;
   return `${central} could not continue ${name}: ${r.reason ?? "it is not ready"}.`;
 }
+
+/** A row of the central host's `session.ready` (X73). */
+export type ReadyRow = { session: string; ready: boolean; reason?: string | null };
+
+/** The readiness marks after asking `central` with `ask` (X73), by
+ * session: none while there is no central host, it is not connected, or
+ * it does not answer, so no mark stays from an earlier answer; null when
+ * this Mac's central host (`current`) changed meanwhile, to drop the
+ * answer. */
+export async function readinessOf(o: {
+  central: string | null;
+  connected: boolean;
+  ask: (central: string) => Promise<ReadyRow[]>;
+  current: () => string | null;
+}): Promise<Record<string, ReadyRow> | null> {
+  if (!o.central || !o.connected) return {};
+  let list: ReadyRow[] = [];
+  try {
+    list = await o.ask(o.central);
+  } catch {
+    // A central host from before X73 has no answer: no marks.
+  }
+  if (o.current() !== o.central) return null;
+  return Object.fromEntries(list.map((r) => [r.session, r]));
+}
