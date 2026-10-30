@@ -157,11 +157,11 @@ Where it differs from the draft above:
 - **`tunnel.open`** carries the request's bytes, and the central host relays it when the asking member is another one. It reaches any member of the account whose callback for that port still waits, not only the Mac the URL was shown on.
 - **`signins.approve {entry, login, check}`** names the commands the user saw. It answers `changed` when they differ from the entry's.
 - **`signins.check`** answers each member's state: `signed_in`, `signed_out`, `needs_approval` or `away`. The page's **Approve these commands on this Mac** approves only this member. Another member approves in its own app.
-- **A sign-in's terminal** has no session, so the app lists it with no session's tabs. The browser still opens on this Mac.
-- **Not built yet:**
-  - the phone's push notification and its one-time code (`gh` prints the code to its terminal);
-  - "This sign-in has to finish on a Mac" opening on the next Mac the user touches (the card says it and disables **Open**);
-  - the e2e spec `sign-in-opens-here.e2e.ts`.
+- **A sign-in's terminal** has no session. The member's own app shows it in a window, **Sign in: gh**, which closes when the sign-in succeeds. (`a_sign_in_running_here_shows_its_terminal_in_this_macs_app`)
+- **The one-time code** comes from the last 40 lines of the asking terminal. The phone's card shows it with **Copy code**. Codes printed in an agent's chat are not read. (`a_device_sign_ins_one_time_code_comes_with_its_url`; core `a_device_sign_ins_one_time_code_is_read_from_its_output`, against gh's real output)
+- **A sign-in the phone cannot finish** is held by the central host. It opens on the next Mac app the user touches while its command waits. (`a_phone_gets_the_url_without_a_forward_and_a_mac_gets_it_next`)
+- **The e2e spec** is `apps/desktop/e2e/specs/sign-in-opens-here.e2e.ts`. While a spec runs, the app opens URLs through a stand-in on `window` (`__moonletOpenUrl`), so a test never opens the real browser.
+- **Blocked: no push notification.** The phone app has no push notifications at all yet; its settings say so. They need an APNs key from the Apple developer account. Until then, the phone taps (haptics) when a sign-in arrives while the app is open.
 
 ## Open questions
 

@@ -142,10 +142,8 @@ Where it differs from the draft above:
 - **Files.** `$MOONLET_HOME/copied-files.json` holds each checkout's hashes and stamps. A session's are kept in `session-copies.json`.
 - **Paused copies.** A paused live copy neither fetches nor applies. On resume it fetches the owner's versions, which win.
 - **Timing.** Members look every second. A change reaches the other side within about 2 s.
-- **Not built yet:**
-  - the sync popover's "3 copied files" line and its list of skipped files;
-  - the leftovers toast with **Show in Finder**;
-  - naming copied files in the offer to rotate secrets when a member is removed (ADR 0014).
+- **The sync popover and the toast.** The popover's "3 copied files" opens their list, with each file left out and why. `session.copied_files {session}` gives the list, for this Mac's session or its live copy of one. The toast comes from the `files.kept` event. (`a_sessions_copied_files_are_listed_with_those_left_out_and_why`; `both_checkouts_changed_while_unlinked_the_later_change_wins_and_the_other_is_in_leftovers` checks the event; `apps/desktop/src/lib/copiedFiles.test.ts` `the_popover_counts_copied_files_and_lists_skipped_ones`)
+- **Removing a paired Mac** names each project's copied files, so you know which secrets to rotate. There was no rotate offer to add them to (ADR 0014's was never built), so it is the removal's confirmation that names them. (`copiedFiles.test.ts` › "names each project's copied files to rotate")
 
 ## Open questions
 
