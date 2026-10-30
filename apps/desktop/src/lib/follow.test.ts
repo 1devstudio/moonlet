@@ -48,7 +48,7 @@ describe("Move to… (X73)", () => {
 });
 
 describe("a session's menu to move it (X73)", () => {
-  const base = { centralHost: "mini", me: "book-id", centralId: "mini-id", centralLabel: "studio-mini", pinned: false, unreachableSince: null, now: 100_000 };
+  const base = { centralHost: "mini", me: "book-id", centralId: "mini-id", centralLabel: "studio-mini", pinned: false, unreachableSince: null, now: 100_000, copy: true };
   it("offers Move to… for this Mac's and the central host's sessions", () => {
     expect(followMenu({ ...base, host: "local" })).toEqual([
       { kind: "move", to: "book-id", label: "This Mac", current: true },
@@ -62,6 +62,10 @@ describe("a session's menu to move it (X73)", () => {
     expect(followMenu({ ...base, host: "mini", unreachableSince: 80_000 })).toEqual([{ kind: "move", to: "book-id", label: "This Mac", current: false }, { kind: "move", to: "mini-id", label: "studio-mini", current: true }]);
     expect(followMenu({ ...base, host: "mini", unreachableSince: 60_000 })).toEqual([{ kind: "take-over" }]);
     expect(followMenu({ ...base, host: "local", unreachableSince: 60_000 })).toEqual([]);
+  });
+
+  it("offers Take over anyway only for a session this Mac holds a copy of", () => {
+    expect(followMenu({ ...base, host: "mini", unreachableSince: 60_000, copy: false })).toEqual([]);
   });
 });
 

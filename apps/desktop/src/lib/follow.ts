@@ -55,7 +55,8 @@ export function moveTargets(o: { thisMac: string; central: { id: string; label: 
 
 /** What a session's menu offers to move it (X73): Move to… this Mac and
  * the central host, Unpin when kept somewhere, and Take over anyway while
- * the central host, which runs it, has been offline 30 s or more. */
+ * the central host, which runs it, has been offline 30 s or more and this
+ * Mac holds a live copy of it (`copy`) to take it from. */
 export function followMenu(o: {
   host: string;
   centralHost: string | null;
@@ -65,6 +66,7 @@ export function followMenu(o: {
   pinned: boolean;
   unreachableSince: number | null;
   now: number;
+  copy: boolean;
 }): ({ kind: "move"; to: string; label: string; current: boolean } | { kind: "unpin" } | { kind: "take-over" })[] {
   if (!o.me || !o.centralId || !o.centralHost) return [];
   const owner = o.host === "local" ? o.me : o.host === o.centralHost ? o.centralId : null;
@@ -74,7 +76,7 @@ export function followMenu(o: {
   return [
     ...(offline ? [] : moves),
     ...(o.pinned && !offline ? [{ kind: "unpin" as const }] : []),
-    ...(offline && o.host === o.centralHost ? [{ kind: "take-over" as const }] : []),
+    ...(offline && o.host === o.centralHost && o.copy ? [{ kind: "take-over" as const }] : []),
   ];
 }
 

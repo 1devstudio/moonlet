@@ -814,6 +814,8 @@ function followItems(host: string, s: Session): MenuItem[] {
     pinned: !!s.pinned,
     unreachableSince: sync.unreachableSince,
     now: Date.now(),
+    // Take over anyway makes this Mac's live copy the session's worktree.
+    copy: !!sync.copies[sesKey(host, s.id)]?.path,
   });
   if (!items.length) return [];
   return [
