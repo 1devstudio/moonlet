@@ -334,6 +334,187 @@ async fn a_phone_where_the_user_is_gets_the_url_and_the_macs_app_leaves_it() {
     assert_eq!(shown["url"], json!("https://github.com/login/device"));
 }
 
+/// A command that listens on `port` like gcloud's redirect server, opens
+/// its sign-in with `$BROWSER`, answers one request and exits.
+fn sign_in_command(port: u16) -> String {
+    format!(
+        r#"python3 -c '
+import http.server, os, subprocess
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = b"You are now authenticated"
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def log_message(self, *a):
+        pass
+srv = http.server.HTTPServer(("127.0.0.1", {port}), H)
+subprocess.Popen([os.environ["BROWSER"], "https://accounts.example.test/auth?redirect_uri=http%3A%2F%2Flocalhost%3A{port}%2F"])
+srv.handle_request()
+'"#
+    )
+}
+
+/// A plain HTTP GET of `path` on `127.0.0.1:port`; the whole answer.
+async fn get(port: u16, path: &str) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let Ok(mut s) = tokio::net::TcpStream::connect(("127.0.0.1", port)).await else {
+        return String::new();
+    };
+    let req = format!("GET {path} HTTP/1.1\r\nHost: localhost:{port}\r\nConnection: close\r\n\r\n");
+    s.write_all(req.as_bytes()).await.unwrap();
+    let mut out = Vec::new();
+    let _ = tokio::time::timeout(Duration::from_secs(20), s.read_to_end(&mut out)).await;
+    String::from_utf8_lossy(&out).to_string()
+}
+
+/// [`linked_book`], whose forwards listen one port along, as the central
+/// host's command holds the port itself on this one machine.
+async fn linked_book_one_along(central: &Daemon, addr: &str) -> Daemon {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(
+        home.path().join("link.json"),
+        json!({ "central": null, "worker": { "id": BOOK, "name": "MacBook", "enabled": false } })
+            .to_string(),
+    )
+    .unwrap();
+    let book = Daemon::start(
+        home,
+        &[
+            ("MOONLET_MOBILE_ADDRS", "127.0.0.2"),
+            ("MOONLET_TEST_FORWARD_OFFSET", "1"),
+        ],
+    )
+    .await;
+    let token = pair(central, addr, "MacBook", DeviceKind::Desktop).await;
+    let _: Value = book
+        .call(
+            "link.set",
+            json!({ "central": { "name": "studio-mini", "addrs": [addr], "token": token } }),
+        )
+        .await;
+    within(Duration::from_secs(15), "the MacBook linked", || async {
+        let workers: Value = central.call("worker.list", json!({})).await;
+        workers
+            .as_array()
+            .is_some_and(|l| l.iter().any(|w| w["id"] == json!(BOOK)))
+    })
+    .await;
+    book
+}
+
+/// Two free ports in a row.
+fn two_free_ports() -> u16 {
+    loop {
+        let port = free_port();
+        if port < u16::MAX && std::net::TcpListener::bind(("127.0.0.1", port + 1)).is_ok() {
+            return port;
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_forward_carries_the_callback_and_ends_when_its_listener_closes() {
+    let (mini, addr) = central().await;
+    let book = linked_book_one_along(&mini, &addr).await;
+    let mut app = book.app().await;
+    let _: bool = app.request("presence.active", json!({})).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let port = two_free_ports();
+    in_terminal(&mini, &sign_in_command(port)).await;
+    let shown = next_show(&mut app, Duration::from_secs(15))
+        .await
+        .expect("a browser.show");
+    assert_eq!(shown["forward"], json!(port));
+    assert!(shown.get("port_taken").is_none(), "{shown}");
+    let answer = get(port + 1, "/?code=4").await;
+    assert!(answer.ends_with("You are now authenticated"), "{answer:?}");
+    // The command answered once and exited: the forward ends.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let after = get(port + 1, "/?code=5").await;
+    assert!(!after.contains("authenticated"), "{after:?}");
+}
+
+#[tokio::test]
+async fn a_port_taken_on_the_mac_waits_for_retry() {
+    let (mini, addr) = central().await;
+    let book = linked_book_one_along(&mini, &addr).await;
+    let mut app = book.app().await;
+    let _: bool = app.request("presence.active", json!({})).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let port = two_free_ports();
+    let holder = std::net::TcpListener::bind(("127.0.0.1", port + 1)).unwrap();
+    in_terminal(&mini, &sign_in_command(port)).await;
+    let shown = next_show(&mut app, Duration::from_secs(15))
+        .await
+        .expect("a browser.show");
+    assert_eq!(shown["port_taken"], json!(true));
+    drop(holder);
+    let _: bool = app
+        .request("browser.retry", json!({ "url": shown["url"] }))
+        .await
+        .unwrap();
+    let again = next_show(&mut app, Duration::from_secs(10))
+        .await
+        .expect("the browser.show again");
+    assert!(again.get("port_taken").is_none(), "{again}");
+    assert!(
+        get(port + 1, "/?code=4")
+            .await
+            .ends_with("You are now authenticated")
+    );
+}
+
+#[tokio::test]
+async fn a_tunnel_without_a_matching_callback_is_forbidden() {
+    let (mini, addr) = central().await;
+    let _book = linked_book(&mini, &addr).await;
+    // A member's request for a port nothing of the central host's waits on.
+    let token = pair(&mini, &addr, "Another Mac", DeviceKind::Desktop).await;
+    let mut s = raw(&addr, &token, "moonletd-worker").await;
+    use moonlet_proto::{read_frame, write_frame};
+    let reg = Message::Request {
+        id: 1,
+        method: "worker.register".into(),
+        params: registration("0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d", "Another Mac"),
+    };
+    write_frame(&mut s, &Frame::Json(reg)).await.unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let f = tokio::time::timeout_at(deadline, read_frame(&mut s))
+            .await
+            .expect("no reply")
+            .unwrap()
+            .unwrap();
+        if let Frame::Json(Message::Response { id: 1, error, .. }) = f {
+            assert!(error.is_none(), "{error:?}");
+            break;
+        }
+    }
+    let req = Message::Request {
+        id: 2,
+        method: "tunnel.open".into(),
+        params: json!({ "member": MINI, "port": 5432, "data": "R0VUIC8gSFRUUC8xLjENCg0K" }),
+    };
+    write_frame(&mut s, &Frame::Json(req)).await.unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let error = loop {
+        let f = tokio::time::timeout_at(deadline, read_frame(&mut s))
+            .await
+            .expect("no reply")
+            .unwrap()
+            .unwrap();
+        if let Frame::Json(Message::Response { id: 2, error, .. }) = f {
+            break error.expect("an error");
+        }
+    };
+    assert_eq!(
+        (error.code.as_str(), error.message.as_str()),
+        ("forbidden", "no sign-in waits on that port")
+    );
+}
+
 #[tokio::test]
 async fn a_url_from_a_member_waits_on_a_central_host_that_never_saw_the_user() {
     let (mini, addr) = central().await;
