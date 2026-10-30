@@ -3367,23 +3367,38 @@ impl Daemon {
             if running && !r.now {
                 return Err(RpcError::new("busy", "a turn is running; it moves when the turn ends"));
             }
-            // What is new goes first, so the central host continues from it;
-            // one it would continue from an older copy stays here.
-            if self.session_copies.send_now().await.contains(&r.session) {
-                return Err(RpcError::new("unsent", "what is new of it could not be sent to the central host; it stays here"));
+            // Cut off now: the agents here stop first, as for sleep, so none
+            // runs a step after the central host goes on. They go on again
+            // if the session stays here.
+            let frozen: Vec<moonlet_proto::TerminalId> =
+                if running { chats.iter().copied().filter(|t| self.chats.freeze(*t, true)).collect() } else { Vec::new() };
+            let handed = async {
+                // What is new goes first, so the central host continues from
+                // it; one it would continue from an older copy stays here.
+                if self.session_copies.send_now().await.contains(&r.session) {
+                    return Err(RpcError::new("unsent", "what is new of it could not be sent to the central host; it stays here"));
+                }
+                let host = self.link.host().ok_or_else(|| RpcError::new("unreachable", "the central host is not connected"))?;
+                let taken = host
+                    .request(
+                        m::SESSION_YIELD,
+                        serde_json::to_value(m::SessionYield { sessions: vec![r.session.clone()], why: Some("moved it there".into()), pin: true })
+                            .map_err(internal)?,
+                    )
+                    .await?;
+                // Moved only once the central host says it took it.
+                let taken: Vec<String> = serde_json::from_value(taken).map_err(internal)?;
+                if !taken.contains(&r.session) {
+                    return Err(RpcError::new("not_taken", "the central host could not take it; it stays here"));
+                }
+                Ok(())
             }
-            let host = self.link.host().ok_or_else(|| RpcError::new("unreachable", "the central host is not connected"))?;
-            let taken = host
-                .request(
-                    m::SESSION_YIELD,
-                    serde_json::to_value(m::SessionYield { sessions: vec![r.session.clone()], why: Some("moved it there".into()), pin: true })
-                        .map_err(internal)?,
-                )
-                .await?;
-            // Moved only once the central host says it took it.
-            let taken: Vec<String> = serde_json::from_value(taken).map_err(internal)?;
-            if !taken.contains(&r.session) {
-                return Err(RpcError::new("not_taken", "the central host could not take it; it stays here"));
+            .await;
+            if let Err(e) = handed {
+                for t in frozen {
+                    self.chats.freeze(t, false);
+                }
+                return Err(e);
             }
             let mut moved = s;
             moved.owner = Some(moonlet_proto::types::SessionOwner { worker: central, name: String::new(), reachable: true });

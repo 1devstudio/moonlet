@@ -2564,6 +2564,72 @@ async fn a_session_kept_on_this_mac_moves_to_the_central_host_when_asked() {
     );
 }
 
+/// The state letters `ps` gives each agent process `d` runs ([`TOOL_CLAUDE`]).
+fn agent_processes(d: &Daemon) -> Vec<(String, String)> {
+    let script = claude_home(d).parent().unwrap().join("bin").join("claude");
+    let out = std::process::Command::new("ps")
+        .args(["-axo", "pid=,stat=,command="])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|l| l.contains(&*script.to_string_lossy()))
+        .filter_map(|l| {
+            let mut f = l.split_whitespace();
+            Some((f.next()?.to_string(), f.next()?.to_string()))
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn moving_a_running_session_now_stops_its_agent_on_this_mac() {
+    let origin = Origin::new();
+    let (mini, mut book) = pair_with_agents_as(&origin, false).await;
+    // The MacBook hears no account news as it happens, so it does not
+    // let go of the session at once: what its agent does then shows.
+    book.env.push((
+        "MOONLET_TEST_IGNORE_ACCOUNT_EVENTS".to_string(),
+        "1".to_string(),
+    ));
+    book.restart().await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    let agent = made["terminals"][0].clone();
+    copy_of(&mini, &made).await;
+    let _: Value = book
+        .call("chat.send", json!({ "id": agent, "text": "HOLD on" }))
+        .await;
+    within(
+        Duration::from_secs(30),
+        "the running turn on studio-mini",
+        || async {
+            mini.try_call("session.copy", json!({ "session": made["id"] }))
+                .await
+                .is_ok_and(|i| i["chats"][0]["state"]["status"] == json!("working"))
+        },
+    )
+    .await;
+
+    let _: Value = book
+        .call(
+            "session.move",
+            json!({ "session": made["id"], "to": MINI, "now": true }),
+        )
+        .await;
+    let theirs: Vec<Value> = mini.call("session.list", json!({})).await;
+    assert!(theirs.iter().any(|s| s["id"] == made["id"]), "studio-mini runs it now");
+    let agents = agent_processes(&book);
+    for (pid, _) in &agents {
+        let _ = std::process::Command::new("kill").args(["-KILL", pid]).status();
+    }
+    assert!(!agents.is_empty());
+    assert!(
+        agents.iter().all(|(_, stat)| stat.starts_with('T')),
+        "the MacBook's agent goes on: {agents:?}"
+    );
+}
+
 #[tokio::test]
 async fn a_session_kept_on_the_central_host_is_unpinned_from_the_mac() {
     let origin = Origin::new();
