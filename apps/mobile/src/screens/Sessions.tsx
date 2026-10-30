@@ -8,7 +8,9 @@ import { M, type Project } from "@desktop/lib/protocol";
 import { prTone } from "@desktop/components/ui";
 import { showScreen, useApp, useShownWorkspace } from "../lib/app";
 import { useBase, useGitStatus, usePr, useSeen } from "../lib/rowDetails";
-import { type ChipId, type ProjectGroup, type SessionRow, chips, filterGroups, rowTarget, sessionGroups, taskChip } from "../lib/sessionList";
+import { type ChipId, type ProjectGroup, type SessionRow, chips, filterGroups, rowTarget, sessionGroups, sessionTask, suggestedTask } from "../lib/sessionList";
+import { LinkSheet } from "../components/LinkSheet";
+import { sessionBoards } from "../lib/board";
 import { useBusy } from "../lib/busy";
 import { STATE_COLOR } from "../lib/palette";
 import { DiffStat, StateGlyph, Title, cx } from "../components/ui";
@@ -39,8 +41,18 @@ function Row({ r }: { r: SessionRow }) {
   const [ref, seen] = useSeen();
   const [stat] = useGitStatus(r.host, seen ? r.session : undefined);
   const [pr] = usePr(r.host, seen ? r.session : undefined);
-  const task = taskChip(r.session);
+  const d = useApp((s) => s.data[r.host]);
+  const hosts = useApp((s) => s.hosts);
+  const data = useApp((s) => s.data);
+  // Boards another member of the account shares count too (X68).
+  const shared = sessionBoards(hosts, data, r.host, r.session).map((b) => b.snapshot);
+  // The task the session works on: its link, or the one its branch or PR names (X46, X76).
+  const task = d ? sessionTask(d, r.session, pr, shared) : null;
+  // A task its name suggests, to link from here (X76).
+  const suggested = d && !task ? suggestedTask(d, r.session, shared) : null;
+  const [linking, setLinking] = useState(false);
   return (
+    <>
     <button ref={ref} type="button" onClick={() => showScreen(rowTarget(r))} className={cx("flex items-start gap-2.5 px-4 py-2.5 text-left", r.state === "blocked" && "bg-[rgba(242,201,76,0.035)]")}>
       <span className="pt-[3px]">
         <StateGlyph state={r.state} />
@@ -53,9 +65,25 @@ function Row({ r }: { r: SessionRow }) {
           </span>
         </span>
         <span className="flex items-center gap-2 text-[12px] text-faint">
-          {task && <span className="flex-none font-mono text-muted">{task.label}</span>}
-          <span className="truncate font-mono">{r.session.branch}</span>
-          {stat && <DiffStat add={stat.additions} del={stat.deletions} />}
+          {task && <span className="flex-none font-mono font-semibold text-accent-2">{task.key}</span>}
+          {suggested && (
+            <span
+              role="button"
+              tabIndex={0}
+              aria-label={`Link to ${suggested.key}?`}
+              onClick={(e) => (e.stopPropagation(), setLinking(true))}
+              onKeyDown={(e) => e.key === "Enter" && (e.stopPropagation(), setLinking(true))}
+              className="flex-none font-mono font-semibold text-faint"
+            >
+              {suggested.key}?
+            </span>
+          )}
+          <span className="min-w-0 truncate font-mono">{r.session.branch}</span>
+          {stat && (
+            <span className="flex-none whitespace-nowrap">
+              <DiffStat add={stat.additions} del={stat.deletions} />
+            </span>
+          )}
           {r.agents && (
             <span className="flex flex-none items-center gap-1">
               <Bot size={12} />
@@ -63,7 +91,7 @@ function Row({ r }: { r: SessionRow }) {
             </span>
           )}
           {pr && (
-            <span className={cx("flex items-center gap-1", prTone(pr.state.toLowerCase()))}>
+            <span className={cx("flex flex-none items-center gap-1 whitespace-nowrap", prTone(pr.state.toLowerCase()))}>
               <GitPullRequest size={12} />#{pr.number}
               {pr.state.toLowerCase() === "merged" ? " merged" : ""}
             </span>
@@ -72,6 +100,8 @@ function Row({ r }: { r: SessionRow }) {
         </span>
       </span>
     </button>
+    {linking && <LinkSheet host={r.host} session={r.session} onClose={() => setLinking(false)} />}
+    </>
   );
 }
 

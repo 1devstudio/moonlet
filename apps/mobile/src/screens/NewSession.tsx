@@ -9,10 +9,16 @@ import { CLAUDE_MODELS, EFFORTS } from "@desktop/lib/agents";
 import { type IssueRef, M, type Project, type ProjectConfig, type Session } from "@desktop/lib/protocol";
 import { type Attachment, type PickerList, type PickerTab, pickerBranches, pickerHint, pickerSearch } from "@desktop/lib/composer";
 import { loadHost, showScreen, showTab, useApp, useShownWorkspace } from "../lib/app";
+import { hostsApi } from "@desktop/lib/daemon";
+import { taskId, trackerOf } from "@desktop/lib/tasks";
+import { phoneBoards } from "../lib/board";
+import { startedOnMac } from "../lib/taskActions";
+import { taskPreset } from "../lib/taskView";
 import { MODES, branchPrefix, composer, modeHelp, projectChoices, setupLine } from "../lib/newSession";
 import { useBusy } from "../lib/busy";
 import { AgentIcon, Btn, cx } from "../components/ui";
 import { Sheet } from "../components/Sheet";
+import { TrackerMark } from "./Tasks";
 import { Markdown } from "../components/Markdown";
 
 const AGENTS = [
@@ -20,16 +26,16 @@ const AGENTS = [
   { id: "codex", label: "Codex" },
 ];
 
-type Picker = "project" | "agent" | "model" | "base" | "source" | null;
+type Picker = "project" | "agent" | "model" | "base" | "source" | "mode" | null;
 
-function RowButton({ label, value, hint, onClick, icon, mono }: { label: string; value: string; hint?: string; onClick: () => void; icon?: ReactNode; mono?: boolean }) {
+function RowButton({ label, value, hint, hintAccent, onClick, icon, mono }: { label: string; value: string; hint?: string; hintAccent?: boolean; onClick: () => void; icon?: ReactNode; mono?: boolean }) {
   return (
     <button type="button" onClick={onClick} className="flex min-h-[50px] items-center gap-2.5 border-b border-border px-3.5 text-left last:border-b-0">
       <span className="w-[72px] text-[14px] text-muted">{label}</span>
       <span className="flex min-w-0 flex-1 items-center gap-1.5">
         {icon}
         <span className={cx("truncate text-[15px]", mono && "font-mono text-[14px]")}>{value}</span>
-        {hint && <span className="truncate text-[12.5px] text-faint">{hint}</span>}
+        {hint && <span className={cx("truncate text-[12.5px]", hintAccent ? "text-accent-2" : "text-faint")}>{hint}</span>}
       </span>
       <ChevronRight size={16} className="text-faint" />
     </button>
@@ -149,9 +155,19 @@ function AttachmentCard({ a, onRemove }: { a: Attachment; onRemove: () => void }
 export function NewSessionScreen() {
   const hosts = useApp((s) => s.hosts);
   const data = useApp((s) => s.data);
-  const choices = projectChoices(hosts, data, useShownWorkspace());
+  const shownWs = useShownWorkspace();
   const [prompt, setPrompt] = useState("");
   const [pick, setPick] = useState(0);
+  // Started from a task (X76): its board, the task and the Mac's preset for it.
+  const newFrom = useApp((s) => s.newFrom);
+  const fromBoard = newFrom ? (phoneBoards(hosts, data, null).find((b) => b.key === newFrom.board) ?? null) : null;
+  // From a task: the projects of its board's workspace, so the session goes where the task is.
+  const choices = projectChoices(hosts, data, fromBoard ? { host: fromBoard.host, id: fromBoard.workspace, account: data[fromBoard.host]?.account ?? "" } : shownWs);
+  const fromTask = fromBoard?.snapshot.tasks.find((t) => taskId(t) === newFrom?.task) ?? null;
+  const preset = fromBoard && fromTask ? taskPreset(fromBoard, fromTask) : null;
+  const [taskBranch, setTaskBranch] = useState<string | null>(null);
+  const [assign, setAssign] = useState(false);
+  const [branchError, setBranchError] = useState<string | null>(null);
   const [agent, setAgent] = useState("claude");
   const [model, setModel] = useState("opus");
   const [effort, setEffort] = useState("high");
@@ -168,6 +184,29 @@ export function NewSessionScreen() {
   const [prLatest] = useState(latestOnly);
   const { busy, error, run } = useBusy();
   const choice = choices[Math.min(pick, choices.length - 1)];
+  // The task's project on its host is picked once, as the Mac's composer does.
+  const presetKey = preset ? `${fromBoard!.key} ${preset.key}` : null;
+  useEffect(() => {
+    if (!preset || !fromBoard) return;
+    // A worktree's own project, else the task's.
+    const own = newFrom?.worktree?.project;
+    const i = choices.findIndex((c) => c.host === fromBoard.host && (own ? c.project.id === own : preset.projects.includes(c.project.id)));
+    if (i >= 0) setPick(i);
+    setAssign(!!preset.assign?.checked);
+    setTaskBranch(null);
+    setBranchError(null);
+    const host = fromBoard.host;
+    // A branch worked out for a task picked before this one is dropped.
+    let live = true;
+    void (async () => {
+      const user = preset.template?.includes("{user}") ? await rpc<string>(host, M.ghWhoami).catch(() => undefined) : undefined;
+      const name = await hostsApi.taskBranch({ kind: preset.kind, key: preset.key, title: preset.title, number: preset.number, template: preset.template, maxLen: preset.maxLen, user, issueType: preset.issueType });
+      if (live) setTaskBranch(name);
+    })().catch((e) => live && setBranchError(`Couldn't name the task's branch: ${e instanceof Error ? e.message : String(e)}`));
+    return () => {
+      live = false;
+    };
+  }, [presetKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const [latest] = useState(latestOnly);
 
   useEffect(() => {
@@ -189,7 +228,7 @@ export function NewSessionScreen() {
 
   // The host's Git settings (X55) name the branch and say where it starts.
   const git = choice ? (data[choice.host]?.git ?? null) : null;
-  const c = composer({ typed: prompt, prefix: branchPrefix(config, git), pickedBranch: picked, pr, prContext, prSend, base, projectBase: choice?.project.base_branch ?? "main", startFrom: git?.start_from ?? "local" });
+  const c = composer({ typed: prompt, prefix: branchPrefix(config, git), pickedBranch: picked, pr, prContext, prSend, base, projectBase: choice?.project.base_branch ?? "main", startFrom: git?.start_from ?? "local", task: preset, taskBranch, worktree: newFrom?.worktree ?? null });
   const pickPr = (p: IssueRef) => {
     setPr(p);
     setPrSend(true);
@@ -215,8 +254,10 @@ export function NewSessionScreen() {
         name: create.name,
         pr: create.pr,
         from: create.from,
-        branch: create.branch,
+        branch: create.newBranch ?? create.branch,
         existing_branch: create.branch !== null,
+        task: create.task ?? null,
+        worktree: create.worktree ?? null,
         agent,
         model: agent === "claude" ? model : null,
         effort: agent === "claude" ? effort : null,
@@ -226,6 +267,10 @@ export function NewSessionScreen() {
         rows: 32,
       });
       await loadHost(choice.host).catch(() => {});
+      // The Mac records it and runs Keep in step's "session starts" (X46).
+      // Its failure shows on the task's card and detail.
+      if (fromBoard && fromTask) void startedOnMac(fromBoard, fromTask, s.name, assign && !!preset?.assign);
+      useApp.setState({ newFrom: null });
       setPrompt("");
       setPicked(null);
       setPr(null);
@@ -240,7 +285,7 @@ export function NewSessionScreen() {
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center px-4 pb-2" style={{ paddingTop: "calc(var(--safe-top) + 10px)" }}>
-        <button type="button" onClick={() => showTab("inbox")} className="text-[15px] text-accent-2">
+        <button type="button" onClick={() => showTab("sessions")} className="text-[15px] text-accent-2">
           Cancel
         </button>
         <span className="flex-1 text-center text-[16px] font-semibold">New session</span>
@@ -252,15 +297,26 @@ export function NewSessionScreen() {
         ) : (
           <>
             <div className="flex flex-col gap-2">
-              <label htmlFor="task" className="text-[13px] text-muted">
-                What do you want to work on?
-              </label>
+              {fromTask ? (
+                <div className="flex min-h-12 items-center gap-2 rounded-[12px] border border-border bg-panel pr-1 pl-3">
+                  <TrackerMark mark={(trackerOf(fromTask.connection) ?? "github").charAt(0).toUpperCase()} />
+                  <span className="flex-none font-mono text-[14px] font-semibold">{fromTask.key}</span>
+                  <span className="min-w-0 flex-1 truncate text-[14px]">{fromTask.title}</span>
+                  <button type="button" aria-label={`Start without ${fromTask.key}`} onClick={() => useApp.setState({ newFrom: null })} className="flex h-9 w-9 flex-none items-center justify-center text-faint">
+                    <X size={16} />
+                  </button>
+                </div>
+              ) : (
+                <label htmlFor="task" className="text-[13px] text-muted">
+                  What do you want to work on?
+                </label>
+              )}
               {c.attachments.map((a) => (
                 <AttachmentCard key={a.id} a={a} onRemove={() => setPrSend(false)} />
               ))}
               <div className="flex flex-col rounded-[14px] border border-border-strong bg-panel">
                 <textarea id="task" rows={4} value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder={c.attachments.length ? c.placeholder : "Describe the task…"} className="resize-none bg-transparent p-3.5 text-[15px] leading-[1.45] outline-none" />
-                <div className="flex items-center gap-2 border-t border-border px-2 py-1.5">
+                <div className={cx("flex items-center gap-2 border-t border-border px-2 py-1.5", fromTask && "hidden")}>
                   <button type="button" aria-label="Dictate" onClick={() => document.getElementById("task")?.focus()} className="flex h-9 w-9 items-center justify-center text-muted">
                     <Mic size={18} />
                   </button>
@@ -272,8 +328,25 @@ export function NewSessionScreen() {
                 </div>
               </div>
             </div>
+            {fromTask && (
+              <div className="flex min-h-11 items-center gap-2 rounded-[12px] border border-border bg-panel px-3 text-[13px]">
+                <GitBranch size={14} className="flex-none text-muted" />
+                <span className="min-w-0 flex-1 truncate font-mono">{c.branch.name}</span>
+                <span className="flex-none text-faint">{c.branch.existing ? "existing branch" : `from ${baseName}`}</span>
+              </div>
+            )}
+            {preset?.assign && (
+              <button type="button" role="checkbox" aria-checked={assign} onClick={() => setAssign(!assign)} className="flex items-start gap-3 px-1 text-left">
+                <span className={cx("mt-[1px] flex h-[22px] w-[22px] flex-none items-center justify-center rounded-[6px] border", assign ? "border-fg bg-fg text-bg" : "border-border-strong")}>{assign && <Check size={15} strokeWidth={3} />}</span>
+                <span className="flex flex-col gap-0.5">
+                  <span className="text-[15px]">{preset.assign.label}</span>
+                  <span className="text-[12.5px] text-muted">{preset.assign.title}</span>
+                </span>
+              </button>
+            )}
             <div className="flex flex-col rounded-[14px] border border-border bg-panel">
-              <RowButton label="Project" value={choice.project.name} onClick={() => setPicker("project")} />
+              <RowButton label="Project" value={choice.project.name} hint={fromTask && preset?.projects.includes(choice.project.id) ? `Linked to ${fromTask.key}` : undefined} hintAccent onClick={() => setPicker("project")} />
+              {!fromTask && (
               <RowButton
                 label="Work on"
                 value={pr ? `PR #${pr.number}` : (picked ?? "Branch or pull request")}
@@ -281,12 +354,14 @@ export function NewSessionScreen() {
                 mono={!pr && !!picked}
                 onClick={() => setPicker("source")}
               />
-              <RowButton label="Host" value={choice.hostLabel} hint={hosts[choice.host]?.status === "connected" ? "online" : "offline"} onClick={() => setPicker("project")} />
+              )}
+              {!fromTask && <RowButton label="Host" value={choice.hostLabel} hint={hosts[choice.host]?.status === "connected" ? "online" : "offline"} onClick={() => setPicker("project")} />}
               <RowButton label="Agent" value={AGENTS.find((a) => a.id === agent)?.label ?? agent} icon={<AgentIcon agent={agent} size={14} />} onClick={() => setPicker("agent")} />
               {agent === "claude" && <RowButton label="Model" value={modelLabel} hint={`${effortLabel} effort`} onClick={() => setPicker("model")} />}
-              {!pr && !picked && <RowButton label="Base" value={baseName} mono onClick={() => setPicker("base")} />}
+              {!pr && !picked && !fromTask && <RowButton label="Base" value={baseName} mono onClick={() => setPicker("base")} />}
+              {fromTask && agent === "claude" && <RowButton label="Mode" value={MODES.find((m) => m.id === mode)?.label ?? mode} hint={MODES.find((m) => m.id === mode)?.short} onClick={() => setPicker("mode")} />}
             </div>
-            {agent === "claude" && (
+            {agent === "claude" && !fromTask && (
               <div className="flex flex-col gap-2">
                 <span className="text-[13px] text-muted">Mode</span>
                 <div className="grid grid-cols-4 rounded-[10px] bg-panel p-[3px]">
@@ -305,7 +380,7 @@ export function NewSessionScreen() {
       {choice && (
         <div className="flex flex-col gap-2.5 border-t border-border px-4 pt-3 pb-3">
           <span className="text-[12.5px] text-muted">{setupLine(c.start, choice.hostLabel, config?.setup)}</span>
-          {error && <span className="text-[12.5px] text-error">{error}</span>}
+          {(error || branchError) && <span className="text-[12.5px] text-error">{error ?? branchError}</span>}
           <Btn tone="primary" disabled={busy || !c.create} onClick={() => void start()}>
             {busy ? "Starting…" : "Start session"} <ArrowRight size={16} />
           </Btn>
@@ -322,6 +397,11 @@ export function NewSessionScreen() {
               setPicker(null);
             }}
           />
+        </Sheet>
+      )}
+      {picker === "mode" && (
+        <Sheet label="Mode" onClose={() => setPicker(null)}>
+          <Choices items={MODES.map((m) => ({ id: m.id, label: m.label, hint: m.help }))} current={mode} onPick={(m) => (setMode(m), setPicker(null))} />
         </Sheet>
       )}
       {picker === "agent" && (

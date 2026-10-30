@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Section } from "@desktop/lib/protocol";
-import { chips, filterGroups, rowTarget, sessionGroups, taskChip } from "./sessionList";
+import { chips, filterGroups, rowTarget, sessionGroups, sessionTask, suggestedTask, taskChip } from "./sessionList";
 import { MIN, NOW, ask, chat, data, project, session, terminal, workspace } from "./fixtures";
 
 const section = (id: string, name: string, project_ids: string[]): Section => ({
@@ -237,5 +237,63 @@ describe("taskChip (X46)", () => {
   it("shows nothing for a session without a stored link", () => {
     expect(taskChip(session("s", "x"))).toBeNull();
     expect(taskChip(session("s", "x", { task: null, task_unlinked: true }))).toBeNull();
+  });
+});
+
+describe("sessionTask (X76)", () => {
+  const LINEAR = "linear:acme";
+  const board = { id: "moon", name: "Moonlet", connection: LINEAR, workspace: "local/personal", origin: { kind: "linear_team" as const, team: "MOON" }, columns: [
+    { name: "Todo", statuses: ["s-todo"], category: "todo" as const },
+    { name: "In Progress", statuses: ["s-progress"], category: "in_progress" as const },
+  ] };
+  const moon142 = { connection: LINEAR, key: "MOON-142", title: "Remote hosts sidebar", url: "https://linear.app/acme/issue/MOON-142", column: "in_progress" as const, priority: 3, assignees: [], labels: [], description: "", updatedMs: 0, tracker: { id: "i", state: "s-progress", source: "MOON" } };
+  const snap = { version: 1 as const, syncedAt: NOW, from: "studio", boards: [board], shownBoard: "moon", tasks: [moon142], boardData: { moon: { keys: [`${LINEAR} MOON-142`] } }, worktrees: [], repos: {}, sourceProjects: {}, error: null, activity: {}, attention: {}, trackers: { github: { branch_template: "", max_length: 48, rules: { session_starts: "auto" as const, pr_opens: "auto" as const, all_merged: "suggest" as const, pr_comment: "auto" as const, issue_done: "suggest" as const } } }, link: { branch: true, pr: true, title: true } };
+  const d = (s = session("remote", "Remote hosts sidebar", { branch: "moon-142-remote-hosts", project_id: "moonlet" })) => ({ ...data({ projects: [project("moonlet", "moonlet")], sessions: [s], tasks: { personal: snap } }), s });
+
+  it("finds the task a session's branch names, with its state on the board and the project", () => {
+    const { s, ...host } = d();
+    expect(sessionTask(host, s, null)).toEqual({ key: "MOON-142", state: "In Progress", category: "in_progress", project: "moonlet", url: "https://linear.app/acme/issue/MOON-142" });
+  });
+
+  it("names a GitHub issue by its number, as rows show it", () => {
+    const gh = { ...moon142, connection: "github:github.com", key: "acme/web#12", url: "https://github.com/acme/web/issues/12", tracker: undefined, github: { repo: "acme/web", number: 12, closingPrs: [] } };
+    const s = session("fix", "Fix", { branch: "12-fix-login", project_id: "moonlet" });
+    const host = { ...data({ projects: [project("moonlet", "moonlet")], sessions: [s], tasks: { personal: { ...snap, tasks: [gh], repos: { moonlet: "acme/web" }, boardData: { moon: { keys: [] } } } } }) };
+    expect(sessionTask(host, s, null)?.key).toBe("#12");
+  });
+
+  it("keeps to the stored link without the Mac's boards, and shows nothing once unlinked", () => {
+    const stored = session("x", "x", { task: { connection: "github:github.com", key: "acme/web#12", url: "https://github.com/acme/web/issues/12" } });
+    expect(sessionTask(data({ sessions: [stored] }), stored, null)).toEqual({ key: "#12", state: null, category: null, project: null, url: "https://github.com/acme/web/issues/12" });
+    const { s, ...host } = d(session("remote", "Remote hosts sidebar", { branch: "moon-142-remote-hosts", task: null, task_unlinked: true }));
+    expect(sessionTask(host, s, null)).toBeNull();
+  });
+
+  it("finds a session's task on a board another member of its account shares (X68)", () => {
+    const s = session("remote", "Remote hosts sidebar", { branch: "moon-142-remote-hosts", project_id: "moonlet" });
+    // This member has no snapshot; the account's board came from another.
+    const host = data({ projects: [project("moonlet", "moonlet")], sessions: [s] });
+    expect(sessionTask(host, s, null)).toBeNull();
+    expect(sessionTask(host, s, null, [snap])?.key).toBe("MOON-142");
+    expect(suggestedTask(host, { ...s, branch: "x", name: "Remote hosts sidebar" }, [snap])).toEqual({ key: "MOON-142", id: `${LINEAR} MOON-142` });
+  });
+
+  it("matches a GitHub issue on another member's board by the session's own repository, whatever that member's project ids", () => {
+    const gh = { ...moon142, connection: "github:github.com", key: "acme/web#12", url: "https://github.com/acme/web/issues/12", tracker: undefined, github: { repo: "acme/web", number: 12, closingPrs: [] } };
+    // The other member keys its repositories by its own project id.
+    const theirs = { ...snap, tasks: [gh], repos: { "p-on-air": "acme/web" }, boardData: { moon: { keys: [] } } };
+    const s = session("fix", "Fix", { branch: "12-fix-login", project_id: "moonlet" });
+    const host = data({ projects: [{ ...project("moonlet", "moonlet"), identity: { origin: "git@github.com:acme/web.git", root: "abc" } }], sessions: [s] });
+    expect(sessionTask(host, s, null, [theirs])?.key).toBe("#12");
+  });
+
+  it("suggests a task whose title is the session's name, for a session with no task (shown as MOON-142?)", () => {
+    const { s, ...host } = d(session("dark", "Remote hosts sidebar", { branch: "moonlet/sidebar", project_id: "moonlet" }));
+    expect(sessionTask(host, s, null)).toBeNull();
+    expect(suggestedTask(host, s)).toEqual({ key: "MOON-142", id: `${LINEAR} MOON-142` });
+    // Never once the user unlinked it, nor for a session with a task.
+    expect(suggestedTask(host, { ...s, task_unlinked: true })).toBeNull();
+    expect(suggestedTask(host, { ...s, task: { connection: LINEAR, key: "MOON-1", url: "" } })).toBeNull();
+    expect(suggestedTask(host, { ...s, name: "Something else" })).toBeNull();
   });
 });

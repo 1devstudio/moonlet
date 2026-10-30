@@ -4,6 +4,7 @@
 
 import { EV, type AccountInfo, type ChatState, type CopyChanged, type ExecSetup, type GitSettings, type ReadRequest, type TerminalInfo } from "@desktop/lib/protocol";
 import { DaemonError } from "@desktop/lib/daemon";
+import type { TaskSnapshot } from "@desktop/lib/taskSnapshot";
 import type { ChatSummary, HostData } from "./app";
 
 /** One record set, or removed (null). */
@@ -16,7 +17,11 @@ export type Change =
   /** A live copy (X60), or removed when it went. */
   | { kind: "copy"; id: string; value: Omit<CopyChanged, "newly_differing" | "removed"> | null }
   /** A routing copy's setup waiting for approval (X62), or answered (null). */
-  | { kind: "setup"; copy: string; value: ExecSetup | null };
+  | { kind: "setup"; copy: string; value: ExecSetup | null }
+  /** A workspace's board snapshot (X76), or removed with its workspace. */
+  | { kind: "tasks"; workspace: string; value: TaskSnapshot | null }
+  /** moonlet opened or closed on the Mac (X76). */
+  | { kind: "macOpen"; value: boolean };
 
 /** The changes `name` makes, or "reload" when only a fresh load tells. */
 export function eventChanges(name: string, data: unknown): Change[] | "reload" {
@@ -55,6 +60,12 @@ export function eventChanges(name: string, data: unknown): Change[] | "reload" {
     }
     case EV.accountInfo:
       return [{ kind: "account", value: (data as AccountInfo).account }];
+    case EV.tasksApp:
+      return [{ kind: "macOpen", value: (data as { open: boolean }).open }];
+    case EV.tasksChanged: {
+      const { workspace, snapshot } = data as { workspace: string; snapshot: TaskSnapshot | null };
+      return [{ kind: "tasks", workspace, value: snapshot }];
+    }
     case EV.sessionsChanged:
     case EV.projectsChanged:
     case EV.workspacesChanged:
@@ -99,7 +110,13 @@ export function applyChanges(d: HostData, changes: readonly Change[]): HostData 
     else if (c.kind === "account") out = { ...out, account: c.value };
     else if (c.kind === "copy") out = { ...out, copies: replaceBy(out.copies, (x) => x.id === c.id, c.value) };
     else if (c.kind === "setup") out = { ...out, setups: replaceBy(out.setups, (x) => x.copy === c.copy, c.value) };
-    else out = { ...out, reads: replaceBy(out.reads, (r) => r.request_id === c.id, c.value) };
+    else if (c.kind === "macOpen") out = { ...out, macOpen: c.value };
+    else if (c.kind === "tasks") {
+      const tasks = { ...out.tasks };
+      if (c.value) tasks[c.workspace] = c.value;
+      else delete tasks[c.workspace];
+      out = { ...out, tasks };
+    } else out = { ...out, reads: replaceBy(out.reads, (r) => r.request_id === c.id, c.value) };
   }
   return out;
 }

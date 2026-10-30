@@ -1,14 +1,20 @@
 // A session (X40): its header and the Chat, Terminal, Changes and PR tabs.
 
 import { type ReactNode, useEffect, useState } from "react";
-import { Archive, ChevronLeft, ExternalLink, MoreHorizontal } from "lucide-react";
+import { Archive, ChevronLeft, Link2, MoreHorizontal } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { rpc } from "@desktop/lib/daemon";
 import { M, type PullRequest, type Session, type SessionArchived, type UnpushedWork } from "@desktop/lib/protocol";
 import { unpushedParams } from "@desktop/lib/gitSettings";
 import { type SessionTab, showScreen, useApp } from "../lib/app";
 import { sessionState } from "../lib/inbox";
-import { taskChip } from "../lib/sessionList";
+import { sessionTask } from "../lib/sessionList";
+import { agentStrip, sessionChat } from "../lib/chatView";
+import { sessionBoards } from "../lib/board";
+import { taskId } from "@desktop/lib/tasks";
+import { LinkSheet } from "../components/LinkSheet";
+import { useNow } from "../lib/now";
+import { STATE_COLOR } from "../lib/palette";
 import { sessionLine, shellTerminals } from "../lib/chatView";
 import { useGitStatus, usePr } from "../lib/rowDetails";
 import { checksDot } from "../lib/checks";
@@ -135,7 +141,11 @@ export function SessionScreen({ host, id, tab }: { host: string; id: string; tab
   const dot = pr ? checksDot(pr.checks) : null;
   const jobs = useSessionJobs(host, id);
   const [menu, setMenu] = useState(false);
+  const now = useNow();
   const [archiving, setArchiving] = useState(false);
+  const [linking, setLinking] = useState(false);
+  const hosts = useApp((s) => s.hosts);
+  const data = useApp((s) => s.data);
   if (!d || !session) {
     return (
       <div className="p-6 text-muted" style={{ paddingTop: "calc(var(--safe-top) + 20px)" }}>
@@ -147,8 +157,11 @@ export function SessionScreen({ host, id, tab }: { host: string; id: string; tab
     );
   }
   const project = d.projects.find((p) => p.id === session.project_id);
-  // The task the session is linked to (X46).
-  const task = taskChip(session);
+  // The task the session works on and where it is (X46, X76).
+  const task = sessionTask(d, session, pr, sessionBoards(hosts, data, host, session).map((b) => b.snapshot));
+  // Its subagents at a glance (X76).
+  const chat = sessionChat(d, session.id);
+  const strip = chat !== null && d.chats[chat] ? agentStrip(d.chats[chat], now) : null;
   const badge: Partial<Record<SessionTab, ReactNode>> = {
     terminal: shellTerminals(d, id).length || null,
     changes: git?.files.length || null,
@@ -158,6 +171,15 @@ export function SessionScreen({ host, id, tab }: { host: string; id: string; tab
   const tabs = sessionTabs(jobs);
   const shown = shownTab(tab, tabs);
   const go = (t: SessionTab) => showScreen({ kind: "session", host, id, tab: t });
+  // The task in the app when a board has it, else in its tracker.
+  const openTask = () => {
+    if (!task) return;
+    // By its URL: a GitHub key shows shortened (#12).
+    const b = sessionBoards(hosts, data, host, session).find((x) => x.snapshot.tasks.some((t) => t.url === task.url));
+    const t = b?.snapshot.tasks.find((x) => x.url === task.url);
+    if (b && t) showScreen({ kind: "task", board: b.key, task: taskId(t), from: { kind: "session", host, id, tab } });
+    else void openUrl(task.url).catch(console.error);
+  };
 
   return (
     <div className="flex h-full flex-col">
@@ -170,31 +192,43 @@ export function SessionScreen({ host, id, tab }: { host: string; id: string; tab
             <StateGlyph state={sessionState(d, session)} />
             <span className="truncate text-[16px] font-semibold">{session.name}</span>
           </div>
-          <span className="flex min-w-0 items-center gap-1.5 text-[12px] text-muted">
+          <span className="flex min-w-0 items-center gap-1.5 text-[12px] text-faint">
             {task && (
-              <button type="button" aria-label={`Open ${task.label}`} onClick={() => void openUrl(task.url).catch(console.error)} className="flex flex-none items-center gap-1 font-mono text-fg">
-                {task.label}
-                <ExternalLink size={11} className="text-faint" />
+              <button type="button" aria-label={`Open ${task.key}`} onClick={openTask} className="flex-none font-mono font-semibold text-accent-2">
+                {task.key}
               </button>
             )}
-            <span className="min-w-0 truncate">{sessionLine(session, project, hostLabel)}</span>
+            <span className="min-w-0 truncate font-mono">{task ? `· ${[project?.name, session.branch].filter(Boolean).join(" · ")}` : sessionLine(session, project, hostLabel)}</span>
           </span>
         </div>
         <button type="button" aria-label="Session actions" onClick={() => setMenu(true)} className="flex h-10 w-10 items-center justify-center text-muted">
           <MoreHorizontal size={20} />
         </button>
       </header>
-      <nav className={cx("grid flex-none border-b border-border px-2", tabs.length > 4 ? "grid-cols-5" : "grid-cols-4")}>
+      {strip && (
+        <div aria-label={`${strip.bars.length} subagents`} className="flex flex-none items-center gap-1.5 px-4 pb-2">
+          <div className="flex flex-1 gap-1">
+            {strip.bars.map((b, i) => (
+              <span key={i} className="h-1 flex-1 rounded-full" style={{ background: { done: STATE_COLOR.done, running: STATE_COLOR.working, needs: STATE_COLOR.blocked, failed: STATE_COLOR.error, stopped: STATE_COLOR.idle }[b] }} />
+            ))}
+          </div>
+          <span className="font-mono text-[12px] text-faint">{strip.progress}</span>
+          <span className={cx("text-[12px]", strip.word.endsWith("needs you") ? "text-blocked" : "text-muted")}>{strip.word}</span>
+        </div>
+      )}
+      {/* The design's segmented tabs; Chat carries a dot while the session needs the user. */}
+      <nav className={cx("mx-4 mb-2 grid flex-none rounded-[12px] border border-border bg-panel p-[3px]", tabs.length > 4 ? "grid-cols-5" : "grid-cols-4")}>
         {tabs.map((id) => ({ id, label: TAB_LABEL[id] })).map((t) => (
           <button
             key={t.id}
             type="button"
+            aria-current={shown === t.id ? "page" : undefined}
             onClick={() => go(t.id)}
-            className={cx("relative flex h-10 items-center justify-center gap-1", tabs.length > 4 ? "text-[13px]" : "gap-1.5 text-[14px]", shown === t.id ? "font-semibold text-fg" : "text-muted")}
+            className={cx("flex h-9 items-center justify-center gap-1 rounded-[9px]", tabs.length > 4 ? "text-[13px]" : "gap-1.5 text-[14px]", shown === t.id ? "bg-border-strong font-semibold text-fg" : "text-muted")}
           >
             {t.label}
-            {badge[t.id] && (t.id === "pr" ? badge[t.id] : <span className="rounded-full bg-raised px-1.5 text-[11px] text-muted">{badge[t.id]}</span>)}
-            {shown === t.id && <span className="absolute right-3 bottom-0 left-3 h-[2px] rounded-full bg-accent" />}
+            {t.id === "chat" && shown !== "chat" && sessionState(d, session) === "blocked" && <span className="h-[7px] w-[7px] rounded-full bg-blocked" />}
+            {badge[t.id] && (t.id === "pr" ? badge[t.id] : <span className="text-[12px] font-normal text-faint">{badge[t.id]}</span>)}
           </button>
         ))}
       </nav>
@@ -216,12 +250,21 @@ export function SessionScreen({ host, id, tab }: { host: string; id: string; tab
             >
               <Archive size={16} /> Archive session
             </Btn>
+            <Btn
+              onClick={() => {
+                setMenu(false);
+                setLinking(true);
+              }}
+            >
+              <Link2 size={16} /> {task ? "Link another task" : "Link a task"}
+            </Btn>
             <Btn tone="ghost" onClick={() => setMenu(false)}>
               Cancel
             </Btn>
           </div>
         </Sheet>
       )}
+      {linking && <LinkSheet host={host} session={session} onClose={() => setLinking(false)} />}
       {archiving && <ArchiveSheet host={host} session={session} pr={pr} onClose={() => setArchiving(false)} />}
     </div>
   );
