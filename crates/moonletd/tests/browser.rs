@@ -991,3 +991,18 @@ async fn sign_in_on_every_member_opens_one_browser_at_a_time() {
         .expect("the second sign-in");
     assert_eq!(second["from"], json!("MacBook"));
 }
+
+#[tokio::test]
+async fn a_device_sign_ins_one_time_code_comes_with_its_url() {
+    let d = daemon().await;
+    let mut app = d.app().await;
+    in_terminal(
+        &d,
+        "echo '! One-time code (AB12-CD34) copied to clipboard'; \"$BROWSER\" 'https://github.com/login/device'",
+    )
+    .await;
+    let shown = next_show(&mut app, Duration::from_secs(10))
+        .await
+        .expect("a browser.show");
+    assert_eq!(shown["code"], json!("AB12-CD34"));
+}

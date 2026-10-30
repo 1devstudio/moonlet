@@ -1336,6 +1336,7 @@ impl Daemon {
                     waiting: unknown,
                     member: Some(worker),
                     port_taken: false,
+                    code: r.code,
                 })
                 .await;
                 ok(true)
@@ -4396,6 +4397,18 @@ impl Daemon {
             Some((port, key)) => (Some(port), Some(key)),
             None => (None, None),
         };
+        // A device sign-in's code, from what its terminal printed: the
+        // output just written may still be on its way, so it looks twice.
+        let mut code = None;
+        if let Some(t) = r.terminal {
+            for _ in 0..2 {
+                code = self.terminals.read_text(t, Some(40)).ok().and_then(|read| moonlet_core::browser::one_time_code(&read.text));
+                if code.is_some() {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            }
+        }
         let mut show = m::BrowserShow {
             url: r.url,
             from: info.worker.name,
@@ -4408,6 +4421,7 @@ impl Daemon {
             waiting: false,
             member: Some(info.worker.id.clone()),
             port_taken: false,
+            code,
         };
         let now = wall_ms();
         if info.central.is_none() {
@@ -4429,6 +4443,7 @@ impl Daemon {
                         session_name: show.session_name.clone(),
                         forward: show.forward,
                         forward_key: show.forward_key.clone(),
+                        code: show.code.clone(),
                     })
                     .map_err(internal)?,
                 )

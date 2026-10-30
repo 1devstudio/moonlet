@@ -1414,6 +1414,10 @@ pub struct BrowserShow {
     /// The forward's port is taken on this Mac: the URL waits for Retry.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub port_taken: bool,
+    /// The one-time code the command printed before opening the page, as
+    /// `gh auth login --web` does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
 }
 
 /// `signins.set` params.
@@ -1491,6 +1495,8 @@ pub struct BrowserRetry {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BrowserRoute {
     pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
