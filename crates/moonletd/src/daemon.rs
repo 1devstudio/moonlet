@@ -2909,12 +2909,26 @@ impl Daemon {
     /// worktree goes, and a live copy of it is kept in sync from the
     /// central host in its place (X60), so typing here can bring it back.
     async fn let_go_of_lost(self: &Arc<Self>) {
+        // One that could not be let go of yet, such as while a round holds
+        // its worktree, is tried again a little later.
+        for _ in 0..15 {
+            if !self.let_go_once().await {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        }
+    }
+
+    /// One look of [`Self::let_go_of_lost`]; true when a session must be
+    /// tried again.
+    async fn let_go_once(self: &Arc<Self>) -> bool {
         let _one = self.letting_go.lock().await;
         let info = self.link.info();
         if info.central.is_none() || info.worker.cloud {
-            return;
+            return false;
         }
         let records = self.sessions.session_records();
+        let mut again = false;
         for s in self.sessions.list_sessions().into_iter().filter(|s| s.owner.is_none() && !s.archived) {
             let Some(owner) = records.get(&s.id).and_then(|r| r.get("owner")).and_then(Value::as_str) else {
                 continue;
@@ -2928,12 +2942,14 @@ impl Daemon {
                 Err(e) => {
                     // Nothing is let go of until what it holds is kept.
                     tracing::warn!(session = %s.id, "cannot keep what was done here meanwhile: {e:#}");
+                    again = true;
                     continue;
                 }
             }
             let keep_at = self.session_copies.worktree_keep_folder(&s.path);
             if let Err(e) = self.sessions.let_go_session(&s.id, &keep_at).await {
                 tracing::warn!(session = %s.id, "cannot let go of a session another member owns: {e:#}");
+                again = true;
                 continue;
             }
             tracing::info!(session = %s.id, "its worktree, as it was here, is kept in {}", keep_at.display());
@@ -2943,6 +2959,7 @@ impl Daemon {
                 tracing::warn!(session = %s.id, "cannot keep a copy of it: {}", e.message);
             }
         }
+        again
     }
 
     /// Sends this member's sessions to the central host, and keeps the

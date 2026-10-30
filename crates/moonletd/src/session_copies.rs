@@ -1978,6 +1978,9 @@ impl SessionCopies {
     /// lines past what was sent are kept as a fork beside it. Gives the
     /// leftovers folder, when there was anything to keep.
     pub async fn keep_gap(&self, s: &moonlet_proto::types::Session) -> Result<Option<PathBuf>> {
+        // Never while a round snapshots the same worktree: both use its
+        // snapshot index, and one would find the other's lock.
+        let _one = self.round.lock().await;
         let dir = Path::new(&s.path);
         let mut folder = None;
         let sent = self.data.lock().unwrap().sent.get(&s.id).cloned();

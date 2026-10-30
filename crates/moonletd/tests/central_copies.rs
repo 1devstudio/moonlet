@@ -1888,3 +1888,58 @@ async fn a_member_that_lost_its_session_keeps_its_gap_and_follows_the_new_owner(
     )
     .await;
 }
+
+#[tokio::test]
+async fn a_member_lets_go_of_a_lost_session_once_its_worktree_is_free_again() {
+    let origin = Origin::new();
+    let (mini, mut book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    copy_of(&mini, &made).await;
+    within(
+        Duration::from_secs(30),
+        "the checkpoint on studio-mini",
+        || async {
+            mini.try_call("session.copy", json!({ "session": made["id"] }))
+                .await
+                .is_ok_and(|i| !i["checkpoint"].is_null())
+        },
+    )
+    .await;
+    book.stop();
+    // Another git holds the worktree's snapshot index as the MacBook comes
+    // back, as a round of its own can.
+    let git_dir = {
+        let out = std::process::Command::new("git")
+            .args(["rev-parse", "--absolute-git-dir"])
+            .current_dir(path_of(&made))
+            .output()
+            .unwrap();
+        PathBuf::from(String::from_utf8_lossy(&out.stdout).trim())
+    };
+    let lock = git_dir.join("moonlet-sync-index.lock");
+    std::fs::write(&lock, "").unwrap();
+    unreachable(&mini, &made).await;
+    let _: Value = mini
+        .call("session.continue_here", json!({ "session": made["id"] }))
+        .await;
+    book.restart().await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let own: Vec<Value> = book.call("session.list", json!({})).await;
+    assert!(
+        own.iter().any(|s| s["id"] == made["id"]),
+        "let go of before its gap was kept"
+    );
+    // Once the worktree is free, the MacBook lets go by itself.
+    std::fs::remove_file(&lock).unwrap();
+    within(
+        Duration::from_secs(30),
+        "fix-cart no longer the MacBook's own",
+        || async {
+            let own: Vec<Value> = book.call("session.list", json!({})).await;
+            own.iter().all(|s| s["id"] != made["id"])
+        },
+    )
+    .await;
+}
