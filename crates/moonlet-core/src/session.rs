@@ -1200,7 +1200,14 @@ impl SessionManager {
     /// files and all, and git forgets it. Its record is the new owner's,
     /// so it is not touched.
     pub async fn let_go_session(&self, id: &str, keep_at: &Path) -> Result<()> {
+        // Never while it is archived, nor while its terminals start (X65):
+        // an archive under way ends first, and then it is not let go of.
+        let lifecycle = self.lifecycle(id);
+        let _letting_go = lifecycle.lock().await;
         let s = self.session(id)?;
+        if s.archived {
+            bail!("the session was archived meanwhile");
+        }
         if Path::new(&s.path).exists() {
             if let Some(parent) = keep_at.parent() {
                 std::fs::create_dir_all(parent)?;
