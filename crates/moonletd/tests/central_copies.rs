@@ -2020,4 +2020,10 @@ async fn a_member_keeps_a_lost_session_until_its_conversation_is_forked() {
         .collect();
     assert_eq!(jsonl.len(), 1, "{forks:?}");
     assert_eq!(std::fs::read_to_string(jsonl[0]).unwrap(), transcript);
+    // The conversation's own files go with it, in a folder of the fork's name.
+    let files = jsonl[0].with_extension("");
+    assert_eq!(
+        std::fs::read_to_string(files.join("tool-results/toolu_01.txt")).unwrap(),
+        "full output\n"
+    );
 }

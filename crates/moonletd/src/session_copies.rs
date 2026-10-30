@@ -400,6 +400,23 @@ fn chrono_stamp() -> String {
     )
 }
 
+/// Whether a transcript file, `bytes`, holds what the central host never
+/// got, when it holds `held` bytes of it starting with `head`. Shorter than
+/// that, or starting otherwise, it was made again here: all of it is new.
+fn unsent(bytes: &[u8], held: u64, head: &[u8]) -> bool {
+    bytes.len() as u64 != held || !bytes.starts_with(head)
+}
+
+/// Where conversation `id`'s transcript file `file` is kept in its fork
+/// made at `stamp`: `<id>.jsonl` as `<id>.fork-<stamp>.jsonl`, and the
+/// files below `<id>/` below `<id>.fork-<stamp>/`.
+fn fork_name(id: &str, file: &str, stamp: &str) -> String {
+    match file.strip_prefix(id) {
+        Some(rest) => format!("{id}.fork-{stamp}{rest}"),
+        None => format!("{id}.fork-{stamp}/{file}"),
+    }
+}
+
 /// The branch a copy's worktree is on: its own, named after the session,
 /// so a member never moves one of the central host's own branches.
 fn copy_branch(session: &str) -> String {
@@ -2011,18 +2028,33 @@ impl SessionCopies {
             let projects = config_dir(self.sessions.config_dir(&s.id), &self.claude)
                 .join("projects")
                 .join(transcript::project_folder(dir));
-            let main = projects.join(format!("{id}.jsonl"));
-            let sent = self
+            // Every file of the conversation, as it is sent, against what
+            // the central host holds of each: any of them past that, or
+            // made again here, forks them all.
+            let files = transcript_files(&projects, &id);
+            let (held, heads) = self
                 .talk
                 .lock()
                 .unwrap()
                 .get(&s.id)
-                .and_then(|t| t.files.get(&format!("{id}.jsonl")).copied())
-                .unwrap_or(0);
-            let len = std::fs::metadata(&main).map(|m| m.len()).unwrap_or(0);
-            if len > sent {
-                let fork = projects.join(format!("{id}.fork-{stamp}.jsonl"));
-                std::fs::copy(&main, &fork).with_context(|| {
+                .map(|t| (t.files.clone(), t.heads.clone()))
+                .unwrap_or_default();
+            let mut gap = false;
+            for f in &files {
+                let bytes =
+                    std::fs::read(projects.join(f)).with_context(|| format!("cannot read {f}"))?;
+                let head = heads.get(f).map(Vec::as_slice).unwrap_or_default();
+                gap |= unsent(&bytes, held.get(f).copied().unwrap_or(0), head);
+            }
+            if !gap {
+                continue;
+            }
+            for f in &files {
+                let fork = projects.join(fork_name(&id, f, &stamp));
+                if let Some(parent) = fork.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::copy(projects.join(f), &fork).with_context(|| {
                     format!("cannot fork the conversation to {}", fork.display())
                 })?;
             }
@@ -2184,6 +2216,45 @@ impl SessionCopies {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_transcript_file_made_again_here_counts_as_unsent() {
+        let sent = b"{\"type\":\"user\"}\n{\"type\":\"assistant\"}\n";
+        let head = &sent[..10];
+        // As the central host holds it, and with a line more.
+        assert!(!unsent(sent, 37, head));
+        assert!(unsent(
+            b"{\"type\":\"user\"}\n{\"type\":\"assistant\"}\n{\"type\":\"user\"}\n",
+            37,
+            head
+        ));
+        // Made again shorter, and made again at the same length.
+        assert!(unsent(b"{\"type\":\"system\"}\n", 37, head));
+        assert!(unsent(
+            b"{\"kind\":\"user\"}\n{\"type\":\"assistant\"}\n",
+            37,
+            head
+        ));
+        // Nothing sent, nothing here.
+        assert!(!unsent(b"", 0, b""));
+    }
+
+    #[test]
+    fn a_fork_keeps_a_conversations_files_beside_its_own_transcript() {
+        let id = "0d6e2a4c-1b3f-4a5e-9c7d-8e1f2a3b4c5d";
+        assert_eq!(
+            fork_name(id, &format!("{id}.jsonl"), "20261030-140200"),
+            "0d6e2a4c-1b3f-4a5e-9c7d-8e1f2a3b4c5d.fork-20261030-140200.jsonl"
+        );
+        assert_eq!(
+            fork_name(
+                id,
+                &format!("{id}/tool-results/toolu_01.txt"),
+                "20261030-140200"
+            ),
+            "0d6e2a4c-1b3f-4a5e-9c7d-8e1f2a3b4c5d.fork-20261030-140200/tool-results/toolu_01.txt"
+        );
+    }
 
     #[test]
     fn a_request_passed_on_reaches_only_its_sessions_chats_and_worktree() {
