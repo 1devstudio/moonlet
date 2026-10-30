@@ -1006,3 +1006,48 @@ async fn a_device_sign_ins_one_time_code_comes_with_its_url() {
         .expect("a browser.show");
     assert_eq!(shown["code"], json!("AB12-CD34"));
 }
+
+#[tokio::test]
+async fn a_phone_gets_the_url_without_a_forward_and_a_mac_gets_it_next() {
+    use moonlet_proto::{read_frame, write_frame};
+    let (mini, addr) = central().await;
+    let book = linked_book_one_along(&mini, &addr).await;
+    let token = pair(&mini, &addr, "iPhone", DeviceKind::Phone).await;
+    let mut phone = raw(&addr, &token, "moonlet-mobile").await;
+    let req = Message::Request {
+        id: 1,
+        method: "presence.active".into(),
+        params: json!({}),
+    };
+    write_frame(&mut phone, &Frame::Json(req)).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let port = two_free_ports();
+    in_terminal(&mini, &sign_in_command(port)).await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let on_phone = loop {
+        let f = tokio::time::timeout_at(deadline, read_frame(&mut phone))
+            .await
+            .expect("no browser.show")
+            .unwrap()
+            .unwrap();
+        if let Frame::Json(Message::Event { name, data }) = f
+            && name == "browser.show"
+        {
+            break data;
+        }
+    };
+    assert_eq!(on_phone["to"], json!("phone"));
+    // The user touches the MacBook's app while the command still waits.
+    let mut app = book.app().await;
+    let _: bool = app.request("presence.active", json!({})).await.unwrap();
+    let on_mac = next_show(&mut app, Duration::from_secs(10))
+        .await
+        .expect("the sign-in on the MacBook");
+    assert_eq!(on_mac["url"], on_phone["url"]);
+    assert!(on_mac.get("to").is_none(), "{on_mac}");
+    assert!(
+        get(port + 1, "/?code=4")
+            .await
+            .ends_with("You are now authenticated")
+    );
+}

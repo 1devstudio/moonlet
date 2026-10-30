@@ -80,6 +80,9 @@ pub struct Daemon {
     forwards: crate::signin::Forwards,
     /// The sign-in commands the user approved on this member (X75).
     approvals: crate::signin::Approvals,
+    /// On the central host: sign-ins shown on the phone that have to finish
+    /// on a Mac, for the next Mac app the user touches, until they lapse.
+    for_next_mac: Mutex<Vec<(std::time::Instant, m::BrowserShow)>>,
     /// What the Mac's last sleep left to its wake (X73).
     asleep: Mutex<Asleep>,
     /// Per design system (X64): one start of its agent, or one change of its
@@ -629,6 +632,7 @@ impl Daemon {
             taken: crate::signin::Taken::default(),
             forwards: crate::signin::Forwards::default(),
             approvals: crate::signin::Approvals::new(&moonlet_core::paths::home()),
+            for_next_mac: Mutex::new(Vec::new()),
             asleep: Default::default(),
             heavy,
             cloud,
@@ -1298,7 +1302,8 @@ impl Daemon {
                 if conn.client == crate::link::WORKER_CLIENT {
                     // A member's app, passed on by its daemon.
                     let worker = self.workers.worker_on(conn.id).ok_or_else(|| RpcError::new("forbidden", "only a member says where the user is"))?;
-                    self.presence.lock().unwrap().last = Some((moonlet_core::browser::Client::Member(worker), now));
+                    self.presence.lock().unwrap().last = Some((moonlet_core::browser::Client::Member(worker.clone()), now));
+                    self.hand_to_mac(&worker);
                 } else if let Some(device) = conn.phone.as_deref() {
                     if !self.is_phone(device) {
                         return Err(RpcError::new("forbidden", "a paired Mac says where the user is through its own daemon"));
@@ -4299,6 +4304,31 @@ impl Daemon {
         Ok(())
     }
 
+    /// On the central host: the user touched member `member`'s app, so the
+    /// sign-ins waiting for a Mac go to it (X75).
+    fn hand_to_mac(self: &Arc<Self>, member: &str) {
+        let waiting: Vec<m::BrowserShow> = {
+            let mut list = self.for_next_mac.lock().unwrap();
+            list.retain(|(until, _)| *until > std::time::Instant::now());
+            std::mem::take(&mut *list).into_iter().map(|(_, s)| s).collect()
+        };
+        if waiting.is_empty() {
+            return;
+        }
+        let d = self.clone();
+        let member = member.to_string();
+        tokio::spawn(async move {
+            let me = d.link.info().worker.id;
+            for show in waiting {
+                if member == me {
+                    d.present(show).await;
+                } else if let Some(conn) = d.workers.conn(&member) {
+                    let _ = conn.request(m::EV_BROWSER_SHOW, serde_json::to_value(&show).unwrap_or_default(), std::time::Duration::from_secs(10)).await;
+                }
+            }
+        });
+    }
+
     /// The user is active in this Mac's app (X75): passed on to the central
     /// host at most every 30 s; on the central host, or without one, kept.
     fn app_active(self: &Arc<Self>, now: u64) {
@@ -4306,7 +4336,9 @@ impl Daemon {
         let mut p = self.presence.lock().unwrap();
         p.app_at = Some(now);
         if info.central.is_none() {
-            p.last = Some((moonlet_core::browser::Client::Member(info.worker.id), now));
+            p.last = Some((moonlet_core::browser::Client::Member(info.worker.id.clone()), now));
+            drop(p);
+            self.hand_to_mac(&info.worker.id);
             return;
         }
         if now.saturating_sub(p.sent_at) < 30_000 {
@@ -4471,6 +4503,11 @@ impl Daemon {
         show.waiting = waiting;
         match client {
             Client::Phone(device) => {
+                // One that comes back to a member's localhost finishes on a
+                // Mac: the next one the user touches gets it too.
+                if show.forward.is_some() {
+                    self.for_next_mac.lock().unwrap().push((std::time::Instant::now() + crate::signin::LIFETIME, show.clone()));
+                }
                 show.to = Some("phone".into());
                 show.device = Some(device.clone());
                 // A phone opens no forward: it never gets the key.
