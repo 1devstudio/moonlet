@@ -1301,6 +1301,7 @@ impl Daemon {
                     session_name: r.session_name,
                     forward: None,
                     to: None,
+                    device: None,
                     waiting: unknown,
                 })
                 .await;
@@ -3961,6 +3962,7 @@ impl Daemon {
             session_name,
             forward: None,
             to: None,
+            device: None,
             waiting: false,
         };
         let now = wall_ms();
@@ -4006,8 +4008,9 @@ impl Daemon {
         };
         show.waiting = waiting;
         match client {
-            Client::Phone(_) => {
+            Client::Phone(device) => {
                 show.to = Some("phone".into());
+                show.device = Some(device);
                 self.terminals.emit(Message::event(m::EV_BROWSER_SHOW, show));
             }
             Client::Member(id) if id == me => self.terminals.emit(Message::event(m::EV_BROWSER_SHOW, show)),

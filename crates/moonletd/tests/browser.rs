@@ -282,3 +282,43 @@ async fn a_url_from_a_member_waits_on_a_central_host_that_never_saw_the_user() {
     assert_eq!(shown["from"], json!("MacBook"));
     assert_eq!(shown["waiting"], json!(true));
 }
+
+/// The next `browser.show` a raw connection gets, if one comes within
+/// `limit`.
+async fn next_raw_show(s: &mut tokio::net::TcpStream, limit: Duration) -> Option<Value> {
+    let deadline = tokio::time::Instant::now() + limit;
+    loop {
+        let f = tokio::time::timeout_at(deadline, moonlet_proto::read_frame(s))
+            .await
+            .ok()?
+            .unwrap()?;
+        if let Frame::Json(Message::Event { name, data }) = f
+            && name == "browser.show"
+        {
+            return Some(data);
+        }
+    }
+}
+
+#[tokio::test]
+async fn only_the_phone_where_the_user_is_gets_the_url() {
+    use moonlet_proto::write_frame;
+    let (mini, addr) = central().await;
+    let iphone = pair(&mini, &addr, "iPhone", DeviceKind::Phone).await;
+    let ipad = pair(&mini, &addr, "iPad", DeviceKind::Phone).await;
+    let mut iphone = raw(&addr, &iphone, "moonlet-mobile").await;
+    let mut ipad = raw(&addr, &ipad, "moonlet-mobile").await;
+    let req = Message::Request {
+        id: 1,
+        method: "presence.active".into(),
+        params: json!({}),
+    };
+    write_frame(&mut iphone, &Frame::Json(req)).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    in_terminal(&mini, "\"$BROWSER\" 'https://github.com/login/device'").await;
+    let shown = next_raw_show(&mut iphone, Duration::from_secs(10))
+        .await
+        .expect("a browser.show on the iPhone");
+    assert_eq!(shown["url"], json!("https://github.com/login/device"));
+    assert_eq!(next_raw_show(&mut ipad, Duration::from_secs(2)).await, None);
+}

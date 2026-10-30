@@ -1365,6 +1365,9 @@ pub struct BrowserShow {
     /// app leaves it alone then.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub to: Option<String>,
+    /// The phone's device, for `to: phone`: only that phone hears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
     /// The user was not active anywhere lately: the URL waits with
     /// **Open** instead of opening by itself.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
