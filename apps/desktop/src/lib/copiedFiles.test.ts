@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addPattern, listNote, removePattern } from "./copiedFiles";
+import { addPattern, listNote, listSaver, removePattern } from "./copiedFiles";
 
 describe("a project's copied files (X74)", () => {
   it("the_default_list_is_env_and_env_star", () => {
@@ -21,5 +21,38 @@ describe("a project's copied files (X74)", () => {
 
   it("removes a pattern", () => {
     expect(removePattern([".env", ".env.*"], ".env")).toEqual([".env.*"]);
+  });
+
+  it("saves go one after another, and a failed one puts back what was last saved", async () => {
+    const sent: string[] = [];
+    const answers: Array<{ ok: () => void; fail: (e: Error) => void }> = [];
+    const save = listSaver<string>("A", (v) => {
+      sent.push(v);
+      return new Promise<void>((ok, fail) => answers.push({ ok, fail }));
+    });
+    const failed: Array<[string, string]> = [];
+    const onFail = (e: unknown, saved: string) => failed.push([(e as Error).message, saved]);
+    const tick = () => new Promise((r) => setTimeout(r, 0));
+
+    // Two quick edits: the second waits for the first.
+    const first = save("B", onFail);
+    const second = save("C", onFail);
+    await tick();
+    expect(sent).toEqual(["B"]);
+    // The first fails once the second was made: nothing is put back for it.
+    answers[0].fail(new Error("offline"));
+    await first;
+    await tick();
+    expect(sent).toEqual(["B", "C"]);
+    answers[1].ok();
+    await second;
+    expect(failed).toEqual([]);
+
+    // A later edit fails: the list goes back to C, the last one saved.
+    const third = save("D", onFail);
+    await tick();
+    answers[2].fail(new Error("forbidden"));
+    await third;
+    expect(failed).toEqual([["forbidden", "C"]]);
   });
 });

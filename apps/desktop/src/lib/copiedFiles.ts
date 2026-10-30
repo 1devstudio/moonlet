@@ -36,3 +36,28 @@ export function addPattern(patterns: string[], input: string): { patterns: strin
 
 /** `patterns` without `p`. */
 export const removePattern = (patterns: string[], p: string): string[] => patterns.filter((x) => x !== p);
+
+/** Saves of a whole list, starting from `saved`, the one the daemon has.
+ * Each is sent once the one before it is answered, so an earlier edit
+ * never lands after a later one. `onFail` runs for a failed save only
+ * while no later save was made, with the list last saved, to put back. */
+export function listSaver<T>(saved: T, send: (value: T) => Promise<unknown>) {
+  let tail: Promise<unknown> = Promise.resolve();
+  let latest = 0;
+  return (value: T, onFail: (e: unknown, saved: T) => void): Promise<void> => {
+    const n = ++latest;
+    const sent = tail.then(() => send(value));
+    tail = sent.then(
+      () => {
+        saved = value;
+      },
+      () => {},
+    );
+    return sent.then(
+      () => {},
+      (e: unknown) => {
+        if (n === latest) onFail(e, saved);
+      },
+    );
+  };
+}

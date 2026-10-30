@@ -2,10 +2,10 @@
 // that moonlet copies to the user's other Macs, `.env` by default. Each
 // change is saved at once to the account state, so every Mac has it.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Plus, X } from "lucide-react";
 import { rpc } from "../../lib/daemon";
-import { COPIED_NOTE, addPattern, listNote, removePattern, type CopiedFiles } from "../../lib/copiedFiles";
+import { COPIED_NOTE, addPattern, listNote, listSaver, removePattern, type CopiedFiles } from "../../lib/copiedFiles";
 import { M } from "../../lib/protocol";
 import { errorToast } from "../../lib/store";
 import { Button, IconButton, cx } from "../ui";
@@ -15,11 +15,17 @@ export function CopiedFilesSection({ host, id }: { host: string; id: string }) {
   const [list, setList] = useState<CopiedFiles | null>(null);
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const saver = useRef<ReturnType<typeof listSaver<CopiedFiles>> | null>(null);
   useEffect(() => {
     let live = true;
     setList(null);
+    saver.current = null;
     rpc<CopiedFiles>(host, M.projectCopiedFilesGet, { id }).then(
-      (l) => live && setList(l),
+      (l) => {
+        if (!live) return;
+        saver.current = listSaver(l, (v) => rpc(host, M.projectCopiedFilesSet, { id, patterns: v.patterns, cloud: v.cloud }));
+        setList(l);
+      },
       () => live && setList(null),
     );
     return () => {
@@ -27,11 +33,16 @@ export function CopiedFilesSection({ host, id }: { host: string; id: string }) {
     };
   }, [host, id]);
   if (!list) return null;
+  // Each edit shows at once; saves go in order, and a failed one puts
+  // back the list last saved unless a later edit was made.
   const save = (patterns: string[], cloud: boolean) => {
-    const before = list;
-    setList({ patterns, cloud, default: false });
-    rpc(host, M.projectCopiedFilesSet, { id, patterns, cloud }).catch((e: unknown) => {
-      setList(before);
+    const s = saver.current;
+    if (!s) return;
+    const next = { patterns, cloud, default: false };
+    setList(next);
+    void s(next, (e, saved) => {
+      if (saver.current !== s) return;
+      setList(saved);
       errorToast(e);
     });
   };
