@@ -3379,6 +3379,27 @@ async fn a_file_the_owner_deletes_after_a_live_copys_mac_restarted_goes_there_to
     .await;
 }
 
+#[tokio::test]
+async fn a_file_the_owner_deletes_while_the_central_host_is_down_goes_from_its_copy() {
+    let origin = Origin::new();
+    let (mut mini, _addr, book) = pair_of(&origin).await;
+    let project = origin.add_to(&book).await;
+    let made = new_session(&book, &project, "fix-cart").await;
+    let tree = path_of(&made);
+    std::fs::write(tree.join(".env"), "SECRET=one\n").unwrap();
+    let copy = copy_of(&mini, &made).await;
+    reads(&copy.join(".env"), "SECRET=one\n").await;
+    mini.stop();
+    std::fs::remove_file(tree.join(".env")).unwrap();
+    mini.restart().await;
+    within(
+        Duration::from_secs(30),
+        "the copy's .env gone",
+        || async { !copy.join(".env").exists() },
+    )
+    .await;
+}
+
 /// Every file under `dir`, by its path in it, with its text.
 fn files_under(dir: &Path) -> Vec<(String, String)> {
     let mut out = Vec::new();

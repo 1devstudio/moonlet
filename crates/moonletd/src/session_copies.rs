@@ -1173,10 +1173,12 @@ impl SessionCopies {
             .find(|p| p.id == s.project_id)
             .context("the session's project is gone")?;
         let (patterns, _, _) = self.sessions.copied_files(&project.identity);
-        let known = self.data.lock().unwrap().files.get(&s.id).cloned().unwrap_or_default();
-        let list = crate::copied_files::manifest(Path::new(&s.path), &patterns, &known).await?;
+        // Unknown once the copy is opened again: the list goes even when it
+        // is empty, so a file deleted meanwhile goes from the copy too.
+        let known = self.data.lock().unwrap().files.get(&s.id).cloned();
+        let list = crate::copied_files::manifest(Path::new(&s.path), &patterns, &known.clone().unwrap_or_default()).await?;
         let now: BTreeMap<String, String> = list.iter().map(|e| (e.path.clone(), e.sha.clone())).collect();
-        if now == known {
+        if known.as_ref() == Some(&now) {
             return Ok(());
         }
         let taken = host
