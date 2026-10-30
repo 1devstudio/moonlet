@@ -1,6 +1,6 @@
 # X75 — Sign-ins open where you are
 
-- **Status:** draft
+- **Status:** implemented (untried with real sign-ins across Macs; see Implementation notes)
 - **Priority / phase:** P1 · phase 4 (sessions across machines)
 - **PRD refs:** none (new scope)
 - **Related ADRs:** [0015](../adr/0015-sessions-follow-the-user.md) (sessions follow the user), [0014](../adr/0014-one-account-across-hosts.md) (one account across hosts), [0011](../adr/0011-machines-connect-over-the-tailnet.md) (the tailnet transport)
@@ -138,6 +138,29 @@ Test names are planned. Each criterion cites its test once it is built, with the
 - **Desktop Vitest** (`lib/browserRoute.test.ts`): `the_toast_names_the_member_and_session`, `the_sign_ins_list_shows_each_member_signed_in_or_not`.
 - **e2e** (`sign-in-opens-here.e2e.ts`): a terminal running `$BROWSER https://example.test/` shows the toast in the app.
 - **Manual:** `gcloud auth login` and `gh auth login --web` on `studio-mini`, signed in from the MacBook and from the phone.
+
+## Implementation notes
+
+Built as the gh stack branches `x75/opener`, `x75/callback` and `x75/signins`. The daemon tests are in `crates/moonletd/tests/browser.rs`, the unit tests in `crates/moonlet-core/src/browser.rs`, `crates/moonletd/src/signin.rs` and `crates/moonlet-core/src/session/account.rs`.
+
+What works as specified:
+- **The opener.** Terminals and agents get `BROWSER` and `GH_BROWSER` set to `$MOONLET_HOME/bin/moonlet-open`, with the `open` or `xdg-open` shim first on `PATH`. `moonlet-open` takes only `http` and `https` URLs of up to 8 KiB. (`browser_and_gh_browser_are_set_for_terminals_and_agents`, `a_terminals_browser_url_reaches_this_macs_app`, `an_agents_cli_never_hears_a_url_to_open`; core `moonlet_open_takes_only_http_and_https_up_to_8_kib`, `the_open_shim_hands_on_urls_and_passes_everything_else_to_usr_bin_open`, `the_xdg_open_shim_hands_on_urls_and_passes_everything_else_on`)
+- **Where it opens.** On the client the user used last, through the central host. A URL from the member where the user is opens there at once. With the central host away and the user elsewhere, the URL waits with **Open**. (`a_url_on_the_central_host_reaches_the_app_of_the_member_where_the_user_is`, `a_url_from_the_member_where_the_user_is_opens_there_without_the_central_host`, `with_the_central_host_away_and_the_user_elsewhere_the_url_waits_here`, `a_phone_where_the_user_is_gets_the_url_and_the_macs_app_leaves_it`; core `the_url_opens_where_the_user_was_last_active`, `with_the_central_host_offline_the_url_opens_only_where_the_user_is_active`)
+- **Callbacks.** A callback is registered only when the command that called `moonlet-open`, or one of its ancestors, listens on the URL's loopback port. That process must have been started by the daemon, and the port must be 1024 or above. The callback lasts while the same process still listens. (core `a_redirect_uri_to_loopback_names_its_port`, against gcloud's captured URL; `signin.rs` `a_callback_is_registered_only_for_a_port_the_calling_command_listens_on`)
+- **The forward.** It carries the browser's request back to the command, and ends when its listener closes. A port taken on the Mac waits for **Retry**. A tunnel with no matching callback is `forbidden`. (`a_forward_carries_the_callback_and_ends_when_its_listener_closes`, `a_port_taken_on_the_mac_waits_for_retry`, `a_tunnel_without_a_matching_callback_is_forbidden`)
+- **Sign-ins.** The list is in the account state, with `gh` and `gcloud` by default, and only the Mac's app changes or runs it. Each member approves an entry's exact commands, and asks again once they change. **Sign in on every member** opens one browser at a time. (`only_the_macs_app_changes_or_runs_sign_ins`, `a_sign_in_changed_on_another_member_asks_again_before_it_runs_here`, `sign_in_on_every_member_opens_one_browser_at_a_time`; core `sign_in_entries_changed_on_two_unlinked_members_meet_at_the_later_change`)
+- **The app and the phone.** The toast names the member and session. The phone shows a sign-in card. The Sign-ins page shows each member's state. (`apps/desktop/src/lib/browserRoute.test.ts`, `apps/desktop/src/lib/signIns.test.ts`, `apps/mobile/src/lib/signIns.test.ts`)
+
+Where it differs from the draft above:
+- **The forward carries one HTTP request at a time.** The Mac reads the browser's request, the member hands it to the command's port, and the answer goes back, until the command closes the connection. That is what an OAuth redirect needs. It is not a byte stream: a WebSocket would not pass.
+- **`tunnel.open`** carries the request's bytes, and the central host relays it when the asking member is another one. It reaches any member of the account whose callback for that port still waits, not only the Mac the URL was shown on.
+- **`signins.approve {entry, login, check}`** names the commands the user saw. It answers `changed` when they differ from the entry's.
+- **`signins.check`** answers each member's state: `signed_in`, `signed_out`, `needs_approval` or `away`. The page's **Approve these commands on this Mac** approves only this member. Another member approves in its own app.
+- **A sign-in's terminal** has no session, so the app lists it with no session's tabs. The browser still opens on this Mac.
+- **Not built yet:**
+  - the phone's push notification and its one-time code (`gh` prints the code to its terminal);
+  - "This sign-in has to finish on a Mac" opening on the next Mac the user touches (the card says it and disables **Open**);
+  - the e2e spec `sign-in-opens-here.e2e.ts`.
 
 ## Open questions
 
