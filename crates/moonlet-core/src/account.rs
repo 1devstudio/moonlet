@@ -307,9 +307,9 @@ impl Log {
         own.records(kind)
     }
 
-    /// The worker id of the member that made record `id` of `kind`.
-    pub fn maker(&self, kind: RecordKind, id: &str) -> Option<&str> {
-        self.first_change(kind, id).and_then(|c| log_owner(&c.stamp.member))
+    /// The changes to records of `kind`, from every member.
+    pub fn changes_of(&self, kind: RecordKind) -> impl Iterator<Item = &Change> {
+        self.changes.values().filter(move |c| c.kind == kind.as_str())
     }
 
     /// The records of `kind` by id, each field at its latest change.
