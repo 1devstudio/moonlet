@@ -32,7 +32,8 @@ export function startBrowser() {
     if (what === "ignore") return;
     const open = () => void openUrl(show.url).catch(errorToast);
     if (what === "offer") {
-      toast(`${signInToast(show)} and waits for you`, "info", { label: "Open", run: open });
+      // The user is away: it stays until they come back to it.
+      toast(`${signInToast(show)} and waits for you`, "info", { label: "Open", run: open }, { sticky: true });
       return;
     }
     open();
