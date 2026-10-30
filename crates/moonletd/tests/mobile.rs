@@ -1257,3 +1257,21 @@ async fn an_undeletable_board_file_hides_no_other_boards() {
     let list = r.expect("tasks.snapshot failed");
     assert!(list.as_array().unwrap().iter().any(|s| s["workspace"] == json!(ws)), "{list}");
 }
+
+/// A board file over the 4 MB a daemon keeps, left by anything, is not
+/// loaded at start, nor served (X76).
+#[tokio::test]
+async fn a_board_file_over_the_limit_is_not_loaded() {
+    let mut mac = Mac::start(None).await;
+    let mut app = mac.app().await;
+    let ws = personal_workspace(&mut app).await;
+    drop(app);
+    let dir = mac.home.path().join("tasks");
+    std::fs::create_dir_all(&dir).unwrap();
+    let big = json!({ "version": 1, "boards": [], "pad": "x".repeat(5 * 1024 * 1024) });
+    std::fs::write(dir.join(format!("{ws}.json")), big.to_string()).unwrap();
+    mac.restart().await;
+    let mut app = mac.app().await;
+    let r: Value = app.request("tasks.snapshot", json!({})).await.unwrap();
+    assert_eq!(r, json!([]));
+}

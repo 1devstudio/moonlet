@@ -2844,13 +2844,19 @@ impl Daemon {
             m::WORKSPACE_DELETE => {
                 let r: m::IdRef = params(p)?;
                 w.delete_workspace(&r.id).map_err(internal)?;
-                self.forget_boards(&r.id)?;
+                // Done already: a board file left behind is pruned on the next read.
+                if let Err(e) = self.forget_boards(&r.id) {
+                    tracing::warn!("cannot remove the boards of workspace {}: {}", r.id, e.message);
+                }
                 ok(true)
             }
             m::WORKSPACE_MERGE => {
                 let r: m::WorkspaceMerge = params(p)?;
                 w.merge_workspace(&r.id, &r.into).map_err(internal)?;
-                self.forget_boards(&r.id)?;
+                // Done already: a board file left behind is pruned on the next read.
+                if let Err(e) = self.forget_boards(&r.id) {
+                    tracing::warn!("cannot remove the boards of workspace {}: {}", r.id, e.message);
+                }
                 ok(true)
             }
             m::SECTION_LIST => ok(w.list_sections()),

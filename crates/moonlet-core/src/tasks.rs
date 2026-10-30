@@ -53,6 +53,11 @@ impl TaskSnapshots {
             else {
                 continue;
             };
+            // Over what `set` keeps: not loaded, nor served.
+            if entry.metadata().is_ok_and(|m| m.len() > MAX_SNAPSHOT as u64) {
+                tracing::warn!("skipping {}: over {} MB", path.display(), MAX_SNAPSHOT / (1024 * 1024));
+                continue;
+            }
             match std::fs::read_to_string(&path)
                 .map_err(anyhow::Error::from)
                 .and_then(|t| Ok(serde_json::from_str::<Value>(&t)?))
