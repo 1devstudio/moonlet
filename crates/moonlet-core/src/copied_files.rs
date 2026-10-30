@@ -315,12 +315,30 @@ pub fn remove(root: &Path, rel: &str) -> Result<()> {
     }
 }
 
+/// Whether anything is at `rel` inside `root`: a file, a link or a folder,
+/// looked at without reading it or following a link at it. A link on the
+/// way is refused.
+fn present(root: &Path, rel: &str) -> Result<bool> {
+    check_path(rel)?;
+    let path = Path::new(rel);
+    let name = path.file_name().context("a file needs a name")?;
+    let Some(dir) = folder(root, path.parent().unwrap_or(Path::new("")), false)? else {
+        return Ok(false);
+    };
+    match dir.symlink_metadata(name) {
+        Ok(_) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e.into()),
+    }
+}
+
 /// Copies the files the list names in checkout `from` into new worktree
-/// `to`, leaving any `to` already has; the paths copied.
+/// `to`, leaving anything `to` already has at their paths, a link
+/// included; the paths copied.
 pub async fn seed(from: &Path, to: &Path, patterns: &[String]) -> Result<Vec<String>> {
     let mut copied = Vec::new();
     for (rel, _) in in_worktree(from, patterns).await?.files {
-        if read(to, &rel).ok().flatten().is_some() {
+        if present(to, &rel)? {
             continue;
         }
         let Some(bytes) = read(from, &rel)? else {
@@ -497,6 +515,39 @@ mod tests {
             .map(|e| e.unwrap().file_name())
             .collect();
         assert_eq!(names.len(), 3, "{names:?}");
+    }
+
+    #[tokio::test]
+    async fn a_link_the_new_worktree_already_has_is_left_alone() {
+        let from = tempfile::tempdir().unwrap();
+        let to = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let out = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(from.path())
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        std::fs::write(from.path().join(".gitignore"), ".env\n").unwrap();
+        std::fs::write(from.path().join(".env"), "SECRET=1\n").unwrap();
+        std::fs::write(from.path().join(".env.local"), "FLAG=1\n").unwrap();
+        // The new worktree's branch has `.env` as a link, as git can track.
+        std::fs::write(outside.path().join("shared.env"), "SHARED=1\n").unwrap();
+        std::os::unix::fs::symlink(outside.path().join("shared.env"), to.path().join(".env"))
+            .unwrap();
+        let copied = seed(from.path(), to.path(), &pats(&DEFAULT)).await.unwrap();
+        assert_eq!(copied, [".env.local"]);
+        assert!(
+            std::fs::symlink_metadata(to.path().join(".env"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            std::fs::read_to_string(to.path().join(".env")).unwrap(),
+            "SHARED=1\n"
+        );
     }
 
     #[test]
