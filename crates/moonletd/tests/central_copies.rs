@@ -1947,6 +1947,13 @@ async fn typing_on_the_member_brings_the_session_back_from_the_central_host() {
         .await;
     assert_eq!(back["id"], made["id"]);
     assert_eq!(back["branch"], made["branch"]);
+    // Git agrees: its worktree here is on the session's own branch.
+    let on = std::process::Command::new("git")
+        .args(["branch", "--show-current"])
+        .current_dir(back["path"].as_str().unwrap())
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&on.stdout).trim(), "moonlet/fix-cart");
     let own: Vec<Value> = book.call("session.list", json!({})).await;
     assert!(own.iter().any(|s| s["id"] == made["id"]));
     // The agent resumes the conversation here and gets the message.
