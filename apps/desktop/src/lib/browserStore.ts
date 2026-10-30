@@ -10,6 +10,13 @@ import { errorToast, selectSession, toast } from "./store";
 let started = false;
 let lastActive: number | null = null;
 
+/** Opens `url` in the default browser; an e2e spec puts its own opener on
+ * `window`, so a test run never opens the real browser. */
+function openInBrowser(url: string): Promise<void> {
+  const own = (window as { __moonletOpenUrl?: (u: string) => Promise<void> }).__moonletOpenUrl;
+  return own ? own(url) : openUrl(url);
+}
+
 /** The user did something here: focus, typing or a click. */
 function active() {
   const now = Date.now();
@@ -43,7 +50,7 @@ function takeWaiting() {
 function handle(host: string, show: BrowserShow) {
   const what = showAction(host, show);
   if (what === "ignore") return;
-  const open = () => void openUrl(show.url).catch(errorToast);
+  const open = () => void openInBrowser(show.url).catch(errorToast);
   if (what === "taken") {
     toast(portTakenLine(show), "error", { label: "Retry", run: () => void rpc("local", M.browserRetry, { url: show.url }).catch(errorToast) });
     return;
