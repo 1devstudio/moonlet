@@ -131,6 +131,6 @@ describe("snapshotsToShare (X76)", () => {
 
   it("empties a workspace the daemon still has boards for, after a restart or a reconnect", () => {
     const gone = snapshotsToShare({ ...base, config: { ...config, boards: [config.boards![0]] } }, {}, ["local/old"]);
-    expect(gone.map((s) => [s.workspace, s.snapshot.boards])).toEqual([["w", gone[0].snapshot.boards], ["old", []]]);
+    expect(gone.map((s) => [s.workspace, s.snapshot.boards.map((b) => b.id)])).toEqual([["w", ["ops"]], ["old", []]]);
   });
 });

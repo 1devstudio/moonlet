@@ -15,7 +15,7 @@ export type TaskAction =
   | { kind: "comment"; board: string; task: string; body: string }
   | { kind: "create_options"; board: string; place?: string; issue_type?: string }
   | { kind: "create"; board: string; column: string; issue: NewIssue }
-  | { kind: "started"; task: string; session: string; assign: boolean };
+  | { kind: "started"; board: string; task: string; session: string; assign: boolean };
 
 /** The daemon's `tasks.request` event. */
 export interface TaskRequestEvent {
@@ -97,8 +97,9 @@ export function resolveTaskRequest(
       return { kind: "create", board, column, issue: a.issue };
     }
     case "started":
-      if (!task) return { error: `${keyOf(a.task)} is no longer on a board in moonlet on the Mac.` };
-      return { kind: "started", task, session: a.session, assign: !!a.assign };
+      if (!board) return { error: "That board is no longer in moonlet on the Mac." };
+      if (!onBoard(task)) return { error: `${keyOf(a.task)} is no longer on ${board.name}.` };
+      return { kind: "started", task: task!, session: a.session, assign: !!a.assign };
     default:
       return { error: `moonlet on the Mac does not know ${String(action.kind)} requests. Update moonlet on the Mac.` };
   }

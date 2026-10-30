@@ -838,7 +838,7 @@ describe("a phone's requests (X76)", () => {
   afterEach(() => useTasks.setState({ config: null, data: {}, activity: {}, failures: {}, moving: {} }));
 
   it("tells of a session started from a task as the Mac's composer does, and answers", async () => {
-    await answerTaskRequest("local", { request_id: 7, workspace: "personal", action: { kind: "started", task: "linear:acme MOON-151", session: "Drag", assign: true } });
+    await answerTaskRequest("local", { request_id: 7, workspace: "personal", action: { kind: "started", board: "moon", task: "linear:acme MOON-151", session: "Drag", assign: true } });
     expect(answered).toEqual([{ request_id: 7, ok: true, result: {} }]);
     // The board's In Progress status, as the Mac's own start moves it.
     expect(sent).toEqual([{ id: "linear:acme", task: "issue-2", source: "MOON", column: "in_progress", status: "s-progress", assign_me: true }]);
@@ -948,7 +948,7 @@ describe("a phone's requests (X76)", () => {
 
   it("says when a session's start could not move or assign its task", async () => {
     failNext.push(new Error("Linear refused the move"));
-    await answerTaskRequest("local", { request_id: 17, workspace: "personal", action: { kind: "started", task: "linear:acme MOON-151", session: "Drag", assign: true } });
+    await answerTaskRequest("local", { request_id: 17, workspace: "personal", action: { kind: "started", board: "moon", task: "linear:acme MOON-151", session: "Drag", assign: true } });
     expect(answered).toEqual([{ request_id: 17, ok: false, error: "MOON-151: Linear refused the move" }]);
   });
 
