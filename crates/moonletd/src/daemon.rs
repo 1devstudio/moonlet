@@ -3810,7 +3810,7 @@ impl Daemon {
         let d = Arc::downgrade(self);
         tokio::spawn(async move {
             loop {
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                 let Some(d) = d.upgrade() else { return };
                 d.send_forced().await;
             }
@@ -3873,7 +3873,7 @@ impl Daemon {
         let d = Arc::downgrade(self);
         tokio::spawn(async move {
             loop {
-                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                 let Some(d) = d.upgrade() else { return };
                 let info = d.link.info();
                 if info.worker.cloud {
