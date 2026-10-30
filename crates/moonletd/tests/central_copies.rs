@@ -2377,6 +2377,33 @@ async fn a_member_going_to_sleep_hands_its_running_session_to_the_central_host()
 }
 
 #[tokio::test]
+async fn a_session_whose_last_copy_cannot_be_sent_stays_on_the_mac_at_sleep() {
+    use std::os::unix::fs::PermissionsExt;
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents_as(&origin, false).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    copy_of(&mini, &made).await;
+    // A file git cannot read: the session's last copy cannot be made.
+    let locked = path_of(&made).join("locked.txt");
+    std::fs::write(&locked, "new work").unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let _: Value = book
+        .call("power.simulate", json!({ "event": "sleep" }))
+        .await;
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let theirs: Vec<Value> = mini.call("session.list", json!({})).await;
+    assert!(
+        theirs.iter().all(|s| s["id"] != made["id"]),
+        "studio-mini does not continue from an older copy"
+    );
+    let own: Vec<Value> = book.call("session.list", json!({})).await;
+    assert!(own.iter().any(|s| s["id"] == made["id"]), "the MacBook keeps it");
+}
+
+#[tokio::test]
 async fn a_session_not_handed_over_before_sleep_goes_on_here_after_waking() {
     let origin = Origin::new();
     let (mini, book) = pair_with_agents_as(&origin, false).await;

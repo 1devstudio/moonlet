@@ -3189,9 +3189,12 @@ impl Daemon {
                     }
                 }
                 self.asleep.lock().unwrap().frozen.extend(frozen);
-                self.session_copies.send_now().await;
+                // A session the central host would continue from an older
+                // copy stays here, as when the hand-over cannot be sent.
+                let unsent = self.session_copies.send_now().await;
                 let handed: Vec<String> = own
                     .iter()
+                    .filter(|s| !unsent.contains(&s.id))
                     .filter(|s| records.get(&s.id).and_then(|r| r.get("pinned")).is_none_or(Value::is_null))
                     .map(|s| s.id.clone())
                     .collect();

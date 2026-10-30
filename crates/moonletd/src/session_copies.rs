@@ -594,11 +594,10 @@ impl SessionCopies {
     }
 
     /// Sends what is new of every session now, as the Mac goes to sleep
-    /// (X73): its files, chats, transcripts and checkpoints.
-    pub async fn send_now(&self) {
-        if let Err(e) = self.round().await {
-            tracing::debug!("session copies: {e:#}");
-        }
+    /// (X73): its files, chats, transcripts and checkpoints. Gives the
+    /// sessions of which some could not be sent.
+    pub async fn send_now(&self) -> std::collections::HashSet<String> {
+        self.round().await
     }
 
     pub fn kick(&self) {
@@ -617,9 +616,7 @@ impl SessionCopies {
         let me = self.clone();
         tokio::spawn(async move {
             loop {
-                if let Err(e) = me.round().await {
-                    tracing::debug!("session copies: {e:#}");
-                }
+                me.round().await;
                 // A round that sent something goes again soon: what it sent
                 // can let the central host take what it could not before,
                 // such as a transcript once its copy is made.
@@ -1023,10 +1020,12 @@ impl SessionCopies {
 
     /// One round: each of this member's live sessions whose files, commit
     /// or branch changed since the central host last took them is sent.
-    async fn round(&self) -> Result<()> {
+    /// Gives the sessions of which some part could not be sent.
+    async fn round(&self) -> std::collections::HashSet<String> {
+        let mut failed = std::collections::HashSet::new();
         let info = self.link.info();
         if info.central.is_none() || info.worker.cloud || !self.sessions.has_account() {
-            return Ok(());
+            return failed;
         }
         let _one = self.round.lock().await;
         let live: Vec<_> = self
@@ -1037,7 +1036,7 @@ impl SessionCopies {
             .collect();
         self.watch_only(live.iter().map(|s| PathBuf::from(&s.path)).collect());
         let Some(host) = self.link.host() else {
-            return Ok(());
+            return failed;
         };
         for s in live {
             // The transcript goes first: the files sent after it are at
@@ -1047,20 +1046,23 @@ impl SessionCopies {
                 Ok(said) => said,
                 Err(e) => {
                     tracing::debug!(session = %s.id, "cannot send the chats: {e:#}");
+                    failed.insert(s.id.clone());
                     Vec::new()
                 }
             };
             if let Err(e) = self.send(&host, &s).await {
                 tracing::debug!(session = %s.id, "cannot send to the central host: {e:#}");
+                failed.insert(s.id.clone());
                 continue;
             }
             for point in said {
                 if let Err(e) = self.checkpoint(&host, &s, point).await {
                     tracing::debug!(session = %s.id, "cannot send a checkpoint: {e:#}");
+                    failed.insert(s.id.clone());
                 }
             }
         }
-        Ok(())
+        failed
     }
 
     /// Watches exactly `paths`.
