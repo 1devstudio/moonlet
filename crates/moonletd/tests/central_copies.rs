@@ -3353,6 +3353,32 @@ async fn a_sessions_env_local_reaches_the_central_copy_and_an_edit_comes_back() 
     );
 }
 
+#[tokio::test]
+async fn a_file_the_owner_deletes_after_a_live_copys_mac_restarted_goes_there_too() {
+    let origin = Origin::new();
+    let (mini, mut book, made) = continued_and_back_with(&origin, async |tree, copy| {
+        std::fs::write(tree.join(".env.local"), "FLAG=book\n").unwrap();
+        reads(&copy.join(".env.local"), "FLAG=book\n").await;
+    })
+    .await;
+    let on_mini = worktree_on(&mini, &made).await;
+    std::fs::write(on_mini.join(".env.local"), "FLAG=mini\n").unwrap();
+    let live = live_copy_on(&book, &made).await;
+    reads(&live.join(".env.local"), "FLAG=mini\n").await;
+    // A later round, so the one that brought FLAG=mini has finished.
+    std::fs::write(on_mini.join(".env.test"), "TEST=1\n").unwrap();
+    reads(&live.join(".env.test"), "TEST=1\n").await;
+    book.restart().await;
+    live_copy_on(&book, &made).await;
+    std::fs::remove_file(on_mini.join(".env.local")).unwrap();
+    within(
+        Duration::from_secs(30),
+        "the live copy's .env.local gone",
+        || async { !live.join(".env.local").exists() },
+    )
+    .await;
+}
+
 /// Every file under `dir`, by its path in it, with its text.
 fn files_under(dir: &Path) -> Vec<(String, String)> {
     let mut out = Vec::new();

@@ -53,14 +53,26 @@ pub async fn manifest(
     .await
 }
 
-/// The copied files each copy last had from its owner, by copy (`copy:`
-/// or `live:` and the session): the owner deleting one of them deletes it
-/// here too. A file only a copy has is left alone.
-fn received() -> &'static std::sync::Mutex<BTreeMap<String, std::collections::BTreeSet<String>>> {
-    static RECEIVED: std::sync::OnceLock<
-        std::sync::Mutex<BTreeMap<String, std::collections::BTreeSet<String>>>,
-    > = std::sync::OnceLock::new();
-    RECEIVED.get_or_init(Default::default)
+/// Where the copied files each copy last had from its owner are kept, by
+/// copy (`copy:` or `live:` and the session), in `$MOONLET_HOME`, mode
+/// 0600: the owner deleting one of them deletes it here too, also after
+/// this daemon restarted. A file only a copy has is left alone. It holds
+/// paths, never contents.
+const RECEIVED: &str = "copied-files-received.json";
+
+type Received = BTreeMap<String, std::collections::BTreeSet<String>>;
+
+fn load_received(home: &Path) -> Received {
+    match files::read(home, RECEIVED) {
+        Ok(Some(bytes)) => serde_json::from_slice(&bytes).unwrap_or_default(),
+        _ => Received::default(),
+    }
+}
+
+/// Held while [`RECEIVED`] is read and written again.
+fn received_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    &LOCK
 }
 
 /// Makes copy `copy`'s copied files, in `dir`, those of `manifest`, the
@@ -92,12 +104,10 @@ pub async fn take(
         );
         Ok(())
     };
-    let had = received()
-        .lock()
-        .unwrap()
-        .get(copy)
-        .cloned()
-        .unwrap_or_default();
+    let had = {
+        let _one = received_lock().lock().unwrap();
+        load_received(home).remove(copy).unwrap_or_default()
+    };
     let want = files::apply(dir, patterns, manifest, &had, keep)
         .await?
         .want;
@@ -107,7 +117,10 @@ pub async fn take(
         .filter(|p| !want.contains(p))
         .chain(had.into_iter().filter(|p| want.contains(p)))
         .collect();
-    received().lock().unwrap().insert(copy.to_string(), now);
+    let _one = received_lock().lock().unwrap();
+    let mut all = load_received(home);
+    all.insert(copy.to_string(), now);
+    files::write(home, RECEIVED, &serde_json::to_vec(&all)?)?;
     Ok(want)
 }
 
