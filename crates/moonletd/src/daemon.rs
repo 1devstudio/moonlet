@@ -2986,10 +2986,15 @@ impl Daemon {
             .remove(&r.session)
             .ok_or_else(|| RpcError::new("not_found", "no such session in the account"))?;
         let text = |f: &str| record.get(f).and_then(Value::as_str).map(str::to_string);
+        let epoch = record.get("epoch").and_then(Value::as_u64).unwrap_or(1);
+        // A takeover kept already, sent again (its answer was lost, or
+        // the member has not heard yet): kept.
+        if r.forced && text("owner").as_deref() == Some(worker) {
+            return Ok(m::SessionTaken { epoch, chats: Vec::new(), transcripts: Vec::new() });
+        }
         if text("owner").as_deref() != Some(me.as_str()) {
             return Err(RpcError::new("elsewhere", "that session runs on another member"));
         }
-        let epoch = record.get("epoch").and_then(Value::as_u64).unwrap_or(1);
         if epoch != r.epoch {
             return Err(RpcError::new("stale", "that session moved meanwhile"));
         }
@@ -3474,7 +3479,14 @@ impl Daemon {
             return;
         }
         let Some(host) = self.link.host() else { return };
+        let me = self.link.info().worker.id;
+        let records = self.sessions.session_records();
         for (session, base) in forced {
+            // Kept, and the account says so now: nothing more to send.
+            if records.get(&session).and_then(|r| r.get("owner")).and_then(Value::as_str) == Some(me.as_str()) {
+                self.session_copies.set_forced(&session, None);
+                continue;
+            }
             let asked = host
                 .request(
                     m::SESSION_TAKE,
@@ -3483,7 +3495,12 @@ impl Daemon {
                 )
                 .await;
             match asked {
-                Ok(_) => tracing::info!(%session, "the central host kept the takeover made while it was offline"),
+                // Still this Mac's to keep until the account names it the
+                // owner, so nothing lets go of it meanwhile.
+                Ok(_) => {
+                    tracing::info!(%session, "the central host kept the takeover made while it was offline");
+                    continue;
+                }
                 Err(e) if e.code == "disconnected" => return,
                 // A refusal is final; anything else, such as its worktree
                 // held by a git of its own just then, is sent again later.

@@ -2641,6 +2641,47 @@ async fn a_session_taken_over_while_the_central_host_was_offline_is_kept_when_it
 }
 
 #[tokio::test]
+async fn a_kept_takeover_stays_on_the_mac_before_the_account_names_it_the_owner() {
+    let origin = Origin::new();
+    let (mut mini, mut book, made) = continued_and_back(&origin).await;
+    mini.stop();
+    within(Duration::from_secs(30), "studio-mini offline", || async {
+        let link: Value = book.call("link.get", json!({})).await;
+        link["unreachable_since"].is_u64()
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    let _: Value = book
+        .call("session.take_anyway", json!({ "session": made["id"] }))
+        .await;
+    // From now on the MacBook hears no account news as it happens: it
+    // learns that it owns the session only at its next exchange.
+    book.env.push((
+        "MOONLET_TEST_IGNORE_ACCOUNT_EVENTS".to_string(),
+        "1".to_string(),
+    ));
+    book.restart().await;
+
+    mini.restart().await;
+    within(
+        Duration::from_secs(30),
+        "the takeover kept on studio-mini",
+        || async {
+            let copies = with_copies(&mini).await;
+            owner_of_copy(&copies, &made).is_some_and(|o| o["worker"] == json!(BOOK))
+        },
+    )
+    .await;
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    let own: Vec<Value> = book.call("session.list", json!({})).await;
+    let kept = own
+        .iter()
+        .find(|s| s["id"] == made["id"])
+        .expect("the MacBook goes on running it");
+    assert!(path_of(kept).is_dir());
+}
+
+#[tokio::test]
 async fn a_session_kept_on_the_central_host_can_be_taken_over_anyway_and_is_kept_here_then() {
     let origin = Origin::new();
     let (mut mini, book, made) = continued_and_back(&origin).await;
