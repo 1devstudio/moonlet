@@ -2449,6 +2449,38 @@ async fn a_wake_cut_short_by_another_sleep_leaves_the_agents_stopped() {
 }
 
 #[tokio::test]
+async fn an_agent_started_while_the_mac_sleeps_waits_for_the_wake() {
+    let origin = Origin::new();
+    let (mini, mut book) = pair_with_agents_as(&origin, false).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    let agent = made["terminals"][0].clone();
+    drop(mini);
+    // After a restart the chat runs no agent until its next message.
+    book.restart().await;
+
+    let _: Value = book
+        .call("power.simulate", json!({ "event": "sleep" }))
+        .await;
+    let _: Value = book
+        .call("chat.send", json!({ "id": agent, "text": "Again" }))
+        .await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert!(
+        !agent_log(&book, "claude-user").contains("Again"),
+        "the agent waits while the MacBook sleeps"
+    );
+    let _: Value = book
+        .call("power.simulate", json!({ "event": "wake" }))
+        .await;
+    within(Duration::from_secs(30), "a turn after waking", || async {
+        agent_log(&book, "claude-user").contains("Again")
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn a_member_lets_go_of_a_lost_session_once_its_worktree_is_free_again() {
     let origin = Origin::new();
     let (mini, mut book) = pair_with_agents(&origin).await;

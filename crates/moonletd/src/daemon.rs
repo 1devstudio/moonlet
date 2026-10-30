@@ -3158,7 +3158,8 @@ impl Daemon {
     pub async fn power(self: &Arc<Self>, event: crate::power::Power) {
         use crate::power::Power;
         let info = self.link.info();
-        if info.central.is_none() || info.worker.cloud {
+        // A wake always ends what a sleep began, even after unlinking.
+        if event == Power::Sleep && (info.central.is_none() || info.worker.cloud) {
             return;
         }
         let me = info.worker.id;
@@ -3172,7 +3173,12 @@ impl Daemon {
                     .filter(|s| s.owner.is_none() && !s.archived)
                     .filter(|s| records.get(&s.id).and_then(|r| r.get("owner")).and_then(Value::as_str) == Some(me.as_str()))
                     .collect();
-                self.asleep.lock().unwrap().sleeps += 1;
+                {
+                    let mut asleep = self.asleep.lock().unwrap();
+                    asleep.sleeps += 1;
+                    // An agent that starts from now on starts stopped too.
+                    self.chats.hold();
+                }
                 // First the agents stop, whatever happens next.
                 let mut frozen = Vec::new();
                 for s in &own {
@@ -3203,13 +3209,10 @@ impl Daemon {
                 }
             }
             Power::Wake => {
-                let sleeps = {
-                    let asleep = self.asleep.lock().unwrap();
-                    if asleep.frozen.is_empty() {
-                        return;
-                    }
-                    asleep.sleeps
-                };
+                let sleeps = self.asleep.lock().unwrap().sleeps;
+                if sleeps == 0 {
+                    return;
+                }
                 // A moment for the link and the account's news: what was
                 // handed over is let go of, not woken.
                 for _ in 0..50 {
@@ -3224,14 +3227,22 @@ impl Daemon {
                     if asleep.sleeps != sleeps {
                         return;
                     }
+                    asleep.frozen.extend(self.chats.release());
                     (std::mem::take(&mut asleep.frozen), std::mem::take(&mut asleep.taken))
                 };
+                if frozen.is_empty() {
+                    return;
+                }
                 let records = self.sessions.session_records();
                 let sessions = self.sessions.list_sessions();
                 let frozen: Vec<_> = frozen
                     .into_iter()
                     .filter_map(|chat| {
-                        let s = sessions.iter().find(|s| s.terminals.contains(&chat))?;
+                        let Some(s) = sessions.iter().find(|s| s.terminals.contains(&chat)) else {
+                            // A chat of no session started while asleep.
+                            self.chats.freeze(chat, false);
+                            return None;
+                        };
                         let owner = records.get(&s.id).and_then(|r| r.get("owner")).and_then(Value::as_str);
                         Some(crate::power::Frozen { chat, session: &s.id, owner })
                     })

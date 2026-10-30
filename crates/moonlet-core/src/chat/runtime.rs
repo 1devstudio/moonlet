@@ -99,6 +99,9 @@ pub struct ChatManager {
     dir: PathBuf,
     me: Weak<ChatManager>,
     session_env: std::sync::OnceLock<SessionEnv>,
+    /// While the Mac sleeps (X73): the chats whose agent started meanwhile,
+    /// each frozen as it started.
+    held: Mutex<Option<Vec<TerminalId>>>,
 }
 
 /// An added directory as the agent gets it: absolute and existing, so it
@@ -168,7 +171,7 @@ fn answers_text(ask: &PermissionAsk, answers: &BTreeMap<String, String>) -> Stri
 
 impl ChatManager {
     pub fn new(terms: Arc<TerminalManager>, dir: PathBuf) -> Arc<Self> {
-        let mgr = Arc::new_cyclic(|me| Self { terms: terms.clone(), chats: Mutex::new(HashMap::new()), dir, me: me.clone(), session_env: std::sync::OnceLock::new() });
+        let mgr = Arc::new_cyclic(|me| Self { terms: terms.clone(), chats: Mutex::new(HashMap::new()), dir, me: me.clone(), session_env: std::sync::OnceLock::new(), held: Mutex::new(None) });
         let weak = Arc::downgrade(&mgr);
         terms.set_chat_stop(Arc::new(move |id, remove| {
             if let Some(m) = weak.upgrade() {
@@ -534,6 +537,18 @@ impl ChatManager {
         unsafe { libc::kill(-pid, sig) == 0 }
     }
 
+    /// As the Mac goes to sleep (X73): every agent that starts from now on
+    /// starts frozen, until [`Self::release`].
+    pub fn hold(&self) {
+        self.held.lock().unwrap().get_or_insert_with(Vec::new);
+    }
+
+    /// As the Mac wakes (X73): agents start as usual again. Gives the chats
+    /// whose agent started frozen meanwhile, for the caller to thaw.
+    pub fn release(&self) -> Vec<TerminalId> {
+        self.held.lock().unwrap().take().unwrap_or_default()
+    }
+
     /// Stops the agent process; `remove` also forgets the conversation.
     pub fn stop(&self, id: TerminalId, remove: bool) {
         let Ok(chat) = self.get(id) else { return };
@@ -814,6 +829,13 @@ impl ChatManager {
         inner.generation += 1;
         let generation = inner.generation;
         inner.pid = child.id();
+        if let Some(held) = self.held.lock().unwrap().as_mut()
+            && let Some(pid) = inner.pid.and_then(|p| i32::try_from(p).ok())
+        {
+            // While the Mac sleeps (X73): frozen before it reads a line.
+            unsafe { libc::kill(-pid, libc::SIGSTOP) };
+            held.push(chat.id);
+        }
         inner.stderr.clear();
         let (tx, mut rx) = mpsc::unbounded_channel::<String>();
         inner.stdin = Some(tx);
