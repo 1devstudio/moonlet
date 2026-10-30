@@ -3859,7 +3859,9 @@ impl Daemon {
         let s = self.sessions.session(&r.session).map_err(internal)?;
         let identity = self.sessions.list_projects().into_iter().find(|p| p.id == s.project_id).map(|p| p.identity);
         if cloud && !identity.as_ref().is_some_and(|i| self.sessions.copied_files(i).1) {
-            return Err(RpcError::new("forbidden", "this project's copied files do not go to cloud machines"));
+            // None, so the machine removes those it had before the switch
+            // went off.
+            return Ok(m::SessionFilesFetched::default());
         }
         let patterns = self.copied_patterns(identity.as_ref());
         let files = crate::copied_files::answer(Path::new(&s.path), &patterns, &r.have).await.map_err(internal)?;
