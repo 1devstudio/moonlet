@@ -2404,6 +2404,51 @@ async fn a_session_not_handed_over_before_sleep_goes_on_here_after_waking() {
 }
 
 #[tokio::test]
+async fn a_wake_cut_short_by_another_sleep_leaves_the_agents_stopped() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents_as(&origin, false).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    let agent = made["terminals"][0].clone();
+    // studio-mini is gone, so a wake waits a while for it.
+    drop(mini);
+    within(Duration::from_secs(60), "the MacBook missing studio-mini", || async {
+        let info: Value = book.call("link.get", json!({})).await;
+        info["state"]["kind"] != json!("connected")
+    })
+    .await;
+    let _: Value = book
+        .call("power.simulate", json!({ "event": "sleep" }))
+        .await;
+
+    // The lid opens, and closes again before the wake is done.
+    let (_, _): (Value, Value) = tokio::join!(
+        book.call("power.simulate", json!({ "event": "wake" })),
+        async {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            book.call("power.simulate", json!({ "event": "sleep" }))
+                .await
+        },
+    );
+    let _: Value = book
+        .call("chat.send", json!({ "id": agent, "text": "Again" }))
+        .await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert!(
+        !agent_log(&book, "claude-user").contains("Again"),
+        "the agent stays stopped while the MacBook sleeps"
+    );
+    let _: Value = book
+        .call("power.simulate", json!({ "event": "wake" }))
+        .await;
+    within(Duration::from_secs(30), "a turn after the last wake", || async {
+        agent_log(&book, "claude-user").contains("Again")
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn a_member_lets_go_of_a_lost_session_once_its_worktree_is_free_again() {
     let origin = Origin::new();
     let (mini, mut book) = pair_with_agents(&origin).await;

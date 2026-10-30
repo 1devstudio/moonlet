@@ -34,6 +34,9 @@ struct Asleep {
     frozen: Vec<moonlet_proto::TerminalId>,
     /// The sessions the central host answered it took.
     taken: std::collections::HashSet<String>,
+    /// How many sleeps began: a wake that a newer sleep overtook leaves
+    /// what it holds to that sleep's wake.
+    sleeps: u64,
 }
 
 /// What looks for sessions another member now owns keep between them (X73).
@@ -3169,6 +3172,7 @@ impl Daemon {
                     .filter(|s| s.owner.is_none() && !s.archived)
                     .filter(|s| records.get(&s.id).and_then(|r| r.get("owner")).and_then(Value::as_str) == Some(me.as_str()))
                     .collect();
+                self.asleep.lock().unwrap().sleeps += 1;
                 // First the agents stop, whatever happens next.
                 let mut frozen = Vec::new();
                 for s in &own {
@@ -3199,10 +3203,13 @@ impl Daemon {
                 }
             }
             Power::Wake => {
-                let Asleep { frozen, taken } = std::mem::take(&mut *self.asleep.lock().unwrap());
-                if frozen.is_empty() {
-                    return;
-                }
+                let sleeps = {
+                    let asleep = self.asleep.lock().unwrap();
+                    if asleep.frozen.is_empty() {
+                        return;
+                    }
+                    asleep.sleeps
+                };
                 // A moment for the link and the account's news: what was
                 // handed over is let go of, not woken.
                 for _ in 0..50 {
@@ -3212,6 +3219,13 @@ impl Daemon {
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                let (frozen, taken) = {
+                    let mut asleep = self.asleep.lock().unwrap();
+                    if asleep.sleeps != sleeps {
+                        return;
+                    }
+                    (std::mem::take(&mut asleep.frozen), std::mem::take(&mut asleep.taken))
+                };
                 let records = self.sessions.session_records();
                 let sessions = self.sessions.list_sessions();
                 let frozen: Vec<_> = frozen
