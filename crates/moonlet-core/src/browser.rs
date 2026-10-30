@@ -51,7 +51,7 @@ fn shim(open: &Path, name: &str, system: &[&str]) -> String {
         "#!/bin/sh\n\
          # moonlet (X75): a URL opens where you are; anything else as usual.\n\
          if [ \"$#\" -eq 1 ]; then\n\
-         \x20 case \"$1\" in http://*|https://*) exec {open} \"$1\" ;; esac\n\
+         \x20 case \"$1\" in [Hh][Tt][Tt][Pp]://*|[Hh][Tt][Tt][Pp][Ss]://*) exec {open} \"$1\" ;; esac\n\
          fi\n\
          for o in {others}; do\n\
          \x20 [ -x \"$o\" ] && exec \"$o\" \"$@\"\n\
@@ -222,6 +222,12 @@ mod tests {
         let shim = o.shims.join("open");
         assert_eq!(run(&shim, &["https://github.com/login/device"]), 0);
         assert_eq!(read(&cli), "open-url\nhttps://github.com/login/device\n");
+        // A scheme in capitals is as much a web URL.
+        assert_eq!(run(&shim, &["HTTPS://github.com/login/device"]), 0);
+        assert_eq!(
+            read(&cli),
+            "open-url\nhttps://github.com/login/device\nopen-url\nHTTPS://github.com/login/device\n"
+        );
         assert_eq!(run(&shim, &["."]), 0);
         assert_eq!(run(&shim, &["-a", "Cursor", "https://x.test"]), 0);
         assert_eq!(run(&shim, &["file:///tmp/a.html"]), 0);
@@ -229,7 +235,6 @@ mod tests {
             read(&system),
             ".\n-a\nCursor\nhttps://x.test\nfile:///tmp/a.html\n"
         );
-        assert_eq!(read(&cli), "open-url\nhttps://github.com/login/device\n");
     }
 
     #[test]
@@ -237,8 +242,12 @@ mod tests {
         let (_dir, o, cli, system) = installed("xdg-open");
         let shim = o.shims.join("xdg-open");
         assert_eq!(run(&shim, &["http://localhost:8085/?code=4"]), 0);
+        assert_eq!(run(&shim, &["Http://localhost:8085/?code=5"]), 0);
         assert_eq!(run(&shim, &["/home/me/report.pdf"]), 0);
-        assert_eq!(read(&cli), "open-url\nhttp://localhost:8085/?code=4\n");
+        assert_eq!(
+            read(&cli),
+            "open-url\nhttp://localhost:8085/?code=4\nopen-url\nHttp://localhost:8085/?code=5\n"
+        );
         assert_eq!(read(&system), "/home/me/report.pdf\n");
     }
 
