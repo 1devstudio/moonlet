@@ -112,3 +112,4 @@ Each feature of moonlet has its own spec in this directory. Write the spec befor
 | X73 | Sessions follow you: the central host continues them when the owner sleeps, typing on another Mac brings them back, Move to… pins (ADR 0014 slice 4, ADR 0015) | P1 | 4 | draft | [X73-sessions-follow-you.md](X73-sessions-follow-you.md) |
 | X74 | Files copied between members although git ignores them, `.env` by default (ADR 0015) | P1 | 4 | draft | [X74-files-copied-between-members.md](X74-files-copied-between-members.md) |
 | X75 | Sign-ins open where you are: a browser opener, localhost callbacks forwarded, sign in on every member (ADR 0015) | P1 | 4 | draft | [X75-sign-ins-open-where-you-are.md](X75-sign-ins-open-where-you-are.md) |
+| X76 | Tasks on the phone: boards shared through the daemon, moves, creates, comments and links relayed to the Mac | P1 | 3 | implemented (phone screens untried on a device) | [X76-tasks-on-the-phone.md](X76-tasks-on-the-phone.md) |
