@@ -44,14 +44,15 @@ fn quoted(s: &str) -> String {
 
 /// The shim named `name` (`open` or `xdg-open`): one `http` or `https` URL
 /// alone goes to the opener, anything else to the first of `system` that
-/// exists, unchanged.
+/// exists, unchanged. A URL the opener cannot hand on, as while the daemon
+/// is down, goes to the system's opener too.
 fn shim(open: &Path, name: &str, system: &[&str]) -> String {
     let others: Vec<String> = system.iter().map(|s| quoted(s)).collect();
     format!(
         "#!/bin/sh\n\
          # moonlet (X75): a URL opens where you are; anything else as usual.\n\
          if [ \"$#\" -eq 1 ]; then\n\
-         \x20 case \"$1\" in [Hh][Tt][Tt][Pp]://*|[Hh][Tt][Tt][Pp][Ss]://*) exec {open} \"$1\" ;; esac\n\
+         \x20 case \"$1\" in [Hh][Tt][Tt][Pp]://*|[Hh][Tt][Tt][Pp][Ss]://*) {open} \"$1\" && exit 0 ;; esac\n\
          fi\n\
          for o in {others}; do\n\
          \x20 [ -x \"$o\" ] && exec \"$o\" \"$@\"\n\
@@ -249,6 +250,18 @@ mod tests {
             "open-url\nhttp://localhost:8085/?code=4\nopen-url\nHttp://localhost:8085/?code=5\n"
         );
         assert_eq!(read(&system), "/home/me/report.pdf\n");
+    }
+
+    #[test]
+    fn a_url_the_daemon_cannot_take_goes_to_the_system_opener() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, o, _cli, system) = installed("open");
+        // The CLI fails, as it does while the daemon is down.
+        let cli = dir.path().join("moonlet");
+        std::fs::write(&cli, "#!/bin/sh\nexit 1\n").unwrap();
+        std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(run(&o.shims.join("open"), &["https://example.test/"]), 0);
+        assert_eq!(read(&system), "https://example.test/\n");
     }
 
     #[test]
