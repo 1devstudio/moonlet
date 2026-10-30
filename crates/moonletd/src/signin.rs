@@ -20,6 +20,7 @@ const MAX_BYTES: usize = 1024 * 1024;
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// The pids `lsof -Fpn` lists as listening, from its output.
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 pub fn listeners(lsof: &str) -> Vec<u32> {
     lsof.lines()
         .filter_map(|l| l.strip_prefix('p'))
@@ -27,7 +28,33 @@ pub fn listeners(lsof: &str) -> Vec<u32> {
         .collect()
 }
 
-/// The pids listening on TCP port `port` on this machine.
+/// The socket inodes `/proc/net/tcp` or `/proc/net/tcp6` lists as
+/// listening on port `port`, from its text.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn listening_inodes(proc_net_tcp: &str, port: u16) -> Vec<u64> {
+    proc_net_tcp
+        .lines()
+        .filter_map(|l| {
+            let f: Vec<&str> = l.split_whitespace().collect();
+            let local = f.get(1)?.rsplit_once(':')?.1;
+            let listen = *f.get(3)? == "0A";
+            (listen && u16::from_str_radix(local, 16).ok()? == port)
+                .then(|| f.get(9)?.parse().ok())
+                .flatten()
+        })
+        .collect()
+}
+
+/// The parent pid in a `/proc/<pid>/stat` line.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn parent_in_stat(stat: &str) -> Option<u32> {
+    // The command's name, in parentheses, may hold spaces or parentheses.
+    let rest = &stat[stat.rfind(')')? + 1..];
+    rest.split_whitespace().nth(1)?.parse().ok()
+}
+
+/// The pids listening on TCP port `port` on this machine, from `lsof`.
+#[cfg(not(target_os = "linux"))]
 async fn listening(port: u16) -> Vec<u32> {
     let out = tokio::process::Command::new("lsof")
         .args(["-nP", &format!("-iTCP:{port}"), "-sTCP:LISTEN", "-Fpn"])
@@ -35,11 +62,51 @@ async fn listening(port: u16) -> Vec<u32> {
         .stderr(std::process::Stdio::null())
         .output()
         .await;
-    out.map(|o| listeners(&String::from_utf8_lossy(&o.stdout)))
-        .unwrap_or_default()
+    match out {
+        Ok(o) => listeners(&String::from_utf8_lossy(&o.stdout)),
+        Err(e) => {
+            tracing::warn!("cannot run lsof to find a sign-in's listener: {e}");
+            Vec::new()
+        }
+    }
+}
+
+/// The pids listening on TCP port `port` on this machine, from `/proc`:
+/// a Linux host may have neither `lsof` nor `ps`.
+#[cfg(target_os = "linux")]
+async fn listening(port: u16) -> Vec<u32> {
+    tokio::task::spawn_blocking(move || {
+        let inodes: Vec<u64> = ["/proc/net/tcp", "/proc/net/tcp6"]
+            .iter()
+            .filter_map(|f| std::fs::read_to_string(f).ok())
+            .flat_map(|t| listening_inodes(&t, port))
+            .collect();
+        if inodes.is_empty() {
+            return Vec::new();
+        }
+        let sockets: Vec<String> = inodes.iter().map(|i| format!("socket:[{i}]")).collect();
+        let Ok(procs) = std::fs::read_dir("/proc") else {
+            return Vec::new();
+        };
+        procs
+            .flatten()
+            .filter_map(|e| e.file_name().to_str()?.parse::<u32>().ok())
+            .filter(|pid| {
+                std::fs::read_dir(format!("/proc/{pid}/fd")).is_ok_and(|fds| {
+                    fds.flatten().any(|fd| {
+                        std::fs::read_link(fd.path())
+                            .is_ok_and(|l| sockets.iter().any(|s| l.as_os_str() == s.as_str()))
+                    })
+                })
+            })
+            .collect()
+    })
+    .await
+    .unwrap_or_default()
 }
 
 /// The parent of `pid`, from `ps`.
+#[cfg(not(target_os = "linux"))]
 async fn parent_of(pid: u32) -> Option<u32> {
     let out = tokio::process::Command::new("ps")
         .args(["-o", "ppid=", "-p", &pid.to_string()])
@@ -49,6 +116,15 @@ async fn parent_of(pid: u32) -> Option<u32> {
         .await
         .ok()?;
     String::from_utf8_lossy(&out.stdout).trim().parse().ok()
+}
+
+/// The parent of `pid`, from `/proc/<pid>/stat`.
+#[cfg(target_os = "linux")]
+async fn parent_of(pid: u32) -> Option<u32> {
+    let stat = tokio::fs::read_to_string(format!("/proc/{pid}/stat"))
+        .await
+        .ok()?;
+    parent_in_stat(&stat)
 }
 
 /// `pid` and its ancestors, up to but not including `stop` (the daemon,
@@ -244,6 +320,27 @@ mod tests {
     fn lsof_names_the_listening_process() {
         assert_eq!(listeners(LSOF), [85443]);
         assert_eq!(listeners(""), Vec::<u32>::new());
+    }
+
+    /// `/proc/net/tcp` and `/proc/net/tcp6` on Debian 13 (python:3.12-slim,
+    /// which has neither `lsof` nor `ps`), with a Python process listening
+    /// on `127.0.0.1:8085` and `[::1]:8086`.
+    const PROC_NET_TCP: &str = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode                                                     
+   0: 0100007F:1F95 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 11838614 1 0000000018bf0821 100 0 0 10 0                  
+";
+    const PROC_NET_TCP6: &str = "  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 00000000000000000000000001000000:1F96 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 11838615 1 00000000457ef864 100 0 0 10 0
+";
+    /// `/proc/7/stat` of a `sh` whose parent is pid 1, same container.
+    const PROC_STAT: &str = "7 (sh) S 1 1 1 0 -1 4194304 88 0 0 0 0 0 0 0 20 0 1 0 64715938 2473984 329 18446744073709551615 187650708471808 187650708599020 281474406712544 0 0 0 0 6 65536 1 0 0 17 2 0 0 0 0 0 187650708663136 187650708668944 187651116544000 281474406715074 281474406715088 281474406715088 281474406715372 0\n";
+
+    #[test]
+    fn proc_names_the_listening_sockets_and_a_parent_without_lsof_or_ps() {
+        assert_eq!(listening_inodes(PROC_NET_TCP, 8085), [11838614]);
+        assert_eq!(listening_inodes(PROC_NET_TCP6, 8086), [11838615]);
+        assert_eq!(listening_inodes(PROC_NET_TCP, 8086), Vec::<u64>::new());
+        assert_eq!(parent_in_stat(PROC_STAT), Some(1));
+        assert_eq!(parent_in_stat("42 (a) b (c) S 17 42 42"), Some(17));
     }
 
     #[test]
