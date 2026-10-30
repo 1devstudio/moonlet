@@ -3018,9 +3018,9 @@ impl Daemon {
         let mine_since = self.mine_since.lock().unwrap().get(&r.session).copied().unwrap_or(s.created_at);
         let forced = r.forced && self.workers.away_since(worker, mine_since);
         // Take over anyway takes a pinned session too, and keeps it on the
-        // member that took it.
+        // member that took it; so does a move (Move to…, `pin`).
         let pinned = text("pinned").is_some();
-        if pinned && !forced && text("pinned").as_deref() != Some(worker) {
+        if pinned && !forced && !r.pin && text("pinned").as_deref() != Some(worker) {
             return Err(RpcError::new("pinned", "that session is kept where it is"));
         }
         let pin = r.pin || (forced && pinned);
@@ -3106,7 +3106,8 @@ impl Daemon {
         if text("owner").as_deref() == Some(me.as_str()) {
             return Err(RpcError::new("invalid_params", "that session is this Mac's own"));
         }
-        if text("pinned").is_some_and(|p| p != me) {
+        // A move (`pin`) keeps it here instead.
+        if !pin && text("pinned").is_some_and(|p| p != me) {
             return Err(RpcError::new("pinned", "that session is kept where it is"));
         }
         // Its live copy becomes its worktree here: without one, the central

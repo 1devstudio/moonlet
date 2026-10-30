@@ -2677,6 +2677,43 @@ async fn a_session_kept_on_the_central_host_is_unpinned_from_the_mac() {
 }
 
 #[tokio::test]
+async fn a_session_kept_on_the_central_host_moves_back_to_the_mac_when_asked() {
+    let origin = Origin::new();
+    let (_mini, book, made) = continued_and_back(&origin).await;
+    let _: Value = book
+        .call("session.move", json!({ "session": made["id"], "to": MINI }))
+        .await;
+    within(
+        Duration::from_secs(30),
+        "the MacBook to hear studio-mini keeps it",
+        || async {
+            let copies = with_copies(&book).await;
+            owner_of_copy(&copies, &made).is_some_and(|o| o["worker"] == json!(MINI))
+        },
+    )
+    .await;
+    within(
+        Duration::from_secs(30),
+        "a live copy on the MacBook",
+        || async {
+            let copies: Vec<Value> = book.call("sync.list", json!({})).await;
+            copies
+                .iter()
+                .any(|c| c["session"] == made["id"] && !c["path"].as_str().unwrap_or("").is_empty())
+        },
+    )
+    .await;
+
+    // Move to… another member changes where it is kept.
+    let moved: Value = book
+        .call("session.move", json!({ "session": made["id"], "to": BOOK }))
+        .await;
+    assert_eq!(moved["id"], made["id"]);
+    let own: Vec<Value> = book.call("session.list", json!({})).await;
+    assert!(own.iter().any(|s| s["id"] == made["id"]));
+}
+
+#[tokio::test]
 async fn a_session_taken_over_while_the_central_host_was_offline_is_kept_when_it_is_back() {
     let origin = Origin::new();
     let (mut mini, book, made) = continued_and_back(&origin).await;
