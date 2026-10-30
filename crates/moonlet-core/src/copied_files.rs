@@ -404,13 +404,14 @@ pub struct Applied {
 
 /// Makes worktree `dir`'s copied files those of `manifest`, the session
 /// owner's: each one that differs is written, and each one `manifest` lacks
-/// is removed. A version of this side's that is replaced or removed goes to
+/// that this side had from the owner before (`had`) is removed. A version of this side's that is replaced or removed goes to
 /// `keep` first, so none is lost. A path that is not a plain path inside
 /// the worktree, or that this side's own list does not name, is refused.
 pub async fn apply(
     dir: &Path,
     patterns: &[String],
     manifest: &[Entry],
+    had: &std::collections::BTreeSet<String>,
     mut keep: impl FnMut(&str, &[u8]) -> Result<()>,
 ) -> Result<Applied> {
     let named = select(
@@ -446,7 +447,9 @@ pub async fn apply(
             _ => done.want.push(e.path.clone()),
         }
     }
-    for (path, old) in here {
+    // Only what the owner had and deleted goes: a file this side made
+    // that the owner never had stays, such as a secret of its own.
+    for (path, old) in here.into_iter().filter(|(p, _)| had.contains(p)) {
         keep(&path, &old)?;
         remove(dir, &path)?;
         done.changed.push(path);
@@ -678,13 +681,14 @@ mod tests {
         let list = pats(&DEFAULT);
         let m = manifest(o, &list, |_, _| true, MAX_TOTAL).await.unwrap();
         let mut kept = Vec::new();
-        let done = apply(c, &list, &m, |p, b| {
+        let none = std::collections::BTreeSet::new();
+        let done = apply(c, &list, &m, &none, |p, b| {
             kept.push((p.to_string(), String::from_utf8(b.to_vec()).unwrap()));
             Ok(())
         })
         .await
         .unwrap();
-        assert_eq!(done.changed, [".env", "apps/web/.env.local", ".env.test"]);
+        assert_eq!(done.changed, [".env", "apps/web/.env.local"]);
         assert!(done.want.is_empty());
         assert_eq!(
             std::fs::read_to_string(c.join(".env")).unwrap(),
@@ -694,19 +698,32 @@ mod tests {
             std::fs::read_to_string(c.join("apps/web/.env.local")).unwrap(),
             "FLAG=1\n"
         );
-        assert!(!c.join(".env.test").exists());
+        // A file of this side's that the owner never had stays.
         assert_eq!(
-            kept,
-            [
-                (".env".to_string(), "DB=copy\n".to_string()),
-                (".env.test".to_string(), "ONLY=copy\n".to_string())
-            ]
+            std::fs::read_to_string(c.join(".env.test")).unwrap(),
+            "ONLY=copy\n"
         );
+        assert_eq!(kept, [(".env".to_string(), "DB=copy\n".to_string())]);
         // Once the same, nothing more is done.
-        let again = apply(c, &list, &m, |_, _| panic!("nothing to keep"))
+        let again = apply(c, &list, &m, &none, |_, _| panic!("nothing to keep"))
             .await
             .unwrap();
         assert_eq!(again, Applied::default());
+        // One the owner had and deleted goes, kept first.
+        std::fs::remove_file(o.join(".env")).unwrap();
+        let m = manifest(o, &list, |_, _| true, MAX_TOTAL).await.unwrap();
+        let had: std::collections::BTreeSet<String> =
+            [".env".to_string(), "apps/web/.env.local".to_string()].into();
+        let mut kept = Vec::new();
+        let done = apply(c, &list, &m, &had, |p, b| {
+            kept.push((p.to_string(), String::from_utf8(b.to_vec()).unwrap()));
+            Ok(())
+        })
+        .await
+        .unwrap();
+        assert_eq!(done.changed, [".env"]);
+        assert_eq!(kept, [(".env".to_string(), "DB=owner\n".to_string())]);
+        assert!(c.join(".env.test").exists());
     }
 
     #[tokio::test]
@@ -726,7 +743,9 @@ mod tests {
                 bytes: None
             }]
         );
-        let done = apply(copy.path(), &list, &m, |_, _| Ok(())).await.unwrap();
+        let done = apply(copy.path(), &list, &m, &Default::default(), |_, _| Ok(()))
+            .await
+            .unwrap();
         assert_eq!(done.want, [".env"]);
         assert!(!copy.path().join(".env").exists());
     }
@@ -741,9 +760,15 @@ mod tests {
         };
         for path in ["notes.txt", "../.env", ".git/.env"] {
             assert!(
-                apply(copy.path(), &pats(&DEFAULT), &[entry(path)], |_, _| Ok(()))
-                    .await
-                    .is_err(),
+                apply(
+                    copy.path(),
+                    &pats(&DEFAULT),
+                    &[entry(path)],
+                    &Default::default(),
+                    |_, _| Ok(())
+                )
+                .await
+                .is_err(),
                 "{path}"
             );
         }

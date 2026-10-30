@@ -3846,7 +3846,7 @@ impl Daemon {
         let manifest: Vec<_> = fetched.files.into_iter().map(crate::copied_files::from_wire).collect();
         let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| session.to_string());
         let label = crate::sync::segment(&name);
-        crate::copied_files::take(&moonlet_core::paths::home(), &label, path, &patterns, &manifest).await?;
+        crate::copied_files::take(&moonlet_core::paths::home(), &label, &format!("live:{session}"), path, &patterns, &manifest).await?;
         Ok(())
     }
 

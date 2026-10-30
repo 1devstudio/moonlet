@@ -2108,7 +2108,7 @@ impl SessionCopies {
         let name = record.get("name").and_then(Value::as_str).unwrap_or(&r.session);
         let label = segment(&format!("{}-{name}", held.project));
         let manifest: Vec<_> = r.files.into_iter().map(crate::copied_files::from_wire).collect();
-        let want = crate::copied_files::take(&self.home, &label, Path::new(&held.path), &patterns, &manifest)
+        let want = crate::copied_files::take(&self.home, &label, &format!("copy:{}", r.session), Path::new(&held.path), &patterns, &manifest)
             .await
             .map_err(|e| RpcError::new("invalid_params", format!("{e:#}")))?;
         Ok(m::SessionFilesTaken { want })

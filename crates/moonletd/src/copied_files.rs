@@ -53,13 +53,25 @@ pub async fn manifest(
     .await
 }
 
-/// Makes `dir`'s copied files those of `manifest`, the owner's. A version
-/// of this side's that is replaced or removed is saved under
-/// `$MOONLET_HOME/sync-leftovers/<label>-<when>/` first (X60's folder),
-/// made only when one is. Gives the paths whose bytes did not come along.
+/// The copied files each copy last had from its owner, by copy (`copy:`
+/// or `live:` and the session): the owner deleting one of them deletes it
+/// here too. A file only a copy has is left alone.
+fn received() -> &'static std::sync::Mutex<BTreeMap<String, std::collections::BTreeSet<String>>> {
+    static RECEIVED: std::sync::OnceLock<
+        std::sync::Mutex<BTreeMap<String, std::collections::BTreeSet<String>>>,
+    > = std::sync::OnceLock::new();
+    RECEIVED.get_or_init(Default::default)
+}
+
+/// Makes copy `copy`'s copied files, in `dir`, those of `manifest`, the
+/// owner's. A version of this side's that is replaced or removed is saved
+/// under `$MOONLET_HOME/sync-leftovers/<label>-<when>/` first (X60's
+/// folder), made only when one is. Gives the paths whose bytes did not come
+/// along.
 pub async fn take(
     home: &Path,
     label: &str,
+    copy: &str,
     dir: &Path,
     patterns: &[String],
     manifest: &[Entry],
@@ -80,7 +92,23 @@ pub async fn take(
         );
         Ok(())
     };
-    Ok(files::apply(dir, patterns, manifest, keep).await?.want)
+    let had = received()
+        .lock()
+        .unwrap()
+        .get(copy)
+        .cloned()
+        .unwrap_or_default();
+    let want = files::apply(dir, patterns, manifest, &had, keep)
+        .await?
+        .want;
+    let now = manifest
+        .iter()
+        .map(|e| e.path.clone())
+        .filter(|p| !want.contains(p))
+        .chain(had.into_iter().filter(|p| want.contains(p)))
+        .collect();
+    received().lock().unwrap().insert(copy.to_string(), now);
+    Ok(want)
 }
 
 /// What `have` lacks of `dir`'s copied files, for `session.files_fetch`.
