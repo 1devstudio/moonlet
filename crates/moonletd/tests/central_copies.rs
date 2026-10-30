@@ -3541,6 +3541,20 @@ async fn both_checkouts_changed_while_unlinked_the_later_change_wins_and_the_oth
 }
 
 #[tokio::test]
+async fn a_copied_file_of_exactly_one_mebibyte_reaches_the_other_checkout() {
+    let origin = Origin::new();
+    let (_mini, _addr, _book, on_mini, on_book) = two_checkouts(&origin).await;
+    let big = "x".repeat(1024 * 1024);
+    std::fs::write(on_book.join(".env"), &big).unwrap();
+    within(
+        Duration::from_secs(10),
+        "the MacBook's 1 MiB .env in studio-mini's checkout",
+        || async { std::fs::read_to_string(on_mini.join(".env")).is_ok_and(|t| t == big) },
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn an_unarchived_sessions_remade_worktree_starts_with_its_checkouts_env() {
     let book = mac(BOOK, "MacBook").await;
     let project = shop(&book).await;

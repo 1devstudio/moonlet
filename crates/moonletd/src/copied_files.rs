@@ -57,6 +57,12 @@ fn decode(c: &str) -> Option<Vec<u8>> {
         .filter(|b| b.len() as u64 <= files::MAX_FILE)
 }
 
+/// How many bytes base64 `c` holds, its `=` padding not counted.
+fn decoded_len(c: &str) -> u64 {
+    let pad = c.bytes().rev().take(2).filter(|b| *b == b'=').count();
+    (c.len() / 4 * 3).saturating_sub(pad) as u64
+}
+
 /// The copied files of worktree `dir`, with the bytes of those whose hash
 /// differs from `known`'s.
 pub async fn manifest(
@@ -359,12 +365,7 @@ impl Checkouts {
         let sizes: Vec<(String, u64)> = answer
             .files
             .iter()
-            .map(|f| {
-                (
-                    f.path.clone(),
-                    f.content.as_ref().map_or(0, |c| c.len() as u64 * 3 / 4),
-                )
-            })
+            .map(|f| (f.path.clone(), f.content.as_deref().map_or(0, decoded_len)))
             .collect();
         let takes = files::receivable(dir, patterns, &sizes).await?;
         let label = crate::sync::segment(&format!("{name}-checkout"));
@@ -426,12 +427,7 @@ impl Checkouts {
         let sizes: Vec<(String, u64)> = r
             .files
             .iter()
-            .map(|f| {
-                (
-                    f.path.clone(),
-                    f.content.as_ref().map_or(0, |c| c.len() as u64 * 3 / 4),
-                )
-            })
+            .map(|f| (f.path.clone(), f.content.as_deref().map_or(0, decoded_len)))
             .collect();
         let takes = files::receivable(dir, patterns, &sizes).await?;
         let label = crate::sync::segment(&format!("{name}-checkout"));
