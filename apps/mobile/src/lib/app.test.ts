@@ -41,3 +41,16 @@ describe("refreshSetups (X62)", () => {
     expect(useApp.getState().data.mini.setups).toEqual([]);
   });
 });
+
+describe("a task's Back (X76)", () => {
+  it("goes back to the session the task was opened from, else to the board's tab", async () => {
+    const { showScreen, taskBack, useApp } = await import("./app");
+    const session = { kind: "session" as const, host: "mac", id: "s1", tab: "chat" as const };
+    showScreen({ kind: "task", board: "mac/personal/web", task: "jira:acme WEB-271", from: session });
+    taskBack();
+    expect(useApp.getState().screen).toEqual(session);
+    showScreen({ kind: "task", board: "mac/personal/web", task: "jira:acme WEB-271" });
+    taskBack();
+    expect(useApp.getState().screen).toBeNull();
+  });
+});

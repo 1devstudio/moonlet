@@ -79,8 +79,8 @@ export type Screen =
   | { kind: "agent"; host: string; terminal: number }
   | { kind: "diff"; host: string; id: string; path: string; against: "base" | "head" }
   | { kind: "plan"; host: string; terminal: number; ask: string; from?: Screen }
-  /** A task on a board (X76): the board's key (`host/workspace/board`) and the task's `connection key`. */
-  | { kind: "task"; board: string; task: string; created?: boolean };
+  /** A task on a board (X76): the board's key (`PhoneBoard.key`) and the task's `connection key`; `from`, the screen it was opened from. */
+  | { kind: "task"; board: string; task: string; created?: boolean; from?: Screen };
 
 export type NotifyKey = "blocked" | "done" | "error" | "checks";
 
@@ -92,7 +92,7 @@ export interface Settings {
   notifyOff: NotifyKey[];
   /** Face ID before Allow and plan approvals. */
   faceId: boolean;
-  /** The board the Tasks tab shows, `host/workspace/board` (X76). */
+  /** The board the Tasks tab shows, by its `PhoneBoard.key` (X76). */
   board?: string | null;
   /** The column shown on each board, by its key. */
   columns?: Record<string, string>;
@@ -153,6 +153,12 @@ export function useShownWorkspace(): WorkspaceRef | null {
   const data = useApp((s) => s.data);
   const kept = useApp((s) => s.settings.workspace);
   return shownWorkspace(kept, hostWorkspaces(hosts, data));
+}
+
+/** A task's Back: to the screen it was opened from, such as a session, else to the tab under it (X76). */
+export function taskBack() {
+  const s = get().screen;
+  set({ screen: s?.kind === "task" ? (s.from ?? null) : null });
 }
 
 export const showTab = (tab: Tab) => set({ tab, screen: null, ...(tab !== "new" && { newFrom: null }) });

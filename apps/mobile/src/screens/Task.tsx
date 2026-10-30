@@ -8,7 +8,7 @@ import { syncedColumns } from "@desktop/lib/boards";
 import { commentsView } from "@desktop/lib/commentsView";
 import { initials } from "@desktop/lib/taskDetails";
 import { trackerName } from "@desktop/lib/tasks";
-import { showScreen, startFromTask, updateSettings, useApp } from "../lib/app";
+import { showScreen, startFromTask, taskBack, updateSettings, useApp } from "../lib/app";
 import { type PhoneBoard, phoneBoards } from "../lib/board";
 import { useNow } from "../lib/now";
 import { useSessionsDetails } from "../lib/rowDetails";
@@ -143,13 +143,13 @@ export function TaskScreen({ board, task, created }: { board: string; task: stri
   const sessions = b && d ? d.sessions.filter((s) => s.workspace_id === b.workspace) : [];
   const details = useSessionsDetails(b?.host ?? null, sessions);
   const t = b && d ? taskDetail(b, task, d, details, moving, now) : null;
-  const back = () => showScreen(null);
+  const back = taskBack;
 
   if (!b || !t) {
     return (
       <div className="p-6 text-muted" style={{ paddingTop: "calc(var(--safe-top) + 20px)" }}>
         <button type="button" onClick={back} className="mb-4 flex items-center gap-1 text-fg">
-          <ChevronLeft size={22} /> Board
+          <ChevronLeft size={22} /> Back
         </button>
         <p>{created ? `Created ${task.slice(task.indexOf(" ") + 1)}. It shows here once moonlet on the Mac shares the board.` : "This task is not on the board any more, or its host is offline."}</p>
       </div>
@@ -165,7 +165,7 @@ export function TaskScreen({ board, task, created }: { board: string; task: stri
   return (
     <div className="flex h-full flex-col">
       <header className="flex flex-none items-center gap-2 px-3 pb-2" style={{ paddingTop: "calc(var(--safe-top) + 10px)" }}>
-        <button type="button" aria-label="Back to the board" onClick={back} className="flex h-10 w-9 items-center justify-center text-fg">
+        <button type="button" aria-label="Back" onClick={back} className="flex h-10 w-9 items-center justify-center text-fg">
           <ChevronLeft size={22} />
         </button>
         <TrackerMark mark={t.mark} />

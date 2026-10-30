@@ -177,7 +177,7 @@ export function SessionScreen({ host, id, tab }: { host: string; id: string; tab
     // By its URL: a GitHub key shows shortened (#12).
     const b = sessionBoards(hosts, data, host, session).find((x) => x.snapshot.tasks.some((t) => t.url === task.url));
     const t = b?.snapshot.tasks.find((x) => x.url === task.url);
-    if (b && t) showScreen({ kind: "task", board: b.key, task: taskId(t) });
+    if (b && t) showScreen({ kind: "task", board: b.key, task: taskId(t), from: { kind: "session", host, id, tab } });
     else void openUrl(task.url).catch(console.error);
   };
 

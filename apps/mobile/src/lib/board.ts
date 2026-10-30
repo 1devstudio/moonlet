@@ -23,7 +23,7 @@ export interface PhoneBoard {
   hostLabel: string;
   workspace: string;
   workspaceName: string;
-  /** `host/workspace/board`: how the phone remembers it. */
+  /** `<account or host>/<workspace>/<board>`: how the phone remembers it. An account's board keeps its key whichever member serves it (X68); use `host` to reach that member. */
   key: string;
   board: BoardConfig;
   snapshot: TaskSnapshot;
