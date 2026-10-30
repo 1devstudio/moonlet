@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addSignIn, signInCard, takesSignIn } from "./signIns";
+import { addSignIn, dropSignIn, signInCard, signInKey, takesSignIn } from "./signIns";
 
 const show = { url: "https://github.com/login/device", from: "studio-mini", session: "s1", session_name: "deploy-fix", to: "phone" };
 
@@ -26,5 +26,14 @@ describe("a sign-in on the phone (X75)", () => {
     const one = addSignIn([], "mini", show);
     expect(addSignIn(one, "mini", show)).toHaveLength(1);
     expect(addSignIn(one, "mini", { ...show, url: "https://x.test/" }).map((s) => s.show.url)).toEqual(["https://x.test/", show.url]);
+  });
+
+  it("keeps the same page asked for by two members, or through two hosts, as cards of their own", () => {
+    const two = addSignIn(addSignIn([], "mini", show), "mini", { ...show, from: "build-box", session: "s2", session_name: "release" });
+    expect(two.map((s) => s.show.from)).toEqual(["build-box", "studio-mini"]);
+    const three = addSignIn(two, "book", show);
+    expect(three).toHaveLength(3);
+    // Dismissing one leaves the others.
+    expect(dropSignIn(three, signInKey(three[0])).map((s) => `${s.host} ${s.show.from}`)).toEqual(["mini build-box", "mini studio-mini"]);
   });
 });

@@ -6,7 +6,7 @@ import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { onDaemonEvent, onHostStatus, rpc, subscribeHost, type DaemonEvent } from "@desktop/lib/daemon";
 import { reportsActive, type BrowserShow } from "@desktop/lib/browserRoute";
-import { addSignIn, takesSignIn, type SignIn } from "./signIns";
+import { addSignIn, dropSignIn, takesSignIn, type SignIn } from "./signIns";
 import { onChatItem, onChatState } from "@desktop/lib/chat";
 import { startJobs } from "@desktop/lib/jobsStore";
 import {
@@ -354,9 +354,9 @@ function active() {
   for (const h of Object.values(get().hosts)) if (h.status === "connected") void rpc(h.id, M.presenceActive, {}).catch(() => {});
 }
 
-/** Drops the sign-in card for `url`. */
-export function dismissSignIn(url: string) {
-  set((st) => ({ signIns: st.signIns.filter((s) => s.show.url !== url) }));
+/** Drops the sign-in card `key` names (see `signInKey`). */
+export function dismissSignIn(key: string) {
+  set((st) => ({ signIns: dropSignIn(st.signIns, key) }));
 }
 
 let started = false;

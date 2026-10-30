@@ -6,7 +6,7 @@ import { KeyRound, ListChecks, MessageCircleQuestion, Server, SquareTerminal, Te
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { planOf } from "@desktop/lib/chat";
 import { dismissSignIn, showScreen, useApp, useShownWorkspace } from "../lib/app";
-import { signInCard, type SignIn } from "../lib/signIns";
+import { signInCard, signInKey, type SignIn } from "../lib/signIns";
 import { answerAsk, answerPlan, answerRead, answerSetup } from "../lib/answers";
 import { ageText, askHeadline, planBlurb, readMessage } from "../lib/cards";
 import { type InboxCard, buildInbox, cardChat, summaryLine } from "../lib/inbox";
@@ -168,6 +168,7 @@ function ReadCard({ card, now }: { card: InboxCard; now: number }) {
 /** A sign-in a terminal or agent opened while the user was here (X75). */
 function SignInCard({ signIn }: { signIn: SignIn }) {
   const card = signInCard(signIn.show);
+  const key = signInKey(signIn);
   return (
     <div className="flex flex-col gap-2.5 rounded-[14px] border border-border-strong bg-panel p-3.5">
       <div className="flex items-center gap-2">
@@ -177,10 +178,10 @@ function SignInCard({ signIn }: { signIn: SignIn }) {
       </div>
       <div className="text-[13.5px] leading-[1.45] text-muted">{card.title}.{card.mac && " This sign-in has to finish on a Mac."}</div>
       <div className="grid grid-cols-2 gap-2">
-        <Btn tone="ghost" onClick={() => dismissSignIn(signIn.show.url)}>
+        <Btn tone="ghost" onClick={() => dismissSignIn(key)}>
           Dismiss
         </Btn>
-        <Btn tone="primary" disabled={card.mac} onClick={() => void openUrl(signIn.show.url).then(() => dismissSignIn(signIn.show.url), console.error)}>
+        <Btn tone="primary" disabled={card.mac} onClick={() => void openUrl(signIn.show.url).then(() => dismissSignIn(key), console.error)}>
           Open
         </Btn>
       </div>
@@ -226,7 +227,7 @@ export function InboxScreen() {
       </Title>
       <div className="flex flex-col gap-2.5 px-4 pt-[18px] pb-6">
         {signIns.map((s) => (
-          <SignInCard key={s.show.url} signIn={s} />
+          <SignInCard key={signInKey(s)} signIn={s} />
         ))}
         {inbox.needs.length > 0 ? (
           <div className="flex items-center gap-2 text-[12px] font-semibold tracking-[0.08em] text-blocked uppercase">

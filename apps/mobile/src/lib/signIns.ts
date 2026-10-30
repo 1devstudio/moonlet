@@ -24,5 +24,17 @@ export function signInCard(s: BrowserShow): { title: string; site: string; mac: 
   return { title: signInToast(s), site, mac: s.forward !== undefined };
 }
 
-/** `list` with `s` first, once per URL. */
-export const addSignIn = (list: SignIn[], host: string, s: BrowserShow): SignIn[] => [{ host, show: s }, ...list.filter((x) => x.show.url !== s.url)];
+/** Which sign-in `s` is: its URL, as asked by one member's session
+ * through one host. Two members may open the same page, such as GitHub's
+ * device page, each with its own code. */
+export const signInKey = (s: SignIn) => JSON.stringify([s.host, s.show.from, s.show.session ?? null, s.show.url]);
+
+/** `list` with `s` first, once per sign-in. */
+export function addSignIn(list: SignIn[], host: string, s: BrowserShow): SignIn[] {
+  const added = { host, show: s };
+  const key = signInKey(added);
+  return [added, ...list.filter((x) => signInKey(x) !== key)];
+}
+
+/** `list` without the sign-in `key` names. */
+export const dropSignIn = (list: SignIn[], key: string): SignIn[] => list.filter((x) => signInKey(x) !== key);
