@@ -2029,6 +2029,19 @@ impl SessionCopies {
             .get(session)
             .cloned()
             .ok_or_else(|| RpcError::new("not_found", "this host holds no copy of that session"))?;
+        Ok(m::SessionCopyInfo {
+            path: held.path,
+            tree: held.tree,
+            head: held.head,
+            chats: self.held_chats(session),
+            checkpoint: held.checkpoints.values().max_by_key(|c| c.at).cloned(),
+            checkpoints: held.checkpoints.into_values().collect(),
+        })
+    }
+
+    /// The chats this host holds of `session`: those still open on its
+    /// member, by terminal.
+    fn held_chats(&self, session: &str) -> Vec<m::SessionCopyChat> {
         let mut chats: Vec<m::SessionCopyChat> =
             std::fs::read_dir(self.talk_dir(session).join("chats"))
                 .into_iter()
@@ -2042,14 +2055,7 @@ impl SessionCopies {
                 })
                 .collect();
         chats.sort_by_key(|c| c.terminal);
-        Ok(m::SessionCopyInfo {
-            path: held.path,
-            tree: held.tree,
-            head: held.head,
-            chats,
-            checkpoint: held.checkpoints.values().max_by_key(|c| c.at).cloned(),
-            checkpoints: held.checkpoints.into_values().collect(),
-        })
+        chats
     }
 
     /// On a member that lost session `s` to another (X73): keeps what it
@@ -2305,8 +2311,10 @@ impl SessionCopies {
     }
 
     /// Whether this host could continue each copy it holds, and why not
-    /// (X73): a copy has to be made, and a checkpoint taken, for its
-    /// agent to go on; and Claude Code has to be on its terminals' PATH.
+    /// (X73): a copy has to be made, and a checkpoint taken of its open
+    /// chats' conversations, for its agent to go on; and Claude Code has to
+    /// be on its terminals' PATH. A closed chat's checkpoint counts for
+    /// nothing.
     pub fn readiness(&self) -> Vec<m::SessionReady> {
         let claude = which(
             "claude",
@@ -2316,17 +2324,28 @@ impl SessionCopies {
                 .map(String::as_str)
                 .unwrap_or(""),
         );
-        self.data
-            .lock()
-            .unwrap()
-            .held
-            .iter()
+        let held = self.data.lock().unwrap().held.clone();
+        held.iter()
             .map(|(id, h)| {
+                // Each open chat that has a conversation needs its own
+                // checkpoint of it, and at least one has to have reached here.
+                let chats = self.held_chats(id);
+                let reached = |c: &m::SessionCopyChat| {
+                    c.state.agent_session.as_ref().is_some_and(|a| {
+                        h.checkpoints
+                            .get(&c.terminal)
+                            .is_some_and(|p| &p.agent_session == a)
+                    })
+                };
+                let talked = chats.iter().any(&reached)
+                    && chats
+                        .iter()
+                        .all(|c| c.state.agent_session.is_none() || reached(c));
                 let reason = if h.path.is_empty() || !Path::new(&h.path).exists() {
                     Some("there is no copy of it here yet".to_string())
                 } else if !claude {
                     Some("Claude Code is not installed here".to_string())
-                } else if h.checkpoints.is_empty() {
+                } else if !talked {
                     Some("its conversation has not reached here yet".to_string())
                 } else {
                     None
