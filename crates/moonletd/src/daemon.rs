@@ -3418,6 +3418,11 @@ impl Daemon {
         if text("owner").as_deref() == Some(info.worker.id.as_str()) {
             return Err(RpcError::new("invalid_params", "that session is this Mac's own"));
         }
+        // Only what the offline central host runs: another member's agent
+        // goes on, and the central host would refuse the takeover after.
+        if text("owner") != Some(self.link.account_info().account) {
+            return Err(RpcError::new("elsewhere", "that session runs on another member"));
+        }
         let epoch = record.get("epoch").and_then(Value::as_u64).unwrap_or(1);
         let (path, repo) = self.sync.release(session).await?;
         let projects = self.sessions.list_projects();
