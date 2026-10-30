@@ -58,7 +58,8 @@ export function taskSnapshot(o: ShareInput & { wsKey: string; data: TasksData | 
     const m = o.moving[taskId(t)];
     return m ? withStatus(t, m.status, m.name) : t;
   });
-  const tasks = boards.length ? placeOnBoards(moved, o.data?.boards, o.config.boards) : [];
+  // Placed by the shared boards only: an unpinned one listed first would put a task in its own columns.
+  const tasks = boards.length ? placeOnBoards(moved, o.data?.boards, boards) : [];
   const ids = new Set(tasks.map(taskId));
   const connections = new Set(boards.map((b) => b.connection));
   const { github, linear, jira, clickup } = o.config;

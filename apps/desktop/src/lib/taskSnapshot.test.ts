@@ -92,6 +92,16 @@ describe("taskSnapshot (X76)", () => {
   });
 });
 
+describe("taskSnapshot places tasks by the boards it shares (X76)", () => {
+  it("puts a task where a shared board does, not where an unpinned board listed first would", () => {
+    const review: BoardColumn[] = [{ name: "Review", statuses: ["3"], category: "in_review" }];
+    const cfg = { ...config, boards: [board("plat", "local/w", { pinned: false, columns: review }), board("ops", "local/w", { name: "OPS · Sprint 42" })] };
+    const both = { ...data, boards: { ...data.boards, plat: { keys: [`${JIRA} PLAT-7`, `${JIRA} OPS-2`] } } };
+    const s = taskSnapshot({ wsKey: "local/w", config: cfg, data: both, moving: {}, activity: {}, attention: {}, shownBoard: "ops", from: "studio" });
+    expect(s.tasks.find((t) => t.key === "OPS-2")?.column).toBe("in_progress");
+  });
+});
+
 describe("snapshotsToShare (X76)", () => {
   const base = { config, data: { "local/w": data }, moving: {}, activity: {}, attention: {}, shownBoard: { "local/w": "ops" }, from: "studio" };
 
