@@ -4205,6 +4205,8 @@ impl Daemon {
                         ..Default::default()
                     })
                     .map_err(internal)?;
+                // This member's app shows it, for any question it asks.
+                self.terminals.emit(Message::event(m::EV_SIGNIN_RUNNING, m::SignInRunning { terminal: t.id, name: e.name.clone() }));
                 // Done when the sign-in exits, so the next member's opens
                 // after it.
                 let end = std::time::Instant::now() + crate::signin::LIFETIME;

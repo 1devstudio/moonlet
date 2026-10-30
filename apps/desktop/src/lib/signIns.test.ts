@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addEntry, needSignIn, stateMark } from "./signIns";
+import { addEntry, needSignIn, runningLine, stateMark } from "./signIns";
 
 const states = [
   { member: "book", name: "MacBook", state: "signed_in" },
@@ -27,5 +27,13 @@ describe("Sign-ins (X75)", () => {
       entries: [{ id: "id-1", name: "npm", login: "npm login", check: "npm whoami" }],
     });
     expect(addEntry([], { name: "npm", login: "", check: "npm whoami" }, "id-1")).toEqual({ error: "A sign-in needs a name, a sign-in command and a check command." });
+  });
+});
+
+describe("a sign-in running on this Mac (X75)", () => {
+  it("says what to do while it runs, and why it stopped when it failed", () => {
+    expect(runningLine(undefined)).toBe("Finish signing in in your browser. This window closes when the sign-in is done.");
+    expect(runningLine({ code: 1 })).toBe("The sign-in stopped with exit code 1. Its output is below.");
+    expect(runningLine({ code: 0 })).toBeNull();
   });
 });

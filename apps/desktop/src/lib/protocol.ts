@@ -1510,6 +1510,7 @@ export const EV = {
   terminalCreated: "terminal.created",
   browserShow: "browser.show",
   filesKept: "files.kept",
+  signinRunning: "signins.running",
   terminalUpdated: "terminal.updated",
   terminalExited: "terminal.exited",
   terminalRemoved: "terminal.removed",

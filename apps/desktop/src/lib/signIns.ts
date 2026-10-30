@@ -33,3 +33,12 @@ export function addEntry(entries: SignIn[], e: { name: string; login: string; ch
   if (!entry.name || !entry.login || !entry.check) return { error: "A sign-in needs a name, a sign-in command and a check command." };
   return { entries: [...entries, entry] };
 }
+
+/** The line over a sign-in's terminal on this Mac: what to do while it
+ * runs, why it stopped when it failed, none once it succeeded (the window
+ * closes then). */
+export function runningLine(exit: { code?: number | null; signal?: number | null } | undefined): string | null {
+  if (!exit) return "Finish signing in in your browser. This window closes when the sign-in is done.";
+  if (exit.code === 0) return null;
+  return `The sign-in stopped with exit code ${exit.code ?? exit.signal}. Its output is below.`;
+}

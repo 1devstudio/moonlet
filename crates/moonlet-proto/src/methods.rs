@@ -583,6 +583,9 @@ pub const SIGNINS_RUN: &str = "signins.run";
 /// [`SignInsHere`] → `[SignInState]`: between members, through the central
 /// host: checks or signs in on a member, with that member's own entry.
 pub const SIGNINS_HERE: &str = "signins.here";
+/// [`SignInRunning`]: a sign-in runs in a terminal of this member, for its
+/// app to show (X75).
+pub const EV_SIGNIN_RUNNING: &str = "signins.running";
 /// [`JobList`] → `[Job]`: a session's jobs, newest first (X62).
 pub const JOB_LIST: &str = "job.list";
 /// [`JobOutputGet`] → [`JobOutput`]: a job's stored output from a byte.
@@ -1456,6 +1459,13 @@ pub struct SignInsHere {
     pub entry: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub member: Option<String>,
+}
+
+/// `signins.running`: the terminal a sign-in runs in, and its name.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SignInRunning {
+    pub terminal: crate::TerminalId,
+    pub name: String,
 }
 
 /// Whether a member is signed in with an entry: `signed_in`, `signed_out`,

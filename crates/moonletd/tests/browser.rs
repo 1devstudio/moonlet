@@ -1051,3 +1051,47 @@ async fn a_phone_gets_the_url_without_a_forward_and_a_mac_gets_it_next() {
             .ends_with("You are now authenticated")
     );
 }
+
+#[tokio::test]
+async fn a_sign_in_running_here_shows_its_terminal_in_this_macs_app() {
+    let d = daemon().await;
+    let mut app = d.app().await;
+    let _: bool = d
+        .call(
+            "signins.set",
+            json!({ "entries": [entry("exit 1", "echo signing-in; sleep 1")] }),
+        )
+        .await;
+    let _: bool = d
+        .call(
+            "signins.approve",
+            json!({ "entry": "t", "login": "echo signing-in; sleep 1", "check": "exit 1" }),
+        )
+        .await;
+    let me: Value = d.call("link.get", json!({})).await;
+    let _: bool = d
+        .call(
+            "signins.run",
+            json!({ "entry": "t", "members": [me["worker"]["id"]] }),
+        )
+        .await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let running = loop {
+        let f = tokio::time::timeout_at(deadline, app.next_frame())
+            .await
+            .expect("no signins.running")
+            .unwrap()
+            .unwrap();
+        if let Frame::Json(Message::Event { name, data }) = f
+            && name == "signins.running"
+        {
+            break data;
+        }
+    };
+    assert_eq!(running["name"], json!("test-cli"));
+    let terminals: Vec<Value> = d.call("terminal.list", json!({})).await;
+    assert!(
+        terminals.iter().any(|t| t["id"] == running["terminal"]),
+        "{terminals:?}"
+    );
+}
