@@ -8,6 +8,7 @@ import { onDaemonEvent, onHostStatus, rpc, subscribeHost, type DaemonEvent } fro
 import { type BrowserShow } from "@desktop/lib/browserRoute";
 import { Presence } from "./presence";
 import { addSignIn, dropSignIn, takesSignIn, type SignIn } from "./signIns";
+import { tap } from "./native";
 import { onChatItem, onChatState } from "@desktop/lib/chat";
 import { startJobs } from "@desktop/lib/jobsStore";
 import {
@@ -311,7 +312,10 @@ function onEvent(e: DaemonEvent) {
   const { host, name, data } = e;
   if (name === EV.browserShow) {
     const show = data as BrowserShow;
-    if (takesSignIn(show)) set((st) => ({ signIns: addSignIn(st.signIns, host, show) }));
+    if (takesSignIn(show)) {
+      set((st) => ({ signIns: addSignIn(st.signIns, host, show) }));
+      void tap("warning");
+    }
     return;
   }
   const changes = eventChanges(name, data);
