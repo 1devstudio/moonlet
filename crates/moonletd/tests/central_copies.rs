@@ -1571,3 +1571,37 @@ async fn a_continued_chat_never_takes_bypass_permissions_from_the_member() {
     .await;
     assert!(!agent_log(&mini, "claude-args").contains("bypassPermissions"));
 }
+
+#[tokio::test]
+async fn an_archived_session_is_not_continued_on_the_central_host() {
+    let origin = Origin::new();
+    let (mini, _addr, book) = pair_of(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = new_session(&book, &project, "fix-cart").await;
+    let other = new_session(&book, &project, "other").await;
+    copy_of(&mini, &made).await;
+    copy_of(&mini, &other).await;
+    let _: Value = book
+        .call("session.archive", json!({ "id": made["id"] }))
+        .await;
+    within(
+        Duration::from_secs(10),
+        "fix-cart gone from studio-mini",
+        || async {
+            with_copies(&mini)
+                .await
+                .iter()
+                .all(|s| s["id"] != made["id"])
+        },
+    )
+    .await;
+    drop(book);
+    unreachable(&mini, &other).await;
+
+    let refused = mini
+        .try_call("session.continue_here", json!({ "session": made["id"] }))
+        .await
+        .unwrap_err();
+    assert!(refused.starts_with("archived"), "{refused}");
+}

@@ -2665,6 +2665,10 @@ impl Daemon {
         if owner == me.id {
             return Err(RpcError::new("invalid_params", "that session is this host's own"));
         }
+        // An archived session is over, and its copy on its way out.
+        if record.get("archived").and_then(Value::as_bool).unwrap_or(false) {
+            return Err(RpcError::new("archived", "that session is archived"));
+        }
         if self.workers.conn(&owner).is_some() {
             return Err(RpcError::new("reachable", "the member running that session is reachable"));
         }
