@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bringsHere, followMenu, hostMark, rowMark, moveTargets, offlineLine, readinessOf, readyMark, waitingLine } from "./follow";
+import { bringsHere, followMenu, hostMark, joinWaiting, movedHost, rowMark, moveTargets, offlineLine, readinessOf, readyMark, untilTurnEnds, waitingLine } from "./follow";
 
 const accounts = { local: { account: "mini-id" }, mini: { account: "mini-id" }, vps: { account: "other" } };
 
@@ -116,5 +116,83 @@ describe("asking the central host for readiness (X73)", () => {
 
   it("drops an answer from a central host that is no longer this Mac's", async () => {
     expect(await readinessOf({ central: "mini", connected: true, ask: async () => [notReady], current: () => "studio" })).toBeNull();
+  });
+});
+
+describe("waiting for the turn there to end (X73)", () => {
+  class Busy extends Error {
+    code = "busy";
+  }
+  // A clock that moves on by each wait, so ten minutes pass at once.
+  const run = (attempt: (now: boolean) => Promise<void>, onWait?: (moveNow: () => void) => void) => {
+    let t = 0;
+    return untilTurnEnds({
+      attempt,
+      waiting: onWait ?? (() => {}),
+      sleep: async (ms) => {
+        t += ms;
+      },
+      clock: () => t,
+      waitMs: 10 * 60_000,
+      everyMs: 3000,
+    });
+  };
+
+  it("goes on as soon as the turn has ended", async () => {
+    let turns = 2;
+    expect(
+      await run(async () => {
+        if (turns-- > 0) throw new Busy("a turn is running");
+      }),
+    ).toBe("done");
+  });
+
+  it("gives up once the turn still runs after the wait", async () => {
+    expect(
+      await run(async () => {
+        throw new Busy("a turn is running");
+      }),
+    ).toBe("timeout");
+  });
+
+  it("moves at once with Move now", async () => {
+    expect(
+      await run(
+        async (now) => {
+          if (!now) throw new Busy("a turn is running");
+        },
+        (moveNow) => moveNow(),
+      ),
+    ).toBe("done");
+  });
+
+  it("stops at an error that is not the turn", async () => {
+    await expect(
+      run(async () => {
+        throw new Error("that session is kept where it is");
+      }),
+    ).rejects.toThrow("that session is kept where it is");
+  });
+});
+
+describe("messages typed while one waits (X73)", () => {
+  it("go with it when typed in the same chat, in order", () => {
+    const image = { name: "cart.png", media_type: "image/png", data: "aGVsbG8=" };
+    expect(joinWaiting({ terminal: 4, text: "Fix the cart", images: [] }, { terminal: 4, text: "And the tests", images: [image] })).toEqual({
+      terminal: 4,
+      text: "Fix the cart\n\nAnd the tests",
+      images: [image],
+    });
+  });
+
+  it("do not join one waiting in another chat", () => {
+    expect(joinWaiting({ terminal: 4, text: "Fix the cart", images: [] }, { terminal: 7, text: "And the tests", images: [] })).toBeNull();
+  });
+});
+
+describe("after Move to… (X73)", () => {
+  it("shows the session where it is listed now", () => {
+    expect(movedHost({ to: "book-id", me: "book-id", centralHost: "mini" })).toBe("local");
+    expect(movedHost({ to: "mini-id", me: "book-id", centralHost: "mini" })).toBe("mini");
   });
 });

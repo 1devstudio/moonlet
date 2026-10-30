@@ -1457,7 +1457,7 @@ export function AgentView({
   // A message typed and an aside requeued go the same way: a design's
   // chat puts its edits by hand before them.
   // Another member's session comes here first (X73).
-  const sendUser = userSend(sendText, (text, images) => sendOrBring(host, wsId, text, () => call(M.chatSend, { text, images })));
+  const sendUser = userSend(sendText, (text, images) => sendOrBring(host, wsId, id, text, images, (t, i) => call(M.chatSend, { text: t, images: i })));
   const send = (text: string, images: ChatImage[]) => {
     stick.current = true;
     if (revising) {

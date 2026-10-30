@@ -825,7 +825,7 @@ function followItems(host: string, s: Session): MenuItem[] {
     ...items.map((i): MenuItem => {
       switch (i.kind) {
         case "move":
-          return { label: `Move to ${i.label}`, checked: i.current && !!s.pinned, onSelect: () => void moveSession(host, s.id, i.to, false) };
+          return { label: `Move to ${i.label}`, checked: i.current && !!s.pinned, onSelect: () => void moveSession(s.id, i.to) };
         case "unpin":
           return { label: "Unpin", icon: <Pin size={14} className="text-muted" />, onSelect: () => void rpc("local", M.sessionUnpin, { session: s.id }).catch(errorToast) };
         case "take-over":
