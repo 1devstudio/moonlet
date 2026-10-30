@@ -16,7 +16,7 @@ import { pruneMoves } from "./taskView";
 
 export const moveAction = (board: BoardConfig, task: Task, to: { label: string; status: string }): TaskAction => ({ kind: "move", board: board.id, task: taskId(task), column: to.label, status: to.status });
 export const createAction = (board: BoardConfig, column: string, issue: NewIssue): TaskAction => ({ kind: "create", board: board.id, column, issue });
-export const startedAction = (task: Task, session: string, assign: boolean): TaskAction => ({ kind: "started", task: taskId(task), session, assign });
+export const startedAction = (board: BoardConfig, task: Task, session: string, assign: boolean): TaskAction => ({ kind: "started", board: board.id, task: taskId(task), session, assign });
 /** `plan`: the chip the phone showed, so the Mac runs only that fix. */
 export const fixAction = (board: BoardConfig, task: Task, plan: string): TaskAction => ({ kind: "fix", board: board.id, task: taskId(task), plan });
 export const syncAction = (board: BoardConfig): TaskAction => ({ kind: "sync", board: board.id });
@@ -87,16 +87,27 @@ export async function moveOnMac(b: Pick<PhoneBoard, "host" | "workspace" | "boar
     saveWaiting([...loadWaiting().filter(other), { host: b.host, workspace: b.workspace, id, action, move }]);
     return;
   }
-  // This move replaces one still stored: never sent after it.
-  saveWaiting(loadWaiting().filter(other));
+  // This move replaces one still stored, and is stored itself until the Mac
+  // answers: a phone app that quits meanwhile sends it on its next start.
+  const entry: Waiting = { host: b.host, workspace: b.workspace, id, action, move };
+  saveWaiting([...loadWaiting().filter(other), entry]);
+  const key = keyOf(entry);
+  const ours = (w: Waiting) => keyOf(w) === key && w.move.at === move.at;
+  sending.add(key);
   try {
     await send(b.host, b.workspace, id, action, move);
+    saveWaiting(loadWaiting().filter((w) => !ours(w)));
   } catch (e) {
-    if (refusedByMac(e)) throw e;
+    if (refusedByMac(e)) {
+      saveWaiting(loadWaiting().filter((w) => !ours(w)));
+      throw e;
+    }
     // The Mac did not take it (closed meanwhile, or no answer): it waits for the next open.
     const waiting: Move = { ...move, waiting: true };
     useTaskStore.setState((s) => (s.moving[id] === move ? { moving: { ...s.moving, [id]: waiting } } : s));
-    saveWaiting([...loadWaiting().filter(other), { host: b.host, workspace: b.workspace, id, action, move: waiting }]);
+    saveWaiting(loadWaiting().map((w) => (ours(w) ? { ...w, move: waiting } : w)));
+  } finally {
+    sending.delete(key);
   }
 }
 
@@ -162,9 +173,9 @@ function sendWaiting(host: string) {
 const keyOf = (w: Pick<Waiting, "host" | "workspace" | "id">) => `${w.host}/${w.workspace} ${w.id}`;
 
 /** Tells the Mac a session started from `task`, for Keep in step (X46); a failure shows on the task. */
-export async function startedOnMac(b: Pick<PhoneBoard, "host" | "workspace">, task: Task, session: string, assign: boolean) {
+export async function startedOnMac(b: Pick<PhoneBoard, "host" | "workspace" | "board">, task: Task, session: string, assign: boolean) {
   try {
-    await askMac(b, startedAction(task, session, assign));
+    await askMac(b, startedAction(b.board, task, session, assign));
   } catch (e) {
     useTaskStore.setState((s) => ({ failures: { ...s.failures, [taskId(task)]: e instanceof Error ? e.message : String(e) } }));
   }

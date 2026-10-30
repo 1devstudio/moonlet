@@ -31,7 +31,7 @@ describe("what the phone asks the Mac (X76)", () => {
     expect(resolveTaskRequest(moveAction(board, task, { label: "In Progress", status: "s-progress" }), mac)).toEqual({ kind: "move", task, category: "in_progress", status: "s-progress" });
     const issue = { title: "Show host health", description: "", assignee: "me", labels: [] };
     expect(resolveTaskRequest(createAction(board, "Todo", issue), mac)).toEqual({ kind: "create", board, column: COLUMNS[0], issue });
-    expect(resolveTaskRequest(startedAction(task, "Drag sessions", true), mac)).toEqual({ kind: "started", task, session: "Drag sessions", assign: true });
+    expect(resolveTaskRequest(startedAction(board, task, "Drag sessions", true), mac)).toEqual({ kind: "started", task, session: "Drag sessions", assign: true });
   });
 
   it("asks for fixes, syncs and comments the Mac's app understands", () => {
@@ -155,6 +155,19 @@ describe("a move while moonlet is closed on the Mac (X76)", () => {
     await moveOnMac(b, task, { label: "In Progress", status: "s-progress" });
     await moveOnMac({ ...b, workspace: "acme" }, task, { label: "Done", status: "s-done" });
     expect(JSON.parse(localStorage.getItem("moonlet.mobile.tasks.waiting") ?? "[]").map((w: { workspace: string }) => w.workspace)).toEqual(["personal", "acme"]);
+  });
+
+  it("keeps a move made while the app is open stored until the Mac answers, for a phone app that quits meanwhile", async () => {
+    useApp.setState({ data: { mac: { ...emptyData(), macOpen: true } } });
+    let release: (v: unknown) => void = () => {};
+    replies.move = () => new Promise((r) => (release = r));
+    const moving = moveOnMac(b, task, { label: "Done", status: "s-done" });
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    expect(JSON.parse(localStorage.getItem("moonlet.mobile.tasks.waiting") ?? "[]")).toMatchObject([{ id, action: { column: "Done" } }]);
+    release({});
+    await moving;
+    expect(JSON.parse(localStorage.getItem("moonlet.mobile.tasks.waiting") ?? "[]")).toEqual([]);
+    delete replies.move;
   });
 
   it("sends a move at once while the app is open", async () => {

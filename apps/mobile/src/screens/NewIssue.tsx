@@ -32,6 +32,7 @@ export function NewIssueSheet({ b, column, onClose }: { b: PhoneBoard; column: s
   const [options, setOptions] = useState<IssueOptions | null>(null);
   const [optionsError, setOptionsError] = useState<string | null>(null);
   const [newLabel, setNewLabel] = useState("");
+  const [partial, setPartial] = useState<{ task: string; text: string } | null>(null);
   const { busy, error, run } = useBusy();
   const form = issueForm(b.board, b.snapshot, draft, options);
   const place = form.draft.place;
@@ -55,12 +56,17 @@ export function NewIssueSheet({ b, column, onClose }: { b: PhoneBoard; column: s
     // Again when another Mac serves the board: its lists are its own.
   }, [b.key, b.host, b.board.connection, place, draft.issueType]); // eslint-disable-line react-hooks/exhaustive-deps
   const set = (patch: Partial<NewIssue>) => setDraft((d) => ({ ...d, ...patch }));
+  const open = (task: string) => {
+    onClose();
+    // Shown once the Mac shares it; until then the detail says so.
+    showScreen({ kind: "task", board: b.key, task, created: true });
+  };
   const create = () =>
     run(async () => {
-      const made = await askMac<{ task: string }>(b, createAction(b.board, column, form.draft));
-      onClose();
-      // Shown once the Mac shares it; until then the detail says so.
-      showScreen({ kind: "task", board: b.key, task: made.task, created: true });
+      const made = await askMac<{ task: string; failed?: string }>(b, createAction(b.board, column, form.draft));
+      // Created, but a later step failed (a Project, its Status): said here, not lost (X52).
+      if (made.failed) setPartial({ task: made.task, text: made.failed });
+      else open(made.task);
     });
   return (
     <Sheet label={`New issue in ${column}`} onClose={onClose}>
@@ -117,9 +123,18 @@ export function NewIssueSheet({ b, column, onClose }: { b: PhoneBoard; column: s
         {form.problem && <span className="text-[12.5px] text-error">{form.problem}</span>}
         {(error || optionsError) && <span className="text-[12.5px] text-error">{error ?? optionsError}</span>}
         {error === "moonlet on the Mac did not answer." && <span className="text-[12.5px] text-muted">The Mac may still create it: check the board before you try again.</span>}
-        <Btn tone="primary" disabled={busy || !form.ready} onClick={() => void create()}>
-          {busy ? "Creating…" : "Create"}
-        </Btn>
+        {partial ? (
+          <>
+            <span className="text-[12.5px] text-error">{partial.text}</span>
+            <Btn tone="primary" onClick={() => open(partial.task)}>
+              Open {partial.task.slice(partial.task.indexOf(" ") + 1)}
+            </Btn>
+          </>
+        ) : (
+          <Btn tone="primary" disabled={busy || !form.ready} onClick={() => void create()}>
+            {busy ? "Creating…" : "Create"}
+          </Btn>
+        )}
       </div>
     </Sheet>
   );
