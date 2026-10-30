@@ -1182,6 +1182,18 @@ impl SessionManager {
         self.session(&id)
     }
 
+    /// Undoes [`Self::adopt_session`] when taking the session in failed
+    /// before anything ran in it (X73): it leaves this member's state, and
+    /// its worktree stays as it is.
+    pub fn unadopt_session(&self, id: &str) -> Result<()> {
+        self.mutate(|st| {
+            st.sessions.retain(|o| o.id != id || !o.terminals.is_empty());
+            Ok(())
+        })?;
+        self.emit_sessions();
+        Ok(())
+    }
+
     /// A chat in session `ws` that goes on from `history`, another member's
     /// chat of it (X73), resuming the same conversation.
     pub fn continue_chat(&self, ws: &Session, mut history: moonlet_proto::types::ChatState) -> Result<TerminalInfo> {

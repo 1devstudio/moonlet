@@ -389,6 +389,19 @@ struct Sent {
     branch: String,
 }
 
+/// A copy [`SessionCopies::take_copy`] took (X73).
+pub struct TakenCopy {
+    /// Its worktree.
+    pub path: PathBuf,
+    /// Its repository.
+    pub repo: PathBuf,
+    /// The member's worktree for it.
+    pub from_path: String,
+    /// The branch its own was renamed to, if any.
+    branch: Option<String>,
+    held: Held,
+}
+
 /// A copy the central host keeps of another member's session.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct Held {
@@ -1929,11 +1942,16 @@ impl SessionCopies {
         })
     }
 
-    /// Stops keeping `session` as a copy because this host now owns it
-    /// (X73): its worktree stays where it is and becomes the session's own.
-    /// Gives what the copy was: where it is, its repository, and the
-    /// member's folder for it.
-    pub async fn take_copy(&self, session: &str) -> Result<(PathBuf, PathBuf, String), RpcError> {
+    /// Stops keeping `session` as a copy because this host is taking it
+    /// over (X73): its worktree stays where it is and becomes the session's
+    /// own, on `branch` when given, renamed from the copy's own branch. No
+    /// offer moves it from then on. Until [`Self::forget_copy`], the copy
+    /// can be given back with [`Self::give_back`].
+    pub async fn take_copy(
+        &self,
+        session: &str,
+        branch: Option<&str>,
+    ) -> Result<TakenCopy, RpcError> {
         let _one = self.apply.lock().await;
         let held = self
             .data
@@ -1944,21 +1962,49 @@ impl SessionCopies {
             .cloned()
             .filter(|h| !h.path.is_empty() && Path::new(&h.path).exists())
             .ok_or_else(|| RpcError::new("no_copy", "this host holds no copy of that session"))?;
-        let _ = git_sync::delete_base_ref(
-            Path::new(&held.repo),
-            &format!("central-{}", segment(session)),
-        )
-        .await;
+        if let Some(b) = branch {
+            moonlet_core::git::git(
+                Path::new(&held.path),
+                &["branch", "-m", &copy_branch(session), b],
+            )
+            .await
+            .map_err(|e| RpcError::new("internal", format!("{e:#}")))?;
+        }
         let mut data = self.data.lock().unwrap();
         data.held.remove(session);
         self.save(&data);
-        // The chats were the copy's; the session's own chats take over.
+        Ok(TakenCopy {
+            path: PathBuf::from(&held.path),
+            repo: PathBuf::from(&held.repo),
+            from_path: held.from_path.clone(),
+            branch: branch.map(str::to_string),
+            held,
+        })
+    }
+
+    /// Keeps `session` as a copy again, after continuing it here failed
+    /// (X73): back on the copy's own branch, as [`Self::take_copy`] found it.
+    pub async fn give_back(&self, session: &str, taken: TakenCopy) {
+        let _one = self.apply.lock().await;
+        if let Some(b) = &taken.branch
+            && let Err(e) =
+                moonlet_core::git::git(&taken.path, &["branch", "-m", b, &copy_branch(session)])
+                    .await
+        {
+            tracing::warn!(%session, "cannot put the copy back on its own branch: {e:#}");
+        }
+        let mut data = self.data.lock().unwrap();
+        data.held.insert(session.to_string(), taken.held);
+        self.save(&data);
+    }
+
+    /// Forgets what this host kept of `session`'s copy beside its worktree,
+    /// once the session is this host's own (X73): the copy's chats, as the
+    /// session's own chats take over, and its sync base.
+    pub async fn forget_copy(&self, session: &str, taken: &TakenCopy) {
+        let _ =
+            git_sync::delete_base_ref(&taken.repo, &format!("central-{}", segment(session))).await;
         let _ = std::fs::remove_dir_all(self.talk_dir(session));
-        Ok((
-            PathBuf::from(held.path),
-            PathBuf::from(held.repo),
-            held.from_path,
-        ))
     }
 
     /// Removes the copies of sessions that are archived or gone from the

@@ -2675,6 +2675,9 @@ impl Daemon {
         if text("pinned").is_some_and(|p| p != me.id) {
             return Err(RpcError::new("pinned", "that session is kept on its member"));
         }
+        if self.sessions.session(session).is_ok() {
+            return Err(RpcError::new("invalid_params", "this host already has that session"));
+        }
         let branch = text("branch").unwrap_or_default();
         let info = self.session_copies.copy_info(session)?;
         if info.path.is_empty() {
@@ -2684,7 +2687,8 @@ impl Daemon {
         // a branch of that name of its own: that one is never touched.
         let copy_path = Path::new(&info.path);
         let copy_branch = format!("moonlet-copy/{session}");
-        if !branch.is_empty() && branch != copy_branch {
+        let rename = !branch.is_empty() && branch != copy_branch;
+        if rename {
             // The name comes from the member: only one git takes as a branch.
             let valid = !branch.starts_with('-')
                 && moonlet_core::git::git(copy_path, &["check-ref-format", "--branch", &branch]).await.is_ok();
@@ -2694,27 +2698,80 @@ impl Daemon {
             if moonlet_core::sync::branch_exists(copy_path, &branch).await {
                 return Err(RpcError::new("branch_taken", format!("{branch} is a branch of this host's own")));
             }
-            moonlet_core::git::git(copy_path, &["branch", "-m", &copy_branch, &branch]).await.map_err(internal)?;
         }
-        let (path, repo, from_path) = self.session_copies.take_copy(session).await?;
+        // From here no offer moves the copy. Until the session is this
+        // host's, a step that fails gives the copy back, to try again.
+        let taken = self.session_copies.take_copy(session, rename.then_some(branch.as_str())).await?;
+        let adopted = match self.adopt_copy(session, &record, &taken, &me.id).await {
+            Ok(adopted) => adopted,
+            Err(e) => {
+                self.session_copies.give_back(session, taken).await;
+                return Err(e);
+            }
+        };
+        self.session_copies.forget_copy(session, &taken).await;
+        let from = self.sessions.member_names().remove(&owner).unwrap_or(owner);
+        for chat in info.chats {
+            let cut_off = matches!(chat.state.status.as_str(), "working" | "blocked");
+            // One chat that cannot go on never holds back the others.
+            let started = match self.sessions.continue_chat(&adopted, chat.state) {
+                Ok(started) => started,
+                Err(e) => {
+                    tracing::warn!(%session, terminal = chat.terminal, "cannot continue a copied chat: {e:#}");
+                    continue;
+                }
+            };
+            if cut_off {
+                let note = crate::session_copies::cut_off_note(&from, &me.name, why, &taken.from_path, &adopted.path);
+                if let Err(e) = self.chats.send(started.id, &note, &[]) {
+                    tracing::warn!(%session, "cannot tell the agent its turn was cut off: {e:#}");
+                }
+            }
+        }
+        self.sessions.session(session).map_err(internal)
+    }
+
+    /// Makes the copy [`Self::continue_here`] took session `session` of
+    /// this host, owned by `me`, as `record` describes it (X73). The session
+    /// is in this host's state before its record names this host, so no
+    /// change ends that record meanwhile; one whose new owner cannot be
+    /// recorded leaves the state again.
+    async fn adopt_copy(
+        self: &Arc<Self>,
+        session: &str,
+        record: &moonlet_core::account::Record,
+        taken: &crate::session_copies::TakenCopy,
+        me: &str,
+    ) -> Result<moonlet_proto::types::Session, RpcError> {
+        let text = |f: &str| record.get(f).and_then(Value::as_str).map(str::to_string);
         // The copy's repository is a project here; a clone made for copies
         // is added as one.
         let projects = self.sessions.list_projects();
-        let project = match projects.iter().find(|p| Path::new(&p.path) == repo) {
+        let project = match projects.iter().find(|p| Path::new(&p.path) == taken.repo) {
             Some(p) => p.clone(),
-            None => self.sessions.add_project(&repo.display().to_string()).await.map_err(internal)?,
+            None => self.sessions.add_project(&taken.repo.display().to_string()).await.map_err(internal)?,
         };
-        let epoch = record.get("epoch").and_then(Value::as_u64).unwrap_or(1) + 1;
-        self.sessions.set_session_owner(session, &me.id, epoch, None);
+        // The member came back, or the session moved, meanwhile.
+        let now = self.sessions.session_records().remove(session);
+        let epoch = record.get("epoch").and_then(Value::as_u64).unwrap_or(1);
+        let still = now.as_ref().is_some_and(|r| {
+            r.get("owner") == record.get("owner") && r.get("epoch").and_then(Value::as_u64).unwrap_or(1) == epoch
+        });
+        if !still {
+            return Err(RpcError::new("stale", "that session moved meanwhile"));
+        }
+        if self.workers.conn(&text("owner").unwrap_or_default()).is_some() {
+            return Err(RpcError::new("reachable", "the member running that session is reachable"));
+        }
         let adopted = self
             .sessions
             .adopt_session(moonlet_proto::types::Session {
                 id: session.to_string(),
                 project_id: project.id.clone(),
                 name: text("name").unwrap_or_default(),
-                branch: branch.clone(),
+                branch: text("branch").unwrap_or_default(),
                 base: project.base_branch.clone(),
-                path: path.display().to_string(),
+                path: taken.path.display().to_string(),
                 agent: Some("claude".into()),
                 archived: false,
                 created_at: record.get("created_at").and_then(Value::as_u64).unwrap_or(0),
@@ -2733,18 +2790,13 @@ impl Daemon {
                 owner: None,
             })
             .map_err(internal)?;
-        let from = self.sessions.member_names().remove(&owner).unwrap_or(owner);
-        for chat in info.chats {
-            let cut_off = matches!(chat.state.status.as_str(), "working" | "blocked");
-            let started = self.sessions.continue_chat(&adopted, chat.state).map_err(internal)?;
-            if cut_off {
-                let note = crate::session_copies::cut_off_note(&from, &me.name, why, &from_path, &adopted.path);
-                if let Err(e) = self.chats.send(started.id, &note, &[]) {
-                    tracing::warn!(%session, "cannot tell the agent its turn was cut off: {e:#}");
-                }
+        if !self.sessions.set_session_owner(session, me, epoch + 1, None) {
+            if let Err(e) = self.sessions.unadopt_session(session) {
+                tracing::warn!(%session, "cannot undo taking the session in: {e:#}");
             }
+            return Err(RpcError::new("internal", "cannot record this host as the session's owner"));
         }
-        self.sessions.session(session).map_err(internal)
+        Ok(adopted)
     }
 
     /// `session.forward` on the central host (X72): the request goes to the

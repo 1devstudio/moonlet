@@ -1605,3 +1605,50 @@ async fn an_archived_session_is_not_continued_on_the_central_host() {
         .unwrap_err();
     assert!(refused.starts_with("archived"), "{refused}");
 }
+
+#[tokio::test]
+async fn a_continue_that_cannot_record_the_new_owner_keeps_the_copy_to_try_again() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    let copy = copy_of(&mini, &made).await;
+    within(
+        Duration::from_secs(30),
+        "the chat on studio-mini",
+        || async {
+            mini.try_call("session.copy", json!({ "session": made["id"] }))
+                .await
+                .is_ok_and(|i| i["chats"][0]["state"]["status"] == json!("done"))
+        },
+    )
+    .await;
+    drop(book);
+    unreachable(&mini, &made).await;
+    // studio-mini cannot write its account log for now.
+    let log = mini.home.path().join("account.json");
+    let aside = mini.home.path().join("account.json.aside");
+    std::fs::rename(&log, &aside).unwrap();
+    std::fs::create_dir(&log).unwrap();
+
+    let refused = mini
+        .try_call("session.continue_here", json!({ "session": made["id"] }))
+        .await
+        .unwrap_err();
+    assert!(refused.starts_with("internal"), "{refused}");
+    let own: Vec<Value> = mini.call("session.list", json!({})).await;
+    assert!(own.iter().all(|s| s["id"] != made["id"]));
+
+    std::fs::remove_dir(&log).unwrap();
+    std::fs::rename(&aside, &log).unwrap();
+    let continued: Value = mini
+        .call("session.continue_here", json!({ "session": made["id"] }))
+        .await;
+    assert_eq!(continued["branch"], made["branch"]);
+    assert_eq!(PathBuf::from(continued["path"].as_str().unwrap()), copy);
+    let st: Value = mini
+        .call("chat.state", json!({ "id": continued["terminals"][0] }))
+        .await;
+    assert_eq!(st["items"][0]["text"], json!("Fix the cart"));
+}
