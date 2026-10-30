@@ -324,6 +324,19 @@ describe("edits by hand told to the agent (X65)", () => {
     ]);
     expect(pendingOf(useEditor.getState(), "local", WS, SLUG)).toEqual([]);
   });
+
+  it("go with the message when the chat delivers it its own way, as a session another member runs does (X73)", async () => {
+    await loadPageSource("local", WS, SLUG, "index");
+    editPage("local", WS, SLUG, "index", { kind: "delete", mid: "m30" }, "m30");
+    const delivered: { text: string; images: unknown[] }[] = [];
+    const image = { name: "cart.png", media_type: "image/png", data: "aGVsbG8=" };
+    await sendWithEdits("local", WS, SLUG, 12, "Two more variants", [image], undefined, async (text, images) => {
+      delivered.push({ text, images });
+    });
+    expect(delivered).toEqual([{ text: "Edits by hand since your last turn:\nindex.html m30 p: deleted\n\nTwo more variants", images: [image] }]);
+    expect(calls.filter((c) => c.method === "chat.send")).toEqual([]);
+    expect(pendingOf(useEditor.getState(), "local", WS, SLUG)).toEqual([]);
+  });
 });
 
 describe("edits by hand told to the agent, once saved (X65)", () => {

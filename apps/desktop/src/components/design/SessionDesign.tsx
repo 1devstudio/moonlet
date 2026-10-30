@@ -6,7 +6,9 @@
 import { useEffect, useMemo, useState, type RefObject } from "react";
 import { ChevronDown, Columns2, PenTool } from "lucide-react";
 import { DesignAndBuild } from "./DesignAndBuild";
-import type { Design, Session } from "../../lib/protocol";
+import { M, type Design, type Session } from "../../lib/protocol";
+import { rpc } from "../../lib/daemon";
+import { sendOrBring } from "../../lib/followStore";
 import { designCanvasKey, commentsOf, loadComments, openSessionDesign, sessionDesignsOf, showSessionDesign, shownSessionDesign, systemsOf, useDesign } from "../../lib/designStore";
 import { projectOf, useStore } from "../../lib/store";
 import { sendWithEdits, type ToldDesign } from "../../lib/designEditor";
@@ -166,7 +168,15 @@ export function SessionChat({ host, id, wsId, focused, visible }: { host: string
       replies={replies}
       onReply={onReply}
       userView={own ? (text) => designMessage(text, pinsOf, true) : undefined}
-      sendText={own ? (text, images) => sendWithEdits(host, own.place, own.slug, id, text, images, peers) : undefined}
+      sendText={
+        own
+          ? (text, images) =>
+              // Another member's session comes here first, with the edits (X73).
+              sendWithEdits(host, own.place, own.slug, id, text, images, peers, (message, imgs) =>
+                sendOrBring(host, wsId, id, message, imgs, (m, i) => rpc(host, M.chatSend, { id, text: m, images: i })),
+              )
+          : undefined
+      }
     />
   );
 }
