@@ -5,7 +5,8 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { onDaemonEvent, onHostStatus, rpc, subscribeHost, type DaemonEvent } from "@desktop/lib/daemon";
-import { reportsActive, type BrowserShow } from "@desktop/lib/browserRoute";
+import { type BrowserShow } from "@desktop/lib/browserRoute";
+import { Presence } from "./presence";
 import { addSignIn, dropSignIn, takesSignIn, type SignIn } from "./signIns";
 import { onChatItem, onChatState } from "@desktop/lib/chat";
 import { startJobs } from "@desktop/lib/jobsStore";
@@ -331,7 +332,12 @@ function onEvent(e: DaemonEvent) {
   }
 }
 
+/** Where the user is, as the phone tells its hosts (X75). */
+const presence = new Presence();
+
 function connected(id: string) {
+  // The user was just active here: this host hears it too (X75).
+  if (document.visibilityState === "visible" && presence.connected(id, Date.now())) tellActive(id);
   void subscribeHost(id).catch(() => {});
   void loadHost(id).catch(() => {});
   void measure(id);
@@ -343,15 +349,16 @@ function onStatus(h: HostEntry) {
   if (h.status === "connected" && prev?.status !== "connected") connected(h.id);
 }
 
-let lastActive: number | null = null;
+/** Tells host `id` the user is active on the phone. */
+function tellActive(id: string) {
+  void rpc(id, M.presenceActive, {}).catch(() => presence.failed(id));
+}
 
 /** The user did something on the phone: its hosts hear of it, at most
- * every 30 s (X75). */
+ * every 30 s each (X75). */
 function active() {
-  const now = Date.now();
-  if (!reportsActive(lastActive, now)) return;
-  lastActive = now;
-  for (const h of Object.values(get().hosts)) if (h.status === "connected") void rpc(h.id, M.presenceActive, {}).catch(() => {});
+  const hosts = Object.values(get().hosts).filter((h) => h.status === "connected").map((h) => h.id);
+  for (const id of presence.active(Date.now(), hosts)) tellActive(id);
 }
 
 /** Drops the sign-in card `key` names (see `signInKey`). */
