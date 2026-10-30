@@ -1374,8 +1374,13 @@ impl Daemon {
             }
             m::SIGNINS_APPROVE => {
                 app_only(conn, "sign-ins")?;
-                let r: m::SignInRef = params(p)?;
+                let r: m::SignInApprove = params(p)?;
                 let entry = self.sign_in_entry(&r.entry)?;
+                // Only the commands the user saw: an entry changed meanwhile,
+                // here or on another member, is shown again first.
+                if entry.login != r.login || entry.check != r.check {
+                    return Err(RpcError::new("changed", "this sign-in's commands changed: look at them again"));
+                }
                 self.approvals.approve(&entry).map_err(internal)?;
                 ok(true)
             }

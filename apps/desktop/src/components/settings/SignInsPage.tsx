@@ -23,7 +23,8 @@ function EntryRow({ entry, onRemove }: { entry: SignIn; onRemove: () => void }) 
       .finally(() => setBusy(false));
   };
   useEffect(check, [entry.id, entry.login, entry.check]);
-  const approve = () => void rpc(LOCAL, M.signinsApprove, { entry: entry.id }).then(check, errorToast);
+  // The commands as shown here: changed meanwhile, nothing is approved.
+  const approve = () => void rpc(LOCAL, M.signinsApprove, { entry: entry.id, login: entry.login, check: entry.check }).then(check, errorToast);
   const missing = needSignIn(states ?? []);
   const run = () =>
     void rpc(LOCAL, M.signinsRun, { entry: entry.id, members: missing }).then(

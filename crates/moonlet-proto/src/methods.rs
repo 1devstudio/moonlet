@@ -565,8 +565,8 @@ pub const BROWSER_RETRY: &str = "browser.retry";
 pub const SIGNINS_LIST: &str = "signins.list";
 /// [`SignInsSet`] → `true`: the account's sign-ins; this Mac's app only.
 pub const SIGNINS_SET: &str = "signins.set";
-/// [`SignInRef`] → `true`: this member may run the entry's commands as
-/// they are now; this Mac's app only.
+/// [`SignInApprove`] → `true`: this member may run the entry's commands,
+/// exactly as the app showed them; this Mac's app only.
 pub const SIGNINS_APPROVE: &str = "signins.approve";
 /// [`SignInRef`] → `[SignInState]`: whether each member is signed in;
 /// this Mac's app only.
@@ -1420,6 +1420,15 @@ pub struct SignInsSet {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SignInRef {
     pub entry: String,
+}
+
+/// `signins.approve` params: the commands as the user saw them. They must
+/// still be the entry's, or nothing is approved (`changed`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SignInApprove {
+    pub entry: String,
+    pub login: String,
+    pub check: String,
 }
 
 /// `signins.run` params: the members to sign in on, by worker id.

