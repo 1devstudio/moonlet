@@ -2918,6 +2918,11 @@ impl Daemon {
         if text("pinned").is_some_and(|p| p != me) {
             return Err(RpcError::new("pinned", "that session is kept where it is"));
         }
+        // Its live copy becomes its worktree here: without one, the central
+        // host keeps it rather than give it up to nowhere.
+        if !self.sync.list().iter().any(|c| c.session == r.session && !c.path.is_empty()) {
+            return Err(RpcError::new("no_copy", "this Mac keeps no copy of that session"));
+        }
         let host = self.link.host().ok_or_else(|| RpcError::new("unreachable", "the central host is not connected"))?;
         let taken = host
             .request(

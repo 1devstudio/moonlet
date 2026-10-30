@@ -2084,6 +2084,23 @@ async fn a_session_whose_new_owner_cannot_be_recorded_stays_on_the_central_host(
 }
 
 #[tokio::test]
+async fn a_member_without_a_copy_of_the_session_leaves_it_on_the_central_host() {
+    let origin = Origin::new();
+    let (mini, book, made) = continued_and_back(&origin).await;
+    let copies: Vec<Value> = book.call("sync.list", json!({})).await;
+    let copy = copies.iter().find(|c| c["session"] == made["id"]).unwrap()["id"].clone();
+    let _: Value = book.call("sync.stop", json!({ "copy": copy })).await;
+
+    let refused = book
+        .try_call("session.bring", json!({ "session": made["id"] }))
+        .await
+        .unwrap_err();
+    assert!(refused.starts_with("no_copy"), "{refused}");
+    let own: Vec<Value> = mini.call("session.list", json!({})).await;
+    assert!(own.iter().any(|s| s["id"] == made["id"]), "still studio-mini's");
+}
+
+#[tokio::test]
 async fn a_member_lets_go_of_a_lost_session_once_its_worktree_is_free_again() {
     let origin = Origin::new();
     let (mini, mut book) = pair_with_agents(&origin).await;
