@@ -19,7 +19,7 @@ import { terminalSearch } from "./lib/actions";
 import { uiScale } from "./lib/uiScale";
 import { SettingsPage } from "./components/settings/SettingsPage";
 import { TasksMode } from "./components/tasks/TasksMode";
-import { loadTrackersConfig } from "./lib/tasksStore";
+import { loadTrackersConfig, shareTasksWithPhones } from "./lib/tasksStore";
 import { modeOf } from "./lib/mode";
 import { sessionDesignsOf, startDesign, useDesign } from "./lib/designStore";
 import { designPanelWidth } from "./lib/sessionDesign";
@@ -149,11 +149,14 @@ export default function App() {
     void startDesign();
     startEditor();
     void loadTrackersConfig();
+    // The boards reach the phone through the daemon (X76).
+    const stopSharing = shareTasksWithPhones();
     const off = installShortcuts();
     const onFind = () => setFinding(true);
     window.addEventListener("moonlet:find", onFind);
     return () => {
       off();
+      stopSharing();
       window.removeEventListener("moonlet:find", onFind);
     };
   }, []);

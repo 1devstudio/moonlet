@@ -2,43 +2,14 @@
 // listed in the Task detail and the Task tab, and posted from there.
 
 import { create } from "zustand";
+import { type CommentsEntry, type TaskComment, canPost } from "./commentsView";
 import { hostsApi, rpc } from "./daemon";
-import { ago } from "./mobile";
 import { type GhComments, M } from "./protocol";
-import { type Task, taskId, trackerName } from "./tasks";
+import { type Task, taskId } from "./tasks";
 import { errorMessage } from "./store";
 import { recordActivity } from "./tasksStore";
 
-export interface TaskComment {
-  id: string;
-  /** The tracker's display name; empty when it gives none. */
-  author: string;
-  body: string;
-  /** Whether `body` is Markdown; ClickUp's is plain text. */
-  markdown: boolean;
-  createdMs: number;
-}
-
-/** One task's comments as loaded. */
-export interface CommentsEntry {
-  /** Oldest first; undefined until the first load ends. */
-  comments?: TaskComment[];
-  /** The tracker has more than these. */
-  more: boolean;
-  loading: boolean;
-  /** Why the last load failed. */
-  error: string | null;
-  /** What the comments were loaded for: the task's updated time and where gh runs. */
-  loadedFor?: string;
-  /** What the load under way is for. */
-  loadingFor?: string;
-  /** A comment is being posted. */
-  posting?: boolean;
-  /** Why the last comment was refused; it stays in the box. */
-  postError?: string | null;
-  /** What the user is writing in the box, kept per task. */
-  draft?: string;
-}
+export { type CommentsEntry, type CommentsView, type TaskComment, canPost, commentsView } from "./commentsView";
 
 export const useComments = create<{ byTask: Record<string, CommentsEntry> }>(() => ({ byTask: {} }));
 
@@ -97,8 +68,6 @@ export function ensureComments(task: Task, at: Where): Promise<void> {
   return loadComments(task, at);
 }
 
-/** Whether the box holds something to post. */
-export const canPost = (text: string) => text.trim() !== "";
 
 /** What the user typed in a task's box. */
 export function setDraft(task: Task, text: string) {
@@ -116,40 +85,31 @@ export async function postComment(task: Task, at: Where, now = Date.now()): Prom
   if (!canPost(text) || entry(task)?.posting) return false;
   put(task, { posting: true, postError: null });
   try {
-    if (task.github) {
-      if (!at.path) throw new Error(`No project in this workspace has ${task.github.repo} as its origin`);
-      await rpc(at.host, M.ghIssueComment, { path: at.path, number: task.github.number, body: text });
-    } else if (task.tracker) {
-      await hostsApi.trackerComment(task.connection, task.tracker.id, text);
-    } else {
-      throw new Error(`${task.key} takes no comments from moonlet`);
-    }
+    await sendComment(task, at, text, now);
   } catch (e) {
     put(task, { posting: false, postError: errorMessage(e) });
     return false;
   }
-  recordActivity(task, "You commented", now);
   await loadComments(task, at);
   put(task, { posting: false, draft: entry(task)?.draft === text ? "" : entry(task)?.draft });
   return true;
 }
 
-export interface CommentsView {
-  heading: string;
-  /** What shows instead of comments: loading, none, or a failed first load. */
-  status: "loading" | "empty" | null;
-  rows: (TaskComment & { ago: string })[];
-  /** "More comments are in <tracker>", when it has more. */
-  more: string | null;
+/** Posts `text` on the task's issue, and notes it in Activity; throws the tracker's refusal. */
+async function sendComment(task: Task, at: Where, text: string, now: number) {
+  if (task.github) {
+    if (!at.path) throw new Error(`No project in this workspace has ${task.github.repo} as its origin`);
+    await rpc(at.host, M.ghIssueComment, { path: at.path, number: task.github.number, body: text });
+  } else if (task.tracker) {
+    await hostsApi.trackerComment(task.connection, task.tracker.id, text);
+  } else {
+    throw new Error(`${task.key} takes no comments from moonlet`);
+  }
+  recordActivity(task, "You commented", now);
 }
 
-/** What the Comments section shows. */
-export function commentsView(e: CommentsEntry | undefined, task: Task, now: number): CommentsView {
-  const comments = e?.comments ?? [];
-  return {
-    heading: `Comments ${comments.length}`,
-    status: !e?.comments ? (e?.error ? null : "loading") : comments.length ? null : "empty",
-    rows: comments.map((c) => ({ ...c, author: c.author || "Someone", ago: ago(Math.max(0, now - c.createdMs)) })),
-    more: e?.more ? `More comments are in ${trackerName(task.connection)}` : null,
-  };
-}
+/** A task's comments for a phone (X76), read as the Task detail reads them. */
+export const commentsFor = (task: Task, at: Where) => fetchComments(task, at);
+
+/** Posts a phone's comment (X76), as Comment does; throws the tracker's refusal. */
+export const commentFrom = (task: Task, at: Where, body: string, now = Date.now()) => sendComment(task, at, body, now);

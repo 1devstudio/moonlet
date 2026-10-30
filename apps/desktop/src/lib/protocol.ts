@@ -1316,6 +1316,12 @@ export const M = {
   gitPullBase: "git.pull_base",
   gitOriginUrl: "git.origin_url",
   gitSettings: "git.settings",
+  tasksSnapshot: "tasks.snapshot",
+  tasksSetSnapshot: "tasks.set_snapshot",
+  tasksRequest: "tasks.request",
+  tasksAnswer: "tasks.answer",
+  /** Whether the moonlet app is open on the daemon (X76): `{open}`. */
+  tasksApp: "tasks.app",
   gitSetSettings: "git.set_settings",
   gitUnpushed: "git.unpushed",
   gitPush: "git.push",
@@ -1475,6 +1481,12 @@ export const EV = {
   sectionsChanged: "sections.changed",
   profilesChanged: "profiles.changed",
   gitSettingsChanged: "git.settings_changed",
+  /** A workspace's board snapshot changed (X76). */
+  tasksChanged: "tasks.changed",
+  /** A phone asks the app to change tasks (X76). */
+  tasksRequest: "tasks.request",
+  /** The moonlet app opened or closed on the daemon (X76): `{open}`. */
+  tasksApp: "tasks.app",
   claudeUpdateOutput: "claude.update_output",
   claudeUpdateDone: "claude.update_done",
   repoCloneProgress: "repo.clone_progress",

@@ -196,6 +196,16 @@ describe("Tasks mode", () => {
     await $('//div[@role="dialog"][@aria-label="Add a board"]').waitForExist({ reverse: true });
   });
 
+  it("shares the board with the phone through the workspace's daemon (X76)", async () => {
+    type Shared = { workspace: string; snapshot: { version: number; boards: { name: string }[]; tasks: { key: string }[] } }[];
+    await browser.waitUntil(
+      () => rpc<Shared>(w, "tasks.snapshot", {}).some((s) => s.snapshot.boards.some((b) => b.name === "acme/storefront") && s.snapshot.tasks.some((t) => t.key === "acme/storefront#12")),
+      { timeout: 15_000, timeoutMsg: "the daemon never got the board's snapshot" },
+    );
+    const [shared] = rpc<Shared>(w, "tasks.snapshot", {}).filter((s) => s.snapshot.boards.length);
+    expect(shared.snapshot.version).toBe(1);
+  });
+
   it("opens Settings at Boards from the switcher's Manage, where a board is unpinned and pinned again (X50)", async () => {
     await $('//button[starts-with(@aria-label, "Switch board, current: acme/storefront")]').click();
     await $('//button[.//span[normalize-space()="Manage"]]').click();
