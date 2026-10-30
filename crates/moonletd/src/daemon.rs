@@ -1152,11 +1152,13 @@ impl Daemon {
                     let r: m::SessionYield = params(p)?;
                     let mut taken = Vec::new();
                     for id in r.sessions {
-                        // Only what the member owns, and nothing pinned.
+                        // Only what the member owns, and nothing pinned; a
+                        // move (Move to…) also takes one pinned to it.
                         let rec = self.sessions.session_records().remove(&id);
                         let ok_to_take = rec.as_ref().is_some_and(|rec| {
+                            let pinned = rec.get("pinned").and_then(Value::as_str);
                             rec.get("owner").and_then(Value::as_str) == Some(worker.as_str())
-                                && rec.get("pinned").is_none_or(Value::is_null)
+                                && (pinned.is_none() || (r.pin && pinned == Some(worker.as_str())))
                         });
                         if !ok_to_take {
                             continue;
@@ -2786,7 +2788,8 @@ impl Daemon {
             let name = self.sessions.member_names().remove(&owner).unwrap_or(owner);
             return Err(RpcError::new("not_yet", format!("{name} has been unreachable for less than 30 s")));
         }
-        if text("pinned").is_some_and(|p| p != me.id) {
+        // A move (`pin`) pins it here instead.
+        if !pin && text("pinned").is_some_and(|p| p != me.id) {
             return Err(RpcError::new("pinned", "that session is kept on its member"));
         }
         if self.sessions.session(session).is_ok() {
@@ -3359,12 +3362,18 @@ impl Daemon {
                 return Err(RpcError::new("unsent", "what is new of it could not be sent to the central host; it stays here"));
             }
             let host = self.link.host().ok_or_else(|| RpcError::new("unreachable", "the central host is not connected"))?;
-            host.request(
-                m::SESSION_YIELD,
-                serde_json::to_value(m::SessionYield { sessions: vec![r.session.clone()], why: Some("moved it there".into()), pin: true })
-                    .map_err(internal)?,
-            )
-            .await?;
+            let taken = host
+                .request(
+                    m::SESSION_YIELD,
+                    serde_json::to_value(m::SessionYield { sessions: vec![r.session.clone()], why: Some("moved it there".into()), pin: true })
+                        .map_err(internal)?,
+                )
+                .await?;
+            // Moved only once the central host says it took it.
+            let taken: Vec<String> = serde_json::from_value(taken).map_err(internal)?;
+            if !taken.contains(&r.session) {
+                return Err(RpcError::new("not_taken", "the central host could not take it; it stays here"));
+            }
             let mut moved = s;
             moved.owner = Some(moonlet_proto::types::SessionOwner { worker: central, name: String::new(), reachable: true });
             return Ok(moved);

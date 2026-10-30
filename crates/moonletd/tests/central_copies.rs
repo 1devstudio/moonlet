@@ -2547,6 +2547,24 @@ async fn a_session_whose_last_copy_cannot_be_sent_is_not_moved_to_the_central_ho
 }
 
 #[tokio::test]
+async fn a_session_kept_on_this_mac_moves_to_the_central_host_when_asked() {
+    let origin = Origin::new();
+    let (mini, book, made) = continued_and_back(&origin).await;
+    let _: Value = book
+        .call("session.move", json!({ "session": made["id"], "to": BOOK }))
+        .await;
+
+    let _: Value = book
+        .call("session.move", json!({ "session": made["id"], "to": MINI }))
+        .await;
+    let mini_own: Vec<Value> = mini.call("session.list", json!({})).await;
+    assert!(
+        mini_own.iter().any(|s| s["id"] == made["id"]),
+        "studio-mini runs it now"
+    );
+}
+
+#[tokio::test]
 async fn a_session_taken_over_while_the_central_host_was_offline_is_kept_when_it_is_back() {
     let origin = Origin::new();
     let (mut mini, book, made) = continued_and_back(&origin).await;
