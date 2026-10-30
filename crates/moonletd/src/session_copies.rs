@@ -506,6 +506,9 @@ pub struct SessionCopies {
     kick: Notify,
     /// Sessions to send again whatever was sent before: a new link's.
     stale: Mutex<std::collections::HashSet<String>>,
+    /// New links so far, changed with [`Self::stale`] held: an offer made
+    /// on an older link leaves its session stale, to send again.
+    links: std::sync::atomic::AtomicU64,
     /// Set when a round sent the central host anything.
     sent_any: std::sync::atomic::AtomicBool,
     /// One round at a time on a member; one offer at a time on the
@@ -557,6 +560,7 @@ impl SessionCopies {
                 kick: Notify::new(),
                 sent_any: std::sync::atomic::AtomicBool::new(false),
                 stale: Mutex::new(std::collections::HashSet::new()),
+                links: std::sync::atomic::AtomicU64::new(0),
                 round: tokio::sync::Mutex::new(()),
                 apply: tokio::sync::Mutex::new(()),
                 cloning: tokio::sync::Mutex::new(()),
@@ -617,7 +621,10 @@ impl SessionCopies {
                     // against (X73); every session is sent again, from
                     // what the central host says it has.
                     let known: Vec<String> = me.data.lock().unwrap().sent.keys().cloned().collect();
-                    me.stale.lock().unwrap().extend(known);
+                    let mut stale = me.stale.lock().unwrap();
+                    me.links.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    stale.extend(known);
+                    drop(stale);
                     me.talk.lock().unwrap().clear();
                     let gone: Vec<(TerminalId, u64)> =
                         std::mem::take(&mut *me.relayed.lock().unwrap())
@@ -1051,6 +1058,7 @@ impl SessionCopies {
             .unwrap_or_else(|| s.branch.clone());
         let now = Sent { tree, head, branch };
         let before = self.data.lock().unwrap().sent.get(&s.id).cloned();
+        let link = self.links.load(std::sync::atomic::Ordering::Relaxed);
         let stale = self.stale.lock().unwrap().contains(&s.id);
         if before.as_ref() == Some(&now) && !stale {
             return Ok(());
@@ -1080,7 +1088,14 @@ impl SessionCopies {
                 anyhow::bail!("{}: {}", e.code, e.message)
             }
         }
-        self.stale.lock().unwrap().remove(&s.id);
+        // Sent on a link a new one replaced meanwhile: sent again on it.
+        let mut stale = self.stale.lock().unwrap();
+        if self.links.load(std::sync::atomic::Ordering::Relaxed) == link {
+            stale.remove(&s.id);
+        } else {
+            stale.insert(s.id.clone());
+        }
+        drop(stale);
         let mut data = self.data.lock().unwrap();
         data.sent.insert(s.id.clone(), now);
         self.sent_any
