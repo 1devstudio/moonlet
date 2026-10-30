@@ -3593,6 +3593,21 @@ async fn a_pattern_taken_off_the_list_leaves_the_other_files_in_step() {
 }
 
 #[tokio::test]
+async fn a_copied_file_grown_past_one_mebibyte_is_not_deleted_on_the_other_checkout() {
+    let origin = Origin::new();
+    let (_mini, _addr, _book, on_mini, on_book) = two_checkouts(&origin).await;
+    std::fs::write(on_book.join(".env"), "A=1\n").unwrap();
+    reads(&on_mini.join(".env"), "A=1\n").await;
+    std::fs::write(on_book.join(".env"), "x".repeat(1024 * 1024 + 1)).unwrap();
+    // A few rounds go by: it stays on the MacBook, so it is not deleted.
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(
+        std::fs::read_to_string(on_mini.join(".env")).ok().as_deref(),
+        Some("A=1\n")
+    );
+}
+
+#[tokio::test]
 async fn an_unarchived_sessions_remade_worktree_starts_with_its_checkouts_env() {
     let book = mac(BOOK, "MacBook").await;
     let project = shop(&book).await;

@@ -558,10 +558,13 @@ impl Version {
 /// Records in `table` what changed in a checkout whose copied files are now
 /// `now` (path to SHA-256 and the file's change time, in milliseconds): a
 /// new or changed file at its change time, and a deleted one at `stamp`,
-/// all by member `by`. Gives the paths that changed.
+/// all by member `by`. A file `now` lacks that is still in the checkout
+/// (`still_there`), over the limits or tracked by git, is not deleted: it
+/// is left as last seen. Gives the paths that changed.
 pub fn notice(
     table: &mut std::collections::BTreeMap<String, Version>,
     now: &std::collections::BTreeMap<String, (String, u64)>,
+    still_there: impl Fn(&str) -> bool,
     stamp: u64,
     by: &str,
 ) -> Vec<String> {
@@ -580,7 +583,7 @@ pub fn notice(
         }
     }
     for (path, v) in table.iter_mut() {
-        if v.sha.is_some() && !now.contains_key(path) {
+        if v.sha.is_some() && !now.contains_key(path) && !still_there(path) {
             *v = Version {
                 sha: None,
                 stamp,
@@ -1021,6 +1024,7 @@ mod tests {
             notice(
                 &mut table,
                 &shas(&[(".env", "a"), (".env.local", "b")]),
+                |_| false,
                 10,
                 "book"
             ),
@@ -1030,13 +1034,14 @@ mod tests {
             notice(
                 &mut table,
                 &shas(&[(".env", "a"), (".env.local", "b")]),
+                |_| false,
                 20,
                 "book"
             ),
             Vec::<String>::new()
         );
         assert_eq!(
-            notice(&mut table, &shas(&[(".env", "c")]), 30, "book"),
+            notice(&mut table, &shas(&[(".env", "c")]), |_| false, 30, "book"),
             [".env", ".env.local"]
         );
         // A change is stamped with the file's change time, a deletion when

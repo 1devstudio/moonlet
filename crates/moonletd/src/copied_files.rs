@@ -268,7 +268,10 @@ impl Checkouts {
         let before = table.len();
         table.retain(|p, _| named.contains(p));
         let pruned = table.len() != before;
-        if !files::notice(table, &now, now_ms(), me).is_empty() || pruned {
+        // A file still there but no longer copied, grown past 1 MiB or now
+        // tracked by git, is not deleted on the other side.
+        let still_there = |p: &str| std::fs::symlink_metadata(dir.join(p)).is_ok();
+        if !files::notice(table, &now, still_there, now_ms(), me).is_empty() || pruned {
             self.save(&t);
         }
         Ok(bytes)
