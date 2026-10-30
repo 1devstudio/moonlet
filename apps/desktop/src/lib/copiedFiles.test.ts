@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addPattern, listNote, listSaver, removePattern } from "./copiedFiles";
+import { addPattern, listNote, listSaver, loadFailedNote, removePattern } from "./copiedFiles";
 
 describe("a project's copied files (X74)", () => {
   it("the_default_list_is_env_and_env_star", () => {
@@ -54,5 +54,9 @@ describe("a project's copied files (X74)", () => {
     answers[2].fail(new Error("forbidden"));
     await third;
     expect(failed).toEqual([["forbidden", "C"]]);
+  });
+
+  it("a list that could not be loaded says why", () => {
+    expect(loadFailedNote("unknown method: project.copied_files.get")).toBe("Could not load this project's copied files: unknown method: project.copied_files.get");
   });
 });

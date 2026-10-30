@@ -14,6 +14,9 @@ export const COPIED_NOTE = "Files git ignores that moonlet copies to your other 
 /** A line under the list when it is the default one, none was set. */
 export const listNote = (c: CopiedFiles): string | null => (c.default ? "The default: .env files in any folder." : null);
 
+/** The section's line when the list could not be loaded, with Check again. */
+export const loadFailedNote = (message: string): string => `Could not load this project's copied files: ${message}`;
+
 /** Why `p` is no pattern of the list, as the daemon would refuse it; null
  * when it is one. */
 function refused(p: string): string | null {

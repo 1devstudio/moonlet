@@ -5,9 +5,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Plus, X } from "lucide-react";
 import { rpc } from "../../lib/daemon";
-import { COPIED_NOTE, addPattern, listNote, listSaver, removePattern, type CopiedFiles } from "../../lib/copiedFiles";
+import { COPIED_NOTE, addPattern, listNote, listSaver, loadFailedNote, removePattern, type CopiedFiles } from "../../lib/copiedFiles";
 import { M } from "../../lib/protocol";
-import { errorToast } from "../../lib/store";
+import { errorMessage, errorToast } from "../../lib/store";
 import { Button, IconButton, cx } from "../ui";
 import { Card, Section, SwitchRow, fieldCls } from "./controls";
 
@@ -15,10 +15,13 @@ export function CopiedFilesSection({ host, id }: { host: string; id: string }) {
   const [list, setList] = useState<CopiedFiles | null>(null);
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
   const saver = useRef<ReturnType<typeof listSaver<CopiedFiles>> | null>(null);
   useEffect(() => {
     let live = true;
     setList(null);
+    setLoadError(null);
     saver.current = null;
     rpc<CopiedFiles>(host, M.projectCopiedFilesGet, { id }).then(
       (l) => {
@@ -26,12 +29,25 @@ export function CopiedFilesSection({ host, id }: { host: string; id: string }) {
         saver.current = listSaver(l, (v) => rpc(host, M.projectCopiedFilesSet, { id, patterns: v.patterns, cloud: v.cloud }));
         setList(l);
       },
-      () => live && setList(null),
+      (e: unknown) => live && setLoadError(errorMessage(e)),
     );
     return () => {
       live = false;
     };
-  }, [host, id]);
+  }, [host, id, attempt]);
+  if (loadError)
+    return (
+      <Section title="Copied between your Macs" hint={COPIED_NOTE}>
+        <Card>
+          <div data-setting="project-copied-files" className="flex items-center gap-2 px-4 py-3.5">
+            <span className="flex-1 ui-text-12 text-error">{loadFailedNote(loadError)}</span>
+            <Button size="sm" onClick={() => setAttempt((n) => n + 1)}>
+              Check again
+            </Button>
+          </div>
+        </Card>
+      </Section>
+    );
   if (!list) return null;
   // Each edit shows at once; saves go in order, and a failed one puts
   // back the list last saved unless a later edit was made.
