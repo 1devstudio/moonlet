@@ -2058,6 +2058,32 @@ async fn a_member_that_lost_its_session_lists_the_files_it_deleted_meanwhile() {
 }
 
 #[tokio::test]
+async fn a_session_whose_new_owner_cannot_be_recorded_stays_on_the_central_host() {
+    let origin = Origin::new();
+    let (mini, book, made) = continued_and_back(&origin).await;
+    // studio-mini cannot save its account log: a folder is where it writes
+    // the log first.
+    let blocked = mini.home.path().join("account.tmp");
+    std::fs::create_dir_all(blocked.join("in-the-way")).unwrap();
+
+    let refused = book
+        .try_call("session.bring", json!({ "session": made["id"] }))
+        .await
+        .unwrap_err();
+    assert!(refused.starts_with("internal"), "{refused}");
+    // It still runs on studio-mini, on its own branch.
+    let own: Vec<Value> = mini.call("session.list", json!({})).await;
+    let kept = own.iter().find(|s| s["id"] == made["id"]).expect("still studio-mini's");
+    let on = std::process::Command::new("git")
+        .args(["branch", "--show-current"])
+        .current_dir(kept["path"].as_str().unwrap())
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&on.stdout).trim(), made["branch"].as_str().unwrap());
+    std::fs::remove_dir_all(&blocked).unwrap();
+}
+
+#[tokio::test]
 async fn a_member_lets_go_of_a_lost_session_once_its_worktree_is_free_again() {
     let origin = Origin::new();
     let (mini, mut book) = pair_with_agents(&origin).await;

@@ -2879,13 +2879,21 @@ impl Daemon {
         let path = Path::new(&s.path);
         let copy_branch = format!("moonlet-copy/{}", r.session);
         moonlet_core::git::git(path, &["branch", "-m", &s.branch, &copy_branch]).await.map_err(internal)?;
-        let project = self
-            .sessions
-            .list_projects()
-            .into_iter()
-            .find(|p| p.id == s.project_id)
-            .ok_or_else(|| RpcError::new("not_found", "the session's project is gone"))?;
-        self.sessions.set_session_owner(&r.session, worker, epoch + 1, None);
+        let back = || async {
+            if let Err(e) = moonlet_core::git::git(path, &["branch", "-m", &copy_branch, &s.branch]).await {
+                tracing::warn!(session = %r.session, "cannot put the session's branch back: {e:#}");
+            }
+        };
+        let Some(project) = self.sessions.list_projects().into_iter().find(|p| p.id == s.project_id) else {
+            back().await;
+            return Err(RpcError::new("not_found", "the session's project is gone"));
+        };
+        // Given up only once the account names its new owner: otherwise it
+        // stays this host's, as it was.
+        if !self.sessions.set_session_owner(&r.session, worker, epoch + 1, None) {
+            back().await;
+            return Err(RpcError::new("internal", "cannot record the session's new owner"));
+        }
         self.sessions.give_up_session(&r.session).map_err(internal)?;
         self.session_copies.hold(&r.session, worker, Path::new(&project.path), path, &s.path, &project.name);
         Ok(m::SessionTaken { epoch: epoch + 1, chats: states, transcripts })
