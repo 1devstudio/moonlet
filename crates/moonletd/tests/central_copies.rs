@@ -2027,3 +2027,46 @@ async fn a_member_keeps_a_lost_session_until_its_conversation_is_forked() {
         "full output\n"
     );
 }
+
+#[tokio::test]
+async fn a_lost_session_that_cannot_be_let_go_of_yet_keeps_its_gap_once() {
+    let origin = Origin::new();
+    let (mini, mut book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    let worktree = path_of(&made);
+    let parent = worktree.parent().unwrap().to_path_buf();
+    let folder = project_folder(&book, &worktree);
+    // Its worktree cannot move as the MacBook comes back.
+    lost_while_away(&mini, &mut book, &made, || {
+        std::fs::write(worktree.join("src/cart.ts"), "while away\n").unwrap();
+        read_only(&parent, true);
+    })
+    .await;
+    tokio::time::sleep(Duration::from_secs(8)).await;
+    let own: Vec<Value> = book.call("session.list", json!({})).await;
+    read_only(&parent, false);
+    assert!(own.iter().any(|s| s["id"] == made["id"]));
+    within(
+        Duration::from_secs(30),
+        "fix-cart no longer the MacBook's own",
+        || async {
+            let own: Vec<Value> = book.call("session.list", json!({})).await;
+            own.iter().all(|s| s["id"] != made["id"])
+        },
+    )
+    .await;
+    let leftovers = book.home.path().join("sync-leftovers");
+    let kept: Vec<PathBuf> = named(&leftovers, "")
+        .into_iter()
+        .filter(|p| !p.display().to_string().contains("-worktree-"))
+        .collect();
+    assert_eq!(kept.len(), 1, "{kept:?}");
+    let forks = named(&folder, ".fork-");
+    let jsonl: Vec<&PathBuf> = forks
+        .iter()
+        .filter(|p| p.extension().is_some_and(|e| e == "jsonl"))
+        .collect();
+    assert_eq!(jsonl.len(), 1, "{forks:?}");
+}

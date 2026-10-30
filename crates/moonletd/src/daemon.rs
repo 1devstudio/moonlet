@@ -27,6 +27,14 @@ use tokio::sync::watch;
 
 use crate::server::Conn;
 
+/// What looks for sessions another member now owns keep between them (X73).
+#[derive(Default)]
+struct LettingGo {
+    /// Sessions whose gap is kept already, not let go of yet: a later try
+    /// never keeps it again.
+    kept: std::collections::HashSet<String>,
+}
+
 pub struct Daemon {
     pub terminals: Arc<TerminalManager>,
     pub chats: Arc<ChatManager>,
@@ -38,7 +46,7 @@ pub struct Daemon {
     /// Copies of every member's sessions on the central host (X72).
     pub session_copies: Arc<crate::session_copies::SessionCopies>,
     /// One look at a time for sessions another member now owns (X73).
-    letting_go: tokio::sync::Mutex<()>,
+    letting_go: tokio::sync::Mutex<LettingGo>,
     /// Per design system (X64): one start of its agent, or one change of its
     /// record or folder, at a time.
     design_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
@@ -542,7 +550,7 @@ impl Daemon {
         Arc::new(Self {
             copies,
             session_copies,
-            letting_go: tokio::sync::Mutex::new(()),
+            letting_go: Default::default(),
             heavy,
             cloud,
             machines,
@@ -2922,7 +2930,7 @@ impl Daemon {
     /// One look of [`Self::let_go_of_lost`]; true when a session must be
     /// tried again.
     async fn let_go_once(self: &Arc<Self>) -> bool {
-        let _one = self.letting_go.lock().await;
+        let mut one = self.letting_go.lock().await;
         let info = self.link.info();
         if info.central.is_none() || info.worker.cloud {
             return false;
@@ -2936,7 +2944,12 @@ impl Daemon {
             if owner == info.worker.id {
                 continue;
             }
-            match self.session_copies.keep_gap(&s).await {
+            let kept = if one.kept.contains(&s.id) {
+                Ok(None)
+            } else {
+                self.session_copies.keep_gap(&s).await
+            };
+            match kept {
                 Ok(Some(folder)) => tracing::info!(session = %s.id, "kept what was done here meanwhile in {}", folder.display()),
                 Ok(None) => {}
                 Err(e) => {
@@ -2946,12 +2959,14 @@ impl Daemon {
                     continue;
                 }
             }
+            one.kept.insert(s.id.clone());
             let keep_at = self.session_copies.worktree_keep_folder(&s.path);
             if let Err(e) = self.sessions.let_go_session(&s.id, &keep_at).await {
                 tracing::warn!(session = %s.id, "cannot let go of a session another member owns: {e:#}");
                 again = true;
                 continue;
             }
+            one.kept.remove(&s.id);
             tracing::info!(session = %s.id, "its worktree, as it was here, is kept in {}", keep_at.display());
             self.session_copies.forget_sent(&s.id);
             tracing::info!(session = %s.id, %owner, "another member runs this session now; keeping a copy of it");
