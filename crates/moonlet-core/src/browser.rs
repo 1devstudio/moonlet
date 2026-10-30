@@ -110,13 +110,16 @@ pub fn install_here(home: &Path, cli: &Path) -> Result<Opener> {
 }
 
 /// What a terminal or agent gets so its URLs open where the user is: the
-/// opener as `BROWSER` and `GH_BROWSER`, and the shims before `path`.
+/// opener as `BROWSER` and `GH_BROWSER`, and the shims before `path`, also
+/// as `MOONLET_SHIMS` for a login shell to put first again after the
+/// system's profile reordered `PATH`.
 pub fn env(o: &Opener, path: Option<&str>) -> Vec<(String, String)> {
     let open = o.open.display().to_string();
     let shims = o.shims.display().to_string();
     vec![
         ("BROWSER".into(), open.clone()),
         ("GH_BROWSER".into(), open),
+        ("MOONLET_SHIMS".into(), shims.clone()),
         (
             "PATH".into(),
             match path.filter(|p| !p.is_empty()) {
@@ -307,6 +310,7 @@ mod tests {
             [
                 ("BROWSER".to_string(), "/h/opener/moonlet-open".to_string()),
                 ("GH_BROWSER".to_string(), "/h/opener/moonlet-open".to_string()),
+                ("MOONLET_SHIMS".to_string(), "/h/opener/shims".to_string()),
                 ("PATH".to_string(), "/h/opener/shims:/usr/bin:/bin".to_string()),
             ]
         );
