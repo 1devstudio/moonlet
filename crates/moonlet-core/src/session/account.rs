@@ -193,7 +193,7 @@ impl SessionManager {
                 *st = next;
                 // Sessions made before X72, or while the log was away,
                 // get their records now.
-                if !session_changes(&st, &mut log, now_ms()).is_empty() {
+                if !session_changes(&st, &mut log, now_ms(), &[]).is_empty() {
                     write_private(&path, &log)?;
                 }
                 log
@@ -508,7 +508,7 @@ impl SessionManager {
             lay_onto(&mut next, &log);
             // Another member's merge can move this member's sessions to
             // another workspace: their records follow (X72).
-            let own = session_changes(&next, &mut log, now_ms());
+            let own = session_changes(&next, &mut log, now_ms(), &[]);
             match write_private(&a.path, &log).and_then(|()| self.save(&next)) {
                 Ok(()) => {
                     a.log = log;
@@ -648,7 +648,15 @@ fn diff(old: &State, new: &State, log: &mut Log, now: u64) -> Vec<Change> {
             out.push(log.set(now, MERGE, from, "into", json!(into)));
         }
     }
-    out.extend(session_changes(new, log, now));
+    // Only a session this change removes ends its record: one that is not
+    // here yet, being taken from another member, keeps it (X73).
+    let removed: Vec<String> = old
+        .sessions
+        .iter()
+        .filter(|o| o.owner.is_none() && !new.sessions.iter().any(|s| s.id == o.id))
+        .map(|o| o.id.clone())
+        .collect();
+    out.extend(session_changes(new, log, now, &removed));
     out
 }
 
@@ -678,7 +686,7 @@ fn session_fields(st: &State, s: &Session, owner: &str) -> Record {
 /// Records in `log` what changed of this member's own sessions since their
 /// records: their fields, and the records of sessions it no longer has.
 /// Sessions another member owns are that member's to record.
-fn session_changes(st: &State, log: &mut Log, now: u64) -> Vec<Change> {
+fn session_changes(st: &State, log: &mut Log, now: u64, removed: &[String]) -> Vec<Change> {
     let Some(me) = log_owner(log.member()).map(str::to_string) else {
         return Vec::new();
     };
@@ -707,6 +715,7 @@ fn session_changes(st: &State, log: &mut Log, now: u64) -> Vec<Change> {
     }
     for (id, _) in records.iter().filter(|(id, r)| {
         r.get("owner").and_then(Value::as_str) == Some(me.as_str())
+            && removed.contains(id)
             && !st.sessions.iter().any(|s| &s.id == *id)
     }) {
         out.push(log.delete(now, SESSION, id));
@@ -2376,6 +2385,49 @@ mod tests {
             .unwrap();
         sync(&book, &mini);
         assert_eq!(mini.session_records()[&session.id]["name"], serde_json::json!("Fix cart"));
+    }
+
+    /// The MacBook's session "Fix cart", made on `book` and known to `mini`.
+    async fn fix_cart_known_to(book: &SessionManager, mini: &SessionManager) -> Session {
+        let shop = repo_named("shop").await;
+        let mine = book.list_sections()[0].clone();
+        let p = book
+            .section_add_project(&mine.id, &shop.path().display().to_string())
+            .await
+            .unwrap();
+        let session = book
+            .create_session(SessionCreate {
+                name: Some("Fix cart".into()),
+                agent: Some("none".into()),
+                cols: 80,
+                rows: 24,
+                ..SessionCreate::new(&p.id)
+            })
+            .await
+            .unwrap();
+        sync(book, mini);
+        session
+    }
+
+    #[tokio::test]
+    async fn a_session_the_central_host_took_keeps_its_record_until_it_is_here() {
+        let (_h1, book) = member("book").await;
+        let (_h2, mini) = member("mini").await;
+        let session = fix_cart_known_to(&book, &mini).await;
+        // studio-mini takes the session; before it has it, a change comes in.
+        assert!(mini.set_session_owner(&session.id, "mini", 2, None));
+        let personal = book.list_workspaces()[0].clone();
+        book.update_workspace(WorkspaceUpdate {
+            id: personal.id.clone(),
+            name: Some("Home".into()),
+            color: None,
+            section_ids: None,
+            claude_profile: None,
+        })
+        .unwrap();
+        sync(&book, &mini);
+        let r = &mini.session_records()[&session.id];
+        assert_eq!((&r["name"], &r["owner"]), (&serde_json::json!("Fix cart"), &serde_json::json!("mini")));
     }
 
     #[tokio::test]
