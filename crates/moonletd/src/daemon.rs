@@ -33,6 +33,8 @@ struct LettingGo {
     /// Sessions whose gap is kept already, not let go of yet: a later try
     /// never keeps it again.
     kept: std::collections::HashSet<String>,
+    /// Set while later tries are on their way.
+    later: bool,
 }
 
 pub struct Daemon {
@@ -2917,20 +2919,46 @@ impl Daemon {
     /// worktree goes, and a live copy of it is kept in sync from the
     /// central host in its place (X60), so typing here can bring it back.
     async fn let_go_of_lost(self: &Arc<Self>) {
+        if !self.let_go_once(false).await {
+            return;
+        }
         // One that could not be let go of yet, such as while a round holds
-        // its worktree, is tried again a little later.
-        for _ in 0..15 {
-            if !self.let_go_once().await {
-                return;
+        // its worktree, is tried again a little later, and again, until it
+        // is let go of: from 2 s apart up to 10 s.
+        let d = Arc::downgrade(self);
+        tokio::spawn(async move {
+            let mut wait = 2;
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+                wait = (wait * 2).min(10);
+                let Some(d) = d.upgrade() else { return };
+                if !d.let_go_once(true).await {
+                    return;
+                }
             }
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        });
+    }
+
+    /// One look of [`Self::let_go_of_lost`], `later` for one of its later
+    /// tries. A later try gives whether a session must still be tried
+    /// again; any other, whether later tries must start for one.
+    async fn let_go_once(self: &Arc<Self>, later: bool) -> bool {
+        let mut one = self.letting_go.lock().await;
+        let again = self.let_go_each(&mut one).await;
+        if later {
+            one.later = again;
+            again
+        } else if again && !one.later {
+            one.later = true;
+            true
+        } else {
+            false
         }
     }
 
-    /// One look of [`Self::let_go_of_lost`]; true when a session must be
-    /// tried again.
-    async fn let_go_once(self: &Arc<Self>) -> bool {
-        let mut one = self.letting_go.lock().await;
+    /// Lets go of each session another member owns now; true when one
+    /// must be tried again.
+    async fn let_go_each(self: &Arc<Self>, one: &mut LettingGo) -> bool {
         let info = self.link.info();
         if info.central.is_none() || info.worker.cloud {
             return false;

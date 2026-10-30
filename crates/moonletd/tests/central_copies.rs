@@ -1925,7 +1925,8 @@ async fn a_member_lets_go_of_a_lost_session_once_its_worktree_is_free_again() {
         .call("session.continue_here", json!({ "session": made["id"] }))
         .await;
     book.restart().await;
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    // For longer than the first few tries take.
+    tokio::time::sleep(Duration::from_secs(45)).await;
     let own: Vec<Value> = book.call("session.list", json!({})).await;
     assert!(
         own.iter().any(|s| s["id"] == made["id"]),
