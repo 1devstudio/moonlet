@@ -3183,13 +3183,18 @@ impl Daemon {
                 tracing::warn!(session = %r.session, "cannot keep transcript {file}: {e:#}");
             }
         }
+        // The message goes to the chat it was typed in, else the first.
         let mut first = None;
+        let mut typed_in = None;
         for chat in taken.chats {
             let started = self.sessions.continue_chat(&adopted, chat.state).map_err(internal)?;
             first.get_or_insert(started.id);
+            if r.terminal == Some(chat.terminal) {
+                typed_in = Some(started.id);
+            }
         }
-        if let (Some(id), Some(message)) = (first, r.message.as_deref().filter(|m| !m.trim().is_empty()))
-            && let Err(e) = self.chats.send(id, message, &[])
+        if let (Some(id), Some(message)) = (typed_in.or(first), r.message.as_deref().filter(|m| !m.trim().is_empty()))
+            && let Err(e) = self.chats.send(id, message, &r.images)
         {
             tracing::warn!(session = %r.session, "cannot send the message it was brought for: {e:#}");
         }
@@ -3375,7 +3380,7 @@ impl Daemon {
                 return self.sessions.session(&r.session).map_err(internal);
             }
             return self
-                .bring_as(m::SessionBring { session: r.session, now: r.now, message: None }, true)
+                .bring_as(m::SessionBring { session: r.session, now: r.now, message: None, terminal: None, images: Vec::new() }, true)
                 .await;
         }
         if r.to == central && owner == me {

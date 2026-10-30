@@ -2139,6 +2139,58 @@ async fn a_member_that_lost_its_session_lists_the_files_it_deleted_meanwhile() {
 }
 
 #[tokio::test]
+async fn the_message_that_brings_a_session_back_goes_to_the_chat_it_was_typed_in_with_its_images() {
+    let origin = Origin::new();
+    let (mini, book, made) = continued_and_back(&origin).await;
+    let own: Vec<Value> = mini.call("session.list", json!({})).await;
+    let there = own.iter().find(|s| s["id"] == made["id"]).unwrap().clone();
+    // A second chat on studio-mini, the one the user types in.
+    let second: Value = mini
+        .call(
+            "terminal.create",
+            json!({ "cwd": there["path"], "session_id": made["id"], "kind": "agent", "agent": "claude", "chat": true }),
+        )
+        .await;
+
+    let back: Value = book
+        .call(
+            "session.bring",
+            json!({
+                "session": made["id"],
+                "terminal": second["id"],
+                "message": "Back here",
+                "images": [{ "name": "cart.png", "media_type": "image/png", "data": "aGVsbG8=" }],
+            }),
+        )
+        .await;
+    let chats = back["terminals"].as_array().unwrap().clone();
+    assert_eq!(chats.len(), 2);
+    within(
+        Duration::from_secs(30),
+        "the message in the second chat",
+        || async {
+            let st: Value = book.call("chat.state", json!({ "id": chats[1] })).await;
+            st["items"]
+                .as_array()
+                .is_some_and(|i| i.iter().any(|i| i["kind"] == json!("user") && i["text"] == json!("Back here\n[image: cart.png]")))
+        },
+    )
+    .await;
+    let first: Value = book.call("chat.state", json!({ "id": chats[0] })).await;
+    assert!(
+        first["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|i| !i["text"].as_str().unwrap_or("").contains("Back here"))
+    );
+    within(Duration::from_secs(30), "the image to the agent", || async {
+        agent_log(&book, "claude-user").contains("aGVsbG8=")
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn a_session_whose_new_owner_cannot_be_recorded_stays_on_the_central_host() {
     let origin = Origin::new();
     let (mini, book, made) = continued_and_back(&origin).await;
