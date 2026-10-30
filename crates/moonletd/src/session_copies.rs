@@ -185,6 +185,23 @@ fn transcript_files(folder: &Path, id: &str) -> Vec<String> {
     out
 }
 
+/// Makes the folders between `folder` and its transcript file `file`,
+/// never through a link: each is looked at before it is used, and made
+/// when missing. False when one of them is a link.
+fn folders_without_links(folder: &Path, file: &str) -> std::io::Result<bool> {
+    let mut at = folder.to_path_buf();
+    let parts: Vec<_> = Path::new(file).components().collect();
+    for part in &parts[..parts.len().saturating_sub(1)] {
+        at.push(part);
+        match std::fs::symlink_metadata(&at) {
+            Ok(m) if m.file_type().is_dir() => {}
+            Ok(_) => return Ok(false),
+            Err(_) => std::fs::create_dir(&at)?,
+        }
+    }
+    Ok(true)
+}
+
 /// The chat methods a request passed on for a session may call, on one of
 /// its chats (X72): what the phone does with a chat. Never `chat.add_dir`
 /// nor `chat.mcp`, which give the agent more of the member.
@@ -1881,17 +1898,8 @@ impl SessionCopies {
         let internal = |e: std::io::Error| RpcError::new("internal", e.to_string());
         let through_link = || RpcError::new("refused", "a transcript path goes through a link");
         std::fs::create_dir_all(&folder).map_err(internal)?;
-        // Never through a link: each folder between the project folder and
-        // the file is looked at before it is used, and made when missing.
-        let mut at = folder.clone();
-        let parts: Vec<_> = Path::new(&r.file).components().collect();
-        for part in &parts[..parts.len().saturating_sub(1)] {
-            at.push(part);
-            match std::fs::symlink_metadata(&at) {
-                Ok(m) if m.file_type().is_dir() => {}
-                Ok(_) => return Err(through_link()),
-                Err(_) => std::fs::create_dir(&at).map_err(internal)?,
-            }
+        if !folders_without_links(&folder, &r.file).map_err(internal)? {
+            return Err(through_link());
         }
         let open = |truncate: bool| {
             use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -2212,9 +2220,11 @@ impl SessionCopies {
             .join("projects")
             .join(transcript::project_folder(path));
         let to = folder.join(file);
-        if let Some(parent) = to.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
+        std::fs::create_dir_all(&folder)?;
+        anyhow::ensure!(
+            folders_without_links(&folder, file)?,
+            "a transcript path goes through a link: {file}"
+        );
         use std::io::Write;
         use std::os::unix::fs::OpenOptionsExt;
         let mut f = std::fs::OpenOptions::new()

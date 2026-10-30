@@ -2129,6 +2129,30 @@ async fn a_transcript_that_cannot_be_fetched_leaves_the_members_as_it_is() {
 }
 
 #[tokio::test]
+async fn a_brought_back_transcript_is_never_written_through_a_link_on_the_member() {
+    let origin = Origin::new();
+    let (_mini, book, made) = continued_and_back(&origin).await;
+    // Something on the MacBook put a link where the conversation's folder goes.
+    let copies: Vec<Value> = book.call("sync.list", json!({})).await;
+    let here = PathBuf::from(copies.iter().find(|c| c["session"] == made["id"]).unwrap()["path"].as_str().unwrap());
+    within(Duration::from_secs(30), "the copy's folder", || async { here.join(".git").exists() }).await;
+    let ours = project_folder(&book, &here);
+    std::fs::create_dir_all(&ours).unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(elsewhere.path(), ours.join(CONVERSATION)).unwrap();
+
+    let _: Value = book
+        .call("session.bring", json!({ "session": made["id"] }))
+        .await;
+    assert!(!elsewhere.path().join("tool-results/toolu_01.txt").exists());
+    assert_eq!(
+        std::fs::read_dir(elsewhere.path()).unwrap().count(),
+        0,
+        "nothing written through the link"
+    );
+}
+
+#[tokio::test]
 async fn a_member_lets_go_of_a_lost_session_once_its_worktree_is_free_again() {
     let origin = Origin::new();
     let (mini, mut book) = pair_with_agents(&origin).await;
