@@ -18,6 +18,30 @@ pub enum Power {
     Wake,
 }
 
+/// A chat frozen as the Mac went to sleep: its session, and that
+/// session's owner as this member knows it at wake.
+pub struct Frozen<'a> {
+    pub chat: moonlet_proto::TerminalId,
+    pub session: &'a str,
+    pub owner: Option<&'a str>,
+}
+
+/// The frozen chats that go on at wake (X73): those of a session this
+/// member `me` still owns and that the central host did not answer it took
+/// (`taken`), even when the news of its new owner has not arrived yet. The
+/// rest stay stopped until the member lets go of their session.
+pub fn to_thaw(
+    frozen: &[Frozen],
+    taken: &std::collections::HashSet<String>,
+    me: &str,
+) -> Vec<moonlet_proto::TerminalId> {
+    frozen
+        .iter()
+        .filter(|f| f.owner == Some(me) && !taken.contains(f.session))
+        .map(|f| f.chat)
+        .collect()
+}
+
 /// Listens for the Mac's sleep and wake, for the daemon's life.
 pub fn spawn(daemon: Arc<Daemon>) {
     #[cfg(target_os = "macos")]
@@ -132,5 +156,40 @@ mod mac {
                 }
             })
             .expect("a thread for the Mac's sleep and wake");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn on_waking_only_chats_of_sessions_still_this_members_and_not_taken_go_on() {
+        let frozen = [
+            Frozen {
+                chat: 1,
+                session: "fix-cart",
+                owner: Some("macbook"),
+            },
+            // The central host said it took this one, though the news of
+            // its new owner has not arrived yet.
+            Frozen {
+                chat: 2,
+                session: "big-refactor",
+                owner: Some("macbook"),
+            },
+            Frozen {
+                chat: 3,
+                session: "docs",
+                owner: Some("studio-mini"),
+            },
+            Frozen {
+                chat: 4,
+                session: "fix-cart",
+                owner: Some("macbook"),
+            },
+        ];
+        let taken = ["big-refactor".to_string()].into_iter().collect();
+        assert_eq!(to_thaw(&frozen, &taken, "macbook"), vec![1, 4]);
     }
 }

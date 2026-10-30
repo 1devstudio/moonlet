@@ -27,6 +27,15 @@ use tokio::sync::watch;
 
 use crate::server::Conn;
 
+/// What the Mac's last sleep left to its wake (X73).
+#[derive(Default)]
+struct Asleep {
+    /// The chats it froze.
+    frozen: Vec<moonlet_proto::TerminalId>,
+    /// The sessions the central host answered it took.
+    taken: std::collections::HashSet<String>,
+}
+
 /// What looks for sessions another member now owns keep between them (X73).
 #[derive(Default)]
 struct LettingGo {
@@ -49,8 +58,8 @@ pub struct Daemon {
     pub session_copies: Arc<crate::session_copies::SessionCopies>,
     /// One look at a time for sessions another member now owns (X73).
     letting_go: tokio::sync::Mutex<LettingGo>,
-    /// The chats frozen as the Mac went to sleep (X73).
-    frozen: Mutex<Vec<moonlet_proto::TerminalId>>,
+    /// What the Mac's last sleep left to its wake (X73).
+    asleep: Mutex<Asleep>,
     /// Per design system (X64): one start of its agent, or one change of its
     /// record or folder, at a time.
     design_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
@@ -555,7 +564,7 @@ impl Daemon {
             copies,
             session_copies,
             letting_go: Default::default(),
-            frozen: Mutex::new(Vec::new()),
+            asleep: Default::default(),
             heavy,
             cloud,
             machines,
@@ -3169,7 +3178,7 @@ impl Daemon {
                         }
                     }
                 }
-                self.frozen.lock().unwrap().extend(frozen);
+                self.asleep.lock().unwrap().frozen.extend(frozen);
                 self.session_copies.send_now().await;
                 let handed: Vec<String> = own
                     .iter()
@@ -3181,12 +3190,16 @@ impl Daemon {
                 }
                 let Some(host) = self.link.host() else { return };
                 match host.request(m::SESSION_YIELD, serde_json::json!({ "sessions": handed })).await {
-                    Ok(taken) => tracing::info!("handed {taken} to the central host before sleep"),
+                    Ok(taken) => {
+                        let taken: Vec<String> = serde_json::from_value(taken).unwrap_or_default();
+                        tracing::info!("handed {taken:?} to the central host before sleep");
+                        self.asleep.lock().unwrap().taken.extend(taken);
+                    }
                     Err(e) => tracing::warn!("cannot hand sessions over before sleep: {}", e.message),
                 }
             }
             Power::Wake => {
-                let frozen = std::mem::take(&mut *self.frozen.lock().unwrap());
+                let Asleep { frozen, taken } = std::mem::take(&mut *self.asleep.lock().unwrap());
                 if frozen.is_empty() {
                     return;
                 }
@@ -3200,14 +3213,17 @@ impl Daemon {
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                 let records = self.sessions.session_records();
-                for t in frozen {
-                    let still_mine = self.sessions.list_sessions().iter().any(|s| {
-                        s.terminals.contains(&t)
-                            && records.get(&s.id).and_then(|r| r.get("owner")).and_then(Value::as_str) == Some(me.as_str())
-                    });
-                    if still_mine {
-                        self.chats.freeze(t, false);
-                    }
+                let sessions = self.sessions.list_sessions();
+                let frozen: Vec<_> = frozen
+                    .into_iter()
+                    .filter_map(|chat| {
+                        let s = sessions.iter().find(|s| s.terminals.contains(&chat))?;
+                        let owner = records.get(&s.id).and_then(|r| r.get("owner")).and_then(Value::as_str);
+                        Some(crate::power::Frozen { chat, session: &s.id, owner })
+                    })
+                    .collect();
+                for t in crate::power::to_thaw(&frozen, &taken, &me) {
+                    self.chats.freeze(t, false);
                 }
             }
         }
