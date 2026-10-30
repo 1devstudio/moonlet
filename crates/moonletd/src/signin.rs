@@ -459,6 +459,29 @@ async fn run(
     }
 }
 
+/// Sign-ins whose forward's port was taken on this Mac, by URL, for
+/// Retry, until their callback would have lapsed.
+#[derive(Default)]
+pub struct Taken {
+    list: Mutex<BTreeMap<String, (Instant, moonlet_proto::methods::BrowserShow)>>,
+}
+
+impl Taken {
+    /// Keeps `show` for Retry, at `now`.
+    pub fn keep(&self, show: moonlet_proto::methods::BrowserShow, now: Instant) {
+        let mut list = self.list.lock().unwrap();
+        list.retain(|_, (until, _)| *until > now);
+        list.insert(show.url.clone(), (now + LIFETIME, show));
+    }
+
+    /// The sign-in for `url` that waits for Retry at `now`, no longer kept.
+    pub fn take(&self, url: &str, now: Instant) -> Option<moonlet_proto::methods::BrowserShow> {
+        let mut list = self.list.lock().unwrap();
+        list.retain(|_, (until, _)| *until > now);
+        list.remove(url).map(|(_, show)| show)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -587,6 +610,39 @@ srv.serve_forever()
             .unwrap()
             .unwrap();
         assert!(got.ends_with("\r\n\r\nok"), "{got:?}");
+    }
+
+    #[test]
+    fn a_sign_in_waiting_for_retry_lapses_with_its_callback() {
+        // As the app gets it in `browser.show`.
+        let show = |url: &str| -> moonlet_proto::methods::BrowserShow {
+            serde_json::from_value(serde_json::json!({
+                "url": url,
+                "from": "studio-mini",
+                "forward": 8085,
+                "member": "3c9a5e71-0d2b-4f86-a1c4-9e7b2d5f8a03",
+                "port_taken": true,
+            }))
+            .unwrap()
+        };
+        let taken = Taken::default();
+        let t0 = Instant::now();
+        taken.keep(show("https://accounts.example.test/a"), t0);
+        taken.keep(show("https://accounts.example.test/b"), t0);
+        let nine = t0 + Duration::from_secs(9 * 60);
+        assert_eq!(
+            taken
+                .take("https://accounts.example.test/a", nine)
+                .map(|s| s.url),
+            Some("https://accounts.example.test/a".to_string())
+        );
+        // Ten minutes on, its gcloud has given up: Retry finds nothing.
+        let past = t0 + Duration::from_secs(10 * 60 + 1);
+        assert!(
+            taken
+                .take("https://accounts.example.test/b", past)
+                .is_none()
+        );
     }
 
     #[tokio::test]

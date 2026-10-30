@@ -75,7 +75,7 @@ pub struct Daemon {
     /// Sign-ins on this member that wait for the browser to come back (X75).
     callbacks: crate::signin::Callbacks,
     /// URLs whose forward's port was taken here, by URL, for Retry (X75).
-    taken: Mutex<BTreeMap<String, m::BrowserShow>>,
+    taken: crate::signin::Taken,
     /// The ports this Mac forwards to other members' sign-ins (X75).
     forwards: crate::signin::Forwards,
     /// What the Mac's last sleep left to its wake (X73).
@@ -624,7 +624,7 @@ impl Daemon {
             local_apps: Default::default(),
             phone_shows: Default::default(),
             callbacks: crate::signin::Callbacks::default(),
-            taken: Mutex::new(BTreeMap::new()),
+            taken: crate::signin::Taken::default(),
             forwards: crate::signin::Forwards::default(),
             asleep: Default::default(),
             heavy,
@@ -1363,7 +1363,7 @@ impl Daemon {
             m::BROWSER_RETRY => {
                 app_only(conn, "sign-ins")?;
                 let r: m::BrowserRetry = params(p)?;
-                let show = self.taken.lock().unwrap().remove(&r.url).ok_or_else(|| RpcError::new("not_found", "no sign-in waits for that"))?;
+                let show = self.taken.take(&r.url, std::time::Instant::now()).ok_or_else(|| RpcError::new("not_found", "no sign-in waits for that"))?;
                 self.present(show).await;
                 ok(true)
             }
@@ -4020,7 +4020,7 @@ impl Daemon {
             if let Err(e) = self.forwards.open(port.saturating_add(offset), pass).await {
                 tracing::info!(port, "cannot forward a sign-in's port: {e}");
                 show.port_taken = true;
-                self.taken.lock().unwrap().insert(show.url.clone(), show.clone());
+                self.taken.keep(show.clone(), std::time::Instant::now());
             } else {
                 show.port_taken = false;
             }
