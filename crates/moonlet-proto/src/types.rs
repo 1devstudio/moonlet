@@ -401,6 +401,16 @@ pub struct ProjectIdentity {
     pub root: Option<String>,
 }
 
+/// A sign-in every member can run (X75): its name, the command that signs
+/// in, and the one that exits 0 when signed in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SignIn {
+    pub id: String,
+    pub name: String,
+    pub login: String,
+    pub check: String,
+}
+
 /// A host's Git settings (X55), kept by its daemon in `~/.moonlet/git.toml`.
 /// Missing keys take their defaults.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
