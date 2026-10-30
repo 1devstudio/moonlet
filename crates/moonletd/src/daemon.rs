@@ -1292,6 +1292,8 @@ impl Daemon {
                 moonlet_core::browser::check_url(&r.url).map_err(|e| RpcError::new("invalid_params", e.to_string()))?;
                 // Named as this host knows it, never as it calls itself.
                 let from = self.sessions.member_names().remove(&worker).unwrap_or(worker);
+                // Nobody said where they are yet: it waits here with Open.
+                let unknown = self.presence.lock().unwrap().last.is_none();
                 self.show_where_the_user_is(m::BrowserShow {
                     url: r.url,
                     from,
@@ -1299,7 +1301,7 @@ impl Daemon {
                     session_name: r.session_name,
                     forward: None,
                     to: None,
-                    waiting: false,
+                    waiting: unknown,
                 })
                 .await;
                 ok(true)

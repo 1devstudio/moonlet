@@ -268,3 +268,17 @@ async fn a_phone_where_the_user_is_gets_the_url_and_the_macs_app_leaves_it() {
     assert_eq!(shown["to"], json!("phone"));
     assert_eq!(shown["url"], json!("https://github.com/login/device"));
 }
+
+#[tokio::test]
+async fn a_url_from_a_member_waits_on_a_central_host_that_never_saw_the_user() {
+    let (mini, addr) = central().await;
+    let book = linked_book(&mini, &addr).await;
+    let mut mini_app = mini.app().await;
+    // Nobody said where they are: not the MacBook's app, nor a phone.
+    in_terminal(&book, "\"$BROWSER\" 'https://accounts.example.test/auth'").await;
+    let shown = next_show(&mut mini_app, Duration::from_secs(10))
+        .await
+        .expect("a browser.show on studio-mini");
+    assert_eq!(shown["from"], json!("MacBook"));
+    assert_eq!(shown["waiting"], json!(true));
+}
