@@ -165,6 +165,7 @@ function index(c: SearchContext): Entry[] {
     app("cloud", "Machines › Cloud workers", "cloud-idle", "Remove a machine after", "", "cloud idle minutes"),
     app("cloud", "Machines › Cloud workers", "cloud-max", "At most", "", "cloud machines limit"),
     app("cloud", "Machines › Cloud workers", "cloud-hours", "Monthly limit", "", "cloud machine-hours usage"),
+    app("signins", "Machines › Sign-ins", undefined, "Sign-ins", "", "sign in every member gh github login browser"),
     app("phones", "Machines › Phones", "phones", "Allow connections from my tailnet", "", "mobile phone pair Tailscale"),
     ...c.workspaces.flatMap((w): Entry[] => {
       const route: SettingsRoute = { page: "workspace", host: w.host, id: w.id };

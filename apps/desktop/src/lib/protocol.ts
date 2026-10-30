@@ -1317,6 +1317,11 @@ export const M = {
   presenceActive: "presence.active",
   browserPending: "browser.pending",
   browserRetry: "browser.retry",
+  signinsList: "signins.list",
+  signinsSet: "signins.set",
+  signinsApprove: "signins.approve",
+  signinsCheck: "signins.check",
+  signinsRun: "signins.run",
   projectCopiedFilesSet: "project.copied_files.set",
   projectWorktreeRemove: "project.worktree_remove",
   sessionCreate: "session.create",
@@ -1553,3 +1558,11 @@ export const EV = {
 export type DaemonService =
   | { mechanism: "login_item"; state: "enabled" | "requires_approval" | "not_registered" | "not_found" }
   | { mechanism: "plist"; state: "loaded" | "installed" | "not_installed"; plist: string };
+
+/** A sign-in every member can run (X75). */
+export interface SignIn {
+  id: string;
+  name: string;
+  login: string;
+  check: string;
+}
