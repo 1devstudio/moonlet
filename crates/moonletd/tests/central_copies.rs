@@ -2101,6 +2101,34 @@ async fn a_member_without_a_copy_of_the_session_leaves_it_on_the_central_host() 
 }
 
 #[tokio::test]
+async fn a_transcript_that_cannot_be_fetched_leaves_the_members_as_it_is() {
+    let origin = Origin::new();
+    let (mini, book, made) = continued_and_back(&origin).await;
+    // studio-mini's transcript is a link, which it never reads through.
+    let own: Vec<Value> = mini.call("session.list", json!({})).await;
+    let there = own.iter().find(|s| s["id"] == made["id"]).unwrap()["path"].clone();
+    let theirs = project_folder(&mini, Path::new(there.as_str().unwrap())).join(format!("{CONVERSATION}.jsonl"));
+    let aside = theirs.with_extension("aside");
+    std::fs::rename(&theirs, &aside).unwrap();
+    std::os::unix::fs::symlink(&aside, &theirs).unwrap();
+    // The MacBook already has some of the conversation where it goes.
+    let copies: Vec<Value> = book.call("sync.list", json!({})).await;
+    let here = PathBuf::from(copies.iter().find(|c| c["session"] == made["id"]).unwrap()["path"].as_str().unwrap());
+    within(Duration::from_secs(30), "the copy's folder", || async { here.join(".git").exists() }).await;
+    let ours = project_folder(&book, &here);
+    std::fs::create_dir_all(&ours).unwrap();
+    std::fs::write(ours.join(format!("{CONVERSATION}.jsonl")), "{\"type\":\"user\"}\n").unwrap();
+
+    let _: Value = book
+        .call("session.bring", json!({ "session": made["id"] }))
+        .await;
+    assert_eq!(
+        std::fs::read_to_string(ours.join(format!("{CONVERSATION}.jsonl"))).unwrap(),
+        "{\"type\":\"user\"}\n"
+    );
+}
+
+#[tokio::test]
 async fn a_member_lets_go_of_a_lost_session_once_its_worktree_is_free_again() {
     let origin = Origin::new();
     let (mini, mut book) = pair_with_agents(&origin).await;

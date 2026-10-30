@@ -2976,12 +2976,22 @@ impl Daemon {
                     serde_json::json!({ "session": r.session, "file": file }),
                 )
                 .await;
+            // Written only as fetched: no pack is an empty file, and a fetch
+            // that failed leaves what is here as it is.
             let bytes = fetched
-                .ok()
-                .and_then(|v| serde_json::from_value::<m::SessionTranscriptFetched>(v).ok())
-                .and_then(|f| f.pack)
-                .and_then(|t| host.take_pack(t))
-                .unwrap_or_default();
+                .map_err(|e| e.message)
+                .and_then(|v| serde_json::from_value::<m::SessionTranscriptFetched>(v).map_err(|e| e.to_string()))
+                .and_then(|f| match f.pack {
+                    None => Ok(Vec::new()),
+                    Some(t) => host.take_pack(t).ok_or_else(|| "the bytes did not arrive".to_string()),
+                });
+            let bytes = match bytes {
+                Ok(b) => b,
+                Err(e) => {
+                    tracing::warn!(session = %r.session, "cannot fetch transcript {file}: {e}");
+                    continue;
+                }
+            };
             if let Err(e) = self.session_copies.write_transcript(&r.session, &path, file, &bytes) {
                 tracing::warn!(session = %r.session, "cannot keep transcript {file}: {e:#}");
             }
