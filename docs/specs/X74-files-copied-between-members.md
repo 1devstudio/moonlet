@@ -135,7 +135,7 @@ Where it differs from the draft above:
   - `session.files`: the owner sends the central host's copy every file's hash, with the bytes of those that changed. The copy answers the paths whose bytes it still needs.
   - `session.files_fetch`: a live copy (X60), or a cloud machine's routed copy, sends what it has and gets what differs.
   - `files.checkout`: the checkout exchange.
-- **A session's copy never wins.** The session's owner is the only writer. An edit made in a copy is put back, and the copy's version kept in leftovers, as X72 does with its other files. Edits made where the session runs come back with the session.
+- **A session's copy never wins.** The session's owner is the only writer. An edit made in a copy to a file the owner has is put back, and the copy's version kept in leftovers, as X72 does with its other files. A file only the copy has, which the owner never sent, stays where it is, unsent; X60 keeps it in leftovers when the copy stops. Edits made where the session runs come back with the session. Which files a copy got from its owner is kept in memory, so a file the owner deleted while that daemon was restarting stays on the copy.
 - **Stamps.** A changed file is stamped with its change time on its member, and a deletion with when it was noticed, with the member's id breaking ties. Stamps are not X68's hybrid logical clock. A stamp more than a day ahead of the central host's clock is taken as a day ahead.
 - **A leading `/`** anchors a pattern at the worktree's root, as in `.gitignore`. Patterns that start with `~` or `//` are refused as absolute.
 - **A project without a root commit** keeps the default list and cannot be given another.
