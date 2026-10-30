@@ -423,6 +423,17 @@ impl WorkerLink {
     }
 
     fn set_state(&self, state: LinkState) {
+        // A central host that answers, if only to refuse this Mac or ask
+        // for an update, is not offline (X73).
+        let out_of_reach = matches!(
+            state,
+            LinkState::Connecting | LinkState::Reconnecting | LinkState::Error { .. }
+        );
+        self.set_state_as(state, out_of_reach);
+    }
+
+    /// [`Self::set_state`], saying whether the central host is out of reach.
+    fn set_state_as(&self, state: LinkState, out_of_reach: bool) {
         {
             let mut s = self.state.lock().unwrap();
             if *s == state {
@@ -430,11 +441,10 @@ impl WorkerLink {
             }
             // Since when the central host has been out of reach (X73).
             let mut down = self.down_since.lock().unwrap();
-            match &state {
-                LinkState::Connected { .. } | LinkState::Off => *down = None,
-                _ => {
-                    down.get_or_insert_with(now_ms);
-                }
+            if out_of_reach {
+                down.get_or_insert_with(now_ms);
+            } else {
+                *down = None;
             }
             *s = state;
         }
@@ -754,8 +764,9 @@ impl WorkerLink {
                 tracing::warn!("cannot register with the central host: {}", e.message);
                 // Linked but not listed: say so, and wait for a retry.
                 let current = self.host.lock().unwrap().as_ref().is_some_and(|h| Arc::ptr_eq(h, &host));
+                // It answered, so it is not offline.
                 if current {
-                    self.set_state(LinkState::Error { message: e.message });
+                    self.set_state_as(LinkState::Error { message: e.message }, false);
                 }
             }
         }
