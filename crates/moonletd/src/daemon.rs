@@ -1140,13 +1140,15 @@ impl Daemon {
                         .remove(&r.session)
                         .ok_or_else(|| RpcError::new("not_found", "no such session in the account"))?;
                     let owner = rec.get("owner").and_then(Value::as_str).unwrap_or_default().to_string();
-                    let pinned = rec.get("pinned").and_then(Value::as_str);
-                    // Its owner, or the member it is pinned to, decides.
-                    if owner != worker && pinned != Some(worker.as_str()) {
-                        return Err(RpcError::new("forbidden", "only the session's owner pins or unpins it"));
+                    // Any member unpins it (Unpin), or keeps it where it
+                    // runs (Move to… its owner); moving it is a take.
+                    if r.pinned.as_deref().is_some_and(|p| p != owner) {
+                        return Err(RpcError::new("elsewhere", "a session is kept only where it runs"));
                     }
                     let epoch = rec.get("epoch").and_then(Value::as_u64).unwrap_or(1);
-                    self.sessions.set_session_owner(&r.session, &owner, epoch, r.pinned.as_deref());
+                    if !self.sessions.set_session_owner(&r.session, &owner, epoch, r.pinned.as_deref()) {
+                        return Err(RpcError::new("internal", "cannot record where the session is kept"));
+                    }
                     ok(true)
                 } else if method == m::SESSION_YIELD {
                     let r: m::SessionYield = params(p)?;
@@ -3379,8 +3381,13 @@ impl Daemon {
             return Ok(moved);
         }
         if r.to == central && owner == central {
+            // It runs there already: it is kept there now.
             self.pin_at_central(&r.session, Some(central)).await?;
-            return Err(RpcError::new("here_already", "it runs there already; it is kept there now"));
+            return self
+                .member_sessions()
+                .into_iter()
+                .find(|s| s.id == r.session)
+                .ok_or_else(|| RpcError::new("not_found", "no such session in the account"));
         }
         Err(RpcError::new("unsupported", "a session moves to this Mac or to the central host"))
     }
