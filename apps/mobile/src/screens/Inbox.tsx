@@ -177,6 +177,14 @@ function SignInCard({ signIn }: { signIn: SignIn }) {
         <span className="text-[12px] text-faint">{card.site}</span>
       </div>
       <div className="text-[13.5px] leading-[1.45] text-muted">{card.title}.{card.mac && " This sign-in has to finish on a Mac."}</div>
+      {card.code && (
+        <div className="flex items-center gap-2">
+          <span className="selectable flex-1 rounded-[10px] bg-bg px-3 py-2 text-center font-mono text-[18px] tracking-[0.12em]">{card.code}</span>
+          <Btn tone="ghost" onClick={() => void navigator.clipboard.writeText(card.code ?? "").catch(console.error)}>
+            Copy code
+          </Btn>
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-2">
         <Btn tone="ghost" onClick={() => dismissSignIn(key)}>
           Dismiss
