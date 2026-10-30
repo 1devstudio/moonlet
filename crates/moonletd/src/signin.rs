@@ -1,7 +1,7 @@
 //! Sign-ins that come back to localhost (X75). When a command on a member
 //! opens a sign-in whose `redirect_uri` is a loopback port it listens on
 //! itself, the member registers a **callback** for that port. The Mac whose
-//! app opens the URL listens on its own `127.0.0.1:<port>`, and passes each
+//! app opens the URL listens on its own loopback `<port>`, and passes each
 //! request the browser makes there to the member, which hands it to the
 //! command's port and answers what the command answered.
 
@@ -257,13 +257,17 @@ fn closing(request: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Hands `request` to this machine's `127.0.0.1:<port>` and gives what it
-/// answered, until it closes the connection.
+/// Hands `request` to this machine's `127.0.0.1:<port>`, or `[::1]:<port>`
+/// when the command listens there only, and gives what it answered, until
+/// it closes the connection.
 pub async fn answer(port: u16, request: &[u8]) -> Result<Vec<u8>> {
     let run = async {
-        let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port))
-            .await
-            .with_context(|| format!("nothing answers on port {port}"))?;
+        let mut s = match tokio::net::TcpStream::connect(("127.0.0.1", port)).await {
+            Ok(s) => s,
+            Err(_) => tokio::net::TcpStream::connect(("::1", port))
+                .await
+                .with_context(|| format!("nothing answers on port {port}"))?,
+        };
         s.write_all(&closing(request)).await?;
         let mut out = Vec::new();
         let mut chunk = [0u8; 8192];
@@ -291,16 +295,45 @@ pub type Pass = std::sync::Arc<
         + Sync,
 >;
 
-/// Listens on this Mac's `127.0.0.1:<port>` for [`LIFETIME`], passing each
+/// Binds this Mac's `127.0.0.1:<port>`, and `[::1]:<port>` where the Mac
+/// has IPv6, for a browser that goes back to `localhost` or `[::1]`. An
+/// error when either is taken here.
+async fn bind_loopback(
+    port: u16,
+) -> std::io::Result<(tokio::net::TcpListener, Option<tokio::net::TcpListener>)> {
+    let v4 = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
+    let v6 = match tokio::net::TcpListener::bind(("::1", port)).await {
+        Ok(l) => Some(l),
+        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => return Err(e),
+        Err(_) => None,
+    };
+    Ok((v4, v6))
+}
+
+/// The next connection on either of a forward's listeners.
+async fn accept(
+    v4: &tokio::net::TcpListener,
+    v6: Option<&tokio::net::TcpListener>,
+) -> std::io::Result<tokio::net::TcpStream> {
+    match v6 {
+        Some(v6) => tokio::select! {
+            a = v4.accept() => a.map(|(s, _)| s),
+            a = v6.accept() => a.map(|(s, _)| s),
+        },
+        None => v4.accept().await.map(|(s, _)| s),
+    }
+}
+
+/// Listens on this Mac's loopback `<port>` for [`LIFETIME`], passing each
 /// request to `pass`, until it answers `gone` (the command stopped
 /// listening). An error when the port is taken here.
 pub async fn forward(port: u16, pass: Pass) -> std::io::Result<()> {
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
+    let (v4, v6) = bind_loopback(port).await?;
     tokio::spawn(async move {
         let end = Instant::now() + LIFETIME;
         loop {
             let left = end.saturating_duration_since(Instant::now());
-            let Ok(Ok((mut stream, _))) = tokio::time::timeout(left, listener.accept()).await
+            let Ok(Ok(mut stream)) = tokio::time::timeout(left, accept(&v4, v6.as_ref())).await
             else {
                 return;
             };
@@ -425,6 +458,39 @@ srv.serve_forever()
             got.ends_with("\r\n\r\nYou are now authenticated"),
             "{got:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn a_sign_in_that_comes_back_to_ipv6_loopback_is_forwarded_and_answered() {
+        // The command listens on [::1] only, as a server bound to
+        // `localhost` may.
+        let (mut server, port) = python_server(&KEEP_ALIVE_SERVER.replace(
+            "srv = http.server.HTTPServer((\"127.0.0.1\", 0), H)",
+            "import socket\nhttp.server.HTTPServer.address_family = socket.AF_INET6\nsrv = http.server.HTTPServer((\"::1\", 0), H)",
+        ));
+        let request = b"GET /?code=4 HTTP/1.1\r\nHost: [::1]\r\n\r\n";
+        let got = answer(port, request).await;
+        let _ = server.kill();
+        let got = String::from_utf8_lossy(&got.unwrap()).to_string();
+        assert!(got.ends_with("You are now authenticated"), "{got:?}");
+        // The browser goes back to [::1] on the Mac: the forward is there.
+        let free = std::net::TcpListener::bind("[::1]:0").unwrap();
+        let port = free.local_addr().unwrap().port();
+        drop(free);
+        let pass: Pass = std::sync::Arc::new(|_| {
+            Box::pin(async { Ok(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok".to_vec()) })
+        });
+        forward(port, pass).await.unwrap();
+        let mut s = tokio::net::TcpStream::connect(("::1", port)).await.unwrap();
+        s.write_all(b"GET /?code=4 HTTP/1.1\r\nHost: [::1]\r\n\r\n")
+            .await
+            .unwrap();
+        let mut got = String::new();
+        tokio::time::timeout(Duration::from_secs(5), s.read_to_string(&mut got))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(got.ends_with("\r\n\r\nok"), "{got:?}");
     }
 
     #[tokio::test]
