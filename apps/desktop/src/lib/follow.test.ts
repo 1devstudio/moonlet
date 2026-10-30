@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bringsHere, followMenu, hostMark, moveTargets, offlineLine, readyMark, waitingLine } from "./follow";
+import { bringsHere, followMenu, hostMark, rowMark, moveTargets, offlineLine, readyMark, waitingLine } from "./follow";
 
 const accounts = { local: { account: "mini-id" }, mini: { account: "mini-id" }, vps: { account: "other" } };
 
@@ -13,6 +13,20 @@ describe("where a session runs (X73)", () => {
     expect(hostMark({}, "mini", "studio-mini", true)).toEqual({ server: true, pin: false, dim: false, tooltip: "Running on studio-mini" });
     expect(hostMark({ pinned: "mini-id" }, "mini", "studio-mini", true)).toEqual({ server: true, pin: true, dim: false, tooltip: "Kept on studio-mini" });
     expect(hostMark({}, "mini", "studio-mini", false, "14:02")).toEqual({ server: true, pin: false, dim: true, tooltip: "Running on studio-mini · offline since 14:02" });
+  });
+
+  it("dims the central host's sessions while this Mac cannot reach it, even with the app still connected to it", () => {
+    const since = new Date(2026, 9, 29, 14, 2).getTime();
+    expect(rowMark({}, "mini", "studio-mini", { connected: true, central: "mini", unreachableSince: since })).toEqual({
+      server: true,
+      pin: false,
+      dim: true,
+      tooltip: "Running on studio-mini · offline since 14:02",
+    });
+    expect(rowMark({}, "mini", "studio-mini", { connected: true, central: "mini", unreachableSince: null })).toEqual({ server: true, pin: false, dim: false, tooltip: "Running on studio-mini" });
+    // Another host goes by the app's own connection to it.
+    expect(rowMark({}, "vps", "vps", { connected: true, central: "mini", unreachableSince: since })).toEqual({ server: true, pin: false, dim: false, tooltip: "Running on vps" });
+    expect(rowMark({}, "vps", "vps", { connected: false, central: "mini", unreachableSince: null })).toEqual({ server: true, pin: false, dim: true, tooltip: "Running on vps · offline" });
   });
 });
 

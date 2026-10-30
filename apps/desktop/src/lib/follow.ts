@@ -18,6 +18,20 @@ export function hostMark(
   return { server: true, pin, dim: !connected, tooltip: connected ? where : `${where} · offline${offlineSince ? ` since ${offlineSince}` : ""}` };
 }
 
+/** {@link hostMark} for a session row listed from `host`: the central host
+ * is offline while this Mac's link cannot reach it (`unreachableSince`),
+ * whatever the app's own connection to it says; another host goes by the
+ * app's connection (`connected`). */
+export function rowMark(
+  s: { pinned?: string | null },
+  host: string,
+  label: string,
+  o: { connected: boolean; central: string | null; unreachableSince: number | null },
+): ReturnType<typeof hostMark> {
+  const cut = host === o.central && o.unreachableSince !== null ? o.unreachableSince : null;
+  return hostMark(s, host, label, o.connected && cut === null, cut === null ? undefined : offlineSince(cut));
+}
+
 /** Whether typing into a session listed from `host` brings it to this Mac:
  * `host` is another member of this Mac's account, and the session is not
  * kept there. A host outside the account is only talked to where it is. */

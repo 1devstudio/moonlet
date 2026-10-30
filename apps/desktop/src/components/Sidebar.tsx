@@ -5,7 +5,7 @@ import { M, type Copy, type HostInfo, type Project, type Section, type SectionVi
 import { arrangeShared, groupCollapseKey, groupHeading, lastActive, missingProjectNote, projectRemoval, sectionCollapseKey, sectionParts, sessionBadge, sessionMenu, shownSections, type HostSession, type SharedGroup } from "../lib/sidebar";
 import { closeClaudeUpdate, errorToast, projKey, pullBase, selectSession, updateActions, updateClaude, sesKey, sessionState, sessionTerminals, shownWorkspace, termKey, toast, updateSettings, useStore } from "../lib/store";
 import { hostNotice } from "../lib/settingsPage";
-import { followMenu, hostMark, offlineLine, readyMark } from "../lib/follow";
+import { followMenu, offlineLine, readyMark, rowMark } from "../lib/follow";
 import { moveSession, useReady } from "../lib/followStore";
 import { gitSettingsOf } from "../lib/gitSettings";
 import { aheadText, baseChip, behindHeadline, chipClick, fetchedLabel, pullPopoverPlacement, rebaseCommand, type BaseChip } from "../lib/baseSync";
@@ -388,10 +388,12 @@ function SessionRow({ host, s, onMenu, cell, nested, on }: { host: string; s: Se
   const notable = state && state !== "idle";
   // Where it runs, when not here (X73).
   const hostInfo = useStore((st) => st.hosts[host]);
-  const where = hostMark(s, host, hostInfo?.label ?? on ?? host, hostInfo?.status === "connected");
+  const central = useSync((st) => st.central);
+  const unreachableSince = useSync((st) => st.unreachableSince);
+  const where = rowMark(s, host, hostInfo?.label ?? on ?? host, { connected: hostInfo?.status === "connected", central, unreachableSince });
   // The central host could not continue it, and why (X73).
   const readiness = useReady((r) => (host === "local" ? r.ready[s.id] : undefined));
-  const centralLabel = useStore((st) => { const c = useSync.getState().central; return c ? (st.hosts[c]?.label ?? c) : null; });
+  const centralLabel = useStore((st) => (central ? (st.hosts[central]?.label ?? central) : null));
   const notReady = centralLabel ? readyMark(readiness, centralLabel, s.name) : null;
   if (archiving) return <ArchivingRow name={s.name} a={archiving} />;
   // Hovering shows the task's key, state and title (X48), then the branch.
