@@ -47,6 +47,8 @@ impl Mac {
             .env("MOONLET_HOME", home)
             .env("MOONLET_SOCK", socket)
             .env("MOONLET_MOBILE_ADDRS", "127.0.0.1")
+            // A task request no app answers fails within the test (X76).
+            .env("MOONLET_TASKS_REQUEST_TIMEOUT_MS", "1500")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
@@ -916,4 +918,360 @@ async fn phones_do_not_hear_a_design_opened() {
             assert_ne!(name, "design.open", "a phone heard a design opened");
         }
     }
+}
+
+async fn call_with(s: &mut TcpStream, id: u64, method: &str, params: Value) -> Message {
+    write_frame(s, &Frame::Json(Message::Request { id, method: method.into(), params })).await.unwrap();
+    loop {
+        match next_json(s).await.expect("connection closed") {
+            m @ Message::Response { id: rid, .. } if rid == id => return m,
+            _ => {}
+        }
+    }
+}
+
+/// Waits for event `name` on a phone connection.
+async fn phone_event(s: &mut TcpStream, name: &str) -> Value {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let m = tokio::time::timeout_at(deadline, next_json(s)).await.expect("no event").expect("connection closed");
+        if let Message::Event { name: n, data } = m
+            && n == name
+        {
+            return data;
+        }
+    }
+}
+
+async fn personal_workspace(app: &mut Client) -> String {
+    let list: Vec<moonlet_proto::types::Workspace> = app.request("workspace.list", json!({})).await.unwrap();
+    list[0].id.clone()
+}
+
+/// A board snapshot as the app shares it (X76): the daemon keeps it whole.
+fn board_snapshot() -> Value {
+    json!({
+        "version": 1,
+        "synced_at": 1_791_970_430_000u64,
+        "from": "studio",
+        "boards": [{ "config": { "id": "linear:acme/team:MOON@local/personal", "name": "Moonlet" }, "tasks": [{ "key": "MOON-142", "title": "Remote hosts sidebar" }] }]
+    })
+}
+
+#[tokio::test]
+async fn the_apps_board_snapshot_reaches_the_phone_and_outlives_a_restart() {
+    let mut mac = Mac::start(None).await;
+    let addr = mac.allow_phones().await;
+    let token = mac.pair(&addr).await;
+    let (mut phone, _) = auth(&addr, json!({ "token": token })).await;
+    hello(&mut phone, "moonlet-mobile").await;
+
+    let mut app = mac.app().await;
+    let ws = personal_workspace(&mut app).await;
+    let saved: bool = app.request("tasks.set_snapshot", json!({ "workspace": ws, "snapshot": board_snapshot() })).await.unwrap();
+    assert!(saved);
+    let changed = phone_event(&mut phone, "tasks.changed").await;
+    assert_eq!(changed, json!({ "workspace": ws, "snapshot": board_snapshot() }));
+
+    let Message::Response { result: Some(r), .. } = call_with(&mut phone, 1, "tasks.snapshot", json!({})).await else { panic!("no snapshots") };
+    assert_eq!(r, json!([{ "workspace": ws, "snapshot": board_snapshot() }]));
+
+    let file = mac.home.path().join("tasks").join(format!("{ws}.json"));
+    use std::os::unix::fs::PermissionsExt;
+    assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
+
+    mac.restart().await;
+    let mut app = mac.app().await;
+    let r: Value = app.request("tasks.snapshot", json!({ "workspace": ws })).await.unwrap();
+    assert_eq!(r, json!([{ "workspace": ws, "snapshot": board_snapshot() }]));
+}
+
+#[tokio::test]
+async fn only_the_app_shares_boards_and_a_workspace_takes_its_boards_along() {
+    let mac = Mac::start(None).await;
+    let addr = mac.allow_phones().await;
+    let token = mac.pair(&addr).await;
+    let (mut phone, _) = auth(&addr, json!({ "token": token })).await;
+    hello(&mut phone, "moonlet-mobile").await;
+    let mut app = mac.app().await;
+    let ws = personal_workspace(&mut app).await;
+
+    let Message::Response { error: Some(e), .. } = call_with(&mut phone, 1, "tasks.set_snapshot", json!({ "workspace": ws, "snapshot": board_snapshot() })).await else {
+        panic!("a phone shared boards")
+    };
+    assert_eq!(e.message, "only the moonlet app shares boards");
+    let mut cli = Client::connect(&mac.socket, "moonlet-cli").await.unwrap();
+    let e = cli.request::<_, bool>("tasks.set_snapshot", json!({ "workspace": ws, "snapshot": board_snapshot() })).await.unwrap_err();
+    assert_eq!(e.to_string(), "forbidden: only the moonlet app shares boards");
+
+    let e = app.request::<_, bool>("tasks.set_snapshot", json!({ "workspace": "nope", "snapshot": {} })).await.unwrap_err();
+    assert_eq!(e.to_string(), "not_found: no workspace nope");
+    let big = json!({ "version": 1, "boards": [], "pad": "x".repeat(5 * 1024 * 1024) });
+    let e = app.request::<_, bool>("tasks.set_snapshot", json!({ "workspace": ws, "snapshot": big })).await.unwrap_err();
+    assert!(e.to_string().contains("over the 4 MB a daemon keeps"), "{e}");
+
+    // A second workspace's boards go when it is deleted.
+    let other: moonlet_proto::types::Workspace = app.request("workspace.create", json!({ "name": "Acme", "color": "clay" })).await.unwrap();
+    let _: bool = app.request("tasks.set_snapshot", json!({ "workspace": other.id, "snapshot": board_snapshot() })).await.unwrap();
+    let _: bool = app.request("workspace.delete", json!({ "id": other.id })).await.unwrap();
+    let gone = loop {
+        let ev = phone_event(&mut phone, "tasks.changed").await;
+        if ev["snapshot"].is_null() {
+            break ev;
+        }
+    };
+    assert_eq!(gone, json!({ "workspace": other.id, "snapshot": null }));
+    let left: Value = app.request("tasks.snapshot", json!({})).await.unwrap();
+    assert_eq!(left, json!([]));
+    assert!(!mac.home.path().join("tasks").join(format!("{}.json", other.id)).exists());
+}
+
+/// Waits for event `name` on an app connection.
+async fn app_event(c: &mut Client, name: &str) -> Value {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let f = tokio::time::timeout_at(deadline, c.next_frame()).await.expect("no event").unwrap().unwrap();
+        if let Frame::Json(Message::Event { name: n, data }) = f
+            && n == name
+        {
+            return data;
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_phones_task_request_is_answered_by_the_app() {
+    let mac = Mac::start(None).await;
+    let addr = mac.allow_phones().await;
+    let token = mac.pair(&addr).await;
+    let (mut phone, _) = auth(&addr, json!({ "token": token })).await;
+    hello(&mut phone, "moonlet-mobile").await;
+
+    // With no app connected, the phone hears so at once.
+    let started = std::time::Instant::now();
+    let move_it = json!({ "workspace": "personal", "action": { "kind": "move", "board": "b1", "task": "linear:acme MOON-144", "column": "Done" } });
+    let Message::Response { error: Some(e), .. } = call_with(&mut phone, 1, "tasks.request", move_it.clone()).await else { panic!("answered without an app") };
+    assert_eq!(e.message, "Open moonlet on the Mac to change tasks.");
+    assert!(started.elapsed() < Duration::from_secs(1));
+
+    let mut app = mac.app().await;
+    let (mut phone2, _) = auth(&addr, json!({ "token": token })).await;
+    hello(&mut phone2, "moonlet-mobile").await;
+    let asking = tokio::spawn(async move { call_with(&mut phone, 2, "tasks.request", move_it).await });
+    let ev = app_event(&mut app, "tasks.request").await;
+    assert_eq!(ev["workspace"], "personal");
+    assert_eq!(ev["action"], json!({ "kind": "move", "board": "b1", "task": "linear:acme MOON-144", "column": "Done" }));
+    let id = ev["request_id"].as_u64().unwrap();
+
+    // Another phone cannot answer it.
+    let Message::Response { error: Some(e), .. } = call_with(&mut phone2, 3, "tasks.answer", json!({ "request_id": id, "ok": true })).await else { panic!("a phone answered") };
+    assert_eq!(e.message, "only the moonlet app answers task requests");
+
+    let _: bool = app.request("tasks.answer", json!({ "request_id": id, "ok": true, "result": { "moved": "Done" } })).await.unwrap();
+    let Message::Response { result: Some(r), error: None, .. } = asking.await.unwrap() else { panic!("no result") };
+    assert_eq!(r, json!({ "moved": "Done" }));
+    let e = app.request::<_, bool>("tasks.answer", json!({ "request_id": id, "ok": true })).await.unwrap_err();
+    assert_eq!(e.to_string(), "failed: already answered");
+
+    // A refusal carries the app's reason; silence ends after the timeout.
+    let refuse = json!({ "workspace": "personal", "action": { "kind": "create", "board": "b1", "column": "Todo", "issue": { "title": "" } } });
+    let asking = tokio::spawn(async move { call_with(&mut phone2, 4, "tasks.request", refuse).await });
+    let ev = app_event(&mut app, "tasks.request").await;
+    let _: bool = app.request("tasks.answer", json!({ "request_id": ev["request_id"], "ok": false, "error": "A title is needed." })).await.unwrap();
+    let Message::Response { error: Some(e), .. } = asking.await.unwrap() else { panic!("not refused") };
+    assert_eq!(e.message, "A title is needed.");
+
+    let (mut phone3, _) = auth(&addr, json!({ "token": token })).await;
+    hello(&mut phone3, "moonlet-mobile").await;
+    let Message::Response { error: Some(e), .. } = call_with(&mut phone3, 5, "tasks.request", json!({ "workspace": "personal", "action": { "kind": "started" } })).await else { panic!("answered") };
+    assert_eq!(e.message, "moonlet on the Mac did not answer.");
+
+    // Only a paired phone asks: not an agent's CLI, nor a local client under another name, nor the app itself.
+    for name in ["moonlet-cli", "anything-else", "moonlet-app"] {
+        let mut c = Client::connect(&mac.socket, name).await.unwrap();
+        let e = c.request::<_, Value>("tasks.request", json!({ "workspace": "personal", "action": {} })).await.unwrap_err();
+        assert_eq!(e.to_string(), "forbidden: only a paired phone asks the app to change tasks", "{name}");
+    }
+}
+
+#[tokio::test]
+async fn one_app_takes_a_task_request_and_agents_cannot_answer_one() {
+    let mac = Mac::start(None).await;
+    let addr = mac.allow_phones().await;
+    let token = mac.pair(&addr).await;
+    let (mut phone, _) = auth(&addr, json!({ "token": token })).await;
+    hello(&mut phone, "moonlet-mobile").await;
+    let mut first = mac.app().await;
+    let mut second = mac.app().await;
+    // A client that only says it is something else is not the app.
+    let mut other = Client::connect(&mac.socket, "moonletd-status").await.unwrap();
+
+    let asking = tokio::spawn(async move { call_with(&mut phone, 1, "tasks.request", json!({ "workspace": "personal", "action": { "kind": "started" } })).await });
+    let ev = app_event(&mut first, "tasks.request").await;
+    // Only one app does it: two would create two issues.
+    for c in [&mut second, &mut other] {
+        let none = tokio::time::timeout(Duration::from_millis(500), app_event(c, "tasks.request")).await;
+        assert!(none.is_err(), "another client got the request");
+    }
+    let mut cli = Client::connect(&mac.socket, "moonlet-cli").await.unwrap();
+    let e = cli.request::<_, bool>("tasks.answer", json!({ "request_id": ev["request_id"], "ok": true })).await.unwrap_err();
+    assert_eq!(e.to_string(), "forbidden: only the moonlet app answers task requests");
+    let e = other.request::<_, bool>("tasks.answer", json!({ "request_id": ev["request_id"], "ok": true })).await.unwrap_err();
+    assert_eq!(e.to_string(), "forbidden: only the moonlet app answers task requests");
+    let _: bool = first.request("tasks.answer", json!({ "request_id": ev["request_id"], "ok": true, "result": {} })).await.unwrap();
+    let Message::Response { error: None, .. } = asking.await.unwrap() else { panic!("not answered") };
+}
+
+/// A phone hears whether moonlet is open on the Mac (X76): moves wait for it.
+#[tokio::test]
+async fn a_phone_hears_when_the_app_opens_and_closes() {
+    let mac = Mac::start(None).await;
+    let addr = mac.allow_phones().await;
+    let token = mac.pair(&addr).await;
+    let (mut phone, _) = auth(&addr, json!({ "token": token })).await;
+    hello(&mut phone, "moonlet-mobile").await;
+
+    // allow_phones' app connection has gone.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let Message::Response { result: Some(r), .. } = call_with(&mut phone, 1, "tasks.app", json!({})).await else { panic!("no answer") };
+        if r == json!({ "open": false }) {
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "the app never closed: {r}");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    let app = mac.app().await;
+    assert_eq!(phone_event(&mut phone, "tasks.app").await, json!({ "open": true }));
+    let Message::Response { result: Some(r), .. } = call_with(&mut phone, 2, "tasks.app", json!({})).await else { panic!("no answer") };
+    assert_eq!(r, json!({ "open": true }));
+
+    // A second app changes nothing; the last one leaving closes it.
+    let second = mac.app().await;
+    drop(app);
+    drop(second);
+    assert_eq!(phone_event(&mut phone, "tasks.app").await, json!({ "open": false }));
+}
+
+/// The desktop app reaching this daemon over the tailnet, paired as a Mac,
+/// is an app too (X76): it shares boards and answers a phone's requests.
+#[tokio::test]
+async fn the_app_on_a_paired_mac_shares_boards_and_answers_over_the_tailnet() {
+    let mac = Mac::start(None).await;
+    let addr = mac.allow_phones().await;
+    let token = mac.pair(&addr).await;
+    let (mut phone, _) = auth(&addr, json!({ "token": token })).await;
+    hello(&mut phone, "moonlet-mobile").await;
+    let mut local = mac.app().await;
+    let ws = personal_workspace(&mut local).await;
+    let p: MobilePairing = local.request("mobile.pair_start", json!({ "kind": "desktop" })).await.unwrap();
+    drop(local);
+    let Some(Message::Authed { token: Some(desk), .. }) = auth(&addr, json!({ "pair": p.code, "device": "Alex's MacBook Pro", "kind": "desktop" })).await.1 else {
+        panic!("no desktop pairing")
+    };
+    let (mut desktop, _) = auth(&addr, json!({ "token": desk })).await;
+    hello(&mut desktop, "moonlet-app").await;
+
+    let Message::Response { result: Some(r), error: None, .. } = call_with(&mut desktop, 1, "tasks.set_snapshot", json!({ "workspace": ws, "snapshot": board_snapshot() })).await else {
+        panic!("the paired Mac's app could not share boards")
+    };
+    assert_eq!(r, json!(true));
+    let Message::Response { result: Some(r), .. } = call_with(&mut phone, 2, "tasks.app", json!({})).await else { panic!("no answer") };
+    assert_eq!(r, json!({ "open": true }));
+}
+
+/// Only the app a request went to answers it, and its leaving ends the
+/// phone's wait at once instead of after the timeout (X76).
+#[tokio::test]
+async fn only_the_app_asked_answers_and_its_leaving_ends_the_wait() {
+    let mac = Mac::start(None).await;
+    let addr = mac.allow_phones().await;
+    let token = mac.pair(&addr).await;
+    let (mut phone, _) = auth(&addr, json!({ "token": token })).await;
+    hello(&mut phone, "moonlet-mobile").await;
+    let mut first = mac.app().await;
+    let mut second = mac.app().await;
+
+    let asking = tokio::spawn(async move {
+        let started = std::time::Instant::now();
+        let m = call_with(&mut phone, 1, "tasks.request", json!({ "workspace": "personal", "action": { "kind": "started" } })).await;
+        (m, started.elapsed())
+    });
+    let ev = app_event(&mut first, "tasks.request").await;
+    let e = second.request::<_, bool>("tasks.answer", json!({ "request_id": ev["request_id"], "ok": true })).await.unwrap_err();
+    assert_eq!(e.to_string(), "forbidden: another app was asked");
+    drop(first);
+    let (m, took) = asking.await.unwrap();
+    let Message::Response { error: Some(e), .. } = m else { panic!("answered") };
+    assert_eq!(e.message, "moonlet on the Mac closed before it answered.");
+    assert!(took < Duration::from_millis(1400), "waited {took:?}");
+}
+
+/// A workspace merged into another takes its boards along (X76).
+#[tokio::test]
+async fn a_merged_workspace_takes_its_boards_along() {
+    let mac = Mac::start(None).await;
+    let mut app = mac.app().await;
+    let ws = personal_workspace(&mut app).await;
+    let other: moonlet_proto::types::Workspace = app.request("workspace.create", json!({ "name": "Acme", "color": "clay" })).await.unwrap();
+    let _: bool = app.request("tasks.set_snapshot", json!({ "workspace": other.id, "snapshot": board_snapshot() })).await.unwrap();
+    let _: bool = app.request("workspace.merge", json!({ "id": other.id, "into": ws })).await.unwrap();
+    let left: Value = app.request("tasks.snapshot", json!({})).await.unwrap();
+    assert_eq!(left, json!([]));
+    assert!(!mac.home.path().join("tasks").join(format!("{}.json", other.id)).exists());
+}
+
+/// Boards of a workspace gone by any way, such as another member's merge
+/// (X68), are not served, and their file goes (X76).
+#[tokio::test]
+async fn boards_of_a_workspace_gone_another_way_are_not_served() {
+    let mut mac = Mac::start(None).await;
+    let dir = mac.home.path().join("tasks");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("gone.json"), board_snapshot().to_string()).unwrap();
+    mac.restart().await;
+    let mut app = mac.app().await;
+    let left: Value = app.request("tasks.snapshot", json!({})).await.unwrap();
+    assert_eq!(left, json!([]));
+    assert!(!dir.join("gone.json").exists());
+}
+
+/// A board file that cannot be removed keeps its own boards, and hides no
+/// other workspace's (X76).
+#[tokio::test]
+async fn an_undeletable_board_file_hides_no_other_boards() {
+    use std::os::unix::fs::PermissionsExt;
+    let mut mac = Mac::start(None).await;
+    let dir = mac.home.path().join("tasks");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("gone.json"), board_snapshot().to_string()).unwrap();
+    mac.restart().await;
+    let mut app = mac.app().await;
+    let ws = personal_workspace(&mut app).await;
+    let _: bool = app.request("tasks.set_snapshot", json!({ "workspace": ws, "snapshot": board_snapshot() })).await.unwrap();
+    // The folder is read only: gone.json cannot be removed.
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let r: Result<Value, _> = app.request("tasks.snapshot", json!({})).await;
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let list = r.expect("tasks.snapshot failed");
+    assert!(list.as_array().unwrap().iter().any(|s| s["workspace"] == json!(ws)), "{list}");
+}
+
+/// A board file over the 4 MB a daemon keeps, left by anything, is not
+/// loaded at start, nor served (X76).
+#[tokio::test]
+async fn a_board_file_over_the_limit_is_not_loaded() {
+    let mut mac = Mac::start(None).await;
+    let mut app = mac.app().await;
+    let ws = personal_workspace(&mut app).await;
+    drop(app);
+    let dir = mac.home.path().join("tasks");
+    std::fs::create_dir_all(&dir).unwrap();
+    let big = json!({ "version": 1, "boards": [], "pad": "x".repeat(5 * 1024 * 1024) });
+    std::fs::write(dir.join(format!("{ws}.json")), big.to_string()).unwrap();
+    mac.restart().await;
+    let mut app = mac.app().await;
+    let r: Value = app.request("tasks.snapshot", json!({})).await.unwrap();
+    assert_eq!(r, json!([]));
 }

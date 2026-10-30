@@ -34,6 +34,16 @@ pub const TERMINAL_READ_ANSWER: &str = "terminal.read_answer";
 pub const TERMINAL_READ_REQUESTS: &str = "terminal.read_requests";
 pub const TERMINAL_READ_GRANTS: &str = "terminal.read_grants";
 pub const TERMINAL_READ_GRANT_CLEAR: &str = "terminal.read_grant_clear";
+/// The board snapshots apps shared (X76): `{ workspace? }` → [`WorkspaceSnapshot`]s.
+pub const TASKS_SNAPSHOT: &str = "tasks.snapshot";
+/// The app shares a workspace's boards (X76): [`TasksSetSnapshot`] → `true`.
+pub const TASKS_SET_SNAPSHOT: &str = "tasks.set_snapshot";
+/// A phone asks the app to change tasks (X76): [`TasksRequest`] → the app's result.
+pub const TASKS_REQUEST: &str = "tasks.request";
+/// The app's answer to a [`TasksRequestEvent`] (X76): [`TasksAnswer`] → `true`.
+pub const TASKS_ANSWER: &str = "tasks.answer";
+/// Whether the moonlet app is open on this daemon (X76): `{}` → [`TasksApp`].
+pub const TASKS_APP: &str = "tasks.app";
 
 // Agents
 pub const AGENT_REPORT: &str = "agent.report";
@@ -507,6 +517,12 @@ pub const EV_SECTIONS_CHANGED: &str = "sections.changed";
 pub const EV_PROFILES_CHANGED: &str = "profiles.changed";
 /// A host's Git settings after a change: the whole `GitSettings` (X55).
 pub const EV_GIT_SETTINGS_CHANGED: &str = "git.settings_changed";
+/// A workspace's board snapshot after a change: [`WorkspaceSnapshot`] (X76).
+pub const EV_TASKS_CHANGED: &str = "tasks.changed";
+/// A phone's request for the app to answer: [`TasksRequestEvent`] (X76).
+pub const EV_TASKS_REQUEST: &str = "tasks.request";
+/// The moonlet app opened or closed on this daemon: [`TasksApp`] (X76).
+pub const EV_TASKS_APP: &str = "tasks.app";
 /// A line `claude update` printed (X36).
 pub const EV_CLAUDE_UPDATE_OUTPUT: &str = "claude.update_output";
 /// How a `claude update` ended, for every window (X36).
@@ -703,6 +719,56 @@ pub struct ReadRequest {
     /// When the agent asked (ms), for "waiting 2m" (X40).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub asked_at: Option<u64>,
+}
+
+/// Whether an app is connected to answer the phone's task requests (X76).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TasksApp {
+    pub open: bool,
+}
+
+/// `tasks.snapshot`'s params (X76): one workspace's, or every one.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TasksSnapshotQuery {
+    #[serde(default)]
+    pub workspace: Option<String>,
+}
+
+/// A workspace's board snapshot (X76). The daemon keeps it whole and never
+/// reads it: its shape is the apps' (`TaskSnapshot` in the desktop's lib).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WorkspaceSnapshot {
+    pub workspace: String,
+    pub snapshot: serde_json::Value,
+}
+
+/// `tasks.set_snapshot` (X76).
+pub type TasksSetSnapshot = WorkspaceSnapshot;
+
+/// `tasks.request` (X76): what a phone asks the app to do in a workspace.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TasksRequest {
+    pub workspace: String,
+    pub action: serde_json::Value,
+}
+
+/// The `tasks.request` event an app answers (X76).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TasksRequestEvent {
+    pub request_id: u64,
+    pub workspace: String,
+    pub action: serde_json::Value,
+}
+
+/// `tasks.answer` (X76): the app's result, or why it refused.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TasksAnswer {
+    pub request_id: u64,
+    pub ok: bool,
+    #[serde(default)]
+    pub result: Option<serde_json::Value>,
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -15,7 +15,8 @@ use moonlet_core::chat::runtime::{ChatCreate, ChatManager, chats_dir};
 use moonlet_core::session::SessionManager;
 use moonlet_core::terminal::TerminalManager;
 use moonlet_core::terminal_read::{self, TerminalReads};
-use moonlet_core::{fs, git, git_settings};
+use moonlet_core::tasks::{TaskRelay, TaskSnapshots};
+use moonlet_core::{fs, git, git_settings, tasks};
 use moonlet_proto::methods as m;
 use moonlet_proto::types::DaemonInfo;
 use moonlet_proto::{Message, PROTOCOL_VERSION, RpcError};
@@ -85,6 +86,11 @@ pub struct Daemon {
     pub runs: Arc<crate::exec::Runs>,
     /// Every session's routed commands, with their output (X62).
     jobs: Arc<crate::jobs::Jobs>,
+    /// Board snapshots the app shares, and the phone's requests to it (X76).
+    task_snapshots: Arc<TaskSnapshots>,
+    task_relay: TaskRelay,
+    /// Connections of the moonlet app, oldest first, to send a phone's task requests to (X76).
+    apps: Mutex<BTreeMap<u64, moonlet_core::terminal::ClientTx>>,
 }
 
 pub type HandlerResult = Result<Value, RpcError>;
@@ -245,6 +251,8 @@ fn jobs_reader(conn: &Conn) -> Result<(), RpcError> {
     }
     Ok(())
 }
+/// The name the moonlet app gives in its hello.
+pub const APP_CLIENT: &str = "moonlet-app";
 
 fn params<T: DeserializeOwned>(v: Value) -> Result<T, RpcError> {
     serde_json::from_value(v).map_err(|e| RpcError::new("invalid_params", e.to_string()))
@@ -449,6 +457,11 @@ impl Daemon {
             .and_then(|v| v.parse().ok())
             .map_or(terminal_read::DEFAULT_TIMEOUT, std::time::Duration::from_millis);
         let reads = TerminalReads::new(terminals.clone(), read_timeout);
+        // Tests shorten how long a phone's task request waits for the app (X76).
+        let tasks_timeout = std::env::var("MOONLET_TASKS_REQUEST_TIMEOUT_MS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .map_or(tasks::REQUEST_TIMEOUT, std::time::Duration::from_millis);
         let emitter = terminals.clone();
         let mobile = Arc::new(crate::mobile::Mobile::load(crate::mobile::Mobile::default_file(), move |m| emitter.emit(m)));
         let clones = crate::clones::Clones::new(sessions.clone(), terminals.clone());
@@ -541,6 +554,9 @@ impl Daemon {
             link,
             workers,
             sync,
+            task_snapshots: Arc::new(TaskSnapshots::load(tasks::dir())),
+            task_relay: TaskRelay::new(tasks_timeout),
+            apps: Mutex::new(BTreeMap::new()),
         })
     }
 
@@ -664,10 +680,63 @@ impl Daemon {
         self.handed_off.store(true, Ordering::SeqCst);
     }
 
+    /// Whether `conn` is the moonlet app, which acts for the user: on this
+    /// Mac, or on a Mac paired with it over the tailnet (X76). Like X31's
+    /// reads, this trusts the name the client gives in its hello.
+    pub fn is_app(&self, conn: &Conn) -> bool {
+        conn.client == APP_CLIENT
+            && conn
+                .phone
+                .as_deref()
+                .is_none_or(|d| self.mobile.kind_of(d) == Some(m::DeviceKind::Desktop))
+    }
+
+    pub fn on_connect(&self, conn: &Conn) {
+        if self.is_app(conn) {
+            // Under the lock, so phones hear opens and closes in their order.
+            let mut apps = self.apps.lock().unwrap();
+            apps.insert(conn.id, conn.tx.clone());
+            // The phone's waiting moves go once moonlet is open (X76).
+            if apps.len() == 1 {
+                self.terminals.emit(Message::event(m::EV_TASKS_APP, &m::TasksApp { open: true }));
+            }
+        }
+    }
+
     pub fn on_disconnect(&self, client: u64) {
         self.watchers.release_client(client);
         self.workers.disconnected(client);
         self.renders.disconnected(client);
+        let mut apps = self.apps.lock().unwrap();
+        if apps.remove(&client).is_some() {
+            // Its requests end now, not at the timeout.
+            self.task_relay.closed(client);
+            if apps.is_empty() {
+                self.terminals.emit(Message::event(m::EV_TASKS_APP, &m::TasksApp { open: false }));
+            }
+        }
+    }
+
+    /// Forgets the boards of workspaces gone by any way, an account's
+    /// changes from another member included (X68, X76).
+    /// One that cannot be removed is kept, and logged: it hides no other.
+    fn prune_boards(&self) {
+        let live: std::collections::HashSet<String> = self.sessions.list_workspaces().into_iter().map(|w| w.id).collect();
+        for ws in self.task_snapshots.workspaces() {
+            if !live.contains(&ws)
+                && let Err(e) = self.forget_boards(&ws)
+            {
+                tracing::warn!("cannot remove the boards of workspace {ws}: {}", e.message);
+            }
+        }
+    }
+
+    /// Removes a deleted or merged workspace's boards, and tells the phones (X76).
+    fn forget_boards(&self, workspace: &str) -> Result<(), RpcError> {
+        if self.task_snapshots.remove(workspace).map_err(internal)? {
+            self.terminals.emit(Message::event(m::EV_TASKS_CHANGED, serde_json::json!({ "workspace": workspace, "snapshot": null })));
+        }
+        Ok(())
     }
 
     pub fn info(&self) -> DaemonInfo {
@@ -1255,6 +1324,8 @@ impl Daemon {
                 // The other members take what this host newly kept from
                 // here; the one that sent them already has them.
                 let taken = self.sessions.apply_account(r.changes);
+                // A workspace another member removed or merged takes its boards along (X76).
+                self.prune_boards();
                 if !taken.is_empty() {
                     self.workers.send_to_members(Message::event(m::EV_ACCOUNT_CHANGED, m::AccountChanged { changes: taken }), Some(conn.id));
                 }
@@ -2773,11 +2844,19 @@ impl Daemon {
             m::WORKSPACE_DELETE => {
                 let r: m::IdRef = params(p)?;
                 w.delete_workspace(&r.id).map_err(internal)?;
+                // Done already: a board file left behind is pruned on the next read.
+                if let Err(e) = self.forget_boards(&r.id) {
+                    tracing::warn!("cannot remove the boards of workspace {}: {}", r.id, e.message);
+                }
                 ok(true)
             }
             m::WORKSPACE_MERGE => {
                 let r: m::WorkspaceMerge = params(p)?;
                 w.merge_workspace(&r.id, &r.into).map_err(internal)?;
+                // Done already: a board file left behind is pruned on the next read.
+                if let Err(e) = self.forget_boards(&r.id) {
+                    tracing::warn!("cannot remove the boards of workspace {}: {}", r.id, e.message);
+                }
                 ok(true)
             }
             m::SECTION_LIST => ok(w.list_sections()),
@@ -3102,6 +3181,66 @@ impl Daemon {
             m::GIT_PUSH => {
                 let r: m::GitUnpushed = params(p)?;
                 git::push(&path(&r.path), r.branch.as_deref(), r.merged_head.as_deref()).await.map_err(internal)?;
+                ok(true)
+            }
+            m::TASKS_APP => ok(m::TasksApp { open: !self.apps.lock().unwrap().is_empty() }),
+            m::TASKS_SNAPSHOT => {
+                let r: m::TasksSnapshotQuery = params(p)?;
+                self.prune_boards();
+                ok(self.task_snapshots.get(r.workspace.as_deref()))
+            }
+            m::TASKS_SET_SNAPSHOT if !self.is_app(conn) => Err(RpcError::new("forbidden", "only the moonlet app shares boards")),
+            m::TASKS_ANSWER if !self.is_app(conn) => Err(RpcError::new("forbidden", "only the moonlet app answers task requests")),
+            // The app acts as the user on the tracker: only for a paired phone,
+            // never a local client, whatever name it gives (X76).
+            m::TASKS_REQUEST if !conn.phone.as_deref().is_some_and(|d| self.is_phone(d)) => {
+                Err(RpcError::new("forbidden", "only a paired phone asks the app to change tasks"))
+            }
+            m::TASKS_SET_SNAPSHOT => {
+                let r: m::TasksSetSnapshot = params(p)?;
+                if !self.sessions.list_workspaces().iter().any(|ws| ws.id == r.workspace) {
+                    return Err(RpcError::new("not_found", format!("no workspace {}", r.workspace)));
+                }
+                let snapshot = r.snapshot.clone();
+                let workspace = r.workspace.clone();
+                let store = self.task_snapshots.clone();
+                // Up to 4 MB written and synced: off the async workers.
+                tokio::task::spawn_blocking(move || store.set(&workspace, snapshot))
+                    .await
+                    .map_err(internal)?
+                    .map_err(internal)?;
+                // Deleted while it was written: its boards go after all.
+                if !self.sessions.list_workspaces().iter().any(|ws| ws.id == r.workspace) {
+                    self.forget_boards(&r.workspace)?;
+                    return Err(RpcError::new("not_found", format!("no workspace {}", r.workspace)));
+                }
+                self.terminals.emit(Message::event(m::EV_TASKS_CHANGED, &r));
+                ok(true)
+            }
+            m::TASKS_REQUEST => {
+                let r: m::TasksRequest = params(p)?;
+                // One app does it, the longest connected: two would create two issues.
+                // Registered under the apps' lock, so the app leaving ends it (X76).
+                let started = {
+                    let apps = self.apps.lock().unwrap();
+                    apps.iter().next().map(|(id, tx)| (*id, tx.clone(), self.task_relay.start(*id, r.workspace, r.action)))
+                };
+                let Some((app, tx, waiting)) = started else {
+                    return Err(RpcError::new("failed", "Open moonlet on the Mac to change tasks."));
+                };
+                if !tx.send(moonlet_proto::Frame::Json(Message::event(m::EV_TASKS_REQUEST, &waiting.event))) {
+                    self.task_relay.closed(app);
+                }
+                let result = self.task_relay.wait(waiting).await.map_err(|e| RpcError::new("failed", e.to_string()))?;
+                ok(result)
+            }
+            m::TASKS_ANSWER => {
+                let r: m::TasksAnswer = params(p)?;
+                match self.task_relay.answer(conn.id, r) {
+                    Ok(()) => {}
+                    Err(moonlet_core::tasks::AnswerRefused::NotWaiting) => return Err(RpcError::new("failed", "already answered")),
+                    Err(moonlet_core::tasks::AnswerRefused::NotYours) => return Err(RpcError::new("forbidden", "another app was asked")),
+                }
                 ok(true)
             }
             m::GIT_SETTINGS => ok(git_settings::load(&git_settings::path())),
