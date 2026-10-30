@@ -883,6 +883,7 @@ mod tests {
             copy.path(),
             &pats(&DEFAULT),
             &[entry(".env", big)],
+            &Default::default(),
             |_, _| Ok(()),
         )
         .await
@@ -893,9 +894,15 @@ mod tests {
         let list: Vec<Entry> = (0..17)
             .map(|n| entry(&format!("a{n:02}/.env"), vec![b'y'; MAX_FILE as usize]))
             .collect();
-        let done = apply(copy.path(), &pats(&DEFAULT), &list, |_, _| Ok(()))
-            .await
-            .unwrap();
+        let done = apply(
+            copy.path(),
+            &pats(&DEFAULT),
+            &list,
+            &Default::default(),
+            |_, _| Ok(()),
+        )
+        .await
+        .unwrap();
         assert_eq!(done.changed.len(), 16);
         assert!(!copy.path().join("a16/.env").exists());
     }
@@ -923,9 +930,15 @@ mod tests {
             sha: sha(b"EVIL=1\n"),
             bytes: Some(b"EVIL=1\n".to_vec()),
         };
-        let done = apply(copy.path(), &pats(&DEFAULT), &[entry], |_, _| Ok(()))
-            .await
-            .unwrap();
+        let done = apply(
+            copy.path(),
+            &pats(&DEFAULT),
+            &[entry],
+            &Default::default(),
+            |_, _| Ok(()),
+        )
+        .await
+        .unwrap();
         assert_eq!(done, Applied::default());
         assert_eq!(
             std::fs::read_to_string(copy.path().join(".env.example")).unwrap(),
