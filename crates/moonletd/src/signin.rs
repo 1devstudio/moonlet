@@ -324,43 +324,139 @@ async fn accept(
     }
 }
 
-/// Listens on this Mac's loopback `<port>` for [`LIFETIME`], passing each
-/// request to `pass`, until it answers `gone` (the command stopped
-/// listening). An error when the port is taken here.
-pub async fn forward(port: u16, pass: Pass) -> std::io::Result<()> {
-    let (v4, v6) = bind_loopback(port).await?;
-    tokio::spawn(async move {
-        let end = Instant::now() + LIFETIME;
-        loop {
-            let left = end.saturating_duration_since(Instant::now());
-            let Ok(Ok(mut stream)) = tokio::time::timeout(left, accept(&v4, v6.as_ref())).await
-            else {
+/// Where a forward hands its requests now: the latest sign-in shown for
+/// its port, which it lasts [`LIFETIME`] from.
+struct Target {
+    pass: Pass,
+    /// Counts the sign-ins shown for the port: a `gone` for an earlier one
+    /// ends nothing.
+    shown: u64,
+    until: Instant,
+}
+
+type Slot = std::sync::Arc<Mutex<Target>>;
+
+/// This Mac's forwards, by port. A sign-in shown again, or another that
+/// comes back to the same port while an earlier one's forward still
+/// listens, goes through that forward instead of finding the port taken.
+#[derive(Default)]
+pub struct Forwards {
+    list: std::sync::Arc<Mutex<BTreeMap<u16, Slot>>>,
+}
+
+impl Forwards {
+    /// Listens on this Mac's loopback `<port>` for [`LIFETIME`], passing
+    /// each request to `pass`, until it answers `gone` (the command stopped
+    /// listening). An error when something else has the port here.
+    pub async fn open(&self, port: u16, pass: Pass) -> std::io::Result<()> {
+        let pass = match self.reuse(port, pass) {
+            Ok(()) => return Ok(()),
+            Err(pass) => pass,
+        };
+        let (v4, v6) = match bind_loopback(port).await {
+            Ok(l) => l,
+            // Another sign-in's forward started meanwhile.
+            Err(e) => return self.reuse(port, pass).map_err(|_| e),
+        };
+        let slot: Slot = std::sync::Arc::new(Mutex::new(Target {
+            pass,
+            shown: 0,
+            until: Instant::now() + LIFETIME,
+        }));
+        self.list.lock().unwrap().insert(port, slot.clone());
+        tokio::spawn(run(port, v4, v6, slot, self.list.clone()));
+        Ok(())
+    }
+
+    /// Points the forward listening on `port`, if any, at `pass`.
+    fn reuse(&self, port: u16, pass: Pass) -> Result<(), Pass> {
+        let list = self.list.lock().unwrap();
+        let Some(slot) = list.get(&port) else {
+            return Err(pass);
+        };
+        let mut t = slot.lock().unwrap();
+        t.pass = pass;
+        t.shown += 1;
+        t.until = Instant::now() + LIFETIME;
+        Ok(())
+    }
+}
+
+/// Ends the forward in `slot` when `over` holds for it: it leaves `list`.
+fn end_if(
+    list: &Mutex<BTreeMap<u16, Slot>>,
+    port: u16,
+    slot: &Slot,
+    over: impl Fn(&Target) -> bool,
+) -> bool {
+    let mut list = list.lock().unwrap();
+    if !over(&slot.lock().unwrap()) {
+        return false;
+    }
+    if list
+        .get(&port)
+        .is_some_and(|s| std::sync::Arc::ptr_eq(s, slot))
+    {
+        list.remove(&port);
+    }
+    true
+}
+
+/// A forward's connections, until it ends.
+async fn run(
+    port: u16,
+    v4: tokio::net::TcpListener,
+    v6: Option<tokio::net::TcpListener>,
+    slot: Slot,
+    list: std::sync::Arc<Mutex<BTreeMap<u16, Slot>>>,
+) {
+    loop {
+        let left = slot
+            .lock()
+            .unwrap()
+            .until
+            .saturating_duration_since(Instant::now());
+        let mut stream = match tokio::time::timeout(left, accept(&v4, v6.as_ref())).await {
+            Ok(Ok(s)) => s,
+            Ok(Err(_)) => {
+                end_if(&list, port, &slot, |_| true);
                 return;
-            };
-            let request = match read_request(&mut stream).await {
-                Ok(r) => r,
-                Err(e) => {
-                    tracing::debug!(port, "a sign-in's request: {e:#}");
-                    continue;
+            }
+            Err(_) => {
+                if end_if(&list, port, &slot, |t| t.until <= Instant::now()) {
+                    return;
                 }
-            };
-            match pass(request).await {
-                Ok(answer) => {
-                    let _ = stream.write_all(&answer).await;
-                    let _ = stream.shutdown().await;
-                }
-                Err(e) => {
-                    let _ = stream
-                        .write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-                        .await;
-                    if e.code == "gone" || e.code == "forbidden" {
-                        return;
-                    }
+                continue;
+            }
+        };
+        let request = match read_request(&mut stream).await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::debug!(port, "a sign-in's request: {e:#}");
+                continue;
+            }
+        };
+        let (pass, shown) = {
+            let t = slot.lock().unwrap();
+            (t.pass.clone(), t.shown)
+        };
+        match pass(request).await {
+            Ok(answer) => {
+                let _ = stream.write_all(&answer).await;
+                let _ = stream.shutdown().await;
+            }
+            Err(e) => {
+                let _ = stream
+                    .write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                    .await;
+                if (e.code == "gone" || e.code == "forbidden")
+                    && end_if(&list, port, &slot, |t| t.shown == shown)
+                {
+                    return;
                 }
             }
         }
-    });
-    Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -480,7 +576,7 @@ srv.serve_forever()
         let pass: Pass = std::sync::Arc::new(|_| {
             Box::pin(async { Ok(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok".to_vec()) })
         });
-        forward(port, pass).await.unwrap();
+        Forwards::default().open(port, pass).await.unwrap();
         let mut s = tokio::net::TcpStream::connect(("::1", port)).await.unwrap();
         s.write_all(b"GET /?code=4 HTTP/1.1\r\nHost: [::1]\r\n\r\n")
             .await

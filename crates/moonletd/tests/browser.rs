@@ -445,6 +445,40 @@ async fn a_forward_carries_the_callback_and_ends_when_its_listener_closes() {
 }
 
 #[tokio::test]
+async fn a_second_sign_in_on_the_same_port_comes_back_through_the_mac_s_forward() {
+    let (mini, addr) = central().await;
+    let book = linked_book_one_along(&mini, &addr).await;
+    let mut app = book.app().await;
+    let _: bool = app.request("presence.active", json!({})).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let port = two_free_ports();
+    in_terminal(&mini, &sign_in_command(port)).await;
+    let shown = next_show(&mut app, Duration::from_secs(15))
+        .await
+        .expect("a browser.show");
+    assert_eq!(shown["forward"], json!(port));
+    assert!(
+        get(port + 1, "/?code=4")
+            .await
+            .ends_with("You are now authenticated")
+    );
+    // Another sign-in on the same port right after, as `gcloud auth
+    // application-default login` after `gcloud auth login`.
+    within(Duration::from_secs(10), "the first command exited", || async {
+        std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
+    })
+    .await;
+    in_terminal(&mini, &sign_in_command(port)).await;
+    let again = next_show(&mut app, Duration::from_secs(15))
+        .await
+        .expect("the second browser.show");
+    assert_eq!(again["forward"], json!(port));
+    assert!(again.get("port_taken").is_none(), "{again}");
+    let answer = get(port + 1, "/?code=5").await;
+    assert!(answer.ends_with("You are now authenticated"), "{answer:?}");
+}
+
+#[tokio::test]
 async fn a_port_taken_on_the_mac_waits_for_retry() {
     let (mini, addr) = central().await;
     let book = linked_book_one_along(&mini, &addr).await;

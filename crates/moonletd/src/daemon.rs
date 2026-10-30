@@ -76,6 +76,8 @@ pub struct Daemon {
     callbacks: crate::signin::Callbacks,
     /// URLs whose forward's port was taken here, by URL, for Retry (X75).
     taken: Mutex<BTreeMap<String, m::BrowserShow>>,
+    /// The ports this Mac forwards to other members' sign-ins (X75).
+    forwards: crate::signin::Forwards,
     /// What the Mac's last sleep left to its wake (X73).
     asleep: Mutex<Asleep>,
     /// Per design system (X64): one start of its agent, or one change of its
@@ -623,6 +625,7 @@ impl Daemon {
             phone_shows: Default::default(),
             callbacks: crate::signin::Callbacks::default(),
             taken: Mutex::new(BTreeMap::new()),
+            forwards: crate::signin::Forwards::default(),
             asleep: Default::default(),
             heavy,
             cloud,
@@ -4014,7 +4017,7 @@ impl Daemon {
             // Tests run every member on one machine: a forward listens a few
             // ports along there.
             let offset: u16 = std::env::var("MOONLET_TEST_FORWARD_OFFSET").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
-            if let Err(e) = crate::signin::forward(port.saturating_add(offset), pass).await {
+            if let Err(e) = self.forwards.open(port.saturating_add(offset), pass).await {
                 tracing::info!(port, "cannot forward a sign-in's port: {e}");
                 show.port_taken = true;
                 self.taken.lock().unwrap().insert(show.url.clone(), show.clone());
