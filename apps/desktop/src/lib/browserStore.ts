@@ -3,7 +3,7 @@
 
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { onDaemonEvent, onHostStatus, rpc } from "./daemon";
-import { asksForWaitingSignIns, reportsActive, showAction, signInToast, type BrowserShow } from "./browserRoute";
+import { asksForWaitingSignIns, portTakenLine, reportsActive, showAction, signInToast, type BrowserShow } from "./browserRoute";
 import { EV, M } from "./protocol";
 import { errorToast, selectSession, toast } from "./store";
 
@@ -44,6 +44,10 @@ function handle(host: string, show: BrowserShow) {
   const what = showAction(host, show);
   if (what === "ignore") return;
   const open = () => void openUrl(show.url).catch(errorToast);
+  if (what === "taken") {
+    toast(portTakenLine(show), "error", { label: "Retry", run: () => void rpc("local", M.browserRetry, { url: show.url }).catch(errorToast) });
+    return;
+  }
   if (what === "offer") {
     // The user is away: it stays until they come back to it.
     toast(`${signInToast(show)} and waits for you`, "info", { label: "Open", run: open }, { sticky: true });
