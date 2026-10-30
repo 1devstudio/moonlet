@@ -8,7 +8,7 @@ import { cleanUpMessage } from "@desktop/lib/keepInStep";
 import { createTarget, createsIn } from "@desktop/lib/newIssue";
 import { trackerOf } from "@desktop/lib/tasks";
 import { showScreen, startFromTask, updateSettings, useApp, useShownWorkspace } from "../lib/app";
-import { type CardView, type ColumnTab, type PhoneBoard, boardScreen, firstColumn, phoneBoards, switcher, syncLine } from "../lib/board";
+import { type CardView, type ColumnTab, type PhoneBoard, boardScreen, firstColumn, noBoardsLine, phoneBoards, switcher, syncLine } from "../lib/board";
 import { useBusy } from "../lib/busy";
 import { useNow } from "../lib/now";
 import { useSessionsDetails } from "../lib/rowDetails";
@@ -64,7 +64,7 @@ export function useShownBoard() {
   const current = all.find((b) => b.key === saved) ?? all.find((b) => b.snapshot.shownBoard === b.board.id) ?? all[0] ?? null;
   const d = current ? data[current.host] : undefined;
   const sessions = current && d ? d.sessions.filter((s) => s.workspace_id === current.workspace) : [];
-  return { current, d, sessions };
+  return { all, current, d, sessions };
 }
 
 /** The Tasks tab's badge: the shown board's cards out of sync, as the board shows them. It reads the
@@ -241,7 +241,7 @@ function ColumnTabs({ columns, shown, onPick }: { columns: ColumnTab[]; shown: s
 }
 
 export function TasksScreen() {
-  const { current, d, sessions } = useShownBoard();
+  const { all, current, d, sessions } = useShownBoard();
   const savedColumns = useApp((s) => s.settings.columns);
   const mineBoards = useApp((s) => s.settings.mine);
   const notNow = useApp((s) => s.settings.notNow);
@@ -270,7 +270,7 @@ export function TasksScreen() {
     return (
       <div className="flex h-full flex-col px-4" style={{ paddingTop: "calc(var(--safe-top) + 14px)" }}>
         {head}
-        <p className="mt-4 text-[14.5px] leading-[1.45] text-muted">No boards yet. Add one in moonlet on the Mac (Tasks › Add a board).</p>
+        <p className="mt-4 text-[14.5px] leading-[1.45] text-muted">{noBoardsLine(all) ?? "This board's host is offline."}</p>
       </div>
     );
   }

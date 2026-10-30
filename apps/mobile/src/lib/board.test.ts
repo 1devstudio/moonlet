@@ -4,7 +4,7 @@ import { DEFAULT_RULES } from "@desktop/lib/keepInStep";
 import type { Task } from "@desktop/lib/tasks";
 import type { TaskSnapshot } from "@desktop/lib/taskSnapshot";
 import type { PullRequest } from "@desktop/lib/protocol";
-import { boardScreen, firstColumn, phoneBoards, sessionBoards, switcher, syncLine } from "./board";
+import { boardScreen, firstColumn, noBoardsLine, phoneBoards, sessionBoards, switcher, syncLine } from "./board";
 import { MIN, NOW, data, project, session, terminal, workspace } from "./fixtures";
 
 const LINEAR = "linear:acme";
@@ -101,6 +101,14 @@ describe("phoneBoards (X76)", () => {
     expect(shown.map((b) => [b.key, b.host, b.snapshot.from])).toEqual([["acc/personal/moon", "air", "air"]]);
     // A session on the older member finds that board too, for its task line and Link.
     expect(sessionBoards({ ...hosts, air, box: other }, d, "mac", { workspace_id: "personal" }).map((b) => b.key)).toEqual(["acc/personal/moon"]);
+  });
+});
+
+describe("noBoardsLine (X76)", () => {
+  it("says how to add a board when no connected host shares one", () => {
+    const none = { mac: data({ workspaces: [workspace("personal", "Personal")] }) };
+    expect(noBoardsLine(phoneBoards(hosts, none, null))).toBe("No boards yet. Add one in moonlet on the Mac (Tasks › Add a board).");
+    expect(noBoardsLine(phoneBoards(hosts, { mac: mac() }, null))).toBeNull();
   });
 });
 

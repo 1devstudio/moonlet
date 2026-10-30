@@ -55,6 +55,9 @@ export function phoneBoards(hosts: Record<string, InboxHost>, data: Record<strin
   return [...byKey.values()];
 }
 
+/** What the Tasks tab says when no connected host shares a board; null when one does. */
+export const noBoardsLine = (boards: PhoneBoard[]) => (boards.length ? null : "No boards yet. Add one in moonlet on the Mac (Tasks › Add a board).");
+
 /** The boards of a session's workspace: its host's, or another member's of its account (X68). */
 export function sessionBoards(hosts: Record<string, InboxHost>, data: Record<string, HostData>, host: string, s: Pick<Session, "workspace_id">): PhoneBoard[] {
   if (!s.workspace_id) return [];
