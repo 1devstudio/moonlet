@@ -128,18 +128,26 @@ async fn parent_of(pid: u32) -> Option<u32> {
 }
 
 /// `pid` and its ancestors, up to but not including `stop` (the daemon,
-/// which started the terminal or agent) or the first process.
+/// which started the terminal or agent); none unless `stop` is one of its
+/// ancestors, so only a process of a terminal or agent of this daemon has
+/// any.
 async fn lineage(pid: u32, stop: u32) -> Vec<u32> {
     let mut out = Vec::new();
     let mut at = pid;
-    while at > 1 && at != stop && out.len() < 64 {
+    while out.len() < 64 {
+        if at == stop {
+            return out;
+        }
+        if at <= 1 {
+            break;
+        }
         out.push(at);
         match parent_of(at).await {
             Some(p) => at = p,
             None => break,
         }
     }
-    out
+    Vec::new()
 }
 
 /// Whether one of `listening` is `caller` or an ancestor of it, below the
@@ -152,6 +160,9 @@ pub fn listens_itself(listening: &[u32], lineage: &[u32]) -> bool {
 #[derive(Debug, Clone)]
 struct Callback {
     until: Instant,
+    /// The command's processes that listened on the port when it opened
+    /// the sign-in: the callback lasts only while one of them still does.
+    pids: Vec<u32>,
     /// The secret only the Mac it is shown on has: a `tunnel.open`
     /// without it never reaches the port.
     key: String,
@@ -203,14 +214,19 @@ impl Callbacks {
             .into_iter()
             .filter(|p| *p != daemon)
             .collect();
-        if !listens_itself(&listening, &lineage) {
+        if port < 1024 || !listens_itself(&listening, &lineage) {
             return None;
         }
+        let pids = listening
+            .into_iter()
+            .filter(|p| lineage.contains(p))
+            .collect();
         let key = new_key()?;
         self.list.lock().unwrap().insert(
             port,
             Callback {
                 until: Instant::now() + LIFETIME,
+                pids,
                 key: key.clone(),
             },
         );
@@ -221,16 +237,21 @@ impl Callbacks {
     /// registered with that key, not timed out, and something still
     /// listening on it.
     pub async fn waiting(&self, port: u16, key: &str) -> bool {
-        let alive = {
+        let pids = {
             let mut list = self.list.lock().unwrap();
             list.retain(|_, c| c.until > Instant::now());
-            list.get(&port).is_some_and(|c| same_key(&c.key, key))
+            match list.get(&port) {
+                Some(c) if same_key(&c.key, key) => c.pids.clone(),
+                _ => return false,
+            }
         };
-        if alive && listening(port).await.is_empty() {
+        // The same process still listens: another that took the port since
+        // is never reached.
+        if !listening(port).await.iter().any(|p| pids.contains(p)) {
             self.list.lock().unwrap().remove(&port);
             return false;
         }
-        alive
+        true
     }
 }
 
@@ -449,13 +470,18 @@ async fn run(
     slot: Slot,
     list: std::sync::Arc<Mutex<BTreeMap<u16, Slot>>>,
 ) {
+    let done = std::sync::Arc::new(tokio::sync::Notify::new());
     loop {
         let left = slot
             .lock()
             .unwrap()
             .until
             .saturating_duration_since(Instant::now());
-        let mut stream = match tokio::time::timeout(left, accept(&v4, v6.as_ref())).await {
+        let accepted = tokio::select! {
+            a = tokio::time::timeout(left, accept(&v4, v6.as_ref())) => a,
+            _ = done.notified() => return,
+        };
+        let mut stream = match accepted {
             Ok(Ok(s)) => s,
             Ok(Err(_)) => {
                 end_if(&list, port, &slot, |_| true);
@@ -468,33 +494,36 @@ async fn run(
                 continue;
             }
         };
-        let request = match read_request(&mut stream).await {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::debug!(port, "a sign-in's request: {e:#}");
-                continue;
-            }
-        };
         let (pass, shown) = {
             let t = slot.lock().unwrap();
             (t.pass.clone(), t.shown)
         };
-        match pass(request).await {
-            Ok(answer) => {
-                let _ = stream.write_all(&answer).await;
-                let _ = stream.shutdown().await;
-            }
-            Err(e) => {
-                let _ = stream
-                    .write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-                    .await;
-                if (e.code == "gone" || e.code == "forbidden")
-                    && end_if(&list, port, &slot, |t| t.shown == shown)
-                {
-                    return;
+        let (list, slot, done) = (list.clone(), slot.clone(), done.clone());
+        // Each connection on its own, and never longer than a request
+        // takes: a browser that holds one open stops nothing.
+        tokio::spawn(async move {
+            let request =
+                match tokio::time::timeout(ANSWER_TIMEOUT, read_request(&mut stream)).await {
+                    Ok(Ok(r)) => r,
+                    _ => return,
+                };
+            match pass(request).await {
+                Ok(answer) => {
+                    let _ = stream.write_all(&answer).await;
+                    let _ = stream.shutdown().await;
+                }
+                Err(e) => {
+                    let _ = stream
+                        .write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                        .await;
+                    if (e.code == "gone" || e.code == "forbidden")
+                        && end_if(&list, port, &slot, |t| t.shown == shown)
+                    {
+                        done.notify_one();
+                    }
                 }
             }
-        }
+        });
     }
 }
 
@@ -697,7 +726,8 @@ srv.serve_forever()
             format!("https://id.example.test/auth?redirect_uri=http%3A%2F%2Flocalhost%3A{port}%2F");
         let callbacks = Callbacks::default();
         let me = std::process::id();
-        let (got, key) = callbacks.register_below(&url, me, 0).await.unwrap();
+        let daemon = parent_of(me).await.unwrap();
+        let (got, key) = callbacks.register_below(&url, me, daemon).await.unwrap();
         assert_eq!(got, port);
         assert!(callbacks.waiting(port, &key).await);
         assert_eq!(key.len(), 64);
@@ -720,7 +750,16 @@ srv.serve_forever()
         let url = format!(
             "https://id.example.test/auth?redirect_uri=http%3A%2F%2Flocalhost%3A{theirs}%2F"
         );
-        assert_eq!(callbacks.register_below(&url, me, 0).await, None);
+        assert_eq!(callbacks.register_below(&url, me, daemon).await, None);
+        // Nor does a process the daemon did not start.
+        let url_mine =
+            format!("https://id.example.test/auth?redirect_uri=http%3A%2F%2Flocalhost%3A{port}%2F");
+        assert_eq!(
+            Callbacks::default()
+                .register_below(&url_mine, me, 999_999)
+                .await,
+            None
+        );
         // Nor does a port of the daemon's own.
         let url =
             format!("https://id.example.test/auth?redirect_uri=http%3A%2F%2Flocalhost%3A{port}%2F");

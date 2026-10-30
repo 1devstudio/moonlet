@@ -4002,6 +4002,11 @@ impl Daemon {
     /// it, as [`Self::show_in_app`].
     async fn present(self: &Arc<Self>, mut show: m::BrowserShow) -> bool {
         let me = self.link.info().worker.id;
+        // Only the port the sign-in itself comes back to, never a
+        // privileged one, whatever a member said.
+        if show.forward.is_some() && (show.forward != moonlet_core::browser::redirect_port(&show.url) || show.forward < Some(1024)) {
+            show.forward = None;
+        }
         if let (Some(port), Some(member)) = (show.forward, show.member.clone())
             && member != me
             && show.to.is_none()
