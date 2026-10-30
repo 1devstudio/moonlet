@@ -78,6 +78,8 @@ pub struct Daemon {
     taken: crate::signin::Taken,
     /// The ports this Mac forwards to other members' sign-ins (X75).
     forwards: crate::signin::Forwards,
+    /// The sign-in commands the user approved on this member (X75).
+    approvals: crate::signin::Approvals,
     /// What the Mac's last sleep left to its wake (X73).
     asleep: Mutex<Asleep>,
     /// Per design system (X64): one start of its agent, or one change of its
@@ -626,6 +628,7 @@ impl Daemon {
             callbacks: crate::signin::Callbacks::default(),
             taken: crate::signin::Taken::default(),
             forwards: crate::signin::Forwards::default(),
+            approvals: crate::signin::Approvals::new(&moonlet_core::paths::home()),
             asleep: Default::default(),
             heavy,
             cloud,
@@ -1360,6 +1363,51 @@ impl Daemon {
                 let to = self.workers.conn(&r.member).ok_or_else(|| RpcError::new("gone", "that member is away"))?;
                 let answer = to.request(m::TUNNEL_OPEN, serde_json::to_value(&r).map_err(internal)?, std::time::Duration::from_secs(20)).await?;
                 ok(answer)
+            }
+            m::SIGNINS_LIST => ok(self.sessions.sign_ins()),
+            m::SIGNINS_SET => {
+                // They run on every member: only this Mac's app changes them.
+                app_only(conn, "sign-ins")?;
+                let r: m::SignInsSet = params(p)?;
+                self.sessions.set_sign_ins(&r.entries).map_err(|e| RpcError::new("invalid_params", format!("{e:#}")))?;
+                ok(true)
+            }
+            m::SIGNINS_APPROVE => {
+                app_only(conn, "sign-ins")?;
+                let r: m::SignInRef = params(p)?;
+                let entry = self.sign_in_entry(&r.entry)?;
+                self.approvals.approve(&entry).map_err(internal)?;
+                ok(true)
+            }
+            m::SIGNINS_CHECK => {
+                app_only(conn, "sign-ins")?;
+                let r: m::SignInRef = params(p)?;
+                ok(self.sign_ins_checked(&r.entry).await?)
+            }
+            m::SIGNINS_RUN => {
+                app_only(conn, "sign-ins")?;
+                let r: m::SignInsRun = params(p)?;
+                self.sign_in_entry(&r.entry)?;
+                // One after the other, so each browser opens in turn.
+                let d = self.clone();
+                tokio::spawn(async move {
+                    for member in r.members {
+                        if let Err(e) = d.sign_in_on(&member, &r.entry).await {
+                            tracing::info!(%member, "cannot sign in there: {}", e.message);
+                        }
+                    }
+                });
+                ok(true)
+            }
+            m::SIGNINS_HERE => {
+                // Between members, through the central host (X75).
+                let refused = || RpcError::new("forbidden", "only a member of the account asks this");
+                if conn.client != crate::link::WORKER_CLIENT || conn.cloud.load(std::sync::atomic::Ordering::Relaxed) {
+                    return Err(refused());
+                }
+                let worker = self.workers.worker_on(conn.id).ok_or_else(refused)?;
+                let r: m::SignInsHere = params(p)?;
+                ok(self.sign_ins_relayed(&worker, r).await?)
             }
             m::BROWSER_RETRY => {
                 app_only(conn, "sign-ins")?;
@@ -3985,6 +4033,14 @@ impl Daemon {
             shown
         }));
         let d = Arc::downgrade(self);
+        self.link.set_signer(Arc::new(move |r| {
+            let d = d.clone();
+            Box::pin(async move {
+                let d = d.upgrade().ok_or_else(|| RpcError::new("gone", "the daemon is stopping"))?;
+                d.sign_in_here(&r.op, &r.entry).await
+            })
+        }));
+        let d = Arc::downgrade(self);
         self.link.set_tunneler(Arc::new(move |r| {
             let d = d.clone();
             Box::pin(async move {
@@ -4070,6 +4126,139 @@ impl Daemon {
         let request = b64.decode(&r.data).map_err(|e| RpcError::new("invalid_params", e.to_string()))?;
         let answer = crate::signin::answer(r.port, &request).await.map_err(internal)?;
         Ok(m::TunnelAnswer { data: b64.encode(answer) })
+    }
+
+    /// Sign-in `id` as this member has it (X75).
+    fn sign_in_entry(&self, id: &str) -> Result<moonlet_proto::types::SignIn, RpcError> {
+        self.sessions.sign_ins().into_iter().find(|e| e.id == id).ok_or_else(|| RpcError::new("not_found", "no such sign-in"))
+    }
+
+    /// Checks or runs sign-in `entry` on this member, with its own copy of
+    /// the entry and only once its user approved those commands here.
+    async fn sign_in_here(self: &Arc<Self>, op: &str, entry: &str) -> Result<Value, RpcError> {
+        let me = self.link.info().worker;
+        let e = self.sign_in_entry(entry)?;
+        let approved = self.approvals.approved(&e);
+        match op {
+            "check" => {
+                let state = if !approved {
+                    "needs_approval"
+                } else if crate::signin::signed_in(&e.check, self.terminals.base_env()).await {
+                    "signed_in"
+                } else {
+                    "signed_out"
+                };
+                Ok(serde_json::json!([m::SignInState { member: me.id, name: me.name, state: state.into() }]))
+            }
+            "run" if !approved => Err(RpcError::new("not_approved", format!("approve {} on {} first", e.name, me.name))),
+            "run" => {
+                let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
+                let t = self
+                    .terminals
+                    .create(m::TerminalCreate {
+                        cwd: home,
+                        command: vec!["/bin/sh".into(), "-c".into(), e.login.clone()],
+                        title: Some(format!("Sign in: {}", e.name)),
+                        ..Default::default()
+                    })
+                    .map_err(internal)?;
+                // Done when the sign-in exits, so the next member's opens
+                // after it.
+                let end = std::time::Instant::now() + crate::signin::LIFETIME;
+                while std::time::Instant::now() < end {
+                    match self.terminals.get(t.id) {
+                        Some(term) if term.info().exit.is_none() => tokio::time::sleep(std::time::Duration::from_millis(300)).await,
+                        _ => break,
+                    }
+                }
+                Ok(serde_json::json!(true))
+            }
+            _ => Err(RpcError::new("invalid_params", "op is check or run")),
+        }
+    }
+
+    /// On the central host: `signins.here` from member `from`. A check
+    /// without a member goes to every member but `from`, this host
+    /// included; anything for one member goes to it.
+    async fn sign_ins_relayed(self: &Arc<Self>, from: &str, r: m::SignInsHere) -> Result<Value, RpcError> {
+        let me = self.link.info().worker.id;
+        match r.member.as_deref() {
+            Some(member) if member == me => self.sign_in_here(&r.op, &r.entry).await,
+            Some(member) => {
+                let conn = self.workers.conn(member).filter(|c| !c.cloud.load(std::sync::atomic::Ordering::Relaxed)).ok_or_else(|| RpcError::new("away", "that member is away"))?;
+                let to = m::SignInsHere { member: None, ..r };
+                conn.request(m::SIGNINS_HERE, serde_json::to_value(&to).map_err(internal)?, crate::signin::LIFETIME).await
+            }
+            None if r.op == "check" => Ok(serde_json::to_value(self.checked_on_members(&r.entry, Some(from)).await).map_err(internal)?),
+            None => Err(RpcError::new("invalid_params", "name the member to sign in on")),
+        }
+    }
+
+    /// On the central host: this host's check of `entry`, and each linked
+    /// member's but `except`'s.
+    async fn checked_on_members(self: &Arc<Self>, entry: &str, except: Option<&str>) -> Vec<m::SignInState> {
+        let mut out: Vec<m::SignInState> = self
+            .sign_in_here("check", entry)
+            .await
+            .ok()
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default();
+        let names = self.sessions.member_names();
+        for w in self.workers.list() {
+            let id = w.worker.id.clone();
+            if Some(id.as_str()) == except {
+                continue;
+            }
+            let Some(conn) = self.workers.conn(&id).filter(|c| !c.cloud.load(std::sync::atomic::Ordering::Relaxed)) else { continue };
+            let ask = m::SignInsHere { op: "check".into(), entry: entry.to_string(), member: None };
+            let got: Option<Vec<m::SignInState>> = match conn.request(m::SIGNINS_HERE, serde_json::to_value(&ask).unwrap_or_default(), std::time::Duration::from_secs(15)).await {
+                Ok(v) => serde_json::from_value(v).ok(),
+                Err(_) => None,
+            };
+            let name = names.get(&id).cloned().unwrap_or_else(|| w.worker.name.clone());
+            // Named as this host knows each member.
+            match got.and_then(|g| g.into_iter().next()) {
+                Some(s) => out.push(m::SignInState { member: id, name, state: s.state }),
+                None => out.push(m::SignInState { member: id, name, state: "away".into() }),
+            }
+        }
+        out
+    }
+
+    /// Whether each member is signed in with `entry`: this one, and the
+    /// others through the central host.
+    async fn sign_ins_checked(self: &Arc<Self>, entry: &str) -> Result<Vec<m::SignInState>, RpcError> {
+        self.sign_in_entry(entry)?;
+        if self.link.info().central.is_none() {
+            return Ok(self.checked_on_members(entry, None).await);
+        }
+        let mut out: Vec<m::SignInState> = serde_json::from_value(self.sign_in_here("check", entry).await?).map_err(internal)?;
+        if let Some(host) = self.link.host() {
+            let ask = m::SignInsHere { op: "check".into(), entry: entry.to_string(), member: None };
+            if let Ok(v) = host.request(m::SIGNINS_HERE, serde_json::to_value(&ask).map_err(internal)?).await
+                && let Ok(more) = serde_json::from_value::<Vec<m::SignInState>>(v)
+            {
+                out.extend(more);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Signs in with `entry` on member `member`, until its sign-in ends.
+    async fn sign_in_on(self: &Arc<Self>, member: &str, entry: &str) -> Result<(), RpcError> {
+        let info = self.link.info();
+        if member == info.worker.id {
+            self.sign_in_here("run", entry).await?;
+            return Ok(());
+        }
+        let ask = m::SignInsHere { op: "run".into(), entry: entry.to_string(), member: Some(member.to_string()) };
+        if info.central.is_none() {
+            self.sign_ins_relayed(&info.worker.id, ask).await?;
+        } else {
+            let host = self.link.host().ok_or_else(|| RpcError::new("unreachable", "the central host is not connected"))?;
+            host.request(m::SIGNINS_HERE, serde_json::to_value(&ask).map_err(internal)?).await?;
+        }
+        Ok(())
     }
 
     /// The user is active in this Mac's app (X75): passed on to the central

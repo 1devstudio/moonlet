@@ -850,3 +850,126 @@ async fn a_url_kept_for_a_macs_app_that_quit_leaves_the_next_waiting_until_the_u
     assert_eq!(shown["url"], json!("https://accounts.example.test/third"));
     assert!(shown.get("waiting").is_none(), "{shown}");
 }
+
+fn entry(check: &str, login: &str) -> Value {
+    json!({ "id": "t", "name": "test-cli", "login": login, "check": check })
+}
+
+async fn states(d: &Daemon) -> Vec<(String, String)> {
+    let list: Vec<Value> = d.call("signins.check", json!({ "entry": "t" })).await;
+    let mut out: Vec<(String, String)> = list
+        .iter()
+        .map(|s| {
+            (
+                s["name"].as_str().unwrap().to_string(),
+                s["state"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+#[tokio::test]
+async fn only_the_macs_app_changes_or_runs_sign_ins() {
+    let d = daemon().await;
+    let mut cli = Client::connect(&d.socket, "moonlet-cli").await.unwrap();
+    for (method, params) in [
+        ("signins.set", json!({ "entries": [entry("true", "true")] })),
+        ("signins.check", json!({ "entry": "gh" })),
+        ("signins.approve", json!({ "entry": "gh" })),
+        ("signins.run", json!({ "entry": "gh", "members": [] })),
+    ] {
+        let e = cli.request::<_, Value>(method, params).await.unwrap_err();
+        assert!(e.to_string().contains("forbidden"), "{method}: {e}");
+    }
+    // Anyone reads the list.
+    let list: Vec<Value> = cli.request("signins.list", json!({})).await.unwrap();
+    assert_eq!(list[0]["id"], json!("gh"));
+}
+
+#[tokio::test]
+async fn a_sign_in_changed_on_another_member_asks_again_before_it_runs_here() {
+    let (mini, addr) = central().await;
+    let book = linked_book(&mini, &addr).await;
+    let _: bool = book
+        .call("signins.set", json!({ "entries": [entry("true", "true")] }))
+        .await;
+    within(
+        Duration::from_secs(10),
+        "the entry on studio-mini",
+        || async {
+            let list: Vec<Value> = mini.call("signins.list", json!({})).await;
+            list.first().is_some_and(|e| e["id"] == json!("t"))
+        },
+    )
+    .await;
+    let _: bool = book.call("signins.approve", json!({ "entry": "t" })).await;
+    assert_eq!(
+        states(&book).await,
+        [
+            ("MacBook".to_string(), "signed_in".to_string()),
+            ("studio-mini".to_string(), "needs_approval".to_string())
+        ]
+    );
+    // studio-mini's app changes the check: the MacBook asks again.
+    let _: bool = mini
+        .call(
+            "signins.set",
+            json!({ "entries": [entry("exit 1", "true")] }),
+        )
+        .await;
+    within(
+        Duration::from_secs(10),
+        "the MacBook asking again",
+        || async {
+            states(&book)
+                .await
+                .contains(&("MacBook".to_string(), "needs_approval".to_string()))
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn sign_in_on_every_member_opens_one_browser_at_a_time() {
+    let (mini, addr) = central().await;
+    let book = linked_book(&mini, &addr).await;
+    let mut app = book.app().await;
+    let _: bool = app.request("presence.active", json!({})).await.unwrap();
+    let login = "\"$BROWSER\" \"https://example.test/$(hostname)-$$\"; sleep 2";
+    let _: bool = book
+        .call(
+            "signins.set",
+            json!({ "entries": [entry("exit 1", login)] }),
+        )
+        .await;
+    within(
+        Duration::from_secs(10),
+        "the entry on studio-mini",
+        || async {
+            let list: Vec<Value> = mini.call("signins.list", json!({})).await;
+            list.first().is_some_and(|e| e["id"] == json!("t"))
+        },
+    )
+    .await;
+    let _: bool = book.call("signins.approve", json!({ "entry": "t" })).await;
+    let _: bool = mini.call("signins.approve", json!({ "entry": "t" })).await;
+    let _: bool = app
+        .request(
+            "signins.run",
+            json!({ "entry": "t", "members": [MINI, BOOK] }),
+        )
+        .await
+        .unwrap();
+    let first = next_show(&mut app, Duration::from_secs(15))
+        .await
+        .expect("the first sign-in");
+    assert_eq!(first["from"], json!("studio-mini"));
+    // The MacBook's opens only once studio-mini's sign-in ended.
+    assert_eq!(next_show(&mut app, Duration::from_millis(1500)).await, None);
+    let second = next_show(&mut app, Duration::from_secs(10))
+        .await
+        .expect("the second sign-in");
+    assert_eq!(second["from"], json!("MacBook"));
+}

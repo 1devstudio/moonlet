@@ -561,6 +561,22 @@ pub const TUNNEL_OPEN: &str = "tunnel.open";
 /// [`BrowserRetry`] → `true`: the app tries a forward whose port was taken
 /// again (X75).
 pub const BROWSER_RETRY: &str = "browser.retry";
+/// `{}` → `[SignIn]`: the account's sign-ins, in order (X75).
+pub const SIGNINS_LIST: &str = "signins.list";
+/// [`SignInsSet`] → `true`: the account's sign-ins; this Mac's app only.
+pub const SIGNINS_SET: &str = "signins.set";
+/// [`SignInRef`] → `true`: this member may run the entry's commands as
+/// they are now; this Mac's app only.
+pub const SIGNINS_APPROVE: &str = "signins.approve";
+/// [`SignInRef`] → `[SignInState]`: whether each member is signed in;
+/// this Mac's app only.
+pub const SIGNINS_CHECK: &str = "signins.check";
+/// [`SignInsRun`] → `true`: signs in on each named member, one after the
+/// other, in a terminal there; this Mac's app only.
+pub const SIGNINS_RUN: &str = "signins.run";
+/// [`SignInsHere`] → `[SignInState]`: between members, through the central
+/// host: checks or signs in on a member, with that member's own entry.
+pub const SIGNINS_HERE: &str = "signins.here";
 /// [`JobList`] → `[Job]`: a session's jobs, newest first (X62).
 pub const JOB_LIST: &str = "job.list";
 /// [`JobOutputGet`] → [`JobOutput`]: a job's stored output from a byte.
@@ -1392,6 +1408,45 @@ pub struct BrowserShow {
     /// The forward's port is taken on this Mac: the URL waits for Retry.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub port_taken: bool,
+}
+
+/// `signins.set` params.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SignInsSet {
+    pub entries: Vec<crate::types::SignIn>,
+}
+
+/// Names a sign-in by its id.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SignInRef {
+    pub entry: String,
+}
+
+/// `signins.run` params: the members to sign in on, by worker id.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SignInsRun {
+    pub entry: String,
+    pub members: Vec<String>,
+}
+
+/// `signins.here` params: `check` on every member but the one asking, or
+/// on `member`; `run` on `member`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SignInsHere {
+    pub op: String,
+    pub entry: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub member: Option<String>,
+}
+
+/// Whether a member is signed in with an entry: `signed_in`, `signed_out`,
+/// `needs_approval` (its commands were not approved on that member yet) or
+/// `away`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SignInState {
+    pub member: String,
+    pub name: String,
+    pub state: String,
 }
 
 /// `tunnel.open`: the bytes of one HTTP request, in base64, for `port` on

