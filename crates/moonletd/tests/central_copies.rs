@@ -1352,3 +1352,32 @@ async fn a_chat_closed_on_the_member_leaves_the_central_hosts_copy() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn with_the_owner_away_the_prs_status_is_asked_of_the_copy() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = new_session(&book, &project, "fix-cart").await;
+    copy_of(&mini, &made).await;
+    drop(book);
+    within(Duration::from_secs(10), "MacBook unreachable", || async {
+        with_copies(&mini)
+            .await
+            .iter()
+            .any(|s| s["id"] == made["id"] && s["owner"]["reachable"] == json!(false))
+    })
+    .await;
+
+    // Answered by the copy, as the copy can: no gh here, so gh's own
+    // error, never owner_offline.
+    let answer = forward(&mini, &made, "gh.pr_status", json!({ "path": "/" })).await;
+    assert!(
+        answer
+            .as_ref()
+            .err()
+            .is_none_or(|e| !e.starts_with("owner_offline")),
+        "{answer:?}"
+    );
+}

@@ -280,6 +280,11 @@ impl Host {
             {
                 self.attaching.lock().unwrap().insert(id, sid as TerminalId);
             }
+            // A terminal of another member, through the central host (X72):
+            // its relay id comes with the reply.
+            if method == moonlet_proto::methods::SESSION_ATTACH {
+                self.attaching.lock().unwrap().insert(id, RELAY_IN_REPLY);
+            }
             let frame = Frame::Json(Message::Request {
                 id,
                 method: method.into(),
@@ -660,6 +665,10 @@ async fn write_link<W: AsyncWrite + Unpin>(
     }
 }
 
+/// In `attaching`, for a `session.attach`: the terminal is the relay id
+/// the reply names (X72).
+const RELAY_IN_REPLY: TerminalId = TerminalId::MAX;
+
 /// Fails only on a pack over its limits, which ends the link.
 fn dispatch(host: &Arc<Host>, frame: Frame) -> Result<(), moonlet_proto::PackError> {
     match frame {
@@ -689,7 +698,16 @@ fn dispatch(host: &Arc<Host>, frame: Frame) -> Result<(), moonlet_proto::PackErr
         }) => {
             // Attach snapshots travel on the output stream, flagged as a reset,
             // so the webview sees them strictly before the live output after them.
-            if let Some(session) = host.attaching.lock().unwrap().remove(&id)
+            let attached = host.attaching.lock().unwrap().remove(&id).and_then(|sid| {
+                if sid != RELAY_IN_REPLY {
+                    return Some(sid);
+                }
+                result
+                    .as_ref()
+                    .and_then(|r| r["info"]["id"].as_u64())
+                    .and_then(|i| TerminalId::try_from(i).ok())
+            });
+            if let Some(session) = attached
                 && let Some(snapshot) = result
                     .as_mut()
                     .and_then(|r| r.as_object_mut())

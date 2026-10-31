@@ -1,6 +1,7 @@
 // The PR tab (X40, X2, X11): the session's pull request, its review and
 // stack, and its checks; or a form to create it.
 
+import { parseCopyHost } from "@desktop/lib/copyHost";
 import { useEffect, useState } from "react";
 import { ExternalLink, GitBranch, GitPullRequest } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -17,6 +18,18 @@ import { AgentIcon, Btn, DiffStat, cx } from "../components/ui";
 import { useNow } from "../lib/now";
 
 function CreatePr({ host, session, onCreated }: { host: string; session: Session; onCreated: () => void }) {
+  // Another member's session (X72): its pull request is made where it runs.
+  if (parseCopyHost(host)) {
+    return (
+      <p className="m-4 text-[14px] text-muted">
+        No pull request for <span className="font-mono text-fg">{session.branch}</span> yet. Open it on {session.owner?.name ?? "the Mac running this session"}.
+      </p>
+    );
+  }
+  return <CreatePrForm host={host} session={session} onCreated={onCreated} />;
+}
+
+function CreatePrForm({ host, session, onCreated }: { host: string; session: Session; onCreated: () => void }) {
   const [title, setTitle] = useState(session.name);
   const [body, setBody] = useState("");
   const git = useApp((s) => s.data[host]?.git ?? null);

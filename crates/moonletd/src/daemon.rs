@@ -2681,7 +2681,8 @@ impl Daemon {
                     .map(|c| serde_json::json!({ "id": c.terminal, "state": c.state }))
                     .collect::<Vec<_>>())
             }
-            m::GIT_STATUS | m::GIT_DIFF | m::GIT_LOG | m::GH_PRS => {
+            // The PR's status too, so the phone's PR tab is never left waiting.
+            m::GIT_STATUS | m::GIT_DIFF | m::GIT_LOG | m::GH_PRS | m::GH_PR_STATUS => {
                 let path = self.session_copies.copy_path(&r.session).ok_or_else(offline)?;
                 let p = scope(&r.method, r.params, &r.session, &path, "", &[])?;
                 Box::pin(self.handle(conn, &r.method, p)).await
