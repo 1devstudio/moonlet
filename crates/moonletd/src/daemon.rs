@@ -535,6 +535,7 @@ impl Daemon {
             link.clone(),
             chats.clone(),
             claude_dir,
+            terminals.clone(),
         );
         Arc::new(Self {
             copies,
@@ -1019,7 +1020,15 @@ impl Daemon {
                 None => Err(RpcError::new("invalid_params", "not a paired device")),
             },
             method if method.starts_with("mobile.") => self.handle_mobile(conn, method, p),
-            m::SESSION_OPEN | m::SESSION_OFFER | m::SESSION_CHAT | m::SESSION_TRANSCRIPT | m::SESSION_CHECKPOINT => {
+            m::SESSION_FORWARD => {
+                // The central host's apps and phones (X72): never a worker,
+                // a cloud machine or an agent's CLI.
+                if conn.client == crate::link::WORKER_CLIENT || conn.client == CLI_CLIENT || conn.cloud.load(std::sync::atomic::Ordering::Relaxed) {
+                    return Err(RpcError::new("forbidden", "only an app or a phone follows another member's session"));
+                }
+                Box::pin(self.forward(conn, params(p)?)).await
+            }
+            m::SESSION_OPEN | m::SESSION_OFFER | m::SESSION_CHAT | m::SESSION_TRANSCRIPT | m::SESSION_CHECKPOINT | m::SESSION_EVENT => {
                 // Only a linked Mac's daemon, as for `design.offer` (X72).
                 let refused = || RpcError::new("forbidden", "only a member of the account sends its sessions");
                 let device = conn.phone.as_deref().ok_or_else(refused)?;
@@ -1037,6 +1046,8 @@ impl Daemon {
                     let r: m::SessionTranscript = params(p)?;
                     let bytes = conn.take_pack(r.pack).ok_or_else(|| RpcError::new("invalid_params", "the bytes did not arrive"))?;
                     ok(self.session_copies.transcript_offered(&worker, r, &bytes)?)
+                } else if method == m::SESSION_EVENT {
+                    ok(self.session_copies.event_offered(&worker, params(p)?)?)
                 } else if method == m::SESSION_CHECKPOINT {
                     ok(self.session_copies.checkpoint_offered(&worker, params(p)?).await?)
                 } else {
@@ -2611,6 +2622,72 @@ impl Daemon {
     /// Keeps this member's design copies (X71): a round when the design
     /// folders change, when the link changes, and when another member's
     /// change to a design's record comes.
+    /// `session.forward` on the central host (X72): the request goes to the
+    /// member that owns the session while it is linked. Otherwise reads are
+    /// answered from this host's copy, and the rest with `owner_offline`.
+    async fn forward(self: &Arc<Self>, conn: &Arc<Conn>, r: m::SessionForward) -> HandlerResult {
+        use crate::session_copies::scope;
+        let record = self
+            .sessions
+            .session_records()
+            .remove(&r.session)
+            .ok_or_else(|| RpcError::new("not_found", "no such session in the account"))?;
+        let owner = record.get("owner").and_then(Value::as_str).unwrap_or_default().to_string();
+        if owner.is_empty() || owner == self.link.info().worker.id {
+            return Err(RpcError::new("invalid_params", "that session is this host's own"));
+        }
+        if let Some(member) = self.workers.conn(&owner) {
+            return member
+                .request(m::SESSION_FORWARD, serde_json::to_value(&r).map_err(internal)?, std::time::Duration::from_secs(60))
+                .await;
+        }
+        let offline = || {
+            let name = self.sessions.member_names().remove(&owner).unwrap_or(owner.clone());
+            RpcError::new("owner_offline", format!("{name} is not reachable"))
+        };
+        match r.method.as_str() {
+            m::CHAT_STATE => {
+                let id = r.params.get("id").and_then(Value::as_u64).ok_or_else(|| RpcError::new("invalid_params", "a chat's id"))?;
+                let state = u32::try_from(id)
+                    .ok()
+                    .and_then(|id| self.session_copies.copy_chat(&r.session, id))
+                    .ok_or_else(|| RpcError::new("not_found", "the copy has no such chat"))?;
+                ok(state)
+            }
+            m::CHAT_SUMMARIES => {
+                let info = self.session_copies.copy_info(&r.session)?;
+                ok(info
+                    .chats
+                    .into_iter()
+                    .map(|c| serde_json::json!({ "id": c.terminal, "state": c.state }))
+                    .collect::<Vec<_>>())
+            }
+            m::GIT_STATUS | m::GIT_DIFF | m::GIT_LOG | m::GH_PRS => {
+                let path = self.session_copies.copy_path(&r.session).ok_or_else(offline)?;
+                let p = scope(&r.method, r.params, &r.session, &path, &[])?;
+                Box::pin(self.handle(conn, &r.method, p)).await
+            }
+            _ => Err(offline()),
+        }
+    }
+
+    /// A request the central host passes on for one of this member's
+    /// sessions (X72): only what [`scope`] lets through, aimed at that
+    /// session, handled as for a paired device, never as the Mac's app.
+    pub async fn forwarded(self: &Arc<Self>, r: m::SessionForward) -> HandlerResult {
+        use crate::session_copies::{only_terminals, scope};
+        let s = self
+            .sessions
+            .list_sessions()
+            .into_iter()
+            .find(|s| s.id == r.session && s.owner.is_none() && !s.archived)
+            .ok_or_else(|| RpcError::new("not_found", "no such session here"))?;
+        let p = scope(&r.method, r.params, &s.id, &s.path, &s.terminals)?;
+        let conn = Conn::detached(self.terminals.new_client_id(), "moonlet-forwarded", Some("forwarded".to_string()));
+        let reply = Box::pin(self.handle(&conn, &r.method, p)).await?;
+        Ok(only_terminals(&r.method, reply, &s.terminals))
+    }
+
     /// Sends this member's sessions to the central host, and keeps the
     /// central host's copies to the sessions that are still live (X72).
     pub fn keep_session_copies(self: &Arc<Self>) {
@@ -2622,6 +2699,14 @@ impl Daemon {
                 tokio::spawn(async move { c.drop_ended().await });
             }
         });
+        let d = Arc::downgrade(self);
+        self.link.set_forwarder(Arc::new(move |r| {
+            let d = d.clone();
+            Box::pin(async move {
+                let d = d.upgrade().ok_or_else(|| RpcError::new("gone", "the daemon is stopping"))?;
+                d.forwarded(r).await
+            })
+        }));
         self.session_copies.spawn();
     }
 

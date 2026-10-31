@@ -851,3 +851,181 @@ async fn a_checkpoint_after_the_turn_names_its_files_and_its_whole_transcript() 
         "b\n"
     );
 }
+
+// --- Requests through the central host ----------------------------------
+
+async fn forward(
+    mini: &Daemon,
+    session: &Value,
+    method: &str,
+    params: Value,
+) -> Result<Value, String> {
+    mini.try_call(
+        "session.forward",
+        json!({ "session": session["id"], "method": method, "params": params }),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn a_message_through_the_central_host_reaches_the_owners_agent() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    let agent = made["terminals"][0].clone();
+
+    forward(
+        &mini,
+        &made,
+        "chat.send",
+        json!({ "id": agent, "text": "Again" }),
+    )
+    .await
+    .unwrap();
+    within(
+        Duration::from_secs(15),
+        "the second message on the MacBook",
+        || async {
+            let st: Value = book.call("chat.state", json!({ "id": agent })).await;
+            st["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|i| i["kind"] == "user" && i["text"] == "Again")
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn git_status_through_the_central_host_comes_from_the_owner() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = new_session(&book, &project, "fix-cart").await;
+    copy_of(&mini, &made).await;
+
+    // Whatever path the client names, the owner's worktree answers: its
+    // branch is the session's, where the copy's is a branch of its own.
+    let status = forward(&mini, &made, "git.status", json!({ "path": "/" }))
+        .await
+        .unwrap();
+    assert_eq!(status["branch"], made["branch"]);
+}
+
+#[tokio::test]
+async fn a_chat_that_is_not_the_sessions_cannot_be_reached_through_it() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = new_session(&book, &project, "fix-cart").await;
+    let other = session_with_a_turn(&book, &project).await;
+    copy_of(&mini, &made).await;
+
+    let refused = forward(
+        &mini,
+        &made,
+        "chat.send",
+        json!({ "id": other["terminals"][0], "text": "x" }),
+    )
+    .await
+    .unwrap_err();
+    assert!(refused.starts_with("forbidden"), "{refused}");
+    let refused = forward(&mini, &made, "terminal.create", json!({}))
+        .await
+        .unwrap_err();
+    assert!(refused.starts_with("forbidden"), "{refused}");
+}
+
+#[tokio::test]
+async fn with_the_owner_away_reads_come_from_the_copy_and_the_rest_waits_for_it() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    let agent = made["terminals"][0].clone();
+    within(
+        Duration::from_secs(15),
+        "the chat on studio-mini",
+        || async {
+            mini.try_call("session.copy", json!({ "session": made["id"] }))
+                .await
+                .is_ok_and(|i| i["chats"][0]["state"]["status"] == json!("done"))
+        },
+    )
+    .await;
+    copy_of(&mini, &made).await;
+
+    drop(book);
+    within(Duration::from_secs(5), "MacBook unreachable", || async {
+        with_copies(&mini)
+            .await
+            .iter()
+            .any(|s| s["id"] == made["id"] && s["owner"]["reachable"] == json!(false))
+    })
+    .await;
+    let state = forward(&mini, &made, "chat.state", json!({ "id": agent }))
+        .await
+        .unwrap();
+    assert_eq!(state["items"][0]["text"], json!("Fix the cart"));
+    let status = forward(&mini, &made, "git.status", json!({}))
+        .await
+        .unwrap();
+    assert_eq!(
+        status["branch"],
+        json!(format!("moonlet-copy/{}", made["id"].as_str().unwrap()))
+    );
+    let waits = forward(
+        &mini,
+        &made,
+        "chat.send",
+        json!({ "id": agent, "text": "Again" }),
+    )
+    .await
+    .unwrap_err();
+    assert!(waits.starts_with("owner_offline"), "{waits}");
+    assert!(waits.contains("MacBook"), "{waits}");
+}
+
+#[tokio::test]
+async fn the_owners_chat_events_reach_the_central_hosts_clients() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    let agent = made["terminals"][0].clone();
+    copy_of(&mini, &made).await;
+    let mut listener = mini.app().await;
+
+    forward(
+        &mini,
+        &made,
+        "chat.send",
+        json!({ "id": agent, "text": "Again" }),
+    )
+    .await
+    .unwrap();
+    let event = tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            match listener.next_frame().await.unwrap() {
+                Some(moonlet_proto::Frame::Json(moonlet_proto::Message::Event { name, data }))
+                    if name == "session.event" && data["event"]["name"] == json!("chat.item") =>
+                {
+                    return data;
+                }
+                Some(_) => {}
+                None => panic!("the connection ended"),
+            }
+        }
+    })
+    .await
+    .expect("no session.event");
+    assert_eq!(event["session"], made["id"]);
+    assert_eq!(event["event"]["data"]["id"], agent);
+}
