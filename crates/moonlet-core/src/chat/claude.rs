@@ -339,6 +339,25 @@ impl Adapter for Claude {
             }
             return out;
         }
+        // Claude starts a turn by itself when a background task ends: a
+        // message sent during it waits in Claude's queue too (X49). The
+        // turn's first line is `requesting`, before any output.
+        let begins_turn = match v["type"].as_str() {
+            Some("assistant" | "stream_event") => true,
+            Some("system") => v["subtype"] == "status" && v["status"] == "requesting",
+            _ => false,
+        };
+        if begins_turn {
+            if !super::busy(st) {
+                st.turn_started_at = Some(now_ms());
+                st.status = "working".into();
+                out.push(Out::State);
+            } else if st.turn_started_at.is_none() {
+                // A subagent's ask kept the chat blocked past the main turn: it stays blocked.
+                st.turn_started_at = Some(now_ms());
+                out.push(Out::State);
+            }
+        }
         match v.get("type").and_then(Value::as_str).unwrap_or("") {
             "system" if v.get("subtype").and_then(Value::as_str) == Some("init") => {
                 st.agent_session = v.get("session_id").and_then(Value::as_str).map(String::from);
@@ -1612,6 +1631,55 @@ mod tests {
         assert!(st.pending.is_empty());
         // The main agent is not working again: its turn had ended.
         assert_eq!(st.status, "done");
+    }
+
+    #[test]
+    fn a_turn_claude_starts_by_itself_works_and_queues_a_message() {
+        let (mut a, mut st) = started();
+        // The main turn ends while a subagent still runs.
+        let ended = until(SUBAGENT_STOP, r#""type": "result""#);
+        replay(&ended, &mut a, &mut st);
+        assert_eq!(st.status, "done");
+        // Claude starts a turn of its own after the last subagent's report: the fixture's
+        // `message_start` of msg_011Cg1u8jVxZFc4bi7HRYg2a is that turn's first line.
+        let own = until(SUBAGENT_STOP, "msg_011Cg1u8jVxZFc4bi7HRYg2a");
+        replay(&own[ended.len()..], &mut a, &mut st);
+        assert_eq!(st.status, "working");
+        assert!(st.turn_started_at.is_some());
+        // Claude reads a message sent now only after its running step.
+        a.send("are you there?", &[], &mut st);
+        assert_eq!(st.queued.iter().map(|q| q.text.as_str()).collect::<Vec<_>>(), ["are you there?"]);
+        assert!(st.items.iter().all(|i| i.text != "are you there?"));
+    }
+
+    #[test]
+    fn a_message_sent_as_claude_requests_a_turn_of_its_own_is_queued() {
+        let (mut a, mut st) = started();
+        replay(&until(SUBAGENT_STOP, r#""type": "result""#), &mut a, &mut st);
+        assert_eq!(st.status, "done");
+        // `requesting` is the first line of the turn: it comes before any output.
+        replay(&until(SUBAGENT_STOP, "196e0caf-7524-402e-a6cc-772a49aafe4e")[until(SUBAGENT_STOP, r#""type": "result""#).len()..], &mut a, &mut st);
+        assert_eq!(st.status, "working");
+        a.send("are you there?", &[], &mut st);
+        assert_eq!(st.queued.iter().map(|q| q.text.as_str()).collect::<Vec<_>>(), ["are you there?"]);
+    }
+
+    #[test]
+    fn a_turn_claude_starts_while_a_subagent_ask_waits_keeps_the_chat_blocked_and_is_timed() {
+        let (mut a, mut st) = started();
+        replay(&until(SUBAGENTS, r#""subtype": "can_use_tool""#), &mut a, &mut st);
+        // The main turn ends while the subagent's ask is still open.
+        let result = SUBAGENTS.lines().find(|l| l.contains(r#""type": "result""#)).unwrap();
+        a.on_line(result, &mut st);
+        assert_eq!((st.status.as_str(), st.turn_started_at), ("blocked", None));
+        // Claude starts a turn of its own: the ask still blocks, and the turn is timed.
+        let own = SUBAGENTS.lines().skip_while(|l| !l.contains(r#""type": "result""#)).skip(1).find(|l| l.contains(r#""type": "stream_event""#) && l.contains(r#""parent_tool_use_id": null"#)).unwrap();
+        a.on_line(own, &mut st);
+        assert_eq!(st.status, "blocked");
+        assert!(st.turn_started_at.is_some());
+        // Answering the ask leaves Claude working on that turn, not done.
+        a.permission("eee7fb1b-453f-4303-8690-b9312d5f1b24", "allow", None, None, None, &mut st);
+        assert_eq!(st.status, "working");
     }
 
     #[test]
