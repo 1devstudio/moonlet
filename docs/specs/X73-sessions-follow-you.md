@@ -85,6 +85,7 @@ Manual check M12 (`docs/manual-checks.md`) measures, on a real MacBook, how long
   - **The owner is in a turn:** the message waits on this member, and the composer shows "Moves here when studio-mini's turn ends", with **Move now**. The move happens at the end of the turn, then the message runs.
   - **A message reaches the owner while the session moves:** the owner keeps the session and its message, and the move waits for that turn to end, as above (`a_message_typed_while_the_session_moves_keeps_it_on_the_central_host`).
 - [ ] A member that has no copy of the session makes one first (X60's copy), showing "Bringing fix-cart to this Mac…".
+- [ ] The copy that becomes the session's worktree is held while the central host gives the session up, so stopping it then waits. When this member then cannot take the session in, the copy stays kept, in the same folder, rather than a folder no one keeps (`a_bring_that_cannot_take_the_session_in_keeps_its_copy`).
 - [ ] Typing on the phone never moves a session. Neither does opening or reading a session on any member.
 - [ ] A message typed on a member for a session pinned elsewhere goes to the owner, as from the phone.
 

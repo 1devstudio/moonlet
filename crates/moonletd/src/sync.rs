@@ -378,6 +378,24 @@ fn internal(e: impl std::fmt::Display) -> RpcError {
     RpcError::new("failed", e.to_string())
 }
 
+/// A live copy [`LiveCopies::hold`] holds: nothing else changes it.
+pub struct Holding {
+    id: String,
+    _one: tokio::sync::OwnedMutexGuard<()>,
+}
+
+/// A live copy [`LiveCopies::let_go`] let go of, still held, until it is
+/// handed over or restored.
+pub struct Released {
+    /// The copy's folder, the session's worktree from now on.
+    pub path: PathBuf,
+    /// The repository the copy's worktree belongs to.
+    pub repo: PathBuf,
+    kept: Kept,
+    state: Option<CopyState>,
+    _one: tokio::sync::OwnedMutexGuard<()>,
+}
+
 pub struct LiveCopies {
     file: PathBuf,
     home: PathBuf,
@@ -1803,32 +1821,42 @@ impl LiveCopies {
         Ok(saved)
     }
 
-    /// Lets go of the live copy of session `session` and keeps its
-    /// worktree: this Mac now owns the session (X73), and the copy's folder
-    /// becomes the session's own. Its central host lets the copy go too.
-    /// Gives the copy's folder and repository.
-    pub async fn release(self: &Arc<Self>, session: &str) -> Result<(PathBuf, PathBuf), RpcError> {
-        let id = self
-            .data
-            .lock()
-            .unwrap()
-            .worker
-            .iter()
-            .find(|k| k.session == session && k.kind == CopyKind::Live && !k.path.is_empty())
-            .map(|k| k.id.clone())
+    /// Holds the live copy of session `session`, which this Mac is about to
+    /// own (X73): until the hold ends, nothing stops or changes the copy,
+    /// so it is still there for [`Self::let_go`].
+    pub async fn hold(self: &Arc<Self>, session: &str) -> Result<Holding, RpcError> {
+        let none = || RpcError::new("no_copy", "this Mac keeps no copy of that session");
+        let live = |k: &Kept| k.session == session && k.kind == CopyKind::Live && !k.path.is_empty();
+        let id = self.data.lock().unwrap().worker.iter().find(|k| live(k)).map(|k| k.id.clone()).ok_or_else(none)?;
+        let one = self.lock(&id).lock_owned().await;
+        // Stopped while this waited for it.
+        self.kept(&id).filter(live).ok_or_else(none)?;
+        Ok(Holding { id, _one: one })
+    }
+
+    /// Lets go of held copy `h` and keeps its worktree: this Mac now owns
+    /// the session (X73), and the copy's folder becomes the session's own.
+    /// Until [`Self::hand_over`], [`Self::restore`] makes it a copy again,
+    /// as it was.
+    pub fn let_go(self: &Arc<Self>, h: Holding) -> Result<Released, RpcError> {
+        let k = self
+            .kept(&h.id)
             .ok_or_else(|| RpcError::new("no_copy", "this Mac keeps no copy of that session"))?;
-        let lock = self.lock(&id);
-        let _one = lock.lock().await;
-        let k = self.kept(&id).ok_or_else(|| RpcError::new("no_copy", "this Mac keeps no copy of that session"))?;
-        self.end_setup(&id);
-        let path = PathBuf::from(&k.path);
-        let repo = PathBuf::from(&k.repo);
-        self.unwatch(&path);
-        let _ = git_sync::delete_base_ref(&repo, &id).await;
-        self.data.lock().unwrap().worker.retain(|w| w.id != id);
-        self.data.lock().unwrap().closed.push(Closed { copy: id.clone(), host: k.host.clone() });
+        self.end_setup(&h.id);
+        self.unwatch(Path::new(&k.path));
+        self.data.lock().unwrap().worker.retain(|w| w.id != h.id);
         self.save();
-        self.states.lock().unwrap().remove(&id);
+        let state = self.states.lock().unwrap().remove(&h.id);
+        Ok(Released { path: PathBuf::from(&k.path), repo: PathBuf::from(&k.repo), kept: k, state, _one: h._one })
+    }
+
+    /// The session took copy `r`'s worktree: its central host lets the
+    /// copy go too.
+    pub async fn hand_over(self: &Arc<Self>, r: Released) {
+        let k = r.kept;
+        let _ = git_sync::delete_base_ref(&r.repo, &k.id).await;
+        self.data.lock().unwrap().closed.push(Closed { copy: k.id.clone(), host: k.host.clone() });
+        self.save();
         self.send_closed_soon();
         (self.emit)(Message::event(
             m::EV_SYNC_CHANGED,
@@ -1838,7 +1866,30 @@ impl LiveCopies {
                 removed: Some(CopyRemoved { reason: CloseReason::Stopped, saved: SyncStopped::default() }),
             },
         ));
-        Ok((path, repo))
+    }
+
+    /// Taking the session in failed after [`Self::let_go`]: copy `r` is
+    /// kept again, as it was, rather than left with no one keeping it.
+    pub fn restore(self: &Arc<Self>, r: Released) {
+        let id = r.kept.id.clone();
+        self.data.lock().unwrap().worker.push(r.kept);
+        self.save();
+        if let Some(state) = r.state {
+            self.states.lock().unwrap().insert(id.clone(), state);
+        }
+        self.watch(&r.path);
+        self.changed(&id);
+        tracing::info!(copy = %id, "kept the copy again: taking its session in failed");
+    }
+
+    /// Lets go of the live copy of session `session` at once, as
+    /// [`Self::hold`], [`Self::let_go`] and [`Self::hand_over`] together.
+    /// Gives the copy's folder and repository.
+    pub async fn release(self: &Arc<Self>, session: &str) -> Result<(PathBuf, PathBuf), RpcError> {
+        let r = self.let_go(self.hold(session).await?)?;
+        let at = (r.path.clone(), r.repo.clone());
+        self.hand_over(r).await;
+        Ok(at)
     }
 
     /// Saves the files of copy `k` that would be lost with it: those that

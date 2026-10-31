@@ -2177,6 +2177,29 @@ async fn a_member_without_a_copy_of_the_session_leaves_it_on_the_central_host() 
 }
 
 #[tokio::test]
+async fn a_bring_that_cannot_take_the_session_in_keeps_its_copy() {
+    let origin = Origin::new();
+    let (_mini, book, made) = continued_and_back(&origin).await;
+    let copies: Vec<Value> = book.call("sync.list", json!({})).await;
+    let copy = copies.iter().find(|c| c["session"] == made["id"]).unwrap().clone();
+    // The MacBook cannot save its sessions: a folder is where it writes
+    // them first.
+    let blocked = book.home.path().join("state.json.tmp");
+    std::fs::create_dir_all(blocked.join("in-the-way")).unwrap();
+
+    let refused = book
+        .try_call("session.bring", json!({ "session": made["id"] }))
+        .await
+        .unwrap_err();
+    assert!(refused.starts_with("failed"), "{refused}");
+    // Its copy is still kept, in the same folder.
+    let copies: Vec<Value> = book.call("sync.list", json!({})).await;
+    let kept = copies.iter().find(|c| c["id"] == copy["id"]).expect("the copy is kept");
+    assert_eq!(kept["path"], copy["path"]);
+    std::fs::remove_dir_all(&blocked).unwrap();
+}
+
+#[tokio::test]
 async fn a_transcript_that_cannot_be_fetched_leaves_the_members_as_it_is() {
     let origin = Origin::new();
     let (mini, book, made) = continued_and_back(&origin).await;

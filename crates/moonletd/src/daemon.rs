@@ -2929,10 +2929,9 @@ impl Daemon {
             return Err(RpcError::new("pinned", "that session is kept where it is"));
         }
         // Its live copy becomes its worktree here: without one, the central
-        // host keeps it rather than give it up to nowhere.
-        if !self.sync.list().iter().any(|c| c.session == r.session && !c.path.is_empty()) {
-            return Err(RpcError::new("no_copy", "this Mac keeps no copy of that session"));
-        }
+        // host keeps it rather than give it up to nowhere. It is held from
+        // now on, so nothing stops it while the central host gives it up.
+        let held = self.sync.hold(&r.session).await?;
         let host = self.link.host().ok_or_else(|| RpcError::new("unreachable", "the central host is not connected"))?;
         let taken = host
             .request(
@@ -2946,39 +2945,20 @@ impl Daemon {
             )
             .await?;
         let taken: m::SessionTaken = serde_json::from_value(taken).map_err(internal)?;
-        let (path, repo) = self.sync.release(&r.session).await?;
-        let projects = self.sessions.list_projects();
-        let project = match projects.iter().find(|p| Path::new(&p.path) == repo) {
-            Some(p) => p.clone(),
-            None => self.sessions.add_project(&repo.display().to_string()).await.map_err(internal)?,
+        let released = self.sync.let_go(held)?;
+        let path = released.path.clone();
+        let adopted = self.adopt_brought(&r.session, &record, &released.repo, &path).await;
+        let adopted = match adopted {
+            Ok(adopted) => {
+                self.sync.hand_over(released).await;
+                adopted
+            }
+            // Its copy stays a copy, rather than a folder no one keeps.
+            Err(e) => {
+                self.sync.restore(released);
+                return Err(e);
+            }
         };
-        let adopted = self
-            .sessions
-            .adopt_session(moonlet_proto::types::Session {
-                id: r.session.clone(),
-                project_id: project.id.clone(),
-                name: text("name").unwrap_or_default(),
-                branch: text("branch").unwrap_or_default(),
-                base: project.base_branch.clone(),
-                path: path.display().to_string(),
-                agent: Some("claude".into()),
-                archived: false,
-                created_at: record.get("created_at").and_then(Value::as_u64).unwrap_or(0),
-                workspace_id: text("workspace"),
-                model: None,
-                effort: None,
-                mode: None,
-                pr: None,
-                spawned_by: None,
-                task: None,
-                task_unlinked: false,
-                cloud: false,
-                terminals: Vec::new(),
-                layout: Value::Null,
-                restore: Vec::new(),
-                owner: None,
-            })
-            .map_err(internal)?;
         for file in &taken.transcripts {
             let fetched = host
                 .request(
@@ -3017,6 +2997,50 @@ impl Daemon {
             tracing::warn!(session = %r.session, "cannot send the message it was brought for: {e:#}");
         }
         self.sessions.session(&r.session).map_err(internal)
+    }
+
+    /// Takes in `session`, with account record `record`, at worktree
+    /// `path` of repository `repo`, its project's, added when it is not
+    /// one yet (X73).
+    async fn adopt_brought(
+        &self,
+        session: &str,
+        record: &moonlet_core::account::Record,
+        repo: &Path,
+        path: &Path,
+    ) -> Result<moonlet_proto::types::Session, RpcError> {
+        let text = |f: &str| record.get(f).and_then(Value::as_str).map(str::to_string);
+        let projects = self.sessions.list_projects();
+        let project = match projects.iter().find(|p| Path::new(&p.path) == repo) {
+            Some(p) => p.clone(),
+            None => self.sessions.add_project(&repo.display().to_string()).await.map_err(internal)?,
+        };
+        self.sessions
+            .adopt_session(moonlet_proto::types::Session {
+                id: session.to_string(),
+                project_id: project.id.clone(),
+                name: text("name").unwrap_or_default(),
+                branch: text("branch").unwrap_or_default(),
+                base: project.base_branch.clone(),
+                path: path.display().to_string(),
+                agent: Some("claude".into()),
+                archived: false,
+                created_at: record.get("created_at").and_then(Value::as_u64).unwrap_or(0),
+                workspace_id: text("workspace"),
+                model: None,
+                effort: None,
+                mode: None,
+                pr: None,
+                spawned_by: None,
+                task: None,
+                task_unlinked: false,
+                cloud: false,
+                terminals: Vec::new(),
+                layout: Value::Null,
+                restore: Vec::new(),
+                owner: None,
+            })
+            .map_err(internal)
     }
 
     /// `session.forward` on the central host (X72): the request goes to the
