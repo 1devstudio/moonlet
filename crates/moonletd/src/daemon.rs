@@ -66,9 +66,10 @@ pub struct Daemon {
     /// Where the user was last active (X75).
     presence: Mutex<Presence>,
     /// URLs that came for this Mac's app while it was not connected, and
-    /// how many of its connections are open (X75).
+    /// how many of its connections are open (X75). Not `apps`, the app
+    /// connections a phone's task requests go to (X76).
     waiting_shows: Mutex<moonlet_core::browser::Waiting<m::BrowserShow>>,
-    apps: std::sync::atomic::AtomicUsize,
+    local_apps: std::sync::atomic::AtomicUsize,
     /// On the central host, the same for each paired phone (X75).
     phone_shows: Mutex<PhoneShows>,
     /// What the Mac's last sleep left to its wake (X73).
@@ -260,8 +261,6 @@ const DESIGN_SELF_GATED: &[&str] = &[m::DESIGN_CHECK, m::DESIGN_FILE];
 /// The name the `moonlet` CLI gives in its hello; agents reach the daemon
 /// through it.
 pub const CLI_CLIENT: &str = "moonlet-cli";
-/// The name the Mac's own app connects with.
-pub const APP_CLIENT: &str = "moonlet-app";
 
 /// Refuses what only the Mac's own app may do, such as managing `what`:
 /// never a paired device over the tailnet, nor an agent's `moonlet` CLI.
@@ -616,7 +615,7 @@ impl Daemon {
             checkouts: crate::copied_files::Checkouts::new(&moonlet_core::paths::home()),
             presence: Mutex::new(Presence::default()),
             waiting_shows: Default::default(),
-            apps: Default::default(),
+            local_apps: Default::default(),
             phone_shows: Default::default(),
             asleep: Default::default(),
             heavy,
@@ -3976,7 +3975,7 @@ impl Daemon {
     /// next activity in the app then reaches the central host at once.
     fn show_in_app(&self, mut show: m::BrowserShow) -> bool {
         let mut waiting = self.waiting_shows.lock().unwrap();
-        if self.apps.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+        if self.local_apps.load(std::sync::atomic::Ordering::SeqCst) > 0 {
             drop(waiting);
             self.terminals.emit(Message::event(m::EV_BROWSER_SHOW, show));
             return true;
@@ -4006,9 +4005,9 @@ impl Daemon {
         use std::sync::atomic::Ordering::SeqCst;
         let _waiting = self.waiting_shows.lock().unwrap();
         if open {
-            self.apps.fetch_add(1, SeqCst);
+            self.local_apps.fetch_add(1, SeqCst);
         } else {
-            self.apps.fetch_sub(1, SeqCst);
+            self.local_apps.fetch_sub(1, SeqCst);
         }
     }
 
