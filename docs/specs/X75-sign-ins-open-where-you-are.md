@@ -55,6 +55,7 @@ With this spec, a browser opened by any terminal or agent that moonlet starts, o
   - the forward ends when the callback's process stops listening on the port, when the asking command exits, or after 10 minutes, whichever comes first.
 - [ ] A port already taken on the Mac shows "Port 8085 is in use on this Mac, so the sign-in for studio-mini can't come back here. Close what uses it and press Retry." The URL is not opened until **Retry** succeeds.
 - [ ] The asking member accepts `tunnel.open` only for a registered, still-waiting callback. Its member and port must both match, and the forward reaches only that member's loopback address.
+- [ ] Only the Mac a callback is shown on can reach it. The asking member makes a random key for each callback (32 bytes) and sends it with the URL, and the central host passes it on only to the Mac it shows the URL on. That Mac's forward sends the key with each `tunnel.open`, and the asking member compares it in constant time. A `tunnel.open` without the key, or with another, gets the same `forbidden` as one for a port nothing waits on, so another member cannot reach a waiting callback. Neither the app nor the phone ever gets the key.
 - [ ] On the phone, such a URL shows "This sign-in has to finish on a Mac", and opens on the next Mac app the user touches while the command still waits.
 
 ### Sign in on every member
@@ -80,9 +81,9 @@ With this spec, a browser opened by any terminal or agent that moonlet starts, o
 - Event `browser.show {url, from, session?, forward?: {port}}` to an app or a phone.
 - `browser.pending` → `[browser.show]`: the URLs that came for this Mac's app while it was not connected, each handed over once. The app asks each time it connects to its own daemon; any other client gets `forbidden`.
 - `presence.active {client}`, member → central host, at most every 30 s while the user is active.
-- `tunnel.open {port, to: <member>}` on the link: a stream from the Mac's daemon to the member's loopback port. It is accepted only for a port named by a `browser.route` from that member that is still waiting.
+- `tunnel.open {port, to: <member>, key}` on the link: a stream from the Mac's daemon to the member's loopback port. It is accepted only for a port named by a `browser.route` from that member that is still waiting, with the key that member made for it. The key goes member → central host in `browser.route` and central host → the chosen Mac in its `browser.show` request, never in the event to an app or a phone.
 - `signins.list` → the entries. `signins.set {entries}` → `true`. `signins.check {entry}` → `{<member>: bool}`. `signins.run {entry, members}` → `true`. Only the Mac's own app may call `signins.set`, `.check` and `.run`; other clients get `forbidden`.
-- `browser.open` registers a callback as described above. `tunnel.open` is refused with `forbidden` without a matching callback.
+- `browser.open` registers a callback as described above. `tunnel.open` is refused with `forbidden` without a matching callback or its key.
 
 ## Data and config
 
@@ -94,7 +95,7 @@ With this spec, a browser opened by any terminal or agent that moonlet starts, o
 ## Security considerations
 
 - A URL opened on the user's Mac comes from an agent or a script on another member. The app opens only `http` and `https` URLs, in the default browser, and always says which member and session asked. An agent could open a phishing page this way, but it could already show one in its reply. The toast makes the origin visible.
-- Forwarding a port opens a member's loopback port to the user's browser. A URL alone never causes it: an agent could name any port in `redirect_uri`, such as a local database's admin page. The member forwards only to a port that the command calling `moonlet-open` (or one of its ancestors) is itself listening on, registered as a callback when it called, and never to moonlet's own ports. The forward lasts only while that listener does, nothing else on the tailnet can reach it, and it listens only on the Mac's `127.0.0.1`.
+- Forwarding a port opens a member's loopback port to the user's browser. A URL alone never causes it: an agent could name any port in `redirect_uri`, such as a local database's admin page. The member forwards only to a port that the command calling `moonlet-open` (or one of its ancestors) is itself listening on, registered as a callback when it called, and never to moonlet's own ports. The forward lasts only while that listener does, nothing else on the tailnet can reach it, and it listens only on the Mac's `127.0.0.1`. Another member of the account cannot ask for the port either: the callback's key goes only to the Mac the URL is shown on. The central host, which routes the URL, sees the key.
 - The redirect carries the OAuth code. It travels inside the tailnet link, which is encrypted end to end (ADR 0011).
 - Sign-in and check commands run with the user's rights on every member. Only the app may run them, and the user has seen them.
 
@@ -127,6 +128,7 @@ Test names are planned. Each criterion cites its test once it is built, with the
   - `a_callback_is_registered_only_for_a_port_the_calling_command_listens_on`: a test server started by the calling command gets a callback, and a port held by an unrelated process gets none.
   - `a_forward_carries_the_callback_and_ends_when_its_listener_closes`.
   - `a_tunnel_without_a_matching_callback_is_forbidden`.
+  - `a_tunnel_without_the_key_shown_to_the_mac_never_reaches_the_callback`: another member's `tunnel.open` with no key or a made-up one is refused, the app's `browser.show` carries no key, and the Mac's forward still reaches the command.
   - `a_port_taken_on_the_mac_waits_for_retry`: the URL is not shown until the port is free and **Retry** is pressed.
   - `a_phone_gets_the_url_without_a_forward_and_a_mac_gets_it_next`: the phone marked active gets `browser.show` with no `forward`, and the URL reaches the next Mac app marked active while the command waits.
   - `only_the_macs_app_changes_or_runs_sign_ins`: `signins.set`, `.check` and `.run` from the CLI, a paired Mac, a phone and an agent's terminal answer `forbidden`.
