@@ -719,6 +719,9 @@ fn session_fields(st: &State, s: &Session, owner: &str) -> Record {
         ("epoch".to_string(), json!(1)),
         ("created_at".to_string(), json!(s.created_at)),
         ("archived".to_string(), json!(s.archived)),
+        // What its new chats run, for a member that continues it (X73).
+        ("model".to_string(), json!(s.model)),
+        ("effort".to_string(), json!(s.effort)),
     ])
 }
 
@@ -2094,6 +2097,8 @@ mod tests {
                 "epoch": 1,
                 "created_at": 1790000000002u64,
                 "archived": false,
+                "model": null,
+                "effort": null,
             })
         );
     }

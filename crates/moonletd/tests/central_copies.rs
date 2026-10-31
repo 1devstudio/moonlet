@@ -1621,6 +1621,45 @@ async fn a_continued_chat_keeps_its_folders_inside_the_worktree_in_the_copy() {
 }
 
 #[tokio::test]
+async fn a_continued_session_keeps_its_model_and_effort_for_new_chats() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made: Value = book
+        .call(
+            "session.create",
+            json!({ "project_id": project, "name": "fix-cart", "agent": "none", "model": "opus", "effort": "high" }),
+        )
+        .await;
+    copy_of(&mini, &made).await;
+    drop(book);
+    unreachable(&mini, &made).await;
+
+    let continued: Value = mini
+        .call("session.continue_here", json!({ "session": made["id"] }))
+        .await;
+    assert_eq!(continued["model"], json!("opus"));
+    assert_eq!(continued["effort"], json!("high"));
+    let _: Value = mini
+        .call(
+            "terminal.create",
+            json!({
+                "session_id": made["id"],
+                "cwd": continued["path"],
+                "kind": "agent",
+                "agent": "claude",
+                "chat": true,
+            }),
+        )
+        .await;
+    within(Duration::from_secs(30), "a new chat on studio-mini", || async {
+        agent_log(&mini, "claude-args").contains("--model opus --effort high")
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn an_archived_session_is_not_continued_on_the_central_host() {
     let origin = Origin::new();
     let (mini, _addr, book) = pair_of(&origin).await;

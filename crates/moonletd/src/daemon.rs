@@ -2779,8 +2779,9 @@ impl Daemon {
                 archived: false,
                 created_at: record.get("created_at").and_then(Value::as_u64).unwrap_or(0),
                 workspace_id: text("workspace"),
-                model: None,
-                effort: None,
+                // The member's word: a name as agents take them, or none.
+                model: text("model").filter(|m| moonlet_core::chat::plain_setting(m)),
+                effort: text("effort").filter(|e| moonlet_core::chat::plain_setting(e)),
                 mode: None,
                 pr: None,
                 spawned_by: None,
