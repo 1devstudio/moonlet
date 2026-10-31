@@ -3,9 +3,12 @@
 //! a worktree's files it names. They travel outside git, so they never
 //! enter an object store.
 
-use std::path::Path;
+use std::path::{Component, Path};
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
+use cap_std::ambient_authority;
+use cap_std::fs::{Dir, DirBuilder, DirBuilderExt, MetadataExt, OpenOptions, OpenOptionsExt};
 use ignore::gitignore::GitignoreBuilder;
 
 /// A project's patterns when it has none of its own.
@@ -187,6 +190,166 @@ pub async fn in_worktree(dir: &Path, patterns: &[String]) -> Result<Matched> {
     })
 }
 
+/// Refuses a path another member sent that is not a plain path inside the
+/// worktree: absolute, with `..`, empty, or under `.git/`.
+pub fn check_path(rel: &str) -> Result<()> {
+    let path = Path::new(rel);
+    if rel.is_empty() || !path.components().all(|c| matches!(c, Component::Normal(_))) {
+        bail!("{rel:?} is not a path inside the worktree");
+    }
+    if path.components().next() == Some(Component::Normal(".git".as_ref())) {
+        bail!("{rel:?} is git's own");
+    }
+    Ok(())
+}
+
+/// The folder `rel` inside `root`, reached through folders of its own,
+/// never a link; with `create`, missing ones are made, mode 0700. `None`
+/// when one is missing and not made.
+fn folder(root: &Path, rel: &Path, create: bool) -> Result<Option<Dir>> {
+    let mut dir = Dir::open_ambient_dir(root, ambient_authority())
+        .with_context(|| format!("cannot open {}", root.display()))?;
+    for part in rel.components() {
+        let Component::Normal(name) = part else {
+            bail!("{} is not a path inside its folder", rel.display());
+        };
+        if create {
+            match dir.create_dir_with(name, DirBuilder::new().mode(0o700)) {
+                Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => return Err(e.into()),
+                _ => {}
+            }
+        }
+        let look = match dir.symlink_metadata(name) {
+            Ok(m) => m,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+        if !look.is_dir() {
+            bail!(
+                "{} is not a folder (a link is refused)",
+                name.to_string_lossy()
+            );
+        }
+        let opened = dir.open_dir(name)?;
+        let now = opened.dir_metadata()?;
+        if (look.dev(), look.ino()) != (now.dev(), now.ino()) {
+            bail!("{} changed while it was opened", name.to_string_lossy());
+        }
+        dir = opened;
+    }
+    Ok(Some(dir))
+}
+
+/// The bytes of file `rel` inside `root`; `None` when it is missing. A
+/// link, at the file or on its way, is refused, never followed.
+pub fn read(root: &Path, rel: &str) -> Result<Option<Vec<u8>>> {
+    use std::io::Read;
+    check_path(rel)?;
+    let path = Path::new(rel);
+    let name = path.file_name().context("a file needs a name")?;
+    let Some(dir) = folder(root, path.parent().unwrap_or(Path::new("")), false)? else {
+        return Ok(None);
+    };
+    let look = match dir.symlink_metadata(name) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    if !look.is_file() {
+        bail!("{rel} is not a file (a link is refused)");
+    }
+    let mut file = dir.open_with(
+        name,
+        OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW),
+    )?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    Ok(Some(bytes))
+}
+
+static NEXT: AtomicU64 = AtomicU64::new(0);
+
+/// Writes file `rel` inside `root`, mode 0600, through a temporary file in
+/// its folder renamed over it, so a reader sees the old content or the new,
+/// never half. Missing folders are made, mode 0700; a link on the way is
+/// refused, and one at `rel` is replaced, never followed.
+pub fn write(root: &Path, rel: &str, bytes: &[u8]) -> Result<()> {
+    use std::io::Write;
+    check_path(rel)?;
+    let path = Path::new(rel);
+    let name = path.file_name().context("a file needs a name")?;
+    let dir = folder(root, path.parent().unwrap_or(Path::new("")), true)?
+        .context("a folder went away")?;
+    let tmp = format!(
+        ".{}.moonlet-{}-{}",
+        name.to_string_lossy(),
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    );
+    let mut f = dir.open_with(
+        &tmp,
+        OpenOptions::new().write(true).create_new(true).mode(0o600),
+    )?;
+    let done = f
+        .write_all(bytes)
+        .and_then(|()| f.sync_all())
+        .and_then(|()| dir.rename(&tmp, &dir, name));
+    if done.is_err() {
+        let _ = dir.remove_file(&tmp);
+    }
+    Ok(done?)
+}
+
+/// Removes file `rel` inside `root`; a missing one is fine, and a link on
+/// the way is refused.
+pub fn remove(root: &Path, rel: &str) -> Result<()> {
+    check_path(rel)?;
+    let path = Path::new(rel);
+    let name = path.file_name().context("a file needs a name")?;
+    let Some(dir) = folder(root, path.parent().unwrap_or(Path::new("")), false)? else {
+        return Ok(());
+    };
+    match dir.remove_file(name) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
+        _ => Ok(()),
+    }
+}
+
+/// Whether anything is at `rel` inside `root`: a file, a link or a folder,
+/// looked at without reading it or following a link at it. A link on the
+/// way is refused.
+fn present(root: &Path, rel: &str) -> Result<bool> {
+    check_path(rel)?;
+    let path = Path::new(rel);
+    let name = path.file_name().context("a file needs a name")?;
+    let Some(dir) = folder(root, path.parent().unwrap_or(Path::new("")), false)? else {
+        return Ok(false);
+    };
+    match dir.symlink_metadata(name) {
+        Ok(_) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Copies the files the list names in checkout `from` into new worktree
+/// `to`, leaving anything `to` already has at their paths, a link
+/// included; the paths copied.
+pub async fn seed(from: &Path, to: &Path, patterns: &[String]) -> Result<Vec<String>> {
+    let mut copied = Vec::new();
+    for (rel, _) in in_worktree(from, patterns).await?.files {
+        if present(to, &rel)? {
+            continue;
+        }
+        let Some(bytes) = read(from, &rel)? else {
+            continue;
+        };
+        write(to, &rel, &bytes)?;
+        copied.push(rel);
+    }
+    Ok(copied)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -312,6 +475,78 @@ mod tests {
                 ("secrets/.env".to_string(), 10),
                 ("secrets/deep/.env.local".to_string(), 7)
             ]
+        );
+    }
+
+    #[test]
+    fn a_copied_file_is_written_0600_in_a_0700_folder_and_never_through_a_link() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let mode = |p: &Path| std::fs::symlink_metadata(p).unwrap().permissions().mode() & 0o777;
+        write(root.path(), "apps/web/.env", b"A=1\n").unwrap();
+        assert_eq!(
+            std::fs::read(root.path().join("apps/web/.env")).unwrap(),
+            b"A=1\n"
+        );
+        assert_eq!(mode(&root.path().join("apps/web/.env")), 0o600);
+        assert_eq!(mode(&root.path().join("apps")), 0o700);
+        // A link at the file is replaced, its target left alone.
+        std::fs::write(outside.path().join("target"), "keep\n").unwrap();
+        std::os::unix::fs::symlink(outside.path().join("target"), root.path().join(".env"))
+            .unwrap();
+        write(root.path(), ".env", b"B=2\n").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(outside.path().join("target")).unwrap(),
+            "keep\n"
+        );
+        assert_eq!(std::fs::read(root.path().join(".env")).unwrap(), b"B=2\n");
+        // A linked folder on the way is refused.
+        std::os::unix::fs::symlink(outside.path(), root.path().join("config")).unwrap();
+        assert!(write(root.path(), "config/.env", b"C=3\n").is_err());
+        assert!(read(root.path(), "config/target").is_err());
+        assert!(!outside.path().join(".env").exists());
+        for bad in ["../x", "/etc/x", ".git/config", ""] {
+            assert!(write(root.path(), bad, b"x").is_err(), "{bad}");
+        }
+        // No temporary file is left behind.
+        let names: Vec<_> = std::fs::read_dir(root.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names.len(), 3, "{names:?}");
+    }
+
+    #[tokio::test]
+    async fn a_link_the_new_worktree_already_has_is_left_alone() {
+        let from = tempfile::tempdir().unwrap();
+        let to = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let out = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(from.path())
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        std::fs::write(from.path().join(".gitignore"), ".env\n").unwrap();
+        std::fs::write(from.path().join(".env"), "SECRET=1\n").unwrap();
+        std::fs::write(from.path().join(".env.local"), "FLAG=1\n").unwrap();
+        // The new worktree's branch has `.env` as a link, as git can track.
+        std::fs::write(outside.path().join("shared.env"), "SHARED=1\n").unwrap();
+        std::os::unix::fs::symlink(outside.path().join("shared.env"), to.path().join(".env"))
+            .unwrap();
+        let copied = seed(from.path(), to.path(), &pats(&DEFAULT)).await.unwrap();
+        assert_eq!(copied, [".env.local"]);
+        assert!(
+            std::fs::symlink_metadata(to.path().join(".env"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            std::fs::read_to_string(to.path().join(".env")).unwrap(),
+            "SHARED=1\n"
         );
     }
 
