@@ -35,3 +35,4 @@ pub mod tailnet;
 pub mod term;
 pub mod terminal;
 pub mod terminal_read;
+pub mod transcript;
