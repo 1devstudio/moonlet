@@ -346,8 +346,9 @@ impl SessionManager {
     /// Who owns a session, its ownership number and its pin (X73) are the
     /// central host's to change: changes to those fields count from the
     /// central host, the referee, and from the session's maker only until
-    /// the referee first moves it. The other fields count from the referee
-    /// and from the member that owned the session when it made the change.
+    /// the referee names an owner. The other fields count from the referee
+    /// and from the member that owns the session now. No stamp a member
+    /// gives its changes decides who made or owns a session.
     pub fn session_records(&self) -> Map<String, Record> {
         self.with_log(sessions_in)
     }
@@ -361,11 +362,20 @@ impl SessionManager {
             let Some(a) = account.as_mut() else { return false };
             let mut log = a.log.clone();
             let now = now_ms();
-            let changes = vec![
+            // The record as it is here goes with the move: from then on
+            // only the new owner's changes count, so the former owner's
+            // fields are kept as this member's.
+            let record = sessions_in(&log).remove(id).unwrap_or_default();
+            let mut changes: Vec<Change> = record
+                .into_iter()
+                .filter(|(field, _)| !OWNERSHIP.contains(&field.as_str()))
+                .map(|(field, value)| log.set(now, SESSION, id, &field, value))
+                .collect();
+            changes.extend([
                 log.set(now, SESSION, id, "owner", json!(owner)),
                 log.set(now, SESSION, id, "epoch", json!(epoch)),
                 log.set(now, SESSION, id, "pinned", json!(pinned)),
-            ];
+            ]);
             if let Err(e) = write_private(&a.path, &log) {
                 tracing::warn!("cannot save a session's owner: {e:#}");
                 return false;
@@ -676,19 +686,16 @@ fn sessions_in(log: &Log) -> Map<String, Record> {
     for list in owners.values_mut() {
         list.sort_by(|a, b| a.0.cmp(b.0));
     }
-    // The member that owned session `id` at `at`: its maker until it names one.
-    let owner_at = |id: &str, at: &Stamp| {
-        owners
-            .get(id)
-            .and_then(|list| list.iter().rev().find(|(when, _, _)| *when <= at))
-            .map(|(_, owner, _)| *owner)
-            .or_else(|| maker(id))
-    };
+    // The member that owns session `id` now: its maker until one is named.
+    // Only its changes and the referee's count, whenever they say they were
+    // made: a move carries the record as the referee had it, so what a
+    // former owner wrote before it is kept.
+    let owner_now = |id: &str| owners.get(id).and_then(|list| list.last()).map(|(_, owner, _)| *owner).or_else(|| maker(id));
     log.records_where(SESSION, |c| {
         if is_ownership(c) {
             ownership_counts(c)
         } else {
-            is_referee(c) || (author(c).is_some() && author(c) == owner_at(&c.id, &c.stamp))
+            is_referee(c) || (author(c).is_some() && author(c) == owner_now(&c.id))
         }
     })
     .into_iter()
@@ -2669,6 +2676,19 @@ mod tests {
         .unwrap();
         sync(&book, &mini);
         assert_eq!(mini.session_records()[&session.id]["name"], serde_json::json!("Renamed on the MacBook"));
+    }
+
+    #[tokio::test]
+    async fn a_former_owner_that_backdates_its_changes_does_not_change_the_session_it_gave_up() {
+        let (_h1, book) = member("book").await;
+        let (_h2, mini) = member("mini").await;
+        let session = fix_cart_known_to(&book, &mini).await;
+        // studio-mini, the central host, takes it.
+        assert!(mini.set_session_owner(&session.id, "mini", 2, None));
+        // The MacBook then stamps a delete as if it still owned it.
+        mini.apply_account(vec![backdated("book.k3x9q2", 1, &session.id, moonlet_proto::types::ChangeOp::Delete)]);
+        let r = &mini.session_records()[&session.id];
+        assert_eq!((&r["owner"], &r["name"]), (&serde_json::json!("mini"), &serde_json::json!("Fix cart")));
     }
 
 
