@@ -2021,7 +2021,9 @@ async fn a_message_typed_while_the_session_moves_keeps_it_on_the_central_host() 
     let there = own.iter().find(|s| s["id"] == made["id"]).unwrap().clone();
     let chat = there["terminals"][0].clone();
     // studio-mini's git waits, as the move renames the session's branch,
-    // until the test says go: a message comes in just then.
+    // until the test says go: a message comes in just then. The hook waits
+    // on the rename deleting the old name, the one step every git runs as
+    // a transaction; git before 2.46 writes the new name and HEAD outside one.
     let worktree = PathBuf::from(there["path"].as_str().unwrap());
     let common = std::process::Command::new("git")
         .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
@@ -2036,7 +2038,7 @@ async fn a_message_typed_while_the_session_moves_keeps_it_on_the_central_host() 
     std::fs::write(
         &hook,
         format!(
-            "#!/bin/sh\n[ \"$1\" = prepared ] || exit 0\ngrep -q refs/heads/moonlet-copy/ || exit 0\n[ -e '{s}' ] && exit 0\ntouch '{s}'\nn=0\nwhile [ ! -e '{g}' ] && [ $n -lt 300 ]; do sleep 0.1; n=$((n+1)); done\n",
+            "#!/bin/sh\n[ \"$1\" = prepared ] || exit 0\ngrep -qE ' 0{{40}} refs/heads/moonlet/fix-cart$' || exit 0\n[ -e '{s}' ] && exit 0\ntouch '{s}'\nn=0\nwhile [ ! -e '{g}' ] && [ $n -lt 300 ]; do sleep 0.1; n=$((n+1)); done\n",
             s = started.display(),
             g = go.display()
         ),
