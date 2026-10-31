@@ -83,6 +83,9 @@ pub struct Daemon {
     /// On the central host: sign-ins shown on the phone that have to finish
     /// on a Mac, for the next Mac app the user touches, until they lapse.
     for_next_mac: Mutex<Vec<(std::time::Instant, m::BrowserShow)>>,
+    /// Whether a Sign in on every member runs (X75): one at a time, so
+    /// their browsers never compete.
+    signing_in: Arc<std::sync::atomic::AtomicBool>,
     /// What the Mac's last sleep left to its wake (X73).
     asleep: Mutex<Asleep>,
     /// Per design system (X64): one start of its agent, or one change of its
@@ -633,6 +636,7 @@ impl Daemon {
             forwards: crate::signin::Forwards::default(),
             approvals: crate::signin::Approvals::new(&moonlet_core::paths::home()),
             for_next_mac: Mutex::new(Vec::new()),
+            signing_in: Default::default(),
             asleep: Default::default(),
             heavy,
             cloud,
@@ -1399,9 +1403,20 @@ impl Daemon {
                 app_only(conn, "sign-ins")?;
                 let r: m::SignInsRun = params(p)?;
                 self.sign_in_entry(&r.entry)?;
+                use std::sync::atomic::Ordering;
+                if self.signing_in.swap(true, Ordering::SeqCst) {
+                    return Err(RpcError::new("busy", "a sign-in on every member is running: wait until it ends"));
+                }
                 // One after the other, so each browser opens in turn.
                 let d = self.clone();
                 tokio::spawn(async move {
+                    struct Done(Arc<std::sync::atomic::AtomicBool>);
+                    impl Drop for Done {
+                        fn drop(&mut self) {
+                            self.0.store(false, Ordering::SeqCst);
+                        }
+                    }
+                    let _done = Done(d.signing_in.clone());
                     for member in r.members {
                         if let Err(e) = d.sign_in_on(&member, &r.entry).await {
                             tracing::info!(%member, "cannot sign in there: {}", e.message);

@@ -1095,3 +1095,30 @@ async fn a_sign_in_running_here_shows_its_terminal_in_this_macs_app() {
         "{terminals:?}"
     );
 }
+
+#[tokio::test]
+async fn a_second_sign_in_on_every_member_waits_until_the_first_ends() {
+    let d = daemon().await;
+    let login = "sleep 2";
+    let _: bool = d
+        .call("signins.set", json!({ "entries": [entry("exit 1", login)] }))
+        .await;
+    let _: bool = d
+        .call(
+            "signins.approve",
+            json!({ "entry": "t", "login": login, "check": "exit 1" }),
+        )
+        .await;
+    let me: Value = d.call("link.get", json!({})).await;
+    let run = json!({ "entry": "t", "members": [me["worker"]["id"]] });
+    let _: bool = d.call("signins.run", run.clone()).await;
+    // A second press while the first round runs starts nothing.
+    let e = d.try_call("signins.run", run.clone()).await.unwrap_err();
+    assert!(e.contains("busy"), "{e}");
+    within(
+        Duration::from_secs(10),
+        "a run accepted once the first ended",
+        || async { d.try_call("signins.run", run.clone()).await.is_ok() },
+    )
+    .await;
+}
