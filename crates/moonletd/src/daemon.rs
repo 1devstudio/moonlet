@@ -825,14 +825,14 @@ impl Daemon {
     }
 
     /// Whether `conn` is the moonlet app, which acts for the user: on this
-    /// Mac, or on a Mac paired with it over the tailnet (X76). Like X31's
-    /// reads, this trusts the name the client gives in its hello.
+    /// Mac, or on a Mac paired with it over the tailnet (X76). On this Mac
+    /// it must have proved it is the app with its credential (X75).
     pub fn is_app(&self, conn: &Conn) -> bool {
         conn.client == APP_CLIENT
-            && conn
-                .phone
-                .as_deref()
-                .is_none_or(|d| self.mobile.kind_of(d) == Some(m::DeviceKind::Desktop))
+            && match conn.phone.as_deref() {
+                None => conn.app,
+                Some(d) => self.mobile.kind_of(d) == Some(m::DeviceKind::Desktop),
+            }
     }
 
     pub fn on_connect(&self, conn: &Conn) {

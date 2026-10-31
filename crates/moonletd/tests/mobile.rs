@@ -1124,6 +1124,36 @@ async fn one_app_takes_a_task_request_and_agents_cannot_answer_one() {
     let Message::Response { error: None, .. } = asking.await.unwrap() else { panic!("not answered") };
 }
 
+/// A local process that only says it is moonlet-app, without the app's
+/// credential (X75), is not the app for a phone's tasks (X76).
+#[tokio::test]
+async fn a_process_that_only_says_it_is_the_app_does_not_act_on_tasks() {
+    let mac = Mac::start(None).await;
+    let addr = mac.allow_phones().await;
+    let token = mac.pair(&addr).await;
+    let (mut phone, _) = auth(&addr, json!({ "token": token })).await;
+    hello(&mut phone, "moonlet-mobile").await;
+    let ws = personal_workspace(&mut mac.app().await).await;
+
+    let mut forged = Client::connect(&mac.socket, "moonlet-app").await.unwrap();
+    let e = forged.request::<_, bool>("tasks.set_snapshot", json!({ "workspace": ws, "snapshot": board_snapshot() })).await.unwrap_err();
+    assert_eq!(e.to_string(), "forbidden: only the moonlet app shares boards");
+    let e = forged.request::<_, bool>("tasks.answer", json!({ "request_id": 1, "ok": true })).await.unwrap_err();
+    assert_eq!(e.to_string(), "forbidden: only the moonlet app answers task requests");
+
+    // Nor does it count as moonlet being open for the phone.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let Message::Response { result: Some(r), .. } = call_with(&mut phone, 1, "tasks.app", json!({})).await else { panic!("no answer") };
+        if r == json!({ "open": false }) {
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "moonlet counts as open with only the forged app: {r}");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    drop(forged);
+}
+
 /// A phone hears whether moonlet is open on the Mac (X76): moves wait for it.
 #[tokio::test]
 async fn a_phone_hears_when_the_app_opens_and_closes() {
