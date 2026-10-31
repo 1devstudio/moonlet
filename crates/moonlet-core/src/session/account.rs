@@ -636,6 +636,13 @@ fn diff(old: &State, new: &State, log: &mut Log, now: u64) -> Vec<Change> {
 /// The account's sessions in `log`, as [`SessionManager::session_records`]
 /// gives them (X72, X73).
 fn sessions_in(log: &Log) -> Map<String, Record> {
+    session_view(log).0
+}
+
+/// The account's sessions in `log` (see [`sessions_in`]), and the ids of
+/// those deleted by a member whose delete counts: the referee, or the
+/// member that owns the session now. Another member's delete is left out.
+fn session_view(log: &Log) -> (Map<String, Record>, BTreeSet<String>) {
     use moonlet_proto::types::{ChangeOp, Stamp};
     let referee = log.account().or_else(|| log_owner(log.member()));
     fn author(c: &Change) -> Option<&str> {
@@ -688,24 +695,28 @@ fn sessions_in(log: &Log) -> Map<String, Record> {
     // made: a move carries the record as the referee had it, so what a
     // former owner wrote before it is kept.
     let owner_now = |id: &str| owners.get(id).and_then(|list| list.last()).map(|(_, owner, _)| *owner).or_else(|| maker(id));
-    log.records_where(SESSION, |c| {
+    let counts = |c: &Change| {
         if is_ownership(c) {
             ownership_counts(c)
         } else {
             is_referee(c) || (author(c).is_some() && author(c) == owner_now(&c.id))
         }
-    })
-    .into_iter()
-    .filter(|(id, r)| {
-        // The maker owns what it makes; only the referee moves it to
-        // another member.
-        let owner = r.get("owner").and_then(Value::as_str);
-        owners
-            .get(id.as_str())
-            .and_then(|list| list.last())
-            .is_some_and(|(_, last, by_referee)| owner == Some(*last) && (*by_referee || owner == maker(id)))
-    })
-    .collect()
+    };
+    let deleted = log.changes_of(SESSION).filter(|c| c.op == ChangeOp::Delete && counts(c)).map(|c| c.id.clone()).collect();
+    let records = log
+        .records_where(SESSION, counts)
+        .into_iter()
+        .filter(|(id, r)| {
+            // The maker owns what it makes; only the referee moves it to
+            // another member.
+            let owner = r.get("owner").and_then(Value::as_str);
+            owners
+                .get(id.as_str())
+                .and_then(|list| list.last())
+                .is_some_and(|(_, last, by_referee)| owner == Some(*last) && (*by_referee || owner == maker(id)))
+        })
+        .collect();
+    (records, deleted)
 }
 
 /// The members that say, in a change of their own, that they own each
@@ -801,15 +812,17 @@ fn session_changes(st: &State, log: &mut Log, now: u64, removed: &[String]) -> V
     let Some(me) = log_owner(log.member()).map(str::to_string) else {
         return Vec::new();
     };
-    let records = log.records(SESSION);
+    // Only a delete that counts ends a record: another member's would
+    // otherwise stop this member recording its session.
+    let (sessions, deleted) = session_view(log);
+    let records = log.records_where(SESSION, |c| c.op != moonlet_proto::types::ChangeOp::Delete || deleted.contains(&c.id));
     // Who owns each session, counting only the changes that may say so.
     let owner_of = |sessions: &Map<String, Record>, id: &str| {
         sessions.get(id).and_then(|r| r.get("owner")).and_then(Value::as_str).map(str::to_string)
     };
-    let sessions = sessions_in(log);
     let mut out = Vec::new();
     for s in st.sessions.iter().filter(|s| s.owner.is_none()) {
-        if log.is_deleted(SESSION, &s.id) {
+        if deleted.contains(&s.id) {
             continue;
         }
         let had = records.get(&s.id);
@@ -2737,6 +2750,28 @@ mod tests {
             let r = &records[&session.id];
             assert_eq!((&r["owner"], &r["name"]), (&serde_json::json!("book"), &serde_json::json!("Fix cart")));
         }
+    }
+
+    #[tokio::test]
+    async fn another_members_delete_never_stops_a_sessions_owner_recording_it() {
+        let (_h1, book) = member("book").await;
+        let (_h2, mini) = member("mini").await;
+        let session = fix_cart_known_to(&book, &mini).await;
+        book.set_central_account(Some("mini".into()));
+        // studio-air, neither its maker nor the central host, deletes it.
+        let delete = session_change("air.p7d2m4", 1, 1, &session.id, moonlet_proto::types::ChangeOp::Delete);
+        mini.apply_account(vec![delete.clone()]);
+        book.apply_account(vec![delete]);
+        book.update(moonlet_proto::methods::SessionUpdate {
+            id: session.id.clone(),
+            name: Some("Renamed on the MacBook".into()),
+            layout: None,
+            task: None,
+        })
+        .unwrap();
+        sync(&book, &mini);
+        let r = &mini.session_records()[&session.id];
+        assert_eq!((&r["owner"], &r["name"]), (&serde_json::json!("book"), &serde_json::json!("Renamed on the MacBook")));
     }
 
     #[tokio::test]
