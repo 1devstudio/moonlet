@@ -583,9 +583,15 @@ pub const SIGNINS_RUN: &str = "signins.run";
 /// [`SignInsHere`] → `[SignInState]`: between members, through the central
 /// host: checks or signs in on a member, with that member's own entry.
 pub const SIGNINS_HERE: &str = "signins.here";
-/// [`SignInRunning`]: a sign-in runs in a terminal of this member, for its
-/// app to show (X75).
+/// [`SignInRunning`]: a sign-in runs in a terminal, for this Mac's app to
+/// show (X75): one of this member's, or another member's that this Mac's
+/// Sign in on every member started; and how the latter ended.
 pub const EV_SIGNIN_RUNNING: &str = "signins.running";
+/// [`SignInAttach`] → `terminal.attach`'s reply, under a relay id: on the
+/// central host, the Mac that started a sign-in on another member follows
+/// its terminal through the central host (X75), as `session.attach` does a
+/// session's. No other client may.
+pub const SIGNINS_ATTACH: &str = "signins.attach";
 /// [`JobList`] → `[Job]`: a session's jobs, newest first (X62).
 pub const JOB_LIST: &str = "job.list";
 /// [`JobOutputGet`] → [`JobOutput`]: a job's stored output from a byte.
@@ -1248,7 +1254,8 @@ pub struct SessionAttach {
 }
 
 /// `session.relay` (X72): `attach` to `terminal` of `session` as relay
-/// `relay`, or `detach` relay `relay`.
+/// `relay`, or `detach` relay `relay`. With `signin`, `terminal` is one of
+/// the member's running sign-ins instead, and `session` is empty (X75).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionRelay {
     pub op: String,
@@ -1261,6 +1268,8 @@ pub struct SessionRelay {
     pub cols: Option<u16>,
     #[serde(default)]
     pub rows: Option<u16>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub signin: bool,
 }
 
 /// `session.detach {relay}` (X72).
@@ -1452,20 +1461,66 @@ pub struct SignInsRun {
 }
 
 /// `signins.here` params: `check` on every member but the one asking, or
-/// on `member`; `run` on `member`.
+/// on `member`; `run` on `member`. `start` on `member` answers
+/// [`SignInStarted`] at once; `wait` for its `terminal` answers
+/// [`SignInEnded`] once the sign-in ends. Only the member that started a
+/// sign-in waits for it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SignInsHere {
     pub op: String,
     pub entry: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub member: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal: Option<crate::TerminalId>,
 }
 
-/// `signins.running`: the terminal a sign-in runs in, and its name.
+/// `signins.here start`'s answer: the sign-in's terminal on its member.
+/// `relayed`: followed through the central host's relay
+/// (`signins.attach`); otherwise it is a terminal of the central host's
+/// own.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SignInStarted {
+    pub terminal: crate::TerminalId,
+    #[serde(default)]
+    pub relayed: bool,
+}
+
+/// `signins.here wait`'s answer: how the sign-in's command ended; none
+/// when its terminal is gone.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SignInEnded {
+    #[serde(default)]
+    pub exit: Option<crate::types::ExitInfo>,
+}
+
+/// `signins.running`: the terminal a sign-in runs in, and its name. For
+/// another member's sign-in, that member, by worker id and name, whether
+/// its terminal is followed through the central host's relay (see
+/// [`SignInStarted`]), and, in a second event once it ended, its `exit`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SignInRunning {
     pub terminal: crate::TerminalId,
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub member: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub member_name: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub relayed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit: Option<crate::types::ExitInfo>,
+}
+
+/// `signins.attach {member, terminal, cols?, rows?}` (X75).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SignInAttach {
+    pub member: String,
+    pub terminal: crate::TerminalId,
+    #[serde(default)]
+    pub cols: Option<u16>,
+    #[serde(default)]
+    pub rows: Option<u16>,
 }
 
 /// Whether a member is signed in with an entry: `signed_in`, `signed_out`,

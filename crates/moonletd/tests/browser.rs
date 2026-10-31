@@ -193,29 +193,47 @@ async fn pair(central: &Daemon, addr: &str, name: &str, kind: DeviceKind) -> Str
 
 /// The MacBook, linked to `central`.
 async fn linked_book(central: &Daemon, addr: &str) -> Daemon {
+    linked_book_and_token(central, addr).await.0
+}
+
+/// The MacBook, linked to `central`, and the token its app reaches
+/// `central` with: the one its daemon links with.
+async fn linked_book_and_token(central: &Daemon, addr: &str) -> (Daemon, String) {
+    linked_member(central, addr, BOOK, "MacBook", "127.0.0.2").await
+}
+
+/// Member `name` (worker `id`, listening on `ip`), linked to `central`,
+/// and the token it links with.
+async fn linked_member(
+    central: &Daemon,
+    addr: &str,
+    id: &str,
+    name: &str,
+    ip: &str,
+) -> (Daemon, String) {
     let home = tempfile::tempdir().unwrap();
     std::fs::write(
         home.path().join("link.json"),
-        json!({ "central": null, "worker": { "id": BOOK, "name": "MacBook", "enabled": false } })
+        json!({ "central": null, "worker": { "id": id, "name": name, "enabled": false } })
             .to_string(),
     )
     .unwrap();
-    let book = Daemon::start(home, &[("MOONLET_MOBILE_ADDRS", "127.0.0.2")]).await;
-    let token = pair(central, addr, "MacBook", DeviceKind::Desktop).await;
-    let _: Value = book
+    let member = Daemon::start(home, &[("MOONLET_MOBILE_ADDRS", ip)]).await;
+    let token = pair(central, addr, name, DeviceKind::Desktop).await;
+    let _: Value = member
         .call(
             "link.set",
             json!({ "central": { "name": "studio-mini", "addrs": [addr], "token": token } }),
         )
         .await;
-    within(Duration::from_secs(15), "the MacBook linked", || async {
+    within(Duration::from_secs(15), "the member linked", || async {
         let workers: Value = central.call("worker.list", json!({})).await;
         workers
             .as_array()
-            .is_some_and(|l| l.iter().any(|w| w["id"] == json!(BOOK)))
+            .is_some_and(|l| l.iter().any(|w| w["id"] == json!(id)))
     })
     .await;
-    book
+    (member, token)
 }
 
 #[tokio::test]
@@ -1179,4 +1197,211 @@ async fn a_sign_in_that_outlives_its_wait_is_stopped_before_the_next_starts() {
         },
     )
     .await;
+}
+
+/// The next `signins.running` `c` gets, if one comes within `limit`.
+async fn next_running(c: &mut Client, limit: Duration) -> Option<Value> {
+    let deadline = tokio::time::Instant::now() + limit;
+    loop {
+        let f = tokio::time::timeout_at(deadline, c.next_frame())
+            .await
+            .ok()?
+            .unwrap()
+            .unwrap();
+        if let Frame::Json(Message::Event { name, data }) = f
+            && name == "signins.running"
+        {
+            return Some(data);
+        }
+    }
+}
+
+/// Sends request `id` on a raw connection and gives its reply, skipping
+/// whatever else comes first.
+async fn raw_request(
+    s: &mut tokio::net::TcpStream,
+    id: u64,
+    method: &str,
+    params: Value,
+) -> Result<Value, moonlet_proto::RpcError> {
+    use moonlet_proto::{read_frame, write_frame};
+    let req = Message::Request {
+        id,
+        method: method.into(),
+        params,
+    };
+    write_frame(s, &Frame::Json(req)).await.unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let f = tokio::time::timeout_at(deadline, read_frame(s))
+            .await
+            .expect("no reply")
+            .unwrap()
+            .unwrap();
+        if let Frame::Json(Message::Response {
+            id: got,
+            result,
+            error,
+        }) = f
+            && got == id
+        {
+            return match error {
+                Some(e) => Err(e),
+                None => Ok(result.unwrap_or(Value::Null)),
+            };
+        }
+    }
+}
+
+const BOX: &str = "5b2e8d4f-6a1c-4f3e-b7d9-0e2a4c6f8b15";
+
+/// Three members: the central host studio-mini, and the MacBook and
+/// build-box linked to it, with a sign-in whose command asks a question
+/// before it ends, approved on each. Gives studio-mini's address and the
+/// tokens of the MacBook and build-box there too.
+struct Asking {
+    mini: Daemon,
+    addr: String,
+    book: Daemon,
+    token: String,
+    build_box: Daemon,
+    box_token: String,
+}
+
+async fn sign_in_that_asks() -> Asking {
+    let (mini, addr) = central().await;
+    let (book, token) = linked_book_and_token(&mini, &addr).await;
+    let (build_box, box_token) = linked_member(&mini, &addr, BOX, "build-box", "127.0.0.3").await;
+    let login = "printf 'Press Enter to open the browser...'; read _; echo answered-$((40+2))";
+    let _: bool = book
+        .call(
+            "signins.set",
+            json!({ "entries": [entry("exit 1", login)] }),
+        )
+        .await;
+    let seen = json!({ "entry": "t", "login": login, "check": "exit 1" });
+    for d in [&book, &mini, &build_box] {
+        within(
+            Duration::from_secs(10),
+            "the entry on each member",
+            || async {
+                let list: Vec<Value> = d.call("signins.list", json!({})).await;
+                list.first().is_some_and(|e| e["id"] == json!("t"))
+            },
+        )
+        .await;
+        let _: bool = d.call("signins.approve", seen.clone()).await;
+    }
+    Asking {
+        mini,
+        addr,
+        book,
+        token,
+        build_box,
+        box_token,
+    }
+}
+
+#[tokio::test]
+async fn another_member_s_sign_in_is_answered_in_the_app_of_the_mac_that_pressed_sign_in() {
+    use moonlet_proto::{read_frame, write_frame};
+    let a = sign_in_that_asks().await;
+    let mut app = a.book.app().await;
+    let _: bool = app
+        .request("signins.run", json!({ "entry": "t", "members": [BOX] }))
+        .await
+        .unwrap();
+    let running = next_running(&mut app, Duration::from_secs(15))
+        .await
+        .expect("build-box's sign-in in the MacBook's app");
+    assert_eq!(running["name"], json!("test-cli"));
+    assert_eq!(running["member"], json!(BOX));
+    assert_eq!(running["member_name"], json!("build-box"));
+    assert_eq!(running["relayed"], json!(true));
+
+    // The MacBook's app follows it through studio-mini, and answers it.
+    let mut follow = raw(&a.addr, &a.token, "moonlet-app").await;
+    let attached = raw_request(
+        &mut follow,
+        1,
+        "signins.attach",
+        json!({ "member": BOX, "terminal": running["terminal"] }),
+    )
+    .await
+    .unwrap();
+    let relay = attached["info"]["id"].as_u64().unwrap() as u32;
+    write_frame(
+        &mut follow,
+        &Frame::Input {
+            terminal: relay,
+            data: b"\n".to_vec(),
+        },
+    )
+    .await
+    .unwrap();
+    let seen = tokio::time::timeout(Duration::from_secs(20), async {
+        let mut out = attached["snapshot"].as_str().unwrap_or("").to_string();
+        while !out.contains("answered-42") {
+            if let Some(Frame::Output { terminal, data }) = read_frame(&mut follow).await.unwrap()
+                && terminal == relay
+            {
+                out.push_str(&String::from_utf8_lossy(&data));
+            }
+        }
+        out
+    })
+    .await
+    .expect("the answer never reached build-box's sign-in");
+    assert!(seen.contains("Press Enter to open the browser"), "{seen}");
+
+    // Its end comes back, as its terminal's exit does not.
+    let ended = next_running(&mut app, Duration::from_secs(10))
+        .await
+        .expect("how the sign-in ended");
+    assert_eq!(ended["terminal"], running["terminal"]);
+    assert_eq!(ended["exit"]["code"], json!(0));
+}
+
+#[tokio::test]
+async fn another_member_s_sign_in_is_followed_only_by_the_mac_that_started_it() {
+    let a = sign_in_that_asks().await;
+    let mut app = a.book.app().await;
+    let _: bool = app
+        .request("signins.run", json!({ "entry": "t", "members": [BOX] }))
+        .await
+        .unwrap();
+    let running = next_running(&mut app, Duration::from_secs(15))
+        .await
+        .expect("build-box's sign-in in the MacBook's app");
+    let follow = json!({ "member": BOX, "terminal": running["terminal"] });
+    let refused = |e: Result<Value, moonlet_proto::RpcError>| e.unwrap_err().code;
+
+    // Not studio-mini's own app, nor build-box's, nor a phone.
+    let mini_app = a.mini.try_call("signins.attach", follow.clone()).await;
+    assert!(mini_app.unwrap_err().starts_with("forbidden"));
+    let mut box_app = raw(&a.addr, &a.box_token, "moonlet-app").await;
+    let box_app = raw_request(&mut box_app, 1, "signins.attach", follow.clone()).await;
+    assert_eq!(refused(box_app), "forbidden");
+    let phone = pair(&a.mini, &a.addr, "iPhone", DeviceKind::Phone).await;
+    let mut phone = raw(&a.addr, &phone, "moonlet-mobile").await;
+    let phone = raw_request(&mut phone, 1, "signins.attach", follow).await;
+    assert_eq!(refused(phone), "forbidden");
+
+    // Nor, from the MacBook, a terminal of build-box's that is no sign-in.
+    let other: Value = a
+        .build_box
+        .call(
+            "terminal.create",
+            json!({ "cwd": a.build_box.home.path(), "command": ["sh", "-c", "sleep 30"] }),
+        )
+        .await;
+    let mut book_app = raw(&a.addr, &a.token, "moonlet-app").await;
+    let not_a_sign_in = raw_request(
+        &mut book_app,
+        1,
+        "signins.attach",
+        json!({ "member": BOX, "terminal": other["id"] }),
+    )
+    .await;
+    assert_eq!(refused(not_a_sign_in), "forbidden");
 }

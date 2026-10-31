@@ -464,10 +464,11 @@ where
                     let e = RpcError::new("forbidden", "a cloud machine only runs heavy commands");
                     let _ = conn.tx.send(Frame::Json(Message::err(id, e)));
                 }
-                // Another member's terminal (X72): its reply, with the
-                // snapshot, goes before any of its output.
+                // Another member's terminal (X72), or sign-in (X75): its
+                // reply, with the snapshot, goes before any of its output.
                 Frame::Json(Message::Request { id, method, params })
-                    if method == moonlet_proto::methods::SESSION_ATTACH =>
+                    if method == moonlet_proto::methods::SESSION_ATTACH
+                        || method == moonlet_proto::methods::SIGNINS_ATTACH =>
                 {
                     let daemon = daemon.clone();
                     let conn = conn.clone();

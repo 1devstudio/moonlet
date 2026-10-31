@@ -562,6 +562,43 @@ impl Taken {
     }
 }
 
+/// Sign-ins that Sign in on every member started (X75), by the member each
+/// runs on and its terminal there, with the member that started it: on a
+/// member, its own sign-ins; on the central host, those it relays, so only
+/// the Mac that started one follows its terminal or waits for its end.
+/// Each lapses a minute after its command would have been stopped.
+#[derive(Default)]
+pub struct Started {
+    list: Mutex<std::collections::HashMap<(String, u32), (String, Instant)>>,
+}
+
+impl Started {
+    /// Sign-in `terminal` on `member`, started by member `by` at `now`.
+    pub fn start(&self, member: &str, terminal: u32, by: &str, now: Instant) {
+        let mut list = self.list.lock().unwrap();
+        list.retain(|_, (_, until)| *until > now);
+        let until = now + run_wait() + Duration::from_secs(60);
+        list.insert((member.to_string(), terminal), (by.to_string(), until));
+    }
+
+    /// Who started sign-in `terminal` on `member`, while it has not lapsed
+    /// at `now`.
+    pub fn by(&self, member: &str, terminal: u32, now: Instant) -> Option<String> {
+        let list = self.list.lock().unwrap();
+        list.get(&(member.to_string(), terminal))
+            .filter(|(_, until)| *until > now)
+            .map(|(by, _)| by.clone())
+    }
+
+    /// Sign-in `terminal` on `member` ended: nobody follows it any more.
+    pub fn end(&self, member: &str, terminal: u32) {
+        self.list
+            .lock()
+            .unwrap()
+            .remove(&(member.to_string(), terminal));
+    }
+}
+
 /// The sign-in commands this member's user approved (X75), by entry id,
 /// as they were then: kept in `$MOONLET_HOME/signins.json`, mode 0600, and
 /// never synced. A command changed since, here or on another member, asks
@@ -618,6 +655,28 @@ pub async fn signed_in(check: &str, env: &BTreeMap<String, String>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_started_sign_in_is_the_starters_until_it_ends_or_lapses() {
+        let started = Started::default();
+        let t0 = Instant::now();
+        started.start("build-box", 7, "MacBook", t0);
+        assert_eq!(
+            started.by("build-box", 7, t0 + Duration::from_secs(5)),
+            Some("MacBook".to_string())
+        );
+        // Another terminal, or the same id on another member, is nobody's.
+        assert_eq!(started.by("build-box", 8, t0), None);
+        assert_eq!(started.by("studio-mini", 7, t0), None);
+        // Past its command's ten minutes and a minute more, it lapses.
+        assert_eq!(
+            started.by("build-box", 7, t0 + Duration::from_secs(11 * 60 + 1)),
+            None
+        );
+        started.start("build-box", 9, "MacBook", t0);
+        started.end("build-box", 9);
+        assert_eq!(started.by("build-box", 9, t0), None);
+    }
 
     /// `lsof -nP -iTCP:8095 -sTCP:LISTEN -Fpn` with `python3 -m
     /// http.server 8095 --bind 127.0.0.1` listening (macOS 27).
