@@ -134,6 +134,9 @@ pub const SESSION_RELAY: &str = "session.relay";
 pub const SESSION_CONTINUE_HERE: &str = "session.continue_here";
 /// A member takes a session the central host runs (X73).
 pub const SESSION_TAKE: &str = "session.take";
+/// A member whose bring of a session failed after the central host gave it
+/// up hands it back, so it goes on there (X73).
+pub const SESSION_GIVE_BACK: &str = "session.give_back";
 /// A member fetches one of a session's transcript files from the central
 /// host, once it owns the session (X73).
 pub const SESSION_TRANSCRIPT_FETCH: &str = "session.transcript_fetch";
@@ -1173,6 +1176,15 @@ pub struct SessionDetach {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionContinueHere {
     pub session: String,
+}
+
+/// `session.give_back {session, epoch}`, member → central host (X73): the
+/// session the central host gave this member at ownership number `epoch`
+/// goes on there again, as it was, because the member could not take it in.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionGiveBack {
+    pub session: String,
+    pub epoch: u64,
 }
 
 /// `session.take {session, epoch, now}`, member → central host (X73): at

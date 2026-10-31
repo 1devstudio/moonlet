@@ -2200,6 +2200,60 @@ async fn a_bring_that_cannot_take_the_session_in_keeps_its_copy() {
 }
 
 #[tokio::test]
+async fn a_bring_whose_mac_fails_after_the_hand_over_leaves_the_session_running_on_the_central_host() {
+    let origin = Origin::new();
+    let (mini, book, made) = continued_and_back(&origin).await;
+    // The MacBook cannot save its sessions, so it fails to take the
+    // session in once studio-mini has already given it up.
+    let blocked = book.home.path().join("state.json.tmp");
+    std::fs::create_dir_all(blocked.join("in-the-way")).unwrap();
+
+    let refused = book
+        .try_call("session.bring", json!({ "session": made["id"] }))
+        .await
+        .unwrap_err();
+    assert!(refused.starts_with("failed"), "{refused}");
+    std::fs::remove_dir_all(&blocked).unwrap();
+
+    // studio-mini runs it again, on its own branch.
+    let own: Vec<Value> = mini.call("session.list", json!({})).await;
+    let back = own
+        .iter()
+        .find(|s| s["id"] == made["id"])
+        .unwrap_or_else(|| panic!("studio-mini's again: {own:?}"));
+    assert_eq!(back["branch"], json!("moonlet/fix-cart"));
+    let on = std::process::Command::new("git")
+        .args(["branch", "--show-current"])
+        .current_dir(back["path"].as_str().unwrap())
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&on.stdout).trim(), "moonlet/fix-cart");
+    // Its chat is not paused: a message reaches the agent there.
+    let chat = back["terminals"][0].clone();
+    let _: Value = mini
+        .call("chat.send", json!({ "id": chat, "text": "Still on studio-mini" }))
+        .await;
+    within(
+        Duration::from_secs(30),
+        "the message on studio-mini",
+        || async { agent_log(&mini, "claude-user").contains("Still on studio-mini") },
+    )
+    .await;
+    // The account names studio-mini its owner, as the MacBook sees it.
+    within(
+        Duration::from_secs(10),
+        "studio-mini's on the MacBook",
+        || async {
+            with_copies(&book)
+                .await
+                .iter()
+                .any(|s| s["id"] == made["id"] && s["owner"]["worker"] == json!(MINI))
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn a_transcript_that_cannot_be_fetched_leaves_the_members_as_it_is() {
     let origin = Origin::new();
     let (mini, book, made) = continued_and_back(&origin).await;

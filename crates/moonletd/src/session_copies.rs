@@ -489,6 +489,11 @@ struct Held {
     /// The transcript files written for it, where they were written.
     #[serde(default)]
     transcripts: Vec<String>,
+    /// For a session this host gave its owner (X73), until the owner opens
+    /// it: its chats as they were, to go on with here should the owner hand
+    /// it back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    given: Option<Vec<m::SessionCopyChat>>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -1541,6 +1546,8 @@ impl SessionCopies {
             h.repo = repo.display().to_string();
             h.from_path = r.path;
             h.project = r.project;
+            // The owner took it in: there is nothing to hand back.
+            h.given = None;
             self.save(&data);
         }
         Ok(m::SessionOpened {
@@ -2141,7 +2148,10 @@ impl SessionCopies {
     }
 
     /// Keeps `path`, the worktree of a session this host gave `owner`, as
-    /// that owner's copy (X73): its next offers go here.
+    /// that owner's copy (X73): its next offers go here. `given` are its
+    /// chats as they were, kept until the owner opens it, in case the owner
+    /// cannot take it in and hands it back.
+    #[allow(clippy::too_many_arguments)]
     pub fn hold(
         &self,
         session: &str,
@@ -2150,6 +2160,7 @@ impl SessionCopies {
         path: &Path,
         from_path: &str,
         project: &str,
+        given: Vec<m::SessionCopyChat>,
     ) {
         let mut data = self.data.lock().unwrap();
         data.held.insert(
@@ -2160,10 +2171,22 @@ impl SessionCopies {
                 path: path.display().to_string(),
                 from_path: from_path.to_string(),
                 project: project.to_string(),
+                given: Some(given),
                 ..Default::default()
             },
         );
         self.save(&data);
+    }
+
+    /// The chats of `session` as this host gave them to `owner` (X73),
+    /// while that owner has not opened it yet; none otherwise.
+    pub fn given(&self, session: &str, owner: &str) -> Option<Vec<m::SessionCopyChat>> {
+        let data = self.data.lock().unwrap();
+        let held = data.held.get(session)?;
+        if held.owner != owner {
+            return None;
+        }
+        held.given.clone()
     }
 
     /// `session.transcript_fetch` from member `worker`, which owns the
