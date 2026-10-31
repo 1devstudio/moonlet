@@ -2809,6 +2809,36 @@ mod tests {
         assert!(notes.is_empty(), "{notes:?}");
     }
 
+    /// X73: what the member's agent had running when it went away is over
+    /// in the chat that goes on here, as after a daemon restart.
+    #[tokio::test]
+    async fn a_continued_chat_closes_what_its_member_had_running() {
+        let (repo, _home, mgr, chats) = structured().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let s = mgr.create_session(new_session(&r.id, None)).await.unwrap();
+        let history: moonlet_proto::types::ChatState = serde_json::from_value(serde_json::json!({
+            "status": "working",
+            "items": [
+                { "id": "m1", "kind": "assistant", "text": "Running the te", "ts": 1, "partial": true },
+                { "id": "t1", "kind": "tool", "ts": 2, "tool": { "name": "Bash", "summary": "npm test", "input": { "command": "npm test" }, "status": "running" } }
+            ],
+            "subagents": [
+                { "id": "a1", "tool_use_id": "toolu_1", "description": "List files", "status": "running", "started_at": 1 }
+            ],
+            "queued": [ { "id": "q1", "text": "Also fix the header" } ]
+        }))
+        .unwrap();
+
+        let chat = mgr.continue_chat(&s, history).unwrap();
+        let st = chats.state(chat.id).unwrap();
+        assert!(!st.items[0].partial);
+        assert_eq!(st.items[1].tool.as_ref().unwrap().status, "error");
+        assert_eq!(st.subagents[0].status, "stopped");
+        assert!(st.queued.is_empty());
+        let texts: Vec<&str> = st.items[2..].iter().map(|i| i.text.as_str()).collect();
+        assert_eq!(texts, ["Also fix the header", "Not delivered: Claude stopped before reading this message."]);
+    }
+
     /// X64: a design system's agent has no session; it starts in its
     /// workspace's profile, with its own settings.
     #[tokio::test]

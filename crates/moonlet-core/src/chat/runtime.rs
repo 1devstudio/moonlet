@@ -121,6 +121,21 @@ fn agent_state(status: &str) -> AgentState {
     }
 }
 
+/// A chat's state from another member, going on here (X73): what its
+/// agent had running is over, as after a daemon restart, and the messages
+/// it had not read yet say they never reached it.
+fn continued_state(mut st: ChatState) -> ChatState {
+    super::stop_subagents(&mut st);
+    for it in &mut st.items {
+        it.partial = false;
+        if let Some(t) = it.tool.as_mut().filter(|t| t.status == "running") {
+            t.status = "error".into();
+        }
+    }
+    super::undeliver(&mut st);
+    st
+}
+
 /// Asks that wait through a daemon restart.
 const KEPT_TOOLS: [&str; 2] = ["AskUserQuestion", "ExitPlanMode"];
 
@@ -231,14 +246,7 @@ impl ChatManager {
                 cfg,
                 env: req.env,
                 state: match history {
-                    Some(h) => ChatState {
-                        status: "idle".into(),
-                        pending: Vec::new(),
-                        queued: Vec::new(),
-                        turn_started_at: None,
-                        add_dirs,
-                        ..h
-                    },
+                    Some(h) => continued_state(ChatState { status: "idle".into(), pending: Vec::new(), turn_started_at: None, add_dirs, ..h }),
                     None => ChatState { status: "idle".into(), add_dirs, ..Default::default() },
                 },
                 adapter: None,
