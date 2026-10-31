@@ -549,6 +549,9 @@ pub const EV_BROWSER_SHOW: &str = "browser.show";
 /// [`BrowserRoute`] → `true`: a member asks its central host to open a URL
 /// where the user is (X75).
 pub const BROWSER_ROUTE: &str = "browser.route";
+/// `{}` → `[BrowserShow]`: the URLs that came for this Mac's app while it
+/// was not connected, each handed over once (X75). Only the app asks.
+pub const BROWSER_PENDING: &str = "browser.pending";
 /// `{}` → `true`: the user is active in this app or phone (X75). A member
 /// passes its app's on to its central host at most every 30 s.
 pub const PRESENCE_ACTIVE: &str = "presence.active";

@@ -100,6 +100,35 @@ async fn a_terminals_browser_url_reaches_this_macs_app() {
 }
 
 #[tokio::test]
+async fn a_url_for_this_mac_while_its_app_is_not_connected_waits_for_the_app() {
+    let d = daemon().await;
+    // From a terminal's `moonlet-open`, with no app connected.
+    let mut cli = Client::connect(&d.socket, "moonlet-cli").await.unwrap();
+    let _: bool = cli
+        .request(
+            "browser.open",
+            json!({ "url": "https://accounts.example.test/auth" }),
+        )
+        .await
+        .unwrap();
+    // Not for an agent's CLI to take.
+    let refused = cli
+        .request::<Value, Value>("browser.pending", json!({}))
+        .await;
+    assert!(refused.unwrap_err().to_string().contains("forbidden"));
+    let mut app = d.app().await;
+    let waiting: Vec<Value> = app.request("browser.pending", json!({})).await.unwrap();
+    let urls: Vec<(&Value, &Value)> = waiting.iter().map(|s| (&s["url"], &s["waiting"])).collect();
+    assert_eq!(
+        urls,
+        [(&json!("https://accounts.example.test/auth"), &json!(true))]
+    );
+    // Handed over once.
+    let again: Vec<Value> = app.request("browser.pending", json!({})).await.unwrap();
+    assert_eq!(again, Vec::<Value>::new());
+}
+
+#[tokio::test]
 async fn an_agents_cli_never_hears_a_url_to_open() {
     let d = daemon().await;
     let mut cli = Client::connect(&d.socket, "moonlet-cli").await.unwrap();
@@ -209,6 +238,42 @@ async fn a_url_on_the_central_host_reaches_the_app_of_the_member_where_the_user_
     assert_eq!(shown["from"], json!("studio-mini"));
     assert!(shown.get("waiting").is_none(), "{shown}");
     assert_eq!(next_show(&mut mini_app, Duration::from_secs(1)).await, None);
+}
+
+#[tokio::test]
+async fn a_url_for_a_member_whose_app_quit_waits_there_until_the_app_connects() {
+    let (mini, addr) = central().await;
+    let book = linked_book(&mini, &addr).await;
+    {
+        let mut book_app = book.app().await;
+        let _: bool = book_app
+            .request("presence.active", json!({}))
+            .await
+            .unwrap();
+    }
+    // studio-mini hears of it, and the MacBook's app has quit.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    in_terminal(&mini, "\"$BROWSER\" 'https://accounts.example.test/auth'").await;
+    // An app that connected meanwhile would have heard it at once.
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    let waiting: Vec<Value> = book
+        .app()
+        .await
+        .request("browser.pending", json!({}))
+        .await
+        .unwrap();
+    let got: Vec<(&Value, &Value, &Value)> = waiting
+        .iter()
+        .map(|s| (&s["url"], &s["from"], &s["waiting"]))
+        .collect();
+    assert_eq!(
+        got,
+        [(
+            &json!("https://accounts.example.test/auth"),
+            &json!("studio-mini"),
+            &json!(true)
+        )]
+    );
 }
 
 #[tokio::test]

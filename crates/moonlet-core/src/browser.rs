@@ -156,6 +156,51 @@ pub fn opens_here(app_active_at: Option<u64>, now_ms: u64) -> bool {
     app_active_at.is_some_and(|at| now_ms.saturating_sub(at) <= ACTIVE_MS)
 }
 
+/// At most this many URLs wait for this Mac's app while it is not
+/// connected…
+pub const WAITING_MAX: usize = 5;
+/// …each for as long as a sign-in's forward lasts.
+pub const WAITING_MS: u64 = 10 * 60 * 1000;
+
+/// URLs for this Mac's app that came while it was not connected (X75),
+/// kept in memory for the app to take when it connects: the latest
+/// [`WAITING_MAX`], none older than [`WAITING_MS`], and the same one once.
+#[derive(Debug)]
+pub struct Waiting<T> {
+    kept: std::collections::VecDeque<(T, u64)>,
+}
+
+impl<T> Default for Waiting<T> {
+    fn default() -> Self {
+        Waiting {
+            kept: Default::default(),
+        }
+    }
+}
+
+impl<T: PartialEq> Waiting<T> {
+    /// Keeps `show`, which came at `now_ms`.
+    pub fn keep(&mut self, show: T, now_ms: u64) {
+        self.expire(now_ms);
+        self.kept.retain(|(s, _)| *s != show);
+        while self.kept.len() >= WAITING_MAX {
+            self.kept.pop_front();
+        }
+        self.kept.push_back((show, now_ms));
+    }
+
+    /// Hands over what waits, oldest first, and forgets it.
+    pub fn take(&mut self, now_ms: u64) -> Vec<T> {
+        self.expire(now_ms);
+        self.kept.drain(..).map(|(s, _)| s).collect()
+    }
+
+    fn expire(&mut self, now_ms: u64) {
+        self.kept
+            .retain(|(_, at)| now_ms.saturating_sub(*at) <= WAITING_MS);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,6 +310,27 @@ mod tests {
         std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
         assert_eq!(run(&o.shims.join("open"), &["https://example.test/"]), 0);
         assert_eq!(read(&system), "https://example.test/\n");
+    }
+
+    #[test]
+    fn at_most_five_urls_wait_for_the_app_each_for_ten_minutes_and_once() {
+        let mut w = Waiting::default();
+        for (url, at) in [
+            ("a", 0),
+            ("b", 1),
+            ("c", 2),
+            ("d", 3),
+            ("e", 4),
+            ("f", 5),
+            ("c", 6),
+        ] {
+            w.keep(url, at);
+        }
+        assert_eq!(w.take(7), ["b", "d", "e", "f", "c"]);
+        assert_eq!(w.take(8), Vec::<&str>::new());
+        w.keep("g", 0);
+        w.keep("h", 1_000);
+        assert_eq!(w.take(600_500), ["h"]);
     }
 
     #[test]

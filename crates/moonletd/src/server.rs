@@ -325,6 +325,12 @@ where
 
     // Fan daemon events out to this client.
     let mut events = daemon.terminals.subscribe_events();
+    // A URL for this Mac's app waits while none is connected (X75); from
+    // now on this one hears it.
+    let app = conn.client == crate::daemon::APP_CLIENT && conn.phone.is_none();
+    if app {
+        daemon.app_connection(true);
+    }
     let ev_tx = tx.clone();
     // The text an agent asks to read is for the app alone, not for the
     // agent's own `moonlet` connections (X31).
@@ -519,6 +525,9 @@ where
     daemon.terminals.detach_all(conn.id);
     daemon.session_copies.detach(conn.id, None);
     daemon.on_disconnect(conn.id);
+    if app {
+        daemon.app_connection(false);
+    }
     event_task.abort();
     drop(conn);
     drop(tx);
