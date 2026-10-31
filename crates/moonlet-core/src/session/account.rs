@@ -480,7 +480,8 @@ impl SessionManager {
             lay_onto(&mut next, &log);
             // Another member's merge can move this member's sessions to
             // another workspace: their records follow (X72).
-            let own = session_changes(&next, &mut log, now_ms(), &[]);
+            let mut own = session_changes(&next, &mut log, now_ms(), &[]);
+            own.extend(name_makers(&a.log, &mut log, now_ms()));
             match write_private(&a.path, &log).and_then(|()| self.save(&next)) {
                 Ok(()) => {
                     a.log = log;
@@ -644,23 +645,19 @@ fn sessions_in(log: &Log) -> Map<String, Record> {
     let is_ownership = |c: &Change| matches!(&c.op, ChangeOp::Set { field, .. } if OWNERSHIP.contains(&field.as_str()));
     // A member chooses its own stamps, so they never decide who made a
     // session: the first owner the referee names does, the referee being
-    // the one that takes each member's changes as they come. Until it
-    // names one, the maker is the one member that says, in a change of its
-    // own, that it owns the session.
+    // the one that takes each member's changes as they come
+    // ([`name_makers`]). Until it names one, the maker is the one member
+    // that says, in a change of its own, that it owns the session.
     let mut named: Map<&str, (&Stamp, &str)> = Map::new();
-    let mut claims: Map<&str, BTreeSet<&str>> = Map::new();
-    for c in log.changes_of(SESSION) {
+    for c in log.changes_of(SESSION).filter(|c| is_referee(c)) {
         let ChangeOp::Set { field, value } = &c.op else { continue };
         let Some(owner) = value.as_str().filter(|_| field == "owner") else { continue };
-        if is_referee(c) {
-            let first = named.entry(c.id.as_str()).or_insert((&c.stamp, owner));
-            if c.stamp < *first.0 {
-                *first = (&c.stamp, owner);
-            }
-        } else if author(c) == Some(owner) {
-            claims.entry(c.id.as_str()).or_default().insert(owner);
+        let first = named.entry(c.id.as_str()).or_insert((&c.stamp, owner));
+        if c.stamp < *first.0 {
+            *first = (&c.stamp, owner);
         }
     }
+    let claims = session_claims(log, referee);
     let maker = |id: &str| {
         named.get(id).map(|(_, owner)| *owner).or_else(|| {
             let claimed = claims.get(id)?;
@@ -709,6 +706,66 @@ fn sessions_in(log: &Log) -> Map<String, Record> {
             .is_some_and(|(_, last, by_referee)| owner == Some(*last) && (*by_referee || owner == maker(id)))
     })
     .collect()
+}
+
+/// The members that say, in a change of their own, that they own each
+/// session: its maker, and anyone claiming it falsely. The referee's word
+/// is not a claim.
+fn session_claims<'a>(log: &'a Log, referee: Option<&str>) -> Map<&'a str, BTreeSet<&'a str>> {
+    let mut claims: Map<&str, BTreeSet<&str>> = Map::new();
+    for c in log.changes_of(SESSION) {
+        let author = log_owner(&c.stamp.member);
+        if let moonlet_proto::types::ChangeOp::Set { field, value } = &c.op
+            && field == "owner"
+            && let Some(owner) = value.as_str()
+            && author == Some(owner)
+            && author != referee
+        {
+            claims.entry(c.id.as_str()).or_default().insert(owner);
+        }
+    }
+    claims
+}
+
+/// On the referee, names the maker of each session in `log` it has named
+/// no owner of yet (X73), `before` being its log before the changes just
+/// taken: the one member that claims the session, or, when several do,
+/// the one whose claim it had first. The referee takes each member's
+/// changes as they come, and another member learns of a session only from
+/// it, so that is the member that made it, whatever stamps the others give
+/// theirs. From then on its word counts, and no claim does.
+fn name_makers(before: &Log, log: &mut Log, now: u64) -> Vec<Change> {
+    let Some(me) = log_owner(log.member()).map(str::to_string).filter(|_| log.account().is_none()) else {
+        return Vec::new();
+    };
+    let named: BTreeSet<String> = log
+        .changes_of(SESSION)
+        .filter(|c| log_owner(&c.stamp.member) == Some(me.as_str()))
+        .filter(|c| matches!(&c.op, moonlet_proto::types::ChangeOp::Set { field, .. } if field == "owner"))
+        .map(|c| c.id.clone())
+        .collect();
+    let had = session_claims(before, Some(&me));
+    let sole = |claims: Option<&BTreeSet<&str>>| claims.filter(|c| c.len() == 1).and_then(|c| c.first()).map(|m| m.to_string());
+    let makers: Vec<(String, String)> = session_claims(log, Some(&me))
+        .into_iter()
+        .filter(|(id, _)| !named.contains(*id))
+        .filter_map(|(id, claims)| Some((id.to_string(), sole(Some(&claims)).or_else(|| sole(had.get(id)))?)))
+        .collect();
+    let mut out = Vec::new();
+    for (id, maker) in makers {
+        let by_maker = |c: &Change| c.id == id && log_owner(&c.stamp.member) == Some(maker.as_str());
+        if log.changes_of(SESSION).any(|c| by_maker(c) && c.op == moonlet_proto::types::ChangeOp::Delete) {
+            continue;
+        }
+        // Its ownership number and pin as the maker gave them.
+        let own = log.records_where(SESSION, by_maker).remove(&id).unwrap_or_default();
+        out.push(log.set(now, SESSION, &id, "owner", json!(maker)));
+        out.push(log.set(now, SESSION, &id, "epoch", own.get("epoch").cloned().unwrap_or(json!(1))));
+        if let Some(pinned) = own.get("pinned") {
+            out.push(log.set(now, SESSION, &id, "pinned", pinned.clone()));
+        }
+    }
+    out
 }
 
 /// This member's own session as account fields (X72): what the other
@@ -778,24 +835,6 @@ fn session_changes(st: &State, log: &mut Log, now: u64, removed: &[String]) -> V
             && !st.sessions.iter().any(|s| &s.id == *id)
     }) {
         out.push(log.delete(now, SESSION, id));
-    }
-    // The referee names the maker of each session it has not named an
-    // owner of yet, as it first sees it: from then on its word on who made
-    // the session counts, and no stamp another member gives a change does.
-    if log.account().is_none() {
-        let named: BTreeSet<String> = log
-            .changes_of(SESSION)
-            .filter(|c| log_owner(&c.stamp.member) == Some(me.as_str()))
-            .filter(|c| matches!(&c.op, moonlet_proto::types::ChangeOp::Set { field, .. } if field == "owner"))
-            .map(|c| c.id.clone())
-            .collect();
-        for (id, r) in sessions.iter().filter(|(id, _)| !named.contains(*id)) {
-            for field in OWNERSHIP {
-                if let Some(value) = r.get(*field) {
-                    out.push(log.set(now, SESSION, id, field, value.clone()));
-                }
-            }
-        }
     }
     out
 }
@@ -2676,6 +2715,28 @@ mod tests {
         .unwrap();
         sync(&book, &mini);
         assert_eq!(mini.session_records()[&session.id]["name"], serde_json::json!("Renamed on the MacBook"));
+    }
+
+    #[tokio::test]
+    async fn another_members_claim_neither_hides_nor_takes_a_session_its_central_host_had_first() {
+        let (_h1, book) = member("book").await;
+        let (_h2, mini) = member("mini").await;
+        // studio-mini learns of the MacBook's session while it is a member
+        // itself, then becomes the central host.
+        mini.set_central_account(Some("hub".into()));
+        let session = fix_cart_known_to(&book, &mini).await;
+        mini.set_central_account(None);
+        book.set_central_account(Some("mini".into()));
+        // studio-air claims it too, stamped before the MacBook made it.
+        mini.apply_account(vec![
+            backdated("air.p7d2m4", 1, &session.id, set_op("owner", serde_json::json!("air"))),
+            backdated("air.p7d2m4", 2, &session.id, set_op("name", serde_json::json!("Named on the Air"))),
+        ]);
+        sync(&book, &mini);
+        for records in [mini.session_records(), book.session_records()] {
+            let r = &records[&session.id];
+            assert_eq!((&r["owner"], &r["name"]), (&serde_json::json!("book"), &serde_json::json!("Fix cart")));
+        }
     }
 
     #[tokio::test]
