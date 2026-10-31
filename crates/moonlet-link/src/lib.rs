@@ -286,9 +286,11 @@ impl Host {
             {
                 self.attaching.lock().unwrap().insert(id, sid as TerminalId);
             }
-            // A terminal of another member, through the central host (X72):
-            // its relay id comes with the reply.
-            if method == moonlet_proto::methods::SESSION_ATTACH {
+            // A terminal of another member, through the central host (X72),
+            // or its sign-in terminal (X75): its relay id comes with the reply.
+            if method == moonlet_proto::methods::SESSION_ATTACH
+                || method == moonlet_proto::methods::SIGNINS_ATTACH
+            {
                 self.attaching.lock().unwrap().insert(id, RELAY_IN_REPLY);
             }
             let frame = Frame::Json(Message::Request {
@@ -672,8 +674,8 @@ async fn write_link<W: AsyncWrite + Unpin>(
     }
 }
 
-/// In `attaching`, for a `session.attach`: the terminal is the relay id
-/// the reply names (X72).
+/// In `attaching`, for a `session.attach` or `signins.attach`: the
+/// terminal is the relay id the reply names (X72, X75).
 const RELAY_IN_REPLY: TerminalId = TerminalId::MAX;
 
 /// Fails only on a pack over its limits, which ends the link.
