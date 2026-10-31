@@ -19,6 +19,7 @@ import { projectKeepsNew, setProjectKeepsNew, useSync } from "../../lib/syncStor
 import { useUnsaved } from "./useUnsaved";
 import { HeavySection, useHeavy } from "./HeavySection";
 import { CloudSection, useProjectCloud } from "./CloudSection";
+import { CopiedFilesSection } from "./CopiedFilesSection";
 
 const EMPTY: Form = { setup: "", run: "", archive: "", default_agent: "", base_branch: "", branch_prefix: "", agents: [], trackers: [] };
 
@@ -307,6 +308,8 @@ export function ProjectPage({ host, id, focus }: { host: string; id: string; foc
             </Row>
           </Card>
         </Section>
+
+        <CopiedFilesSection host={host} id={id} />
 
         <Section title="Agents">
           <Card>

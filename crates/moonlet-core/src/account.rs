@@ -27,6 +27,9 @@ pub enum RecordKind {
     /// `branch`, `owner` (the worker id of the member running its agent),
     /// `created_at` and `archived`.
     Session,
+    /// A project's copied files (X74), by project identity: its `patterns`
+    /// and `cloud`.
+    ProjectFiles,
 }
 
 impl RecordKind {
@@ -38,6 +41,7 @@ impl RecordKind {
             RecordKind::Member => "member",
             RecordKind::Design => "design",
             RecordKind::Session => "session",
+            RecordKind::ProjectFiles => "project_files",
         }
     }
 }

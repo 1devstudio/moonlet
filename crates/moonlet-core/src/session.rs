@@ -573,7 +573,7 @@ impl SessionManager {
             .context("no such session")
     }
 
-    fn project(&self, id: &str) -> Result<Project> {
+    pub fn project(&self, id: &str) -> Result<Project> {
         self.state
             .lock()
             .unwrap()
