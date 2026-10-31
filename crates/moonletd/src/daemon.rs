@@ -3413,7 +3413,7 @@ impl Daemon {
                 return Err(e);
             }
             let mut moved = s;
-            moved.owner = Some(moonlet_proto::types::SessionOwner { worker: central, name: String::new(), reachable: true });
+            moved.owner = Some(moonlet_proto::types::SessionOwner { worker: central, name: String::new(), reachable: true, unreachable_since: None });
             return Ok(moved);
         }
         if r.to == central && owner == central {
