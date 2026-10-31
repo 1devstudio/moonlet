@@ -86,6 +86,7 @@ Manual check M12 (`docs/manual-checks.md`) measures, on a real MacBook, how long
   - **A message reaches the owner while the session moves:** the owner keeps the session and its message, and the move waits for that turn to end, as above (`a_message_typed_while_the_session_moves_keeps_it_on_the_central_host`).
 - [ ] A member that has no copy of the session makes one first (X60's copy), showing "Bringing fix-cart to this Mac…".
 - [ ] The copy that becomes the session's worktree is held while the central host gives the session up, so stopping it then waits. When this member then cannot take the session in, the copy stays kept, in the same folder, rather than a folder no one keeps (`a_bring_that_cannot_take_the_session_in_keeps_its_copy`).
+- [ ] When this member cannot take the session in after the central host gave it up, it hands the session back (`session.give_back`): the central host owns it again, its worktree is back on the session's own branch, and its chats go on there as they were, not paused (`a_bring_whose_mac_fails_after_the_hand_over_leaves_the_session_running_on_the_central_host`).
 - [ ] Typing on the phone never moves a session. Neither does opening or reading a session on any member.
 - [ ] A message typed on a member for a session pinned elsewhere goes to the owner, as from the phone.
 
@@ -173,6 +174,7 @@ Manual check M12 (`docs/manual-checks.md`) measures, on a real MacBook, how long
 - `session.take {session, epoch, reason}`, where `reason` is `typed`, `unreachable` or `move`: member → central host. Answers `{epoch}`, or `stale` or `pinned`.
 - `session.release {session, to, now}`: central host → owner. "Stop at the end of this turn (or now), send the last checkpoint and answer."
 - `session.bring {session, message?}`: app → its own daemon, when the user types into a session this member does not own.
+- `session.give_back {session, epoch}`: member → central host, when the member could not take in the session the central host just gave it at `epoch`. Accepted only from that member, at that epoch, before it opened the session; the central host takes it back with the chats it gave.
 - `session.move {session, to, now}` and `session.unpin {session}`: app → its own daemon. Only the Mac's own app may call them.
 - `session.take_anyway {session}`: app → its own daemon, only while the central host has been unreachable for 30 s. The forced change goes to the central host as `session.take {session, epoch, reason: "forced", base}` once it is back. Answers `{kept: bool}`.
 - `link.status` gains `unreachable_since`, so the app can say since when the central host is offline.
