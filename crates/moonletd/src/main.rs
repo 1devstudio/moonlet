@@ -370,7 +370,9 @@ async fn proxy(socket: PathBuf) -> Result<()> {
     // stdout, and the proxy exits when the daemon closes the stream.
     let up = tokio::spawn(async move {
         let mut stdin = tokio::io::stdin();
-        let _ = tokio::io::copy(&mut stdin, &mut sw).await;
+        if forward_hello(&mut stdin, &mut sw).await.is_ok() {
+            let _ = tokio::io::copy(&mut stdin, &mut sw).await;
+        }
         let _ = tokio::io::AsyncWriteExt::shutdown(&mut sw).await;
     });
     let mut stdout = tokio::io::stdout();
@@ -378,4 +380,38 @@ async fn proxy(socket: PathBuf) -> Result<()> {
     let _ = tokio::io::AsyncWriteExt::flush(&mut stdout).await;
     up.abort();
     Ok(())
+}
+
+/// Forwards the client's first frame. The Mac's app cannot read this host's
+/// app credential (X75), so a `hello` from `moonlet-app` without one gets it
+/// here: the proxy runs as the user, and the SSH login proved who that is.
+/// Any other first frame, and any other client's `hello`, goes on unchanged.
+async fn forward_hello(
+    from: &mut (impl tokio::io::AsyncRead + Unpin),
+    to: &mut (impl tokio::io::AsyncWrite + Unpin),
+) -> std::io::Result<()> {
+    use moonlet_proto::{Frame, Message};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut raw = vec![0u8; 4];
+    from.read_exact(&mut raw).await?;
+    let len = u32::from_be_bytes([raw[0], raw[1], raw[2], raw[3]]) as usize;
+    if (1..=moonlet_proto::MAX_FRAME_LEN).contains(&len) {
+        raw.resize(4 + len, 0);
+        from.read_exact(&mut raw[4..]).await?;
+    }
+    let mut frames = moonlet_proto::FrameDecoder::new();
+    frames.push(&raw);
+    if let Ok(Some(Frame::Json(Message::Hello { protocol, client, app_token: None }))) =
+        frames.next_frame()
+        && client == daemon::APP_CLIENT
+        && let Some(token) = moonlet_core::app_token::read(&moonlet_core::app_token::file())
+        && let Ok(hello) = moonlet_proto::encode_frame(&Frame::Json(Message::Hello {
+            protocol,
+            client,
+            app_token: Some(token),
+        }))
+    {
+        raw = hello;
+    }
+    to.write_all(&raw).await
 }
