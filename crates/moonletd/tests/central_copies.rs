@@ -3052,6 +3052,89 @@ async fn an_agent_started_while_the_mac_sleeps_waits_for_the_wake() {
 }
 
 #[tokio::test]
+async fn the_central_host_says_whether_it_could_continue_each_copy() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents_as(&origin, false).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    // A session with no conversation yet, and one after a turn.
+    let quiet = new_session(&book, &project, "quiet").await;
+    let talked = session_with_a_turn(&book, &project).await;
+    copy_of(&mini, &quiet).await;
+    copy_of(&mini, &talked).await;
+
+    let ready = within_value(
+        Duration::from_secs(30),
+        "both copies ready or not",
+        || async {
+            let all: Vec<Value> = mini.call("session.ready", json!({})).await;
+            let of = |s: &Value| all.iter().find(|r| r["session"] == s["id"]).cloned();
+            match (of(&quiet), of(&talked)) {
+                (Some(q), Some(t)) if t["ready"] == json!(true) => Some((q, t)),
+                _ => None,
+            }
+        },
+    )
+    .await;
+    assert_eq!(
+        ready.0,
+        json!({ "session": quiet["id"], "ready": false, "reason": "its conversation has not reached here yet" })
+    );
+    assert_eq!(ready.1, json!({ "session": talked["id"], "ready": true }));
+}
+
+#[tokio::test]
+async fn a_closed_chats_conversation_does_not_make_a_new_chat_ready() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents_as(&origin, false).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    copy_of(&mini, &made).await;
+    let ready_of = |all: Vec<Value>| all.into_iter().find(|r| r["session"] == made["id"]);
+    within(Duration::from_secs(30), "the copy ready", || async {
+        ready_of(mini.call("session.ready", json!({})).await)
+            .is_some_and(|r| r["ready"] == json!(true))
+    })
+    .await;
+
+    // The chat that talked closes, and a new one opens.
+    let _: Value = book
+        .call(
+            "terminal.kill",
+            json!({ "id": made["terminals"][0], "remove": true }),
+        )
+        .await;
+    let fresh: Value = book
+        .call(
+            "terminal.create",
+            json!({ "cwd": made["path"], "session_id": made["id"], "kind": "agent", "agent": "claude", "chat": true }),
+        )
+        .await;
+    within(
+        Duration::from_secs(30),
+        "only the new chat on studio-mini",
+        || async {
+            mini.try_call("session.copy", json!({ "session": made["id"] }))
+                .await
+                .is_ok_and(|i| {
+                    i["chats"]
+                        .as_array()
+                        .is_some_and(|c| c.len() == 1 && c[0]["terminal"] == fresh["id"])
+                })
+        },
+    )
+    .await;
+
+    assert_eq!(
+        ready_of(mini.call("session.ready", json!({})).await),
+        Some(
+            json!({ "session": made["id"], "ready": false, "reason": "its conversation has not reached here yet" })
+        )
+    );
+}
+
+#[tokio::test]
 async fn a_member_lets_go_of_a_lost_session_once_its_worktree_is_free_again() {
     let origin = Origin::new();
     let (mini, mut book) = pair_with_agents(&origin).await;

@@ -4345,6 +4345,7 @@ impl Daemon {
                 let _ = self.design_session(&made.id);
                 ok(made)
             }
+            m::SESSION_READY => ok(self.session_copies.readiness()),
             m::SESSION_COPY => {
                 let r: m::SessionCopyReq = params(p)?;
                 ok(self.session_copies.copy_info(&r.session)?)
