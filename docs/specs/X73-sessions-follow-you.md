@@ -95,6 +95,7 @@ Manual check M12 (`docs/manual-checks.md`) measures, on a real MacBook, how long
 - [ ] An owner whose link to the central host has missed its pings for 30 s (X41's 3 misses) without a sleep notice keeps its sessions while nobody acts on them elsewhere.
 - [ ] A message, an answer to an ask, or **Move now** for such a session, from the phone or another member, makes the central host take it over first. The phone shows "MacBook is not reachable. Continuing on studio-mini."
 - [ ] For a session whose owner is unreachable and whose copy shows a turn that was running, the phone shows "MacBook is not reachable · fix-cart was working" with **Continue on studio-mini**. Pressing it takes the session over as a message would, and continues the turn with the cut-off note.
+- [ ] Until the owner has been unreachable for 30 s, the phone holds **Continue on studio-mini** back and counts down: "Continue on studio-mini in 12 s". The central host would refuse it before then.
 - [ ] A pinned session is never taken over this way. The phone shows "Kept on MacBook · not reachable".
 
 ### When the central host is offline: Take over anyway
