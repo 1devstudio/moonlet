@@ -325,20 +325,26 @@ async fn accept(
 }
 
 /// Where a forward hands its requests now: the latest sign-in shown for
-/// its port, which it lasts [`LIFETIME`] from.
+/// its port, always of the one member the forward was made for.
 struct Target {
+    /// The member whose command the browser comes back to, by worker id.
+    member: String,
     pass: Pass,
     /// Counts the sign-ins shown for the port: a `gone` for an earlier one
     /// ends nothing.
     shown: u64,
+    /// [`LIFETIME`] from when the forward was made: a later sign-in never
+    /// extends it.
     until: Instant,
 }
 
 type Slot = std::sync::Arc<Mutex<Target>>;
 
-/// This Mac's forwards, by port. A sign-in shown again, or another that
-/// comes back to the same port while an earlier one's forward still
-/// listens, goes through that forward instead of finding the port taken.
+/// This Mac's forwards, by port. A sign-in shown again, or another of the
+/// same member's that comes back to the same port while an earlier one's
+/// forward still listens, goes through that forward instead of finding the
+/// port taken. Another member's finds it taken: it never gets a callback
+/// meant for the first member's command.
 #[derive(Default)]
 pub struct Forwards {
     list: std::sync::Arc<Mutex<BTreeMap<u16, Slot>>>,
@@ -346,19 +352,21 @@ pub struct Forwards {
 
 impl Forwards {
     /// Listens on this Mac's loopback `<port>` for [`LIFETIME`], passing
-    /// each request to `pass`, until it answers `gone` (the command stopped
-    /// listening). An error when something else has the port here.
-    pub async fn open(&self, port: u16, pass: Pass) -> std::io::Result<()> {
-        let pass = match self.reuse(port, pass) {
+    /// each request to `pass`, member `member`'s, until it answers `gone`
+    /// (the command stopped listening). An error when something else has
+    /// the port here, another member's forward too.
+    pub async fn open(&self, port: u16, member: &str, pass: Pass) -> std::io::Result<()> {
+        let pass = match self.reuse(port, member, pass) {
             Ok(()) => return Ok(()),
             Err(pass) => pass,
         };
         let (v4, v6) = match bind_loopback(port).await {
             Ok(l) => l,
             // Another sign-in's forward started meanwhile.
-            Err(e) => return self.reuse(port, pass).map_err(|_| e),
+            Err(e) => return self.reuse(port, member, pass).map_err(|_| e),
         };
         let slot: Slot = std::sync::Arc::new(Mutex::new(Target {
+            member: member.to_string(),
             pass,
             shown: 0,
             until: Instant::now() + LIFETIME,
@@ -368,16 +376,19 @@ impl Forwards {
         Ok(())
     }
 
-    /// Points the forward listening on `port`, if any, at `pass`.
-    fn reuse(&self, port: u16, pass: Pass) -> Result<(), Pass> {
+    /// Points the forward listening on `port` for member `member`, if any,
+    /// at `pass`, until the forward's own end.
+    fn reuse(&self, port: u16, member: &str, pass: Pass) -> Result<(), Pass> {
         let list = self.list.lock().unwrap();
         let Some(slot) = list.get(&port) else {
             return Err(pass);
         };
         let mut t = slot.lock().unwrap();
+        if t.member != member {
+            return Err(pass);
+        }
         t.pass = pass;
         t.shown += 1;
-        t.until = Instant::now() + LIFETIME;
         Ok(())
     }
 }
@@ -599,7 +610,10 @@ srv.serve_forever()
         let pass: Pass = std::sync::Arc::new(|_| {
             Box::pin(async { Ok(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok".to_vec()) })
         });
-        Forwards::default().open(port, pass).await.unwrap();
+        Forwards::default()
+            .open(port, "3c9a5e71-0d2b-4f86-a1c4-9e7b2d5f8a03", pass)
+            .await
+            .unwrap();
         let mut s = tokio::net::TcpStream::connect(("::1", port)).await.unwrap();
         s.write_all(b"GET /?code=4 HTTP/1.1\r\nHost: [::1]\r\n\r\n")
             .await

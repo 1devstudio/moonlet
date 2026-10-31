@@ -464,9 +464,11 @@ async fn a_second_sign_in_on_the_same_port_comes_back_through_the_mac_s_forward(
     );
     // Another sign-in on the same port right after, as `gcloud auth
     // application-default login` after `gcloud auth login`.
-    within(Duration::from_secs(10), "the first command exited", || async {
-        std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
-    })
+    within(
+        Duration::from_secs(10),
+        "the first command exited",
+        || async { std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() },
+    )
     .await;
     in_terminal(&mini, &sign_in_command(port)).await;
     let again = next_show(&mut app, Duration::from_secs(15))
@@ -475,6 +477,67 @@ async fn a_second_sign_in_on_the_same_port_comes_back_through_the_mac_s_forward(
     assert_eq!(again["forward"], json!(port));
     assert!(again.get("port_taken").is_none(), "{again}");
     let answer = get(port + 1, "/?code=5").await;
+    assert!(answer.ends_with("You are now authenticated"), "{answer:?}");
+}
+
+#[tokio::test]
+async fn another_member_s_sign_in_on_a_forwarded_port_waits_for_retry_and_never_gets_its_callback()
+{
+    let (mini, addr) = central().await;
+    let book = linked_book_one_along(&mini, &addr).await;
+    let mut app = book.app().await;
+    let _: bool = app.request("presence.active", json!({})).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let port = two_free_ports();
+    in_terminal(&mini, &sign_in_command(port)).await;
+    let shown = next_show(&mut app, Duration::from_secs(15))
+        .await
+        .expect("studio-mini's browser.show");
+    assert!(shown.get("port_taken").is_none(), "{shown}");
+    // Another member opens a sign-in that comes back to the same port while
+    // studio-mini's command still waits on it.
+    let token = pair(&mini, &addr, "Another Mac", DeviceKind::Desktop).await;
+    let mut s = raw(&addr, &token, "moonletd-worker").await;
+    use moonlet_proto::{read_frame, write_frame};
+    let mut call = async |id: u64, method: &str, params: Value| {
+        let req = Message::Request {
+            id,
+            method: method.into(),
+            params,
+        };
+        write_frame(&mut s, &Frame::Json(req)).await.unwrap();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let f = tokio::time::timeout_at(deadline, read_frame(&mut s))
+                .await
+                .expect("no reply")
+                .unwrap()
+                .unwrap();
+            if let Frame::Json(Message::Response { id: got, error, .. }) = f
+                && got == id
+            {
+                assert!(error.is_none(), "{error:?}");
+                return;
+            }
+        }
+    };
+    call(
+        1,
+        "worker.register",
+        registration("0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d", "Another Mac"),
+    )
+    .await;
+    let url = format!(
+        "https://accounts.example.test/auth?redirect_uri=http%3A%2F%2Flocalhost%3A{port}%2F&state=OTHER"
+    );
+    call(2, "browser.route", json!({ "url": url, "forward": port })).await;
+    let other = next_show(&mut app, Duration::from_secs(15))
+        .await
+        .expect("Another Mac's browser.show");
+    assert_eq!(other["url"], json!(url));
+    assert_eq!(other["port_taken"], json!(true));
+    // The browser's callback still reaches studio-mini's command.
+    let answer = get(port + 1, "/?code=4").await;
     assert!(answer.ends_with("You are now authenticated"), "{answer:?}");
 }
 

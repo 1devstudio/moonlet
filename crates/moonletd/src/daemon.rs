@@ -4006,9 +4006,10 @@ impl Daemon {
             && show.to.is_none()
         {
             let d = Arc::downgrade(self);
+            let to = member.clone();
             let pass: crate::signin::Pass = Arc::new(move |request: Vec<u8>| {
                 let d = d.clone();
-                let member = member.clone();
+                let member = to.clone();
                 Box::pin(async move {
                     let d = d.upgrade().ok_or_else(|| RpcError::new("gone", "the daemon is stopping"))?;
                     d.tunnel_to(&member, port, request).await
@@ -4017,7 +4018,7 @@ impl Daemon {
             // Tests run every member on one machine: a forward listens a few
             // ports along there.
             let offset: u16 = std::env::var("MOONLET_TEST_FORWARD_OFFSET").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
-            if let Err(e) = self.forwards.open(port.saturating_add(offset), pass).await {
+            if let Err(e) = self.forwards.open(port.saturating_add(offset), &member, pass).await {
                 tracing::info!(port, "cannot forward a sign-in's port: {e}");
                 show.port_taken = true;
                 self.taken.keep(show.clone(), std::time::Instant::now());
