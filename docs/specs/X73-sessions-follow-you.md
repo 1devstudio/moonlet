@@ -1,6 +1,6 @@
 # X73 — Sessions follow you: the central host continues them when the MacBook sleeps, and typing brings them back
 
-- **Status:** draft
+- **Status:** implemented (untried on real Macs and a phone; see Implementation notes)
 - **Priority / phase:** P1 · phase 4 (sessions across machines)
 - **PRD refs:** none (new scope)
 - **Related ADRs:** [0015](../adr/0015-sessions-follow-the-user.md) (sessions follow the user), [0014](../adr/0014-one-account-across-hosts.md) (one account across hosts, delivery slice 4), [0009](../adr/0009-central-host-workers-live-copies.md) (the ownership number)
@@ -95,6 +95,7 @@ Manual check M12 (`docs/manual-checks.md`) measures, on a real MacBook, how long
 - [ ] An owner whose link to the central host has missed its pings for 30 s (X41's 3 misses) without a sleep notice keeps its sessions while nobody acts on them elsewhere.
 - [ ] A message, an answer to an ask, or **Move now** for such a session, from the phone or another member, makes the central host take it over first. The phone shows "MacBook is not reachable. Continuing on studio-mini."
 - [ ] For a session whose owner is unreachable and whose copy shows a turn that was running, the phone shows "MacBook is not reachable · fix-cart was working" with **Continue on studio-mini**. Pressing it takes the session over as a message would, and continues the turn with the cut-off note.
+- [ ] Until the owner has been unreachable for 30 s, the phone holds **Continue on studio-mini** back and counts down: "Continue on studio-mini in 12 s". The central host would refuse it before then.
 - [ ] A pinned session is never taken over this way. The phone shows "Kept on MacBook · not reachable".
 
 ### When the central host is offline: Take over anyway
@@ -228,6 +229,33 @@ Manual check M12 (`docs/manual-checks.md`) measures, on a real MacBook, how long
 - Screenshot with `e2e/snap.ts`: a sidebar with a local session, one on `studio-mini` and one pinned.
 - e2e (`session-moves.e2e.ts`), with a second daemon linked as the central host: typing into a session the other daemon owns moves it to the app's daemon.
 - Manual: the journey on the MacBook, `studio-mini` and the phone, with the lid closed for real, on battery and on power.
+
+## Implementation notes
+
+Built as the gh stack branches `x73/continue`, `x73/lost`, `x73/bring-back`, `x73/sleep`, `x73/move`, `x73/ready` and `x73/desktop`. The tests are in `crates/moonletd/tests/central_copies.rs` unless another file is named.
+
+What works as specified:
+- **Who owns a session.** Only the session's maker and the central host (the referee) change `owner`, `epoch` and `pinned`. The maker owns what it makes, and only the referee moves it to another member. (`moonlet-core` `only_its_maker_and_the_central_host_move_a_session_and_its_owner_records_it_then`, `a_member_cannot_claim_another_members_session_nor_make_one_in_its_name`)
+- **Continue on the central host.** It continues a session whose member is unreachable, from its copy, on the session's own branch, resuming the conversation. A cut-off turn gets the note. (`a_session_whose_member_is_away_goes_on_on_the_central_host_from_its_copy`, `a_turn_cut_off_on_the_member_goes_on_with_a_note_to_the_agent`, `a_session_whose_member_is_reachable_is_not_continued_elsewhere`, `a_continued_chat_never_takes_bypass_permissions_from_the_member`)
+- **The member that lost a session.**
+  - It keeps its gap: changed files in leftovers, and the conversation as `<id>.fork-<time>.jsonl`.
+  - Its worktree moves, whole, into leftovers; it is never deleted.
+  - It then follows the new owner with an X60 live copy, as the user chose. (`a_member_that_lost_its_session_keeps_its_gap_and_follows_the_new_owner`)
+- **Sleep.** The member freezes its chat agents, sends what is new, and hands its unpinned sessions over with `session.yield`, holding sleep for at most 25 s. On wake, an agent goes on only while its session is still its own. (`a_member_going_to_sleep_hands_its_running_session_to_the_central_host`, `a_session_not_handed_over_before_sleep_goes_on_here_after_waking`)
+- **Typing brings a session back.** It waits for the end of the turn, or moves at once with Move now. (`typing_on_the_member_brings_the_session_back_from_the_central_host`, `a_session_in_the_middle_of_a_turn_comes_back_only_when_asked_now`)
+- **Move to… pins, and Unpin.** (`a_session_moved_to_the_central_host_stays_there`, `a_session_moved_to_this_mac_stays_through_sleep_until_unpinned`)
+- **Take over anyway.** (`a_session_taken_over_while_the_central_host_was_offline_is_kept_when_it_is_back`)
+- **Readiness.** (`the_central_host_says_whether_it_could_continue_each_copy`)
+- **The app's marks, menu and lines.** (`apps/desktop/src/lib/follow.test.ts`, `apps/mobile/src/lib/copies.test.ts`)
+
+Where it differs from the draft above:
+- **Moves.** A session moves between a member and the central host. Bringing back a session that a third member runs, or moving one to it, answers `elsewhere` or `unsupported`.
+- **Take over anyway** starts a new conversation on the member: the transcript stayed on the central host. When the central host is back, it keeps its own work from the gap, files and conversation, before the member's work replaces it.
+- **The waiting message** is a toast with Move now, not a line above the composer. It waits up to ten minutes; then, or when the session cannot be brought, it goes where the session runs. More typed into the same chat meanwhile goes with it. Move to… during a turn waits the same way. The chat's muted "Continued on…" line is not built: the agent's note says it instead.
+- **Only structured chats** are frozen and moved. A PTY agent tab is not.
+- **Setup** does not run when a session continues on the central host.
+- **Waking:** the member waits up to 5 s for its link, and half a second for the account's news, before it lets agents go on.
+- **The sleep hold** has not been measured on a real MacBook: manual check M12.
 
 ## Open questions
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Session } from "@desktop/lib/protocol";
-import { copyData, dropRelisted, ownerLine, readOnlyLine } from "./copies";
+import { continueFailed, continueOffer, continueWait, copyData, dropRelisted, ownerLine, readOnlyLine } from "./copies";
 
 const session = (owner?: Session["owner"]): Session => ({
   id: "5e7f9a1b3c5d",
@@ -64,5 +64,38 @@ describe("a session listed by its member and by the central host (X72)", () => {
     const copy = { ...session({ worker: "w1", name: "MacBook", reachable: true }), id: "a1" };
     const other = { ...session({ worker: "w2", name: "MacBook Air", reachable: true }), id: "b2" };
     expect(dropRelisted({ book: [own], mini: [copy, other] })).toEqual({ book: [own], mini: [other] });
+  });
+});
+
+describe("continuing a session whose member is away (X73)", () => {
+  it("is offered on the central host while that member is unreachable", () => {
+    expect(continueOffer(session({ worker: "w1", name: "MacBook", reachable: false }), "studio-mini")).toBe("Continue on studio-mini");
+    expect(continueOffer(session({ worker: "w1", name: "MacBook", reachable: true }), "studio-mini")).toBeNull();
+    expect(continueOffer({ ...session({ worker: "w1", name: "MacBook", reachable: false }), pinned: "w1" }, "studio-mini")).toBeNull();
+    expect(continueOffer(session(), "studio-mini")).toBeNull();
+  });
+
+  it("waits until its member has been unreachable for 30 s, as the central host does", () => {
+    const away = session({ worker: "w1", name: "MacBook", reachable: false, unreachable_since: 1790000000000 });
+    expect(continueWait(away, 1790000018000)).toBe(12);
+    expect(continueOffer(away, "studio-mini", 1790000018000)).toBe("Continue on studio-mini in 12 s");
+    expect(continueWait(away, 1790000029500)).toBe(1);
+    expect(continueOffer(away, "studio-mini", 1790000029500)).toBe("Continue on studio-mini in 1 s");
+    expect(continueWait(away, 1790000030000)).toBe(0);
+    expect(continueOffer(away, "studio-mini", 1790000030000)).toBe("Continue on studio-mini");
+    // A central host that does not say since when leaves the wait to its answer.
+    expect(continueWait(session({ worker: "w1", name: "MacBook", reachable: false }), 1790000018000)).toBe(0);
+  });
+
+  it("says why it could not continue, so the user can try again", () => {
+    const away = session({ worker: "w1", name: "MacBook", reachable: false });
+    expect(continueFailed({ code: "reachable", message: "the member running that session is reachable" }, away, "studio-mini")).toBe(
+      "MacBook is back: fix-cart goes on there.",
+    );
+    expect(continueFailed({ code: "pinned", message: "that session is kept on its member" }, away, "studio-mini")).toBe("fix-cart is kept on MacBook.");
+    expect(continueFailed({ code: "no_copy", message: "this host has no copy of that session yet" }, away, "studio-mini")).toBe(
+      "studio-mini has no copy of fix-cart yet.",
+    );
+    expect(continueFailed(new Error("the connection closed"), away, "studio-mini")).toBe("Could not continue on studio-mini: the connection closed");
   });
 });

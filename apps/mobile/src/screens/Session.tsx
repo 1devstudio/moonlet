@@ -18,7 +18,7 @@ import { STATE_COLOR } from "../lib/palette";
 import { sessionLine, shellTerminals } from "../lib/chatView";
 import { useGitStatus, usePr } from "../lib/rowDetails";
 import { checksDot } from "../lib/checks";
-import { readOnlyLine } from "../lib/copies";
+import { continueFailed, continueOffer, continueWait, readOnlyLine } from "../lib/copies";
 import { parseCopyHost } from "@desktop/lib/copyHost";
 import { archiveSheet, archivedNote } from "../lib/archive";
 import { useBusy } from "../lib/busy";
@@ -152,6 +152,17 @@ export function SessionScreen({ host, id, tab }: { host: string; id: string; tab
   const [linking, setLinking] = useState(false);
   const hosts = useApp((s) => s.hosts);
   const data = useApp((s) => s.data);
+  // Continue on <central> (X73): in progress, and why it failed.
+  const [continuing, setContinuing] = useState(false);
+  const [continueError, setContinueError] = useState<string | null>(null);
+  // Seconds until Continue can be pressed, counted down once a second.
+  const [ticks, tick] = useState(0);
+  const wait = session ? continueWait(session, Date.now()) : 0;
+  useEffect(() => {
+    if (wait <= 0) return;
+    const t = setTimeout(() => tick((n) => n + 1), 1000);
+    return () => clearTimeout(t);
+  }, [wait, ticks]);
   if (!d || !session) {
     return (
       <div className="p-6 text-muted" style={{ paddingTop: "calc(var(--safe-top) + 20px)" }}>
@@ -239,8 +250,28 @@ export function SessionScreen({ host, id, tab }: { host: string; id: string; tab
         ))}
       </nav>
       {centralLabel && readOnlyLine(session, centralLabel) && (
-        <p role="status" className="flex-none border-b border-border bg-panel px-4 py-2 text-[13px] text-muted">
-          {readOnlyLine(session, centralLabel)}
+        <div role="status" className="flex flex-none items-center gap-3 border-b border-border bg-panel px-4 py-2 text-[13px] text-muted">
+          <span className="min-w-0 flex-1">{readOnlyLine(session, centralLabel)}</span>
+          {central && continueOffer(session, centralLabel) && (
+            <Btn
+              disabled={continuing || wait > 0}
+              onClick={() => {
+                setContinuing(true);
+                setContinueError(null);
+                void rpc(central, M.sessionContinueHere, { session: session.id })
+                  .then(() => showScreen({ kind: "session", host: central, id: session.id, tab: "chat" }))
+                  .catch((e) => setContinueError(continueFailed(e, session, centralLabel)))
+                  .finally(() => setContinuing(false));
+              }}
+            >
+              {continueOffer(session, centralLabel)}
+            </Btn>
+          )}
+        </div>
+      )}
+      {continueError && (
+        <p role="alert" className="m-0 flex-none border-b border-border bg-panel px-4 py-2 text-[13px] leading-snug text-error">
+          {continueError}
         </p>
       )}
       <div className="min-h-0 flex-1">

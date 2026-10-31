@@ -652,6 +652,10 @@ pub struct Session {
     /// member owns (X72); none for this host's own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner: Option<SessionOwner>,
+    /// The member it is kept on, by worker id, when pinned with Move to…
+    /// (X73).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned: Option<String>,
 }
 
 /// The member that owns a session another member lists (X72).

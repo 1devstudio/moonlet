@@ -1,10 +1,12 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Archive, ArrowDown, ArrowLeftRight, Bell, BellOff, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, Command, Download, FolderPlus, History, Link2, Loader2, MoreHorizontal, PenTool, Plus, RotateCcw, RotateCw, Settings, ShieldAlert, X } from "lucide-react";
+import { Archive, ArrowDown, ArrowLeftRight, Bell, Pin, Server, Triangle, BellOff, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, Command, Download, FolderPlus, History, Link2, Loader2, MoreHorizontal, PenTool, Plus, RotateCcw, RotateCw, Settings, ShieldAlert, X } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { M, type Copy, type HostInfo, type Project, type Section, type SectionView, type Session, type Workspace } from "../lib/protocol";
 import { arrangeShared, groupCollapseKey, groupHeading, lastActive, missingProjectNote, projectRemoval, sectionCollapseKey, sectionParts, sessionBadge, sessionMenu, shownSections, type HostSession, type SharedGroup } from "../lib/sidebar";
 import { closeClaudeUpdate, errorToast, projKey, pullBase, selectSession, updateActions, updateClaude, sesKey, sessionState, sessionTerminals, shownWorkspace, termKey, toast, updateSettings, useStore } from "../lib/store";
 import { hostNotice } from "../lib/settingsPage";
+import { followMenu, offlineLine, readyMark, rowMark } from "../lib/follow";
+import { moveSession, useReady } from "../lib/followStore";
 import { gitSettingsOf } from "../lib/gitSettings";
 import { aheadText, baseChip, behindHeadline, chipClick, fetchedLabel, pullPopoverPlacement, rebaseCommand, type BaseChip } from "../lib/baseSync";
 import { archiveSession, openProjectSettings } from "../lib/actions";
@@ -384,6 +386,15 @@ function SessionRow({ host, s, onMenu, cell, nested, on }: { host: string; s: Se
   const line = lines[s.id];
   const [renaming, setRenaming] = useState(false);
   const notable = state && state !== "idle";
+  // Where it runs, when not here (X73).
+  const hostInfo = useStore((st) => st.hosts[host]);
+  const central = useSync((st) => st.central);
+  const unreachableSince = useSync((st) => st.unreachableSince);
+  const where = rowMark(s, host, hostInfo?.label ?? on ?? host, { connected: hostInfo?.status === "connected", central, unreachableSince });
+  // The central host could not continue it, and why (X73).
+  const readiness = useReady((r) => (host === "local" ? r.ready[s.id] : undefined));
+  const centralLabel = useStore((st) => (central ? (st.hosts[central]?.label ?? central) : null));
+  const notReady = centralLabel ? readyMark(readiness, centralLabel, s.name) : null;
   if (archiving) return <ArchivingRow name={s.name} a={archiving} />;
   // Hovering shows the task's key, state and title (X48), then the branch.
   const task = line ? `${line.key} · ${line.text} · ${line.title}\n` : "";
@@ -423,8 +434,18 @@ function SessionRow({ host, s, onMenu, cell, nested, on }: { host: string; s: Se
                 <PenTool size={12} />
               </span>
             )}
-            {/* A session of a shared workspace on another member (X68). */}
-            {on && <span className="shrink-0 font-mono ui-text-11 text-faint">on {on}</span>}
+            {notReady && (
+              <span title={notReady} aria-label={notReady} className="flex shrink-0 text-muted">
+                <Triangle size={11} />
+              </span>
+            )}
+            {/* Where the session runs, when not on this Mac (X73). */}
+            {where && (
+              <span title={where.tooltip} aria-label={where.tooltip} className={cx("flex shrink-0 items-center gap-0.5 text-muted", where.dim && "opacity-50")}>
+                {where.server && <Server size={12} />}
+                {where.pin && <Pin size={10} />}
+              </span>
+            )}
             <SyncMark host={host} s={s} />
           </>
         )
@@ -766,6 +787,70 @@ function projectItems(host: string, projectId: string, sec: Section): MenuItem[]
   ];
 }
 
+/** "studio-mini is offline since 14:02", while the central host is out of
+ * reach (X73). */
+function CentralOffline() {
+  const since = useSync((st) => st.unreachableSince);
+  const central = useSync((st) => st.central);
+  const label = useStore((st) => (central ? (st.hosts[central]?.label ?? central) : null));
+  if (since === null || !label) return null;
+  return (
+    <div className="flex items-center gap-1.5 px-4 pb-1 ui-text-12 text-faint">
+      <Server size={12} className="opacity-50" />
+      {offlineLine(label, since)}
+    </div>
+  );
+}
+
+/** Move to…, Unpin and Take over anyway for session `s` on `host` (X73). */
+function followItems(host: string, s: Session): MenuItem[] {
+  const st = useStore.getState();
+  const sync = useSync.getState();
+  const centralHost = sync.central;
+  const items = followMenu({
+    host,
+    centralHost,
+    me: sync.me,
+    centralId: st.accounts.local?.account ?? null,
+    centralLabel: (centralHost && st.hosts[centralHost]?.label) || "the central host",
+    pinned: !!s.pinned,
+    unreachableSince: sync.unreachableSince,
+    now: Date.now(),
+    // Take over anyway makes this Mac's live copy the session's worktree.
+    copy: !!sync.copies[sesKey(host, s.id)]?.path,
+  });
+  if (!items.length) return [];
+  return [
+    { kind: "divider" },
+    ...items.map((i): MenuItem => {
+      switch (i.kind) {
+        case "move":
+          return { label: `Move to ${i.label}`, checked: i.current && !!s.pinned, onSelect: () => void moveSession(s.id, i.to) };
+        case "unpin":
+          return { label: "Unpin", icon: <Pin size={14} className="text-muted" />, onSelect: () => void rpc("local", M.sessionUnpin, { session: s.id }).catch(errorToast) };
+        case "take-over":
+          return {
+            label: "Take over anyway",
+            onSelect: async () => {
+              const ok = await askConfirm({
+                title: "Take over anyway?",
+                message: `Take over ${s.name} without ${(centralHost && st.hosts[centralHost]?.label) || "the central host"}? If it is still running it, cut off from the network, both Macs run its agent until they meet again. Then its work from the gap is saved to a folder, and this Mac's is kept.`,
+                action: "Take over",
+              });
+              if (!ok) return;
+              try {
+                await rpc("local", M.sessionTakeAnyway, { session: s.id });
+                selectSession("local", s.id);
+              } catch (e) {
+                errorToast(e);
+              }
+            },
+          };
+      }
+    }),
+  ];
+}
+
 function sessionItems(host: string, s: Session, task: { linked: boolean; sources: boolean }, sync: { offered: boolean; copy?: Copy }): MenuItem[] {
   return sessionMenu({ ...task, sync: sync.offered }).flatMap((id): MenuItem[] => {
     switch (id) {
@@ -784,6 +869,7 @@ function sessionItems(host: string, s: Session, task: { linked: boolean; sources
         ];
       case "archive":
         return [
+          ...followItems(host, s),
           { kind: "divider" },
           {
             label: "Archive",
@@ -895,6 +981,7 @@ export function Sidebar() {
         <DesignSidebar />
       ) : (
       <>
+      <CentralOffline />
       <nav className="px-2 pb-3">
         <NavRow icon={<Plus size={15} strokeWidth={1.75} />} label="New session" hint="⇧⌘N" onClick={() => useStore.setState({ dialog: { kind: "new-session", host: shown?.host, workspace: shown?.id } })} />
         <NavRow icon={<Command size={15} strokeWidth={1.75} />} label="Run action" hint="⌘K" onClick={() => useStore.setState({ dialog: { kind: "palette" } })} />

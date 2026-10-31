@@ -600,6 +600,8 @@ export interface Session {
   /** The member running its agent, for a session another member owns,
    *  listed by `session.list {copies: true}` (X72). */
   owner?: SessionOwner;
+  /** The member it is kept on, by worker id, when pinned with Move to… (X73). */
+  pinned?: string | null;
 }
 
 /** The member that owns a session another member lists (X72). */
@@ -972,6 +974,8 @@ export interface LinkInfo {
   /** `slots`: how many routed commands it runs at once (X62). */
   worker: { id: string; name: string; enabled: boolean; slots?: number };
   state: LinkState;
+  /** Since when the central host has been out of reach (ms), while it is (X73). */
+  unreachable_since?: number;
 }
 
 /** Where a live copy is (X60). */
@@ -1312,6 +1316,16 @@ export const M = {
   projectWorktreeRemove: "project.worktree_remove",
   sessionCreate: "session.create",
   sessionList: "session.list",
+  /** X73: bring a session another member runs to this Mac. */
+  sessionBring: "session.bring",
+  /** X73: move a session to a member and keep it there. */
+  sessionMove: "session.move",
+  sessionUnpin: "session.unpin",
+  /** X73: take a session while the central host is offline. */
+  sessionTakeAnyway: "session.take_anyway",
+  /** X73: the central host continues a session whose member is away. */
+  sessionContinueHere: "session.continue_here",
+  sessionReady: "session.ready",
   sessionArchive: "session.archive",
   sessionUnarchive: "session.unarchive",
   sessionUpdate: "session.update",

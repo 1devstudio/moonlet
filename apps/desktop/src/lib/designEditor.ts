@@ -265,8 +265,19 @@ export interface ToldDesign {
  *  meanwhile; one whose save failed waits for a save that takes it. Once
  *  the message is sent, those are told. `peers`: every design the agent
  *  works on, the session's designs for a session design's agent, whose
- *  edits all go, each page named under its folder; else the design alone. */
-export async function sendWithEdits(host: string, place: DesignPlace, slug: string, agent: number, text: string, images: ChatImage[], peers?: ToldDesign[]): Promise<void> {
+ *  edits all go, each page named under its folder; else the design alone.
+ *  `deliver` sends the whole message, else `chat.send` to `agent` on `host`:
+ *  a session another member runs comes to this Mac with it first (X73). */
+export async function sendWithEdits(
+  host: string,
+  place: DesignPlace,
+  slug: string,
+  agent: number,
+  text: string,
+  images: ChatImage[],
+  peers?: ToldDesign[],
+  deliver?: (text: string, images: ChatImage[]) => Promise<unknown>,
+): Promise<void> {
   const designs = peers ?? [{ place, slug, folder: null }];
   const pendingOf = (d: ToldDesign) => useEditor.getState().pending[itemKey(host, d.place, d.slug)] ?? [];
   const keyOf = (d: ToldDesign, p: Pending) => pageKey(host, d.place, d.slug, p.page);
@@ -277,7 +288,8 @@ export async function sendWithEdits(host: string, place: DesignPlace, slug: stri
   }
   const told = designs.map((d) => ({ d, edits: pendingOf(d).filter((p) => !notSaved[keyOf(d, p)]?.some((c) => c.step === p.id)) }));
   const lines = told.flatMap(({ d, edits }) => edits.map((e) => ({ ...e, folder: d.folder })));
-  await rpc(host, M.chatSend, { id: agent, text: editsMessage(lines, text), images });
+  const message = editsMessage(lines, text);
+  await (deliver ? deliver(message, images) : rpc(host, M.chatSend, { id: agent, text: message, images }));
   useEditor.setState((s) => ({
     pending: { ...s.pending, ...Object.fromEntries(told.map(({ d, edits }) => [itemKey(host, d.place, d.slug), (s.pending[itemKey(host, d.place, d.slug)] ?? []).filter((p) => !edits.includes(p))])) },
   }));

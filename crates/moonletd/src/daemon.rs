@@ -1169,8 +1169,13 @@ impl Daemon {
                         if !ok_to_take {
                             continue;
                         }
-                        let why = r.why.clone().unwrap_or_else(|| "went to sleep".into());
-                        match self.continue_here_as(&id, &why, false, r.pin).await {
+                        // A reason by name, in this host's own words: never
+                        // the member's text in the agent's note.
+                        let why = match r.why.as_deref() {
+                            Some("moved") => "moved it there",
+                            _ => "went to sleep",
+                        };
+                        match self.continue_here_as(&id, why, false, r.pin).await {
                             Ok(_) => taken.push(id),
                             Err(e) => tracing::warn!(session = %id, "cannot continue a sleeping member's session: {}", e.message),
                         }
@@ -2967,6 +2972,7 @@ impl Daemon {
                 layout: Value::Null,
                 restore: Vec::new(),
                 owner: None,
+                pinned: None,
             })
             .map_err(internal)?;
         if !self.sessions.set_session_owner(session, me, epoch + 1, pin.then_some(me)) {
@@ -3012,9 +3018,9 @@ impl Daemon {
         let mine_since = self.mine_since.lock().unwrap().get(&r.session).copied().unwrap_or(s.created_at);
         let forced = r.forced && self.workers.away_since(worker, mine_since);
         // Take over anyway takes a pinned session too, and keeps it on the
-        // member that took it.
+        // member that took it; so does a move (Move to…, `pin`).
         let pinned = text("pinned").is_some();
-        if pinned && !forced && text("pinned").as_deref() != Some(worker) {
+        if pinned && !forced && !r.pin && text("pinned").as_deref() != Some(worker) {
             return Err(RpcError::new("pinned", "that session is kept where it is"));
         }
         let pin = r.pin || (forced && pinned);
@@ -3100,7 +3106,8 @@ impl Daemon {
         if text("owner").as_deref() == Some(me.as_str()) {
             return Err(RpcError::new("invalid_params", "that session is this Mac's own"));
         }
-        if text("pinned").is_some_and(|p| p != me) {
+        // A move (`pin`) keeps it here instead.
+        if !pin && text("pinned").is_some_and(|p| p != me) {
             return Err(RpcError::new("pinned", "that session is kept where it is"));
         }
         // Its live copy becomes its worktree here: without one, the central
@@ -3176,13 +3183,18 @@ impl Daemon {
                 tracing::warn!(session = %r.session, "cannot keep transcript {file}: {e:#}");
             }
         }
+        // The message goes to the chat it was typed in, else the first.
         let mut first = None;
+        let mut typed_in = None;
         for chat in taken.chats {
             let started = self.sessions.continue_chat(&adopted, chat.state).map_err(internal)?;
             first.get_or_insert(started.id);
+            if r.terminal == Some(chat.terminal) {
+                typed_in = Some(started.id);
+            }
         }
-        if let (Some(id), Some(message)) = (first, r.message.as_deref().filter(|m| !m.trim().is_empty()))
-            && let Err(e) = self.chats.send(id, message, &[])
+        if let (Some(id), Some(message)) = (typed_in.or(first), r.message.as_deref().filter(|m| !m.trim().is_empty()))
+            && let Err(e) = self.chats.send(id, message, &r.images)
         {
             tracing::warn!(session = %r.session, "cannot send the message it was brought for: {e:#}");
         }
@@ -3229,6 +3241,7 @@ impl Daemon {
                 layout: Value::Null,
                 restore: Vec::new(),
                 owner: None,
+                pinned: None,
             })
             .map_err(internal)
     }
@@ -3367,7 +3380,7 @@ impl Daemon {
                 return self.sessions.session(&r.session).map_err(internal);
             }
             return self
-                .bring_as(m::SessionBring { session: r.session, now: r.now, message: None }, true)
+                .bring_as(m::SessionBring { session: r.session, now: r.now, message: None, terminal: None, images: Vec::new() }, true)
                 .await;
         }
         if r.to == central && owner == me {
@@ -3394,7 +3407,7 @@ impl Daemon {
                 let taken = host
                     .request(
                         m::SESSION_YIELD,
-                        serde_json::to_value(m::SessionYield { sessions: vec![r.session.clone()], why: Some("moved it there".into()), pin: true })
+                        serde_json::to_value(m::SessionYield { sessions: vec![r.session.clone()], why: Some("moved".into()), pin: true })
                             .map_err(internal)?,
                     )
                     .await?;
@@ -4025,6 +4038,7 @@ impl Daemon {
                     terminals: Vec::new(),
                     layout: Value::Null,
                     restore: Vec::new(),
+                    pinned: r.get("pinned").and_then(Value::as_str).map(str::to_string),
                     owner: Some(SessionOwner {
                         name: names.get(&owner).cloned().unwrap_or_else(|| owner.clone()),
                         reachable: self.workers.conn(&owner).is_some(),
@@ -4353,6 +4367,11 @@ impl Daemon {
             m::SESSION_LIST => {
                 let r: m::SessionList = serde_json::from_value(p).unwrap_or_default();
                 let mut list = w.list_sessions();
+                // Each kept with Move to… says where (X73).
+                let records = self.sessions.session_records();
+                for s in &mut list {
+                    s.pinned = records.get(&s.id).and_then(|r| r.get("pinned")).and_then(Value::as_str).map(str::to_string);
+                }
                 if r.copies {
                     list.extend(self.member_sessions());
                 }
