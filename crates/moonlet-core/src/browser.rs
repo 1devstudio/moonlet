@@ -59,6 +59,22 @@ pub fn redirect_port(url: &str) -> Option<u16> {
     find(&url::Url::parse(url).ok()?, 0)
 }
 
+/// The one-time code a device sign-in printed before opening its page, as
+/// `gh auth login --web` does, from the last of `output` that names one.
+pub fn one_time_code(output: &str) -> Option<String> {
+    output.lines().rev().find_map(|line| {
+        let at = line.to_ascii_lowercase().find("one-time code")?;
+        let rest = &line[at + "one-time code".len()..];
+        let start = rest.find(|c: char| c.is_ascii_alphanumeric())?;
+        let code: String = rest[start..]
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '-')
+            .collect();
+        let parts: Vec<&str> = code.split('-').collect();
+        (parts.len() == 2 && parts.iter().all(|p| p.len() == 4)).then_some(code)
+    })
+}
+
 /// Where the opener and the shims are.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Opener {
@@ -411,6 +427,22 @@ mod tests {
     }
 
     #[test]
+    fn a_device_sign_ins_one_time_code_is_read_from_its_output() {
+        // `gh auth login --web` without a terminal (gh 2026), its code
+        // replaced, and with one (earlier gh).
+        let piped = "\n! One-time code (AB12-CD34) copied to clipboard\nOpen this URL to continue in your web browser: https://github.com/login/device\n";
+        assert_eq!(one_time_code(piped).as_deref(), Some("AB12-CD34"));
+        let tty = "! First copy your one-time code: 9F3C-77AE\nPress Enter to open github.com in your browser... \n";
+        assert_eq!(one_time_code(tty).as_deref(), Some("9F3C-77AE"));
+        assert_eq!(
+            one_time_code(
+                "Your browser has been opened to visit:\n  https://accounts.google.com/o/oauth2/auth\n"
+            ),
+            None
+        );
+    }
+
+    #[test]
     fn the_url_opens_where_the_user_was_last_active() {
         let min = 60_000;
         let now = 100 * min;
@@ -452,9 +484,15 @@ mod tests {
             env(&o, Some("/usr/bin:/bin")),
             [
                 ("BROWSER".to_string(), "/h/opener/moonlet-open".to_string()),
-                ("GH_BROWSER".to_string(), "/h/opener/moonlet-open".to_string()),
+                (
+                    "GH_BROWSER".to_string(),
+                    "/h/opener/moonlet-open".to_string()
+                ),
                 ("MOONLET_SHIMS".to_string(), "/h/opener/shims".to_string()),
-                ("PATH".to_string(), "/h/opener/shims:/usr/bin:/bin".to_string()),
+                (
+                    "PATH".to_string(),
+                    "/h/opener/shims:/usr/bin:/bin".to_string()
+                ),
             ]
         );
     }

@@ -168,6 +168,12 @@ pub const SESSION_FILES_FETCH: &str = "session.files_fetch";
 /// [`FilesCheckout`] → [`FilesCheckedOut`]: a member's checkout of a project
 /// and the central host's, kept in step through it (X74).
 pub const FILES_CHECKOUT: &str = "files.checkout";
+/// [`SessionRef`]-like `{session}` → [`CopiedFilesStatus`]: the copied files
+/// of this Mac's session, or of its live copy of one (X74).
+pub const SESSION_COPIED_FILES: &str = "session.copied_files";
+/// [`FilesKept`]: this side's version of a copied file went to leftovers,
+/// as the other side's won (X74).
+pub const EV_FILES_KEPT: &str = "files.kept";
 /// Whether the central host could continue each copy it holds (X73).
 pub const SESSION_READY: &str = "session.ready";
 /// Tests only, with `MOONLET_TEST_POWER=1`: as if the Mac went to sleep
@@ -561,6 +567,31 @@ pub const TUNNEL_OPEN: &str = "tunnel.open";
 /// [`BrowserRetry`] → `true`: the app tries a forward whose port was taken
 /// again (X75).
 pub const BROWSER_RETRY: &str = "browser.retry";
+/// `{}` → `[SignIn]`: the account's sign-ins, in order (X75).
+pub const SIGNINS_LIST: &str = "signins.list";
+/// [`SignInsSet`] → `true`: the account's sign-ins; this Mac's app only.
+pub const SIGNINS_SET: &str = "signins.set";
+/// [`SignInApprove`] → `true`: this member may run the entry's commands,
+/// exactly as the app showed them; this Mac's app only.
+pub const SIGNINS_APPROVE: &str = "signins.approve";
+/// [`SignInRef`] → `[SignInState]`: whether each member is signed in;
+/// this Mac's app only.
+pub const SIGNINS_CHECK: &str = "signins.check";
+/// [`SignInsRun`] → `true`: signs in on each named member, one after the
+/// other, in a terminal there; this Mac's app only.
+pub const SIGNINS_RUN: &str = "signins.run";
+/// [`SignInsHere`] → `[SignInState]`: between members, through the central
+/// host: checks or signs in on a member, with that member's own entry.
+pub const SIGNINS_HERE: &str = "signins.here";
+/// [`SignInRunning`]: a sign-in runs in a terminal, for this Mac's app to
+/// show (X75): one of this member's, or another member's that this Mac's
+/// Sign in on every member started; and how the latter ended.
+pub const EV_SIGNIN_RUNNING: &str = "signins.running";
+/// [`SignInAttach`] → `terminal.attach`'s reply, under a relay id: on the
+/// central host, the Mac that started a sign-in on another member follows
+/// its terminal through the central host (X75), as `session.attach` does a
+/// session's. No other client may.
+pub const SIGNINS_ATTACH: &str = "signins.attach";
 /// [`JobList`] → `[Job]`: a session's jobs, newest first (X62).
 pub const JOB_LIST: &str = "job.list";
 /// [`JobOutputGet`] → [`JobOutput`]: a job's stored output from a byte.
@@ -1223,7 +1254,8 @@ pub struct SessionAttach {
 }
 
 /// `session.relay` (X72): `attach` to `terminal` of `session` as relay
-/// `relay`, or `detach` relay `relay`.
+/// `relay`, or `detach` relay `relay`. With `signin`, `terminal` is one of
+/// the member's running sign-ins instead, and `session` is empty (X75).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionRelay {
     pub op: String,
@@ -1236,6 +1268,8 @@ pub struct SessionRelay {
     pub cols: Option<u16>,
     #[serde(default)]
     pub rows: Option<u16>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub signin: bool,
 }
 
 /// `session.detach {relay}` (X72).
@@ -1392,6 +1426,111 @@ pub struct BrowserShow {
     /// The forward's port is taken on this Mac: the URL waits for Retry.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub port_taken: bool,
+    /// The one-time code the command printed before opening the page, as
+    /// `gh auth login --web` does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+}
+
+/// `signins.set` params.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SignInsSet {
+    pub entries: Vec<crate::types::SignIn>,
+}
+
+/// Names a sign-in by its id.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SignInRef {
+    pub entry: String,
+}
+
+/// `signins.approve` params: the commands as the user saw them. They must
+/// still be the entry's, or nothing is approved (`changed`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SignInApprove {
+    pub entry: String,
+    pub login: String,
+    pub check: String,
+}
+
+/// `signins.run` params: the members to sign in on, by worker id.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SignInsRun {
+    pub entry: String,
+    pub members: Vec<String>,
+}
+
+/// `signins.here` params: `check` on every member but the one asking, or
+/// on `member`; `run` on `member`. `start` on `member` answers
+/// [`SignInStarted`] at once; `wait` for its `terminal` answers
+/// [`SignInEnded`] once the sign-in ends. Only the member that started a
+/// sign-in waits for it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SignInsHere {
+    pub op: String,
+    pub entry: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub member: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal: Option<crate::TerminalId>,
+}
+
+/// `signins.here start`'s answer: the sign-in's terminal on its member.
+/// `relayed`: followed through the central host's relay
+/// (`signins.attach`); otherwise it is a terminal of the central host's
+/// own.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SignInStarted {
+    pub terminal: crate::TerminalId,
+    #[serde(default)]
+    pub relayed: bool,
+}
+
+/// `signins.here wait`'s answer: how the sign-in's command ended; none
+/// when its terminal is gone.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SignInEnded {
+    #[serde(default)]
+    pub exit: Option<crate::types::ExitInfo>,
+}
+
+/// `signins.running`: the terminal a sign-in runs in, and its name. For
+/// another member's sign-in, that member, by worker id and name, whether
+/// its terminal is followed through the central host's relay (see
+/// [`SignInStarted`]), and, in a second event once it ended, its `exit`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SignInRunning {
+    pub terminal: crate::TerminalId,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub member: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub member_name: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub relayed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit: Option<crate::types::ExitInfo>,
+}
+
+/// `signins.attach {member, terminal, cols?, rows?}` (X75).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SignInAttach {
+    pub member: String,
+    pub terminal: crate::TerminalId,
+    #[serde(default)]
+    pub cols: Option<u16>,
+    #[serde(default)]
+    pub rows: Option<u16>,
+}
+
+/// Whether a member is signed in with an entry: `signed_in`, `signed_out`,
+/// `needs_approval` (its commands were not approved on that member yet) or
+/// `away`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SignInState {
+    pub member: String,
+    pub name: String,
+    pub state: String,
 }
 
 /// `tunnel.open`: the bytes of one HTTP request, in base64, for `port` on
@@ -1422,6 +1561,8 @@ pub struct BrowserRetry {
 pub struct BrowserRoute {
     pub url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_name: Option<String>,
@@ -1441,6 +1582,36 @@ pub struct CopiedFile {
     pub sha: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
+}
+
+/// `session.copied_files` params.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionCopiedFiles {
+    pub session: String,
+}
+
+/// What the list names in a worktree (X74): the files copied, and those
+/// left out with why.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CopiedFilesStatus {
+    pub files: Vec<String>,
+    pub skipped: Vec<SkippedFile>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SkippedFile {
+    pub path: String,
+    /// Such as "is over 1 MiB".
+    pub reason: String,
+}
+
+/// `files.kept`: what was kept, and where.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FilesKept {
+    /// The session's or checkout's name.
+    pub label: String,
+    pub path: String,
+    pub folder: String,
 }
 
 /// A checkout's copied file as a member last saw it change (X74): its

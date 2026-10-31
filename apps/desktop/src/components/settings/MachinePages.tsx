@@ -17,6 +17,7 @@ import { failureShown, olderHosts, olderHostsText, updateAllLabel } from "../../
 import { updateAll, useHostUpdates } from "../../lib/hostUpdateStore";
 import { centralHostButton, centralHostId, clampSlots, heavyHostIds, linkLine, linkRetries, pairThenLink, pickCentral, remoteLinkAction, remoteLinkError, remoteLinkLine, remoteSwitchOn, slotsHint, turnOnNeeds, watchLink, withRunning } from "../../lib/workerLink";
 import { changeCentral } from "../../lib/syncStore";
+import { removeMacMessage, type CopiedFiles } from "../../lib/copiedFiles";
 import { Card, PageHeading, Row, Section, Status, Switch, SwitchRow } from "./controls";
 
 const iconBox = "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-muted";
@@ -197,8 +198,20 @@ async function setTailnetAccess(enabled: boolean) {
   }
 }
 
-async function removeDevice(id: string, name: string) {
-  const ok = await askConfirm({ title: `Remove ${name}?`, message: "It will need to be paired again.", action: "Remove" });
+async function removeDevice(id: string, name: string, mac = false) {
+  // A Mac may hold the projects' copied files (X74): say which to rotate,
+  // and which projects could not be looked up.
+  const lists = mac
+    ? await Promise.all(
+        (useStore.getState().projects[HOST] ?? []).map((p) =>
+          rpc<CopiedFiles>(HOST, M.projectCopiedFilesGet, { id: p.id }).then(
+            (c) => ({ project: p.name, patterns: c.patterns }),
+            () => ({ project: p.name, patterns: null }),
+          ),
+        ),
+      )
+    : [];
+  const ok = await askConfirm({ title: `Remove ${name}?`, message: removeMacMessage(lists), action: "Remove" });
   if (!ok) return;
   try {
     await rpc(HOST, M.mobileRevoke, { id });
@@ -555,7 +568,7 @@ export function HostsPage({ status }: { status: MobileStatus | null }) {
                   <span className="truncate ui-text-13">{d.name}</span>
                   <span className="ui-text-12 text-muted">{deviceLine(d, now)}</span>
                 </span>
-                <Button size="sm" variant="ghost" onClick={() => void removeDevice(d.id, d.name)}>
+                <Button size="sm" variant="ghost" onClick={() => void removeDevice(d.id, d.name, true)}>
                   Remove
                 </Button>
               </div>

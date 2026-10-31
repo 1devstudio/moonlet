@@ -18,6 +18,8 @@ export interface BrowserShow {
   waiting?: boolean;
   /** The forward's port is taken on this Mac: it waits for Retry. */
   port_taken?: boolean;
+  /** The one-time code the command printed, such as gh's. */
+  code?: string;
 }
 
 /** The toast's line: who asked. */

@@ -133,6 +133,10 @@ async fn boot(dir: PathBuf, user_data: String, join: bool) {
         .env("MOONLET_TAILSCALE_CALLS", &calls)
         // A fresh machine: idle, whatever the central host's test load.
         .env("MOONLET_TEST_LOAD", "0.5")
+        // `moonletd join` runs below this daemon, as below root's runuser
+        // on a real machine: the machine takes that for the login that
+        // vouches for it (X75).
+        .env(moonlet_core::app_token::TEST_SSHD_EXE, &exe)
         .env_remove("MOONLET_CLOUD_FAKE")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())

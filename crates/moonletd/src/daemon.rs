@@ -72,12 +72,33 @@ pub struct Daemon {
     local_apps: std::sync::atomic::AtomicUsize,
     /// On the central host, the same for each paired phone (X75).
     phone_shows: Mutex<PhoneShows>,
+    /// What this Mac's app sends in `hello` to prove it is the app (X75).
+    app_token: String,
+    /// The executable a test connects from as the app (X75), from
+    /// `MOONLET_TEST_APP_EXE`.
+    test_app_exe: Option<std::path::PathBuf>,
+    /// sshd's executable for a test (X75), from `MOONLET_TEST_SSHD_EXE`.
+    test_sshd_exe: Option<std::path::PathBuf>,
     /// Sign-ins on this member that wait for the browser to come back (X75).
     callbacks: crate::signin::Callbacks,
     /// URLs whose forward's port was taken here, by URL, for Retry (X75).
     taken: crate::signin::Taken,
     /// The ports this Mac forwards to other members' sign-ins (X75).
     forwards: crate::signin::Forwards,
+    /// The sign-in commands the user approved on this member (X75).
+    approvals: crate::signin::Approvals,
+    /// On the central host: sign-ins shown on the phone that have to finish
+    /// on a Mac, for the next Mac app the user touches, until they lapse.
+    for_next_mac: Mutex<Vec<(std::time::Instant, m::BrowserShow)>>,
+    /// Whether a Sign in on every member runs (X75): one at a time, so
+    /// their browsers never compete.
+    signing_in: Arc<std::sync::atomic::AtomicBool>,
+    /// This member's sign-ins that Sign in on every member started, for
+    /// the central host to wait for and relay (X75).
+    signins_here: crate::signin::Started,
+    /// On the central host: the sign-ins it relays, with the member that
+    /// started each, the only one that follows or waits for it (X75).
+    signins_relayed: crate::signin::Started,
     /// What the Mac's last sleep left to its wake (X73).
     asleep: Mutex<Asleep>,
     /// Per design system (X64): one start of its agent, or one change of its
@@ -269,12 +290,13 @@ const DESIGN_SELF_GATED: &[&str] = &[m::DESIGN_CHECK, m::DESIGN_FILE];
 pub const CLI_CLIENT: &str = "moonlet-cli";
 
 /// Refuses what only the Mac's own app may do, such as managing `what`:
-/// never a paired device over the tailnet, nor an agent's `moonlet` CLI.
+/// never a paired device over the tailnet, nor an agent's `moonlet` CLI, nor
+/// any local connection that did not prove it is the app (X75).
 pub(crate) fn app_only(conn: &Conn, what: &str) -> Result<(), RpcError> {
     if conn.phone.is_some() {
         return Err(RpcError::new("forbidden", format!("manage {what} from the Mac")));
     }
-    if conn.client == CLI_CLIENT {
+    if !conn.app {
         return Err(RpcError::new("forbidden", format!("only the moonlet app manages {what}")));
     }
     Ok(())
@@ -623,9 +645,25 @@ impl Daemon {
             waiting_shows: Default::default(),
             local_apps: Default::default(),
             phone_shows: Default::default(),
+            app_token: moonlet_core::app_token::load_or_create(&moonlet_core::app_token::file()).unwrap_or_else(|e| {
+                // No app can prove itself then: app-only methods are refused.
+                tracing::error!("cannot keep the app credential: {e}");
+                String::new()
+            }),
+            test_app_exe: std::env::var_os(moonlet_core::app_token::TEST_APP_EXE)
+                .filter(|v| !v.is_empty())
+                .map(std::path::PathBuf::from),
+            test_sshd_exe: std::env::var_os(moonlet_core::app_token::TEST_SSHD_EXE)
+                .filter(|v| !v.is_empty())
+                .map(std::path::PathBuf::from),
             callbacks: crate::signin::Callbacks::default(),
             taken: crate::signin::Taken::default(),
             forwards: crate::signin::Forwards::default(),
+            approvals: crate::signin::Approvals::new(&moonlet_core::paths::home()),
+            for_next_mac: Mutex::new(Vec::new()),
+            signing_in: Default::default(),
+            signins_here: Default::default(),
+            signins_relayed: Default::default(),
             asleep: Default::default(),
             heavy,
             cloud,
@@ -787,14 +825,14 @@ impl Daemon {
     }
 
     /// Whether `conn` is the moonlet app, which acts for the user: on this
-    /// Mac, or on a Mac paired with it over the tailnet (X76). Like X31's
-    /// reads, this trusts the name the client gives in its hello.
+    /// Mac, or on a Mac paired with it over the tailnet (X76). On this Mac
+    /// it must have proved it is the app with its credential (X75).
     pub fn is_app(&self, conn: &Conn) -> bool {
         conn.client == APP_CLIENT
-            && conn
-                .phone
-                .as_deref()
-                .is_none_or(|d| self.mobile.kind_of(d) == Some(m::DeviceKind::Desktop))
+            && match conn.phone.as_deref() {
+                None => conn.app,
+                Some(d) => self.mobile.kind_of(d) == Some(m::DeviceKind::Desktop),
+            }
     }
 
     pub fn on_connect(&self, conn: &Conn) {
@@ -922,6 +960,10 @@ impl Daemon {
                 ok(true)
             }
             m::DAEMON_UPDATE => {
+                // On the local socket, the app that proved it is (X75).
+                if conn.phone.is_none() && !conn.app {
+                    return Err(RpcError::new("forbidden", "update moonlet from the app"));
+                }
                 let (reply, handoff) = self.update_from(Some(&conn.client), conn.phone.as_deref(), p).await?;
                 // The connection's writer sends the reply after this returns.
                 handoff.start_after(crate::update::REPLY_GRACE);
@@ -1055,9 +1097,10 @@ impl Daemon {
                 let r: m::TerminalRef = params(p)?;
                 ok(self.reads.readable(r.id).map_err(internal)?.1)
             }
-            m::TERMINAL_READ_ANSWER | m::TERMINAL_READ_REQUESTS if conn.client == CLI_CLIENT => {
+            m::TERMINAL_READ_ANSWER | m::TERMINAL_READ_REQUESTS if conn.phone.is_none() && !conn.app => {
                 // An agent must not approve its own read, nor see the waiting
-                // text, with `moonlet rpc` (X31).
+                // text, with `moonlet rpc` (X31), whatever client name it
+                // gives (X75).
                 Err(RpcError::new("forbidden", "only the moonlet app answers read requests"))
             }
             m::TERMINAL_READ_ANSWER => {
@@ -1128,7 +1171,14 @@ impl Daemon {
                     let name = self.sessions.member_names().remove(&owner).unwrap_or(owner.clone());
                     RpcError::new("owner_offline", format!("{name} is not reachable"))
                 })?;
-                self.session_copies.attach(conn, &member, r).await
+                self.session_copies.attach(conn, &member, r, false).await
+            }
+            m::SIGNINS_ATTACH => {
+                if conn.client == crate::link::WORKER_CLIENT || (conn.phone.is_none() && !conn.app) || conn.cloud.load(std::sync::atomic::Ordering::Relaxed) {
+                    return Err(RpcError::new("forbidden", "only the Mac that started a sign-in follows it"));
+                }
+                let r: m::SignInAttach = params(p)?;
+                ok(self.follow_sign_in(conn, r).await?)
             }
             m::POWER_SIMULATE => {
                 app_only(conn, "power")?;
@@ -1295,13 +1345,16 @@ impl Daemon {
                 if conn.client == crate::link::WORKER_CLIENT {
                     // A member's app, passed on by its daemon.
                     let worker = self.workers.worker_on(conn.id).ok_or_else(|| RpcError::new("forbidden", "only a member says where the user is"))?;
-                    self.presence.lock().unwrap().last = Some((moonlet_core::browser::Client::Member(worker), now));
+                    self.presence.lock().unwrap().last = Some((moonlet_core::browser::Client::Member(worker.clone()), now));
+                    self.hand_to_mac(&worker);
                 } else if let Some(device) = conn.phone.as_deref() {
                     if !self.is_phone(device) {
                         return Err(RpcError::new("forbidden", "a paired Mac says where the user is through its own daemon"));
                     }
                     self.presence.lock().unwrap().last = Some((moonlet_core::browser::Client::Phone(device.to_string()), now));
-                } else if conn.client == CLI_CLIENT {
+                } else if !conn.app {
+                    // Any local process may say it is the app; only the app
+                    // has its credential (X75).
                     return Err(RpcError::new("forbidden", "only the app says where the user is"));
                 } else {
                     self.app_active(now);
@@ -1333,13 +1386,14 @@ impl Daemon {
                     waiting: unknown,
                     member: Some(worker),
                     port_taken: false,
+                    code: r.code,
                 })
                 .await;
                 ok(true)
             }
             m::BROWSER_PENDING => {
                 // This Mac's own app takes what came while it was away (X75).
-                if conn.client != APP_CLIENT || conn.phone.is_some() {
+                if !conn.app || conn.client != APP_CLIENT {
                     return Err(RpcError::new("forbidden", "only this Mac's app shows its sign-ins"));
                 }
                 ok(self.waiting_shows.lock().unwrap().take(wall_ms()))
@@ -1361,6 +1415,67 @@ impl Daemon {
                 let answer = to.request(m::TUNNEL_OPEN, serde_json::to_value(&r).map_err(internal)?, std::time::Duration::from_secs(20)).await?;
                 ok(answer)
             }
+            m::SIGNINS_LIST => ok(self.sessions.sign_ins()),
+            m::SIGNINS_SET => {
+                // They run on every member: only this Mac's app changes them.
+                app_only(conn, "sign-ins")?;
+                let r: m::SignInsSet = params(p)?;
+                self.sessions.set_sign_ins(&r.entries).map_err(|e| RpcError::new("invalid_params", format!("{e:#}")))?;
+                ok(true)
+            }
+            m::SIGNINS_APPROVE => {
+                app_only(conn, "sign-ins")?;
+                let r: m::SignInApprove = params(p)?;
+                let entry = self.sign_in_entry(&r.entry)?;
+                // Only the commands the user saw: an entry changed meanwhile,
+                // here or on another member, is shown again first.
+                if entry.login != r.login || entry.check != r.check {
+                    return Err(RpcError::new("changed", "this sign-in's commands changed: look at them again"));
+                }
+                self.approvals.approve(&entry).map_err(internal)?;
+                ok(true)
+            }
+            m::SIGNINS_CHECK => {
+                app_only(conn, "sign-ins")?;
+                let r: m::SignInRef = params(p)?;
+                ok(self.sign_ins_checked(&r.entry).await?)
+            }
+            m::SIGNINS_RUN => {
+                app_only(conn, "sign-ins")?;
+                let r: m::SignInsRun = params(p)?;
+                self.sign_in_entry(&r.entry)?;
+                use std::sync::atomic::Ordering;
+                if self.signing_in.swap(true, Ordering::SeqCst) {
+                    return Err(RpcError::new("busy", "a sign-in on every member is running: wait until it ends"));
+                }
+                // One after the other, so each browser opens in turn.
+                let d = self.clone();
+                tokio::spawn(async move {
+                    struct Done(Arc<std::sync::atomic::AtomicBool>);
+                    impl Drop for Done {
+                        fn drop(&mut self) {
+                            self.0.store(false, Ordering::SeqCst);
+                        }
+                    }
+                    let _done = Done(d.signing_in.clone());
+                    for member in r.members {
+                        if let Err(e) = d.sign_in_on(&member, &r.entry).await {
+                            tracing::info!(%member, "cannot sign in there: {}", e.message);
+                        }
+                    }
+                });
+                ok(true)
+            }
+            m::SIGNINS_HERE => {
+                // Between members, through the central host (X75).
+                let refused = || RpcError::new("forbidden", "only a member of the account asks this");
+                if conn.client != crate::link::WORKER_CLIENT || conn.cloud.load(std::sync::atomic::Ordering::Relaxed) {
+                    return Err(refused());
+                }
+                let worker = self.workers.worker_on(conn.id).ok_or_else(refused)?;
+                let r: m::SignInsHere = params(p)?;
+                ok(self.sign_ins_relayed(&worker, r).await?)
+            }
             m::BROWSER_RETRY => {
                 app_only(conn, "sign-ins")?;
                 let r: m::BrowserRetry = params(p)?;
@@ -1378,6 +1493,32 @@ impl Daemon {
                 moonlet_core::browser::check_url(&r.url).map_err(|e| RpcError::new("invalid_params", e.to_string()))?;
                 self.open_url(r, conn.peer_pid).await?;
                 ok(true)
+            }
+            m::SESSION_COPIED_FILES => {
+                let r: m::SessionCopiedFiles = params(p)?;
+                // This Mac's own session, or its live copy of the central
+                // host's.
+                let (path, identity) = match self.sessions.session(&r.session) {
+                    Ok(s) if s.owner.is_none() => {
+                        let identity = self.sessions.list_projects().into_iter().find(|p| p.id == s.project_id).map(|p| p.identity);
+                        (std::path::PathBuf::from(s.path), identity)
+                    }
+                    _ => {
+                        let (_, path, identity) = self
+                            .sync
+                            .live_copies()
+                            .into_iter()
+                            .find(|(id, _, _)| *id == r.session)
+                            .ok_or_else(|| RpcError::new("not_found", "no such session here"))?;
+                        (path, identity)
+                    }
+                };
+                let patterns = self.copied_patterns(identity.as_ref());
+                let m = moonlet_core::copied_files::in_worktree(&path, &patterns).await.map_err(internal)?;
+                ok(m::CopiedFilesStatus {
+                    files: m.files.into_iter().map(|(p, _)| p).collect(),
+                    skipped: m.skipped.into_iter().map(|(path, reason)| m::SkippedFile { path, reason }).collect(),
+                })
             }
             m::FILES_CHECKOUT => {
                 // Only a linked Mac's daemon, as for `session.files` (X74).
@@ -3797,6 +3938,15 @@ impl Daemon {
             self.session_copies.relay_detach(r.relay);
             return ok(true);
         }
+        // One of this member's sign-ins, for the Mac that started it (X75):
+        // the central host checked which Mac that is.
+        if r.signin {
+            let me = self.link.info().worker.id;
+            if self.signins_here.by(&me, r.terminal, std::time::Instant::now()).is_none() {
+                return Err(RpcError::new("forbidden", "no such sign-in runs here"));
+            }
+            return self.session_copies.relay_attach(r.relay, r.terminal, r.cols.zip(r.rows));
+        }
         let s = self
             .sessions
             .list_sessions()
@@ -3985,12 +4135,26 @@ impl Daemon {
             shown
         }));
         let d = Arc::downgrade(self);
+        self.link.set_signer(Arc::new(move |r| {
+            let d = d.clone();
+            Box::pin(async move {
+                let d = d.upgrade().ok_or_else(|| RpcError::new("gone", "the daemon is stopping"))?;
+                d.sign_in_here(&r.op, &r.entry, r.terminal).await
+            })
+        }));
+        let d = Arc::downgrade(self);
         self.link.set_tunneler(Arc::new(move |r| {
             let d = d.clone();
             Box::pin(async move {
                 let d = d.upgrade().ok_or_else(|| RpcError::new("gone", "the daemon is stopping"))?;
                 Ok(serde_json::to_value(d.tunnel_here(r).await?).unwrap_or_default())
             })
+        }));
+        let d = Arc::downgrade(self);
+        crate::copied_files::on_kept(Arc::new(move |k| {
+            if let Some(d) = d.upgrade() {
+                d.terminals.emit(Message::event(m::EV_FILES_KEPT, k));
+            }
         }));
         self.session_copies.spawn();
         self.keep_copied_files();
@@ -4002,6 +4166,11 @@ impl Daemon {
     /// it, as [`Self::show_in_app`].
     async fn present(self: &Arc<Self>, mut show: m::BrowserShow) -> bool {
         let me = self.link.info().worker.id;
+        // Only the port the sign-in itself comes back to, never a
+        // privileged one, whatever a member said.
+        if show.forward.is_some() && (show.forward != moonlet_core::browser::redirect_port(&show.url) || show.forward < Some(1024)) {
+            show.forward = None;
+        }
         if let (Some(port), Some(member)) = (show.forward, show.member.clone())
             && member != me
             && show.to.is_none()
@@ -4067,6 +4236,289 @@ impl Daemon {
         Ok(m::TunnelAnswer { data: b64.encode(answer) })
     }
 
+    /// Sign-in `id` as this member has it (X75).
+    fn sign_in_entry(&self, id: &str) -> Result<moonlet_proto::types::SignIn, RpcError> {
+        self.sessions.sign_ins().into_iter().find(|e| e.id == id).ok_or_else(|| RpcError::new("not_found", "no such sign-in"))
+    }
+
+    /// Checks or runs sign-in `entry` on this member, with its own copy of
+    /// the entry and only once its user approved those commands here.
+    /// `start` answers its terminal at once, and `wait` for that `terminal`
+    /// answers how it ended; `run` does both.
+    async fn sign_in_here(self: &Arc<Self>, op: &str, entry: &str, terminal: Option<moonlet_proto::TerminalId>) -> Result<Value, RpcError> {
+        let me = self.link.info().worker;
+        let e = self.sign_in_entry(entry)?;
+        let approved = self.approvals.approved(&e);
+        match op {
+            "check" => {
+                let state = if !approved {
+                    "needs_approval"
+                } else if crate::signin::signed_in(&e.check, self.terminals.base_env()).await {
+                    "signed_in"
+                } else {
+                    "signed_out"
+                };
+                Ok(serde_json::json!([m::SignInState { member: me.id, name: me.name, state: state.into() }]))
+            }
+            "run" | "start" if !approved => Err(RpcError::new("not_approved", format!("approve {} on {} first", e.name, me.name))),
+            "start" => {
+                let t = self.start_sign_in(&e)?;
+                Ok(serde_json::to_value(m::SignInStarted { terminal: t, relayed: false }).map_err(internal)?)
+            }
+            "wait" => {
+                // Only a sign-in Sign in on every member started here.
+                let t = terminal
+                    .filter(|t| self.signins_here.by(&me.id, *t, std::time::Instant::now()).is_some())
+                    .ok_or_else(|| RpcError::new("forbidden", "no such sign-in runs here"))?;
+                let exit = self.sign_in_ended(t).await;
+                Ok(serde_json::to_value(m::SignInEnded { exit }).map_err(internal)?)
+            }
+            "run" => {
+                let t = self.start_sign_in(&e)?;
+                self.sign_in_ended(t).await;
+                Ok(serde_json::json!(true))
+            }
+            _ => Err(RpcError::new("invalid_params", "op is check, start, wait or run")),
+        }
+    }
+
+    /// Starts sign-in `e` in a terminal of this member, which this
+    /// member's app shows, for any question it asks. One still running
+    /// when its wait is over is stopped, whether anyone waits for it or
+    /// not.
+    fn start_sign_in(self: &Arc<Self>, e: &moonlet_proto::types::SignIn) -> Result<moonlet_proto::TerminalId, RpcError> {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
+        let t = self
+            .terminals
+            .create(m::TerminalCreate {
+                cwd: home,
+                command: vec!["/bin/sh".into(), "-c".into(), e.login.clone()],
+                title: Some(format!("Sign in: {}", e.name)),
+                ..Default::default()
+            })
+            .map_err(internal)?;
+        let me = self.link.info().worker.id;
+        self.signins_here.start(&me, t.id, &me, std::time::Instant::now());
+        self.terminals.emit(Message::event(
+            m::EV_SIGNIN_RUNNING,
+            m::SignInRunning { terminal: t.id, name: e.name.clone(), member: None, member_name: None, relayed: false, exit: None },
+        ));
+        let d = self.clone();
+        tokio::spawn(async move {
+            d.sign_in_ended(t.id).await;
+        });
+        Ok(t.id)
+    }
+
+    /// Waits for sign-in terminal `t` to end, so the next member's opens
+    /// after it, and gives how it ended. One still running when the wait
+    /// is over is stopped first, so it never overlaps the next.
+    async fn sign_in_ended(&self, t: moonlet_proto::TerminalId) -> Option<moonlet_proto::types::ExitInfo> {
+        let running = || self.terminals.get(t).is_some_and(|term| term.info().exit.is_none());
+        let end = std::time::Instant::now() + crate::signin::run_wait();
+        while std::time::Instant::now() < end && running() {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        }
+        if running() {
+            tracing::info!(terminal = t, "a sign-in still runs after its wait: stopping it");
+            let _ = self.terminals.kill(t, false);
+            let stop = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while std::time::Instant::now() < stop && running() {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+        }
+        self.terminals.get(t).and_then(|term| term.info().exit)
+    }
+
+    /// On the central host: `signins.here` from member `from`. A check
+    /// without a member goes to every member but `from`, this host
+    /// included; anything for one member goes to it.
+    /// A sign-in `start`ed is `from`'s alone: only it follows the terminal
+    /// and waits for its end.
+    async fn sign_ins_relayed(self: &Arc<Self>, from: &str, r: m::SignInsHere) -> Result<Value, RpcError> {
+        let me = self.link.info().worker.id;
+        let Some(member) = r.member.clone() else {
+            return match r.op.as_str() {
+                "check" => Ok(serde_json::to_value(self.checked_on_members(&r.entry, Some(from)).await).map_err(internal)?),
+                _ => Err(RpcError::new("invalid_params", "name the member to sign in on")),
+            };
+        };
+        if r.op == "wait" {
+            let started = r.terminal.and_then(|t| self.signins_relayed.by(&member, t, std::time::Instant::now()));
+            if started.as_deref() != Some(from) {
+                return Err(RpcError::new("forbidden", "only the Mac that started a sign-in waits for it"));
+            }
+        }
+        let answer = if member == me {
+            self.sign_in_here(&r.op, &r.entry, r.terminal).await?
+        } else {
+            let conn = self.workers.conn(&member).filter(|c| !c.cloud.load(std::sync::atomic::Ordering::Relaxed)).ok_or_else(|| RpcError::new("away", "that member is away"))?;
+            let to = m::SignInsHere { member: None, ..r.clone() };
+            conn.request(m::SIGNINS_HERE, serde_json::to_value(&to).map_err(internal)?, crate::signin::RELAY_WAIT).await?
+        };
+        match r.op.as_str() {
+            "start" => {
+                let mut started: m::SignInStarted = serde_json::from_value(answer).map_err(internal)?;
+                self.signins_relayed.start(&member, started.terminal, from, std::time::Instant::now());
+                // This host's own terminal the Mac reaches as it does any;
+                // another member's, through the relay.
+                started.relayed = member != me;
+                Ok(serde_json::to_value(started).map_err(internal)?)
+            }
+            "wait" => {
+                if let Some(t) = r.terminal {
+                    self.signins_relayed.end(&member, t);
+                }
+                Ok(answer)
+            }
+            _ => Ok(answer),
+        }
+    }
+
+    /// `signins.attach` on the central host (X75): `conn` follows sign-in
+    /// `r.terminal` on member `r.member` through the relay, only when it
+    /// is the app of the Mac that started it: this host's own, or a paired
+    /// Mac's whose daemon links as that member.
+    async fn follow_sign_in(self: &Arc<Self>, conn: &Arc<Conn>, r: m::SignInAttach) -> Result<Value, RpcError> {
+        let refused = || RpcError::new("forbidden", "only the Mac that started a sign-in follows it");
+        let by = self.signins_relayed.by(&r.member, r.terminal, std::time::Instant::now()).ok_or_else(refused)?;
+        let me = self.link.info().worker.id;
+        let theirs = match conn.phone.as_deref() {
+            None => by == me,
+            Some(device) => self.workers.owned_by(&by, device),
+        };
+        if !theirs || r.member == me {
+            return Err(refused());
+        }
+        let member = self.workers.conn(&r.member).filter(|c| !c.cloud.load(std::sync::atomic::Ordering::Relaxed)).ok_or_else(|| RpcError::new("away", "that member is away"))?;
+        let attach = m::SessionAttach { session: String::new(), terminal: r.terminal, cols: r.cols, rows: r.rows };
+        self.session_copies.attach(conn, &member, attach, true).await
+    }
+
+    /// On the central host: this host's check of `entry`, and each linked
+    /// member's but `except`'s.
+    async fn checked_on_members(self: &Arc<Self>, entry: &str, except: Option<&str>) -> Vec<m::SignInState> {
+        let mut out: Vec<m::SignInState> = self
+            .sign_in_here("check", entry, None)
+            .await
+            .ok()
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default();
+        let names = self.sessions.member_names();
+        for w in self.workers.list() {
+            let id = w.worker.id.clone();
+            if Some(id.as_str()) == except {
+                continue;
+            }
+            let Some(conn) = self.workers.conn(&id).filter(|c| !c.cloud.load(std::sync::atomic::Ordering::Relaxed)) else { continue };
+            let ask = m::SignInsHere { op: "check".into(), entry: entry.to_string(), member: None, terminal: None };
+            let got: Option<Vec<m::SignInState>> = match conn.request(m::SIGNINS_HERE, serde_json::to_value(&ask).unwrap_or_default(), std::time::Duration::from_secs(15)).await {
+                Ok(v) => serde_json::from_value(v).ok(),
+                Err(_) => None,
+            };
+            let name = names.get(&id).cloned().unwrap_or_else(|| w.worker.name.clone());
+            // Named as this host knows each member.
+            match got.and_then(|g| g.into_iter().next()) {
+                Some(s) => out.push(m::SignInState { member: id, name, state: s.state }),
+                None => out.push(m::SignInState { member: id, name, state: "away".into() }),
+            }
+        }
+        out
+    }
+
+    /// Whether each member is signed in with `entry`: this one, and the
+    /// others through the central host.
+    async fn sign_ins_checked(self: &Arc<Self>, entry: &str) -> Result<Vec<m::SignInState>, RpcError> {
+        self.sign_in_entry(entry)?;
+        if self.link.info().central.is_none() {
+            return Ok(self.checked_on_members(entry, None).await);
+        }
+        let mut out: Vec<m::SignInState> = serde_json::from_value(self.sign_in_here("check", entry, None).await?).map_err(internal)?;
+        if let Some(host) = self.link.host() {
+            let ask = m::SignInsHere { op: "check".into(), entry: entry.to_string(), member: None, terminal: None };
+            if let Ok(v) = host.request(m::SIGNINS_HERE, serde_json::to_value(&ask).map_err(internal)?).await
+                && let Ok(more) = serde_json::from_value::<Vec<m::SignInState>>(v)
+            {
+                out.extend(more);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Signs in with `entry` on member `member`, until its sign-in ends.
+    /// Another member's terminal shows in this Mac's app too, followed
+    /// through the central host, so the user answers what it asks here;
+    /// and its end, which that terminal's exit does not bring here.
+    async fn sign_in_on(self: &Arc<Self>, member: &str, entry: &str) -> Result<(), RpcError> {
+        let info = self.link.info();
+        if member == info.worker.id {
+            self.sign_in_here("run", entry, None).await?;
+            return Ok(());
+        }
+        let name = self.sign_in_entry(entry)?.name;
+        let ask = |op: &str, terminal: Option<moonlet_proto::TerminalId>| m::SignInsHere { op: op.into(), entry: entry.to_string(), member: Some(member.to_string()), terminal };
+        let started: m::SignInStarted = serde_json::from_value(self.sign_in_via_central(ask("start", None)).await?).map_err(internal)?;
+        let mut running = m::SignInRunning {
+            terminal: started.terminal,
+            name,
+            member: Some(member.to_string()),
+            member_name: self.sessions.member_names().remove(member),
+            relayed: started.relayed,
+            exit: None,
+        };
+        self.terminals.emit(Message::event(m::EV_SIGNIN_RUNNING, running.clone()));
+        let ended: m::SignInEnded = serde_json::from_value(self.sign_in_via_central(ask("wait", Some(started.terminal))).await?).map_err(internal)?;
+        if let Some(exit) = ended.exit {
+            running.exit = Some(exit);
+            self.terminals.emit(Message::event(m::EV_SIGNIN_RUNNING, running));
+        }
+        Ok(())
+    }
+
+    /// `signins.here` `ask`, through the central host, or on it when this
+    /// is the central host.
+    async fn sign_in_via_central(self: &Arc<Self>, ask: m::SignInsHere) -> Result<Value, RpcError> {
+        let info = self.link.info();
+        if info.central.is_none() {
+            return self.sign_ins_relayed(&info.worker.id, ask).await;
+        }
+        let host = self.link.host().ok_or_else(|| RpcError::new("unreachable", "the central host is not connected"))?;
+        host.request(m::SIGNINS_HERE, serde_json::to_value(&ask).map_err(internal)?).await
+    }
+
+    /// On the central host: the user touched member `member`'s app, so the
+    /// sign-ins waiting for a Mac go to it (X75).
+    fn hand_to_mac(self: &Arc<Self>, member: &str) {
+        let waiting: Vec<(std::time::Instant, m::BrowserShow)> = {
+            let mut list = self.for_next_mac.lock().unwrap();
+            list.retain(|(until, _)| *until > std::time::Instant::now());
+            std::mem::take(&mut *list)
+        };
+        if waiting.is_empty() {
+            return;
+        }
+        let d = self.clone();
+        let member = member.to_string();
+        tokio::spawn(async move {
+            let me = d.link.info().worker.id;
+            for (until, show) in waiting {
+                let sent = if member == me {
+                    d.present(show.clone()).await;
+                    true
+                } else if let Some(conn) = d.workers.conn(&member) {
+                    conn.request(m::EV_BROWSER_SHOW, serde_json::to_value(&show).unwrap_or_default(), std::time::Duration::from_secs(10)).await.is_ok()
+                } else {
+                    false
+                };
+                // That Mac went away meanwhile: it waits for the next one,
+                // until it lapses.
+                if !sent {
+                    d.for_next_mac.lock().unwrap().push((until, show));
+                }
+            }
+        });
+    }
+
     /// The user is active in this Mac's app (X75): passed on to the central
     /// host at most every 30 s; on the central host, or without one, kept.
     fn app_active(self: &Arc<Self>, now: u64) {
@@ -4074,7 +4526,9 @@ impl Daemon {
         let mut p = self.presence.lock().unwrap();
         p.app_at = Some(now);
         if info.central.is_none() {
-            p.last = Some((moonlet_core::browser::Client::Member(info.worker.id), now));
+            p.last = Some((moonlet_core::browser::Client::Member(info.worker.id.clone()), now));
+            drop(p);
+            self.hand_to_mac(&info.worker.id);
             return;
         }
         if now.saturating_sub(p.sent_at) < 30_000 {
@@ -4123,6 +4577,39 @@ impl Daemon {
         }
     }
 
+    /// Whether a connection on the local socket is this Mac's app (X75):
+    /// its `hello` sent the app credential, and the process at the other
+    /// end, as the kernel says, runs the app beside this daemon's
+    /// executable, or runs this executable started at a login: over SSH, at
+    /// the console or by root (`moonletd proxy`, which vouches for the app on
+    /// an SSH host, or `pair` and `tailnet` on a host without the app).
+    /// Anything it cannot tell is not the app.
+    pub fn proves_app(&self, sent: Option<&str>, peer_pid: Option<u32>) -> bool {
+        use moonlet_core::app_token::{self, Peer};
+        let Some(sent) = sent else { return false };
+        if self.app_token.is_empty() || !app_token::matches(&self.app_token, sent) {
+            return false;
+        }
+        let (Some(pid), Ok(daemon)) = (peer_pid, std::env::current_exe()) else {
+            return false;
+        };
+        let exe = moonlet_core::process::executable(pid);
+        let peer = exe
+            .as_deref()
+            .map_or(Peer::Other, |exe| app_token::peer(exe, &daemon, self.test_app_exe.as_deref()));
+        let app = match peer {
+            Peer::App => true,
+            Peer::Moonletd => {
+                app_token::vouched(&app_token::ancestors(pid), std::process::id(), self.test_sshd_exe.as_deref())
+            }
+            Peer::Other => false,
+        };
+        if !app {
+            tracing::warn!(?exe, ?peer, "a connection with the app credential is not the app");
+        }
+        app
+    }
+
     /// This Mac's app connected, or (`false`) one of its connections
     /// closed (X75).
     pub fn app_connection(&self, open: bool) {
@@ -4165,6 +4652,18 @@ impl Daemon {
             Some((port, key)) => (Some(port), Some(key)),
             None => (None, None),
         };
+        // A device sign-in's code, from what its terminal printed: the
+        // output just written may still be on its way, so it looks twice.
+        let mut code = None;
+        if let Some(t) = r.terminal {
+            for _ in 0..2 {
+                code = self.terminals.read_text(t, Some(40)).ok().and_then(|read| moonlet_core::browser::one_time_code(&read.text));
+                if code.is_some() {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            }
+        }
         let mut show = m::BrowserShow {
             url: r.url,
             from: info.worker.name,
@@ -4177,6 +4676,7 @@ impl Daemon {
             waiting: false,
             member: Some(info.worker.id.clone()),
             port_taken: false,
+            code,
         };
         let now = wall_ms();
         if info.central.is_none() {
@@ -4198,6 +4698,7 @@ impl Daemon {
                         session_name: show.session_name.clone(),
                         forward: show.forward,
                         forward_key: show.forward_key.clone(),
+                        code: show.code.clone(),
                     })
                     .map_err(internal)?,
                 )
@@ -4225,6 +4726,11 @@ impl Daemon {
         show.waiting = waiting;
         match client {
             Client::Phone(device) => {
+                // One that comes back to a member's localhost finishes on a
+                // Mac: the next one the user touches gets it too.
+                if show.forward.is_some() {
+                    self.for_next_mac.lock().unwrap().push((std::time::Instant::now() + crate::signin::LIFETIME, show.clone()));
+                }
                 show.to = Some("phone".into());
                 show.device = Some(device.clone());
                 // A phone opens no forward: it never gets the key.

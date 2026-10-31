@@ -11,7 +11,7 @@ describe("a sign-in on the phone (X75)", () => {
   });
 
   it("names the page's host and who asked", () => {
-    expect(signInCard(show)).toEqual({ title: "studio-mini · deploy-fix opened a sign-in", site: "github.com", mac: false });
+    expect(signInCard(show)).toEqual({ title: "studio-mini · deploy-fix opened a sign-in", site: "github.com", mac: false, code: null });
   });
 
   it("says a sign-in that comes back to localhost finishes on a Mac", () => {
@@ -19,7 +19,12 @@ describe("a sign-in on the phone (X75)", () => {
       title: "studio-mini · deploy-fix opened a sign-in",
       site: "accounts.google.com",
       mac: true,
+      code: null,
     });
+  });
+
+  it("shows the one-time code the command printed", () => {
+    expect(signInCard({ ...show, code: "AB12-CD34" }).code).toBe("AB12-CD34");
   });
 
   it("keeps one card per URL, newest first", () => {

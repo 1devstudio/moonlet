@@ -16,13 +16,17 @@ pub struct Daemon {
     pub socket: PathBuf,
     pub env: Vec<(String, String)>,
     pub child: Child,
+    /// The `moonletd` it runs.
+    pub exe: PathBuf,
 }
 
-fn spawn(home: &Path, socket: &Path, env: &[(String, String)]) -> Child {
-    Command::new(env!("CARGO_BIN_EXE_moonletd"))
+fn spawn(exe: &Path, home: &Path, socket: &Path, env: &[(String, String)]) -> Child {
+    Command::new(exe)
         .arg("daemon")
         .env("MOONLET_HOME", home)
         .env("MOONLET_SOCK", socket)
+        // This test counts as the app when it sends the credential (X75).
+        .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
         .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -33,12 +37,18 @@ fn spawn(home: &Path, socket: &Path, env: &[(String, String)]) -> Child {
 
 impl Daemon {
     pub async fn start(home: tempfile::TempDir, env: &[(&str, &str)]) -> Daemon {
+        Daemon::start_from(Path::new(env!("CARGO_BIN_EXE_moonletd")), home, env).await
+    }
+
+    /// [`Self::start`] with the `moonletd` at `exe`, such as a copy of the
+    /// built one where an installed daemon would be.
+    pub async fn start_from(exe: &Path, home: tempfile::TempDir, env: &[(&str, &str)]) -> Daemon {
         let socket = home.path().join("run").join("d.sock");
         let env: Vec<(String, String)> = env
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
-        let child = spawn(home.path(), &socket, &env);
+        let child = spawn(exe, home.path(), &socket, &env);
         wait_for_socket(&socket, Duration::from_secs(15))
             .await
             .unwrap();
@@ -47,6 +57,7 @@ impl Daemon {
             socket,
             env,
             child,
+            exe: exe.to_path_buf(),
         }
     }
 
@@ -61,14 +72,17 @@ impl Daemon {
         let _ = self.child.kill();
         let _ = self.child.wait();
         let _ = std::fs::remove_file(&self.socket);
-        self.child = spawn(self.home.path(), &self.socket, &self.env);
+        self.child = spawn(&self.exe, self.home.path(), &self.socket, &self.env);
         wait_for_socket(&self.socket, Duration::from_secs(15))
             .await
             .unwrap();
     }
 
+    /// This Mac's app: it sends the credential its daemon wrote (X75).
     pub async fn app(&self) -> Client {
-        Client::connect(&self.socket, "moonlet-app").await.unwrap()
+        Client::connect_app(&self.socket, self.home.path())
+            .await
+            .unwrap()
     }
 
     pub async fn call<T: serde::de::DeserializeOwned>(&self, method: &str, params: Value) -> T {
@@ -121,6 +135,7 @@ pub async fn raw(addr: &str, token: &str, client: &str) -> tokio::net::TcpStream
     let hello = Message::Hello {
         protocol: moonlet_proto::PROTOCOL_VERSION,
         client: client.into(),
+        app_token: None,
     };
     write_frame(&mut s, &Frame::Json(hello)).await.unwrap();
     assert!(matches!(

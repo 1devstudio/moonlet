@@ -91,6 +91,11 @@ impl Connector for LocalDaemon {
         Box::pin(connect_local())
     }
 
+    /// The token this Mac's daemon wrote, so it knows this is its app (X75).
+    fn app_token(&self) -> Option<String> {
+        moonlet_core::app_token::read(&moonlet_core::app_token::file())
+    }
+
     fn welcomed<'a>(&'a self, reply: &'a Frame) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             let mismatch = match reply {

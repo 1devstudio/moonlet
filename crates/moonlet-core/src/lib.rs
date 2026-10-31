@@ -3,6 +3,7 @@
 
 pub mod account;
 pub mod agent;
+pub mod app_token;
 pub mod bundle;
 pub mod chat;
 pub mod claude_update;
@@ -27,6 +28,7 @@ pub mod paths;
 pub mod profiles;
 pub mod repo_clone;
 pub mod project_config;
+pub mod process;
 pub mod pty;
 pub mod session;
 pub mod shell;

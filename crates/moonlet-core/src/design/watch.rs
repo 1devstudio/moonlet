@@ -172,27 +172,31 @@ pub fn start_session(
     ];
     let top = worktree.clone();
     let arm = move |armed: &mut Armed| -> anyhow::Result<Vec<PathBuf>> {
-        let mut made = Vec::new();
+        let (mut on, mut off) = (Vec::new(), Vec::new());
         for root in &roots {
             if root.is_dir() {
-                if armed.watch(root, true)? {
-                    // What it has came before its watch: count it.
-                    for e in std::fs::read_dir(root)?.flatten() {
-                        made.push(e.path());
-                    }
-                }
+                on.push((root.clone(), true));
                 continue;
             }
             // Gone, or not made yet: watched for from the nearest folder
             // above it, the worktree at the top.
-            armed.unwatch(root);
+            off.push(root.clone());
             if let Some(above) = root
                 .ancestors()
                 .skip(1)
                 .take_while(|a| a.starts_with(&top))
                 .find(|a| a.is_dir())
             {
-                armed.watch(above, false)?;
+                on.push((above.to_path_buf(), false));
+            }
+        }
+        let mut made = Vec::new();
+        for (dir, whole) in armed.set(&on, &off)? {
+            // What it has came before its watch: count it.
+            if whole {
+                for e in std::fs::read_dir(&dir)?.flatten() {
+                    made.push(e.path());
+                }
             }
         }
         Ok(made)
@@ -218,29 +222,53 @@ struct Armed {
 }
 
 impl Armed {
-    /// Watches `dir`, whole (`recursive`) or only its own entries; true
-    /// when it was not watched so before.
-    fn watch(&mut self, dir: &Path, recursive: bool) -> notify::Result<bool> {
+    /// Puts the watch on each of `on`, a folder and whether whole (with its
+    /// folders) or only its own entries, in order, and takes it off each of
+    /// `off`. The watch restarts once for them all, and only if anything
+    /// changed: on macOS each restart takes seconds on a busy Mac. Returns
+    /// the folders newly watched, and how.
+    fn set(&mut self, on: &[(PathBuf, bool)], off: &[PathBuf]) -> notify::Result<Vec<(PathBuf, bool)>> {
         use notify::Watcher;
-        if self.on.get(dir) == Some(&recursive) {
-            return Ok(false);
+        let changes = off.iter().any(|d| self.on.contains_key(d))
+            || on.iter().any(|(d, whole)| self.on.get(d) != Some(whole));
+        if !changes {
+            return Ok(Vec::new());
         }
-        self.unwatch(dir);
-        let mode = if recursive {
-            notify::RecursiveMode::Recursive
-        } else {
-            notify::RecursiveMode::NonRecursive
-        };
-        self.watcher.watch(dir, mode)?;
-        self.on.insert(dir.to_path_buf(), recursive);
-        Ok(true)
-    }
-
-    /// Stops watching `dir`, if it was.
-    fn unwatch(&mut self, dir: &Path) {
-        use notify::Watcher;
-        if self.on.remove(dir).is_some() {
-            let _ = self.watcher.unwatch(dir);
+        let mut paths = self.watcher.paths_mut();
+        for dir in off {
+            if self.on.remove(dir).is_some() {
+                let _ = paths.remove(dir);
+            }
+        }
+        let (mut newly, mut failed) = (Vec::new(), None);
+        for (dir, whole) in on {
+            if self.on.get(dir) == Some(whole) {
+                continue;
+            }
+            if self.on.remove(dir).is_some() {
+                let _ = paths.remove(dir);
+            }
+            let mode = if *whole {
+                notify::RecursiveMode::Recursive
+            } else {
+                notify::RecursiveMode::NonRecursive
+            };
+            match paths.add(dir, mode) {
+                Ok(()) => {
+                    self.on.insert(dir.clone(), *whole);
+                    newly.push((dir.clone(), *whole));
+                }
+                Err(e) => {
+                    failed.get_or_insert(e);
+                }
+            }
+        }
+        // The watch restarts only once committed, the folders it was on
+        // before included: so always, also after a folder failed.
+        paths.commit()?;
+        match failed {
+            Some(e) => Err(e),
+            None => Ok(newly),
         }
     }
 }
@@ -328,7 +356,7 @@ pub fn start(root: &Path, emit: impl Fn(Vec<Change>) + Send + 'static) -> anyhow
     let watched = given.clone();
     let arm = move |armed: &mut Armed| {
         armed
-            .watch(&watched, true)
+            .set(&[(watched.clone(), true)], &[])
             .map(|_| Vec::new())
             .map_err(Into::into)
     };
@@ -676,7 +704,9 @@ mod tests {
         assert_eq!((watching.watches_whole(&folder), watching.watches_whole(&side)), (false, false));
         std::fs::create_dir_all(folder.join("settings-page/pages")).unwrap();
         std::fs::create_dir_all(side.join("settings-page")).unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        // Arming restarts the watch, which on a busy Mac takes seconds
+        // (FSEvents): this bounds a watch that never arms, not its speed.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
         loop {
             std::fs::write(folder.join("settings-page/pages/index.html"), "<p>x</p>\n").unwrap();
             if rx.recv_timeout(std::time::Duration::from_millis(300)).is_ok() && watching.watches_whole(&folder) && watching.watches_whole(&side) {
@@ -703,7 +733,9 @@ mod tests {
         let comments = |c: &SessionChange| {
             c.design == "settings-page" && c.paths.iter().any(|p| p == "comments.json")
         };
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        // Arming restarts the watch, which on a busy Mac takes seconds
+        // (FSEvents): this bounds a watch that never arms, not its speed.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
         loop {
             std::fs::write(
                 wt.join(".moonlet/design/settings-page/comments.json"),

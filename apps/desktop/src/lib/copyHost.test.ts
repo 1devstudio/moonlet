@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { EarlyOutput, PendingAttaches, copyHostId, parseCopyHost, routeCall, unwrapEvent } from "./copyHost";
+import { EarlyOutput, PendingAttaches, copyHostId, parseCopyHost, routeCall, signInHostId, unwrapEvent } from "./copyHost";
 
 describe("copy hosts (X72)", () => {
   it("names a session another member owns by its central host and its id", () => {
@@ -63,5 +63,24 @@ describe("leaving a terminal while its attach is on its way (X72)", () => {
     a.start("studio-mini#copy:s1:5");
     expect(a.done("studio-mini#copy:s1:5")).toBe(false);
     expect(a.leave("studio-mini#copy:s1:5")).toBe(false);
+  });
+});
+
+describe("another member's sign-in through the central host (X75)", () => {
+  it("attaches by the member and terminal, detaches by relay, and sends nothing else", () => {
+    const id = signInHostId("studio-mini", "5b2e8d4f-6a1c-4f3e-b7d9-0e2a4c6f8b15");
+    expect(id).toBe("studio-mini#signin:5b2e8d4f-6a1c-4f3e-b7d9-0e2a4c6f8b15");
+    expect(parseCopyHost(id)?.host).toBe("studio-mini");
+    expect(routeCall(id, "terminal.attach", { id: 3, cols: 80, rows: 24 }, () => undefined)).toEqual({
+      host: "studio-mini",
+      method: "signins.attach",
+      params: { member: "5b2e8d4f-6a1c-4f3e-b7d9-0e2a4c6f8b15", terminal: 3, cols: 80, rows: 24 },
+    });
+    expect(routeCall(id, "terminal.detach", { id: 3 }, (t) => (t === 3 ? 0x4000_0002 : undefined))).toEqual({
+      host: "studio-mini",
+      method: "session.detach",
+      params: { relay: 0x4000_0002 },
+    });
+    expect(routeCall(id, "terminal.kill", { id: 3 }, () => undefined)).toBeNull();
   });
 });

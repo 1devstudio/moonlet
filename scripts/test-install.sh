@@ -53,22 +53,47 @@ export MOONLET_MOBILE_ADDRS=127.0.0.1
 if [ "$systemd" = 1 ]; then
   systemctl --user set-environment MOONLET_MOBILE_ADDRS=127.0.0.1
 fi
+# moonletd takes `tailnet` and `pair` for the app only from a login over
+# SSH, at the console or by root (X75). Where sudo needs no password, as on
+# CI's runner, the installs run below root's runuser, as
+# `sudo runuser -u <user> --` runs them. Elsewhere they run below a shell
+# that the daemon takes for sshd (MOONLET_TEST_SSHD_EXE, read from its own
+# environment) and that this test runs nothing else in: a copy of bash, or
+# zsh on a Mac, which kills a copy of its own binaries.
+if [ "$(uname -s)" = Linux ] && sudo -n runuser -u "$(id -un)" -- true 2>/dev/null; then
+  as_login() {
+    sudo -n runuser -u "$(id -un)" -- env HOME="$HOME" PATH="$PATH" TMPDIR="$TMPDIR" \
+      MOONLET_MOBILE_ADDRS="${MOONLET_MOBILE_ADDRS-}" XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR-}" \
+      DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS-}" sh "$@"
+  }
+else
+  login_shell=/bin/zsh
+  if [ "$(uname -s)" != Darwin ]; then
+    login_shell="$fake/sshd"
+    cp "$(command -v bash)" "$login_shell"
+  fi
+  export MOONLET_TEST_SSHD_EXE="$login_shell"
+  if [ "$systemd" = 1 ]; then
+    systemctl --user set-environment MOONLET_TEST_SSHD_EXE="$login_shell"
+  fi
+  as_login() { "$login_shell" -c 'sh "$@"; exit $?' sh "$@"; }
+fi
 bin="$HOME/.moonlet/bin"
 cleanup() {
   "$bin/moonletd" stop >/dev/null 2>&1 || true
   if [ "$systemd" = 1 ]; then
-    systemctl --user unset-environment MOONLET_MOBILE_ADDRS || true
+    systemctl --user unset-environment MOONLET_MOBILE_ADDRS MOONLET_TEST_SSHD_EXE || true
   fi
   rm -rf "$work"
 }
 trap cleanup EXIT
 
 run_install() {
-  PATH="$fake:$PATH" sh "$dist/install.sh" --from "$dist" --no-pair "$@" 2>&1
+  PATH="$fake:$PATH" as_login "$dist/install.sh" --from "$dist" --no-pair "$@" 2>&1
 }
 
 # A fresh install, as published: downloaded, not --from.
-out=$(PATH="$fake:$PATH" sh "$dist/install.sh" --no-pair 2>&1) || fail "install failed: $out"
+out=$(PATH="$fake:$PATH" as_login "$dist/install.sh" --no-pair 2>&1) || fail "install failed: $out"
 has "$out" "moonlet $version for Linux x86_64"
 has "$out" "✓ Downloaded and checked moonletd and moonlet"
 has "$out" "✓ Installed in ~/.moonlet/bin"
@@ -119,6 +144,21 @@ pass "refuses a damaged download"
 out=$(run_install) || fail "second install failed: $out"
 has "$out" "moonlet $version is already installed."
 pass "says when this version is already installed"
+
+# From a terminal that no login started, the daemon does not take
+# `moonletd tailnet on` for the app (X75): the install still works and says
+# what to run. Four shells down, so none of moonletd's nearest 4 ancestors
+# starts a login, even when this test runs over SSH.
+printf '#!/bin/sh\n"$@"\nexit $?\n' >"$fake/shell"
+chmod +x "$fake/shell"
+out=$(PATH="$fake:$PATH" "$fake/shell" "$fake/shell" "$fake/shell" sh "$dist/install.sh" --from "$dist" --no-pair 2>&1) ||
+  fail "install from a plain terminal failed: $out"
+has "$out" "moonlet $version is already installed."
+has "$out" "Tailnet access was not turned on: only the moonlet app, or you over SSH or at the console, may turn it on."
+has "$out" '  sudo runuser -u "$(id -un)" -- ~/.moonlet/bin/moonletd tailnet on'
+has "$out" '  sudo runuser -u "$(id -un)" -- ~/.moonlet/bin/moonletd pair'
+"$bin/moonletd" status >/dev/null 2>&1 || fail "the daemon is not running"
+pass "from a plain terminal, installs and says how to turn on tailnet access"
 
 # An update keeps a running session.
 term=$("$bin/moonlet" rpc terminal.create "{\"cwd\":\"$work\",\"command\":[\"sleep\",\"600\"]}")

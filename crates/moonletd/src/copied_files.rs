@@ -21,6 +21,30 @@ pub fn lists() -> &'static std::sync::Mutex<BTreeMap<String, Vec<String>>> {
     LISTS.get_or_init(Default::default)
 }
 
+/// Tells this Mac's app that a version of a copied file went to leftovers
+/// (X74), for its toast.
+pub type Kept = std::sync::Arc<dyn Fn(m::FilesKept) + Send + Sync>;
+
+fn kept_hook() -> &'static std::sync::OnceLock<Kept> {
+    static KEPT: std::sync::OnceLock<Kept> = std::sync::OnceLock::new();
+    &KEPT
+}
+
+/// Sets what hears of kept versions, once, as the daemon starts.
+pub fn on_kept(f: Kept) {
+    let _ = kept_hook().set(f);
+}
+
+fn kept(label: &str, path: &str, folder: &Path) {
+    if let Some(f) = kept_hook().get() {
+        f(m::FilesKept {
+            label: label.to_string(),
+            path: path.to_string(),
+            folder: folder.display().to_string(),
+        });
+    }
+}
+
 /// How many bytes of copied files go in one message; the rest go in the
 /// next round.
 const BUDGET: u64 = 4 * 1024 * 1024;
@@ -132,6 +156,7 @@ pub async fn take(
             "{label}: kept this side's {path} in {} before replacing it",
             folder.display()
         );
+        kept(label, path, folder);
         Ok(())
     };
     let had = {
@@ -305,16 +330,17 @@ impl Checkouts {
         Ok(bytes)
     }
 
-    /// Puts version `v` of `path` in checkout `dir`, the version there kept
-    /// in leftovers first.
+    /// Puts version `v` of `path` in project `name`'s checkout `dir`, the
+    /// version there kept in leftovers first.
     fn put(
         &self,
-        label: &str,
+        name: &str,
         folder: &mut Option<PathBuf>,
         dir: &Path,
         path: &str,
         bytes: Option<&[u8]>,
     ) -> Result<()> {
+        let label = crate::sync::segment(&format!("{name}-checkout"));
         if let Some(old) = files::read(dir, path)? {
             if bytes.is_some_and(|b| b == old.as_slice()) {
                 return Ok(());
@@ -322,10 +348,12 @@ impl Checkouts {
             if folder.is_none() {
                 *folder = Some(crate::sync::make_leftovers_folder(
                     &self.home.join("sync-leftovers"),
-                    label,
+                    &label,
                 )?);
             }
-            files::write(folder.as_ref().expect("made above"), path, &old)?;
+            let kept_in = folder.as_ref().expect("made above");
+            files::write(kept_in, path, &old)?;
+            kept(name, path, kept_in);
         }
         match bytes {
             Some(b) => files::write(dir, path, b),
@@ -445,7 +473,6 @@ impl Checkouts {
             .map(|f| (f.path.clone(), f.content.as_deref().map_or(0, decoded_len)))
             .collect();
         let takes = files::receivable(dir, patterns, &sizes).await?;
-        let label = crate::sync::segment(&format!("{name}-checkout"));
         let mut folder = None;
         let mut t = self.tables.lock().unwrap();
         let Tables {
@@ -476,7 +503,7 @@ impl Checkouts {
                 // Its bytes come next time.
                 continue;
             }
-            self.put(&label, &mut folder, dir, &f.path, content.as_deref())?;
+            self.put(name, &mut folder, dir, &f.path, content.as_deref())?;
             match &f.sha {
                 Some(sha) => sent.insert(f.path.clone(), sha.clone()),
                 None => sent.remove(&f.path),
@@ -518,7 +545,6 @@ impl Checkouts {
             .map(|f| (f.path.clone(), f.content.as_deref().map_or(0, decoded_len)))
             .collect();
         let takes = files::receivable(dir, patterns, &sizes).await?;
-        let label = crate::sync::segment(&format!("{name}-checkout"));
         let mut folder = None;
         let mut out = m::FilesCheckedOut::default();
         let mut t = self.tables.lock().unwrap();
@@ -561,7 +587,7 @@ impl Checkouts {
                         out.want.push(f.path.clone());
                         continue;
                     }
-                    self.put(&label, &mut folder, dir, &f.path, content.as_deref())?;
+                    self.put(name, &mut folder, dir, &f.path, content.as_deref())?;
                     table.insert(f.path.clone(), theirs);
                 }
             }

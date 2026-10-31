@@ -11,7 +11,7 @@ import { accountOf, ownWorkspaces } from "./workspaces";
 import { older } from "./versions";
 
 /** The app-wide pages, in nav order. */
-export type AppPage = "general" | "appearance" | "terminal" | "agents" | "git" | "notifications" | "trackers" | "shortcuts" | "profiles" | "hooks" | "hosts" | "workers" | "cloud" | "phones";
+export type AppPage = "general" | "appearance" | "terminal" | "agents" | "git" | "notifications" | "trackers" | "shortcuts" | "profiles" | "hooks" | "hosts" | "workers" | "cloud" | "signins" | "phones";
 
 export type SettingsRoute =
   /** `focus` is a row's `data-setting`, scrolled to and highlighted (X50 Manage › Boards). */
@@ -76,7 +76,7 @@ export function settingsNav(input: NavInput): NavGroup[] {
       title: "Claude Code",
       entries: [app("profiles", "Profiles", input.profilesNeedSignIn ? { dot: "a profile is not signed in" } : {}), app("hooks", "Hooks")],
     },
-    { title: "Machines", entries: [counted("hosts", "Hosts", input.remoteHosts), app("workers", "Workers", onHost(input.central ?? null)), app("cloud", "Cloud workers", { ...onHost(input.central ?? null), ...(input.cloudRemovalFailed ? { dot: "a cloud machine could not be removed" } : {}) }), counted("phones", "Phones", input.phones)] },
+    { title: "Machines", entries: [counted("hosts", "Hosts", input.remoteHosts), app("workers", "Workers", onHost(input.central ?? null)), app("cloud", "Cloud workers", { ...onHost(input.central ?? null), ...(input.cloudRemovalFailed ? { dot: "a cloud machine could not be removed" } : {}) }), app("signins", "Sign-ins"), counted("phones", "Phones", input.phones)] },
   ];
   if (input.workspaces.length)
     groups.push({

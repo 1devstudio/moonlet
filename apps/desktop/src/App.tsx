@@ -16,6 +16,8 @@ import { startCloud } from "./lib/cloudStore";
 import { startJobs } from "./lib/jobsStore";
 import { startReadiness } from "./lib/followStore";
 import { startBrowser } from "./lib/browserStore";
+import { startCopiedFiles } from "./lib/copiedFilesStore";
+import { SignInRunning, startSignInRunning } from "./components/SignInRunning";
 import { installShortcuts } from "./lib/keys";
 import { terminalSearch } from "./lib/actions";
 import { uiScale } from "./lib/uiScale";
@@ -152,6 +154,9 @@ export default function App() {
     const readiness = startReadiness();
     // Sign-ins open where the user is (X75).
     startBrowser();
+    // Where this Mac's version of a copied file went (X74).
+    startCopiedFiles();
+    startSignInRunning();
     void startDesign();
     startEditor();
     void loadTrackersConfig();
@@ -206,6 +211,7 @@ export default function App() {
       {s.settingsPage && <SettingsPage route={s.settingsPage} />}
       <Dialogs />
       <SyncPopoverHost />
+      <SignInRunning />
       {s.dialog?.kind === "palette" && <CommandPalette />}
       <ConfirmHost />
       <ReadHost />

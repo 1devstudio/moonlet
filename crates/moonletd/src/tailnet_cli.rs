@@ -14,16 +14,32 @@ use qrcodegen::{QrCode, QrCodeEcc};
 use serde_json::json;
 use tokio::signal::unix::{SignalKind, signal};
 
+/// A connection with the app credential (X75): on a host without the app,
+/// the user manages phones and pairing from a terminal instead.
+pub async fn connect_as_app(socket: &Path, client: &str) -> Result<Client> {
+    let token = moonlet_core::app_token::read(&moonlet_core::app_token::file());
+    Client::connect_with(socket, client, token.as_deref()).await
+}
+
 /// `moonletd tailnet on|off|status`: changes or shows tailnet access and
-/// prints its status line. `on` waits a little for the listener.
-pub async fn tailnet(socket: &Path, enable: Option<bool>) -> Result<()> {
-    let mut c = Client::connect(socket, "moonletd-tailnet").await?;
-    let mut st: MobileStatus = match enable {
-        Some(enabled) => {
-            c.request(m::MOBILE_SET_ENABLED, json!({ "enabled": enabled }))
-                .await?
+/// prints its status line. `on` waits a little for the listener. Returns the
+/// exit status.
+pub async fn tailnet(socket: &Path, enable: Option<bool>) -> Result<i32> {
+    let mut c = connect_as_app(socket, "moonletd-tailnet").await?;
+    let (first, command) = match enable {
+        Some(enabled) => (
+            c.request(m::MOBILE_SET_ENABLED, json!({ "enabled": enabled })).await,
+            if enabled { "tailnet on" } else { "tailnet off" },
+        ),
+        None => (c.request(m::MOBILE_STATUS, json!({})).await, "tailnet status"),
+    };
+    let mut st: MobileStatus = match first {
+        Ok(st) => st,
+        Err(e) if forbidden(&e) => {
+            eprintln!("{}", not_the_app(command));
+            return Ok(1);
         }
-        None => c.request(m::MOBILE_STATUS, json!({})).await?,
+        Err(e) => return Err(e),
     };
     if enable == Some(true) {
         for _ in 0..100 {
@@ -35,7 +51,7 @@ pub async fn tailnet(socket: &Path, enable: Option<bool>) -> Result<()> {
         }
     }
     println!("{}", status_line(&st));
-    Ok(())
+    Ok(0)
 }
 
 /// `moonletd pair`: shows a pairing code and waits until a device uses it,
@@ -43,7 +59,7 @@ pub async fn tailnet(socket: &Path, enable: Option<bool>) -> Result<()> {
 pub async fn pair(socket: &Path, name: Option<String>) -> Result<i32> {
     // Registered before the code shows, so Ctrl-C always cancels it.
     let mut interrupt = signal(SignalKind::interrupt())?;
-    let mut c = Client::connect(socket, "moonletd-pair").await?;
+    let mut c = connect_as_app(socket, "moonletd-pair").await?;
     let p: MobilePairing = match c.request(m::MOBILE_PAIR_START, json!({ "kind": "desktop" })).await {
         Ok(p) => p,
         Err(e) => {
@@ -94,7 +110,26 @@ fn pair_error(e: &anyhow::Error) -> String {
     match e.downcast_ref::<RpcError>().map(|e| e.code.as_str()) {
         Some("mobile_off") => "Tailnet access is off. Run `moonletd tailnet on` first.".into(),
         Some("no_tailscale") => "Tailscale is not running on this machine.".into(),
+        Some("forbidden") => not_the_app("pair"),
         _ => format!("Cannot start pairing: {e:#}"),
+    }
+}
+
+/// Whether the daemon refused a request because it does not take this
+/// process for the app (X75).
+fn forbidden(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<RpcError>().is_some_and(|e| e.code == "forbidden")
+}
+
+/// What `moonletd <command>` says when the daemon does not take it for the
+/// app (X75): no login started it, over SSH or at the console, nor root. On
+/// Linux, root's runuser starts it from any terminal, through sudo.
+pub fn not_the_app(command: &str) -> String {
+    let only = "Only the moonlet app, or you over SSH or at the console, manages tailnet access and pairing.";
+    if cfg!(target_os = "linux") {
+        format!("{only}\nFrom this terminal, run: sudo runuser -u \"$(id -un)\" -- ~/.moonlet/bin/moonletd {command}")
+    } else {
+        only.into()
     }
 }
 

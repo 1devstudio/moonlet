@@ -244,7 +244,7 @@ async fn another_members_change_says_workspaces_changed_to_this_macs_app() {
         || async { air.names().await.len() == 3 },
     )
     .await;
-    let mut app = Client::connect(&air.socket, "moonlet-app").await.unwrap();
+    let mut app = Client::connect_app(&air.socket, air.home.path()).await.unwrap();
     let books = book.workspaces().await[0].clone();
     rename(&book, &books.id, "Home").await;
     let deadline = Instant::now() + Duration::from_secs(5);

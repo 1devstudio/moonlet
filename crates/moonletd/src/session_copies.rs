@@ -757,12 +757,14 @@ impl SessionCopies {
     /// `session.attach` on the central host (X72): asks the owner, linked
     /// as `owner`, to attach to terminal `r.terminal` of its session for
     /// `client`, under a new relay id, and gives `terminal.attach`'s reply
-    /// with that id.
+    /// with that id. With `signin`, `r.terminal` is one of the owner's
+    /// running sign-ins, and `r.session` is empty (X75).
     pub async fn attach(
         &self,
         client: &Arc<crate::server::Conn>,
         owner: &Arc<crate::server::Conn>,
         r: m::SessionAttach,
+        signin: bool,
     ) -> Result<Value, RpcError> {
         let relay = self
             .next_relay
@@ -785,6 +787,7 @@ impl SessionCopies {
                     relay,
                     cols: r.cols,
                     rows: r.rows,
+                    signin,
                 })
                 .unwrap_or_default(),
                 Duration::from_secs(30),
