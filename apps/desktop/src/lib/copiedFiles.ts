@@ -90,10 +90,15 @@ export const skippedLine = (s: { path: string; reason: string }) => `${s.path} $
 export const keptToast = (k: { label: string; path: string; folder: string }, home: string | null) =>
   `${k.label}: ${k.path} changed on both Macs. This Mac's version is in ${tildePath(k.folder, home)}`;
 
-/** The confirmation when a paired Mac is removed: the copied files it held,
- * by project, whose secrets to rotate (ADR 0014). */
-export function removeMacMessage(lists: { project: string; patterns: string[] }[]): string {
-  const held = lists.filter((l) => l.patterns.length).map((l) => `${l.project} (${l.patterns.join(", ")})`);
-  const base = "It will need to be paired again.";
-  return held.length ? `${base} It held copies of the files your projects copy between your Macs: ${held.join(", ")}. Rotate the secrets in them.` : base;
+/** The confirmation when a paired Mac is removed: the copied files it may
+ * hold, by project, whose secrets to rotate (ADR 0014). `patterns` is null
+ * for a project whose list could not be looked up: named as such, never as
+ * one without copied files. */
+export function removeMacMessage(lists: { project: string; patterns: string[] | null }[]): string {
+  const held = lists.flatMap((l) => (l.patterns?.length ? [`${l.project} (${l.patterns.join(", ")})`] : []));
+  const unknown = lists.filter((l) => l.patterns === null).map((l) => l.project);
+  let out = "It will need to be paired again.";
+  if (held.length) out += ` It may hold copies of the files your projects copy between your Macs: ${held.join(", ")}. Rotate the secrets in them.`;
+  if (unknown.length) out += ` The copied files of ${unknown.join(", ")} could not be looked up: rotate their secrets too if they copy any.`;
+  return out;
 }

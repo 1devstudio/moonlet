@@ -87,7 +87,22 @@ describe("removing a Mac that held copied files (X74, ADR 0014)", () => {
         { project: "blog", patterns: [] },
         { project: "api", patterns: ["config/local.yaml"] },
       ]),
-    ).toBe("It will need to be paired again. It held copies of the files your projects copy between your Macs: shop (.env, .env.*), api (config/local.yaml). Rotate the secrets in them.");
+    ).toBe("It will need to be paired again. It may hold copies of the files your projects copy between your Macs: shop (.env, .env.*), api (config/local.yaml). Rotate the secrets in them.");
     expect(removeMacMessage([])).toBe("It will need to be paired again.");
+  });
+
+  it("names the projects whose copied files could not be looked up", () => {
+    expect(
+      removeMacMessage([
+        { project: "shop", patterns: [".env"] },
+        { project: "blog", patterns: null },
+        { project: "api", patterns: null },
+      ]),
+    ).toBe(
+      "It will need to be paired again. It may hold copies of the files your projects copy between your Macs: shop (.env). Rotate the secrets in them. The copied files of blog, api could not be looked up: rotate their secrets too if they copy any.",
+    );
+    expect(removeMacMessage([{ project: "blog", patterns: null }])).toBe(
+      "It will need to be paired again. The copied files of blog could not be looked up: rotate their secrets too if they copy any.",
+    );
   });
 });

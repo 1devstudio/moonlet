@@ -199,13 +199,14 @@ async function setTailnetAccess(enabled: boolean) {
 }
 
 async function removeDevice(id: string, name: string, mac = false) {
-  // A Mac held the projects' copied files (X74): say which to rotate.
+  // A Mac may hold the projects' copied files (X74): say which to rotate,
+  // and which projects could not be looked up.
   const lists = mac
     ? await Promise.all(
         (useStore.getState().projects[HOST] ?? []).map((p) =>
           rpc<CopiedFiles>(HOST, M.projectCopiedFilesGet, { id: p.id }).then(
             (c) => ({ project: p.name, patterns: c.patterns }),
-            () => ({ project: p.name, patterns: [] }),
+            () => ({ project: p.name, patterns: null }),
           ),
         ),
       )
