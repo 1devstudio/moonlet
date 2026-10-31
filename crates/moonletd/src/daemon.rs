@@ -2888,6 +2888,16 @@ impl Daemon {
             back().await;
             return Err(RpcError::new("not_found", "the session's project is gone"));
         };
+        // A message that came in while the branch moved would end with the
+        // chats here: the session stays, and moves when that turn ends.
+        let typed = |st: &moonlet_proto::types::ChatState| st.items.iter().filter(|i| i.kind == "user").count() + st.queued.len();
+        let came_in = states
+            .iter()
+            .any(|c| self.chats.state(c.terminal).is_ok_and(|now| typed(&now) > typed(&c.state)));
+        if came_in {
+            back().await;
+            return Err(RpcError::new("busy", "a message came in as it moved; it moves when the turn ends"));
+        }
         // Given up only once the account names its new owner: otherwise it
         // stays this host's, as it was.
         if !self.sessions.set_session_owner(&r.session, worker, epoch + 1, None) {

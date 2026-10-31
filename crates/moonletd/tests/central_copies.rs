@@ -2014,6 +2014,75 @@ async fn a_session_in_the_middle_of_a_turn_comes_back_only_when_asked_now() {
 }
 
 #[tokio::test]
+async fn a_message_typed_while_the_session_moves_keeps_it_on_the_central_host() {
+    let origin = Origin::new();
+    let (mini, book, made) = continued_and_back(&origin).await;
+    let own: Vec<Value> = mini.call("session.list", json!({})).await;
+    let there = own.iter().find(|s| s["id"] == made["id"]).unwrap().clone();
+    let chat = there["terminals"][0].clone();
+    // studio-mini's git waits, as the move renames the session's branch,
+    // until the test says go: a message comes in just then.
+    let worktree = PathBuf::from(there["path"].as_str().unwrap());
+    let common = std::process::Command::new("git")
+        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .current_dir(&worktree)
+        .output()
+        .unwrap();
+    let hooks = PathBuf::from(String::from_utf8_lossy(&common.stdout).trim()).join("hooks");
+    std::fs::create_dir_all(&hooks).unwrap();
+    let gate = tempfile::tempdir().unwrap();
+    let (started, go) = (gate.path().join("started"), gate.path().join("go"));
+    let hook = hooks.join("reference-transaction");
+    std::fs::write(
+        &hook,
+        format!(
+            "#!/bin/sh\n[ \"$1\" = prepared ] || exit 0\ngrep -q refs/heads/moonlet-copy/ || exit 0\n[ -e '{s}' ] && exit 0\ntouch '{s}'\nn=0\nwhile [ ! -e '{g}' ] && [ $n -lt 300 ]; do sleep 0.1; n=$((n+1)); done\n",
+            s = started.display(),
+            g = go.display()
+        ),
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let (brought, ()) = tokio::join!(
+        book.try_call("session.bring", json!({ "session": made["id"] })),
+        async {
+            within(Duration::from_secs(30), "the move under way", || async {
+                started.exists()
+            })
+            .await;
+            let _: Value = mini
+                .call("chat.send", json!({ "id": chat, "text": "Typed meanwhile" }))
+                .await;
+            std::fs::write(&go, "").unwrap();
+        }
+    );
+    let busy = brought.unwrap_err();
+    assert!(busy.starts_with("busy"), "{busy}");
+    // It still runs on studio-mini, on its own branch, with the message.
+    let own: Vec<Value> = mini.call("session.list", json!({})).await;
+    assert!(own.iter().any(|s| s["id"] == made["id"]), "{own:?}");
+    let on = std::process::Command::new("git")
+        .args(["branch", "--show-current"])
+        .current_dir(&worktree)
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&on.stdout).trim(), "moonlet/fix-cart");
+    let st: Value = mini.call("chat.state", json!({ "id": chat })).await;
+    assert!(
+        st["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i["kind"] == json!("user") && i["text"] == json!("Typed meanwhile")),
+        "{st}"
+    );
+}
+
+#[tokio::test]
 async fn a_member_that_lost_its_session_lists_the_files_it_deleted_meanwhile() {
     let origin = Origin::new();
     let (mini, mut book) = pair_with_agents(&origin).await;
