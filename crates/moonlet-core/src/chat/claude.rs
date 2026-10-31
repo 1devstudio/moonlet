@@ -339,6 +339,13 @@ impl Adapter for Claude {
             }
             return out;
         }
+        // Claude starts a turn by itself when a background task ends: a
+        // message sent during it waits in Claude's queue too (X49).
+        if matches!(v["type"].as_str(), Some("assistant" | "stream_event")) && !super::busy(st) {
+            st.turn_started_at = Some(now_ms());
+            st.status = "working".into();
+            out.push(Out::State);
+        }
         match v.get("type").and_then(Value::as_str).unwrap_or("") {
             "system" if v.get("subtype").and_then(Value::as_str) == Some("init") => {
                 st.agent_session = v.get("session_id").and_then(Value::as_str).map(String::from);
@@ -1612,6 +1619,24 @@ mod tests {
         assert!(st.pending.is_empty());
         // The main agent is not working again: its turn had ended.
         assert_eq!(st.status, "done");
+    }
+
+    #[test]
+    fn a_turn_claude_starts_by_itself_works_and_queues_a_message() {
+        let (mut a, mut st) = started();
+        // The main turn ends while a subagent still runs.
+        let ended = until(SUBAGENT_STOP, r#""type": "result""#);
+        replay(&ended, &mut a, &mut st);
+        assert_eq!(st.status, "done");
+        // Claude starts a turn of its own after the stopped subagent's report.
+        let own = until(SUBAGENT_STOP, "msg_011Cg1u8jVxZFc4bi7HRYg2a");
+        replay(&own[ended.len()..], &mut a, &mut st);
+        assert_eq!(st.status, "working");
+        assert!(st.turn_started_at.is_some());
+        // Claude reads a message sent now only after its running step.
+        a.send("are you there?", &[], &mut st);
+        assert_eq!(st.queued.iter().map(|q| q.text.as_str()).collect::<Vec<_>>(), ["are you there?"]);
+        assert!(st.items.iter().all(|i| i.text != "are you there?"));
     }
 
     #[test]
