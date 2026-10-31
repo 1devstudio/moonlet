@@ -390,11 +390,14 @@ async fn proxy(socket: PathBuf) -> Result<()> {
 /// same for itself before it takes the proxy for the app.
 fn ssh_session_command() -> bool {
     let parent = std::os::unix::process::parent_id();
+    // Linux hides sshd's executable from the user, so its kernel name
+    // stands in; the daemon checks the session again itself.
+    let name = |pid| moonlet_core::process::name(pid).or_else(|| moonlet_core::process::kernel_name(pid));
     let mut names = Vec::new();
-    if let Some(name) = moonlet_core::process::name(parent) {
-        names.push(name);
-        if let Some(name) = moonlet_core::process::parent(parent).and_then(moonlet_core::process::name) {
-            names.push(name);
+    if let Some(n) = name(parent) {
+        names.push(n);
+        if let Some(n) = moonlet_core::process::parent(parent).and_then(name) {
+            names.push(n);
         }
     }
     let names: Vec<&str> = names.iter().map(String::as_str).collect();
