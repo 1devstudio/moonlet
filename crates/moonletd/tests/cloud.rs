@@ -681,8 +681,11 @@ fn gcp_key() -> String {
 async fn cloud_set_refuses_a_bad_google_cloud_key() {
     let d = Daemon::start(tempfile::tempdir().unwrap(), &[]).await;
     assert_eq!(
-        d.fails("cloud.set", json!({ "providers": { "gcp": { "key": "hc_7Kq2mXw9pD" } } }))
-            .await,
+        d.fails(
+            "cloud.set",
+            json!({ "providers": { "gcp": { "key": "hc_7Kq2mXw9pD" } } })
+        )
+        .await,
         "invalid_params: That is not a Google Cloud service-account key: it is not JSON."
     );
     assert_eq!(
@@ -711,13 +714,19 @@ async fn cloud_set_refuses_a_bad_google_cloud_key() {
     // A key of spaces is no key: never shown as saved.
     let d2 = Daemon::start(tempfile::tempdir().unwrap(), &[]).await;
     let _: Value = d2
-        .call("cloud.set", json!({ "providers": { "gcp": { "key": "   " } } }))
+        .call(
+            "cloud.set",
+            json!({ "providers": { "gcp": { "key": "   " } } }),
+        )
         .await;
     let got2: Value = d2.call("cloud.get", json!({})).await;
     assert_eq!(got2["providers"], json!({ "gcp": {} }));
     // An empty max_hours is 12, and keeps the saved key.
     let _: Value = d
-        .call("cloud.set", json!({ "providers": { "gcp": { "max_hours": "" } } }))
+        .call(
+            "cloud.set",
+            json!({ "providers": { "gcp": { "max_hours": "" } } }),
+        )
         .await;
     let got: Value = d.call("cloud.get", json!({})).await;
     assert_eq!(got["providers"]["gcp"]["has_key"], json!(true));
@@ -2435,4 +2444,105 @@ async fn a_cloud_machine_never_contacts_origin() {
         .to_string();
     assert_eq!(ran_on(&ran), name, "{ran:?}");
     assert_eq!((ran.stdout.as_str(), ran.status), ("out\n", 0));
+}
+
+#[tokio::test]
+async fn a_cloud_machine_gets_copied_files_only_when_the_switch_is_on() {
+    let c = routing(&[]).await;
+    c.ready().await;
+    let s = c.session("fix-cart", true).await;
+    let tree = PathBuf::from(s["path"].as_str().unwrap());
+    std::fs::write(tree.join(".env"), "API_KEY=secret\n").unwrap();
+    c.run(&s, &["sh", "run.sh"]).await;
+    let copy = copies_on(&c)[0].clone();
+    // Off by default: a few rounds go by and the copy has none.
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert!(!copy.join(".env").exists());
+    let _: Value =
+        c.d.call(
+            "project.copied_files.set",
+            json!({ "id": c.project, "patterns": [".env"], "cloud": true }),
+        )
+        .await;
+    let start = std::time::Instant::now();
+    while std::fs::read_to_string(copy.join(".env")).ok().as_deref() != Some("API_KEY=secret\n") {
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "no .env on the cloud machine"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// Waits until `ok` holds, for up to 10 s.
+async fn until_true(what: &str, ok: impl Fn() -> bool) {
+    let start = std::time::Instant::now();
+    while !ok() {
+        assert!(start.elapsed() < Duration::from_secs(10), "{what}");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+#[tokio::test]
+async fn a_file_taken_off_the_list_leaves_the_cloud_machine() {
+    let c = routing(&[]).await;
+    c.ready().await;
+    let s = c.session("fix-cart", true).await;
+    let tree = PathBuf::from(s["path"].as_str().unwrap());
+    std::fs::write(tree.join(".env"), "API_KEY=secret\n").unwrap();
+    std::fs::write(tree.join(".env.local"), "TOKEN=t0k3n\n").unwrap();
+    c.run(&s, &["sh", "run.sh"]).await;
+    let copy = copies_on(&c)[0].clone();
+    let _: Value =
+        c.d.call(
+            "project.copied_files.set",
+            json!({ "id": c.project, "patterns": [".env", ".env.local"], "cloud": true }),
+        )
+        .await;
+    until_true("no .env.local on the cloud machine", || {
+        std::fs::read_to_string(copy.join(".env.local")).ok().as_deref() == Some("TOKEN=t0k3n\n")
+    })
+    .await;
+    let _: Value =
+        c.d.call(
+            "project.copied_files.set",
+            json!({ "id": c.project, "patterns": [".env"], "cloud": true }),
+        )
+        .await;
+    until_true(".env.local still on the cloud machine", || {
+        !copy.join(".env.local").exists()
+    })
+    .await;
+    assert_eq!(
+        std::fs::read_to_string(copy.join(".env")).unwrap(),
+        "API_KEY=secret\n"
+    );
+}
+
+#[tokio::test]
+async fn turning_the_switch_off_takes_the_copied_files_off_the_cloud_machine() {
+    let c = routing(&[]).await;
+    c.ready().await;
+    let s = c.session("fix-cart", true).await;
+    let tree = PathBuf::from(s["path"].as_str().unwrap());
+    std::fs::write(tree.join(".env"), "API_KEY=secret\n").unwrap();
+    c.run(&s, &["sh", "run.sh"]).await;
+    let copy = copies_on(&c)[0].clone();
+    let _: Value =
+        c.d.call(
+            "project.copied_files.set",
+            json!({ "id": c.project, "patterns": [".env"], "cloud": true }),
+        )
+        .await;
+    until_true("no .env on the cloud machine", || {
+        std::fs::read_to_string(copy.join(".env")).ok().as_deref() == Some("API_KEY=secret\n")
+    })
+    .await;
+    let _: Value =
+        c.d.call(
+            "project.copied_files.set",
+            json!({ "id": c.project, "patterns": [".env"], "cloud": false }),
+        )
+        .await;
+    until_true(".env still on the cloud machine", || !copy.join(".env").exists()).await;
 }
