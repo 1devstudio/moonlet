@@ -73,8 +73,15 @@ export interface CopiedFilesStatus {
   skipped: { path: string; reason: string }[];
 }
 
-/** The sync popover's line, none without copied files. */
-export const copiedLine = (s: CopiedFilesStatus): string | null => (s.files.length === 0 ? null : s.files.length === 1 ? "1 copied file" : `${s.files.length} copied files`);
+/** The sync popover's line, which opens the list: the copied files, or
+ * with none, the files left out; none without either. */
+export function copiedLine(s: CopiedFilesStatus): string | null {
+  const n = s.files.length;
+  if (n) return n === 1 ? "1 copied file" : `${n} copied files`;
+  const out = s.skipped.length;
+  if (out) return out === 1 ? "1 file not copied" : `${out} files not copied`;
+  return null;
+}
 
 /** Why a matching file is not copied. */
 export const skippedLine = (s: { path: string; reason: string }) => `${s.path} ${s.reason} and stays on each Mac.`;

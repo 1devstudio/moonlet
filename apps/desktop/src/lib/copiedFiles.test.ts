@@ -66,6 +66,9 @@ describe("copied files in the sync popover and toasts (X74)", () => {
     expect(copiedLine({ files: [".env", ".env.local", "apps/web/.env"], skipped: [] })).toBe("3 copied files");
     expect(copiedLine({ files: [".env"], skipped: [] })).toBe("1 copied file");
     expect(copiedLine({ files: [], skipped: [] })).toBeNull();
+    // Only files left out: the line still opens their list.
+    expect(copiedLine({ files: [], skipped: [{ path: "secrets.json", reason: "is over 1 MiB" }] })).toBe("1 file not copied");
+    expect(copiedLine({ files: [], skipped: [{ path: "a.json", reason: "is over 1 MiB" }, { path: "b.json", reason: "is over 1 MiB" }] })).toBe("2 files not copied");
     expect(skippedLine({ path: "secrets.json", reason: "is over 1 MiB" })).toBe("secrets.json is over 1 MiB and stays on each Mac.");
   });
 
