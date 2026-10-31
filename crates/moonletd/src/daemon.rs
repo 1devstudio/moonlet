@@ -4302,6 +4302,24 @@ impl Daemon {
                 let r: m::ProjectSetConfig = params(p)?;
                 ok(w.set_project_config(&r.id, &r.version, &r.config).await.map_err(internal)?)
             }
+            m::PROJECT_COPIED_FILES_GET => {
+                let r: m::IdRef = params(p)?;
+                let identity = w.project(&r.id).map_err(|e| RpcError::new("invalid_params", e.to_string()))?.identity;
+                let (patterns, cloud, default) = w.copied_files(&identity);
+                ok(m::CopiedFiles { patterns, cloud, default })
+            }
+            m::PROJECT_COPIED_FILES_SET => {
+                // The list carries files to every member: only this Mac's
+                // app widens it, never an agent (X74).
+                app_only(conn, "copied files")?;
+                let r: m::CopiedFilesSet = params(p)?;
+                for pattern in &r.patterns {
+                    moonlet_core::copied_files::check_pattern(pattern).map_err(|e| RpcError::new("invalid_params", e.to_string()))?;
+                }
+                let identity = w.project(&r.id).map_err(|e| RpcError::new("invalid_params", e.to_string()))?.identity;
+                w.set_copied_files(&identity, &r.patterns, r.cloud).map_err(|e| RpcError::new("invalid_params", e.to_string()))?;
+                ok(true)
+            }
             m::PROJECT_WORKTREE_REMOVE => {
                 let r: m::ProjectWorktree = params(p)?;
                 w.remove_worktree(&r.id, &r.path).await.map_err(internal)?;

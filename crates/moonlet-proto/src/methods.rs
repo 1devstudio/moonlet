@@ -61,6 +61,11 @@ pub const PROJECT_REMOVE: &str = "project.remove";
 pub const PROJECT_CONFIG: &str = "project.config";
 pub const PROJECT_CONFIG_FILE: &str = "project.config_file";
 pub const PROJECT_SET_CONFIG: &str = "project.set_config";
+/// [`IdRef`] → [`CopiedFiles`]: the project's copied files (X74).
+pub const PROJECT_COPIED_FILES_GET: &str = "project.copied_files.get";
+/// [`CopiedFilesSet`] → `true`: sets the project's copied files, for every
+/// member; from this Mac's app only (X74).
+pub const PROJECT_COPIED_FILES_SET: &str = "project.copied_files.set";
 /// `{id}` → the project's linked work trees (X45).
 pub const PROJECT_WORKTREES: &str = "project.worktrees";
 /// `{id, path}`: removes a linked worktree no session uses (X45 Clean up).
@@ -896,6 +901,27 @@ pub struct ProjectAdd {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IdRef {
     pub id: String,
+}
+
+/// A project's copied files (X74): files git ignores that moonlet copies
+/// between members.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CopiedFiles {
+    /// `.gitignore` lines, relative to the worktree's root.
+    pub patterns: Vec<String>,
+    /// Whether they also go to cloud machines.
+    pub cloud: bool,
+    /// Whether `patterns` is the default, none having been set.
+    pub default: bool,
+}
+
+/// `project.copied_files.set` params.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CopiedFilesSet {
+    pub id: String,
+    pub patterns: Vec<String>,
+    #[serde(default)]
+    pub cloud: bool,
 }
 
 /// Writes a project's `.moonlet/config.toml` (X8).

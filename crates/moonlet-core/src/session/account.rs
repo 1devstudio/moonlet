@@ -35,6 +35,8 @@ const MEMBER: RecordKind = RecordKind::Member;
 const DESIGN: RecordKind = RecordKind::Design;
 /// A session, so every member knows which member runs it (X72).
 const SESSION: RecordKind = RecordKind::Session;
+/// A project's copied files, by project identity (X74).
+const PROJECT_FILES: RecordKind = RecordKind::ProjectFiles;
 /// A session record's fields only its maker and the central host change:
 /// who owns it, the ownership number and the pin (X73).
 const OWNERSHIP: &[&str] = &["owner", "epoch", "pinned"];
@@ -336,6 +338,52 @@ impl SessionManager {
             change
         };
         self.account_changed(vec![change]);
+    }
+
+    /// Project `identity`'s copied files (X74): its patterns, whether they
+    /// also go to cloud machines, and whether the patterns are the default
+    /// because none were set.
+    pub fn copied_files(&self, identity: &ProjectIdentity) -> (Vec<String>, bool, bool) {
+        let record = identity_key(identity)
+            .and_then(|key| self.with_log(|log| Some(log.records(PROJECT_FILES).remove(&key)?)));
+        let cloud = record.as_ref().and_then(|r| r.get("cloud")?.as_bool()).unwrap_or(false);
+        let patterns: Option<Vec<String>> =
+            record.as_ref().and_then(|r| serde_json::from_value(r.get("patterns")?.clone()).ok());
+        match patterns {
+            Some(p) => (p, cloud, false),
+            None => (crate::copied_files::DEFAULT.iter().map(|s| s.to_string()).collect(), cloud, true),
+        }
+    }
+
+    /// Sets project `identity`'s copied files (X74) as this member's change,
+    /// and sends it on. Refuses a pattern that is not one `.gitignore` line
+    /// inside the worktree, a project without a root, and a member without
+    /// an account.
+    pub fn set_copied_files(&self, identity: &ProjectIdentity, patterns: &[String], cloud: bool) -> Result<()> {
+        for p in patterns {
+            crate::copied_files::check_pattern(p)?;
+        }
+        let patterns: Vec<String> = patterns.iter().map(|p| p.trim().to_string()).collect();
+        let key = identity_key(identity).context("a project without a git root keeps the default list")?;
+        let changes = {
+            let mut account = self.account.lock().unwrap();
+            let a = account.as_mut().context("copied files are kept in the account: pair a Mac first")?;
+            let now = a.log.records(PROJECT_FILES).remove(&key).unwrap_or_default();
+            let mut log = a.log.clone();
+            let changes: Vec<Change> = [("patterns", json!(patterns)), ("cloud", json!(cloud))]
+                .into_iter()
+                .filter(|(field, value)| now.get(*field) != Some(value))
+                .map(|(field, value)| log.set(now_ms(), PROJECT_FILES, &key, field, value))
+                .collect();
+            if changes.is_empty() {
+                return Ok(());
+            }
+            write_private(&a.path, &log)?;
+            a.log = log;
+            changes
+        };
+        self.account_changed(changes);
+        Ok(())
     }
 
     /// The sessions of the account (X72), by session id; none without an

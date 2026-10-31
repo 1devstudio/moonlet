@@ -3179,6 +3179,77 @@ async fn the_central_host_says_whether_it_could_continue_each_copy() {
     assert_eq!(ready.1, json!({ "session": talked["id"], "ready": true }));
 }
 
+// X74: files git ignores that moonlet copies between members, `.env` by
+// default.
+
+async fn copied_files(d: &Daemon, project: &str) -> Value {
+    d.call("project.copied_files.get", json!({ "id": project }))
+        .await
+}
+
+#[tokio::test]
+async fn a_project_without_a_list_copies_env_and_env_star() {
+    let book = mac(BOOK, "MacBook").await;
+    let project = shop(&book).await;
+    assert_eq!(
+        copied_files(&book, &project).await,
+        json!({ "patterns": [".env", ".env.*"], "cloud": false, "default": true })
+    );
+}
+
+#[tokio::test]
+async fn the_list_set_on_one_member_reaches_the_others() {
+    // Neither member has a rule that renames the origin, so both name the
+    // project alike.
+    let origin = Origin::new();
+    let (mini, addr) = central().await;
+    let book = mac(BOOK, "MacBook").await;
+    link(&book, &mini, &addr).await;
+    let on_book = origin.add_to(&book).await;
+    let on_mini = origin.add_to(&mini).await;
+    let _: Value = book
+        .call(
+            "project.copied_files.set",
+            json!({ "id": on_book, "patterns": [".env", "config/local.yaml"], "cloud": true }),
+        )
+        .await;
+    within(
+        Duration::from_secs(10),
+        "the list on studio-mini",
+        || async {
+            copied_files(&mini, &on_mini).await
+                == json!({ "patterns": [".env", "config/local.yaml"], "cloud": true, "default": false })
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn only_the_macs_app_changes_the_list() {
+    let book = mac(BOOK, "MacBook").await;
+    let project = shop(&book).await;
+    let set = json!({ "id": project, "patterns": ["secrets/*"] });
+    let mut cli = moonlet_core::client::Client::connect(&book.socket, "moonlet-cli")
+        .await
+        .unwrap();
+    let e = cli
+        .request::<_, Value>("project.copied_files.set", set.clone())
+        .await
+        .unwrap_err();
+    assert!(e.to_string().contains("forbidden"), "{e}");
+    for bad in ["!.env", "../.env"] {
+        let e = book
+            .try_call(
+                "project.copied_files.set",
+                json!({ "id": project, "patterns": [bad] }),
+            )
+            .await
+            .unwrap_err();
+        assert!(e.contains("invalid_params"), "{bad}: {e}");
+    }
+    assert_eq!(copied_files(&book, &project).await["default"], json!(true));
+}
+
 #[tokio::test]
 async fn a_closed_chats_conversation_does_not_make_a_new_chat_ready() {
     let origin = Origin::new();
