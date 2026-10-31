@@ -983,8 +983,9 @@ struct WorkerRequests(Weak<WorkerLink>);
 /// sessions (X72).
 pub type Forwarder = Arc<dyn Fn(m::SessionForward) -> BoxFuture<'static, Result<Value, RpcError>> + Send + Sync>;
 
-/// Shows this Mac's app a URL from another member (X75).
-pub type Shower = Arc<dyn Fn(m::BrowserShow) + Send + Sync>;
+/// Shows this Mac's app a URL from another member (X75); false when it was
+/// kept for the app, which is not connected.
+pub type Shower = Arc<dyn Fn(m::BrowserShow) -> bool + Send + Sync>;
 
 /// Attaches to or detaches from a terminal the central host relays (X72).
 pub type Relayer = Arc<dyn Fn(m::SessionRelay) -> BoxFuture<'static, Result<Value, RpcError>> + Send + Sync>;
@@ -1077,8 +1078,9 @@ impl Requests for WorkerRequests {
                     moonlet_core::browser::check_url(&req.url).map_err(|e| RpcError::new("invalid_params", e.to_string()))?;
                     let link = link.ok_or_else(|| RpcError::new("gone", "the link closed"))?;
                     let show = link.shower.get().cloned().ok_or_else(|| RpcError::new("gone", "nothing shows URLs"))?;
-                    show(req);
-                    Ok(serde_json::json!(true))
+                    // Kept for the app: the central host knows the user is
+                    // not here.
+                    Ok(if show(req) { serde_json::json!(true) } else { serde_json::json!({ "kept": true }) })
                 }
                 m::SESSION_FORWARD => {
                     let req: m::SessionForward = serde_json::from_value(params)

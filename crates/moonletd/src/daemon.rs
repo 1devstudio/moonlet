@@ -3941,11 +3941,7 @@ impl Daemon {
             })
         }));
         let d = Arc::downgrade(self);
-        self.link.set_shower(Arc::new(move |show| {
-            if let Some(d) = d.upgrade() {
-                d.show_in_app(show);
-            }
-        }));
+        self.link.set_shower(Arc::new(move |show| d.upgrade().is_some_and(|d| d.show_in_app(show))));
         self.session_copies.spawn();
         self.keep_copied_files();
     }
@@ -3974,18 +3970,34 @@ impl Daemon {
         }
     }
 
-    /// Shows `show` in this Mac's app (X75). While no app is connected it
-    /// is kept, waiting with **Open**, for the app to take with
-    /// `browser.pending` when it connects.
-    fn show_in_app(&self, mut show: m::BrowserShow) {
+    /// Shows `show` in this Mac's app (X75), and says whether it did.
+    /// While no app is connected it is kept, waiting with **Open**, for the
+    /// app to take with `browser.pending` when it connects; the user's
+    /// next activity in the app then reaches the central host at once.
+    fn show_in_app(&self, mut show: m::BrowserShow) -> bool {
         let mut waiting = self.waiting_shows.lock().unwrap();
         if self.apps.load(std::sync::atomic::Ordering::SeqCst) > 0 {
             drop(waiting);
             self.terminals.emit(Message::event(m::EV_BROWSER_SHOW, show));
-            return;
+            return true;
         }
         show.waiting = true;
         waiting.keep(show, wall_ms());
+        drop(waiting);
+        self.presence.lock().unwrap().sent_at = 0;
+        false
+    }
+
+    /// On the central host: a URL for member `id`'s app was kept there, as
+    /// the app is not connected (X75). That member stays the last one the
+    /// user used, but not an active one, until its app says otherwise.
+    fn not_active_at(&self, id: &str) {
+        let mut p = self.presence.lock().unwrap();
+        if let Some((moonlet_core::browser::Client::Member(m), at)) = &mut p.last
+            && m == id
+        {
+            *at = 0;
+        }
     }
 
     /// This Mac's app connected, or (`false`) one of its connections
@@ -4090,19 +4102,28 @@ impl Daemon {
                     phones.waiting.entry(device).or_default().keep(show, wall_ms());
                 }
             }
-            Client::Member(id) if id == me => self.show_in_app(show),
+            Client::Member(id) if id == me => {
+                if !self.show_in_app(show) {
+                    self.not_active_at(&id);
+                }
+            }
             Client::Member(id) => {
-                let sent = match self.workers.conn(&id) {
+                let answer = match self.workers.conn(&id) {
                     Some(conn) => conn
                         .request(m::EV_BROWSER_SHOW, serde_json::to_value(&show).unwrap_or_default(), std::time::Duration::from_secs(10))
                         .await
-                        .is_ok(),
-                    None => false,
+                        .ok(),
+                    None => None,
                 };
-                // That member is away: here, waiting with Open.
-                if !sent {
-                    show.waiting = true;
-                    self.show_in_app(show);
+                match answer {
+                    // That member is away: here, waiting with Open.
+                    None => {
+                        show.waiting = true;
+                        self.show_in_app(show);
+                    }
+                    // It kept the URL for its app, which is not connected.
+                    Some(v) if v.get("kept") == Some(&Value::Bool(true)) => self.not_active_at(&id),
+                    Some(_) => {}
                 }
             }
         }

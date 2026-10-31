@@ -438,3 +438,48 @@ async fn a_url_for_a_phone_that_is_not_connected_waits_for_that_phone() {
         None
     );
 }
+
+#[tokio::test]
+async fn a_url_kept_for_a_macs_app_that_quit_leaves_the_next_waiting_until_the_user_is_back() {
+    let (mini, addr) = central().await;
+    let book = linked_book(&mini, &addr).await;
+    {
+        let mut book_app = book.app().await;
+        let _: bool = book_app
+            .request("presence.active", json!({}))
+            .await
+            .unwrap();
+        // studio-mini hears of it.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    // The MacBook's app quit: the first URL waits there for it.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    open_url(&mini, "https://accounts.example.test/first").await;
+    let mut book_app = book.app().await;
+    let waiting: Vec<Value> = book_app
+        .request("browser.pending", json!({}))
+        .await
+        .unwrap();
+    let urls: Vec<&Value> = waiting.iter().map(|s| &s["url"]).collect();
+    assert_eq!(urls, [&json!("https://accounts.example.test/first")]);
+    // The app is back, but the user was not seen there since: the next one
+    // waits with Open rather than opening by itself.
+    open_url(&mini, "https://accounts.example.test/second").await;
+    let shown = next_show(&mut book_app, Duration::from_secs(5))
+        .await
+        .expect("a browser.show on the MacBook");
+    assert_eq!(shown["url"], json!("https://accounts.example.test/second"));
+    assert_eq!(shown["waiting"], json!(true));
+    // The user is back at the MacBook: studio-mini hears it at once.
+    let _: bool = book_app
+        .request("presence.active", json!({}))
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    open_url(&mini, "https://accounts.example.test/third").await;
+    let shown = next_show(&mut book_app, Duration::from_secs(5))
+        .await
+        .expect("a browser.show on the MacBook");
+    assert_eq!(shown["url"], json!("https://accounts.example.test/third"));
+    assert!(shown.get("waiting").is_none(), "{shown}");
+}
