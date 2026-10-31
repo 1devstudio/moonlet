@@ -1247,6 +1247,25 @@ impl SessionManager {
         Ok(kept)
     }
 
+    /// Gives session `id` up to another member that takes it (X73): it
+    /// leaves this member's state and its terminals end; its worktree stays,
+    /// as the copy it becomes.
+    pub fn give_up_session(&self, id: &str) -> Result<Session> {
+        let s = self.session(id)?;
+        for t in &s.terminals {
+            if let Some(chats) = self.chats.get() {
+                chats.stop(*t, true);
+            }
+            let _ = self.terminals.kill(*t, true);
+        }
+        self.mutate(|st| {
+            st.sessions.retain(|o| o.id != id);
+            Ok(())
+        })?;
+        self.emit_sessions();
+        Ok(s)
+    }
+
     /// A chat in session `ws` that goes on from `history`, another member's
     /// chat of it (X73), resuming the same conversation.
     pub fn continue_chat(&self, ws: &Session, mut history: moonlet_proto::types::ChatState) -> Result<TerminalInfo> {

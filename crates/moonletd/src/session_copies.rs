@@ -185,6 +185,23 @@ fn transcript_files(folder: &Path, id: &str) -> Vec<String> {
     out
 }
 
+/// Makes the folders between `folder` and its transcript file `file`,
+/// never through a link: each is looked at before it is used, and made
+/// when missing. False when one of them is a link.
+fn folders_without_links(folder: &Path, file: &str) -> std::io::Result<bool> {
+    let mut at = folder.to_path_buf();
+    let parts: Vec<_> = Path::new(file).components().collect();
+    for part in &parts[..parts.len().saturating_sub(1)] {
+        at.push(part);
+        match std::fs::symlink_metadata(&at) {
+            Ok(m) if m.file_type().is_dir() => {}
+            Ok(_) => return Ok(false),
+            Err(_) => std::fs::create_dir(&at)?,
+        }
+    }
+    Ok(true)
+}
+
 /// The chat methods a request passed on for a session may call, on one of
 /// its chats (X72): what the phone does with a chat. Never `chat.add_dir`
 /// nor `chat.mcp`, which give the agent more of the member.
@@ -472,6 +489,11 @@ struct Held {
     /// The transcript files written for it, where they were written.
     #[serde(default)]
     transcripts: Vec<String>,
+    /// For a session this host gave its owner (X73), until the owner opens
+    /// it: its chats as they were, to go on with here should the owner hand
+    /// it back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    given: Option<Vec<m::SessionCopyChat>>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -1524,6 +1546,8 @@ impl SessionCopies {
             h.repo = repo.display().to_string();
             h.from_path = r.path;
             h.project = r.project;
+            // The owner took it in: there is nothing to hand back.
+            h.given = None;
             self.save(&data);
         }
         Ok(m::SessionOpened {
@@ -1881,17 +1905,8 @@ impl SessionCopies {
         let internal = |e: std::io::Error| RpcError::new("internal", e.to_string());
         let through_link = || RpcError::new("refused", "a transcript path goes through a link");
         std::fs::create_dir_all(&folder).map_err(internal)?;
-        // Never through a link: each folder between the project folder and
-        // the file is looked at before it is used, and made when missing.
-        let mut at = folder.clone();
-        let parts: Vec<_> = Path::new(&r.file).components().collect();
-        for part in &parts[..parts.len().saturating_sub(1)] {
-            at.push(part);
-            match std::fs::symlink_metadata(&at) {
-                Ok(m) if m.file_type().is_dir() => {}
-                Ok(_) => return Err(through_link()),
-                Err(_) => std::fs::create_dir(&at).map_err(internal)?,
-            }
+        if !folders_without_links(&folder, &r.file).map_err(internal)? {
+            return Err(through_link());
         }
         let open = |truncate: bool| {
             use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -2112,6 +2127,138 @@ impl SessionCopies {
             .chain((2..).map(|n| PathBuf::from(format!("{}-{n}", first.display()))))
             .find(|p| !p.exists())
             .unwrap()
+    }
+
+    /// The transcript files of session `s`'s chats on this host, relative
+    /// to Claude Code's project folder for its worktree (X73).
+    pub fn transcripts_of(
+        &self,
+        s: &moonlet_proto::types::Session,
+        chats: &[m::SessionCopyChat],
+    ) -> Vec<String> {
+        let folder = config_dir(self.sessions.config_dir(&s.id), &self.claude)
+            .join("projects")
+            .join(transcript::project_folder(Path::new(&s.path)));
+        chats
+            .iter()
+            .filter_map(|c| c.state.agent_session.clone())
+            .filter(|id| transcript::is_uuid(id))
+            .flat_map(|id| transcript_files(&folder, &id))
+            .collect()
+    }
+
+    /// Keeps `path`, the worktree of a session this host gave `owner`, as
+    /// that owner's copy (X73): its next offers go here. `given` are its
+    /// chats as they were, kept until the owner opens it, in case the owner
+    /// cannot take it in and hands it back.
+    #[allow(clippy::too_many_arguments)]
+    pub fn hold(
+        &self,
+        session: &str,
+        owner: &str,
+        repo: &Path,
+        path: &Path,
+        from_path: &str,
+        project: &str,
+        given: Vec<m::SessionCopyChat>,
+    ) {
+        let mut data = self.data.lock().unwrap();
+        data.held.insert(
+            session.to_string(),
+            Held {
+                owner: owner.to_string(),
+                repo: repo.display().to_string(),
+                path: path.display().to_string(),
+                from_path: from_path.to_string(),
+                project: project.to_string(),
+                given: Some(given),
+                ..Default::default()
+            },
+        );
+        self.save(&data);
+    }
+
+    /// The chats of `session` as this host gave them to `owner` (X73),
+    /// while that owner has not opened it yet; none otherwise.
+    pub fn given(&self, session: &str, owner: &str) -> Option<Vec<m::SessionCopyChat>> {
+        let data = self.data.lock().unwrap();
+        let held = data.held.get(session)?;
+        if held.owner != owner {
+            return None;
+        }
+        held.given.clone()
+    }
+
+    /// `session.transcript_fetch` from member `worker`, which owns the
+    /// session now: the bytes of one of its transcript files, as this host,
+    /// the session's former owner, has them.
+    pub fn transcript_bytes(
+        &self,
+        worker: &str,
+        r: &m::SessionTranscriptFetch,
+    ) -> Result<Vec<u8>, RpcError> {
+        let record = self.owned_by(&r.session, worker)?;
+        let held = self
+            .data
+            .lock()
+            .unwrap()
+            .held
+            .get(&r.session)
+            .cloned()
+            .ok_or_else(|| RpcError::new("no_copy", "this host holds no copy of that session"))?;
+        let id = r.file.split(['.', '/']).next().unwrap_or_default();
+        if !transcript::file_ok(&r.file, id) {
+            return Err(RpcError::new("invalid_params", "not a transcript file"));
+        }
+        let path = self
+            .transcript_folder(&record, Path::new(&held.path))
+            .join(&r.file);
+        use std::io::Read;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut bytes = Vec::new();
+        std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&path)
+            .and_then(|mut f| f.read_to_end(&mut bytes))
+            .map_err(|e| RpcError::new("not_found", e.to_string()))?;
+        Ok(bytes)
+    }
+
+    /// Writes transcript file `file` of a session this member now owns, at
+    /// worktree `path`, where Claude Code reads it here (X73), mode 0600.
+    pub fn write_transcript(
+        &self,
+        session: &str,
+        path: &Path,
+        file: &str,
+        bytes: &[u8],
+    ) -> Result<()> {
+        let id = file.split(['.', '/']).next().unwrap_or_default();
+        anyhow::ensure!(
+            transcript::file_ok(file, id),
+            "not a transcript file: {file}"
+        );
+        let folder = config_dir(self.sessions.config_dir(session), &self.claude)
+            .join("projects")
+            .join(transcript::project_folder(path));
+        let to = folder.join(file);
+        std::fs::create_dir_all(&folder)?;
+        anyhow::ensure!(
+            folders_without_links(&folder, file)?,
+            "a transcript path goes through a link: {file}"
+        );
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&to)?;
+        f.write_all(bytes)?;
+        Ok(())
     }
 
     /// Stops keeping `session` as a copy because this host is taking it

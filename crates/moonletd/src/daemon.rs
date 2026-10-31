@@ -1055,6 +1055,10 @@ impl Daemon {
                 })?;
                 self.session_copies.attach(conn, &member, r).await
             }
+            m::SESSION_BRING => {
+                app_only(conn, "sessions")?;
+                ok(self.bring(params(p)?).await?)
+            }
             m::SESSION_CONTINUE_HERE => {
                 if conn.client == crate::link::WORKER_CLIENT || conn.client == CLI_CLIENT || conn.cloud.load(std::sync::atomic::Ordering::Relaxed) {
                     return Err(RpcError::new("forbidden", "only an app or a phone continues a session here"));
@@ -1070,7 +1074,7 @@ impl Daemon {
                 }
                 Box::pin(self.forward(conn, params(p)?)).await
             }
-            m::SESSION_OPEN | m::SESSION_OFFER | m::SESSION_CHAT | m::SESSION_TRANSCRIPT | m::SESSION_CHECKPOINT | m::SESSION_EVENT => {
+            m::SESSION_OPEN | m::SESSION_OFFER | m::SESSION_CHAT | m::SESSION_TRANSCRIPT | m::SESSION_CHECKPOINT | m::SESSION_EVENT | m::SESSION_TAKE | m::SESSION_GIVE_BACK | m::SESSION_TRANSCRIPT_FETCH => {
                 // Only a linked Mac's daemon, as for `design.offer` (X72).
                 let refused = || RpcError::new("forbidden", "only a member of the account sends its sessions");
                 let device = conn.phone.as_deref().ok_or_else(refused)?;
@@ -1088,6 +1092,15 @@ impl Daemon {
                     let r: m::SessionTranscript = params(p)?;
                     let bytes = conn.take_pack(r.pack).ok_or_else(|| RpcError::new("invalid_params", "the bytes did not arrive"))?;
                     ok(self.session_copies.transcript_offered(&worker, r, &bytes)?)
+                } else if method == m::SESSION_TAKE {
+                    ok(self.give(&worker, params(p)?).await?)
+                } else if method == m::SESSION_GIVE_BACK {
+                    ok(self.take_back(&worker, params(p)?).await?)
+                } else if method == m::SESSION_TRANSCRIPT_FETCH {
+                    let r: m::SessionTranscriptFetch = params(p)?;
+                    let bytes = self.session_copies.transcript_bytes(&worker, &r)?;
+                    let pack = if bytes.is_empty() { None } else { Some(conn.send_pack(&bytes)?) };
+                    ok(m::SessionTranscriptFetched { pack })
                 } else if method == m::SESSION_EVENT {
                     ok(self.session_copies.event_offered(&worker, params(p)?)?)
                 } else if method == m::SESSION_CHECKPOINT {
@@ -2698,11 +2711,55 @@ impl Daemon {
         if self.sessions.session(session).is_ok() {
             return Err(RpcError::new("invalid_params", "this host already has that session"));
         }
-        let branch = text("branch").unwrap_or_default();
         let info = self.session_copies.copy_info(session)?;
         if info.path.is_empty() {
             return Err(RpcError::new("no_copy", "this host has no copy of that session yet"));
         }
+        self.take_in(session, &record, info.chats, Some(why)).await
+    }
+
+    /// `session.give_back` from member `worker` (X73): the session this
+    /// host gave it, which it could not take in, goes on here again, its
+    /// chats as they were when it was given.
+    async fn take_back(self: &Arc<Self>, worker: &str, r: m::SessionGiveBack) -> Result<moonlet_proto::types::Session, RpcError> {
+        let record = self
+            .sessions
+            .session_records()
+            .remove(&r.session)
+            .ok_or_else(|| RpcError::new("not_found", "no such session in the account"))?;
+        if record.get("owner").and_then(Value::as_str) != Some(worker) {
+            return Err(RpcError::new("elsewhere", "that session is not that member's"));
+        }
+        if record.get("epoch").and_then(Value::as_u64).unwrap_or(1) != r.epoch {
+            return Err(RpcError::new("stale", "that session moved meanwhile"));
+        }
+        if self.sessions.session(&r.session).is_ok() {
+            return Err(RpcError::new("invalid_params", "this host already has that session"));
+        }
+        // Only a session this host gave and its member has not opened yet.
+        let chats = self
+            .session_copies
+            .given(&r.session, worker)
+            .ok_or_else(|| RpcError::new("not_given", "this host did not give that session to be handed back"))?;
+        self.take_in(&r.session, &record, chats, None).await
+    }
+
+    /// Makes the copy of `session` this host holds the session's own
+    /// worktree again, with this host its owner, and goes on with `chats`
+    /// there (X73). `why` says why its owner's running turn was cut off,
+    /// for continuing it with a note; none when the owner handed it back.
+    async fn take_in(
+        self: &Arc<Self>,
+        session: &str,
+        record: &moonlet_core::account::Record,
+        chats: Vec<m::SessionCopyChat>,
+        why: Option<&str>,
+    ) -> Result<moonlet_proto::types::Session, RpcError> {
+        let me = self.link.info().worker;
+        let text = |f: &str| record.get(f).and_then(Value::as_str).map(str::to_string);
+        let owner = text("owner").unwrap_or_default();
+        let branch = text("branch").unwrap_or_default();
+        let info = self.session_copies.copy_info(session)?;
         // The copy's branch becomes the session's own, unless this host has
         // a branch of that name of its own: that one is never touched.
         let copy_path = Path::new(&info.path);
@@ -2722,7 +2779,7 @@ impl Daemon {
         // From here no offer moves the copy. Until the session is this
         // host's, a step that fails gives the copy back, to try again.
         let taken = self.session_copies.take_copy(session, rename.then_some(branch.as_str())).await?;
-        let adopted = match self.adopt_copy(session, &record, &taken, &me.id).await {
+        let adopted = match self.adopt_copy(session, record, &taken, &me.id, why.is_some()).await {
             Ok(adopted) => adopted,
             Err(e) => {
                 self.session_copies.give_back(session, taken).await;
@@ -2731,7 +2788,7 @@ impl Daemon {
         };
         self.session_copies.forget_copy(session, &taken).await;
         let from = self.sessions.member_names().remove(&owner).unwrap_or(owner);
-        for mut chat in info.chats {
+        for mut chat in chats {
             let cut_off = matches!(chat.state.status.as_str(), "working" | "blocked");
             // Folders it was given inside the member's worktree are the
             // same ones in the copy.
@@ -2744,7 +2801,7 @@ impl Daemon {
                     continue;
                 }
             };
-            if cut_off {
+            if let Some(why) = why.filter(|_| cut_off) {
                 let note = crate::session_copies::cut_off_note(&from, &me.name, why, &taken.from_path, &adopted.path);
                 if let Err(e) = self.chats.send(started.id, &note, &[]) {
                     tracing::warn!(%session, "cannot tell the agent its turn was cut off: {e:#}");
@@ -2754,17 +2811,19 @@ impl Daemon {
         self.sessions.session(session).map_err(internal)
     }
 
-    /// Makes the copy [`Self::continue_here`] took session `session` of
-    /// this host, owned by `me`, as `record` describes it (X73). The session
-    /// is in this host's state before its record names this host, so no
+    /// Makes the copy [`Self::take_in`] took session `session` of this
+    /// host, owned by `me`, as `record` describes it (X73). The session is
+    /// in this host's state before its record names this host, so no
     /// change ends that record meanwhile; one whose new owner cannot be
-    /// recorded leaves the state again.
+    /// recorded leaves the state again. With `away`, only while its owner
+    /// is still away.
     async fn adopt_copy(
         self: &Arc<Self>,
         session: &str,
         record: &moonlet_core::account::Record,
         taken: &crate::session_copies::TakenCopy,
         me: &str,
+        away: bool,
     ) -> Result<moonlet_proto::types::Session, RpcError> {
         let text = |f: &str| record.get(f).and_then(Value::as_str).map(str::to_string);
         // The copy's repository is a project here; a clone made for copies
@@ -2783,7 +2842,7 @@ impl Daemon {
         if !still {
             return Err(RpcError::new("stale", "that session moved meanwhile"));
         }
-        if self.workers.conn(&text("owner").unwrap_or_default()).is_some() {
+        if away && self.workers.conn(&text("owner").unwrap_or_default()).is_some() {
             return Err(RpcError::new("reachable", "the member running that session is reachable"));
         }
         let adopted = self
@@ -2821,6 +2880,228 @@ impl Daemon {
             return Err(RpcError::new("internal", "cannot record this host as the session's owner"));
         }
         Ok(adopted)
+    }
+
+    /// `session.take` from member `worker` on the central host (X73): it
+    /// takes a session this host runs, at ownership number `r.epoch`. A
+    /// running turn answers `busy`, unless `now`, which stops it. This host
+    /// becomes the session's copy-keeper and the member its owner.
+    async fn give(self: &Arc<Self>, worker: &str, r: m::SessionTake) -> Result<m::SessionTaken, RpcError> {
+        let me = self.link.info().worker.id;
+        let record = self
+            .sessions
+            .session_records()
+            .remove(&r.session)
+            .ok_or_else(|| RpcError::new("not_found", "no such session in the account"))?;
+        let text = |f: &str| record.get(f).and_then(Value::as_str).map(str::to_string);
+        if text("owner").as_deref() != Some(me.as_str()) {
+            return Err(RpcError::new("elsewhere", "that session runs on another member"));
+        }
+        let epoch = record.get("epoch").and_then(Value::as_u64).unwrap_or(1);
+        if epoch != r.epoch {
+            return Err(RpcError::new("stale", "that session moved meanwhile"));
+        }
+        if text("pinned").is_some_and(|p| p != worker) {
+            return Err(RpcError::new("pinned", "that session is kept where it is"));
+        }
+        let s = self.sessions.session(&r.session).map_err(internal)?;
+        let chats: Vec<moonlet_proto::TerminalId> = s.terminals.iter().copied().filter(|t| self.chats.is_chat(*t)).collect();
+        let running = chats
+            .iter()
+            .any(|t| self.chats.state(*t).is_ok_and(|st| matches!(st.status.as_str(), "working" | "blocked")));
+        if running && !r.now {
+            return Err(RpcError::new("busy", "a turn is running; it moves when the turn ends"));
+        }
+        if running {
+            for t in &chats {
+                let _ = self.chats.interrupt(*t);
+            }
+        }
+        let states: Vec<m::SessionCopyChat> = chats
+            .iter()
+            .filter_map(|t| self.chats.state(*t).ok().map(|state| m::SessionCopyChat { terminal: *t, state }))
+            .collect();
+        let transcripts = self.session_copies.transcripts_of(&s, &states);
+        // Its worktree is the member's copy from now on, on the copy's own
+        // branch, so no branch of the session's name stays checked out here.
+        let path = Path::new(&s.path);
+        let copy_branch = format!("moonlet-copy/{}", r.session);
+        moonlet_core::git::git(path, &["branch", "-m", &s.branch, &copy_branch]).await.map_err(internal)?;
+        let back = || async {
+            if let Err(e) = moonlet_core::git::git(path, &["branch", "-m", &copy_branch, &s.branch]).await {
+                tracing::warn!(session = %r.session, "cannot put the session's branch back: {e:#}");
+            }
+        };
+        let Some(project) = self.sessions.list_projects().into_iter().find(|p| p.id == s.project_id) else {
+            back().await;
+            return Err(RpcError::new("not_found", "the session's project is gone"));
+        };
+        // A message that came in while the branch moved would end with the
+        // chats here: the session stays, and moves when that turn ends.
+        let typed = |st: &moonlet_proto::types::ChatState| st.items.iter().filter(|i| i.kind == "user").count() + st.queued.len();
+        let came_in = states
+            .iter()
+            .any(|c| self.chats.state(c.terminal).is_ok_and(|now| typed(&now) > typed(&c.state)));
+        if came_in {
+            back().await;
+            return Err(RpcError::new("busy", "a message came in as it moved; it moves when the turn ends"));
+        }
+        // Given up only once the account names its new owner: otherwise it
+        // stays this host's, as it was.
+        if !self.sessions.set_session_owner(&r.session, worker, epoch + 1, None) {
+            back().await;
+            return Err(RpcError::new("internal", "cannot record the session's new owner"));
+        }
+        self.sessions.give_up_session(&r.session).map_err(internal)?;
+        self.session_copies.hold(&r.session, worker, Path::new(&project.path), path, &s.path, &project.name, states.clone());
+        Ok(m::SessionTaken { epoch: epoch + 1, chats: states, transcripts })
+    }
+
+    /// `session.bring` on a member (X73): takes the session the central
+    /// host runs to this Mac. Its live copy here becomes the session's own
+    /// worktree, its transcript is fetched, and each chat goes on here,
+    /// resuming its conversation. `busy` while a turn runs there, unless
+    /// `now`.
+    async fn bring(self: &Arc<Self>, r: m::SessionBring) -> Result<moonlet_proto::types::Session, RpcError> {
+        let me = self.link.info().worker.id;
+        let record = self
+            .sessions
+            .session_records()
+            .remove(&r.session)
+            .ok_or_else(|| RpcError::new("not_found", "no such session in the account"))?;
+        let text = |f: &str| record.get(f).and_then(Value::as_str).map(str::to_string);
+        if text("owner").as_deref() == Some(me.as_str()) {
+            return Err(RpcError::new("invalid_params", "that session is this Mac's own"));
+        }
+        if text("pinned").is_some_and(|p| p != me) {
+            return Err(RpcError::new("pinned", "that session is kept where it is"));
+        }
+        // Its live copy becomes its worktree here: without one, the central
+        // host keeps it rather than give it up to nowhere. It is held from
+        // now on, so nothing stops it while the central host gives it up.
+        let held = self.sync.hold(&r.session).await?;
+        let host = self.link.host().ok_or_else(|| RpcError::new("unreachable", "the central host is not connected"))?;
+        let taken = host
+            .request(
+                m::SESSION_TAKE,
+                serde_json::to_value(m::SessionTake {
+                    session: r.session.clone(),
+                    epoch: record.get("epoch").and_then(Value::as_u64).unwrap_or(1),
+                    now: r.now,
+                })
+                .map_err(internal)?,
+            )
+            .await?;
+        let taken: m::SessionTaken = serde_json::from_value(taken).map_err(internal)?;
+        // The central host gave it up: should this Mac fail to take it in,
+        // it hands the session back, so it goes on there as it was.
+        let give_back = |e: RpcError| async {
+            let back = m::SessionGiveBack { session: r.session.clone(), epoch: taken.epoch };
+            match host.request(m::SESSION_GIVE_BACK, serde_json::to_value(back).map_err(internal)?).await {
+                Ok(_) => tracing::info!(session = %r.session, "handed the session back after failing to take it in: {}", e.message),
+                Err(back) => tracing::warn!(session = %r.session, "cannot hand the session back: {}", back.message),
+            }
+            Err::<moonlet_proto::types::Session, _>(e)
+        };
+        let released = match self.sync.let_go(held) {
+            Ok(released) => released,
+            Err(e) => return give_back(e).await,
+        };
+        let path = released.path.clone();
+        let adopted = self.adopt_brought(&r.session, &record, &released.repo, &path).await;
+        let adopted = match adopted {
+            Ok(adopted) => {
+                self.sync.hand_over(released).await;
+                adopted
+            }
+            // Its copy stays a copy, rather than a folder no one keeps.
+            Err(e) => {
+                self.sync.restore(released);
+                return give_back(e).await;
+            }
+        };
+        for file in &taken.transcripts {
+            let fetched = host
+                .request(
+                    m::SESSION_TRANSCRIPT_FETCH,
+                    serde_json::json!({ "session": r.session, "file": file }),
+                )
+                .await;
+            // Written only as fetched: no pack is an empty file, and a fetch
+            // that failed leaves what is here as it is.
+            let bytes = fetched
+                .map_err(|e| e.message)
+                .and_then(|v| serde_json::from_value::<m::SessionTranscriptFetched>(v).map_err(|e| e.to_string()))
+                .and_then(|f| match f.pack {
+                    None => Ok(Vec::new()),
+                    Some(t) => host.take_pack(t).ok_or_else(|| "the bytes did not arrive".to_string()),
+                });
+            let bytes = match bytes {
+                Ok(b) => b,
+                Err(e) => {
+                    tracing::warn!(session = %r.session, "cannot fetch transcript {file}: {e}");
+                    continue;
+                }
+            };
+            if let Err(e) = self.session_copies.write_transcript(&r.session, &path, file, &bytes) {
+                tracing::warn!(session = %r.session, "cannot keep transcript {file}: {e:#}");
+            }
+        }
+        let mut first = None;
+        for chat in taken.chats {
+            let started = self.sessions.continue_chat(&adopted, chat.state).map_err(internal)?;
+            first.get_or_insert(started.id);
+        }
+        if let (Some(id), Some(message)) = (first, r.message.as_deref().filter(|m| !m.trim().is_empty()))
+            && let Err(e) = self.chats.send(id, message, &[])
+        {
+            tracing::warn!(session = %r.session, "cannot send the message it was brought for: {e:#}");
+        }
+        self.sessions.session(&r.session).map_err(internal)
+    }
+
+    /// Takes in `session`, with account record `record`, at worktree
+    /// `path` of repository `repo`, its project's, added when it is not
+    /// one yet (X73).
+    async fn adopt_brought(
+        &self,
+        session: &str,
+        record: &moonlet_core::account::Record,
+        repo: &Path,
+        path: &Path,
+    ) -> Result<moonlet_proto::types::Session, RpcError> {
+        let text = |f: &str| record.get(f).and_then(Value::as_str).map(str::to_string);
+        let projects = self.sessions.list_projects();
+        let project = match projects.iter().find(|p| Path::new(&p.path) == repo) {
+            Some(p) => p.clone(),
+            None => self.sessions.add_project(&repo.display().to_string()).await.map_err(internal)?,
+        };
+        self.sessions
+            .adopt_session(moonlet_proto::types::Session {
+                id: session.to_string(),
+                project_id: project.id.clone(),
+                name: text("name").unwrap_or_default(),
+                branch: text("branch").unwrap_or_default(),
+                base: project.base_branch.clone(),
+                path: path.display().to_string(),
+                agent: Some("claude".into()),
+                archived: false,
+                created_at: record.get("created_at").and_then(Value::as_u64).unwrap_or(0),
+                workspace_id: text("workspace"),
+                model: None,
+                effort: None,
+                mode: None,
+                pr: None,
+                spawned_by: None,
+                task: None,
+                task_unlinked: false,
+                cloud: false,
+                terminals: Vec::new(),
+                layout: Value::Null,
+                restore: Vec::new(),
+                owner: None,
+            })
+            .map_err(internal)
     }
 
     /// `session.forward` on the central host (X72): the request goes to the
