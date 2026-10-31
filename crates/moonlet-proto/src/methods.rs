@@ -115,6 +115,14 @@ pub const SESSION_TRANSCRIPT: &str = "session.transcript";
 pub const SESSION_CHECKPOINT: &str = "session.checkpoint";
 /// What the central host holds of another member's session (X72).
 pub const SESSION_COPY: &str = "session.copy";
+/// A request for a session another member owns, through the central
+/// host: passed on to that member, or answered from the copy (X72).
+pub const SESSION_FORWARD: &str = "session.forward";
+/// An event of a member's session, for the central host's clients (X72).
+pub const SESSION_EVENT: &str = "session.event";
+/// The central host's clients hear another member's session events as
+/// this, `{session, event}` (X72).
+pub const EV_SESSION_EVENT: &str = "session.event";
 
 // Git
 pub const GIT_STATUS: &str = "git.status";
@@ -1077,6 +1085,24 @@ pub struct SessionCopyInfo {
 pub struct SessionCopyChat {
     pub terminal: crate::TerminalId,
     pub state: crate::types::ChatState,
+}
+
+/// `session.forward {session, method, params}` (X72): `method` with
+/// `params`, for session `session`, on the member that owns it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionForward {
+    pub session: String,
+    pub method: String,
+    #[serde(default)]
+    pub params: serde_json::Value,
+}
+
+/// `session.event`, member → central host (X72): one of its session's
+/// events, for the central host's clients.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionEvent {
+    pub session: String,
+    pub event: crate::Message,
 }
 
 /// `session.list`'s request. With `copies`, the list also holds the
