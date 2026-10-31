@@ -317,7 +317,7 @@ where
 
     // Only on the local socket: over the tailnet a device proves itself
     // with its own token.
-    let app = phone.is_none() && daemon.is_app(app_token.as_deref(), peer_pid);
+    let app = phone.is_none() && daemon.proves_app(app_token.as_deref(), peer_pid);
     let conn = Arc::new(Conn {
         id: daemon.terminals.new_client_id(),
         tx: tx.clone(),

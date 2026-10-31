@@ -4583,7 +4583,7 @@ impl Daemon {
     /// executable, or runs this executable within an SSH session
     /// (`moonletd proxy`, which vouches for the app on an SSH host). Anything
     /// it cannot tell is not the app.
-    pub fn is_app(&self, sent: Option<&str>, peer_pid: Option<u32>) -> bool {
+    pub fn proves_app(&self, sent: Option<&str>, peer_pid: Option<u32>) -> bool {
         use moonlet_core::app_token::{self, Peer};
         let Some(sent) = sent else { return false };
         if self.app_token.is_empty() || !app_token::matches(&self.app_token, sent) {
