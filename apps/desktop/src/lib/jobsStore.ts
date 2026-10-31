@@ -2,6 +2,7 @@
 // and `job.changed`, and the output of the jobs a view shows, from
 // `job.output` and its event. Jobs live on the session's host.
 
+import { parseCopyHost } from "./copyHost";
 import { useEffect } from "react";
 import { create } from "zustand";
 import { DaemonError, onDaemonEvent, onHostStatus, rpc } from "./daemon";
@@ -37,6 +38,8 @@ function upsert(list: Job[], job: Job): Job[] {
 /** Reads a session's jobs once; later ones come as `job.changed`, and the
  * list is read again when its host reconnects. */
 export function loadJobs(host: string, session: string, again = false) {
+  // Another member's session through its central host (X72) has no jobs here.
+  if (parseCopyHost(host)) return;
   const k = key(host, session);
   wanted.set(k, { host, session });
   if (loading.has(k) && !again) return;

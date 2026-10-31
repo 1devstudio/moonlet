@@ -9,6 +9,7 @@ import { registerSink, rpc, sendInput } from "@desktop/lib/daemon";
 import { chatDraft, joinDraft, saveChatDraft } from "@desktop/lib/chat";
 import { blockForAgent, blockHeader, rerunInput, shortPath } from "@desktop/lib/blockText";
 import { M, type Session, type TerminalInfo } from "@desktop/lib/protocol";
+import { parseCopyHost } from "@desktop/lib/copyHost";
 import { THEME } from "@desktop/lib/terminalTheme";
 import { showScreen, useApp } from "../lib/app";
 import { type Block, BlockReader } from "../lib/blocks";
@@ -226,9 +227,11 @@ export function TerminalTab({ host, session }: { host: string; session: Session 
             {x.title}
           </button>
         ))}
+{!parseCopyHost(host) && (
         <button type="button" aria-label="New terminal" onClick={() => void add()} className="flex h-8 w-8 flex-none items-center justify-center text-muted">
           <Plus size={16} />
         </button>
+        )}
         <span className="flex-1" />
         <button type="button" onClick={() => setRaw(!raw)} className="flex h-8 flex-none items-center gap-1 rounded-[8px] border border-border-strong px-2.5 text-[12.5px] text-muted">
           {raw ? "Raw" : "Blocks"} <ChevronDown size={12} />
