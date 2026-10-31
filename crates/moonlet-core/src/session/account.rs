@@ -50,7 +50,7 @@ pub(super) struct Account {
     path: PathBuf,
     listener: Option<Listener>,
     /// Called with the changes taken from other members.
-    applied: Option<Applied>,
+    applied: Vec<Applied>,
 }
 
 /// A log with the changes of one request, written beside the log until the
@@ -211,7 +211,7 @@ impl SessionManager {
             log,
             path,
             listener: None,
-            applied: None,
+            applied: Vec::new(),
         });
         Ok(())
     }
@@ -361,10 +361,11 @@ impl SessionManager {
         })
     }
 
-    /// Called with the changes this member takes from the others.
+    /// Called with the changes this member takes from the others, after
+    /// the listeners added before.
     pub fn on_account_applied(&self, f: impl Fn(&[Change]) + Send + Sync + 'static) {
         if let Some(a) = self.account.lock().unwrap().as_mut() {
-            a.applied = Some(Arc::new(f));
+            a.applied.push(Arc::new(f));
         }
     }
 
@@ -461,8 +462,8 @@ impl SessionManager {
         }
         if changed {
             self.emit_all();
-            let applied = self.account.lock().unwrap().as_ref().and_then(|a| a.applied.clone());
-            if let Some(f) = applied {
+            let applied = self.account.lock().unwrap().as_ref().map(|a| a.applied.clone()).unwrap_or_default();
+            for f in applied {
                 f(&taken);
             }
         }

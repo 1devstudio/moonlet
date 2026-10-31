@@ -3302,7 +3302,7 @@ async fn changed_paths(repo: &Path, a: &str, b: &str) -> u32 {
 /// repository holds it and no other copy has it, else `fallback`. The path
 /// comes from the central host, so it may never point elsewhere on this Mac,
 /// not by `..` nor through a symlink, nor into a repository's own folder.
-fn copy_path(session: &Path, worktrees: &Path, taken: &[PathBuf], fallback: PathBuf) -> PathBuf {
+pub(crate) fn copy_path(session: &Path, worktrees: &Path, taken: &[PathBuf], fallback: PathBuf) -> PathBuf {
     let shaped = session.strip_prefix(worktrees).is_ok_and(|rest| {
         rest.components().count() == 2
             && rest
@@ -3367,7 +3367,7 @@ fn inside(path: &Path, root: &Path) -> bool {
 
 /// `copies/<host>/<project>/<session>` under `home`. The names come from
 /// the central host, so each is one plain folder name (see [`segment`]).
-fn copies_dir(home: &Path, host: &str, project: &str, session: &str) -> PathBuf {
+pub(crate) fn copies_dir(home: &Path, host: &str, project: &str, session: &str) -> PathBuf {
     let base = home.join("copies");
     let dir = base
         .join(segment(host))
@@ -3893,7 +3893,7 @@ fn runs_dir(home: &Path, sub: &str, host: &str, project: &str, session: &str) ->
 
 /// `dir`, or `dir-2`, `dir-3` and so on: the first that is empty or missing
 /// and that no other copy holds.
-fn free_folder(dir: PathBuf, taken: &[PathBuf]) -> PathBuf {
+pub(crate) fn free_folder(dir: PathBuf, taken: &[PathBuf]) -> PathBuf {
     let name = dir
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -3907,7 +3907,7 @@ fn free_folder(dir: PathBuf, taken: &[PathBuf]) -> PathBuf {
 /// `clones/<host>/<16 hex digits of the origin's SHA-256>` under `home`,
 /// with a port's `:` as `_`: one folder per origin, never inside another's
 /// whatever the central host names, `github.com/acme/shop/repo` included.
-fn clone_dir(home: &Path, origin: &str) -> PathBuf {
+pub(crate) fn clone_dir(home: &Path, origin: &str) -> PathBuf {
     use sha2::{Digest, Sha256};
     let host = origin
         .split('/')
@@ -3927,7 +3927,7 @@ fn clone_dir(home: &Path, origin: &str) -> PathBuf {
 
 /// A clone folder found on disk may be used: it lies under `home`'s
 /// `clones` and no folder on the way there, itself included, is a link.
-fn clone_folder_ok(home: &Path, dir: &Path) -> bool {
+pub(crate) fn clone_folder_ok(home: &Path, dir: &Path) -> bool {
     let base = home.join("clones");
     let Ok(rest) = dir.strip_prefix(&base) else {
         return false;
@@ -3956,7 +3956,7 @@ fn clone_folder_ok(home: &Path, dir: &Path) -> bool {
 /// `name` as one folder name: itself when it is up to 100 of
 /// `[A-Za-z0-9._-]` and not `.` or `..`, else the first 16 hex digits of
 /// its SHA-256, so nothing a peer sends can leave the folder it goes in.
-fn segment(name: &str) -> String {
+pub(crate) fn segment(name: &str) -> String {
     let plain = !name.is_empty()
         && name.len() <= 100
         && name != "."

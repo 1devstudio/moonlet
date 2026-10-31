@@ -102,6 +102,11 @@ pub const SESSION_ARCHIVE: &str = "session.archive";
 pub const SESSION_UNARCHIVE: &str = "session.unarchive";
 pub const SESSION_UPDATE: &str = "session.update";
 pub const SESSION_RUN: &str = "session.run";
+/// A member opens its session's copy on the central host (X72).
+pub const SESSION_OPEN: &str = "session.open";
+/// A member sends its session's files and commit to the central host's
+/// copy (X72).
+pub const SESSION_OFFER: &str = "session.offer";
 
 // Git
 pub const GIT_STATUS: &str = "git.status";
@@ -952,6 +957,47 @@ impl SessionCreate {
             rows: default_rows(),
         }
     }
+}
+
+/// `session.open`, member → central host (X72): opens the copy of one of
+/// the member's sessions, cloning its project there when needed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionOpen {
+    pub session: String,
+    /// The session's worktree on the member: the copy takes the same path
+    /// when X60's rule allows.
+    pub path: String,
+    /// The project's name on the member, for the copy's folder.
+    pub project: String,
+    /// The project's origin URL, without credentials, to clone it from.
+    #[serde(default)]
+    pub origin_url: Option<String>,
+}
+
+/// `session.open`'s reply: the commits the copy's repository has, which a
+/// pack sent to it leaves out.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionOpened {
+    pub have: Vec<String>,
+}
+
+/// `session.offer`, member → central host (X72): the session's files as a
+/// tree, its commit and branch, with the objects the copy lacks.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionOffer {
+    pub session: String,
+    pub tree: String,
+    pub head: String,
+    pub branch: String,
+    #[serde(default)]
+    pub pack: Option<u32>,
+}
+
+/// `session.offer`'s reply: what the copy holds now.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionOffered {
+    pub tree: String,
+    pub head: String,
 }
 
 /// `session.list`'s request. With `copies`, the list also holds the
