@@ -2,9 +2,10 @@
 // whether each member is signed in, and Sign in on every member, whose
 // browsers open on this Mac one after the other.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { KeyRound, Plus, RotateCw, X } from "lucide-react";
 import { rpc } from "../../lib/daemon";
+import { listSaver } from "../../lib/copiedFiles";
 import { M, type SignIn } from "../../lib/protocol";
 import { addEntry, needSignIn, stateMark, type SignInState } from "../../lib/signIns";
 import { errorToast, toast } from "../../lib/store";
@@ -79,19 +80,33 @@ export function SignInsPage() {
   const [entries, setEntries] = useState<SignIn[] | null>(null);
   const [draft, setDraft] = useState({ name: "", login: "", check: "" });
   const [error, setError] = useState<string | null>(null);
+  const saver = useRef<ReturnType<typeof listSaver<SignIn[]>> | null>(null);
   useEffect(() => {
-    rpc<SignIn[]>(LOCAL, M.signinsList).then(setEntries, errorToast);
+    let live = true;
+    rpc<SignIn[]>(LOCAL, M.signinsList).then((l) => {
+      if (!live) return;
+      saver.current = listSaver(l, (v) => rpc(LOCAL, M.signinsSet, { entries: v }));
+      setEntries(l);
+    }, errorToast);
+    return () => {
+      live = false;
+    };
   }, []);
+  // Nothing is edited before the list is loaded. Each edit shows at once;
+  // saves go in order, and a failed one puts back the list last saved
+  // unless a later edit was made.
   const save = (next: SignIn[]) => {
-    const before = entries;
+    const s = saver.current;
+    if (!s) return;
     setEntries(next);
-    rpc(LOCAL, M.signinsSet, { entries: next }).catch((e: unknown) => {
-      setEntries(before);
+    void s(next, (e, saved) => {
+      setEntries(saved);
       errorToast(e);
     });
   };
   const add = () => {
-    const r = addEntry(entries ?? [], draft, crypto.randomUUID());
+    if (!entries) return;
+    const r = addEntry(entries, draft, crypto.randomUUID());
     if ("error" in r) return setError(r.error);
     setError(null);
     setDraft({ name: "", login: "", check: "" });
@@ -118,7 +133,7 @@ export function SignInsPage() {
             {field("login", "npm login", "Sign-in command")}
             {field("check", "npm whoami", "Check command")}
             {error && <span className="ui-text-12 text-error">{error}</span>}
-            <Button size="sm" className="self-start" onClick={add}>
+            <Button size="sm" className="self-start" disabled={!entries} onClick={add}>
               <Plus size={12} /> Add
             </Button>
           </div>
