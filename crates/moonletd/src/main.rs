@@ -22,6 +22,7 @@ mod notify;
 mod render;
 mod server;
 mod service;
+mod power;
 mod session_copies;
 mod sync;
 mod tailnet_cli;
@@ -311,6 +312,8 @@ fn run_daemon(
         // Design systems and designs on every member of the account (X71).
         daemon.keep_design_copies();
         daemon.keep_session_copies();
+        // The Mac's sleep hands its sessions to the central host (X73).
+        power::spawn(daemon.clone());
         // The session designs saved before a restart, watched again at once.
         daemon.watch_saved_session_designs();
         // Cloud machines: the sweep and the startup deadlines (X63).
