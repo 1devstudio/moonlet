@@ -1159,7 +1159,7 @@ impl LiveCopies {
         let mut differs = Vec::new();
         let made_from = self.kept(&k.id).and_then(|kept| kept.made_from);
         if made && let Some(from) = made_from {
-            let local = git_sync::snapshot(&path, MAX_FILE)
+            let local = crate::copied_files::snapshot(&self.sessions, &path, MAX_FILE)
                 .await
                 .map_err(|e| Stop::Paused(format!("{e:#}")))?;
             if local.tree != from {
@@ -1188,7 +1188,7 @@ impl LiveCopies {
                 differs = r.differs;
             }
         }
-        apply_tries(&path, &target, &host_name).await?;
+        apply_tries(&self.sessions, &path, &target, &host_name).await?;
         git_sync::set_base_ref(&repo, &k.id, &base)
             .await
             .map_err(|e| Stop::Paused(format!("{e:#}")))?;
@@ -1338,7 +1338,7 @@ impl LiveCopies {
         }
         self.check_paths(&k, &repo, &req.tree).await?;
         for _ in 0..APPLY_TRIES {
-            let local = git_sync::snapshot(&path, MAX_FILE)
+            let local = crate::copied_files::snapshot(&self.sessions, &path, MAX_FILE)
                 .await
                 .map_err(internal)?;
             if local.tree != base {
@@ -1429,7 +1429,7 @@ impl LiveCopies {
             if !self.on_branch(&k, &path).await? {
                 return Ok(Round::Held);
             }
-            let local = git_sync::snapshot(&path, MAX_FILE)
+            let local = crate::copied_files::snapshot(&self.sessions, &path, MAX_FILE)
                 .await
                 .map_err(internal)?;
             let head = git_sync::head(&path).await.map_err(internal)?;
@@ -1568,7 +1568,7 @@ impl LiveCopies {
             .await
             .map_err(internal)?;
         for _ in 0..APPLY_TRIES {
-            let now = git_sync::snapshot(path, MAX_FILE).await.map_err(internal)?;
+            let now = crate::copied_files::snapshot(&self.sessions, path, MAX_FILE).await.map_err(internal)?;
             let files = git_sync::read_files(repo, &now.tree)
                 .await
                 .map_err(internal)?;
@@ -1938,7 +1938,7 @@ impl LiveCopies {
         let base = &base;
         let shown = tilde(&path);
         let whole = |e: anyhow::Error| Unsaved::new(&shown, format!("{e:#}"));
-        let local = git_sync::snapshot(&path, MAX_FILE).await.map_err(whole)?;
+        let local = crate::copied_files::snapshot(&self.sessions, &path, MAX_FILE).await.map_err(whole)?;
         let here = git_sync::read_files(&repo, &local.tree)
             .await
             .map_err(whole)?;
@@ -2711,7 +2711,7 @@ impl LiveCopies {
         let lock = self.lock(&format!("session:{}", served.path));
         let _one = lock.lock().await;
         let path = Path::new(&served.path);
-        let snap = git_sync::snapshot(path, MAX_FILE).await.map_err(internal)?;
+        let snap = crate::copied_files::snapshot(&self.sessions, path, MAX_FILE).await.map_err(internal)?;
         let head = git_sync::head(path).await.map_err(internal)?;
         let have = git_sync::present(path, &req.have).await.map_err(internal)?;
         let have: Vec<&str> = have.iter().map(String::as_str).collect();
@@ -2911,7 +2911,7 @@ impl LiveCopies {
         let base_files = git_sync::read_files(path, &base).await.map_err(internal)?;
         let mut done = None;
         for _ in 0..APPLY_TRIES {
-            let snap = git_sync::snapshot(path, MAX_FILE).await.map_err(internal)?;
+            let snap = crate::copied_files::snapshot(&self.sessions, path, MAX_FILE).await.map_err(internal)?;
             let central = git_sync::read_files(path, &snap.tree)
                 .await
                 .map_err(internal)?;
@@ -3099,7 +3099,7 @@ impl LiveCopies {
         }
         // Back on the branch: the paused worker hears so.
         let always = always || served.off_branch_sent;
-        let snap = git_sync::snapshot(path, MAX_FILE).await?;
+        let snap = crate::copied_files::snapshot(&self.sessions, path, MAX_FILE).await?;
         let head = git_sync::head(path).await?;
         if !always
             && served.central_tree.as_deref() == Some(snap.tree.as_str())
@@ -3263,9 +3263,9 @@ fn setup_command(copy: &Path) -> Option<String> {
 
 /// Applies `target` to the copy at `path` from a fresh snapshot, trying
 /// again while the copy changes under it.
-async fn apply_tries(path: &Path, target: &str, host: &str) -> Result<(), Stop> {
+async fn apply_tries(sessions: &SessionManager, path: &Path, target: &str, host: &str) -> Result<(), Stop> {
     for _ in 0..APPLY_TRIES {
-        let local = git_sync::snapshot(path, MAX_FILE)
+        let local = crate::copied_files::snapshot(sessions, path, MAX_FILE)
             .await
             .map_err(|e| Stop::Paused(format!("{e:#}")))?;
         if local.tree == target {
@@ -3575,7 +3575,7 @@ impl LiveCopies {
             .filter(|k| k.kind == CopyKind::Run && !k.path.is_empty())
             .ok_or_else(|| RpcError::new("not_found", "no such routing copy"))?;
         let path = PathBuf::from(&k.path);
-        let snap = git_sync::snapshot(&path, MAX_FILE).await.map_err(internal)?;
+        let snap = crate::copied_files::snapshot(&self.sessions, &path, MAX_FILE).await.map_err(internal)?;
         let now = git_sync::head(&path).await.map_err(internal)?;
         if snap.tree != tree || now != head {
             return Err(RpcError::new("not_fenced", "the copy does not match the session"));
@@ -3594,7 +3594,7 @@ impl LiveCopies {
             anyhow::bail!("the routing copy has no fence");
         };
         let path = Path::new(&k.path);
-        let snap = git_sync::snapshot(path, MAX_FILE).await?;
+        let snap = crate::copied_files::snapshot(&self.sessions, path, MAX_FILE).await?;
         let head = git_sync::head(path).await?;
         let mut new = vec![snap.tree.as_str(), head.as_str()];
         new.extend(outputs);
@@ -3701,7 +3701,7 @@ impl LiveCopies {
         {
             let _ = git_sync::reset_branch(path, &head, &base_head).await;
         }
-        if let Err(Stop::Paused(reason)) = apply_tries(path, &base, &k.host).await {
+        if let Err(Stop::Paused(reason)) = apply_tries(&self.sessions, path, &base, &k.host).await {
             self.update_kept(copy, |k| k.paused = Some(reason));
         }
     }
@@ -3752,7 +3752,7 @@ impl LiveCopies {
             .await
             .map_err(|e| not_fenced(&format!("{e:#}")))?;
         let after = self.served(copy).ok_or_else(|| not_fenced("the copy went"))?;
-        let snap = git_sync::snapshot(path, MAX_FILE).await.map_err(internal)?;
+        let snap = crate::copied_files::snapshot(&self.sessions, path, MAX_FILE).await.map_err(internal)?;
         let head = git_sync::head(path).await.map_err(internal)?;
         if after.base.as_deref() != Some(snap.tree.as_str()) || after.base_head.as_deref() != Some(head.as_str()) {
             return Err(not_fenced("the session changed during the fence"));
@@ -3792,7 +3792,7 @@ impl LiveCopies {
                 .await
                 .map_err(|e| RpcError::new("refused", e.to_string()))?;
         }
-        let now = git_sync::snapshot(path, MAX_FILE).await.map_err(internal)?;
+        let now = crate::copied_files::snapshot(&self.sessions, path, MAX_FILE).await.map_err(internal)?;
         let head_now = git_sync::head(path).await.map_err(internal)?;
         let r = git_sync::reconcile_trees(path, &base, &now.tree, &req.tree)
             .await

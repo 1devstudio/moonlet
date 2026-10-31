@@ -21,6 +21,43 @@ pub fn lists() -> &'static std::sync::Mutex<BTreeMap<String, Vec<String>>> {
     LISTS.get_or_init(Default::default)
 }
 
+/// The identity of each worktree [`snapshot`] looked at: finding its root
+/// commit walks the whole history, too slow for every snapshot.
+fn identities() -> &'static std::sync::Mutex<BTreeMap<PathBuf, moonlet_proto::types::ProjectIdentity>> {
+    static IDS: std::sync::OnceLock<std::sync::Mutex<BTreeMap<PathBuf, moonlet_proto::types::ProjectIdentity>>> =
+        std::sync::OnceLock::new();
+    IDS.get_or_init(Default::default)
+}
+
+/// The patterns of the project worktree `dir` holds: the account's list
+/// for its identity, the default without one.
+pub async fn patterns_at(sessions: &moonlet_core::session::SessionManager, dir: &Path) -> Vec<String> {
+    let known = identities().lock().unwrap().get(dir).cloned();
+    let identity = match known {
+        Some(i) => i,
+        None => {
+            let i = moonlet_core::identity::identity(dir).await;
+            if i.root.is_some() {
+                identities().lock().unwrap().insert(dir.to_path_buf(), i.clone());
+            }
+            i
+        }
+    };
+    sessions.copied_files(&identity).0
+}
+
+/// An X60 snapshot of worktree `dir` that leaves out its project's copied
+/// files: they travel outside git, so they are never hashed. Every member
+/// has the same list, so both sides of a copy leave out the same files.
+pub async fn snapshot(
+    sessions: &moonlet_core::session::SessionManager,
+    dir: &Path,
+    max_file: u64,
+) -> Result<moonlet_core::sync::Snapshot> {
+    let patterns = patterns_at(sessions, dir).await;
+    moonlet_core::sync::snapshot(dir, max_file, &patterns).await
+}
+
 /// Tells this Mac's app that a version of a copied file went to leftovers
 /// (X74), for its toast.
 pub type Kept = std::sync::Arc<dyn Fn(m::FilesKept) + Send + Sync>;

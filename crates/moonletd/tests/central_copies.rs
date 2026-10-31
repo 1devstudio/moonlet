@@ -3396,6 +3396,31 @@ async fn a_sessions_env_local_reaches_the_central_copy_and_an_edit_comes_back() 
 }
 
 #[tokio::test]
+async fn a_copied_file_no_gitignore_names_never_enters_either_sides_git() {
+    let origin = Origin::new();
+    let (mini, _addr, book) = pair_of(&origin).await;
+    let project = origin.add_to(&book).await;
+    let made = new_session(&book, &project, "fix-cart").await;
+    let copy = copy_of(&mini, &made).await;
+    // The repository ignores nothing, but `.env.*` is on the project's list.
+    let tree = path_of(&made);
+    std::fs::write(tree.join(".env.development"), "API_KEY=dev-7f3a\n").unwrap();
+    reads(&copy.join(".env.development"), "API_KEY=dev-7f3a\n").await;
+    std::fs::write(tree.join("notes.md"), "new\n").unwrap();
+    reads(&copy.join("notes.md"), "new\n").await;
+    // `git hash-object` of the file's bytes.
+    let blob = "e397b097b66819499a8395e6dd3e109bbd1d4709";
+    for dir in [&tree, &copy] {
+        let out = std::process::Command::new("git")
+            .args(["cat-file", "-e", blob])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(!out.status.success(), "{} has the file in git", dir.display());
+    }
+}
+
+#[tokio::test]
 async fn a_file_the_owner_deletes_after_a_live_copys_mac_restarted_goes_there_too() {
     let origin = Origin::new();
     let (mini, mut book, made) = continued_and_back_with(&origin, async |tree, copy| {
