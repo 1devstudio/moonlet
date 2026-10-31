@@ -2244,11 +2244,21 @@ async fn a_brought_back_transcript_is_never_written_through_a_link_on_the_member
         .call("session.bring", json!({ "session": made["id"] }))
         .await;
     assert!(!elsewhere.path().join("tool-results/toolu_01.txt").exists());
-    assert_eq!(
-        std::fs::read_dir(elsewhere.path()).unwrap().count(),
-        0,
-        "nothing written through the link"
-    );
+    // The resumed agent may make its own empty folders there as it starts;
+    // the daemon writes files, and none may go through the link.
+    let mut files = Vec::new();
+    let mut folders = vec![elsewhere.path().to_path_buf()];
+    while let Some(dir) = folders.pop() {
+        for e in std::fs::read_dir(&dir).unwrap().flatten() {
+            let path = e.path();
+            if path.is_dir() {
+                folders.push(path);
+            } else {
+                files.push(path);
+            }
+        }
+    }
+    assert_eq!(files, Vec::<PathBuf>::new(), "nothing written through the link");
 }
 
 #[tokio::test]
