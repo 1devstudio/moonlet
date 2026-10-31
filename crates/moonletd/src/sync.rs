@@ -1882,16 +1882,6 @@ impl LiveCopies {
         tracing::info!(copy = %id, "kept the copy again: taking its session in failed");
     }
 
-    /// Lets go of the live copy of session `session` at once, as
-    /// [`Self::hold`], [`Self::let_go`] and [`Self::hand_over`] together.
-    /// Gives the copy's folder and repository.
-    pub async fn release(self: &Arc<Self>, session: &str) -> Result<(PathBuf, PathBuf), RpcError> {
-        let r = self.let_go(self.hold(session).await?)?;
-        let at = (r.path.clone(), r.repo.clone());
-        self.hand_over(r).await;
-        Ok(at)
-    }
-
     /// Saves the files of copy `k` that would be lost with it: those that
     /// differ, those changed here since the last round, and those only this
     /// Mac has (secrets, and files that stopped syncing). Plain ignored
