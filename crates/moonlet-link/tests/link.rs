@@ -266,6 +266,61 @@ async fn an_attach_snapshot_comes_before_live_output_on_the_output_stream() {
 }
 
 #[tokio::test]
+async fn another_members_sign_in_snapshot_comes_on_the_output_stream_under_its_relay() {
+    let (host, _seen, mut rx) = start();
+    let out = Arc::new(Mutex::new(Vec::<u8>::new()));
+    host.set_output({
+        let out = out.clone();
+        move |buf| out.lock().unwrap().extend_from_slice(&buf)
+    });
+    let mut daemon = FakeDaemon::accept(&mut rx).await;
+    let attach = tokio::spawn({
+        let host = host.clone();
+        async move {
+            let params = json!({ "member": "w-build", "terminal": 3, "cols": 80, "rows": 24 });
+            loop {
+                match host.request("signins.attach", params.clone()).await {
+                    Err(e) if e.code == "disconnected" => {
+                        tokio::time::sleep(Duration::from_millis(5)).await
+                    }
+                    other => return other,
+                }
+            }
+        }
+    });
+    let (id, method, _) = daemon.next_request().await;
+    assert_eq!(method, "signins.attach");
+    // The central host's relay id for build-box's terminal, not the
+    // terminal's own id there.
+    daemon
+        .send(Frame::Json(Message::ok(
+            id,
+            json!({ "info": { "id": 42 }, "snapshot": "code: 1A2B" }),
+        )))
+        .await;
+    daemon
+        .send(Frame::Output {
+            terminal: 42,
+            data: b"ok".to_vec(),
+        })
+        .await;
+    assert_eq!(
+        attach.await.unwrap().unwrap(),
+        json!({ "info": { "id": 42 } })
+    );
+
+    let mut want = Vec::new();
+    want.extend_from_slice(&(42u32 | 0x8000_0000).to_be_bytes());
+    want.extend_from_slice(&10u32.to_be_bytes());
+    want.extend_from_slice(b"code: 1A2B");
+    want.extend_from_slice(&42u32.to_be_bytes());
+    want.extend_from_slice(&2u32.to_be_bytes());
+    want.extend_from_slice(b"ok");
+    eventually("the output", || out.lock().unwrap().len() >= want.len()).await;
+    assert_eq!(*out.lock().unwrap(), want);
+}
+
+#[tokio::test]
 async fn input_reaches_the_daemon_as_an_input_frame() {
     let (host, _seen, mut rx) = start();
     let mut daemon = FakeDaemon::accept(&mut rx).await;
