@@ -3980,7 +3980,7 @@ impl Daemon {
             let Some(d) = d.upgrade() else { return false };
             // Kept for an app that is not connected: the central host hears
             // so.
-            let shown = d.apps.load(std::sync::atomic::Ordering::SeqCst) > 0;
+            let shown = d.local_apps.load(std::sync::atomic::Ordering::SeqCst) > 0;
             tokio::spawn(async move { d.present(show).await });
             shown
         }));
