@@ -74,6 +74,9 @@ pub struct Daemon {
     phone_shows: Mutex<PhoneShows>,
     /// What this Mac's app sends in `hello` to prove it is the app (X75).
     app_token: String,
+    /// The executable a test connects from as the app (X75), from
+    /// `MOONLET_TEST_APP_EXE`.
+    test_app_exe: Option<std::path::PathBuf>,
     /// Sign-ins on this member that wait for the browser to come back (X75).
     callbacks: crate::signin::Callbacks,
     /// URLs whose forward's port was taken here, by URL, for Retry (X75).
@@ -645,6 +648,9 @@ impl Daemon {
                 tracing::error!("cannot keep the app credential: {e}");
                 String::new()
             }),
+            test_app_exe: std::env::var_os(moonlet_core::app_token::TEST_APP_EXE)
+                .filter(|v| !v.is_empty())
+                .map(std::path::PathBuf::from),
             callbacks: crate::signin::Callbacks::default(),
             taken: crate::signin::Taken::default(),
             forwards: crate::signin::Forwards::default(),
@@ -4566,14 +4572,31 @@ impl Daemon {
         }
     }
 
-    /// This Mac's app connected, or (`false`) one of its connections
-    /// closed (X75).
-    /// Whether `sent`, from a `hello` on the local socket, is this Mac's
-    /// app credential (X75).
-    pub fn is_app_token(&self, sent: &str) -> bool {
-        !self.app_token.is_empty() && moonlet_core::app_token::matches(&self.app_token, sent)
+    /// Whether a connection on the local socket is this Mac's app (X75):
+    /// its `hello` sent the app credential, and the process at the other
+    /// end, as the kernel says, runs the app beside this daemon's executable
+    /// or this executable itself (`moonletd proxy`, which vouches for the
+    /// app on an SSH host). Anything it cannot tell is not the app.
+    pub fn is_app(&self, sent: Option<&str>, peer_pid: Option<u32>) -> bool {
+        let Some(sent) = sent else { return false };
+        if self.app_token.is_empty() || !moonlet_core::app_token::matches(&self.app_token, sent) {
+            return false;
+        }
+        let exe = peer_pid.and_then(moonlet_core::process::executable);
+        let app = match (&exe, std::env::current_exe()) {
+            (Some(exe), Ok(daemon)) => {
+                moonlet_core::app_token::may_be_the_app(exe, &daemon, self.test_app_exe.as_deref())
+            }
+            _ => false,
+        };
+        if !app {
+            tracing::warn!(?exe, "a connection with the app credential is not the app");
+        }
+        app
     }
 
+    /// This Mac's app connected, or (`false`) one of its connections
+    /// closed (X75).
     pub fn app_connection(&self, open: bool) {
         use std::sync::atomic::Ordering::SeqCst;
         let _waiting = self.waiting_shows.lock().unwrap();

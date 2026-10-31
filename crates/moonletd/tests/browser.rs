@@ -936,6 +936,90 @@ async fn a_process_that_only_says_it_is_the_app_cannot_change_app_only_settings(
 }
 
 #[tokio::test]
+async fn a_process_with_the_app_credential_that_is_not_the_app_is_not_the_app() {
+    // No executable named for tests: this test's own process is not the app,
+    // though it read the credential the daemon wrote.
+    let d = Daemon::start(
+        tempfile::tempdir().unwrap(),
+        &[("MOONLET_TEST_APP_EXE", "")],
+    )
+    .await;
+    let mut stolen = d.app().await;
+    let e = stolen
+        .request::<_, Value>("signins.set", json!({ "entries": [entry("true", "true")] }))
+        .await
+        .unwrap_err();
+    assert_eq!(e.to_string(), "forbidden: only the moonlet app manages sign-ins");
+    let e = stolen
+        .request::<_, Value>("browser.pending", json!({}))
+        .await
+        .unwrap_err();
+    assert_eq!(e.to_string(), "forbidden: only this Mac's app shows its sign-ins");
+}
+
+/// What a copy of this test binary does when [`run_copy_as`] runs it:
+/// connects to the daemon at `APP_COPY_SOCKET` with the credential in
+/// `APP_COPY_HOME`, asks to change sign-ins, and writes the outcome to
+/// stderr. In a plain run it does nothing.
+#[tokio::test]
+async fn as_a_copy_asks_to_change_sign_ins() {
+    let (Some(socket), Some(home)) = (
+        std::env::var_os("APP_COPY_SOCKET"),
+        std::env::var_os("APP_COPY_HOME"),
+    ) else {
+        return;
+    };
+    let mut c = Client::connect_app(std::path::Path::new(&socket), std::path::Path::new(&home))
+        .await
+        .unwrap();
+    match c
+        .request::<_, Value>("signins.set", json!({ "entries": [entry("true", "true")] }))
+        .await
+    {
+        Ok(_) => eprint!("allowed"),
+        Err(e) => eprint!("{e}"),
+    }
+}
+
+/// Copies this test binary to `exe` and runs it as
+/// [`as_a_copy_asks_to_change_sign_ins`] against `d`: what it answered.
+async fn run_copy_as(exe: &std::path::Path, d: &Daemon) -> String {
+    std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+    std::fs::copy(std::env::current_exe().unwrap(), exe).unwrap();
+    let out = tokio::process::Command::new(exe)
+        .args(["--exact", "as_a_copy_asks_to_change_sign_ins", "--nocapture", "--test-threads=1"])
+        .env("APP_COPY_SOCKET", &d.socket)
+        .env("APP_COPY_HOME", d.home.path())
+        .output()
+        .await
+        .unwrap();
+    String::from_utf8_lossy(&out.stderr).trim().to_string()
+}
+
+#[tokio::test]
+async fn a_binary_copied_under_the_app_s_name_is_not_the_app() {
+    // The daemon runs from where the bundle keeps it, the app beside it.
+    let dir = tempfile::tempdir().unwrap();
+    let installed = dir.path().join("moonlet.app/Contents/MacOS");
+    std::fs::create_dir_all(&installed).unwrap();
+    let built = std::path::Path::new(env!("CARGO_BIN_EXE_moonletd"));
+    std::fs::copy(built, installed.join("moonletd")).unwrap();
+    std::fs::copy(built.with_file_name("moonlet"), installed.join("moonlet")).unwrap();
+    let d = Daemon::start_from(
+        &installed.join("moonletd"),
+        tempfile::tempdir().unwrap(),
+        &[("MOONLET_TEST_APP_EXE", "")],
+    )
+    .await;
+
+    let elsewhere = run_copy_as(&dir.path().join("Downloads/moonlet-app"), &d).await;
+    assert_eq!(elsewhere, "forbidden: only the moonlet app manages sign-ins");
+    // The same binary where the app is, beside the daemon, is the app.
+    let beside = run_copy_as(&installed.join("moonlet-app"), &d).await;
+    assert_eq!(beside, "allowed");
+}
+
+#[tokio::test]
 async fn a_process_that_only_says_it_is_the_app_never_hears_where_the_user_signs_in() {
     let d = daemon().await;
     let mut forged = Client::connect(&d.socket, "moonlet-app").await.unwrap();

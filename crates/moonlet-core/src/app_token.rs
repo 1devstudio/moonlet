@@ -69,6 +69,35 @@ fn well_formed(token: &str) -> bool {
     token.len() == 64 && token.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
+/// The file name of the app's executable: the Tauri crate's binary. The
+/// bundle keeps it beside the `moonletd` the daemon runs from
+/// (`Contents/MacOS`), and so do the dev and e2e builds (`target/debug`,
+/// `target/e2e/debug`).
+pub const APP_EXE: &str = "moonlet-app";
+
+/// Names the executable a test connects from, so the test counts as the
+/// app. Only tests set it, in the daemon's own environment.
+pub const TEST_APP_EXE: &str = "MOONLET_TEST_APP_EXE";
+
+/// Whether a local process that runs `exe`, as the kernel says, may count
+/// as the app, with the credential. `daemon_exe` is the daemon's own
+/// executable; `test_exe` is what [`TEST_APP_EXE`] names.
+///
+/// Only these exact files may: the app beside `daemon_exe`, `daemon_exe`
+/// itself (`moonletd proxy` vouches for the app on an SSH host, and
+/// `moonletd pair`, `tailnet` and `join` stand in for it on a host without
+/// it), and `test_exe`. Compared as canonical paths; a path that cannot be
+/// resolved never matches.
+pub fn may_be_the_app(exe: &Path, daemon_exe: &Path, test_exe: Option<&Path>) -> bool {
+    let (Ok(exe), Ok(daemon_exe)) = (exe.canonicalize(), daemon_exe.canonicalize()) else {
+        return false;
+    };
+    let is_exe = |p: &Path| p.canonicalize().is_ok_and(|p| p == exe);
+    exe == daemon_exe
+        || daemon_exe.parent().is_some_and(|dir| is_exe(&dir.join(APP_EXE)))
+        || test_exe.is_some_and(is_exe)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -107,5 +136,38 @@ mod tests {
         assert!(matches(token, token));
         assert!(!matches(token, "0123456789abcdef"));
         assert!(!matches(token, ""));
+    }
+
+    #[test]
+    fn only_the_app_beside_the_daemon_and_the_daemon_itself_may_be_the_app() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = |rel: &str| {
+            let p = dir.path().join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, "#!/bin/sh\n").unwrap();
+            p
+        };
+        let daemon = file("moonlet.app/Contents/MacOS/moonletd");
+        let app = file("moonlet.app/Contents/MacOS/moonlet-app");
+        let cli = file("moonlet.app/Contents/MacOS/moonlet");
+        let copy = file("Downloads/moonlet-app");
+        let test = file("target/debug/deps/browser-0123abcd");
+        assert!(may_be_the_app(&app, &daemon, None));
+        assert!(may_be_the_app(&daemon, &daemon, None));
+        // The same file by another path.
+        let via = dir.path().join("moonlet.app/Contents/MacOS/../MacOS/moonlet-app");
+        assert!(may_be_the_app(&via, &daemon, None));
+
+        // A copy elsewhere under the app's name, or another binary beside it.
+        assert!(!may_be_the_app(&copy, &daemon, None));
+        assert!(!may_be_the_app(&cli, &daemon, None));
+        assert!(!may_be_the_app(&test, &daemon, None));
+        // A path that does not resolve is never the app.
+        let gone = dir.path().join("moonlet.app/Contents/MacOS/gone");
+        assert!(!may_be_the_app(&gone, &daemon, None));
+        assert!(!may_be_the_app(&app, &gone.with_file_name("moonletd-gone"), None));
+
+        assert!(may_be_the_app(&test, &daemon, Some(&test)));
+        assert!(!may_be_the_app(&copy, &daemon, Some(&test)));
     }
 }

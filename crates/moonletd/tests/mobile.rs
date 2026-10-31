@@ -44,6 +44,7 @@ impl Mac {
     async fn spawn(home: &Path, socket: &Path, path: Option<&Path>) -> Child {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_moonletd"));
         cmd.arg("daemon")
+            .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
             .env("MOONLET_HOME", home)
             .env("MOONLET_SOCK", socket)
             .env("MOONLET_MOBILE_ADDRS", "127.0.0.1")

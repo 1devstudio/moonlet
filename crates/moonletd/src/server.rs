@@ -104,7 +104,7 @@ pub struct Conn {
     /// The paired phone's device id on a phone connection (X39).
     pub phone: Option<String>,
     /// A local connection that sent this Mac's app credential in `hello`
-    /// (X75): the app, whatever `client` says.
+    /// from the app's executable (X75): the app, whatever `client` says.
     pub app: bool,
     /// The process at the other end of a local connection, as the kernel
     /// says (X75): never what the client claims.
@@ -317,7 +317,7 @@ where
 
     // Only on the local socket: over the tailnet a device proves itself
     // with its own token.
-    let app = phone.is_none() && app_token.is_some_and(|t| daemon.is_app_token(&t));
+    let app = phone.is_none() && daemon.is_app(app_token.as_deref(), peer_pid);
     let conn = Arc::new(Conn {
         id: daemon.terminals.new_client_id(),
         tx: tx.clone(),

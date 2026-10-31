@@ -72,6 +72,7 @@ impl Drop for Daemon {
 async fn spawn(home: &Path, socket: &Path, env: &[(String, String)]) -> Child {
     let child = Command::new(env!("CARGO_BIN_EXE_moonletd"))
         .arg("daemon")
+        .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
         .env("MOONLET_HOME", home)
         .env("MOONLET_SOCK", socket)
         // The user's own Claude Code settings never reach a test.

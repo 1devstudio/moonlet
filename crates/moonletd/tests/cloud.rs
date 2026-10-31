@@ -73,6 +73,7 @@ impl Drop for Daemon {
 async fn spawn(home: &Path, socket: &Path, env: &[(&str, &str)]) -> Child {
     let child = Command::new(env!("CARGO_BIN_EXE_moonletd"))
         .arg("daemon")
+        .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
         .env("MOONLET_HOME", home)
         .env("MOONLET_SOCK", socket)
         .env("CLAUDE_CONFIG_DIR", home.join("claude"))

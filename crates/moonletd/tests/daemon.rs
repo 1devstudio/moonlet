@@ -26,6 +26,7 @@ impl TestDaemon {
         let socket = home.path().join("run").join("d.sock");
         let child = Command::new(env!("CARGO_BIN_EXE_moonletd"))
             .arg("daemon")
+            .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
             .envs(env.iter().map(|(k, v)| (*k, v.as_str())))
             .env("MOONLET_HOME", home.path())
             .env("MOONLET_SOCK", &socket)
@@ -385,6 +386,7 @@ async fn terminals_do_not_inherit_the_daemon_starters_environment() {
     let socket = home.path().join("run").join("d.sock");
     let mut child = Command::new(env!("CARGO_BIN_EXE_moonletd"))
         .arg("daemon")
+        .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
         .env("MOONLET_HOME", home.path())
         .env("MOONLET_SOCK", &socket)
         .env("CLAUDE_CODE_MESSAGING_TOKEN", "leaked-secret")
@@ -960,6 +962,7 @@ async fn starting_refreshes_an_outdated_moonlet_skill() {
     let socket = home.path().join(".moonlet/run/moonletd.sock");
     let mut child = Command::new(env!("CARGO_BIN_EXE_moonletd"))
         .arg("daemon")
+        .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
         .env("HOME", home.path())
         .env_remove("MOONLET_SOCK")
         .env_remove("MOONLET_HOME")
@@ -1032,6 +1035,7 @@ impl HomeDaemon {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_moonletd"));
         cmd.envs(env.iter().map(|(k, v)| (k, v)));
         cmd.arg("daemon")
+            .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
             .env("HOME", home)
             .env_remove("MOONLET_SOCK")
             .env_remove("MOONLET_HOME")
@@ -1728,6 +1732,7 @@ async fn a_second_daemon_exits_with_0_while_one_is_listening() {
     let d = TestDaemon::start().await;
     let mut second = Command::new(env!("CARGO_BIN_EXE_moonletd"))
         .arg("daemon")
+        .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
         .env("MOONLET_HOME", d.home.path())
         .env("MOONLET_SOCK", &d.socket)
         .stdin(Stdio::null())

@@ -79,6 +79,7 @@ async fn host() -> (Host, String) {
     .unwrap();
     let daemon = Command::new(target_bin("moonletd"))
         .arg("daemon")
+        .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
         .env("MOONLET_HOME", home.path())
         .env("MOONLET_SOCK", &socket)
         .env("CLAUDE_CONFIG_DIR", home.path().join("claude"))

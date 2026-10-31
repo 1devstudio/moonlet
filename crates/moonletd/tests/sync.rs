@@ -67,6 +67,7 @@ impl Drop for Daemon {
 async fn spawn(home: &Path, socket: &Path, env: &[(String, String)]) -> Child {
     let child = Command::new(env!("CARGO_BIN_EXE_moonletd"))
         .arg("daemon")
+        .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
         .env("MOONLET_HOME", home)
         .env("MOONLET_SOCK", socket)
         .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
@@ -822,6 +823,7 @@ async fn a_live_upgrade_of_the_central_host_loses_no_edit() {
     write(&c.join("docs/during.md"), "during the upgrade\n");
     let status = Command::new(env!("CARGO_BIN_EXE_moonletd"))
         .arg("upgrade")
+        .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
         .env("MOONLET_HOME", central.daemon.home.path())
         .env("MOONLET_SOCK", &central.daemon.socket)
         .envs(

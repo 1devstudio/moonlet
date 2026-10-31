@@ -28,6 +28,7 @@ pub mod paths;
 pub mod profiles;
 pub mod repo_clone;
 pub mod project_config;
+pub mod process;
 pub mod pty;
 pub mod session;
 pub mod shell;
