@@ -2672,6 +2672,13 @@ impl Daemon {
         if self.workers.conn(&owner).is_some() {
             return Err(RpcError::new("reachable", "the member running that session is reachable"));
         }
+        // Not for a short drop: only once it has been away for 30 s. Tests
+        // set a shorter wait.
+        let wait: u64 = std::env::var("MOONLET_TEST_UNREACHABLE_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(30_000);
+        if self.workers.unreachable_since(&owner).is_some_and(|t| now_ms().saturating_sub(t) < wait) {
+            let name = self.sessions.member_names().remove(&owner).unwrap_or(owner);
+            return Err(RpcError::new("not_yet", format!("{name} has been unreachable for less than 30 s")));
+        }
         if text("pinned").is_some_and(|p| p != me.id) {
             return Err(RpcError::new("pinned", "that session is kept on its member"));
         }

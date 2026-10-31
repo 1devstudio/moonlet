@@ -691,6 +691,11 @@ fn agent_env(home: &Path, origin: Option<&Origin>) -> Vec<(String, String)> {
     let mut env = vec![
         ("HOME".to_string(), home.display().to_string()),
         ("SHELL".to_string(), "/bin/sh".to_string()),
+        // Continue here after 1 s away instead of 30 (X73).
+        (
+            "MOONLET_TEST_UNREACHABLE_MS".to_string(),
+            "1000".to_string(),
+        ),
         (
             "PATH".to_string(),
             format!("{}:/usr/bin:/bin", bin.display()),
@@ -1404,7 +1409,8 @@ fn agent_log(d: &Daemon, file: &str) -> String {
     std::fs::read_to_string(PathBuf::from(&env["HOME"]).join(file)).unwrap_or_default()
 }
 
-/// Waits until `book` is gone from `mini`'s point of view.
+/// Waits until `book` is gone from `mini`'s point of view, and for the
+/// 1 s a daemon with [`agent_env`] waits before it continues a session.
 async fn unreachable(mini: &Daemon, session: &Value) {
     within(Duration::from_secs(10), "MacBook unreachable", || async {
         with_copies(mini)
@@ -1413,6 +1419,7 @@ async fn unreachable(mini: &Daemon, session: &Value) {
             .any(|s| s["id"] == session["id"] && s["owner"]["reachable"] == json!(false))
     })
     .await;
+    tokio::time::sleep(Duration::from_millis(1100)).await;
 }
 
 #[tokio::test]
@@ -1520,6 +1527,27 @@ async fn a_session_whose_member_is_reachable_is_not_continued_elsewhere() {
         .await
         .unwrap_err();
     assert!(refused.starts_with("reachable"), "{refused}");
+}
+
+#[tokio::test]
+async fn a_session_whose_member_went_away_less_than_30_s_ago_is_not_continued_yet() {
+    let origin = Origin::new();
+    // No shorter wait for tests here: the real 30 s.
+    let (mini, _addr, book) = pair_of(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = new_session(&book, &project, "fix-cart").await;
+    copy_of(&mini, &made).await;
+    drop(book);
+    unreachable(&mini, &made).await;
+
+    let refused = mini
+        .try_call("session.continue_here", json!({ "session": made["id"] }))
+        .await
+        .unwrap_err();
+    assert!(refused.starts_with("not_yet"), "{refused}");
+    let own: Vec<Value> = mini.call("session.list", json!({})).await;
+    assert!(own.iter().all(|s| s["id"] != made["id"]));
 }
 
 #[tokio::test]
