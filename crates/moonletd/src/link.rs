@@ -360,6 +360,10 @@ pub struct WorkerLink {
     runs: std::sync::OnceLock<Weak<crate::exec::Runs>>,
     /// Takes the central host's requests for this member's sessions (X72).
     forwarder: std::sync::OnceLock<Forwarder>,
+    /// Takes the central host's terminal relays (X72).
+    relayer: std::sync::OnceLock<Relayer>,
+    /// Takes input for those relays, and forgets an earlier link's (X72).
+    relay_input: std::sync::OnceLock<(moonlet_link::RelayedInput, Arc<dyn Fn() + Send + Sync>)>,
     sessions: Arc<SessionManager>,
     emit: Box<dyn Fn(Message) + Send + Sync>,
 }
@@ -381,6 +385,8 @@ impl WorkerLink {
             sync: std::sync::OnceLock::new(),
             runs: std::sync::OnceLock::new(),
             forwarder: std::sync::OnceLock::new(),
+            relayer: std::sync::OnceLock::new(),
+            relay_input: std::sync::OnceLock::new(),
             sessions,
             emit: Box::new(emit),
         })
@@ -587,6 +593,18 @@ impl WorkerLink {
         let _ = self.forwarder.set(f);
     }
 
+    /// What takes input for the terminals the central host relays, and
+    /// what forgets an earlier link's relays, each time a link is made
+    /// (X72). Set before the link starts.
+    pub fn set_relay_input(&self, sink: moonlet_link::RelayedInput, relink: Arc<dyn Fn() + Send + Sync>) {
+        let _ = self.relay_input.set((sink, relink));
+    }
+
+    /// What attaches to the terminals the central host relays (X72).
+    pub fn set_relayer(&self, f: Relayer) {
+        let _ = self.relayer.set(f);
+    }
+
     pub fn set_runs(&self, runs: Weak<crate::exec::Runs>) {
         let _ = self.runs.set(runs);
     }
@@ -651,6 +669,13 @@ impl WorkerLink {
                     tokio::runtime::Handle::current(),
                 );
                 h.set_requests(Arc::new(WorkerRequests(Arc::downgrade(self))));
+                // Before the link can carry a relay (X72): what an earlier
+                // link relayed has no client any more, and input for the
+                // new link's relays has somewhere to go from its first frame.
+                if let Some((sink, relink)) = self.relay_input.get() {
+                    relink();
+                    h.set_relayed_input(sink.clone());
+                }
                 *host = Some(h);
             }
             _ => {
@@ -824,7 +849,14 @@ impl WorkerLink {
             .unwrap_or_default();
         let state = match info.status {
             HostStatus::Connecting => LinkState::Connecting,
-            HostStatus::Reconnecting => LinkState::Reconnecting,
+            HostStatus::Reconnecting => {
+                // The central host ended this link's relays with it (X72),
+                // and may have lost what it was told.
+                if let Some((_, relink)) = self.relay_input.get() {
+                    relink();
+                }
+                LinkState::Reconnecting
+            }
             HostStatus::Connected => {
                 tokio::spawn(self.clone().register(host));
                 LinkState::Connected { since: now_ms() }
@@ -921,6 +953,9 @@ struct WorkerRequests(Weak<WorkerLink>);
 /// sessions (X72).
 pub type Forwarder = Arc<dyn Fn(m::SessionForward) -> BoxFuture<'static, Result<Value, RpcError>> + Send + Sync>;
 
+/// Attaches to or detaches from a terminal the central host relays (X72).
+pub type Relayer = Arc<dyn Fn(m::SessionRelay) -> BoxFuture<'static, Result<Value, RpcError>> + Send + Sync>;
+
 impl Requests for WorkerRequests {
     fn request(
         &self,
@@ -990,6 +1025,17 @@ impl Requests for WorkerRequests {
                     let link = link.ok_or_else(|| RpcError::new("gone", "the link closed"))?;
                     let runs = link.runs().ok_or_else(|| RpcError::new("gone", "no runs"))?;
                     Ok(serde_json::json!(runs.cancel_here(req.run)))
+                }
+                m::SESSION_RELAY => {
+                    let req: m::SessionRelay = serde_json::from_value(params)
+                        .map_err(|e| RpcError::new("invalid_params", e.to_string()))?;
+                    let link = link.ok_or_else(|| RpcError::new("gone", "the link closed"))?;
+                    let f = link
+                        .relayer
+                        .get()
+                        .cloned()
+                        .ok_or_else(|| RpcError::new("gone", "nothing relays terminals"))?;
+                    f(req).await
                 }
                 m::SESSION_FORWARD => {
                     let req: m::SessionForward = serde_json::from_value(params)

@@ -1020,6 +1020,28 @@ impl Daemon {
                 None => Err(RpcError::new("invalid_params", "not a paired device")),
             },
             method if method.starts_with("mobile.") => self.handle_mobile(conn, method, p),
+            m::SESSION_ATTACH | m::SESSION_DETACH => {
+                if conn.client == crate::link::WORKER_CLIENT || conn.client == CLI_CLIENT || conn.cloud.load(std::sync::atomic::Ordering::Relaxed) {
+                    return Err(RpcError::new("forbidden", "only an app or a phone follows another member's session"));
+                }
+                if method == m::SESSION_DETACH {
+                    let r: m::SessionDetach = params(p)?;
+                    self.session_copies.detach(conn.id, Some(r.relay));
+                    return ok(true);
+                }
+                let r: m::SessionAttach = params(p)?;
+                let owner = self
+                    .sessions
+                    .session_records()
+                    .remove(&r.session)
+                    .and_then(|rec| rec.get("owner").and_then(Value::as_str).map(str::to_string))
+                    .ok_or_else(|| RpcError::new("not_found", "no such session in the account"))?;
+                let member = self.workers.conn(&owner).ok_or_else(|| {
+                    let name = self.sessions.member_names().remove(&owner).unwrap_or(owner.clone());
+                    RpcError::new("owner_offline", format!("{name} is not reachable"))
+                })?;
+                self.session_copies.attach(conn, &member, r).await
+            }
             m::SESSION_FORWARD => {
                 // The central host's apps and phones (X72): never a worker,
                 // a cloud machine or an agent's CLI.
@@ -2619,9 +2641,6 @@ impl Daemon {
         }
     }
 
-    /// Keeps this member's design copies (X71): a round when the design
-    /// folders change, when the link changes, and when another member's
-    /// change to a design's record comes.
     /// `session.forward` on the central host (X72): the request goes to the
     /// member that owns the session while it is linked. Otherwise reads are
     /// answered from this host's copy, and the rest with `owner_offline`.
@@ -2664,11 +2683,30 @@ impl Daemon {
             }
             m::GIT_STATUS | m::GIT_DIFF | m::GIT_LOG | m::GH_PRS => {
                 let path = self.session_copies.copy_path(&r.session).ok_or_else(offline)?;
-                let p = scope(&r.method, r.params, &r.session, &path, &[])?;
+                let p = scope(&r.method, r.params, &r.session, &path, "", &[])?;
                 Box::pin(self.handle(conn, &r.method, p)).await
             }
             _ => Err(offline()),
         }
+    }
+
+    /// `session.relay` from the central host (X72): attaches to a terminal
+    /// of one of this member's sessions for a client there, or detaches.
+    pub async fn relayed(self: &Arc<Self>, r: m::SessionRelay) -> HandlerResult {
+        if r.op == "detach" {
+            self.session_copies.relay_detach(r.relay);
+            return ok(true);
+        }
+        let s = self
+            .sessions
+            .list_sessions()
+            .into_iter()
+            .find(|s| s.id == r.session && s.owner.is_none() && !s.archived)
+            .ok_or_else(|| RpcError::new("not_found", "no such session here"))?;
+        if !s.terminals.contains(&r.terminal) {
+            return Err(RpcError::new("forbidden", "that terminal is not one of the session's"));
+        }
+        self.session_copies.relay_attach(r.relay, r.terminal, r.cols.zip(r.rows))
     }
 
     /// A request the central host passes on for one of this member's
@@ -2682,7 +2720,10 @@ impl Daemon {
             .into_iter()
             .find(|s| s.id == r.session && s.owner.is_none() && !s.archived)
             .ok_or_else(|| RpcError::new("not_found", "no such session here"))?;
-        let p = scope(&r.method, r.params, &s.id, &s.path, &s.terminals)?;
+        let p = scope(&r.method, r.params, &s.id, &s.path, &s.branch, &s.terminals)?;
+        // A file named in a forwarded call stays inside the worktree, links
+        // resolved, so a link in the session can't reach the rest of the Mac.
+        crate::session_copies::files_inside(&p, Path::new(&s.path))?;
         let conn = Conn::detached(self.terminals.new_client_id(), "moonlet-forwarded", Some("forwarded".to_string()));
         let reply = Box::pin(self.handle(&conn, &r.method, p)).await?;
         Ok(only_terminals(&r.method, reply, &s.terminals))
@@ -2707,9 +2748,20 @@ impl Daemon {
                 d.forwarded(r).await
             })
         }));
+        let d = Arc::downgrade(self);
+        self.link.set_relayer(Arc::new(move |r| {
+            let d = d.clone();
+            Box::pin(async move {
+                let d = d.upgrade().ok_or_else(|| RpcError::new("gone", "the daemon is stopping"))?;
+                d.relayed(r).await
+            })
+        }));
         self.session_copies.spawn();
     }
 
+    /// Keeps this member's design copies (X71): a round when the design
+    /// folders change, when the link changes, and when another member's
+    /// change to a design's record comes.
     pub fn keep_design_copies(self: &Arc<Self>) {
         let copies = Arc::downgrade(&self.copies);
         self.sessions.on_account_applied(move |changes| {

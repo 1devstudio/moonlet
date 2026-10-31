@@ -48,6 +48,40 @@ fn clone_url_names(url: &str, origin: &str) -> bool {
     moonlet_core::identity::normalize_origin(url).as_deref() == Some(origin)
 }
 
+/// The first relay id: far above the ids of a host's own terminals, so a
+/// client never mistakes one for the other.
+const RELAY_BASE: TerminalId = 0x4000_0000;
+
+/// Where this run's relay ids start: at a different point each time the
+/// daemon starts, so an id a member still holds from an earlier run is not
+/// handed out again soon.
+fn first_relay() -> TerminalId {
+    use std::hash::{BuildHasher, Hasher};
+    let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+    h.write_u128(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    );
+    RELAY_BASE + (h.finish() as u32 & 0x1fff_ffff)
+}
+
+/// A terminal of another member the central host relays to one client.
+struct Relay {
+    owner: Weak<crate::server::Conn>,
+    client: Weak<crate::server::Conn>,
+    /// Output that came before the client had the attach reply, given to
+    /// it right after: the reply's snapshot comes first.
+    pending: Option<Vec<Vec<u8>>>,
+}
+
+/// How much output a relay holds back until its client has the reply.
+const PENDING_MAX: usize = 4 * 1024 * 1024;
+
+/// How many of a transcript file's first bytes tell it from one made again.
+const HEAD: usize = 256;
+
 /// How many bytes of a transcript file go in one `session.transcript`.
 const CHUNK: usize = 4 * 1024 * 1024;
 
@@ -56,11 +90,22 @@ const CHUNK: usize = 4 * 1024 * 1024;
 struct Talk {
     /// A hash of each chat's state as last sent.
     states: BTreeMap<TerminalId, String>,
+    /// The first bytes of each transcript file it holds, up to [`HEAD`],
+    /// to tell a file made again.
+    heads: BTreeMap<String, Vec<u8>>,
     /// How many bytes of each transcript file it holds.
     files: BTreeMap<String, u64>,
-    /// Each chat's [`progress`] and transcript length at its last
-    /// checkpoint the central host kept.
-    points: BTreeMap<TerminalId, ((usize, usize), u64)>,
+    /// Each chat's last look at its transcript: its progress, the bytes
+    /// sent, whether its turn was over, and the checkpoint length found.
+    scanned: BTreeMap<TerminalId, ((usize, usize), u64, bool, u64)>,
+    /// Each chat's [`progress`], transcript length and conversation at its
+    /// last checkpoint the central host kept.
+    points: BTreeMap<TerminalId, ((usize, usize), u64, String)>,
+    /// When each transcript file was last changed, as last sent: a file
+    /// rewritten at the same length is told by it.
+    mtimes: BTreeMap<String, std::time::SystemTime>,
+    /// The session's open chats, as the central host last heard.
+    live: Option<Vec<TerminalId>>,
 }
 
 /// A checkpoint to send once the files are sent.
@@ -69,6 +114,24 @@ struct Point {
     agent_session: String,
     len: u64,
     progress: (usize, usize),
+}
+
+/// Where the next piece of a transcript file sent from byte `from` ends:
+/// at most `max` bytes on, and for a `.jsonl` file at the end of a line, so
+/// the central host never holds half of one. A line longer than `max` goes
+/// whole. `whole` is where the file's complete part ends.
+fn chunk_end(bytes: &[u8], from: usize, whole: usize, jsonl: bool, max: usize) -> usize {
+    let limit = whole.min(from.saturating_add(max));
+    if !jsonl || limit == whole {
+        return limit;
+    }
+    match bytes[from..limit].iter().rposition(|b| *b == b'\n') {
+        Some(i) => from + i + 1,
+        None => bytes[limit..whole]
+            .iter()
+            .position(|b| *b == b'\n')
+            .map_or(whole, |i| limit + i + 1),
+    }
 }
 
 /// How far a chat is: its tool calls that ended, and its turns that ended.
@@ -168,6 +231,7 @@ pub fn scope(
     params: Value,
     session: &str,
     path: &str,
+    branch: &str,
     terminals: &[TerminalId],
 ) -> Result<Value, RpcError> {
     let refused = || {
@@ -203,6 +267,11 @@ pub fn scope(
         }
         _ if FORWARDED_GIT.contains(&method) => {
             params.insert("path".to_string(), Value::String(path.to_string()));
+            // A branch named in the request is the session's own, so a push
+            // or a look at unpushed work never reaches another branch.
+            if params.contains_key("branch") && !branch.is_empty() {
+                params.insert("branch".to_string(), Value::String(branch.to_string()));
+            }
         }
         m::SESSION_ARCHIVE => {
             if params.get("id").and_then(Value::as_str) != Some(session) {
@@ -212,6 +281,43 @@ pub fn scope(
         _ => return Err(refused()),
     }
     Ok(Value::Object(params))
+}
+
+/// Refuses a forwarded call whose `file` or `files` name a path that, with
+/// links resolved, is outside `worktree` (X72).
+pub fn files_inside(params: &Value, worktree: &Path) -> Result<(), RpcError> {
+    let Ok(root) = worktree.canonicalize() else {
+        return Ok(());
+    };
+    let mut names: Vec<&str> = Vec::new();
+    if let Some(f) = params.get("file").and_then(Value::as_str) {
+        names.push(f);
+    }
+    if let Some(list) = params.get("files").and_then(Value::as_array) {
+        names.extend(list.iter().filter_map(Value::as_str));
+    }
+    for name in names {
+        let path = root.join(name);
+        // A file that is gone (a deletion to stage) has nothing to follow:
+        // its folder, as far as it exists, is what must be inside.
+        let mut at = path.clone();
+        while !at.exists() {
+            if !at.pop() {
+                break;
+            }
+        }
+        let real = at.canonicalize().unwrap_or(at);
+        if Path::new(name).is_absolute()
+            || name.split('/').any(|p| p == "..")
+            || !real.starts_with(&root)
+        {
+            return Err(RpcError::new(
+                "forbidden",
+                format!("{name} is not inside the session's worktree"),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Keeps of `reply` to `method` only the session's own terminals, for the
@@ -233,6 +339,11 @@ pub fn only_terminals(method: &str, reply: Value, terminals: &[TerminalId]) -> V
             })
             .collect(),
     )
+}
+
+/// Whether `dir` is a git repository's working folder.
+fn is_repo(dir: &Path) -> bool {
+    dir.join(".git").exists()
 }
 
 /// The branch a copy's worktree is on: its own, named after the session,
@@ -270,8 +381,8 @@ struct Held {
     project: String,
     /// The last checkpoint held in full.
     #[serde(default)]
-    checkpoint: Option<m::SessionCheckpoint>,
-    /// The transcript files written for it, relative to `projects/`.
+    checkpoints: BTreeMap<TerminalId, m::SessionCheckpoint>,
+    /// The transcript files written for it, where they were written.
     #[serde(default)]
     transcripts: Vec<String>,
 }
@@ -296,16 +407,27 @@ pub struct SessionCopies {
     data: Mutex<Data>,
     chats: Arc<ChatManager>,
     terminals: Arc<moonlet_core::terminal::TerminalManager>,
+    /// On the central host: the terminals it relays to its clients, by
+    /// relay id (X72).
+    relays: Mutex<BTreeMap<TerminalId, Relay>>,
+    next_relay: std::sync::atomic::AtomicU32,
+    /// On a member: its terminals the central host relays, by relay id:
+    /// the terminal and the client id it is attached under.
+    relayed: Arc<Mutex<BTreeMap<TerminalId, (TerminalId, u64)>>>,
     /// The Claude Code folder agents get without a workspace profile: the
     /// terminals' `CLAUDE_CONFIG_DIR`, else `~/.claude`.
     claude: PathBuf,
     /// On a member: what the central host has of each session's chats.
     talk: Mutex<BTreeMap<String, Talk>>,
     kick: Notify,
+    /// Set when a round sent the central host anything.
+    sent_any: std::sync::atomic::AtomicBool,
     /// One round at a time on a member; one offer at a time on the
     /// central host.
     round: tokio::sync::Mutex<()>,
     apply: tokio::sync::Mutex<()>,
+    /// One clone of a project at a time, on the central host.
+    cloning: tokio::sync::Mutex<()>,
 }
 
 impl SessionCopies {
@@ -335,6 +457,9 @@ impl SessionCopies {
                 chats,
                 claude,
                 terminals,
+                relays: Mutex::new(BTreeMap::new()),
+                next_relay: std::sync::atomic::AtomicU32::new(first_relay()),
+                relayed: Arc::new(Mutex::new(BTreeMap::new())),
                 talk: Mutex::new(BTreeMap::new()),
                 home: home.to_path_buf(),
                 file,
@@ -344,8 +469,10 @@ impl SessionCopies {
                 watched: Mutex::new(Vec::new()),
                 data: Mutex::new(data),
                 kick: Notify::new(),
+                sent_any: std::sync::atomic::AtomicBool::new(false),
                 round: tokio::sync::Mutex::new(()),
                 apply: tokio::sync::Mutex::new(()),
+                cloning: tokio::sync::Mutex::new(()),
             }
         })
     }
@@ -358,16 +485,63 @@ impl SessionCopies {
     /// change, for as long as the daemon runs.
     pub fn spawn(self: &Arc<Self>) {
         self.pass_events();
+        self.take_relayed_input();
+        // Copies whose sessions ended while this host was down go now, not
+        // at the account's next change.
+        let me = self.clone();
+        tokio::spawn(async move { me.drop_ended().await });
         let me = self.clone();
         tokio::spawn(async move {
             loop {
                 if let Err(e) = me.round().await {
                     tracing::debug!("session copies: {e:#}");
                 }
-                let _ = tokio::time::timeout(EVERY, me.kick.notified()).await;
+                // A round that sent something goes again soon: what it sent
+                // can let the central host take what it could not before,
+                // such as a transcript once its copy is made.
+                let sent = me
+                    .sent_any
+                    .swap(false, std::sync::atomic::Ordering::Relaxed);
+                if !sent {
+                    let _ = tokio::time::timeout(EVERY, me.kick.notified()).await;
+                }
                 tokio::time::sleep(QUIET).await;
             }
         });
+    }
+
+    /// Hands input the central host relays to the terminal it is for, on
+    /// every link this member makes, from the link's first frame (X72).
+    fn take_relayed_input(self: &Arc<Self>) {
+        let typed = Arc::downgrade(self);
+        let reset = Arc::downgrade(self);
+        self.link.set_relay_input(
+            Arc::new(move |relay, data| {
+                if let Some(me) = typed.upgrade() {
+                    me.relay_typed(relay, data);
+                }
+            }),
+            Arc::new(move || {
+                // A new link, perhaps to another central host: it is told
+                // everything again, and what the old one relayed has no
+                // client.
+                if let Some(me) = reset.upgrade() {
+                    {
+                        let mut data = me.data.lock().unwrap();
+                        data.sent.clear();
+                        me.save(&data);
+                    }
+                    me.talk.lock().unwrap().clear();
+                    let gone: Vec<(TerminalId, u64)> =
+                        std::mem::take(&mut *me.relayed.lock().unwrap())
+                            .into_values()
+                            .collect();
+                    for (terminal, client) in gone {
+                        me.terminals.detach(terminal, client);
+                    }
+                }
+            }),
+        );
     }
 
     /// Passes the chat events of this member's sessions to its central
@@ -375,6 +549,17 @@ impl SessionCopies {
     fn pass_events(self: &Arc<Self>) {
         let me = self.clone();
         let mut events = self.terminals.subscribe_events();
+        // One at a time, in the order they came, so the central host's
+        // clients see them in that order too.
+        let (out, mut queue) = tokio::sync::mpsc::unbounded_channel::<Value>();
+        let sender = self.clone();
+        tokio::spawn(async move {
+            while let Some(params) = queue.recv().await {
+                if let Some(host) = sender.link.host() {
+                    let _ = host.request(m::SESSION_EVENT, params).await;
+                }
+            }
+        });
         tokio::spawn(async move {
             loop {
                 let msg = match events.recv().await {
@@ -395,14 +580,16 @@ impl SessionCopies {
                 let Some(id) = data.get("id").and_then(Value::as_u64) else {
                     continue;
                 };
-                let Some(session) = me.sessions.list_sessions().into_iter().find(|s| {
-                    s.owner.is_none()
-                        && !s.archived
-                        && s.terminals.iter().any(|t| u64::from(*t) == id)
-                }) else {
+                // The terminal's own session, without listing every session.
+                let Some(session) = u32::try_from(id)
+                    .ok()
+                    .and_then(|t| me.terminals.get(t))
+                    .and_then(|t| t.info().session_id)
+                    .and_then(|sid| me.sessions.session(&sid).ok())
+                    .filter(|s| s.owner.is_none() && !s.archived)
+                else {
                     continue;
                 };
-                let Some(host) = me.link.host() else { continue };
                 let event = m::SessionEvent {
                     session: session.id,
                     event: msg.clone(),
@@ -410,10 +597,7 @@ impl SessionCopies {
                 let Ok(params) = serde_json::to_value(event) else {
                     continue;
                 };
-                // In the background, so a slow link never holds events up.
-                tokio::spawn(async move {
-                    let _ = host.request(m::SESSION_EVENT, params).await;
-                });
+                let _ = out.send(params);
             }
         });
     }
@@ -427,6 +611,253 @@ impl SessionCopies {
             serde_json::json!({ "session": r.session, "event": r.event }),
         ));
         Ok(true)
+    }
+
+    /// `session.attach` on the central host (X72): asks the owner, linked
+    /// as `owner`, to attach to terminal `r.terminal` of its session for
+    /// `client`, under a new relay id, and gives `terminal.attach`'s reply
+    /// with that id.
+    pub async fn attach(
+        &self,
+        client: &Arc<crate::server::Conn>,
+        owner: &Arc<crate::server::Conn>,
+        r: m::SessionAttach,
+    ) -> Result<Value, RpcError> {
+        let relay = self
+            .next_relay
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.relays.lock().unwrap().insert(
+            relay,
+            Relay {
+                owner: Arc::downgrade(owner),
+                client: Arc::downgrade(client),
+                pending: Some(Vec::new()),
+            },
+        );
+        let asked = owner
+            .request(
+                m::SESSION_RELAY,
+                serde_json::to_value(m::SessionRelay {
+                    op: "attach".to_string(),
+                    session: r.session,
+                    terminal: r.terminal,
+                    relay,
+                    cols: r.cols,
+                    rows: r.rows,
+                })
+                .unwrap_or_default(),
+                Duration::from_secs(30),
+            )
+            .await;
+        let mut reply = match asked {
+            Ok(v) => v,
+            Err(e) => {
+                self.relays.lock().unwrap().remove(&relay);
+                return Err(e);
+            }
+        };
+        // Detached, or the client gone, while the member attached: the
+        // member lets go of its terminal too.
+        if !self.relays.lock().unwrap().contains_key(&relay) {
+            let owner = owner.clone();
+            tokio::spawn(async move {
+                let _ = owner
+                    .request(
+                        m::SESSION_RELAY,
+                        serde_json::json!({ "op": "detach", "relay": relay }),
+                        Duration::from_secs(10),
+                    )
+                    .await;
+            });
+            return Err(RpcError::new(
+                "gone",
+                "the terminal was let go of while it was attached",
+            ));
+        }
+        reply["info"]["id"] = serde_json::json!(relay);
+        Ok(reply)
+    }
+
+    /// The client of relay `relay` has its attach reply: what came before
+    /// goes to it now, and the rest as it comes (X72).
+    pub fn relay_ready(&self, relay: TerminalId) {
+        let mut relays = self.relays.lock().unwrap();
+        let Some(r) = relays.get_mut(&relay) else {
+            return;
+        };
+        let held = r.pending.take().unwrap_or_default();
+        if let Some(c) = r.client.upgrade() {
+            for data in held {
+                let _ = c.tx.send(moonlet_proto::Frame::Output {
+                    terminal: relay,
+                    data,
+                });
+            }
+        }
+    }
+
+    /// Output from the member linked as `from` for relay `relay`, to the
+    /// client following it.
+    pub fn relay_output(&self, from: u64, relay: TerminalId, data: Vec<u8>) {
+        let mut relays = self.relays.lock().unwrap();
+        let Some(r) = relays
+            .get_mut(&relay)
+            .filter(|r| r.owner.upgrade().is_some_and(|o| o.id == from))
+        else {
+            return;
+        };
+        // Before the client has the attach reply: held back, so the
+        // snapshot never lands on top of it.
+        if let Some(held) = r.pending.as_mut() {
+            if held.iter().map(Vec::len).sum::<usize>() + data.len() <= PENDING_MAX {
+                held.push(data);
+            }
+            return;
+        }
+        let client = r.client.upgrade();
+        drop(relays);
+        if let Some(c) = client {
+            let _ = c.tx.send(moonlet_proto::Frame::Output {
+                terminal: relay,
+                data,
+            });
+        }
+    }
+
+    /// Input client `from` typed into relay `relay`, to the member; false
+    /// when `relay` is not one this client follows.
+    pub fn relay_input(&self, from: u64, relay: TerminalId, data: Vec<u8>) -> bool {
+        let owner = self
+            .relays
+            .lock()
+            .unwrap()
+            .get(&relay)
+            .filter(|r| r.client.upgrade().is_some_and(|c| c.id == from))
+            .and_then(|r| r.owner.upgrade());
+        match owner {
+            Some(o) => {
+                let _ = o.tx.send(moonlet_proto::Frame::Input {
+                    terminal: relay,
+                    data,
+                });
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// `session.detach` from client `from`, or every relay of a client or
+    /// member that is gone: the member detaches too.
+    pub fn detach(&self, from: u64, relay: Option<TerminalId>) {
+        let gone: Vec<(TerminalId, Relay)> = {
+            let mut relays = self.relays.lock().unwrap();
+            let ids: Vec<TerminalId> = relays
+                .iter()
+                .filter(|(id, r)| {
+                    relay.is_none_or(|x| x == **id)
+                        && [&r.client, &r.owner]
+                            .iter()
+                            .any(|c| c.upgrade().is_none_or(|c| c.id == from))
+                })
+                .map(|(id, _)| *id)
+                .collect();
+            ids.into_iter()
+                .filter_map(|id| relays.remove(&id).map(|r| (id, r)))
+                .collect()
+        };
+        for (id, r) in gone {
+            if let Some(owner) = r.owner.upgrade().filter(|o| o.id != from) {
+                tokio::spawn(async move {
+                    let _ = owner
+                        .request(
+                            m::SESSION_RELAY,
+                            serde_json::json!({ "op": "detach", "relay": id }),
+                            Duration::from_secs(10),
+                        )
+                        .await;
+                });
+            }
+        }
+    }
+
+    /// On a member: attaches to its terminal `terminal` for the central
+    /// host, whose client follows it as `relay`; gives the snapshot.
+    pub fn relay_attach(
+        &self,
+        relay: TerminalId,
+        terminal: TerminalId,
+        size: Option<(u16, u16)>,
+    ) -> Result<Value, RpcError> {
+        let host = self
+            .link
+            .host()
+            .ok_or_else(|| RpcError::new("gone", "the link closed"))?;
+        let client = self.terminals.new_client_id();
+        let (raw, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let tx = moonlet_core::terminal::ClientTx::new(raw);
+        let queued = tx.counter();
+        let mut first = None;
+        self.terminals
+            .attach_with(terminal, client, tx, size, |info, snapshot| {
+                first = Some((info, snapshot));
+                None
+            })
+            .map_err(|e| RpcError::new("failed", format!("{e:#}")))?;
+        let (info, snapshot) = first.ok_or_else(|| RpcError::new("failed", "no snapshot"))?;
+        {
+            let mut relayed = self.relayed.lock().unwrap();
+            if relayed.contains_key(&relay) {
+                drop(relayed);
+                self.terminals.detach(terminal, client);
+                return Err(RpcError::new("refused", "that relay is taken"));
+            }
+            relayed.insert(relay, (terminal, client));
+        }
+        let relayed = self.relayed.clone();
+        let terminals = self.terminals.clone();
+        tokio::spawn(async move {
+            while let Some(frame) = rx.recv().await {
+                moonlet_core::terminal::dequeued(&queued, &frame);
+                // Only while this relay is still this attachment.
+                if relayed.lock().unwrap().get(&relay) != Some(&(terminal, client)) {
+                    break;
+                }
+                if let moonlet_proto::Frame::Output { data, .. } = frame
+                    && host.send_output(relay, data).is_err()
+                {
+                    break;
+                }
+            }
+            // Ended, by the central host or a link that went: the terminal
+            // is let go of, and the relay forgotten if it is still this one.
+            {
+                let mut r = relayed.lock().unwrap();
+                if r.get(&relay) == Some(&(terminal, client)) {
+                    r.remove(&relay);
+                }
+            }
+            terminals.detach(terminal, client);
+        });
+        Ok(serde_json::to_value(m::AttachResult {
+            info,
+            snapshot: String::from_utf8_lossy(&snapshot).into_owned(),
+        })
+        .unwrap_or_default())
+    }
+
+    /// On a member: the central host stopped relaying `relay`.
+    pub fn relay_detach(&self, relay: TerminalId) {
+        if let Some((terminal, client)) = self.relayed.lock().unwrap().remove(&relay) {
+            self.terminals.detach(terminal, client);
+        }
+    }
+
+    /// On a member: input for a terminal the central host relays.
+    fn relay_typed(&self, relay: TerminalId, data: Vec<u8>) {
+        let terminal = self.relayed.lock().unwrap().get(&relay).map(|(t, _)| *t);
+        if let Some(t) = terminal {
+            let _ = self.terminals.write(t, data);
+        }
     }
 
     /// The copy's chat of terminal `id`, as last sent, when it has one.
@@ -551,10 +982,20 @@ impl SessionCopies {
                     .await
                     .map_err(|e| anyhow::anyhow!("{}", e.message))?;
             }
-            Err(e) => anyhow::bail!("{}: {}", e.code, e.message),
+            Err(e) => {
+                // Whatever the central host could not take, such as a pack
+                // that left out a tree it no longer has, the next round
+                // opens the copy again and sends what it says it lacks.
+                let mut data = self.data.lock().unwrap();
+                data.sent.remove(&s.id);
+                self.save(&data);
+                anyhow::bail!("{}: {}", e.code, e.message)
+            }
         }
         let mut data = self.data.lock().unwrap();
         data.sent.insert(s.id.clone(), now);
+        self.sent_any
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         self.save(&data);
         Ok(())
     }
@@ -639,6 +1080,33 @@ impl SessionCopies {
             .filter_map(|t| self.chats.state(*t).ok().map(|st| (*t, st)))
             .collect();
         let mut points = Vec::new();
+        // The open chats: the central host forgets the others.
+        let live: Vec<TerminalId> = chats.iter().map(|(t, _)| *t).collect();
+        let heard = self
+            .talk
+            .lock()
+            .unwrap()
+            .get(&s.id)
+            .and_then(|t| t.live.clone());
+        if heard.as_ref() != Some(&live) {
+            host.request(
+                m::SESSION_CHAT,
+                serde_json::to_value(m::SessionChat {
+                    session: s.id.clone(),
+                    terminal: 0,
+                    state: None,
+                    live: Some(live.clone()),
+                })?,
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("{}: {}", e.code, e.message))?;
+            self.talk
+                .lock()
+                .unwrap()
+                .entry(s.id.clone())
+                .or_default()
+                .live = Some(live);
+        }
         for (terminal, state) in chats {
             let hash = moonlet_core::hash::sha256_hex(&serde_json::to_vec(&state)?);
             let known = self
@@ -653,7 +1121,8 @@ impl SessionCopies {
                     serde_json::to_value(m::SessionChat {
                         session: s.id.clone(),
                         terminal,
-                        state: state.clone(),
+                        state: Some(state.clone()),
+                        live: None,
                     })?,
                 )
                 .await
@@ -665,6 +1134,8 @@ impl SessionCopies {
                     .or_default()
                     .states
                     .insert(terminal, hash);
+                self.sent_any
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
             }
             let Some(id) = state.agent_session.clone() else {
                 continue;
@@ -676,6 +1147,10 @@ impl SessionCopies {
             for file in transcript_files(&folder, &id) {
                 self.send_file(host, s, &id, &folder, &file).await?;
             }
+            // No transcript yet (or not Claude Code's): nothing to resume.
+            if !folder.join(&main).is_file() {
+                continue;
+            }
             let progress = progress(&state);
             let sent = self
                 .talk
@@ -684,18 +1159,41 @@ impl SessionCopies {
                 .get(&s.id)
                 .and_then(|t| t.files.get(&main).copied())
                 .unwrap_or(0);
-            let text = std::fs::read(folder.join(&main)).unwrap_or_default();
-            let text =
-                String::from_utf8_lossy(&text[..(sent as usize).min(text.len())]).into_owned();
             let over = !matches!(state.status.as_str(), "working" | "blocked");
-            let len = transcript::checkpoint_len(&text, over) as u64;
+            // Read only when something it depends on moved since the last
+            // look, not at every round.
+            let known = self
+                .talk
+                .lock()
+                .unwrap()
+                .get(&s.id)
+                .and_then(|t| t.scanned.get(&terminal).copied())
+                .filter(|(p, n, o, _)| *p == progress && *n == sent && *o == over)
+                .map(|(_, _, _, len)| len);
+            let len = match known {
+                Some(len) => len,
+                None => {
+                    let text = std::fs::read(folder.join(&main)).unwrap_or_default();
+                    let text = String::from_utf8_lossy(&text[..(sent as usize).min(text.len())])
+                        .into_owned();
+                    let len = transcript::checkpoint_len(&text, over) as u64;
+                    self.talk
+                        .lock()
+                        .unwrap()
+                        .entry(s.id.clone())
+                        .or_default()
+                        .scanned
+                        .insert(terminal, (progress, sent, over, len));
+                    len
+                }
+            };
             let last = self
                 .talk
                 .lock()
                 .unwrap()
                 .get(&s.id)
-                .and_then(|t| t.points.get(&terminal).copied());
-            if last == Some((progress, len)) {
+                .and_then(|t| t.points.get(&terminal).cloned());
+            if last == Some((progress, len, id.clone())) {
                 continue;
             }
             points.push(Point {
@@ -718,7 +1216,6 @@ impl SessionCopies {
         folder: &Path,
         file: &str,
     ) -> Result<()> {
-        let bytes = std::fs::read(folder.join(file)).unwrap_or_default();
         let mut from = self
             .talk
             .lock()
@@ -726,13 +1223,55 @@ impl SessionCopies {
             .get(&s.id)
             .and_then(|t| t.files.get(file).copied())
             .unwrap_or(0) as usize;
-        let whole = if file.ends_with(".jsonl") {
+        let path = folder.join(file);
+        // Unchanged since it was sent: not read again.
+        let len = std::fs::metadata(&path)
+            .map(|m| m.len() as usize)
+            .unwrap_or(0);
+        let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+        let sent_mtime = self
+            .talk
+            .lock()
+            .unwrap()
+            .get(&s.id)
+            .and_then(|t| t.mtimes.get(file).copied());
+        if len == from && mtime.is_some() && mtime == sent_mtime {
+            return Ok(());
+        }
+        let bytes = std::fs::read(&path).unwrap_or_default();
+        if let Some(mt) = mtime {
+            self.talk
+                .lock()
+                .unwrap()
+                .entry(s.id.clone())
+                .or_default()
+                .mtimes
+                .insert(file.to_string(), mt);
+        }
+        // Made again here, perhaps longer than before: its first bytes are
+        // not those sent, and it starts over.
+        let head = self
+            .talk
+            .lock()
+            .unwrap()
+            .get(&s.id)
+            .and_then(|t| t.heads.get(file).cloned())
+            .unwrap_or_default();
+        if !bytes.starts_with(&head) {
+            from = 0;
+        }
+        let jsonl = file.ends_with(".jsonl");
+        let whole = if jsonl {
             bytes.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1)
         } else {
             bytes.len()
         };
+        // Shorter than what was sent: the file was made again here.
+        if from > whole {
+            from = 0;
+        }
         for _ in 0..16 {
-            let end = whole.min(from + CHUNK);
+            let end = chunk_end(&bytes, from, whole, jsonl, CHUNK);
             if end <= from {
                 break;
             }
@@ -761,17 +1300,20 @@ impl SessionCopies {
             } else {
                 got.len as usize
             };
-            if next == from && next != 0 {
+            // No progress, as while the central host has no copy to keep
+            // it with: tried again at a later round, not now.
+            if next == from {
                 break;
             }
             from = next;
-            self.talk
-                .lock()
-                .unwrap()
-                .entry(s.id.clone())
-                .or_default()
-                .files
-                .insert(file.to_string(), from as u64);
+            let mut talk = self.talk.lock().unwrap();
+            let t = talk.entry(s.id.clone()).or_default();
+            t.files.insert(file.to_string(), from as u64);
+            t.heads
+                .insert(file.to_string(), bytes[..from.min(HEAD)].to_vec());
+            drop(talk);
+            self.sent_any
+                .store(true, std::sync::atomic::Ordering::Relaxed);
         }
         Ok(())
     }
@@ -793,7 +1335,7 @@ impl SessionCopies {
                 serde_json::to_value(m::SessionCheckpoint {
                     session: s.id.clone(),
                     terminal: point.terminal,
-                    agent_session: point.agent_session,
+                    agent_session: point.agent_session.clone(),
                     tree: sent.tree,
                     head: sent.head,
                     len: point.len,
@@ -811,7 +1353,10 @@ impl SessionCopies {
                 .entry(s.id.clone())
                 .or_default()
                 .points
-                .insert(point.terminal, (point.progress, point.len));
+                .insert(
+                    point.terminal,
+                    (point.progress, point.len, point.agent_session),
+                );
         }
         Ok(())
     }
@@ -836,6 +1381,14 @@ impl SessionCopies {
                 "only the member that owns a session sends it",
             ));
         }
+        // An archived session's copy is gone, and stays gone.
+        if record
+            .get("archived")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            return Err(RpcError::new("archived", "that session is archived"));
+        }
         Ok(record)
     }
 
@@ -848,9 +1401,14 @@ impl SessionCopies {
     ) -> Result<m::SessionOpened, RpcError> {
         let record = self.owned_by(&r.session, worker)?;
         let held = self.data.lock().unwrap().held.get(&r.session).cloned();
-        let repo = match held.filter(|h| Path::new(&h.repo).exists()) {
+        let repo = match held.filter(|h| is_repo(Path::new(&h.repo))) {
             Some(h) => PathBuf::from(h.repo),
-            None => self.repo_for(&record, r.origin_url.as_deref()).await?,
+            None => {
+                // One clone at a time: two sessions of one project opening
+                // together must not both clone into its folder.
+                let _one = self.cloning.lock().await;
+                self.repo_for(&record, r.origin_url.as_deref()).await?
+            }
         };
         {
             let mut data = self.data.lock().unwrap();
@@ -875,12 +1433,10 @@ impl SessionCopies {
             .get("project")
             .and_then(|v| serde_json::from_value(v.clone()).ok())
             .unwrap_or_default();
-        if let Some(p) = self
-            .sessions
-            .list_projects()
-            .into_iter()
-            .find(|p| moonlet_core::identity::same_project(&p.identity, &identity))
-        {
+        if let Some(p) = self.sessions.list_projects().into_iter().find(|p| {
+            moonlet_core::identity::same_project(&p.identity, &identity)
+                && is_repo(Path::new(&p.path))
+        }) {
             return Ok(PathBuf::from(p.path));
         }
         let (Some(origin), Some(url)) = (identity.origin.as_deref(), origin_url) else {
@@ -905,9 +1461,32 @@ impl SessionCopies {
                 "the clone folder is not a plain folder under clones",
             ));
         }
-        if !dir.join(".git").exists() {
-            git_sync::clone(url, &dir).await.map_err(|e| {
+        if !is_repo(&dir) {
+            // Into a folder beside it, moved into place once whole, so a
+            // clone cut off half way is never taken for the project.
+            let part = dir.with_extension("part");
+            let _ = std::fs::remove_dir_all(&part);
+            git_sync::clone(url, &part).await.map_err(|e| {
                 RpcError::new("clone_failed", format!("cannot clone {origin}: {e}"))
+            })?;
+            // A folder already there that is not a clone is never removed:
+            // whatever it holds is not this host's to throw away.
+            if std::fs::read_dir(&dir).is_ok_and(|mut d| d.next().is_some()) {
+                let _ = std::fs::remove_dir_all(&part);
+                return Err(RpcError::new(
+                    "refused",
+                    format!(
+                        "{} holds files that are not a clone of {origin}",
+                        dir.display()
+                    ),
+                ));
+            }
+            let _ = std::fs::remove_dir(&dir);
+            std::fs::rename(&part, &dir).map_err(|e| {
+                RpcError::new(
+                    "clone_failed",
+                    format!("cannot keep the clone of {origin}: {e}"),
+                )
             })?;
         }
         Ok(dir)
@@ -957,6 +1536,10 @@ impl SessionCopies {
             PathBuf::from(&held.path)
         };
         self.bring(&dir, &mut held, &r).await?;
+        // The member's next pack leaves out this tree: a ref keeps it from
+        // git's cleanup until the next one replaces it.
+        let _ = git_sync::set_base_ref(&repo, &format!("central-{}", segment(&r.session)), &r.tree)
+            .await;
         held.tree = r.tree.clone();
         held.head = r.head.clone();
         held.branch = r.branch.clone();
@@ -997,6 +1580,17 @@ impl SessionCopies {
                 &taken,
             ),
         );
+        // The copy's branch is its own: one left by an earlier copy, still
+        // named by a worktree that is gone or at history the member has
+        // since rewritten, is dropped first, so the copy can be made again.
+        let repo = Path::new(&held.repo);
+        let _ = moonlet_core::git::git(repo, &["worktree", "prune"]).await;
+        if git_sync::checked_out(repo, &copy_branch(&r.session))
+            .await
+            .is_none()
+        {
+            let _ = moonlet_core::git::git(repo, &["branch", "-D", &copy_branch(&r.session)]).await;
+        }
         git_sync::add_worktree(
             Path::new(&held.repo),
             &dir,
@@ -1102,10 +1696,25 @@ impl SessionCopies {
         let write = || -> Result<()> {
             let dir = self.talk_dir(&r.session).join("chats");
             moonlet_core::paths::ensure_private_dir(&dir)?;
-            let file = dir.join(format!("{}.json", r.terminal));
-            let tmp = file.with_extension("tmp");
-            std::fs::write(&tmp, serde_json::to_vec(&r.state)?)?;
-            std::fs::rename(&tmp, &file)?;
+            if let Some(state) = &r.state {
+                let file = dir.join(format!("{}.json", r.terminal));
+                let tmp = file.with_extension("tmp");
+                std::fs::write(&tmp, serde_json::to_vec(state)?)?;
+                std::fs::rename(&tmp, &file)?;
+            }
+            // Chats closed on the member go here too.
+            if let Some(live) = &r.live {
+                for e in std::fs::read_dir(&dir)?.flatten() {
+                    let name = e.file_name().to_string_lossy().to_string();
+                    let open = name
+                        .strip_suffix(".json")
+                        .and_then(|n| n.parse::<TerminalId>().ok())
+                        .is_some_and(|t| live.contains(&t));
+                    if !open {
+                        let _ = std::fs::remove_file(e.path());
+                    }
+                }
+            }
             Ok(())
         };
         write().map_err(|e| RpcError::new("internal", format!("{e:#}")))?;
@@ -1156,41 +1765,54 @@ impl SessionCopies {
         let folder = self.transcript_folder(&record, Path::new(&copy));
         let path = folder.join(&r.file);
         let internal = |e: std::io::Error| RpcError::new("internal", e.to_string());
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(internal)?;
-        }
-        // Never through a link: the file and every folder between the
-        // project folder and it are plain.
+        let through_link = || RpcError::new("refused", "a transcript path goes through a link");
+        std::fs::create_dir_all(&folder).map_err(internal)?;
+        // Never through a link: each folder between the project folder and
+        // the file is looked at before it is used, and made when missing.
         let mut at = folder.clone();
-        for part in Path::new(&r.file).components() {
+        let parts: Vec<_> = Path::new(&r.file).components().collect();
+        for part in &parts[..parts.len().saturating_sub(1)] {
             at.push(part);
-            if std::fs::symlink_metadata(&at).is_ok_and(|m| m.file_type().is_symlink()) {
-                return Err(RpcError::new(
-                    "refused",
-                    "a transcript path goes through a link",
-                ));
+            match std::fs::symlink_metadata(&at) {
+                Ok(m) if m.file_type().is_dir() => {}
+                Ok(_) => return Err(through_link()),
+                Err(_) => std::fs::create_dir(&at).map_err(internal)?,
             }
         }
-        let len = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-        let written = if r.from == 0 {
-            use std::io::Write;
-            use std::os::unix::fs::OpenOptionsExt;
-            // It holds whatever the agent read, secrets included.
-            let mut f = std::fs::OpenOptions::new()
+        let open = |truncate: bool| {
+            use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+            // It holds whatever the agent read, secrets included: the file
+            // itself is never a link, and is the user's alone.
+            let f = std::fs::OpenOptions::new()
                 .write(true)
                 .create(true)
-                .truncate(true)
+                .truncate(truncate)
+                .append(!truncate)
                 .mode(0o600)
+                .custom_flags(libc::O_NOFOLLOW)
                 .open(&path)
+                .map_err(|e| {
+                    if e.raw_os_error() == Some(libc::ELOOP) {
+                        through_link()
+                    } else {
+                        internal(e)
+                    }
+                })?;
+            f.set_permissions(std::fs::Permissions::from_mode(0o600))
                 .map_err(internal)?;
+            Ok::<_, RpcError>(f)
+        };
+        let len = std::fs::symlink_metadata(&path)
+            .map(|m| m.len())
+            .unwrap_or(0);
+        let written = if r.from == 0 {
+            use std::io::Write;
+            let mut f = open(true)?;
             f.write_all(bytes).map_err(internal)?;
             bytes.len() as u64
         } else if r.from == len {
             use std::io::Write;
-            let mut f = std::fs::OpenOptions::new()
-                .append(true)
-                .open(&path)
-                .map_err(internal)?;
+            let mut f = open(false)?;
             f.write_all(bytes).map_err(internal)?;
             len + bytes.len() as u64
         } else {
@@ -1198,14 +1820,15 @@ impl SessionCopies {
         };
         let mut data = self.data.lock().unwrap();
         if let Some(h) = data.held.get_mut(&r.session) {
-            let rel = format!(
-                "{}/{}",
-                transcript::project_folder(Path::new(&copy)),
-                r.file
-            );
-            if !h.transcripts.contains(&rel) {
-                h.transcripts.push(rel);
+            let at = path.display().to_string();
+            if !h.transcripts.contains(&at) {
+                h.transcripts.push(at);
             }
+            // Started over shorter than a checkpoint names: that checkpoint
+            // no longer holds.
+            h.checkpoints.retain(|_, c| {
+                !(format!("{}.jsonl", c.agent_session) == r.file && c.len > written)
+            });
         }
         self.save(&data);
         Ok(m::SessionTranscribed { len: written })
@@ -1228,14 +1851,17 @@ impl SessionCopies {
         let main = self
             .transcript_folder(&record, Path::new(&held.path))
             .join(format!("{}.jsonl", r.agent_session));
+        // A checkpoint names a transcript this host holds, as far as it
+        // says; one with nothing in it names nothing to resume.
         if !transcript::file_ok(&format!("{}.jsonl", r.agent_session), &r.agent_session)
+            || r.len == 0
             || std::fs::metadata(&main).map(|m| m.len()).unwrap_or(0) < r.len
         {
             return Ok(false);
         }
         let mut data = self.data.lock().unwrap();
         if let Some(h) = data.held.get_mut(&r.session) {
-            h.checkpoint = Some(r);
+            h.checkpoints.insert(r.terminal, r);
         }
         self.save(&data);
         Ok(true)
@@ -1269,7 +1895,8 @@ impl SessionCopies {
             tree: held.tree,
             head: held.head,
             chats,
-            checkpoint: held.checkpoint,
+            checkpoint: held.checkpoints.values().max_by_key(|c| c.at).cloned(),
+            checkpoints: held.checkpoints.into_values().collect(),
         })
     }
 
@@ -1294,34 +1921,36 @@ impl SessionCopies {
             let _one = self.apply.lock().await;
             if !h.path.is_empty() && Path::new(&h.path).exists() {
                 let dir = Path::new(&h.path);
-                if let Ok(now) = git_sync::snapshot(dir, git_sync::MAX_FILE).await
-                    && !h.tree.is_empty()
-                    && now.tree != h.tree
-                {
-                    let _ = self.keep_edits(dir, &h.tree, &now.tree).await;
+                // Edits made in the copy are kept first; a copy whose edits
+                // cannot be kept stays, and is tried again later.
+                let kept = match git_sync::snapshot(dir, git_sync::MAX_FILE).await {
+                    Ok(now) if !h.tree.is_empty() && now.tree != h.tree => {
+                        self.keep_edits(dir, &h.tree, &now.tree).await
+                    }
+                    Ok(_) => Ok(()),
+                    Err(e) => Err(e),
+                };
+                if let Err(e) = kept {
+                    tracing::warn!(
+                        "kept the copy {}: cannot save its edits: {e:#}",
+                        dir.display()
+                    );
+                    continue;
                 }
                 if let Err(e) = git_sync::remove_worktree(Path::new(&h.repo), dir).await {
                     tracing::warn!("cannot remove the copy {}: {e:#}", dir.display());
                     continue;
                 }
             }
+            if !h.repo.is_empty() {
+                let repo = Path::new(&h.repo);
+                let _ = git_sync::delete_base_ref(repo, &format!("central-{}", segment(&id))).await;
+                let _ = moonlet_core::git::git(repo, &["branch", "-D", &copy_branch(&id)]).await;
+            }
             let _ = std::fs::remove_dir_all(self.talk_dir(&id));
-            if let Some(record_ws) = records
-                .get(&id)
-                .and_then(|r| r.get("workspace"))
-                .and_then(Value::as_str)
-            {
-                let projects =
-                    config_dir(self.sessions.workspace_config_dir(record_ws), &self.claude)
-                        .join("projects");
-                for rel in &h.transcripts {
-                    let _ = std::fs::remove_file(projects.join(rel));
-                }
-            } else {
-                let projects = self.claude.join("projects");
-                for rel in &h.transcripts {
-                    let _ = std::fs::remove_file(projects.join(rel));
-                }
+            // Each where it was written, whatever the record says now.
+            for file in &h.transcripts {
+                let _ = std::fs::remove_file(file);
             }
             let mut data = self.data.lock().unwrap();
             data.held.remove(&id);
@@ -1343,6 +1972,7 @@ mod tests {
                 params,
                 "s1",
                 "/Users/alex/.moonlet/worktrees/shop/fix-cart",
+                "moonlet/fix-cart",
                 &terminals,
             )
         };
@@ -1411,12 +2041,68 @@ mod tests {
     }
 
     #[test]
+    fn a_forwarded_push_goes_to_the_sessions_own_branch() {
+        let p = scope(
+            m::GIT_PUSH,
+            serde_json::json!({ "path": "/", "branch": "main" }),
+            "s1",
+            "/Users/alex/.moonlet/worktrees/shop/fix-cart",
+            "moonlet/fix-cart",
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            p,
+            serde_json::json!({ "path": "/Users/alex/.moonlet/worktrees/shop/fix-cart", "branch": "moonlet/fix-cart" })
+        );
+    }
+
+    #[test]
+    fn a_forwarded_file_stays_inside_the_worktree_through_links() {
+        let tree = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(tree.path().join("cart.ts"), "a").unwrap();
+        std::os::unix::fs::symlink(outside.path(), tree.path().join("out")).unwrap();
+        let ok = |params: Value| files_inside(&params, tree.path());
+        assert!(ok(serde_json::json!({ "file": "cart.ts" })).is_ok());
+        // Gone, as a deletion to stage is.
+        assert!(ok(serde_json::json!({ "files": ["gone/new.ts"] })).is_ok());
+        for bad in ["out/secret", "../x", "/etc/hosts"] {
+            assert_eq!(
+                ok(serde_json::json!({ "file": bad })).unwrap_err().code,
+                "forbidden",
+                "{bad}"
+            );
+        }
+        assert_eq!(
+            ok(serde_json::json!({ "files": ["cart.ts", "out/secret"] }))
+                .unwrap_err()
+                .code,
+            "forbidden"
+        );
+    }
+
+    #[test]
     fn a_list_of_every_chat_keeps_only_the_sessions_own() {
         let reply = serde_json::json!([{ "id": 3, "state": {} }, { "id": 5, "state": {} }]);
         assert_eq!(
             only_terminals(m::CHAT_SUMMARIES, reply, &[3, 7]),
             serde_json::json!([{ "id": 3, "state": {} }])
         );
+    }
+
+    #[test]
+    fn a_transcript_goes_in_pieces_that_end_at_a_line() {
+        let text = b"{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n";
+        // At most 12 bytes: the first line only, then the second.
+        assert_eq!(chunk_end(text, 0, text.len(), true, 12), 8);
+        assert_eq!(chunk_end(text, 8, text.len(), true, 12), 16);
+        // A line longer than the limit goes whole.
+        assert_eq!(chunk_end(text, 0, text.len(), true, 4), 8);
+        // The rest fits: all of it.
+        assert_eq!(chunk_end(text, 16, text.len(), true, 12), 24);
+        // Any other file is cut at the limit.
+        assert_eq!(chunk_end(text, 0, text.len(), false, 12), 12);
     }
 
     #[test]
