@@ -7,7 +7,7 @@
 //! to the identity with its sort key or to `null` once removed, so two
 //! members adding projects to one section at once both keep theirs.
 
-use std::collections::BTreeMap as Map;
+use std::collections::{BTreeMap as Map, BTreeSet};
 
 use moonlet_proto::types::{Change, ProjectIdentity};
 use serde_json::{Value, json};
@@ -632,30 +632,35 @@ fn sessions_in(log: &Log) -> Map<String, Record> {
     }
     let is_referee = |c: &Change| referee.is_some() && author(c) == referee;
     let is_ownership = |c: &Change| matches!(&c.op, ChangeOp::Set { field, .. } if OWNERSHIP.contains(&field.as_str()));
-    // Each session's first change, which names its maker, and the referee's
-    // first change to who owns it.
-    let mut first: Map<&str, &Change> = Map::new();
-    let mut moved: Map<&str, &Stamp> = Map::new();
+    // A member chooses its own stamps, so they never decide who made a
+    // session: the first owner the referee names does, the referee being
+    // the one that takes each member's changes as they come. Until it
+    // names one, the maker is the one member that says, in a change of its
+    // own, that it owns the session.
+    let mut named: Map<&str, (&Stamp, &str)> = Map::new();
+    let mut claims: Map<&str, BTreeSet<&str>> = Map::new();
     for c in log.changes_of(SESSION) {
-        let slot = first.entry(c.id.as_str()).or_insert(c);
-        if c.stamp < slot.stamp {
-            *slot = c;
-        }
-        if is_ownership(c) && is_referee(c) {
-            let at = moved.entry(c.id.as_str()).or_insert(&c.stamp);
-            if c.stamp < **at {
-                *at = &c.stamp;
+        let ChangeOp::Set { field, value } = &c.op else { continue };
+        let Some(owner) = value.as_str().filter(|_| field == "owner") else { continue };
+        if is_referee(c) {
+            let first = named.entry(c.id.as_str()).or_insert((&c.stamp, owner));
+            if c.stamp < *first.0 {
+                *first = (&c.stamp, owner);
             }
+        } else if author(c) == Some(owner) {
+            claims.entry(c.id.as_str()).or_default().insert(owner);
         }
     }
-    let maker = |id: &str| first.get(id).and_then(|c| author(c));
-    // Who owns a session is its maker's word until the referee first moves
-    // it, and the referee's alone from then on.
+    let maker = |id: &str| {
+        named.get(id).map(|(_, owner)| *owner).or_else(|| {
+            let claimed = claims.get(id)?;
+            claimed.first().copied().filter(|_| claimed.len() == 1)
+        })
+    };
+    // Who owns a session is its maker's word until the referee names an
+    // owner, and the referee's alone from then on.
     let ownership_counts = |c: &Change| {
-        is_referee(c)
-            || (author(c).is_some()
-                && author(c) == maker(&c.id)
-                && moved.get(c.id.as_str()).is_none_or(|at| c.stamp < **at))
+        is_referee(c) || (author(c).is_some() && author(c) == maker(&c.id) && !named.contains_key(c.id.as_str()))
     };
     // Each session's owners in order: when, who, and whether the referee
     // said so.
@@ -766,6 +771,24 @@ fn session_changes(st: &State, log: &mut Log, now: u64, removed: &[String]) -> V
             && !st.sessions.iter().any(|s| &s.id == *id)
     }) {
         out.push(log.delete(now, SESSION, id));
+    }
+    // The referee names the maker of each session it has not named an
+    // owner of yet, as it first sees it: from then on its word on who made
+    // the session counts, and no stamp another member gives a change does.
+    if log.account().is_none() {
+        let named: BTreeSet<String> = log
+            .changes_of(SESSION)
+            .filter(|c| log_owner(&c.stamp.member) == Some(me.as_str()))
+            .filter(|c| matches!(&c.op, moonlet_proto::types::ChangeOp::Set { field, .. } if field == "owner"))
+            .map(|c| c.id.clone())
+            .collect();
+        for (id, r) in sessions.iter().filter(|(id, _)| !named.contains(*id)) {
+            for field in OWNERSHIP {
+                if let Some(value) = r.get(*field) {
+                    out.push(log.set(now, SESSION, id, field, value.clone()));
+                }
+            }
+        }
     }
     out
 }
@@ -2609,6 +2632,43 @@ mod tests {
         let records = mini.session_records();
         assert_eq!(records[&session.id]["owner"], serde_json::json!("book"));
         assert!(!records.contains_key("0a1b2c3d4e5f"));
+    }
+
+    /// A change from log `member` stamped in 1970, before every real one.
+    fn backdated(member: &str, seq: u64, id: &str, op: moonlet_proto::types::ChangeOp) -> Change {
+        Change {
+            stamp: moonlet_proto::types::Stamp { ms: seq, n: 0, member: member.into() },
+            seq,
+            kind: "session".into(),
+            id: id.into(),
+            op,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_member_that_backdates_its_changes_to_a_session_does_not_become_its_maker() {
+        let (_h1, book) = member("book").await;
+        let (_h2, mini) = member("mini").await;
+        let session = fix_cart_known_to(&book, &mini).await;
+        book.set_central_account(Some("mini".into()));
+        // studio-air stamps its claim before the MacBook made the session.
+        mini.apply_account(vec![
+            backdated("air.p7d2m4", 1, &session.id, set_op("owner", serde_json::json!("air"))),
+            backdated("air.p7d2m4", 2, &session.id, set_op("name", serde_json::json!("Named on the Air"))),
+        ]);
+        sync(&book, &mini);
+        let r = &mini.session_records()[&session.id];
+        assert_eq!((&r["owner"], &r["name"]), (&serde_json::json!("book"), &serde_json::json!("Fix cart")));
+        // The MacBook goes on recording it.
+        book.update(moonlet_proto::methods::SessionUpdate {
+            id: session.id.clone(),
+            name: Some("Renamed on the MacBook".into()),
+            layout: None,
+            task: None,
+        })
+        .unwrap();
+        sync(&book, &mini);
+        assert_eq!(mini.session_records()[&session.id]["name"], serde_json::json!("Renamed on the MacBook"));
     }
 
 
