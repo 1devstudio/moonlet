@@ -1224,7 +1224,16 @@ impl SessionManager {
                     .into_iter()
                     .filter(|(k, _)| k != crate::profiles::CONFIG_DIR_VAR)
                     .collect(),
-                add_dirs: Vec::new(),
+                // Only folders inside the session's worktree here, that
+                // are there, and not a link out of it: the member's word
+                // gives nothing else.
+                add_dirs: crate::chat::moved_dirs(&history.add_dirs, &ws.path, &ws.path)
+                    .into_iter()
+                    .filter(|d| {
+                        let real = |p: &str| std::fs::canonicalize(p).ok();
+                        Path::new(d).is_dir() && real(d).zip(real(&ws.path)).is_some_and(|(d, w)| d.starts_with(w))
+                    })
+                    .collect(),
                 settings: None,
                 workspace: None,
                 design: None,
@@ -2853,6 +2862,32 @@ mod tests {
         assert_eq!(chats.state(chat.id).unwrap().mode, None);
         let args = nth_line(&Path::new(&s.path).join("claude-args"), 1).await;
         assert!(!args.contains("--permission-mode"), "{args}");
+    }
+
+    /// X73: a continued chat keeps the folders it was given inside the
+    /// session's worktree here; one anywhere else, or gone, is not given.
+    #[tokio::test]
+    async fn a_continued_chat_keeps_its_folders_inside_the_worktree_alone() {
+        let (repo, home, mgr, chats) = structured().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let s = mgr.create_session(new_session(&r.id, None)).await.unwrap();
+        let web = format!("{}/packages/web", s.path);
+        std::fs::create_dir_all(&web).unwrap();
+        let elsewhere = home.path().join("shared-lib");
+        std::fs::create_dir(&elsewhere).unwrap();
+        let link = format!("{}/packages/lib", s.path);
+        std::os::unix::fs::symlink(&elsewhere, &link).unwrap();
+        let history = moonlet_proto::types::ChatState {
+            status: "done".into(),
+            add_dirs: vec![web.clone(), elsewhere.display().to_string(), format!("{}/gone", s.path), format!("{}/packages/../../x", s.path), link],
+            ..Default::default()
+        };
+
+        let chat = mgr.continue_chat(&s, history).unwrap();
+        assert_eq!(chats.state(chat.id).unwrap().add_dirs, vec![web.clone()]);
+        let args = nth_line(&Path::new(&s.path).join("claude-args"), 1).await;
+        assert!(args.contains(&format!("--add-dir {web}")), "{args}");
+        assert!(!args.contains("shared-lib"), "{args}");
     }
 
     /// X64: a design system's agent has no session; it starts in its

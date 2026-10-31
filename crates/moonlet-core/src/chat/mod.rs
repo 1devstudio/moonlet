@@ -26,6 +26,23 @@ pub fn check_mode(mode: Option<&str>) -> anyhow::Result<()> {
     }
 }
 
+/// The folders in `dirs` inside `from`, as the same folders inside `to`
+/// (X73): another member's grants inside its worktree, for this host's
+/// copy of it. A folder anywhere else, or one that leaves `from` with
+/// `..`, is dropped.
+pub fn moved_dirs(dirs: &[String], from: &str, to: &str) -> Vec<String> {
+    use std::path::{Component, Path};
+    dirs.iter()
+        .filter_map(|d| {
+            let inside = Path::new(d).strip_prefix(from).ok()?;
+            if from.is_empty() || inside.components().any(|c| !matches!(c, Component::Normal(_))) {
+                return None;
+            }
+            Some(Path::new(to).join(inside).display().to_string())
+        })
+        .collect()
+}
+
 /// Permission modes from the least to the most permissive (X22).
 const MODE_ORDER: [&str; 5] = ["plan", "manual", "acceptEdits", "auto", "bypassPermissions"];
 
