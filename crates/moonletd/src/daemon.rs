@@ -72,6 +72,12 @@ pub struct Daemon {
     local_apps: std::sync::atomic::AtomicUsize,
     /// On the central host, the same for each paired phone (X75).
     phone_shows: Mutex<PhoneShows>,
+    /// Sign-ins on this member that wait for the browser to come back (X75).
+    callbacks: crate::signin::Callbacks,
+    /// URLs whose forward's port was taken here, by URL, for Retry (X75).
+    taken: crate::signin::Taken,
+    /// The ports this Mac forwards to other members' sign-ins (X75).
+    forwards: crate::signin::Forwards,
     /// What the Mac's last sleep left to its wake (X73).
     asleep: Mutex<Asleep>,
     /// Per design system (X64): one start of its agent, or one change of its
@@ -617,6 +623,9 @@ impl Daemon {
             waiting_shows: Default::default(),
             local_apps: Default::default(),
             phone_shows: Default::default(),
+            callbacks: crate::signin::Callbacks::default(),
+            taken: crate::signin::Taken::default(),
+            forwards: crate::signin::Forwards::default(),
             asleep: Default::default(),
             heavy,
             cloud,
@@ -1309,7 +1318,7 @@ impl Daemon {
                 let r: m::BrowserRoute = params(p)?;
                 moonlet_core::browser::check_url(&r.url).map_err(|e| RpcError::new("invalid_params", e.to_string()))?;
                 // Named as this host knows it, never as it calls itself.
-                let from = self.sessions.member_names().remove(&worker).unwrap_or(worker);
+                let from = self.sessions.member_names().remove(&worker).unwrap_or_else(|| worker.clone());
                 // Nobody said where they are yet: it waits here with Open.
                 let unknown = self.presence.lock().unwrap().last.is_none();
                 self.show_where_the_user_is(m::BrowserShow {
@@ -1317,10 +1326,13 @@ impl Daemon {
                     from,
                     session: r.session,
                     session_name: r.session_name,
-                    forward: None,
+                    forward: r.forward,
+                    forward_key: r.forward_key,
                     to: None,
                     device: None,
                     waiting: unknown,
+                    member: Some(worker),
+                    port_taken: false,
                 })
                 .await;
                 ok(true)
@@ -1332,6 +1344,30 @@ impl Daemon {
                 }
                 ok(self.waiting_shows.lock().unwrap().take(wall_ms()))
             }
+            m::TUNNEL_OPEN => {
+                // The browser came back to a forwarded port on a member's
+                // Mac (X75): for this host's own sign-in, or passed on to
+                // the member whose it is.
+                let refused = || RpcError::new("forbidden", "only a member of the account forwards sign-ins");
+                if conn.client != crate::link::WORKER_CLIENT || conn.cloud.load(std::sync::atomic::Ordering::Relaxed) {
+                    return Err(refused());
+                }
+                self.workers.worker_on(conn.id).ok_or_else(refused)?;
+                let r: m::TunnelOpen = params(p)?;
+                if r.member == self.link.info().worker.id {
+                    return ok(self.tunnel_here(r).await?);
+                }
+                let to = self.workers.conn(&r.member).ok_or_else(|| RpcError::new("gone", "that member is away"))?;
+                let answer = to.request(m::TUNNEL_OPEN, serde_json::to_value(&r).map_err(internal)?, std::time::Duration::from_secs(20)).await?;
+                ok(answer)
+            }
+            m::BROWSER_RETRY => {
+                app_only(conn, "sign-ins")?;
+                let r: m::BrowserRetry = params(p)?;
+                let show = self.taken.take(&r.url, std::time::Instant::now()).ok_or_else(|| RpcError::new("not_found", "no sign-in waits for that"))?;
+                self.present(show).await;
+                ok(true)
+            }
             m::BROWSER_OPEN => {
                 // From this Mac's own terminals and agents, through the CLI
                 // (X75).
@@ -1340,7 +1376,7 @@ impl Daemon {
                 }
                 let r: m::BrowserOpen = params(p)?;
                 moonlet_core::browser::check_url(&r.url).map_err(|e| RpcError::new("invalid_params", e.to_string()))?;
-                self.open_url(r).await?;
+                self.open_url(r, conn.peer_pid).await?;
                 ok(true)
             }
             m::FILES_CHECKOUT => {
@@ -3940,9 +3976,95 @@ impl Daemon {
             })
         }));
         let d = Arc::downgrade(self);
-        self.link.set_shower(Arc::new(move |show| d.upgrade().is_some_and(|d| d.show_in_app(show))));
+        self.link.set_shower(Arc::new(move |show| {
+            let Some(d) = d.upgrade() else { return false };
+            // Kept for an app that is not connected: the central host hears
+            // so.
+            let shown = d.local_apps.load(std::sync::atomic::Ordering::SeqCst) > 0;
+            tokio::spawn(async move { d.present(show).await });
+            shown
+        }));
+        let d = Arc::downgrade(self);
+        self.link.set_tunneler(Arc::new(move |r| {
+            let d = d.clone();
+            Box::pin(async move {
+                let d = d.upgrade().ok_or_else(|| RpcError::new("gone", "the daemon is stopping"))?;
+                Ok(serde_json::to_value(d.tunnel_here(r).await?).unwrap_or_default())
+            })
+        }));
         self.session_copies.spawn();
         self.keep_copied_files();
+    }
+
+    /// Shows this Mac's app `show` (X75). A sign-in that comes back to
+    /// another member's port gets that port forwarded from here first; when
+    /// it is taken here, the URL waits for Retry. Says whether the app got
+    /// it, as [`Self::show_in_app`].
+    async fn present(self: &Arc<Self>, mut show: m::BrowserShow) -> bool {
+        let me = self.link.info().worker.id;
+        if let (Some(port), Some(member)) = (show.forward, show.member.clone())
+            && member != me
+            && show.to.is_none()
+        {
+            let d = Arc::downgrade(self);
+            let to = member.clone();
+            // Only this Mac was given the callback's key.
+            let key = show.forward_key.clone().unwrap_or_default();
+            let pass: crate::signin::Pass = Arc::new(move |request: Vec<u8>| {
+                let d = d.clone();
+                let member = to.clone();
+                let key = key.clone();
+                Box::pin(async move {
+                    let d = d.upgrade().ok_or_else(|| RpcError::new("gone", "the daemon is stopping"))?;
+                    d.tunnel_to(&member, port, key, request).await
+                })
+            });
+            // Tests run every member on one machine: a forward listens a few
+            // ports along there.
+            let offset: u16 = std::env::var("MOONLET_TEST_FORWARD_OFFSET").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+            if let Err(e) = self.forwards.open(port.saturating_add(offset), &member, pass).await {
+                tracing::info!(port, "cannot forward a sign-in's port: {e}");
+                show.port_taken = true;
+                self.taken.keep(show.clone(), std::time::Instant::now());
+            } else {
+                show.port_taken = false;
+            }
+        }
+        self.show_in_app(show)
+    }
+
+    /// Passes a request the browser made to this Mac's forward on to member
+    /// `member`'s port, with the callback's `key`: through the central host,
+    /// or straight to the member when this is the central host.
+    async fn tunnel_to(&self, member: &str, port: u16, key: String, request: Vec<u8>) -> Result<Vec<u8>, RpcError> {
+        use base64::Engine;
+        let b64 = base64::engine::general_purpose::STANDARD;
+        let r = m::TunnelOpen { member: member.to_string(), port, data: b64.encode(&request), key };
+        let params = serde_json::to_value(&r).map_err(internal)?;
+        let answer = if self.link.info().central.is_none() {
+            let conn = self.workers.conn(member).ok_or_else(|| RpcError::new("gone", "that member is away"))?;
+            conn.request(m::TUNNEL_OPEN, params, std::time::Duration::from_secs(20)).await?
+        } else {
+            let host = self.link.host().ok_or_else(|| RpcError::new("unreachable", "the central host is not connected"))?;
+            host.request(m::TUNNEL_OPEN, params).await?
+        };
+        let answer: m::TunnelAnswer = serde_json::from_value(answer).map_err(internal)?;
+        b64.decode(answer.data).map_err(|e| RpcError::new("invalid_params", e.to_string()))
+    }
+
+    /// `tunnel.open` for one of this member's sign-ins: only a port with a
+    /// callback still waiting, with the key it was shown with, and only its
+    /// loopback address. Another member, which never got the key, never
+    /// reaches it.
+    async fn tunnel_here(&self, r: m::TunnelOpen) -> Result<m::TunnelAnswer, RpcError> {
+        use base64::Engine;
+        let b64 = base64::engine::general_purpose::STANDARD;
+        if !self.callbacks.waiting(r.port, &r.key).await {
+            return Err(RpcError::new("forbidden", "no sign-in waits on that port"));
+        }
+        let request = b64.decode(&r.data).map_err(|e| RpcError::new("invalid_params", e.to_string()))?;
+        let answer = crate::signin::answer(r.port, &request).await.map_err(internal)?;
+        Ok(m::TunnelAnswer { data: b64.encode(answer) })
     }
 
     /// The user is active in this Mac's app (X75): passed on to the central
@@ -3974,6 +4096,8 @@ impl Daemon {
     /// app to take with `browser.pending` when it connects; the user's
     /// next activity in the app then reaches the central host at once.
     fn show_in_app(&self, mut show: m::BrowserShow) -> bool {
+        // The forward has the key; the app never needs it.
+        show.forward_key = None;
         let mut waiting = self.waiting_shows.lock().unwrap();
         if self.local_apps.load(std::sync::atomic::Ordering::SeqCst) > 0 {
             drop(waiting);
@@ -4032,26 +4156,36 @@ impl Daemon {
     /// here at once while the user is active in this Mac's app; else the
     /// central host finds where the user is. Without one, or while it is
     /// unreachable, it waits here with **Open**.
-    async fn open_url(self: &Arc<Self>, r: m::BrowserOpen) -> Result<(), RpcError> {
+    async fn open_url(self: &Arc<Self>, r: m::BrowserOpen, caller: Option<u32>) -> Result<(), RpcError> {
         let session_name = r.session.as_deref().and_then(|s| self.sessions.session(s).ok()).map(|s| s.name);
         let info = self.link.info();
+        // A sign-in that comes back to a port its own command listens on.
+        let callback = self.callbacks.register(&r.url, caller).await;
+        let (forward, forward_key) = match callback {
+            Some((port, key)) => (Some(port), Some(key)),
+            None => (None, None),
+        };
         let mut show = m::BrowserShow {
             url: r.url,
             from: info.worker.name,
             session: r.session,
             session_name,
-            forward: None,
+            forward,
+            forward_key,
             to: None,
             device: None,
             waiting: false,
+            member: Some(info.worker.id.clone()),
+            port_taken: false,
         };
         let now = wall_ms();
         if info.central.is_none() {
             self.show_where_the_user_is(show).await;
             return Ok(());
         }
-        if moonlet_core::browser::opens_here(self.presence.lock().unwrap().app_at, now) {
-            self.show_in_app(show);
+        let here = moonlet_core::browser::opens_here(self.presence.lock().unwrap().app_at, now);
+        if here {
+            self.present(show).await;
             return Ok(());
         }
         let routed = match self.link.host() {
@@ -4062,6 +4196,8 @@ impl Daemon {
                         url: show.url.clone(),
                         session: show.session.clone(),
                         session_name: show.session_name.clone(),
+                        forward: show.forward,
+                        forward_key: show.forward_key.clone(),
                     })
                     .map_err(internal)?,
                 )
@@ -4071,7 +4207,7 @@ impl Daemon {
         };
         if !routed {
             show.waiting = true;
-            self.show_in_app(show);
+            self.present(show).await;
         }
         Ok(())
     }
@@ -4083,7 +4219,7 @@ impl Daemon {
         let me = self.link.info().worker.id;
         let last = self.presence.lock().unwrap().last.clone();
         let Some((client, waiting)) = moonlet_core::browser::route(last.as_ref(), wall_ms()) else {
-            self.show_in_app(show);
+            self.present(show).await;
             return;
         };
         show.waiting = waiting;
@@ -4091,6 +4227,8 @@ impl Daemon {
             Client::Phone(device) => {
                 show.to = Some("phone".into());
                 show.device = Some(device.clone());
+                // A phone opens no forward: it never gets the key.
+                show.forward_key = None;
                 let mut phones = self.phone_shows.lock().unwrap();
                 if phones.open.get(&device).is_some_and(|n| *n > 0) {
                     drop(phones);
@@ -4102,7 +4240,7 @@ impl Daemon {
                 }
             }
             Client::Member(id) if id == me => {
-                if !self.show_in_app(show) {
+                if !self.present(show).await {
                     self.not_active_at(&id);
                 }
             }
@@ -4118,7 +4256,7 @@ impl Daemon {
                     // That member is away: here, waiting with Open.
                     None => {
                         show.waiting = true;
-                        self.show_in_app(show);
+                        self.present(show).await;
                     }
                     // It kept the URL for its app, which is not connected.
                     Some(v) if v.get("kept") == Some(&Value::Bool(true)) => self.not_active_at(&id),

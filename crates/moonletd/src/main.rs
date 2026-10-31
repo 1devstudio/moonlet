@@ -25,6 +25,7 @@ mod server;
 mod service;
 mod power;
 mod session_copies;
+mod signin;
 mod sync;
 mod tailnet_cli;
 mod update;

@@ -28,6 +28,37 @@ pub fn check_url(url: &str) -> Result<()> {
     Ok(())
 }
 
+/// The loopback port a sign-in URL sends the browser back to: its
+/// `redirect_uri` (or `redirect_url`) is `http://localhost:<port>`,
+/// `http://127.0.0.1:<port>` or `http://[::1]:<port>`, in the URL or in a
+/// URL nested in one of its parameters. None for any other URL.
+pub fn redirect_port(url: &str) -> Option<u16> {
+    fn find(url: &url::Url, depth: usize) -> Option<u16> {
+        for (key, value) in url.query_pairs() {
+            let Ok(inner) = url::Url::parse(&value) else {
+                continue;
+            };
+            if key == "redirect_uri" || key == "redirect_url" {
+                let loopback = matches!(
+                    inner.host(),
+                    Some(url::Host::Domain("localhost"))
+                        | Some(url::Host::Ipv4(std::net::Ipv4Addr::LOCALHOST))
+                        | Some(url::Host::Ipv6(std::net::Ipv6Addr::LOCALHOST))
+                );
+                if inner.scheme() == "http" && loopback {
+                    return inner.port();
+                }
+            } else if depth < 3
+                && let Some(port) = find(&inner, depth + 1)
+            {
+                return Some(port);
+            }
+        }
+        None
+    }
+    find(&url::Url::parse(url).ok()?, 0)
+}
+
 /// Where the opener and the shims are.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Opener {
@@ -298,6 +329,52 @@ mod tests {
             "open-url\nhttp://localhost:8085/?code=4\nopen-url\nHttp://localhost:8085/?code=5\n"
         );
         assert_eq!(read(&system), "/home/me/report.pdf\n");
+    }
+
+    /// `gcloud auth login`'s URL, captured with a recording `BROWSER`
+    /// (gcloud 2026), its one-time values replaced.
+    const GCLOUD: &str = "https://accounts.google.com/o/oauth2/auth?response_type=code&client_id=32555940559.apps.googleusercontent.com&redirect_uri=http%3A%2F%2Flocalhost%3A8085%2F&scope=openid+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fuserinfo.email+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcloud-platform+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fappengine.admin+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fsqlservice.login+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcompute+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Faccounts.reauth&state=STATE&access_type=offline&code_challenge=CHALLENGE&code_challenge_method=S256";
+
+    #[test]
+    fn a_redirect_uri_to_loopback_names_its_port() {
+        assert_eq!(redirect_port(GCLOUD), Some(8085));
+        assert_eq!(
+            redirect_port(
+                "https://github.com/login/oauth/authorize?client_id=Iv1.x&redirect_uri=http://127.0.0.1:53682/callback&state=S"
+            ),
+            Some(53682)
+        );
+        assert_eq!(
+            redirect_port(
+                "https://id.example.test/auth?redirect_url=http%3A%2F%2F%5B%3A%3A1%5D%3A9004%2F"
+            ),
+            Some(9004)
+        );
+        // Nested in another parameter, as a sign-in page that continues.
+        let nested = format!(
+            "https://accounts.google.com/AccountChooser?continue={}",
+            url::form_urlencoded::byte_serialize(GCLOUD.as_bytes()).collect::<String>()
+        );
+        assert_eq!(redirect_port(&nested), Some(8085));
+        // `gh auth login --web`: a device page, nothing comes back.
+        assert_eq!(redirect_port("https://github.com/login/device"), None);
+        // Not loopback, not http, or no port.
+        assert_eq!(
+            redirect_port("https://x.test/?redirect_uri=https://localhost:8085/"),
+            None
+        );
+        assert_eq!(
+            redirect_port("https://x.test/?redirect_uri=http://evil.test:8085/"),
+            None
+        );
+        assert_eq!(
+            redirect_port("https://x.test/?redirect_uri=http://localhost/"),
+            None
+        );
+        assert_eq!(
+            redirect_port("https://x.test/?next=http://localhost:5432/"),
+            None
+        );
     }
 
     #[test]
