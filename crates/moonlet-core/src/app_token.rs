@@ -133,17 +133,32 @@ pub fn is_sshd(exe: &Path, test_sshd: Option<&Path>) -> bool {
     named && exe.starts_with("/usr") && root_only
 }
 
+/// Whether `exe` is `runuser`, under /usr or /sbin, which only root may
+/// change (/usr/sbin/runuser). Only root runs it: a cloud machine's
+/// first-boot script runs `moonletd join` through it (X63).
+pub fn is_runuser(exe: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(exe) = exe.canonicalize() else {
+        return false;
+    };
+    let named = exe.file_name().and_then(|n| n.to_str()) == Some("runuser");
+    let root_only = std::fs::metadata(&exe).is_ok_and(|m| m.uid() == 0 && m.mode() & 0o022 == 0);
+    named && (exe.starts_with("/usr") || exe.starts_with("/sbin")) && root_only
+}
+
 /// Whether a `moonletd` process ([`Peer::Moonletd`]) runs within an SSH
-/// session, so the SSH login proved who the user is: one of its nearest 4
-/// `ancestors` (pid and executable, parent first) is sshd. A process of one
-/// of the daemon's own terminals or agents (below `daemon`, its pid) never
-/// is, nor one whose ancestors the kernel does not show.
+/// session, so the SSH login proved who the user is, or was started by root
+/// through `runuser`, as a cloud machine's first boot runs `moonletd join`:
+/// one of its nearest 4 `ancestors` (pid and executable, parent first) is
+/// sshd or runuser. A process of one of the daemon's own terminals or
+/// agents (below `daemon`, its pid) never is, nor one whose ancestors the
+/// kernel does not show.
 pub fn vouched_by_ssh(ancestors: &[(u32, Option<PathBuf>)], daemon: u32, test_sshd: Option<&Path>) -> bool {
     for (pid, exe) in ancestors.iter().take(4) {
         if *pid == daemon {
             return false;
         }
-        if exe.as_deref().is_some_and(|e| is_sshd(e, test_sshd)) {
+        if exe.as_deref().is_some_and(|e| is_sshd(e, test_sshd) || is_runuser(e)) {
             return true;
         }
     }
@@ -254,6 +269,25 @@ mod tests {
         assert!(!is_sshd(Path::new("/usr/sbin/no-such-sshd"), None));
         #[cfg(target_os = "macos")]
         assert!(is_sshd(Path::new("/usr/sbin/sshd"), None));
+    }
+
+    #[test]
+    fn only_root_s_runuser_under_usr_or_sbin_is_runuser() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = dir.path().join("runuser");
+        std::fs::write(&fake, "#!/bin/sh\n").unwrap();
+        assert!(!is_runuser(&fake));
+        assert!(!is_runuser(Path::new("/usr/bin/true")));
+        assert!(!is_runuser(Path::new("/usr/sbin/no-such-runuser")));
+        // Started by a runuser of the user's own, not root's.
+        assert!(!vouched_by_ssh(&[(950, Some(PathBuf::from("/bin/sh"))), (900, Some(fake.clone()))], 4100, None));
+        #[cfg(target_os = "linux")]
+        if Path::new("/usr/sbin/runuser").exists() {
+            assert!(is_runuser(Path::new("/usr/sbin/runuser")));
+            // `runuser -l moonlet -c "moonletd join …"` in a cloud machine's first boot.
+            let boot = [(950, Some(PathBuf::from("/bin/sh"))), (900, Some(PathBuf::from("/usr/sbin/runuser")))];
+            assert!(vouched_by_ssh(&boot, 4100, None));
+        }
     }
 
     #[test]
