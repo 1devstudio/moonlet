@@ -387,3 +387,54 @@ async fn only_the_phone_where_the_user_is_gets_the_url() {
     assert_eq!(shown["url"], json!("https://github.com/login/device"));
     assert_eq!(next_raw_show(&mut ipad, Duration::from_secs(2)).await, None);
 }
+
+/// Opens `url` from a terminal of `d`, as `moonlet-open` does; on a central
+/// host, the answer comes once the URL went where the user is.
+async fn open_url(d: &Daemon, url: &str) {
+    let mut cli = Client::connect(&d.socket, "moonlet-cli").await.unwrap();
+    let _: bool = cli
+        .request("browser.open", json!({ "url": url }))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_url_for_a_phone_that_is_not_connected_waits_for_that_phone() {
+    use moonlet_proto::write_frame;
+    let (mini, addr) = central().await;
+    let iphone = pair(&mini, &addr, "iPhone", DeviceKind::Phone).await;
+    let ipad = pair(&mini, &addr, "iPad", DeviceKind::Phone).await;
+    {
+        let mut phone = raw(&addr, &iphone, "moonlet-mobile").await;
+        let req = Message::Request {
+            id: 1,
+            method: "presence.active".into(),
+            params: json!({}),
+        };
+        write_frame(&mut phone, &Frame::Json(req)).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    // The iPhone went away, as iOS closes its socket in the background.
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    open_url(&mini, "https://github.com/login/device").await;
+    // Not for another phone.
+    let mut other = raw(&addr, &ipad, "moonlet-mobile").await;
+    assert_eq!(
+        next_raw_show(&mut other, Duration::from_secs(1)).await,
+        None
+    );
+    let mut phone = raw(&addr, &iphone, "moonlet-mobile").await;
+    let shown = next_raw_show(&mut phone, Duration::from_secs(5))
+        .await
+        .expect("the URL that waited for the iPhone");
+    assert_eq!(shown["url"], json!("https://github.com/login/device"));
+    assert_eq!(shown["to"], json!("phone"));
+    assert_eq!(shown["waiting"], json!(true));
+    // Handed over once.
+    drop(phone);
+    let mut phone = raw(&addr, &iphone, "moonlet-mobile").await;
+    assert_eq!(
+        next_raw_show(&mut phone, Duration::from_secs(1)).await,
+        None
+    );
+}

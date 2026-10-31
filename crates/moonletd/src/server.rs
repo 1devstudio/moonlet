@@ -342,6 +342,13 @@ where
     let device = conn.phone.clone();
     // A paired phone answers setup questions too (X40); a paired Mac does not.
     let approves_setup = conn.phone.as_deref().is_some_and(|d| daemon.is_phone(d));
+    // A URL that came for this phone while it was away is shown now (X75).
+    let paired_phone = device.clone().filter(|_| approves_setup);
+    if let Some(d) = &paired_phone {
+        for show in daemon.phone_connection(d, true) {
+            let _ = tx.send(Frame::Json(Message::event(moonlet_proto::methods::EV_BROWSER_SHOW, show)));
+        }
+    }
     // A cloud machine (X63) reaches only what a worker needs: no terminal,
     // and none of the central host's events.
     let cloud = conn
@@ -527,6 +534,9 @@ where
     daemon.on_disconnect(conn.id);
     if app {
         daemon.app_connection(false);
+    }
+    if let Some(d) = &paired_phone {
+        daemon.phone_connection(d, false);
     }
     event_task.abort();
     drop(conn);

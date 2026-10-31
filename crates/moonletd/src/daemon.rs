@@ -69,6 +69,8 @@ pub struct Daemon {
     /// how many of its connections are open (X75).
     waiting_shows: Mutex<moonlet_core::browser::Waiting<m::BrowserShow>>,
     apps: std::sync::atomic::AtomicUsize,
+    /// On the central host, the same for each paired phone (X75).
+    phone_shows: Mutex<PhoneShows>,
     /// What the Mac's last sleep left to its wake (X73).
     asleep: Mutex<Asleep>,
     /// Per design system (X64): one start of its agent, or one change of its
@@ -455,6 +457,14 @@ struct Presence {
     last: Option<(moonlet_core::browser::Client, u64)>,
 }
 
+/// URLs for each paired phone, by device, that came while it was not
+/// connected, and how many of its connections are open (X75).
+#[derive(Default)]
+struct PhoneShows {
+    open: HashMap<String, usize>,
+    waiting: HashMap<String, moonlet_core::browser::Waiting<m::BrowserShow>>,
+}
+
 fn wall_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
 }
@@ -607,6 +617,7 @@ impl Daemon {
             presence: Mutex::new(Presence::default()),
             waiting_shows: Default::default(),
             apps: Default::default(),
+            phone_shows: Default::default(),
             asleep: Default::default(),
             heavy,
             cloud,
@@ -3989,6 +4000,23 @@ impl Daemon {
         }
     }
 
+    /// The paired phone `device` connected, with what waited for it, or
+    /// (`false`) one of its connections closed (X75).
+    pub fn phone_connection(&self, device: &str, open: bool) -> Vec<m::BrowserShow> {
+        let mut phones = self.phone_shows.lock().unwrap();
+        if open {
+            *phones.open.entry(device.to_string()).or_default() += 1;
+            return phones.waiting.remove(device).map(|mut w| w.take(wall_ms())).unwrap_or_default();
+        }
+        if let Some(n) = phones.open.get_mut(device) {
+            *n -= 1;
+            if *n == 0 {
+                phones.open.remove(device);
+            }
+        }
+        Vec::new()
+    }
+
     /// A URL from one of this Mac's terminals or agents (X75). It opens
     /// here at once while the user is active in this Mac's app; else the
     /// central host finds where the user is. Without one, or while it is
@@ -4051,8 +4079,16 @@ impl Daemon {
         match client {
             Client::Phone(device) => {
                 show.to = Some("phone".into());
-                show.device = Some(device);
-                self.terminals.emit(Message::event(m::EV_BROWSER_SHOW, show));
+                show.device = Some(device.clone());
+                let mut phones = self.phone_shows.lock().unwrap();
+                if phones.open.get(&device).is_some_and(|n| *n > 0) {
+                    drop(phones);
+                    self.terminals.emit(Message::event(m::EV_BROWSER_SHOW, show));
+                } else {
+                    // That phone is away: it hears it when it connects.
+                    show.waiting = true;
+                    phones.waiting.entry(device).or_default().keep(show, wall_ms());
+                }
             }
             Client::Member(id) if id == me => self.show_in_app(show),
             Client::Member(id) => {
