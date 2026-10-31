@@ -1811,3 +1811,314 @@ async fn a_continue_that_cannot_record_the_new_owner_keeps_the_copy_to_try_again
         .await;
     assert_eq!(st["items"][0]["text"], json!("Fix the cart"));
 }
+
+#[tokio::test]
+async fn a_member_that_lost_its_session_keeps_its_gap_and_follows_the_new_owner() {
+    let origin = Origin::new();
+    let (mini, mut book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    let agent = made["terminals"][0].clone();
+    let copy = copy_of(&mini, &made).await;
+    reads(&copy.join("src/cart.ts"), "b\n").await;
+    within(
+        Duration::from_secs(30),
+        "the checkpoint on studio-mini",
+        || async {
+            mini.try_call("session.copy", json!({ "session": made["id"] }))
+                .await
+                .is_ok_and(|i| !i["checkpoint"].is_null())
+        },
+    )
+    .await;
+
+    // The MacBook goes away; meanwhile its worktree changes on its own.
+    book.stop();
+    std::fs::write(path_of(&made).join("src/cart.ts"), "while away\n").unwrap();
+    unreachable(&mini, &made).await;
+    let _: Value = mini
+        .call("session.continue_here", json!({ "session": made["id"] }))
+        .await;
+
+    book.restart().await;
+    within(
+        Duration::from_secs(30),
+        "fix-cart no longer the MacBook's own",
+        || async {
+            let own: Vec<Value> = book.call("session.list", json!({})).await;
+            own.iter().all(|s| s["id"] != made["id"])
+        },
+    )
+    .await;
+    // Its agent stopped, and what it did meanwhile is kept.
+    let terminals: Vec<Value> = book.call("terminal.list", json!({})).await;
+    assert!(terminals.iter().all(|t| t["id"] != agent));
+    let kept: Vec<PathBuf> = std::fs::read_dir(book.home.path().join("sync-leftovers"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    // The changed file on its own, and the whole worktree beside it.
+    let files: Vec<&PathBuf> = kept
+        .iter()
+        .filter(|p| !p.display().to_string().contains("-worktree-"))
+        .collect();
+    assert_eq!(files.len(), 1, "{kept:?}");
+    assert_eq!(
+        std::fs::read_to_string(files[0].join("src/cart.ts")).unwrap(),
+        "while away\n"
+    );
+    let whole: Vec<&PathBuf> = kept
+        .iter()
+        .filter(|p| p.display().to_string().contains("-worktree-"))
+        .collect();
+    assert_eq!(whole.len(), 1, "{kept:?}");
+    assert_eq!(
+        std::fs::read_to_string(whole[0].join("src/cart.ts")).unwrap(),
+        "while away\n"
+    );
+    // It keeps a live copy of the session studio-mini runs now (X60).
+    within(
+        Duration::from_secs(30),
+        "a live copy on the MacBook",
+        || async {
+            let copies: Vec<Value> = book.call("sync.list", json!({})).await;
+            copies.iter().any(|c| c["session"] == made["id"])
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn a_member_that_lost_its_session_lists_the_files_it_deleted_meanwhile() {
+    let origin = Origin::new();
+    let (mini, mut book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    let copy = copy_of(&mini, &made).await;
+    reads(&copy.join("src/cart.ts"), "b\n").await;
+    within(
+        Duration::from_secs(30),
+        "the checkpoint on studio-mini",
+        || async {
+            mini.try_call("session.copy", json!({ "session": made["id"] }))
+                .await
+                .is_ok_and(|i| !i["checkpoint"].is_null())
+        },
+    )
+    .await;
+
+    // The MacBook goes away; meanwhile a file goes from its worktree.
+    book.stop();
+    std::fs::remove_file(path_of(&made).join("src/cart.ts")).unwrap();
+    unreachable(&mini, &made).await;
+    let _: Value = mini
+        .call("session.continue_here", json!({ "session": made["id"] }))
+        .await;
+
+    book.restart().await;
+    within(
+        Duration::from_secs(30),
+        "fix-cart no longer the MacBook's own",
+        || async {
+            let own: Vec<Value> = book.call("session.list", json!({})).await;
+            own.iter().all(|s| s["id"] != made["id"])
+        },
+    )
+    .await;
+    // The gap's folder names the file it deleted.
+    let gap: Vec<PathBuf> = std::fs::read_dir(book.home.path().join("sync-leftovers"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| !p.display().to_string().contains("-worktree-"))
+        .collect();
+    assert_eq!(gap.len(), 1, "{gap:?}");
+    assert_eq!(
+        std::fs::read_to_string(gap[0].join("moonlet-deleted.txt")).unwrap(),
+        "src/cart.ts\n"
+    );
+}
+
+#[tokio::test]
+async fn a_member_lets_go_of_a_lost_session_once_its_worktree_is_free_again() {
+    let origin = Origin::new();
+    let (mini, mut book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    copy_of(&mini, &made).await;
+    within(
+        Duration::from_secs(30),
+        "the checkpoint on studio-mini",
+        || async {
+            mini.try_call("session.copy", json!({ "session": made["id"] }))
+                .await
+                .is_ok_and(|i| !i["checkpoint"].is_null())
+        },
+    )
+    .await;
+    book.stop();
+    // Another git holds the worktree's snapshot index as the MacBook comes
+    // back, as a round of its own can.
+    let git_dir = {
+        let out = std::process::Command::new("git")
+            .args(["rev-parse", "--absolute-git-dir"])
+            .current_dir(path_of(&made))
+            .output()
+            .unwrap();
+        PathBuf::from(String::from_utf8_lossy(&out.stdout).trim())
+    };
+    let lock = git_dir.join("moonlet-sync-index.lock");
+    std::fs::write(&lock, "").unwrap();
+    unreachable(&mini, &made).await;
+    let _: Value = mini
+        .call("session.continue_here", json!({ "session": made["id"] }))
+        .await;
+    book.restart().await;
+    // For longer than the first few tries take.
+    tokio::time::sleep(Duration::from_secs(45)).await;
+    let own: Vec<Value> = book.call("session.list", json!({})).await;
+    assert!(
+        own.iter().any(|s| s["id"] == made["id"]),
+        "let go of before its gap was kept"
+    );
+    // Once the worktree is free, the MacBook lets go by itself.
+    std::fs::remove_file(&lock).unwrap();
+    within(
+        Duration::from_secs(30),
+        "fix-cart no longer the MacBook's own",
+        || async {
+            let own: Vec<Value> = book.call("session.list", json!({})).await;
+            own.iter().all(|s| s["id"] != made["id"])
+        },
+    )
+    .await;
+}
+
+/// Sets `dir` read-only (`0o555`), or writable again.
+fn read_only(dir: &Path, yes: bool) {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = if yes { 0o555 } else { 0o755 };
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(mode)).unwrap();
+}
+
+/// A member whose session was continued on studio-mini while it was away,
+/// back again: `made` is the session, its record studio-mini's now.
+async fn lost_while_away(mini: &Daemon, book: &mut Daemon, made: &Value, meanwhile: impl FnOnce()) {
+    copy_of(mini, made).await;
+    within(
+        Duration::from_secs(30),
+        "the checkpoint on studio-mini",
+        || async {
+            mini.try_call("session.copy", json!({ "session": made["id"] }))
+                .await
+                .is_ok_and(|i| !i["checkpoint"].is_null())
+        },
+    )
+    .await;
+    book.stop();
+    meanwhile();
+    unreachable(mini, made).await;
+    let _: Value = mini
+        .call("session.continue_here", json!({ "session": made["id"] }))
+        .await;
+    book.restart().await;
+}
+
+/// The files in `dir` whose names hold `part`.
+fn named(dir: &Path, part: &str) -> Vec<PathBuf> {
+    std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .map(|e| e.unwrap().path())
+                .filter(|p| p.file_name().unwrap().to_string_lossy().contains(part))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[tokio::test]
+async fn a_member_keeps_a_lost_session_until_its_conversation_is_forked() {
+    let origin = Origin::new();
+    let (mini, mut book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    let folder = project_folder(&book, &path_of(&made));
+    let transcript = std::fs::read_to_string(folder.join(format!("{CONVERSATION}.jsonl"))).unwrap();
+    // Nothing can be written beside the transcript as the MacBook comes back.
+    lost_while_away(&mini, &mut book, &made, || read_only(&folder, true)).await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let own: Vec<Value> = book.call("session.list", json!({})).await;
+    read_only(&folder, false);
+    assert!(
+        own.iter().any(|s| s["id"] == made["id"]),
+        "let go of before its conversation was forked"
+    );
+    within(
+        Duration::from_secs(30),
+        "fix-cart no longer the MacBook's own",
+        || async {
+            let own: Vec<Value> = book.call("session.list", json!({})).await;
+            own.iter().all(|s| s["id"] != made["id"])
+        },
+    )
+    .await;
+    let forks = named(&folder, ".fork-");
+    let jsonl: Vec<&PathBuf> = forks
+        .iter()
+        .filter(|p| p.extension().is_some_and(|e| e == "jsonl"))
+        .collect();
+    assert_eq!(jsonl.len(), 1, "{forks:?}");
+    assert_eq!(std::fs::read_to_string(jsonl[0]).unwrap(), transcript);
+    // The conversation's own files go with it, in a folder of the fork's name.
+    let files = jsonl[0].with_extension("");
+    assert_eq!(
+        std::fs::read_to_string(files.join("tool-results/toolu_01.txt")).unwrap(),
+        "full output\n"
+    );
+}
+
+#[tokio::test]
+async fn a_lost_session_that_cannot_be_let_go_of_yet_keeps_its_gap_once() {
+    let origin = Origin::new();
+    let (mini, mut book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    let worktree = path_of(&made);
+    let parent = worktree.parent().unwrap().to_path_buf();
+    let folder = project_folder(&book, &worktree);
+    // Its worktree cannot move as the MacBook comes back.
+    lost_while_away(&mini, &mut book, &made, || {
+        std::fs::write(worktree.join("src/cart.ts"), "while away\n").unwrap();
+        read_only(&parent, true);
+    })
+    .await;
+    tokio::time::sleep(Duration::from_secs(8)).await;
+    let own: Vec<Value> = book.call("session.list", json!({})).await;
+    read_only(&parent, false);
+    assert!(own.iter().any(|s| s["id"] == made["id"]));
+    within(
+        Duration::from_secs(30),
+        "fix-cart no longer the MacBook's own",
+        || async {
+            let own: Vec<Value> = book.call("session.list", json!({})).await;
+            own.iter().all(|s| s["id"] != made["id"])
+        },
+    )
+    .await;
+    let leftovers = book.home.path().join("sync-leftovers");
+    let kept: Vec<PathBuf> = named(&leftovers, "")
+        .into_iter()
+        .filter(|p| !p.display().to_string().contains("-worktree-"))
+        .collect();
+    assert_eq!(kept.len(), 1, "{kept:?}");
+    let forks = named(&folder, ".fork-");
+    let jsonl: Vec<&PathBuf> = forks
+        .iter()
+        .filter(|p| p.extension().is_some_and(|e| e == "jsonl"))
+        .collect();
+    assert_eq!(jsonl.len(), 1, "{forks:?}");
+}

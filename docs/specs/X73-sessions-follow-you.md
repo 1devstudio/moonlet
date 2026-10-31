@@ -117,7 +117,7 @@ Manual check M12 (`docs/manual-checks.md`) measures, on a real MacBook, how long
   - **The central host cannot be reached:** the agent goes on, as ADR 0014 accepts for offline work.
 - [ ] A member that learns it lost a session it went on running does the following:
   1. it stops the agent;
-  2. its files changed since the session moved go to `$MOONLET_HOME/sync-leftovers/` (X60);
+  2. its files changed since the session moved go to `$MOONLET_HOME/sync-leftovers/` (X60), and the files it deleted are listed there in `moonlet-deleted.txt` (`a_member_that_lost_its_session_lists_the_files_it_deleted_meanwhile`);
   3. its transcript after the last checkpoint is kept as `<agent session id>.fork-<YYYYMMDD-HHMMSS>.jsonl` beside the transcript;
   4. the chat says "MacBook ran this session while it could not reach studio-mini. Its work is saved in <folder>."
 - [ ] The same checks run when a daemon starts.

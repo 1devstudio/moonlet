@@ -27,6 +27,16 @@ use tokio::sync::watch;
 
 use crate::server::Conn;
 
+/// What looks for sessions another member now owns keep between them (X73).
+#[derive(Default)]
+struct LettingGo {
+    /// Sessions whose gap is kept already, not let go of yet: a later try
+    /// never keeps it again.
+    kept: std::collections::HashSet<String>,
+    /// Set while later tries are on their way.
+    later: bool,
+}
+
 pub struct Daemon {
     pub terminals: Arc<TerminalManager>,
     pub chats: Arc<ChatManager>,
@@ -37,6 +47,8 @@ pub struct Daemon {
     pub copies: Arc<crate::copies::DesignCopies>,
     /// Copies of every member's sessions on the central host (X72).
     pub session_copies: Arc<crate::session_copies::SessionCopies>,
+    /// One look at a time for sessions another member now owns (X73).
+    letting_go: tokio::sync::Mutex<LettingGo>,
     /// Per design system (X64): one start of its agent, or one change of its
     /// record or folder, at a time.
     design_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
@@ -540,6 +552,7 @@ impl Daemon {
         Arc::new(Self {
             copies,
             session_copies,
+            letting_go: Default::default(),
             heavy,
             cloud,
             machines,
@@ -2899,6 +2912,104 @@ impl Daemon {
         Ok(only_terminals(&r.method, reply, &s.terminals))
     }
 
+    /// Lets go of this member's sessions that the central host gave
+    /// another member (X73). What this member did meanwhile that the
+    /// central host never got is kept: files in a leftovers folder, the
+    /// conversation as a fork. The session's agent and terminals end, its
+    /// worktree goes, and a live copy of it is kept in sync from the
+    /// central host in its place (X60), so typing here can bring it back.
+    async fn let_go_of_lost(self: &Arc<Self>) {
+        if !self.let_go_once(false).await {
+            return;
+        }
+        // One that could not be let go of yet, such as while a round holds
+        // its worktree, is tried again a little later, and again, until it
+        // is let go of: from 2 s apart up to 10 s.
+        let d = Arc::downgrade(self);
+        tokio::spawn(async move {
+            let mut wait = 2;
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+                wait = (wait * 2).min(10);
+                let Some(d) = d.upgrade() else { return };
+                if !d.let_go_once(true).await {
+                    return;
+                }
+            }
+        });
+    }
+
+    /// One look of [`Self::let_go_of_lost`], `later` for one of its later
+    /// tries. A later try gives whether a session must still be tried
+    /// again; any other, whether later tries must start for one.
+    async fn let_go_once(self: &Arc<Self>, later: bool) -> bool {
+        let mut one = self.letting_go.lock().await;
+        let again = self.let_go_each(&mut one).await;
+        if later {
+            one.later = again;
+            again
+        } else if again && !one.later {
+            one.later = true;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Lets go of each session another member owns now; true when one
+    /// must be tried again.
+    async fn let_go_each(self: &Arc<Self>, one: &mut LettingGo) -> bool {
+        let info = self.link.info();
+        if info.central.is_none() || info.worker.cloud {
+            return false;
+        }
+        let records = self.sessions.session_records();
+        let mut again = false;
+        for s in self.sessions.list_sessions().into_iter().filter(|s| s.owner.is_none() && !s.archived) {
+            let Some(owner) = records.get(&s.id).and_then(|r| r.get("owner")).and_then(Value::as_str) else {
+                continue;
+            };
+            if owner == info.worker.id {
+                continue;
+            }
+            let kept = if one.kept.contains(&s.id) {
+                Ok(None)
+            } else {
+                self.session_copies.keep_gap(&s).await
+            };
+            match kept {
+                Ok(Some(folder)) => tracing::info!(session = %s.id, "kept what was done here meanwhile in {}", folder.display()),
+                Ok(None) => {}
+                Err(e) => {
+                    // Nothing is let go of until what it holds is kept.
+                    tracing::warn!(session = %s.id, "cannot keep what was done here meanwhile: {e:#}");
+                    again = true;
+                    continue;
+                }
+            }
+            one.kept.insert(s.id.clone());
+            let keep_at = self.session_copies.worktree_keep_folder(&s.path);
+            let kept_at = match self.sessions.let_go_session(&s.id, &keep_at).await {
+                Ok(kept_at) => kept_at,
+                Err(e) => {
+                    tracing::warn!(session = %s.id, "cannot let go of a session another member owns: {e:#}");
+                    again = true;
+                    continue;
+                }
+            };
+            one.kept.remove(&s.id);
+            if let Some(kept_at) = kept_at {
+                tracing::info!(session = %s.id, "its worktree, as it was here, is kept in {}", kept_at.display());
+            }
+            self.session_copies.forget_sent(&s.id);
+            tracing::info!(session = %s.id, %owner, "another member runs this session now; keeping a copy of it");
+            if let Err(e) = self.sync.start(s.id.clone()) {
+                tracing::warn!(session = %s.id, "cannot keep a copy of it: {}", e.message);
+            }
+        }
+        again
+    }
+
     /// Sends this member's sessions to the central host, and keeps the
     /// central host's copies to the sessions that are still live (X72).
     pub fn keep_session_copies(self: &Arc<Self>) {
@@ -2910,6 +3021,18 @@ impl Daemon {
                 tokio::spawn(async move { c.drop_ended().await });
             }
         });
+        // Sessions the central host gave another member, now and as the
+        // news comes (X73).
+        let d = Arc::downgrade(self);
+        self.sessions.on_account_applied(move |changes| {
+            if let Some(d) = d.upgrade()
+                && changes.iter().any(|c| c.kind == "session")
+            {
+                tokio::spawn(async move { d.let_go_of_lost().await });
+            }
+        });
+        let d = self.clone();
+        tokio::spawn(async move { d.let_go_of_lost().await });
         let d = Arc::downgrade(self);
         self.link.set_forwarder(Arc::new(move |r| {
             let d = d.clone();
