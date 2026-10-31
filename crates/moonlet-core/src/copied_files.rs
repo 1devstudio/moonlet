@@ -179,6 +179,74 @@ pub async fn untracked(dir: &Path) -> Result<Vec<String>> {
     Ok(out)
 }
 
+/// Which of `paths` git tracks in worktree `dir`: those are git's to
+/// carry, never written or removed as copied files.
+pub async fn tracked(dir: &Path, paths: &[String]) -> Result<std::collections::BTreeSet<String>> {
+    if paths.is_empty() {
+        return Ok(Default::default());
+    }
+    let specs: Vec<String> = paths.iter().map(|p| format!(":(literal){p}")).collect();
+    let mut args = vec!["ls-files", "--cached", "-z", "--"];
+    args.extend(specs.iter().map(String::as_str));
+    let bytes = crate::git::git(dir, &args).await?;
+    Ok(bytes
+        .split(|b| *b == 0)
+        .filter(|p| !p.is_empty())
+        .filter_map(|p| std::str::from_utf8(p).ok().map(str::to_string))
+        .collect())
+}
+
+/// Of the files another member sent, by path with the size of the bytes
+/// that came along (0 when none did), those this side takes: plain paths
+/// inside the worktree, named by its own list, within its limits, and not
+/// tracked by its git. A path the list does not name is refused; one over
+/// the limits or tracked here is left out.
+pub async fn receivable(
+    dir: &Path,
+    patterns: &[String],
+    sent: &[(String, u64)],
+) -> Result<std::collections::BTreeSet<String>> {
+    for (path, _) in sent {
+        check_path(path)?;
+    }
+    let paths: Vec<String> = sent.iter().map(|(p, _)| p.clone()).collect();
+    let picked = select(patterns, &paths, |p| {
+        sent.iter().find(|(q, _)| q == p).map(|(_, n)| *n)
+    })?;
+    let named: std::collections::BTreeSet<&str> = picked
+        .files
+        .iter()
+        .map(|(p, _)| p.as_str())
+        .chain(picked.skipped.iter().map(|(p, _)| p.as_str()))
+        .collect();
+    if let Some(p) = paths.iter().find(|p| !named.contains(p.as_str())) {
+        bail!("{p} is not a copied file here");
+    }
+    let tracked = tracked(dir, &paths).await?;
+    Ok(picked
+        .files
+        .into_iter()
+        .map(|(p, _)| p)
+        .filter(|p| !tracked.contains(p))
+        .collect())
+}
+
+/// Which of `paths`, sent by another member, the `patterns` name, whatever
+/// their size; a path that is not a plain path inside the worktree is
+/// refused.
+pub fn named(patterns: &[String], paths: &[String]) -> Result<std::collections::BTreeSet<String>> {
+    for path in paths {
+        check_path(path)?;
+    }
+    let picked = select(patterns, paths, |_| Some(0))?;
+    Ok(picked
+        .files
+        .into_iter()
+        .map(|(p, _)| p)
+        .chain(picked.skipped.into_iter().map(|(p, _)| p))
+        .collect())
+}
+
 /// What the list names in worktree `dir`, sized from the disk.
 pub async fn in_worktree(dir: &Path, patterns: &[String]) -> Result<Matched> {
     let candidates = untracked(dir).await?;
@@ -414,30 +482,40 @@ pub async fn apply(
     had: &std::collections::BTreeSet<String>,
     mut keep: impl FnMut(&str, &[u8]) -> Result<()>,
 ) -> Result<Applied> {
-    let named = select(
-        patterns,
-        &manifest.iter().map(|e| e.path.clone()).collect::<Vec<_>>(),
-        |_| Some(0),
-    )?;
-    let named: std::collections::BTreeSet<&str> =
-        named.files.iter().map(|(p, _)| p.as_str()).collect();
+    let sent: Vec<(String, u64)> = manifest
+        .iter()
+        .map(|e| {
+            (
+                e.path.clone(),
+                e.bytes.as_ref().map_or(0, |b| b.len() as u64),
+            )
+        })
+        .collect();
+    let takes = receivable(dir, patterns, &sent).await?;
     let mut here = std::collections::BTreeMap::new();
     for (path, _) in in_worktree(dir, patterns).await?.files {
         if let Some(bytes) = read(dir, &path)? {
             here.insert(path, bytes);
         }
     }
+    // What stays as it is counts toward the total first.
+    let mut total: u64 = manifest
+        .iter()
+        .filter_map(|e| here.get(&e.path).filter(|b| sha(b) == e.sha))
+        .map(|b| b.len() as u64)
+        .sum();
     let mut done = Applied::default();
     for e in manifest {
-        if check_path(&e.path).is_err() || !named.contains(e.path.as_str()) {
-            bail!("{} is not a copied file here", e.path);
-        }
         let old = here.remove(&e.path);
-        if old.as_deref().map(sha).as_deref() == Some(e.sha.as_str()) {
+        if !takes.contains(&e.path) || old.as_deref().map(sha).as_deref() == Some(e.sha.as_str()) {
             continue;
         }
         match &e.bytes {
             Some(bytes) if sha(bytes) == e.sha => {
+                if total + bytes.len() as u64 > MAX_TOTAL {
+                    continue;
+                }
+                total += bytes.len() as u64;
                 if let Some(old) = &old {
                     keep(&e.path, old)?;
                 }
@@ -455,6 +533,67 @@ pub async fn apply(
         done.changed.push(path);
     }
     Ok(done)
+}
+
+/// A checkout's copied file as one member last saw it change (X74): its
+/// SHA-256, or none once deleted, and when and by which member the change
+/// was noticed.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Version {
+    pub sha: Option<String>,
+    /// Milliseconds since the epoch, on the member that noticed it.
+    pub stamp: u64,
+    /// That member's worker id.
+    pub by: String,
+}
+
+impl Version {
+    /// Whether this change came after `other`: the later stamp, and on the
+    /// same stamp, the greater member id, so every member picks the same.
+    pub fn after(&self, other: &Version) -> bool {
+        (self.stamp, &self.by) > (other.stamp, &other.by)
+    }
+}
+
+/// Records in `table` what changed in a checkout whose copied files are now
+/// `now` (path to SHA-256 and the file's change time, in milliseconds): a
+/// new or changed file at its change time, and a deleted one at `stamp`,
+/// all by member `by`. A file `now` lacks that is still in the checkout
+/// (`still_there`), over the limits or tracked by git, is not deleted: it
+/// is left as last seen. Gives the paths that changed.
+pub fn notice(
+    table: &mut std::collections::BTreeMap<String, Version>,
+    now: &std::collections::BTreeMap<String, (String, u64)>,
+    still_there: impl Fn(&str) -> bool,
+    stamp: u64,
+    by: &str,
+) -> Vec<String> {
+    let mut changed = Vec::new();
+    for (path, (sha, at)) in now {
+        if table.get(path).and_then(|v| v.sha.as_ref()) != Some(sha) {
+            table.insert(
+                path.clone(),
+                Version {
+                    sha: Some(sha.clone()),
+                    stamp: *at,
+                    by: by.to_string(),
+                },
+            );
+            changed.push(path.clone());
+        }
+    }
+    for (path, v) in table.iter_mut() {
+        if v.sha.is_some() && !now.contains_key(path) && !still_there(path) {
+            *v = Version {
+                sha: None,
+                stamp,
+                by: by.to_string(),
+            };
+            changed.push(path.clone());
+        }
+    }
+    changed.sort();
+    changed
 }
 
 #[cfg(test)]
@@ -751,6 +890,82 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_file_over_the_limits_is_never_written_whatever_the_other_side_sent() {
+        let copy = repo();
+        let big = vec![b'x'; MAX_FILE as usize + 1];
+        let entry = |path: &str, bytes: Vec<u8>| Entry {
+            path: path.into(),
+            sha: sha(&bytes),
+            bytes: Some(bytes),
+        };
+        let done = apply(
+            copy.path(),
+            &pats(&DEFAULT),
+            &[entry(".env", big)],
+            &Default::default(),
+            |_, _| Ok(()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(done, Applied::default());
+        assert!(!copy.path().join(".env").exists());
+        // 17 files of 1 MiB: only 16 are written.
+        let list: Vec<Entry> = (0..17)
+            .map(|n| entry(&format!("a{n:02}/.env"), vec![b'y'; MAX_FILE as usize]))
+            .collect();
+        let done = apply(
+            copy.path(),
+            &pats(&DEFAULT),
+            &list,
+            &Default::default(),
+            |_, _| Ok(()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(done.changed.len(), 16);
+        assert!(!copy.path().join("a16/.env").exists());
+    }
+
+    #[tokio::test]
+    async fn a_file_git_tracks_on_this_side_is_never_written() {
+        let copy = repo();
+        let run = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(copy.path())
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        std::fs::write(copy.path().join(".env.example"), "EXAMPLE=1\n").unwrap();
+        run(&["add", ".env.example"]);
+        let entry = Entry {
+            path: ".env.example".into(),
+            sha: sha(b"EVIL=1\n"),
+            bytes: Some(b"EVIL=1\n".to_vec()),
+        };
+        let done = apply(
+            copy.path(),
+            &pats(&DEFAULT),
+            &[entry],
+            &Default::default(),
+            |_, _| Ok(()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(done, Applied::default());
+        assert_eq!(
+            std::fs::read_to_string(copy.path().join(".env.example")).unwrap(),
+            "EXAMPLE=1\n"
+        );
+    }
+
+    #[tokio::test]
     async fn a_path_this_sides_list_does_not_name_is_refused() {
         let copy = repo();
         let entry = |path: &str| Entry {
@@ -781,6 +996,72 @@ mod tests {
     #[test]
     fn a_files_hash_is_its_sha256() {
         assert_eq!(sha(b"A=1\n"), A1);
+    }
+
+    #[test]
+    fn a_conflict_on_a_checkout_goes_to_the_later_stamp() {
+        let v = |stamp, by: &str| Version {
+            sha: Some("a".into()),
+            stamp,
+            by: by.into(),
+        };
+        assert!(v(1_000, "book").after(&v(999, "mini")));
+        assert!(!v(999, "mini").after(&v(1_000, "book")));
+        // The same stamp: the greater member id, on every member alike.
+        assert!(v(1_000, "mini").after(&v(1_000, "book")));
+        assert!(!v(1_000, "book").after(&v(1_000, "mini")));
+    }
+
+    #[test]
+    fn a_checkouts_new_changed_and_deleted_files_are_noticed() {
+        let shas = |list: &[(&str, &str)]| {
+            list.iter()
+                .map(|(p, s)| (p.to_string(), (s.to_string(), 5)))
+                .collect()
+        };
+        let mut table = std::collections::BTreeMap::new();
+        assert_eq!(
+            notice(
+                &mut table,
+                &shas(&[(".env", "a"), (".env.local", "b")]),
+                |_| false,
+                10,
+                "book"
+            ),
+            [".env", ".env.local"]
+        );
+        assert_eq!(
+            notice(
+                &mut table,
+                &shas(&[(".env", "a"), (".env.local", "b")]),
+                |_| false,
+                20,
+                "book"
+            ),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            notice(&mut table, &shas(&[(".env", "c")]), |_| false, 30, "book"),
+            [".env", ".env.local"]
+        );
+        // A change is stamped with the file's change time, a deletion when
+        // it is noticed.
+        assert_eq!(
+            table[".env"],
+            Version {
+                sha: Some("c".into()),
+                stamp: 5,
+                by: "book".into()
+            }
+        );
+        assert_eq!(
+            table[".env.local"],
+            Version {
+                sha: None,
+                stamp: 30,
+                by: "book".into()
+            }
+        );
     }
 
     #[test]

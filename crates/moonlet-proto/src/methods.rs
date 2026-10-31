@@ -165,6 +165,9 @@ pub const SESSION_FILES: &str = "session.files";
 /// [`SessionFilesFetch`] → [`SessionFilesFetched`]: the copied files of a
 /// session the central host runs, for a Mac's live copy of it (X74).
 pub const SESSION_FILES_FETCH: &str = "session.files_fetch";
+/// [`FilesCheckout`] → [`FilesCheckedOut`]: a member's checkout of a project
+/// and the central host's, kept in step through it (X74).
+pub const FILES_CHECKOUT: &str = "files.checkout";
 /// Whether the central host could continue each copy it holds (X73).
 pub const SESSION_READY: &str = "session.ready";
 /// Tests only, with `MOONLET_TEST_POWER=1`: as if the Mac went to sleep
@@ -1332,6 +1335,47 @@ pub struct CopiedFile {
     pub content: Option<String>,
 }
 
+/// A checkout's copied file as a member last saw it change (X74): its
+/// SHA-256, or none once deleted; when and by whom; and its bytes in base64
+/// when they go along.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CheckoutFile {
+    pub path: String,
+    pub sha: Option<String>,
+    pub stamp: u64,
+    pub by: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+}
+
+/// `files.checkout`: a member's copied files of its checkout of project
+/// `identity`, with the bytes of those changed since it last sent them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FilesCheckout {
+    pub identity: crate::types::ProjectIdentity,
+    pub files: Vec<CheckoutFile>,
+    /// The central host's versions this member would not take (tracked by
+    /// its git, over its limits, or off its list): not answered again
+    /// while the central host's version is the same.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub refused: Vec<RefusedFile>,
+}
+
+/// A path a member would not take at version `sha`, none for a deletion.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RefusedFile {
+    pub path: String,
+    pub sha: Option<String>,
+}
+
+/// `files.checkout`'s answer: the central host's versions that won over
+/// the member's, with their bytes, and paths whose bytes it still needs.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct FilesCheckedOut {
+    pub files: Vec<CheckoutFile>,
+    pub want: Vec<String>,
+}
+
 /// `session.files`: every copied file of the session's worktree on the
 /// member that runs it, with the bytes of those that changed (X74).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1358,6 +1402,10 @@ pub struct SessionFilesFetch {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SessionFilesFetched {
     pub files: Vec<CopiedFile>,
+    /// The project's list on the central host, for a cloud machine, which
+    /// keeps no account of its own.
+    #[serde(default)]
+    pub patterns: Vec<String>,
 }
 
 /// `session.pin {session, pinned}`, member → central host (X73).

@@ -61,6 +61,8 @@ pub struct Daemon {
     pub session_copies: Arc<crate::session_copies::SessionCopies>,
     /// One look at a time for sessions another member now owns (X73).
     letting_go: tokio::sync::Mutex<LettingGo>,
+    /// The copied files of this member's checkouts (X74).
+    checkouts: crate::copied_files::Checkouts,
     /// What the Mac's last sleep left to its wake (X73).
     asleep: Mutex<Asleep>,
     /// Per design system (X64): one start of its agent, or one change of its
@@ -272,6 +274,7 @@ const CLOUD_METHODS: &[&str] = &[
     m::SYNC_OFFER,
     m::SYNC_CLOSE,
     m::EXEC_DONE,
+    m::SESSION_FILES_FETCH,
 ];
 
 /// Jobs hold commands' output: the app and paired devices read and stop
@@ -570,6 +573,7 @@ impl Daemon {
             copies,
             session_copies,
             letting_go: Default::default(),
+            checkouts: crate::copied_files::Checkouts::new(&moonlet_core::paths::home()),
             asleep: Default::default(),
             heavy,
             cloud,
@@ -1118,7 +1122,7 @@ impl Daemon {
                 }
                 Box::pin(self.forward(conn, params(p)?)).await
             }
-            m::SESSION_OPEN | m::SESSION_OFFER | m::SESSION_CHAT | m::SESSION_TRANSCRIPT | m::SESSION_CHECKPOINT | m::SESSION_EVENT | m::SESSION_TAKE | m::SESSION_GIVE_BACK | m::SESSION_TRANSCRIPT_FETCH | m::SESSION_YIELD | m::SESSION_PIN | m::SESSION_FILES | m::SESSION_FILES_FETCH => {
+            m::SESSION_OPEN | m::SESSION_OFFER | m::SESSION_CHAT | m::SESSION_TRANSCRIPT | m::SESSION_CHECKPOINT | m::SESSION_EVENT | m::SESSION_TAKE | m::SESSION_GIVE_BACK | m::SESSION_TRANSCRIPT_FETCH | m::SESSION_YIELD | m::SESSION_PIN | m::SESSION_FILES => {
                 // Only a linked Mac's daemon, as for `design.offer` (X72).
                 let refused = || RpcError::new("forbidden", "only a member of the account sends its sessions");
                 let device = conn.phone.as_deref().ok_or_else(refused)?;
@@ -1187,8 +1191,7 @@ impl Daemon {
                     ok(self.take_back(&worker, params(p)?).await?)
                 } else if method == m::SESSION_FILES {
                     ok(self.session_copies.files_offered(&worker, params(p)?).await?)
-                } else if method == m::SESSION_FILES_FETCH {
-                    ok(self.files_fetched(params(p)?).await?)
+
                 } else if method == m::SESSION_TRANSCRIPT_FETCH {
                     let r: m::SessionTranscriptFetch = params(p)?;
                     let bytes = self.session_copies.transcript_bytes(&worker, &r)?;
@@ -1206,6 +1209,57 @@ impl Daemon {
                     };
                     ok(self.session_copies.offered(&worker, r, pack).await?)
                 }
+            }
+            m::SESSION_FILES_FETCH => {
+                // A linked Mac's daemon for its live copies, or a cloud
+                // machine for its routed copies when the project's files go
+                // to cloud machines (X74).
+                let refused = || RpcError::new("forbidden", "only a member of the account fetches copied files");
+                let cloud = conn.cloud.load(std::sync::atomic::Ordering::Relaxed);
+                if !cloud {
+                    let device = conn.phone.as_deref().ok_or_else(refused)?;
+                    let mac = self.mobile.kind_of(device) == Some(m::DeviceKind::Desktop);
+                    if !mac || self.workers.worker_on(conn.id).is_none() {
+                        return Err(refused());
+                    }
+                }
+                if !self.sessions.has_account() {
+                    return Err(RpcError::new("no_account", "this host shares no account"));
+                }
+                let r: m::SessionFilesFetch = params(p)?;
+                if cloud {
+                    // Only for a session the machine may hold a copy of,
+                    // as for `sync.open`.
+                    let machine = conn.phone.as_deref().and_then(|d| self.machines.machine_of(d)).ok_or_else(refused)?;
+                    self.machines.may_open(&machine, &r.session)?;
+                }
+                ok(self.files_fetched(r, cloud).await?)
+            }
+            m::FILES_CHECKOUT => {
+                // Only a linked Mac's daemon, as for `session.files` (X74).
+                let refused = || RpcError::new("forbidden", "only a member of the account keeps its checkouts in step");
+                let device = conn.phone.as_deref().ok_or_else(refused)?;
+                let mac = self.mobile.kind_of(device) == Some(m::DeviceKind::Desktop);
+                let cloud = conn.cloud.load(std::sync::atomic::Ordering::Relaxed);
+                let worker = self.workers.worker_on(conn.id).filter(|_| mac && !cloud).ok_or_else(refused)?;
+                if !self.sessions.has_account() {
+                    return Err(RpcError::new("no_account", "this host shares no account"));
+                }
+                let r: m::FilesCheckout = params(p)?;
+                let project = self
+                    .sessions
+                    .list_projects()
+                    .into_iter()
+                    .find(|p| moonlet_core::identity::same_project(&p.identity, &r.identity))
+                    .ok_or_else(|| RpcError::new("no_project", "this host has no checkout of that project"))?;
+                let me = self.link.info().worker.id;
+                let patterns = self.copied_patterns(Some(&project.identity));
+                let answer = self
+                    .checkouts
+                    .take(&worker, &me, r, &project.name, Path::new(&project.path), &patterns)
+                    .await
+                    .map_err(|e| RpcError::new("invalid_params", format!("{e:#}")))?;
+                ok(answer)
             }
             m::DESIGN_OFFER | m::DESIGN_FETCH => {
                 // Only a linked Mac's daemon, as for `account.sync` (X71).
@@ -3792,7 +3846,7 @@ impl Daemon {
 
     /// `session.files_fetch` on the central host (X74): the copied files of
     /// a session it runs, with the bytes a member's live copy lacks.
-    async fn files_fetched(&self, r: m::SessionFilesFetch) -> Result<m::SessionFilesFetched, RpcError> {
+    async fn files_fetched(&self, r: m::SessionFilesFetch, cloud: bool) -> Result<m::SessionFilesFetched, RpcError> {
         let me = self.link.info().worker.id;
         let record = self
             .sessions
@@ -3804,21 +3858,38 @@ impl Daemon {
         }
         let s = self.sessions.session(&r.session).map_err(internal)?;
         let identity = self.sessions.list_projects().into_iter().find(|p| p.id == s.project_id).map(|p| p.identity);
+        if cloud && !identity.as_ref().is_some_and(|i| self.sessions.copied_files(i).1) {
+            // None, so the machine removes those it had before the switch
+            // went off.
+            return Ok(m::SessionFilesFetched::default());
+        }
         let patterns = self.copied_patterns(identity.as_ref());
         let files = crate::copied_files::answer(Path::new(&s.path), &patterns, &r.have).await.map_err(internal)?;
-        Ok(m::SessionFilesFetched { files })
+        Ok(m::SessionFilesFetched { files, patterns })
     }
 
     /// Keeps the copied files of this Mac's live copies (X60) those of the
-    /// sessions the central host runs (X74), every couple of seconds.
+    /// sessions the central host runs, and its checkouts in step with the
+    /// central host's (X74), every second.
     fn keep_copied_files(self: &Arc<Self>) {
         let d = Arc::downgrade(self);
         tokio::spawn(async move {
             loop {
-                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                 let Some(d) = d.upgrade() else { return };
                 let info = d.link.info();
-                if info.central.is_none() || info.worker.cloud || !d.sessions.has_account() {
+                if info.worker.cloud {
+                    // A cloud machine's routed copies, when its central
+                    // host lets them have the files.
+                    let Some(host) = d.link.host() else { continue };
+                    for (session, path, _) in d.sync.copies_of(m::CopyKind::Run) {
+                        if let Err(e) = d.fetch_copied_files(&host, &session, &path, None).await {
+                            tracing::debug!(%session, "no copied files: {e:#}");
+                        }
+                    }
+                    continue;
+                }
+                if info.central.is_none() || !d.sessions.has_account() {
                     continue;
                 }
                 let Some(host) = d.link.host() else { continue };
@@ -3827,12 +3898,28 @@ impl Daemon {
                         tracing::debug!(%session, "cannot fetch the copied files: {e:#}");
                     }
                 }
+                // Each checkout in step with the central host's.
+                let me = info.worker.id.clone();
+                for p in d.sessions.list_projects() {
+                    if p.identity.root.is_none() || !Path::new(&p.path).is_dir() {
+                        continue;
+                    }
+                    let patterns = d.copied_patterns(Some(&p.identity));
+                    if let Err(e) = d.checkouts.exchange(&host, &p.identity, &p.name, Path::new(&p.path), &patterns, &me).await {
+                        tracing::debug!(project = %p.name, "cannot keep the checkout's copied files: {e:#}");
+                    }
+                }
             }
         });
     }
 
     async fn fetch_copied_files(&self, host: &moonlet_link::Host, session: &str, path: &Path, identity: Option<&moonlet_proto::types::ProjectIdentity>) -> anyhow::Result<()> {
-        let patterns = self.copied_patterns(identity);
+        // A cloud machine has no account: it takes the central host's list.
+        let cloud = self.link.info().worker.cloud;
+        let patterns = match crate::copied_files::lists().lock().unwrap().get(session) {
+            Some(known) if cloud => known.clone(),
+            _ => self.copied_patterns(identity),
+        };
         let have: std::collections::BTreeMap<String, String> = moonlet_core::copied_files::manifest(path, &patterns, |_, _| false, 0)
             .await?
             .into_iter()
@@ -3843,10 +3930,16 @@ impl Daemon {
             .await
             .map_err(|e| anyhow::anyhow!("{}: {}", e.code, e.message))?;
         let fetched: m::SessionFilesFetched = serde_json::from_value(fetched)?;
+        let patterns = if cloud {
+            crate::copied_files::lists().lock().unwrap().insert(session.to_string(), fetched.patterns.clone());
+            fetched.patterns
+        } else {
+            patterns
+        };
         let manifest: Vec<_> = fetched.files.into_iter().map(crate::copied_files::from_wire).collect();
         let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| session.to_string());
         let label = crate::sync::segment(&name);
-        crate::copied_files::take(&moonlet_core::paths::home(), &label, &format!("live:{session}"), path, &patterns, &manifest).await?;
+        crate::copied_files::take(&moonlet_core::paths::home(), &label, &format!("live:{session}"), path, &patterns, &manifest, cloud).await?;
         Ok(())
     }
 
