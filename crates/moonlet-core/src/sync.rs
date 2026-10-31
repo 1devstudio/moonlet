@@ -72,7 +72,9 @@ pub async fn common_dir(worktree: &Path) -> Result<PathBuf> {
 /// Untracked files that never sync, whatever `.gitignore` says, since an
 /// agent on the other side can edit `.gitignore`: files that usually hold
 /// secrets. Both sides apply this list in place of the user's own global
-/// excludes, which differ between machines, so they still agree.
+/// excludes, which differ between machines, so they still agree. The
+/// project's copied files (X74) are left out the same way: their list is
+/// in the account, so every member has the same one.
 pub const NEVER_SYNCED: &str = "\
 .env
 .env.local
@@ -125,20 +127,31 @@ fn pathspecs(specs: impl IntoIterator<Item = String>) -> Vec<u8> {
 /// Snapshots `worktree`: tracked files and the untracked ones that
 /// `.gitignore`, `.git/info/exclude` and [`NEVER_SYNCED`] don't ignore. The
 /// user's global excludes are not applied, so two machines agree whatever
-/// theirs say.
+/// theirs say. Untracked files the `copied` patterns name (X74) are never
+/// hashed, whatever `.gitignore` says: they travel outside git.
 /// A file leaves the snapshot only once it is gone from disk. One that
 /// becomes ignored, and that HEAD doesn't track, stays at the version an
 /// earlier snapshot took: the other side never reads it as deleted, and
 /// nothing new of it leaves this machine. So does a file over `max_file`
 /// bytes ([`MAX_FILE`] outside tests), or it stays out if no snapshot took
 /// it yet.
-pub async fn snapshot(worktree: &Path, max_file: u64) -> Result<Snapshot> {
+pub async fn snapshot(worktree: &Path, max_file: u64, copied: &[String]) -> Result<Snapshot> {
     let index = private_index(worktree).await?;
     let file = IndexFile::new(&index);
     let env = file.env();
+    // A pattern the list could not hold is left out, as the copied-files
+    // code leaves it out.
+    let copied: Vec<String> = copied
+        .iter()
+        .filter(|p| crate::copied_files::check_pattern(p).is_ok())
+        .map(|p| p.trim().to_string())
+        .collect();
+    let rules: String = std::iter::once(NEVER_SYNCED.to_string())
+        .chain(copied.iter().map(|p| format!("{p}\n")))
+        .collect();
     let excludes = git_dir(worktree).await?.join("moonlet-sync-excludes");
-    if std::fs::read_to_string(&excludes).ok().as_deref() != Some(NEVER_SYNCED) {
-        std::fs::write(&excludes, NEVER_SYNCED)?;
+    if std::fs::read_to_string(&excludes).ok().as_deref() != Some(rules.as_str()) {
+        std::fs::write(&excludes, &rules)?;
     }
     let excludes_opt = format!("core.excludesFile={}", excludes.display());
     let our_excludes = ["-c", excludes_opt.as_str()];
@@ -215,9 +228,22 @@ pub async fn snapshot(worktree: &Path, max_file: u64) -> Result<Snapshot> {
         let out = git_env(worktree, &env, &args, None).await?;
         candidates.extend(split_z(&out));
     }
+    // Copied files a `.gitignore` lets back in, on disk: `add` leaves them
+    // as they were. One gone from disk leaves the snapshot.
+    let plain: Vec<String> = candidates
+        .iter()
+        .filter(|p| crate::copied_files::check_path(p).is_ok())
+        .filter(|p| std::fs::symlink_metadata(worktree.join(p)).is_ok())
+        .cloned()
+        .collect();
+    let copied_here = if copied.is_empty() {
+        Default::default()
+    } else {
+        crate::copied_files::named(&copied, &plain)?
+    };
     let mut too_big: Vec<String> = candidates
         .into_iter()
-        .filter(|p| !never_synced(p))
+        .filter(|p| !never_synced(p) && !copied_here.contains(p))
         .filter(|p| {
             std::fs::symlink_metadata(worktree.join(p))
                 .is_ok_and(|m| m.is_file() && m.len() > max_file)
@@ -232,6 +258,7 @@ pub async fn snapshot(worktree: &Path, max_file: u64) -> Result<Snapshot> {
     let specs = pathspecs(
         std::iter::once(".".to_string())
             .chain(too_big.iter().map(|p| format!(":(exclude,literal){p}")))
+            .chain(copied_here.iter().map(|p| format!(":(exclude,literal){p}")))
             .chain(
                 NEVER_SYNCED
                     .lines()
@@ -1591,7 +1618,7 @@ mod tests {
     async fn a_snapshot_follows_gits_rules_without_global_excludes() {
         let dir = worked_example().await;
         let p = dir.path();
-        let snap = snapshot(p, MAX_FILE).await.unwrap();
+        let snap = snapshot(p, MAX_FILE, &[]).await.unwrap();
         assert_eq!(
             listing(p, &snap.tree).await,
             pairs(&[
@@ -1637,7 +1664,7 @@ mod tests {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(path, "secret\n").unwrap();
         }
-        let snap = snapshot(p, MAX_FILE).await.unwrap();
+        let snap = snapshot(p, MAX_FILE, &[]).await.unwrap();
         assert_eq!(
             listing(p, &snap.tree).await,
             pairs(&[
@@ -1671,7 +1698,7 @@ mod tests {
             std::fs::write(path, "secret\n").unwrap();
         }
         std::fs::write(p.join("config/dev.key"), "dev only, rotated\n").unwrap();
-        let snap = snapshot(p, MAX_FILE).await.unwrap();
+        let snap = snapshot(p, MAX_FILE, &[]).await.unwrap();
         let names: Vec<String> = listing(p, &snap.tree)
             .await
             .into_iter()
@@ -1702,7 +1729,7 @@ mod tests {
 
         // A synced file renamed to a secret's name leaves.
         std::fs::rename(p.join("notes.txt"), p.join("sub/.env.local")).unwrap();
-        let snap = snapshot(p, MAX_FILE).await.unwrap();
+        let snap = snapshot(p, MAX_FILE, &[]).await.unwrap();
         let names: Vec<String> = listing(p, &snap.tree)
             .await
             .into_iter()
@@ -1717,13 +1744,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn copied_files_stay_out_and_are_never_hashed() {
+        let dir = worked_example().await;
+        let p = dir.path();
+        // Only the user's global excludes name .env.development, and the
+        // project's rules let .env.staging back in.
+        std::fs::write(p.join(".git/my-excludes"), "scratch.txt\n.env.development\n").unwrap();
+        let mut gitignore = std::fs::read_to_string(p.join(".gitignore")).unwrap();
+        gitignore.push_str("!.env.staging\n");
+        std::fs::write(p.join(".gitignore"), gitignore).unwrap();
+        std::fs::create_dir_all(p.join("config")).unwrap();
+        std::fs::create_dir_all(p.join("apps/web")).unwrap();
+        for f in [
+            ".env.development",
+            ".env.staging",
+            "apps/web/.env.test",
+            "config/local.yaml",
+        ] {
+            std::fs::write(p.join(f), "API_KEY=dev-7f3a\n").unwrap();
+        }
+        let copied = [".env".to_string(), ".env.*".to_string(), "config/local.yaml".to_string()];
+        let snap = snapshot(p, MAX_FILE, &copied).await.unwrap();
+        assert_eq!(
+            paths(listing(p, &snap.tree).await),
+            [
+                ".gitignore",
+                "link",
+                "run.sh",
+                "scratch.txt",
+                "src/cart.ts",
+                "src/new.ts",
+                "vendor/keep.js",
+            ]
+        );
+        assert!(snap.too_big.is_empty());
+        // `git hash-object` of the files' bytes.
+        assert!(
+            git(p, &["cat-file", "-e", "e397b097b66819499a8395e6dd3e109bbd1d4709"])
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
     async fn a_file_ignored_after_a_snapshot_stays_at_its_last_version() {
         let dir = worked_example().await;
         let p = dir.path();
         std::fs::create_dir_all(p.join("build")).unwrap();
         std::fs::write(p.join("build/out.js"), "built\n").unwrap();
         std::fs::write(p.join("notes.txt"), "mine\n").unwrap();
-        let first = snapshot(p, MAX_FILE).await.unwrap();
+        let first = snapshot(p, MAX_FILE, &[]).await.unwrap();
         assert!(paths(listing(p, &first.tree).await).contains(&"build/out.js".to_string()));
 
         // Ignored on both sides through .gitignore, and on this side only
@@ -1738,7 +1808,7 @@ mod tests {
         std::fs::write(p.join(".git/info/exclude"), "notes.txt\n").unwrap();
         std::fs::write(p.join("build/out.js"), "built again\n").unwrap();
         std::fs::write(p.join("notes.txt"), "a secret now\n").unwrap();
-        let second = snapshot(p, MAX_FILE).await.unwrap();
+        let second = snapshot(p, MAX_FILE, &[]).await.unwrap();
         assert_eq!(
             show(p, &second.tree, "build/out.js").await.as_deref(),
             Some("built\n")
@@ -1750,12 +1820,12 @@ mod tests {
 
         // An untracked file the rules already ignore never enters.
         std::fs::write(p.join("build/new.js"), "new\n").unwrap();
-        let third = snapshot(p, MAX_FILE).await.unwrap();
+        let third = snapshot(p, MAX_FILE, &[]).await.unwrap();
         assert!(!paths(listing(p, &third.tree).await).contains(&"build/new.js".to_string()));
 
         // Gone from disk: gone from the snapshot.
         std::fs::remove_file(p.join("build/out.js")).unwrap();
-        let fourth = snapshot(p, MAX_FILE).await.unwrap();
+        let fourth = snapshot(p, MAX_FILE, &[]).await.unwrap();
         assert!(!paths(listing(p, &fourth.tree).await).contains(&"build/out.js".to_string()));
     }
 
@@ -1779,12 +1849,12 @@ mod tests {
     async fn a_file_head_tracks_is_in_even_when_force_added_later() {
         let dir = worked_example().await;
         let p = dir.path();
-        snapshot(p, MAX_FILE).await.unwrap();
+        snapshot(p, MAX_FILE, &[]).await.unwrap();
         // vendor/ is ignored; this file is committed past that.
         std::fs::write(p.join("vendor/later.js"), "later\n").unwrap();
         git(p, &["add", "-f", "vendor/later.js"]).await.unwrap();
         git(p, &["commit", "-q", "-m", "later"]).await.unwrap();
-        let snap = snapshot(p, MAX_FILE).await.unwrap();
+        let snap = snapshot(p, MAX_FILE, &[]).await.unwrap();
         assert_eq!(
             show(p, &snap.tree, "vendor/later.js").await.as_deref(),
             Some("later\n")
@@ -1800,7 +1870,7 @@ mod tests {
         for i in 0..6000 {
             std::fs::write(p.join(format!("build/{i:05}{}", "x".repeat(195))), "ab").unwrap();
         }
-        let snap = snapshot(p, 1).await.unwrap();
+        let snap = snapshot(p, 1, &[]).await.unwrap();
         assert_eq!(
             snap.too_big
                 .iter()
@@ -1816,7 +1886,7 @@ mod tests {
         let p = dir.path();
         std::fs::write(p.join("big.bin"), vec![7u8; 2048]).unwrap();
         std::fs::write(p.join("grows.bin"), vec![7u8; 10]).unwrap();
-        let first = snapshot(p, 1024).await.unwrap();
+        let first = snapshot(p, 1024, &[]).await.unwrap();
         assert_eq!(first.too_big, ["big.bin"]);
         let listed = paths(listing(p, &first.tree).await);
         assert!(
@@ -1825,7 +1895,7 @@ mod tests {
         let small = show(p, &first.tree, "grows.bin").await;
 
         std::fs::write(p.join("grows.bin"), vec![7u8; 2048]).unwrap();
-        let second = snapshot(p, 1024).await.unwrap();
+        let second = snapshot(p, 1024, &[]).await.unwrap();
         assert_eq!(second.too_big, ["big.bin", "grows.bin"]);
         // Its last synced version stays in, so the other side keeps it.
         assert_eq!(show(p, &second.tree, "grows.bin").await, small);
@@ -1845,7 +1915,7 @@ mod tests {
             // macOS file systems refuse such names; only Linux has them.
             return;
         }
-        let snap = snapshot(p, MAX_FILE).await.unwrap();
+        let snap = snapshot(p, MAX_FILE, &[]).await.unwrap();
         assert_eq!(snap.bad_names, ["bad\u{fffd}.txt"]);
         let raw = git(p, &["ls-tree", "-r", "-z", "--name-only", &snap.tree])
             .await
@@ -1857,13 +1927,13 @@ mod tests {
     async fn a_file_committed_past_its_ignore_rule_is_still_held_to_the_size_limit() {
         let dir = worked_example().await;
         let p = dir.path();
-        let first = snapshot(p, 1024).await.unwrap();
+        let first = snapshot(p, 1024, &[]).await.unwrap();
         std::fs::write(p.join("vendor/blob.bin"), vec![1u8; 10]).unwrap();
         git(p, &["add", "-f", "vendor/blob.bin"]).await.unwrap();
         git(p, &["commit", "-q", "-m", "blob"]).await.unwrap();
         // Grown past the limit before the next snapshot.
         std::fs::write(p.join("vendor/blob.bin"), vec![1u8; 2048]).unwrap();
-        let snap = snapshot(p, 1024).await.unwrap();
+        let snap = snapshot(p, 1024, &[]).await.unwrap();
         assert_eq!(snap.too_big, ["vendor/blob.bin"]);
         assert!(!paths(listing(p, &snap.tree).await).contains(&"vendor/blob.bin".to_string()));
         let _ = first;
@@ -2037,14 +2107,14 @@ mod tests {
     async fn reconciling_trees_writes_each_sides_tree() {
         let dir = worked_example().await;
         let p = dir.path();
-        let base = snapshot(p, MAX_FILE).await.unwrap().tree;
+        let base = snapshot(p, MAX_FILE, &[]).await.unwrap().tree;
         std::fs::write(p.join("src/cart.ts"), "studio-mini's cart\n").unwrap();
         std::fs::write(p.join("src/new.ts"), "studio-mini's new\n").unwrap();
-        let central = snapshot(p, MAX_FILE).await.unwrap().tree;
+        let central = snapshot(p, MAX_FILE, &[]).await.unwrap().tree;
         std::fs::write(p.join("src/cart.ts"), "export const cart = [1];\n").unwrap();
         std::fs::write(p.join("src/new.ts"), "this Mac's new\n").unwrap();
         std::fs::remove_file(p.join("scratch.txt")).unwrap();
-        let worker = snapshot(p, MAX_FILE).await.unwrap().tree;
+        let worker = snapshot(p, MAX_FILE, &[]).await.unwrap().tree;
 
         let r = reconcile_trees(p, &base, &central, &worker).await.unwrap();
         assert_eq!(r.differs, ["src/new.ts"]);
@@ -2090,11 +2160,11 @@ mod tests {
     async fn applying_writes_what_differs() {
         let dir = worked_example().await;
         let p = dir.path();
-        let older = snapshot(p, MAX_FILE).await.unwrap().tree;
+        let older = snapshot(p, MAX_FILE, &[]).await.unwrap().tree;
         std::fs::write(p.join("src/cart.ts"), "studio-mini's cart\n").unwrap();
         std::fs::remove_file(p.join("src/new.ts")).unwrap();
         std::fs::write(p.join("src/added.ts"), "added\n").unwrap();
-        let newer = snapshot(p, MAX_FILE).await.unwrap().tree;
+        let newer = snapshot(p, MAX_FILE, &[]).await.unwrap().tree;
 
         apply(p, &newer, &older).await.unwrap();
         assert_eq!(
@@ -2105,24 +2175,24 @@ mod tests {
         assert_eq!(read(p, "src/added.ts"), None);
         // Ignored files are not part of either tree, and stay.
         assert_eq!(read(p, ".env").as_deref(), Some("SECRET=1\n"));
-        assert_eq!(snapshot(p, MAX_FILE).await.unwrap().tree, older);
+        assert_eq!(snapshot(p, MAX_FILE, &[]).await.unwrap().tree, older);
 
         apply(p, &older, &newer).await.unwrap();
         assert_eq!(
             read(p, "src/cart.ts").as_deref(),
             Some("studio-mini's cart\n")
         );
-        assert_eq!(snapshot(p, MAX_FILE).await.unwrap().tree, newer);
+        assert_eq!(snapshot(p, MAX_FILE, &[]).await.unwrap().tree, newer);
     }
 
     #[tokio::test]
     async fn an_edit_since_the_snapshot_is_never_overwritten() {
         let dir = worked_example().await;
         let p = dir.path();
-        let older = snapshot(p, MAX_FILE).await.unwrap().tree;
+        let older = snapshot(p, MAX_FILE, &[]).await.unwrap().tree;
         std::fs::write(p.join("src/cart.ts"), "studio-mini's cart\n").unwrap();
         std::fs::remove_file(p.join("src/new.ts")).unwrap();
-        let newer = snapshot(p, MAX_FILE).await.unwrap().tree;
+        let newer = snapshot(p, MAX_FILE, &[]).await.unwrap().tree;
 
         // Edited after the snapshot, in a file the target changes.
         std::fs::write(p.join("src/cart.ts"), "typed just now\n").unwrap();
@@ -2205,7 +2275,7 @@ mod tests {
     async fn a_tree_reaching_outside_is_not_applied() {
         let dir = worked_example().await;
         let p = dir.path();
-        let here = snapshot(p, MAX_FILE).await.unwrap().tree;
+        let here = snapshot(p, MAX_FILE, &[]).await.unwrap().tree;
         let blob = String::from_utf8(
             git(p, &["rev-parse", &format!("{here}:run.sh")])
                 .await
@@ -2220,7 +2290,7 @@ mod tests {
             matches!(e, ApplyError::Unsafe(ref path) if path == ".."),
             "{e}"
         );
-        assert_eq!(snapshot(p, MAX_FILE).await.unwrap().tree, here);
+        assert_eq!(snapshot(p, MAX_FILE, &[]).await.unwrap().tree, here);
     }
 
     async fn git_mktree(repo: &Path, listing: &str) -> String {
@@ -2238,7 +2308,7 @@ mod tests {
     async fn a_copys_base_survives_gc_until_its_ref_goes() {
         let dir = worked_example().await;
         let p = dir.path();
-        let base = snapshot(p, MAX_FILE).await.unwrap().tree;
+        let base = snapshot(p, MAX_FILE, &[]).await.unwrap().tree;
         // src/new.ts is untracked: only the snapshot reaches its blob.
         let blob = String::from_utf8(
             git(p, &["rev-parse", &format!("{base}:src/new.ts")])
@@ -2252,7 +2322,7 @@ mod tests {
         // Nothing else may keep it: the file goes, and the next snapshot
         // no longer has it.
         std::fs::remove_file(p.join("src/new.ts")).unwrap();
-        snapshot(p, MAX_FILE).await.unwrap();
+        snapshot(p, MAX_FILE, &[]).await.unwrap();
         git(p, &["-c", "gc.reflogExpire=now", "gc", "-q", "--prune=now"])
             .await
             .unwrap();
@@ -2271,7 +2341,7 @@ mod tests {
     async fn a_pack_takes_any_number_of_ids_and_only_ids() {
         let dir = worked_example().await;
         let p = dir.path();
-        let tree = snapshot(p, MAX_FILE).await.unwrap().tree;
+        let tree = snapshot(p, MAX_FILE, &[]).await.unwrap().tree;
         let head = String::from_utf8(git(p, &["rev-parse", "HEAD"]).await.unwrap()).unwrap();
         // 30 000 ids: past what a command line holds on macOS.
         let many: Vec<&str> = std::iter::repeat_n(head.trim(), 30_000).collect();
@@ -2291,8 +2361,8 @@ mod tests {
         git(copy.path(), &["clone", "-q", c.to_str().unwrap(), "shop"])
             .await
             .unwrap();
-        let theirs = snapshot(c, MAX_FILE).await.unwrap().tree;
-        let mine = snapshot(&w, MAX_FILE).await.unwrap().tree;
+        let theirs = snapshot(c, MAX_FILE, &[]).await.unwrap().tree;
+        let mine = snapshot(&w, MAX_FILE, &[]).await.unwrap().tree;
         assert!(!exists(&w, &theirs).await);
 
         let pack = pack_objects(c, &[&theirs], &[&mine]).await.unwrap();
@@ -2576,12 +2646,12 @@ mod tests {
     async fn files_only_this_machine_has_are_the_secrets_and_those_that_stopped_syncing() {
         let dir = worked_example().await;
         let p = dir.path();
-        snapshot(p, MAX_FILE).await.unwrap();
+        snapshot(p, MAX_FILE, &[]).await.unwrap();
         // Stops syncing: ignored after it synced, then edited.
         std::fs::write(p.join(".git/info/exclude"), "scratch.txt\nsrc/new.ts\n").unwrap();
         std::fs::write(p.join("src/new.ts"), "edited here\n").unwrap();
         std::fs::write(p.join("key.pem"), "-----BEGIN-----\n").unwrap();
-        let snap = snapshot(p, MAX_FILE).await.unwrap();
+        let snap = snapshot(p, MAX_FILE, &[]).await.unwrap();
         assert_eq!(snap.too_big, Vec::<String>::new());
         assert_eq!(
             local_only(p).await.unwrap(),
@@ -2741,7 +2811,7 @@ mod tests {
         git(&sub, &["commit", "-q", "-m", "inner"]).await.unwrap();
         let head = String::from_utf8(git(&sub, &["rev-parse", "HEAD"]).await.unwrap()).unwrap();
 
-        let snap = snapshot(p, MAX_FILE).await.unwrap();
+        let snap = snapshot(p, MAX_FILE, &[]).await.unwrap();
         let files = read_files(p, &snap.tree).await.unwrap();
         assert_eq!(
             files["lib"],
@@ -2818,10 +2888,10 @@ mod tests {
         git(copy.path(), &["clone", "-q", c.to_str().unwrap(), "shop"])
             .await
             .unwrap();
-        let mut have = snapshot(&w, MAX_FILE).await.unwrap().tree;
+        let mut have = snapshot(&w, MAX_FILE, &[]).await.unwrap().tree;
         for i in 0..60 {
             std::fs::write(c.join("src/cart.ts"), format!("edit {i}\n")).unwrap();
-            let next = snapshot(c, MAX_FILE).await.unwrap().tree;
+            let next = snapshot(c, MAX_FILE, &[]).await.unwrap().tree;
             unpack(&w, &pack_objects(c, &[&next], &[&have]).await.unwrap())
                 .await
                 .unwrap();

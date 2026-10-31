@@ -1109,7 +1109,7 @@ impl SessionCopies {
         s: &moonlet_proto::types::Session,
     ) -> Result<()> {
         let path = Path::new(&s.path);
-        let tree = git_sync::snapshot(path, git_sync::MAX_FILE).await?.tree;
+        let tree = crate::copied_files::snapshot(&self.sessions, path, git_sync::MAX_FILE).await?.tree;
         let head = git_sync::head(path).await?;
         let branch = git_sync::branch(path)
             .await?
@@ -1864,7 +1864,7 @@ impl SessionCopies {
                     .map_err(internal)?;
             }
         }
-        let from = git_sync::snapshot(dir, git_sync::MAX_FILE)
+        let from = crate::copied_files::snapshot(&self.sessions, dir, git_sync::MAX_FILE)
             .await
             .map_err(internal)?
             .tree;
@@ -2178,7 +2178,7 @@ impl SessionCopies {
         // The snapshot first, which a busy worktree can refuse: then nothing
         // is kept yet, and a later try keeps it all once.
         let trees = if dir.is_dir() {
-            let now = git_sync::snapshot(dir, git_sync::MAX_FILE).await?.tree;
+            let now = crate::copied_files::snapshot(&self.sessions, dir, git_sync::MAX_FILE).await?.tree;
             // Against what was last sent; with nothing sent, against the
             // last commit, so nothing changed here is left out.
             let was = match sent {
@@ -2554,7 +2554,7 @@ impl SessionCopies {
                 let dir = Path::new(&h.path);
                 // Edits made in the copy are kept first; a copy whose edits
                 // cannot be kept stays, and is tried again later.
-                let kept = match git_sync::snapshot(dir, git_sync::MAX_FILE).await {
+                let kept = match crate::copied_files::snapshot(&self.sessions, dir, git_sync::MAX_FILE).await {
                     Ok(now) if !h.tree.is_empty() && now.tree != h.tree => {
                         self.keep_edits(dir, &h.tree, &now.tree).await.map(|_| ())
                     }
