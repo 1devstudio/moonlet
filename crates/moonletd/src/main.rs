@@ -7,6 +7,7 @@
 //! * `moonletd stop` / `moonletd status`.
 
 mod clones;
+mod copied_files;
 mod copies;
 mod cloud;
 mod cloud_fake;
