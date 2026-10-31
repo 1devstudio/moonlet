@@ -1628,7 +1628,8 @@ mod tests {
         let ended = until(SUBAGENT_STOP, r#""type": "result""#);
         replay(&ended, &mut a, &mut st);
         assert_eq!(st.status, "done");
-        // Claude starts a turn of its own after the stopped subagent's report.
+        // Claude starts a turn of its own after the last subagent's report: the fixture's
+        // `message_start` of msg_011Cg1u8jVxZFc4bi7HRYg2a is that turn's first line.
         let own = until(SUBAGENT_STOP, "msg_011Cg1u8jVxZFc4bi7HRYg2a");
         replay(&own[ended.len()..], &mut a, &mut st);
         assert_eq!(st.status, "working");
