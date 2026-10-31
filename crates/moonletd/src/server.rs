@@ -325,6 +325,12 @@ where
 
     // Fan daemon events out to this client.
     let mut events = daemon.terminals.subscribe_events();
+    // A URL for this Mac's app waits while none is connected (X75); from
+    // now on this one hears it.
+    let app = conn.client == crate::daemon::APP_CLIENT && conn.phone.is_none();
+    if app {
+        daemon.app_connection(true);
+    }
     let ev_tx = tx.clone();
     // The text an agent asks to read is for the app alone, not for the
     // agent's own `moonlet` connections (X31).
@@ -333,8 +339,16 @@ where
     // (X62): neither an agent's CLI nor a worker hears it.
     let no_jobs = is_cli || conn.client == crate::link::WORKER_CLIENT;
     let phone = conn.phone.is_some();
+    let device = conn.phone.clone();
     // A paired phone answers setup questions too (X40); a paired Mac does not.
     let approves_setup = conn.phone.as_deref().is_some_and(|d| daemon.is_phone(d));
+    // A URL that came for this phone while it was away is shown now (X75).
+    let paired_phone = device.clone().filter(|_| approves_setup);
+    if let Some(d) = &paired_phone {
+        for show in daemon.phone_connection(d, true) {
+            let _ = tx.send(Frame::Json(Message::event(moonlet_proto::methods::EV_BROWSER_SHOW, show)));
+        }
+    }
     // A cloud machine (X63) reaches only what a worker needs: no terminal,
     // and none of the central host's events.
     let cloud = conn
@@ -357,6 +371,17 @@ where
                 Ok(Message::Event { name, .. })
                     if (no_jobs || (phone && !approves_setup))
                         && name == moonlet_proto::methods::EV_EXEC_SETUP => {}
+                // A URL to open goes to where the user is: this Mac's app or
+                // a paired phone (X75), never an agent or another Mac.
+                Ok(Message::Event { name, .. })
+                    if (no_jobs || (phone && !approves_setup))
+                        && name == moonlet_proto::methods::EV_BROWSER_SHOW => {}
+                // One for the phone goes to the phone the user used last
+                // alone, not every paired phone (X75).
+                Ok(Message::Event { name, data })
+                    if phone
+                        && name == moonlet_proto::methods::EV_BROWSER_SHOW
+                        && data.get("device").and_then(Value::as_str).is_some_and(|d| Some(d) != device.as_deref()) => {}
                 // Design systems and designs stay on the Mac (X64, X65): a
                 // paired device hears none of the Mac-only events.
                 Ok(Message::Event { name, .. }) if phone && MAC_ONLY_EVENTS.contains(&name.as_str()) => {}
@@ -507,6 +532,12 @@ where
     daemon.terminals.detach_all(conn.id);
     daemon.session_copies.detach(conn.id, None);
     daemon.on_disconnect(conn.id);
+    if app {
+        daemon.app_connection(false);
+    }
+    if let Some(d) = &paired_phone {
+        daemon.phone_connection(d, false);
+    }
     event_task.abort();
     drop(conn);
     drop(tx);
