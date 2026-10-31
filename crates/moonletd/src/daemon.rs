@@ -1118,7 +1118,7 @@ impl Daemon {
                 }
                 Box::pin(self.forward(conn, params(p)?)).await
             }
-            m::SESSION_OPEN | m::SESSION_OFFER | m::SESSION_CHAT | m::SESSION_TRANSCRIPT | m::SESSION_CHECKPOINT | m::SESSION_EVENT | m::SESSION_TAKE | m::SESSION_GIVE_BACK | m::SESSION_TRANSCRIPT_FETCH | m::SESSION_YIELD | m::SESSION_PIN => {
+            m::SESSION_OPEN | m::SESSION_OFFER | m::SESSION_CHAT | m::SESSION_TRANSCRIPT | m::SESSION_CHECKPOINT | m::SESSION_EVENT | m::SESSION_TAKE | m::SESSION_GIVE_BACK | m::SESSION_TRANSCRIPT_FETCH | m::SESSION_YIELD | m::SESSION_PIN | m::SESSION_FILES | m::SESSION_FILES_FETCH => {
                 // Only a linked Mac's daemon, as for `design.offer` (X72).
                 let refused = || RpcError::new("forbidden", "only a member of the account sends its sessions");
                 let device = conn.phone.as_deref().ok_or_else(refused)?;
@@ -1185,6 +1185,10 @@ impl Daemon {
                     ok(self.give(&worker, params(p)?).await?)
                 } else if method == m::SESSION_GIVE_BACK {
                     ok(self.take_back(&worker, params(p)?).await?)
+                } else if method == m::SESSION_FILES {
+                    ok(self.session_copies.files_offered(&worker, params(p)?).await?)
+                } else if method == m::SESSION_FILES_FETCH {
+                    ok(self.files_fetched(params(p)?).await?)
                 } else if method == m::SESSION_TRANSCRIPT_FETCH {
                     let r: m::SessionTranscriptFetch = params(p)?;
                     let bytes = self.session_copies.transcript_bytes(&worker, &r)?;
@@ -3774,6 +3778,76 @@ impl Daemon {
             })
         }));
         self.session_copies.spawn();
+        self.keep_copied_files();
+    }
+
+    /// The patterns of the project `identity` names; the default without
+    /// one (X74).
+    fn copied_patterns(&self, identity: Option<&moonlet_proto::types::ProjectIdentity>) -> Vec<String> {
+        match identity {
+            Some(i) => self.sessions.copied_files(i).0,
+            None => moonlet_core::copied_files::DEFAULT.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    /// `session.files_fetch` on the central host (X74): the copied files of
+    /// a session it runs, with the bytes a member's live copy lacks.
+    async fn files_fetched(&self, r: m::SessionFilesFetch) -> Result<m::SessionFilesFetched, RpcError> {
+        let me = self.link.info().worker.id;
+        let record = self
+            .sessions
+            .session_records()
+            .remove(&r.session)
+            .ok_or_else(|| RpcError::new("not_found", "no such session in the account"))?;
+        if record.get("owner").and_then(Value::as_str) != Some(me.as_str()) {
+            return Err(RpcError::new("elsewhere", "that session runs on another member"));
+        }
+        let s = self.sessions.session(&r.session).map_err(internal)?;
+        let identity = self.sessions.list_projects().into_iter().find(|p| p.id == s.project_id).map(|p| p.identity);
+        let patterns = self.copied_patterns(identity.as_ref());
+        let files = crate::copied_files::answer(Path::new(&s.path), &patterns, &r.have).await.map_err(internal)?;
+        Ok(m::SessionFilesFetched { files })
+    }
+
+    /// Keeps the copied files of this Mac's live copies (X60) those of the
+    /// sessions the central host runs (X74), every couple of seconds.
+    fn keep_copied_files(self: &Arc<Self>) {
+        let d = Arc::downgrade(self);
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                let Some(d) = d.upgrade() else { return };
+                let info = d.link.info();
+                if info.central.is_none() || info.worker.cloud || !d.sessions.has_account() {
+                    continue;
+                }
+                let Some(host) = d.link.host() else { continue };
+                for (session, path, identity) in d.sync.live_copies() {
+                    if let Err(e) = d.fetch_copied_files(&host, &session, &path, identity.as_ref()).await {
+                        tracing::debug!(%session, "cannot fetch the copied files: {e:#}");
+                    }
+                }
+            }
+        });
+    }
+
+    async fn fetch_copied_files(&self, host: &moonlet_link::Host, session: &str, path: &Path, identity: Option<&moonlet_proto::types::ProjectIdentity>) -> anyhow::Result<()> {
+        let patterns = self.copied_patterns(identity);
+        let have: std::collections::BTreeMap<String, String> = moonlet_core::copied_files::manifest(path, &patterns, |_, _| false, 0)
+            .await?
+            .into_iter()
+            .map(|e| (e.path, e.sha))
+            .collect();
+        let fetched = host
+            .request(m::SESSION_FILES_FETCH, serde_json::to_value(m::SessionFilesFetch { session: session.to_string(), have })?)
+            .await
+            .map_err(|e| anyhow::anyhow!("{}: {}", e.code, e.message))?;
+        let fetched: m::SessionFilesFetched = serde_json::from_value(fetched)?;
+        let manifest: Vec<_> = fetched.files.into_iter().map(crate::copied_files::from_wire).collect();
+        let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| session.to_string());
+        let label = crate::sync::segment(&name);
+        crate::copied_files::take(&moonlet_core::paths::home(), &label, &format!("live:{session}"), path, &patterns, &manifest).await?;
+        Ok(())
     }
 
     /// Keeps this member's design copies (X71): a round when the design

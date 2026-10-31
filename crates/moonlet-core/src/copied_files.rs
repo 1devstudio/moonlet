@@ -350,6 +350,113 @@ pub async fn seed(from: &Path, to: &Path, patterns: &[String]) -> Result<Vec<Str
     Ok(copied)
 }
 
+/// The SHA-256 of `bytes`, in hex: how two members compare a file.
+pub fn sha(bytes: &[u8]) -> String {
+    use sha2::Digest;
+    sha2::Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// A copied file as one member has it: its hash, and its bytes when they
+/// go along.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Entry {
+    pub path: String,
+    pub sha: String,
+    pub bytes: Option<Vec<u8>>,
+}
+
+/// Every copied file of worktree `dir`, in path order, each with its hash,
+/// and its bytes when `include` says so for its path and hash, until
+/// `budget` bytes went along; the rest go another time.
+pub async fn manifest(
+    dir: &Path,
+    patterns: &[String],
+    include: impl Fn(&str, &str) -> bool,
+    mut budget: u64,
+) -> Result<Vec<Entry>> {
+    let mut out = Vec::new();
+    for (path, _) in in_worktree(dir, patterns).await?.files {
+        let Some(bytes) = read(dir, &path)? else {
+            continue;
+        };
+        let sha = sha(&bytes);
+        let fits = (bytes.len() as u64) <= budget;
+        let bytes = (include(&path, &sha) && fits).then(|| {
+            budget -= bytes.len() as u64;
+            bytes
+        });
+        out.push(Entry { path, sha, bytes });
+    }
+    Ok(out)
+}
+
+/// What [`apply`] did.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Applied {
+    /// Paths written or removed.
+    pub changed: Vec<String>,
+    /// Paths that differ whose bytes did not come along.
+    pub want: Vec<String>,
+}
+
+/// Makes worktree `dir`'s copied files those of `manifest`, the session
+/// owner's: each one that differs is written, and each one `manifest` lacks
+/// that this side had from the owner before (`had`) is removed. A version of this side's that is replaced or removed goes to
+/// `keep` first, so none is lost. A path that is not a plain path inside
+/// the worktree, or that this side's own list does not name, is refused.
+pub async fn apply(
+    dir: &Path,
+    patterns: &[String],
+    manifest: &[Entry],
+    had: &std::collections::BTreeSet<String>,
+    mut keep: impl FnMut(&str, &[u8]) -> Result<()>,
+) -> Result<Applied> {
+    let named = select(
+        patterns,
+        &manifest.iter().map(|e| e.path.clone()).collect::<Vec<_>>(),
+        |_| Some(0),
+    )?;
+    let named: std::collections::BTreeSet<&str> =
+        named.files.iter().map(|(p, _)| p.as_str()).collect();
+    let mut here = std::collections::BTreeMap::new();
+    for (path, _) in in_worktree(dir, patterns).await?.files {
+        if let Some(bytes) = read(dir, &path)? {
+            here.insert(path, bytes);
+        }
+    }
+    let mut done = Applied::default();
+    for e in manifest {
+        if check_path(&e.path).is_err() || !named.contains(e.path.as_str()) {
+            bail!("{} is not a copied file here", e.path);
+        }
+        let old = here.remove(&e.path);
+        if old.as_deref().map(sha).as_deref() == Some(e.sha.as_str()) {
+            continue;
+        }
+        match &e.bytes {
+            Some(bytes) if sha(bytes) == e.sha => {
+                if let Some(old) = &old {
+                    keep(&e.path, old)?;
+                }
+                write(dir, &e.path, bytes)?;
+                done.changed.push(e.path.clone());
+            }
+            _ => done.want.push(e.path.clone()),
+        }
+    }
+    // Only what the owner had and deleted goes: a file this side made
+    // that the owner never had stays, such as a secret of its own.
+    for (path, old) in here.into_iter().filter(|(p, _)| had.contains(p)) {
+        keep(&path, &old)?;
+        remove(dir, &path)?;
+        done.changed.push(path);
+    }
+    Ok(done)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -548,6 +655,132 @@ mod tests {
             std::fs::read_to_string(to.path().join(".env")).unwrap(),
             "SHARED=1\n"
         );
+    }
+
+    fn repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let out = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        dir
+    }
+
+    #[tokio::test]
+    async fn the_owners_files_replace_this_sides_which_are_kept_first() {
+        let owner = repo();
+        let copy = repo();
+        let o = owner.path();
+        let c = copy.path();
+        write(o, ".env", b"DB=owner\n").unwrap();
+        write(o, "apps/web/.env.local", b"FLAG=1\n").unwrap();
+        write(c, ".env", b"DB=copy\n").unwrap();
+        write(c, ".env.test", b"ONLY=copy\n").unwrap();
+        let list = pats(&DEFAULT);
+        let m = manifest(o, &list, |_, _| true, MAX_TOTAL).await.unwrap();
+        let mut kept = Vec::new();
+        let none = std::collections::BTreeSet::new();
+        let done = apply(c, &list, &m, &none, |p, b| {
+            kept.push((p.to_string(), String::from_utf8(b.to_vec()).unwrap()));
+            Ok(())
+        })
+        .await
+        .unwrap();
+        assert_eq!(done.changed, [".env", "apps/web/.env.local"]);
+        assert!(done.want.is_empty());
+        assert_eq!(
+            std::fs::read_to_string(c.join(".env")).unwrap(),
+            "DB=owner\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(c.join("apps/web/.env.local")).unwrap(),
+            "FLAG=1\n"
+        );
+        // A file of this side's that the owner never had stays.
+        assert_eq!(
+            std::fs::read_to_string(c.join(".env.test")).unwrap(),
+            "ONLY=copy\n"
+        );
+        assert_eq!(kept, [(".env".to_string(), "DB=copy\n".to_string())]);
+        // Once the same, nothing more is done.
+        let again = apply(c, &list, &m, &none, |_, _| panic!("nothing to keep"))
+            .await
+            .unwrap();
+        assert_eq!(again, Applied::default());
+        // One the owner had and deleted goes, kept first.
+        std::fs::remove_file(o.join(".env")).unwrap();
+        let m = manifest(o, &list, |_, _| true, MAX_TOTAL).await.unwrap();
+        let had: std::collections::BTreeSet<String> =
+            [".env".to_string(), "apps/web/.env.local".to_string()].into();
+        let mut kept = Vec::new();
+        let done = apply(c, &list, &m, &had, |p, b| {
+            kept.push((p.to_string(), String::from_utf8(b.to_vec()).unwrap()));
+            Ok(())
+        })
+        .await
+        .unwrap();
+        assert_eq!(done.changed, [".env"]);
+        assert_eq!(kept, [(".env".to_string(), "DB=owner\n".to_string())]);
+        assert!(c.join(".env.test").exists());
+    }
+
+    #[tokio::test]
+    async fn a_file_whose_bytes_did_not_come_along_is_asked_for() {
+        let owner = repo();
+        let copy = repo();
+        write(owner.path(), ".env", b"A=1\n").unwrap();
+        let list = pats(&DEFAULT);
+        let m = manifest(owner.path(), &list, |_, _| false, MAX_TOTAL)
+            .await
+            .unwrap();
+        assert_eq!(
+            m,
+            [Entry {
+                path: ".env".into(),
+                sha: A1.into(),
+                bytes: None
+            }]
+        );
+        let done = apply(copy.path(), &list, &m, &Default::default(), |_, _| Ok(()))
+            .await
+            .unwrap();
+        assert_eq!(done.want, [".env"]);
+        assert!(!copy.path().join(".env").exists());
+    }
+
+    #[tokio::test]
+    async fn a_path_this_sides_list_does_not_name_is_refused() {
+        let copy = repo();
+        let entry = |path: &str| Entry {
+            path: path.into(),
+            sha: sha(b"x"),
+            bytes: Some(b"x".to_vec()),
+        };
+        for path in ["notes.txt", "../.env", ".git/.env"] {
+            assert!(
+                apply(
+                    copy.path(),
+                    &pats(&DEFAULT),
+                    &[entry(path)],
+                    &Default::default(),
+                    |_, _| Ok(())
+                )
+                .await
+                .is_err(),
+                "{path}"
+            );
+        }
+        assert!(!copy.path().join("notes.txt").exists());
+    }
+
+    /// `printf 'A=1\n' | shasum -a 256`.
+    const A1: &str = "91d6a3d55e9fea7911c537afae6607c77fa8bc0f3a76c375e104ac5a8cfa84db";
+
+    #[test]
+    fn a_files_hash_is_its_sha256() {
+        assert_eq!(sha(b"A=1\n"), A1);
     }
 
     #[test]

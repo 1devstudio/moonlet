@@ -159,6 +159,12 @@ pub const SESSION_UNPIN: &str = "session.unpin";
 pub const SESSION_TAKE_ANYWAY: &str = "session.take_anyway";
 /// Pins a session to a member, or unpins it (X73): member → central host.
 pub const SESSION_PIN: &str = "session.pin";
+/// [`SessionFiles`] → [`SessionFilesTaken`]: a session's copied files, from
+/// the member that runs it to the central host's copy (X74).
+pub const SESSION_FILES: &str = "session.files";
+/// [`SessionFilesFetch`] → [`SessionFilesFetched`]: the copied files of a
+/// session the central host runs, for a Mac's live copy of it (X74).
+pub const SESSION_FILES_FETCH: &str = "session.files_fetch";
 /// Whether the central host could continue each copy it holds (X73).
 pub const SESSION_READY: &str = "session.ready";
 /// Tests only, with `MOONLET_TEST_POWER=1`: as if the Mac went to sleep
@@ -1314,6 +1320,44 @@ pub struct SessionMove {
     pub to: String,
     #[serde(default)]
     pub now: bool,
+}
+
+/// A copied file as its side has it (X74): its SHA-256, and its bytes in
+/// base64 when they go along.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CopiedFile {
+    pub path: String,
+    pub sha: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+}
+
+/// `session.files`: every copied file of the session's worktree on the
+/// member that runs it, with the bytes of those that changed (X74).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionFiles {
+    pub session: String,
+    pub files: Vec<CopiedFile>,
+}
+
+/// `session.files`' answer: paths whose bytes the copy still needs.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SessionFilesTaken {
+    pub want: Vec<String>,
+}
+
+/// `session.files_fetch`: what a live copy has, by path and SHA-256.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionFilesFetch {
+    pub session: String,
+    pub have: BTreeMap<String, String>,
+}
+
+/// `session.files_fetch`'s answer: every copied file of the session, with
+/// the bytes of those the copy lacks.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SessionFilesFetched {
+    pub files: Vec<CopiedFile>,
 }
 
 /// `session.pin {session, pinned}`, member → central host (X73).
