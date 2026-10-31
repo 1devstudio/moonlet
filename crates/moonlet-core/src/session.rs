@@ -2786,6 +2786,29 @@ mod tests {
         assert!(notes.contains(&"Started a new conversation: this workspace now uses Private".to_string()), "{notes:?}");
     }
 
+    /// X73: another member's chat goes on here in the profile of this
+    /// host's workspace, where its conversation was put: it is resumed.
+    #[tokio::test]
+    async fn a_continued_chat_resumes_its_conversation_in_the_workspaces_profile() {
+        let (repo, home, mgr, chats) = structured().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let work = mgr.create_profile("Work", Some(&folder(&home, "claude-work"))).unwrap();
+        set_profile(&mgr, &mgr.list_workspaces()[0].id, Some(&work.id));
+        let s = mgr.create_session(new_session(&r.id, None)).await.unwrap();
+        let history = moonlet_proto::types::ChatState {
+            status: "done".into(),
+            agent_session: Some("0d6e2a4c-1b3f-4a5e-9c7d-8e1f2a3b4c5d".into()),
+            ..Default::default()
+        };
+
+        let chat = mgr.continue_chat(&s, history).unwrap();
+        let args = nth_line(&Path::new(&s.path).join("claude-args"), 1).await;
+        assert!(args.contains("--resume 0d6e2a4c-1b3f-4a5e-9c7d-8e1f2a3b4c5d"), "{args}");
+        assert_eq!(nth_line(&Path::new(&s.path).join("claude-env"), 1).await, folder(&home, "claude-work"));
+        let notes: Vec<String> = chats.state(chat.id).unwrap().items.into_iter().filter(|i| i.kind == "system").map(|i| i.text).collect();
+        assert!(notes.is_empty(), "{notes:?}");
+    }
+
     /// X64: a design system's agent has no session; it starts in its
     /// workspace's profile, with its own settings.
     #[tokio::test]

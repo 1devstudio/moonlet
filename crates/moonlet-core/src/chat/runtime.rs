@@ -192,6 +192,7 @@ impl ChatManager {
         // Only Claude has a permission mode.
         let mode = req.mode.filter(|_| req.agent == "claude");
         let add_dirs = req.add_dirs.iter().map(|d| check_dir(d)).collect::<Result<Vec<_>>>()?;
+        let continuing = history.is_some();
         let cfg = ChatConfig { agent: req.agent.clone(), model: req.model, effort: req.effort, mode, resume: None, name: req.name, cwd: cwd.display().to_string(), add_dirs: add_dirs.clone(), settings: req.settings, workspace: req.workspace, config_dir: None };
         let (program, args) = adapter.command(&cfg);
         let mut command = vec![program];
@@ -255,6 +256,11 @@ impl ChatManager {
         // Start right away so the agent is warm when the first message comes.
         {
             let mut inner = chat.inner.lock().unwrap();
+            // A continued conversation was put in this host's profile for
+            // the session (X73): it is resumed there, not started anew.
+            if continuing {
+                inner.cfg.config_dir = self.launch(&inner).env.get(crate::profiles::CONFIG_DIR_VAR).cloned();
+            }
             if let Err(e) = self.spawn(&chat, &mut inner) {
                 self.fail(&chat, &mut inner, &format!("{e:#}"));
             }
