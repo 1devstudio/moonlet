@@ -1214,7 +1214,9 @@ pub struct SessionTake {
     #[serde(default)]
     pub pin: bool,
     /// Taken while the central host was offline (Take over anyway): kept
-    /// only if `epoch` is still the session's.
+    /// only if `epoch` is still the session's. The central host takes it so
+    /// only from a member cut off from it since the session became its own;
+    /// from any other, it is an ordinary take.
     #[serde(default)]
     pub forced: bool,
 }

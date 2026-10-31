@@ -111,6 +111,7 @@ Manual check M12 (`docs/manual-checks.md`) measures, on a real MacBook, how long
   - **The central host's record still has the `epoch` the member started from:** the change is kept, and the central host stops its agent if it went on running. Its files from the gap go to `sync-leftovers`, and its conversation from the gap is kept as a fork, as for any member that lost a session.
   - **The record moved on meanwhile** (the central host gave the session to a third member): the forced change loses. This member stops its agent and keeps its own work from the gap the same way.
 - [ ] A pinned session can be taken over anyway too. Doing so pins it to this member.
+- [ ] The central host takes a change as forced only from a member that was cut off from it since the session became the central host's: the central host started since, or that member's link was made since. From a member that stayed linked, it is an ordinary take: a pin or a running turn refuses it (`a_takeover_from_a_member_that_never_lost_the_central_host_is_not_forced`).
 - [ ] The phone, connected only to the central host, never offers it. While the central host is offline, the phone shows that, as today.
 
 ### Waking up, and finding out the session moved

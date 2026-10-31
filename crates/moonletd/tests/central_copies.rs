@@ -2841,6 +2841,139 @@ async fn a_session_kept_on_the_central_host_can_be_taken_over_anyway_and_is_kept
     assert!(mini_own.iter().all(|s| s["id"] != made["id"]));
 }
 
+const AIR: &str = "9e2b4d6f-1a3c-4e5f-8b7d-0c2e4a6b8d1f";
+
+/// The replies a [`HandLink`] waits for, by request id.
+type Waiting = std::sync::Arc<
+    std::sync::Mutex<std::collections::HashMap<u64, tokio::sync::oneshot::Sender<Result<Value, String>>>>,
+>;
+
+/// A member's link to the central host made by hand, as another Mac's
+/// daemon would make it: it answers the central host's pings, so it stays
+/// linked, and asks what a test sends.
+struct HandLink {
+    out: tokio::sync::mpsc::UnboundedSender<moonlet_proto::Frame>,
+    waiting: Waiting,
+    next: std::sync::atomic::AtomicU64,
+}
+
+impl HandLink {
+    /// Pairs as the Mac `name` with the central host `mini` and links as
+    /// worker `id`.
+    async fn to(mini: &Daemon, id: &str, name: &str) -> HandLink {
+        use moonlet_proto::{Frame, Message, read_frame, write_frame};
+        let status: Value = mini.call("mobile.status", json!({})).await;
+        let addr = status["listening"][0].as_str().unwrap().to_string();
+        let p: MobilePairing = mini
+            .call("mobile.pair_start", json!({ "kind": "desktop" }))
+            .await;
+        let token = moonlet_link::tailnet::pair(&[addr.clone()], &p.code, name, DeviceKind::Desktop)
+            .await
+            .unwrap()
+            .token;
+        let (mut rd, mut wr) = raw(&addr, &token, "moonletd-worker").await.into_split();
+        let (out, mut outgoing) = tokio::sync::mpsc::unbounded_channel::<Frame>();
+        tokio::spawn(async move {
+            while let Some(f) = outgoing.recv().await {
+                if write_frame(&mut wr, &f).await.is_err() {
+                    return;
+                }
+            }
+        });
+        let waiting: Waiting = Default::default();
+        let (pongs, replies) = (out.clone(), waiting.clone());
+        tokio::spawn(async move {
+            loop {
+                match read_frame(&mut rd).await {
+                    Ok(Some(Frame::Json(Message::Request { id, .. }))) => {
+                        let _ = pongs.send(Frame::Json(Message::ok(id, json!({}))));
+                    }
+                    Ok(Some(Frame::Json(Message::Response { id, result, error }))) => {
+                        if let Some(reply) = replies.lock().unwrap().remove(&id) {
+                            let _ = reply.send(match error {
+                                Some(e) => Err(format!("{}: {}", e.code, e.message)),
+                                None => Ok(result.unwrap_or(Value::Null)),
+                            });
+                        }
+                    }
+                    Ok(Some(_)) => {}
+                    _ => return,
+                }
+            }
+        });
+        let link = HandLink { out, waiting, next: 1.into() };
+        link.ask("worker.register", registration(id, name)).await.unwrap();
+        link
+    }
+
+    async fn ask(&self, method: &str, params: Value) -> Result<Value, String> {
+        let id = self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.waiting.lock().unwrap().insert(id, tx);
+        let req = moonlet_proto::Message::Request { id, method: method.to_string(), params };
+        self.out.send(moonlet_proto::Frame::Json(req)).unwrap();
+        tokio::time::timeout(Duration::from_secs(30), rx)
+            .await
+            .expect("no reply")
+            .unwrap_or_else(|_| Err("the link closed".to_string()))
+    }
+}
+
+#[tokio::test]
+async fn a_takeover_from_a_member_that_never_lost_the_central_host_is_not_forced() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents_as(&origin, false).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    copy_of(&mini, &made).await;
+    within(
+        Duration::from_secs(30),
+        "the checkpoint on studio-mini",
+        || async {
+            mini.try_call("session.copy", json!({ "session": made["id"] }))
+                .await
+                .is_ok_and(|i| !i["checkpoint"].is_null())
+        },
+    )
+    .await;
+    // The MacBook Air is linked before the session reaches studio-mini, and
+    // stays linked.
+    let air = HandLink::to(&mini, AIR, "MacBook Air").await;
+    let _: Value = book
+        .call("session.move", json!({ "session": made["id"], "to": MINI }))
+        .await;
+
+    // Made at ownership number 1, moved once: 2. Kept on studio-mini, it
+    // is not taken, whatever the Air says.
+    let take = json!({ "session": made["id"], "epoch": 2, "now": false, "forced": true });
+    let refused = air.ask("session.take", take.clone()).await.unwrap_err();
+    assert!(refused.starts_with("pinned"), "{refused}");
+
+    // Unpinned, with a turn running there, it waits for the turn.
+    let _: Value = book
+        .call("session.unpin", json!({ "session": made["id"] }))
+        .await;
+    let own: Vec<Value> = mini.call("session.list", json!({})).await;
+    let chat = own.iter().find(|s| s["id"] == made["id"]).unwrap()["terminals"][0].clone();
+    let _: Value = mini
+        .call("chat.send", json!({ "id": chat, "text": "HOLD there" }))
+        .await;
+    within(
+        Duration::from_secs(30),
+        "a turn running on studio-mini",
+        || async {
+            let st: Value = mini.call("chat.state", json!({ "id": chat })).await;
+            st["status"] == json!("working")
+        },
+    )
+    .await;
+    let busy = air.ask("session.take", take).await.unwrap_err();
+    assert!(busy.starts_with("busy"), "{busy}");
+    let mini_own: Vec<Value> = mini.call("session.list", json!({})).await;
+    assert!(mini_own.iter().any(|s| s["id"] == made["id"]), "studio-mini still runs it");
+}
+
 #[tokio::test]
 async fn a_wake_cut_short_by_another_sleep_leaves_the_agents_stopped() {
     let origin = Origin::new();

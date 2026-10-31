@@ -72,6 +72,9 @@ pub struct Daemon {
     /// (X65): what they did, and how many saves, so only the last save's
     /// wait takes the snapshot.
     hand_edits: Mutex<HashMap<String, HandEdits>>,
+    /// On the central host: when it took each session in since it started
+    /// (ms, X73), so it knows whether a member was cut off from it since.
+    mine_since: Mutex<HashMap<String, u64>>,
     /// The watches of the sessions' worktrees that hold session designs,
     /// by session, which announce their changes as `design.changed` (X65).
     session_watches: Mutex<HashMap<String, moonlet_core::design::watch::Watching>>,
@@ -581,6 +584,7 @@ impl Daemon {
             design_locks: Mutex::new(HashMap::new()),
             _design_watch: design_watch,
             hand_edits: Mutex::new(HashMap::new()),
+            mine_since: Mutex::new(HashMap::new()),
             session_watches: Mutex::new(HashMap::new()),
             edits_quiet: std::env::var("MOONLET_DESIGN_QUIET_MS")
                 .ok()
@@ -2971,6 +2975,7 @@ impl Daemon {
             }
             return Err(RpcError::new("internal", "cannot record this host as the session's owner"));
         }
+        self.mine_since.lock().unwrap().insert(session.to_string(), moonlet_core::paths::now_ms());
         Ok(adopted)
     }
 
@@ -2998,24 +3003,31 @@ impl Daemon {
         if epoch != r.epoch {
             return Err(RpcError::new("stale", "that session moved meanwhile"));
         }
+        let s = self.sessions.session(&r.session).map_err(internal)?;
+        // Taken while this host was offline only if the member was cut off
+        // from it since the session became this host's: this host started
+        // since, or the member's link was made since. A session made here
+        // became this host's when it was made. Otherwise it is an ordinary
+        // take, which a pin or a running turn stops.
+        let mine_since = self.mine_since.lock().unwrap().get(&r.session).copied().unwrap_or(s.created_at);
+        let forced = r.forced && self.workers.away_since(worker, mine_since);
         // Take over anyway takes a pinned session too, and keeps it on the
         // member that took it.
         let pinned = text("pinned").is_some();
-        if pinned && !r.forced && text("pinned").as_deref() != Some(worker) {
+        if pinned && !forced && text("pinned").as_deref() != Some(worker) {
             return Err(RpcError::new("pinned", "that session is kept where it is"));
         }
-        let pin = r.pin || (r.forced && pinned);
-        let s = self.sessions.session(&r.session).map_err(internal)?;
+        let pin = r.pin || (forced && pinned);
         let chats: Vec<moonlet_proto::TerminalId> = s.terminals.iter().copied().filter(|t| self.chats.is_chat(*t)).collect();
         let running = chats
             .iter()
             .any(|t| self.chats.state(*t).is_ok_and(|st| matches!(st.status.as_str(), "working" | "blocked")));
-        if running && !r.now && !r.forced {
+        if running && !r.now && !forced {
             return Err(RpcError::new("busy", "a turn is running; it moves when the turn ends"));
         }
         // Taken while this host was offline: what it did meanwhile is kept
         // before the member's work replaces it.
-        if r.forced {
+        if forced {
             match self.session_copies.keep_gap(&s).await {
                 Ok(Some(folder)) => tracing::info!(session = %r.session, "kept what this host did while it was offline in {}", folder.display()),
                 Ok(None) => {}
