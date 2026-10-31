@@ -5,12 +5,21 @@
 // a copy host as they use any host.
 
 const SEP = "#copy:";
+/** Another member's sign-in (X75), followed through the central host as
+ * a copy host's terminals are: by member instead of session. */
+const SIGNIN_SEP = "#signin:";
 
 export function copyHostId(host: string, session: string): string {
   return `${host}${SEP}${session}`;
 }
 
-export function parseCopyHost(id: string): { host: string; session: string } | null {
+export function signInHostId(host: string, member: string): string {
+  return `${host}${SIGNIN_SEP}${member}`;
+}
+
+export function parseCopyHost(id: string): { host: string; session: string; member?: string } | null {
+  const s = id.lastIndexOf(SIGNIN_SEP);
+  if (s > 0 && s + SIGNIN_SEP.length < id.length) return { host: id.slice(0, s), session: "", member: id.slice(s + SIGNIN_SEP.length) };
   const i = id.lastIndexOf(SEP);
   if (i <= 0 || i + SEP.length >= id.length) return null;
   return { host: id.slice(0, i), session: id.slice(i + SEP.length) };
@@ -18,7 +27,9 @@ export function parseCopyHost(id: string): { host: string; session: string } | n
 
 /** How a call to copy host `id` goes to its central host: the session's
  * terminals by `session.attach` and the relay id `relayOf` gives once
- * attached, anything else as `session.forward`. Null: nothing to send. */
+ * attached, anything else as `session.forward`. A sign-in's terminal is
+ * attached by `signins.attach`, and nothing else is sent for it. Null:
+ * nothing to send. */
 export function routeCall(
   id: string,
   method: string,
@@ -28,6 +39,10 @@ export function routeCall(
   const copy = parseCopyHost(id);
   if (!copy) return null;
   const p = (params ?? {}) as { id?: number; cols?: number; rows?: number };
+  if (copy.member !== undefined && method === "terminal.attach") {
+    return { host: copy.host, method: "signins.attach", params: { member: copy.member, terminal: p.id, cols: p.cols, rows: p.rows } };
+  }
+  if (copy.member !== undefined && method !== "terminal.detach") return null;
   if (method === "terminal.attach") {
     return { host: copy.host, method: "session.attach", params: { session: copy.session, terminal: p.id, cols: p.cols, rows: p.rows } };
   }

@@ -3,7 +3,7 @@
 // underneath, so terminals and agents keep running.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, Bell, Bot, ChevronRight, Cloud, Cpu, Folder, GitBranch, Keyboard, Link2, Palette, Search, Server, Settings, Smartphone, SquareTerminal, User, X, ListChecks } from "lucide-react";
+import { ArrowLeft, Bell, Bot, ChevronRight, Cloud, Cpu, Folder, GitBranch, KeyRound, Keyboard, Link2, Palette, Search, Server, Settings, Smartphone, SquareTerminal, User, X, ListChecks } from "lucide-react";
 import { escapeAction, hostOrder, profilesNeedSignIn, routeFocus, routeKey, activeNavKey, settingsCrumbs, settingsHosts, settingsNav, settingsWorkspaces, type AppPage, type NavEntry, type SettingsRoute } from "../../lib/settingsPage";
 import { goSettings } from "../../lib/settingsNavigation";
 import { moveSelection, searchSettings, type SearchResult } from "../../lib/settingsSearch";
@@ -24,6 +24,7 @@ import { HooksPage, ProfilesPage } from "./ClaudePages";
 import { HostsPage, PhonesPage, useMobileStatus } from "./MachinePages";
 import { WorkersPage } from "./WorkersPage";
 import { CloudPage } from "./CloudPage";
+import { SignInsPage } from "./SignInsPage";
 import { removalError } from "../../lib/cloudSettings";
 import { useCloud } from "../../lib/cloudStore";
 import { useSync } from "../../lib/syncStore";
@@ -43,6 +44,7 @@ const ICONS: Record<AppPage, typeof Settings> = {
   hosts: Server,
   workers: Cpu,
   cloud: Cloud,
+  signins: KeyRound,
   phones: Smartphone,
 };
 
@@ -189,6 +191,8 @@ function AppPageBody({ route, mobile }: { route: { page: AppPage }; mobile: Retu
       return <WorkersPage />;
     case "cloud":
       return null;
+    case "signins":
+      return <SignInsPage />;
     case "phones":
       return <PhonesPage status={mobile} />;
   }

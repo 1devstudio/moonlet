@@ -45,7 +45,7 @@ impl Daemon {
     }
 
     async fn app(&self) -> Client {
-        Client::connect(&self.socket, "moonlet-app").await.unwrap()
+        Client::connect_app(&self.socket, self.home.path()).await.unwrap()
     }
 
     async fn call<T: serde::de::DeserializeOwned>(&self, method: &str, params: Value) -> T {
@@ -73,6 +73,7 @@ impl Drop for Daemon {
 async fn spawn(home: &Path, socket: &Path, env: &[(&str, &str)]) -> Child {
     let child = Command::new(env!("CARGO_BIN_EXE_moonletd"))
         .arg("daemon")
+        .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
         .env("MOONLET_HOME", home)
         .env("MOONLET_SOCK", socket)
         .env("CLAUDE_CONFIG_DIR", home.join("claude"))
@@ -151,6 +152,7 @@ async fn as_device_client(
     let hello = Message::Hello {
         protocol: moonlet_proto::PROTOCOL_VERSION,
         client: client.into(),
+        app_token: None,
     };
     write_frame(&mut s, &Frame::Json(hello)).await.unwrap();
     read_frame(&mut s).await.unwrap();
@@ -923,6 +925,7 @@ async fn worker_link(addr: &str, token: &str) -> tokio::net::TcpStream {
     let hello = Message::Hello {
         protocol: moonlet_proto::PROTOCOL_VERSION,
         client: "moonletd-worker".into(),
+        app_token: None,
     };
     write_frame(&mut s, &Frame::Json(hello)).await.unwrap();
     read_frame(&mut s).await.unwrap();
@@ -1076,6 +1079,7 @@ async fn a_cloud_device_may_call_only_worker_methods() {
     let hello = Message::Hello {
         protocol: moonlet_proto::PROTOCOL_VERSION,
         client: "moonletd-worker".into(),
+        app_token: None,
     };
     write_frame(&mut s, &Frame::Json(hello)).await.unwrap();
     read_frame(&mut s).await.unwrap();

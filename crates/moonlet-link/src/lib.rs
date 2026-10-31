@@ -114,6 +114,12 @@ pub trait Connector: Send + Sync + 'static {
     fn welcomed<'a>(&'a self, _reply: &'a Frame) -> BoxFuture<'a, Result<()>> {
         Box::pin(async { Ok(()) })
     }
+
+    /// This Mac's app credential to send in `hello` (X75), read once
+    /// connected. Only the app's link to this Mac's own daemon has one.
+    fn app_token(&self) -> Option<String> {
+        None
+    }
 }
 
 /// Where a host's statuses and daemon events go.
@@ -541,6 +547,7 @@ async fn run_link(
         .write_all(&encode_frame(&Frame::Json(Message::Hello {
             protocol: PROTOCOL_VERSION,
             client: host.client.clone(),
+            app_token: connector.app_token(),
         }))?)
         .await?;
     writer.flush().await?;
@@ -783,6 +790,10 @@ fn request_timeout(method: &str) -> Duration {
         660
     } else if method.starts_with("gh.") || method.starts_with("workspace.") || method.starts_with("repo.") {
         180
+    } else if method.starts_with("signins.") {
+        // A sign-in waits for the user for up to 10 minutes (X75), and is
+        // stopped then: its end still comes back.
+        720
     } else if method.starts_with("sync.")
         || method == moonlet_proto::methods::SESSION_OPEN
         || method == moonlet_proto::methods::SESSION_OFFER

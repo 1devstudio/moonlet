@@ -193,29 +193,47 @@ async fn pair(central: &Daemon, addr: &str, name: &str, kind: DeviceKind) -> Str
 
 /// The MacBook, linked to `central`.
 async fn linked_book(central: &Daemon, addr: &str) -> Daemon {
+    linked_book_and_token(central, addr).await.0
+}
+
+/// The MacBook, linked to `central`, and the token its app reaches
+/// `central` with: the one its daemon links with.
+async fn linked_book_and_token(central: &Daemon, addr: &str) -> (Daemon, String) {
+    linked_member(central, addr, BOOK, "MacBook", "127.0.0.2").await
+}
+
+/// Member `name` (worker `id`, listening on `ip`), linked to `central`,
+/// and the token it links with.
+async fn linked_member(
+    central: &Daemon,
+    addr: &str,
+    id: &str,
+    name: &str,
+    ip: &str,
+) -> (Daemon, String) {
     let home = tempfile::tempdir().unwrap();
     std::fs::write(
         home.path().join("link.json"),
-        json!({ "central": null, "worker": { "id": BOOK, "name": "MacBook", "enabled": false } })
+        json!({ "central": null, "worker": { "id": id, "name": name, "enabled": false } })
             .to_string(),
     )
     .unwrap();
-    let book = Daemon::start(home, &[("MOONLET_MOBILE_ADDRS", "127.0.0.2")]).await;
-    let token = pair(central, addr, "MacBook", DeviceKind::Desktop).await;
-    let _: Value = book
+    let member = Daemon::start(home, &[("MOONLET_MOBILE_ADDRS", ip)]).await;
+    let token = pair(central, addr, name, DeviceKind::Desktop).await;
+    let _: Value = member
         .call(
             "link.set",
             json!({ "central": { "name": "studio-mini", "addrs": [addr], "token": token } }),
         )
         .await;
-    within(Duration::from_secs(15), "the MacBook linked", || async {
+    within(Duration::from_secs(15), "the member linked", || async {
         let workers: Value = central.call("worker.list", json!({})).await;
         workers
             .as_array()
-            .is_some_and(|l| l.iter().any(|w| w["id"] == json!(BOOK)))
+            .is_some_and(|l| l.iter().any(|w| w["id"] == json!(id)))
     })
     .await;
-    book
+    (member, token)
 }
 
 #[tokio::test]
@@ -849,4 +867,674 @@ async fn a_url_kept_for_a_macs_app_that_quit_leaves_the_next_waiting_until_the_u
         .expect("a browser.show on the MacBook");
     assert_eq!(shown["url"], json!("https://accounts.example.test/third"));
     assert!(shown.get("waiting").is_none(), "{shown}");
+}
+
+fn entry(check: &str, login: &str) -> Value {
+    json!({ "id": "t", "name": "test-cli", "login": login, "check": check })
+}
+
+async fn states(d: &Daemon) -> Vec<(String, String)> {
+    let list: Vec<Value> = d.call("signins.check", json!({ "entry": "t" })).await;
+    let mut out: Vec<(String, String)> = list
+        .iter()
+        .map(|s| {
+            (
+                s["name"].as_str().unwrap().to_string(),
+                s["state"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+#[tokio::test]
+async fn only_the_macs_app_changes_or_runs_sign_ins() {
+    let d = daemon().await;
+    let mut cli = Client::connect(&d.socket, "moonlet-cli").await.unwrap();
+    for (method, params) in [
+        ("signins.set", json!({ "entries": [entry("true", "true")] })),
+        ("signins.check", json!({ "entry": "gh" })),
+        (
+            "signins.approve",
+            json!({ "entry": "gh", "login": "gh auth login --web", "check": "gh auth status" }),
+        ),
+        ("signins.run", json!({ "entry": "gh", "members": [] })),
+    ] {
+        let e = cli.request::<_, Value>(method, params).await.unwrap_err();
+        assert!(e.to_string().contains("forbidden"), "{method}: {e}");
+    }
+    // Anyone reads the list.
+    let list: Vec<Value> = cli.request("signins.list", json!({})).await.unwrap();
+    assert_eq!(list[0]["id"], json!("gh"));
+}
+
+#[tokio::test]
+async fn a_process_that_only_says_it_is_the_app_cannot_change_app_only_settings() {
+    let d = daemon().await;
+    let entries = json!({ "entries": [entry("true", "true")] });
+    let mut forged = Client::connect(&d.socket, "moonlet-app").await.unwrap();
+    let e = forged
+        .request::<_, Value>("signins.set", entries.clone())
+        .await
+        .unwrap_err();
+    assert_eq!(e.to_string(), "forbidden: only the moonlet app manages sign-ins");
+    let wrong = "0".repeat(64);
+    let mut guessed = Client::connect_with(&d.socket, "moonlet-app", Some(&wrong))
+        .await
+        .unwrap();
+    let e = guessed
+        .request::<_, Value>("signins.set", entries.clone())
+        .await
+        .unwrap_err();
+    assert_eq!(e.to_string(), "forbidden: only the moonlet app manages sign-ins");
+    // With the credential its daemon wrote, the app may.
+    let mut app = d.app().await;
+    let _: bool = app.request("signins.set", entries).await.unwrap();
+    let list: Vec<Value> = forged.request("signins.list", json!({})).await.unwrap();
+    assert_eq!(list[0]["id"], json!("t"));
+}
+
+#[tokio::test]
+async fn a_process_with_the_app_credential_that_is_not_the_app_is_not_the_app() {
+    // No executable named for tests: this test's own process is not the app,
+    // though it read the credential the daemon wrote.
+    let d = Daemon::start(
+        tempfile::tempdir().unwrap(),
+        &[("MOONLET_TEST_APP_EXE", "")],
+    )
+    .await;
+    let mut stolen = d.app().await;
+    let e = stolen
+        .request::<_, Value>("signins.set", json!({ "entries": [entry("true", "true")] }))
+        .await
+        .unwrap_err();
+    assert_eq!(e.to_string(), "forbidden: only the moonlet app manages sign-ins");
+    let e = stolen
+        .request::<_, Value>("browser.pending", json!({}))
+        .await
+        .unwrap_err();
+    assert_eq!(e.to_string(), "forbidden: only this Mac's app shows its sign-ins");
+}
+
+/// What a copy of this test binary does when [`run_copy_as`] runs it:
+/// connects to the daemon at `APP_COPY_SOCKET` with the credential in
+/// `APP_COPY_HOME`, asks to change sign-ins, and writes the outcome to
+/// stderr. In a plain run it does nothing.
+#[tokio::test]
+async fn as_a_copy_asks_to_change_sign_ins() {
+    let (Some(socket), Some(home)) = (
+        std::env::var_os("APP_COPY_SOCKET"),
+        std::env::var_os("APP_COPY_HOME"),
+    ) else {
+        return;
+    };
+    let mut c = Client::connect_app(std::path::Path::new(&socket), std::path::Path::new(&home))
+        .await
+        .unwrap();
+    match c
+        .request::<_, Value>("signins.set", json!({ "entries": [entry("true", "true")] }))
+        .await
+    {
+        Ok(_) => eprint!("allowed"),
+        Err(e) => eprint!("{e}"),
+    }
+}
+
+/// Copies this test binary to `exe` and runs it as
+/// [`as_a_copy_asks_to_change_sign_ins`] against `d`: what it answered.
+async fn run_copy_as(exe: &std::path::Path, d: &Daemon) -> String {
+    std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+    std::fs::copy(std::env::current_exe().unwrap(), exe).unwrap();
+    let out = tokio::process::Command::new(exe)
+        .args(["--exact", "as_a_copy_asks_to_change_sign_ins", "--nocapture", "--test-threads=1"])
+        .env("APP_COPY_SOCKET", &d.socket)
+        .env("APP_COPY_HOME", d.home.path())
+        .output()
+        .await
+        .unwrap();
+    String::from_utf8_lossy(&out.stderr).trim().to_string()
+}
+
+#[tokio::test]
+async fn a_binary_copied_under_the_app_s_name_is_not_the_app() {
+    // The daemon runs from where the bundle keeps it, the app beside it.
+    let dir = tempfile::tempdir().unwrap();
+    let installed = dir.path().join("moonlet.app/Contents/MacOS");
+    std::fs::create_dir_all(&installed).unwrap();
+    let built = std::path::Path::new(env!("CARGO_BIN_EXE_moonletd"));
+    std::fs::copy(built, installed.join("moonletd")).unwrap();
+    std::fs::copy(built.with_file_name("moonlet"), installed.join("moonlet")).unwrap();
+    let d = Daemon::start_from(
+        &installed.join("moonletd"),
+        tempfile::tempdir().unwrap(),
+        &[("MOONLET_TEST_APP_EXE", "")],
+    )
+    .await;
+
+    let elsewhere = run_copy_as(&dir.path().join("Downloads/moonlet-app"), &d).await;
+    assert_eq!(elsewhere, "forbidden: only the moonlet app manages sign-ins");
+    // The same binary where the app is, beside the daemon, is the app.
+    let beside = run_copy_as(&installed.join("moonlet-app"), &d).await;
+    assert_eq!(beside, "allowed");
+}
+
+#[tokio::test]
+async fn a_process_that_only_says_it_is_the_app_never_hears_where_the_user_signs_in() {
+    let d = daemon().await;
+    let mut forged = Client::connect(&d.socket, "moonlet-app").await.unwrap();
+    let e = forged
+        .request::<_, Value>("presence.active", json!({}))
+        .await
+        .unwrap_err();
+    assert_eq!(e.to_string(), "forbidden: only the app says where the user is");
+    let e = forged
+        .request::<_, Value>("browser.pending", json!({}))
+        .await
+        .unwrap_err();
+    assert_eq!(e.to_string(), "forbidden: only this Mac's app shows its sign-ins");
+    let mut app = d.app().await;
+    in_terminal(&d, "\"$BROWSER\" 'https://accounts.example.test/auth'").await;
+    let shown = next_show(&mut app, Duration::from_secs(10))
+        .await
+        .expect("a browser.show for the app");
+    assert_eq!(shown["url"], json!("https://accounts.example.test/auth"));
+    assert_eq!(next_show(&mut forged, Duration::from_secs(1)).await, None);
+}
+
+#[tokio::test]
+async fn a_sign_in_changed_on_another_member_asks_again_before_it_runs_here() {
+    let (mini, addr) = central().await;
+    let book = linked_book(&mini, &addr).await;
+    let _: bool = book
+        .call("signins.set", json!({ "entries": [entry("true", "true")] }))
+        .await;
+    within(
+        Duration::from_secs(10),
+        "the entry on studio-mini",
+        || async {
+            let list: Vec<Value> = mini.call("signins.list", json!({})).await;
+            list.first().is_some_and(|e| e["id"] == json!("t"))
+        },
+    )
+    .await;
+    // An approval names the commands the user saw: others approve nothing.
+    let e = book
+        .try_call(
+            "signins.approve",
+            json!({ "entry": "t", "login": "true", "check": "curl evil.test" }),
+        )
+        .await
+        .unwrap_err();
+    assert!(e.contains("changed"), "{e}");
+    let _: bool = book
+        .call(
+            "signins.approve",
+            json!({ "entry": "t", "login": "true", "check": "true" }),
+        )
+        .await;
+    assert_eq!(
+        states(&book).await,
+        [
+            ("MacBook".to_string(), "signed_in".to_string()),
+            ("studio-mini".to_string(), "needs_approval".to_string())
+        ]
+    );
+    // studio-mini's app changes the check: the MacBook asks again.
+    let _: bool = mini
+        .call(
+            "signins.set",
+            json!({ "entries": [entry("exit 1", "true")] }),
+        )
+        .await;
+    within(
+        Duration::from_secs(10),
+        "the MacBook asking again",
+        || async {
+            states(&book)
+                .await
+                .contains(&("MacBook".to_string(), "needs_approval".to_string()))
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn sign_in_on_every_member_opens_one_browser_at_a_time() {
+    let (mini, addr) = central().await;
+    let book = linked_book(&mini, &addr).await;
+    let mut app = book.app().await;
+    let _: bool = app.request("presence.active", json!({})).await.unwrap();
+    let login = "\"$BROWSER\" \"https://example.test/$(hostname)-$$\"; sleep 2";
+    let _: bool = book
+        .call(
+            "signins.set",
+            json!({ "entries": [entry("exit 1", login)] }),
+        )
+        .await;
+    within(
+        Duration::from_secs(10),
+        "the entry on studio-mini",
+        || async {
+            let list: Vec<Value> = mini.call("signins.list", json!({})).await;
+            list.first().is_some_and(|e| e["id"] == json!("t"))
+        },
+    )
+    .await;
+    let seen = json!({ "entry": "t", "login": login, "check": "exit 1" });
+    let _: bool = book.call("signins.approve", seen.clone()).await;
+    let _: bool = mini.call("signins.approve", seen).await;
+    let _: bool = app
+        .request(
+            "signins.run",
+            json!({ "entry": "t", "members": [MINI, BOOK] }),
+        )
+        .await
+        .unwrap();
+    let first = next_show(&mut app, Duration::from_secs(15))
+        .await
+        .expect("the first sign-in");
+    assert_eq!(first["from"], json!("studio-mini"));
+    // The MacBook's opens only once studio-mini's sign-in ended.
+    assert_eq!(next_show(&mut app, Duration::from_millis(1500)).await, None);
+    let second = next_show(&mut app, Duration::from_secs(10))
+        .await
+        .expect("the second sign-in");
+    assert_eq!(second["from"], json!("MacBook"));
+}
+
+#[tokio::test]
+async fn a_device_sign_ins_one_time_code_comes_with_its_url() {
+    let d = daemon().await;
+    let mut app = d.app().await;
+    in_terminal(
+        &d,
+        "echo '! One-time code (AB12-CD34) copied to clipboard'; \"$BROWSER\" 'https://github.com/login/device'",
+    )
+    .await;
+    let shown = next_show(&mut app, Duration::from_secs(10))
+        .await
+        .expect("a browser.show");
+    assert_eq!(shown["code"], json!("AB12-CD34"));
+}
+
+#[tokio::test]
+async fn a_phone_gets_the_url_without_a_forward_and_a_mac_gets_it_next() {
+    use moonlet_proto::{read_frame, write_frame};
+    let (mini, addr) = central().await;
+    let book = linked_book_one_along(&mini, &addr).await;
+    let token = pair(&mini, &addr, "iPhone", DeviceKind::Phone).await;
+    let mut phone = raw(&addr, &token, "moonlet-mobile").await;
+    let req = Message::Request {
+        id: 1,
+        method: "presence.active".into(),
+        params: json!({}),
+    };
+    write_frame(&mut phone, &Frame::Json(req)).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let port = two_free_ports();
+    in_terminal(&mini, &sign_in_command(port)).await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let on_phone = loop {
+        let f = tokio::time::timeout_at(deadline, read_frame(&mut phone))
+            .await
+            .expect("no browser.show")
+            .unwrap()
+            .unwrap();
+        if let Frame::Json(Message::Event { name, data }) = f
+            && name == "browser.show"
+        {
+            break data;
+        }
+    };
+    assert_eq!(on_phone["to"], json!("phone"));
+    // The user touches the MacBook's app while the command still waits.
+    let mut app = book.app().await;
+    let _: bool = app.request("presence.active", json!({})).await.unwrap();
+    let on_mac = next_show(&mut app, Duration::from_secs(10))
+        .await
+        .expect("the sign-in on the MacBook");
+    assert_eq!(on_mac["url"], on_phone["url"]);
+    assert!(on_mac.get("to").is_none(), "{on_mac}");
+    assert!(
+        get(port + 1, "/?code=4")
+            .await
+            .ends_with("You are now authenticated")
+    );
+}
+
+#[tokio::test]
+async fn a_sign_in_running_here_shows_its_terminal_in_this_macs_app() {
+    let d = daemon().await;
+    let mut app = d.app().await;
+    let _: bool = d
+        .call(
+            "signins.set",
+            json!({ "entries": [entry("exit 1", "echo signing-in; sleep 1")] }),
+        )
+        .await;
+    let _: bool = d
+        .call(
+            "signins.approve",
+            json!({ "entry": "t", "login": "echo signing-in; sleep 1", "check": "exit 1" }),
+        )
+        .await;
+    let me: Value = d.call("link.get", json!({})).await;
+    let _: bool = d
+        .call(
+            "signins.run",
+            json!({ "entry": "t", "members": [me["worker"]["id"]] }),
+        )
+        .await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let running = loop {
+        let f = tokio::time::timeout_at(deadline, app.next_frame())
+            .await
+            .expect("no signins.running")
+            .unwrap()
+            .unwrap();
+        if let Frame::Json(Message::Event { name, data }) = f
+            && name == "signins.running"
+        {
+            break data;
+        }
+    };
+    assert_eq!(running["name"], json!("test-cli"));
+    let terminals: Vec<Value> = d.call("terminal.list", json!({})).await;
+    assert!(
+        terminals.iter().any(|t| t["id"] == running["terminal"]),
+        "{terminals:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_second_sign_in_on_every_member_waits_until_the_first_ends() {
+    let d = daemon().await;
+    let login = "sleep 2";
+    let _: bool = d
+        .call(
+            "signins.set",
+            json!({ "entries": [entry("exit 1", login)] }),
+        )
+        .await;
+    let _: bool = d
+        .call(
+            "signins.approve",
+            json!({ "entry": "t", "login": login, "check": "exit 1" }),
+        )
+        .await;
+    let me: Value = d.call("link.get", json!({})).await;
+    let run = json!({ "entry": "t", "members": [me["worker"]["id"]] });
+    let _: bool = d.call("signins.run", run.clone()).await;
+    // A second press while the first round runs starts nothing.
+    let e = d.try_call("signins.run", run.clone()).await.unwrap_err();
+    assert!(e.contains("busy"), "{e}");
+    within(
+        Duration::from_secs(10),
+        "a run accepted once the first ended",
+        || async { d.try_call("signins.run", run.clone()).await.is_ok() },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn a_sign_in_that_outlives_its_wait_is_stopped_before_the_next_starts() {
+    let d = Daemon::start(
+        tempfile::tempdir().unwrap(),
+        &[("MOONLET_TEST_SIGNIN_WAIT_MS", "1000")],
+    )
+    .await;
+    let mut app = d.app().await;
+    let login = "sleep 60";
+    let _: bool = d
+        .call(
+            "signins.set",
+            json!({ "entries": [entry("exit 1", login)] }),
+        )
+        .await;
+    let _: bool = d
+        .call(
+            "signins.approve",
+            json!({ "entry": "t", "login": login, "check": "exit 1" }),
+        )
+        .await;
+    let me: Value = d.call("link.get", json!({})).await;
+    let _: bool = d
+        .call(
+            "signins.run",
+            json!({ "entry": "t", "members": [me["worker"]["id"]] }),
+        )
+        .await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let running = loop {
+        let f = tokio::time::timeout_at(deadline, app.next_frame())
+            .await
+            .expect("no signins.running")
+            .unwrap()
+            .unwrap();
+        if let Frame::Json(Message::Event { name, data }) = f
+            && name == "signins.running"
+        {
+            break data;
+        }
+    };
+    within(
+        Duration::from_secs(10),
+        "the sign-in's terminal stopped",
+        || async {
+            let terminals: Vec<Value> = d.call("terminal.list", json!({})).await;
+            terminals
+                .iter()
+                .find(|t| t["id"] == running["terminal"])
+                .is_none_or(|t| !t["exit"].is_null())
+        },
+    )
+    .await;
+}
+
+/// The next `signins.running` `c` gets, if one comes within `limit`.
+async fn next_running(c: &mut Client, limit: Duration) -> Option<Value> {
+    let deadline = tokio::time::Instant::now() + limit;
+    loop {
+        let f = tokio::time::timeout_at(deadline, c.next_frame())
+            .await
+            .ok()?
+            .unwrap()
+            .unwrap();
+        if let Frame::Json(Message::Event { name, data }) = f
+            && name == "signins.running"
+        {
+            return Some(data);
+        }
+    }
+}
+
+/// Sends request `id` on a raw connection and gives its reply, skipping
+/// whatever else comes first.
+async fn raw_request(
+    s: &mut tokio::net::TcpStream,
+    id: u64,
+    method: &str,
+    params: Value,
+) -> Result<Value, moonlet_proto::RpcError> {
+    use moonlet_proto::{read_frame, write_frame};
+    let req = Message::Request {
+        id,
+        method: method.into(),
+        params,
+    };
+    write_frame(s, &Frame::Json(req)).await.unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let f = tokio::time::timeout_at(deadline, read_frame(s))
+            .await
+            .expect("no reply")
+            .unwrap()
+            .unwrap();
+        if let Frame::Json(Message::Response {
+            id: got,
+            result,
+            error,
+        }) = f
+            && got == id
+        {
+            return match error {
+                Some(e) => Err(e),
+                None => Ok(result.unwrap_or(Value::Null)),
+            };
+        }
+    }
+}
+
+const BOX: &str = "5b2e8d4f-6a1c-4f3e-b7d9-0e2a4c6f8b15";
+
+/// Three members: the central host studio-mini, and the MacBook and
+/// build-box linked to it, with a sign-in whose command asks a question
+/// before it ends, approved on each. Gives studio-mini's address and the
+/// tokens of the MacBook and build-box there too.
+struct Asking {
+    mini: Daemon,
+    addr: String,
+    book: Daemon,
+    token: String,
+    build_box: Daemon,
+    box_token: String,
+}
+
+async fn sign_in_that_asks() -> Asking {
+    let (mini, addr) = central().await;
+    let (book, token) = linked_book_and_token(&mini, &addr).await;
+    let (build_box, box_token) = linked_member(&mini, &addr, BOX, "build-box", "127.0.0.3").await;
+    let login = "printf 'Press Enter to open the browser...'; read _; echo answered-$((40+2))";
+    let _: bool = book
+        .call(
+            "signins.set",
+            json!({ "entries": [entry("exit 1", login)] }),
+        )
+        .await;
+    let seen = json!({ "entry": "t", "login": login, "check": "exit 1" });
+    for d in [&book, &mini, &build_box] {
+        within(
+            Duration::from_secs(10),
+            "the entry on each member",
+            || async {
+                let list: Vec<Value> = d.call("signins.list", json!({})).await;
+                list.first().is_some_and(|e| e["id"] == json!("t"))
+            },
+        )
+        .await;
+        let _: bool = d.call("signins.approve", seen.clone()).await;
+    }
+    Asking {
+        mini,
+        addr,
+        book,
+        token,
+        build_box,
+        box_token,
+    }
+}
+
+#[tokio::test]
+async fn another_member_s_sign_in_is_answered_in_the_app_of_the_mac_that_pressed_sign_in() {
+    use moonlet_proto::{read_frame, write_frame};
+    let a = sign_in_that_asks().await;
+    let mut app = a.book.app().await;
+    let _: bool = app
+        .request("signins.run", json!({ "entry": "t", "members": [BOX] }))
+        .await
+        .unwrap();
+    let running = next_running(&mut app, Duration::from_secs(15))
+        .await
+        .expect("build-box's sign-in in the MacBook's app");
+    assert_eq!(running["name"], json!("test-cli"));
+    assert_eq!(running["member"], json!(BOX));
+    assert_eq!(running["member_name"], json!("build-box"));
+    assert_eq!(running["relayed"], json!(true));
+
+    // The MacBook's app follows it through studio-mini, and answers it.
+    let mut follow = raw(&a.addr, &a.token, "moonlet-app").await;
+    let attached = raw_request(
+        &mut follow,
+        1,
+        "signins.attach",
+        json!({ "member": BOX, "terminal": running["terminal"] }),
+    )
+    .await
+    .unwrap();
+    let relay = attached["info"]["id"].as_u64().unwrap() as u32;
+    write_frame(
+        &mut follow,
+        &Frame::Input {
+            terminal: relay,
+            data: b"\n".to_vec(),
+        },
+    )
+    .await
+    .unwrap();
+    let seen = tokio::time::timeout(Duration::from_secs(20), async {
+        let mut out = attached["snapshot"].as_str().unwrap_or("").to_string();
+        while !out.contains("answered-42") {
+            if let Some(Frame::Output { terminal, data }) = read_frame(&mut follow).await.unwrap()
+                && terminal == relay
+            {
+                out.push_str(&String::from_utf8_lossy(&data));
+            }
+        }
+        out
+    })
+    .await
+    .expect("the answer never reached build-box's sign-in");
+    assert!(seen.contains("Press Enter to open the browser"), "{seen}");
+
+    // Its end comes back, as its terminal's exit does not.
+    let ended = next_running(&mut app, Duration::from_secs(10))
+        .await
+        .expect("how the sign-in ended");
+    assert_eq!(ended["terminal"], running["terminal"]);
+    assert_eq!(ended["exit"]["code"], json!(0));
+}
+
+#[tokio::test]
+async fn another_member_s_sign_in_is_followed_only_by_the_mac_that_started_it() {
+    let a = sign_in_that_asks().await;
+    let mut app = a.book.app().await;
+    let _: bool = app
+        .request("signins.run", json!({ "entry": "t", "members": [BOX] }))
+        .await
+        .unwrap();
+    let running = next_running(&mut app, Duration::from_secs(15))
+        .await
+        .expect("build-box's sign-in in the MacBook's app");
+    let follow = json!({ "member": BOX, "terminal": running["terminal"] });
+    let refused = |e: Result<Value, moonlet_proto::RpcError>| e.unwrap_err().code;
+
+    // Not studio-mini's own app, nor build-box's, nor a phone.
+    let mini_app = a.mini.try_call("signins.attach", follow.clone()).await;
+    assert!(mini_app.unwrap_err().starts_with("forbidden"));
+    let mut box_app = raw(&a.addr, &a.box_token, "moonlet-app").await;
+    let box_app = raw_request(&mut box_app, 1, "signins.attach", follow.clone()).await;
+    assert_eq!(refused(box_app), "forbidden");
+    let phone = pair(&a.mini, &a.addr, "iPhone", DeviceKind::Phone).await;
+    let mut phone = raw(&a.addr, &phone, "moonlet-mobile").await;
+    let phone = raw_request(&mut phone, 1, "signins.attach", follow).await;
+    assert_eq!(refused(phone), "forbidden");
+
+    // Nor, from the MacBook, a terminal of build-box's that is no sign-in.
+    let other: Value = a
+        .build_box
+        .call(
+            "terminal.create",
+            json!({ "cwd": a.build_box.home.path(), "command": ["sh", "-c", "sleep 30"] }),
+        )
+        .await;
+    let mut book_app = raw(&a.addr, &a.token, "moonlet-app").await;
+    let not_a_sign_in = raw_request(
+        &mut book_app,
+        1,
+        "signins.attach",
+        json!({ "member": BOX, "terminal": other["id"] }),
+    )
+    .await;
+    assert_eq!(refused(not_a_sign_in), "forbidden");
 }

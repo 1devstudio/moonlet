@@ -30,6 +30,9 @@ pub enum RecordKind {
     /// A project's copied files (X74), by project identity: its `patterns`
     /// and `cloud`.
     ProjectFiles,
+    /// A sign-in of Settings › Machines › Sign-ins (X75): its `name`,
+    /// `login`, `check` and `order`.
+    SignIn,
 }
 
 impl RecordKind {
@@ -42,6 +45,7 @@ impl RecordKind {
             RecordKind::Design => "design",
             RecordKind::Session => "session",
             RecordKind::ProjectFiles => "project_files",
+            RecordKind::SignIn => "signin",
         }
     }
 }

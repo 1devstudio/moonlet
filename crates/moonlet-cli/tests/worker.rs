@@ -79,6 +79,7 @@ async fn host() -> (Host, String) {
     .unwrap();
     let daemon = Command::new(target_bin("moonletd"))
         .arg("daemon")
+        .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
         .env("MOONLET_HOME", home.path())
         .env("MOONLET_SOCK", &socket)
         .env("CLAUDE_CONFIG_DIR", home.path().join("claude"))
@@ -100,7 +101,7 @@ async fn host() -> (Host, String) {
         socket,
         daemon,
     };
-    let mut app = Client::connect(&h.socket, "moonlet-app").await.unwrap();
+    let mut app = Client::connect_app(&h.socket, h.home.path()).await.unwrap();
     for _ in 0..100 {
         let st: Value = app.request("mobile.status", json!({})).await.unwrap();
         if st["listening"].as_array().is_some_and(|l| !l.is_empty()) {
@@ -162,7 +163,7 @@ async fn worker_up_ls_and_down() {
     let name = text(&up.stdout).trim().to_string();
     assert!(name.starts_with("moonlet-shop-"), "{name}");
     // Made for the session it was started in.
-    let mut app = Client::connect(&h.socket, "moonlet-app").await.unwrap();
+    let mut app = Client::connect_app(&h.socket, h.home.path()).await.unwrap();
     let all: Value = app.request("cloud.machines", json!({})).await.unwrap();
     let mine = all["machines"].as_array().unwrap().iter().find(|m| m["name"] == name.as_str()).unwrap().clone();
     assert_eq!(mine["for_session"], json!(session));

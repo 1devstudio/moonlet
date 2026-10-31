@@ -9,6 +9,7 @@ import { M, type Copy, type FileContent, type Session } from "../lib/protocol";
 import { errorToast, sesKey, useStore } from "../lib/store";
 import { logTail, markTone, popoverPlace, READ_CAP_MIB, setupActions, syncLine, tooBigLine } from "../lib/sync";
 import { tildePath } from "../lib/profiles";
+import { copiedLine, skippedLine, type CopiedFilesStatus } from "../lib/copiedFiles";
 import { dismissSyncNote, resolveSync, retrySync, runSetupAgain, stopSync, syncDataDir, useCentralBranch, useSync } from "../lib/syncStore";
 import { workspaceOpenIn } from "../lib/openIn";
 import { Menu } from "./Menu";
@@ -74,6 +75,10 @@ function SyncPopover({ anchorKey, copy, s }: { anchorKey: string; copy: Copy; s:
   const [style, setStyle] = useState<React.CSSProperties | null>(null);
   const [targets, setTargets] = useState<{ id: string; label: string }[]>([]);
   const [log, setLog] = useState<string | null>(null);
+  // The copied files of this Mac's copy (X74), and whether their list shows.
+  const [copied, setCopied] = useState<CopiedFilesStatus | null>(null);
+  const [copiedOpen, setCopiedOpen] = useState(false);
+  useEffect(() => void rpc<CopiedFilesStatus>("local", M.sessionCopiedFiles, { session: copy.session }).then(setCopied, () => setCopied(null)), [copy.session]);
   useEffect(() => void hostsApi.openTargets().then(setTargets, () => {}), []);
   // Placed after the render that may have just shown the session's row.
   useLayoutEffect(() => {
@@ -172,6 +177,25 @@ function SyncPopover({ anchorKey, copy, s }: { anchorKey: string; copy: Copy; s:
               </span>
             </div>
           ))}
+        </div>
+      )}
+      {copied && copiedLine(copied) && (
+        <div className="flex flex-col gap-0.5 ui-text-12 text-muted">
+          <button type="button" className="self-start text-fg hover:underline" aria-expanded={copiedOpen} onClick={() => setCopiedOpen(!copiedOpen)}>
+            {copiedLine(copied)}
+          </button>
+          {copiedOpen && (
+            <>
+              {copied.files.map((p) => (
+                <span key={p} className="font-mono">
+                  {p}
+                </span>
+              ))}
+              {copied.skipped.map((s) => (
+                <span key={s.path}>{skippedLine(s)}</span>
+              ))}
+            </>
+          )}
         </div>
       )}
       {copy.too_big.length > 0 && (

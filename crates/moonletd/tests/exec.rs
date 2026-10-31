@@ -44,7 +44,7 @@ impl Daemon {
     }
 
     async fn app(&self) -> Client {
-        Client::connect(&self.socket, "moonlet-app").await.unwrap()
+        Client::connect_app(&self.socket, self.home.path()).await.unwrap()
     }
 
     async fn call<T: serde::de::DeserializeOwned>(&self, method: &str, params: Value) -> T {
@@ -72,6 +72,7 @@ impl Drop for Daemon {
 async fn spawn(home: &Path, socket: &Path, env: &[(String, String)]) -> Child {
     let child = Command::new(env!("CARGO_BIN_EXE_moonletd"))
         .arg("daemon")
+        .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
         .env("MOONLET_HOME", home)
         .env("MOONLET_SOCK", socket)
         // The user's own Claude Code settings never reach a test.
@@ -446,6 +447,7 @@ async fn device(addr: &str, token: &str, client: &str) -> tokio::net::TcpStream 
     let hello = Message::Hello {
         protocol: moonlet_proto::PROTOCOL_VERSION,
         client: client.into(),
+        app_token: None,
     };
     write_frame(&mut s, &Frame::Json(hello)).await.unwrap();
     assert!(matches!(

@@ -37,6 +37,45 @@ const DESIGN: RecordKind = RecordKind::Design;
 const SESSION: RecordKind = RecordKind::Session;
 /// A project's copied files, by project identity (X74).
 const PROJECT_FILES: RecordKind = RecordKind::ProjectFiles;
+/// A sign-in of Settings › Machines › Sign-ins (X75).
+const SIGN_IN: RecordKind = RecordKind::SignIn;
+
+/// The sign-ins in `log` (X75), in their order: the records, and each
+/// default that was never edited nor removed.
+fn sign_ins_in(log: &Log) -> Vec<moonlet_proto::types::SignIn> {
+    let removed: Vec<String> = default_sign_ins().into_iter().map(|e| e.id).filter(|id| log.is_deleted(SIGN_IN, id)).collect();
+    let records = log.records(SIGN_IN);
+    let text = |r: &Record, f: &str| r.get(f).and_then(Value::as_str).unwrap_or_default().to_string();
+    let mut out: Vec<(String, moonlet_proto::types::SignIn)> = records
+        .iter()
+        .map(|(id, r)| {
+            let entry = moonlet_proto::types::SignIn { id: id.clone(), name: text(r, "name"), login: text(r, "login"), check: text(r, "check") };
+            (text(r, "order"), entry)
+        })
+        .collect();
+    for (n, d) in default_sign_ins().into_iter().enumerate() {
+        if !records.contains_key(&d.id) && !removed.contains(&d.id) {
+            out.push((format!("default-{n}"), d));
+        }
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out.into_iter().map(|(_, e)| e).collect()
+}
+
+/// The sign-ins every account starts with (X75), under ids of their own so
+/// every member edits the same ones.
+fn default_sign_ins() -> Vec<moonlet_proto::types::SignIn> {
+    let entry = |id: &str, login: &str, check: &str| moonlet_proto::types::SignIn {
+        id: id.into(),
+        name: id.into(),
+        login: login.into(),
+        check: check.into(),
+    };
+    vec![
+        entry("gh", "gh auth login --web", "gh auth status"),
+        entry("gcloud", "gcloud auth login", "gcloud auth print-access-token"),
+    ]
+}
 /// A session record's fields only its maker and the central host change:
 /// who owns it, the ownership number and the pin (X73).
 const OWNERSHIP: &[&str] = &["owner", "epoch", "pinned"];
@@ -375,6 +414,62 @@ impl SessionManager {
                 .filter(|(field, value)| now.get(*field) != Some(value))
                 .map(|(field, value)| log.set(now_ms(), PROJECT_FILES, &key, field, value))
                 .collect();
+            if changes.is_empty() {
+                return Ok(());
+            }
+            write_private(&a.path, &log)?;
+            a.log = log;
+            changes
+        };
+        self.account_changed(changes);
+        Ok(())
+    }
+
+    /// The account's sign-ins (X75), in their order: the records, and each
+    /// default that was never edited nor removed. The defaults without an
+    /// account.
+    pub fn sign_ins(&self) -> Vec<moonlet_proto::types::SignIn> {
+        match self.account.lock().unwrap().as_ref() {
+            Some(a) => sign_ins_in(&a.log),
+            None => default_sign_ins(),
+        }
+    }
+
+    /// Makes the account's sign-ins `entries`, in that order, as this
+    /// member's changes, and sends them on: changed fields are set, and an
+    /// entry no longer listed is removed for good.
+    pub fn set_sign_ins(&self, entries: &[moonlet_proto::types::SignIn]) -> Result<()> {
+        for e in entries {
+            if e.id.is_empty() || e.name.trim().is_empty() || e.login.trim().is_empty() || e.check.trim().is_empty() {
+                bail!("a sign-in needs a name, a sign-in command and a check command");
+            }
+        }
+        let changes = {
+            let mut account = self.account.lock().unwrap();
+            let a = account.as_mut().context("sign-ins are kept in the account")?;
+            // What is removed comes from the same log the changes go to, so
+            // an entry another save added meanwhile is not missed.
+            let now_list = sign_ins_in(&a.log);
+            let records = a.log.records(SIGN_IN);
+            let mut log = a.log.clone();
+            let mut changes = Vec::new();
+            for (n, e) in entries.iter().enumerate() {
+                let had = records.get(&e.id).cloned().unwrap_or_default();
+                let fields = [
+                    ("name", json!(e.name.trim())),
+                    ("login", json!(e.login.trim())),
+                    ("check", json!(e.check.trim())),
+                    ("order", json!(format!("{n:04}"))),
+                ];
+                for (field, value) in fields {
+                    if had.get(field) != Some(&value) {
+                        changes.push(log.set(now_ms(), SIGN_IN, &e.id, field, value));
+                    }
+                }
+            }
+            for gone in now_list.iter().filter(|g| !entries.iter().any(|e| e.id == g.id)) {
+                changes.push(log.delete(now_ms(), SIGN_IN, &gone.id));
+            }
             if changes.is_empty() {
                 return Ok(());
             }
@@ -1297,6 +1392,45 @@ mod tests {
         b.apply_account(to_b);
         let to_a = b.account_changes_for(&a.account_version());
         a.apply_account(to_a);
+    }
+
+    fn sign_in(id: &str, name: &str, login: &str, check: &str) -> moonlet_proto::types::SignIn {
+        moonlet_proto::types::SignIn { id: id.into(), name: name.into(), login: login.into(), check: check.into() }
+    }
+
+    #[tokio::test]
+    async fn the_sign_ins_start_with_gh_and_gcloud() {
+        let (_h, book) = member("book").await;
+        assert_eq!(
+            book.sign_ins(),
+            [
+                sign_in("gh", "gh", "gh auth login --web", "gh auth status"),
+                sign_in("gcloud", "gcloud", "gcloud auth login", "gcloud auth print-access-token"),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn sign_in_entries_changed_on_two_unlinked_members_meet_at_the_later_change() {
+        let (_a, book) = member("book").await;
+        let (_b, mini) = member("mini").await;
+        let npm = sign_in("npm-1", "npm", "npm login", "npm whoami");
+        book.set_sign_ins(&[sign_in("gh", "gh", "gh auth login --web", "gh auth status"), npm.clone()]).unwrap();
+        // A moment later, studio-mini edits gh's check, apart.
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        let gh = sign_in("gh", "GitHub", "gh auth login --web", "gh auth status --hostname github.com");
+        mini.set_sign_ins(&[gh.clone(), sign_in("gcloud", "gcloud", "gcloud auth login", "gcloud auth print-access-token")]).unwrap();
+        sync(&book, &mini);
+        // gcloud, removed on the MacBook, stays removed; gh has the later
+        // edit; npm is there on both.
+        assert_eq!(book.sign_ins(), mini.sign_ins());
+        assert_eq!(book.sign_ins(), [gh, npm]);
+    }
+
+    #[tokio::test]
+    async fn a_sign_in_needs_a_name_and_both_commands() {
+        let (_h, book) = member("book").await;
+        assert!(book.set_sign_ins(&[sign_in("x", "x", "", "true")]).is_err());
     }
 
     fn names(mgr: &SessionManager) -> Vec<String> {

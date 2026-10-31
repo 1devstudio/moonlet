@@ -560,3 +560,69 @@ async fn a_pack_the_host_sends_arrives_whole_under_its_transfer_id() {
         }
     }
 }
+
+/// [`Pipe`] to this Mac's own daemon, whose app credential it read (X75).
+struct OwnDaemon(Pipe);
+
+impl Connector for OwnDaemon {
+    fn connect(&self) -> BoxFuture<'_, Result<(Reader, Writer)>> {
+        self.0.connect()
+    }
+
+    fn app_token(&self) -> Option<String> {
+        Some("5e".repeat(32))
+    }
+}
+
+/// The `hello` the app sends on the next connection.
+async fn hello_on(rx: &mut mpsc::UnboundedReceiver<DuplexStream>) -> Message {
+    let (mut r, _w) = tokio::io::split(rx.recv().await.unwrap());
+    match tokio::time::timeout(Duration::from_secs(5), read_frame(&mut r))
+        .await
+        .unwrap()
+        .unwrap()
+    {
+        Some(Frame::Json(m)) => m,
+        other => panic!("expected hello, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn only_the_link_to_this_macs_own_daemon_sends_the_app_credential() {
+    let opts = || HostOptions {
+        id: "local".into(),
+        label: "This Mac".into(),
+        remote: false,
+        client: "moonlet-app".into(),
+    };
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let _own = Host::start(
+        opts(),
+        Arc::new(OwnDaemon(Pipe(tx))),
+        Arc::new(Seen::default()),
+        tokio::runtime::Handle::current(),
+    );
+    assert_eq!(
+        hello_on(&mut rx).await,
+        Message::Hello {
+            protocol: moonlet_proto::PROTOCOL_VERSION,
+            client: "moonlet-app".into(),
+            app_token: Some("5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e".into()),
+        }
+    );
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let _other = Host::start(
+        opts(),
+        Arc::new(Pipe(tx)),
+        Arc::new(Seen::default()),
+        tokio::runtime::Handle::current(),
+    );
+    assert_eq!(
+        hello_on(&mut rx).await,
+        Message::Hello {
+            protocol: moonlet_proto::PROTOCOL_VERSION,
+            client: "moonlet-app".into(),
+            app_token: None,
+        }
+    );
+}

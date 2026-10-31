@@ -20,6 +20,23 @@ pub struct Client {
 
 impl Client {
     pub async fn connect(path: &Path, client: &str) -> Result<Client> {
+        Self::connect_with(path, client, None).await
+    }
+
+    /// [`Self::connect`] as this Mac's app, `moonlet-app`, with the
+    /// credential the daemon of `home` (its `MOONLET_HOME`) wrote (X75).
+    pub async fn connect_app(path: &Path, home: &Path) -> Result<Client> {
+        let token = crate::app_token::read(&crate::app_token::file_in(home));
+        Self::connect_with(path, "moonlet-app", token.as_deref()).await
+    }
+
+    /// [`Self::connect`] with this Mac's app credential (X75), which the
+    /// daemon of the socket's home wrote: the connection counts as the app.
+    pub async fn connect_with(
+        path: &Path,
+        client: &str,
+        app_token: Option<&str>,
+    ) -> Result<Client> {
         let mut stream = UnixStream::connect(path)
             .await
             .with_context(|| format!("cannot connect to {}", path.display()))?;
@@ -28,6 +45,7 @@ impl Client {
             &Frame::Json(Message::Hello {
                 protocol: PROTOCOL_VERSION,
                 client: client.into(),
+                app_token: app_token.map(str::to_string),
             }),
         )
         .await?;

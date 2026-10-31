@@ -1316,7 +1316,13 @@ export const M = {
   projectCopiedFilesGet: "project.copied_files.get",
   presenceActive: "presence.active",
   browserPending: "browser.pending",
+  sessionCopiedFiles: "session.copied_files",
   browserRetry: "browser.retry",
+  signinsList: "signins.list",
+  signinsSet: "signins.set",
+  signinsApprove: "signins.approve",
+  signinsCheck: "signins.check",
+  signinsRun: "signins.run",
   projectCopiedFilesSet: "project.copied_files.set",
   projectWorktreeRemove: "project.worktree_remove",
   sessionCreate: "session.create",
@@ -1503,6 +1509,8 @@ export const M = {
 export const EV = {
   terminalCreated: "terminal.created",
   browserShow: "browser.show",
+  filesKept: "files.kept",
+  signinRunning: "signins.running",
   terminalUpdated: "terminal.updated",
   terminalExited: "terminal.exited",
   terminalRemoved: "terminal.removed",
@@ -1553,3 +1561,11 @@ export const EV = {
 export type DaemonService =
   | { mechanism: "login_item"; state: "enabled" | "requires_approval" | "not_registered" | "not_found" }
   | { mechanism: "plist"; state: "loaded" | "installed" | "not_installed"; plist: string };
+
+/** A sign-in every member can run (X75). */
+export interface SignIn {
+  id: string;
+  name: string;
+  login: string;
+  check: string;
+}

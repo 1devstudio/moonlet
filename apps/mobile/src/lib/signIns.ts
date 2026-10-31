@@ -12,16 +12,17 @@ export interface SignIn {
 /** Whether the phone shows `s`: the central host found the user here. */
 export const takesSignIn = (s: BrowserShow) => s.to === "phone" && /^https?:\/\//i.test(s.url);
 
-/** The card's lines: who asked, the page's site, and whether it has to
- * finish on a Mac because it comes back to the asking member's localhost. */
-export function signInCard(s: BrowserShow): { title: string; site: string; mac: boolean } {
+/** The card's lines: who asked, the page's site, whether it has to finish
+ * on a Mac because it comes back to the asking member's localhost, and the
+ * one-time code the command printed, to enter on the page. */
+export function signInCard(s: BrowserShow): { title: string; site: string; mac: boolean; code: string | null } {
   let site = s.url;
   try {
     site = new URL(s.url).host;
   } catch {
     // Shown as it came.
   }
-  return { title: signInToast(s), site, mac: s.forward !== undefined };
+  return { title: signInToast(s), site, mac: s.forward !== undefined, code: s.code ?? null };
 }
 
 /** Which sign-in `s` is: its URL, as asked by one member's session

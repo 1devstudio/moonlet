@@ -202,6 +202,7 @@ impl Host {
         let socket = home.path().join("run").join("d.sock");
         let child = Command::new(exe)
             .arg("daemon")
+            .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
             .env("MOONLET_HOME", home.path())
             .env("MOONLET_SOCK", &socket)
             .env("MOONLET_MOBILE_ADDRS", "127.0.0.1")
@@ -217,7 +218,7 @@ impl Host {
     }
 
     async fn app(&self) -> Client {
-        Client::connect(&self.socket, "moonlet-app").await.unwrap()
+        Client::connect_app(&self.socket, self.home.path()).await.unwrap()
     }
 
     /// The tailnet listener's address, and a token paired as `kind`.
@@ -262,7 +263,7 @@ impl Host {
         send(&mut s, Message::Auth { token: None, pair: Some(p.code), device: Some(format!("a {kind}")), route: None, kind: Some(serde_json::from_value(json!(kind)).unwrap()) }).await;
         assert!(matches!(next(&mut s).await, Some(Message::Authed { .. })));
         let client = if kind == "phone" { "moonlet-mobile" } else { "moonlet-app" };
-        send(&mut s, Message::Hello { protocol: PROTOCOL_VERSION, client: client.into() }).await;
+        send(&mut s, Message::Hello { protocol: PROTOCOL_VERSION, client: client.into(), app_token: None }).await;
         assert!(matches!(next(&mut s).await, Some(Message::Welcome { .. })));
         s
     }

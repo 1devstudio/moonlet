@@ -26,6 +26,7 @@ impl TestDaemon {
         let socket = home.path().join("run").join("d.sock");
         let child = Command::new(env!("CARGO_BIN_EXE_moonletd"))
             .arg("daemon")
+            .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
             .envs(env.iter().map(|(k, v)| (*k, v.as_str())))
             .env("MOONLET_HOME", home.path())
             .env("MOONLET_SOCK", &socket)
@@ -45,7 +46,7 @@ impl TestDaemon {
     }
 
     pub async fn client(&self) -> Client {
-        Client::connect(&self.socket, "test").await.unwrap()
+        Client::connect_app(&self.socket, self.home.path()).await.unwrap()
     }
 }
 
@@ -95,6 +96,7 @@ async fn rejects_protocol_mismatch() {
         &Frame::Json(Message::Hello {
             protocol: PROTOCOL_VERSION + 1,
             client: "old".into(),
+            app_token: None,
         }),
     )
     .await
@@ -384,6 +386,7 @@ async fn terminals_do_not_inherit_the_daemon_starters_environment() {
     let socket = home.path().join("run").join("d.sock");
     let mut child = Command::new(env!("CARGO_BIN_EXE_moonletd"))
         .arg("daemon")
+        .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
         .env("MOONLET_HOME", home.path())
         .env("MOONLET_SOCK", &socket)
         .env("CLAUDE_CODE_MESSAGING_TOKEN", "leaked-secret")
@@ -959,6 +962,7 @@ async fn starting_refreshes_an_outdated_moonlet_skill() {
     let socket = home.path().join(".moonlet/run/moonletd.sock");
     let mut child = Command::new(env!("CARGO_BIN_EXE_moonletd"))
         .arg("daemon")
+        .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
         .env("HOME", home.path())
         .env_remove("MOONLET_SOCK")
         .env_remove("MOONLET_HOME")
@@ -1031,6 +1035,7 @@ impl HomeDaemon {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_moonletd"));
         cmd.envs(env.iter().map(|(k, v)| (k, v)));
         cmd.arg("daemon")
+            .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
             .env("HOME", home)
             .env_remove("MOONLET_SOCK")
             .env_remove("MOONLET_HOME")
@@ -1049,7 +1054,7 @@ impl HomeDaemon {
     }
 
     async fn client(&self) -> Client {
-        Client::connect(&self.socket, "test").await.unwrap()
+        Client::connect_app(&self.socket, self.home.path()).await.unwrap()
     }
 }
 
@@ -1727,6 +1732,7 @@ async fn a_second_daemon_exits_with_0_while_one_is_listening() {
     let d = TestDaemon::start().await;
     let mut second = Command::new(env!("CARGO_BIN_EXE_moonletd"))
         .arg("daemon")
+        .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
         .env("MOONLET_HOME", d.home.path())
         .env("MOONLET_SOCK", &d.socket)
         .stdin(Stdio::null())
@@ -3107,7 +3113,7 @@ async fn render_fixture(d: &TestDaemon) -> (Client, String, PathBuf) {
 /// card's flags: the field's empty mount is bad; a screenshot is the PNG
 /// signature, padded to `png_bytes`.
 async fn fake_app(d: &TestDaemon, png_bytes: usize) -> tokio::sync::mpsc::UnboundedReceiver<serde_json::Value> {
-    let mut app = Client::connect(&d.socket, "moonlet-app").await.unwrap();
+    let mut app = Client::connect_app(&d.socket, d.home.path()).await.unwrap();
     let _: serde_json::Value = app.request(methods::DESIGN_RENDER_READY, serde_json::json!({})).await.unwrap();
     let (seen, rx) = tokio::sync::mpsc::unbounded_channel();
     tokio::spawn(async move {
@@ -3236,7 +3242,7 @@ async fn without_the_app_the_render_check_and_snap_say_to_open_moonlet() {
         .unwrap_err();
     assert_eq!(e.to_string(), "no_app: Open moonlet to render cards");
     // An app that said it renders, then quit, renders no more.
-    let mut app = Client::connect(&d.socket, "moonlet-app").await.unwrap();
+    let mut app = Client::connect_app(&d.socket, d.home.path()).await.unwrap();
     let _: serde_json::Value = app.request(methods::DESIGN_RENDER_READY, serde_json::json!({})).await.unwrap();
     drop(app);
     let e = c
@@ -3256,7 +3262,7 @@ async fn a_render_waits_its_turn_without_its_clock_running() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     let d = TestDaemon::start_with(&[("MOONLET_RENDER_TIMEOUT_MS", "1500".into())]).await;
     let (mut c, w, _) = render_fixture(&d).await;
-    let mut app = Client::connect(&d.socket, "moonlet-app").await.unwrap();
+    let mut app = Client::connect_app(&d.socket, d.home.path()).await.unwrap();
     let _: serde_json::Value = app.request(methods::DESIGN_RENDER_READY, serde_json::json!({})).await.unwrap();
     let (mut reader, mut writer) = app.into_stream().into_split();
     let (answers, mut to_send) = tokio::sync::mpsc::unbounded_channel::<serde_json::Value>();

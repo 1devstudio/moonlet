@@ -103,6 +103,9 @@ pub struct Conn {
     pub client: String,
     /// The paired phone's device id on a phone connection (X39).
     pub phone: Option<String>,
+    /// A local connection that sent this Mac's app credential in `hello`
+    /// from the app's executable (X75): the app, whatever `client` says.
+    pub app: bool,
     /// The process at the other end of a local connection, as the kernel
     /// says (X75): never what the client claims.
     pub peer_pid: Option<u32>,
@@ -133,6 +136,7 @@ impl Conn {
             urgent,
             client: client.to_string(),
             phone,
+            app: false,
             peer_pid: None,
             pending: Mutex::new(HashMap::new()),
             next_request: AtomicU64::new(1),
@@ -254,8 +258,8 @@ where
     let (urgent, urgent_rx) = mpsc::unbounded_channel::<Frame>();
     let writer_task = tokio::spawn(write_loop(writer, urgent_rx, rx, tx.counter()));
 
-    let client = match read_frame(&mut reader).await? {
-        Some(Frame::Json(Message::Hello { protocol, client })) => {
+    let (client, app_token) = match read_frame(&mut reader).await? {
+        Some(Frame::Json(Message::Hello { protocol, client, app_token })) => {
             if protocol != PROTOCOL_VERSION {
                 let _ = tx.send(Frame::Json(Message::err(
                     0,
@@ -280,7 +284,7 @@ where
                 let _ = writer_task.await;
                 return Ok(());
             }
-            client
+            (client, app_token)
         }
         // A paired Mac may ask for an update in place of `hello`, whatever
         // protocol it speaks (X69). This exchange never changes.
@@ -311,12 +315,16 @@ where
         pid: std::process::id(),
     }));
 
+    // Only on the local socket: over the tailnet a device proves itself
+    // with its own token.
+    let app = phone.is_none() && daemon.proves_app(app_token.as_deref(), peer_pid);
     let conn = Arc::new(Conn {
         id: daemon.terminals.new_client_id(),
         tx: tx.clone(),
         urgent,
         client,
         phone,
+        app,
         peer_pid,
         pending: Mutex::new(HashMap::new()),
         next_request: AtomicU64::new(1),
@@ -333,13 +341,16 @@ where
     let mut events = daemon.terminals.subscribe_events();
     // A URL for this Mac's app waits while none is connected (X75); from
     // now on this one hears it.
-    let app = conn.client == crate::daemon::APP_CLIENT && conn.phone.is_none();
+    let app = conn.app && conn.client == crate::daemon::APP_CLIENT;
     if app {
         daemon.app_connection(true);
     }
     let ev_tx = tx.clone();
-    // The text an agent asks to read is for the app alone, not for the
-    // agent's own `moonlet` connections (X31).
+    // A local connection that did not prove it is the app (X75): an agent's
+    // `moonlet` CLI or any other process of the user's. The text an agent
+    // asks to read is for the app alone (X31), and so are a URL to open and
+    // a setup question.
+    let not_app = conn.phone.is_none() && !conn.app;
     let is_cli = conn.client == crate::daemon::CLI_CLIENT;
     // A job's output is for the app and paired devices, as `job.output` is
     // (X62): neither an agent's CLI nor a worker hears it.
@@ -367,7 +378,7 @@ where
             match events.recv().await {
                 Ok(_) if cloud => {}
                 Ok(Message::Event { name, .. })
-                    if is_cli && name == moonlet_proto::methods::EV_TERMINAL_READ_REQUEST => {}
+                    if not_app && name == moonlet_proto::methods::EV_TERMINAL_READ_REQUEST => {}
                 Ok(Message::Event { name, .. })
                     if no_jobs
                         && (name == moonlet_proto::methods::EV_JOB_OUTPUT
@@ -375,12 +386,12 @@ where
                 // Setup questions go where they are answered: the app and
                 // paired phones (X62, X40).
                 Ok(Message::Event { name, .. })
-                    if (no_jobs || (phone && !approves_setup))
+                    if (no_jobs || not_app || (phone && !approves_setup))
                         && name == moonlet_proto::methods::EV_EXEC_SETUP => {}
                 // A URL to open goes to where the user is: this Mac's app or
                 // a paired phone (X75), never an agent or another Mac.
                 Ok(Message::Event { name, .. })
-                    if (no_jobs || (phone && !approves_setup))
+                    if (no_jobs || not_app || (phone && !approves_setup))
                         && name == moonlet_proto::methods::EV_BROWSER_SHOW => {}
                 // One for the phone goes to the phone the user used last
                 // alone, not every paired phone (X75).
@@ -388,6 +399,12 @@ where
                     if phone
                         && name == moonlet_proto::methods::EV_BROWSER_SHOW
                         && data.get("device").and_then(Value::as_str).is_some_and(|d| Some(d) != device.as_deref()) => {}
+                // Where a secret's other version went is for this Mac's
+                // app alone (X74).
+                Ok(Message::Event { name, .. })
+                    if (no_jobs || not_app || phone)
+                        && (name == moonlet_proto::methods::EV_FILES_KEPT
+                            || name == moonlet_proto::methods::EV_SIGNIN_RUNNING) => {}
                 // Design systems and designs stay on the Mac (X64, X65): a
                 // paired device hears none of the Mac-only events.
                 Ok(Message::Event { name, .. }) if phone && MAC_ONLY_EVENTS.contains(&name.as_str()) => {}
@@ -458,10 +475,11 @@ where
                     let e = RpcError::new("forbidden", "a cloud machine only runs heavy commands");
                     let _ = conn.tx.send(Frame::Json(Message::err(id, e)));
                 }
-                // Another member's terminal (X72): its reply, with the
-                // snapshot, goes before any of its output.
+                // Another member's terminal (X72), or sign-in (X75): its
+                // reply, with the snapshot, goes before any of its output.
                 Frame::Json(Message::Request { id, method, params })
-                    if method == moonlet_proto::methods::SESSION_ATTACH =>
+                    if method == moonlet_proto::methods::SESSION_ATTACH
+                        || method == moonlet_proto::methods::SIGNINS_ATTACH =>
                 {
                     let daemon = daemon.clone();
                     let conn = conn.clone();
