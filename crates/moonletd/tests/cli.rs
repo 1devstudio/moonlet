@@ -23,6 +23,12 @@ impl Host {
     /// A daemon with tailnet access `enabled` on an ephemeral port, and
     /// `addrs` as its Tailscale addresses.
     async fn start(enabled: bool, addrs: &str) -> Host {
+        Host::launch(enabled, addrs, true).await
+    }
+
+    /// A daemon that, unless `ssh`, takes `moonletd pair` and `tailnet`
+    /// run by this test for what they are: not started at a login.
+    async fn launch(enabled: bool, addrs: &str, ssh: bool) -> Host {
         let home = tempfile::tempdir().unwrap();
         std::fs::write(
             home.path().join("mobile.json"),
@@ -30,12 +36,16 @@ impl Host {
         )
         .unwrap();
         let socket = home.path().join("run").join("d.sock");
-        let child = Command::new(env!("CARGO_BIN_EXE_moonletd"))
-            .arg("daemon")
-            .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
+        let mut daemon = Command::new(env!("CARGO_BIN_EXE_moonletd"));
+        daemon.env_remove("MOONLET_TEST_SSHD_EXE");
+        if ssh {
             // `moonletd pair` and `tailnet`, run by this test, count as
             // typed in an SSH login (X75).
-            .env("MOONLET_TEST_SSHD_EXE", std::env::current_exe().unwrap())
+            daemon.env("MOONLET_TEST_SSHD_EXE", std::env::current_exe().unwrap());
+        }
+        let child = daemon
+            .arg("daemon")
+            .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
             .env("MOONLET_HOME", home.path())
             .env("MOONLET_SOCK", &socket)
             .env("MOONLET_MOBILE_ADDRS", addrs)
@@ -65,6 +75,21 @@ impl Host {
 
     fn run(&self, args: &[&str]) -> Output {
         self.cmd(args).output().unwrap()
+    }
+
+    /// `moonletd <args>` below 4 shells of the user's, so none of its
+    /// nearest 4 ancestors starts a login, even when this test runs in one.
+    fn run_in_a_plain_terminal(&self, args: &[&str]) -> Output {
+        let mut c = Command::new("/bin/sh");
+        for _ in 0..3 {
+            c.args(["-c", "\"$@\"; exit $?", "sh", "/bin/sh"]);
+        }
+        c.args(["-c", "\"$@\"; exit $?", "sh", env!("CARGO_BIN_EXE_moonletd")]);
+        c.args(args)
+            .env("MOONLET_HOME", self.home.path())
+            .env("MOONLET_SOCK", &self.socket)
+            .output()
+            .unwrap()
     }
 
     async fn app(&self) -> Client {
@@ -210,6 +235,32 @@ async fn pair_needs_tailnet_access_and_tailscale() {
         text(&out.stderr),
         "Tailscale is not running on this machine.\n"
     );
+}
+
+#[tokio::test]
+async fn tailnet_and_pair_from_a_plain_terminal_say_where_to_run_them() {
+    let host = Host::launch(true, "127.0.0.1", false).await;
+    let only =
+        "Only the moonlet app, or you over SSH or at the console, manages tailnet access and pairing.";
+    for (args, command) in [
+        (&["tailnet", "on"][..], "tailnet on"),
+        (&["tailnet", "off"][..], "tailnet off"),
+        (&["pair"][..], "pair"),
+    ] {
+        let out = host.run_in_a_plain_terminal(args);
+        assert_eq!(out.status.code(), Some(1), "{command}");
+        assert_eq!(text(&out.stdout), "", "{command}");
+        let hint = if cfg!(target_os = "linux") {
+            format!(
+                "{only}\nFrom this terminal, run: sudo runuser -u \"$(id -un)\" -- ~/.moonlet/bin/moonletd {command}\n"
+            )
+        } else {
+            format!("{only}\n")
+        };
+        assert_eq!(text(&out.stderr), hint, "{command}");
+    }
+    // Still on: the refused `tailnet off` changed nothing.
+    host.listening().await;
 }
 
 #[tokio::test]

@@ -152,14 +152,15 @@ fn main() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&info)?);
             Ok(())
         }),
-        Cmd::Tailnet { action } => rt.block_on(tailnet_cli::tailnet(
-            &socket,
-            match action {
+        Cmd::Tailnet { action } => {
+            let enable = match action {
                 TailnetAction::On => Some(true),
                 TailnetAction::Off => Some(false),
                 TailnetAction::Status => None,
-            },
-        )),
+            };
+            let code = rt.block_on(tailnet_cli::tailnet(&socket, enable))?;
+            std::process::exit(code)
+        }
         Cmd::Join { addrs, code, name } => rt.block_on(async {
             let mut c = tailnet_cli::connect_as_app(&socket, "moonletd-join").await?;
             let join = methods::LinkJoin {

@@ -363,7 +363,12 @@ async fn moonletd_with_the_credential_is_the_app_only_within_an_ssh_session() {
         .unwrap();
     assert!(!out.status.success());
     let said = String::from_utf8_lossy(&out.stderr);
-    assert!(said.contains("forbidden"), "{said}");
+    assert!(
+        said.starts_with(
+            "Only the moonlet app, or you over SSH or at the console, manages tailnet access and pairing.\n"
+        ),
+        "{said}"
+    );
 
     let out = host
         .command(&["tailnet", "status"], Run::Ssh { env: Vec::new() })
