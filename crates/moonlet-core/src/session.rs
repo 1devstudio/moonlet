@@ -1164,6 +1164,92 @@ impl SessionManager {
 
 
 
+    /// Takes in session `s`, which another member made and this member now
+    /// owns (X73): its worktree is already here, at `s.path`. It keeps its id.
+    pub fn adopt_session(&self, s: Session) -> Result<Session> {
+        let id = s.id.clone();
+        self.mutate(|st| {
+            if st.sessions.iter().any(|o| o.id == s.id) {
+                bail!("this host already has that session");
+            }
+            if !st.projects.iter().any(|p| p.id == s.project_id) {
+                bail!("no such project");
+            }
+            st.sessions.push(Session { owner: None, terminals: vec![], restore: vec![], ..s });
+            Ok(())
+        })?;
+        self.emit_sessions();
+        self.session(&id)
+    }
+
+    /// Undoes [`Self::adopt_session`] when taking the session in failed
+    /// before anything ran in it (X73): it leaves this member's state, and
+    /// its worktree stays as it is.
+    pub fn unadopt_session(&self, id: &str) -> Result<()> {
+        self.mutate(|st| {
+            st.sessions.retain(|o| o.id != id || !o.terminals.is_empty());
+            Ok(())
+        })?;
+        self.emit_sessions();
+        Ok(())
+    }
+
+    /// A chat in session `ws` that goes on from `history`, another member's
+    /// chat of it (X73), resuming the same conversation.
+    pub fn continue_chat(&self, ws: &Session, mut history: moonlet_proto::types::ChatState) -> Result<TerminalInfo> {
+        let chats = self.chat_runtime(Some("claude")).context("no structured chats")?;
+        // Another member's word: a conversation id that is not one starts
+        // a new conversation, and a mode that turns every check off, or
+        // that this host does not know, is never taken from it; it is set
+        // here, on this member.
+        if !history.agent_session.as_deref().is_some_and(crate::transcript::is_uuid) {
+            history.agent_session = None;
+        }
+        if history.mode.as_deref().is_some_and(|m| m == "bypassPermissions" || !crate::chat::PERMISSION_MODES.contains(&m)) {
+            history.mode = None;
+        }
+        let repo = self.project(&ws.project_id)?;
+        let info = chats.create_continuing(
+            crate::chat::runtime::ChatCreate {
+                cwd: ws.path.clone(),
+                agent: "claude".into(),
+                model: history.model.clone().or_else(|| ws.model.clone()),
+                effort: history.effort.clone().or_else(|| ws.effort.clone()),
+                mode: history.mode.clone().or_else(|| ws.mode.clone()).filter(|m| m != "bypassPermissions"),
+                name: ws.name.clone(),
+                title: Some("claude".into()),
+                session_id: Some(ws.id.clone()),
+                env: self
+                    .script_env(ws, &repo)
+                    .into_iter()
+                    .filter(|(k, _)| k != crate::profiles::CONFIG_DIR_VAR)
+                    .collect(),
+                // Only folders inside the session's worktree here, that
+                // are there, and not a link out of it: the member's word
+                // gives nothing else.
+                add_dirs: crate::chat::moved_dirs(&history.add_dirs, &ws.path, &ws.path)
+                    .into_iter()
+                    .filter(|d| {
+                        let real = |p: &str| std::fs::canonicalize(p).ok();
+                        Path::new(d).is_dir() && real(d).zip(real(&ws.path)).is_some_and(|(d, w)| d.starts_with(w))
+                    })
+                    .collect(),
+                settings: None,
+                workspace: None,
+                design: None,
+            },
+            history,
+        )?;
+        self.mutate(|st| {
+            if let Some(w) = st.sessions.iter_mut().find(|w| w.id == ws.id) {
+                w.terminals.push(info.id);
+            }
+            Ok(())
+        })?;
+        self.emit_sessions();
+        Ok(info)
+    }
+
     /// Starts a session inside a workspace and remembers how to restart it.
     pub fn spawn_in(&self, ws: &Session, mut req: TerminalCreate) -> Result<TerminalInfo> {
         let repo = self.project(&ws.project_id)?;
@@ -2708,6 +2794,100 @@ mod tests {
         assert!(!args.last().unwrap().contains("--resume"), "{args:?}");
         let notes: Vec<String> = chats.state(chat).unwrap().items.into_iter().filter(|i| i.kind == "system").map(|i| i.text).collect();
         assert!(notes.contains(&"Started a new conversation: this workspace now uses Private".to_string()), "{notes:?}");
+    }
+
+    /// X73: another member's chat goes on here in the profile of this
+    /// host's workspace, where its conversation was put: it is resumed.
+    #[tokio::test]
+    async fn a_continued_chat_resumes_its_conversation_in_the_workspaces_profile() {
+        let (repo, home, mgr, chats) = structured().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let work = mgr.create_profile("Work", Some(&folder(&home, "claude-work"))).unwrap();
+        set_profile(&mgr, &mgr.list_workspaces()[0].id, Some(&work.id));
+        let s = mgr.create_session(new_session(&r.id, None)).await.unwrap();
+        let history = moonlet_proto::types::ChatState {
+            status: "done".into(),
+            agent_session: Some("0d6e2a4c-1b3f-4a5e-9c7d-8e1f2a3b4c5d".into()),
+            ..Default::default()
+        };
+
+        let chat = mgr.continue_chat(&s, history).unwrap();
+        let args = nth_line(&Path::new(&s.path).join("claude-args"), 1).await;
+        assert!(args.contains("--resume 0d6e2a4c-1b3f-4a5e-9c7d-8e1f2a3b4c5d"), "{args}");
+        assert_eq!(nth_line(&Path::new(&s.path).join("claude-env"), 1).await, folder(&home, "claude-work"));
+        let notes: Vec<String> = chats.state(chat.id).unwrap().items.into_iter().filter(|i| i.kind == "system").map(|i| i.text).collect();
+        assert!(notes.is_empty(), "{notes:?}");
+    }
+
+    /// X73: what the member's agent had running when it went away is over
+    /// in the chat that goes on here, as after a daemon restart.
+    #[tokio::test]
+    async fn a_continued_chat_closes_what_its_member_had_running() {
+        let (repo, _home, mgr, chats) = structured().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let s = mgr.create_session(new_session(&r.id, None)).await.unwrap();
+        let history: moonlet_proto::types::ChatState = serde_json::from_value(serde_json::json!({
+            "status": "working",
+            "items": [
+                { "id": "m1", "kind": "assistant", "text": "Running the te", "ts": 1, "partial": true },
+                { "id": "t1", "kind": "tool", "ts": 2, "tool": { "name": "Bash", "summary": "npm test", "input": { "command": "npm test" }, "status": "running" } }
+            ],
+            "subagents": [
+                { "id": "a1", "tool_use_id": "toolu_1", "description": "List files", "status": "running", "started_at": 1 }
+            ],
+            "queued": [ { "id": "q1", "text": "Also fix the header" } ]
+        }))
+        .unwrap();
+
+        let chat = mgr.continue_chat(&s, history).unwrap();
+        let st = chats.state(chat.id).unwrap();
+        assert!(!st.items[0].partial);
+        assert_eq!(st.items[1].tool.as_ref().unwrap().status, "error");
+        assert_eq!(st.subagents[0].status, "stopped");
+        assert!(st.queued.is_empty());
+        let texts: Vec<&str> = st.items[2..].iter().map(|i| i.text.as_str()).collect();
+        assert_eq!(texts, ["Also fix the header", "Not delivered: Claude stopped before reading this message."]);
+    }
+
+    /// X73: a permission mode this host does not know, from another
+    /// member's word, never stops its chat going on: it runs in the default.
+    #[tokio::test]
+    async fn a_continued_chat_with_an_unknown_mode_goes_on_in_the_default_one() {
+        let (repo, _home, mgr, chats) = structured().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let s = mgr.create_session(new_session(&r.id, None)).await.unwrap();
+        let history = moonlet_proto::types::ChatState { status: "done".into(), mode: Some("yolo".into()), ..Default::default() };
+
+        let chat = mgr.continue_chat(&s, history).unwrap();
+        assert_eq!(chats.state(chat.id).unwrap().mode, None);
+        let args = nth_line(&Path::new(&s.path).join("claude-args"), 1).await;
+        assert!(!args.contains("--permission-mode"), "{args}");
+    }
+
+    /// X73: a continued chat keeps the folders it was given inside the
+    /// session's worktree here; one anywhere else, or gone, is not given.
+    #[tokio::test]
+    async fn a_continued_chat_keeps_its_folders_inside_the_worktree_alone() {
+        let (repo, home, mgr, chats) = structured().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let s = mgr.create_session(new_session(&r.id, None)).await.unwrap();
+        let web = format!("{}/packages/web", s.path);
+        std::fs::create_dir_all(&web).unwrap();
+        let elsewhere = home.path().join("shared-lib");
+        std::fs::create_dir(&elsewhere).unwrap();
+        let link = format!("{}/packages/lib", s.path);
+        std::os::unix::fs::symlink(&elsewhere, &link).unwrap();
+        let history = moonlet_proto::types::ChatState {
+            status: "done".into(),
+            add_dirs: vec![web.clone(), elsewhere.display().to_string(), format!("{}/gone", s.path), format!("{}/packages/../../x", s.path), link],
+            ..Default::default()
+        };
+
+        let chat = mgr.continue_chat(&s, history).unwrap();
+        assert_eq!(chats.state(chat.id).unwrap().add_dirs, vec![web.clone()]);
+        let args = nth_line(&Path::new(&s.path).join("claude-args"), 1).await;
+        assert!(args.contains(&format!("--add-dir {web}")), "{args}");
+        assert!(!args.contains("shared-lib"), "{args}");
     }
 
     /// X64: a design system's agent has no session; it starts in its

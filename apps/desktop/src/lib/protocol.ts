@@ -608,6 +608,9 @@ export interface SessionOwner {
   name: string;
   /** Whether its link to the listing host is up. */
   reachable: boolean;
+  /** Since when its link has been down (ms since the epoch, X73); absent
+   *  while it is up. */
+  unreachable_since?: number;
 }
 
 /** A tracker issue a session is linked to (X46). */

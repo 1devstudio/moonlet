@@ -7,7 +7,7 @@
 //! to the identity with its sort key or to `null` once removed, so two
 //! members adding projects to one section at once both keep theirs.
 
-use std::collections::BTreeMap as Map;
+use std::collections::{BTreeMap as Map, BTreeSet};
 
 use moonlet_proto::types::{Change, ProjectIdentity};
 use serde_json::{Value, json};
@@ -35,6 +35,9 @@ const MEMBER: RecordKind = RecordKind::Member;
 const DESIGN: RecordKind = RecordKind::Design;
 /// A session, so every member knows which member runs it (X72).
 const SESSION: RecordKind = RecordKind::Session;
+/// A session record's fields only its maker and the central host change:
+/// who owns it, the ownership number and the pin (X73).
+const OWNERSHIP: &[&str] = &["owner", "epoch", "pinned"];
 
 type Listener = Arc<dyn Fn(Vec<Change>) + Send + Sync>;
 type Applied = Arc<dyn Fn(&[Change]) + Send + Sync>;
@@ -190,7 +193,7 @@ impl SessionManager {
                 *st = next;
                 // Sessions made before X72, or while the log was away,
                 // get their records now.
-                if !session_changes(&st, &mut log, now_ms()).is_empty() {
+                if !session_changes(&st, &mut log, now_ms(), &[]).is_empty() {
                     write_private(&path, &log)?;
                 }
                 log
@@ -339,16 +342,50 @@ impl SessionManager {
     /// account. Only the changes of the member that made a session count,
     /// and its `owner` must be that member: a member cannot claim another's
     /// session, nor make one in another's name.
+    ///
+    /// Who owns a session, its ownership number and its pin (X73) are the
+    /// central host's to change: changes to those fields count from the
+    /// central host, the referee, and from the session's maker only until
+    /// the referee names an owner. The other fields count from the referee
+    /// and from the member that owns the session now. No stamp a member
+    /// gives its changes decides who made or owns a session.
     pub fn session_records(&self) -> Map<String, Record> {
-        self.with_log(|log| {
-            log.records_by_maker(SESSION)
+        self.with_log(sessions_in)
+    }
+
+    /// Makes `owner` the owner of session `id` with ownership number
+    /// `epoch`, as this member's changes: the central host, the referee
+    /// (X73). False without an account.
+    pub fn set_session_owner(&self, id: &str, owner: &str, epoch: u64, pinned: Option<&str>) -> bool {
+        let changes = {
+            let mut account = self.account.lock().unwrap();
+            let Some(a) = account.as_mut() else { return false };
+            let mut log = a.log.clone();
+            let now = now_ms();
+            // The record as it is here goes with the move: from then on
+            // only the new owner's changes count, so the former owner's
+            // fields are kept as this member's.
+            let record = sessions_in(&log).remove(id).unwrap_or_default();
+            let mut changes: Vec<Change> = record
                 .into_iter()
-                .filter(|(id, r)| {
-                    let maker = log.first_change(SESSION, id).and_then(|c| log_owner(&c.stamp.member));
-                    maker.is_some() && r.get("owner").and_then(Value::as_str) == maker
-                })
-                .collect()
-        })
+                .filter(|(field, _)| !OWNERSHIP.contains(&field.as_str()))
+                .map(|(field, value)| log.set(now, SESSION, id, &field, value))
+                .collect();
+            changes.extend([
+                log.set(now, SESSION, id, "owner", json!(owner)),
+                log.set(now, SESSION, id, "epoch", json!(epoch)),
+                log.set(now, SESSION, id, "pinned", json!(pinned)),
+            ]);
+            if let Err(e) = write_private(&a.path, &log) {
+                tracing::warn!("cannot save a session's owner: {e:#}");
+                return false;
+            }
+            a.log = log;
+            changes
+        };
+        self.emit_sessions();
+        self.account_changed(changes);
+        true
     }
 
     /// Each member's name as it calls itself, by worker id (X71).
@@ -443,7 +480,8 @@ impl SessionManager {
             lay_onto(&mut next, &log);
             // Another member's merge can move this member's sessions to
             // another workspace: their records follow (X72).
-            let own = session_changes(&next, &mut log, now_ms());
+            let mut own = session_changes(&next, &mut log, now_ms(), &[]);
+            own.extend(name_makers(&a.log, &mut log, now_ms()));
             match write_private(&a.path, &log).and_then(|()| self.save(&next)) {
                 Ok(()) => {
                     a.log = log;
@@ -583,7 +621,161 @@ fn diff(old: &State, new: &State, log: &mut Log, now: u64) -> Vec<Change> {
             out.push(log.set(now, MERGE, from, "into", json!(into)));
         }
     }
-    out.extend(session_changes(new, log, now));
+    // Only a session this change removes ends its record: one that is not
+    // here yet, being taken from another member, keeps it (X73).
+    let removed: Vec<String> = old
+        .sessions
+        .iter()
+        .filter(|o| o.owner.is_none() && !new.sessions.iter().any(|s| s.id == o.id))
+        .map(|o| o.id.clone())
+        .collect();
+    out.extend(session_changes(new, log, now, &removed));
+    out
+}
+
+/// The account's sessions in `log`, as [`SessionManager::session_records`]
+/// gives them (X72, X73).
+fn sessions_in(log: &Log) -> Map<String, Record> {
+    session_view(log).0
+}
+
+/// The account's sessions in `log` (see [`sessions_in`]), and the ids of
+/// those deleted by a member whose delete counts: the referee, or the
+/// member that owns the session now. Another member's delete is left out.
+fn session_view(log: &Log) -> (Map<String, Record>, BTreeSet<String>) {
+    use moonlet_proto::types::{ChangeOp, Stamp};
+    let referee = log.account().or_else(|| log_owner(log.member()));
+    fn author(c: &Change) -> Option<&str> {
+        log_owner(&c.stamp.member)
+    }
+    let is_referee = |c: &Change| referee.is_some() && author(c) == referee;
+    let is_ownership = |c: &Change| matches!(&c.op, ChangeOp::Set { field, .. } if OWNERSHIP.contains(&field.as_str()));
+    // A member chooses its own stamps, so they never decide who made a
+    // session: the first owner the referee names does, the referee being
+    // the one that takes each member's changes as they come
+    // ([`name_makers`]). Until it names one, the maker is the one member
+    // that says, in a change of its own, that it owns the session.
+    let mut named: Map<&str, (&Stamp, &str)> = Map::new();
+    for c in log.changes_of(SESSION).filter(|c| is_referee(c)) {
+        let ChangeOp::Set { field, value } = &c.op else { continue };
+        let Some(owner) = value.as_str().filter(|_| field == "owner") else { continue };
+        let first = named.entry(c.id.as_str()).or_insert((&c.stamp, owner));
+        if c.stamp < *first.0 {
+            *first = (&c.stamp, owner);
+        }
+    }
+    let claims = session_claims(log, referee);
+    let maker = |id: &str| {
+        named.get(id).map(|(_, owner)| *owner).or_else(|| {
+            let claimed = claims.get(id)?;
+            claimed.first().copied().filter(|_| claimed.len() == 1)
+        })
+    };
+    // Who owns a session is its maker's word until the referee names an
+    // owner, and the referee's alone from then on.
+    let ownership_counts = |c: &Change| {
+        is_referee(c) || (author(c).is_some() && author(c) == maker(&c.id) && !named.contains_key(c.id.as_str()))
+    };
+    // Each session's owners in order: when, who, and whether the referee
+    // said so.
+    let mut owners: Map<&str, Vec<(&Stamp, &str, bool)>> = Map::new();
+    for c in log.changes_of(SESSION).filter(|c| ownership_counts(c)) {
+        if let ChangeOp::Set { field, value } = &c.op
+            && field == "owner"
+            && let Some(owner) = value.as_str()
+        {
+            owners.entry(c.id.as_str()).or_default().push((&c.stamp, owner, is_referee(c)));
+        }
+    }
+    for list in owners.values_mut() {
+        list.sort_by(|a, b| a.0.cmp(b.0));
+    }
+    // The member that owns session `id` now: its maker until one is named.
+    // Only its changes and the referee's count, whenever they say they were
+    // made: a move carries the record as the referee had it, so what a
+    // former owner wrote before it is kept.
+    let owner_now = |id: &str| owners.get(id).and_then(|list| list.last()).map(|(_, owner, _)| *owner).or_else(|| maker(id));
+    let counts = |c: &Change| {
+        if is_ownership(c) {
+            ownership_counts(c)
+        } else {
+            is_referee(c) || (author(c).is_some() && author(c) == owner_now(&c.id))
+        }
+    };
+    let deleted = log.changes_of(SESSION).filter(|c| c.op == ChangeOp::Delete && counts(c)).map(|c| c.id.clone()).collect();
+    let records = log
+        .records_where(SESSION, counts)
+        .into_iter()
+        .filter(|(id, r)| {
+            // The maker owns what it makes; only the referee moves it to
+            // another member.
+            let owner = r.get("owner").and_then(Value::as_str);
+            owners
+                .get(id.as_str())
+                .and_then(|list| list.last())
+                .is_some_and(|(_, last, by_referee)| owner == Some(*last) && (*by_referee || owner == maker(id)))
+        })
+        .collect();
+    (records, deleted)
+}
+
+/// The members that say, in a change of their own, that they own each
+/// session: its maker, and anyone claiming it falsely. The referee's word
+/// is not a claim.
+fn session_claims<'a>(log: &'a Log, referee: Option<&str>) -> Map<&'a str, BTreeSet<&'a str>> {
+    let mut claims: Map<&str, BTreeSet<&str>> = Map::new();
+    for c in log.changes_of(SESSION) {
+        let author = log_owner(&c.stamp.member);
+        if let moonlet_proto::types::ChangeOp::Set { field, value } = &c.op
+            && field == "owner"
+            && let Some(owner) = value.as_str()
+            && author == Some(owner)
+            && author != referee
+        {
+            claims.entry(c.id.as_str()).or_default().insert(owner);
+        }
+    }
+    claims
+}
+
+/// On the referee, names the maker of each session in `log` it has named
+/// no owner of yet (X73), `before` being its log before the changes just
+/// taken: the one member that claims the session, or, when several do,
+/// the one whose claim it had first. The referee takes each member's
+/// changes as they come, and another member learns of a session only from
+/// it, so that is the member that made it, whatever stamps the others give
+/// theirs. From then on its word counts, and no claim does.
+fn name_makers(before: &Log, log: &mut Log, now: u64) -> Vec<Change> {
+    let Some(me) = log_owner(log.member()).map(str::to_string).filter(|_| log.account().is_none()) else {
+        return Vec::new();
+    };
+    let named: BTreeSet<String> = log
+        .changes_of(SESSION)
+        .filter(|c| log_owner(&c.stamp.member) == Some(me.as_str()))
+        .filter(|c| matches!(&c.op, moonlet_proto::types::ChangeOp::Set { field, .. } if field == "owner"))
+        .map(|c| c.id.clone())
+        .collect();
+    let had = session_claims(before, Some(&me));
+    let sole = |claims: Option<&BTreeSet<&str>>| claims.filter(|c| c.len() == 1).and_then(|c| c.first()).map(|m| m.to_string());
+    let makers: Vec<(String, String)> = session_claims(log, Some(&me))
+        .into_iter()
+        .filter(|(id, _)| !named.contains(*id))
+        .filter_map(|(id, claims)| Some((id.to_string(), sole(Some(&claims)).or_else(|| sole(had.get(id)))?)))
+        .collect();
+    let mut out = Vec::new();
+    for (id, maker) in makers {
+        let by_maker = |c: &Change| c.id == id && log_owner(&c.stamp.member) == Some(maker.as_str());
+        if log.changes_of(SESSION).any(|c| by_maker(c) && c.op == moonlet_proto::types::ChangeOp::Delete) {
+            continue;
+        }
+        // Its ownership number and pin as the maker gave them.
+        let own = log.records_where(SESSION, by_maker).remove(&id).unwrap_or_default();
+        out.push(log.set(now, SESSION, &id, "owner", json!(maker)));
+        out.push(log.set(now, SESSION, &id, "epoch", own.get("epoch").cloned().unwrap_or(json!(1))));
+        if let Some(pinned) = own.get("pinned") {
+            out.push(log.set(now, SESSION, &id, "pinned", pinned.clone()));
+        }
+    }
     out
 }
 
@@ -604,33 +796,55 @@ fn session_fields(st: &State, s: &Session, owner: &str) -> Record {
         ("workspace".to_string(), json!(s.workspace_id)),
         ("branch".to_string(), json!(s.branch)),
         ("owner".to_string(), json!(owner)),
+        ("epoch".to_string(), json!(1)),
         ("created_at".to_string(), json!(s.created_at)),
         ("archived".to_string(), json!(s.archived)),
+        // What its new chats run, for a member that continues it (X73).
+        ("model".to_string(), json!(s.model)),
+        ("effort".to_string(), json!(s.effort)),
     ])
 }
 
 /// Records in `log` what changed of this member's own sessions since their
 /// records: their fields, and the records of sessions it no longer has.
 /// Sessions another member owns are that member's to record.
-fn session_changes(st: &State, log: &mut Log, now: u64) -> Vec<Change> {
+fn session_changes(st: &State, log: &mut Log, now: u64, removed: &[String]) -> Vec<Change> {
     let Some(me) = log_owner(log.member()).map(str::to_string) else {
         return Vec::new();
     };
-    let records = log.records(SESSION);
+    // Only a delete that counts ends a record: another member's would
+    // otherwise stop this member recording its session.
+    let (sessions, deleted) = session_view(log);
+    let records = log.records_where(SESSION, |c| c.op != moonlet_proto::types::ChangeOp::Delete || deleted.contains(&c.id));
+    // Who owns each session, counting only the changes that may say so.
+    let owner_of = |sessions: &Map<String, Record>, id: &str| {
+        sessions.get(id).and_then(|r| r.get("owner")).and_then(Value::as_str).map(str::to_string)
+    };
     let mut out = Vec::new();
     for s in st.sessions.iter().filter(|s| s.owner.is_none()) {
-        if log.is_deleted(SESSION, &s.id) {
+        if deleted.contains(&s.id) {
             continue;
         }
         let had = records.get(&s.id);
+        // A session the central host gave another member is that member's
+        // to record now (X73).
+        if owner_of(&sessions, &s.id).is_some_and(|o| o != me) {
+            continue;
+        }
         for (field, value) in session_fields(st, s, &me) {
+            // Who owns it is set once, as it is made: later, only the
+            // central host moves it.
+            if had.is_some() && OWNERSHIP.contains(&field.as_str()) {
+                continue;
+            }
             if had.and_then(|r| r.get(&field)) != Some(&value) {
                 out.push(log.set(now, SESSION, &s.id, &field, value));
             }
         }
     }
-    for (id, _) in records.iter().filter(|(id, r)| {
-        r.get("owner").and_then(Value::as_str) == Some(me.as_str())
+    for id in records.keys().filter(|id| {
+        owner_of(&sessions, id).as_deref() == Some(me.as_str())
+            && removed.contains(id)
             && !st.sessions.iter().any(|s| &s.id == *id)
     }) {
         out.push(log.delete(now, SESSION, id));
@@ -1962,8 +2176,11 @@ mod tests {
                 "workspace": "7c1e2a9b0d44",
                 "branch": "moonlet/fix-cart",
                 "owner": "book",
+                "epoch": 1,
                 "created_at": 1790000000002u64,
                 "archived": false,
+                "model": null,
+                "effort": null,
             })
         );
     }
@@ -2255,6 +2472,187 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn only_its_maker_and_the_central_host_move_a_session_and_its_owner_records_it_then() {
+        let shop = repo_named("shop").await;
+        let (_h1, book) = member("book").await;
+        let (_h2, mini) = member("mini").await;
+        let mine = book.list_sections()[0].clone();
+        let p = book
+            .section_add_project(&mine.id, &shop.path().display().to_string())
+            .await
+            .unwrap();
+        let session = book
+            .create_session(SessionCreate {
+                name: Some("Fix cart".into()),
+                agent: Some("none".into()),
+                cols: 80,
+                rows: 24,
+                ..SessionCreate::new(&p.id)
+            })
+            .await
+            .unwrap();
+        sync(&book, &mini);
+        // studio-mini is the MacBook's central host.
+        book.set_central_account(Some("mini".into()));
+        assert_eq!(mini.session_records()[&session.id]["epoch"], serde_json::json!(1));
+        // studio-mini, the central host (its log names no other account),
+        // takes the session.
+        assert!(mini.set_session_owner(&session.id, "mini", 2, None));
+        sync(&book, &mini);
+        let r = &book.session_records()[&session.id];
+        assert_eq!((&r["owner"], &r["epoch"]), (&serde_json::json!("mini"), &serde_json::json!(2)));
+        // Another member's word on who owns it does not count.
+        let forged = Change {
+            stamp: moonlet_proto::types::Stamp { ms: now_ms() + 5, n: 0, member: "air.k3x9q2".into() },
+            seq: 1,
+            kind: "session".into(),
+            id: session.id.clone(),
+            op: moonlet_proto::types::ChangeOp::Set { field: "owner".into(), value: serde_json::json!("air") },
+        };
+        mini.apply_account(vec![forged]);
+        assert_eq!(mini.session_records()[&session.id]["owner"], serde_json::json!("mini"));
+        // The MacBook no longer records it: a rename there stays there.
+        book.update(moonlet_proto::methods::SessionUpdate { id: session.id.clone(), name: Some("Renamed on the MacBook".into()), layout: None, task: None })
+            .unwrap();
+        sync(&book, &mini);
+        assert_eq!(mini.session_records()[&session.id]["name"], serde_json::json!("Fix cart"));
+    }
+
+    /// The MacBook's session "Fix cart", made on `book` and known to `mini`.
+    async fn fix_cart_known_to(book: &SessionManager, mini: &SessionManager) -> Session {
+        let shop = repo_named("shop").await;
+        let mine = book.list_sections()[0].clone();
+        let p = book
+            .section_add_project(&mine.id, &shop.path().display().to_string())
+            .await
+            .unwrap();
+        let session = book
+            .create_session(SessionCreate {
+                name: Some("Fix cart".into()),
+                agent: Some("none".into()),
+                cols: 80,
+                rows: 24,
+                ..SessionCreate::new(&p.id)
+            })
+            .await
+            .unwrap();
+        sync(book, mini);
+        session
+    }
+
+    /// A change to session `id` from log `member`, `ms` from now.
+    fn session_change(member: &str, seq: u64, ms: u64, id: &str, op: moonlet_proto::types::ChangeOp) -> Change {
+        Change {
+            stamp: moonlet_proto::types::Stamp { ms: now_ms() + ms, n: 0, member: member.into() },
+            seq,
+            kind: "session".into(),
+            id: id.into(),
+            op,
+        }
+    }
+
+    fn set_op(field: &str, value: serde_json::Value) -> moonlet_proto::types::ChangeOp {
+        moonlet_proto::types::ChangeOp::Set { field: field.into(), value }
+    }
+
+    #[tokio::test]
+    async fn a_session_the_central_host_moved_stays_moved_whatever_its_maker_says_later() {
+        let (_h1, book) = member("book").await;
+        let (_h2, mini) = member("mini").await;
+        let session = fix_cart_known_to(&book, &mini).await;
+        // studio-mini, the central host, takes it.
+        assert!(mini.set_session_owner(&session.id, "mini", 2, None));
+        // The MacBook, its maker, says later that it owns it again, pinned.
+        mini.apply_account(vec![
+            session_change("book.k3x9q2", 1, 5_000, &session.id, set_op("owner", serde_json::json!("book"))),
+            session_change("book.k3x9q2", 2, 5_001, &session.id, set_op("epoch", serde_json::json!(3))),
+            session_change("book.k3x9q2", 3, 5_002, &session.id, set_op("pinned", serde_json::json!("book"))),
+        ]);
+        let r = &mini.session_records()[&session.id];
+        assert_eq!(
+            (&r["owner"], &r["epoch"], &r["pinned"]),
+            (&serde_json::json!("mini"), &serde_json::json!(2), &serde_json::Value::Null)
+        );
+    }
+
+    #[tokio::test]
+    async fn once_a_session_moves_only_its_new_owner_changes_it() {
+        let (_h1, book) = member("book").await;
+        let (_h2, mini) = member("mini").await;
+        let session = fix_cart_known_to(&book, &mini).await;
+        // studio-air renames it before it is studio-air's: that does not count.
+        mini.apply_account(vec![session_change(
+            "air.p7d2m4",
+            1,
+            1,
+            &session.id,
+            set_op("name", serde_json::json!("Named on the Air early")),
+        )]);
+        // studio-mini, the central host, gives it to studio-air.
+        assert!(mini.set_session_owner(&session.id, "air", 2, None));
+        assert_eq!(mini.session_records()[&session.id]["name"], serde_json::json!("Fix cart"));
+        // From then on studio-air's renames count, and the MacBook's do not,
+        // nor does its delete.
+        mini.apply_account(vec![
+            session_change("air.p7d2m4", 2, 5_000, &session.id, set_op("name", serde_json::json!("Renamed on the Air"))),
+            session_change("book.k3x9q2", 1, 6_000, &session.id, set_op("name", serde_json::json!("Renamed on the MacBook"))),
+            session_change("book.k3x9q2", 2, 7_000, &session.id, moonlet_proto::types::ChangeOp::Delete),
+        ]);
+        let records = mini.session_records();
+        assert_eq!(records[&session.id]["name"], serde_json::json!("Renamed on the Air"));
+        assert_eq!(records[&session.id]["owner"], serde_json::json!("air"));
+    }
+
+    #[tokio::test]
+    async fn a_session_the_central_host_took_keeps_its_record_until_it_is_here() {
+        let (_h1, book) = member("book").await;
+        let (_h2, mini) = member("mini").await;
+        let session = fix_cart_known_to(&book, &mini).await;
+        // studio-mini takes the session; before it has it, a change comes in.
+        assert!(mini.set_session_owner(&session.id, "mini", 2, None));
+        let personal = book.list_workspaces()[0].clone();
+        book.update_workspace(WorkspaceUpdate {
+            id: personal.id.clone(),
+            name: Some("Home".into()),
+            color: None,
+            section_ids: None,
+            claude_profile: None,
+        })
+        .unwrap();
+        sync(&book, &mini);
+        let r = &mini.session_records()[&session.id];
+        assert_eq!((&r["name"], &r["owner"]), (&serde_json::json!("Fix cart"), &serde_json::json!("mini")));
+    }
+
+    #[tokio::test]
+    async fn another_members_word_on_who_owns_a_session_never_stops_its_owner_recording_it() {
+        let (_h1, book) = member("book").await;
+        let (_h2, mini) = member("mini").await;
+        let session = fix_cart_known_to(&book, &mini).await;
+        // studio-air, not the central host, says it owns the MacBook's session.
+        book.apply_account(vec![session_change(
+            "air.p7d2m4",
+            1,
+            5_000,
+            &session.id,
+            set_op("owner", serde_json::json!("air")),
+        )]);
+        book.update(moonlet_proto::methods::SessionUpdate {
+            id: session.id.clone(),
+            name: Some("Renamed on the MacBook".into()),
+            layout: None,
+            task: None,
+        })
+        .unwrap();
+        sync(&book, &mini);
+        let r = &mini.session_records()[&session.id];
+        assert_eq!(
+            (&r["name"], &r["owner"]),
+            (&serde_json::json!("Renamed on the MacBook"), &serde_json::json!("book"))
+        );
+    }
+
+    #[tokio::test]
     async fn a_member_cannot_claim_another_members_session_nor_make_one_in_its_name() {
         let shop = repo_named("shop").await;
         let (_h1, book) = member("book").await;
@@ -2293,6 +2691,100 @@ mod tests {
         let records = mini.session_records();
         assert_eq!(records[&session.id]["owner"], serde_json::json!("book"));
         assert!(!records.contains_key("0a1b2c3d4e5f"));
+    }
+
+    /// A change from log `member` stamped in 1970, before every real one.
+    fn backdated(member: &str, seq: u64, id: &str, op: moonlet_proto::types::ChangeOp) -> Change {
+        Change {
+            stamp: moonlet_proto::types::Stamp { ms: seq, n: 0, member: member.into() },
+            seq,
+            kind: "session".into(),
+            id: id.into(),
+            op,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_member_that_backdates_its_changes_to_a_session_does_not_become_its_maker() {
+        let (_h1, book) = member("book").await;
+        let (_h2, mini) = member("mini").await;
+        let session = fix_cart_known_to(&book, &mini).await;
+        book.set_central_account(Some("mini".into()));
+        // studio-air stamps its claim before the MacBook made the session.
+        mini.apply_account(vec![
+            backdated("air.p7d2m4", 1, &session.id, set_op("owner", serde_json::json!("air"))),
+            backdated("air.p7d2m4", 2, &session.id, set_op("name", serde_json::json!("Named on the Air"))),
+        ]);
+        sync(&book, &mini);
+        let r = &mini.session_records()[&session.id];
+        assert_eq!((&r["owner"], &r["name"]), (&serde_json::json!("book"), &serde_json::json!("Fix cart")));
+        // The MacBook goes on recording it.
+        book.update(moonlet_proto::methods::SessionUpdate {
+            id: session.id.clone(),
+            name: Some("Renamed on the MacBook".into()),
+            layout: None,
+            task: None,
+        })
+        .unwrap();
+        sync(&book, &mini);
+        assert_eq!(mini.session_records()[&session.id]["name"], serde_json::json!("Renamed on the MacBook"));
+    }
+
+    #[tokio::test]
+    async fn another_members_claim_neither_hides_nor_takes_a_session_its_central_host_had_first() {
+        let (_h1, book) = member("book").await;
+        let (_h2, mini) = member("mini").await;
+        // studio-mini learns of the MacBook's session while it is a member
+        // itself, then becomes the central host.
+        mini.set_central_account(Some("hub".into()));
+        let session = fix_cart_known_to(&book, &mini).await;
+        mini.set_central_account(None);
+        book.set_central_account(Some("mini".into()));
+        // studio-air claims it too, stamped before the MacBook made it.
+        mini.apply_account(vec![
+            backdated("air.p7d2m4", 1, &session.id, set_op("owner", serde_json::json!("air"))),
+            backdated("air.p7d2m4", 2, &session.id, set_op("name", serde_json::json!("Named on the Air"))),
+        ]);
+        sync(&book, &mini);
+        for records in [mini.session_records(), book.session_records()] {
+            let r = &records[&session.id];
+            assert_eq!((&r["owner"], &r["name"]), (&serde_json::json!("book"), &serde_json::json!("Fix cart")));
+        }
+    }
+
+    #[tokio::test]
+    async fn another_members_delete_never_stops_a_sessions_owner_recording_it() {
+        let (_h1, book) = member("book").await;
+        let (_h2, mini) = member("mini").await;
+        let session = fix_cart_known_to(&book, &mini).await;
+        book.set_central_account(Some("mini".into()));
+        // studio-air, neither its maker nor the central host, deletes it.
+        let delete = session_change("air.p7d2m4", 1, 1, &session.id, moonlet_proto::types::ChangeOp::Delete);
+        mini.apply_account(vec![delete.clone()]);
+        book.apply_account(vec![delete]);
+        book.update(moonlet_proto::methods::SessionUpdate {
+            id: session.id.clone(),
+            name: Some("Renamed on the MacBook".into()),
+            layout: None,
+            task: None,
+        })
+        .unwrap();
+        sync(&book, &mini);
+        let r = &mini.session_records()[&session.id];
+        assert_eq!((&r["owner"], &r["name"]), (&serde_json::json!("book"), &serde_json::json!("Renamed on the MacBook")));
+    }
+
+    #[tokio::test]
+    async fn a_former_owner_that_backdates_its_changes_does_not_change_the_session_it_gave_up() {
+        let (_h1, book) = member("book").await;
+        let (_h2, mini) = member("mini").await;
+        let session = fix_cart_known_to(&book, &mini).await;
+        // studio-mini, the central host, takes it.
+        assert!(mini.set_session_owner(&session.id, "mini", 2, None));
+        // The MacBook then stamps a delete as if it still owned it.
+        mini.apply_account(vec![backdated("book.k3x9q2", 1, &session.id, moonlet_proto::types::ChangeOp::Delete)]);
+        let r = &mini.session_records()[&session.id];
+        assert_eq!((&r["owner"], &r["name"]), (&serde_json::json!("mini"), &serde_json::json!("Fix cart")));
     }
 
 

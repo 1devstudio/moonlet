@@ -44,7 +44,8 @@ pub fn file_ok(name: &str, id: &str) -> bool {
     parts.len() <= 4 && parts.iter().all(|p| plain(p))
 }
 
-fn is_uuid(id: &str) -> bool {
+/// Whether `id` is a UUID, as a Claude Code conversation id is.
+pub fn is_uuid(id: &str) -> bool {
     id.len() == 36
         && id.chars().enumerate().all(|(i, c)| {
             if matches!(i, 8 | 13 | 18 | 23) {
