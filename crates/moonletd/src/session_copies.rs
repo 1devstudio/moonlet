@@ -504,6 +504,10 @@ struct Data {
     /// On the central host: by session id.
     #[serde(default)]
     held: BTreeMap<String, Held>,
+    /// On a member: sessions it took while the central host was offline
+    /// (X73), with the ownership number they had, to send once it is back.
+    #[serde(default)]
+    forced: BTreeMap<String, u64>,
 }
 
 pub struct SessionCopies {
@@ -2113,6 +2117,26 @@ impl SessionCopies {
             Some((was, now)) => self.keep_edits(dir, &was, &now).await,
             None => Ok(None),
         }
+    }
+
+    /// Takeovers made while the central host was offline, to send (X73).
+    pub fn forced(&self) -> BTreeMap<String, u64> {
+        self.data.lock().unwrap().forced.clone()
+    }
+
+    /// Records a takeover made while the central host was offline, or,
+    /// with `None`, that the central host answered it.
+    pub fn set_forced(&self, session: &str, base: Option<u64>) {
+        let mut data = self.data.lock().unwrap();
+        match base {
+            Some(b) => {
+                data.forced.insert(session.to_string(), b);
+            }
+            None => {
+                data.forced.remove(session);
+            }
+        }
+        self.save(&data);
     }
 
     /// Forgets what was sent of session `id`, once it is let go of (X73).

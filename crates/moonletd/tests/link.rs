@@ -377,6 +377,9 @@ async fn a_central_host_on_another_protocol_needs_an_update_and_waits_for_a_retr
     .await;
     tokio::time::sleep(Duration::from_millis(1500)).await;
     assert_eq!(reached.load(Ordering::SeqCst), 1, "it retried by itself");
+    // The central host answered: it is not offline (X73).
+    let info: LinkInfo = worker.call("link.get", json!({})).await;
+    assert_eq!(info.unreachable_since, None);
     let _: LinkInfo = worker.call("link.retry", json!({})).await;
     eventually("a retry", || async { reached.load(Ordering::SeqCst) == 2 }).await;
     // Changing the settings tries again too.
@@ -406,7 +409,10 @@ async fn a_mac_the_central_host_removed_says_so_and_waits_for_a_retry() {
     let want = LinkState::Refused;
     eventually("refused", || async { link_state(&worker).await == want }).await;
     tokio::time::sleep(Duration::from_millis(1500)).await;
-    assert_eq!(link_state(&worker).await, want, "it retried by itself");
+    let info: LinkInfo = worker.call("link.get", json!({})).await;
+    assert_eq!(info.state, want, "it retried by itself");
+    // The central host answered: it is not offline (X73).
+    assert_eq!(info.unreachable_since, None);
 }
 
 /// Sends request `id` and returns its reply; answers the central host's

@@ -144,6 +144,16 @@ pub const SESSION_TRANSCRIPT_FETCH: &str = "session.transcript_fetch";
 pub const SESSION_BRING: &str = "session.bring";
 /// A member going to sleep hands its sessions to the central host (X73).
 pub const SESSION_YIELD: &str = "session.yield";
+/// Moves a session to a member and keeps it there (X73): app → its own
+/// daemon.
+pub const SESSION_MOVE: &str = "session.move";
+/// Lets a pinned session follow the user again (X73): app → its own daemon.
+pub const SESSION_UNPIN: &str = "session.unpin";
+/// Takes a session the central host runs while the central host is
+/// offline (X73): app → its own daemon.
+pub const SESSION_TAKE_ANYWAY: &str = "session.take_anyway";
+/// Pins a session to a member, or unpins it (X73): member → central host.
+pub const SESSION_PIN: &str = "session.pin";
 /// Tests only, with `MOONLET_TEST_POWER=1`: as if the Mac went to sleep
 /// or woke (X73).
 pub const POWER_SIMULATE: &str = "power.simulate";
@@ -1200,6 +1210,15 @@ pub struct SessionTake {
     pub epoch: u64,
     #[serde(default)]
     pub now: bool,
+    /// Keep it on the member that takes it (Move to…).
+    #[serde(default)]
+    pub pin: bool,
+    /// Taken while the central host was offline (Take over anyway): kept
+    /// only if `epoch` is still the session's. The central host takes it so
+    /// only from a member cut off from it since the session became its own;
+    /// from any other, it is an ordinary take.
+    #[serde(default)]
+    pub forced: bool,
 }
 
 /// `session.take`'s reply: the new ownership number, the session's chats
@@ -1239,12 +1258,41 @@ pub struct SessionBring {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionYield {
     pub sessions: Vec<String>,
+    /// Why, for a cut-off turn's note; going to sleep when none.
+    #[serde(default)]
+    pub why: Option<String>,
+    /// Keep them on the central host (Move to…).
+    #[serde(default)]
+    pub pin: bool,
 }
 
 /// `power.simulate {event}`: `sleep` or `wake` (tests only).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PowerSimulate {
     pub event: String,
+}
+
+/// `session.move {session, to, now}` (X73): `to` is a member's worker id.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionMove {
+    pub session: String,
+    pub to: String,
+    #[serde(default)]
+    pub now: bool,
+}
+
+/// `session.pin {session, pinned}`, member → central host (X73).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionPin {
+    pub session: String,
+    #[serde(default)]
+    pub pinned: Option<String>,
+}
+
+/// Names one session (X73).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionRef {
+    pub session: String,
 }
 
 /// `session.list`'s request. With `copies`, the list also holds the
@@ -2386,6 +2434,10 @@ pub struct LinkInfo {
     pub central: Option<LinkCentralInfo>,
     pub worker: LinkWorker,
     pub state: LinkState,
+    /// Since when the link to the central host has been down (ms), while
+    /// it is (X73).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unreachable_since: Option<u64>,
 }
 
 /// One of a worker's projects, as its central host sees it.
