@@ -150,15 +150,22 @@ pub fn is_runuser(exe: &Path) -> bool {
 /// session, so the SSH login proved who the user is, or was started by root
 /// through `runuser`, as a cloud machine's first boot runs `moonletd join`:
 /// one of its nearest 4 `ancestors` (pid and executable, parent first) is
-/// sshd or runuser. A process of one of the daemon's own terminals or
-/// agents (below `daemon`, its pid) never is, nor one whose ancestors the
-/// kernel does not show.
-pub fn vouched_by_ssh(ancestors: &[(u32, Option<PathBuf>)], daemon: u32, test_sshd: Option<&Path>) -> bool {
+/// sshd, or runuser whose process runs as root (`root`, by pid: real and
+/// effective uid 0, as the kernel says). A process of one of the daemon's
+/// own terminals or agents (below `daemon`, its pid) never is, nor one
+/// whose ancestors the kernel does not show.
+pub fn vouched_by_ssh(
+    ancestors: &[(u32, Option<PathBuf>)],
+    daemon: u32,
+    test_sshd: Option<&Path>,
+    root: impl Fn(u32) -> bool,
+) -> bool {
     for (pid, exe) in ancestors.iter().take(4) {
         if *pid == daemon {
             return false;
         }
-        if exe.as_deref().is_some_and(|e| is_sshd(e, test_sshd) || is_runuser(e)) {
+        let vouches = |e: &Path| is_sshd(e, test_sshd) || (is_runuser(e) && root(*pid));
+        if exe.as_deref().is_some_and(vouches) {
             return true;
         }
     }
@@ -280,14 +287,18 @@ mod tests {
         assert!(!is_runuser(Path::new("/usr/bin/true")));
         assert!(!is_runuser(Path::new("/usr/sbin/no-such-runuser")));
         // Started by a runuser of the user's own, not root's.
-        assert!(!vouched_by_ssh(&[(950, Some(PathBuf::from("/bin/sh"))), (900, Some(fake.clone()))], 4100, None));
+        assert!(!vouched_by_ssh(&[(950, Some(PathBuf::from("/bin/sh"))), (900, Some(fake.clone()))], 4100, None, |_| true));
         #[cfg(target_os = "linux")]
         if Path::new("/usr/sbin/runuser").exists() {
             assert!(is_runuser(Path::new("/usr/sbin/runuser")));
             // `runuser -l moonlet -c "moonletd join …"` in a cloud machine's first boot.
             let boot = [(950, Some(PathBuf::from("/bin/sh"))), (900, Some(PathBuf::from("/usr/sbin/runuser")))];
-            assert!(vouched_by_ssh(&boot, 4100, None));
+            assert!(vouched_by_ssh(&boot, 4100, None, |pid| pid == 900));
         }
+        // runuser at its real path, run by a process that is not root, does
+        // not vouch; nor one whose uid cannot be read.
+        let boot = [(950, Some(PathBuf::from("/bin/sh"))), (900, Some(PathBuf::from("/usr/sbin/runuser")))];
+        assert!(!vouched_by_ssh(&boot, 4100, None, |_| false));
     }
 
     #[test]
@@ -296,8 +307,8 @@ mod tests {
         let other = |p: &str| Some(PathBuf::from(p));
         let daemon = 4100;
         // `ssh host moonletd proxy`, through the login shell or not.
-        assert!(vouched_by_ssh(&[(812, sshd())], daemon, None));
-        assert!(vouched_by_ssh(&[(950, other("/bin/zsh")), (812, sshd())], daemon, None));
+        assert!(vouched_by_ssh(&[(812, sshd())], daemon, None, |_| true));
+        assert!(vouched_by_ssh(&[(950, other("/bin/zsh")), (812, sshd())], daemon, None, |_| true));
         // `moonletd pair` typed in an SSH login, 4 processes down at most.
         let deep = [
             (990, other("/usr/bin/env")),
@@ -305,17 +316,17 @@ mod tests {
             (950, other("/bin/zsh")),
             (812, sshd()),
         ];
-        assert!(vouched_by_ssh(&deep, daemon, None));
+        assert!(vouched_by_ssh(&deep, daemon, None, |_| true));
         let deeper = [(995, other("/usr/bin/nice")), deep[0].clone(), deep[1].clone(), deep[2].clone(), deep[3].clone()];
-        assert!(!vouched_by_ssh(&deeper, daemon, None));
+        assert!(!vouched_by_ssh(&deeper, daemon, None, |_| true));
 
         // Started by another process of the user's.
-        assert!(!vouched_by_ssh(&[(700, other("/usr/bin/python3")), (1, other("/sbin/launchd"))], daemon, None));
+        assert!(!vouched_by_ssh(&[(700, other("/usr/bin/python3")), (1, other("/sbin/launchd"))], daemon, None, |_| true));
         // In the daemon's terminal, though the daemon itself started under sshd.
         let in_terminal = [(990, other("/bin/sh")), (daemon, other("/opt/moonlet/moonletd")), (812, sshd())];
-        assert!(!vouched_by_ssh(&in_terminal, daemon, None));
+        assert!(!vouched_by_ssh(&in_terminal, daemon, None, |_| true));
         // An ancestor the kernel does not show is not sshd.
-        assert!(!vouched_by_ssh(&[(812, None)], daemon, None));
+        assert!(!vouched_by_ssh(&[(812, None)], daemon, None, |_| true));
     }
 
     #[test]

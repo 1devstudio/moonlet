@@ -4602,6 +4602,7 @@ impl Daemon {
                 &moonlet_core::process::ancestors(pid, 4),
                 std::process::id(),
                 self.test_sshd_exe.as_deref(),
+                moonlet_core::process::runs_as_root,
             ),
             Peer::Other => false,
         };

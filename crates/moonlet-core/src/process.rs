@@ -62,6 +62,31 @@ pub fn parent(pid: u32) -> Option<u32> {
     }
 }
 
+/// Whether process `pid` runs as root: its real and effective uid both 0,
+/// as the kernel says (Linux, `/proc/<pid>/status`). `false` when that
+/// cannot be read, and always on macOS, which has no runuser to vouch.
+pub fn runs_as_root(pid: u32) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_to_string(format!("/proc/{pid}/status")).is_ok_and(|s| root_in_status(&s))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = pid;
+        false
+    }
+}
+
+/// Whether a `/proc/<pid>/status` text names root as both the real and
+/// the effective uid (its `Uid:` line: real, effective, saved, fs).
+pub fn root_in_status(status: &str) -> bool {
+    let Some(line) = status.lines().find_map(|l| l.strip_prefix("Uid:")) else {
+        return false;
+    };
+    let mut ids = line.split_whitespace().map(|v| v.parse::<u32>().ok());
+    matches!((ids.next(), ids.next()), (Some(Some(0)), Some(Some(0))))
+}
+
 /// The nearest `hops` ancestors of process `pid`, parent first, with the
 /// executable each runs; it stops at the first the kernel does not show,
 /// and before launchd or init.
@@ -83,6 +108,21 @@ pub fn ancestors(pid: u32, hops: usize) -> Vec<(u32, Option<PathBuf>)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn root_is_both_the_real_and_the_effective_uid() {
+        // From /proc/<pid>/status on Ubuntu 24.04: runuser started by
+        // cloud-init, then a user's process.
+        let runuser = "Name:\trunuser\nUmask:\t0022\nState:\tS (sleeping)\nTgid:\t1412\nPid:\t1412\nPPid:\t1398\nUid:\t0\t0\t0\t0\nGid:\t0\t0\t0\t0\n";
+        assert!(root_in_status(runuser));
+        let user = "Name:\trunuser\nPid:\t2210\nUid:\t1000\t1000\t1000\t1000\nGid:\t1000\t1000\t1000\t1000\n";
+        assert!(!root_in_status(user));
+        // Root in name only: effective uid the user's.
+        assert!(!root_in_status("Uid:\t0\t1000\t0\t1000\n"));
+        assert!(!root_in_status("Uid:\t1000\t0\t0\t0\n"));
+        assert!(!root_in_status("Name:\trunuser\n"));
+        assert!(!root_in_status(""));
+    }
 
     #[test]
     fn a_child_s_executable_name_and_parent_are_what_the_kernel_says() {
