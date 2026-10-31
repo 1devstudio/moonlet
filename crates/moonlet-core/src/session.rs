@@ -1066,6 +1066,11 @@ impl SessionManager {
         self.state.lock().unwrap().profile_of(session).map(|p| p.path.clone())
     }
 
+    /// The Claude profile folder of workspace `ws`, when it has one (X33).
+    pub fn workspace_config_dir(&self, ws: &str) -> Option<String> {
+        self.state.lock().unwrap().profile_of_workspace(ws).map(|p| p.path.clone())
+    }
+
     /// Variables every process of a session gets for its workspace's
     /// profile, looked up at each start (X33).
     pub fn session_env(&self, session: &str) -> BTreeMap<String, String> {

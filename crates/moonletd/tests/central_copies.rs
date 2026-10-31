@@ -622,3 +622,232 @@ async fn a_copy_switched_by_hand_to_another_branch_goes_back_without_moving_it()
     .unwrap();
     assert_eq!(after.trim(), before);
 }
+
+// --- The chat, the transcript and checkpoints ---------------------------
+
+/// A fake `claude` speaking stream-json: its conversation id is fixed, and
+/// for each message it runs one tool, which writes `src/cart.ts`, and
+/// answers. It keeps its transcript where Claude Code does, in
+/// `$CLAUDE_CONFIG_DIR/projects/<folder>/<id>.jsonl`.
+const TOOL_CLAUDE: &str = r#"#!/bin/sh
+ID=0d6e2a4c-1b3f-4a5e-9c7d-8e1f2a3b4c5d
+DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$(pwd -P | sed 's/[^A-Za-z0-9]/-/g')"
+mkdir -p "$DIR/$ID/tool-results"
+T="$DIR/$ID.jsonl"
+while IFS= read -r line; do
+  case "$line" in
+    *'"subtype":"initialize"'*) echo '{"type":"system","subtype":"init","session_id":"'$ID'","model":"fake"}' ;;
+    *'"type":"user"'*)
+      echo '{"type":"user","message":{"role":"user","content":"Fix the cart"},"sessionId":"'$ID'"}' >> "$T"
+      USE='{"type":"assistant","message":{"id":"m1","role":"assistant","content":[{"type":"tool_use","id":"toolu_01","name":"Bash","input":{"command":"printf b > src/cart.ts"}}]},"session_id":"'$ID'"}'
+      echo "$USE"; echo "$USE" >> "$T"
+      printf 'b\n' > src/cart.ts
+      printf 'full output\n' > "$DIR/$ID/tool-results/toolu_01.txt"
+      RESULT='{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_01","type":"tool_result","content":"done"}]},"session_id":"'$ID'"}'
+      echo "$RESULT"; echo "$RESULT" >> "$T"
+      SAID='{"type":"assistant","message":{"id":"m2","role":"assistant","content":[{"type":"text","text":"Fixed."}]},"session_id":"'$ID'"}'
+      echo "$SAID"; echo "$SAID" >> "$T"
+      echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}' ;;
+  esac
+done
+"#;
+
+/// The conversation id [`TOOL_CLAUDE`] gives.
+const CONVERSATION: &str = "0d6e2a4c-1b3f-4a5e-9c7d-8e1f2a3b4c5d";
+
+/// The environment of a daemon whose agents are [`TOOL_CLAUDE`]: its HOME
+/// and shell are its own scratch ones, so its agents' Claude Code folder is
+/// that HOME's `.claude`, never the user's.
+fn agent_env(home: &Path, origin: Option<&Origin>) -> Vec<(String, String)> {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = home.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(bin.join("claude"), TOOL_CLAUDE).unwrap();
+    std::fs::set_permissions(bin.join("claude"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let first = format!("PATH=\"{}:$PATH\"; export PATH\n", bin.display());
+    for rc in [
+        ".profile",
+        ".zshenv",
+        ".zprofile",
+        ".zshrc",
+        ".bash_profile",
+    ] {
+        std::fs::write(home.join(rc), &first).unwrap();
+    }
+    let mut env = vec![
+        ("HOME".to_string(), home.display().to_string()),
+        ("SHELL".to_string(), "/bin/sh".to_string()),
+        (
+            "PATH".to_string(),
+            format!("{}:/usr/bin:/bin", bin.display()),
+        ),
+    ];
+    if let Some(o) = origin {
+        env.extend(env_for(o));
+    }
+    env
+}
+
+/// [`pair_of`], both daemons with [`TOOL_CLAUDE`] for an agent.
+async fn pair_with_agents(origin: &Origin) -> (Daemon, Daemon) {
+    let scratch = tempfile::tempdir().unwrap();
+    let mini_home = scratch.path().join("mini");
+    let book_home = scratch.path().join("book");
+    std::fs::create_dir_all(&mini_home).unwrap();
+    std::fs::create_dir_all(&book_home).unwrap();
+    let mini_env = agent_env(&mini_home, Some(origin));
+    let book_env = agent_env(&book_home, None);
+    let m: Vec<(&str, &str)> = mini_env
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    let b: Vec<(&str, &str)> = book_env
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    let (mini, addr) = central_with(&m).await;
+    let book = mac_with(BOOK, "MacBook", &b).await;
+    link(&book, &mini, &addr).await;
+    std::mem::forget(scratch);
+    (mini, book)
+}
+
+/// A session of `shop` on `book` with a chat agent, after one message.
+async fn session_with_a_turn(book: &Daemon, project: &str) -> Value {
+    let made: Value = book
+        .call(
+            "session.create",
+            json!({ "project_id": project, "name": "fix-cart", "agent": "claude" }),
+        )
+        .await;
+    let agent = made["terminals"][0].clone();
+    let _: Value = book
+        .call("chat.send", json!({ "id": agent, "text": "Fix the cart" }))
+        .await;
+    within(Duration::from_secs(15), "the turn to end", || async {
+        let st: Value = book.call("chat.state", json!({ "id": agent })).await;
+        st["status"] == json!("done")
+    })
+    .await;
+    made
+}
+
+fn claude_home(d: &Daemon) -> PathBuf {
+    let env: std::collections::HashMap<_, _> = d.env.iter().cloned().collect();
+    PathBuf::from(&env["HOME"]).join(".claude")
+}
+
+#[tokio::test]
+async fn a_members_chat_reaches_the_central_hosts_copy() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+
+    let chat = within_value(
+        Duration::from_secs(15),
+        "the chat on studio-mini",
+        || async {
+            let info: Value = mini
+                .try_call("session.copy", json!({ "session": made["id"] }))
+                .await
+                .ok()?;
+            let chat = info["chats"][0]["state"].clone();
+            (chat["status"] == json!("done")).then_some(chat)
+        },
+    )
+    .await;
+    let kinds: Vec<&str> = chat["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["user", "tool", "assistant"]);
+    assert_eq!(chat["items"][0]["text"], json!("Fix the cart"));
+    assert_eq!(chat["agent_session"], json!(CONVERSATION));
+}
+
+#[tokio::test]
+async fn the_agents_transcript_reaches_the_central_host_where_claude_code_reads_it() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    let copy = copy_of(&mini, &made).await;
+
+    // Where Claude Code would look on studio-mini for the copy's folder.
+    let folder = |home: PathBuf, path: &Path| {
+        home.join("projects").join(
+            path.canonicalize()
+                .unwrap()
+                .display()
+                .to_string()
+                .replace(|c: char| !c.is_ascii_alphanumeric(), "-"),
+        )
+    };
+    let theirs = folder(claude_home(&book), &path_of(&made));
+    let ours = folder(claude_home(&mini), &copy);
+    let original = std::fs::read_to_string(theirs.join(format!("{CONVERSATION}.jsonl"))).unwrap();
+    assert_eq!(original.lines().count(), 4);
+    reads(&ours.join(format!("{CONVERSATION}.jsonl")), &original).await;
+    reads(
+        &ours.join(format!("{CONVERSATION}/tool-results/toolu_01.txt")),
+        "full output\n",
+    )
+    .await;
+    use std::os::unix::fs::PermissionsExt;
+    let mode = std::fs::metadata(ours.join(format!("{CONVERSATION}.jsonl")))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o600);
+}
+
+#[tokio::test]
+async fn a_checkpoint_after_the_turn_names_its_files_and_its_whole_transcript() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    let path = path_of(&made);
+    let transcript = std::fs::read(
+        claude_home(&book)
+            .join("projects")
+            .join(
+                path.canonicalize()
+                    .unwrap()
+                    .display()
+                    .to_string()
+                    .replace(|c: char| !c.is_ascii_alphanumeric(), "-"),
+            )
+            .join(format!("{CONVERSATION}.jsonl")),
+    )
+    .unwrap();
+
+    let point = within_value(
+        Duration::from_secs(15),
+        "a checkpoint at the end of the turn",
+        || async {
+            let info = mini
+                .try_call("session.copy", json!({ "session": made["id"] }))
+                .await
+                .ok()?;
+            let p: Value = info["checkpoint"].clone();
+            (p["len"] == json!(transcript.len())).then_some((info, p))
+        },
+    )
+    .await;
+    let (info, p) = point;
+    assert_eq!(p["agent_session"], json!(CONVERSATION));
+    assert_eq!(p["head"], json!(head(&path)));
+    assert_eq!(p["tree"], info["tree"]);
+    let copy = PathBuf::from(info["path"].as_str().unwrap());
+    assert_eq!(
+        std::fs::read_to_string(copy.join("src/cart.ts")).unwrap(),
+        "b\n"
+    );
+}

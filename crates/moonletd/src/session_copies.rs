@@ -29,6 +29,10 @@ use crate::link::WorkerLink;
 use crate::sync::{
     clone_dir, clone_folder_ok, copies_dir, copy_path, free_folder, make_leftovers_folder, segment,
 };
+use moonlet_core::chat::runtime::ChatManager;
+use moonlet_core::transcript;
+use moonlet_proto::TerminalId;
+use moonlet_proto::types::ChatState;
 
 /// The watcher client id these watches go under.
 const WATCH_CLIENT: u64 = u64::MAX - 72;
@@ -42,6 +46,77 @@ const EVERY: Duration = Duration::from_secs(5);
 /// identity's origin (X41), whatever its scheme and user.
 fn clone_url_names(url: &str, origin: &str) -> bool {
     moonlet_core::identity::normalize_origin(url).as_deref() == Some(origin)
+}
+
+/// How many bytes of a transcript file go in one `session.transcript`.
+const CHUNK: usize = 4 * 1024 * 1024;
+
+/// What the central host has of one session's chats, on its member.
+#[derive(Default)]
+struct Talk {
+    /// A hash of each chat's state as last sent.
+    states: BTreeMap<TerminalId, String>,
+    /// How many bytes of each transcript file it holds.
+    files: BTreeMap<String, u64>,
+    /// Each chat's [`progress`] and transcript length at its last
+    /// checkpoint the central host kept.
+    points: BTreeMap<TerminalId, ((usize, usize), u64)>,
+}
+
+/// A checkpoint to send once the files are sent.
+struct Point {
+    terminal: TerminalId,
+    agent_session: String,
+    len: u64,
+    progress: (usize, usize),
+}
+
+/// How far a chat is: its tool calls that ended, and its turns that ended.
+/// A checkpoint is taken whenever either grows.
+fn progress(state: &ChatState) -> (usize, usize) {
+    let tools = state
+        .items
+        .iter()
+        .filter(|i| i.tool.as_ref().is_some_and(|t| t.status != "running"))
+        .count();
+    let turns = state.items.iter().filter(|i| i.turn.is_some()).count();
+    (tools, turns)
+}
+
+/// The Claude Code folder conversations are kept in: a workspace profile's
+/// (X33), else `default`, the one agents get without a profile.
+fn config_dir(profile: Option<String>, default: &Path) -> PathBuf {
+    profile
+        .map(PathBuf::from)
+        .unwrap_or_else(|| default.to_path_buf())
+}
+
+/// Conversation `id`'s transcript files in project folder `folder`,
+/// relative to it: `<id>.jsonl` and the plain files below `<id>/`.
+fn transcript_files(folder: &Path, id: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    if folder.join(format!("{id}.jsonl")).is_file() {
+        out.push(format!("{id}.jsonl"));
+    }
+    fn walk(dir: &Path, rel: &str, depth: usize, out: &mut Vec<String>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            let rel = format!("{rel}/{name}");
+            let Ok(kind) = e.file_type() else { continue };
+            if kind.is_dir() && depth < 3 {
+                walk(&e.path(), &rel, depth + 1, out);
+            } else if kind.is_file() {
+                out.push(rel);
+            }
+        }
+    }
+    walk(&folder.join(id), id, 0, &mut out);
+    out.retain(|f| transcript::file_ok(f, id));
+    out.sort();
+    out
 }
 
 /// The branch a copy's worktree is on: its own, named after the session,
@@ -77,6 +152,12 @@ struct Held {
     from_path: String,
     #[serde(default)]
     project: String,
+    /// The last checkpoint held in full.
+    #[serde(default)]
+    checkpoint: Option<m::SessionCheckpoint>,
+    /// The transcript files written for it, relative to `projects/`.
+    #[serde(default)]
+    transcripts: Vec<String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -97,6 +178,12 @@ pub struct SessionCopies {
     watchers: Arc<Watchers>,
     watched: Mutex<Vec<PathBuf>>,
     data: Mutex<Data>,
+    chats: Arc<ChatManager>,
+    /// The Claude Code folder agents get without a workspace profile: the
+    /// terminals' `CLAUDE_CONFIG_DIR`, else `~/.claude`.
+    claude: PathBuf,
+    /// On a member: what the central host has of each session's chats.
+    talk: Mutex<BTreeMap<String, Talk>>,
     kick: Notify,
     /// One round at a time on a member; one offer at a time on the
     /// central host.
@@ -109,6 +196,8 @@ impl SessionCopies {
         home: &Path,
         sessions: Arc<SessionManager>,
         link: Arc<WorkerLink>,
+        chats: Arc<ChatManager>,
+        claude: PathBuf,
     ) -> Arc<SessionCopies> {
         let file = home.join("session-copies.json");
         let data: Data = std::fs::read(&file)
@@ -125,6 +214,9 @@ impl SessionCopies {
                 }
             }));
             SessionCopies {
+                chats,
+                claude,
+                talk: Mutex::new(BTreeMap::new()),
                 home: home.to_path_buf(),
                 file,
                 sessions,
@@ -202,8 +294,24 @@ impl SessionCopies {
             return Ok(());
         };
         for s in live {
+            // The transcript goes first: the files sent after it are at
+            // least as far along, so a checkpoint never names a transcript
+            // ahead of its files.
+            let said = match self.send_talk(&host, &s).await {
+                Ok(said) => said,
+                Err(e) => {
+                    tracing::debug!(session = %s.id, "cannot send the chats: {e:#}");
+                    Vec::new()
+                }
+            };
             if let Err(e) = self.send(&host, &s).await {
                 tracing::debug!(session = %s.id, "cannot send to the central host: {e:#}");
+                continue;
+            }
+            for point in said {
+                if let Err(e) = self.checkpoint(&host, &s, point).await {
+                    tracing::debug!(session = %s.id, "cannot send a checkpoint: {e:#}");
+                }
             }
         }
         Ok(())
@@ -325,6 +433,198 @@ impl SessionCopies {
             .unwrap_or_default(),
         )
         .await?;
+        Ok(())
+    }
+
+    /// Sends the chats of session `s` that changed and what was added to
+    /// their agents' transcripts. Gives a checkpoint to take for each chat
+    /// that finished a tool call or a turn since the last one.
+    async fn send_talk(
+        &self,
+        host: &moonlet_link::Host,
+        s: &moonlet_proto::types::Session,
+    ) -> Result<Vec<Point>> {
+        let chats: Vec<(TerminalId, ChatState)> = s
+            .terminals
+            .iter()
+            .filter(|t| self.chats.is_chat(**t))
+            .filter_map(|t| self.chats.state(*t).ok().map(|st| (*t, st)))
+            .collect();
+        let mut points = Vec::new();
+        for (terminal, state) in chats {
+            let hash = moonlet_core::hash::sha256_hex(&serde_json::to_vec(&state)?);
+            let known = self
+                .talk
+                .lock()
+                .unwrap()
+                .get(&s.id)
+                .and_then(|t| t.states.get(&terminal).cloned());
+            if known.as_ref() != Some(&hash) {
+                host.request(
+                    m::SESSION_CHAT,
+                    serde_json::to_value(m::SessionChat {
+                        session: s.id.clone(),
+                        terminal,
+                        state: state.clone(),
+                    })?,
+                )
+                .await
+                .map_err(|e| anyhow::anyhow!("{}: {}", e.code, e.message))?;
+                self.talk
+                    .lock()
+                    .unwrap()
+                    .entry(s.id.clone())
+                    .or_default()
+                    .states
+                    .insert(terminal, hash);
+            }
+            let Some(id) = state.agent_session.clone() else {
+                continue;
+            };
+            let folder = config_dir(self.sessions.config_dir(&s.id), &self.claude)
+                .join("projects")
+                .join(transcript::project_folder(Path::new(&s.path)));
+            let main = format!("{id}.jsonl");
+            for file in transcript_files(&folder, &id) {
+                self.send_file(host, s, &id, &folder, &file).await?;
+            }
+            let progress = progress(&state);
+            let sent = self
+                .talk
+                .lock()
+                .unwrap()
+                .get(&s.id)
+                .and_then(|t| t.files.get(&main).copied())
+                .unwrap_or(0);
+            let text = std::fs::read(folder.join(&main)).unwrap_or_default();
+            let text =
+                String::from_utf8_lossy(&text[..(sent as usize).min(text.len())]).into_owned();
+            let over = !matches!(state.status.as_str(), "working" | "blocked");
+            let len = transcript::checkpoint_len(&text, over) as u64;
+            let last = self
+                .talk
+                .lock()
+                .unwrap()
+                .get(&s.id)
+                .and_then(|t| t.points.get(&terminal).copied());
+            if last == Some((progress, len)) {
+                continue;
+            }
+            points.push(Point {
+                terminal,
+                agent_session: id,
+                len,
+                progress,
+            });
+        }
+        Ok(points)
+    }
+
+    /// Sends what was added to transcript file `file` since the central
+    /// host last took it, a whole number of lines for a `.jsonl` file.
+    async fn send_file(
+        &self,
+        host: &moonlet_link::Host,
+        s: &moonlet_proto::types::Session,
+        id: &str,
+        folder: &Path,
+        file: &str,
+    ) -> Result<()> {
+        let bytes = std::fs::read(folder.join(file)).unwrap_or_default();
+        let mut from = self
+            .talk
+            .lock()
+            .unwrap()
+            .get(&s.id)
+            .and_then(|t| t.files.get(file).copied())
+            .unwrap_or(0) as usize;
+        let whole = if file.ends_with(".jsonl") {
+            bytes.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1)
+        } else {
+            bytes.len()
+        };
+        for _ in 0..16 {
+            let end = whole.min(from + CHUNK);
+            if end <= from {
+                break;
+            }
+            let pack = host
+                .send_pack(&bytes[from..end])
+                .map_err(|e| anyhow::anyhow!("{}: {}", e.code, e.message))?;
+            let got = host
+                .request(
+                    m::SESSION_TRANSCRIPT,
+                    serde_json::to_value(m::SessionTranscript {
+                        session: s.id.clone(),
+                        agent_session: id.to_string(),
+                        file: file.to_string(),
+                        from: from as u64,
+                        pack,
+                    })?,
+                )
+                .await
+                .map_err(|e| anyhow::anyhow!("{}: {}", e.code, e.message))?;
+            let got: m::SessionTranscribed = serde_json::from_value(got)?;
+            // The central host holding more than this member has means the
+            // file was made again here: it starts over from 0, which the
+            // central host takes as a new file.
+            let next = if got.len as usize > whole {
+                0
+            } else {
+                got.len as usize
+            };
+            if next == from && next != 0 {
+                break;
+            }
+            from = next;
+            self.talk
+                .lock()
+                .unwrap()
+                .entry(s.id.clone())
+                .or_default()
+                .files
+                .insert(file.to_string(), from as u64);
+        }
+        Ok(())
+    }
+
+    /// Sends checkpoint `point` of session `s`, at the files the central
+    /// host just took.
+    async fn checkpoint(
+        &self,
+        host: &moonlet_link::Host,
+        s: &moonlet_proto::types::Session,
+        point: Point,
+    ) -> Result<()> {
+        let Some(sent) = self.data.lock().unwrap().sent.get(&s.id).cloned() else {
+            return Ok(());
+        };
+        let kept = host
+            .request(
+                m::SESSION_CHECKPOINT,
+                serde_json::to_value(m::SessionCheckpoint {
+                    session: s.id.clone(),
+                    terminal: point.terminal,
+                    agent_session: point.agent_session,
+                    tree: sent.tree,
+                    head: sent.head,
+                    len: point.len,
+                    at: moonlet_core::paths::now_ms(),
+                })?,
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("{}: {}", e.code, e.message))?;
+        // One the central host could not keep yet (its copy is behind) is
+        // sent again at the next round.
+        if kept == Value::Bool(true) {
+            self.talk
+                .lock()
+                .unwrap()
+                .entry(s.id.clone())
+                .or_default()
+                .points
+                .insert(point.terminal, (point.progress, point.len));
+        }
         Ok(())
     }
 
@@ -603,6 +903,188 @@ impl SessionCopies {
         Ok(())
     }
 
+    /// The folder of the central host's copy of `session`'s chats.
+    fn talk_dir(&self, session: &str) -> PathBuf {
+        self.home.join("session-copies").join(segment(session))
+    }
+
+    /// `session.chat` from member `worker`: keeps one chat of its session.
+    pub fn chat_offered(&self, worker: &str, r: m::SessionChat) -> Result<bool, RpcError> {
+        self.owned_by(&r.session, worker)?;
+        let write = || -> Result<()> {
+            let dir = self.talk_dir(&r.session).join("chats");
+            moonlet_core::paths::ensure_private_dir(&dir)?;
+            let file = dir.join(format!("{}.json", r.terminal));
+            let tmp = file.with_extension("tmp");
+            std::fs::write(&tmp, serde_json::to_vec(&r.state)?)?;
+            std::fs::rename(&tmp, &file)?;
+            Ok(())
+        };
+        write().map_err(|e| RpcError::new("internal", format!("{e:#}")))?;
+        Ok(true)
+    }
+
+    /// The folder a copy's transcript files go in: Claude Code's project
+    /// folder for the copy's worktree, in the profile its workspace uses
+    /// on this host.
+    fn transcript_folder(&self, record: &moonlet_core::account::Record, copy: &Path) -> PathBuf {
+        let profile = record
+            .get("workspace")
+            .and_then(Value::as_str)
+            .and_then(|w| self.sessions.workspace_config_dir(w));
+        config_dir(profile, &self.claude)
+            .join("projects")
+            .join(transcript::project_folder(copy))
+    }
+
+    /// `session.transcript` from member `worker`: bytes for one of its
+    /// agent's transcript files, from byte `from`. They are written only
+    /// when they go on from where the file ends here, or start it over.
+    pub fn transcript_offered(
+        &self,
+        worker: &str,
+        r: m::SessionTranscript,
+        bytes: &[u8],
+    ) -> Result<m::SessionTranscribed, RpcError> {
+        let record = self.owned_by(&r.session, worker)?;
+        if !transcript::file_ok(&r.file, &r.agent_session) {
+            return Err(RpcError::new(
+                "invalid_params",
+                "not a transcript file of that conversation",
+            ));
+        }
+        let copy = self
+            .data
+            .lock()
+            .unwrap()
+            .held
+            .get(&r.session)
+            .map(|h| h.path.clone())
+            .filter(|p| !p.is_empty());
+        // Until the copy is made, it has nowhere to keep them.
+        let Some(copy) = copy else {
+            return Ok(m::SessionTranscribed { len: 0 });
+        };
+        let folder = self.transcript_folder(&record, Path::new(&copy));
+        let path = folder.join(&r.file);
+        let internal = |e: std::io::Error| RpcError::new("internal", e.to_string());
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(internal)?;
+        }
+        // Never through a link: the file and every folder between the
+        // project folder and it are plain.
+        let mut at = folder.clone();
+        for part in Path::new(&r.file).components() {
+            at.push(part);
+            if std::fs::symlink_metadata(&at).is_ok_and(|m| m.file_type().is_symlink()) {
+                return Err(RpcError::new(
+                    "refused",
+                    "a transcript path goes through a link",
+                ));
+            }
+        }
+        let len = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        let written = if r.from == 0 {
+            use std::io::Write;
+            use std::os::unix::fs::OpenOptionsExt;
+            // It holds whatever the agent read, secrets included.
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&path)
+                .map_err(internal)?;
+            f.write_all(bytes).map_err(internal)?;
+            bytes.len() as u64
+        } else if r.from == len {
+            use std::io::Write;
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .map_err(internal)?;
+            f.write_all(bytes).map_err(internal)?;
+            len + bytes.len() as u64
+        } else {
+            return Ok(m::SessionTranscribed { len });
+        };
+        let mut data = self.data.lock().unwrap();
+        if let Some(h) = data.held.get_mut(&r.session) {
+            let rel = format!(
+                "{}/{}",
+                transcript::project_folder(Path::new(&copy)),
+                r.file
+            );
+            if !h.transcripts.contains(&rel) {
+                h.transcripts.push(rel);
+            }
+        }
+        self.save(&data);
+        Ok(m::SessionTranscribed { len: written })
+    }
+
+    /// `session.checkpoint` from member `worker`: kept when this host holds
+    /// the files and the transcript it names; true when kept.
+    pub async fn checkpoint_offered(
+        &self,
+        worker: &str,
+        r: m::SessionCheckpoint,
+    ) -> Result<bool, RpcError> {
+        let record = self.owned_by(&r.session, worker)?;
+        let Some(held) = self.data.lock().unwrap().held.get(&r.session).cloned() else {
+            return Ok(false);
+        };
+        if held.path.is_empty() || held.tree != r.tree || held.head != r.head {
+            return Ok(false);
+        }
+        let main = self
+            .transcript_folder(&record, Path::new(&held.path))
+            .join(format!("{}.jsonl", r.agent_session));
+        if !transcript::file_ok(&format!("{}.jsonl", r.agent_session), &r.agent_session)
+            || std::fs::metadata(&main).map(|m| m.len()).unwrap_or(0) < r.len
+        {
+            return Ok(false);
+        }
+        let mut data = self.data.lock().unwrap();
+        if let Some(h) = data.held.get_mut(&r.session) {
+            h.checkpoint = Some(r);
+        }
+        self.save(&data);
+        Ok(true)
+    }
+
+    /// `session.copy`: what this host holds of another member's session.
+    pub fn copy_info(&self, session: &str) -> Result<m::SessionCopyInfo, RpcError> {
+        let held = self
+            .data
+            .lock()
+            .unwrap()
+            .held
+            .get(session)
+            .cloned()
+            .ok_or_else(|| RpcError::new("not_found", "this host holds no copy of that session"))?;
+        let mut chats: Vec<m::SessionCopyChat> =
+            std::fs::read_dir(self.talk_dir(session).join("chats"))
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter_map(|e| {
+                    let name = e.file_name().to_string_lossy().to_string();
+                    let terminal: TerminalId = name.strip_suffix(".json")?.parse().ok()?;
+                    let state = serde_json::from_slice(&std::fs::read(e.path()).ok()?).ok()?;
+                    Some(m::SessionCopyChat { terminal, state })
+                })
+                .collect();
+        chats.sort_by_key(|c| c.terminal);
+        Ok(m::SessionCopyInfo {
+            path: held.path,
+            tree: held.tree,
+            head: held.head,
+            chats,
+            checkpoint: held.checkpoint,
+        })
+    }
+
     /// Removes the copies of sessions that are archived or gone from the
     /// account.
     pub async fn drop_ended(&self) {
@@ -633,6 +1115,24 @@ impl SessionCopies {
                 if let Err(e) = git_sync::remove_worktree(Path::new(&h.repo), dir).await {
                     tracing::warn!("cannot remove the copy {}: {e:#}", dir.display());
                     continue;
+                }
+            }
+            let _ = std::fs::remove_dir_all(self.talk_dir(&id));
+            if let Some(record_ws) = records
+                .get(&id)
+                .and_then(|r| r.get("workspace"))
+                .and_then(Value::as_str)
+            {
+                let projects =
+                    config_dir(self.sessions.workspace_config_dir(record_ws), &self.claude)
+                        .join("projects");
+                for rel in &h.transcripts {
+                    let _ = std::fs::remove_file(projects.join(rel));
+                }
+            } else {
+                let projects = self.claude.join("projects");
+                for rel in &h.transcripts {
+                    let _ = std::fs::remove_file(projects.join(rel));
                 }
             }
             let mut data = self.data.lock().unwrap();

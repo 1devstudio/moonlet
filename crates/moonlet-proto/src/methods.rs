@@ -107,6 +107,14 @@ pub const SESSION_OPEN: &str = "session.open";
 /// A member sends its session's files and commit to the central host's
 /// copy (X72).
 pub const SESSION_OFFER: &str = "session.offer";
+/// A member sends one of its session's chats to the central host (X72).
+pub const SESSION_CHAT: &str = "session.chat";
+/// A member sends what was added to its agent's transcript (X72).
+pub const SESSION_TRANSCRIPT: &str = "session.transcript";
+/// A member says the copy's files and transcript agree up to here (X72).
+pub const SESSION_CHECKPOINT: &str = "session.checkpoint";
+/// What the central host holds of another member's session (X72).
+pub const SESSION_COPY: &str = "session.copy";
 
 // Git
 pub const GIT_STATUS: &str = "git.status";
@@ -998,6 +1006,77 @@ pub struct SessionOffer {
 pub struct SessionOffered {
     pub tree: String,
     pub head: String,
+}
+
+/// `session.chat`, member → central host (X72): one chat of a session, as
+/// the app shows it. Sent when it changes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionChat {
+    pub session: String,
+    pub terminal: crate::TerminalId,
+    pub state: crate::types::ChatState,
+}
+
+/// `session.transcript`, member → central host (X72): bytes added to one
+/// of the agent's transcript files, from byte `from`, carried as a pack
+/// transfer. `file` is relative to Claude Code's project folder.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionTranscript {
+    pub session: String,
+    /// The agent's conversation id, a UUID.
+    pub agent_session: String,
+    pub file: String,
+    pub from: u64,
+    pub pack: u32,
+}
+
+/// `session.transcript`'s reply: how many bytes of the file the central
+/// host holds. When it is not `from` plus what was sent, nothing was
+/// written, and the member goes on from there.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionTranscribed {
+    pub len: u64,
+}
+
+/// A point where a copy's files and transcript agree (X72): the files are
+/// `tree` at commit `head`, and the transcript's first `len` bytes are
+/// whole up to there. The central host continues a session from here
+/// (X73).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionCheckpoint {
+    pub session: String,
+    pub terminal: crate::TerminalId,
+    pub agent_session: String,
+    pub tree: String,
+    pub head: String,
+    pub len: u64,
+    /// When the member took it (ms).
+    #[serde(default)]
+    pub at: u64,
+}
+
+/// `session.copy {session}`: what the central host holds of a session
+/// another member owns (X72).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionCopyReq {
+    pub session: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionCopyInfo {
+    /// The copy's worktree; empty until made.
+    pub path: String,
+    pub tree: String,
+    pub head: String,
+    pub chats: Vec<SessionCopyChat>,
+    /// The last checkpoint the central host holds in full.
+    pub checkpoint: Option<SessionCheckpoint>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionCopyChat {
+    pub terminal: crate::TerminalId,
+    pub state: crate::types::ChatState,
 }
 
 /// `session.list`'s request. With `copies`, the list also holds the
