@@ -33,6 +33,8 @@ const MERGE: RecordKind = RecordKind::Merge;
 const MEMBER: RecordKind = RecordKind::Member;
 /// A design system or workspace design shared with every member (X71).
 const DESIGN: RecordKind = RecordKind::Design;
+/// A session, so every member knows which member runs it (X72).
+const SESSION: RecordKind = RecordKind::Session;
 
 type Listener = Arc<dyn Fn(Vec<Change>) + Send + Sync>;
 type Applied = Arc<dyn Fn(&[Change]) + Send + Sync>;
@@ -186,6 +188,11 @@ impl SessionManager {
                 lay_onto(&mut next, &log);
                 self.save(&next)?;
                 *st = next;
+                // Sessions made before X72, or while the log was away,
+                // get their records now.
+                if !session_changes(&st, &mut log, now_ms()).is_empty() {
+                    write_private(&path, &log)?;
+                }
                 log
             }
             None => {
@@ -328,6 +335,22 @@ impl SessionManager {
         self.account_changed(vec![change]);
     }
 
+    /// The sessions of the account (X72), by session id; none without an
+    /// account. Only the changes of the member that made a session count,
+    /// and its `owner` must be that member: a member cannot claim another's
+    /// session, nor make one in another's name.
+    pub fn session_records(&self) -> Map<String, Record> {
+        self.with_log(|log| {
+            log.records_by_maker(SESSION)
+                .into_iter()
+                .filter(|(id, r)| {
+                    let maker = log.first_change(SESSION, id).and_then(|c| log_owner(&c.stamp.member));
+                    maker.is_some() && r.get("owner").and_then(Value::as_str) == maker
+                })
+                .collect()
+        })
+    }
+
     /// Each member's name as it calls itself, by worker id (X71).
     pub fn member_names(&self) -> Map<String, String> {
         self.with_log(|log| {
@@ -397,7 +420,7 @@ impl SessionManager {
         if let Some(c) = ahead.first() {
             tracing::warn!(member = %c.stamp.member, "refused {} account changes stamped more than a day ahead", ahead.len());
         }
-        let (taken, changed) = {
+        let (taken, own) = {
             let mut st = self.state.lock().unwrap();
             let mut account = self.account.lock().unwrap();
             let Some(a) = account.as_mut() else {
@@ -417,18 +440,25 @@ impl SessionManager {
             log.apply(new.clone());
             let mut next = st.clone();
             lay_onto(&mut next, &log);
+            // Another member's merge can move this member's sessions to
+            // another workspace: their records follow (X72).
+            let own = session_changes(&next, &mut log, now_ms());
             match write_private(&a.path, &log).and_then(|()| self.save(&next)) {
                 Ok(()) => {
                     a.log = log;
                     *st = next;
-                    (new, true)
+                    (new, Some(own))
                 }
                 Err(e) => {
                     tracing::warn!("cannot save the account's changes: {e:#}");
-                    (Vec::new(), false)
+                    (Vec::new(), None)
                 }
             }
         };
+        let changed = own.is_some();
+        if let Some(own) = own.filter(|o| !o.is_empty()) {
+            self.account_changed(own);
+        }
         if changed {
             self.emit_all();
             let applied = self.account.lock().unwrap().as_ref().and_then(|a| a.applied.clone());
@@ -551,6 +581,58 @@ fn diff(old: &State, new: &State, log: &mut Log, now: u64) -> Vec<Change> {
         if old.merges.get(from) != Some(into) {
             out.push(log.set(now, MERGE, from, "into", json!(into)));
         }
+    }
+    out.extend(session_changes(new, log, now));
+    out
+}
+
+/// This member's own session as account fields (X72): what the other
+/// members show of it, with `owner` this member's worker id. A project
+/// without an identity gives `null`, as it is this member's alone.
+fn session_fields(st: &State, s: &Session, owner: &str) -> Record {
+    let project = st
+        .projects
+        .iter()
+        .find(|p| p.id == s.project_id)
+        .filter(|p| identity_key(&p.identity).is_some())
+        .map(|p| json!({ "origin": p.identity.origin, "root": p.identity.root }))
+        .unwrap_or(Value::Null);
+    Record::from([
+        ("name".to_string(), json!(s.name)),
+        ("project".to_string(), project),
+        ("workspace".to_string(), json!(s.workspace_id)),
+        ("branch".to_string(), json!(s.branch)),
+        ("owner".to_string(), json!(owner)),
+        ("created_at".to_string(), json!(s.created_at)),
+        ("archived".to_string(), json!(s.archived)),
+    ])
+}
+
+/// Records in `log` what changed of this member's own sessions since their
+/// records: their fields, and the records of sessions it no longer has.
+/// Sessions another member owns are that member's to record.
+fn session_changes(st: &State, log: &mut Log, now: u64) -> Vec<Change> {
+    let Some(me) = log_owner(log.member()).map(str::to_string) else {
+        return Vec::new();
+    };
+    let records = log.records(SESSION);
+    let mut out = Vec::new();
+    for s in st.sessions.iter().filter(|s| s.owner.is_none()) {
+        if log.is_deleted(SESSION, &s.id) {
+            continue;
+        }
+        let had = records.get(&s.id);
+        for (field, value) in session_fields(st, s, &me) {
+            if had.and_then(|r| r.get(&field)) != Some(&value) {
+                out.push(log.set(now, SESSION, &s.id, &field, value));
+            }
+        }
+    }
+    for (id, _) in records.iter().filter(|(id, r)| {
+        r.get("owner").and_then(Value::as_str) == Some(me.as_str())
+            && !st.sessions.iter().any(|s| &s.id == *id)
+    }) {
+        out.push(log.delete(now, SESSION, id));
     }
     out
 }
@@ -1846,6 +1928,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sessions_from_before_x72_get_records_the_other_members_read() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::write(
+            home.path().join("state.json"),
+            r#"{"version":3,"workspaces":[{"id":"7c1e2a9b0d44","name":"Acme","color":"blue","section_ids":["3f6b8c2d1e90"],"claude_profile":null,"created_at":1790000000000}],"sections":[{"id":"3f6b8c2d1e90","name":"Clients","project_ids":["a1b2c3d4e5f6"],"view":{"group_by":"status","sort_by":"name","filter":[]},"created_at":1790000000001}],"profiles":[],"projects":[{"id":"a1b2c3d4e5f6","name":"shop","path":"/Users/alex/src/shop","base_branch":"main","identity":{"origin":"github.com/acme/shop","root":"9f2c4e1a7b3d5f6e8a0c2e4f6a8b0c2d4e6f8a0b"}}],"sessions":[{"id":"5e7f9a1b3c5d","project_id":"a1b2c3d4e5f6","name":"fix-cart","branch":"moonlet/fix-cart","base":"main","path":"/Users/alex/.moonlet/worktrees/shop/fix-cart","agent":"claude","archived":false,"created_at":1790000000002,"workspace_id":"7c1e2a9b0d44"}]}"#,
+        )
+        .unwrap();
+        // A log from before X72: it has the workspace, but no session.
+        std::fs::write(
+            home.path().join("account.json"),
+            r#"{"member":"book.k3x9q2","changes":[{"stamp":{"ms":1790000000003,"n":0,"member":"book.k3x9q2"},"seq":1,"kind":"workspace","id":"7c1e2a9b0d44","op":{"set":{"field":"name","value":"Acme"}}}]}"#,
+        )
+        .unwrap();
+        let env: BTreeMap<String, String> = std::env::vars().collect();
+        let book = SessionManager::load(
+            home.path().join("state.json"),
+            home.path().join("worktrees"),
+            TerminalManager::new(home.path().join("s.sock"), env),
+        );
+        book.attach_account(home.path().join("account.json"), "book")
+            .unwrap();
+        let (_h2, mini) = member("mini").await;
+        sync(&book, &mini);
+        let records = mini.session_records();
+        let fix_cart = records.get("5e7f9a1b3c5d").expect("fix-cart's record");
+        assert_eq!(
+            serde_json::Value::Object(fix_cart.clone().into_iter().collect()),
+            serde_json::json!({
+                "name": "fix-cart",
+                "project": { "origin": "github.com/acme/shop", "root": "9f2c4e1a7b3d5f6e8a0c2e4f6a8b0c2d4e6f8a0b" },
+                "workspace": "7c1e2a9b0d44",
+                "branch": "moonlet/fix-cart",
+                "owner": "book",
+                "created_at": 1790000000002u64,
+                "archived": false,
+            })
+        );
+    }
+
+    #[tokio::test]
     async fn a_state_from_before_the_account_becomes_its_changes_with_the_same_ids() {
         let home = tempfile::tempdir().unwrap();
         std::fs::write(
@@ -2124,7 +2246,54 @@ mod tests {
             .find(|s| s.id == session.id)
             .unwrap();
         assert_eq!(moved.workspace_id, Some(books.id.clone()));
+        // Its record follows it there on every member (X72).
+        assert_eq!(
+            book.session_records()[&session.id]["workspace"],
+            serde_json::json!(books.id)
+        );
     }
+
+    #[tokio::test]
+    async fn a_member_cannot_claim_another_members_session_nor_make_one_in_its_name() {
+        let shop = repo_named("shop").await;
+        let (_h1, book) = member("book").await;
+        let (_h2, mini) = member("mini").await;
+        let mine = book.list_sections()[0].clone();
+        let p = book
+            .section_add_project(&mine.id, &shop.path().display().to_string())
+            .await
+            .unwrap();
+        let session = book
+            .create_session(SessionCreate {
+                name: Some("Fix cart".into()),
+                agent: Some("none".into()),
+                cols: 80,
+                rows: 24,
+                ..SessionCreate::new(&p.id)
+            })
+            .await
+            .unwrap();
+        sync(&book, &mini);
+        let at = |n: u64| moonlet_proto::types::Stamp { ms: now_ms() + n, n: 0, member: "air.k3x9q2".into() };
+        let forged = |seq: u64, id: &str, field: &str, value: serde_json::Value| Change {
+            stamp: at(seq),
+            seq,
+            kind: "session".into(),
+            id: id.into(),
+            op: moonlet_proto::types::ChangeOp::Set { field: field.into(), value },
+        };
+        // Another member takes book's session for itself, and makes one
+        // that says it is book's.
+        mini.apply_account(vec![
+            forged(1, &session.id, "owner", serde_json::json!("air")),
+            forged(2, "0a1b2c3d4e5f", "owner", serde_json::json!("book")),
+            forged(3, "0a1b2c3d4e5f", "name", serde_json::json!("not book's")),
+        ]);
+        let records = mini.session_records();
+        assert_eq!(records[&session.id]["owner"], serde_json::json!("book"));
+        assert!(!records.contains_key("0a1b2c3d4e5f"));
+    }
+
 
     #[tokio::test]
     async fn a_workspace_says_which_member_made_it() {

@@ -597,6 +597,17 @@ export interface Session {
   task_unlinked?: boolean;
   terminals: number[];
   layout: unknown;
+  /** The member running its agent, for a session another member owns,
+   *  listed by `session.list {copies: true}` (X72). */
+  owner?: SessionOwner;
+}
+
+/** The member that owns a session another member lists (X72). */
+export interface SessionOwner {
+  worker: string;
+  name: string;
+  /** Whether its link to the listing host is up. */
+  reachable: boolean;
 }
 
 /** A tracker issue a session is linked to (X46). */

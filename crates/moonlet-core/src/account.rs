@@ -23,6 +23,10 @@ pub enum RecordKind {
     /// A design system or workspace design (X71): its `workspace`, `kind`,
     /// `slug`, `name`, `owner` (a worker id), `tree` and `agent`.
     Design,
+    /// A session (X72): its `name`, `project` (an identity), `workspace`,
+    /// `branch`, `owner` (the worker id of the member running its agent),
+    /// `created_at` and `archived`.
+    Session,
 }
 
 impl RecordKind {
@@ -33,6 +37,7 @@ impl RecordKind {
             RecordKind::Merge => "merge",
             RecordKind::Member => "member",
             RecordKind::Design => "design",
+            RecordKind::Session => "session",
         }
     }
 }
@@ -265,6 +270,37 @@ impl Log {
         self.changes
             .values()
             .any(|c| c.kind == kind.as_str() && c.id == id && c.op == ChangeOp::Delete)
+    }
+
+    /// The records of `kind` by id, counting only the changes of the
+    /// member that made each record (by worker id, X41): another member's
+    /// change to it is left out, as if it never came.
+    pub fn records_by_maker(&self, kind: RecordKind) -> BTreeMap<String, Record> {
+        let maker: BTreeMap<&str, Option<&str>> = self
+            .changes
+            .values()
+            .filter(|c| c.kind == kind.as_str())
+            .fold(BTreeMap::new(), |mut first: BTreeMap<&str, &Change>, c| {
+                let slot = first.entry(c.id.as_str()).or_insert(c);
+                if c.stamp < slot.stamp {
+                    *slot = c;
+                }
+                first
+            })
+            .into_iter()
+            .map(|(id, c)| (id, log_owner(&c.stamp.member)))
+            .collect();
+        let mut own = Log::new(&self.member);
+        own.changes = self
+            .changes
+            .iter()
+            .filter(|(_, c)| {
+                c.kind == kind.as_str()
+                    && maker.get(c.id.as_str()).copied().flatten().is_some_and(|m| log_owner(&c.stamp.member) == Some(m))
+            })
+            .map(|(k, c)| (k.clone(), c.clone()))
+            .collect();
+        own.records(kind)
     }
 
     /// The records of `kind` by id, each field at its latest change.

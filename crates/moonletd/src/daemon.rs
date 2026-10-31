@@ -2775,6 +2775,64 @@ impl Daemon {
         }
     }
 
+    /// The sessions other members of the account own, from their records
+    /// (X72), each with its owner and whether this host reaches it.
+    fn member_sessions(&self) -> Vec<moonlet_proto::types::Session> {
+        use moonlet_proto::types::{ProjectIdentity, Session, SessionOwner};
+        let me = self.link.info().worker.id;
+        let names = self.sessions.member_names();
+        let projects = self.sessions.list_projects();
+        self.sessions
+            .session_records()
+            .into_iter()
+            .filter_map(|(id, r)| {
+                let owner = r.get("owner")?.as_str()?.to_string();
+                if owner == me || r.get("archived").and_then(Value::as_bool).unwrap_or(false) {
+                    return None;
+                }
+                let text = |f: &str| r.get(f).and_then(Value::as_str).map(str::to_string);
+                let identity: Option<ProjectIdentity> =
+                    r.get("project").and_then(|v| serde_json::from_value(v.clone()).ok());
+                let project_id = identity
+                    .and_then(|i| {
+                        projects
+                            .iter()
+                            .find(|p| moonlet_core::identity::same_project(&p.identity, &i))
+                    })
+                    .map(|p| p.id.clone())
+                    .unwrap_or_default();
+                Some(Session {
+                    id,
+                    project_id,
+                    name: text("name").unwrap_or_default(),
+                    branch: text("branch").unwrap_or_default(),
+                    base: String::new(),
+                    path: String::new(),
+                    agent: None,
+                    archived: false,
+                    created_at: r.get("created_at").and_then(Value::as_u64).unwrap_or(0),
+                    workspace_id: text("workspace"),
+                    model: None,
+                    effort: None,
+                    mode: None,
+                    pr: None,
+                    spawned_by: None,
+                    task: None,
+                    task_unlinked: false,
+                    cloud: false,
+                    terminals: Vec::new(),
+                    layout: Value::Null,
+                    restore: Vec::new(),
+                    owner: Some(SessionOwner {
+                        name: names.get(&owner).cloned().unwrap_or_else(|| owner.clone()),
+                        reachable: self.workers.conn(&owner).is_some(),
+                        worker: owner,
+                    }),
+                })
+            })
+            .collect()
+    }
+
     /// Workspaces, projects, sessions, git and files.
     async fn handle_project(&self, conn: &Conn, method: &str, p: Value) -> HandlerResult {
         let w = &self.sessions;
@@ -3084,7 +3142,14 @@ impl Daemon {
                 let _ = self.design_session(&made.id);
                 ok(made)
             }
-            m::SESSION_LIST => ok(w.list_sessions()),
+            m::SESSION_LIST => {
+                let r: m::SessionList = serde_json::from_value(p).unwrap_or_default();
+                let mut list = w.list_sessions();
+                if r.copies {
+                    list.extend(self.member_sessions());
+                }
+                ok(list)
+            }
             m::SESSION_ARCHIVE => {
                 let r: m::SessionArchive = params(p)?;
                 let id = r.id.clone();
