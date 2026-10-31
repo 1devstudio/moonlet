@@ -3194,6 +3194,7 @@ impl Daemon {
                     owner: Some(SessionOwner {
                         name: names.get(&owner).cloned().unwrap_or_else(|| owner.clone()),
                         reachable: self.workers.conn(&owner).is_some(),
+                        unreachable_since: self.workers.unreachable_since(&owner),
                         worker: owner,
                     }),
                 })

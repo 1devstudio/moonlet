@@ -254,6 +254,50 @@ async fn a_session_whose_member_is_gone_is_listed_as_unreachable() {
     .await;
 }
 
+/// Milliseconds since the epoch, as the daemon stamps them.
+fn epoch_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+}
+
+#[tokio::test]
+async fn a_session_whose_member_is_gone_says_since_when() {
+    let (mini, addr) = central().await;
+    let book = mac(BOOK, "MacBook").await;
+    link(&book, &mini, &addr).await;
+    let project = shop(&book).await;
+    let made = new_session(&book, &project, "fix-cart").await;
+    let listed = within_value(
+        Duration::from_secs(5),
+        "fix-cart on studio-mini",
+        || async {
+            with_copies(&mini)
+                .await
+                .into_iter()
+                .find(|s| s["id"] == made["id"])
+        },
+    )
+    .await;
+    // A reachable owner has no time it went away.
+    assert!(listed["owner"].get("unreachable_since").is_none(), "{listed}");
+
+    let before = epoch_ms();
+    drop(book);
+    let owner = within_value(Duration::from_secs(5), "MacBook unreachable", || async {
+        with_copies(&mini)
+            .await
+            .into_iter()
+            .find(|s| s["id"] == made["id"] && s["owner"]["reachable"] == json!(false))
+            .map(|s| s["owner"].clone())
+    })
+    .await;
+    // The phone waits 30 s from this before it offers Continue.
+    let since = owner["unreachable_since"].as_u64().unwrap_or_else(|| panic!("{owner}"));
+    assert!(since >= before && since <= epoch_ms(), "{since} not after {before}");
+}
+
 #[tokio::test]
 async fn sessions_made_before_the_member_shared_its_account_reach_the_central_host() {
     let (mini, addr) = central().await;
