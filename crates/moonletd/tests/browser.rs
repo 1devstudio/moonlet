@@ -1101,7 +1101,10 @@ async fn a_second_sign_in_on_every_member_waits_until_the_first_ends() {
     let d = daemon().await;
     let login = "sleep 2";
     let _: bool = d
-        .call("signins.set", json!({ "entries": [entry("exit 1", login)] }))
+        .call(
+            "signins.set",
+            json!({ "entries": [entry("exit 1", login)] }),
+        )
         .await;
     let _: bool = d
         .call(
@@ -1119,6 +1122,61 @@ async fn a_second_sign_in_on_every_member_waits_until_the_first_ends() {
         Duration::from_secs(10),
         "a run accepted once the first ended",
         || async { d.try_call("signins.run", run.clone()).await.is_ok() },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn a_sign_in_that_outlives_its_wait_is_stopped_before_the_next_starts() {
+    let d = Daemon::start(
+        tempfile::tempdir().unwrap(),
+        &[("MOONLET_TEST_SIGNIN_WAIT_MS", "1000")],
+    )
+    .await;
+    let mut app = d.app().await;
+    let login = "sleep 60";
+    let _: bool = d
+        .call(
+            "signins.set",
+            json!({ "entries": [entry("exit 1", login)] }),
+        )
+        .await;
+    let _: bool = d
+        .call(
+            "signins.approve",
+            json!({ "entry": "t", "login": login, "check": "exit 1" }),
+        )
+        .await;
+    let me: Value = d.call("link.get", json!({})).await;
+    let _: bool = d
+        .call(
+            "signins.run",
+            json!({ "entry": "t", "members": [me["worker"]["id"]] }),
+        )
+        .await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let running = loop {
+        let f = tokio::time::timeout_at(deadline, app.next_frame())
+            .await
+            .expect("no signins.running")
+            .unwrap()
+            .unwrap();
+        if let Frame::Json(Message::Event { name, data }) = f
+            && name == "signins.running"
+        {
+            break data;
+        }
+    };
+    within(
+        Duration::from_secs(10),
+        "the sign-in's terminal stopped",
+        || async {
+            let terminals: Vec<Value> = d.call("terminal.list", json!({})).await;
+            terminals
+                .iter()
+                .find(|t| t["id"] == running["terminal"])
+                .is_none_or(|t| !t["exit"].is_null())
+        },
     )
     .await;
 }

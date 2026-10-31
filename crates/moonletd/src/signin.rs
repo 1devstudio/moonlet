@@ -14,6 +14,18 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// How long a callback, and the forward for it, lasts at most.
 pub const LIFETIME: Duration = Duration::from_secs(10 * 60);
+/// How long a member's relay of a sign-in waits for its end: past
+/// [`LIFETIME`], so the end of one stopped then still comes back.
+pub const RELAY_WAIT: Duration = Duration::from_secs(11 * 60);
+
+/// How long a sign-in run waits for its command to end before it stops
+/// it: [`LIFETIME`]. Tests set less.
+pub fn run_wait() -> Duration {
+    std::env::var("MOONLET_TEST_SIGNIN_WAIT_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .map_or(LIFETIME, Duration::from_millis)
+}
 /// The most a request or an answer through a forward may be.
 const MAX_BYTES: usize = 1024 * 1024;
 /// How long a forwarded request waits for the command's answer.

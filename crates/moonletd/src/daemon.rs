@@ -4223,12 +4223,19 @@ impl Daemon {
                 // This member's app shows it, for any question it asks.
                 self.terminals.emit(Message::event(m::EV_SIGNIN_RUNNING, m::SignInRunning { terminal: t.id, name: e.name.clone() }));
                 // Done when the sign-in exits, so the next member's opens
-                // after it.
-                let end = std::time::Instant::now() + crate::signin::LIFETIME;
-                while std::time::Instant::now() < end {
-                    match self.terminals.get(t.id) {
-                        Some(term) if term.info().exit.is_none() => tokio::time::sleep(std::time::Duration::from_millis(300)).await,
-                        _ => break,
+                // after it. One still running when the wait is over is
+                // stopped first, so it never overlaps the next.
+                let running = || self.terminals.get(t.id).is_some_and(|term| term.info().exit.is_none());
+                let end = std::time::Instant::now() + crate::signin::run_wait();
+                while std::time::Instant::now() < end && running() {
+                    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                }
+                if running() {
+                    tracing::info!(entry = %e.name, "a sign-in still runs after its wait: stopping it");
+                    let _ = self.terminals.kill(t.id, false);
+                    let stop = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                    while std::time::Instant::now() < stop && running() {
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                     }
                 }
                 Ok(serde_json::json!(true))
@@ -4247,7 +4254,7 @@ impl Daemon {
             Some(member) => {
                 let conn = self.workers.conn(member).filter(|c| !c.cloud.load(std::sync::atomic::Ordering::Relaxed)).ok_or_else(|| RpcError::new("away", "that member is away"))?;
                 let to = m::SignInsHere { member: None, ..r };
-                conn.request(m::SIGNINS_HERE, serde_json::to_value(&to).map_err(internal)?, crate::signin::LIFETIME).await
+                conn.request(m::SIGNINS_HERE, serde_json::to_value(&to).map_err(internal)?, crate::signin::RELAY_WAIT).await
             }
             None if r.op == "check" => Ok(serde_json::to_value(self.checked_on_members(&r.entry, Some(from)).await).map_err(internal)?),
             None => Err(RpcError::new("invalid_params", "name the member to sign in on")),

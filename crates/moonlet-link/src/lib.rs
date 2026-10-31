@@ -783,15 +783,18 @@ fn request_timeout(method: &str) -> Duration {
         660
     } else if method.starts_with("gh.") || method.starts_with("workspace.") || method.starts_with("repo.") {
         180
-    } else if method.starts_with("sync.") || method.starts_with("signins.")
+    } else if method.starts_with("signins.") {
+        // A sign-in waits for the user for up to 10 minutes (X75), and is
+        // stopped then: its end still comes back.
+        720
+    } else if method.starts_with("sync.")
         || method == moonlet_proto::methods::SESSION_OPEN
         || method == moonlet_proto::methods::SESSION_OFFER
         || method == moonlet_proto::methods::SESSION_TRANSCRIPT
         || method == moonlet_proto::methods::SESSION_TRANSCRIPT_FETCH
     {
         // A copy's first pack can be a whole repository's history (X60,
-        // X72), and opening one may clone the project first. A sign-in
-        // waits for the user (X75).
+        // X72), and opening one may clone the project first.
         600
     } else {
         60
