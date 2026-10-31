@@ -753,12 +753,19 @@ fn agent_env(home: &Path, origin: Option<&Origin>) -> Vec<(String, String)> {
 
 /// [`pair_of`], both daemons with [`TOOL_CLAUDE`] for an agent.
 async fn pair_with_agents(origin: &Origin) -> (Daemon, Daemon) {
+    pair_with_agents_as(origin, true).await
+}
+
+/// [`pair_with_agents`]; without `clone_rule`, studio-mini has no git rule
+/// that leads the origin to a local folder, so its own project of `shop`
+/// has the identity the MacBook's has, as on real Macs.
+async fn pair_with_agents_as(origin: &Origin, clone_rule: bool) -> (Daemon, Daemon) {
     let scratch = tempfile::tempdir().unwrap();
     let mini_home = scratch.path().join("mini");
     let book_home = scratch.path().join("book");
     std::fs::create_dir_all(&mini_home).unwrap();
     std::fs::create_dir_all(&book_home).unwrap();
-    let mini_env = agent_env(&mini_home, Some(origin));
+    let mini_env = agent_env(&mini_home, clone_rule.then_some(origin));
     let book_env = agent_env(&book_home, None);
     let m: Vec<(&str, &str)> = mini_env
         .iter()
@@ -1889,6 +1896,194 @@ async fn a_member_that_lost_its_session_keeps_its_gap_and_follows_the_new_owner(
     .await;
 }
 
+/// The session continued on `mini` while `book` was away, with `book`
+/// back and keeping a live copy of it.
+async fn continued_and_back(origin: &Origin) -> (Daemon, Daemon, Value) {
+    let (mini, mut book) = pair_with_agents_as(origin, false).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    copy_of(&mini, &made).await;
+    within(
+        Duration::from_secs(30),
+        "the checkpoint on studio-mini",
+        || async {
+            mini.try_call("session.copy", json!({ "session": made["id"] }))
+                .await
+                .is_ok_and(|i| !i["checkpoint"].is_null())
+        },
+    )
+    .await;
+    book.stop();
+    unreachable(&mini, &made).await;
+    let _: Value = mini
+        .call("session.continue_here", json!({ "session": made["id"] }))
+        .await;
+    book.restart().await;
+    within(
+        Duration::from_secs(30),
+        "a live copy on the MacBook",
+        || async {
+            let copies: Vec<Value> = book.call("sync.list", json!({})).await;
+            copies
+                .iter()
+                .any(|c| c["session"] == made["id"] && !c["path"].as_str().unwrap_or("").is_empty())
+        },
+    )
+    .await;
+    (mini, book, made)
+}
+
+#[tokio::test]
+async fn typing_on_the_member_brings_the_session_back_from_the_central_host() {
+    let origin = Origin::new();
+    let (mini, book, made) = continued_and_back(&origin).await;
+
+    let back: Value = book
+        .call(
+            "session.bring",
+            json!({ "session": made["id"], "message": "Back here" }),
+        )
+        .await;
+    assert_eq!(back["id"], made["id"]);
+    assert_eq!(back["branch"], made["branch"]);
+    // Git agrees: its worktree here is on the session's own branch.
+    let on = std::process::Command::new("git")
+        .args(["branch", "--show-current"])
+        .current_dir(back["path"].as_str().unwrap())
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&on.stdout).trim(), "moonlet/fix-cart");
+    let own: Vec<Value> = book.call("session.list", json!({})).await;
+    assert!(own.iter().any(|s| s["id"] == made["id"]));
+    // The agent resumes the conversation here and gets the message.
+    within(
+        Duration::from_secs(30),
+        "the message on the MacBook",
+        || async { agent_log(&book, "claude-user").contains("Back here") },
+    )
+    .await;
+    assert!(agent_log(&book, "claude-args").contains(&format!("--resume {CONVERSATION}")));
+    // studio-mini keeps a copy of it again, the MacBook's.
+    within(
+        Duration::from_secs(30),
+        "a copy on studio-mini again",
+        || async {
+            let own: Vec<Value> = mini.call("session.list", json!({})).await;
+            own.iter().all(|s| s["id"] != made["id"])
+                && with_copies(&mini)
+                    .await
+                    .iter()
+                    .any(|s| s["id"] == made["id"] && s["owner"]["worker"] == json!(BOOK))
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn a_session_in_the_middle_of_a_turn_comes_back_only_when_asked_now() {
+    let origin = Origin::new();
+    let (mini, book, made) = continued_and_back(&origin).await;
+    let own: Vec<Value> = mini.call("session.list", json!({})).await;
+    let chat = own.iter().find(|s| s["id"] == made["id"]).unwrap()["terminals"][0].clone();
+    let _: Value = mini
+        .call("chat.send", json!({ "id": chat, "text": "HOLD there" }))
+        .await;
+    within(
+        Duration::from_secs(30),
+        "a turn running on studio-mini",
+        || async {
+            let st: Value = mini.call("chat.state", json!({ "id": chat })).await;
+            st["status"] == json!("working")
+        },
+    )
+    .await;
+
+    let busy = book
+        .try_call("session.bring", json!({ "session": made["id"] }))
+        .await
+        .unwrap_err();
+    assert!(busy.starts_with("busy"), "{busy}");
+    let back: Value = book
+        .call(
+            "session.bring",
+            json!({ "session": made["id"], "now": true }),
+        )
+        .await;
+    assert_eq!(back["id"], made["id"]);
+}
+
+#[tokio::test]
+async fn a_message_typed_while_the_session_moves_keeps_it_on_the_central_host() {
+    let origin = Origin::new();
+    let (mini, book, made) = continued_and_back(&origin).await;
+    let own: Vec<Value> = mini.call("session.list", json!({})).await;
+    let there = own.iter().find(|s| s["id"] == made["id"]).unwrap().clone();
+    let chat = there["terminals"][0].clone();
+    // studio-mini's git waits, as the move renames the session's branch,
+    // until the test says go: a message comes in just then. The hook waits
+    // on the rename deleting the old name, the one step every git runs as
+    // a transaction; git before 2.46 writes the new name and HEAD outside one.
+    let worktree = PathBuf::from(there["path"].as_str().unwrap());
+    let common = std::process::Command::new("git")
+        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .current_dir(&worktree)
+        .output()
+        .unwrap();
+    let hooks = PathBuf::from(String::from_utf8_lossy(&common.stdout).trim()).join("hooks");
+    std::fs::create_dir_all(&hooks).unwrap();
+    let gate = tempfile::tempdir().unwrap();
+    let (started, go) = (gate.path().join("started"), gate.path().join("go"));
+    let hook = hooks.join("reference-transaction");
+    std::fs::write(
+        &hook,
+        format!(
+            "#!/bin/sh\n[ \"$1\" = prepared ] || exit 0\ngrep -qE ' 0{{40}} refs/heads/moonlet/fix-cart$' || exit 0\n[ -e '{s}' ] && exit 0\ntouch '{s}'\nn=0\nwhile [ ! -e '{g}' ] && [ $n -lt 300 ]; do sleep 0.1; n=$((n+1)); done\n",
+            s = started.display(),
+            g = go.display()
+        ),
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let (brought, ()) = tokio::join!(
+        book.try_call("session.bring", json!({ "session": made["id"] })),
+        async {
+            within(Duration::from_secs(30), "the move under way", || async {
+                started.exists()
+            })
+            .await;
+            let _: Value = mini
+                .call("chat.send", json!({ "id": chat, "text": "Typed meanwhile" }))
+                .await;
+            std::fs::write(&go, "").unwrap();
+        }
+    );
+    let busy = brought.unwrap_err();
+    assert!(busy.starts_with("busy"), "{busy}");
+    // It still runs on studio-mini, on its own branch, with the message.
+    let own: Vec<Value> = mini.call("session.list", json!({})).await;
+    assert!(own.iter().any(|s| s["id"] == made["id"]), "{own:?}");
+    let on = std::process::Command::new("git")
+        .args(["branch", "--show-current"])
+        .current_dir(&worktree)
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&on.stdout).trim(), "moonlet/fix-cart");
+    let st: Value = mini.call("chat.state", json!({ "id": chat })).await;
+    assert!(
+        st["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i["kind"] == json!("user") && i["text"] == json!("Typed meanwhile")),
+        "{st}"
+    );
+}
+
 #[tokio::test]
 async fn a_member_that_lost_its_session_lists_the_files_it_deleted_meanwhile() {
     let origin = Origin::new();
@@ -1938,6 +2133,188 @@ async fn a_member_that_lost_its_session_lists_the_files_it_deleted_meanwhile() {
         std::fs::read_to_string(gap[0].join("moonlet-deleted.txt")).unwrap(),
         "src/cart.ts\n"
     );
+}
+
+#[tokio::test]
+async fn a_session_whose_new_owner_cannot_be_recorded_stays_on_the_central_host() {
+    let origin = Origin::new();
+    let (mini, book, made) = continued_and_back(&origin).await;
+    // studio-mini cannot save its account log: a folder is where it writes
+    // the log first.
+    let blocked = mini.home.path().join("account.tmp");
+    std::fs::create_dir_all(blocked.join("in-the-way")).unwrap();
+
+    let refused = book
+        .try_call("session.bring", json!({ "session": made["id"] }))
+        .await
+        .unwrap_err();
+    assert!(refused.starts_with("internal"), "{refused}");
+    // It still runs on studio-mini, on its own branch.
+    let own: Vec<Value> = mini.call("session.list", json!({})).await;
+    let kept = own.iter().find(|s| s["id"] == made["id"]).expect("still studio-mini's");
+    let on = std::process::Command::new("git")
+        .args(["branch", "--show-current"])
+        .current_dir(kept["path"].as_str().unwrap())
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&on.stdout).trim(), made["branch"].as_str().unwrap());
+    std::fs::remove_dir_all(&blocked).unwrap();
+}
+
+#[tokio::test]
+async fn a_member_without_a_copy_of_the_session_leaves_it_on_the_central_host() {
+    let origin = Origin::new();
+    let (mini, book, made) = continued_and_back(&origin).await;
+    let copies: Vec<Value> = book.call("sync.list", json!({})).await;
+    let copy = copies.iter().find(|c| c["session"] == made["id"]).unwrap()["id"].clone();
+    let _: Value = book.call("sync.stop", json!({ "copy": copy })).await;
+
+    let refused = book
+        .try_call("session.bring", json!({ "session": made["id"] }))
+        .await
+        .unwrap_err();
+    assert!(refused.starts_with("no_copy"), "{refused}");
+    let own: Vec<Value> = mini.call("session.list", json!({})).await;
+    assert!(own.iter().any(|s| s["id"] == made["id"]), "still studio-mini's");
+}
+
+#[tokio::test]
+async fn a_bring_that_cannot_take_the_session_in_keeps_its_copy() {
+    let origin = Origin::new();
+    let (_mini, book, made) = continued_and_back(&origin).await;
+    let copies: Vec<Value> = book.call("sync.list", json!({})).await;
+    let copy = copies.iter().find(|c| c["session"] == made["id"]).unwrap().clone();
+    // The MacBook cannot save its sessions: a folder is where it writes
+    // them first.
+    let blocked = book.home.path().join("state.json.tmp");
+    std::fs::create_dir_all(blocked.join("in-the-way")).unwrap();
+
+    let refused = book
+        .try_call("session.bring", json!({ "session": made["id"] }))
+        .await
+        .unwrap_err();
+    assert!(refused.starts_with("failed"), "{refused}");
+    // Its copy is still kept, in the same folder.
+    let copies: Vec<Value> = book.call("sync.list", json!({})).await;
+    let kept = copies.iter().find(|c| c["id"] == copy["id"]).expect("the copy is kept");
+    assert_eq!(kept["path"], copy["path"]);
+    std::fs::remove_dir_all(&blocked).unwrap();
+}
+
+#[tokio::test]
+async fn a_bring_whose_mac_fails_after_the_hand_over_leaves_the_session_running_on_the_central_host() {
+    let origin = Origin::new();
+    let (mini, book, made) = continued_and_back(&origin).await;
+    // The MacBook cannot save its sessions, so it fails to take the
+    // session in once studio-mini has already given it up.
+    let blocked = book.home.path().join("state.json.tmp");
+    std::fs::create_dir_all(blocked.join("in-the-way")).unwrap();
+
+    let refused = book
+        .try_call("session.bring", json!({ "session": made["id"] }))
+        .await
+        .unwrap_err();
+    assert!(refused.starts_with("failed"), "{refused}");
+    std::fs::remove_dir_all(&blocked).unwrap();
+
+    // studio-mini runs it again, on its own branch.
+    let own: Vec<Value> = mini.call("session.list", json!({})).await;
+    let back = own
+        .iter()
+        .find(|s| s["id"] == made["id"])
+        .unwrap_or_else(|| panic!("studio-mini's again: {own:?}"));
+    assert_eq!(back["branch"], json!("moonlet/fix-cart"));
+    let on = std::process::Command::new("git")
+        .args(["branch", "--show-current"])
+        .current_dir(back["path"].as_str().unwrap())
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&on.stdout).trim(), "moonlet/fix-cart");
+    // Its chat is not paused: a message reaches the agent there.
+    let chat = back["terminals"][0].clone();
+    let _: Value = mini
+        .call("chat.send", json!({ "id": chat, "text": "Still on studio-mini" }))
+        .await;
+    within(
+        Duration::from_secs(30),
+        "the message on studio-mini",
+        || async { agent_log(&mini, "claude-user").contains("Still on studio-mini") },
+    )
+    .await;
+    // The account names studio-mini its owner, as the MacBook sees it.
+    within(
+        Duration::from_secs(10),
+        "studio-mini's on the MacBook",
+        || async {
+            with_copies(&book)
+                .await
+                .iter()
+                .any(|s| s["id"] == made["id"] && s["owner"]["worker"] == json!(MINI))
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn a_transcript_that_cannot_be_fetched_leaves_the_members_as_it_is() {
+    let origin = Origin::new();
+    let (mini, book, made) = continued_and_back(&origin).await;
+    // studio-mini's transcript is a link, which it never reads through.
+    let own: Vec<Value> = mini.call("session.list", json!({})).await;
+    let there = own.iter().find(|s| s["id"] == made["id"]).unwrap()["path"].clone();
+    let theirs = project_folder(&mini, Path::new(there.as_str().unwrap())).join(format!("{CONVERSATION}.jsonl"));
+    let aside = theirs.with_extension("aside");
+    std::fs::rename(&theirs, &aside).unwrap();
+    std::os::unix::fs::symlink(&aside, &theirs).unwrap();
+    // The MacBook already has some of the conversation where it goes.
+    let copies: Vec<Value> = book.call("sync.list", json!({})).await;
+    let here = PathBuf::from(copies.iter().find(|c| c["session"] == made["id"]).unwrap()["path"].as_str().unwrap());
+    within(Duration::from_secs(30), "the copy's folder", || async { here.join(".git").exists() }).await;
+    let ours = project_folder(&book, &here);
+    std::fs::create_dir_all(&ours).unwrap();
+    std::fs::write(ours.join(format!("{CONVERSATION}.jsonl")), "{\"type\":\"user\"}\n").unwrap();
+
+    let _: Value = book
+        .call("session.bring", json!({ "session": made["id"] }))
+        .await;
+    assert_eq!(
+        std::fs::read_to_string(ours.join(format!("{CONVERSATION}.jsonl"))).unwrap(),
+        "{\"type\":\"user\"}\n"
+    );
+}
+
+#[tokio::test]
+async fn a_brought_back_transcript_is_never_written_through_a_link_on_the_member() {
+    let origin = Origin::new();
+    let (_mini, book, made) = continued_and_back(&origin).await;
+    // Something on the MacBook put a link where the conversation's folder goes.
+    let copies: Vec<Value> = book.call("sync.list", json!({})).await;
+    let here = PathBuf::from(copies.iter().find(|c| c["session"] == made["id"]).unwrap()["path"].as_str().unwrap());
+    within(Duration::from_secs(30), "the copy's folder", || async { here.join(".git").exists() }).await;
+    let ours = project_folder(&book, &here);
+    std::fs::create_dir_all(&ours).unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(elsewhere.path(), ours.join(CONVERSATION)).unwrap();
+
+    let _: Value = book
+        .call("session.bring", json!({ "session": made["id"] }))
+        .await;
+    assert!(!elsewhere.path().join("tool-results/toolu_01.txt").exists());
+    // The resumed agent may make its own empty folders there as it starts;
+    // the daemon writes files, and none may go through the link.
+    let mut files = Vec::new();
+    let mut folders = vec![elsewhere.path().to_path_buf()];
+    while let Some(dir) = folders.pop() {
+        for e in std::fs::read_dir(&dir).unwrap().flatten() {
+            let path = e.path();
+            if path.is_dir() {
+                folders.push(path);
+            } else {
+                files.push(path);
+            }
+        }
+    }
+    assert_eq!(files, Vec::<PathBuf>::new(), "nothing written through the link");
 }
 
 #[tokio::test]
