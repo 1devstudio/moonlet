@@ -541,6 +541,20 @@ pub const WORKER_RETIRE: &str = "worker.retire";
 pub const EXEC_SETUPS: &str = "exec.setups";
 /// [`ExecSetup`]: a routing copy's setup waits for the user's approval.
 pub const EV_EXEC_SETUP: &str = "exec.setup";
+/// [`BrowserOpen`] → `true`: `moonlet-open` hands a URL to its daemon (X75).
+pub const BROWSER_OPEN: &str = "browser.open";
+/// [`BrowserShow`]: a URL to open, for the app or the phone (X75). Also
+/// the central host's request to the member whose app opens it.
+pub const EV_BROWSER_SHOW: &str = "browser.show";
+/// [`BrowserRoute`] → `true`: a member asks its central host to open a URL
+/// where the user is (X75).
+pub const BROWSER_ROUTE: &str = "browser.route";
+/// `{}` → `[BrowserShow]`: the URLs that came for this Mac's app while it
+/// was not connected, each handed over once (X75). Only the app asks.
+pub const BROWSER_PENDING: &str = "browser.pending";
+/// `{}` → `true`: the user is active in this app or phone (X75). A member
+/// passes its app's on to its central host at most every 30 s.
+pub const PRESENCE_ACTIVE: &str = "presence.active";
 /// [`JobList`] → `[Job]`: a session's jobs, newest first (X62).
 pub const JOB_LIST: &str = "job.list";
 /// [`JobOutputGet`] → [`JobOutput`]: a job's stored output from a byte.
@@ -1323,6 +1337,54 @@ pub struct SessionMove {
     pub to: String,
     #[serde(default)]
     pub now: bool,
+}
+
+/// `browser.open`: a URL from a terminal or agent of this daemon (X75).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BrowserOpen {
+    pub url: String,
+    /// The session of the terminal or agent that asked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal: Option<crate::TerminalId>,
+}
+
+/// `browser.show`: a URL for the app or the phone to open (X75): who asked,
+/// and the localhost port forwarded for its sign-in to come back, if any.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BrowserShow {
+    pub url: String,
+    /// The member that asked, by name.
+    pub from: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+    /// The session's name, for the toast.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forward: Option<u16>,
+    /// `phone` when it is for the phone, which the user used last; the
+    /// app leaves it alone then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+    /// The phone's device, for `to: phone`: only that phone hears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+    /// The user was not active anywhere lately: the URL waits with
+    /// **Open** instead of opening by itself.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub waiting: bool,
+}
+
+/// `browser.route`: a URL from one of a member's terminals or agents.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BrowserRoute {
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_name: Option<String>,
 }
 
 /// A copied file as its side has it (X74): its SHA-256, and its bytes in

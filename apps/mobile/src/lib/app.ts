@@ -5,6 +5,9 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { onDaemonEvent, onHostStatus, rpc, subscribeHost, type DaemonEvent } from "@desktop/lib/daemon";
+import { type BrowserShow } from "@desktop/lib/browserRoute";
+import { Presence } from "./presence";
+import { addSignIn, dropSignIn, takesSignIn, type SignIn } from "./signIns";
 import { onChatItem, onChatState } from "@desktop/lib/chat";
 import { startJobs } from "@desktop/lib/jobsStore";
 import {
@@ -127,6 +130,8 @@ interface AppState {
   ready: boolean;
   /** The task, and maybe its worktree, New session starts from (X76). */
   newFrom: { board: string; task: string; worktree?: { path: string; branch: string; project?: string } } | null;
+  /** Sign-ins opened while the user was last active here (X75). */
+  signIns: SignIn[];
 }
 
 export const useApp = create<AppState>(() => ({
@@ -138,6 +143,7 @@ export const useApp = create<AppState>(() => ({
   newFrom: null,
   settings: loadJson<Settings>(SETTINGS, { workspace: null, notifyOff: ["checks"], faceId: true }),
   ready: false,
+  signIns: [],
 }));
 
 const set = useApp.setState;
@@ -303,6 +309,11 @@ async function fetchHostData(host: string): Promise<Omit<HostData, "git" | "acco
 
 function onEvent(e: DaemonEvent) {
   const { host, name, data } = e;
+  if (name === EV.browserShow) {
+    const show = data as BrowserShow;
+    if (takesSignIn(show)) set((st) => ({ signIns: addSignIn(st.signIns, host, show) }));
+    return;
+  }
   const changes = eventChanges(name, data);
   if (name === EV.execSetup) nextSetupTurn(host);
   if (changes === "reload") {
@@ -321,7 +332,12 @@ function onEvent(e: DaemonEvent) {
   }
 }
 
+/** Where the user is, as the phone tells its hosts (X75). */
+const presence = new Presence();
+
 function connected(id: string) {
+  // The user was just active here: this host hears it too (X75).
+  if (document.visibilityState === "visible" && presence.connected(id, Date.now())) tellActive(id);
   void subscribeHost(id).catch(() => {});
   void loadHost(id).catch(() => {});
   void measure(id);
@@ -331,6 +347,23 @@ function onStatus(h: HostEntry) {
   const prev = get().hosts[h.id];
   set((s) => ({ hosts: { ...s.hosts, [h.id]: h } }));
   if (h.status === "connected" && prev?.status !== "connected") connected(h.id);
+}
+
+/** Tells host `id` the user is active on the phone. */
+function tellActive(id: string) {
+  void rpc(id, M.presenceActive, {}).catch(() => presence.failed(id));
+}
+
+/** The user did something on the phone: its hosts hear of it, at most
+ * every 30 s each (X75). */
+function active() {
+  const hosts = Object.values(get().hosts).filter((h) => h.status === "connected").map((h) => h.id);
+  for (const id of presence.active(Date.now(), hosts)) tellActive(id);
+}
+
+/** Drops the sign-in card `key` names (see `signInKey`). */
+export function dismissSignIn(key: string) {
+  set((st) => ({ signIns: dropSignIn(st.signIns, key) }));
 }
 
 let started = false;
@@ -347,9 +380,13 @@ export async function startApp() {
   set({ hosts: Object.fromEntries(list.map((h) => [h.id, h])), ready: true });
   // Hosts that connected before the listeners were up load now.
   for (const h of list) if (h.status === "connected") connected(h.id);
+  // Where the user is (X75): sign-ins open here while they use the phone.
+  for (const ev of ["pointerdown", "keydown"] as const) window.addEventListener(ev, active, { capture: true, passive: true });
+  active();
   // Back from the background: retry hosts that dropped meanwhile at once.
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible") return;
+    active();
     for (const h of Object.values(get().hosts)) if (h.status !== "connected") void reconnect(h.id).catch(() => {});
   });
   // Round trips and "last seen" stay fresh while the app is open.

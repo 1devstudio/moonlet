@@ -63,6 +63,15 @@ pub struct Daemon {
     letting_go: tokio::sync::Mutex<LettingGo>,
     /// The copied files of this member's checkouts (X74).
     checkouts: crate::copied_files::Checkouts,
+    /// Where the user was last active (X75).
+    presence: Mutex<Presence>,
+    /// URLs that came for this Mac's app while it was not connected, and
+    /// how many of its connections are open (X75). Not `apps`, the app
+    /// connections a phone's task requests go to (X76).
+    waiting_shows: Mutex<moonlet_core::browser::Waiting<m::BrowserShow>>,
+    local_apps: std::sync::atomic::AtomicUsize,
+    /// On the central host, the same for each paired phone (X75).
+    phone_shows: Mutex<PhoneShows>,
     /// What the Mac's last sleep left to its wake (X73).
     asleep: Mutex<Asleep>,
     /// Per design system (X64): one start of its agent, or one change of its
@@ -437,6 +446,28 @@ fn profile_hooks(dir: &str) -> HookPaths {
     HookPaths::default_paths().with_claude_dir(Path::new(dir))
 }
 
+/// Where the user was last active (X75): this Mac's app, when it was last
+/// passed on to the central host, and on the central host, the client the
+/// user used last. Kept in memory only.
+#[derive(Default)]
+struct Presence {
+    app_at: Option<u64>,
+    sent_at: u64,
+    last: Option<(moonlet_core::browser::Client, u64)>,
+}
+
+/// URLs for each paired phone, by device, that came while it was not
+/// connected, and how many of its connections are open (X75).
+#[derive(Default)]
+struct PhoneShows {
+    open: HashMap<String, usize>,
+    waiting: HashMap<String, moonlet_core::browser::Waiting<m::BrowserShow>>,
+}
+
+fn wall_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
+}
+
 pub fn internal(e: impl std::fmt::Display) -> RpcError {
     RpcError::new("failed", format!("{e:#}"))
 }
@@ -446,6 +477,14 @@ impl Daemon {
         // Agents call the CLI as "$MOONLET_BIN" (X22): it is not on PATH.
         if let Ok(bin) = moonlet_cli_path() {
             base_env.insert("MOONLET_BIN".into(), bin.display().to_string());
+            // A browser any of them opens opens where the user is (X75).
+            match moonlet_core::browser::install_here(&moonlet_core::paths::home(), &bin) {
+                Ok(opener) => {
+                    let path = base_env.get("PATH").cloned().or_else(|| std::env::var("PATH").ok());
+                    base_env.extend(moonlet_core::browser::env(&opener, path.as_deref()));
+                }
+                Err(e) => tracing::warn!("cannot write moonlet-open: {e:#}"),
+            }
         }
         // A daemon with its own data folder (tests, e2e, a custom setup)
         // passes it on, so `moonlet` in its terminals uses the same one and
@@ -574,6 +613,10 @@ impl Daemon {
             session_copies,
             letting_go: Default::default(),
             checkouts: crate::copied_files::Checkouts::new(&moonlet_core::paths::home()),
+            presence: Mutex::new(Presence::default()),
+            waiting_shows: Default::default(),
+            local_apps: Default::default(),
+            phone_shows: Default::default(),
             asleep: Default::default(),
             heavy,
             cloud,
@@ -1234,6 +1277,71 @@ impl Daemon {
                     self.machines.may_open(&machine, &r.session)?;
                 }
                 ok(self.files_fetched(r, cloud).await?)
+            }
+            m::PRESENCE_ACTIVE => {
+                let now = wall_ms();
+                if conn.cloud.load(std::sync::atomic::Ordering::Relaxed) {
+                    return Err(RpcError::new("forbidden", "a cloud machine has no user"));
+                }
+                if conn.client == crate::link::WORKER_CLIENT {
+                    // A member's app, passed on by its daemon.
+                    let worker = self.workers.worker_on(conn.id).ok_or_else(|| RpcError::new("forbidden", "only a member says where the user is"))?;
+                    self.presence.lock().unwrap().last = Some((moonlet_core::browser::Client::Member(worker), now));
+                } else if let Some(device) = conn.phone.as_deref() {
+                    if !self.is_phone(device) {
+                        return Err(RpcError::new("forbidden", "a paired Mac says where the user is through its own daemon"));
+                    }
+                    self.presence.lock().unwrap().last = Some((moonlet_core::browser::Client::Phone(device.to_string()), now));
+                } else if conn.client == CLI_CLIENT {
+                    return Err(RpcError::new("forbidden", "only the app says where the user is"));
+                } else {
+                    self.app_active(now);
+                }
+                ok(true)
+            }
+            m::BROWSER_ROUTE => {
+                // A member's terminal or agent opened a URL (X75).
+                let refused = || RpcError::new("forbidden", "only a member of the account opens URLs here");
+                if conn.client != crate::link::WORKER_CLIENT || conn.cloud.load(std::sync::atomic::Ordering::Relaxed) {
+                    return Err(refused());
+                }
+                let worker = self.workers.worker_on(conn.id).ok_or_else(refused)?;
+                let r: m::BrowserRoute = params(p)?;
+                moonlet_core::browser::check_url(&r.url).map_err(|e| RpcError::new("invalid_params", e.to_string()))?;
+                // Named as this host knows it, never as it calls itself.
+                let from = self.sessions.member_names().remove(&worker).unwrap_or(worker);
+                // Nobody said where they are yet: it waits here with Open.
+                let unknown = self.presence.lock().unwrap().last.is_none();
+                self.show_where_the_user_is(m::BrowserShow {
+                    url: r.url,
+                    from,
+                    session: r.session,
+                    session_name: r.session_name,
+                    forward: None,
+                    to: None,
+                    device: None,
+                    waiting: unknown,
+                })
+                .await;
+                ok(true)
+            }
+            m::BROWSER_PENDING => {
+                // This Mac's own app takes what came while it was away (X75).
+                if conn.client != APP_CLIENT || conn.phone.is_some() {
+                    return Err(RpcError::new("forbidden", "only this Mac's app shows its sign-ins"));
+                }
+                ok(self.waiting_shows.lock().unwrap().take(wall_ms()))
+            }
+            m::BROWSER_OPEN => {
+                // From this Mac's own terminals and agents, through the CLI
+                // (X75).
+                if conn.phone.is_some() || conn.client == crate::link::WORKER_CLIENT {
+                    return Err(RpcError::new("forbidden", "only this Mac's terminals open URLs here"));
+                }
+                let r: m::BrowserOpen = params(p)?;
+                moonlet_core::browser::check_url(&r.url).map_err(|e| RpcError::new("invalid_params", e.to_string()))?;
+                self.open_url(r).await?;
+                ok(true)
             }
             m::FILES_CHECKOUT => {
                 // Only a linked Mac's daemon, as for `session.files` (X74).
@@ -3831,8 +3939,193 @@ impl Daemon {
                 d.relayed(r).await
             })
         }));
+        let d = Arc::downgrade(self);
+        self.link.set_shower(Arc::new(move |show| d.upgrade().is_some_and(|d| d.show_in_app(show))));
         self.session_copies.spawn();
         self.keep_copied_files();
+    }
+
+    /// The user is active in this Mac's app (X75): passed on to the central
+    /// host at most every 30 s; on the central host, or without one, kept.
+    fn app_active(self: &Arc<Self>, now: u64) {
+        let info = self.link.info();
+        let mut p = self.presence.lock().unwrap();
+        p.app_at = Some(now);
+        if info.central.is_none() {
+            p.last = Some((moonlet_core::browser::Client::Member(info.worker.id), now));
+            return;
+        }
+        if now.saturating_sub(p.sent_at) < 30_000 {
+            return;
+        }
+        p.sent_at = now;
+        drop(p);
+        if let Some(host) = self.link.host() {
+            tokio::spawn(async move {
+                if let Err(e) = host.request(m::PRESENCE_ACTIVE, serde_json::json!({})).await {
+                    tracing::debug!("cannot say where the user is: {}", e.message);
+                }
+            });
+        }
+    }
+
+    /// Shows `show` in this Mac's app (X75), and says whether it did.
+    /// While no app is connected it is kept, waiting with **Open**, for the
+    /// app to take with `browser.pending` when it connects; the user's
+    /// next activity in the app then reaches the central host at once.
+    fn show_in_app(&self, mut show: m::BrowserShow) -> bool {
+        let mut waiting = self.waiting_shows.lock().unwrap();
+        if self.local_apps.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+            drop(waiting);
+            self.terminals.emit(Message::event(m::EV_BROWSER_SHOW, show));
+            return true;
+        }
+        show.waiting = true;
+        waiting.keep(show, wall_ms());
+        drop(waiting);
+        self.presence.lock().unwrap().sent_at = 0;
+        false
+    }
+
+    /// On the central host: a URL for member `id`'s app was kept there, as
+    /// the app is not connected (X75). That member stays the last one the
+    /// user used, but not an active one, until its app says otherwise.
+    fn not_active_at(&self, id: &str) {
+        let mut p = self.presence.lock().unwrap();
+        if let Some((moonlet_core::browser::Client::Member(m), at)) = &mut p.last
+            && m == id
+        {
+            *at = 0;
+        }
+    }
+
+    /// This Mac's app connected, or (`false`) one of its connections
+    /// closed (X75).
+    pub fn app_connection(&self, open: bool) {
+        use std::sync::atomic::Ordering::SeqCst;
+        let _waiting = self.waiting_shows.lock().unwrap();
+        if open {
+            self.local_apps.fetch_add(1, SeqCst);
+        } else {
+            self.local_apps.fetch_sub(1, SeqCst);
+        }
+    }
+
+    /// The paired phone `device` connected, with what waited for it, or
+    /// (`false`) one of its connections closed (X75).
+    pub fn phone_connection(&self, device: &str, open: bool) -> Vec<m::BrowserShow> {
+        let mut phones = self.phone_shows.lock().unwrap();
+        if open {
+            *phones.open.entry(device.to_string()).or_default() += 1;
+            return phones.waiting.remove(device).map(|mut w| w.take(wall_ms())).unwrap_or_default();
+        }
+        if let Some(n) = phones.open.get_mut(device) {
+            *n -= 1;
+            if *n == 0 {
+                phones.open.remove(device);
+            }
+        }
+        Vec::new()
+    }
+
+    /// A URL from one of this Mac's terminals or agents (X75). It opens
+    /// here at once while the user is active in this Mac's app; else the
+    /// central host finds where the user is. Without one, or while it is
+    /// unreachable, it waits here with **Open**.
+    async fn open_url(self: &Arc<Self>, r: m::BrowserOpen) -> Result<(), RpcError> {
+        let session_name = r.session.as_deref().and_then(|s| self.sessions.session(s).ok()).map(|s| s.name);
+        let info = self.link.info();
+        let mut show = m::BrowserShow {
+            url: r.url,
+            from: info.worker.name,
+            session: r.session,
+            session_name,
+            forward: None,
+            to: None,
+            device: None,
+            waiting: false,
+        };
+        let now = wall_ms();
+        if info.central.is_none() {
+            self.show_where_the_user_is(show).await;
+            return Ok(());
+        }
+        if moonlet_core::browser::opens_here(self.presence.lock().unwrap().app_at, now) {
+            self.show_in_app(show);
+            return Ok(());
+        }
+        let routed = match self.link.host() {
+            Some(host) => host
+                .request(
+                    m::BROWSER_ROUTE,
+                    serde_json::to_value(m::BrowserRoute {
+                        url: show.url.clone(),
+                        session: show.session.clone(),
+                        session_name: show.session_name.clone(),
+                    })
+                    .map_err(internal)?,
+                )
+                .await
+                .is_ok(),
+            None => false,
+        };
+        if !routed {
+            show.waiting = true;
+            self.show_in_app(show);
+        }
+        Ok(())
+    }
+
+    /// On the central host, or a Mac without one: shows `show` on the client
+    /// the user used last (X75). With none known, this Mac's app.
+    async fn show_where_the_user_is(self: &Arc<Self>, mut show: m::BrowserShow) {
+        use moonlet_core::browser::Client;
+        let me = self.link.info().worker.id;
+        let last = self.presence.lock().unwrap().last.clone();
+        let Some((client, waiting)) = moonlet_core::browser::route(last.as_ref(), wall_ms()) else {
+            self.show_in_app(show);
+            return;
+        };
+        show.waiting = waiting;
+        match client {
+            Client::Phone(device) => {
+                show.to = Some("phone".into());
+                show.device = Some(device.clone());
+                let mut phones = self.phone_shows.lock().unwrap();
+                if phones.open.get(&device).is_some_and(|n| *n > 0) {
+                    drop(phones);
+                    self.terminals.emit(Message::event(m::EV_BROWSER_SHOW, show));
+                } else {
+                    // That phone is away: it hears it when it connects.
+                    show.waiting = true;
+                    phones.waiting.entry(device).or_default().keep(show, wall_ms());
+                }
+            }
+            Client::Member(id) if id == me => {
+                if !self.show_in_app(show) {
+                    self.not_active_at(&id);
+                }
+            }
+            Client::Member(id) => {
+                let answer = match self.workers.conn(&id) {
+                    Some(conn) => conn
+                        .request(m::EV_BROWSER_SHOW, serde_json::to_value(&show).unwrap_or_default(), std::time::Duration::from_secs(10))
+                        .await
+                        .ok(),
+                    None => None,
+                };
+                match answer {
+                    // That member is away: here, waiting with Open.
+                    None => {
+                        show.waiting = true;
+                        self.show_in_app(show);
+                    }
+                    // It kept the URL for its app, which is not connected.
+                    Some(v) if v.get("kept") == Some(&Value::Bool(true)) => self.not_active_at(&id),
+                    Some(_) => {}
+                }
+            }
+        }
     }
 
     /// The patterns of the project `identity` names; the default without

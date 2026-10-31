@@ -79,11 +79,22 @@ add-zsh-hook preexec __moonlet_preexec
 add-zsh-hook precmd __moonlet_blank
 "#;
 
+/// Puts the opener's shims (X75) first on PATH again after the system's
+/// login profile, whose path_helper on macOS moves /etc/paths ahead of
+/// them. The user's own startup files run after, so they may still change
+/// PATH.
+const SHIMS_FIRST: &str = r#"if [ -n "${MOONLET_SHIMS-}" ]; then
+  case "$PATH" in "$MOONLET_SHIMS":*) ;; *) PATH="$MOONLET_SHIMS:$PATH" ;; esac
+fi
+"#;
+
 /// One zsh startup file: run the user's version with their ZDOTDIR, then
 /// point ZDOTDIR back at us so the next startup file is ours too.
 fn zsh_file(name: &str, last_for_login: bool, add_hooks: bool) -> String {
+    let first = if name == ".zprofile" { SHIMS_FIRST } else { "" };
     let mut s = format!(
         "# moonlet shell integration; runs the user's {name} unchanged.\n\
+         {first}\
          MOONLET_ZDOTDIR=\"$ZDOTDIR\"\n\
          ZDOTDIR=\"${{MOONLET_USER_ZDOTDIR:-$HOME}}\"\n\
          [[ -f \"$ZDOTDIR/{name}\" ]] && source \"$ZDOTDIR/{name}\"\n\
@@ -105,6 +116,10 @@ fn zsh_file(name: &str, last_for_login: bool, add_hooks: bool) -> String {
 
 const BASH_RC: &str = r#"# moonlet shell integration for bash: login semantics, then hooks.
 [ -f /etc/profile ] && . /etc/profile
+# The opener's shims first again, after path_helper (X75).
+if [ -n "${MOONLET_SHIMS-}" ]; then
+  case "$PATH" in "$MOONLET_SHIMS":*) ;; *) PATH="$MOONLET_SHIMS:$PATH" ;; esac
+fi
 if [ -f "$HOME/.bash_profile" ]; then . "$HOME/.bash_profile"
 elif [ -f "$HOME/.bash_login" ]; then . "$HOME/.bash_login"
 elif [ -f "$HOME/.profile" ]; then . "$HOME/.profile"
@@ -192,6 +207,10 @@ PROMPT_COMMAND="__moonlet_prompt${PROMPT_COMMAND:+; $PROMPT_COMMAND}; __moonlet_
 "#;
 
 const FISH_CONF: &str = r#"# moonlet shell integration for fish
+# The opener's shims first again, after fish put /etc/paths ahead (X75).
+if set -q MOONLET_SHIMS; and test "$PATH[1]" != "$MOONLET_SHIMS"
+  set -gx PATH $MOONLET_SHIMS $PATH
+end
 if status is-interactive
   function __moonlet_prompt --on-event fish_prompt
     if set -q __moonlet_ran
@@ -769,6 +788,48 @@ mod tests {
     #[tokio::test]
     async fn bash_reports_its_path() {
         reports_path("/bin/bash").await;
+    }
+
+    /// The opener's shims (X75) stay first on a login shell's PATH, after
+    /// macOS's path_helper put /etc/paths ahead of them.
+    async fn shims_come_first(shell: &str) {
+        if !Path::new(shell).exists() {
+            return;
+        }
+        let home = tempfile::tempdir().unwrap();
+        let shims = home.path().join("opener").join("shims");
+        let root = home.path().join("shell");
+        let mut env: BTreeMap<String, String> = BTreeMap::from([
+            ("HOME".into(), home.path().display().to_string()),
+            ("PATH".into(), format!("{}:/usr/bin:/bin", shims.display())),
+            ("MOONLET_SHIMS".into(), shims.display().to_string()),
+            ("SHELL".into(), shell.into()),
+        ]);
+        let args = apply(&root, shell, vec!["-l".into()], &mut env);
+        let mgr = TerminalManager::new(home.path().join("s.sock"), env);
+        let mut command = vec![shell.to_string()];
+        command.extend(args);
+        let info = mgr
+            .create(TerminalCreate { cwd: home.path().display().to_string(), command, ..Default::default() })
+            .unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        mgr.attach(info.id, 1, tx, None).unwrap();
+        read_until(&mut rx, "133;A").await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let path = mgr.shell_path(info.id);
+        let _ = mgr.kill(info.id, true);
+        let path = path.unwrap_or_default();
+        assert!(path.starts_with(&format!("{}:", shims.display())), "{shell}: {path}");
+    }
+
+    #[tokio::test]
+    async fn zsh_login_keeps_the_shims_first_on_path() {
+        shims_come_first("/bin/zsh").await;
+    }
+
+    #[tokio::test]
+    async fn bash_login_keeps_the_shims_first_on_path() {
+        shims_come_first("/bin/bash").await;
     }
 
     #[tokio::test]

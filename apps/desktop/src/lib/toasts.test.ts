@@ -26,4 +26,12 @@ describe("toasts (A3)", () => {
     vi.advanceTimersByTime(1);
     expect(shown()).toEqual([]);
   });
+
+  it("keeps a sticky toast until it is dismissed", () => {
+    toast("studio-mini opened a sign-in and waits for you", "info", { label: "Open", run: () => {} }, { sticky: true });
+    vi.advanceTimersByTime(60 * 60_000);
+    expect(shown()).toEqual(["studio-mini opened a sign-in and waits for you"]);
+    dismissToast(useStore.getState().toasts[0].id);
+    expect(shown()).toEqual([]);
+  });
 });

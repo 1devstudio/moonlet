@@ -391,10 +391,12 @@ useStore.subscribe((s, prev) => {
 });
 
 let toastId = 0;
-export function toast(text: string, kind: Toast["kind"] = "info", action?: Toast["action"]) {
+/** Shows a toast. It closes on its own after a few seconds, unless it is
+ * `sticky`: then it stays until the user dismisses it or runs its action. */
+export function toast(text: string, kind: Toast["kind"] = "info", action?: Toast["action"], opts: { sticky?: boolean } = {}) {
   const id = ++toastId;
   set((s) => ({ toasts: [...s.toasts, { id, kind, text, action }] }));
-  setTimeout(() => dismissToast(id), action ? 10_000 : kind === "error" ? 7000 : 3500);
+  if (!opts.sticky) setTimeout(() => dismissToast(id), action ? 10_000 : kind === "error" ? 7000 : 3500);
 }
 
 export function dismissToast(id: number) {

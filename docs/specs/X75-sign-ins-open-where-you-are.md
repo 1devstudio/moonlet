@@ -38,6 +38,9 @@ With this spec, a browser opened by any terminal or agent that moonlet starts, o
 - [ ] A URL from the member where the user is opens there at once, with no round trip through the central host. Working on the MacBook alone behaves as it does today.
 - [ ] With no client active in the last 15 minutes, the URL opens on the last one, and the session that asked shows "Waiting for a sign-in" with **Open** on every client.
 - [ ] While the central host is unreachable, a URL opens on the member that asked only when the user is active in that member's own app, by the same rule as above (focus, typing or a click within the last 15 minutes). An app that is merely open does not count. Otherwise the URL waits in that session with **Open**.
+- [ ] A URL for a Mac whose app is not connected (the app quit, or the daemon runs without it) is kept by that Mac's daemon, in memory, and shown with **Open** when the app connects. At most the latest 5 wait, each for 10 minutes, and the same URL from the same session once.
+- [ ] A member that keeps a URL from the central host this way tells it so. The central host then counts that Mac as the client the user used last but not as an active one: the next URL goes there waiting with **Open**, until the user is active in that app again. The app's next activity reaches the central host at once, not after the 30 s limit.
+- [ ] A URL for a phone that is not connected is kept by the central host, in memory, by the same rule, and shown when that phone connects. Another phone never gets it.
 
 ### Sign-ins that come back to localhost
 
@@ -73,7 +76,9 @@ With this spec, a browser opened by any terminal or agent that moonlet starts, o
 
 - `browser.open {url, session?, terminal?}`, from `moonlet-open` to its own daemon → `true`.
 - `browser.route {url, from: <member>, session?}`, member → central host. The central host picks the client and sends `browser.show` to that member's app, or to the phone.
+- `browser.show`, central host → member, as a request → `true` when the app got it, `{kept: true}` when the app is not connected and the URL waits for it.
 - Event `browser.show {url, from, session?, forward?: {port}}` to an app or a phone.
+- `browser.pending` → `[browser.show]`: the URLs that came for this Mac's app while it was not connected, each handed over once. The app asks each time it connects to its own daemon; any other client gets `forbidden`.
 - `presence.active {client}`, member → central host, at most every 30 s while the user is active.
 - `tunnel.open {port, to: <member>}` on the link: a stream from the Mac's daemon to the member's loopback port. It is accepted only for a port named by a `browser.route` from that member that is still waiting.
 - `signins.list` → the entries. `signins.set {entries}` → `true`. `signins.check {entry}` → `{<member>: bool}`. `signins.run {entry, members}` → `true`. Only the Mac's own app may call `signins.set`, `.check` and `.run`; other clients get `forbidden`.
@@ -84,7 +89,7 @@ With this spec, a browser opened by any terminal or agent that moonlet starts, o
 - `$MOONLET_HOME/bin/moonlet-open`, `$MOONLET_HOME/bin/shims/open` (macOS) and `$MOONLET_HOME/bin/shims/xdg-open` (Linux), written by the daemon on start.
 - The sign-in entries are in the account state as records of kind `signin`, each keyed by a random id. Their fields are `name`, `login` (the sign-in command), `check` (the check command) and `order` (a sort key, X68). Each field follows X68's rules: the change with the latest stamp wins, also between members changed while unlinked. A deleted entry stays deleted. Older members keep these records and pass them on unread.
 - Approvals of an entry's exact commands are kept per member in `$MOONLET_HOME/signins.json`, mode 0600, and never synced.
-- Where the user was last active is kept in memory on the central host only.
+- Where the user was last active is kept in memory on the central host only, and so are the URLs waiting for a phone that is not connected.
 
 ## Security considerations
 
@@ -111,10 +116,14 @@ Test names are planned. Each criterion cites its test once it is built, with the
   - `the_xdg_open_shim_hands_on_urls_and_passes_everything_else_on`.
   - `the_url_opens_where_the_user_was_last_active`: a table of activity times against the client that opens.
   - `with_the_central_host_offline_the_url_opens_only_where_the_user_is_active`.
+  - `at_most_five_urls_wait_for_the_app_each_for_ten_minutes_and_once`.
 - **Daemon integration** (`crates/moonletd/tests/browser.rs`), with two members and a fake app connection:
   - `browser_and_gh_browser_are_set_for_terminals_and_agents`.
   - `a_terminals_browser_url_reaches_the_app_of_the_active_member`.
   - `a_url_from_the_member_where_the_user_is_opens_there_without_the_central_host`.
+  - `a_url_for_this_mac_while_its_app_is_not_connected_waits_for_the_app` and `a_url_for_a_member_whose_app_quit_waits_there_until_the_app_connects`.
+  - `a_url_kept_for_a_macs_app_that_quit_leaves_the_next_waiting_until_the_user_is_back`.
+  - `a_url_for_a_phone_that_is_not_connected_waits_for_that_phone`.
   - `a_callback_is_registered_only_for_a_port_the_calling_command_listens_on`: a test server started by the calling command gets a callback, and a port held by an unrelated process gets none.
   - `a_forward_carries_the_callback_and_ends_when_its_listener_closes`.
   - `a_tunnel_without_a_matching_callback_is_forbidden`.

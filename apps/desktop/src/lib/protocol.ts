@@ -1314,6 +1314,8 @@ export const M = {
   projectSetConfig: "project.set_config",
   projectWorktrees: "project.worktrees",
   projectCopiedFilesGet: "project.copied_files.get",
+  presenceActive: "presence.active",
+  browserPending: "browser.pending",
   projectCopiedFilesSet: "project.copied_files.set",
   projectWorktreeRemove: "project.worktree_remove",
   sessionCreate: "session.create",
@@ -1499,6 +1501,7 @@ export const M = {
 
 export const EV = {
   terminalCreated: "terminal.created",
+  browserShow: "browser.show",
   terminalUpdated: "terminal.updated",
   terminalExited: "terminal.exited",
   terminalRemoved: "terminal.removed",

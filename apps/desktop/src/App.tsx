@@ -15,6 +15,7 @@ import { startSync } from "./lib/syncStore";
 import { startCloud } from "./lib/cloudStore";
 import { startJobs } from "./lib/jobsStore";
 import { startReadiness } from "./lib/followStore";
+import { startBrowser } from "./lib/browserStore";
 import { installShortcuts } from "./lib/keys";
 import { terminalSearch } from "./lib/actions";
 import { uiScale } from "./lib/uiScale";
@@ -149,6 +150,8 @@ export default function App() {
     startCloud();
     // Whether the central host could continue each session here (X73).
     const readiness = startReadiness();
+    // Sign-ins open where the user is (X75).
+    startBrowser();
     void startDesign();
     startEditor();
     void loadTrackersConfig();
