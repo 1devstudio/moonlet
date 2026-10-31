@@ -342,6 +342,8 @@ pub fn computer_name() -> String {
 pub struct WorkerLink {
     store: Mutex<LinkStore>,
     state: Mutex<LinkState>,
+    /// Since when the link has been down, while it is (X73).
+    down_since: Mutex<Option<u64>>,
     host: Mutex<Option<Arc<Host>>>,
     /// Which host is current: a stopped host's late news carries an older
     /// number and is ignored.
@@ -377,6 +379,7 @@ impl WorkerLink {
         Arc::new(WorkerLink {
             store: Mutex::new(store),
             state: Mutex::new(LinkState::Off),
+            down_since: Mutex::new(None),
             host: Mutex::new(None),
             generation: AtomicU64::new(0),
             synced: AtomicUsize::new(0),
@@ -409,6 +412,7 @@ impl WorkerLink {
             central: store.central_info(),
             worker: store.worker().clone(),
             state: self.state.lock().unwrap().clone(),
+            unreachable_since: *self.down_since.lock().unwrap(),
         }
     }
 
@@ -419,10 +423,28 @@ impl WorkerLink {
     }
 
     fn set_state(&self, state: LinkState) {
+        // A central host that answers, if only to refuse this Mac or ask
+        // for an update, is not offline (X73).
+        let out_of_reach = matches!(
+            state,
+            LinkState::Connecting | LinkState::Reconnecting | LinkState::Error { .. }
+        );
+        self.set_state_as(state, out_of_reach);
+    }
+
+    /// [`Self::set_state`], saying whether the central host is out of reach.
+    fn set_state_as(&self, state: LinkState, out_of_reach: bool) {
         {
             let mut s = self.state.lock().unwrap();
             if *s == state {
                 return;
+            }
+            // Since when the central host has been out of reach (X73).
+            let mut down = self.down_since.lock().unwrap();
+            if out_of_reach {
+                down.get_or_insert_with(now_ms);
+            } else {
+                *down = None;
             }
             *s = state;
         }
@@ -742,8 +764,9 @@ impl WorkerLink {
                 tracing::warn!("cannot register with the central host: {}", e.message);
                 // Linked but not listed: say so, and wait for a retry.
                 let current = self.host.lock().unwrap().as_ref().is_some_and(|h| Arc::ptr_eq(h, &host));
+                // It answered, so it is not offline.
                 if current {
-                    self.set_state(LinkState::Error { message: e.message });
+                    self.set_state_as(LinkState::Error { message: e.message }, false);
                 }
             }
         }

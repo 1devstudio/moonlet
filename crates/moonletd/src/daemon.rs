@@ -72,6 +72,9 @@ pub struct Daemon {
     /// (X65): what they did, and how many saves, so only the last save's
     /// wait takes the snapshot.
     hand_edits: Mutex<HashMap<String, HandEdits>>,
+    /// On the central host: when it took each session in since it started
+    /// (ms, X73), so it knows whether a member was cut off from it since.
+    mine_since: Mutex<HashMap<String, u64>>,
     /// The watches of the sessions' worktrees that hold session designs,
     /// by session, which announce their changes as `design.changed` (X65).
     session_watches: Mutex<HashMap<String, moonlet_core::design::watch::Watching>>,
@@ -581,6 +584,7 @@ impl Daemon {
             design_locks: Mutex::new(HashMap::new()),
             _design_watch: design_watch,
             hand_edits: Mutex::new(HashMap::new()),
+            mine_since: Mutex::new(HashMap::new()),
             session_watches: Mutex::new(HashMap::new()),
             edits_quiet: std::env::var("MOONLET_DESIGN_QUIET_MS")
                 .ok()
@@ -1080,6 +1084,21 @@ impl Daemon {
                 self.power(event).await;
                 ok(true)
             }
+            m::SESSION_MOVE => {
+                app_only(conn, "sessions")?;
+                ok(self.move_session(params(p)?).await?)
+            }
+            m::SESSION_UNPIN => {
+                app_only(conn, "sessions")?;
+                let r: m::SessionRef = params(p)?;
+                self.pin_at_central(&r.session, None).await?;
+                ok(true)
+            }
+            m::SESSION_TAKE_ANYWAY => {
+                app_only(conn, "sessions")?;
+                let r: m::SessionRef = params(p)?;
+                ok(self.take_anyway(&r.session).await?)
+            }
             m::SESSION_BRING => {
                 app_only(conn, "sessions")?;
                 ok(self.bring(params(p)?).await?)
@@ -1099,7 +1118,7 @@ impl Daemon {
                 }
                 Box::pin(self.forward(conn, params(p)?)).await
             }
-            m::SESSION_OPEN | m::SESSION_OFFER | m::SESSION_CHAT | m::SESSION_TRANSCRIPT | m::SESSION_CHECKPOINT | m::SESSION_EVENT | m::SESSION_TAKE | m::SESSION_GIVE_BACK | m::SESSION_TRANSCRIPT_FETCH | m::SESSION_YIELD => {
+            m::SESSION_OPEN | m::SESSION_OFFER | m::SESSION_CHAT | m::SESSION_TRANSCRIPT | m::SESSION_CHECKPOINT | m::SESSION_EVENT | m::SESSION_TAKE | m::SESSION_GIVE_BACK | m::SESSION_TRANSCRIPT_FETCH | m::SESSION_YIELD | m::SESSION_PIN => {
                 // Only a linked Mac's daemon, as for `design.offer` (X72).
                 let refused = || RpcError::new("forbidden", "only a member of the account sends its sessions");
                 let device = conn.phone.as_deref().ok_or_else(refused)?;
@@ -1117,20 +1136,41 @@ impl Daemon {
                     let r: m::SessionTranscript = params(p)?;
                     let bytes = conn.take_pack(r.pack).ok_or_else(|| RpcError::new("invalid_params", "the bytes did not arrive"))?;
                     ok(self.session_copies.transcript_offered(&worker, r, &bytes)?)
+                } else if method == m::SESSION_PIN {
+                    let r: m::SessionPin = params(p)?;
+                    let rec = self
+                        .sessions
+                        .session_records()
+                        .remove(&r.session)
+                        .ok_or_else(|| RpcError::new("not_found", "no such session in the account"))?;
+                    let owner = rec.get("owner").and_then(Value::as_str).unwrap_or_default().to_string();
+                    // Any member unpins it (Unpin), or keeps it where it
+                    // runs (Move to… its owner); moving it is a take.
+                    if r.pinned.as_deref().is_some_and(|p| p != owner) {
+                        return Err(RpcError::new("elsewhere", "a session is kept only where it runs"));
+                    }
+                    let epoch = rec.get("epoch").and_then(Value::as_u64).unwrap_or(1);
+                    if !self.sessions.set_session_owner(&r.session, &owner, epoch, r.pinned.as_deref()) {
+                        return Err(RpcError::new("internal", "cannot record where the session is kept"));
+                    }
+                    ok(true)
                 } else if method == m::SESSION_YIELD {
                     let r: m::SessionYield = params(p)?;
                     let mut taken = Vec::new();
                     for id in r.sessions {
-                        // Only what the member owns, and nothing pinned.
+                        // Only what the member owns, and nothing pinned; a
+                        // move (Move to…) also takes one pinned to it.
                         let rec = self.sessions.session_records().remove(&id);
                         let ok_to_take = rec.as_ref().is_some_and(|rec| {
+                            let pinned = rec.get("pinned").and_then(Value::as_str);
                             rec.get("owner").and_then(Value::as_str) == Some(worker.as_str())
-                                && rec.get("pinned").is_none_or(Value::is_null)
+                                && (pinned.is_none() || (r.pin && pinned == Some(worker.as_str())))
                         });
                         if !ok_to_take {
                             continue;
                         }
-                        match self.continue_here(&id, "went to sleep", false).await {
+                        let why = r.why.clone().unwrap_or_else(|| "went to sleep".into());
+                        match self.continue_here_as(&id, &why, false, r.pin).await {
                             Ok(_) => taken.push(id),
                             Err(e) => tracing::warn!(session = %id, "cannot continue a sleeping member's session: {}", e.message),
                         }
@@ -2724,6 +2764,11 @@ impl Daemon {
     /// on, resuming its conversation. A turn the member had running when it
     /// went away goes on with a note to the agent. `why` says why it moved.
     async fn continue_here(self: &Arc<Self>, session: &str, why: &str, only_unreachable: bool) -> Result<moonlet_proto::types::Session, RpcError> {
+        self.continue_here_as(session, why, only_unreachable, false).await
+    }
+
+    /// [`Self::continue_here`]; with `pin`, the session is kept here after.
+    async fn continue_here_as(self: &Arc<Self>, session: &str, why: &str, only_unreachable: bool, pin: bool) -> Result<moonlet_proto::types::Session, RpcError> {
         let me = self.link.info().worker;
         let record = self
             .sessions
@@ -2749,7 +2794,8 @@ impl Daemon {
             let name = self.sessions.member_names().remove(&owner).unwrap_or(owner);
             return Err(RpcError::new("not_yet", format!("{name} has been unreachable for less than 30 s")));
         }
-        if text("pinned").is_some_and(|p| p != me.id) {
+        // A move (`pin`) pins it here instead.
+        if !pin && text("pinned").is_some_and(|p| p != me.id) {
             return Err(RpcError::new("pinned", "that session is kept on its member"));
         }
         if self.sessions.session(session).is_ok() {
@@ -2759,7 +2805,7 @@ impl Daemon {
         if info.path.is_empty() {
             return Err(RpcError::new("no_copy", "this host has no copy of that session yet"));
         }
-        self.take_in(session, &record, info.chats, Some(why), only_unreachable).await
+        self.take_in(session, &record, info.chats, Some(why), only_unreachable, pin).await
     }
 
     /// `session.give_back` from member `worker` (X73): the session this
@@ -2785,14 +2831,16 @@ impl Daemon {
             .session_copies
             .given(&r.session, worker)
             .ok_or_else(|| RpcError::new("not_given", "this host did not give that session to be handed back"))?;
-        self.take_in(&r.session, &record, chats, None, false).await
+        self.take_in(&r.session, &record, chats, None, false, false).await
     }
 
     /// Makes the copy of `session` this host holds the session's own
     /// worktree again, with this host its owner, and goes on with `chats`
     /// there (X73). `why` says why its owner's running turn was cut off,
     /// for continuing it with a note; none when the owner handed it back.
-    /// With `only_unreachable`, only while its owner is still away.
+    /// With `only_unreachable`, only while its owner is still away; with
+    /// `pin`, it is kept here after.
+    #[allow(clippy::too_many_arguments)]
     async fn take_in(
         self: &Arc<Self>,
         session: &str,
@@ -2800,6 +2848,7 @@ impl Daemon {
         chats: Vec<m::SessionCopyChat>,
         why: Option<&str>,
         only_unreachable: bool,
+        pin: bool,
     ) -> Result<moonlet_proto::types::Session, RpcError> {
         let me = self.link.info().worker;
         let text = |f: &str| record.get(f).and_then(Value::as_str).map(str::to_string);
@@ -2825,7 +2874,7 @@ impl Daemon {
         // From here no offer moves the copy. Until the session is this
         // host's, a step that fails gives the copy back, to try again.
         let taken = self.session_copies.take_copy(session, rename.then_some(branch.as_str())).await?;
-        let adopted = match self.adopt_copy(session, record, &taken, &me.id, only_unreachable).await {
+        let adopted = match self.adopt_copy(session, record, &taken, &me.id, only_unreachable, pin).await {
             Ok(adopted) => adopted,
             Err(e) => {
                 self.session_copies.give_back(session, taken).await;
@@ -2862,7 +2911,7 @@ impl Daemon {
     /// in this host's state before its record names this host, so no
     /// change ends that record meanwhile; one whose new owner cannot be
     /// recorded leaves the state again. With `only_unreachable`, only while
-    /// its owner is still away.
+    /// its owner is still away; with `pin`, it is kept here after.
     async fn adopt_copy(
         self: &Arc<Self>,
         session: &str,
@@ -2870,6 +2919,7 @@ impl Daemon {
         taken: &crate::session_copies::TakenCopy,
         me: &str,
         only_unreachable: bool,
+        pin: bool,
     ) -> Result<moonlet_proto::types::Session, RpcError> {
         let text = |f: &str| record.get(f).and_then(Value::as_str).map(str::to_string);
         // The copy's repository is a project here; a clone made for copies
@@ -2919,12 +2969,13 @@ impl Daemon {
                 owner: None,
             })
             .map_err(internal)?;
-        if !self.sessions.set_session_owner(session, me, epoch + 1, None) {
+        if !self.sessions.set_session_owner(session, me, epoch + 1, pin.then_some(me)) {
             if let Err(e) = self.sessions.unadopt_session(session) {
                 tracing::warn!(%session, "cannot undo taking the session in: {e:#}");
             }
             return Err(RpcError::new("internal", "cannot record this host as the session's owner"));
         }
+        self.mine_since.lock().unwrap().insert(session.to_string(), moonlet_core::paths::now_ms());
         Ok(adopted)
     }
 
@@ -2940,23 +2991,48 @@ impl Daemon {
             .remove(&r.session)
             .ok_or_else(|| RpcError::new("not_found", "no such session in the account"))?;
         let text = |f: &str| record.get(f).and_then(Value::as_str).map(str::to_string);
+        let epoch = record.get("epoch").and_then(Value::as_u64).unwrap_or(1);
+        // A takeover kept already, sent again (its answer was lost, or
+        // the member has not heard yet): kept.
+        if r.forced && text("owner").as_deref() == Some(worker) {
+            return Ok(m::SessionTaken { epoch, chats: Vec::new(), transcripts: Vec::new() });
+        }
         if text("owner").as_deref() != Some(me.as_str()) {
             return Err(RpcError::new("elsewhere", "that session runs on another member"));
         }
-        let epoch = record.get("epoch").and_then(Value::as_u64).unwrap_or(1);
         if epoch != r.epoch {
             return Err(RpcError::new("stale", "that session moved meanwhile"));
         }
-        if text("pinned").is_some_and(|p| p != worker) {
+        let s = self.sessions.session(&r.session).map_err(internal)?;
+        // Taken while this host was offline only if the member was cut off
+        // from it since the session became this host's: this host started
+        // since, or the member's link was made since. A session made here
+        // became this host's when it was made. Otherwise it is an ordinary
+        // take, which a pin or a running turn stops.
+        let mine_since = self.mine_since.lock().unwrap().get(&r.session).copied().unwrap_or(s.created_at);
+        let forced = r.forced && self.workers.away_since(worker, mine_since);
+        // Take over anyway takes a pinned session too, and keeps it on the
+        // member that took it.
+        let pinned = text("pinned").is_some();
+        if pinned && !forced && text("pinned").as_deref() != Some(worker) {
             return Err(RpcError::new("pinned", "that session is kept where it is"));
         }
-        let s = self.sessions.session(&r.session).map_err(internal)?;
+        let pin = r.pin || (forced && pinned);
         let chats: Vec<moonlet_proto::TerminalId> = s.terminals.iter().copied().filter(|t| self.chats.is_chat(*t)).collect();
         let running = chats
             .iter()
             .any(|t| self.chats.state(*t).is_ok_and(|st| matches!(st.status.as_str(), "working" | "blocked")));
-        if running && !r.now {
+        if running && !r.now && !forced {
             return Err(RpcError::new("busy", "a turn is running; it moves when the turn ends"));
+        }
+        // Taken while this host was offline: what it did meanwhile is kept
+        // before the member's work replaces it.
+        if forced {
+            match self.session_copies.keep_gap(&s).await {
+                Ok(Some(folder)) => tracing::info!(session = %r.session, "kept what this host did while it was offline in {}", folder.display()),
+                Ok(None) => {}
+                Err(e) => return Err(RpcError::new("internal", format!("cannot keep this host's work first: {e:#}"))),
+            }
         }
         if running {
             for t in &chats {
@@ -2994,7 +3070,7 @@ impl Daemon {
         }
         // Given up only once the account names its new owner: otherwise it
         // stays this host's, as it was.
-        if !self.sessions.set_session_owner(&r.session, worker, epoch + 1, None) {
+        if !self.sessions.set_session_owner(&r.session, worker, epoch + 1, pin.then_some(worker)) {
             back().await;
             return Err(RpcError::new("internal", "cannot record the session's new owner"));
         }
@@ -3009,6 +3085,11 @@ impl Daemon {
     /// resuming its conversation. `busy` while a turn runs there, unless
     /// `now`.
     async fn bring(self: &Arc<Self>, r: m::SessionBring) -> Result<moonlet_proto::types::Session, RpcError> {
+        self.bring_as(r, false).await
+    }
+
+    /// [`Self::bring`]; with `pin`, the session is kept here after.
+    async fn bring_as(self: &Arc<Self>, r: m::SessionBring, pin: bool) -> Result<moonlet_proto::types::Session, RpcError> {
         let me = self.link.info().worker.id;
         let record = self
             .sessions
@@ -3034,6 +3115,8 @@ impl Daemon {
                     session: r.session.clone(),
                     epoch: record.get("epoch").and_then(Value::as_u64).unwrap_or(1),
                     now: r.now,
+                    pin,
+                    forced: false,
                 })
                 .map_err(internal)?,
             )
@@ -3257,6 +3340,191 @@ impl Daemon {
         }
     }
 
+    /// Asks the central host to pin session `session` to `pinned`, or to
+    /// unpin it (X73).
+    async fn pin_at_central(&self, session: &str, pinned: Option<String>) -> Result<(), RpcError> {
+        let host = self.link.host().ok_or_else(|| RpcError::new("unreachable", "the central host is not connected"))?;
+        host.request(m::SESSION_PIN, serde_json::to_value(m::SessionPin { session: session.to_string(), pinned }).map_err(internal)?)
+            .await?;
+        Ok(())
+    }
+
+    /// `session.move` on a member (X73): moves a session to this Mac or to
+    /// the central host, and keeps it there (pinned). It moves at the end
+    /// of a running turn (`busy` until then), or now, cutting it off.
+    async fn move_session(self: &Arc<Self>, r: m::SessionMove) -> Result<moonlet_proto::types::Session, RpcError> {
+        let me = self.link.info().worker.id;
+        let central = self.link.account_info().account;
+        let record = self
+            .sessions
+            .session_records()
+            .remove(&r.session)
+            .ok_or_else(|| RpcError::new("not_found", "no such session in the account"))?;
+        let owner = record.get("owner").and_then(Value::as_str).unwrap_or_default().to_string();
+        if r.to == me {
+            if owner == me {
+                self.pin_at_central(&r.session, Some(me.clone())).await?;
+                return self.sessions.session(&r.session).map_err(internal);
+            }
+            return self
+                .bring_as(m::SessionBring { session: r.session, now: r.now, message: None }, true)
+                .await;
+        }
+        if r.to == central && owner == me {
+            let s = self.sessions.session(&r.session).map_err(internal)?;
+            let chats: Vec<moonlet_proto::TerminalId> = s.terminals.iter().copied().filter(|t| self.chats.is_chat(*t)).collect();
+            let running = chats
+                .iter()
+                .any(|t| self.chats.state(*t).is_ok_and(|st| matches!(st.status.as_str(), "working" | "blocked")));
+            if running && !r.now {
+                return Err(RpcError::new("busy", "a turn is running; it moves when the turn ends"));
+            }
+            // Cut off now: the agents here stop first, as for sleep, so none
+            // runs a step after the central host goes on. They go on again
+            // if the session stays here.
+            let frozen: Vec<moonlet_proto::TerminalId> =
+                if running { chats.iter().copied().filter(|t| self.chats.freeze(*t, true)).collect() } else { Vec::new() };
+            let handed = async {
+                // What is new goes first, so the central host continues from
+                // it; one it would continue from an older copy stays here.
+                if self.session_copies.send_now().await.contains(&r.session) {
+                    return Err(RpcError::new("unsent", "what is new of it could not be sent to the central host; it stays here"));
+                }
+                let host = self.link.host().ok_or_else(|| RpcError::new("unreachable", "the central host is not connected"))?;
+                let taken = host
+                    .request(
+                        m::SESSION_YIELD,
+                        serde_json::to_value(m::SessionYield { sessions: vec![r.session.clone()], why: Some("moved it there".into()), pin: true })
+                            .map_err(internal)?,
+                    )
+                    .await?;
+                // Moved only once the central host says it took it.
+                let taken: Vec<String> = serde_json::from_value(taken).map_err(internal)?;
+                if !taken.contains(&r.session) {
+                    return Err(RpcError::new("not_taken", "the central host could not take it; it stays here"));
+                }
+                Ok(())
+            }
+            .await;
+            if let Err(e) = handed {
+                for t in frozen {
+                    self.chats.freeze(t, false);
+                }
+                return Err(e);
+            }
+            let mut moved = s;
+            moved.owner = Some(moonlet_proto::types::SessionOwner { worker: central, name: String::new(), reachable: true, unreachable_since: None });
+            return Ok(moved);
+        }
+        if r.to == central && owner == central {
+            // It runs there already: it is kept there now.
+            self.pin_at_central(&r.session, Some(central)).await?;
+            return self
+                .member_sessions()
+                .into_iter()
+                .find(|s| s.id == r.session)
+                .ok_or_else(|| RpcError::new("not_found", "no such session in the account"));
+        }
+        Err(RpcError::new("unsupported", "a session moves to this Mac or to the central host"))
+    }
+
+    /// `session.take_anyway` on a member (X73): the central host runs the
+    /// session and has been offline for 30 s or more. This Mac takes it from
+    /// its live copy, with a new conversation (the transcript stayed on the
+    /// central host), and sends the takeover once the central host is back,
+    /// which keeps it only if nothing moved the session meanwhile.
+    async fn take_anyway(self: &Arc<Self>, session: &str) -> Result<moonlet_proto::types::Session, RpcError> {
+        let info = self.link.info();
+        let down = info.unreachable_since.map(|t| moonlet_core::paths::now_ms().saturating_sub(t)).unwrap_or(0);
+        // 30 s; tests set a shorter wait.
+        let needed: u64 = std::env::var("MOONLET_TEST_UNREACHABLE_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(30_000);
+        if info.unreachable_since.is_none() || down < needed {
+            return Err(RpcError::new("reachable", "the central host has not been offline for 30 s"));
+        }
+        let record = self
+            .sessions
+            .session_records()
+            .remove(session)
+            .ok_or_else(|| RpcError::new("not_found", "no such session in the account"))?;
+        let text = |f: &str| record.get(f).and_then(Value::as_str).map(str::to_string);
+        if text("owner").as_deref() == Some(info.worker.id.as_str()) {
+            return Err(RpcError::new("invalid_params", "that session is this Mac's own"));
+        }
+        // Only what the offline central host runs: another member's agent
+        // goes on, and the central host would refuse the takeover after.
+        if text("owner") != Some(self.link.account_info().account) {
+            return Err(RpcError::new("elsewhere", "that session runs on another member"));
+        }
+        let epoch = record.get("epoch").and_then(Value::as_u64).unwrap_or(1);
+        let released = self.sync.let_go(self.sync.hold(session).await?)?;
+        let path = released.path.clone();
+        self.session_copies.set_forced(session, Some(epoch));
+        let adopted = match self.adopt_brought(session, &record, &released.repo, &path).await {
+            Ok(adopted) => {
+                self.sync.hand_over(released).await;
+                adopted
+            }
+            // Its copy stays a copy, and no takeover is sent for it.
+            Err(e) => {
+                self.session_copies.set_forced(session, None);
+                self.sync.restore(released);
+                return Err(e);
+            }
+        };
+        self.sessions
+            .continue_chat(&adopted, moonlet_proto::types::ChatState::default())
+            .map_err(internal)?;
+        self.sessions.session(session).map_err(internal)
+    }
+
+    /// Sends the takeovers made while the central host was offline, once
+    /// it is back (X73). One it keeps makes this Mac the owner; one it
+    /// refuses, because the session moved meanwhile, is let go of here,
+    /// with what was done meanwhile kept.
+    async fn send_forced(self: &Arc<Self>) {
+        let forced = self.session_copies.forced();
+        if forced.is_empty() || !matches!(self.link.info().state, m::LinkState::Connected { .. }) {
+            return;
+        }
+        let Some(host) = self.link.host() else { return };
+        let me = self.link.info().worker.id;
+        let records = self.sessions.session_records();
+        for (session, base) in forced {
+            // Kept, and the account says so now: nothing more to send.
+            if records.get(&session).and_then(|r| r.get("owner")).and_then(Value::as_str) == Some(me.as_str()) {
+                self.session_copies.set_forced(&session, None);
+                continue;
+            }
+            let asked = host
+                .request(
+                    m::SESSION_TAKE,
+                    serde_json::to_value(m::SessionTake { session: session.clone(), epoch: base, now: true, pin: false, forced: true })
+                        .unwrap_or_default(),
+                )
+                .await;
+            match asked {
+                // Still this Mac's to keep until the account names it the
+                // owner, so nothing lets go of it meanwhile.
+                Ok(_) => {
+                    tracing::info!(%session, "the central host kept the takeover made while it was offline");
+                    continue;
+                }
+                Err(e) if e.code == "disconnected" => return,
+                // A refusal is final; anything else, such as its worktree
+                // held by a git of its own just then, is sent again later.
+                Err(e) if matches!(e.code.as_str(), "not_found" | "elsewhere" | "stale" | "pinned" | "forbidden") => {
+                    tracing::info!(%session, "the central host refused the takeover: {}", e.message)
+                }
+                Err(e) => {
+                    tracing::info!(%session, "the central host could not take the takeover yet: {}", e.message);
+                    continue;
+                }
+            }
+            self.session_copies.set_forced(&session, None);
+        }
+        self.let_go_of_lost().await;
+    }
+
     /// `session.forward` on the central host (X72): the request goes to the
     /// member that owns the session while it is linked. Otherwise reads are
     /// answered from this host's copy, and the rest with `owner_offline`.
@@ -3403,7 +3671,7 @@ impl Daemon {
             let Some(owner) = records.get(&s.id).and_then(|r| r.get("owner")).and_then(Value::as_str) else {
                 continue;
             };
-            if owner == info.worker.id {
+            if owner == info.worker.id || self.session_copies.forced().contains_key(&s.id) {
                 continue;
             }
             let kept = if one.kept.contains(&s.id) {
@@ -3467,6 +3735,15 @@ impl Daemon {
         });
         let d = self.clone();
         tokio::spawn(async move { d.let_go_of_lost().await });
+        // Takeovers made while the central host was offline, once it is back.
+        let d = Arc::downgrade(self);
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                let Some(d) = d.upgrade() else { return };
+                d.send_forced().await;
+            }
+        });
         let d = Arc::downgrade(self);
         self.link.set_forwarder(Arc::new(move |r| {
             let d = d.clone();

@@ -106,10 +106,12 @@ Manual check M12 (`docs/manual-checks.md`) measures, on a real MacBook, how long
 - [ ] After 30 s, the line offers **Take over anyway** for a session this member holds a copy of. A session this member has no copy of says "This Mac has no copy of fix-cart" instead.
 - [ ] **Take over anyway** asks first: "Take over fix-cart without studio-mini? If studio-mini is still running it, cut off from the network, both Macs run its agent until they meet again. Then studio-mini's work from the gap is saved to a folder, and this Mac's is kept." It offers **Take over** and **Cancel**.
 - [ ] Taking over raises `epoch` on this member alone, makes it the owner, marks the change `forced`, and continues the session as any move does (Continuing on a member). The chat says "Taken over while studio-mini was offline. Work studio-mini did after 14:02 is not here yet." A turn that was running on the central host continues with the cut-off note, naming the central host as offline.
+- [ ] A takeover that cannot take the session in on this member keeps its copy, in the same folder, and sends no forced change: the central host still runs the session when it is back (`a_takeover_that_cannot_take_the_session_in_keeps_its_copy_and_is_never_sent`).
 - [ ] When the central host is back, the member sends the forced change:
   - **The central host's record still has the `epoch` the member started from:** the change is kept, and the central host stops its agent if it went on running. Its files from the gap go to `sync-leftovers`, and its conversation from the gap is kept as a fork, as for any member that lost a session.
   - **The record moved on meanwhile** (the central host gave the session to a third member): the forced change loses. This member stops its agent and keeps its own work from the gap the same way.
 - [ ] A pinned session can be taken over anyway too. Doing so pins it to this member.
+- [ ] The central host takes a change as forced only from a member that was cut off from it since the session became the central host's: the central host started since, or that member's link was made since. From a member that stayed linked, it is an ordinary take: a pin or a running turn refuses it (`a_takeover_from_a_member_that_never_lost_the_central_host_is_not_forced`).
 - [ ] The phone, connected only to the central host, never offers it. While the central host is offline, the phone shows that, as today.
 
 ### Waking up, and finding out the session moved

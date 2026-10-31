@@ -228,6 +228,12 @@ impl Workers {
         Some(self.gone_since.lock().unwrap().get(id).copied().unwrap_or(self.started))
     }
 
+    /// Whether worker `id` has been unlinked at some time after `t` (ms,
+    /// X73): it is not linked now, or its link was made after `t`.
+    pub fn away_since(&self, id: &str, t: u64) -> bool {
+        self.list.lock().unwrap().get(id).is_none_or(|e| e.info.connected_since > t)
+    }
+
     /// Whether connection `conn` was dropped for missed pings.
     pub fn missed_pings(&self, conn: u64) -> bool {
         self.missed.lock().unwrap().contains(&conn)
