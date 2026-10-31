@@ -630,6 +630,39 @@ async fn a_copy_never_moves_a_branch_of_the_central_hosts_own() {
 }
 
 #[tokio::test]
+async fn a_session_is_copied_while_the_central_host_has_a_commit_the_member_lacks() {
+    let origin = Origin::new();
+    let (mini, _addr, book) = pair_of(&origin).await;
+    let project = origin.add_to(&book).await;
+    let first = new_session(&book, &project, "fix-cart").await;
+    let copy = copy_of(&mini, &first).await;
+    // studio-mini's repository gets a branch with a commit MacBook never saw.
+    let out = std::process::Command::new("git")
+        .args([
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit-tree",
+            "HEAD^{tree}",
+            "-p",
+            "HEAD",
+            "-m",
+            "mini's own",
+        ])
+        .current_dir(&copy)
+        .output()
+        .unwrap();
+    let own = String::from_utf8(out.stdout).unwrap().trim().to_string();
+    git(&copy, &["update-ref", "refs/heads/mini-only", &own]);
+
+    let made = new_session(&book, &project, "fix-tax").await;
+    std::fs::write(path_of(&made).join("src/cart.ts"), "f\n").unwrap();
+    let copy = copy_of(&mini, &made).await;
+    reads(&copy.join("src/cart.ts"), "f\n").await;
+}
+
+#[tokio::test]
 async fn a_copy_switched_by_hand_to_another_branch_goes_back_without_moving_it() {
     let origin = Origin::new();
     let (mini, _addr, book) = pair_of(&origin).await;

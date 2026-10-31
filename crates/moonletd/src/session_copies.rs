@@ -1253,12 +1253,19 @@ impl SessionCopies {
         now: &Sent,
         not: &[String],
     ) -> Result<(), RpcError> {
+        // What the central host has can only be left out of the pack if this
+        // side has it too: git refuses to leave out an object it lacks, such
+        // as a commit on a branch of the central host's own.
+        let path = Path::new(&s.path);
+        let not = git_sync::present(path, not)
+            .await
+            .map_err(|e| RpcError::new("internal", e.to_string()))?;
         let not: Vec<&str> = not
             .iter()
             .map(String::as_str)
             .filter(|o| git_sync::is_object_id(o))
             .collect();
-        let pack = git_sync::pack_objects(Path::new(&s.path), &[&now.tree, &now.head], &not)
+        let pack = git_sync::pack_objects(path, &[&now.tree, &now.head], &not)
             .await
             .map_err(|e| RpcError::new("internal", e.to_string()))?;
         let pack = if pack.is_empty() {
