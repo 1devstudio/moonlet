@@ -1354,6 +1354,18 @@ pub struct CheckoutFile {
 pub struct FilesCheckout {
     pub identity: crate::types::ProjectIdentity,
     pub files: Vec<CheckoutFile>,
+    /// The central host's versions this member would not take (tracked by
+    /// its git, over its limits, or off its list): not answered again
+    /// while the central host's version is the same.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub refused: Vec<RefusedFile>,
+}
+
+/// A path a member would not take at version `sha`, none for a deletion.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RefusedFile {
+    pub path: String,
+    pub sha: Option<String>,
 }
 
 /// `files.checkout`'s answer: the central host's versions that won over

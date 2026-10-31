@@ -210,6 +210,19 @@ struct Tables {
     /// central host has from it.
     #[serde(default)]
     sent: BTreeMap<String, BTreeMap<String, String>>,
+    /// On a member, by project identity key: the central host's versions
+    /// it would not take, listed in each exchange so they are not sent
+    /// again.
+    #[serde(default)]
+    refused: BTreeMap<String, BTreeMap<String, Refused>>,
+}
+
+/// A version of a path a member would not take: its hash, none for a
+/// deletion, and its size.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct Refused {
+    sha: Option<String>,
+    size: u64,
 }
 
 /// Each member's checkout of a project is kept in step through the central
@@ -320,6 +333,44 @@ impl Checkouts {
         }
     }
 
+    /// On a member: the versions of checkout `dir` it refused that it
+    /// still would not take, for the central host to leave out. One taken
+    /// off its git, under its limits now, or newly on its list is dropped,
+    /// so the central host sends it again.
+    async fn still_refused(
+        &self,
+        key: &str,
+        dir: &Path,
+        patterns: &[String],
+    ) -> Result<Vec<m::RefusedFile>> {
+        let mut refused = self
+            .tables
+            .lock()
+            .unwrap()
+            .refused
+            .get(key)
+            .cloned()
+            .unwrap_or_default();
+        if refused.is_empty() {
+            return Ok(Vec::new());
+        }
+        let paths: Vec<String> = refused.keys().cloned().collect();
+        let named = files::named(patterns, &paths)?;
+        let tracked = files::tracked(dir, &paths).await?;
+        let before = refused.len();
+        refused
+            .retain(|p, r| !named.contains(p) || tracked.contains(p) || r.size > files::MAX_FILE);
+        if refused.len() != before {
+            let mut t = self.tables.lock().unwrap();
+            t.refused.insert(key.to_string(), refused.clone());
+            self.save(&t);
+        }
+        Ok(refused
+            .into_iter()
+            .map(|(path, r)| m::RefusedFile { path, sha: r.sha })
+            .collect())
+    }
+
     /// On a member: one exchange of checkout `dir` of project `identity`
     /// with the central host.
     pub async fn exchange(
@@ -343,6 +394,7 @@ impl Checkouts {
                 t.sent.get(&key).cloned().unwrap_or_default(),
             )
         };
+        let refused = self.still_refused(&key, dir, patterns).await?;
         let mut budget = BUDGET;
         let mut with_bytes = Vec::new();
         let files: Vec<m::CheckoutFile> = table
@@ -374,6 +426,7 @@ impl Checkouts {
                 serde_json::to_value(m::FilesCheckout {
                     identity: identity.clone(),
                     files,
+                    refused,
                 })?,
             )
             .await
@@ -395,9 +448,14 @@ impl Checkouts {
         let label = crate::sync::segment(&format!("{name}-checkout"));
         let mut folder = None;
         let mut t = self.tables.lock().unwrap();
-        let Tables { checkouts, sent } = &mut *t;
+        let Tables {
+            checkouts,
+            sent,
+            refused,
+        } = &mut *t;
         let sent = sent.entry(key.clone()).or_default();
         let table = checkouts.entry(key.clone()).or_default();
+        let refused = refused.entry(key.clone()).or_default();
         for path in with_bytes {
             if let Some(sha) = table.get(&path).and_then(|v| v.sha.clone()) {
                 sent.insert(path, sha);
@@ -408,8 +466,11 @@ impl Checkouts {
         }
         for f in answer.files {
             if !takes.contains(&f.path) {
+                let size = f.content.as_deref().map_or(0, decoded_len);
+                refused.insert(f.path, Refused { sha: f.sha, size });
                 continue;
             }
+            refused.remove(&f.path);
             let content = f.content.as_deref().and_then(decode);
             if f.sha.is_some() && content.as_deref().map(files::sha) != f.sha {
                 // Its bytes come next time.
@@ -463,6 +524,10 @@ impl Checkouts {
         let mut t = self.tables.lock().unwrap();
         let table = t.checkouts.entry(key).or_default();
         let latest = now_ms() + AHEAD_MS;
+        // The member would not take these versions; they are not sent again.
+        let refused: BTreeMap<String, Option<String>> =
+            r.refused.into_iter().map(|f| (f.path, f.sha)).collect();
+        let answered = |path: &str, mine: &Version| refused.get(path) != Some(&mine.sha);
         let mut seen = std::collections::BTreeSet::new();
         for f in r.files {
             seen.insert(f.path.clone());
@@ -478,6 +543,7 @@ impl Checkouts {
             let mine = table.get(&f.path).cloned();
             match mine {
                 Some(mine) if mine.sha == theirs.sha => {}
+                Some(mine) if !theirs.after(&mine) && !answered(&f.path, &mine) => {}
                 Some(mine) if !theirs.after(&mine) => out.files.push(m::CheckoutFile {
                     content: mine
                         .sha
@@ -501,7 +567,10 @@ impl Checkouts {
             }
         }
         // What the member has never heard of.
-        for (path, mine) in table.iter().filter(|(p, _)| !seen.contains(*p)) {
+        for (path, mine) in table
+            .iter()
+            .filter(|(p, v)| !seen.contains(*p) && answered(p, v))
+        {
             out.files.push(m::CheckoutFile {
                 path: path.clone(),
                 sha: mine.sha.clone(),
@@ -521,3 +590,73 @@ impl Checkouts {
 
 /// Where [`Checkouts`] keeps its tables, in `$MOONLET_HOME`.
 const FILE: &str = "copied-files.json";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A git checkout of `shop` holding `.env` with `text`.
+    fn checkout(text: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let out = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(dir.path())
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        std::fs::write(dir.path().join(".env"), text).unwrap();
+        dir
+    }
+
+    fn request(refused: Vec<m::RefusedFile>) -> m::FilesCheckout {
+        m::FilesCheckout {
+            identity: moonlet_proto::types::ProjectIdentity {
+                origin: Some("github.com/acme/shop".into()),
+                root: Some("1111111".into()),
+            },
+            files: Vec::new(),
+            refused,
+        }
+    }
+
+    /// The paths of `answer`'s files, with their bytes in base64.
+    fn sent(answer: &m::FilesCheckedOut) -> Vec<(String, Option<String>)> {
+        answer
+            .files
+            .iter()
+            .map(|f| (f.path.clone(), f.content.clone()))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_file_the_member_refused_is_not_sent_again_until_it_changes() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = checkout("A=1\n");
+        let patterns = vec![".env".to_string()];
+        let checkouts = Checkouts::new(home.path());
+        let take = |refused| {
+            checkouts.take(
+                "MacBook",
+                "studio-mini",
+                request(refused),
+                "shop",
+                dir.path(),
+                &patterns,
+            )
+        };
+        let first = take(Vec::new()).await.unwrap();
+        assert_eq!(sent(&first), [(".env".into(), Some("QT0xCg==".into()))]);
+        // The MacBook's git tracks its .env, so it would not take it.
+        let refused = vec![m::RefusedFile {
+            path: ".env".into(),
+            sha: first.files[0].sha.clone(),
+        }];
+        let again = take(refused.clone()).await.unwrap();
+        assert_eq!(sent(&again), []);
+        // A new version goes again.
+        std::fs::write(dir.path().join(".env"), "A=2\n").unwrap();
+        let changed = take(refused).await.unwrap();
+        assert_eq!(sent(&changed), [(".env".into(), Some("QT0yCg==".into()))]);
+    }
+}

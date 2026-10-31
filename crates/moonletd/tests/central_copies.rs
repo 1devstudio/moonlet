@@ -3608,6 +3608,24 @@ async fn a_copied_file_grown_past_one_mebibyte_is_not_deleted_on_the_other_check
 }
 
 #[tokio::test]
+async fn a_file_the_macbooks_git_tracked_reaches_it_once_git_lets_go_of_it() {
+    let origin = Origin::new();
+    let (_mini, _addr, _book, on_mini, on_book) = two_checkouts(&origin).await;
+    std::fs::write(on_mini.join(".env"), "A=1\n").unwrap();
+    reads(&on_book.join(".env"), "A=1\n").await;
+    git(&on_book, &["add", "-f", ".env"]);
+    std::fs::write(on_mini.join(".env"), "A=2\n").unwrap();
+    // Tracked by the MacBook's git, it is git's to carry.
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(
+        std::fs::read_to_string(on_book.join(".env")).unwrap(),
+        "A=1\n"
+    );
+    git(&on_book, &["rm", "-q", "--cached", ".env"]);
+    reads(&on_book.join(".env"), "A=2\n").await;
+}
+
+#[tokio::test]
 async fn an_unarchived_sessions_remade_worktree_starts_with_its_checkouts_env() {
     let book = mac(BOOK, "MacBook").await;
     let project = shop(&book).await;
