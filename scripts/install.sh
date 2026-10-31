@@ -172,13 +172,33 @@ main() {
     echo "moonletd is running, but nothing will start it after a reboot."
   fi
 
+  # moonletd takes `tailnet` and `pair` only from the app, or from a login
+  # over SSH, at the console or by root (X75): not from a desktop terminal.
   if [ "$listen" = 0 ]; then
     # Off, also when an earlier install turned it on.
-    "$bin/moonletd" tailnet off >/dev/null 2>&1 || true
-    echo "Tailnet access stays off: this machine connects to its central host."
+    status=$("$bin/moonletd" tailnet off 2>&1) || true
+    case "$status" in
+      "Only the moonlet app"*)
+        echo "Tailnet access may still be on: only the moonlet app, or you over SSH or at the console, may turn it off."
+        echo 'Turn it off from this terminal with: sudo runuser -u "$(id -un)" -- ~/.moonlet/bin/moonletd tailnet off'
+        ;;
+      *) echo "Tailnet access stays off: this machine connects to its central host." ;;
+    esac
     return 0
   fi
-  status=$("$bin/moonletd" tailnet on)
+  if ! status=$("$bin/moonletd" tailnet on 2>&1); then
+    case "$status" in
+      "Only the moonlet app"*)
+        echo "Tailnet access was not turned on: only the moonlet app, or you over SSH or at the console, may turn it on."
+        echo "Turn it on and pair this machine from this terminal with:"
+        echo '  sudo runuser -u "$(id -un)" -- ~/.moonlet/bin/moonletd tailnet on'
+        echo '  sudo runuser -u "$(id -un)" -- ~/.moonlet/bin/moonletd pair'
+        echo "or run ~/.moonlet/bin/moonletd tailnet on and pair over SSH or at the console."
+        return 0
+        ;;
+    esac
+    die "$status"
+  fi
   case "$status" in
     "Tailscale is not running"*)
       echo "Tailscale is not running on this machine. Start it, then run: ~/.moonlet/bin/moonletd pair"
