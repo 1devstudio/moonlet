@@ -1194,6 +1194,59 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Lets go of session `id`, which the central host gave another member
+    /// (X73): it leaves this member's state and its terminals end. Its
+    /// worktree is never deleted: it moves, whole, to `keep_at`, ignored
+    /// files and all, and git forgets it. On another volume than
+    /// `keep_at`, it moves beside itself instead, under `keep_at`'s name.
+    /// Its record is the new owner's, so it is not touched. Gives where the
+    /// worktree went, when it was there.
+    pub async fn let_go_session(&self, id: &str, keep_at: &Path) -> Result<Option<PathBuf>> {
+        // Never while it is archived, nor while its terminals start (X65):
+        // an archive under way ends first, and then it is not let go of.
+        let lifecycle = self.lifecycle(id);
+        let _letting_go = lifecycle.lock().await;
+        let s = self.session(id)?;
+        if s.archived {
+            bail!("the session was archived meanwhile");
+        }
+        let mut kept = None;
+        if Path::new(&s.path).exists() {
+            if let Some(parent) = keep_at.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let to = match std::fs::rename(&s.path, keep_at) {
+                Ok(()) => keep_at.to_path_buf(),
+                // Another volume: beside itself, where it can move.
+                Err(e) if e.kind() == std::io::ErrorKind::CrossesDevices => {
+                    let beside = Path::new(&s.path).with_file_name(keep_at.file_name().unwrap_or_default());
+                    std::fs::rename(&s.path, &beside)
+                        .with_context(|| format!("cannot move {} to {}", s.path, beside.display()))?;
+                    beside
+                }
+                Err(e) => {
+                    return Err(e).with_context(|| format!("cannot move {} to {}", s.path, keep_at.display()));
+                }
+            };
+            kept = Some(to);
+        }
+        for t in &s.terminals {
+            let _ = self.terminals.kill(*t, true);
+            if let Some(chats) = self.chats.get() {
+                chats.stop(*t, true);
+            }
+        }
+        self.mutate(|st| {
+            st.sessions.retain(|o| o.id != id);
+            Ok(())
+        })?;
+        if let Ok(repo) = self.project(&s.project_id) {
+            let _ = git::git(Path::new(&repo.path), &["worktree", "prune"]).await;
+        }
+        self.emit_sessions();
+        Ok(kept)
+    }
+
     /// A chat in session `ws` that goes on from `history`, another member's
     /// chat of it (X73), resuming the same conversation.
     pub fn continue_chat(&self, ws: &Session, mut history: moonlet_proto::types::ChatState) -> Result<TerminalInfo> {

@@ -41,6 +41,9 @@ const QUIET: Duration = Duration::from_millis(300);
 /// How often a member looks at its sessions with no file event: a commit
 /// in a linked worktree changes nothing the file watcher sees.
 const EVERY: Duration = Duration::from_secs(5);
+/// The file in a leftovers folder that lists the files deleted meanwhile,
+/// which the folder cannot hold themselves.
+const DELETED_LIST: &str = "moonlet-deleted.txt";
 
 /// Whether clone URL `url`, from a member, names `origin`, the project
 /// identity's origin (X41), whatever its scheme and user.
@@ -375,6 +378,48 @@ pub fn cut_off_note(from: &str, to: &str, why: &str, old_path: &str, new_path: &
     note
 }
 
+/// `YYYYMMDD-HHMMSS` now, in UTC, for a fork's name.
+fn chrono_stamp() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let (days, rest) = (secs / 86_400, secs % 86_400);
+    // Days since 1970-01-01 to a civil date (Howard Hinnant's algorithm).
+    let z = days as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!(
+        "{y:04}{m:02}{d:02}-{:02}{:02}{:02}",
+        rest / 3600,
+        rest % 3600 / 60,
+        rest % 60
+    )
+}
+
+/// Whether a transcript file, `bytes`, holds what the central host never
+/// got, when it holds `held` bytes of it starting with `head`. Shorter than
+/// that, or starting otherwise, it was made again here: all of it is new.
+fn unsent(bytes: &[u8], held: u64, head: &[u8]) -> bool {
+    bytes.len() as u64 != held || !bytes.starts_with(head)
+}
+
+/// Where conversation `id`'s transcript file `file` is kept in its fork
+/// made at `stamp`: `<id>.jsonl` as `<id>.fork-<stamp>.jsonl`, and the
+/// files below `<id>/` below `<id>.fork-<stamp>/`.
+fn fork_name(id: &str, file: &str, stamp: &str) -> String {
+    match file.strip_prefix(id) {
+        Some(rest) => format!("{id}.fork-{stamp}{rest}"),
+        None => format!("{id}.fork-{stamp}/{file}"),
+    }
+}
+
 /// The branch a copy's worktree is on: its own, named after the session,
 /// so a member never moves one of the central host's own branches.
 fn copy_branch(session: &str) -> String {
@@ -462,6 +507,11 @@ pub struct SessionCopies {
     /// On a member: what the central host has of each session's chats.
     talk: Mutex<BTreeMap<String, Talk>>,
     kick: Notify,
+    /// Sessions to send again whatever was sent before: a new link's.
+    stale: Mutex<std::collections::HashSet<String>>,
+    /// New links so far, changed with [`Self::stale`] held: an offer made
+    /// on an older link leaves its session stale, to send again.
+    links: std::sync::atomic::AtomicU64,
     /// Set when a round sent the central host anything.
     sent_any: std::sync::atomic::AtomicBool,
     /// One round at a time on a member; one offer at a time on the
@@ -512,6 +562,8 @@ impl SessionCopies {
                 data: Mutex::new(data),
                 kick: Notify::new(),
                 sent_any: std::sync::atomic::AtomicBool::new(false),
+                stale: Mutex::new(std::collections::HashSet::new()),
+                links: std::sync::atomic::AtomicU64::new(0),
                 round: tokio::sync::Mutex::new(()),
                 apply: tokio::sync::Mutex::new(()),
                 cloning: tokio::sync::Mutex::new(()),
@@ -568,11 +620,14 @@ impl SessionCopies {
                 // everything again, and what the old one relayed has no
                 // client.
                 if let Some(me) = reset.upgrade() {
-                    {
-                        let mut data = me.data.lock().unwrap();
-                        data.sent.clear();
-                        me.save(&data);
-                    }
+                    // What was sent stays known, for a gap to be kept
+                    // against (X73); every session is sent again, from
+                    // what the central host says it has.
+                    let known: Vec<String> = me.data.lock().unwrap().sent.keys().cloned().collect();
+                    let mut stale = me.stale.lock().unwrap();
+                    me.links.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    stale.extend(known);
+                    drop(stale);
                     me.talk.lock().unwrap().clear();
                     let gone: Vec<(TerminalId, u64)> =
                         std::mem::take(&mut *me.relayed.lock().unwrap())
@@ -1006,15 +1061,17 @@ impl SessionCopies {
             .unwrap_or_else(|| s.branch.clone());
         let now = Sent { tree, head, branch };
         let before = self.data.lock().unwrap().sent.get(&s.id).cloned();
-        if before.as_ref() == Some(&now) {
+        let link = self.links.load(std::sync::atomic::Ordering::Relaxed);
+        let stale = self.stale.lock().unwrap().contains(&s.id);
+        if before.as_ref() == Some(&now) && !stale {
             return Ok(());
         }
-        // The first time, or after the central host lost the copy, it says
-        // what it has, so the pack leaves that out.
+        // The first time, after the central host lost the copy, or on a new
+        // link, it says what it has, so the pack leaves that out.
         let mut not: Vec<String> = Vec::new();
         match &before {
-            Some(b) => not.extend([b.tree.clone(), b.head.clone()]),
-            None => not.extend(self.open(host, s).await?),
+            Some(b) if !stale => not.extend([b.tree.clone(), b.head.clone()]),
+            _ => not.extend(self.open(host, s).await?),
         }
         match self.offer(host, s, &now, &not).await {
             Ok(()) => {}
@@ -1034,6 +1091,14 @@ impl SessionCopies {
                 anyhow::bail!("{}: {}", e.code, e.message)
             }
         }
+        // Sent on a link a new one replaced meanwhile: sent again on it.
+        let mut stale = self.stale.lock().unwrap();
+        if self.links.load(std::sync::atomic::Ordering::Relaxed) == link {
+            stale.remove(&s.id);
+        } else {
+            stale.insert(s.id.clone());
+        }
+        drop(stale);
         let mut data = self.data.lock().unwrap();
         data.sent.insert(s.id.clone(), now);
         self.sent_any
@@ -1699,13 +1764,16 @@ impl SessionCopies {
     }
 
     /// Saves the files of `dir` that differ between tree `was` (the last
-    /// offer) and `now` (the folder as it is) to a leftovers folder.
-    async fn keep_edits(&self, dir: &Path, was: &str, now: &str) -> Result<()> {
+    /// offer) and `now` (the folder as it is) to a leftovers folder. The
+    /// files deleted since are listed in its [`DELETED_LIST`], one a line.
+    async fn keep_edits(&self, dir: &Path, was: &str, now: &str) -> Result<Option<PathBuf>> {
         let a = git_sync::read_files(dir, was).await?;
         let b = git_sync::read_files(dir, now).await?;
         let changed: Vec<&String> = b.keys().filter(|p| a.get(*p) != b.get(*p)).collect();
-        if changed.is_empty() {
-            return Ok(());
+        let mut deleted: Vec<&String> = a.keys().filter(|p| !b.contains_key(*p)).collect();
+        deleted.sort();
+        if changed.is_empty() && deleted.is_empty() {
+            return Ok(None);
         }
         let name = dir
             .file_name()
@@ -1719,12 +1787,16 @@ impl SessionCopies {
             }
             std::fs::copy(dir.join(p), &to)?;
         }
+        if !deleted.is_empty() {
+            let list: String = deleted.iter().map(|p| format!("{p}\n")).collect();
+            std::fs::write(folder.join(DELETED_LIST), list)?;
+        }
         tracing::info!(
             "kept edits made in the copy {} in {}",
             dir.display(),
             folder.display()
         );
-        Ok(())
+        Ok(Some(folder))
     }
 
     /// The folder of the central host's copy of `session`'s chats.
@@ -1942,6 +2014,106 @@ impl SessionCopies {
         })
     }
 
+    /// On a member that lost session `s` to another (X73): keeps what it
+    /// did meanwhile that the central host never got. Files changed since
+    /// the last snapshot sent go to a leftovers folder; each transcript's
+    /// lines past what was sent are kept as a fork beside it. Gives the
+    /// leftovers folder, when there was anything to keep.
+    pub async fn keep_gap(&self, s: &moonlet_proto::types::Session) -> Result<Option<PathBuf>> {
+        // Never while a round snapshots the same worktree: both use its
+        // snapshot index, and one would find the other's lock.
+        let _one = self.round.lock().await;
+        let dir = Path::new(&s.path);
+        let sent = self.data.lock().unwrap().sent.get(&s.id).cloned();
+        // The snapshot first, which a busy worktree can refuse: then nothing
+        // is kept yet, and a later try keeps it all once.
+        let trees = if dir.is_dir() {
+            let now = git_sync::snapshot(dir, git_sync::MAX_FILE).await?.tree;
+            // Against what was last sent; with nothing sent, against the
+            // last commit, so nothing changed here is left out.
+            let was = match sent {
+                Some(sent) => sent.tree,
+                None => moonlet_core::git::git_text(dir, &["rev-parse", "HEAD^{tree}"])
+                    .await?
+                    .trim()
+                    .to_string(),
+            };
+            (now != was).then_some((was, now))
+        } else {
+            None
+        };
+        let stamp = chrono_stamp();
+        for t in &s.terminals {
+            let Ok(state) = self.chats.state(*t) else {
+                continue;
+            };
+            let Some(id) = state.agent_session else {
+                continue;
+            };
+            let projects = config_dir(self.sessions.config_dir(&s.id), &self.claude)
+                .join("projects")
+                .join(transcript::project_folder(dir));
+            // Every file of the conversation, as it is sent, against what
+            // the central host holds of each: any of them past that, or
+            // made again here, forks them all.
+            let files = transcript_files(&projects, &id);
+            let (held, heads) = self
+                .talk
+                .lock()
+                .unwrap()
+                .get(&s.id)
+                .map(|t| (t.files.clone(), t.heads.clone()))
+                .unwrap_or_default();
+            let mut gap = false;
+            for f in &files {
+                let bytes =
+                    std::fs::read(projects.join(f)).with_context(|| format!("cannot read {f}"))?;
+                let head = heads.get(f).map(Vec::as_slice).unwrap_or_default();
+                gap |= unsent(&bytes, held.get(f).copied().unwrap_or(0), head);
+            }
+            if !gap {
+                continue;
+            }
+            for f in &files {
+                let fork = projects.join(fork_name(&id, f, &stamp));
+                if let Some(parent) = fork.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::copy(projects.join(f), &fork).with_context(|| {
+                    format!("cannot fork the conversation to {}", fork.display())
+                })?;
+            }
+        }
+        match trees {
+            Some((was, now)) => self.keep_edits(dir, &was, &now).await,
+            None => Ok(None),
+        }
+    }
+
+    /// Forgets what was sent of session `id`, once it is let go of (X73).
+    pub fn forget_sent(&self, id: &str) {
+        let mut data = self.data.lock().unwrap();
+        data.sent.remove(id);
+        self.save(&data);
+        drop(data);
+        self.talk.lock().unwrap().remove(id);
+    }
+
+    /// Where a let-go session's worktree is kept: a new folder under
+    /// `sync-leftovers`, named after it.
+    pub fn worktree_keep_folder(&self, path: &str) -> PathBuf {
+        let name = Path::new(path)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let base = self.home.join("sync-leftovers");
+        let first = base.join(format!("{}-worktree-{}", segment(&name), chrono_stamp()));
+        std::iter::once(first.clone())
+            .chain((2..).map(|n| PathBuf::from(format!("{}-{n}", first.display()))))
+            .find(|p| !p.exists())
+            .unwrap()
+    }
+
     /// Stops keeping `session` as a copy because this host is taking it
     /// over (X73): its worktree stays where it is and becomes the session's
     /// own, on `branch` when given, renamed from the copy's own branch. No
@@ -2032,7 +2204,7 @@ impl SessionCopies {
                 // cannot be kept stays, and is tried again later.
                 let kept = match git_sync::snapshot(dir, git_sync::MAX_FILE).await {
                     Ok(now) if !h.tree.is_empty() && now.tree != h.tree => {
-                        self.keep_edits(dir, &h.tree, &now.tree).await
+                        self.keep_edits(dir, &h.tree, &now.tree).await.map(|_| ())
                     }
                     Ok(_) => Ok(()),
                     Err(e) => Err(e),
@@ -2069,6 +2241,45 @@ impl SessionCopies {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_transcript_file_made_again_here_counts_as_unsent() {
+        let sent = b"{\"type\":\"user\"}\n{\"type\":\"assistant\"}\n";
+        let head = &sent[..10];
+        // As the central host holds it, and with a line more.
+        assert!(!unsent(sent, 37, head));
+        assert!(unsent(
+            b"{\"type\":\"user\"}\n{\"type\":\"assistant\"}\n{\"type\":\"user\"}\n",
+            37,
+            head
+        ));
+        // Made again shorter, and made again at the same length.
+        assert!(unsent(b"{\"type\":\"system\"}\n", 37, head));
+        assert!(unsent(
+            b"{\"kind\":\"user\"}\n{\"type\":\"assistant\"}\n",
+            37,
+            head
+        ));
+        // Nothing sent, nothing here.
+        assert!(!unsent(b"", 0, b""));
+    }
+
+    #[test]
+    fn a_fork_keeps_a_conversations_files_beside_its_own_transcript() {
+        let id = "0d6e2a4c-1b3f-4a5e-9c7d-8e1f2a3b4c5d";
+        assert_eq!(
+            fork_name(id, &format!("{id}.jsonl"), "20261030-140200"),
+            "0d6e2a4c-1b3f-4a5e-9c7d-8e1f2a3b4c5d.fork-20261030-140200.jsonl"
+        );
+        assert_eq!(
+            fork_name(
+                id,
+                &format!("{id}/tool-results/toolu_01.txt"),
+                "20261030-140200"
+            ),
+            "0d6e2a4c-1b3f-4a5e-9c7d-8e1f2a3b4c5d.fork-20261030-140200/tool-results/toolu_01.txt"
+        );
+    }
 
     #[test]
     fn a_request_passed_on_reaches_only_its_sessions_chats_and_worktree() {
