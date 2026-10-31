@@ -54,7 +54,7 @@ impl Daemon {
     }
 
     async fn client(&self) -> Client {
-        Client::connect(&self.socket, "test").await.unwrap()
+        Client::connect_app(&self.socket, self.home.path()).await.unwrap()
     }
 
     fn command(&self, terminal: Option<u32>, args: &[&str]) -> Command {
@@ -512,7 +512,7 @@ async fn the_request_event_skips_cli_connections() {
     let d = Daemon::start(&[]).await;
     let mut c = d.client().await;
     let mut cli = Client::connect(&d.socket, "moonlet-cli").await.unwrap();
-    let mut app = Client::connect(&d.socket, "moonlet-app").await.unwrap();
+    let mut app = Client::connect_app(&d.socket, d.home.path()).await.unwrap();
     let s = d.session(&mut c, "Fix login").await;
     let t = d.terminal(&mut c, &s, THREE_LINES, "three").await;
 

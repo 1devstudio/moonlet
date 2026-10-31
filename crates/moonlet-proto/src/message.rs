@@ -7,7 +7,15 @@ use serde_json::Value;
 pub enum Message {
     /// First message from the client. The daemon closes the connection if
     /// `protocol` does not match its own [`crate::PROTOCOL_VERSION`].
-    Hello { protocol: u32, client: String },
+    Hello {
+        protocol: u32,
+        client: String,
+        /// This Mac's app credential (X75), sent to its own daemon's socket
+        /// alone: the connection counts as the app. Daemons before X75
+        /// ignore it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        app_token: Option<String>,
+    },
     /// Daemon's reply to `Hello`.
     Welcome {
         protocol: u32,

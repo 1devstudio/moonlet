@@ -81,7 +81,7 @@ impl Mac {
     }
 
     async fn app(&self) -> Client {
-        Client::connect(&self.socket, "moonlet-app").await.unwrap()
+        Client::connect_app(&self.socket, self.home.path()).await.unwrap()
     }
 
     /// Turns phone access on and waits for the listener.
@@ -158,6 +158,7 @@ async fn hello(s: &mut TcpStream, client: &str) -> Option<Message> {
         &Frame::Json(Message::Hello {
             protocol: PROTOCOL_VERSION,
             client: client.into(),
+            app_token: None,
         }),
     )
     .await

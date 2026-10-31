@@ -99,7 +99,7 @@ async fn shop() -> Shop {
     .unwrap();
     git(&repo, &["add", "."]);
     git(&repo, &["commit", "-q", "-m", "shop"]);
-    let mut app = Client::connect(&socket, "moonlet-app").await.unwrap();
+    let mut app = Client::connect_app(&socket, home.path()).await.unwrap();
     let project: Value = app
         .request("project.add", json!({ "path": repo }))
         .await
@@ -191,7 +191,7 @@ async fn the_hook_prints_nothing_when_the_daemon_says_no() {
     assert!(out.status.success());
     assert_eq!(String::from_utf8_lossy(&out.stdout), "");
 
-    let mut app = Client::connect(&s.socket, "moonlet-app").await.unwrap();
+    let mut app = Client::connect_app(&s.socket, s.home.path()).await.unwrap();
     let _: Value = app
         .request(
             "heavy.approve",
@@ -265,7 +265,7 @@ fn moonlet_exec_without_routing_runs_the_command_here() {
 
 async fn approved_shop() -> Shop {
     let s = shop().await;
-    let mut app = Client::connect(&s.socket, "moonlet-app").await.unwrap();
+    let mut app = Client::connect_app(&s.socket, s.home.path()).await.unwrap();
     let _: Value = app
         .request(
             "heavy.approve",
@@ -424,7 +424,7 @@ async fn a_job_knows_its_tool_call() {
         .output()
         .unwrap();
     assert_eq!(String::from_utf8_lossy(&out.stdout), "hi\n");
-    let mut app = Client::connect(&s.socket, "moonlet-app").await.unwrap();
+    let mut app = Client::connect_app(&s.socket, s.home.path()).await.unwrap();
     let jobs: Value = app
         .request("job.list", json!({ "session": s.session }))
         .await

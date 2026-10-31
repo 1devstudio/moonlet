@@ -3247,6 +3247,15 @@ async fn only_the_macs_app_changes_the_list() {
         .await
         .unwrap_err();
     assert!(e.to_string().contains("forbidden"), "{e}");
+    // Saying it is the app is not enough: the app sends its credential (X75).
+    let mut forged = moonlet_core::client::Client::connect(&book.socket, "moonlet-app")
+        .await
+        .unwrap();
+    let e = forged
+        .request::<_, Value>("project.copied_files.set", set.clone())
+        .await
+        .unwrap_err();
+    assert_eq!(e.to_string(), "forbidden: only the moonlet app manages copied files");
     for bad in ["!.env", "../.env"] {
         let e = book
             .try_call(

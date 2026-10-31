@@ -161,7 +161,7 @@ fn main() -> Result<()> {
             },
         )),
         Cmd::Join { addrs, code, name } => rt.block_on(async {
-            let mut c = Client::connect(&socket, "moonletd-join").await?;
+            let mut c = tailnet_cli::connect_as_app(&socket, "moonletd-join").await?;
             let join = methods::LinkJoin {
                 addrs: addrs.split(',').map(|a| a.trim().to_string()).filter(|a| !a.is_empty()).collect(),
                 code,
@@ -218,6 +218,11 @@ fn run_daemon(
     rt.block_on(async move {
         let (listener, daemon) = match handoff {
             None => {
+                // The app credential exists before anyone can connect, so the
+                // app never reads a missing one (X75).
+                if let Err(e) = moonlet_core::app_token::load_or_create(&moonlet_core::app_token::file()) {
+                    tracing::error!("cannot keep the app credential: {e}");
+                }
                 // Bind first so clients waiting for the socket never time out;
                 // they queue in the backlog while the login env is captured.
                 let listener = match server::bind(&socket).await {

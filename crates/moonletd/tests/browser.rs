@@ -910,6 +910,55 @@ async fn only_the_macs_app_changes_or_runs_sign_ins() {
 }
 
 #[tokio::test]
+async fn a_process_that_only_says_it_is_the_app_cannot_change_app_only_settings() {
+    let d = daemon().await;
+    let entries = json!({ "entries": [entry("true", "true")] });
+    let mut forged = Client::connect(&d.socket, "moonlet-app").await.unwrap();
+    let e = forged
+        .request::<_, Value>("signins.set", entries.clone())
+        .await
+        .unwrap_err();
+    assert_eq!(e.to_string(), "forbidden: only the moonlet app manages sign-ins");
+    let wrong = "0".repeat(64);
+    let mut guessed = Client::connect_with(&d.socket, "moonlet-app", Some(&wrong))
+        .await
+        .unwrap();
+    let e = guessed
+        .request::<_, Value>("signins.set", entries.clone())
+        .await
+        .unwrap_err();
+    assert_eq!(e.to_string(), "forbidden: only the moonlet app manages sign-ins");
+    // With the credential its daemon wrote, the app may.
+    let mut app = d.app().await;
+    let _: bool = app.request("signins.set", entries).await.unwrap();
+    let list: Vec<Value> = forged.request("signins.list", json!({})).await.unwrap();
+    assert_eq!(list[0]["id"], json!("t"));
+}
+
+#[tokio::test]
+async fn a_process_that_only_says_it_is_the_app_never_hears_where_the_user_signs_in() {
+    let d = daemon().await;
+    let mut forged = Client::connect(&d.socket, "moonlet-app").await.unwrap();
+    let e = forged
+        .request::<_, Value>("presence.active", json!({}))
+        .await
+        .unwrap_err();
+    assert_eq!(e.to_string(), "forbidden: only the app says where the user is");
+    let e = forged
+        .request::<_, Value>("browser.pending", json!({}))
+        .await
+        .unwrap_err();
+    assert_eq!(e.to_string(), "forbidden: only this Mac's app shows its sign-ins");
+    let mut app = d.app().await;
+    in_terminal(&d, "\"$BROWSER\" 'https://accounts.example.test/auth'").await;
+    let shown = next_show(&mut app, Duration::from_secs(10))
+        .await
+        .expect("a browser.show for the app");
+    assert_eq!(shown["url"], json!("https://accounts.example.test/auth"));
+    assert_eq!(next_show(&mut forged, Duration::from_secs(1)).await, None);
+}
+
+#[tokio::test]
 async fn a_sign_in_changed_on_another_member_asks_again_before_it_runs_here() {
     let (mini, addr) = central().await;
     let book = linked_book(&mini, &addr).await;

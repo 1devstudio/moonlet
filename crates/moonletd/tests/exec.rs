@@ -44,7 +44,7 @@ impl Daemon {
     }
 
     async fn app(&self) -> Client {
-        Client::connect(&self.socket, "moonlet-app").await.unwrap()
+        Client::connect_app(&self.socket, self.home.path()).await.unwrap()
     }
 
     async fn call<T: serde::de::DeserializeOwned>(&self, method: &str, params: Value) -> T {
@@ -446,6 +446,7 @@ async fn device(addr: &str, token: &str, client: &str) -> tokio::net::TcpStream 
     let hello = Message::Hello {
         protocol: moonlet_proto::PROTOCOL_VERSION,
         client: client.into(),
+        app_token: None,
     };
     write_frame(&mut s, &Frame::Json(hello)).await.unwrap();
     assert!(matches!(

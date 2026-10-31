@@ -373,7 +373,7 @@ async fn render_system(d: &Daemon) -> PathBuf {
 /// the field's empty mount bad, and snaps a 6 KB PNG.
 async fn fake_app(d: &Daemon) {
     use moonlet_proto::{Frame, Message};
-    let mut app = Client::connect(&d.socket, "moonlet-app").await.unwrap();
+    let mut app = Client::connect_app(&d.socket, d.home.path()).await.unwrap();
     let _: serde_json::Value = app
         .request(methods::DESIGN_RENDER_READY, serde_json::json!({}))
         .await
@@ -575,7 +575,7 @@ async fn designs_are_made_listed_opened_and_removed_from_the_cli() {
     let slugs: Vec<&str> = list.as_array().unwrap().iter().map(|d| d["slug"].as_str().unwrap()).collect();
     assert_eq!(slugs, vec!["pricing-table-for-three-plans", "settings-page"]);
 
-    let mut app = Client::connect(&d.socket, "moonlet-app").await.unwrap();
+    let mut app = Client::connect_app(&d.socket, d.home.path()).await.unwrap();
     let opened = d.moonlet(&here, &["design", "open", "settings-page"]);
     assert!(opened.status.success(), "{}", String::from_utf8_lossy(&opened.stderr));
     assert_eq!(
@@ -662,7 +662,7 @@ async fn a_sessions_agent_makes_a_session_design_with_design_new_here() {
         .unwrap();
     let (worktree, terminal) = (PathBuf::from(&session.path), session.terminals[0]);
 
-    let mut app = Client::connect(&d.socket, "moonlet-app").await.unwrap();
+    let mut app = Client::connect_app(&d.socket, d.home.path()).await.unwrap();
     let made = json(&d.moonlet_as(&worktree, terminal, &["design", "new", "--here", "Prototype the settings page"]));
     let dir = worktree.join("docs/design/prototype-the-settings-page");
     assert_eq!(

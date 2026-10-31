@@ -64,7 +64,7 @@ impl Host {
     }
 
     async fn app(&self) -> Client {
-        Client::connect(&self.socket, "moonlet-app").await.unwrap()
+        Client::connect_app(&self.socket, self.home.path()).await.unwrap()
     }
 
     async fn listening(&self) -> String {

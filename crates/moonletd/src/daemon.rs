@@ -72,6 +72,8 @@ pub struct Daemon {
     local_apps: std::sync::atomic::AtomicUsize,
     /// On the central host, the same for each paired phone (X75).
     phone_shows: Mutex<PhoneShows>,
+    /// What this Mac's app sends in `hello` to prove it is the app (X75).
+    app_token: String,
     /// Sign-ins on this member that wait for the browser to come back (X75).
     callbacks: crate::signin::Callbacks,
     /// URLs whose forward's port was taken here, by URL, for Retry (X75).
@@ -283,12 +285,13 @@ const DESIGN_SELF_GATED: &[&str] = &[m::DESIGN_CHECK, m::DESIGN_FILE];
 pub const CLI_CLIENT: &str = "moonlet-cli";
 
 /// Refuses what only the Mac's own app may do, such as managing `what`:
-/// never a paired device over the tailnet, nor an agent's `moonlet` CLI.
+/// never a paired device over the tailnet, nor an agent's `moonlet` CLI, nor
+/// any local connection that did not prove it is the app (X75).
 pub(crate) fn app_only(conn: &Conn, what: &str) -> Result<(), RpcError> {
     if conn.phone.is_some() {
         return Err(RpcError::new("forbidden", format!("manage {what} from the Mac")));
     }
-    if conn.client == CLI_CLIENT {
+    if !conn.app {
         return Err(RpcError::new("forbidden", format!("only the moonlet app manages {what}")));
     }
     Ok(())
@@ -637,6 +640,11 @@ impl Daemon {
             waiting_shows: Default::default(),
             local_apps: Default::default(),
             phone_shows: Default::default(),
+            app_token: moonlet_core::app_token::load_or_create(&moonlet_core::app_token::file()).unwrap_or_else(|e| {
+                // No app can prove itself then: app-only methods are refused.
+                tracing::error!("cannot keep the app credential: {e}");
+                String::new()
+            }),
             callbacks: crate::signin::Callbacks::default(),
             taken: crate::signin::Taken::default(),
             forwards: crate::signin::Forwards::default(),
@@ -941,6 +949,10 @@ impl Daemon {
                 ok(true)
             }
             m::DAEMON_UPDATE => {
+                // On the local socket, the app that proved it is (X75).
+                if conn.phone.is_none() && !conn.app {
+                    return Err(RpcError::new("forbidden", "update moonlet from the app"));
+                }
                 let (reply, handoff) = self.update_from(Some(&conn.client), conn.phone.as_deref(), p).await?;
                 // The connection's writer sends the reply after this returns.
                 handoff.start_after(crate::update::REPLY_GRACE);
@@ -1074,9 +1086,10 @@ impl Daemon {
                 let r: m::TerminalRef = params(p)?;
                 ok(self.reads.readable(r.id).map_err(internal)?.1)
             }
-            m::TERMINAL_READ_ANSWER | m::TERMINAL_READ_REQUESTS if conn.client == CLI_CLIENT => {
+            m::TERMINAL_READ_ANSWER | m::TERMINAL_READ_REQUESTS if conn.phone.is_none() && !conn.app => {
                 // An agent must not approve its own read, nor see the waiting
-                // text, with `moonlet rpc` (X31).
+                // text, with `moonlet rpc` (X31), whatever client name it
+                // gives (X75).
                 Err(RpcError::new("forbidden", "only the moonlet app answers read requests"))
             }
             m::TERMINAL_READ_ANSWER => {
@@ -1150,7 +1163,7 @@ impl Daemon {
                 self.session_copies.attach(conn, &member, r, false).await
             }
             m::SIGNINS_ATTACH => {
-                if conn.client == crate::link::WORKER_CLIENT || conn.client == CLI_CLIENT || conn.cloud.load(std::sync::atomic::Ordering::Relaxed) {
+                if conn.client == crate::link::WORKER_CLIENT || (conn.phone.is_none() && !conn.app) || conn.cloud.load(std::sync::atomic::Ordering::Relaxed) {
                     return Err(RpcError::new("forbidden", "only the Mac that started a sign-in follows it"));
                 }
                 let r: m::SignInAttach = params(p)?;
@@ -1328,7 +1341,9 @@ impl Daemon {
                         return Err(RpcError::new("forbidden", "a paired Mac says where the user is through its own daemon"));
                     }
                     self.presence.lock().unwrap().last = Some((moonlet_core::browser::Client::Phone(device.to_string()), now));
-                } else if conn.client == CLI_CLIENT {
+                } else if !conn.app {
+                    // Any local process may say it is the app; only the app
+                    // has its credential (X75).
                     return Err(RpcError::new("forbidden", "only the app says where the user is"));
                 } else {
                     self.app_active(now);
@@ -1367,7 +1382,7 @@ impl Daemon {
             }
             m::BROWSER_PENDING => {
                 // This Mac's own app takes what came while it was away (X75).
-                if conn.client != APP_CLIENT || conn.phone.is_some() {
+                if !conn.app || conn.client != APP_CLIENT {
                     return Err(RpcError::new("forbidden", "only this Mac's app shows its sign-ins"));
                 }
                 ok(self.waiting_shows.lock().unwrap().take(wall_ms()))
@@ -4553,6 +4568,12 @@ impl Daemon {
 
     /// This Mac's app connected, or (`false`) one of its connections
     /// closed (X75).
+    /// Whether `sent`, from a `hello` on the local socket, is this Mac's
+    /// app credential (X75).
+    pub fn is_app_token(&self, sent: &str) -> bool {
+        !self.app_token.is_empty() && moonlet_core::app_token::matches(&self.app_token, sent)
+    }
+
     pub fn app_connection(&self, open: bool) {
         use std::sync::atomic::Ordering::SeqCst;
         let _waiting = self.waiting_shows.lock().unwrap();

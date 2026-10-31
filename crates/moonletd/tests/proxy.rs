@@ -35,6 +35,7 @@ impl Link {
             &Frame::Json(Message::Hello {
                 protocol: PROTOCOL_VERSION,
                 client: "proxy-test".into(),
+                app_token: None,
             }),
         )
         .await

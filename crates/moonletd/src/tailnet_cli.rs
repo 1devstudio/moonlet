@@ -14,10 +14,17 @@ use qrcodegen::{QrCode, QrCodeEcc};
 use serde_json::json;
 use tokio::signal::unix::{SignalKind, signal};
 
+/// A connection with the app credential (X75): on a host without the app,
+/// the user manages phones and pairing from a terminal instead.
+pub async fn connect_as_app(socket: &Path, client: &str) -> Result<Client> {
+    let token = moonlet_core::app_token::read(&moonlet_core::app_token::file());
+    Client::connect_with(socket, client, token.as_deref()).await
+}
+
 /// `moonletd tailnet on|off|status`: changes or shows tailnet access and
 /// prints its status line. `on` waits a little for the listener.
 pub async fn tailnet(socket: &Path, enable: Option<bool>) -> Result<()> {
-    let mut c = Client::connect(socket, "moonletd-tailnet").await?;
+    let mut c = connect_as_app(socket, "moonletd-tailnet").await?;
     let mut st: MobileStatus = match enable {
         Some(enabled) => {
             c.request(m::MOBILE_SET_ENABLED, json!({ "enabled": enabled }))
@@ -43,7 +50,7 @@ pub async fn tailnet(socket: &Path, enable: Option<bool>) -> Result<()> {
 pub async fn pair(socket: &Path, name: Option<String>) -> Result<i32> {
     // Registered before the code shows, so Ctrl-C always cancels it.
     let mut interrupt = signal(SignalKind::interrupt())?;
-    let mut c = Client::connect(socket, "moonletd-pair").await?;
+    let mut c = connect_as_app(socket, "moonletd-pair").await?;
     let p: MobilePairing = match c.request(m::MOBILE_PAIR_START, json!({ "kind": "desktop" })).await {
         Ok(p) => p,
         Err(e) => {
