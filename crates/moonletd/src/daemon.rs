@@ -4331,10 +4331,10 @@ impl Daemon {
     /// On the central host: the user touched member `member`'s app, so the
     /// sign-ins waiting for a Mac go to it (X75).
     fn hand_to_mac(self: &Arc<Self>, member: &str) {
-        let waiting: Vec<m::BrowserShow> = {
+        let waiting: Vec<(std::time::Instant, m::BrowserShow)> = {
             let mut list = self.for_next_mac.lock().unwrap();
             list.retain(|(until, _)| *until > std::time::Instant::now());
-            std::mem::take(&mut *list).into_iter().map(|(_, s)| s).collect()
+            std::mem::take(&mut *list)
         };
         if waiting.is_empty() {
             return;
@@ -4343,11 +4343,19 @@ impl Daemon {
         let member = member.to_string();
         tokio::spawn(async move {
             let me = d.link.info().worker.id;
-            for show in waiting {
-                if member == me {
-                    d.present(show).await;
+            for (until, show) in waiting {
+                let sent = if member == me {
+                    d.present(show.clone()).await;
+                    true
                 } else if let Some(conn) = d.workers.conn(&member) {
-                    let _ = conn.request(m::EV_BROWSER_SHOW, serde_json::to_value(&show).unwrap_or_default(), std::time::Duration::from_secs(10)).await;
+                    conn.request(m::EV_BROWSER_SHOW, serde_json::to_value(&show).unwrap_or_default(), std::time::Duration::from_secs(10)).await.is_ok()
+                } else {
+                    false
+                };
+                // That Mac went away meanwhile: it waits for the next one,
+                // until it lapses.
+                if !sent {
+                    d.for_next_mac.lock().unwrap().push((until, show));
                 }
             }
         });
