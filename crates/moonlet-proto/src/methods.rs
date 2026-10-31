@@ -154,6 +154,8 @@ pub const SESSION_UNPIN: &str = "session.unpin";
 pub const SESSION_TAKE_ANYWAY: &str = "session.take_anyway";
 /// Pins a session to a member, or unpins it (X73): member → central host.
 pub const SESSION_PIN: &str = "session.pin";
+/// Whether the central host could continue each copy it holds (X73).
+pub const SESSION_READY: &str = "session.ready";
 /// Tests only, with `MOONLET_TEST_POWER=1`: as if the Mac went to sleep
 /// or woke (X73).
 pub const POWER_SIMULATE: &str = "power.simulate";
@@ -1293,6 +1295,16 @@ pub struct SessionPin {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionRef {
     pub session: String,
+}
+
+/// One copy in `session.ready`'s answer (X73).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionReady {
+    pub session: String,
+    pub ready: bool,
+    /// Why it could not continue, in words for the user.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// `session.list`'s request. With `copies`, the list also holds the
