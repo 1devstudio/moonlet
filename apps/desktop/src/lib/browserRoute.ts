@@ -2,6 +2,8 @@
 // this Mac or another member, that this Mac's daemon hands to the app, and
 // the activity that tells the daemons where the user is.
 
+import type { HostInfo } from "./protocol";
+
 export interface BrowserShow {
   url: string;
   /** The member that asked, by name. */
@@ -33,3 +35,7 @@ export const ACTIVE_EVERY_MS = 30_000;
 /** Whether the app says the user is active now, having last said so at
  * `last`. */
 export const reportsActive = (last: number | null, now: number) => last === null || now - last >= ACTIVE_EVERY_MS;
+
+/** Whether the app asks `h` for the sign-ins that came while it was not
+ * connected: this Mac's own daemon, each time it connects. */
+export const asksForWaitingSignIns = (h: Pick<HostInfo, "id" | "status">) => h.id === "local" && h.status === "connected";

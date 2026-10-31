@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ACTIVE_EVERY_MS, reportsActive, showAction, signInToast } from "./browserRoute";
+import { ACTIVE_EVERY_MS, asksForWaitingSignIns, reportsActive, showAction, signInToast } from "./browserRoute";
 
 describe("sign-ins open where you are (X75)", () => {
   it("the_toast_names_the_member_and_session", () => {
@@ -14,6 +14,12 @@ describe("sign-ins open where you are (X75)", () => {
     expect(showAction("mini", { url: "https://github.com/login/device", from: "studio-mini" })).toBe("ignore");
     expect(showAction("local", { url: "file:///etc/passwd", from: "MacBook" })).toBe("ignore");
     expect(showAction("local", { url: "javascript:alert(1)", from: "MacBook" })).toBe("ignore");
+  });
+
+  it("asks this Mac's daemon for the sign-ins that waited each time it connects", () => {
+    expect(asksForWaitingSignIns({ id: "local", status: "connected" })).toBe(true);
+    expect(asksForWaitingSignIns({ id: "local", status: "connecting" })).toBe(false);
+    expect(asksForWaitingSignIns({ id: "studio-mini", status: "connected" })).toBe(false);
   });
 
   it("says the user is active at most every 30 s", () => {
