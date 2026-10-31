@@ -1316,6 +1316,7 @@ export const M = {
   projectCopiedFilesGet: "project.copied_files.get",
   presenceActive: "presence.active",
   browserPending: "browser.pending",
+  browserRetry: "browser.retry",
   projectCopiedFilesSet: "project.copied_files.set",
   projectWorktreeRemove: "project.worktree_remove",
   sessionCreate: "session.create",

@@ -16,6 +16,8 @@ export interface BrowserShow {
   to?: string;
   /** Nobody was active lately: it waits for Open. */
   waiting?: boolean;
+  /** The forward's port is taken on this Mac: it waits for Retry. */
+  port_taken?: boolean;
 }
 
 /** The toast's line: who asked. */
@@ -24,10 +26,14 @@ export const signInToast = (s: BrowserShow) => `${s.from}${s.session_name ? ` ·
 /** What the app does with `s`, heard from `host`: opens it, offers it with
  * Open while it waits, or leaves it, when it is the phone's, not this
  * Mac's daemon's, or not an http or https URL. */
-export function showAction(host: string, s: BrowserShow): "open" | "offer" | "ignore" {
+export function showAction(host: string, s: BrowserShow): "open" | "offer" | "taken" | "ignore" {
   if (host !== "local" || s.to === "phone" || !/^https?:\/\//i.test(s.url)) return "ignore";
+  if (s.port_taken) return "taken";
   return s.waiting ? "offer" : "open";
 }
+
+/** What the app says when the sign-in's port is taken on this Mac. */
+export const portTakenLine = (s: BrowserShow) => `Port ${s.forward} is in use on this Mac, so the sign-in for ${s.from} can't come back here. Close what uses it and press Retry.`;
 
 /** How often at most the app says the user is active. */
 export const ACTIVE_EVERY_MS = 30_000;

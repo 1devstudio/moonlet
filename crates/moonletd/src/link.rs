@@ -366,6 +366,7 @@ pub struct WorkerLink {
     relayer: std::sync::OnceLock<Relayer>,
     /// Shows a URL the central host found the user here for (X75).
     shower: std::sync::OnceLock<Shower>,
+    tunneler: std::sync::OnceLock<Tunneler>,
     /// Takes input for those relays, and forgets an earlier link's (X72).
     relay_input: std::sync::OnceLock<(moonlet_link::RelayedInput, Arc<dyn Fn() + Send + Sync>)>,
     sessions: Arc<SessionManager>,
@@ -392,6 +393,7 @@ impl WorkerLink {
             forwarder: std::sync::OnceLock::new(),
             relayer: std::sync::OnceLock::new(),
             shower: std::sync::OnceLock::new(),
+            tunneler: std::sync::OnceLock::new(),
             relay_input: std::sync::OnceLock::new(),
             sessions,
             emit: Box::new(emit),
@@ -632,6 +634,10 @@ impl WorkerLink {
 
     pub fn set_shower(&self, f: Shower) {
         let _ = self.shower.set(f);
+    }
+
+    pub fn set_tunneler(&self, f: Tunneler) {
+        let _ = self.tunneler.set(f);
     }
 
     pub fn set_runs(&self, runs: Weak<crate::exec::Runs>) {
@@ -987,6 +993,10 @@ pub type Forwarder = Arc<dyn Fn(m::SessionForward) -> BoxFuture<'static, Result<
 /// kept for the app, which is not connected.
 pub type Shower = Arc<dyn Fn(m::BrowserShow) -> bool + Send + Sync>;
 
+/// Hands a request the browser made on another Mac to this member's waiting
+/// sign-in (X75).
+pub type Tunneler = Arc<dyn Fn(m::TunnelOpen) -> BoxFuture<'static, Result<Value, RpcError>> + Send + Sync>;
+
 /// Attaches to or detaches from a terminal the central host relays (X72).
 pub type Relayer = Arc<dyn Fn(m::SessionRelay) -> BoxFuture<'static, Result<Value, RpcError>> + Send + Sync>;
 
@@ -1081,6 +1091,13 @@ impl Requests for WorkerRequests {
                     // Kept for the app: the central host knows the user is
                     // not here.
                     Ok(if show(req) { serde_json::json!(true) } else { serde_json::json!({ "kept": true }) })
+                }
+                m::TUNNEL_OPEN => {
+                    let req: m::TunnelOpen = serde_json::from_value(params)
+                        .map_err(|e| RpcError::new("invalid_params", e.to_string()))?;
+                    let link = link.ok_or_else(|| RpcError::new("gone", "the link closed"))?;
+                    let f = link.tunneler.get().cloned().ok_or_else(|| RpcError::new("gone", "no sign-in waits here"))?;
+                    f(req).await
                 }
                 m::SESSION_FORWARD => {
                     let req: m::SessionForward = serde_json::from_value(params)

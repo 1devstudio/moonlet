@@ -61,17 +61,17 @@ pub async fn serve(daemon: Arc<Daemon>, listener: UnixListener, socket: PathBuf)
         tokio::select! {
             accepted = listener.accept() => {
                 let (stream, _) = accepted?;
-                match stream.peer_cred() {
-                    Ok(cred) if cred.uid() == my_uid => {}
+                let peer_pid = match stream.peer_cred() {
+                    Ok(cred) if cred.uid() == my_uid => cred.pid().and_then(|p| u32::try_from(p).ok()),
                     other => {
                         tracing::warn!("rejecting connection from foreign peer: {other:?}");
                         continue;
                     }
-                }
+                };
                 let daemon = daemon.clone();
                 tokio::spawn(async move {
                     let (r, w) = stream.into_split();
-                    if let Err(e) = handle_connection(daemon, r, w, None).await {
+                    if let Err(e) = handle_connection(daemon, r, w, None, peer_pid).await {
                         tracing::debug!("connection ended: {e:#}");
                     }
                 });
@@ -103,6 +103,9 @@ pub struct Conn {
     pub client: String,
     /// The paired phone's device id on a phone connection (X39).
     pub phone: Option<String>,
+    /// The process at the other end of a local connection, as the kernel
+    /// says (X75): never what the client claims.
+    pub peer_pid: Option<u32>,
     /// Requests this daemon sent the client, waiting for its reply. Only a
     /// worker gets any (X41).
     pending: Mutex<HashMap<u64, oneshot::Sender<Result<Value, RpcError>>>>,
@@ -130,6 +133,7 @@ impl Conn {
             urgent,
             client: client.to_string(),
             phone,
+            peer_pid: None,
             pending: Mutex::new(HashMap::new()),
             next_request: AtomicU64::new(1),
             closed: Notify::new(),
@@ -239,6 +243,7 @@ pub async fn handle_connection<R, W>(
     mut reader: R,
     writer: W,
     phone: Option<String>,
+    peer_pid: Option<u32>,
 ) -> Result<()>
 where
     R: AsyncRead + Unpin,
@@ -312,6 +317,7 @@ where
         urgent,
         client,
         phone,
+        peer_pid,
         pending: Mutex::new(HashMap::new()),
         next_request: AtomicU64::new(1),
         closed: Notify::new(),

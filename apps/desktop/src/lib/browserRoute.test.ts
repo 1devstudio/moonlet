@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ACTIVE_EVERY_MS, asksForWaitingSignIns, reportsActive, showAction, signInToast } from "./browserRoute";
+import { ACTIVE_EVERY_MS, asksForWaitingSignIns, portTakenLine, reportsActive, showAction, signInToast } from "./browserRoute";
 
 describe("sign-ins open where you are (X75)", () => {
   it("the_toast_names_the_member_and_session", () => {
@@ -20,6 +20,12 @@ describe("sign-ins open where you are (X75)", () => {
     expect(asksForWaitingSignIns({ id: "local", status: "connected" })).toBe(true);
     expect(asksForWaitingSignIns({ id: "local", status: "connecting" })).toBe(false);
     expect(asksForWaitingSignIns({ id: "studio-mini", status: "connected" })).toBe(false);
+  });
+
+  it("waits for Retry when the sign-in's port is taken here", () => {
+    const s = { url: "https://accounts.google.com/o/oauth2/auth", from: "studio-mini", forward: 8085, port_taken: true };
+    expect(showAction("local", s)).toBe("taken");
+    expect(portTakenLine(s)).toBe("Port 8085 is in use on this Mac, so the sign-in for studio-mini can't come back here. Close what uses it and press Retry.");
   });
 
   it("says the user is active at most every 30 s", () => {

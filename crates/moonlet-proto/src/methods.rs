@@ -555,6 +555,12 @@ pub const BROWSER_PENDING: &str = "browser.pending";
 /// `{}` → `true`: the user is active in this app or phone (X75). A member
 /// passes its app's on to its central host at most every 30 s.
 pub const PRESENCE_ACTIVE: &str = "presence.active";
+/// [`TunnelOpen`] → [`TunnelAnswer`]: a request the browser made to a Mac's
+/// forwarded port, for the member whose command waits on that port (X75).
+pub const TUNNEL_OPEN: &str = "tunnel.open";
+/// [`BrowserRetry`] → `true`: the app tries a forward whose port was taken
+/// again (X75).
+pub const BROWSER_RETRY: &str = "browser.retry";
 /// [`JobList`] → `[Job]`: a session's jobs, newest first (X62).
 pub const JOB_LIST: &str = "job.list";
 /// [`JobOutputGet`] → [`JobOutput`]: a job's stored output from a byte.
@@ -1364,6 +1370,11 @@ pub struct BrowserShow {
     pub session_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub forward: Option<u16>,
+    /// The secret the asking member made for the forward's callback: only
+    /// the Mac it is shown on passes it in `tunnel.open`. Never sent to an
+    /// app or a phone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forward_key: Option<String>,
     /// `phone` when it is for the phone, which the user used last; the
     /// app leaves it alone then.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1375,6 +1386,35 @@ pub struct BrowserShow {
     /// **Open** instead of opening by itself.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub waiting: bool,
+    /// The member that asked, by worker id, for the forward.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub member: Option<String>,
+    /// The forward's port is taken on this Mac: the URL waits for Retry.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub port_taken: bool,
+}
+
+/// `tunnel.open`: the bytes of one HTTP request, in base64, for `port` on
+/// member `member`, with the key its callback was shown with.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TunnelOpen {
+    pub member: String,
+    pub port: u16,
+    pub data: String,
+    #[serde(default)]
+    pub key: String,
+}
+
+/// `tunnel.open`'s answer: what the command answered, in base64.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TunnelAnswer {
+    pub data: String,
+}
+
+/// `browser.retry`: the URL whose forward is tried again.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BrowserRetry {
+    pub url: String,
 }
 
 /// `browser.route`: a URL from one of a member's terminals or agents.
@@ -1385,6 +1425,12 @@ pub struct BrowserRoute {
     pub session: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_name: Option<String>,
+    /// The port a callback waits on, on the member that asks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forward: Option<u16>,
+    /// The callback's key, for the Mac it is shown on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forward_key: Option<String>,
 }
 
 /// A copied file as its side has it (X74): its SHA-256, and its bytes in
