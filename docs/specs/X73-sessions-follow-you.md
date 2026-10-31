@@ -175,6 +175,7 @@ Manual check M12 (`docs/manual-checks.md`) measures, on a real MacBook, how long
 - `session.take_anyway {session}`: app → its own daemon, only while the central host has been unreachable for 30 s. The forced change goes to the central host as `session.take {session, epoch, reason: "forced", base}` once it is back. Answers `{kept: bool}`.
 - `link.status` gains `unreachable_since`, so the app can say since when the central host is offline.
 - `session.continue_here {session}`: phone → central host. Allowed only while the owner has been unreachable for 30 s. Answers `{epoch}`, or `reachable` or `pinned`.
+- The owner that `session.list {copies: true}` gives for another member's session gains `unreachable_since` (ms since the epoch) while its link is down, so the phone knows when the 30 s are up.
 - `session.ready` → `[{session, ready, reason?}]`: on the central host.
 - Event `session.moved {session, from, to, epoch, reason}`.
 - The session record gains `epoch` and `pinned`.
