@@ -142,6 +142,11 @@ pub const SESSION_GIVE_BACK: &str = "session.give_back";
 pub const SESSION_TRANSCRIPT_FETCH: &str = "session.transcript_fetch";
 /// The app brings a session another member runs to this Mac (X73).
 pub const SESSION_BRING: &str = "session.bring";
+/// A member going to sleep hands its sessions to the central host (X73).
+pub const SESSION_YIELD: &str = "session.yield";
+/// Tests only, with `MOONLET_TEST_POWER=1`: as if the Mac went to sleep
+/// or woke (X73).
+pub const POWER_SIMULATE: &str = "power.simulate";
 /// The central host's clients hear another member's session events as
 /// this, `{session, event}` (X72).
 pub const EV_SESSION_EVENT: &str = "session.event";
@@ -1227,6 +1232,19 @@ pub struct SessionBring {
     pub now: bool,
     #[serde(default)]
     pub message: Option<String>,
+}
+
+/// `session.yield {sessions}`, member → central host (X73): the member is
+/// going to sleep. Answers the sessions the central host took.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionYield {
+    pub sessions: Vec<String>,
+}
+
+/// `power.simulate {event}`: `sleep` or `wake` (tests only).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PowerSimulate {
+    pub event: String,
 }
 
 /// `session.list`'s request. With `copies`, the list also holds the

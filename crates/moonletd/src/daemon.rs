@@ -27,6 +27,18 @@ use tokio::sync::watch;
 
 use crate::server::Conn;
 
+/// What the Mac's last sleep left to its wake (X73).
+#[derive(Default)]
+struct Asleep {
+    /// The chats it froze.
+    frozen: Vec<moonlet_proto::TerminalId>,
+    /// The sessions the central host answered it took.
+    taken: std::collections::HashSet<String>,
+    /// How many sleeps began: a wake that a newer sleep overtook leaves
+    /// what it holds to that sleep's wake.
+    sleeps: u64,
+}
+
 /// What looks for sessions another member now owns keep between them (X73).
 #[derive(Default)]
 struct LettingGo {
@@ -49,6 +61,8 @@ pub struct Daemon {
     pub session_copies: Arc<crate::session_copies::SessionCopies>,
     /// One look at a time for sessions another member now owns (X73).
     letting_go: tokio::sync::Mutex<LettingGo>,
+    /// What the Mac's last sleep left to its wake (X73).
+    asleep: Mutex<Asleep>,
     /// Per design system (X64): one start of its agent, or one change of its
     /// record or folder, at a time.
     design_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
@@ -553,6 +567,7 @@ impl Daemon {
             copies,
             session_copies,
             letting_go: Default::default(),
+            asleep: Default::default(),
             heavy,
             cloud,
             machines,
@@ -1055,6 +1070,16 @@ impl Daemon {
                 })?;
                 self.session_copies.attach(conn, &member, r).await
             }
+            m::POWER_SIMULATE => {
+                app_only(conn, "power")?;
+                if std::env::var_os("MOONLET_TEST_POWER").is_none_or(|v| v != "1") {
+                    return Err(RpcError::new("unknown_method", "power.simulate is for tests"));
+                }
+                let r: m::PowerSimulate = params(p)?;
+                let event = if r.event == "sleep" { crate::power::Power::Sleep } else { crate::power::Power::Wake };
+                self.power(event).await;
+                ok(true)
+            }
             m::SESSION_BRING => {
                 app_only(conn, "sessions")?;
                 ok(self.bring(params(p)?).await?)
@@ -1064,7 +1089,7 @@ impl Daemon {
                     return Err(RpcError::new("forbidden", "only an app or a phone continues a session here"));
                 }
                 let r: m::SessionContinueHere = params(p)?;
-                ok(self.continue_here(&r.session, "could not be reached").await?)
+                ok(self.continue_here(&r.session, "could not be reached", true).await?)
             }
             m::SESSION_FORWARD => {
                 // The central host's apps and phones (X72): never a worker,
@@ -1074,7 +1099,7 @@ impl Daemon {
                 }
                 Box::pin(self.forward(conn, params(p)?)).await
             }
-            m::SESSION_OPEN | m::SESSION_OFFER | m::SESSION_CHAT | m::SESSION_TRANSCRIPT | m::SESSION_CHECKPOINT | m::SESSION_EVENT | m::SESSION_TAKE | m::SESSION_GIVE_BACK | m::SESSION_TRANSCRIPT_FETCH => {
+            m::SESSION_OPEN | m::SESSION_OFFER | m::SESSION_CHAT | m::SESSION_TRANSCRIPT | m::SESSION_CHECKPOINT | m::SESSION_EVENT | m::SESSION_TAKE | m::SESSION_GIVE_BACK | m::SESSION_TRANSCRIPT_FETCH | m::SESSION_YIELD => {
                 // Only a linked Mac's daemon, as for `design.offer` (X72).
                 let refused = || RpcError::new("forbidden", "only a member of the account sends its sessions");
                 let device = conn.phone.as_deref().ok_or_else(refused)?;
@@ -1092,6 +1117,25 @@ impl Daemon {
                     let r: m::SessionTranscript = params(p)?;
                     let bytes = conn.take_pack(r.pack).ok_or_else(|| RpcError::new("invalid_params", "the bytes did not arrive"))?;
                     ok(self.session_copies.transcript_offered(&worker, r, &bytes)?)
+                } else if method == m::SESSION_YIELD {
+                    let r: m::SessionYield = params(p)?;
+                    let mut taken = Vec::new();
+                    for id in r.sessions {
+                        // Only what the member owns, and nothing pinned.
+                        let rec = self.sessions.session_records().remove(&id);
+                        let ok_to_take = rec.as_ref().is_some_and(|rec| {
+                            rec.get("owner").and_then(Value::as_str) == Some(worker.as_str())
+                                && rec.get("pinned").is_none_or(Value::is_null)
+                        });
+                        if !ok_to_take {
+                            continue;
+                        }
+                        match self.continue_here(&id, "went to sleep", false).await {
+                            Ok(_) => taken.push(id),
+                            Err(e) => tracing::warn!(session = %id, "cannot continue a sleeping member's session: {}", e.message),
+                        }
+                    }
+                    ok(taken)
                 } else if method == m::SESSION_TAKE {
                     ok(self.give(&worker, params(p)?).await?)
                 } else if method == m::SESSION_GIVE_BACK {
@@ -2679,7 +2723,7 @@ impl Daemon {
     /// its worktree on the session's own branch, and each copied chat goes
     /// on, resuming its conversation. A turn the member had running when it
     /// went away goes on with a note to the agent. `why` says why it moved.
-    async fn continue_here(self: &Arc<Self>, session: &str, why: &str) -> Result<moonlet_proto::types::Session, RpcError> {
+    async fn continue_here(self: &Arc<Self>, session: &str, why: &str, only_unreachable: bool) -> Result<moonlet_proto::types::Session, RpcError> {
         let me = self.link.info().worker;
         let record = self
             .sessions
@@ -2695,13 +2739,13 @@ impl Daemon {
         if record.get("archived").and_then(Value::as_bool).unwrap_or(false) {
             return Err(RpcError::new("archived", "that session is archived"));
         }
-        if self.workers.conn(&owner).is_some() {
+        if only_unreachable && self.workers.conn(&owner).is_some() {
             return Err(RpcError::new("reachable", "the member running that session is reachable"));
         }
         // Not for a short drop: only once it has been away for 30 s. Tests
         // set a shorter wait.
         let wait: u64 = std::env::var("MOONLET_TEST_UNREACHABLE_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(30_000);
-        if self.workers.unreachable_since(&owner).is_some_and(|t| now_ms().saturating_sub(t) < wait) {
+        if only_unreachable && self.workers.unreachable_since(&owner).is_some_and(|t| now_ms().saturating_sub(t) < wait) {
             let name = self.sessions.member_names().remove(&owner).unwrap_or(owner);
             return Err(RpcError::new("not_yet", format!("{name} has been unreachable for less than 30 s")));
         }
@@ -2715,7 +2759,7 @@ impl Daemon {
         if info.path.is_empty() {
             return Err(RpcError::new("no_copy", "this host has no copy of that session yet"));
         }
-        self.take_in(session, &record, info.chats, Some(why)).await
+        self.take_in(session, &record, info.chats, Some(why), only_unreachable).await
     }
 
     /// `session.give_back` from member `worker` (X73): the session this
@@ -2741,19 +2785,21 @@ impl Daemon {
             .session_copies
             .given(&r.session, worker)
             .ok_or_else(|| RpcError::new("not_given", "this host did not give that session to be handed back"))?;
-        self.take_in(&r.session, &record, chats, None).await
+        self.take_in(&r.session, &record, chats, None, false).await
     }
 
     /// Makes the copy of `session` this host holds the session's own
     /// worktree again, with this host its owner, and goes on with `chats`
     /// there (X73). `why` says why its owner's running turn was cut off,
     /// for continuing it with a note; none when the owner handed it back.
+    /// With `only_unreachable`, only while its owner is still away.
     async fn take_in(
         self: &Arc<Self>,
         session: &str,
         record: &moonlet_core::account::Record,
         chats: Vec<m::SessionCopyChat>,
         why: Option<&str>,
+        only_unreachable: bool,
     ) -> Result<moonlet_proto::types::Session, RpcError> {
         let me = self.link.info().worker;
         let text = |f: &str| record.get(f).and_then(Value::as_str).map(str::to_string);
@@ -2779,7 +2825,7 @@ impl Daemon {
         // From here no offer moves the copy. Until the session is this
         // host's, a step that fails gives the copy back, to try again.
         let taken = self.session_copies.take_copy(session, rename.then_some(branch.as_str())).await?;
-        let adopted = match self.adopt_copy(session, record, &taken, &me.id, why.is_some()).await {
+        let adopted = match self.adopt_copy(session, record, &taken, &me.id, only_unreachable).await {
             Ok(adopted) => adopted,
             Err(e) => {
                 self.session_copies.give_back(session, taken).await;
@@ -2815,15 +2861,15 @@ impl Daemon {
     /// host, owned by `me`, as `record` describes it (X73). The session is
     /// in this host's state before its record names this host, so no
     /// change ends that record meanwhile; one whose new owner cannot be
-    /// recorded leaves the state again. With `away`, only while its owner
-    /// is still away.
+    /// recorded leaves the state again. With `only_unreachable`, only while
+    /// its owner is still away.
     async fn adopt_copy(
         self: &Arc<Self>,
         session: &str,
         record: &moonlet_core::account::Record,
         taken: &crate::session_copies::TakenCopy,
         me: &str,
-        away: bool,
+        only_unreachable: bool,
     ) -> Result<moonlet_proto::types::Session, RpcError> {
         let text = |f: &str| record.get(f).and_then(Value::as_str).map(str::to_string);
         // The copy's repository is a project here; a clone made for copies
@@ -2842,7 +2888,7 @@ impl Daemon {
         if !still {
             return Err(RpcError::new("stale", "that session moved meanwhile"));
         }
-        if away && self.workers.conn(&text("owner").unwrap_or_default()).is_some() {
+        if only_unreachable && self.workers.conn(&text("owner").unwrap_or_default()).is_some() {
             return Err(RpcError::new("reachable", "the member running that session is reachable"));
         }
         let adopted = self
@@ -3102,6 +3148,113 @@ impl Daemon {
                 owner: None,
             })
             .map_err(internal)
+    }
+
+    /// The Mac goes to sleep or woke (X73). Going to sleep, this member
+    /// freezes the agents of the sessions it runs, sends what is new, and
+    /// hands the sessions that are not pinned to the central host, which
+    /// continues them. Waking, it lets an agent go on only while its
+    /// session is still this member's; one handed over is let go of.
+    pub async fn power(self: &Arc<Self>, event: crate::power::Power) {
+        use crate::power::Power;
+        let info = self.link.info();
+        // A wake always ends what a sleep began, even after unlinking.
+        if event == Power::Sleep && (info.central.is_none() || info.worker.cloud) {
+            return;
+        }
+        let me = info.worker.id;
+        match event {
+            Power::Sleep => {
+                let records = self.sessions.session_records();
+                let own: Vec<_> = self
+                    .sessions
+                    .list_sessions()
+                    .into_iter()
+                    .filter(|s| s.owner.is_none() && !s.archived)
+                    .filter(|s| records.get(&s.id).and_then(|r| r.get("owner")).and_then(Value::as_str) == Some(me.as_str()))
+                    .collect();
+                {
+                    let mut asleep = self.asleep.lock().unwrap();
+                    asleep.sleeps += 1;
+                    // An agent that starts from now on starts stopped too.
+                    self.chats.hold();
+                }
+                // First the agents stop, whatever happens next.
+                let mut frozen = Vec::new();
+                for s in &own {
+                    for t in s.terminals.iter().filter(|t| self.chats.is_chat(**t)) {
+                        if self.chats.freeze(*t, true) {
+                            frozen.push(*t);
+                        }
+                    }
+                }
+                self.asleep.lock().unwrap().frozen.extend(frozen);
+                // A session the central host would continue from an older
+                // copy stays here, as when the hand-over cannot be sent.
+                let unsent = self.session_copies.send_now().await;
+                let handed: Vec<String> = own
+                    .iter()
+                    .filter(|s| !unsent.contains(&s.id))
+                    .filter(|s| records.get(&s.id).and_then(|r| r.get("pinned")).is_none_or(Value::is_null))
+                    .map(|s| s.id.clone())
+                    .collect();
+                if handed.is_empty() {
+                    return;
+                }
+                let Some(host) = self.link.host() else { return };
+                match host.request(m::SESSION_YIELD, serde_json::json!({ "sessions": handed })).await {
+                    Ok(taken) => {
+                        let taken: Vec<String> = serde_json::from_value(taken).unwrap_or_default();
+                        tracing::info!("handed {taken:?} to the central host before sleep");
+                        self.asleep.lock().unwrap().taken.extend(taken);
+                    }
+                    Err(e) => tracing::warn!("cannot hand sessions over before sleep: {}", e.message),
+                }
+            }
+            Power::Wake => {
+                let sleeps = self.asleep.lock().unwrap().sleeps;
+                if sleeps == 0 {
+                    return;
+                }
+                // A moment for the link and the account's news: what was
+                // handed over is let go of, not woken.
+                for _ in 0..50 {
+                    if matches!(self.link.info().state, m::LinkState::Connected { .. }) {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                let (frozen, taken) = {
+                    let mut asleep = self.asleep.lock().unwrap();
+                    if asleep.sleeps != sleeps {
+                        return;
+                    }
+                    asleep.frozen.extend(self.chats.release());
+                    (std::mem::take(&mut asleep.frozen), std::mem::take(&mut asleep.taken))
+                };
+                if frozen.is_empty() {
+                    return;
+                }
+                let records = self.sessions.session_records();
+                let sessions = self.sessions.list_sessions();
+                let frozen: Vec<_> = frozen
+                    .into_iter()
+                    .filter_map(|chat| {
+                        let Some(s) = sessions.iter().find(|s| s.terminals.contains(&chat)) else {
+                            // A chat of no session started while asleep.
+                            self.chats.freeze(chat, false);
+                            return None;
+                        };
+                        let owner = records.get(&s.id).and_then(|r| r.get("owner")).and_then(Value::as_str);
+                        Some(crate::power::Frozen { chat, session: &s.id, owner })
+                    })
+                    .collect();
+                for t in crate::power::to_thaw(&frozen, &taken, &me) {
+                    self.chats.freeze(t, false);
+                }
+            }
+        }
     }
 
     /// `session.forward` on the central host (X72): the request goes to the
