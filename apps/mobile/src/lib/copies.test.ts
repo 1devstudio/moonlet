@@ -48,7 +48,7 @@ describe("sessions another member owns (X72)", () => {
 
   it("keep their chats reachable while their member is away, with no terminal list", () => {
     const d = copyData(
-      { terminals: {}, sessions: [session({ worker: "w1", name: "MacBook", reachable: false })], projects: [], workspaces: [], sections: [], reads: [], chats: {}, git: null, copies: [], setups: [] },
+      { terminals: {}, sessions: [session({ worker: "w1", name: "MacBook", reachable: false })], projects: [], workspaces: [], sections: [], reads: [], chats: {}, git: null, copies: [], setups: [], tasks: {}, macOpen: false },
       "5e7f9a1b3c5d",
       [],
       [{ id: 3, state: { status: "done" } as never }],
