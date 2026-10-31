@@ -389,9 +389,15 @@ where
             };
             match frame {
                 Frame::Input { terminal, data } => {
-                    if !cloud {
+                    // A terminal of another member this client follows
+                    // through this host (X72), else one of this host's.
+                    if !cloud && !daemon.session_copies.relay_input(conn.id, terminal, data.clone()) {
                         let _ = daemon.terminals.write(terminal, data);
                     }
+                }
+                // Output of a member's terminal this host relays (X72).
+                Frame::Output { terminal, data } if conn.client == crate::link::WORKER_CLIENT => {
+                    daemon.session_copies.relay_output(conn.id, terminal, data);
                 }
                 // A worker's routed command's output, for `moonlet exec`
                 // (X62); from anyone else, nothing.
@@ -420,6 +426,29 @@ where
                 {
                     let e = RpcError::new("forbidden", "a cloud machine only runs heavy commands");
                     let _ = conn.tx.send(Frame::Json(Message::err(id, e)));
+                }
+                // Another member's terminal (X72): its reply, with the
+                // snapshot, goes before any of its output.
+                Frame::Json(Message::Request { id, method, params })
+                    if method == moonlet_proto::methods::SESSION_ATTACH =>
+                {
+                    let daemon = daemon.clone();
+                    let conn = conn.clone();
+                    tokio::spawn(async move {
+                        let reply = daemon.handle(&conn, &method, params).await;
+                        let relay = reply
+                            .as_ref()
+                            .ok()
+                            .and_then(|v| v["info"]["id"].as_u64())
+                            .and_then(|i| u32::try_from(i).ok());
+                        let _ = conn.tx.send(Frame::Json(match reply {
+                            Ok(value) => Message::Response { id, result: Some(value), error: None },
+                            Err(e) => Message::err(id, e),
+                        }));
+                        if let Some(relay) = relay {
+                            daemon.session_copies.relay_ready(relay);
+                        }
+                    });
                 }
                 Frame::Json(Message::Request { id, method, params })
                     if method == moonlet_proto::methods::TERMINAL_ATTACH =>
@@ -476,6 +505,7 @@ where
 
     conn.fail_pending();
     daemon.terminals.detach_all(conn.id);
+    daemon.session_copies.detach(conn.id, None);
     daemon.on_disconnect(conn.id);
     event_task.abort();
     drop(conn);

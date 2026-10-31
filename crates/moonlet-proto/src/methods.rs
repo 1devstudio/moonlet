@@ -120,6 +120,15 @@ pub const SESSION_COPY: &str = "session.copy";
 pub const SESSION_FORWARD: &str = "session.forward";
 /// An event of a member's session, for the central host's clients (X72).
 pub const SESSION_EVENT: &str = "session.event";
+/// A client of the central host attaches to a terminal of a session
+/// another member owns, through the central host (X72).
+pub const SESSION_ATTACH: &str = "session.attach";
+/// It stops following that terminal (X72).
+pub const SESSION_DETACH: &str = "session.detach";
+/// Central host → member (X72): attach to, or detach from, a terminal of
+/// one of its sessions for a client of the central host. Never forwarded
+/// from a client: only `session.attach` and `session.detach` make these.
+pub const SESSION_RELAY: &str = "session.relay";
 /// The central host's clients hear another member's session events as
 /// this, `{session, event}` (X72).
 pub const EV_SESSION_EVENT: &str = "session.event";
@@ -1022,7 +1031,13 @@ pub struct SessionOffered {
 pub struct SessionChat {
     pub session: String,
     pub terminal: crate::TerminalId,
-    pub state: crate::types::ChatState,
+    /// None when only `live` is news.
+    #[serde(default)]
+    pub state: Option<crate::types::ChatState>,
+    /// The session's chats that are still open: the central host forgets
+    /// the others.
+    #[serde(default)]
+    pub live: Option<Vec<crate::TerminalId>>,
 }
 
 /// `session.transcript`, member → central host (X72): bytes added to one
@@ -1077,8 +1092,11 @@ pub struct SessionCopyInfo {
     pub tree: String,
     pub head: String,
     pub chats: Vec<SessionCopyChat>,
-    /// The last checkpoint the central host holds in full.
+    /// The latest checkpoint the central host holds in full, of any chat.
     pub checkpoint: Option<SessionCheckpoint>,
+    /// The latest of each chat.
+    #[serde(default)]
+    pub checkpoints: Vec<SessionCheckpoint>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1103,6 +1121,42 @@ pub struct SessionForward {
 pub struct SessionEvent {
     pub session: String,
     pub event: crate::Message,
+}
+
+/// `session.attach {session, terminal, cols?, rows?}` (X72). The reply is
+/// `terminal.attach`'s, with the terminal under a relay id of the central
+/// host's: its output comes as `Frame::Output` of that id, and input sent
+/// to it reaches the terminal on its member.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionAttach {
+    pub session: String,
+    pub terminal: TerminalId,
+    #[serde(default)]
+    pub cols: Option<u16>,
+    #[serde(default)]
+    pub rows: Option<u16>,
+}
+
+/// `session.relay` (X72): `attach` to `terminal` of `session` as relay
+/// `relay`, or `detach` relay `relay`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionRelay {
+    pub op: String,
+    #[serde(default)]
+    pub session: String,
+    #[serde(default)]
+    pub terminal: TerminalId,
+    pub relay: TerminalId,
+    #[serde(default)]
+    pub cols: Option<u16>,
+    #[serde(default)]
+    pub rows: Option<u16>,
+}
+
+/// `session.detach {relay}` (X72).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionDetach {
+    pub relay: TerminalId,
 }
 
 /// `session.list`'s request. With `copies`, the list also holds the

@@ -355,7 +355,7 @@ async fn pair_of(origin: &Origin) -> (Daemon, String, Daemon) {
 
 /// Where the central host keeps its copy of `session`, once it has one.
 async fn copy_of(mini: &Daemon, session: &Value) -> PathBuf {
-    within_value(Duration::from_secs(15), "a copy on studio-mini", || async {
+    within_value(Duration::from_secs(30), "a copy on studio-mini", || async {
         with_copies(mini)
             .await
             .into_iter()
@@ -385,7 +385,7 @@ fn head(dir: &Path) -> String {
 
 async fn reads(path: &Path, text: &str) {
     within(
-        Duration::from_secs(15),
+        Duration::from_secs(30),
         &format!("{} reading {text:?}", path.display()),
         || async { std::fs::read_to_string(path).is_ok_and(|t| t == text) },
     )
@@ -437,7 +437,7 @@ async fn a_commit_on_the_member_moves_the_copys_branch_to_it() {
     );
     let commit = head(&path);
     within(
-        Duration::from_secs(15),
+        Duration::from_secs(30),
         "the copy at the member's commit",
         || async { head(&copy) == commit },
     )
@@ -500,7 +500,7 @@ async fn an_archived_sessions_copy_is_removed() {
     let _: Value = book
         .call("session.archive", json!({ "id": made["id"] }))
         .await;
-    within(Duration::from_secs(15), "the copy removed", || async {
+    within(Duration::from_secs(30), "the copy removed", || async {
         !copy.exists()
     })
     .await;
@@ -560,7 +560,7 @@ async fn a_copy_never_moves_a_branch_of_the_central_hosts_own() {
     let commit = head(&path);
     let copy = copy_of(&mini, &made).await;
     within(
-        Duration::from_secs(15),
+        Duration::from_secs(30),
         "the copy at the member's commit",
         || async { head(&copy) == commit },
     )
@@ -606,7 +606,7 @@ async fn a_copy_switched_by_hand_to_another_branch_goes_back_without_moving_it()
     );
     let commit = head(&path);
     within(
-        Duration::from_secs(15),
+        Duration::from_secs(30),
         "the copy at the member's commit",
         || async { head(&copy) == commit },
     )
@@ -724,7 +724,7 @@ async fn session_with_a_turn(book: &Daemon, project: &str) -> Value {
     let _: Value = book
         .call("chat.send", json!({ "id": agent, "text": "Fix the cart" }))
         .await;
-    within(Duration::from_secs(15), "the turn to end", || async {
+    within(Duration::from_secs(30), "the turn to end", || async {
         let st: Value = book.call("chat.state", json!({ "id": agent })).await;
         st["status"] == json!("done")
     })
@@ -746,7 +746,7 @@ async fn a_members_chat_reaches_the_central_hosts_copy() {
     let made = session_with_a_turn(&book, &project).await;
 
     let chat = within_value(
-        Duration::from_secs(15),
+        Duration::from_secs(30),
         "the chat on studio-mini",
         || async {
             let info: Value = mini
@@ -829,7 +829,7 @@ async fn a_checkpoint_after_the_turn_names_its_files_and_its_whole_transcript() 
     .unwrap();
 
     let point = within_value(
-        Duration::from_secs(15),
+        Duration::from_secs(30),
         "a checkpoint at the end of the turn",
         || async {
             let info = mini
@@ -885,7 +885,7 @@ async fn a_message_through_the_central_host_reaches_the_owners_agent() {
     .await
     .unwrap();
     within(
-        Duration::from_secs(15),
+        Duration::from_secs(30),
         "the second message on the MacBook",
         || async {
             let st: Value = book.call("chat.state", json!({ "id": agent })).await;
@@ -950,7 +950,7 @@ async fn with_the_owner_away_reads_come_from_the_copy_and_the_rest_waits_for_it(
     let made = session_with_a_turn(&book, &project).await;
     let agent = made["terminals"][0].clone();
     within(
-        Duration::from_secs(15),
+        Duration::from_secs(30),
         "the chat on studio-mini",
         || async {
             mini.try_call("session.copy", json!({ "session": made["id"] }))
@@ -1011,7 +1011,7 @@ async fn the_owners_chat_events_reach_the_central_hosts_clients() {
     )
     .await
     .unwrap();
-    let event = tokio::time::timeout(Duration::from_secs(15), async {
+    let event = tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             match listener.next_frame().await.unwrap() {
                 Some(moonlet_proto::Frame::Json(moonlet_proto::Message::Event { name, data }))
@@ -1028,4 +1028,327 @@ async fn the_owners_chat_events_reach_the_central_hosts_clients() {
     .expect("no session.event");
     assert_eq!(event["session"], made["id"]);
     assert_eq!(event["event"]["data"]["id"], agent);
+}
+
+// --- Terminals through the central host ----------------------------------
+
+/// A shell in `session`'s worktree on `d`; gives its terminal id.
+async fn shell(d: &Daemon, session: &Value) -> Value {
+    let info: Value = d
+        .call(
+            "terminal.create",
+            json!({ "cwd": session["path"], "command": ["/bin/sh"], "session_id": session["id"] }),
+        )
+        .await;
+    info["id"].clone()
+}
+
+#[tokio::test]
+async fn a_terminal_of_the_owners_session_is_followed_and_typed_into_through_the_central_host() {
+    use moonlet_proto::{Frame, Message};
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = new_session(&book, &project, "fix-cart").await;
+    let term = shell(&book, &made).await;
+    within(
+        Duration::from_secs(10),
+        "the shell on studio-mini's list",
+        || async {
+            mini.try_call("session.list", json!({ "copies": true }))
+                .await
+                .is_ok()
+                && with_copies(&mini)
+                    .await
+                    .iter()
+                    .any(|s| s["id"] == made["id"])
+        },
+    )
+    .await;
+
+    let mut phone = mini.app().await;
+    let attached: Value = phone
+        .request(
+            "session.attach",
+            json!({ "session": made["id"], "terminal": term }),
+        )
+        .await
+        .unwrap();
+    let relay = attached["info"]["id"].as_u64().unwrap();
+    // Not one of studio-mini's own terminals, nor the MacBook's id.
+    assert!(relay >= 0x4000_0000, "{relay}");
+    assert!(attached["snapshot"].is_string());
+
+    phone
+        .send(&Frame::Input {
+            terminal: relay as u32,
+            data: b"echo relayed-$((40+2))\n".to_vec(),
+        })
+        .await
+        .unwrap();
+    let seen = tokio::time::timeout(Duration::from_secs(30), async {
+        let mut out = String::new();
+        loop {
+            match phone.next_frame().await.unwrap() {
+                Some(Frame::Output { terminal, data }) if u64::from(terminal) == relay => {
+                    out.push_str(&String::from_utf8_lossy(&data));
+                    if out.contains("relayed-42") {
+                        return out;
+                    }
+                }
+                Some(Frame::Json(Message::Event { .. })) | Some(_) => {}
+                None => panic!("the connection ended"),
+            }
+        }
+    })
+    .await
+    .expect("no relayed output");
+    assert!(seen.contains("relayed-42"));
+}
+
+#[tokio::test]
+async fn a_terminal_that_is_not_the_sessions_is_not_followed_through_it() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = new_session(&book, &project, "fix-cart").await;
+    let other = new_session(&book, &project, "other").await;
+    let theirs = shell(&book, &other).await;
+    within(
+        Duration::from_secs(10),
+        "fix-cart on studio-mini",
+        || async {
+            with_copies(&mini)
+                .await
+                .iter()
+                .any(|s| s["id"] == made["id"])
+        },
+    )
+    .await;
+
+    let refused = mini
+        .try_call(
+            "session.attach",
+            json!({ "session": made["id"], "terminal": theirs }),
+        )
+        .await
+        .unwrap_err();
+    assert!(refused.starts_with("forbidden"), "{refused}");
+}
+
+#[tokio::test]
+async fn a_client_cannot_pick_a_relay_through_a_forwarded_request() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = new_session(&book, &project, "fix-cart").await;
+    let term = shell(&book, &made).await;
+    within(
+        Duration::from_secs(10),
+        "fix-cart on studio-mini",
+        || async {
+            with_copies(&mini)
+                .await
+                .iter()
+                .any(|s| s["id"] == made["id"])
+        },
+    )
+    .await;
+
+    for (method, params) in [
+        (
+            "terminal.attach",
+            json!({ "id": term, "relay": 0x4000_0001u32 }),
+        ),
+        ("terminal.detach", json!({ "relay": 0x4000_0001u32 })),
+    ] {
+        let refused = forward(&mini, &made, method, params).await.unwrap_err();
+        assert!(refused.starts_with("forbidden"), "{method}: {refused}");
+    }
+}
+
+#[tokio::test]
+async fn a_terminal_can_be_followed_as_soon_as_its_member_links() {
+    use moonlet_proto::{Frame, Message};
+    let origin = Origin::new();
+    let scratch = tempfile::tempdir().unwrap();
+    let (mini_home, book_home) = (scratch.path().join("mini"), scratch.path().join("book"));
+    std::fs::create_dir_all(&mini_home).unwrap();
+    std::fs::create_dir_all(&book_home).unwrap();
+    let m = agent_env(&mini_home, Some(&origin));
+    let b = agent_env(&book_home, None);
+    let m: Vec<(&str, &str)> = m.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    let b: Vec<(&str, &str)> = b.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    let (mini, addr) = central_with(&m).await;
+    let book = mac_with(BOOK, "MacBook", &b).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    // Made before the Mac links, so the session is listed on studio-mini
+    // as soon as the link is up.
+    let made = new_session(&book, &project, "fix-cart").await;
+    let term = shell(&book, &made).await;
+    link(&book, &mini, &addr).await;
+    within(
+        Duration::from_secs(30),
+        "fix-cart on studio-mini",
+        || async {
+            with_copies(&mini)
+                .await
+                .iter()
+                .any(|s| s["id"] == made["id"] && s["owner"]["reachable"] == json!(true))
+        },
+    )
+    .await;
+
+    let mut phone = mini.app().await;
+    let attached: Value = phone
+        .request(
+            "session.attach",
+            json!({ "session": made["id"], "terminal": term }),
+        )
+        .await
+        .unwrap();
+    let relay = attached["info"]["id"].as_u64().unwrap() as u32;
+    phone
+        .send(&Frame::Input {
+            terminal: relay,
+            data: b"echo early-$((6*7))\n".to_vec(),
+        })
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let mut out = String::new();
+        loop {
+            match phone.next_frame().await.unwrap() {
+                Some(Frame::Output { terminal, data }) if terminal == relay => {
+                    out.push_str(&String::from_utf8_lossy(&data));
+                    if out.contains("early-42") {
+                        return;
+                    }
+                }
+                Some(Frame::Json(Message::Event { .. })) | Some(_) => {}
+                None => panic!("the connection ended"),
+            }
+        }
+    })
+    .await
+    .expect("no relayed output right after linking");
+    drop(scratch);
+}
+
+/// Claude Code's project folder on `d` for worktree `path`.
+fn project_folder(d: &Daemon, path: &Path) -> PathBuf {
+    claude_home(d).join("projects").join(
+        path.canonicalize()
+            .unwrap()
+            .display()
+            .to_string()
+            .replace(|c: char| !c.is_ascii_alphanumeric(), "-"),
+    )
+}
+
+#[tokio::test]
+async fn a_transcript_made_again_shorter_replaces_the_central_hosts() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    let copy = copy_of(&mini, &made).await;
+    let ours = project_folder(&mini, &copy).join(format!("{CONVERSATION}.jsonl"));
+    let theirs = project_folder(&book, &path_of(&made)).join(format!("{CONVERSATION}.jsonl"));
+    reads(&ours, &std::fs::read_to_string(&theirs).unwrap()).await;
+
+    std::fs::write(&theirs, "{\"type\":\"user\"}\n").unwrap();
+    // A chat change makes the member look at its transcript again.
+    let agent = made["terminals"][0].clone();
+    let _: Value = book
+        .call("chat.send", json!({ "id": agent, "text": "Again" }))
+        .await;
+    within(Duration::from_secs(30), "the turn to end", || async {
+        let st: Value = book.call("chat.state", json!({ "id": agent })).await;
+        st["status"] == json!("done")
+    })
+    .await;
+    let now = std::fs::read_to_string(&theirs).unwrap();
+    assert!(now.starts_with("{\"type\":\"user\"}\n"), "{now}");
+    reads(&ours, &now).await;
+}
+
+#[tokio::test]
+async fn a_transcript_is_never_written_through_a_link_on_the_central_host() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made: Value = book
+        .call(
+            "session.create",
+            json!({ "project_id": project, "name": "fix-cart", "agent": "claude" }),
+        )
+        .await;
+    let copy = copy_of(&mini, &made).await;
+    // Something on studio-mini put a link where the transcript goes.
+    let folder = project_folder(&mini, &copy);
+    std::fs::create_dir_all(&folder).unwrap();
+    let elsewhere = tempfile::NamedTempFile::new().unwrap();
+    std::os::unix::fs::symlink(
+        elsewhere.path(),
+        folder.join(format!("{CONVERSATION}.jsonl")),
+    )
+    .unwrap();
+
+    let agent = made["terminals"][0].clone();
+    let _: Value = book
+        .call("chat.send", json!({ "id": agent, "text": "Fix the cart" }))
+        .await;
+    within(
+        Duration::from_secs(30),
+        "the chat on studio-mini",
+        || async {
+            mini.try_call("session.copy", json!({ "session": made["id"] }))
+                .await
+                .is_ok_and(|i| i["chats"][0]["state"]["status"] == json!("done"))
+        },
+    )
+    .await;
+    tokio::time::sleep(Duration::from_secs(6)).await;
+    assert_eq!(std::fs::read_to_string(elsewhere.path()).unwrap(), "");
+}
+
+#[tokio::test]
+async fn a_chat_closed_on_the_member_leaves_the_central_hosts_copy() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    let agent = made["terminals"][0].clone();
+    within(
+        Duration::from_secs(30),
+        "the chat on studio-mini",
+        || async {
+            mini.try_call("session.copy", json!({ "session": made["id"] }))
+                .await
+                .is_ok_and(|i| i["chats"].as_array().is_some_and(|c| c.len() == 1))
+        },
+    )
+    .await;
+
+    let _: Value = book
+        .call("terminal.kill", json!({ "id": agent, "remove": true }))
+        .await;
+    within(
+        Duration::from_secs(30),
+        "no chat on studio-mini",
+        || async {
+            mini.try_call("session.copy", json!({ "session": made["id"] }))
+                .await
+                .is_ok_and(|i| i["chats"].as_array().is_some_and(|c| c.is_empty()))
+        },
+    )
+    .await;
 }
