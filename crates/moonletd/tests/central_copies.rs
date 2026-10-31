@@ -2707,6 +2707,51 @@ async fn a_session_taken_over_while_the_central_host_was_offline_is_kept_when_it
 }
 
 #[tokio::test]
+async fn a_takeover_that_cannot_take_the_session_in_keeps_its_copy_and_is_never_sent() {
+    let origin = Origin::new();
+    let (mut mini, book, made) = continued_and_back(&origin).await;
+    let copies: Vec<Value> = book.call("sync.list", json!({})).await;
+    let copy = copies.iter().find(|c| c["session"] == made["id"]).unwrap().clone();
+    mini.stop();
+    within(Duration::from_secs(30), "studio-mini offline", || async {
+        let link: Value = book.call("link.get", json!({})).await;
+        link["unreachable_since"].is_u64()
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    // The MacBook cannot save its sessions: a folder is where it writes
+    // them first.
+    let blocked = book.home.path().join("state.json.tmp");
+    std::fs::create_dir_all(blocked.join("in-the-way")).unwrap();
+
+    let refused = book
+        .try_call("session.take_anyway", json!({ "session": made["id"] }))
+        .await
+        .unwrap_err();
+    assert!(refused.starts_with("failed"), "{refused}");
+    // Its copy is still kept, in the same folder.
+    let copies: Vec<Value> = book.call("sync.list", json!({})).await;
+    let kept = copies.iter().find(|c| c["id"] == copy["id"]).expect("the copy is kept");
+    assert_eq!(kept["path"], copy["path"]);
+    std::fs::remove_dir_all(&blocked).unwrap();
+
+    // Back, studio-mini still runs it: no takeover was sent.
+    mini.restart().await;
+    within(Duration::from_secs(30), "the copy in sync again", || async {
+        let copies: Vec<Value> = book.call("sync.list", json!({})).await;
+        copies
+            .iter()
+            .any(|c| c["id"] == copy["id"] && c["state"]["kind"] == json!("in_sync"))
+    })
+    .await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let mini_own: Vec<Value> = mini.call("session.list", json!({})).await;
+    assert!(mini_own.iter().any(|s| s["id"] == made["id"]), "{mini_own:?}");
+    let own: Vec<Value> = book.call("session.list", json!({})).await;
+    assert!(own.iter().all(|s| s["id"] != made["id"]), "{own:?}");
+}
+
+#[tokio::test]
 async fn a_kept_takeover_stays_on_the_mac_before_the_account_names_it_the_owner() {
     let origin = Origin::new();
     let (mut mini, mut book, made) = continued_and_back(&origin).await;

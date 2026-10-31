@@ -3444,40 +3444,21 @@ impl Daemon {
             return Err(RpcError::new("elsewhere", "that session runs on another member"));
         }
         let epoch = record.get("epoch").and_then(Value::as_u64).unwrap_or(1);
-        let (path, repo) = self.sync.release(session).await?;
-        let projects = self.sessions.list_projects();
-        let project = match projects.iter().find(|p| Path::new(&p.path) == repo) {
-            Some(p) => p.clone(),
-            None => self.sessions.add_project(&repo.display().to_string()).await.map_err(internal)?,
-        };
+        let released = self.sync.let_go(self.sync.hold(session).await?)?;
+        let path = released.path.clone();
         self.session_copies.set_forced(session, Some(epoch));
-        let adopted = self
-            .sessions
-            .adopt_session(moonlet_proto::types::Session {
-                id: session.to_string(),
-                project_id: project.id.clone(),
-                name: text("name").unwrap_or_default(),
-                branch: text("branch").unwrap_or_default(),
-                base: project.base_branch.clone(),
-                path: path.display().to_string(),
-                agent: Some("claude".into()),
-                archived: false,
-                created_at: record.get("created_at").and_then(Value::as_u64).unwrap_or(0),
-                workspace_id: text("workspace"),
-                model: None,
-                effort: None,
-                mode: None,
-                pr: None,
-                spawned_by: None,
-                task: None,
-                task_unlinked: false,
-                cloud: false,
-                terminals: Vec::new(),
-                layout: Value::Null,
-                restore: Vec::new(),
-                owner: None,
-            })
-            .map_err(internal)?;
+        let adopted = match self.adopt_brought(session, &record, &released.repo, &path).await {
+            Ok(adopted) => {
+                self.sync.hand_over(released).await;
+                adopted
+            }
+            // Its copy stays a copy, and no takeover is sent for it.
+            Err(e) => {
+                self.session_copies.set_forced(session, None);
+                self.sync.restore(released);
+                return Err(e);
+            }
+        };
         self.sessions
             .continue_chat(&adopted, moonlet_proto::types::ChatState::default())
             .map_err(internal)?;
