@@ -18,11 +18,27 @@ export function readOnlyLine(s: Session, central: string): string | null {
   return `${s.owner.name} is asleep. This is the copy on ${central}, read only.`;
 }
 
+/** How long the central host waits after a member becomes unreachable
+ * before it continues that member's sessions (X73). */
+const CONTINUE_AFTER_MS = 30_000;
+
+/** Seconds left at `now` (ms) before Continue on <central> can be pressed:
+ * the central host continues a session only once its member has been
+ * unreachable for 30 s (X73). 0 once it can, or when the central host does
+ * not say since when the member is away. */
+export function continueWait(s: Session, now: number): number {
+  const since = s.owner?.unreachable_since;
+  if (since == null) return 0;
+  return Math.max(0, Math.ceil((since + CONTINUE_AFTER_MS - now) / 1000));
+}
+
 /** The button that continues a session on the central host while its
- * member is unreachable (X73); none while it is reachable, or kept there. */
-export function continueOffer(s: Session, central: string): string | null {
+ * member is unreachable (X73), counting down the seconds until it can be
+ * pressed; none while it is reachable, or kept there. */
+export function continueOffer(s: Session, central: string, now = Date.now()): string | null {
   if (!s.owner || s.owner.reachable || s.pinned) return null;
-  return `Continue on ${central}`;
+  const wait = continueWait(s, now);
+  return wait > 0 ? `Continue on ${central} in ${wait} s` : `Continue on ${central}`;
 }
 
 /** What the phone says when Continue on <central> failed (X73), by the

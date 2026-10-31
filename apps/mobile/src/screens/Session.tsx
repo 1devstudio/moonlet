@@ -18,7 +18,7 @@ import { STATE_COLOR } from "../lib/palette";
 import { sessionLine, shellTerminals } from "../lib/chatView";
 import { useGitStatus, usePr } from "../lib/rowDetails";
 import { checksDot } from "../lib/checks";
-import { continueFailed, continueOffer, readOnlyLine } from "../lib/copies";
+import { continueFailed, continueOffer, continueWait, readOnlyLine } from "../lib/copies";
 import { parseCopyHost } from "@desktop/lib/copyHost";
 import { archiveSheet, archivedNote } from "../lib/archive";
 import { useBusy } from "../lib/busy";
@@ -155,6 +155,14 @@ export function SessionScreen({ host, id, tab }: { host: string; id: string; tab
   // Continue on <central> (X73): in progress, and why it failed.
   const [continuing, setContinuing] = useState(false);
   const [continueError, setContinueError] = useState<string | null>(null);
+  // Seconds until Continue can be pressed, counted down once a second.
+  const [ticks, tick] = useState(0);
+  const wait = session ? continueWait(session, Date.now()) : 0;
+  useEffect(() => {
+    if (wait <= 0) return;
+    const t = setTimeout(() => tick((n) => n + 1), 1000);
+    return () => clearTimeout(t);
+  }, [wait, ticks]);
   if (!d || !session) {
     return (
       <div className="p-6 text-muted" style={{ paddingTop: "calc(var(--safe-top) + 20px)" }}>
@@ -246,7 +254,7 @@ export function SessionScreen({ host, id, tab }: { host: string; id: string; tab
           <span className="min-w-0 flex-1">{readOnlyLine(session, centralLabel)}</span>
           {central && continueOffer(session, centralLabel) && (
             <Btn
-              disabled={continuing}
+              disabled={continuing || wait > 0}
               onClick={() => {
                 setContinuing(true);
                 setContinueError(null);
