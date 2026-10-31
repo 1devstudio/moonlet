@@ -1890,6 +1890,57 @@ async fn a_member_that_lost_its_session_keeps_its_gap_and_follows_the_new_owner(
 }
 
 #[tokio::test]
+async fn a_member_that_lost_its_session_lists_the_files_it_deleted_meanwhile() {
+    let origin = Origin::new();
+    let (mini, mut book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    let copy = copy_of(&mini, &made).await;
+    reads(&copy.join("src/cart.ts"), "b\n").await;
+    within(
+        Duration::from_secs(30),
+        "the checkpoint on studio-mini",
+        || async {
+            mini.try_call("session.copy", json!({ "session": made["id"] }))
+                .await
+                .is_ok_and(|i| !i["checkpoint"].is_null())
+        },
+    )
+    .await;
+
+    // The MacBook goes away; meanwhile a file goes from its worktree.
+    book.stop();
+    std::fs::remove_file(path_of(&made).join("src/cart.ts")).unwrap();
+    unreachable(&mini, &made).await;
+    let _: Value = mini
+        .call("session.continue_here", json!({ "session": made["id"] }))
+        .await;
+
+    book.restart().await;
+    within(
+        Duration::from_secs(30),
+        "fix-cart no longer the MacBook's own",
+        || async {
+            let own: Vec<Value> = book.call("session.list", json!({})).await;
+            own.iter().all(|s| s["id"] != made["id"])
+        },
+    )
+    .await;
+    // The gap's folder names the file it deleted.
+    let gap: Vec<PathBuf> = std::fs::read_dir(book.home.path().join("sync-leftovers"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| !p.display().to_string().contains("-worktree-"))
+        .collect();
+    assert_eq!(gap.len(), 1, "{gap:?}");
+    assert_eq!(
+        std::fs::read_to_string(gap[0].join("moonlet-deleted.txt")).unwrap(),
+        "src/cart.ts\n"
+    );
+}
+
+#[tokio::test]
 async fn a_member_lets_go_of_a_lost_session_once_its_worktree_is_free_again() {
     let origin = Origin::new();
     let (mini, mut book) = pair_with_agents(&origin).await;

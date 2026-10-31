@@ -41,6 +41,9 @@ const QUIET: Duration = Duration::from_millis(300);
 /// How often a member looks at its sessions with no file event: a commit
 /// in a linked worktree changes nothing the file watcher sees.
 const EVERY: Duration = Duration::from_secs(5);
+/// The file in a leftovers folder that lists the files deleted meanwhile,
+/// which the folder cannot hold themselves.
+const DELETED_LIST: &str = "moonlet-deleted.txt";
 
 /// Whether clone URL `url`, from a member, names `origin`, the project
 /// identity's origin (X41), whatever its scheme and user.
@@ -1761,12 +1764,15 @@ impl SessionCopies {
     }
 
     /// Saves the files of `dir` that differ between tree `was` (the last
-    /// offer) and `now` (the folder as it is) to a leftovers folder.
+    /// offer) and `now` (the folder as it is) to a leftovers folder. The
+    /// files deleted since are listed in its [`DELETED_LIST`], one a line.
     async fn keep_edits(&self, dir: &Path, was: &str, now: &str) -> Result<Option<PathBuf>> {
         let a = git_sync::read_files(dir, was).await?;
         let b = git_sync::read_files(dir, now).await?;
         let changed: Vec<&String> = b.keys().filter(|p| a.get(*p) != b.get(*p)).collect();
-        if changed.is_empty() {
+        let mut deleted: Vec<&String> = a.keys().filter(|p| !b.contains_key(*p)).collect();
+        deleted.sort();
+        if changed.is_empty() && deleted.is_empty() {
             return Ok(None);
         }
         let name = dir
@@ -1780,6 +1786,10 @@ impl SessionCopies {
                 std::fs::create_dir_all(parent)?;
             }
             std::fs::copy(dir.join(p), &to)?;
+        }
+        if !deleted.is_empty() {
+            let list: String = deleted.iter().map(|p| format!("{p}\n")).collect();
+            std::fs::write(folder.join(DELETED_LIST), list)?;
         }
         tracing::info!(
             "kept edits made in the copy {} in {}",
