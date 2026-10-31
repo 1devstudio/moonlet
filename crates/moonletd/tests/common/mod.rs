@@ -133,6 +133,22 @@ pub fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
+/// Waits up to `limit` for `get` to give a value; returns it.
+pub async fn within_value<T, F, Fut>(limit: Duration, what: &str, mut get: F) -> T
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Option<T>>,
+{
+    let start = Instant::now();
+    while start.elapsed() < limit {
+        if let Some(v) = get().await {
+            return v;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("{what} did not happen within {limit:?}");
+}
+
 /// Waits up to `limit` for `ok`; returns how long it took.
 pub async fn within<F, Fut>(limit: Duration, what: &str, mut ok: F) -> Duration
 where

@@ -954,6 +954,15 @@ impl SessionCreate {
     }
 }
 
+/// `session.list`'s request. With `copies`, the list also holds the
+/// sessions other members of the account own, each with its `owner` (X72).
+/// An older client sends nothing, and gets this host's own.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SessionList {
+    #[serde(default)]
+    pub copies: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionArchive {
     pub id: String,
