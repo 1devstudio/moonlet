@@ -1199,12 +1199,13 @@ impl SessionManager {
     pub fn continue_chat(&self, ws: &Session, mut history: moonlet_proto::types::ChatState) -> Result<TerminalInfo> {
         let chats = self.chat_runtime(Some("claude")).context("no structured chats")?;
         // Another member's word: a conversation id that is not one starts
-        // a new conversation, and a mode that turns every check off is
-        // never taken from it; it is set here, on this member.
+        // a new conversation, and a mode that turns every check off, or
+        // that this host does not know, is never taken from it; it is set
+        // here, on this member.
         if !history.agent_session.as_deref().is_some_and(crate::transcript::is_uuid) {
             history.agent_session = None;
         }
-        if history.mode.as_deref() == Some("bypassPermissions") {
+        if history.mode.as_deref().is_some_and(|m| m == "bypassPermissions" || !crate::chat::PERMISSION_MODES.contains(&m)) {
             history.mode = None;
         }
         let repo = self.project(&ws.project_id)?;
@@ -2837,6 +2838,21 @@ mod tests {
         assert!(st.queued.is_empty());
         let texts: Vec<&str> = st.items[2..].iter().map(|i| i.text.as_str()).collect();
         assert_eq!(texts, ["Also fix the header", "Not delivered: Claude stopped before reading this message."]);
+    }
+
+    /// X73: a permission mode this host does not know, from another
+    /// member's word, never stops its chat going on: it runs in the default.
+    #[tokio::test]
+    async fn a_continued_chat_with_an_unknown_mode_goes_on_in_the_default_one() {
+        let (repo, _home, mgr, chats) = structured().await;
+        let r = mgr.add_project(&repo.path().display().to_string()).await.unwrap();
+        let s = mgr.create_session(new_session(&r.id, None)).await.unwrap();
+        let history = moonlet_proto::types::ChatState { status: "done".into(), mode: Some("yolo".into()), ..Default::default() };
+
+        let chat = mgr.continue_chat(&s, history).unwrap();
+        assert_eq!(chats.state(chat.id).unwrap().mode, None);
+        let args = nth_line(&Path::new(&s.path).join("claude-args"), 1).await;
+        assert!(!args.contains("--permission-mode"), "{args}");
     }
 
     /// X64: a design system's agent has no session; it starts in its
