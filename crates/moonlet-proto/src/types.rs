@@ -663,6 +663,11 @@ pub struct SessionOwner {
     pub name: String,
     /// Whether its link to this host is up, so requests can reach it.
     pub reachable: bool,
+    /// Since when its link has been down (ms since the epoch, X73); none
+    /// while it is up. The central host continues its sessions only 30 s
+    /// after this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unreachable_since: Option<u64>,
 }
 
 /// A named, coloured scope with its own sections, sessions and (X33) Claude

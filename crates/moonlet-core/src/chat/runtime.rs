@@ -121,6 +121,21 @@ fn agent_state(status: &str) -> AgentState {
     }
 }
 
+/// A chat's state from another member, going on here (X73): what its
+/// agent had running is over, as after a daemon restart, and the messages
+/// it had not read yet say they never reached it.
+fn continued_state(mut st: ChatState) -> ChatState {
+    super::stop_subagents(&mut st);
+    for it in &mut st.items {
+        it.partial = false;
+        if let Some(t) = it.tool.as_mut().filter(|t| t.status == "running") {
+            t.status = "error".into();
+        }
+    }
+    super::undeliver(&mut st);
+    st
+}
+
 /// Asks that wait through a daemon restart.
 const KEPT_TOOLS: [&str; 2] = ["AskUserQuestion", "ExitPlanMode"];
 
@@ -172,6 +187,17 @@ impl ChatManager {
     }
 
     pub fn create(&self, req: ChatCreate) -> Result<TerminalInfo> {
+        self.create_from(req, None)
+    }
+
+    /// A chat that goes on from `history`, another member's chat of the same
+    /// session (X73): its items stay, and its agent resumes the same
+    /// conversation. What it had running or asking is over: it starts idle.
+    pub fn create_continuing(&self, req: ChatCreate, history: ChatState) -> Result<TerminalInfo> {
+        self.create_from(req, Some(history))
+    }
+
+    fn create_from(&self, req: ChatCreate, history: Option<ChatState>) -> Result<TerminalInfo> {
         let adapter = adapter_for(&req.agent).with_context(|| format!("{} has no structured mode", req.agent))?;
         check_mode(req.mode.as_deref())?;
         let cwd = crate::terminal::expand_home(&req.cwd);
@@ -181,6 +207,7 @@ impl ChatManager {
         // Only Claude has a permission mode.
         let mode = req.mode.filter(|_| req.agent == "claude");
         let add_dirs = req.add_dirs.iter().map(|d| check_dir(d)).collect::<Result<Vec<_>>>()?;
+        let continuing = history.is_some();
         let cfg = ChatConfig { agent: req.agent.clone(), model: req.model, effort: req.effort, mode, resume: None, name: req.name, cwd: cwd.display().to_string(), add_dirs: add_dirs.clone(), settings: req.settings, workspace: req.workspace, config_dir: None };
         let (program, args) = adapter.command(&cfg);
         let mut command = vec![program];
@@ -218,7 +245,10 @@ impl ChatManager {
                 info: info.clone(),
                 cfg,
                 env: req.env,
-                state: ChatState { status: "idle".into(), add_dirs, ..Default::default() },
+                state: match history {
+                    Some(h) => continued_state(ChatState { status: "idle".into(), pending: Vec::new(), turn_started_at: None, add_dirs, ..h }),
+                    None => ChatState { status: "idle".into(), add_dirs, ..Default::default() },
+                },
                 adapter: None,
                 stdin: None,
                 pid: None,
@@ -234,6 +264,11 @@ impl ChatManager {
         // Start right away so the agent is warm when the first message comes.
         {
             let mut inner = chat.inner.lock().unwrap();
+            // A continued conversation was put in this host's profile for
+            // the session (X73): it is resumed there, not started anew.
+            if continuing {
+                inner.cfg.config_dir = self.launch(&inner).env.get(crate::profiles::CONFIG_DIR_VAR).cloned();
+            }
             if let Err(e) = self.spawn(&chat, &mut inner) {
                 self.fail(&chat, &mut inner, &format!("{e:#}"));
             }

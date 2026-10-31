@@ -39,6 +39,12 @@ pub struct Workers {
     /// Connections dropped because their worker stopped answering pings,
     /// so a job can say why its worker went away (X62).
     missed: Mutex<std::collections::HashSet<u64>>,
+    /// When each worker that is not linked now last went away (ms), so the
+    /// central host waits before it continues its sessions (X73).
+    gone_since: Mutex<HashMap<String, u64>>,
+    /// When this daemon started: a worker not linked since went away then
+    /// at the latest.
+    started: u64,
     ping_every: Duration,
     emit: Box<dyn Fn(Message) + Send + Sync>,
 }
@@ -60,6 +66,8 @@ impl Workers {
             ),
             owners_file,
             missed: Mutex::default(),
+            gone_since: Mutex::default(),
+            started: now_ms(),
             ping_every,
             emit: Box::new(emit),
         }
@@ -175,6 +183,7 @@ impl Workers {
                 },
             )
         };
+        self.gone_since.lock().unwrap().remove(&id);
         let again = old.as_ref().is_some_and(|o| o.conn.id == conn.id);
         if let Some(old) = old
             && !again
@@ -191,13 +200,15 @@ impl Workers {
 
     /// Drops the workers on a connection that closed.
     pub fn disconnected(&self, conn: u64) {
-        let removed = {
+        let removed: Vec<String> = {
             let mut list = self.list.lock().unwrap();
-            let before = list.len();
+            let gone: Vec<String> = list.iter().filter(|(_, e)| e.conn.id == conn).map(|(id, _)| id.clone()).collect();
             list.retain(|_, e| e.conn.id != conn);
-            before != list.len()
+            gone
         };
-        if removed {
+        let now = now_ms();
+        self.gone_since.lock().unwrap().extend(removed.iter().map(|id| (id.clone(), now)));
+        if !removed.is_empty() {
             self.changed();
         }
     }
@@ -205,6 +216,16 @@ impl Workers {
     /// The connection of the linked worker `id` (X60).
     pub fn conn(&self, id: &str) -> Option<Arc<Conn>> {
         self.list.lock().unwrap().get(id).map(|e| e.conn.clone())
+    }
+
+    /// Since when worker `id` has not been linked (ms, X73); none while it
+    /// is.
+    pub fn unreachable_since(&self, id: &str) -> Option<u64> {
+        let list = self.list.lock().unwrap();
+        if list.contains_key(id) {
+            return None;
+        }
+        Some(self.gone_since.lock().unwrap().get(id).copied().unwrap_or(self.started))
     }
 
     /// Whether connection `conn` was dropped for missed pings.

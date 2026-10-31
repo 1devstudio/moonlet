@@ -290,17 +290,26 @@ impl Log {
             .into_iter()
             .map(|(id, c)| (id, log_owner(&c.stamp.member)))
             .collect();
+        self.records_where(kind, |c| {
+            maker.get(c.id.as_str()).copied().flatten().is_some_and(|m| log_owner(&c.stamp.member) == Some(m))
+        })
+    }
+
+    /// The records of `kind` by id, counting only the changes `keep` takes.
+    pub fn records_where(&self, kind: RecordKind, keep: impl Fn(&Change) -> bool) -> BTreeMap<String, Record> {
         let mut own = Log::new(&self.member);
         own.changes = self
             .changes
             .iter()
-            .filter(|(_, c)| {
-                c.kind == kind.as_str()
-                    && maker.get(c.id.as_str()).copied().flatten().is_some_and(|m| log_owner(&c.stamp.member) == Some(m))
-            })
+            .filter(|(_, c)| c.kind == kind.as_str() && keep(c))
             .map(|(k, c)| (k.clone(), c.clone()))
             .collect();
         own.records(kind)
+    }
+
+    /// The changes to records of `kind`, from every member.
+    pub fn changes_of(&self, kind: RecordKind) -> impl Iterator<Item = &Change> {
+        self.changes.values().filter(move |c| c.kind == kind.as_str())
     }
 
     /// The records of `kind` by id, each field at its latest change.

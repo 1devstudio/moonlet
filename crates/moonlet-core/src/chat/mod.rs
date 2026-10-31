@@ -26,6 +26,32 @@ pub fn check_mode(mode: Option<&str>) -> anyhow::Result<()> {
     }
 }
 
+/// Whether `value` is a model or effort name as agents take them, such
+/// as `opus` or `claude-opus-4-1[1m]`: one another member's word may give.
+pub fn plain_setting(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && !value.starts_with('-')
+        && value.chars().all(|c| c.is_ascii_alphanumeric() || "._-[]:".contains(c))
+}
+
+/// The folders in `dirs` inside `from`, as the same folders inside `to`
+/// (X73): another member's grants inside its worktree, for this host's
+/// copy of it. A folder anywhere else, or one that leaves `from` with
+/// `..`, is dropped.
+pub fn moved_dirs(dirs: &[String], from: &str, to: &str) -> Vec<String> {
+    use std::path::{Component, Path};
+    dirs.iter()
+        .filter_map(|d| {
+            let inside = Path::new(d).strip_prefix(from).ok()?;
+            if from.is_empty() || inside.components().any(|c| !matches!(c, Component::Normal(_))) {
+                return None;
+            }
+            Some(Path::new(to).join(inside).display().to_string())
+        })
+        .collect()
+}
+
 /// Permission modes from the least to the most permissive (X22).
 const MODE_ORDER: [&str; 5] = ["plan", "manual", "acceptEdits", "auto", "bypassPermissions"];
 
@@ -391,6 +417,16 @@ pub fn diff_for(name: &str, input: &serde_json::Value) -> Option<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_members_model_or_effort_is_taken_only_as_a_plain_name() {
+        for ok in ["opus", "claude-opus-4-1[1m]", "gpt-5.1-codex", "high"] {
+            assert!(plain_setting(ok), "{ok}");
+        }
+        for refused in ["", "--dangerously-skip-permissions", "opus; rm -rf ~", "high effort", "$(id)"] {
+            assert!(!plain_setting(refused), "{refused}");
+        }
+    }
 
     #[test]
     fn summaries_and_diffs() {
