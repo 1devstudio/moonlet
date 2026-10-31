@@ -368,9 +368,10 @@ async fn proxy(socket: PathBuf) -> Result<()> {
     let (mut sr, mut sw) = stream.into_split();
     // Stdin EOF only half-closes the socket: replies still in flight reach
     // stdout, and the proxy exits when the daemon closes the stream.
+    let vouch = ssh_session_command();
     let up = tokio::spawn(async move {
         let mut stdin = tokio::io::stdin();
-        if forward_hello(&mut stdin, &mut sw).await.is_ok() {
+        if forward_hello(&mut stdin, &mut sw, vouch).await.is_ok() {
             let _ = tokio::io::copy(&mut stdin, &mut sw).await;
         }
         let _ = tokio::io::AsyncWriteExt::shutdown(&mut sw).await;
@@ -382,13 +383,32 @@ async fn proxy(socket: PathBuf) -> Result<()> {
     Ok(())
 }
 
+/// Whether this proxy runs as an SSH session's command (X75), so the SSH
+/// login proved who the user is: sshd started it, directly or through the
+/// login shell, and it is not in a moonlet terminal. The daemon checks the
+/// same for itself before it takes the proxy for the app.
+fn ssh_session_command() -> bool {
+    let parent = std::os::unix::process::parent_id();
+    let mut names = Vec::new();
+    if let Some(name) = moonlet_core::process::name(parent) {
+        names.push(name);
+        if let Some(name) = moonlet_core::process::parent(parent).and_then(moonlet_core::process::name) {
+            names.push(name);
+        }
+    }
+    let names: Vec<&str> = names.iter().map(String::as_str).collect();
+    moonlet_core::app_token::ssh_session_command(|var| std::env::var_os(var).is_some(), &names)
+}
+
 /// Forwards the client's first frame. The Mac's app cannot read this host's
-/// app credential (X75), so a `hello` from `moonlet-app` without one gets it
-/// here: the proxy runs as the user, and the SSH login proved who that is.
-/// Any other first frame, and any other client's `hello`, goes on unchanged.
+/// app credential (X75), so when the proxy runs as an SSH session's command
+/// (`vouch`), a `hello` from `moonlet-app` gets it here. A credential the
+/// client sent never goes through: the daemon would take the proxy for the
+/// app. Any other first frame goes on unchanged.
 async fn forward_hello(
     from: &mut (impl tokio::io::AsyncRead + Unpin),
     to: &mut (impl tokio::io::AsyncWrite + Unpin),
+    vouch: bool,
 ) -> std::io::Result<()> {
     use moonlet_proto::{Frame, Message};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -401,17 +421,16 @@ async fn forward_hello(
     }
     let mut frames = moonlet_proto::FrameDecoder::new();
     frames.push(&raw);
-    if let Ok(Some(Frame::Json(Message::Hello { protocol, client, app_token: None }))) =
-        frames.next_frame()
-        && client == daemon::APP_CLIENT
-        && let Some(token) = moonlet_core::app_token::read(&moonlet_core::app_token::file())
-        && let Ok(hello) = moonlet_proto::encode_frame(&Frame::Json(Message::Hello {
-            protocol,
-            client,
-            app_token: Some(token),
-        }))
-    {
-        raw = hello;
+    if let Ok(Some(Frame::Json(Message::Hello { protocol, client, app_token: sent }))) = frames.next_frame() {
+        let token = if vouch && client == daemon::APP_CLIENT {
+            moonlet_core::app_token::read(&moonlet_core::app_token::file())
+        } else {
+            None
+        };
+        if sent.is_some() || token.is_some() {
+            let hello = Frame::Json(Message::Hello { protocol, client, app_token: token });
+            raw = moonlet_proto::encode_frame(&hello).map_err(std::io::Error::other)?;
+        }
     }
     to.write_all(&raw).await
 }

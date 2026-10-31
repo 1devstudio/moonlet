@@ -77,6 +77,8 @@ pub struct Daemon {
     /// The executable a test connects from as the app (X75), from
     /// `MOONLET_TEST_APP_EXE`.
     test_app_exe: Option<std::path::PathBuf>,
+    /// sshd's executable for a test (X75), from `MOONLET_TEST_SSHD_EXE`.
+    test_sshd_exe: Option<std::path::PathBuf>,
     /// Sign-ins on this member that wait for the browser to come back (X75).
     callbacks: crate::signin::Callbacks,
     /// URLs whose forward's port was taken here, by URL, for Retry (X75).
@@ -649,6 +651,9 @@ impl Daemon {
                 String::new()
             }),
             test_app_exe: std::env::var_os(moonlet_core::app_token::TEST_APP_EXE)
+                .filter(|v| !v.is_empty())
+                .map(std::path::PathBuf::from),
+            test_sshd_exe: std::env::var_os(moonlet_core::app_token::TEST_SSHD_EXE)
                 .filter(|v| !v.is_empty())
                 .map(std::path::PathBuf::from),
             callbacks: crate::signin::Callbacks::default(),
@@ -4574,23 +4579,34 @@ impl Daemon {
 
     /// Whether a connection on the local socket is this Mac's app (X75):
     /// its `hello` sent the app credential, and the process at the other
-    /// end, as the kernel says, runs the app beside this daemon's executable
-    /// or this executable itself (`moonletd proxy`, which vouches for the
-    /// app on an SSH host). Anything it cannot tell is not the app.
+    /// end, as the kernel says, runs the app beside this daemon's
+    /// executable, or runs this executable within an SSH session
+    /// (`moonletd proxy`, which vouches for the app on an SSH host). Anything
+    /// it cannot tell is not the app.
     pub fn is_app(&self, sent: Option<&str>, peer_pid: Option<u32>) -> bool {
+        use moonlet_core::app_token::{self, Peer};
         let Some(sent) = sent else { return false };
-        if self.app_token.is_empty() || !moonlet_core::app_token::matches(&self.app_token, sent) {
+        if self.app_token.is_empty() || !app_token::matches(&self.app_token, sent) {
             return false;
         }
-        let exe = peer_pid.and_then(moonlet_core::process::executable);
-        let app = match (&exe, std::env::current_exe()) {
-            (Some(exe), Ok(daemon)) => {
-                moonlet_core::app_token::may_be_the_app(exe, &daemon, self.test_app_exe.as_deref())
-            }
-            _ => false,
+        let (Some(pid), Ok(daemon)) = (peer_pid, std::env::current_exe()) else {
+            return false;
+        };
+        let exe = moonlet_core::process::executable(pid);
+        let peer = exe
+            .as_deref()
+            .map_or(Peer::Other, |exe| app_token::peer(exe, &daemon, self.test_app_exe.as_deref()));
+        let app = match peer {
+            Peer::App => true,
+            Peer::Moonletd => app_token::vouched_by_ssh(
+                &moonlet_core::process::ancestors(pid, 4),
+                std::process::id(),
+                self.test_sshd_exe.as_deref(),
+            ),
+            Peer::Other => false,
         };
         if !app {
-            tracing::warn!(?exe, "a connection with the app credential is not the app");
+            tracing::warn!(?exe, ?peer, "a connection with the app credential is not the app");
         }
         app
     }

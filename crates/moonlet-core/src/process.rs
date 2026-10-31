@@ -62,6 +62,24 @@ pub fn parent(pid: u32) -> Option<u32> {
     }
 }
 
+/// The nearest `hops` ancestors of process `pid`, parent first, with the
+/// executable each runs; it stops at the first the kernel does not show,
+/// and before launchd or init.
+pub fn ancestors(pid: u32, hops: usize) -> Vec<(u32, Option<PathBuf>)> {
+    let mut out = Vec::new();
+    let mut at = pid;
+    while out.len() < hops {
+        match parent(at) {
+            Some(p) if p > 1 => {
+                out.push((p, executable(p)));
+                at = p;
+            }
+            _ => break,
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -78,6 +96,16 @@ mod tests {
         assert_eq!(exe.as_deref().and_then(|e| e.file_name()), Some("sleep".as_ref()));
         assert_eq!(named.as_deref(), Some("sleep"));
         assert_eq!(parent_of_child, Some(std::process::id()));
+    }
+
+    #[test]
+    fn a_child_s_ancestors_start_with_this_process() {
+        let mut child = std::process::Command::new("/bin/sleep").arg("5").spawn().unwrap();
+        let up = ancestors(child.id(), 4);
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert_eq!(up[0], (std::process::id(), std::env::current_exe().ok()));
+        assert!(up.len() <= 4);
     }
 
     #[test]
