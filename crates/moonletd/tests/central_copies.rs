@@ -2139,6 +2139,58 @@ async fn a_member_that_lost_its_session_lists_the_files_it_deleted_meanwhile() {
 }
 
 #[tokio::test]
+async fn the_message_that_brings_a_session_back_goes_to_the_chat_it_was_typed_in_with_its_images() {
+    let origin = Origin::new();
+    let (mini, book, made) = continued_and_back(&origin).await;
+    let own: Vec<Value> = mini.call("session.list", json!({})).await;
+    let there = own.iter().find(|s| s["id"] == made["id"]).unwrap().clone();
+    // A second chat on studio-mini, the one the user types in.
+    let second: Value = mini
+        .call(
+            "terminal.create",
+            json!({ "cwd": there["path"], "session_id": made["id"], "kind": "agent", "agent": "claude", "chat": true }),
+        )
+        .await;
+
+    let back: Value = book
+        .call(
+            "session.bring",
+            json!({
+                "session": made["id"],
+                "terminal": second["id"],
+                "message": "Back here",
+                "images": [{ "name": "cart.png", "media_type": "image/png", "data": "aGVsbG8=" }],
+            }),
+        )
+        .await;
+    let chats = back["terminals"].as_array().unwrap().clone();
+    assert_eq!(chats.len(), 2);
+    within(
+        Duration::from_secs(30),
+        "the message in the second chat",
+        || async {
+            let st: Value = book.call("chat.state", json!({ "id": chats[1] })).await;
+            st["items"]
+                .as_array()
+                .is_some_and(|i| i.iter().any(|i| i["kind"] == json!("user") && i["text"] == json!("Back here\n[image: cart.png]")))
+        },
+    )
+    .await;
+    let first: Value = book.call("chat.state", json!({ "id": chats[0] })).await;
+    assert!(
+        first["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|i| !i["text"].as_str().unwrap_or("").contains("Back here"))
+    );
+    within(Duration::from_secs(30), "the image to the agent", || async {
+        agent_log(&book, "claude-user").contains("aGVsbG8=")
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn a_session_whose_new_owner_cannot_be_recorded_stays_on_the_central_host() {
     let origin = Origin::new();
     let (mini, book, made) = continued_and_back(&origin).await;
@@ -2493,6 +2545,13 @@ async fn a_session_moved_to_this_mac_stays_through_sleep_until_unpinned() {
         .await;
     let own: Vec<Value> = book.call("session.list", json!({})).await;
     assert!(own.iter().any(|s| s["id"] == made["id"]));
+    // Listed as kept here, once the central host's pin arrives.
+    within(Duration::from_secs(30), "kept on the MacBook", || async {
+        let own: Vec<Value> = book.call("session.list", json!({})).await;
+        own.iter()
+            .any(|s| s["id"] == made["id"] && s["pinned"] == json!(BOOK))
+    })
+    .await;
 
     // Pinned here: going to sleep keeps it.
     let _: Value = book
@@ -2665,6 +2724,43 @@ async fn a_session_kept_on_the_central_host_is_unpinned_from_the_mac() {
             .is_ok()
     })
     .await;
+    let own: Vec<Value> = book.call("session.list", json!({})).await;
+    assert!(own.iter().any(|s| s["id"] == made["id"]));
+}
+
+#[tokio::test]
+async fn a_session_kept_on_the_central_host_moves_back_to_the_mac_when_asked() {
+    let origin = Origin::new();
+    let (_mini, book, made) = continued_and_back(&origin).await;
+    let _: Value = book
+        .call("session.move", json!({ "session": made["id"], "to": MINI }))
+        .await;
+    within(
+        Duration::from_secs(30),
+        "the MacBook to hear studio-mini keeps it",
+        || async {
+            let copies = with_copies(&book).await;
+            owner_of_copy(&copies, &made).is_some_and(|o| o["worker"] == json!(MINI))
+        },
+    )
+    .await;
+    within(
+        Duration::from_secs(30),
+        "a live copy on the MacBook",
+        || async {
+            let copies: Vec<Value> = book.call("sync.list", json!({})).await;
+            copies
+                .iter()
+                .any(|c| c["session"] == made["id"] && !c["path"].as_str().unwrap_or("").is_empty())
+        },
+    )
+    .await;
+
+    // Move to… another member changes where it is kept.
+    let moved: Value = book
+        .call("session.move", json!({ "session": made["id"], "to": BOOK }))
+        .await;
+    assert_eq!(moved["id"], made["id"]);
     let own: Vec<Value> = book.call("session.list", json!({})).await;
     assert!(own.iter().any(|s| s["id"] == made["id"]));
 }

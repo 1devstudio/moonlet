@@ -1245,7 +1245,9 @@ pub struct SessionTranscriptFetched {
     pub pack: Option<u32>,
 }
 
-/// `session.bring {session, now, message?}`, app → its own daemon (X73).
+/// `session.bring {session, now, message?, terminal?, images}`, app → its
+/// own daemon (X73). The message goes, with its images, to the chat that
+/// goes on from `terminal`, the chat it was typed in where the session ran.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionBring {
     pub session: String,
@@ -1253,6 +1255,10 @@ pub struct SessionBring {
     pub now: bool,
     #[serde(default)]
     pub message: Option<String>,
+    #[serde(default)]
+    pub terminal: Option<TerminalId>,
+    #[serde(default)]
+    pub images: Vec<crate::types::ChatImage>,
 }
 
 /// `session.yield {sessions}`, member → central host (X73): the member is
@@ -1260,7 +1266,8 @@ pub struct SessionBring {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionYield {
     pub sessions: Vec<String>,
-    /// Why, for a cut-off turn's note; going to sleep when none.
+    /// Why, by name: `moved` (Move to…), else going to sleep. The central
+    /// host words the note itself.
     #[serde(default)]
     pub why: Option<String>,
     /// Keep them on the central host (Move to…).
