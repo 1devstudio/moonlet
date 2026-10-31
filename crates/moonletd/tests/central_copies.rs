@@ -1573,6 +1573,54 @@ async fn a_continued_chat_never_takes_bypass_permissions_from_the_member() {
 }
 
 #[tokio::test]
+async fn a_continued_chat_keeps_its_folders_inside_the_worktree_in_the_copy() {
+    let origin = Origin::new();
+    let (mini, book) = pair_with_agents(&origin).await;
+    origin.add_to(&mini).await;
+    let project = origin.add_to(&book).await;
+    let made = session_with_a_turn(&book, &project).await;
+    let agent = made["terminals"][0].clone();
+    let elsewhere = tempfile::tempdir().unwrap();
+    for dir in [path_of(&made).join("src"), elsewhere.path().to_path_buf()] {
+        let _: Value = book
+            .call("chat.add_dir", json!({ "id": agent, "path": dir }))
+            .await;
+    }
+    within(
+        Duration::from_secs(30),
+        "the folders in studio-mini's copy",
+        || async {
+            mini.try_call("session.copy", json!({ "session": made["id"] }))
+                .await
+                .is_ok_and(|i| {
+                    i["chats"][0]["state"]["add_dirs"]
+                        .as_array()
+                        .is_some_and(|d| d.len() == 2)
+                        && !i["path"].as_str().unwrap_or("").is_empty()
+                })
+        },
+    )
+    .await;
+    drop(book);
+    unreachable(&mini, &made).await;
+
+    let continued: Value = mini
+        .call("session.continue_here", json!({ "session": made["id"] }))
+        .await;
+    let src = path_of(&continued).join("src").display().to_string();
+    let st: Value = mini
+        .call("chat.state", json!({ "id": continued["terminals"][0] }))
+        .await;
+    assert_eq!(st["add_dirs"], json!([src]));
+    within(
+        Duration::from_secs(30),
+        "the agent on studio-mini",
+        || async { agent_log(&mini, "claude-args").contains(&format!("--add-dir {src}")) },
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn an_archived_session_is_not_continued_on_the_central_host() {
     let origin = Origin::new();
     let (mini, _addr, book) = pair_of(&origin).await;

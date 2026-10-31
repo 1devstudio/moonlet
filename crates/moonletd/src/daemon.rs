@@ -2711,8 +2711,11 @@ impl Daemon {
         };
         self.session_copies.forget_copy(session, &taken).await;
         let from = self.sessions.member_names().remove(&owner).unwrap_or(owner);
-        for chat in info.chats {
+        for mut chat in info.chats {
             let cut_off = matches!(chat.state.status.as_str(), "working" | "blocked");
+            // Folders it was given inside the member's worktree are the
+            // same ones in the copy.
+            chat.state.add_dirs = moonlet_core::chat::moved_dirs(&chat.state.add_dirs, &taken.from_path, &adopted.path);
             // One chat that cannot go on never holds back the others.
             let started = match self.sessions.continue_chat(&adopted, chat.state) {
                 Ok(started) => started,
