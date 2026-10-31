@@ -1327,6 +1327,7 @@ impl Daemon {
                     session: r.session,
                     session_name: r.session_name,
                     forward: r.forward,
+                    forward_key: r.forward_key,
                     to: None,
                     device: None,
                     waiting: unknown,
@@ -4007,12 +4008,15 @@ impl Daemon {
         {
             let d = Arc::downgrade(self);
             let to = member.clone();
+            // Only this Mac was given the callback's key.
+            let key = show.forward_key.clone().unwrap_or_default();
             let pass: crate::signin::Pass = Arc::new(move |request: Vec<u8>| {
                 let d = d.clone();
                 let member = to.clone();
+                let key = key.clone();
                 Box::pin(async move {
                     let d = d.upgrade().ok_or_else(|| RpcError::new("gone", "the daemon is stopping"))?;
-                    d.tunnel_to(&member, port, request).await
+                    d.tunnel_to(&member, port, key, request).await
                 })
             });
             // Tests run every member on one machine: a forward listens a few
@@ -4030,12 +4034,12 @@ impl Daemon {
     }
 
     /// Passes a request the browser made to this Mac's forward on to member
-    /// `member`'s port: through the central host, or straight to the member
-    /// when this is the central host.
-    async fn tunnel_to(&self, member: &str, port: u16, request: Vec<u8>) -> Result<Vec<u8>, RpcError> {
+    /// `member`'s port, with the callback's `key`: through the central host,
+    /// or straight to the member when this is the central host.
+    async fn tunnel_to(&self, member: &str, port: u16, key: String, request: Vec<u8>) -> Result<Vec<u8>, RpcError> {
         use base64::Engine;
         let b64 = base64::engine::general_purpose::STANDARD;
-        let r = m::TunnelOpen { member: member.to_string(), port, data: b64.encode(&request) };
+        let r = m::TunnelOpen { member: member.to_string(), port, data: b64.encode(&request), key };
         let params = serde_json::to_value(&r).map_err(internal)?;
         let answer = if self.link.info().central.is_none() {
             let conn = self.workers.conn(member).ok_or_else(|| RpcError::new("gone", "that member is away"))?;
@@ -4049,11 +4053,13 @@ impl Daemon {
     }
 
     /// `tunnel.open` for one of this member's sign-ins: only a port with a
-    /// callback still waiting, and only its loopback address.
+    /// callback still waiting, with the key it was shown with, and only its
+    /// loopback address. Another member, which never got the key, never
+    /// reaches it.
     async fn tunnel_here(&self, r: m::TunnelOpen) -> Result<m::TunnelAnswer, RpcError> {
         use base64::Engine;
         let b64 = base64::engine::general_purpose::STANDARD;
-        if !self.callbacks.waiting(r.port).await {
+        if !self.callbacks.waiting(r.port, &r.key).await {
             return Err(RpcError::new("forbidden", "no sign-in waits on that port"));
         }
         let request = b64.decode(&r.data).map_err(|e| RpcError::new("invalid_params", e.to_string()))?;
@@ -4090,6 +4096,8 @@ impl Daemon {
     /// app to take with `browser.pending` when it connects; the user's
     /// next activity in the app then reaches the central host at once.
     fn show_in_app(&self, mut show: m::BrowserShow) -> bool {
+        // The forward has the key; the app never needs it.
+        show.forward_key = None;
         let mut waiting = self.waiting_shows.lock().unwrap();
         if self.local_apps.load(std::sync::atomic::Ordering::SeqCst) > 0 {
             drop(waiting);
@@ -4152,13 +4160,18 @@ impl Daemon {
         let session_name = r.session.as_deref().and_then(|s| self.sessions.session(s).ok()).map(|s| s.name);
         let info = self.link.info();
         // A sign-in that comes back to a port its own command listens on.
-        let forward = self.callbacks.register(&r.url, caller).await;
+        let callback = self.callbacks.register(&r.url, caller).await;
+        let (forward, forward_key) = match callback {
+            Some((port, key)) => (Some(port), Some(key)),
+            None => (None, None),
+        };
         let mut show = m::BrowserShow {
             url: r.url,
             from: info.worker.name,
             session: r.session,
             session_name,
             forward,
+            forward_key,
             to: None,
             device: None,
             waiting: false,
@@ -4184,6 +4197,7 @@ impl Daemon {
                         session: show.session.clone(),
                         session_name: show.session_name.clone(),
                         forward: show.forward,
+                        forward_key: show.forward_key.clone(),
                     })
                     .map_err(internal)?,
                 )
@@ -4213,6 +4227,8 @@ impl Daemon {
             Client::Phone(device) => {
                 show.to = Some("phone".into());
                 show.device = Some(device.clone());
+                // A phone opens no forward: it never gets the key.
+                show.forward_key = None;
                 let mut phones = self.phone_shows.lock().unwrap();
                 if phones.open.get(&device).is_some_and(|n| *n > 0) {
                     drop(phones);

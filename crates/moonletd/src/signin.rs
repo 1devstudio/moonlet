@@ -152,6 +152,30 @@ pub fn listens_itself(listening: &[u32], lineage: &[u32]) -> bool {
 #[derive(Debug, Clone)]
 struct Callback {
     until: Instant,
+    /// The secret only the Mac it is shown on has: a `tunnel.open`
+    /// without it never reaches the port.
+    key: String,
+}
+
+/// A new callback key: 32 random bytes, as hex.
+fn new_key() -> Option<String> {
+    use std::io::Read;
+    let mut bytes = [0u8; 32];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut bytes))
+        .ok()?;
+    Some(moonlet_core::hash::hex(&bytes))
+}
+
+/// Whether `sent` is `key`, in a time that says nothing about how much of
+/// it matched.
+fn same_key(key: &str, sent: &str) -> bool {
+    key.len() == sent.len()
+        && key
+            .bytes()
+            .zip(sent.bytes())
+            .fold(0u8, |diff, (a, b)| diff | (a ^ b))
+            == 0
 }
 
 /// This member's callbacks, by port.
@@ -163,14 +187,15 @@ pub struct Callbacks {
 impl Callbacks {
     /// Registers a callback for the port `url` comes back to, when the
     /// process `caller` (the CLI that `moonlet-open` ran) or one of its
-    /// ancestors below this daemon listens on it. Gives the port.
-    pub async fn register(&self, url: &str, caller: Option<u32>) -> Option<u16> {
+    /// ancestors below this daemon listens on it. Gives the port, and the
+    /// key a `tunnel.open` for it needs.
+    pub async fn register(&self, url: &str, caller: Option<u32>) -> Option<(u16, String)> {
         self.register_below(url, caller?, std::process::id()).await
     }
 
     /// [`Self::register`], `daemon` being the process that started the
     /// terminal or agent: neither it nor its own ports ever count.
-    async fn register_below(&self, url: &str, caller: u32, daemon: u32) -> Option<u16> {
+    async fn register_below(&self, url: &str, caller: u32, daemon: u32) -> Option<(u16, String)> {
         let port = moonlet_core::browser::redirect_port(url)?;
         let lineage = lineage(caller, daemon).await;
         let listening: Vec<u32> = listening(port)
@@ -181,22 +206,25 @@ impl Callbacks {
         if !listens_itself(&listening, &lineage) {
             return None;
         }
+        let key = new_key()?;
         self.list.lock().unwrap().insert(
             port,
             Callback {
                 until: Instant::now() + LIFETIME,
+                key: key.clone(),
             },
         );
-        Some(port)
+        Some((port, key))
     }
 
-    /// Whether port `port` has a callback still waiting: registered, not
-    /// timed out, and something still listening on it.
-    pub async fn waiting(&self, port: u16) -> bool {
+    /// Whether port `port` has a callback still waiting for key `key`:
+    /// registered with that key, not timed out, and something still
+    /// listening on it.
+    pub async fn waiting(&self, port: u16, key: &str) -> bool {
         let alive = {
             let mut list = self.list.lock().unwrap();
             list.retain(|_, c| c.until > Instant::now());
-            list.contains_key(&port)
+            list.get(&port).is_some_and(|c| same_key(&c.key, key))
         };
         if alive && listening(port).await.is_empty() {
             self.list.lock().unwrap().remove(&port);
@@ -669,8 +697,13 @@ srv.serve_forever()
             format!("https://id.example.test/auth?redirect_uri=http%3A%2F%2Flocalhost%3A{port}%2F");
         let callbacks = Callbacks::default();
         let me = std::process::id();
-        assert_eq!(callbacks.register_below(&url, me, 0).await, Some(port));
-        assert!(callbacks.waiting(port).await);
+        let (got, key) = callbacks.register_below(&url, me, 0).await.unwrap();
+        assert_eq!(got, port);
+        assert!(callbacks.waiting(port, &key).await);
+        assert_eq!(key.len(), 64);
+        // Another key, or none, finds nothing waiting.
+        assert!(!callbacks.waiting(port, &"5f".repeat(32)).await);
+        assert!(!callbacks.waiting(port, "").await);
         // A port another process holds gets none.
         let mut other = std::process::Command::new("python3")
             .args(["-c", "import socket,time;s=socket.socket();s.bind(('127.0.0.1',0));s.listen();print(s.getsockname()[1],flush=True);time.sleep(30)"])
@@ -698,6 +731,6 @@ srv.serve_forever()
         let _ = other.kill();
         // Once nothing listens, it waits no more.
         drop(mine);
-        assert!(!callbacks.waiting(port).await);
+        assert!(!callbacks.waiting(port, &key).await);
     }
 }

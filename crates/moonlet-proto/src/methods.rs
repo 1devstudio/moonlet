@@ -1370,6 +1370,11 @@ pub struct BrowserShow {
     pub session_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub forward: Option<u16>,
+    /// The secret the asking member made for the forward's callback: only
+    /// the Mac it is shown on passes it in `tunnel.open`. Never sent to an
+    /// app or a phone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forward_key: Option<String>,
     /// `phone` when it is for the phone, which the user used last; the
     /// app leaves it alone then.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1390,12 +1395,14 @@ pub struct BrowserShow {
 }
 
 /// `tunnel.open`: the bytes of one HTTP request, in base64, for `port` on
-/// member `member`.
+/// member `member`, with the key its callback was shown with.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TunnelOpen {
     pub member: String,
     pub port: u16,
     pub data: String,
+    #[serde(default)]
+    pub key: String,
 }
 
 /// `tunnel.open`'s answer: what the command answered, in base64.
@@ -1421,6 +1428,9 @@ pub struct BrowserRoute {
     /// The port a callback waits on, on the member that asks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub forward: Option<u16>,
+    /// The callback's key, for the Mac it is shown on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forward_key: Option<String>,
 }
 
 /// A copied file as its side has it (X74): its SHA-256, and its bytes in

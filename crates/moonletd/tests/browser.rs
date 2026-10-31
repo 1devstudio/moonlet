@@ -620,6 +620,87 @@ async fn a_tunnel_without_a_matching_callback_is_forbidden() {
     );
 }
 
+/// `method` with `params` as request `id` on a raw link connection: the
+/// error it answered, if any.
+async fn raw_call(
+    s: &mut tokio::net::TcpStream,
+    id: u64,
+    method: &str,
+    params: Value,
+) -> Option<moonlet_proto::RpcError> {
+    use moonlet_proto::{read_frame, write_frame};
+    let req = Message::Request {
+        id,
+        method: method.into(),
+        params,
+    };
+    write_frame(s, &Frame::Json(req)).await.unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let f = tokio::time::timeout_at(deadline, read_frame(s))
+            .await
+            .expect("no reply")
+            .unwrap()
+            .unwrap();
+        if let Frame::Json(Message::Response { id: got, error, .. }) = f
+            && got == id
+        {
+            return error;
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_tunnel_without_the_key_shown_to_the_mac_never_reaches_the_callback() {
+    let (mini, addr) = central().await;
+    let book = linked_book_one_along(&mini, &addr).await;
+    let mut app = book.app().await;
+    let _: bool = app.request("presence.active", json!({})).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let port = two_free_ports();
+    in_terminal(&mini, &sign_in_command(port)).await;
+    let shown = next_show(&mut app, Duration::from_secs(15))
+        .await
+        .expect("a browser.show");
+    assert_eq!(shown["forward"], json!(port));
+    // The key stays with the MacBook's daemon: its app never hears it.
+    assert!(shown.get("forward_key").is_none(), "{shown}");
+    // Another member asks for the port studio-mini's command waits on,
+    // with no key and then with one it made up.
+    let token = pair(&mini, &addr, "Another Mac", DeviceKind::Desktop).await;
+    let mut s = raw(&addr, &token, "moonletd-worker").await;
+    let registered = raw_call(
+        &mut s,
+        1,
+        "worker.register",
+        registration("0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d", "Another Mac"),
+    )
+    .await;
+    assert!(registered.is_none(), "{registered:?}");
+    // `GET / HTTP/1.1`, in base64.
+    let data = "R0VUIC8gSFRUUC8xLjENCg0K";
+    let guessed = "5f".repeat(32);
+    for (id, params) in [
+        (2, json!({ "member": MINI, "port": port, "data": data })),
+        (
+            3,
+            json!({ "member": MINI, "port": port, "data": data, "key": guessed }),
+        ),
+    ] {
+        let error = raw_call(&mut s, id, "tunnel.open", params)
+            .await
+            .expect("an error");
+        assert_eq!(
+            (error.code.as_str(), error.message.as_str()),
+            ("forbidden", "no sign-in waits on that port")
+        );
+    }
+    // The MacBook's forward, with the key it was shown, still reaches the
+    // command.
+    let answer = get(port + 1, "/?code=4").await;
+    assert!(answer.ends_with("You are now authenticated"), "{answer:?}");
+}
+
 #[tokio::test]
 async fn a_url_from_a_member_waits_on_a_central_host_that_never_saw_the_user() {
     let (mini, addr) = central().await;
