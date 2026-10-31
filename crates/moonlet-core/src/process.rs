@@ -63,17 +63,34 @@ pub fn parent(pid: u32) -> Option<u32> {
 }
 
 /// Whether process `pid` runs as root: its real and effective uid both 0,
-/// as the kernel says (Linux, `/proc/<pid>/status`). `false` when that
-/// cannot be read, and always on macOS, which has no runuser to vouch.
-pub fn runs_as_root(pid: u32) -> bool {
+/// as the kernel says (Linux, `/proc/<pid>/status`; `Some(false)` when that
+/// cannot be read). `None` on macOS, where it is not read.
+pub fn runs_as_root(pid: u32) -> Option<bool> {
     #[cfg(target_os = "linux")]
     {
-        std::fs::read_to_string(format!("/proc/{pid}/status")).is_ok_and(|s| root_in_status(&s))
+        Some(std::fs::read_to_string(format!("/proc/{pid}/status")).is_ok_and(|s| root_in_status(&s)))
     }
     #[cfg(not(target_os = "linux"))]
     {
         let _ = pid;
-        false
+        None
+    }
+}
+
+/// The name the kernel keeps for process `pid`: on Linux its `comm`, the
+/// file name it was started as (up to 15 bytes), which the kernel shows even
+/// for a process whose executable it hides, such as root's. `None` on
+/// macOS, where [`executable`] says more.
+pub fn kernel_name(pid: u32) -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
+        Some(comm.strip_suffix('\n').unwrap_or(&comm).to_string())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = pid;
+        None
     }
 }
 
@@ -131,11 +148,20 @@ mod tests {
         let exe = executable(pid);
         let named = name(pid);
         let parent_of_child = parent(pid);
+        let kernel = kernel_name(pid);
+        let root = runs_as_root(pid);
         child.kill().unwrap();
         child.wait().unwrap();
         assert_eq!(exe.as_deref().and_then(|e| e.file_name()), Some("sleep".as_ref()));
         assert_eq!(named.as_deref(), Some("sleep"));
         assert_eq!(parent_of_child, Some(std::process::id()));
+        #[cfg(target_os = "linux")]
+        {
+            assert_eq!(kernel.as_deref(), Some("sleep"));
+            assert_eq!(root, Some(false));
+        }
+        #[cfg(target_os = "macos")]
+        assert_eq!((kernel, root), (None, None));
     }
 
     #[test]
@@ -155,5 +181,8 @@ mod tests {
         assert_eq!(executable(pid), None);
         assert_eq!(name(pid), None);
         assert_eq!(parent(pid), None);
+        assert_eq!(kernel_name(pid), None);
+        #[cfg(target_os = "linux")]
+        assert_eq!(runs_as_root(pid), Some(false));
     }
 }

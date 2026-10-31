@@ -80,7 +80,7 @@ pub const APP_EXE: &str = "moonlet-app";
 pub const TEST_APP_EXE: &str = "MOONLET_TEST_APP_EXE";
 
 /// Names sshd's executable for a test, so a process it starts counts as
-/// one of an SSH session. Only tests set it, in the daemon's own
+/// one of an SSH session, whoever runs it. Only tests set it, in the daemon's own
 /// environment.
 pub const TEST_SSHD_EXE: &str = "MOONLET_TEST_SSHD_EXE";
 
@@ -92,8 +92,8 @@ pub enum Peer {
     App,
     /// The daemon's own executable: `moonletd proxy`, which vouches for the
     /// app on an SSH host, or `moonletd pair`, `tailnet` or `join`, which
-    /// stand in for it on a host without one. The app only within an SSH
-    /// session (see [`vouched_by_ssh`]).
+    /// stand in for it on a host without one. The app only when a login
+    /// started it (see [`vouched`]).
     Moonletd,
     /// Anything else, a copy of the app elsewhere included, and anything
     /// whose path does not resolve.
@@ -117,55 +117,90 @@ pub fn peer(exe: &Path, daemon_exe: &Path, test_exe: Option<&Path>) -> Peer {
     }
 }
 
-/// Whether `exe` is sshd's: `sshd` or `sshd-session` under /usr, which
-/// only root may change (/usr/sbin/sshd, /usr/libexec/sshd-session), or
-/// what [`TEST_SSHD_EXE`] names (`test_sshd`).
-pub fn is_sshd(exe: &Path, test_sshd: Option<&Path>) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    let Ok(exe) = exe.canonicalize() else {
-        return false;
-    };
-    if test_sshd.is_some_and(|t| t.canonicalize().is_ok_and(|t| t == exe)) {
-        return true;
-    }
-    let named = matches!(exe.file_name().and_then(|n| n.to_str()), Some("sshd" | "sshd-session"));
-    let root_only = std::fs::metadata(&exe).is_ok_and(|m| m.uid() == 0 && m.mode() & 0o022 == 0);
-    named && exe.starts_with("/usr") && root_only
+/// What starts a login session as root, and so vouches for a `moonletd` it
+/// starts (X75): SSH, the console, sudo, su and runuser.
+pub const SESSION_STARTERS: [&str; 6] = ["sshd", "sshd-session", "login", "sudo", "su", "runuser"];
+
+/// One of a process's ancestors, as the kernel says.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ancestor {
+    pub pid: u32,
+    /// The executable it runs. `None` where the kernel does not say, as
+    /// Linux does not to the user for root's processes, nor for sshd's own
+    /// once it changed user.
+    pub exe: Option<PathBuf>,
+    /// The name the kernel keeps for it (Linux's `comm`, the file name it
+    /// was started as), which Linux shows even where it hides the
+    /// executable. `None` on macOS.
+    pub name: Option<String>,
+    /// Whether it runs as root: real and effective uid 0. `None` where the
+    /// kernel does not say, as on macOS.
+    pub root: Option<bool>,
 }
 
-/// Whether `exe` is `runuser`, under /usr or /sbin, which only root may
-/// change (/usr/sbin/runuser). Only root runs it: a cloud machine's
-/// first-boot script runs `moonletd join` through it (X63).
-pub fn is_runuser(exe: &Path) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    let Ok(exe) = exe.canonicalize() else {
-        return false;
-    };
-    let named = exe.file_name().and_then(|n| n.to_str()) == Some("runuser");
-    let root_only = std::fs::metadata(&exe).is_ok_and(|m| m.uid() == 0 && m.mode() & 0o022 == 0);
-    named && (exe.starts_with("/usr") || exe.starts_with("/sbin")) && root_only
+/// The nearest 4 ancestors of process `pid`, parent first, as
+/// [`vouched`] takes them.
+pub fn ancestors(pid: u32) -> Vec<Ancestor> {
+    crate::process::ancestors(pid, 4)
+        .into_iter()
+        .map(|(pid, exe)| Ancestor {
+            pid,
+            exe,
+            name: crate::process::kernel_name(pid),
+            root: crate::process::runs_as_root(pid),
+        })
+        .collect()
 }
 
-/// Whether a `moonletd` process ([`Peer::Moonletd`]) runs within an SSH
-/// session, so the SSH login proved who the user is, or was started by root
-/// through `runuser`, as a cloud machine's first boot runs `moonletd join`:
-/// one of its nearest 4 `ancestors` (pid and executable, parent first) is
-/// sshd, or runuser whose process runs as root (`root`, by pid: real and
-/// effective uid 0, as the kernel says). A process of one of the daemon's
-/// own terminals or agents (below `daemon`, its pid) never is, nor one
-/// whose ancestors the kernel does not show.
-pub fn vouched_by_ssh(
-    ancestors: &[(u32, Option<PathBuf>)],
-    daemon: u32,
-    test_sshd: Option<&Path>,
-    root: impl Fn(u32) -> bool,
-) -> bool {
-    for (pid, exe) in ancestors.iter().take(4) {
-        if *pid == daemon {
+/// Which of [`SESSION_STARTERS`] `exe` is: one under /usr, /bin or /sbin
+/// that only root may change, such as /usr/sbin/sshd,
+/// /usr/libexec/sshd-session or /usr/bin/sudo. Compared as a canonical
+/// path.
+pub fn session_starter(exe: &Path) -> Option<&'static str> {
+    use std::os::unix::fs::MetadataExt;
+    let exe = exe.canonicalize().ok()?;
+    let name = exe.file_name()?.to_str()?;
+    let starter = SESSION_STARTERS.into_iter().find(|s| *s == name)?;
+    let under = ["/usr", "/bin", "/sbin"].into_iter().any(|dir| exe.starts_with(dir));
+    let root_only = std::fs::metadata(&exe).is_ok_and(|m| m.uid() == 0 && m.mode() & 0o022 == 0);
+    (under && root_only).then_some(starter)
+}
+
+/// Whether a `moonletd` process ([`Peer::Moonletd`]: `proxy`, `pair`,
+/// `tailnet` or `join`) was started at a login that proved who the user is:
+/// over SSH, at the console, through sudo or su, or by root's runuser, as a
+/// cloud machine's first boot runs `moonletd join` (X63). One of its nearest
+/// 4 `ancestors` (parent first) is one of [`SESSION_STARTERS`] and runs as
+/// root, real and effective uid 0. sudo or su that the user runs keeps the
+/// user's real uid, so it never vouches itself; what it runs as root may.
+///
+/// A starter is known by its executable ([`session_starter`]) where the
+/// kernel shows it, else by the name the kernel keeps for it: only root
+/// makes a process that runs as root. Where the kernel does not say who runs
+/// a process (macOS), sshd still vouches by its executable. Init (pid 1),
+/// which an orphan moves to, never vouches, nor does anything above the
+/// daemon (`daemon`, its pid) for its own terminals and agents. What
+/// [`TEST_SSHD_EXE`] names (`test_sshd`) vouches whoever runs it.
+pub fn vouched(ancestors: &[Ancestor], daemon: u32, test_sshd: Option<&Path>) -> bool {
+    let test_sshd = test_sshd.and_then(|t| t.canonicalize().ok());
+    for a in ancestors.iter().take(4) {
+        if a.pid == daemon || a.pid <= 1 {
             return false;
         }
-        let vouches = |e: &Path| is_sshd(e, test_sshd) || (is_runuser(e) && root(*pid));
-        if exe.as_deref().is_some_and(vouches) {
+        let exe = a.exe.as_deref();
+        if test_sshd.is_some() && exe.and_then(|e| e.canonicalize().ok()) == test_sshd {
+            return true;
+        }
+        let starter = match exe {
+            Some(exe) => session_starter(exe),
+            None => a.name.as_deref().and_then(|n| SESSION_STARTERS.into_iter().find(|s| *s == n)),
+        };
+        let vouches = match (starter, a.root) {
+            (Some(_), Some(true)) => true,
+            (Some("sshd" | "sshd-session"), None) => exe.is_some(),
+            _ => false,
+        };
+        if vouches {
             return true;
         }
     }
@@ -265,68 +300,136 @@ mod tests {
         assert_eq!(peer(&copy, &daemon, Some(&test)), Peer::Other);
     }
 
+    /// An ancestor as Linux shows it to the user's daemon: its name and
+    /// uids, and no executable for root's processes, nor for sshd's own
+    /// once it changed user.
+    fn linux(pid: u32, name: &str, root: bool) -> Ancestor {
+        Ancestor { pid, exe: None, name: Some(name.into()), root: Some(root) }
+    }
+
+    /// An ancestor as macOS shows it: its executable, not who runs it.
+    fn mac(pid: u32, exe: &str) -> Ancestor {
+        Ancestor { pid, exe: Some(PathBuf::from(exe)), name: None, root: None }
+    }
+
     #[test]
-    fn only_root_s_sshd_under_usr_is_sshd() {
+    fn only_root_s_session_starters_under_usr_bin_or_sbin_count() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["sshd", "login", "sudo", "su", "runuser"] {
+            let fake = dir.path().join(name);
+            std::fs::write(&fake, "#!/bin/sh\n").unwrap();
+            assert_eq!(session_starter(&fake), None, "{name}");
+        }
+        assert_eq!(session_starter(Path::new("/usr/bin/true")), None);
+        assert_eq!(session_starter(Path::new("/usr/sbin/no-such-sshd")), None);
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(session_starter(Path::new("/usr/sbin/sshd")), Some("sshd"));
+            assert_eq!(session_starter(Path::new("/usr/bin/login")), Some("login"));
+            assert_eq!(session_starter(Path::new("/usr/bin/sudo")), Some("sudo"));
+        }
+    }
+
+    #[test]
+    fn moonletd_is_the_app_below_root_s_sshd_login_sudo_su_or_runuser() {
+        let daemon = 4100;
+        // `moonletd pair` typed in an SSH login, as /proc showed it on Alpine
+        // 3 with OpenSSH 10: the user's sshd-session, then root's.
+        let ssh = [
+            linux(216, "ash", false),
+            linux(215, "sshd-session", false),
+            linux(213, "sshd-session", true),
+        ];
+        assert!(vouched(&ssh, daemon, None));
+        // An older OpenSSH, sshd for both.
+        assert!(vouched(&[linux(940, "sshd", false), linux(930, "sshd", true)], daemon, None));
+        // At the console.
+        assert!(vouched(&[linux(990, "bash", false), linux(812, "login", true)], daemon, None));
+        // `sudo runuser -u <user> -- moonletd tailnet on`, as a cloud
+        // machine's first boot runs `runuser -l moonlet -c "moonletd join …"`.
+        let runuser = [linux(1412, "runuser", true), linux(1411, "sudo", false), linux(1400, "bash", false)];
+        assert!(vouched(&runuser, daemon, None));
+        // su and sudo that root runs.
+        assert!(vouched(&[linux(172, "su", true)], daemon, None));
+        assert!(vouched(&[linux(990, "sh", false), linux(980, "sudo", true)], daemon, None));
+        // macOS does not say who runs sshd: its path still vouches.
+        #[cfg(target_os = "macos")]
+        assert!(vouched(&[mac(950, "/bin/zsh"), mac(812, "/usr/sbin/sshd")], daemon, None));
+
+        // 4 processes up at most.
+        let deep = [
+            linux(990, "env", false),
+            linux(980, "bash", false),
+            linux(950, "zsh", false),
+            linux(812, "login", true),
+        ];
+        assert!(vouched(&deep, daemon, None));
+        let deeper = [linux(995, "nice", false), deep[0].clone(), deep[1].clone(), deep[2].clone(), deep[3].clone()];
+        assert!(!vouched(&deeper, daemon, None));
+    }
+
+    #[test]
+    fn sudo_that_the_user_runs_does_not_vouch() {
+        // `sudo -u <user> moonletd pair`, with a terminal: sudo keeps the
+        // user's real uid (`Uid: 1000 0 0 0`), as it does while it runs
+        // SUDO_ASKPASS before any password is checked.
+        let sudo = [linux(50, "sudo", false), linux(49, "sudo", false), linux(48, "bash", false)];
+        assert!(!vouched(&sudo, 4100, None));
+        for name in ["sshd", "sshd-session", "login", "su", "runuser"] {
+            assert!(!vouched(&[linux(900, name, false)], 4100, None), "{name}");
+        }
+        // Where the kernel does not say who runs it, only sshd vouches.
+        assert!(!vouched(&[mac(900, "/usr/bin/sudo")], 4100, None));
+        assert!(!vouched(&[mac(900, "/usr/bin/login")], 4100, None));
+    }
+
+    #[test]
+    fn init_and_root_s_other_processes_never_vouch() {
+        // Init, which an orphan moves to, whatever it runs.
+        assert!(!vouched(&[linux(1, "login", true)], 4100, None));
+        assert!(!vouched(&[linux(990, "sh", false), linux(1, "su", true)], 4100, None));
+        for name in ["cron", "systemd", "bash", "containerd-shim"] {
+            assert!(!vouched(&[linux(700, name, true)], 4100, None), "{name}");
+        }
+        // Named sudo, but its executable is known and is not root's sudo.
+        let named = Ancestor {
+            pid: 812,
+            exe: Some(PathBuf::from("/tmp/sudo")),
+            name: Some("sudo".into()),
+            root: Some(true),
+        };
+        assert!(!vouched(&[named], 4100, None));
+        // An ancestor the kernel does not show.
+        let hidden = Ancestor { pid: 812, exe: None, name: None, root: None };
+        assert!(!vouched(&[hidden], 4100, None));
+        // Started by another process of the user's.
+        assert!(!vouched(&[mac(700, "/usr/bin/python3"), mac(650, "/sbin/launchd")], 4100, None));
+    }
+
+    #[test]
+    fn an_agent_below_the_daemon_is_never_the_app() {
+        let daemon = 4100;
+        // In the daemon's terminal, though the daemon itself started in an
+        // SSH login.
+        let agent = [
+            linux(990, "node", false),
+            linux(980, "zsh", false),
+            linux(daemon, "moonletd", false),
+            linux(812, "sshd-session", true),
+        ];
+        assert!(!vouched(&agent, daemon, None));
+        #[cfg(target_os = "macos")]
+        assert!(!vouched(&[mac(990, "/bin/sh"), mac(daemon, "/opt/moonlet/moonletd"), mac(812, "/usr/sbin/sshd")], daemon, None));
+    }
+
+    #[test]
+    fn the_test_s_sshd_vouches_whoever_runs_it() {
         let dir = tempfile::tempdir().unwrap();
         let fake = dir.path().join("sshd");
         std::fs::write(&fake, "#!/bin/sh\n").unwrap();
-        assert!(!is_sshd(&fake, None));
-        assert!(is_sshd(&fake, Some(&fake)));
-        assert!(!is_sshd(Path::new("/usr/bin/true"), None));
-        assert!(!is_sshd(Path::new("/usr/sbin/no-such-sshd"), None));
-        #[cfg(target_os = "macos")]
-        assert!(is_sshd(Path::new("/usr/sbin/sshd"), None));
-    }
-
-    #[test]
-    fn only_root_s_runuser_under_usr_or_sbin_is_runuser() {
-        let dir = tempfile::tempdir().unwrap();
-        let fake = dir.path().join("runuser");
-        std::fs::write(&fake, "#!/bin/sh\n").unwrap();
-        assert!(!is_runuser(&fake));
-        assert!(!is_runuser(Path::new("/usr/bin/true")));
-        assert!(!is_runuser(Path::new("/usr/sbin/no-such-runuser")));
-        // Started by a runuser of the user's own, not root's.
-        assert!(!vouched_by_ssh(&[(950, Some(PathBuf::from("/bin/sh"))), (900, Some(fake.clone()))], 4100, None, |_| true));
-        #[cfg(target_os = "linux")]
-        if Path::new("/usr/sbin/runuser").exists() {
-            assert!(is_runuser(Path::new("/usr/sbin/runuser")));
-            // `runuser -l moonlet -c "moonletd join …"` in a cloud machine's first boot.
-            let boot = [(950, Some(PathBuf::from("/bin/sh"))), (900, Some(PathBuf::from("/usr/sbin/runuser")))];
-            assert!(vouched_by_ssh(&boot, 4100, None, |pid| pid == 900));
-        }
-        // runuser at its real path, run by a process that is not root, does
-        // not vouch; nor one whose uid cannot be read.
-        let boot = [(950, Some(PathBuf::from("/bin/sh"))), (900, Some(PathBuf::from("/usr/sbin/runuser")))];
-        assert!(!vouched_by_ssh(&boot, 4100, None, |_| false));
-    }
-
-    #[test]
-    fn moonletd_is_the_app_only_within_an_ssh_session() {
-        let sshd = || Some(PathBuf::from("/usr/sbin/sshd"));
-        let other = |p: &str| Some(PathBuf::from(p));
-        let daemon = 4100;
-        // `ssh host moonletd proxy`, through the login shell or not.
-        assert!(vouched_by_ssh(&[(812, sshd())], daemon, None, |_| true));
-        assert!(vouched_by_ssh(&[(950, other("/bin/zsh")), (812, sshd())], daemon, None, |_| true));
-        // `moonletd pair` typed in an SSH login, 4 processes down at most.
-        let deep = [
-            (990, other("/usr/bin/env")),
-            (980, other("/bin/bash")),
-            (950, other("/bin/zsh")),
-            (812, sshd()),
-        ];
-        assert!(vouched_by_ssh(&deep, daemon, None, |_| true));
-        let deeper = [(995, other("/usr/bin/nice")), deep[0].clone(), deep[1].clone(), deep[2].clone(), deep[3].clone()];
-        assert!(!vouched_by_ssh(&deeper, daemon, None, |_| true));
-
-        // Started by another process of the user's.
-        assert!(!vouched_by_ssh(&[(700, other("/usr/bin/python3")), (1, other("/sbin/launchd"))], daemon, None, |_| true));
-        // In the daemon's terminal, though the daemon itself started under sshd.
-        let in_terminal = [(990, other("/bin/sh")), (daemon, other("/opt/moonlet/moonletd")), (812, sshd())];
-        assert!(!vouched_by_ssh(&in_terminal, daemon, None, |_| true));
-        // An ancestor the kernel does not show is not sshd.
-        assert!(!vouched_by_ssh(&[(812, None)], daemon, None, |_| true));
+        let chain = [Ancestor { pid: 812, exe: Some(fake.clone()), name: None, root: Some(false) }];
+        assert!(!vouched(&chain, 4100, None));
+        assert!(vouched(&chain, 4100, Some(&fake)));
     }
 
     #[test]

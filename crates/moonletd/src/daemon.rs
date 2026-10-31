@@ -4580,9 +4580,10 @@ impl Daemon {
     /// Whether a connection on the local socket is this Mac's app (X75):
     /// its `hello` sent the app credential, and the process at the other
     /// end, as the kernel says, runs the app beside this daemon's
-    /// executable, or runs this executable within an SSH session
-    /// (`moonletd proxy`, which vouches for the app on an SSH host). Anything
-    /// it cannot tell is not the app.
+    /// executable, or runs this executable started at a login: over SSH, at
+    /// the console or by root (`moonletd proxy`, which vouches for the app on
+    /// an SSH host, or `pair` and `tailnet` on a host without the app).
+    /// Anything it cannot tell is not the app.
     pub fn proves_app(&self, sent: Option<&str>, peer_pid: Option<u32>) -> bool {
         use moonlet_core::app_token::{self, Peer};
         let Some(sent) = sent else { return false };
@@ -4598,12 +4599,9 @@ impl Daemon {
             .map_or(Peer::Other, |exe| app_token::peer(exe, &daemon, self.test_app_exe.as_deref()));
         let app = match peer {
             Peer::App => true,
-            Peer::Moonletd => app_token::vouched_by_ssh(
-                &moonlet_core::process::ancestors(pid, 4),
-                std::process::id(),
-                self.test_sshd_exe.as_deref(),
-                moonlet_core::process::runs_as_root,
-            ),
+            Peer::Moonletd => {
+                app_token::vouched(&app_token::ancestors(pid), std::process::id(), self.test_sshd_exe.as_deref())
+            }
             Peer::Other => false,
         };
         if !app {
