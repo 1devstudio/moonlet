@@ -40,6 +40,28 @@ const PROJECT_FILES: RecordKind = RecordKind::ProjectFiles;
 /// A sign-in of Settings › Machines › Sign-ins (X75).
 const SIGN_IN: RecordKind = RecordKind::SignIn;
 
+/// The sign-ins in `log` (X75), in their order: the records, and each
+/// default that was never edited nor removed.
+fn sign_ins_in(log: &Log) -> Vec<moonlet_proto::types::SignIn> {
+    let removed: Vec<String> = default_sign_ins().into_iter().map(|e| e.id).filter(|id| log.is_deleted(SIGN_IN, id)).collect();
+    let records = log.records(SIGN_IN);
+    let text = |r: &Record, f: &str| r.get(f).and_then(Value::as_str).unwrap_or_default().to_string();
+    let mut out: Vec<(String, moonlet_proto::types::SignIn)> = records
+        .iter()
+        .map(|(id, r)| {
+            let entry = moonlet_proto::types::SignIn { id: id.clone(), name: text(r, "name"), login: text(r, "login"), check: text(r, "check") };
+            (text(r, "order"), entry)
+        })
+        .collect();
+    for (n, d) in default_sign_ins().into_iter().enumerate() {
+        if !records.contains_key(&d.id) && !removed.contains(&d.id) {
+            out.push((format!("default-{n}"), d));
+        }
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out.into_iter().map(|(_, e)| e).collect()
+}
+
 /// The sign-ins every account starts with (X75), under ids of their own so
 /// every member edits the same ones.
 fn default_sign_ins() -> Vec<moonlet_proto::types::SignIn> {
@@ -407,25 +429,10 @@ impl SessionManager {
     /// default that was never edited nor removed. The defaults without an
     /// account.
     pub fn sign_ins(&self) -> Vec<moonlet_proto::types::SignIn> {
-        let (records, removed): (Map<String, Record>, Vec<String>) = self.with_log(|log| {
-            let removed = default_sign_ins().into_iter().map(|e| e.id).filter(|id| log.is_deleted(SIGN_IN, id)).collect();
-            (log.records(SIGN_IN), removed)
-        });
-        let text = |r: &Record, f: &str| r.get(f).and_then(Value::as_str).unwrap_or_default().to_string();
-        let mut out: Vec<(String, moonlet_proto::types::SignIn)> = records
-            .iter()
-            .map(|(id, r)| {
-                let entry = moonlet_proto::types::SignIn { id: id.clone(), name: text(r, "name"), login: text(r, "login"), check: text(r, "check") };
-                (text(r, "order"), entry)
-            })
-            .collect();
-        for (n, d) in default_sign_ins().into_iter().enumerate() {
-            if !records.contains_key(&d.id) && !removed.contains(&d.id) {
-                out.push((format!("default-{n}"), d));
-            }
+        match self.account.lock().unwrap().as_ref() {
+            Some(a) => sign_ins_in(&a.log),
+            None => default_sign_ins(),
         }
-        out.sort_by(|a, b| a.0.cmp(&b.0));
-        out.into_iter().map(|(_, e)| e).collect()
     }
 
     /// Makes the account's sign-ins `entries`, in that order, as this
@@ -437,10 +444,12 @@ impl SessionManager {
                 bail!("a sign-in needs a name, a sign-in command and a check command");
             }
         }
-        let now_list = self.sign_ins();
         let changes = {
             let mut account = self.account.lock().unwrap();
             let a = account.as_mut().context("sign-ins are kept in the account")?;
+            // What is removed comes from the same log the changes go to, so
+            // an entry another save added meanwhile is not missed.
+            let now_list = sign_ins_in(&a.log);
             let records = a.log.records(SIGN_IN);
             let mut log = a.log.clone();
             let mut changes = Vec::new();
