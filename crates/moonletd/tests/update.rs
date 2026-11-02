@@ -504,6 +504,83 @@ async fn a_mac_on_another_protocol_updates_its_host_before_hello() {
     host.next_daemon(pid).await;
 }
 
+/// `Info.plist` as Tauri writes it, trimmed.
+fn plist(version: &str) -> String {
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\">\n<dict>\n\
+         \t<key>CFBundleShortVersionString</key>\n\t<string>{version}</string>\n</dict>\n</plist>\n"
+    )
+}
+
+/// A daemon run from a Mac app bundle, `<home>/Applications/moonlet.app`,
+/// updates from a release laid out as tauri-action publishes one: its
+/// `latest.json` points at api.github.com asset URLs, not at the release's
+/// own folder (as v0.1.35's did), and the app archive and its signature sit
+/// in the release as `moonlet_<version>_aarch64.app.tar.gz{,.sig}`.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[tokio::test]
+async fn a_mac_host_updates_from_a_release_as_tauri_action_publishes_it() {
+    let key = Key::new();
+    let mut gz = tar::Builder::new(flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast()));
+    let new_plist = plist("9.9.9");
+    let new_daemon = daemon_saying("9.9.9");
+    for (name, data) in [("moonlet.app/Contents/Info.plist", new_plist.as_bytes()), ("moonlet.app/Contents/MacOS/moonletd", &new_daemon[..])] {
+        let mut h = tar::Header::new_gnu();
+        h.set_size(data.len() as u64);
+        h.set_mode(0o755);
+        h.set_cksum();
+        gz.append_data(&mut h, name, data).unwrap();
+    }
+    let app_archive = gz.into_inner().unwrap().finish().unwrap();
+    let sig = key.sign(&app_archive);
+    let latest = json!({
+        "version": "9.9.9",
+        "platforms": {
+            "darwin-aarch64": { "signature": String::from_utf8(sig.clone()).unwrap(), "url": "https://api.github.com/repos/1devstudio/moonlet/releases/assets/696833801" },
+            "darwin-aarch64-app": { "signature": String::from_utf8(sig.clone()).unwrap(), "url": "https://api.github.com/repos/1devstudio/moonlet/releases/assets/696833801" }
+        }
+    });
+    let releases = release_server(
+        HashMap::from([
+            ("/v9.9.9/latest.json".to_string(), serde_json::to_vec(&latest).unwrap()),
+            ("/v9.9.9/moonlet_9.9.9_aarch64.app.tar.gz".to_string(), app_archive),
+            ("/v9.9.9/moonlet_9.9.9_aarch64.app.tar.gz.sig".to_string(), sig),
+        ]),
+        Duration::ZERO,
+    )
+    .await;
+
+    let home = tempfile::tempdir().unwrap();
+    let app = home.path().join("Applications/moonlet.app");
+    std::fs::create_dir_all(app.join("Contents/MacOS")).unwrap();
+    std::fs::write(app.join("Contents/Info.plist"), plist(env!("CARGO_PKG_VERSION"))).unwrap();
+    std::fs::copy(env!("CARGO_BIN_EXE_moonletd"), app.join("Contents/MacOS/moonletd")).unwrap();
+    std::fs::write(home.path().join("mobile.json"), r#"{ "enabled": true, "port": 0 }"#).unwrap();
+    let socket = home.path().join("run").join("d.sock");
+    let child = Command::new(app.join("Contents/MacOS/moonletd"))
+        .arg("daemon")
+        .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
+        .env("MOONLET_HOME", home.path())
+        .env("MOONLET_SOCK", &socket)
+        .env("MOONLET_MOBILE_ADDRS", "127.0.0.1")
+        .env("MOONLET_RELEASES", &releases)
+        .env("MOONLET_RELEASE_KEY", key.public())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    wait_for_socket(&socket, Duration::from_secs(15)).await.unwrap();
+    let host = Host { home, socket, child };
+    let pid = host.pid().await;
+
+    let (addr, mac) = host.pair("desktop").await;
+    let reply = moonlet_link::tailnet::update(&[addr], &mac, "9.9.9").await.unwrap();
+    assert_eq!((reply.from.as_str(), reply.to.as_str()), (env!("CARGO_PKG_VERSION"), "9.9.9"));
+    host.next_daemon(pid).await;
+    assert_eq!(std::fs::read_to_string(app.join("Contents/Info.plist")).unwrap(), plist("9.9.9"));
+}
+
 /// The release workflow checks each Linux archive's signature with the
 /// `moonletd` it ships, so a release can't go out that hosts would refuse.
 #[test]
