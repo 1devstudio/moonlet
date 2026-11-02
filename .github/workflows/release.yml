@@ -198,6 +198,31 @@ jobs:
           gh release upload "$GITHUB_REF_NAME" dist/moonlet-linux-x86_64.tar.gz dist/moonlet-linux-aarch64.tar.gz \
             dist/moonlet-linux-x86_64.tar.gz.sig dist/moonlet-linux-aarch64.tar.gz.sig dist/SHA256SUMS dist/install.sh --clobber
 
+      # tauri-action points latest.json at api.github.com asset URLs, as the
+      # draft's assets have no public URL yet. A Mac host's moonletd 0.1.34
+      # and 0.1.35 take an archive only from the release's own folder (X69),
+      # so latest.json points there before the release goes out. Newer ones
+      # fetch moonlet_<version>_aarch64.app.tar.gz and its .sig by name, so
+      # both must be in the release under that name.
+      - name: Point latest.json at the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          dir="$RUNNER_TEMP/latest"
+          mkdir -p "$dir"
+          gh release download "$GITHUB_REF_NAME" -p latest.json -D "$dir" --clobber
+          gh release view "$GITHUB_REF_NAME" --json assets > "$dir/assets.json"
+          app="moonlet_${GITHUB_REF_NAME#v}_aarch64.app.tar.gz"
+          for f in "$app" "$app.sig"; do
+            if ! jq -e --arg f "$f" '[.assets[].name] | index($f) != null' "$dir/assets.json" > /dev/null; then
+              echo "::error::the release has no $f, which Mac hosts update from (X69)"
+              exit 1
+            fi
+          done
+          mkdir -p "$dir/out"
+          node scripts/release-urls.mjs "$dir/latest.json" "$dir/assets.json" "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" > "$dir/out/latest.json"
+          gh release upload "$GITHUB_REF_NAME" "$dir/out/latest.json" --clobber
+
       - name: Publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

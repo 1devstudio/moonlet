@@ -5,7 +5,8 @@
 //!
 //! Two layouts can update themselves: `~/.moonlet/bin` (`install.sh`, X58),
 //! which takes `moonlet-<os>-<arch>.tar.gz`, and a Mac app bundle, which takes
-//! the archive the app's own updater uses (X35).
+//! `moonlet_<version>_<arch>.app.tar.gz`, the archive the app's own updater
+//! uses (X35). Each comes with `<archive>.sig` in the same release.
 
 use std::io::{Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
@@ -64,15 +65,16 @@ pub fn version(s: &str) -> Option<(u64, u64, u64)> {
     parts.next().is_none().then_some(v)
 }
 
-/// The archive a daemon in `~/.moonlet/bin` takes, for this machine; its
-/// signature is `<archive>.sig`. A bundle's comes from `latest.json`.
-fn bin_asset() -> String {
-    format!("moonlet-{}-{}.tar.gz", std::env::consts::OS, std::env::consts::ARCH)
-}
-
-/// `latest.json`'s key for this Mac.
-fn updater_platform() -> String {
-    format!("darwin-{}", std::env::consts::ARCH)
+/// The archive of release `version` that `layout` takes, for this machine;
+/// its signature is `<archive>.sig`. A bundle's is named as tauri-action
+/// uploads it (`moonlet_0.1.35_aarch64.app.tar.gz`; releases are for Apple
+/// Silicon only). Never taken from `latest.json`,
+/// whose URLs tauri-action points at api.github.com, outside the release.
+fn asset(layout: &Layout, version: &str) -> String {
+    match layout {
+        Layout::Bin(_) => format!("moonlet-{}-{}.tar.gz", std::env::consts::OS, std::env::consts::ARCH),
+        Layout::Bundle(_) => format!("moonlet_{version}_{}.app.tar.gz", std::env::consts::ARCH),
+    }
 }
 
 fn err(code: &str, message: impl Into<String>) -> RpcError {
@@ -149,28 +151,9 @@ async fn download(layout: &Layout, version: &str) -> Result<Vec<u8>, RpcError> {
         .timeout(Duration::from_secs(300))
         .build()
         .map_err(|e| err("download_failed", e.to_string()))?;
-    let (url, signature) = match layout {
-        Layout::Bin(_) => {
-            let url = release_url(&releases, version, &bin_asset());
-            let sig = fetch(&client, &format!("{url}.sig")).await?;
-            (url, String::from_utf8_lossy(&sig).to_string())
-        }
-        Layout::Bundle(_) => {
-            let latest = fetch(&client, &release_url(&releases, version, "latest.json")).await?;
-            let latest: Value = serde_json::from_slice(&latest)
-                .map_err(|e| err("download_failed", format!("latest.json: {e}")))?;
-            let entry = &latest["platforms"][updater_platform()];
-            let (Some(url), Some(sig)) = (entry["url"].as_str(), entry["signature"].as_str()) else {
-                return Err(err("download_failed", format!("release {version} has no {}", updater_platform())));
-            };
-            // The signature says moonlet made the archive, not which release
-            // it is: take it only from the release asked for.
-            if !in_release(url, &releases, version) {
-                return Err(err("download_failed", format!("latest.json points outside release {version}: {url}")));
-            }
-            (url.to_string(), sig.to_string())
-        }
-    };
+    // The archive and its signature, both from the release asked for.
+    let url = release_url(&releases, version, &asset(layout, version));
+    let signature = String::from_utf8_lossy(&fetch(&client, &format!("{url}.sig")).await?).to_string();
     let data = fetch(&client, &url).await?;
     verify(&key, &data, &signature)?;
     Ok(data)
@@ -179,12 +162,6 @@ async fn download(layout: &Layout, version: &str) -> Result<Vec<u8>, RpcError> {
 /// File `name` of release `version`.
 fn release_url(releases: &str, version: &str, name: &str) -> String {
     format!("{releases}/v{version}/{name}")
-}
-
-/// Whether `url` is a file of release `version` itself.
-fn in_release(url: &str, releases: &str, version: &str) -> bool {
-    url.strip_prefix(&release_url(releases, version, ""))
-        .is_some_and(|name| !name.is_empty() && !name.contains('/') && !name.contains(".."))
 }
 
 fn install_failed(e: impl std::fmt::Display) -> RpcError {
@@ -624,15 +601,6 @@ mod tests {
         assert_eq!((e.code.as_str(), e.message.as_str()), ("install_failed", "the release holds moonlet 0.1.20, not 0.1.34"));
         assert_eq!(std::fs::read_to_string(app.join("Contents/MacOS/moonletd")).unwrap(), "old");
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
-    }
-
-    #[test]
-    fn a_bundle_archive_comes_only_from_the_release_asked_for() {
-        let base = "https://github.com/1devstudio/moonlet/releases/download";
-        assert!(in_release(&format!("{base}/v0.1.34/moonlet.app.tar.gz"), base, "0.1.34"));
-        assert!(!in_release(&format!("{base}/v0.1.20/moonlet.app.tar.gz"), base, "0.1.34"));
-        assert!(!in_release("https://example.com/v0.1.34/moonlet.app.tar.gz", base, "0.1.34"));
-        assert!(!in_release(&format!("{base}/v0.1.34/../v0.1.20/moonlet.app.tar.gz"), base, "0.1.34"));
     }
 
     /// Without the debug seams, releases come from GitHub and only moonlet's
