@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Check, ChevronDown, GitPullRequest, LoaderCircle, Plus, X } from "lucide-react";
+import { Check, ChevronDown, FileDiff, GitPullRequest, LoaderCircle, Plus, X } from "lucide-react";
 import { rpc } from "../lib/daemon";
-import { leaves } from "../lib/layout";
+import { leaves, type DiffMode } from "../lib/layout";
 import { M, type ProjectConfig, type Session } from "../lib/protocol";
 import { focusTerminal, getLayout, projectOf, termKey, setLayout, useStore, sesKey } from "../lib/store";
-import { closeFileTab, closeJobTab, closeTab, newAgentTab, newSessionAgentTab, newTab, sendToAgent, split } from "../lib/actions";
+import { closeDiffTab, closeFileTab, closeJobTab, closeTab, newAgentTab, newSessionAgentTab, newTab, sendToAgent, split } from "../lib/actions";
 import { FileIcon } from "./FileIcon";
 import { WorkerIcon, going } from "./JobsPanel";
 import { chipFromJob } from "../lib/jobs";
@@ -141,6 +141,34 @@ function FileTab({ host, ws, id, path, active }: { host: string; ws: Session; id
   );
 }
 
+/** A changed file's diff tab (X77): the name, and which changes it compares. */
+function DiffTab({ host, ws, id, path, mode, active }: { host: string; ws: Session; id: string; path: string; mode: DiffMode; active: boolean }) {
+  const name = path.split("/").pop() ?? path;
+  return (
+    <div
+      aria-current={active || undefined}
+      title={`${path} — ${mode === "base" ? `against ${ws.base}` : "uncommitted"}`}
+      className={cx(
+        "no-drag group relative flex h-full w-[172px] shrink-0 cursor-default items-center gap-2.5 px-4 ui-text-14",
+        active ? "bg-raised text-fg" : "text-muted hover:text-fg",
+      )}
+      onMouseDown={() => setLayout(host, ws.id, { ...getLayout(host, ws.id), active: id, focused: null })}
+    >
+      <FileDiff size={14} strokeWidth={1.5} className="shrink-0" />
+      <span className="truncate">{name}</span>
+      {mode === "head" && <span className="shrink-0 ui-text-11 text-faint group-hover:hidden">uncommitted</span>}
+      <button
+        className="ml-auto rounded p-0.5 text-faint opacity-0 hover:bg-hover hover:text-fg focus-visible:opacity-100 group-hover:opacity-100"
+        title="Close tab"
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={() => closeDiffTab(host, ws.id, path, mode)}
+      >
+        <X size={12} />
+      </button>
+    </div>
+  );
+}
+
 /** A job's tab (X62): where it runs, its command and how it is going. */
 function JobTab({ host, ws, id, job, active }: { host: string; ws: Session; id: string; job: string; active: boolean }) {
   const j = useSessionJob(host, ws.id, job);
@@ -187,6 +215,8 @@ function TabStrip({ host, ws }: { host: string; ws: Session }) {
         {layout?.tabs.map((t) =>
           t.root.type === "file" ? (
             <FileTab key={t.id} host={host} ws={ws} id={t.id} path={t.root.path} active={t.id === layout.active} />
+          ) : t.root.type === "diff" ? (
+            <DiffTab key={t.id} host={host} ws={ws} id={t.id} path={t.root.path} mode={t.root.mode} active={t.id === layout.active} />
           ) : t.root.type === "job" ? (
             <JobTab key={t.id} host={host} ws={ws} id={t.id} job={t.root.job} active={t.id === layout.active} />
           ) : (

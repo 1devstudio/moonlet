@@ -367,3 +367,6 @@ export function renderTaskMarkdown(source: string): string {
 export function renderChatMarkdown(source: string, exists?: FileCheck): string {
   return chatSanitize(chatMd.render(source, { exists }));
 }
+
+/** Whether a file shows as rendered Markdown in a Preview (X26, X77). */
+export const isMarkdownPath = (path: string) => /\.(md|markdown|mdx)$/i.test(path);

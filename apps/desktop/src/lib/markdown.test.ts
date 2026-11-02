@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fileToOpen, linkToOpen, linkToolbarPosition, openableUrl, previewDocument, renderChatMarkdown, renderMarkdown, renderTaskMarkdown } from "./markdown";
+import { fileToOpen, isMarkdownPath, linkToOpen, linkToolbarPosition, openableUrl, previewDocument, renderChatMarkdown, renderMarkdown, renderTaskMarkdown } from "./markdown";
 
 describe("markdown preview", () => {
   it("renders tables, code and highlights", async () => {
@@ -163,3 +163,13 @@ describe("a task's description (X46)", () => {
   });
 });
 
+
+describe("isMarkdownPath (X26, X77)", () => {
+  it("is true for Markdown files by extension, in any case", () => {
+    for (const p of ["README.md", "docs/specs/X77-diff-tabs.md", "NOTES.MD", "post.markdown", "page.mdx"]) expect(isMarkdownPath(p)).toBe(true);
+  });
+
+  it("is false for anything else", () => {
+    for (const p of ["app.ts", "notes.md.bak", "md", "docs.md/index.html", "README"]) expect(isMarkdownPath(p)).toBe(false);
+  });
+});

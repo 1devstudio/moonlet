@@ -8,6 +8,7 @@ import { useStore } from "../lib/store";
 
 const FileEditor = lazy(() => import("./FileEditor"));
 const JobView = lazy(() => import("./JobView"));
+const DiffView = lazy(() => import("./DiffView"));
 
 interface Props {
   host: string;
@@ -26,6 +27,12 @@ export function PaneTree({ host, wsId, tabId, node, path, focused, visible }: Pr
     return (
       <Suspense fallback={null}>
         <FileEditor host={host} wsId={wsId} path={node.path} line={node.line} visible={visible} />
+      </Suspense>
+    );
+  if (node.type === "diff")
+    return (
+      <Suspense fallback={null}>
+        <DiffView host={host} wsId={wsId} path={node.path} mode={node.mode} />
       </Suspense>
     );
   if (node.type === "job")

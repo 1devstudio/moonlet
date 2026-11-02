@@ -1,10 +1,10 @@
 // The Files tab is a file explorer with type icons and row actions; the
 // Changes tab lists the changed files as a tree or a list (X28), then shows a
-// file's diff (X25).
+// file's diff in a tab of the main window, with a preview for Markdown (X77).
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { $, browser, expect } from "@wdio/globals";
+import { $, $$, browser, expect } from "@wdio/globals";
 import { PROJECT, rpc, sel, world } from "../fixtures";
 
 const w = world();
@@ -84,22 +84,48 @@ describe("File explorer and changed files", () => {
     await expect($('//div[@role="button"][@title="docs/guide.md"]')).toBeDisplayed();
   });
 
-  it("opens a file's diff from the keyboard", async () => {
+  /** A diff tab of the main window, by the file's path. */
+  const diffTab = (path: string) => `//div[starts-with(@title, ${JSON.stringify(`${path} — `)})][.//button[@title="Close tab"]]`;
+
+  it("opens a file's diff in a tab of the main window from the keyboard", async () => {
     await browser.execute(() => (document.querySelector('div[role="button"][title="package.json"]') as HTMLElement).focus());
     await browser.keys("Enter");
-    const back = $('button[aria-label="Back to the changed files"]');
-    await expect(back).toBeDisplayed();
-    await back.click();
+    await expect($(diffTab("package.json"))).toBeDisplayed({ wait: 15_000 });
+    // The right panel keeps the list.
     await expect($(sel.text("2 files changed"))).toBeDisplayed();
+    await expect($('button[aria-label="Back to the changed files"]')).not.toBeExisting();
   });
 
-  it("opens a file's diff, and goes back to the list", async () => {
+  it("switches to the file's diff tab when it is clicked again", async () => {
     await $('//div[@role="button"][@title="package.json"]').click();
-    const back = $('button[aria-label="Back to the changed files"]');
-    await expect(back).toBeDisplayed();
-    await expect($(sel.text("2 files changed"))).not.toBeExisting();
-    await back.click();
-    await expect($(sel.text("2 files changed"))).toBeDisplayed();
+    await $('//div[@role="button"][@title="package.json"]').click();
+    await expect($$(diffTab("package.json"))).toBeElementsArrayOfSize(1);
+  });
+
+  it("previews a Markdown file's new version in its diff tab", async () => {
+    await $('//div[@role="button"][@title="docs/guide.md"]').click();
+    await expect($(diffTab("docs/guide.md"))).toBeDisplayed({ wait: 15_000 });
+    // A file that is not Markdown has no switch.
+    await $(diffTab("package.json")).click();
+    await expect($(sel.button("Preview"))).not.toBeDisplayed();
+    await $(diffTab("docs/guide.md")).click();
+    await $(sel.button("Preview")).click();
+    const frame = $('iframe[title="Markdown preview"]');
+    await expect(frame).toBeDisplayed();
+    expect(await frame.getAttribute("srcdoc")).toContain("<h1");
+    expect(await frame.getAttribute("srcdoc")).toContain("Guide");
+    await $(sel.button("Diff")).click();
+    await expect(frame).not.toBeDisplayed();
+  });
+
+  it("closes the diff tabs", async () => {
+    for (const path of ["docs/guide.md", "package.json"]) {
+      await browser.execute((p: string) => {
+        const t = document.evaluate(`//div[starts-with(@title, "${p} — ")]//button[@title="Close tab"]`, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue as HTMLElement;
+        t.click();
+      }, path);
+      await expect($(diffTab(path))).not.toBeExisting();
+    }
   });
 
   it("switches the changed files to a flat list and back", async () => {

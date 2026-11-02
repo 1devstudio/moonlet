@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addTab, allSessions, closeFile, closeJob, cycleFocus, emptyLayout, leaves, openFile, openJob, parseLayout, reconcile, removeSession, splitLeaf } from "./layout";
+import { addTab, allSessions, closeDiff, closeFile, closeJob, cycleFocus, emptyLayout, leaves, openDiff, openFile, openJob, parseLayout, reconcile, removeSession, splitLeaf } from "./layout";
 
 describe("layout", () => {
   it("opens a tab per unseen session and drops dead ones", () => {
@@ -127,6 +127,72 @@ describe("job tabs (X62)", () => {
   it("closes a job tab and activates its neighbour", () => {
     const l = closeJob(openJob(reconcile(emptyLayout(), [1]), "j7"), "j7");
     expect(l.tabs.map((t) => t.root)).toEqual([{ type: "leaf", session: 1 }]);
+    expect(l.focused).toBe(1);
+  });
+});
+
+describe("diff tabs (X77)", () => {
+  const path = "src/app.ts";
+
+  it("opens a changed file's diff as a new active tab after the others", () => {
+    const l = openDiff(reconcile(emptyLayout(), [1]), path, "base");
+    expect(l.tabs.map((t) => t.root)).toEqual([
+      { type: "leaf", session: 1 },
+      { type: "diff", path, mode: "base" },
+    ]);
+    expect(l.active).toBe(l.tabs[1].id);
+    expect(l.focused).toBeNull();
+  });
+
+  it("switches to the diff's tab when that file and mode are already open", () => {
+    const opened = openDiff(reconcile(emptyLayout(), [1]), path, "base");
+    const back = { ...opened, active: opened.tabs[0].id, focused: 1 };
+    const again = openDiff(back, path, "base");
+    expect(again.tabs).toHaveLength(2);
+    expect(again.active).toBe(opened.tabs[1].id);
+  });
+
+  it("keeps one tab per file and mode", () => {
+    const l = openDiff(openDiff(emptyLayout(), path, "base"), path, "head");
+    expect(l.tabs.map((t) => t.root)).toEqual([
+      { type: "diff", path, mode: "base" },
+      { type: "diff", path, mode: "head" },
+    ]);
+  });
+
+  it("keeps a file's editor tab and its diff tab apart", () => {
+    const l = openDiff(openFile(emptyLayout(), path), path, "base");
+    expect(l.tabs).toHaveLength(2);
+  });
+
+  it("keeps diff tabs when the terminals are synced", () => {
+    const l = reconcile(openDiff(reconcile(emptyLayout(), [1]), path, "head"), [1, 2]);
+    expect(l.tabs.map((t) => t.root)).toEqual([
+      { type: "leaf", session: 1 },
+      { type: "diff", path, mode: "head" },
+      { type: "leaf", session: 2 },
+    ]);
+    expect(allSessions(l)).toEqual([1, 2]);
+  });
+
+  it("reads diff tabs back from a stored layout and drops ones without a mode", () => {
+    const stored = {
+      tabs: [
+        { id: "a", root: { type: "diff", path, mode: "head" } },
+        { id: "b", root: { type: "diff", path, mode: "sideways" } },
+        { id: "c", root: { type: "diff", mode: "base" } },
+      ],
+      active: "a",
+      focused: null,
+    };
+    expect(parseLayout(stored).tabs).toEqual([{ id: "a", root: { type: "diff", path, mode: "head" } }]);
+  });
+
+  it("closes a diff tab and activates its neighbour", () => {
+    const opened = openDiff(reconcile(emptyLayout(), [1]), path, "base");
+    const l = closeDiff(opened, path, "base");
+    expect(l.tabs.map((t) => t.root)).toEqual([{ type: "leaf", session: 1 }]);
+    expect(l.active).toBe(l.tabs[0].id);
     expect(l.focused).toBe(1);
   });
 });
