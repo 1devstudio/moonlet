@@ -74,15 +74,34 @@ export function matchingRepos<T extends { repo: string }>(repos: T[], query: str
 
 /**
  * Where a listed repository stands for the chosen section: `free` (no project
- * has it), `here` (the section already holds it) or `elsewhere` (a project
- * holds it in another section, so adding its `path` here needs no clone). With
- * no section chosen, or from an older daemon that names no sections, any
- * project that has it holds it.
+ * has it), `here` (a project in the section has it) or `elsewhere` (projects
+ * in other sections have it, so adding one of their `paths` here needs no
+ * clone). With no section chosen, or from an older daemon that names no
+ * projects, any project that has it holds it.
  */
-export function repoInSection(r: { added: boolean; project_path?: string | null; sections?: string[] }, sectionId: string): { state: "free" | "here" } | { state: "elsewhere"; path: string } {
+export function repoInSection(
+  r: { added: boolean; projects?: { path: string; sections: string[] }[] },
+  sectionId: string,
+): { state: "free" | "here" } | { state: "elsewhere"; paths: string[] } {
   if (!r.added) return { state: "free" };
-  if (!sectionId || !r.sections || !r.project_path || r.sections.includes(sectionId)) return { state: "here" };
-  return { state: "elsewhere", path: r.project_path };
+  if (!sectionId || !r.projects?.length || r.projects.some((p) => p.sections.includes(sectionId))) return { state: "here" };
+  return { state: "elsewhere", paths: r.projects.map((p) => p.path) };
+}
+
+/** A row of the repository list: a repository, or one checkout of it that another section holds. */
+export interface RepoRow<T> {
+  repo: T;
+  state: "free" | "here" | "elsewhere";
+  /** The folder to add, for an `elsewhere` row. */
+  path?: string;
+}
+
+/** The rows for `repos`: one per checkout another section holds, one for any other repository. */
+export function repoRows<T extends { repo: string; added: boolean; projects?: { path: string; sections: string[] }[] }>(repos: T[], sectionId: string): RepoRow<T>[] {
+  return repos.flatMap((repo): RepoRow<T>[] => {
+    const held = repoInSection(repo, sectionId);
+    return held.state === "elsewhere" ? held.paths.map((path) => ({ repo, state: "elsewhere", path })) : [{ repo, state: held.state }];
+  });
 }
 
 /** The owners the list shows, in order of first appearance: "acme, sam-rivera". */

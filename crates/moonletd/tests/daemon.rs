@@ -1895,20 +1895,21 @@ async fn looks_repositories_up_and_lists_them_through_gh() {
     let added: Vec<(&str, bool)> = list.iter().map(|r| (r["repo"].as_str().unwrap(), r["added"].as_bool().unwrap())).collect();
     assert_eq!(added, [("acme/storefront", false), ("acme/storefront-admin", false), ("acme/payments-api", true), ("sam-rivera/store-locator", false)]);
 
-    // It says where: the folder, and each section that holds it, also one in
-    // another workspace, so the dialog can offer the others.
+    // It says where: each project's folder and the sections that hold it,
+    // also one in another workspace, so the dialog can offer the others.
     let row = |list: &[serde_json::Value]| list.iter().find(|r| r["repo"] == "acme/payments-api").cloned().unwrap();
-    let before = row(&list);
-    assert_eq!(before["project_path"].as_str(), Some(project.path.as_str()));
-    let first_sections: Vec<String> = before["sections"].as_array().unwrap().iter().map(|s| s.as_str().unwrap().to_string()).collect();
-    assert_eq!(first_sections.len(), 1, "{before}");
+    let held = |row: &serde_json::Value| -> Vec<(String, Vec<String>)> {
+        row["projects"].as_array().unwrap().iter().map(|p| (p["path"].as_str().unwrap().to_string(), p["sections"].as_array().unwrap().iter().map(|s| s.as_str().unwrap().to_string()).collect())).collect()
+    };
+    let before = held(&row(&list));
+    assert_eq!((before.len(), &before[0].0, before[0].1.len()), (1, &project.path, 1), "{before:?}");
     let play: moonlet_proto::types::Workspace = c.request(methods::WORKSPACE_CREATE, serde_json::json!({"name": "Play", "color": "blue"})).await.unwrap();
     let play_section: moonlet_proto::types::Section = c.request(methods::SECTION_CREATE, serde_json::json!({"workspace_id": play.id, "name": "Side"})).await.unwrap();
     let _: moonlet_proto::types::Project = c.request(methods::SECTION_ADD_PROJECT, serde_json::json!({"id": play_section.id, "path": project.path})).await.unwrap();
     let list: Vec<serde_json::Value> = c.request(methods::REPO_LIST, ()).await.unwrap();
-    let ids: Vec<String> = row(&list)["sections"].as_array().unwrap().iter().map(|s| s.as_str().unwrap().to_string()).collect();
-    assert_eq!(ids.len(), 2, "{ids:?}");
-    assert!(ids.contains(&first_sections[0]) && ids.contains(&play_section.id), "{ids:?}");
+    let after = held(&row(&list));
+    assert_eq!((after.len(), &after[0].0, after[0].1.len()), (1, &project.path, 2), "{after:?}");
+    assert!(after[0].1.contains(&before[0].1[0]) && after[0].1.contains(&play_section.id), "{after:?}");
 }
 
 /// A repository whose one commit has a fixed hash, `5af9891b…`, so tests can

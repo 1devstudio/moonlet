@@ -27,7 +27,8 @@ import {
   targetTaken,
   type CloneRun,
   type GhOnHost,
-  repoInSection,
+  repoRows,
+  type RepoRow,
 } from "../lib/addProject";
 import { Button, Dialog, Field, IconButton, cx, inputCls } from "./ui";
 import { radioProps } from "./settings/controls";
@@ -196,18 +197,17 @@ export function AddProjectDialog({ host: presetHost, section: presetSection, clo
 
   const { listing, canClone: ready } = cloneTabState({ text: repoText, gh, found: !!found, target, cloning, busy });
   const canClone = shownTab === "github" && ready;
-  const shownRepos = listing ? matchingRepos(repos ?? [], repoText) : [];
-  const pickable = shownRepos.filter((r) => repoInSection(r, secId).state !== "here");
-  const pick = (repo: string) => {
+  const rows = listing ? repoRows(matchingRepos(repos ?? [], repoText), secId) : [];
+  const pickable = rows.filter((r) => r.state !== "here");
+  const highlighted = pickable[Math.min(highlight, pickable.length - 1)];
+  const pick = (row: RepoRow<RepoSummary>) => {
     // A project of another section has it: add that folder here, no clone.
-    const listed = repos?.find((r) => r.repo === repo);
-    const held = listed && repoInSection(listed, secId);
-    if (held?.state === "elsewhere") {
-      if (!busy) void addFolder(held.path);
+    if (row.state === "elsewhere" && row.path) {
+      if (!busy) void addFolder(row.path);
       return;
     }
     clearFailure();
-    setRepoText(repo);
+    setRepoText(row.repo.repo);
     setNameEdited(false);
   };
   const taken = found && target ? targetTaken(target, found.repo, clonePath(parent, name)) : null;
@@ -327,13 +327,13 @@ export function AddProjectDialog({ host: presetHost, section: presetSection, clo
                     setHighlight((h) => moveHighlight(h, key, pickable.length));
                   } else if (e.key === "Enter") {
                     e.preventDefault();
-                    pick(pickable[Math.min(highlight, pickable.length - 1)].repo);
+                    pick(highlighted);
                   }
                 } else if (e.key === "Enter" && canClone) void startClone();
               }}
             />
-            {listing && repos && shownRepos.length > 0 && (
-              <RepoList repos={shownRepos} sectionId={secId} login={gh && gh !== "too-old" ? gh.login : null} highlighted={pickable[Math.min(highlight, pickable.length - 1)]?.repo} onPick={pick} />
+            {listing && repos && rows.length > 0 && (
+              <RepoList rows={rows} login={gh && gh !== "too-old" ? gh.login : null} highlighted={highlighted} onPick={pick} />
             )}
             {listing && (
               <p className="-mt-1 mb-3 ui-text-11 text-faint">
@@ -498,26 +498,27 @@ function HeldPill({ children }: { children: string }) {
   return <span className="shrink-0 rounded-full border border-border-strong px-1.5 py-px ui-text-11 text-muted">{children}</span>;
 }
 
-function RepoList({ repos, sectionId, login, highlighted, onPick }: { repos: RepoSummary[]; sectionId: string; login: string | null; highlighted?: string; onPick: (repo: string) => void }) {
+function RepoList({ rows, login, highlighted, onPick }: { rows: RepoRow<RepoSummary>[]; login: string | null; highlighted?: RepoRow<RepoSummary>; onPick: (row: RepoRow<RepoSummary>) => void }) {
   const now = new Date();
   return (
     <div className="-mt-1 mb-2 flex flex-col overflow-hidden rounded-lg border border-border bg-panel-2" role="listbox" aria-label="Your repositories">
       <div className="flex items-center justify-between px-2.5 pt-[7px] pb-[5px] ui-text-11 text-faint">
         <span className="font-medium text-muted">Your repositories</span>
-        <span>from gh · {repoOwners(repos)}</span>
+        <span>from gh · {repoOwners(rows.map((row) => row.repo))}</span>
       </div>
-      {repos.map((r) => {
+      {rows.map((row) => {
+        const r = row.repo;
         const { owner, name } = repoParts(r.repo);
-        const on = r.repo === highlighted;
-        const held = repoInSection(r, sectionId).state;
+        const on = row === highlighted;
+        const held = row.state;
         return (
           <button
-            key={r.repo}
+            key={`${r.repo}\n${row.path ?? ""}`}
             type="button"
             role="option"
             aria-selected={on}
             disabled={held === "here"}
-            onClick={() => onPick(r.repo)}
+            onClick={() => onPick(row)}
             className={cx("flex w-full items-center gap-2.5 border-t border-border px-2.5 py-[7px] text-left", on ? "bg-hover" : "hover:bg-hover", held === "here" && "cursor-default opacity-60 hover:bg-transparent")}
           >
             <OwnerTile repo={r.repo} login={login} size={26} />
@@ -529,7 +530,7 @@ function RepoList({ repos, sectionId, login, highlighted, onPick }: { repos: Rep
                 </span>
                 {r.private && <Lock size={11} className="text-faint" aria-label="Private" />}
               </span>
-              {r.description && <span className="truncate ui-text-11.5 text-faint">{r.description}</span>}
+              {row.path ? <span className="truncate font-mono ui-text-11 text-faint">{row.path}</span> : r.description && <span className="truncate ui-text-11.5 text-faint">{r.description}</span>}
             </span>
             {held === "here" ? (
               <HeldPill>Already added</HeldPill>

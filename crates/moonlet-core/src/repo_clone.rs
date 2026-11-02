@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
-use moonlet_proto::types::{CloneStep, CloneTarget, GhStatus, RepoInfo, RepoSummary};
+use moonlet_proto::types::{CloneStep, CloneTarget, GhStatus, RepoHeld, RepoInfo, RepoSummary};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
@@ -129,7 +129,7 @@ pub struct RepoProject {
 
 /// The user's repositories from `gh api LIST_PATH --jq LIST_JQ`. `projects`
 /// are this host's projects that sit on GitHub; a repository is `added` when
-/// one has it as `origin`, and lists the sections of all those projects.
+/// one has it as `origin`, and lists each of those projects with its sections.
 pub fn parse_repo_list(json: &[u8], projects: &[RepoProject]) -> Result<Vec<RepoSummary>> {
     let v: Value = serde_json::from_slice(json).context("gh api gave no JSON")?;
     Ok(v.as_array()
@@ -141,16 +141,15 @@ pub fn parse_repo_list(json: &[u8], projects: &[RepoProject]) -> Result<Vec<Repo
                 .iter()
                 .filter(|p| p.repo.eq_ignore_ascii_case(&repo))
                 .collect();
-            let mut sections: Vec<String> = Vec::new();
-            for id in held.iter().flat_map(|p| &p.sections) {
-                if !sections.contains(id) {
-                    sections.push(id.clone());
-                }
-            }
             Some(RepoSummary {
                 added: !held.is_empty(),
-                project_path: held.first().map(|p| p.path.clone()),
-                sections,
+                projects: held
+                    .iter()
+                    .map(|p| RepoHeld {
+                        path: p.path.clone(),
+                        sections: p.sections.clone(),
+                    })
+                    .collect(),
                 description: json_text(&r["description"]),
                 private: r["private"].as_bool().unwrap_or(false),
                 pushed_at: json_text(&r["pushed_at"]),
@@ -621,8 +620,14 @@ mod tests {
                     private,
                     pushed_at: Some(pushed_at.into()),
                     added,
-                    project_path: added.then(|| "/Users/sam/code/payments-api".into()),
-                    sections: if added { vec!["s-work".into()] } else { vec![] },
+                    projects: if added {
+                        vec![RepoHeld {
+                            path: "/Users/sam/code/payments-api".into(),
+                            sections: vec!["s-work".into()],
+                        }]
+                    } else {
+                        vec![]
+                    },
                 }
             };
         assert_eq!(
@@ -661,7 +666,7 @@ mod tests {
     }
 
     #[test]
-    fn a_repository_in_two_projects_lists_the_sections_of_both() {
+    fn a_repository_in_two_projects_lists_each_with_its_sections() {
         let project = |path: &str, sections: &[&str]| RepoProject {
             repo: "acme/storefront".into(),
             path: path.into(),
@@ -671,19 +676,25 @@ mod tests {
             fixture("gh-user-repos.json").as_bytes(),
             &[
                 project("/Users/sam/code/storefront", &["s-work"]),
-                project("/Users/sam/code/storefront-2", &["s-play", "s-work"]),
+                project("/Users/sam/code/storefront-2", &["s-play", "s-studio"]),
             ],
         )
         .unwrap();
         let shop = &list[0];
         assert_eq!(shop.repo, "acme/storefront");
+        assert!(shop.added);
         assert_eq!(
-            (shop.added, shop.project_path.as_deref(), &shop.sections),
-            (
-                true,
-                Some("/Users/sam/code/storefront"),
-                &vec!["s-work".to_string(), "s-play".to_string()]
-            )
+            shop.projects,
+            [
+                RepoHeld {
+                    path: "/Users/sam/code/storefront".into(),
+                    sections: vec!["s-work".into()]
+                },
+                RepoHeld {
+                    path: "/Users/sam/code/storefront-2".into(),
+                    sections: vec!["s-play".into(), "s-studio".into()]
+                },
+            ]
         );
     }
 

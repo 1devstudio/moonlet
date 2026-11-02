@@ -98,13 +98,16 @@ describe("Add project from GitHub", () => {
         .map((x) => x.name);
     const project = rpc<{ id: string; name: string; path: string }[]>(w, "project.list", {}).find((p) => p.name === "storefront-admin")!;
     // Its origin is the repository gh lists, as a cloned project's would be.
-    const originUrl = execFileSync("git", ["remote", "get-url", "origin"], { cwd: project.path, env: w.env, stdio: "pipe" }).toString().trim();
-    execFileSync("git", ["remote", "set-url", "origin", "git@github.com:acme/storefront-admin.git"], { cwd: project.path, env: w.env, stdio: "pipe" });
-    const studio = rpc<{ id: string }>(w, "workspace.create", { name: "Studio", color: "blue" });
-    const side = rpc<{ id: string }>(w, "section.create", { workspace_id: studio.id, name: "Side" });
-    const projectsBefore = rpc<{ id: string }[]>(w, "project.list", {}).length;
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: project.path, env: w.env, stdio: "pipe" }).toString().trim();
+    const originUrl = git("remote", "get-url", "origin");
     const row = `${dialog}//div[@role="listbox"][@aria-label="Your repositories"]//button[.//span[normalize-space()="acme/storefront-admin"]]`;
+    let studio: { id: string } | undefined;
+    let side: { id: string } | undefined;
     try {
+      git("remote", "set-url", "origin", "git@github.com:acme/storefront-admin.git");
+      studio = rpc<{ id: string }>(w, "workspace.create", { name: "Studio", color: "blue" });
+      side = rpc<{ id: string }>(w, "section.create", { workspace_id: studio.id, name: "Side" });
+      const projectsBefore = rpc<{ id: string }[]>(w, "project.list", {}).length;
       await openAddProject();
       await $(`${dialog}//button[@role="radio"][normalize-space()="Clone from GitHub"]`).click();
       await fill(`${dialog}//input[@aria-label="Repository"]`, "storefront-admin");
@@ -116,6 +119,7 @@ describe("Add project from GitHub", () => {
       // Another workspace's section: the same row now adds the folder there.
       await choose(`${dialog}//select[option[normalize-space()="Studio › Side"]]`, side.id);
       await expect($(`${row}//*[normalize-space()="Add to this section"]`)).toBeDisplayed();
+      await expect($(`${row}//*[normalize-space()="${project.path}"]`)).toBeDisplayed();
       await $(row).click();
       await $('//div[@role="dialog"][@aria-label="New session"]').waitForDisplayed({ timeout: 20_000 });
       expect(holders(project.id)).toContain("Side");
@@ -123,9 +127,13 @@ describe("Add project from GitHub", () => {
       expect(rpc<{ id: string }[]>(w, "project.list", {}).length).toBe(projectsBefore);
       await browser.keys("Escape");
     } finally {
-      rpc(w, "section.delete", { id: side.id });
-      rpc(w, "workspace.delete", { id: studio.id });
-      execFileSync("git", ["remote", "set-url", "origin", originUrl], { cwd: project.path, env: w.env, stdio: "pipe" });
+      // The origin goes back even when the workspace cleanup throws.
+      try {
+        if (side) rpc(w, "section.delete", { id: side.id });
+        if (studio) rpc(w, "workspace.delete", { id: studio.id });
+      } finally {
+        git("remote", "set-url", "origin", originUrl);
+      }
     }
   });
 
