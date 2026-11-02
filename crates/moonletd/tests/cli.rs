@@ -46,6 +46,7 @@ impl Host {
         let child = daemon
             .arg("daemon")
             .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
+            .env("MOONLET_EXIT_WITH", std::process::id().to_string())
             .env("MOONLET_HOME", home.path())
             .env("MOONLET_SOCK", &socket)
             .env("MOONLET_MOBILE_ADDRS", addrs)
@@ -69,6 +70,7 @@ impl Host {
         let mut c = Command::new(env!("CARGO_BIN_EXE_moonletd"));
         c.args(args)
             .env("MOONLET_HOME", self.home.path())
+            .env("MOONLET_EXIT_WITH", std::process::id().to_string())
             .env("MOONLET_SOCK", &self.socket);
         c
     }

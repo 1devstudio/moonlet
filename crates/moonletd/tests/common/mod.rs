@@ -27,6 +27,7 @@ fn spawn(exe: &Path, home: &Path, socket: &Path, env: &[(String, String)]) -> Ch
         .env("MOONLET_SOCK", socket)
         // This test counts as the app when it sends the credential (X75).
         .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
+        .env("MOONLET_EXIT_WITH", std::process::id().to_string())
         .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
         .stdin(Stdio::null())
         .stdout(Stdio::null())

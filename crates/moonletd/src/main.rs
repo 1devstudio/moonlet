@@ -273,6 +273,8 @@ fn run_daemon(
                 (listener, daemon)
             }
         };
+        // As soon as there is a daemon to stop: startup can take a while.
+        stop_with_owner(&daemon);
         upgrade::write_pid(&socket);
         update::clean_leftovers();
         let chats = daemon.chats.restore();
@@ -340,6 +342,30 @@ fn run_daemon(
     // After a handoff the PTYs live on in the new daemon; otherwise exiting
     // drops every PTY master and sessions end with SIGHUP.
     std::process::exit(0);
+}
+
+/// Tests start their daemons with `MOONLET_EXIT_WITH` set to the test
+/// process's pid. Once that process is gone, the daemon shuts down as on
+/// SIGTERM, stopping its agents too, so a test run killed before it could
+/// stop its daemons leaves none running.
+fn stop_with_owner(daemon: &std::sync::Arc<daemon::Daemon>) {
+    let Some(pid) = std::env::var("MOONLET_EXIT_WITH").ok().and_then(|v| v.parse::<libc::pid_t>().ok()).filter(|p| *p > 0) else {
+        return;
+    };
+    let d = daemon.clone();
+    tokio::spawn(async move {
+        loop {
+            // SAFETY: signal 0 only checks that the process exists.
+            let gone = unsafe { libc::kill(pid, 0) } != 0
+                && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
+            if gone {
+                tracing::info!(pid, "the process this daemon was started for is gone; stopping");
+                d.request_shutdown();
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        }
+    });
 }
 
 fn set_path(env: &std::collections::BTreeMap<String, String>) {

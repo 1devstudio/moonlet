@@ -2437,10 +2437,12 @@ mod tests {
         let (repo, _home, mgr) = setup().await;
         let gate = tempfile::tempdir().unwrap();
         let (started, go) = (gate.path().join("started"), gate.path().join("go"));
+        // The archive script waits for `go` at most 30 s (600 x 0.05 s), so one
+        // left behind by a killed test ends instead of polling forever.
         std::fs::write(
             repo.path().join(".moonlet/config.toml"),
             format!(
-                "archive = \"touch {}; while [ ! -f {} ]; do sleep 0.05; done\"\ndefault_agent = \"fake\"\n[agents]\nfake = \"sh -c 'sleep 30'\"\n",
+                "archive = \"touch {}; i=0; while [ ! -f {} ] && [ $i -lt 600 ]; do sleep 0.05; i=$((i+1)); done\"\ndefault_agent = \"fake\"\n[agents]\nfake = \"sh -c 'sleep 30'\"\n",
                 started.display(),
                 go.display()
             ),

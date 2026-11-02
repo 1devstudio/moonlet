@@ -21,6 +21,7 @@ fn moonletd(home: &std::path::Path, socket: &PathBuf, args: &[&str]) -> Command 
     let mut c = Command::new(env!("CARGO_BIN_EXE_moonletd"));
     c.args(args)
         .env("MOONLET_HOME", home)
+        .env("MOONLET_EXIT_WITH", std::process::id().to_string())
         .env("MOONLET_SOCK", socket)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -145,6 +146,7 @@ async fn start_takes_over_a_jaunt_daemon() {
         let mut c = Command::new(env!("CARGO_BIN_EXE_moonletd"));
         c.args(args)
             .env("MOONLET_HOME", home.path())
+            .env("MOONLET_EXIT_WITH", std::process::id().to_string())
             .env_remove("MOONLET_SOCK")
             .env_remove("JAUNT_HOME")
             .stdin(Stdio::null())

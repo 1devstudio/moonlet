@@ -27,6 +27,7 @@ impl TestDaemon {
         let child = Command::new(env!("CARGO_BIN_EXE_moonletd"))
             .arg("daemon")
             .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
+            .env("MOONLET_EXIT_WITH", std::process::id().to_string())
             .envs(env.iter().map(|(k, v)| (*k, v.as_str())))
             .env("MOONLET_HOME", home.path())
             .env("MOONLET_SOCK", &socket)
@@ -387,6 +388,7 @@ async fn terminals_do_not_inherit_the_daemon_starters_environment() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_moonletd"))
         .arg("daemon")
         .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
+        .env("MOONLET_EXIT_WITH", std::process::id().to_string())
         .env("MOONLET_HOME", home.path())
         .env("MOONLET_SOCK", &socket)
         .env("CLAUDE_CODE_MESSAGING_TOKEN", "leaked-secret")
@@ -963,6 +965,7 @@ async fn starting_refreshes_an_outdated_moonlet_skill() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_moonletd"))
         .arg("daemon")
         .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
+        .env("MOONLET_EXIT_WITH", std::process::id().to_string())
         .env("HOME", home.path())
         .env_remove("MOONLET_SOCK")
         .env_remove("MOONLET_HOME")
@@ -1036,6 +1039,7 @@ impl HomeDaemon {
         cmd.envs(env.iter().map(|(k, v)| (k, v)));
         cmd.arg("daemon")
             .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
+            .env("MOONLET_EXIT_WITH", std::process::id().to_string())
             .env("HOME", home)
             .env_remove("MOONLET_SOCK")
             .env_remove("MOONLET_HOME")
@@ -1733,6 +1737,7 @@ async fn a_second_daemon_exits_with_0_while_one_is_listening() {
     let mut second = Command::new(env!("CARGO_BIN_EXE_moonletd"))
         .arg("daemon")
         .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
+        .env("MOONLET_EXIT_WITH", std::process::id().to_string())
         .env("MOONLET_HOME", d.home.path())
         .env("MOONLET_SOCK", &d.socket)
         .stdin(Stdio::null())
@@ -1754,6 +1759,61 @@ async fn a_second_daemon_exits_with_0_while_one_is_listening() {
     assert_eq!(status.code(), Some(0));
     // The first one still serves.
     d.client().await;
+}
+
+/// A daemon started for a test process stops once that process is gone, so
+/// a test run killed before it could stop its daemons leaves none running.
+#[tokio::test]
+async fn a_daemon_stops_once_the_process_it_was_started_for_is_gone() {
+    let mut owner = Command::new("sleep").arg("600").spawn().unwrap();
+    let mut d = TestDaemon::start_with(&[("MOONLET_EXIT_WITH", owner.id().to_string())]).await;
+    d.client().await;
+    owner.kill().unwrap();
+    owner.wait().unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let status = loop {
+        if let Some(status) = d.child.try_wait().unwrap() {
+            break status;
+        }
+        assert!(std::time::Instant::now() < deadline, "the daemon kept running after its process was gone");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    // It shut down as on SIGTERM, not by crashing.
+    assert_eq!(status.code(), Some(0));
+}
+
+/// A daemon whose process is already gone while it starts up stops too:
+/// a stop asked for before it serves is not lost.
+#[tokio::test]
+async fn a_daemon_started_for_a_process_already_gone_stops() {
+    let mut owner = Command::new("true").spawn().unwrap();
+    let gone = owner.id().to_string();
+    owner.wait().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let mut daemon = Command::new(env!("CARGO_BIN_EXE_moonletd"))
+        .arg("daemon")
+        .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
+        .env("MOONLET_EXIT_WITH", &gone)
+        .env("MOONLET_HOME", home.path())
+        .env("MOONLET_SOCK", home.path().join("run/d.sock"))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let status = loop {
+        if let Some(status) = daemon.try_wait().unwrap() {
+            break status;
+        }
+        if std::time::Instant::now() > deadline {
+            let _ = daemon.kill();
+            let _ = daemon.wait();
+            panic!("the daemon kept running though its process was gone before it served");
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    assert_eq!(status.code(), Some(0));
 }
 
 /// A fake gh signed in as sam-rivera, whose `repo clone` runs `clone`
@@ -3325,11 +3385,14 @@ async fn a_render_waits_its_turn_without_its_clock_running() {
 /// and holds a turn whose message says `HOLD-NOW`, working, until a file
 /// `release` is in its folder.
 const WRITING_CLAUDE: &str = r#"#!/bin/sh
+# Waits for the file $1 for at most 30 s, so a fake left behind by a killed
+# test ends instead of polling forever.
+wait_for() { i=0; while [ ! -f "$1" ] && [ $i -lt 600 ]; do sleep 0.05; i=$((i+1)); done; }
 n=0
 while IFS= read -r line; do
   case "$line" in
     *'"subtype":"initialize"'*) echo '{"type":"system","subtype":"init","session_id":"s1","model":"fake"}' ;;
-    *'"type":"user"'*) case "$line" in *'HOLD-NOW'*) while [ ! -f release ]; do sleep 0.05; done; rm -f release ;; esac
+    *'"type":"user"'*) case "$line" in *'HOLD-NOW'*) wait_for release; rm -f release ;; esac
       n=$((n+1)); mkdir -p pages
       printf '<body data-mid="m1"><p data-mid="m2">turn %s</p></body>\n' "$n" > pages/index.html
       echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}' ;;
@@ -3613,16 +3676,19 @@ async fn edits_by_hand_saved_once_the_agent_works_go_with_its_turn_though_its_st
 /// it started it, which starts the next turn with no `chat.send`, and holds
 /// that turn until `release`.
 const QUEUEING_CLAUDE: &str = r#"#!/bin/sh
+# Waits for the file $1 for at most 30 s, so a fake left behind by a killed
+# test ends instead of polling forever.
+wait_for() { i=0; while [ ! -f "$1" ] && [ $i -lt 600 ]; do sleep 0.05; i=$((i+1)); done; }
 n=0
 while IFS= read -r line; do
   case "$line" in
     *'"subtype":"initialize"'*) echo '{"type":"system","subtype":"init","session_id":"s1","model":"fake"}' ;;
     *'"type":"user"'*) case "$line" in
-        *'QUEUED'*) while [ ! -f go ]; do sleep 0.05; done; rm -f go
+        *'QUEUED'*) wait_for go; rm -f go
           uuid=${line#*'"uuid":"'}; uuid=${uuid%%'"'*}
           echo "{\"type\":\"command_lifecycle\",\"command_uuid\":\"$uuid\",\"state\":\"started\",\"session_id\":\"s1\"}"
-          while [ ! -f release ]; do sleep 0.05; done; rm -f release ;;
-        *'HOLD-NOW'*) while [ ! -f release ]; do sleep 0.05; done; rm -f release ;;
+          wait_for release; rm -f release ;;
+        *'HOLD-NOW'*) wait_for release; rm -f release ;;
       esac
       n=$((n+1)); mkdir -p pages
       printf '<body data-mid="m1"><p data-mid="m2">turn %s</p></body>\n' "$n" > pages/index.html

@@ -41,6 +41,7 @@ async fn claude_hook_raises_attention_quickly() {
     let _daemon = KillOnDrop(
         Command::new(target_bin("moonletd"))
             .arg("daemon")
+            .env("MOONLET_EXIT_WITH", std::process::id().to_string())
             .env("MOONLET_HOME", home.path())
             .env("MOONLET_SOCK", &socket)
             .stdin(Stdio::null())
@@ -124,6 +125,7 @@ async fn hook_in_a_terminal_jaunt_opened_reaches_its_terminal() {
     let _daemon = KillOnDrop(
         Command::new(target_bin("moonletd"))
             .arg("daemon")
+            .env("MOONLET_EXIT_WITH", std::process::id().to_string())
             .env("MOONLET_HOME", home.path())
             .env("MOONLET_SOCK", &socket)
             .stdin(Stdio::null())
