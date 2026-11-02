@@ -7,7 +7,12 @@ export type PaneNode =
   | { type: "file"; path: string; line?: number }
   /** A routed command's output (X62), by job id. */
   | { type: "job"; job: string }
+  /** A changed file's diff (X77), against the base or the uncommitted changes; `path` is relative to the worktree. */
+  | { type: "diff"; path: string; mode: DiffMode }
   | { type: "split"; dir: "row" | "col"; children: PaneNode[]; sizes: number[] };
+
+/** What a diff tab compares: the work since branching from the base, or the uncommitted changes only. */
+export type DiffMode = "base" | "head";
 
 export interface Tab {
   id: string;
@@ -25,9 +30,12 @@ export const emptyLayout = (): Layout => ({ tabs: [], active: null, focused: nul
 let counter = 0;
 export const newTabId = () => `t${Date.now().toString(36)}${(counter++).toString(36)}`;
 
-/** The terminals shown in a pane tree; file and job panes hold none. */
+/** A pane that is not a terminal and holds none: a file, a job or a diff. */
+const isViewer = (node: PaneNode) => node.type === "file" || node.type === "job" || node.type === "diff";
+
+/** The terminals shown in a pane tree; file, job and diff panes hold none. */
 export function leaves(node: PaneNode): number[] {
-  if (node.type === "file" || node.type === "job") return [];
+  if (isViewer(node)) return [];
   return node.type === "leaf" ? [node.session] : node.children.flatMap(leaves);
 }
 
@@ -41,7 +49,7 @@ export function tabOf(layout: Layout, session: number): Tab | undefined {
 
 /** Splits the pane showing `target`, putting `session` after it. */
 export function splitLeaf(node: PaneNode, target: number, session: number, dir: "row" | "col"): PaneNode {
-  if (node.type === "file" || node.type === "job") return node;
+  if (isViewer(node)) return node;
   if (node.type === "leaf") {
     if (node.session !== target) return node;
     return { type: "split", dir, children: [node, { type: "leaf", session }], sizes: [50, 50] };
@@ -58,7 +66,7 @@ export function splitLeaf(node: PaneNode, target: number, session: number, dir: 
 
 /** Removes a pane; collapses splits left with one child. */
 export function removeLeaf(node: PaneNode, session: number): PaneNode | null {
-  if (node.type === "file" || node.type === "job") return node;
+  if (isViewer(node)) return node;
   if (node.type === "leaf") return node.session === session ? null : node;
   const kept: { child: PaneNode; size: number }[] = [];
   node.children.forEach((c, i) => {
@@ -126,6 +134,21 @@ export function closeFile(layout: Layout, path: string): Layout {
   return withTabs(layout, layout.tabs.filter((t) => !isFile(t, path)), null);
 }
 
+const isDiff = (t: Tab, path: string, mode: DiffMode) => t.root.type === "diff" && t.root.path === path && t.root.mode === mode;
+
+/** Opens a changed file's diff tab (X77), or switches to it when that file and mode are open. */
+export function openDiff(layout: Layout, path: string, mode: DiffMode): Layout {
+  const open = layout.tabs.find((t) => isDiff(t, path, mode));
+  if (open) return { ...layout, active: open.id, focused: null };
+  const tab = { id: newTabId(), root: { type: "diff", path, mode } as PaneNode };
+  return { tabs: [...layout.tabs, tab], active: tab.id, focused: null };
+}
+
+/** Closes a diff tab (X77). */
+export function closeDiff(layout: Layout, path: string, mode: DiffMode): Layout {
+  return withTabs(layout, layout.tabs.filter((t) => !isDiff(t, path, mode)), null);
+}
+
 const isJob = (t: Tab, job: string) => t.root.type === "job" && t.root.job === job;
 
 /** Opens a job's tab (X62), or switches to it when it is open. */
@@ -173,6 +196,7 @@ function isNode(v: unknown): v is PaneNode {
   if (n.type === "leaf") return typeof n.session === "number";
   if (n.type === "file") return typeof n.path === "string" && (n.line === undefined || typeof n.line === "number");
   if (n.type === "job") return typeof n.job === "string";
+  if (n.type === "diff") return typeof n.path === "string" && (n.mode === "base" || n.mode === "head");
   return (
     n.type === "split" &&
     (n.dir === "row" || n.dir === "col") &&

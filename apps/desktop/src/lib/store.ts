@@ -304,8 +304,6 @@ interface State extends UiPersist {
   jobDetail: string | null;
   /** Per chat (`termKey`): the latest agent start when × hid the strip (X42). */
   stripDismissed: Record<string, number>;
-  /** File shown in the Changes diff (set from the Files list). */
-  diffFile: string | null;
   /** Sessions (`sesKey`) whose sidebar row plays the archive loader (X21). */
   archiving: Record<string, Archiving>;
 }
@@ -357,7 +355,6 @@ function makeStore() {
   agentDetail: null,
   jobDetail: null,
   stripDismissed: {},
-  diffFile: null,
   archiving: {},
   }));
 }
@@ -706,7 +703,7 @@ export function focusTerminal(host: string, session: number) {
 }
 
 export function selectSession(host: string, id: string, keepMode = false) {
-  set((s) => ({ selected: { host, session: id }, diffFile: null, ...showSessionWorkspace(s, host, id, keepMode) }));
+  set((s) => ({ selected: { host, session: id }, ...showSessionWorkspace(s, host, id, keepMode) }));
   const layout = getLayout(host, id);
   if (layout.focused !== null) {
     set((s) => {

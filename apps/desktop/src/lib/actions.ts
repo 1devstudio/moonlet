@@ -2,9 +2,9 @@
 // keyboard shortcuts.
 
 import { rpc, sendInput } from "./daemon";
-import { addTab, closeFile, closeJob, cycleFocus, openFile, openJob, splitLeaf, tabOf } from "./layout";
+import { addTab, closeDiff, closeFile, closeJob, cycleFocus, openDiff, openFile, openJob, splitLeaf, tabOf, type DiffMode } from "./layout";
 import { M, type ProjectConfig, type TerminalInfo, type Session, type SessionArchived, type UnpushedWork } from "./protocol";
-import { checkForUpdates, errorToast, focusTerminal, getLayout, selectedSession, sesKey, sessionState, setLayout, termKey, toast, useStore, sessionTerminals, shownWorkspace, designHostOf } from "./store";
+import { checkForUpdates, errorToast, focusTerminal, getLayout, selectedSession, sesKey, sessionState, setLayout, termKey, toast, useStore, sessionTerminals, shownWorkspace, designHostOf, selectSession } from "./store";
 import { lastActive, sharedSessionOrder } from "./sidebar";
 import { findEntry, outputToCopy } from "./terminals";
 import { agentReadiness, isStructured, tabAgent } from "./agents";
@@ -96,6 +96,7 @@ export async function closeFocused() {
   const layout = getLayout(c.host, c.ws.id);
   const root = layout.tabs.find((t) => t.id === layout.active)?.root;
   if (root?.type === "file") return closeFileTab(c.host, c.ws.id, root.path);
+  if (root?.type === "diff") return closeDiffTab(c.host, c.ws.id, root.path, root.mode);
   if (root?.type === "job") return closeJobTab(c.host, c.ws.id, root.job);
   const focused = layout.focused;
   if (focused === null) return;
@@ -119,6 +120,18 @@ export async function closeTab(host: string, ids: number[]) {
 /** Opens a file in an editor tab of a session's main window (X26), at `line` if given. */
 export function openFileTab(host: string, wsId: string, path: string, line?: number) {
   setLayout(host, wsId, openFile(getLayout(host, wsId), path, line));
+}
+
+/** Opens a changed file's diff in a tab of a session's main window (X77). */
+export function openDiffTab(host: string, wsId: string, path: string, mode: DiffMode) {
+  // The right panel also shows beside Tasks and Design: the tab needs Sessions mode to be seen.
+  selectSession(host, wsId);
+  setLayout(host, wsId, openDiff(getLayout(host, wsId), path, mode));
+}
+
+/** Closes a diff tab (X77). */
+export function closeDiffTab(host: string, wsId: string, path: string, mode: DiffMode) {
+  setLayout(host, wsId, closeDiff(getLayout(host, wsId), path, mode));
 }
 
 /** Closes a file's editor tab, asking first when it has unsaved edits. */

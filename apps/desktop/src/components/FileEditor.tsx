@@ -7,6 +7,7 @@ import { errorToast, toast, useStore } from "../lib/store";
 import { editorFont } from "../lib/uiScale";
 import { Empty, cx } from "./ui";
 import { MarkdownPreview } from "./MarkdownPreview";
+import { isMarkdownPath } from "../lib/markdown";
 import { afterRead, afterSave } from "../lib/fileSync";
 
 /**
@@ -25,7 +26,7 @@ export default function FileEditor({ host, wsId, path, line, visible }: { host: 
   const language = useEditorLanguage(path);
   const key = `${host}|${path}`;
   const readOnly = !file || file.truncated;
-  const markdown = /\.(md|markdown|mdx)$/i.test(path);
+  const markdown = isMarkdownPath(path);
   /** The editor's text while a markdown file shows rendered; null shows the source. */
   const [preview, setPreview] = useState<string | null>(null);
 
