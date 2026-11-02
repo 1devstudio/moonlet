@@ -45,6 +45,7 @@ impl Mac {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_moonletd"));
         cmd.arg("daemon")
             .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
+            .env("MOONLET_EXIT_WITH", std::process::id().to_string())
             .env("MOONLET_HOME", home)
             .env("MOONLET_SOCK", socket)
             .env("MOONLET_MOBILE_ADDRS", "127.0.0.1")
@@ -729,8 +730,9 @@ async fn phones_and_agents_cannot_manage_phones() {
 fn fake_ssh(dir: &Path, remote_home: &Path, args_file: &Path) {
     use std::os::unix::fs::PermissionsExt;
     let script = format!(
-        "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nMOONLET_HOME='{}' MOONLET_SOCK='{}' exec '{}' proxy\n",
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nMOONLET_EXIT_WITH='{}' MOONLET_HOME='{}' MOONLET_SOCK='{}' exec '{}' proxy\n",
         args_file.display(),
+        std::process::id(),
         remote_home.display(),
         remote_home.join("run").join("d.sock").display(),
         env!("CARGO_BIN_EXE_moonletd"),

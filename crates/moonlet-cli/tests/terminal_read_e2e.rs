@@ -42,6 +42,7 @@ impl Daemon {
         let child = Command::new(target_bin("moonletd"))
             .arg("daemon")
             .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
+            .env("MOONLET_EXIT_WITH", std::process::id().to_string())
             .env("MOONLET_HOME", home.path())
             .env("MOONLET_SOCK", &socket)
             .envs(env.iter().copied())

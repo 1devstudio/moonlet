@@ -27,6 +27,7 @@ impl TestDaemon {
         let child = Command::new(env!("CARGO_BIN_EXE_moonletd"))
             .arg("daemon")
             .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
+            .env("MOONLET_EXIT_WITH", std::process::id().to_string())
             .envs(env.iter().map(|(k, v)| (*k, v.as_str())))
             .env("MOONLET_HOME", home.path())
             .env("MOONLET_SOCK", &socket)
@@ -387,6 +388,7 @@ async fn terminals_do_not_inherit_the_daemon_starters_environment() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_moonletd"))
         .arg("daemon")
         .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
+        .env("MOONLET_EXIT_WITH", std::process::id().to_string())
         .env("MOONLET_HOME", home.path())
         .env("MOONLET_SOCK", &socket)
         .env("CLAUDE_CODE_MESSAGING_TOKEN", "leaked-secret")
@@ -963,6 +965,7 @@ async fn starting_refreshes_an_outdated_moonlet_skill() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_moonletd"))
         .arg("daemon")
         .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
+        .env("MOONLET_EXIT_WITH", std::process::id().to_string())
         .env("HOME", home.path())
         .env_remove("MOONLET_SOCK")
         .env_remove("MOONLET_HOME")
@@ -1036,6 +1039,7 @@ impl HomeDaemon {
         cmd.envs(env.iter().map(|(k, v)| (k, v)));
         cmd.arg("daemon")
             .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
+            .env("MOONLET_EXIT_WITH", std::process::id().to_string())
             .env("HOME", home)
             .env_remove("MOONLET_SOCK")
             .env_remove("MOONLET_HOME")
@@ -1733,6 +1737,7 @@ async fn a_second_daemon_exits_with_0_while_one_is_listening() {
     let mut second = Command::new(env!("CARGO_BIN_EXE_moonletd"))
         .arg("daemon")
         .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
+        .env("MOONLET_EXIT_WITH", std::process::id().to_string())
         .env("MOONLET_HOME", d.home.path())
         .env("MOONLET_SOCK", &d.socket)
         .stdin(Stdio::null())
@@ -1754,6 +1759,22 @@ async fn a_second_daemon_exits_with_0_while_one_is_listening() {
     assert_eq!(status.code(), Some(0));
     // The first one still serves.
     d.client().await;
+}
+
+/// A daemon started for a test process stops once that process is gone, so
+/// a test run killed before it could stop its daemons leaves none running.
+#[tokio::test]
+async fn a_daemon_stops_once_the_process_it_was_started_for_is_gone() {
+    let mut owner = Command::new("sleep").arg("600").spawn().unwrap();
+    let mut d = TestDaemon::start_with(&[("MOONLET_EXIT_WITH", owner.id().to_string())]).await;
+    d.client().await;
+    owner.kill().unwrap();
+    owner.wait().unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while d.child.try_wait().unwrap().is_none() {
+        assert!(std::time::Instant::now() < deadline, "the daemon kept running after its process was gone");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }
 
 /// A fake gh signed in as sam-rivera, whose `repo clone` runs `clone`

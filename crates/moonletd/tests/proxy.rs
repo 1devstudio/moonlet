@@ -54,7 +54,8 @@ impl Host {
             }
         };
         c.env("MOONLET_HOME", self.home.path())
-            .env("MOONLET_TEST_SSHD_EXE", self.sshd());
+            .env("MOONLET_TEST_SSHD_EXE", self.sshd())
+            .env("MOONLET_EXIT_WITH", std::process::id().to_string());
         c
     }
 }
