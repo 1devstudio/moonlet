@@ -66,19 +66,14 @@ pub fn version(s: &str) -> Option<(u64, u64, u64)> {
 }
 
 /// The archive of release `version` that `layout` takes, for this machine;
-/// its signature is `<archive>.sig`. A bundle's is named as Tauri names it
-/// (`moonlet_0.1.35_aarch64.app.tar.gz`). Never taken from `latest.json`,
+/// its signature is `<archive>.sig`. A bundle's is named as tauri-action
+/// uploads it (`moonlet_0.1.35_aarch64.app.tar.gz`; releases are for Apple
+/// Silicon only). Never taken from `latest.json`,
 /// whose URLs tauri-action points at api.github.com, outside the release.
 fn asset(layout: &Layout, version: &str) -> String {
     match layout {
         Layout::Bin(_) => format!("moonlet-{}-{}.tar.gz", std::env::consts::OS, std::env::consts::ARCH),
-        Layout::Bundle(_) => {
-            let arch = match std::env::consts::ARCH {
-                "x86_64" => "x64",
-                arch => arch,
-            };
-            format!("moonlet_{version}_{arch}.app.tar.gz")
-        }
+        Layout::Bundle(_) => format!("moonlet_{version}_{}.app.tar.gz", std::env::consts::ARCH),
     }
 }
 

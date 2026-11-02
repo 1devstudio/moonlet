@@ -99,9 +99,14 @@ fn daemon_saying(version: &str) -> Vec<u8> {
 }
 
 fn tgz(daemon: &[u8]) -> Vec<u8> {
+    tgz_of(&[("moonletd", daemon), ("moonlet", NEW_CLI)])
+}
+
+/// A `.tar.gz` of `files`, each executable.
+fn tgz_of(files: &[(&str, &[u8])]) -> Vec<u8> {
     let gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
     let mut tar = tar::Builder::new(gz);
-    for (name, data) in [("moonletd", daemon), ("moonlet", NEW_CLI)] {
+    for &(name, data) in files {
         let mut h = tar::Header::new_gnu();
         h.set_size(data.len() as u64);
         h.set_mode(0o755);
@@ -198,6 +203,22 @@ impl Host {
         } else {
             built.to_path_buf()
         };
+        Host::run(home, &exe, releases, key).await
+    }
+
+    /// A daemon run from `<home>/Applications/moonlet.app`, a bundle of
+    /// this workspace's version holding a copy of the built `moonletd`.
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    async fn start_in_bundle(releases: &str, key: &Key) -> Host {
+        let home = tempfile::tempdir().unwrap();
+        let app = home.path().join("Applications/moonlet.app");
+        std::fs::create_dir_all(app.join("Contents/MacOS")).unwrap();
+        std::fs::write(app.join("Contents/Info.plist"), plist(env!("CARGO_PKG_VERSION"))).unwrap();
+        std::fs::copy(env!("CARGO_BIN_EXE_moonletd"), app.join("Contents/MacOS/moonletd")).unwrap();
+        Host::run(home, &app.join("Contents/MacOS/moonletd"), releases, key).await
+    }
+
+    async fn run(home: tempfile::TempDir, exe: &Path, releases: &str, key: &Key) -> Host {
         std::fs::write(home.path().join("mobile.json"), r#"{ "enabled": true, "port": 0 }"#).unwrap();
         let socket = home.path().join("run").join("d.sock");
         let child = Command::new(exe)
@@ -505,6 +526,7 @@ async fn a_mac_on_another_protocol_updates_its_host_before_hello() {
 }
 
 /// `Info.plist` as Tauri writes it, trimmed.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn plist(version: &str) -> String {
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\">\n<dict>\n\
@@ -521,17 +543,11 @@ fn plist(version: &str) -> String {
 #[tokio::test]
 async fn a_mac_host_updates_from_a_release_as_tauri_action_publishes_it() {
     let key = Key::new();
-    let mut gz = tar::Builder::new(flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast()));
     let new_plist = plist("9.9.9");
-    let new_daemon = daemon_saying("9.9.9");
-    for (name, data) in [("moonlet.app/Contents/Info.plist", new_plist.as_bytes()), ("moonlet.app/Contents/MacOS/moonletd", &new_daemon[..])] {
-        let mut h = tar::Header::new_gnu();
-        h.set_size(data.len() as u64);
-        h.set_mode(0o755);
-        h.set_cksum();
-        gz.append_data(&mut h, name, data).unwrap();
-    }
-    let app_archive = gz.into_inner().unwrap().finish().unwrap();
+    let app_archive = tgz_of(&[
+        ("moonlet.app/Contents/Info.plist", new_plist.as_bytes()),
+        ("moonlet.app/Contents/MacOS/moonletd", &daemon_saying("9.9.9")),
+    ]);
     let sig = key.sign(&app_archive);
     let latest = json!({
         "version": "9.9.9",
@@ -550,34 +566,14 @@ async fn a_mac_host_updates_from_a_release_as_tauri_action_publishes_it() {
     )
     .await;
 
-    let home = tempfile::tempdir().unwrap();
-    let app = home.path().join("Applications/moonlet.app");
-    std::fs::create_dir_all(app.join("Contents/MacOS")).unwrap();
-    std::fs::write(app.join("Contents/Info.plist"), plist(env!("CARGO_PKG_VERSION"))).unwrap();
-    std::fs::copy(env!("CARGO_BIN_EXE_moonletd"), app.join("Contents/MacOS/moonletd")).unwrap();
-    std::fs::write(home.path().join("mobile.json"), r#"{ "enabled": true, "port": 0 }"#).unwrap();
-    let socket = home.path().join("run").join("d.sock");
-    let child = Command::new(app.join("Contents/MacOS/moonletd"))
-        .arg("daemon")
-        .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
-        .env("MOONLET_HOME", home.path())
-        .env("MOONLET_SOCK", &socket)
-        .env("MOONLET_MOBILE_ADDRS", "127.0.0.1")
-        .env("MOONLET_RELEASES", &releases)
-        .env("MOONLET_RELEASE_KEY", key.public())
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
-    wait_for_socket(&socket, Duration::from_secs(15)).await.unwrap();
-    let host = Host { home, socket, child };
+    let host = Host::start_in_bundle(&releases, &key).await;
     let pid = host.pid().await;
 
     let (addr, mac) = host.pair("desktop").await;
     let reply = moonlet_link::tailnet::update(&[addr], &mac, "9.9.9").await.unwrap();
     assert_eq!((reply.from.as_str(), reply.to.as_str()), (env!("CARGO_PKG_VERSION"), "9.9.9"));
     host.next_daemon(pid).await;
+    let app = host.home.path().join("Applications/moonlet.app");
     assert_eq!(std::fs::read_to_string(app.join("Contents/Info.plist")).unwrap(), plist("9.9.9"));
 }
 
