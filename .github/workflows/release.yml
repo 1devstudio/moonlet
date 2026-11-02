@@ -126,7 +126,18 @@ jobs:
             echo "::error::Apple did not accept the DMG; see the submission id above and run notarytool log"
             exit 1
           fi
-          xcrun stapler staple "${dmgs[0]}"
+          # Apple's ticket service (api.apple-cloudkit.com) drops connections
+          # now and then; stapling is safe to repeat.
+          retry() {
+            local tries=$1 pause=$2; shift 2
+            for i in $(seq 1 "$tries"); do
+              "$@" && return 0
+              echo "attempt $i of $tries failed: $*"
+              [ "$i" -lt "$tries" ] && sleep "$pause"
+            done
+            return 1
+          }
+          retry 5 20 xcrun stapler staple "${dmgs[0]}"
 
       # The app must carry the daemon's login item agent (X56), and every
       # binary must carry the team's signature and the hardened runtime,
@@ -139,6 +150,17 @@ jobs:
           TEAM_ID: LE9Q47C92D
         run: |
           app=target/release/bundle/macos/moonlet.app
+          # Apple's ticket service (api.apple-cloudkit.com) drops connections
+          # now and then; stapling is safe to repeat.
+          retry() {
+            local tries=$1 pause=$2; shift 2
+            for i in $(seq 1 "$tries"); do
+              "$@" && return 0
+              echo "attempt $i of $tries failed: $*"
+              [ "$i" -lt "$tries" ] && sleep "$pause"
+            done
+            return 1
+          }
           codesign --verify --deep --strict --verbose=2 "$app"
           if [ ! -f "$app/Contents/Library/LaunchAgents/dev.onedevstudio.moonlet.moonletd.plist" ]; then
             echo "::error::the app does not carry the daemon's login item agent (X56)"
@@ -155,14 +177,16 @@ jobs:
               exit 1
             fi
           done
-          codesign --verify --check-notarization -R="notarized" --verbose=2 "$app"
-          xcrun stapler validate "$app"
+          retry 3 20 codesign --verify --check-notarization -R="notarized" --verbose=2 "$app"
+          # tauri staples the app itself and carries on if that fails, so staple it again.
+          retry 5 20 xcrun stapler staple "$app"
+          retry 3 20 xcrun stapler validate "$app"
           update=$(mktemp -d)
           tar -xzf target/release/bundle/macos/*.app.tar.gz -C "$update"
-          codesign --verify --deep --strict --check-notarization -R="notarized" --verbose=2 "$update/moonlet.app"
+          retry 3 20 codesign --verify --deep --strict --check-notarization -R="notarized" --verbose=2 "$update/moonlet.app"
           for dmg in target/release/bundle/dmg/*.dmg; do
-            codesign --verify --check-notarization -R="notarized" --verbose=2 "$dmg"
-            xcrun stapler validate "$dmg"
+            retry 3 20 codesign --verify --check-notarization -R="notarized" --verbose=2 "$dmg"
+            retry 3 20 xcrun stapler validate "$dmg"
           done
 
       # tauri-action uploaded the DMG before it was notarized; the stapled one
