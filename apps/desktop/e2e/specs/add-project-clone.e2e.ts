@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { $, browser, expect } from "@wdio/globals";
-import { fill, rpc, sel, world } from "../fixtures";
+import { choose, fill, rpc, sel, world } from "../fixtures";
 
 const w = world();
 const fakeGh = join(w.root, "bin", "gh");
@@ -89,6 +89,52 @@ describe("Add project from GitHub", () => {
     expect(project?.path.endsWith("/moonlet/storefront-admin")).toBe(true);
     expect(existsSync(join(clonedPath, "README.md"))).toBe(true);
     await browser.keys("Escape");
+  });
+
+  it("adds a repository that is a project of another workspace to the chosen section without cloning it", async () => {
+    const holders = (id: string) =>
+      rpc<{ name: string; project_ids: string[] }[]>(w, "section.list", {})
+        .filter((x) => x.project_ids.includes(id))
+        .map((x) => x.name);
+    const project = rpc<{ id: string; name: string; path: string }[]>(w, "project.list", {}).find((p) => p.name === "storefront-admin")!;
+    // Its origin is the repository gh lists, as a cloned project's would be.
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: project.path, env: w.env, stdio: "pipe" }).toString().trim();
+    const originUrl = git("remote", "get-url", "origin");
+    const row = `${dialog}//div[@role="listbox"][@aria-label="Your repositories"]//button[.//span[normalize-space()="acme/storefront-admin"]]`;
+    let studio: { id: string } | undefined;
+    let side: { id: string } | undefined;
+    try {
+      git("remote", "set-url", "origin", "git@github.com:acme/storefront-admin.git");
+      studio = rpc<{ id: string }>(w, "workspace.create", { name: "Studio", color: "blue" });
+      side = rpc<{ id: string }>(w, "section.create", { workspace_id: studio.id, name: "Side" });
+      const projectsBefore = rpc<{ id: string }[]>(w, "project.list", {}).length;
+      await openAddProject();
+      await $(`${dialog}//button[@role="radio"][normalize-space()="Clone from GitHub"]`).click();
+      await fill(`${dialog}//input[@aria-label="Repository"]`, "storefront-admin");
+      // In the section the dialog starts on, the project is already there.
+      await $(row).waitForDisplayed();
+      await expect($(`${row}//*[normalize-space()="Already added"]`)).toBeDisplayed();
+      await expect($(row)).toBeDisabled();
+
+      // Another workspace's section: the same row now adds the folder there.
+      await choose(`${dialog}//select[option[normalize-space()="Studio › Side"]]`, side.id);
+      await expect($(`${row}//*[normalize-space()="Add to this section"]`)).toBeDisplayed();
+      await expect($(`${row}//*[normalize-space()="${project.path}"]`)).toBeDisplayed();
+      await $(row).click();
+      await $('//div[@role="dialog"][@aria-label="New session"]').waitForDisplayed({ timeout: 20_000 });
+      expect(holders(project.id)).toContain("Side");
+      expect(holders(project.id).length).toBe(2);
+      expect(rpc<{ id: string }[]>(w, "project.list", {}).length).toBe(projectsBefore);
+      await browser.keys("Escape");
+    } finally {
+      // The origin goes back even when the workspace cleanup throws.
+      try {
+        if (side) rpc(w, "section.delete", { id: side.id });
+        if (studio) rpc(w, "workspace.delete", { id: studio.id });
+      } finally {
+        git("remote", "set-url", "origin", originUrl);
+      }
+    }
   });
 
   it("sends a URL typed as a folder to the clone tab, which sees the folder is taken", async () => {

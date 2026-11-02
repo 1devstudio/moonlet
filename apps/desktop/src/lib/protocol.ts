@@ -251,6 +251,8 @@ export interface RepoSummary {
   pushed_at: string | null;
   /** A project on the host already has it as `origin`. */
   added: boolean;
+  /** The projects that have it, each with the ids of the sections that hold it (absent from older daemons). */
+  projects?: { path: string; sections: string[] }[];
 }
 
 /** The folder a clone would go to (X59). */

@@ -72,6 +72,38 @@ export function matchingRepos<T extends { repo: string }>(repos: T[], query: str
   return repos.filter((r) => r.repo.toLowerCase().includes(q)).slice(0, limit);
 }
 
+/**
+ * Where a listed repository stands for the chosen section: `free` (no project
+ * has it), `here` (a project in the section has it) or `elsewhere` (projects
+ * in other sections have it, so adding one of their `paths` here needs no
+ * clone). With no section chosen, or from an older daemon that names no
+ * projects, any project that has it holds it.
+ */
+export function repoInSection(
+  r: { added: boolean; projects?: { path: string; sections: string[] }[] },
+  sectionId: string,
+): { state: "free" | "here" } | { state: "elsewhere"; paths: string[] } {
+  if (!r.added) return { state: "free" };
+  if (!sectionId || !r.projects?.length || r.projects.some((p) => p.sections.includes(sectionId))) return { state: "here" };
+  return { state: "elsewhere", paths: r.projects.map((p) => p.path) };
+}
+
+/** A row of the repository list: a repository, or one checkout of it that another section holds. */
+export interface RepoRow<T> {
+  repo: T;
+  state: "free" | "here" | "elsewhere";
+  /** The folder to add, for an `elsewhere` row. */
+  path?: string;
+}
+
+/** The rows for `repos`: one per checkout another section holds, one for any other repository. */
+export function repoRows<T extends { repo: string; added: boolean; projects?: { path: string; sections: string[] }[] }>(repos: T[], sectionId: string): RepoRow<T>[] {
+  return repos.flatMap((repo): RepoRow<T>[] => {
+    const held = repoInSection(repo, sectionId);
+    return held.state === "elsewhere" ? held.paths.map((path) => ({ repo, state: "elsewhere", path })) : [{ repo, state: held.state }];
+  });
+}
+
 /** The owners the list shows, in order of first appearance: "acme, sam-rivera". */
 export function repoOwners(repos: { repo: string }[]): string {
   return [...new Set(repos.map((r) => repoParts(r.repo).owner))].join(", ");

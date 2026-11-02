@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { beforeEach } from "vitest";
 import type { CloneDone, CloneProgress } from "./protocol";
-import { afterCloneDone, runsAfterProgress, afterCloneProgress, cantSee, ghLine, targetTaken, repoParts, clonePath, cloneTabState, cloneIntoHint, moveHighlight, clonePercent, cloneStepRows, cloneParent, diskSize, matchingRepos, pushedAgo, rememberCloneParent, repoOwners, repoRef } from "./addProject";
+import { afterCloneDone, runsAfterProgress, afterCloneProgress, cantSee, ghLine, targetTaken, repoParts, clonePath, cloneTabState, cloneIntoHint, moveHighlight, clonePercent, cloneStepRows, cloneParent, diskSize, matchingRepos, repoInSection, repoRows, pushedAgo, rememberCloneParent, repoOwners, repoRef } from "./addProject";
 
 describe("repoRef", () => {
   it("reads GitHub URLs and owner/repo as the repository", () => {
@@ -258,5 +258,51 @@ describe("moveHighlight", () => {
     expect(moveHighlight(0, "ArrowDown", 3)).toBe(1);
     expect(moveHighlight(2, "ArrowDown", 3)).toBe(0);
     expect(moveHighlight(0, "ArrowUp", 3)).toBe(2);
+  });
+});
+
+describe("repoInSection", () => {
+  const free = { added: false, projects: [] };
+  const inWork = { added: true, projects: [{ path: "/Users/sam/code/payments-api", sections: ["s-work"] }] };
+  const twoCheckouts = {
+    added: true,
+    projects: [
+      { path: "/Users/sam/code/payments-api", sections: ["s-work"] },
+      { path: "/Users/sam/code/payments-api-2", sections: ["s-play"] },
+    ],
+  };
+
+  it("is free for a repository no project has, and held where a project's section is the chosen one", () => {
+    expect(repoInSection(free, "s-work")).toEqual({ state: "free" });
+    expect(repoInSection(inWork, "s-work")).toEqual({ state: "here" });
+    expect(repoInSection(twoCheckouts, "s-play")).toEqual({ state: "here" });
+  });
+
+  it("offers the existing checkouts when only other sections hold it", () => {
+    expect(repoInSection(inWork, "s-play")).toEqual({ state: "elsewhere", paths: ["/Users/sam/code/payments-api"] });
+    expect(repoInSection(twoCheckouts, "s-studio")).toEqual({ state: "elsewhere", paths: ["/Users/sam/code/payments-api", "/Users/sam/code/payments-api-2"] });
+  });
+
+  it("holds a repository a project has when no section is chosen, or an older daemon names none", () => {
+    expect(repoInSection(inWork, "")).toEqual({ state: "here" });
+    expect(repoInSection({ added: true }, "s-play")).toEqual({ state: "here" });
+    expect(repoInSection({ added: false }, "s-play")).toEqual({ state: "free" });
+  });
+});
+
+describe("repoRows", () => {
+  const list = [
+    { repo: "acme/storefront", added: false, projects: [] },
+    { repo: "acme/payments-api", added: true, projects: [{ path: "/Users/sam/code/payments-api", sections: ["s-work"] }, { path: "/Users/sam/code/payments-api-2", sections: ["s-play"] }] },
+    { repo: "acme/web", added: true, projects: [{ path: "/Users/sam/code/web", sections: ["s-studio"] }] },
+  ];
+
+  it("gives a repository one row per checkout another section holds, and one row otherwise", () => {
+    expect(repoRows(list, "s-studio").map((r) => [r.repo.repo, r.state, r.path ?? null])).toEqual([
+      ["acme/storefront", "free", null],
+      ["acme/payments-api", "elsewhere", "/Users/sam/code/payments-api"],
+      ["acme/payments-api", "elsewhere", "/Users/sam/code/payments-api-2"],
+      ["acme/web", "here", null],
+    ]);
   });
 });

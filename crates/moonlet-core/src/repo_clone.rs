@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
-use moonlet_proto::types::{CloneStep, CloneTarget, GhStatus, RepoInfo, RepoSummary};
+use moonlet_proto::types::{CloneStep, CloneTarget, GhStatus, RepoHeld, RepoInfo, RepoSummary};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
@@ -117,17 +117,39 @@ pub const LIST_PATH: &str =
     "user/repos?affiliation=owner,collaborator,organization_member&sort=pushed&per_page=100";
 pub const LIST_JQ: &str = "[.[] | {full_name, description, private, pushed_at}]";
 
-/// The user's repositories from `gh api LIST_PATH --jq LIST_JQ`. `added`
-/// are the `owner/name`s of this host's projects, in any case.
-pub fn parse_repo_list(json: &[u8], added: &[String]) -> Result<Vec<RepoSummary>> {
+/// A project of this host whose `origin` is a GitHub repository, and the
+/// sections that hold it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RepoProject {
+    /// `owner/name`, in any case.
+    pub repo: String,
+    pub path: String,
+    pub sections: Vec<String>,
+}
+
+/// The user's repositories from `gh api LIST_PATH --jq LIST_JQ`. `projects`
+/// are this host's projects that sit on GitHub; a repository is `added` when
+/// one has it as `origin`, and lists each of those projects with its sections.
+pub fn parse_repo_list(json: &[u8], projects: &[RepoProject]) -> Result<Vec<RepoSummary>> {
     let v: Value = serde_json::from_slice(json).context("gh api gave no JSON")?;
     Ok(v.as_array()
         .into_iter()
         .flatten()
         .filter_map(|r| {
             let repo = json_text(&r["full_name"])?;
+            let held: Vec<&RepoProject> = projects
+                .iter()
+                .filter(|p| p.repo.eq_ignore_ascii_case(&repo))
+                .collect();
             Some(RepoSummary {
-                added: added.iter().any(|a| a.eq_ignore_ascii_case(&repo)),
+                added: !held.is_empty(),
+                projects: held
+                    .iter()
+                    .map(|p| RepoHeld {
+                        path: p.path.clone(),
+                        sections: p.sections.clone(),
+                    })
+                    .collect(),
                 description: json_text(&r["description"]),
                 private: r["private"].as_bool().unwrap_or(false),
                 pushed_at: json_text(&r["pushed_at"]),
@@ -326,15 +348,16 @@ pub async fn lookup(repo: &str, ssh: Option<&str>) -> Result<RepoInfo> {
     Ok(parse_ls_remote(repo, &String::from_utf8_lossy(&out)))
 }
 
-/// The `owner/name` each folder's `origin` points at, for those on GitHub.
-pub async fn folder_repos(folders: &[String]) -> Vec<String> {
+/// The `owner/name` each folder's `origin` points at, for those on GitHub,
+/// with the folder.
+pub async fn folder_repos(folders: &[String]) -> Vec<(String, String)> {
     let mut repos = Vec::new();
     for folder in folders {
         if let Some(repo) = git::origin_url(Path::new(folder))
             .await
             .and_then(|u| origin_repo(&u))
         {
-            repos.push(repo);
+            repos.push((repo, folder.clone()));
         }
     }
     repos
@@ -342,7 +365,7 @@ pub async fn folder_repos(folders: &[String]) -> Vec<String> {
 
 /// The signed-in user's repositories, most recently pushed first. `added`
 /// as in `parse_repo_list`.
-pub async fn user_repos(added: &[String]) -> Result<Vec<RepoSummary>> {
+pub async fn user_repos(added: &[RepoProject]) -> Result<Vec<RepoSummary>> {
     parse_repo_list(
         &run_ok("gh", &["api", LIST_PATH, "--jq", LIST_JQ]).await?,
         added,
@@ -582,7 +605,11 @@ mod tests {
     fn lists_the_users_repositories_and_marks_those_already_added() {
         let list = parse_repo_list(
             fixture("gh-user-repos.json").as_bytes(),
-            &["ACME/Payments-API".into()],
+            &[RepoProject {
+                repo: "ACME/Payments-API".into(),
+                path: "/Users/sam/code/payments-api".into(),
+                sections: vec!["s-work".into()],
+            }],
         )
         .unwrap();
         let summary =
@@ -593,6 +620,14 @@ mod tests {
                     private,
                     pushed_at: Some(pushed_at.into()),
                     added,
+                    projects: if added {
+                        vec![RepoHeld {
+                            path: "/Users/sam/code/payments-api".into(),
+                            sections: vec!["s-work".into()],
+                        }]
+                    } else {
+                        vec![]
+                    },
                 }
             };
         assert_eq!(
@@ -626,6 +661,39 @@ mod tests {
                     "2026-10-21T15:13:16Z",
                     false
                 ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_repository_in_two_projects_lists_each_with_its_sections() {
+        let project = |path: &str, sections: &[&str]| RepoProject {
+            repo: "acme/storefront".into(),
+            path: path.into(),
+            sections: sections.iter().map(|s| s.to_string()).collect(),
+        };
+        let list = parse_repo_list(
+            fixture("gh-user-repos.json").as_bytes(),
+            &[
+                project("/Users/sam/code/storefront", &["s-work"]),
+                project("/Users/sam/code/storefront-2", &["s-play", "s-studio"]),
+            ],
+        )
+        .unwrap();
+        let shop = &list[0];
+        assert_eq!(shop.repo, "acme/storefront");
+        assert!(shop.added);
+        assert_eq!(
+            shop.projects,
+            [
+                RepoHeld {
+                    path: "/Users/sam/code/storefront".into(),
+                    sections: vec!["s-work".into()]
+                },
+                RepoHeld {
+                    path: "/Users/sam/code/storefront-2".into(),
+                    sections: vec!["s-play".into(), "s-studio".into()]
+                },
             ]
         );
     }

@@ -766,6 +766,14 @@ pub struct RepoInfo {
     pub disk_kb: Option<u64>,
 }
 
+/// A project that has a listed repository as `origin` (X59).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RepoHeld {
+    pub path: String,
+    /// The ids of the sections that hold the project.
+    pub sections: Vec<String>,
+}
+
 /// One of the user's repositories (X59).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RepoSummary {
@@ -775,6 +783,9 @@ pub struct RepoSummary {
     pub pushed_at: Option<String>,
     /// A project on this host already has it as `origin`.
     pub added: bool,
+    /// The projects that have it, each with the sections that hold it.
+    #[serde(default)]
+    pub projects: Vec<RepoHeld>,
 }
 
 /// The folder a clone would go to (X59).
