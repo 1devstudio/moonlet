@@ -273,6 +273,8 @@ fn run_daemon(
                 (listener, daemon)
             }
         };
+        // As soon as there is a daemon to stop: startup can take a while.
+        stop_with_owner(&daemon);
         upgrade::write_pid(&socket);
         update::clean_leftovers();
         let chats = daemon.chats.restore();
@@ -311,7 +313,6 @@ fn run_daemon(
                 }
             }
         });
-        stop_with_owner(&daemon);
         // Phones over Tailscale, when the user allows them (X39).
         mobile::spawn(daemon.clone());
         // A design's snapshot when its agent ends a turn (X65).
@@ -354,7 +355,6 @@ fn stop_with_owner(daemon: &std::sync::Arc<daemon::Daemon>) {
     let d = daemon.clone();
     tokio::spawn(async move {
         loop {
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             // SAFETY: signal 0 only checks that the process exists.
             let gone = unsafe { libc::kill(pid, 0) } != 0
                 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
@@ -363,6 +363,7 @@ fn stop_with_owner(daemon: &std::sync::Arc<daemon::Daemon>) {
                 d.request_shutdown();
                 return;
             }
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         }
     });
 }

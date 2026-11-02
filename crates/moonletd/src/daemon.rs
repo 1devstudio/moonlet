@@ -804,7 +804,9 @@ impl Daemon {
     }
 
     pub fn request_shutdown(&self) {
-        let _ = self.shutdown.send(true);
+        // send_replace, not send: send drops the value while nothing
+        // subscribes yet, so a stop asked for during startup was lost.
+        self.shutdown.send_replace(true);
     }
 
     pub fn handed_off(&self) -> bool {

@@ -76,7 +76,9 @@ pub async fn serve(daemon: Arc<Daemon>, listener: UnixListener, socket: PathBuf)
                     }
                 });
             }
-            _ = shutdown.changed() => break,
+            // wait_for, not changed: a stop asked for before this loop
+            // started (by SIGTERM or a gone owner during startup) still ends it.
+            _ = shutdown.wait_for(|stop| *stop) => break,
         }
     }
     daemon.chats.shutdown();

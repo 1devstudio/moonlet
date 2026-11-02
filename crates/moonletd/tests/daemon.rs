@@ -1782,6 +1782,40 @@ async fn a_daemon_stops_once_the_process_it_was_started_for_is_gone() {
     assert_eq!(status.code(), Some(0));
 }
 
+/// A daemon whose process is already gone while it starts up stops too:
+/// a stop asked for before it serves is not lost.
+#[tokio::test]
+async fn a_daemon_started_for_a_process_already_gone_stops() {
+    let mut owner = Command::new("true").spawn().unwrap();
+    let gone = owner.id().to_string();
+    owner.wait().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let mut daemon = Command::new(env!("CARGO_BIN_EXE_moonletd"))
+        .arg("daemon")
+        .env("MOONLET_TEST_APP_EXE", std::env::current_exe().unwrap())
+        .env("MOONLET_EXIT_WITH", &gone)
+        .env("MOONLET_HOME", home.path())
+        .env("MOONLET_SOCK", home.path().join("run/d.sock"))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let status = loop {
+        if let Some(status) = daemon.try_wait().unwrap() {
+            break status;
+        }
+        if std::time::Instant::now() > deadline {
+            let _ = daemon.kill();
+            let _ = daemon.wait();
+            panic!("the daemon kept running though its process was gone before it served");
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    assert_eq!(status.code(), Some(0));
+}
+
 /// A fake gh signed in as sam-rivera, whose `repo clone` runs `clone`
 /// with the folder as `$4` (X59).
 fn fake_clone_gh(clone: &str) -> String {
