@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { HostInfo } from "./protocol";
-import { failureShown, followUpdate, olderHosts, olderHostsText, offerNotice, updateAllLabel, updateFailed, updateOffer } from "./hostUpdate";
+import { failureShown, followUpdate, olderHosts, olderHostsText, offerNotice, sidebarNotice, updateAllLabel, updateFailed, updateOffer } from "./hostUpdate";
 
 const host = (patch: Partial<HostInfo>): HostInfo => ({
   id: "studio-mini",
@@ -130,5 +130,33 @@ describe("what stays on a host's row after an update (X69)", () => {
     expect(offerNotice(host({ status: "connected", daemon_version: "0.1.33" }), "0.1.34")).toBe("studio-mini runs moonlet 0.1.33");
     expect(offerNotice(host({ status: "connected", daemon_version: "0.1.34" }), "0.1.34")).toBeNull();
     expect(offerNotice(host({ status: "needs_update" }), "0.1.34")).toBeNull();
+  });
+});
+
+describe("the sidebar notice under a host (R4, X69)", () => {
+  it("shows why an update failed, where the click was, until the host runs this Mac's version", () => {
+    const failed = {
+      phase: "failed" as const,
+      text: "latest.json points outside release 0.1.35: https://api.github.com/repos/1devstudio/moonlet/releases/assets/696833801",
+      command: null,
+    };
+    expect(sidebarNotice(host({ status: "connected", daemon_version: "0.1.34" }), "0.1.35", failed)).toEqual({
+      text: "Update failed: latest.json points outside release 0.1.35: https://api.github.com/repos/1devstudio/moonlet/releases/assets/696833801",
+      tone: "error",
+    });
+    expect(sidebarNotice(host({ status: "connected", daemon_version: "0.1.35" }), "0.1.35", failed)).toBeNull();
+  });
+
+  it("otherwise offers the update to a connected older host, or says what is wrong", () => {
+    expect(sidebarNotice(host({ status: "connected", daemon_version: "0.1.34" }), "0.1.35", undefined)).toEqual({
+      text: "studio-mini runs moonlet 0.1.34",
+      tone: "waiting",
+    });
+    expect(sidebarNotice(host({ status: "reconnecting" }), "0.1.35", undefined)).toEqual({ text: "studio-mini: reconnecting…", tone: "waiting" });
+    expect(sidebarNotice(host({ status: "error", message: "connection refused" }), "0.1.35", undefined)).toEqual({
+      text: "studio-mini: connection refused",
+      tone: "error",
+    });
+    expect(sidebarNotice(host({ status: "connected", daemon_version: "0.1.35" }), "0.1.35", undefined)).toBeNull();
   });
 });

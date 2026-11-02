@@ -4,7 +4,6 @@ import { rpc } from "../lib/daemon";
 import { M, type Copy, type HostInfo, type Project, type Section, type SectionView, type Session, type Workspace } from "../lib/protocol";
 import { arrangeShared, groupCollapseKey, groupHeading, lastActive, missingProjectNote, projectRemoval, sectionCollapseKey, sectionParts, sessionBadge, sessionMenu, shownSections, type HostSession, type SharedGroup } from "../lib/sidebar";
 import { closeClaudeUpdate, errorToast, projKey, pullBase, selectSession, updateActions, updateClaude, sesKey, sessionState, sessionTerminals, shownWorkspace, termKey, toast, updateSettings, useStore } from "../lib/store";
-import { hostNotice } from "../lib/settingsPage";
 import { followMenu, offlineLine, readyMark, rowMark } from "../lib/follow";
 import { moveSession, useReady } from "../lib/followStore";
 import { gitSettingsOf } from "../lib/gitSettings";
@@ -31,7 +30,8 @@ import { movingSessions, runningClaudeAgents, switchConfirm } from "../lib/profi
 import { AgentIcon, Button, IconButton, Kbd, StateGlyph, cx, prTone } from "./ui";
 import { updateButton } from "../lib/updater";
 import { HostUpdateButton } from "./HostUpdate";
-import { offerNotice } from "../lib/hostUpdate";
+import { sidebarNotice } from "../lib/hostUpdate";
+import { useHostUpdates } from "../lib/hostUpdateStore";
 import { claudeBanner, type ClaudeBanner, type StepState } from "../lib/claudeUpdate";
 
 // ------------------------------------------------------------------ helpers
@@ -920,13 +920,14 @@ function HistoryList() {
 
 function HostNotice({ host }: { host: HostInfo }) {
   const appVersion = useStore((s) => s.appVersion);
-  const text = hostNotice(host, appVersion ?? "") ?? offerNotice(host, appVersion ?? "");
-  if (text === null) return null;
+  const update = useHostUpdates((s) => s.updates[host.id]);
+  const notice = sidebarNotice(host, appVersion ?? "", update);
+  if (notice === null) return null;
   return (
     <div className="mx-3 mb-2 flex items-center gap-2 rounded-md bg-panel-2 px-2.5 py-1.5 ui-text-12">
-      <span className={cx("h-1.5 w-1.5 shrink-0 rounded-full", host.status === "reconnecting" || host.status === "connecting" || host.status === "connected" ? "bg-blocked" : "bg-error")} />
-      <span className="min-w-0 flex-1 truncate text-muted" title={text}>
-        {text}
+      <span className={cx("h-1.5 w-1.5 shrink-0 rounded-full", notice.tone === "waiting" ? "bg-blocked" : "bg-error")} />
+      <span className="min-w-0 flex-1 truncate text-muted" title={notice.text}>
+        {notice.text}
       </span>
       <HostUpdateButton host={host} />
     </div>
