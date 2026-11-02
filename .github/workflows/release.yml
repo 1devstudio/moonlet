@@ -177,15 +177,15 @@ jobs:
               exit 1
             fi
           done
-          codesign --verify --check-notarization -R="notarized" --verbose=2 "$app"
+          retry 3 20 codesign --verify --check-notarization -R="notarized" --verbose=2 "$app"
           # tauri staples the app itself and carries on if that fails, so staple it again.
           retry 5 20 xcrun stapler staple "$app"
           retry 3 20 xcrun stapler validate "$app"
           update=$(mktemp -d)
           tar -xzf target/release/bundle/macos/*.app.tar.gz -C "$update"
-          codesign --verify --deep --strict --check-notarization -R="notarized" --verbose=2 "$update/moonlet.app"
+          retry 3 20 codesign --verify --deep --strict --check-notarization -R="notarized" --verbose=2 "$update/moonlet.app"
           for dmg in target/release/bundle/dmg/*.dmg; do
-            codesign --verify --check-notarization -R="notarized" --verbose=2 "$dmg"
+            retry 3 20 codesign --verify --check-notarization -R="notarized" --verbose=2 "$dmg"
             retry 3 20 xcrun stapler validate "$dmg"
           done
 
