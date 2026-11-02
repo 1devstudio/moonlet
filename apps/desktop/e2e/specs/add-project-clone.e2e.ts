@@ -98,6 +98,7 @@ describe("Add project from GitHub", () => {
         .map((x) => x.name);
     const project = rpc<{ id: string; name: string; path: string }[]>(w, "project.list", {}).find((p) => p.name === "storefront-admin")!;
     // Its origin is the repository gh lists, as a cloned project's would be.
+    const originUrl = execFileSync("git", ["remote", "get-url", "origin"], { cwd: project.path, env: w.env, stdio: "pipe" }).toString().trim();
     execFileSync("git", ["remote", "set-url", "origin", "git@github.com:acme/storefront-admin.git"], { cwd: project.path, env: w.env, stdio: "pipe" });
     const studio = rpc<{ id: string }>(w, "workspace.create", { name: "Studio", color: "blue" });
     const side = rpc<{ id: string }>(w, "section.create", { workspace_id: studio.id, name: "Side" });
@@ -124,6 +125,7 @@ describe("Add project from GitHub", () => {
     } finally {
       rpc(w, "section.delete", { id: side.id });
       rpc(w, "workspace.delete", { id: studio.id });
+      execFileSync("git", ["remote", "set-url", "origin", originUrl], { cwd: project.path, env: w.env, stdio: "pipe" });
     }
   });
 

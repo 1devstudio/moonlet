@@ -200,8 +200,12 @@ export function AddProjectDialog({ host: presetHost, section: presetSection, clo
   const pickable = shownRepos.filter((r) => repoInSection(r, secId).state !== "here");
   const pick = (repo: string) => {
     // A project of another section has it: add that folder here, no clone.
-    const held = repoInSection(repos?.find((r) => r.repo === repo) ?? { added: false }, secId);
-    if (held.state === "elsewhere") return void addFolder(held.path);
+    const listed = repos?.find((r) => r.repo === repo);
+    const held = listed && repoInSection(listed, secId);
+    if (held?.state === "elsewhere") {
+      if (!busy) void addFolder(held.path);
+      return;
+    }
     clearFailure();
     setRepoText(repo);
     setNameEdited(false);
@@ -385,7 +389,15 @@ export function AddProjectDialog({ host: presetHost, section: presetSection, clo
         )}
         {choices.length > 0 && !cloning && (
           <Field label="Section">
-            <select className={inputCls} value={secId} onChange={(e) => setSecId(e.target.value)}>
+            <select
+              className={inputCls}
+              value={secId}
+              onChange={(e) => {
+                setSecId(e.target.value);
+                // Rows held in the new section drop out of the pickable list.
+                setHighlight(0);
+              }}
+            >
               {choices.map(({ sec, label }) => (
                 <option key={sec.id} value={sec.id}>
                   {label}
@@ -482,6 +494,10 @@ function OwnerTile({ repo, login, size }: { repo: string; login: string | null; 
   );
 }
 
+function HeldPill({ children }: { children: string }) {
+  return <span className="shrink-0 rounded-full border border-border-strong px-1.5 py-px ui-text-11 text-muted">{children}</span>;
+}
+
 function RepoList({ repos, sectionId, login, highlighted, onPick }: { repos: RepoSummary[]; sectionId: string; login: string | null; highlighted?: string; onPick: (repo: string) => void }) {
   const now = new Date();
   return (
@@ -516,9 +532,16 @@ function RepoList({ repos, sectionId, login, highlighted, onPick }: { repos: Rep
               {r.description && <span className="truncate ui-text-11.5 text-faint">{r.description}</span>}
             </span>
             {held === "here" ? (
-              <span className="shrink-0 rounded-full border border-border-strong px-1.5 py-px ui-text-11 text-muted">Already added</span>
+              <HeldPill>Already added</HeldPill>
             ) : held === "elsewhere" ? (
-              <span className="shrink-0 rounded-full border border-border-strong px-1.5 py-px ui-text-11 text-muted">Add to this section</span>
+              <span className="flex shrink-0 items-center gap-1.5">
+                <HeldPill>Add to this section</HeldPill>
+                {on && (
+                  <kbd className="rounded border border-border-strong bg-panel-2 px-1 text-faint">
+                    <CornerDownLeft size={10} />
+                  </kbd>
+                )}
+              </span>
             ) : on ? (
               <kbd className="rounded border border-border-strong bg-panel-2 px-1 text-faint">
                 <CornerDownLeft size={10} />
