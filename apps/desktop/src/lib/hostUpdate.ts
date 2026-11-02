@@ -77,18 +77,19 @@ export function offerNotice(h: HostInfo, appVersion: string): string | null {
 }
 
 /** The notice under a host in the sidebar, beside its Update button: why
- * an update failed, else what is wrong with the host, else the offer to
+ * an update failed (with the command to run there, for a host too old to be
+ * updated from here), else what is wrong with the host, else the offer to
  * update a connected older one. `waiting` is a host that is fine or on its
  * way back. */
 export function sidebarNotice(
   h: HostInfo,
   appVersion: string,
   u: HostUpdate | undefined,
-): { text: string; tone: "error" | "waiting" } | null {
+): { text: string; tone: "error" | "waiting"; command: string | null } | null {
   const failed = failureShown(u, h, appVersion);
-  if (failed?.phase === "failed") return { text: `Update failed: ${failed.text}`, tone: "error" };
+  if (failed?.phase === "failed") return { text: `Update failed: ${failed.text}`, tone: "error", command: failed.command };
   const text = hostNotice(h, appVersion) ?? offerNotice(h, appVersion);
   if (text === null) return null;
   const waiting = h.status === "reconnecting" || h.status === "connecting" || h.status === "connected";
-  return { text, tone: waiting ? "waiting" : "error" };
+  return { text, tone: waiting ? "waiting" : "error", command: null };
 }

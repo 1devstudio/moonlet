@@ -143,19 +143,35 @@ describe("the sidebar notice under a host (R4, X69)", () => {
     expect(sidebarNotice(host({ status: "connected", daemon_version: "0.1.34" }), "0.1.35", failed)).toEqual({
       text: "Update failed: latest.json points outside release 0.1.35: https://api.github.com/repos/1devstudio/moonlet/releases/assets/696833801",
       tone: "error",
+      command: null,
     });
     expect(sidebarNotice(host({ status: "connected", daemon_version: "0.1.35" }), "0.1.35", failed)).toBeNull();
+  });
+
+  it("keeps the command to run on a Linux host too old to be updated from here", () => {
+    const tooOld = {
+      phase: "failed" as const,
+      text: "studio-mini runs moonlet 0.1.25, which can't be updated from here: run this there",
+      command: "curl -fsSL https://github.com/1devstudio/moonlet/releases/latest/download/install.sh | sh",
+    };
+    expect(sidebarNotice(host({ status: "needs_update", daemon_version: "0.1.25", os: "linux" }), "0.1.35", tooOld)).toEqual({
+      text: "Update failed: studio-mini runs moonlet 0.1.25, which can't be updated from here: run this there",
+      tone: "error",
+      command: "curl -fsSL https://github.com/1devstudio/moonlet/releases/latest/download/install.sh | sh",
+    });
   });
 
   it("otherwise offers the update to a connected older host, or says what is wrong", () => {
     expect(sidebarNotice(host({ status: "connected", daemon_version: "0.1.34" }), "0.1.35", undefined)).toEqual({
       text: "studio-mini runs moonlet 0.1.34",
       tone: "waiting",
+      command: null,
     });
-    expect(sidebarNotice(host({ status: "reconnecting" }), "0.1.35", undefined)).toEqual({ text: "studio-mini: reconnecting…", tone: "waiting" });
+    expect(sidebarNotice(host({ status: "reconnecting" }), "0.1.35", undefined)).toEqual({ text: "studio-mini: reconnecting…", tone: "waiting", command: null });
     expect(sidebarNotice(host({ status: "error", message: "connection refused" }), "0.1.35", undefined)).toEqual({
       text: "studio-mini: connection refused",
       tone: "error",
+      command: null,
     });
     expect(sidebarNotice(host({ status: "connected", daemon_version: "0.1.35" }), "0.1.35", undefined)).toBeNull();
   });

@@ -58,7 +58,7 @@ Updating a tailnet host is manual today. When the MacBook updates and the Mac mi
 - [x] While an update runs, the button reads "Updating…" and is disabled, and the app asks a host that waits for a retry (`needs_update`, an error) to connect again every 2 s. A host that comes back on the new version clears it. A minute after the reply, the row shows "<host> did not come back after the update", or, for a host back on its old version (the handoff failed after the reply), "<host> still runs moonlet 0.1.33: the update did not finish there (see its moonletd log)". (`hostUpdate.test.ts`, `hostUpdateStore.test.ts`)
 - [x] An error shows on the row with its message. `too_old` keeps today's manual text (the `install.sh` command with **Copy** for Linux, Settings › Updates for a Mac; both when the host's OS isn't known, as for a connected host).
 - [x] The sidebar notice for a host (R4) offers the same button. A connected older host, which had no notice, gets one: "studio-mini runs moonlet 0.1.33". (`offerNotice`)
-- [x] A failed update shows in that sidebar notice too, with a red dot: "Update failed: <message>", until the host runs this Mac's version. Before, only the Settings row showed it, so a click in the sidebar seemed to do nothing. (`sidebarNotice`)
+- [x] A failed update shows in that sidebar notice too, with a red dot: "Update failed: <message>", until the host runs this Mac's version, with **Copy** for the command a `too_old` Linux host gets. Before, only the Settings row showed it, so a click in the sidebar seemed to do nothing. (`shows why an update failed, where the click was, until the host runs this Mac's version`, `keeps the command to run on a Linux host too old to be updated from here`)
 
 ### Update all
 

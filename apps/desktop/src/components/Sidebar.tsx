@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Archive, ArrowDown, ArrowLeftRight, Bell, Pin, Server, Triangle, BellOff, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, Command, Download, FolderPlus, History, Link2, Loader2, MoreHorizontal, PenTool, Plus, RotateCcw, RotateCw, Settings, ShieldAlert, X } from "lucide-react";
+import { Archive, ArrowDown, Copy as CopyIcon, ArrowLeftRight, Bell, Pin, Server, Triangle, BellOff, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, Command, Download, FolderPlus, History, Link2, Loader2, MoreHorizontal, PenTool, Plus, RotateCcw, RotateCw, Settings, ShieldAlert, X } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { M, type Copy, type HostInfo, type Project, type Section, type SectionView, type Session, type Workspace } from "../lib/protocol";
 import { arrangeShared, groupCollapseKey, groupHeading, lastActive, missingProjectNote, projectRemoval, sectionCollapseKey, sectionParts, sessionBadge, sessionMenu, shownSections, type HostSession, type SharedGroup } from "../lib/sidebar";
@@ -929,6 +929,11 @@ function HostNotice({ host }: { host: HostInfo }) {
       <span className="min-w-0 flex-1 truncate text-muted" title={notice.text}>
         {notice.text}
       </span>
+      {notice.command !== null && (
+        <IconButton title="Copy command" onClick={() => void navigator.clipboard.writeText(notice.command ?? "")}>
+          <CopyIcon size={12} />
+        </IconButton>
+      )}
       <HostUpdateButton host={host} />
     </div>
   );
