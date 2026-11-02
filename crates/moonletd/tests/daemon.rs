@@ -3346,11 +3346,14 @@ async fn a_render_waits_its_turn_without_its_clock_running() {
 /// and holds a turn whose message says `HOLD-NOW`, working, until a file
 /// `release` is in its folder.
 const WRITING_CLAUDE: &str = r#"#!/bin/sh
+# Waits for the file $1 for at most 30 s, so a fake left behind by a killed
+# test ends instead of polling forever.
+wait_for() { i=0; while [ ! -f "$1" ] && [ $i -lt 600 ]; do sleep 0.05; i=$((i+1)); done; }
 n=0
 while IFS= read -r line; do
   case "$line" in
     *'"subtype":"initialize"'*) echo '{"type":"system","subtype":"init","session_id":"s1","model":"fake"}' ;;
-    *'"type":"user"'*) case "$line" in *'HOLD-NOW'*) while [ ! -f release ]; do sleep 0.05; done; rm -f release ;; esac
+    *'"type":"user"'*) case "$line" in *'HOLD-NOW'*) wait_for release; rm -f release ;; esac
       n=$((n+1)); mkdir -p pages
       printf '<body data-mid="m1"><p data-mid="m2">turn %s</p></body>\n' "$n" > pages/index.html
       echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}' ;;
@@ -3634,16 +3637,19 @@ async fn edits_by_hand_saved_once_the_agent_works_go_with_its_turn_though_its_st
 /// it started it, which starts the next turn with no `chat.send`, and holds
 /// that turn until `release`.
 const QUEUEING_CLAUDE: &str = r#"#!/bin/sh
+# Waits for the file $1 for at most 30 s, so a fake left behind by a killed
+# test ends instead of polling forever.
+wait_for() { i=0; while [ ! -f "$1" ] && [ $i -lt 600 ]; do sleep 0.05; i=$((i+1)); done; }
 n=0
 while IFS= read -r line; do
   case "$line" in
     *'"subtype":"initialize"'*) echo '{"type":"system","subtype":"init","session_id":"s1","model":"fake"}' ;;
     *'"type":"user"'*) case "$line" in
-        *'QUEUED'*) while [ ! -f go ]; do sleep 0.05; done; rm -f go
+        *'QUEUED'*) wait_for go; rm -f go
           uuid=${line#*'"uuid":"'}; uuid=${uuid%%'"'*}
           echo "{\"type\":\"command_lifecycle\",\"command_uuid\":\"$uuid\",\"state\":\"started\",\"session_id\":\"s1\"}"
-          while [ ! -f release ]; do sleep 0.05; done; rm -f release ;;
-        *'HOLD-NOW'*) while [ ! -f release ]; do sleep 0.05; done; rm -f release ;;
+          wait_for release; rm -f release ;;
+        *'HOLD-NOW'*) wait_for release; rm -f release ;;
       esac
       n=$((n+1)); mkdir -p pages
       printf '<body data-mid="m1"><p data-mid="m2">turn %s</p></body>\n' "$n" > pages/index.html

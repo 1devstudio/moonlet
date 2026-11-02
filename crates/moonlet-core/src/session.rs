@@ -2440,7 +2440,7 @@ mod tests {
         std::fs::write(
             repo.path().join(".moonlet/config.toml"),
             format!(
-                "archive = \"touch {}; while [ ! -f {} ]; do sleep 0.05; done\"\ndefault_agent = \"fake\"\n[agents]\nfake = \"sh -c 'sleep 30'\"\n",
+                "archive = \"touch {}; i=0; while [ ! -f {} ] && [ $i -lt 600 ]; do sleep 0.05; i=$((i+1)); done\"\ndefault_agent = \"fake\"\n[agents]\nfake = \"sh -c 'sleep 30'\"\n",
                 started.display(),
                 go.display()
             ),
