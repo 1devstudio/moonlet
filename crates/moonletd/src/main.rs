@@ -348,7 +348,7 @@ fn run_daemon(
 /// SIGTERM, stopping its agents too, so a test run killed before it could
 /// stop its daemons leaves none running.
 fn stop_with_owner(daemon: &std::sync::Arc<daemon::Daemon>) {
-    let Some(pid) = std::env::var("MOONLET_EXIT_WITH").ok().and_then(|v| v.parse::<libc::pid_t>().ok()) else {
+    let Some(pid) = std::env::var("MOONLET_EXIT_WITH").ok().and_then(|v| v.parse::<libc::pid_t>().ok()).filter(|p| *p > 0) else {
         return;
     };
     let d = daemon.clone();

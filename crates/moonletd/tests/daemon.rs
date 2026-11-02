@@ -1771,10 +1771,15 @@ async fn a_daemon_stops_once_the_process_it_was_started_for_is_gone() {
     owner.kill().unwrap();
     owner.wait().unwrap();
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    while d.child.try_wait().unwrap().is_none() {
+    let status = loop {
+        if let Some(status) = d.child.try_wait().unwrap() {
+            break status;
+        }
         assert!(std::time::Instant::now() < deadline, "the daemon kept running after its process was gone");
         tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+    };
+    // It shut down as on SIGTERM, not by crashing.
+    assert_eq!(status.code(), Some(0));
 }
 
 /// A fake gh signed in as sam-rivera, whose `repo clone` runs `clone`
