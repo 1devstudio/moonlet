@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { focusTerminal, selectSession, sessionNeedsYou, shownWorkspace, switchWorkspace, useStore } from "./store";
-import { visibleSessionOrder } from "./actions";
+import { openDiffTab, visibleSessionOrder } from "./actions";
 import type { Section, Session, TerminalInfo, Workspace } from "./protocol";
 
 vi.mock("./daemon", () => ({ rpc: vi.fn(() => Promise.resolve()), sendInput: vi.fn() }));
@@ -51,6 +51,13 @@ describe("opening a session elsewhere (X32)", () => {
     expect(useStore.getState().mode).toEqual({ "local/acme": "sessions", "local/personal": "tasks" });
     selectSession("local", "s1");
     expect(useStore.getState().mode).toEqual({ "local/acme": "sessions", "local/personal": "sessions" });
+  });
+
+  it("opening a diff tab shows its session in Sessions mode, from Design or Tasks (X77)", () => {
+    useStore.setState({ mode: { "local/acme": "design", "local/personal": "tasks" } });
+    openDiffTab("local", "s2", "src/app.ts", "base");
+    expect(useStore.getState().mode).toEqual({ "local/acme": "sessions", "local/personal": "tasks" });
+    expect(useStore.getState().layouts["local/s2"].tabs.map((t) => t.root)).toContainEqual({ type: "diff", path: "src/app.ts", mode: "base" });
   });
 
   it("switching workspace keeps the mode it was left in, while its last session is restored", () => {

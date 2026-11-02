@@ -4,7 +4,7 @@
 import { rpc, sendInput } from "./daemon";
 import { addTab, closeDiff, closeFile, closeJob, cycleFocus, openDiff, openFile, openJob, splitLeaf, tabOf, type DiffMode } from "./layout";
 import { M, type ProjectConfig, type TerminalInfo, type Session, type SessionArchived, type UnpushedWork } from "./protocol";
-import { checkForUpdates, errorToast, focusTerminal, getLayout, selectedSession, sesKey, sessionState, setLayout, termKey, toast, useStore, sessionTerminals, shownWorkspace, designHostOf } from "./store";
+import { checkForUpdates, errorToast, focusTerminal, getLayout, selectedSession, sesKey, sessionState, setLayout, termKey, toast, useStore, sessionTerminals, shownWorkspace, designHostOf, selectSession } from "./store";
 import { lastActive, sharedSessionOrder } from "./sidebar";
 import { findEntry, outputToCopy } from "./terminals";
 import { agentReadiness, isStructured, tabAgent } from "./agents";
@@ -124,6 +124,8 @@ export function openFileTab(host: string, wsId: string, path: string, line?: num
 
 /** Opens a changed file's diff in a tab of a session's main window (X77). */
 export function openDiffTab(host: string, wsId: string, path: string, mode: DiffMode) {
+  // The right panel also shows beside Tasks and Design: the tab needs Sessions mode to be seen.
+  selectSession(host, wsId);
   setLayout(host, wsId, openDiff(getLayout(host, wsId), path, mode));
 }
 
