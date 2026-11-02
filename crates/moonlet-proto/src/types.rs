@@ -775,6 +775,12 @@ pub struct RepoSummary {
     pub pushed_at: Option<String>,
     /// A project on this host already has it as `origin`.
     pub added: bool,
+    /// The folder of that project; the first when several have it.
+    #[serde(default)]
+    pub project_path: Option<String>,
+    /// The ids of the sections that hold a project of it.
+    #[serde(default)]
+    pub sections: Vec<String>,
 }
 
 /// The folder a clone would go to (X59).

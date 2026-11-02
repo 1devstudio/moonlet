@@ -72,6 +72,19 @@ export function matchingRepos<T extends { repo: string }>(repos: T[], query: str
   return repos.filter((r) => r.repo.toLowerCase().includes(q)).slice(0, limit);
 }
 
+/**
+ * Where a listed repository stands for the chosen section: `free` (no project
+ * has it), `here` (the section already holds it) or `elsewhere` (a project
+ * holds it in another section, so adding its `path` here needs no clone). With
+ * no section chosen, or from an older daemon that names no sections, any
+ * project that has it holds it.
+ */
+export function repoInSection(r: { added: boolean; project_path?: string | null; sections?: string[] }, sectionId: string): { state: "free" | "here" } | { state: "elsewhere"; path: string } {
+  if (!r.added) return { state: "free" };
+  if (!sectionId || !r.sections || !r.project_path || r.sections.includes(sectionId)) return { state: "here" };
+  return { state: "elsewhere", path: r.project_path };
+}
+
 /** The owners the list shows, in order of first appearance: "acme, sam-rivera". */
 export function repoOwners(repos: { repo: string }[]): string {
   return [...new Set(repos.map((r) => repoParts(r.repo).owner))].join(", ");

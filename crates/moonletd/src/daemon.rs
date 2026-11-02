@@ -1581,9 +1581,19 @@ impl Daemon {
                 ok(moonlet_core::repo_clone::lookup(&r.repo, r.ssh.as_deref()).await.map_err(internal)?)
             }
             m::REPO_LIST => {
-                let folders: Vec<String> = self.sessions.list_projects().into_iter().map(|p| p.path).collect();
-                let added = moonlet_core::repo_clone::folder_repos(&folders).await;
-                ok(moonlet_core::repo_clone::user_repos(&added).await.map_err(internal)?)
+                let projects = self.sessions.list_projects();
+                let folders: Vec<String> = projects.iter().map(|p| p.path.clone()).collect();
+                let sections = self.sessions.list_sections();
+                let held: Vec<moonlet_core::repo_clone::RepoProject> = moonlet_core::repo_clone::folder_repos(&folders)
+                    .await
+                    .into_iter()
+                    .filter_map(|(repo, path)| {
+                        let id = &projects.iter().find(|p| p.path == path)?.id;
+                        let sections = sections.iter().filter(|s| s.project_ids.contains(id)).map(|s| s.id.clone()).collect();
+                        Some(moonlet_core::repo_clone::RepoProject { repo, path, sections })
+                    })
+                    .collect();
+                ok(moonlet_core::repo_clone::user_repos(&held).await.map_err(internal)?)
             }
             m::REPO_CLONE_TARGET => {
                 let r: m::RepoCloneTarget = params(p)?;

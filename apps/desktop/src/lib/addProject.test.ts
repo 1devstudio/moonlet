@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { beforeEach } from "vitest";
 import type { CloneDone, CloneProgress } from "./protocol";
-import { afterCloneDone, runsAfterProgress, afterCloneProgress, cantSee, ghLine, targetTaken, repoParts, clonePath, cloneTabState, cloneIntoHint, moveHighlight, clonePercent, cloneStepRows, cloneParent, diskSize, matchingRepos, pushedAgo, rememberCloneParent, repoOwners, repoRef } from "./addProject";
+import { afterCloneDone, runsAfterProgress, afterCloneProgress, cantSee, ghLine, targetTaken, repoParts, clonePath, cloneTabState, cloneIntoHint, moveHighlight, clonePercent, cloneStepRows, cloneParent, diskSize, matchingRepos, repoInSection, pushedAgo, rememberCloneParent, repoOwners, repoRef } from "./addProject";
 
 describe("repoRef", () => {
   it("reads GitHub URLs and owner/repo as the repository", () => {
@@ -258,5 +258,25 @@ describe("moveHighlight", () => {
     expect(moveHighlight(0, "ArrowDown", 3)).toBe(1);
     expect(moveHighlight(2, "ArrowDown", 3)).toBe(0);
     expect(moveHighlight(0, "ArrowUp", 3)).toBe(2);
+  });
+});
+
+describe("repoInSection", () => {
+  const free = { repo: "acme/storefront", added: false, project_path: null, sections: [] as string[] };
+  const inWork = { repo: "acme/payments-api", added: true, project_path: "/Users/sam/code/payments-api", sections: ["s-work"] };
+
+  it("is free for a repository no project has, and held where its project's section is the chosen one", () => {
+    expect(repoInSection(free, "s-work")).toEqual({ state: "free" });
+    expect(repoInSection(inWork, "s-work")).toEqual({ state: "here" });
+  });
+
+  it("offers the existing project when only another section holds it", () => {
+    expect(repoInSection(inWork, "s-play")).toEqual({ state: "elsewhere", path: "/Users/sam/code/payments-api" });
+  });
+
+  it("holds a repository a project has when no section is chosen, or an older daemon names none", () => {
+    expect(repoInSection(inWork, "")).toEqual({ state: "here" });
+    expect(repoInSection({ added: true }, "s-play")).toEqual({ state: "here" });
+    expect(repoInSection({ added: false }, "s-play")).toEqual({ state: "free" });
   });
 });

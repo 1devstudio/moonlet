@@ -27,6 +27,7 @@ import {
   targetTaken,
   type CloneRun,
   type GhOnHost,
+  repoInSection,
 } from "../lib/addProject";
 import { Button, Dialog, Field, IconButton, cx, inputCls } from "./ui";
 import { radioProps } from "./settings/controls";
@@ -196,8 +197,11 @@ export function AddProjectDialog({ host: presetHost, section: presetSection, clo
   const { listing, canClone: ready } = cloneTabState({ text: repoText, gh, found: !!found, target, cloning, busy });
   const canClone = shownTab === "github" && ready;
   const shownRepos = listing ? matchingRepos(repos ?? [], repoText) : [];
-  const pickable = shownRepos.filter((r) => !r.added);
+  const pickable = shownRepos.filter((r) => repoInSection(r, secId).state !== "here");
   const pick = (repo: string) => {
+    // A project of another section has it: add that folder here, no clone.
+    const held = repoInSection(repos?.find((r) => r.repo === repo) ?? { added: false }, secId);
+    if (held.state === "elsewhere") return void addFolder(held.path);
     clearFailure();
     setRepoText(repo);
     setNameEdited(false);
@@ -325,7 +329,7 @@ export function AddProjectDialog({ host: presetHost, section: presetSection, clo
               }}
             />
             {listing && repos && shownRepos.length > 0 && (
-              <RepoList repos={shownRepos} login={gh && gh !== "too-old" ? gh.login : null} highlighted={pickable[Math.min(highlight, pickable.length - 1)]?.repo} onPick={pick} />
+              <RepoList repos={shownRepos} sectionId={secId} login={gh && gh !== "too-old" ? gh.login : null} highlighted={pickable[Math.min(highlight, pickable.length - 1)]?.repo} onPick={pick} />
             )}
             {listing && (
               <p className="-mt-1 mb-3 ui-text-11 text-faint">
@@ -478,7 +482,7 @@ function OwnerTile({ repo, login, size }: { repo: string; login: string | null; 
   );
 }
 
-function RepoList({ repos, login, highlighted, onPick }: { repos: RepoSummary[]; login: string | null; highlighted?: string; onPick: (repo: string) => void }) {
+function RepoList({ repos, sectionId, login, highlighted, onPick }: { repos: RepoSummary[]; sectionId: string; login: string | null; highlighted?: string; onPick: (repo: string) => void }) {
   const now = new Date();
   return (
     <div className="-mt-1 mb-2 flex flex-col overflow-hidden rounded-lg border border-border bg-panel-2" role="listbox" aria-label="Your repositories">
@@ -489,15 +493,16 @@ function RepoList({ repos, login, highlighted, onPick }: { repos: RepoSummary[];
       {repos.map((r) => {
         const { owner, name } = repoParts(r.repo);
         const on = r.repo === highlighted;
+        const held = repoInSection(r, sectionId).state;
         return (
           <button
             key={r.repo}
             type="button"
             role="option"
             aria-selected={on}
-            disabled={r.added}
+            disabled={held === "here"}
             onClick={() => onPick(r.repo)}
-            className={cx("flex w-full items-center gap-2.5 border-t border-border px-2.5 py-[7px] text-left", on ? "bg-hover" : "hover:bg-hover", r.added && "cursor-default opacity-60 hover:bg-transparent")}
+            className={cx("flex w-full items-center gap-2.5 border-t border-border px-2.5 py-[7px] text-left", on ? "bg-hover" : "hover:bg-hover", held === "here" && "cursor-default opacity-60 hover:bg-transparent")}
           >
             <OwnerTile repo={r.repo} login={login} size={26} />
             <span className="flex min-w-0 flex-1 flex-col gap-px">
@@ -510,8 +515,10 @@ function RepoList({ repos, login, highlighted, onPick }: { repos: RepoSummary[];
               </span>
               {r.description && <span className="truncate ui-text-11.5 text-faint">{r.description}</span>}
             </span>
-            {r.added ? (
+            {held === "here" ? (
               <span className="shrink-0 rounded-full border border-border-strong px-1.5 py-px ui-text-11 text-muted">Already added</span>
+            ) : held === "elsewhere" ? (
+              <span className="shrink-0 rounded-full border border-border-strong px-1.5 py-px ui-text-11 text-muted">Add to this section</span>
             ) : on ? (
               <kbd className="rounded border border-border-strong bg-panel-2 px-1 text-faint">
                 <CornerDownLeft size={10} />
