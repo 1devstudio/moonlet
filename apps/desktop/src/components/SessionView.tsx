@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Check, ChevronDown, FileDiff, GitPullRequest, LoaderCircle, Plus, X } from "lucide-react";
 import { rpc } from "../lib/daemon";
+import { diffModeLabel } from "../lib/changes";
 import { leaves, type DiffMode } from "../lib/layout";
 import { M, type ProjectConfig, type Session } from "../lib/protocol";
 import { focusTerminal, getLayout, projectOf, termKey, setLayout, useStore, sesKey } from "../lib/store";
@@ -147,7 +148,7 @@ function DiffTab({ host, ws, id, path, mode, active }: { host: string; ws: Sessi
   return (
     <div
       aria-current={active || undefined}
-      title={`${path} — ${mode === "base" ? `against ${ws.base}` : "uncommitted"}`}
+      title={`${path} — ${diffModeLabel(mode, ws.base)}`}
       className={cx(
         "no-drag group relative flex h-full w-[172px] shrink-0 cursor-default items-center gap-2.5 px-4 ui-text-14",
         active ? "bg-raised text-fg" : "text-muted hover:text-fg",

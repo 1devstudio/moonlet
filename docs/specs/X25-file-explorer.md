@@ -17,7 +17,7 @@ The Files tab used to open on the list of changed files, with the file tree behi
 4. `⌄` opens an "Open in" menu with the apps that can open the entry: Finder (which reveals the entry), then the installed editors, then, for folders, the installed terminals.
 5. Clicking a folder expands it; clicking a file opens it in an editor tab of the main window ([X26](X26-file-tabs.md)).
 6. The user opens the Changes tab. The summary line (`+12 −3 · 4 files → main`) sits above the changed files, grouped by folder, each with a status icon and its `+/−` counts. Hovering a file shows stage, unstage and discard buttons.
-7. Clicking a changed file shows its diff in the full height of the tab, under a bar with a back button and the file's path. The back button returns to the list.
+7. Clicking a changed file opens its diff in a tab of the main window and leaves the list in place ([X77](X77-diff-tabs.md)).
 
 ## Behaviour and acceptance criteria
 
@@ -27,7 +27,7 @@ The Files tab used to open on the list of changed files, with the file tree behi
 - [x] The Files tab shows the tree only; the "changed / all files" toggle and the summary line are gone from it. (`file-explorer.e2e.ts`)
 - [x] Each changed file shows `+a −d`, `+a`, `−d` or `bin`. (`changeCount` in `changes.test.ts`)
 - [x] *Superseded by [X28](X28-changes-tree-and-list.md):* changed files were grouped by folder, folders in path order and the root folder shown as `/`. X28 shows them as a tree or a list instead.
-- [x] The Changes tab opens on the changed files with the summary line (X28: tree or list, `N files changed` header); clicking a file shows its diff with a back button; back returns to the list. (`file-explorer.e2e.ts`)
+- [x] The Changes tab opens on the changed files with the summary line (X28: tree or list, `N files changed` header). *Superseded by [X77](X77-diff-tabs.md):* clicking a file showed its diff in the panel, with a back button; it now opens a diff tab in the main window.
 
 ## UI
 

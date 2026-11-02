@@ -32,7 +32,7 @@ export function PaneTree({ host, wsId, tabId, node, path, focused, visible }: Pr
   if (node.type === "diff")
     return (
       <Suspense fallback={null}>
-        <DiffView host={host} wsId={wsId} path={node.path} mode={node.mode} />
+        <DiffView host={host} wsId={wsId} path={node.path} mode={node.mode} visible={visible} />
       </Suspense>
     );
   if (node.type === "job")

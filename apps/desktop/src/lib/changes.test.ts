@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { changeCount, changeList, changeTree, type ChangeNode } from "./changes";
+import { changeCount, changeList, changeTree, type ChangeNode, diffModeLabel } from "./changes";
 import type { FileChange } from "./protocol";
 
 const change = (path: string, additions: number, deletions: number, binary = false): FileChange => ({
@@ -71,5 +71,13 @@ describe("changed files as a list (X28)", () => {
       ["core/services/console/src/sources/", "route.ts"],
       ["", "README.md"],
     ]);
+  });
+});
+
+describe("diffModeLabel (X77)", () => {
+  it("says what a diff tab compares", () => {
+    expect(diffModeLabel("base", "main")).toBe("against main");
+    expect(diffModeLabel("base", "origin/develop")).toBe("against origin/develop");
+    expect(diffModeLabel("head", "main")).toBe("uncommitted");
   });
 });

@@ -1,3 +1,4 @@
+import type { DiffMode } from "./layout";
 import type { FileChange } from "./protocol";
 
 /** A changed file's `+a −d` counts, or `bin`. */
@@ -56,3 +57,6 @@ export function changeList(files: FileChange[]): (FileChange & { dir: string; na
       return { ...f, dir: f.path.slice(0, i), name: f.path.slice(i) };
     });
 }
+
+/** What a diff tab compares, for its title and header (X77). */
+export const diffModeLabel = (mode: DiffMode, base: string) => (mode === "base" ? `against ${base}` : "uncommitted");

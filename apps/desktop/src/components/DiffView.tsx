@@ -3,6 +3,7 @@ import { DiffEditor, type DiffOnMount } from "@monaco-editor/react";
 import { MessageSquarePlus, Plus, Undo2 } from "lucide-react";
 import { editorOptions, monaco, useEditorLanguage } from "../lib/monaco";
 import { rpc } from "../lib/daemon";
+import { diffModeLabel } from "../lib/changes";
 import type { DiffMode } from "../lib/layout";
 import { isMarkdownPath } from "../lib/markdown";
 import { commentPrompt, hunkPatch, parseFileDiff, type FileDiff as ParsedDiff } from "../lib/patch";
@@ -16,6 +17,9 @@ import { MarkdownPreview } from "./MarkdownPreview";
 
 /** Pending diff-model cleanups per tab, cancelled if the tab mounts again. */
 const modelCleanup = new Map<string, number>();
+
+/** A diff tab's Monaco model name. The mode is in it: one file against the base and uncommitted are two pairs. */
+const diffModelPath = (wsId: string, mode: DiffMode, side: "original" | "modified", path: string) => `moonlet-diff://${wsId}/${mode}/${side}/${path}`;
 
 function CommentBar({ file, line, snippet, onDone }: { file: string; line: number; snippet: string; onDone: () => void }) {
   const [text, setText] = useState("");
@@ -65,7 +69,7 @@ function CommentBar({ file, line, snippet, onDone }: { file: string; line: numbe
  * hunk staging on uncommitted changes, comments to the agent, and for a
  * Markdown file a Preview of its new version.
  */
-export default function DiffView({ host, wsId, path, mode }: { host: string; wsId: string; path: string; mode: DiffMode }) {
+export default function DiffView({ host, wsId, path, mode, visible }: { host: string; wsId: string; path: string; mode: DiffMode; visible: boolean }) {
   const ws = useStore((s) => s.sessions[host]?.find((w) => w.id === wsId));
   const fontSize = useStore((s) => s.settings.term.fontSize);
   const fsVersion = useStore((s) => (ws ? (s.fsVersion[`${host}|${ws.path}`] ?? 0) : 0));
@@ -86,12 +90,10 @@ export default function DiffView({ host, wsId, path, mode }: { host: string; wsI
 
   const wsPath = ws?.path;
   const base = mode === "base" ? ws?.base : undefined;
-  // One model pair per tab, released with it. The mode is in the name: the
-  // same file against the base and uncommitted are two different pairs.
-  const modelPath = (side: "original" | "modified") => `moonlet-diff://${wsId}/${mode}/${side}/${path}`;
+  // One model pair per tab, released with it.
   useEffect(() => {
     const key = `moonlet-diff://${wsId}/${mode}/${path}`;
-    const uris = (["original", "modified"] as const).map((side) => monaco.Uri.parse(`moonlet-diff://${wsId}/${mode}/${side}/${path}`).toString());
+    const uris = (["original", "modified"] as const).map((side) => monaco.Uri.parse(diffModelPath(wsId, mode, side, path)).toString());
     // Mounted again before a pending cleanup ran: its models are in use again.
     window.clearTimeout(modelCleanup.get(key));
     return () => {
@@ -106,31 +108,29 @@ export default function DiffView({ host, wsId, path, mode }: { host: string; wsI
     };
   }, [wsId, mode, path]);
 
-  // Watch the worktree so changes on disk arrive while the right panel is closed.
-  useEffect(() => {
-    if (!wsPath) return;
-    void rpc(host, M.fsWatch, { path: wsPath }).catch(() => {});
-    return () => void rpc(host, M.fsUnwatch, { path: wsPath }).catch(() => {});
-  }, [host, wsPath]);
-
+  // Only the latest load shows: a slower, older one must not overwrite it.
+  const loads = useRef(0);
   const load = useCallback(async () => {
     if (!wsPath) return;
+    const mine = ++loads.current;
     try {
+      // Hunks are staged on uncommitted changes only.
       const [v, d] = await Promise.all([
         rpc<FileVersions>(host, M.gitFileVersions, { path: wsPath, file: path, base }),
-        rpc<string>(host, M.gitDiff, { path: wsPath, file: path, base: undefined }),
+        mode === "head" ? rpc<string>(host, M.gitDiff, { path: wsPath, file: path, base: undefined }) : Promise.resolve(""),
       ]);
-      if (!live.current) return;
+      if (!live.current || mine !== loads.current) return;
       setVersions(v);
       setDiff(parseFileDiff(d));
     } catch (e) {
-      if (live.current) errorToast(e);
+      if (live.current && mine === loads.current) errorToast(e);
     }
-  }, [host, wsPath, path, base]);
+  }, [host, wsPath, path, base, mode]);
 
+  // A tab behind another one waits, and reads again when it comes back.
   useEffect(() => {
-    void load();
-  }, [load, fsVersion]);
+    if (visible) void load();
+  }, [load, fsVersion, visible]);
 
   const hunkAction = async (i: number, a: "stage" | "discard") => {
     if (!diff || !wsPath) return;
@@ -182,7 +182,7 @@ export default function DiffView({ host, wsId, path, mode }: { host: string; wsI
         <span className="truncate font-mono text-muted" title={path}>
           {path}
         </span>
-        <span className="shrink-0 text-faint">{mode === "base" ? `against ${ws.base}` : "uncommitted"}</span>
+        <span className="shrink-0 text-faint">{diffModeLabel(mode, ws.base)}</span>
         {/* Hunk staging works on uncommitted changes only. */}
         {mode === "head" && !showPreview && diff && diff.hunks.length > 0 && (
           <span className="flex items-center gap-1">
@@ -239,8 +239,8 @@ export default function DiffView({ host, wsId, path, mode }: { host: string; wsI
             original={versions.original ?? ""}
             modified={versions.modified ?? ""}
             onMount={onMount}
-            originalModelPath={modelPath("original")}
-            modifiedModelPath={modelPath("modified")}
+            originalModelPath={diffModelPath(wsId, mode, "original", path)}
+            modifiedModelPath={diffModelPath(wsId, mode, "modified", path)}
             keepCurrentOriginalModel
             keepCurrentModifiedModel
             options={{ ...editorOptions, ...editorFont(fontSize), readOnly: true, renderIndicators: false, renderMarginRevertIcon: false, renderSideBySide: sideBySide, originalEditable: false, renderOverviewRuler: false, hideUnchangedRegions: { enabled: true } }}

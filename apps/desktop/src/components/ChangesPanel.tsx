@@ -7,10 +7,10 @@ import { sessionDesignsOf, useDesign } from "../lib/designStore";
 import { M, type FileChange, type GitStatus, type Session } from "../lib/protocol";
 import { errorToast, refreshGit, useStore, sesKey } from "../lib/store";
 import { openDiffTab } from "../lib/actions";
+import type { DiffMode } from "../lib/layout";
 import { askConfirm } from "../lib/confirm";
 import { Button, Empty, IconButton, cx } from "./ui";
 
-type Mode = "base" | "head";
 type FileAction = "stage" | "unstage" | "revert";
 
 function StatusBox({ status }: { status: FileChange["status"] }) {
@@ -169,7 +169,7 @@ function GroupedChanges({ groups, view, onSelect, onAction }: { groups: NonNulla
 export default function ChangesPanel({ host, ws }: { host: string; ws: Session }) {
   const status = useStore((s) => s.git[sesKey(host, ws.id)]);
   const view = useStore((s) => s.changesView);
-  const [mode, setMode] = useState<Mode>("base");
+  const [mode, setMode] = useState<DiffMode>("base");
   const [headStatus, setHeadStatus] = useState<typeof status>(undefined);
   const files = (mode === "base" ? status : headStatus)?.files ?? [];
   const fsVersion = useStore((s) => s.fsVersion[`${host}|${ws.path}`] ?? 0);
@@ -207,7 +207,7 @@ export default function ChangesPanel({ host, ws }: { host: string; ws: Session }
     <div className="flex h-full flex-col">
       <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-1.5 ui-text-12">
         <div className="flex rounded-md border border-border-strong p-0.5">
-          {(["base", "head"] as Mode[]).map((m) => (
+          {(["base", "head"] as DiffMode[]).map((m) => (
             <button
               key={m}
               className={cx("rounded px-2 py-0.5", mode === m ? "bg-raised text-fg" : "text-muted hover:text-fg")}

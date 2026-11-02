@@ -19,14 +19,17 @@ Clicking a changed file in the Changes tab used to replace the list with a diff,
 
 ## Behaviour and acceptance criteria
 
-- [x] A diff tab holds a file path (relative to the worktree) and a mode, `base` (everything since branching from the base) or `head` (uncommitted changes only). Opening one adds a tab after the existing tabs and makes it active; opening the same file in the same mode activates that tab; the same file in the other mode, or its editor tab, is a separate tab. (`openDiff` in `layout.test.ts`)
-- [x] Syncing terminals keeps diff tabs; a stored layout with diff tabs reads back, and a diff tab without a path or with an unknown mode is dropped. (`reconcile`, `parseLayout` in `layout.test.ts`)
-- [x] Closing a diff tab removes it and activates its neighbour. (`closeDiff` in `layout.test.ts`)
-- [x] Clicking a changed file, or pressing Enter or Space on its row, opens its diff tab in the mode the Changes tab is in; the list stays in the right panel. (`file-explorer.e2e.ts`)
-- [x] Clicking the same file again switches to its tab. (`file-explorer.e2e.ts`)
-- [x] A path ending in `.md`, `.markdown` or `.mdx`, in any case, is Markdown; no other path is. (`isMarkdownPath` in `markdown.test.ts`)
-- [x] A Markdown file's diff tab has a Diff / Preview switch; Preview renders the new version of the file; a file that is not Markdown has no switch. (`file-explorer.e2e.ts`)
-- [x] The diff keeps what the panel had: split or inline, hunk stage and discard on uncommitted changes, and comments to the agent (⇧⌘M).
+- [x] A diff tab holds a file path (relative to the worktree) and a mode, `base` (everything since branching from the base) or `head` (uncommitted changes only). Opening one adds a tab after the existing tabs and makes it active; opening the same file in the same mode activates that tab. (`layout.test.ts` › "opens a changed file's diff as a new active tab after the others", "switches to the diff's tab when that file and mode are already open")
+- [x] The same file in the other mode, or its editor tab, is a separate tab. (`layout.test.ts` › "keeps one tab per file and mode", "keeps a file's editor tab and its diff tab apart")
+- [x] Syncing terminals keeps diff tabs; a stored layout with diff tabs reads back, and a diff tab without a path or with an unknown mode is dropped. (`layout.test.ts` › "keeps diff tabs when the terminals are synced", "reads diff tabs back from a stored layout and drops ones without a mode")
+- [x] Closing a diff tab removes it and activates its neighbour. (`layout.test.ts` › "closes a diff tab and activates its neighbour")
+- [x] Clicking a changed file, or pressing Enter or Space on its row, opens its diff tab in the mode the Changes tab is in; the list stays in the right panel. (`file-explorer.e2e.ts` › "opens a file's diff in a tab of the main window from the keyboard", "opens a file's diff from the keyboard with Space too", "opens the diff of the uncommitted changes as a separate, marked tab")
+- [x] Clicking the same file again switches to its tab. (`file-explorer.e2e.ts` › "switches to the file's diff tab when it is clicked again")
+- [x] A path ending in `.md`, `.markdown` or `.mdx`, in any case, is Markdown; no other path is. (`markdown.test.ts` › "is true for Markdown files by extension, in any case", "is false for anything else")
+- [x] A Markdown file's diff tab has a Diff / Preview switch; Preview renders the new version of the file; a file that is not Markdown, and a deleted file, has no switch. (`file-explorer.e2e.ts` › "previews a Markdown file's new version in its diff tab")
+- [x] A diff tab is titled with what it compares: `against <base>` or `uncommitted`. (`changes.test.ts` › "says what a diff tab compares")
+- [x] The diff keeps what the panel had: split or inline, hunk stage and discard on uncommitted changes, and comments to the agent (⇧⌘M). Preview hides the hunk and comment controls. The `+a −d` totals the panel showed above an open diff are gone.
+- [x] A diff tab reads its file when it opens, when the worktree changes (as long as something watches it, which the right panel does while open) and when it comes back to the front; a tab behind another one does not read.
 
 ## UI
 
@@ -56,6 +59,7 @@ The preview renders in the same sandboxed frame as file tabs' preview (X26).
 
 - A rendered side-by-side diff of Markdown: Preview shows the new version only.
 - Closing a diff tab when its file stops being changed: the tab stays and shows no differences.
+- Closing a diff tab with ⌘W is not covered by a test of its own.
 
 ## Test plan
 

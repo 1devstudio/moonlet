@@ -113,3 +113,4 @@ Each feature of moonlet has its own spec in this directory. Write the spec befor
 | X74 | Files copied between members although git ignores them, `.env` by default (ADR 0015) | P1 | 4 | implemented | [X74-files-copied-between-members.md](X74-files-copied-between-members.md) |
 | X75 | Sign-ins open where you are: a browser opener, localhost callbacks forwarded, sign in on every member (ADR 0015) | P1 | 4 | implemented | [X75-sign-ins-open-where-you-are.md](X75-sign-ins-open-where-you-are.md) |
 | X76 | Tasks on the phone: boards shared through the daemon, moves, creates, comments and links relayed to the Mac | P1 | 3 | implemented (phone screens untried on a device) | [X76-tasks-on-the-phone.md](X76-tasks-on-the-phone.md) |
+| X77 | A changed file's diff opens in a tab of the main window, with a Markdown preview | P1 | 3 | implemented | [X77-diff-tabs.md](X77-diff-tabs.md) |
