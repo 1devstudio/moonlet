@@ -6,7 +6,7 @@
 
 ## Summary
 
-Archiving a session runs the project's archive script (up to 60 seconds), stops its terminals and removes the worktree. Until now the sidebar row sat unchanged for that whole time, so the app looked stuck. The row now turns into a small night scene drawn in pixel art while the daemon works, then folds away. Each archive picks one of five scenes at random.
+Archiving a session runs the project's archive script (up to 60 seconds), stops its terminals and removes the worktree, which can take minutes for a big folder; the app waits up to 20 minutes before it reports a timeout. A worktree that cannot be removed fails the archive and the session stays in the list. Until now the sidebar row sat unchanged for that whole time, so the app looked stuck. The row now turns into a small night scene drawn in pixel art while the daemon works, then folds away. Each archive picks one of five scenes at random.
 
 ## User journey
 

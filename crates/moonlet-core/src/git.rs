@@ -893,16 +893,59 @@ pub async fn fetch_branch(repo: &Path, branch: &str) -> Result<()> {
 }
 
 pub async fn worktree_remove(repo: &Path, dir: &Path) -> Result<()> {
+    worktree_remove_within(repo, dir, WORKTREE_REMOVE_TIMEOUT).await
+}
+
+/// [`worktree_remove`] with the time git may take.
+pub(crate) async fn worktree_remove_within(repo: &Path, dir: &Path, timeout: Duration) -> Result<()> {
     let dir_s = dir.display().to_string();
-    if git(repo, &["worktree", "remove", "--force", &dir_s])
-        .await
-        .is_err()
-    {
-        // Already gone from disk: drop the stale registration.
-        git(repo, &["worktree", "prune"]).await?;
+    // Asked before git starts: a git that gives up part way may have taken
+    // the folder's `.git` file already.
+    let linked = is_linked_worktree(repo, dir).await;
+    // Twice forced, so a locked worktree goes too. A big folder (installed
+    // dependencies) takes longer than git's usual minute.
+    let removed = git_with(repo, &[], &["worktree", "remove", "--force", "--force", &dir_s], None, timeout).await;
+    let Err(failure) = removed else {
+        return Ok(());
+    };
+    // Git gave up (timed out, a file busy) with the folder still there: it is
+    // a worktree's own folder, so delete it here. A folder that is not one of
+    // the repository's linked worktrees is left alone.
+    if linked && dir.exists() {
+        let folder = dir.to_path_buf();
+        tokio::task::spawn_blocking(move || std::fs::remove_dir_all(&folder))
+            .await?
+            .with_context(|| format!("cannot delete the worktree folder {dir_s}"))?;
+    }
+    // Prune keeps a locked worktree's registration, and a registration left
+    // behind keeps its branch checked out: unlock it first.
+    if linked {
+        let _ = git(repo, &["worktree", "unlock", &dir_s]).await;
+    }
+    // Drop the registration of a folder that is gone. A prune that fails
+    // matters only while the folder is still there.
+    let pruned = git(repo, &["worktree", "prune"]).await;
+    if dir.exists() {
+        // Never report a worktree gone while its folder is there.
+        return Err(failure.context(format!("the worktree {dir_s} is still there")));
+    }
+    if let Err(e) = pruned {
+        tracing::warn!("cannot prune the registration of the removed worktree {dir_s}: {e:#}");
     }
     Ok(())
 }
+
+/// Whether `dir` is one of `repo`'s linked work trees, not its main checkout.
+async fn is_linked_worktree(repo: &Path, dir: &Path) -> bool {
+    let Ok(out) = git_text(repo, &["worktree", "list", "--porcelain"]).await else {
+        return false;
+    };
+    let same = |a: &Path, b: &Path| a == b || matches!((a.canonicalize(), b.canonicalize()), (Ok(a), Ok(b)) if a == b);
+    linked_worktrees(&out).iter().any(|(path, _)| same(Path::new(path), dir))
+}
+
+/// How long `git worktree remove` may take.
+const WORKTREE_REMOVE_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// `git status --porcelain=v1 -z` as one letter per file: the index's
 /// change, else the work tree's; `?` for untracked (X55).
@@ -1982,6 +2025,83 @@ pub(crate) mod tests {
         worktree_remove(p, &target).await.unwrap();
         assert!(!target.exists());
         delete_branch(p, "moonlet/fix-bug").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_worktree_git_will_not_remove_is_still_removed() {
+        // `git worktree remove --force` refuses a locked worktree; the
+        // archive must still leave no folder behind.
+        let dir = repo().await;
+        let p = dir.path();
+        let wt = tempfile::tempdir().unwrap();
+        let target = wt.path().join("ws");
+        worktree_add(p, &target, "moonlet/locked", "main", false).await.unwrap();
+        git(p, &["worktree", "lock", &target.display().to_string()]).await.unwrap();
+        worktree_remove(p, &target).await.unwrap();
+        assert!(!target.exists());
+        let listed = git_text(p, &["worktree", "list", "--porcelain"]).await.unwrap();
+        assert!(!listed.contains("moonlet/locked"), "{listed}");
+    }
+
+    #[tokio::test]
+    async fn a_worktree_git_gives_up_on_is_deleted_by_moonlet() {
+        // Git is given a millisecond, so it is stopped before it is done.
+        let dir = repo().await;
+        let p = dir.path();
+        let wt = tempfile::tempdir().unwrap();
+        let target = wt.path().join("ws");
+        worktree_add(p, &target, "moonlet/slow", "main", false).await.unwrap();
+        std::fs::write(target.join("big.bin"), vec![0u8; 1024]).unwrap();
+        worktree_remove_within(p, &target, Duration::from_millis(1)).await.unwrap();
+        assert!(!target.exists());
+        let listed = git_text(p, &["worktree", "list", "--porcelain"]).await.unwrap();
+        assert!(!listed.contains("moonlet/slow"), "{listed}");
+    }
+
+    #[tokio::test]
+    async fn a_locked_worktree_git_gives_up_on_loses_its_registration_too() {
+        // Prune keeps a locked worktree's registration, and a registration
+        // left behind keeps its branch checked out.
+        let dir = repo().await;
+        let p = dir.path();
+        let wt = tempfile::tempdir().unwrap();
+        let target = wt.path().join("ws");
+        worktree_add(p, &target, "moonlet/locked-slow", "main", false).await.unwrap();
+        git(p, &["worktree", "lock", &target.display().to_string()]).await.unwrap();
+        worktree_remove_within(p, &target, Duration::from_millis(1)).await.unwrap();
+        assert!(!target.exists());
+        let listed = git_text(p, &["worktree", "list", "--porcelain"]).await.unwrap();
+        assert!(!listed.contains("moonlet/locked-slow"), "{listed}");
+        delete_branch(p, "moonlet/locked-slow").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_folder_that_is_not_a_linked_worktree_is_never_deleted() {
+        // A checkout of another repository has a `.git` of its own.
+        let dir = repo().await;
+        let other = repo().await;
+        assert!(worktree_remove_within(dir.path(), other.path(), Duration::from_millis(1)).await.is_err());
+        assert!(other.path().join("a.txt").exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_worktree_that_cannot_be_removed_is_an_error() {
+        // The folder stays when its parent cannot be written to: the call
+        // must say so, not pretend the worktree is gone.
+        use std::os::unix::fs::PermissionsExt;
+        let dir = repo().await;
+        let p = dir.path();
+        let wt = tempfile::tempdir().unwrap();
+        let parent = wt.path().join("parent");
+        std::fs::create_dir(&parent).unwrap();
+        let target = parent.join("ws");
+        worktree_add(p, &target, "moonlet/stuck", "main", false).await.unwrap();
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let removed = worktree_remove(p, &target).await;
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(target.exists(), "the test needs a folder removal cannot delete; run it without root");
+        assert!(removed.is_err(), "the folder {} is still there", target.display());
     }
 
     #[tokio::test]

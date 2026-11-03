@@ -758,6 +758,28 @@ async fn archiving_stops_when_git_cannot_read_the_branch() {
 }
 
 #[tokio::test]
+async fn archiving_keeps_the_session_listed_when_its_worktree_cannot_be_removed() {
+    use moonlet_proto::types::Session;
+    use std::os::unix::fs::PermissionsExt;
+    let d = TestDaemon::start().await;
+    let mut c = d.client().await;
+    let (_repo, p) = project_with_repo(&d, &mut c).await;
+    let s = new_session(&mut c, &p.id, "Stuck folder").await;
+    let folder = std::path::Path::new(&s.path);
+    let parent = folder.parent().unwrap();
+    std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+    let result = c
+        .request::<_, serde_json::Value>(methods::SESSION_ARCHIVE, serde_json::json!({"id": s.id, "remove_worktree": true}))
+        .await;
+    std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(folder.exists(), "the test needs a folder removal cannot delete; run it without root");
+    assert!(result.is_err());
+    let list: Vec<Session> = c.request(methods::SESSION_LIST, ()).await.unwrap();
+    assert!(!list.iter().find(|x| x.id == s.id).unwrap().archived);
+}
+
+#[tokio::test]
 async fn archiving_reports_no_origin_error_when_origin_already_deleted_the_branch() {
     use moonlet_proto::types::SessionArchived;
     let d = TestDaemon::start().await;
