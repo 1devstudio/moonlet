@@ -2,18 +2,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { archiveSession } from "./actions";
 import { LOADERS } from "./archiveLoader";
 import { useStore } from "./store";
-import { answerConfirm } from "./confirm";
+import { answerConfirm, type ConfirmOptions } from "./confirm";
 import type { PullRequest, Session } from "./protocol";
 import { DEFAULT_GIT_SETTINGS } from "./gitSettings";
 
 const daemon = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock("./daemon", () => ({ rpc: daemon.rpc, sendInput: vi.fn() }));
 
-// Answers the confirm modal as soon as it opens, like a click on its buttons.
+// Answers the confirm modal as soon as it opens, like a click on its buttons,
+// keeping what it asked.
 let reply: { ok: boolean; checked: boolean; alt?: boolean } = { ok: true, checked: false };
+let asked: ConfirmOptions | null = null;
 useStore.subscribe((s) => {
-  if (s.confirm) answerConfirm(reply.ok, reply.checked, reply.alt);
+  if (!s.confirm) return;
+  asked = s.confirm.options;
+  answerConfirm(reply.ok, reply.checked, reply.alt);
 });
+const askedText = () => (typeof asked?.message === "function" ? asked.message(false) : asked?.message);
 
 const ws: Session = {
   id: "s1",
@@ -97,7 +102,38 @@ describe("archiveSession", () => {
     const done = archiveSession();
     await vi.runAllTimersAsync();
     await done;
-    expect(daemon.rpc.mock.calls.map((c) => c[1])).toEqual(["git.unpushed", "git.push", "session.archive"]);
+    expect(daemon.rpc.mock.calls.map((c) => c[1])).toEqual(["git.unpushed", "session.processes", "git.push", "session.archive"]);
+  });
+
+  const running = {
+    processes: [
+      { pid: 4100, name: "zsh", origin: { kind: "terminal", id: 1, title: "zsh" }, tab: true },
+      { pid: 4242, name: "vite", origin: { kind: "terminal", id: 1, title: "zsh" }, tab: false },
+      { pid: 4310, name: "tail", origin: { kind: "agent", id: 3, title: "Claude" }, tab: false },
+    ],
+    leftovers: [{ pid: 5151, name: "node", origin: { kind: "leftover" }, tab: false }],
+  };
+
+  it("lists the processes still running and stops them before archiving (X83)", async () => {
+    daemon.rpc.mockImplementation(async (_h: string, method: string) => (method === "session.processes" ? running : method === "git.unpushed" ? { files: [], commits: 0, upstream: null } : true));
+    const done = archiveSession();
+    await vi.runAllTimersAsync();
+    await done;
+    expect(askedText()).toBe('Archive "s1"? Its terminals stop and the worktree folder is removed. The branch is kept. 3 processes still run: vite, tail, node. Archiving stops them.');
+    expect(daemon.rpc.mock.calls.map((c) => c[1])).toEqual(["git.unpushed", "session.processes", "session.kill_processes", "session.archive"]);
+    expect(daemon.rpc).toHaveBeenCalledWith("local", "session.kill_processes", { id: "s1", pids: [4242, 4310, 5151] });
+  });
+
+  it("archives as before when the daemon cannot list processes (X83)", async () => {
+    daemon.rpc.mockImplementation(async (_h: string, method: string) => {
+      if (method === "session.processes") throw new Error("unknown method: session.processes");
+      return method === "git.unpushed" ? { files: [], commits: 0, upstream: null } : true;
+    });
+    const done = archiveSession();
+    await vi.runAllTimersAsync();
+    await done;
+    expect(askedText()).toBe('Archive "s1"? Its terminals stop and the worktree folder is removed. The branch is kept.');
+    expect(daemon.rpc.mock.calls.map((c) => c[1])).toEqual(["git.unpushed", "session.processes", "session.archive"]);
   });
 
   it("archives nothing when the push fails (X55)", async () => {
@@ -118,7 +154,7 @@ describe("archiveSession", () => {
     const done = archiveSession();
     await vi.runAllTimersAsync();
     await done;
-    expect(daemon.rpc.mock.calls.map((c) => c[1])).toEqual(["session.archive"]);
+    expect(daemon.rpc.mock.calls.map((c) => c[1])).toEqual(["session.processes", "session.archive"]);
   });
 
   it("does nothing when the modal is cancelled", async () => {

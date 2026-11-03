@@ -3,7 +3,8 @@
 
 import { rpc, sendInput } from "./daemon";
 import { addTab, closeDiff, closeFile, closeJob, cycleFocus, openDiff, openFile, openJob, splitLeaf, tabOf, type DiffMode } from "./layout";
-import { M, type ProjectConfig, type TerminalInfo, type Session, type SessionArchived, type UnpushedWork } from "./protocol";
+import { M, type ProjectConfig, type TerminalInfo, type Session, type SessionArchived, type SessionProcesses, type UnpushedWork } from "./protocol";
+import { runningLine, toStopOnArchive, withRunning } from "./sessionProcesses";
 import { checkForUpdates, errorToast, focusTerminal, getLayout, selectedSession, sesKey, sessionState, setLayout, termKey, toast, useStore, sessionTerminals, shownWorkspace, designHostOf, selectSession } from "./store";
 import { lastActive, sharedSessionOrder } from "./sidebar";
 import { findEntry, outputToCopy } from "./terminals";
@@ -303,10 +304,19 @@ export async function archiveSession(target?: { host: string; ws: Session }) {
   // Work only on this machine that the archive would take (X55).
   const where = c.host === "local" ? "this Mac" : (s.hosts[c.host]?.label ?? c.host);
   const params = unpushedParams(c.ws, pr);
-  const work = git.warn_unpushed ? await rpc<UnpushedWork>(c.host, M.gitUnpushed, params).catch(() => null) : null;
+  // What still runs in it, beyond its tabs, is named and stopped too (X83);
+  // a daemon that cannot say archives as before.
+  const [work, running] = await Promise.all([
+    git.warn_unpushed ? rpc<UnpushedWork>(c.host, M.gitUnpushed, params).catch(() => null) : null,
+    rpc<SessionProcesses>(c.host, M.sessionProcesses, { id: c.ws.id }).then(
+      (r) => (Array.isArray(r?.processes) && Array.isArray(r?.leftovers) ? r : null),
+      () => null,
+    ),
+  ]);
   const view = work && unpushedView(work, plan, c.ws.branch, where);
-  const answer = await askConfirm(view ? unpushedPrompt(c.ws.name, plan, view) : archivePrompt(c.ws.name, plan));
+  const answer = await askConfirm(withRunning(view ? unpushedPrompt(c.ws.name, plan, view) : archivePrompt(c.ws.name, plan), runningLine(running)));
   if (!answer) return;
+  const stop = toStopOnArchive(running);
   const flags = archiveFlags(plan, answer.checked, !!answer.alt);
   if (answer.alt) {
     try {
@@ -326,6 +336,9 @@ export async function archiveSession(target?: { host: string; ws: Session }) {
   const started = Date.now();
   setArchiving(key, { loader, done: false, folding: false });
   try {
+    // Its terminals stop with the archive; what was listed stops first. A
+    // failure to stop them is said, and the archive goes on.
+    if (stop.length) await rpc(c.host, M.sessionKillProcesses, { id: c.ws.id, pids: stop }).catch(errorToast);
     const done = await rpc<SessionArchived | boolean>(c.host, M.sessionArchive, { id: c.ws.id, ...flags });
     if (typeof done === "object" && done.remote_error) toast(`Couldn't delete ${c.ws.branch} on origin: ${done.remote_error}`, "error");
     setArchiving(key, { loader, done: true, folding: false });
