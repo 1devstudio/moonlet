@@ -219,6 +219,12 @@ pub fn signal_session(sid: u32, signal: Signal, leader_reaped: bool) -> bool {
     any
 }
 
+/// Whether any process is in session `sid`.
+pub fn session_has_members(sid: u32) -> bool {
+    // SAFETY: getsid only reads the process table.
+    all_pids().into_iter().any(|pid| unsafe { libc::getsid(pid) } == sid as i32)
+}
+
 /// When process `pid` started, in microseconds since the epoch on macOS
 /// and clock ticks since boot on Linux: the same number for one process,
 /// a different one for another that later got the same pid. `None` when

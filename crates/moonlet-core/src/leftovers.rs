@@ -40,26 +40,29 @@ pub fn save(path: &Path, leftovers: &Leftovers) -> std::io::Result<()> {
     std::fs::rename(&tmp, path)
 }
 
-/// Ends what the daemon before this one recorded in `path` and still runs:
-/// a daemon that stopped cleanly ended it all already, one that crashed did
-/// not. Reads the file now, so a new record cannot overwrite it first, and
-/// ends the processes in the background (SIGTERM, then SIGKILL 3 s later).
-pub fn reap(path: &Path) {
+/// Ends what the daemon before this one recorded in `path` and still runs,
+/// and returns it, for the next record to keep naming until it is gone. A
+/// daemon that crashed ended nothing; one that stopped cleanly ended its
+/// agents and what they started, but jobs that ignored its terminals' hangup
+/// still run, and end now. Reads the file at once, so a new record cannot
+/// overwrite it first, and ends the processes in the background (SIGTERM,
+/// then SIGKILL 3 s later; terminal sessions as when a tab closes).
+pub fn reap(path: &Path) -> Leftovers {
     let Some(left) = std::fs::read(path).ok().and_then(|b| serde_json::from_slice::<Leftovers>(&b).ok()) else {
-        return;
+        return Leftovers::default();
     };
-    let _ = std::fs::remove_file(path);
     if left.boot.is_some() && left.boot != crate::process::boot_time() {
-        return;
+        return Leftovers::default();
     }
-    let mut doomed = Doomed { group: None, family: Family::of(left.processes) };
+    let mut doomed = Doomed { group: None, family: Family::of(left.processes.clone()) };
     if doomed.signal(None) {
         tracing::info!("ending processes the previous daemon's agents left running");
         tokio::spawn(doomed.end());
     }
-    for (sid, started) in left.sessions {
+    for &(sid, started) in &left.sessions {
         crate::pty::end_recorded_session(sid, Some(started));
     }
+    left
 }
 
 #[cfg(test)]
@@ -123,7 +126,7 @@ mod tests {
         // Ignores SIGTERM, like a dev server: only the SIGKILL ends it.
         let ready = dir.path().join("ready");
         let script = format!("trap '' TERM; touch '{}'; while :; do sleep 1; done", ready.display());
-        let mut stubborn = std::process::Command::new("/bin/sh").args(["-c", &script]).spawn().unwrap();
+        let stubborn = std::process::Command::new("/bin/sh").args(["-c", &script]).spawn().unwrap();
         while !ready.exists() {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
@@ -133,8 +136,7 @@ mod tests {
         // belonged to an earlier process.
         let left = Leftovers { boot: crate::process::boot_time(), processes: vec![(stubborn.id(), start(stubborn.id())), (other.id(), start(other.id()) - 1)], sessions: vec![] };
         save(&path, &left).unwrap();
-        reap(&path);
-        assert!(!path.exists(), "a reaped record is used once");
+        assert_eq!(reap(&path), left, "what it ends is returned");
         let status = ended(stubborn).await;
         assert_eq!(std::os::unix::process::ExitStatusExt::signal(&status), Some(libc::SIGKILL));
         assert!(other.try_wait().unwrap().is_none(), "a reused pid was signalled");

@@ -116,6 +116,10 @@ pub struct ChatManager {
     /// Where to keep what agents and terminals run, for the next daemon to
     /// end after a crash, and what was written there last (X79).
     leftovers: Mutex<Option<(PathBuf, Option<crate::leftovers::Leftovers>)>>,
+    /// Processes and terminal sessions being ended (a stopped agent's, or
+    /// those a crashed daemon left), recorded until they are gone, so a crash
+    /// meanwhile still leaves them to the next daemon (X79).
+    dying: Mutex<crate::leftovers::Leftovers>,
 }
 
 /// An added directory as the agent gets it: absolute and existing, so it
@@ -185,7 +189,7 @@ fn answers_text(ask: &PermissionAsk, answers: &BTreeMap<String, String>) -> Stri
 
 impl ChatManager {
     pub fn new(terms: Arc<TerminalManager>, dir: PathBuf) -> Arc<Self> {
-        let mgr = Arc::new_cyclic(|me| Self { terms: terms.clone(), chats: Mutex::new(HashMap::new()), dir, me: me.clone(), session_env: std::sync::OnceLock::new(), held: Mutex::new(None), watching: Default::default(), ending: Mutex::new(Vec::new()), stopping: Default::default(), leftovers: Mutex::new(None) });
+        let mgr = Arc::new_cyclic(|me| Self { terms: terms.clone(), chats: Mutex::new(HashMap::new()), dir, me: me.clone(), session_env: std::sync::OnceLock::new(), held: Mutex::new(None), watching: Default::default(), ending: Mutex::new(Vec::new()), stopping: Default::default(), leftovers: Mutex::new(None), dying: Default::default() });
         let weak = Arc::downgrade(&mgr);
         terms.set_chat_stop(Arc::new(move |id, remove| {
             if let Some(m) = weak.upgrade() {
@@ -737,6 +741,7 @@ impl ChatManager {
 
     /// Ends `doomed` in the background; `shutdown` waits for it.
     fn end_later(&self, doomed: crate::process::Doomed) {
+        self.dying.lock().unwrap().processes.extend(doomed.family.members());
         let mut ending = self.ending.lock().unwrap();
         ending.retain(|e| !e.is_finished());
         ending.push(tokio::spawn(doomed.end()));
@@ -764,7 +769,12 @@ impl ChatManager {
 
     /// Keeps in `path`, every few seconds while it changes, what agents and
     /// terminals run, for the next daemon to end if this one crashes (X79).
-    pub fn record_leftovers(&self, path: PathBuf) {
+    /// `inherited` is what the daemon before left and is being ended.
+    pub fn record_leftovers(&self, path: PathBuf, inherited: crate::leftovers::Leftovers) {
+        let mut dying = self.dying.lock().unwrap();
+        dying.processes.extend(inherited.processes);
+        dying.sessions.extend(inherited.sessions);
+        drop(dying);
         *self.leftovers.lock().unwrap() = Some((path, None));
         self.watch_families();
     }
@@ -784,8 +794,17 @@ impl ChatManager {
             .into_iter()
             .filter_map(|pid| Some((pid, crate::pty::process_start(pid).or_else(|| last_sessions.iter().find(|s| s.0 == pid).map(|s| s.1))?)))
             .collect();
+        {
+            let mut dying = self.dying.lock().unwrap();
+            dying.processes.retain(|&(pid, start)| crate::pty::process_start(pid) == Some(start));
+            dying.sessions.retain(|&(sid, _)| crate::pty::session_has_members(sid));
+            processes.extend(dying.processes.iter().copied());
+            sessions.extend(dying.sessions.iter().copied());
+        }
         processes.sort_unstable();
+        processes.dedup();
         sessions.sort_unstable();
+        sessions.dedup();
         let now = crate::leftovers::Leftovers { boot: crate::process::boot_time(), processes, sessions };
         if self.leftovers.lock().unwrap().as_ref().is_some_and(|(_, last)| last.as_ref() == Some(&now)) {
             return;
@@ -2060,6 +2079,42 @@ done
         terms.kill(id, false).unwrap();
         chats.shutdown().await;
         assert!(gone_within(server, 1).await, "the stopped agent's server outlived the daemon");
+    }
+
+    /// The pids the leftovers file at `path` names among its processes.
+    fn recorded(path: &Path) -> Vec<i32> {
+        let left: crate::leftovers::Leftovers = std::fs::read(path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+        left.processes.iter().map(|p| p.0 as i32).collect()
+    }
+
+    #[tokio::test]
+    async fn what_a_stopped_agent_left_stays_recorded_until_it_is_gone() {
+        let (dir, terms, chats) = setup().await;
+        let path = dir.path().join("d.leftovers.json");
+        chats.record_leftovers(path.clone(), Default::default());
+        let (id, server) = agent_with_a_server(&chats, dir.path()).await;
+        terms.kill(id, false).unwrap();
+        // A look after the stop, within the server's SIGTERM grace.
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        assert!(nix::sys::signal::kill(server, None).is_ok(), "the server ended before its SIGKILL");
+        assert!(recorded(&path).contains(&server.as_raw()), "a crash now would leave the server running");
+        assert!(gone_within(server, 4).await);
+    }
+
+    #[tokio::test]
+    async fn what_a_crashed_daemon_left_stays_recorded_until_it_is_gone() {
+        let (dir, _terms, chats) = setup().await;
+        let path = dir.path().join("d.leftovers.json");
+        let mut left = std::process::Command::new("/bin/sleep").arg("30").spawn().unwrap();
+        let start = crate::pty::process_start(left.id()).unwrap();
+        let inherited = crate::leftovers::Leftovers { processes: vec![(left.id(), start)], ..Default::default() };
+        chats.record_leftovers(path.clone(), inherited);
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        assert!(recorded(&path).contains(&(left.id() as i32)), "a second crash now would leave it running");
+        left.kill().unwrap();
+        left.wait().unwrap();
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        assert!(!recorded(&path).contains(&(left.id() as i32)), "an ended process stays recorded");
     }
 
     #[tokio::test]

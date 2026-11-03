@@ -284,10 +284,8 @@ fn run_daemon(
         // A daemon that crashed left its agents' processes and its terminals'
         // jobs running; after a handoff they are this daemon's own (X79).
         let leftovers = moonlet_core::leftovers::file(&socket);
-        if fresh {
-            moonlet_core::leftovers::reap(&leftovers);
-        }
-        daemon.chats.record_leftovers(leftovers);
+        let inherited = if fresh { moonlet_core::leftovers::reap(&leftovers) } else { Default::default() };
+        daemon.chats.record_leftovers(leftovers, inherited);
         daemon.sessions.relink_terminals();
         // Before anything can ask, phones and the socket alike, so
         // `project.list` never lacks one (X41).

@@ -111,6 +111,14 @@ After a crash:
       `reaping_ends_recorded_processes_and_spares_a_reused_pid`,
       `reaping_ends_a_recorded_terminal_session_whose_shell_is_gone`,
       `a_record_from_before_a_reboot_ends_nothing`).
+- [x] What is being ended stays in the record until it is gone: a stopped
+      agent's processes during their grace, and what the daemon before left,
+      so a crash meanwhile still leaves them to the next daemon
+      (`what_a_stopped_agent_left_stays_recorded_until_it_is_gone`,
+      `what_a_crashed_daemon_left_stays_recorded_until_it_is_gone`).
+- [x] A daemon that stopped cleanly ended its agents and what they started.
+      Jobs in its terminals' sessions that ignored the hangup end at the next
+      start, as after a crash.
 - [x] After a handoff nothing is ended: the new daemon adopted the terminals,
       and the old one ended its agents (`upgrade_keeps_sessions_alive`).
 
@@ -186,6 +194,8 @@ feature reads only pids, parent pids, process groups and start times.
 - Rust, `leftovers.rs`: `reaping_ends_recorded_processes_and_spares_a_reused_pid`,
   `reaping_ends_a_recorded_terminal_session_whose_shell_is_gone` and
   `a_record_from_before_a_reboot_ends_nothing`.
+- Rust, `chat/runtime.rs`: `what_a_stopped_agent_left_stays_recorded_until_it_is_gone`
+  and `what_a_crashed_daemon_left_stays_recorded_until_it_is_gone`.
 - Rust, `moonletd/tests/daemon.rs`:
   `a_daemon_started_after_a_crash_ends_what_its_agents_left_running`;
   `moonletd/tests/upgrade.rs`: `upgrade_keeps_sessions_alive`.
