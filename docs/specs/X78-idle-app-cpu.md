@@ -1,6 +1,6 @@
 # X78 — The app stays quiet while nothing changes
 
-- **Status:** draft
+- **Status:** implemented
 - **Priority / phase:** P1 · phase 3
 - **PRD refs:** performance targets in `docs/plan.md` (memory under 600 MB with 10 panes)
 - **Related ADRs:** none
