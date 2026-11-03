@@ -5436,3 +5436,20 @@ async fn leftovers_in_a_sessions_worktree_are_listed_apart_and_stopped_only_by_p
     outsider.kill().unwrap();
     outsider.wait().unwrap();
 }
+
+/// X83: a worker's link neither lists nor stops a session's processes; the
+/// CLI, which an agent in the session runs, does.
+#[tokio::test]
+async fn a_workers_link_neither_lists_nor_stops_a_sessions_processes() {
+    let d = TestDaemon::start().await;
+    let mut c = d.client().await;
+    let ws = bare_session(d.home.path(), &mut c).await;
+    let mut worker = Client::connect(&d.socket, "moonletd-worker").await.unwrap();
+    for method in [methods::SESSION_PROCESSES, methods::SESSION_KILL_PROCESSES] {
+        let e = worker.request::<_, serde_json::Value>(method, serde_json::json!({"id": ws.id})).await.unwrap_err();
+        assert_eq!(e.to_string(), "forbidden: only the moonlet app and the moonlet CLI manage a session's processes", "{method}");
+    }
+    let mut cli = Client::connect(&d.socket, "moonlet-cli").await.unwrap();
+    let listed: serde_json::Value = cli.request(methods::SESSION_PROCESSES, serde_json::json!({"id": ws.id})).await.unwrap();
+    assert!(listed["processes"].is_array(), "{listed}");
+}

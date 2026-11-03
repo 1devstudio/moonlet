@@ -125,6 +125,8 @@ session". A daemon too old to list processes shows the error.
   `{kind: "leftover"}`; `started` is in milliseconds since the epoch,
   `cpu_ms` the CPU time used so far, `rss` resident memory in bytes.
 - `session.kill_processes {id, pids?}` → `{ended: [pid], skipped: [pid]}`.
+- Both answer the app and the CLI; a worker's link gets `forbidden`
+  (`a_workers_link_neither_lists_nor_stops_a_sessions_processes`).
 - CLI: `moonlet ps [--session <id>] [--json]`,
   `moonlet kill [--session <id>] (<pid>... | --all)`.
 
@@ -137,9 +139,14 @@ None: listed from the kernel's process table at each call.
 Command-line arguments of other processes can hold tokens: only pids, parent
 pids, sessions, start times, executable paths (shown by file name), working
 directories (compared with the worktree, never shown), CPU time and memory are
-read. `session.kill_processes` signals only processes it lists for that
-session at the time of the call, and only while their start time is
-unchanged, so it cannot be used to signal any process of the user's.
+read. `session.processes` and `session.kill_processes` answer the app and the
+`moonlet` CLI, which an agent running in a session can call; a worker's link
+gets `forbidden`. `session.kill_processes` signals only what it finds, at the
+time of the call, to be that session's processes or launchd's (init's)
+children working in its worktree, and only while their start time is
+unchanged. Such a leftover is any process of the user's that works in the
+worktree, so the CLI can stop it by pid; nothing outside the session and its
+worktree can be signalled.
 
 ## Out of scope
 
@@ -155,8 +162,9 @@ unchanged, so it cannot be used to signal any process of the user's.
   `stopping_all_spares_the_tabs_own_processes_and_leftovers`,
   `stopping_by_pid_skips_pids_that_are_not_the_sessions` and
   `ending_skips_a_pid_whose_start_changed`.
-- Rust, `moonletd/tests/daemon.rs`: `a_sessions_processes_are_listed_by_name_and_stopped`
-  and `leftovers_in_a_sessions_worktree_are_listed_apart_and_stopped_only_by_pid`.
+- Rust, `moonletd/tests/daemon.rs`: `a_sessions_processes_are_listed_by_name_and_stopped`,
+  `leftovers_in_a_sessions_worktree_are_listed_apart_and_stopped_only_by_pid`
+  and `a_workers_link_neither_lists_nor_stops_a_sessions_processes`.
 - Rust, `moonlet-cli`: `ps_prints_name_pid_origin_age_cpu_and_memory_never_arguments`
   (`src/ps.rs`) and `moonlet_ps_lists_a_sessions_processes_and_moonlet_kill_stops_one`
   (`tests/session_e2e.rs`).
