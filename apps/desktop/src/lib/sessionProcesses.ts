@@ -126,8 +126,9 @@ export function processLooks() {
     },
     /** A look at session `id` of `host` starts; its token. */
     begin(host: string, id: string): number {
-      latest++;
-      return shown?.host === host && shown.id === id ? latest : -1;
+      // One for a session no longer shown never counts, nor drops one that does.
+      if (shown?.host !== host || shown.id !== id) return -1;
+      return ++latest;
     },
     /** Whether what the look of `token` found may be shown. */
     current(token: number): boolean {

@@ -83,7 +83,10 @@ describe("the Processes tab (X83)", () => {
     // Once another session shows, its looks and a Stop's refresh of s1 are dropped.
     looks.show("local", "s2");
     expect(looks.current(second)).toBe(false);
+    const shownLook = looks.begin("local", "s2");
     expect(looks.current(looks.begin("local", "s1"))).toBe(false);
+    // ...without dropping the look at s2 under way.
+    expect(looks.current(shownLook)).toBe(true);
     expect(looks.current(looks.begin("local", "s2"))).toBe(true);
     // The same session id on another host is another session.
     looks.show("mini", "s2");
