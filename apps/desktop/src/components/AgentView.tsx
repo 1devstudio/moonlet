@@ -55,6 +55,7 @@ import {
   lastBlocks,
   limitShowing,
   showChat,
+  useChatOnScreen,
   type PlanChoice,
   planAnswer,
   planApproveLabel,
@@ -1398,12 +1399,9 @@ export function AgentView({
   const stick = useRef(true);
   const scale = useStore((s) => uiScale(s.settings.term.fontSize));
 
-  // Its items load when it is shown, and stay while it is among the last
-  // chats shown (X81).
-  const loaded = !!st;
-  useEffect(() => {
-    if (visible) void showChat(host, id).catch(errorToast);
-  }, [host, id, visible, loaded]);
+  // Its items load when it is shown, and stay while it is on screen or
+  // among the last chats shown (X81).
+  useChatOnScreen(host, id, visible, errorToast);
 
   const working = turnRunning(st?.status);
   const exists = useProjectFiles(host, cwd, working);

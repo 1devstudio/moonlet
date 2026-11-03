@@ -1,6 +1,7 @@
 // Structured agent conversations (X6): a mirror of each chat terminal's
 // ChatState, loaded with `chat.state` and kept current by `chat.*` events.
 
+import { useEffect } from "react";
 import { create } from "zustand";
 import type { PlanApproveMode } from "./agents";
 import { rpc } from "./daemon";
@@ -124,24 +125,68 @@ const summary = ({ items: _, ...rest }: ChatState): ChatSummary => rest;
  *  (X81); undefined until it is loaded. */
 export const chatSummary = (s: ChatStore, host: string, id: number): ChatSummary | undefined => s.chats[chatKey(host, id)] ?? s.summaries[chatKey(host, id)];
 
-/** How many chats keep their items in memory: the last ones shown (X81). */
+/** How many chats off screen keep their items in memory: the last ones
+ *  shown (X81). */
 export const CHATS_KEPT = 8;
 
 /** The keys of the chats shown last, the latest first, at most CHATS_KEPT. */
-let shown: string[] = [];
+let lastShown: string[] = [];
+/** How many views have each chat on screen now, by key (`holdChat`). */
+const onScreen = new Map<string, number>();
+
+/** Whether a chat keeps its items: it is on screen, or among the last shown. */
+const keepsItems = (key: string) => onScreen.has(key) || lastShown.includes(key);
+
+/** The chats among `keys` that no longer keep their items drop them. */
+function dropItems(keys: readonly string[]) {
+  for (const k of keys) if (!keepsItems(k)) useChat.setState((s) => (s.chats[k] ? placeChat(s, k, s.chats[k], false) : s));
+}
 
 /**
  * A chat is shown (X81): it keeps its items, loaded now when it has none,
- * and a chat that falls out of the last CHATS_KEPT shown drops its own.
+ * and a chat off screen that falls out of the last CHATS_KEPT shown drops
+ * its own. A chat on screen never does, however many are.
  */
 export async function showChat(host: string, id: number) {
   const key = chatKey(host, id);
-  const next = [key, ...shown.filter((k) => k !== key)];
-  const dropped = next.slice(CHATS_KEPT).filter((k) => useChat.getState().chats[k]);
-  shown = next.slice(0, CHATS_KEPT);
-  for (const k of dropped) useChat.setState((s) => (s.chats[k] ? placeChat(s, k, s.chats[k], false) : s));
+  const before = lastShown;
+  lastShown = [key, ...lastShown.filter((k) => k !== key)].slice(0, CHATS_KEPT);
+  dropItems(before.filter((k) => !lastShown.includes(k)));
   // Dropped while its load was in flight, it keeps its summary only.
   if (!useChat.getState().chats[key]) await loadChat(host, id);
+}
+
+/**
+ * A view puts chat `id` on screen (X81): it keeps its items until every
+ * view that holds it lets go with the function returned. Let go of, it drops
+ * them unless it is among the last CHATS_KEPT shown.
+ */
+export function holdChat(host: string, id: number): () => void {
+  const key = chatKey(host, id);
+  onScreen.set(key, (onScreen.get(key) ?? 0) + 1);
+  let held = true;
+  return () => {
+    if (!held) return;
+    held = false;
+    const n = (onScreen.get(key) ?? 1) - 1;
+    if (n > 0) onScreen.set(key, n);
+    else {
+      onScreen.delete(key);
+      dropItems([key]);
+    }
+  };
+}
+
+/**
+ * A view shows chat `id` while `on` (X81): it holds it on screen and shows
+ * it, loading its items, and loads them again should they go.
+ */
+export function useChatOnScreen(host: string, id: number | null, on: boolean, onError: (e: unknown) => void = () => {}) {
+  const loaded = useChat((s) => id !== null && !!s.chats[chatKey(host, id)]);
+  useEffect(() => (on && id !== null ? holdChat(host, id) : undefined), [host, id, on]);
+  useEffect(() => {
+    if (on && id !== null) void showChat(host, id).catch(onError);
+  }, [host, id, on, loaded]);
 }
 
 /** The store with chat `key` read as `st`: with its items when `withItems`,
@@ -184,7 +229,7 @@ export async function loadChat(host: string, id: number) {
   try {
     const st = await rpc<ChatState>(host, M.chatState, { id });
     const buf = buffered.get(key);
-    const keep = shown.includes(key);
+    const keep = keepsItems(key);
     const items = keep ? mergeItems(st.items, buf?.items ?? []) : [];
     const latest: ChatState = { ...empty, ...(buf?.state ? { ...buf.state, items } : { ...st, items }) };
     useChat.setState((s) => placeChat(s, key, latest, keep));
@@ -203,7 +248,7 @@ export async function loadChat(host: string, id: number) {
 
 export function forgetChat(host: string, id: number) {
   const key = chatKey(host, id);
-  shown = shown.filter((k) => k !== key);
+  lastShown = lastShown.filter((k) => k !== key);
   useChat.setState((s) => {
     const chats = { ...s.chats };
     const summaries = { ...s.summaries };

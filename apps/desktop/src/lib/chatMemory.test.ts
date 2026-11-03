@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { chatKey, chatSummary, loadChat, onChatItem, onChatState, reloadChats, showChat, useChat } from "./chat";
+import { chatKey, chatSummary, holdChat, loadChat, onChatItem, onChatState, reloadChats, showChat, useChat } from "./chat";
 import type { ChatState } from "./protocol";
 
 /** What the daemon's `chat.state` answers, by `host:id`. */
@@ -78,5 +78,39 @@ describe("chats kept in memory (X81)", () => {
     expect(chatSummary(useChat.getState(), "e", 2)?.status).toBe("done");
     expect(texts("e", 2)).toBeUndefined();
     expect(chatSummary(useChat.getState(), "e", 3)).toBeUndefined();
+  });
+
+  it("never drops the items of a chat on screen, however many are on screen", async () => {
+    for (let id = 1; id <= 10; id++) daemon[`f:${id}`] = chat(`chat ${id}`);
+    // Ten views show a chat each, and each shows its chat again, as a view
+    // does when it renders again: none drops another's items.
+    const release: (() => void)[] = [];
+    for (let id = 1; id <= 10; id++) {
+      release.push(holdChat("f", id));
+      await showChat("f", id);
+    }
+    for (let id = 1; id <= 10; id++) await showChat("f", id);
+    for (let id = 1; id <= 10; id++) expect(texts("f", id)).toEqual([`chat ${id}`]);
+    // Off screen, chat 1 is not among the last 8 shown (3–10): it drops its
+    // items. Chat 10 is, and keeps them.
+    release[0]();
+    release[9]();
+    expect(texts("f", 1)).toBeUndefined();
+    expect(texts("f", 10)).toEqual(["chat 10"]);
+  });
+
+  it("keeps a chat two views show until both let it go", async () => {
+    daemon["g:1"] = chat("in a pane and in the Plan tab");
+    const pane = holdChat("g", 1);
+    const plan = holdChat("g", 1);
+    await showChat("g", 1);
+    for (let id = 2; id <= 9; id++) {
+      daemon[`g:${id}`] = chat(`chat ${id}`);
+      await showChat("g", id);
+    }
+    pane();
+    expect(texts("g", 1)).toEqual(["in a pane and in the Plan tab"]);
+    plan();
+    expect(texts("g", 1)).toBeUndefined();
   });
 });
