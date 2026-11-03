@@ -521,19 +521,13 @@ impl TerminalManager {
         let (exited, session) = {
             let mut st = s.state.lock().unwrap();
             let exited = st.info.exit.is_some();
-            // A script owns every process it starts, including jobs a
+            // A tab owns every process it starts, including jobs a
             // job-control shell moved to their own process group, which
-            // outlive the shell when they ignore SIGHUP.
-            let script = matches!(st.info.kind, TerminalKind::Run | TerminalKind::Setup);
-            let session = st
-                .pty
-                .as_ref()
-                .filter(|_| script && !exited)
-                .map(|pty| pty.pid());
+            // outlive the shell when they ignore SIGHUP: a script's (X1),
+            // and a dev server left running in a shell or agent tab (X79).
+            let session = st.pty.as_ref().filter(|_| !exited).map(|pty| pty.pid());
             if let Some(sid) = session {
                 crate::pty::signal_session(sid, nix::sys::signal::Signal::SIGHUP, false);
-            } else if let Some(pty) = &st.pty {
-                let _ = pty.signal(nix::sys::signal::Signal::SIGHUP);
             }
             if remove && !exited {
                 st.remove_on_exit = true;
@@ -548,25 +542,6 @@ impl TerminalManager {
             crate::pty::escalate_session(sid, move || {
                 weak.upgrade()
                     .is_none_or(|s| s.state.lock().unwrap().info.exit.is_some())
-            });
-        } else if !exited {
-            // Some programs (agents included) ignore SIGHUP: escalate.
-            let weak = Arc::downgrade(&s);
-            tokio::spawn(async move {
-                for (delay, sig) in [
-                    (1500, nix::sys::signal::Signal::SIGTERM),
-                    (3000, nix::sys::signal::Signal::SIGKILL),
-                ] {
-                    tokio::time::sleep(Duration::from_millis(delay)).await;
-                    let Some(s) = weak.upgrade() else { return };
-                    let st = s.state.lock().unwrap();
-                    if st.info.exit.is_some() {
-                        return;
-                    }
-                    if let Some(pty) = &st.pty {
-                        let _ = pty.signal(sig);
-                    }
-                }
             });
         }
         // Otherwise the read loop removes it once the process is gone.
@@ -1253,6 +1228,21 @@ mod tests {
 
     #[tokio::test]
     async fn closing_a_run_tab_stops_jobs_that_outlive_the_shell() {
+        closing_stops_jobs_that_outlive_the_shell(TerminalKind::Run).await;
+    }
+
+    #[tokio::test]
+    async fn closing_a_shell_tab_stops_jobs_that_outlive_the_shell() {
+        // A dev server left running in the background of a terminal (X79).
+        closing_stops_jobs_that_outlive_the_shell(TerminalKind::Shell).await;
+    }
+
+    #[tokio::test]
+    async fn closing_an_agent_tab_stops_jobs_that_outlive_the_shell() {
+        closing_stops_jobs_that_outlive_the_shell(TerminalKind::Agent).await;
+    }
+
+    async fn closing_stops_jobs_that_outlive_the_shell(kind: TerminalKind) {
         // A job-control shell puts the job in its own process group, and the
         // job ignores SIGHUP, so it keeps running after the shell exits.
         let dir = tempfile::tempdir().unwrap();
@@ -1269,7 +1259,7 @@ mod tests {
                         pid_file.display()
                     ),
                 ],
-                kind: TerminalKind::Run,
+                kind: kind,
                 ..Default::default()
             })
             .unwrap();
@@ -1290,7 +1280,7 @@ mod tests {
         while nix::sys::signal::kill(job, None).is_ok() {
             assert!(
                 start.elapsed() < Duration::from_secs(8),
-                "the run tab's job is still running"
+                "the {kind:?} tab's job is still running"
             );
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
