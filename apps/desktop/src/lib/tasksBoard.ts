@@ -204,7 +204,8 @@ export function sessionsWithoutTask(sessions: BoardSession[], tasks: Task[], lin
     .filter((s) => !s.archived && !s.task && !taskForSession(s, s.pr, s.originRepo, tasks, link))
     .map((session) => {
       if (!link.title) return { session, hint: "" };
-      const like = tasks.find((t) => words(t.title) === words(session.name));
+      const name = words(session.name);
+      const like = tasks.find((t) => words(t.title) === name);
       return { session, hint: like ? `Looks like ${like.key} ${like.title}` : "No matching issue" };
     });
 }
