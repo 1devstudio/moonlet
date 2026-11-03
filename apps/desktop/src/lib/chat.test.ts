@@ -19,6 +19,7 @@ import {
   fuzzyFilter,
   loadChat,
   mergeItem,
+  mergeItems,
   onChatItem,
   onChatState,
   planAnswer,
@@ -399,5 +400,15 @@ describe("a long transcript (X81)", () => {
     expect(lastBlocks(blocks, 400).earlier).toBe(50);
     expect(ids(lastBlocks(blocks, 400).shown)[0]).toBe("m50");
     expect(lastBlocks(blocks, 600)).toEqual({ shown: blocks, earlier: 0 });
+  });
+
+  it("applies events held during a load in order, the latest version of an item winning", () => {
+    const loaded = [item("u", "fix it", "user"), item("a", "Look")];
+    const held = [item("a", "Looking"), item("t", "", "tool"), item("a", "Looking at it."), item("b", "Done.")];
+    const merged = mergeItems(loaded, held);
+    expect(merged.map((i) => `${i.id}:${i.text}`)).toEqual(["u:fix it", "a:Looking at it.", "t:", "b:Done."]);
+    // The loaded transcript is left as it was.
+    expect(loaded.map((i) => i.text)).toEqual(["fix it", "Look"]);
+    expect(mergeItems(loaded, [])).toBe(loaded);
   });
 });

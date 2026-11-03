@@ -58,10 +58,27 @@ export function itemShown(item: ChatItem, userText: ((text: string, first: boole
 }
 
 export function mergeItem(items: ChatItem[], item: ChatItem): ChatItem[] {
-  const i = items.findIndex((x) => x.id === item.id);
+  // A streamed item is the last one, or near it (X81).
+  const i = items.findLastIndex((x) => x.id === item.id);
   if (i < 0) return [...items, item];
   const next = items.slice();
   next[i] = item;
+  return next;
+}
+
+/** `items` with each of `incoming` merged in turn, as `mergeItem` would,
+ *  copying `items` once rather than once per item (X81). */
+export function mergeItems(items: ChatItem[], incoming: readonly ChatItem[]): ChatItem[] {
+  if (!incoming.length) return items;
+  const next = items.slice();
+  const at = new Map(next.map((it, i) => [it.id, i]));
+  for (const it of incoming) {
+    const i = at.get(it.id);
+    if (i === undefined) {
+      at.set(it.id, next.length);
+      next.push(it);
+    } else next[i] = it;
+  }
   return next;
 }
 
@@ -164,11 +181,7 @@ export async function loadChat(host: string, id: number, opts: { onlyIfShown?: b
     const st = await rpc<ChatState>(host, M.chatState, { id });
     const buf = buffered.get(key);
     const keep = !opts.onlyIfShown || shown.includes(key);
-    let items: ChatItem[] = [];
-    if (keep) {
-      items = st.items;
-      for (const it of buf?.items ?? []) items = mergeItem(items, it);
-    }
+    const items = keep ? mergeItems(st.items, buf?.items ?? []) : [];
     const latest: ChatState = { ...empty, ...(buf?.state ? { ...buf.state, items } : { ...st, items }) };
     useChat.setState((s) => {
       const chats = { ...s.chats };
