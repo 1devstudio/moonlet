@@ -86,7 +86,11 @@ None: no new inputs.
   The endless-animation test builds the app's stylesheet with Tailwind from
   `index.css` and every file it imports, with the `animate-*` classes found in
   the app's sources, and reads the `animation` shorthand, its longhands and
-  rules nested in `@media`, `@supports` and `@layer`.
+  rules nested in `@media`, `@supports` and `@layer`. The pause and
+  reduced-motion rules name `::before` and `::after` in the same selector list
+  as the elements; jsdom drops a list holding a pseudo-element, so the tests
+  give it each selector as a rule of its own, and cannot check the
+  pseudo-elements themselves (jsdom computes no style for them).
 - Vitest, `subagents.test.ts`: `ticks the strip's clock only while agents run
   and the strip is shown` and `ticks the Agents tab's clock only while agents
   run and the tab is shown`.
