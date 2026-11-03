@@ -1,14 +1,21 @@
 import { describe, expect, it, vi } from "vitest";
-import { chatKey, chatSummary, holdChat, loadChat, onChatItem, onChatState, reloadChats, showChat, showChats, useChat } from "./chat";
+import { chatKey, chatSummary, holdChat, loadChatSummaries, onChatItem, onChatState, reloadChats, showChat, showChats, useChat } from "./chat";
 import { newChatContext } from "./chatContext";
 import type { ChatState, TerminalInfo } from "./protocol";
 
 /** What the daemon's `chat.state` answers, by `host:id`; nothing while its
- *  host is down. */
-const daemon = vi.hoisted(() => ({}) as Record<string, unknown>);
+ *  host is down. `chat.summaries` answers each of the host's without items.
+ *  `asked` notes each request, as `chat.state e:1` or `chat.summaries e`. */
+const { daemon, asked } = vi.hoisted(() => ({ daemon: {} as Record<string, unknown>, asked: [] as string[] }));
 vi.mock("./daemon", () => ({
-  rpc: (host: string, _method: string, params: { id: number }) => {
-    const st = daemon[`${host}:${params.id}`];
+  rpc: (host: string, method: string, params?: { id: number }) => {
+    if (method === "chat.summaries") {
+      asked.push(`${method} ${host}`);
+      const mine = Object.entries(daemon).filter(([k, v]) => k.startsWith(`${host}:`) && !(v instanceof Promise));
+      return Promise.resolve(mine.map(([k, v]) => ({ id: Number(k.split(":")[1]), state: { ...(v as object), items: [] } })));
+    }
+    asked.push(`${method} ${host}:${params?.id}`);
+    const st = daemon[`${host}:${params?.id}`];
     return st === undefined ? Promise.reject(new Error(`${host} is not connected`)) : Promise.resolve(st);
   },
 }));
@@ -63,10 +70,11 @@ describe("chats kept in memory (X81)", () => {
 
   it("keeps only the status and asks of a chat loaded but not shown", async () => {
     daemon["d:1"] = chat("never shown", { status: "working" });
-    await loadChat("d", 1);
+    await loadChatSummaries("d");
     expect(chatSummary(useChat.getState(), "d", 1)?.status).toBe("working");
     expect(texts("d", 1)).toBeUndefined();
-    // Shown, it reads its items.
+    // Its transcript was not asked for until it is shown.
+    expect(asked.filter((a) => a.endsWith(" d") || a.includes(" d:"))).toEqual(["chat.summaries d"]);
     await showChat("d", 1);
     expect(texts("d", 1)).toEqual(["never shown"]);
   });
@@ -75,7 +83,7 @@ describe("chats kept in memory (X81)", () => {
     daemon["e:1"] = chat("shown");
     daemon["e:2"] = chat("in the Agents panel");
     await showChat("e", 1);
-    await loadChat("e", 2);
+    await loadChatSummaries("e");
     // The host reconnects: each chat moved on meanwhile.
     daemon["e:1"] = chat("shown, later");
     daemon["e:2"] = chat("in the Agents panel, later", { status: "done" });
@@ -85,6 +93,8 @@ describe("chats kept in memory (X81)", () => {
     expect(chatSummary(useChat.getState(), "e", 2)?.status).toBe("done");
     expect(texts("e", 2)).toBeUndefined();
     expect(chatSummary(useChat.getState(), "e", 3)).toBeUndefined();
+    // Only the shown chat's transcript was read again.
+    expect(asked.filter((a) => a.endsWith(" e") || a.includes(" e:"))).toEqual(["chat.state e:1", "chat.summaries e", "chat.state e:1", "chat.summaries e"]);
   });
 
   it("loads on reconnect a chat shown while its host was down", async () => {

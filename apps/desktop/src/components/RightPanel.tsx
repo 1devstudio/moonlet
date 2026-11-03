@@ -10,7 +10,7 @@ import { latestOnly, stackView, type StackView } from "../lib/prStack";
 import { hasRunCommand } from "../lib/projectSettings";
 import { workspaceOpenIn } from "../lib/openIn";
 import { useSync } from "../lib/syncStore";
-import { chatKey, chatSummary, loadChat, useChat, useChatOnScreen } from "../lib/chat";
+import { chatKey, chatSummary, loadChatSummaries, useChat, useChatOnScreen } from "../lib/chat";
 import { planChat, planTabDot, planView, planWaits } from "../lib/plan";
 import { agentRows, agentsTabClockRuns, agentsTabDot } from "../lib/subagents";
 import { grantMenuLabel } from "../lib/terminalRead";
@@ -250,12 +250,12 @@ function useSessionAgents(host: string, ws: Session, tab: RightTab) {
   const list = useMemo(() => (ids ? ids.split(",").map(Number) : []), [ids]);
   // Each chat's subagents and asks, which change only on `chat.state`, so
   // streaming text does not re-render the panel. Undefined until loaded,
-  // and loaded without the chat's items unless it is shown (X81).
+  // read for every chat of the host at once, without items (X81).
   const subagents = useChat(useShallow((s) => list.map((id) => chatSummary(s, host, id)?.subagents)));
   const pending = useChat(useShallow((s) => list.map((id) => chatSummary(s, host, id)?.pending)));
   const unloaded = list.filter((_, i) => pending[i] === undefined).join(",");
   useEffect(() => {
-    for (const id of unloaded ? unloaded.split(",") : []) void loadChat(host, Number(id)).catch(() => {});
+    if (unloaded) void loadChatSummaries(host).catch(() => {});
   }, [host, unloaded]);
   const now = useNow(agentsTabClockRuns(tab, subagents));
   const rows = useMemo(

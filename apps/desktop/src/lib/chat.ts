@@ -103,8 +103,13 @@ export function onChatItem(host: string, id: number, item: ChatItem) {
   });
 }
 
+/** How many `chat.state` events came, by key: a summary asked for before
+ *  the latest one is older than it (`loadChatSummaries`). */
+const stateEvents = new Map<string, number>();
+
 export function onChatState(host: string, id: number, state: ChatState) {
   const key = chatKey(host, id);
+  stateEvents.set(key, (stateEvents.get(key) ?? 0) + 1);
   const buf = buffered.get(key);
   if (buf) {
     buf.state = state;
@@ -220,16 +225,51 @@ function placeChat(s: ChatStore, key: string, st: ChatState, withItems: boolean)
  *  meanwhile, which could not load. The others load when shown (X81). */
 export async function reloadChats(host: string, ids: readonly number[]) {
   const s = useChat.getState();
-  const wanted = ids.filter((id) => chatSummary(s, host, id) || keepsItems(chatKey(host, id)));
-  await Promise.all(wanted.map((id) => loadChat(host, id).catch(() => {})));
+  const withItems = ids.filter((id) => s.chats[chatKey(host, id)] || keepsItems(chatKey(host, id)));
+  // The summaries are read again together, without their items.
+  const summarized = ids.some((id) => !withItems.includes(id) && s.summaries[chatKey(host, id)]);
+  await Promise.all([
+    ...withItems.map((id) => loadChat(host, id).catch(() => {})),
+    ...(summarized ? [loadChatSummaries(host, { refresh: true }).catch(() => {})] : []),
+  ]);
+}
+
+const summariesLoading = new Set<string>();
+
+/**
+ * Reads the status, asks and subagents of `host`'s chats, without their
+ * items, with one `chat.summaries`, such as for the Agents panel (X81).
+ * With `refresh`, only of the chats with a summary already. A chat with its
+ * items in memory, loading them, or moved on by an event meanwhile keeps
+ * what it has.
+ */
+export async function loadChatSummaries(host: string, opts: { refresh?: boolean } = {}) {
+  if (summariesLoading.has(host)) return;
+  summariesLoading.add(host);
+  const before = new Map(stateEvents);
+  try {
+    const list = await rpc<{ id: number; state: ChatState }[]>(host, M.chatSummaries);
+    useChat.setState((s) => {
+      const summaries = { ...s.summaries };
+      for (const { id, state } of list) {
+        const key = chatKey(host, id);
+        if (s.chats[key] || buffered.has(key) || stateEvents.get(key) !== before.get(key)) continue;
+        if (opts.refresh && !s.summaries[key]) continue;
+        summaries[key] = summary({ ...empty, ...state });
+      }
+      return { summaries };
+    });
+  } finally {
+    summariesLoading.delete(host);
+  }
 }
 
 const loading = new Set<string>();
 
 /**
- * Reads a chat's state: its status, asks and subagents, such as for the
- * Agents panel, and its items only while it is among the chats shown last
- * (X81).
+ * Reads a chat's state with its items (`chat.state`), for a chat shown: it
+ * keeps them only while it is on screen or among the chats shown last, and
+ * else only its summary (X81).
  */
 export async function loadChat(host: string, id: number) {
   const key = chatKey(host, id);
