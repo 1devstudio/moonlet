@@ -18,6 +18,7 @@ import { ChecksPanel } from "./ChecksPanel";
 import { PlanPanel } from "./PlanPanel";
 import { AgentsPanel } from "./AgentsPanel";
 import { JobsPanel } from "./JobsPanel";
+import { ProcessesPanel } from "./ProcessesPanel";
 import { useSessionJobs } from "../lib/jobsStore";
 import { jobsTabCount } from "../lib/jobs";
 import { FileLinks, useProjectFiles } from "./AgentView";
@@ -76,6 +77,7 @@ function MoreMenu({ host, ws }: { host: string; ws: Session }) {
             <div className="my-1 border-t border-border" />
             {item("Commit…", () => useStore.setState({ dialog: { kind: "commit" } }))}
             {item("Re-run setup script", () => void runScript("setup"))}
+            {item("Processes…", () => useStore.setState({ rightTab: "processes", rightOpen: true }))}
             {item("Project settings…", () => openProjectSettings({ host, project: ws.project_id }))}
             {item("Toggle sidebar  ⌘B", () => useStore.setState((s) => ({ sidebarOpen: !s.sidebarOpen })))}
             {askAgain && item(askAgain, () => void rpc(host, M.terminalReadGrantClear, { session_id: ws.id }).catch(errorToast))}
@@ -276,7 +278,9 @@ export function RightPanel({ host, ws }: { host: string; ws: Session }) {
   const design = designTab(designs);
   const tab = (chosen === "task" && !linked) || (chosen === "jobs" && !jobs.length) || (chosen === "design" && !design) ? "files" : chosen;
   const withJobs = jobs.length ? TABS.flatMap((t) => (t.id === "agents" ? [t, { id: "jobs" as const, label: "Jobs" }] : [t])) : TABS;
-  const shown = design ? [...withJobs, { id: "design" as const, label: "Design" }] : withJobs;
+  const withDesign = design ? [...withJobs, { id: "design" as const, label: "Design" }] : withJobs;
+  // The Processes tab shows while it is the chosen one, picked from the ⋯ menu (X83).
+  const shown = tab === "processes" ? [...withDesign, { id: "processes" as const, label: "Processes" }] : withDesign;
   const tabs = linked ? [{ id: "task" as const, label: "Task" }, ...shown] : shown;
   const { view: plan, waits: planWaiting } = useSessionPlan(host, ws, tab === "plan");
   const agents = useSessionAgents(host, ws, tab);
@@ -339,6 +343,8 @@ export function RightPanel({ host, ws }: { host: string; ws: Session }) {
             <FileLinks.Provider value={{ host, wsId: ws.id, cwd: ws.path, exists }}>
               <AgentsPanel host={host} cwd={ws.path} rows={agents.rows} now={agents.now} />
             </FileLinks.Provider>
+          ) : tab === "processes" ? (
+            <ProcessesPanel host={host} ws={ws} />
           ) : tab === "jobs" ? (
             <JobsPanel host={host} ws={ws} jobs={jobs} />
           ) : tab === "files" ? (
