@@ -4,36 +4,39 @@
 use moonlet_proto::methods::{ProcessOrigin, ProcessesKilled, SessionProcess, SessionProcesses};
 
 /// The table `moonlet ps` prints, ages taken at `now` (milliseconds since
-/// the epoch): pid, name, age, CPU time, memory and origin, then the
+/// the epoch): pid, name, origin, age, CPU time and memory, then the
 /// leftovers under their own heading.
 pub fn table(list: &SessionProcesses, now: u64) -> String {
     if list.processes.is_empty() && list.leftovers.is_empty() {
         return "Nothing runs in this session.\n".into();
     }
-    let mut out = format!(
-        "{:>7}  {:<16}{:>5}  {:>8}  {:>9}  ORIGIN\n",
-        "PID", "NAME", "AGE", "CPU", "MEMORY"
-    );
+    let all = || list.processes.iter().chain(&list.leftovers);
+    let width = all().map(|p| origin(p).chars().count()).max().unwrap_or(0).max("ORIGIN".len());
+    let line = |pid: &str, name: &str, origin: &str, age: &str, cpu: &str, mem: &str| {
+        format!("{pid:>7}  {name:<16}  {origin:<width$}  {age:>5}  {cpu:>8}  {mem:>9}\n")
+    };
+    let row = |p: &SessionProcess| {
+        let dash = || "-".to_string();
+        let age = p.started.map(|s| age(now.saturating_sub(s) / 1000)).unwrap_or_else(dash);
+        let cpu = p.cpu_ms.map(cpu).unwrap_or_else(dash);
+        let mem = p.rss.map(memory).unwrap_or_else(dash);
+        line(&p.pid.to_string(), &p.name, &origin(p), &age, &cpu, &mem)
+    };
+    let mut out = line("PID", "NAME", "ORIGIN", "AGE", "CPU", "MEMORY");
     for p in &list.processes {
-        out.push_str(&row(p, now));
+        out.push_str(&row(p));
     }
     if !list.leftovers.is_empty() {
         out.push_str("\nLeft in the worktree, stopped only by pid:\n");
         for p in &list.leftovers {
-            out.push_str(&row(p, now));
+            out.push_str(&row(p));
         }
     }
     out
 }
 
-fn row(p: &SessionProcess, now: u64) -> String {
-    let dash = || "-".to_string();
-    let age = p
-        .started
-        .map(|s| age(now.saturating_sub(s) / 1000))
-        .unwrap_or_else(dash);
-    let cpu = p.cpu_ms.map(cpu).unwrap_or_else(dash);
-    let mem = p.rss.map(memory).unwrap_or_else(dash);
+/// What a process belongs to, as `moonlet ps` says it.
+fn origin(p: &SessionProcess) -> String {
     let mut origin = match &p.origin {
         ProcessOrigin::Terminal { id, title } => format!("terminal {id} ({title})"),
         ProcessOrigin::Run { id, title } => format!("run {id} ({title})"),
@@ -43,10 +46,7 @@ fn row(p: &SessionProcess, now: u64) -> String {
     if p.tab {
         origin.push_str(", the tab's own");
     }
-    format!(
-        "{:>7}  {:<16}{:>5}  {:>8}  {:>9}  {origin}\n",
-        p.pid, p.name, age, cpu, mem
-    )
+    origin
 }
 
 /// "42s", "45m", "2h", "6d": the largest whole unit.
@@ -187,15 +187,15 @@ mod tests {
         };
         assert_eq!(
             table(&list, NOW),
-            "    PID  NAME              AGE       CPU     MEMORY  ORIGIN
-   4100  zsh                3d      1.2s     4.0 MB  terminal 2 (dev), the tab's own
-   4242  vite               2h     1m12s   210.0 MB  terminal 2 (dev)
-   4300  claude            45m      8.0s   380.0 MB  agent 3 (claude), the tab's own
-   4310  tail              42s      0.0s     900 KB  agent 3 (claude)
-   4320  ?                   -         -          -  run 5 (test)
+            "    PID  NAME              ORIGIN                             AGE       CPU     MEMORY
+   4100  zsh               terminal 2 (dev), the tab's own     3d      1.2s     4.0 MB
+   4242  vite              terminal 2 (dev)                    2h     1m12s   210.0 MB
+   4300  claude            agent 3 (claude), the tab's own    45m      8.0s   380.0 MB
+   4310  tail              agent 3 (claude)                   42s      0.0s     900 KB
+   4320  ?                 run 5 (test)                         -         -          -
 
 Left in the worktree, stopped only by pid:
-   5151  node               6d     3h05m     3.0 GB  init
+   5151  node              init                                6d     3h05m     3.0 GB
 "
         );
         assert_eq!(
