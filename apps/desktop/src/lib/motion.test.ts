@@ -18,10 +18,28 @@ function sheet(css: string): CSSStyleSheet {
   return style.sheet!;
 }
 
+/** `css` with each selector of a list in a rule of its own, which WebKit applies
+ *  alike: jsdom drops a whole list that holds a pseudo-element. */
+function oneSelectorEach(css: string): string {
+  const parsed = sheet(css);
+  const declarations = (style: CSSStyleDeclaration) =>
+    Array.from(style, (p) => `${p}: ${style.getPropertyValue(p)}${style.getPropertyPriority(p) ? " !important" : ""};`).join(" ");
+  const write = (rules: CSSRuleList): string[] =>
+    [...rules].flatMap((r) =>
+      r.type === CSSRule.STYLE_RULE
+        ? splitTop((r as CSSStyleRule).selectorText, ",").map((selector) => `${selector} { ${declarations((r as CSSStyleRule).style)} }`)
+        : r.type === CSSRule.MEDIA_RULE
+          ? [`@media ${(r as CSSMediaRule).media.mediaText} {\n${write((r as CSSMediaRule).cssRules).join("\n")}\n}`]
+          : [r.cssText],
+    );
+  parsed.ownerNode!.remove();
+  return write(parsed.cssRules).join("\n");
+}
+
 /** The app's motion rules, with an endless spinner like the app's own. Its
  *  play state is written out: jsdom computes none, where WebKit's is `running`. */
 const page = (css = motionCss) =>
-  sheet(`.spin { animation-name: moonlet-spin; animation-iteration-count: infinite; animation-play-state: running; }\n${css}`);
+  sheet(`.spin { animation-name: moonlet-spin; animation-iteration-count: infinite; animation-play-state: running; }\n${oneSelectorEach(css)}`);
 
 /** A tab's container holding a spinner, `hidden` as the session view hides it. */
 function tabWithSpinner(hidden: boolean): HTMLElement {
