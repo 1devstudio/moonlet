@@ -633,7 +633,7 @@ export function syncLayout(host: string, w: Session) {
   const live = sessionTerminals(s, host, w.id).map((x) => x.id);
   const base = s.layouts[key] ?? parseLayout(w.layout);
   const next = reconcile(base, live);
-  if (JSON.stringify(next) !== JSON.stringify(s.layouts[key])) {
+  if (!sameJson(s.layouts[key], next)) {
     set((st) => ({ layouts: { ...st.layouts, [key]: next } }));
     persistLayout(host, w.id, next);
   }
