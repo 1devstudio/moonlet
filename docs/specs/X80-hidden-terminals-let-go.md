@@ -1,6 +1,6 @@
 # X80 — Hidden terminals let go of their memory
 
-- **Status:** draft
+- **Status:** implemented
 - **Priority / phase:** P1 · phase 3
 - **PRD refs:** performance targets in `docs/plan.md` (memory under 600 MB with 10 panes), S2 reattach replay, T1 terminal rendering
 - **Related ADRs:** none
@@ -30,19 +30,19 @@ attached again and drawn from the daemon's replay.
 
 ## Behaviour and acceptance criteria
 
-- [ ] At most 8 terminals keep a live xterm. When a ninth is shown, the one
+- [x] At most 8 terminals keep a live xterm. When a ninth is shown, the one
       shown longest ago is let go of: its xterm and add-ons are disposed, the
       app sends `terminal.detach` for it, and it receives no more output
       (`lets go of the least recently shown terminals beyond the limit (X80)`,
       `a ninth terminal shown lets go of the one shown longest ago, and detaches it (X80)`).
-- [ ] A terminal let go of is attached again when it is shown again, and the
+- [x] A terminal let go of is attached again when it is shown again, and the
       daemon's replay (S2) draws its screen and scrollback
       (`a terminal let go of attaches again when shown, and the replay draws it (X80)`).
-- [ ] A terminal on screen is never let go of, nor is any pane of a split on
+- [x] A terminal on screen is never let go of, nor is any pane of a split on
       screen, even when more than 8 are on screen
       (`never lets go of a terminal on screen, even past the limit (X80)`,
       `a terminal in a split on screen is kept however many others are shown (X80)`).
-- [ ] A terminal keeps its newest 2000 command blocks (T4, T8). The marks and
+- [x] A terminal keeps its newest 2000 command blocks (T4, T8). The marks and
       decorations of an older block are disposed when it is dropped, not left
       in the terminal until its rows leave the scrollback
       (`a block dropped past the 2000 kept lets go of its marks (X80)`).
