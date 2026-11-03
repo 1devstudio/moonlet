@@ -45,9 +45,11 @@ Listing (`session.processes`):
       (`a_sessions_processes_are_its_tabs_sessions_and_its_agents_families`,
       `a_sessions_processes_are_listed_by_name_and_stopped`).
 - [x] Each process is named by the file name of its executable as the kernel
-      says, never its arguments; it has its start time, its CPU time and its
-      resident memory where the kernel tells them
-      (`a_child_s_working_directory_and_usage_are_what_the_kernel_says`).
+      says, never its arguments, without the " (deleted)" Linux adds to an
+      executable replaced since it started; it has its start time, its CPU
+      time and its resident memory where the kernel tells them
+      (`a_child_s_working_directory_and_usage_are_what_the_kernel_says`,
+      `an_executable_deleted_since_it_started_is_named_by_its_file`).
 - [x] Leftovers are listed apart: processes whose parent is launchd (init on
       Linux), that are not already the session's, whose working directory is
       the session's worktree or inside it. Each says what it was left to on
@@ -198,7 +200,8 @@ worktree can be signalled.
   `stopping_all_spares_the_tabs_own_processes_and_leftovers`,
   `stopping_by_pid_skips_pids_that_are_not_the_sessions`,
   `stopping_a_pid_listed_with_another_start_leaves_it_alone`,
-  `a_process_still_running_after_its_ending_is_not_reported_ended` and
+  `a_process_still_running_after_its_ending_is_not_reported_ended`,
+  `an_executable_deleted_since_it_started_is_named_by_its_file` and
   `ending_skips_a_pid_whose_start_changed`.
 - Rust, `moonletd/tests/daemon.rs`: `a_sessions_processes_are_listed_by_name_and_stopped`,
   `leftovers_in_a_sessions_worktree_are_listed_apart_and_stopped_only_by_pid`,

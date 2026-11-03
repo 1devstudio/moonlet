@@ -247,6 +247,13 @@ pub fn after_ending(signalled: &[(u32, u64)], start_of: impl Fn(u32) -> Option<u
     out
 }
 
+/// The name a process is shown by, from its executable's file name: Linux
+/// names an executable deleted or replaced since it started "<file>
+/// (deleted)", and the file is what the user knows it by.
+pub fn shown_name(file_name: &str) -> &str {
+    file_name.strip_suffix(" (deleted)").unwrap_or(file_name)
+}
+
 /// Describes each found process and leftover from what the kernel says now.
 pub fn describe(found: &[Found], leftovers: &[Proc]) -> SessionProcesses {
     let one = |p: &Proc, origin: ProcessOrigin, tab: bool| {
@@ -254,6 +261,7 @@ pub fn describe(found: &[Found], leftovers: &[Proc]) -> SessionProcesses {
         SessionProcess {
             pid: p.pid,
             name: crate::process::name(p.pid)
+                .map(|n| shown_name(&n).to_string())
                 .or_else(|| crate::process::kernel_name(p.pid))
                 .unwrap_or_else(|| "?".into()),
             origin,
@@ -567,6 +575,14 @@ mod tests {
             None,
             "the sleep outlived its ending"
         );
+    }
+
+    #[test]
+    fn an_executable_deleted_since_it_started_is_named_by_its_file() {
+        // Linux's /proc/<pid>/exe of a node replaced by an upgrade.
+        assert_eq!(shown_name("node (deleted)"), "node");
+        assert_eq!(shown_name("node"), "node");
+        assert_eq!(shown_name("my (deleted) tool"), "my (deleted) tool");
     }
 
     #[test]
