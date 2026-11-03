@@ -52,6 +52,7 @@ import {
   fuzzyFilter,
   joinDraft,
   BLOCKS_SHOWN,
+  blockKey,
   limitShowing,
   showChats,
   useChatOnScreen,
@@ -1407,7 +1408,7 @@ export function AgentView({
   const agentRowsHere = useMemo(() => agentRows([{ id, st }], agentNow), [id, st, agentNow]);
   const placed = useMemo(() => notesByBlock(blocks, st ? agentNotes(st.items, st.subagents ?? []) : []), [blocks, st]);
   // The last blocks render; "Show earlier" adds more (X81).
-  const { rendered: renderedBlocks, earlier, showEarlier, setLimit } = useShowEarlier(blocks, BLOCKS_SHOWN, id, scroller);
+  const { rendered: renderedBlocks, earlier, showEarlier, setLimit } = useShowEarlier(blocks, { step: BLOCKS_SHOWN, reset: id, scroller, key: blockKey, atEnd: () => stick.current });
   // A jump to an item among the earlier blocks shows them (X81); it is
   // done once the transcript it looks in has loaded.
   const reveal = useChat((s) => (s.reveal?.key === chatKey(host, id) ? s.reveal : null));

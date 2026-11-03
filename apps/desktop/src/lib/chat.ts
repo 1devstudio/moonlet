@@ -539,6 +539,9 @@ export function chatBlocks(items: readonly ChatItem[], view: ToolCallView): Chat
  *  "Show earlier" adds (X81). */
 export const BLOCKS_SHOWN = 200;
 
+/** A block's key: its item's id, or its group's. */
+export const blockKey = (b: ChatBlock) => (b.kind === "item" ? b.item.id : b.id);
+
 /** The blocks to render so that the last one holding an item `isTarget`
  *  picks is among them: `limit`, plus as many steps of BLOCKS_SHOWN as it
  *  takes; `limit` when it is shown already or not there (X81). */

@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUpRight, Check, ChevronLeft, Circle, Cloud, Copy, Cpu, Laptop, LoaderCircle, RotateCw, Server } from "lucide-react";
 import { copyJobOutput, openJobTab, stopJob } from "../lib/actions";
 import { rpc } from "../lib/daemon";
-import { type JobIcon, type JobTone, type OutputLine, chipFromJob, going, jobRowLine, jobStateLine, jobsSummary, dur, LINES_SHOWN, outputCount, outputShown, phaseList, workerLine } from "../lib/jobs";
+import { type JobIcon, type JobTone, type OutputLine, chipFromJob, going, jobRowLine, jobStateLine, jobsSummary, dur, LINES_SHOWN, lineKey, outputCount, outputShown, phaseList, workerLine } from "../lib/jobs";
 import { loadOutput, useJobs } from "../lib/jobsStore";
 import { startupCard, waitingNote, type StartupCard } from "../lib/cloudMachines";
 import { useCloud } from "../lib/cloudStore";
@@ -15,7 +15,7 @@ import { useNow } from "../lib/useNow";
 import { errorToast, useStore } from "../lib/store";
 import { Empty, cx } from "./ui";
 import { ShowEarlier } from "./ShowEarlier";
-import { useShowEarlier } from "../lib/showEarlier";
+import { nearBottom, useShowEarlier } from "../lib/showEarlier";
 
 export const TONE: Record<JobTone, string> = {
   muted: "text-muted",
@@ -179,7 +179,7 @@ function JobDetail({ host, ws, job, now }: { host: string; ws: Session; job: Job
   const count = useJobCount(job.id);
   const [follow, setFollow] = useState(true);
   const box = useFollow(follow, lines?.length ?? 0);
-  const last = useShowEarlier(lines ?? NO_LINES, LINES_SHOWN, job.id, box);
+  const last = useShowEarlier(lines ?? NO_LINES, { step: LINES_SHOWN, reset: job.id, scroller: box, key: lineKey, atEnd: () => follow || nearBottom(box.current) });
   const central = useStore((s) => s.hosts[host]?.label) ?? "this Mac";
   const chip = chipFromJob(job);
   const runHere = () => void rpc(host, M.jobRunHere, { job: job.id }).catch(errorToast);

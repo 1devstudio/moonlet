@@ -5,8 +5,8 @@ import { useEffect, useMemo, useState } from "react";
 import { Copy, Folder, MoreHorizontal, Search } from "lucide-react";
 import { closeJobTab, copyJobOutput, openJobs, stopJob } from "../lib/actions";
 import { hostsApi } from "../lib/daemon";
-import { type OutputFilter, LINES_SHOWN, chipFromJob, jobTabLine, phaseBar, shownLines, workerFacts } from "../lib/jobs";
-import { useShowEarlier } from "../lib/showEarlier";
+import { type OutputFilter, LINES_SHOWN, chipFromJob, lineKey, jobTabLine, phaseBar, shownLines, workerFacts } from "../lib/jobs";
+import { nearBottom, useShowEarlier } from "../lib/showEarlier";
 import { useSessionJob } from "../lib/jobsStore";
 import { errorToast, useStore } from "../lib/store";
 import { useNow } from "../lib/useNow";
@@ -41,7 +41,7 @@ export default function JobView({ host, wsId, job: id }: { host: string; wsId: s
   const filtered = useMemo(() => (lines ? shownLines(lines, filter, find) : []), [lines, filter, find]);
   const box = useFollow(follow, filtered.length);
   // The last lines render; Show earlier adds more (X81).
-  const { rendered, earlier, showEarlier } = useShowEarlier(filtered, LINES_SHOWN, `${id}\n${filter}\n${find}`, box);
+  const { rendered, earlier, showEarlier } = useShowEarlier(filtered, { step: LINES_SHOWN, reset: `${id}\n${filter}\n${find}`, scroller: box, key: lineKey, atEnd: () => follow || nearBottom(box.current) });
   // The tab closes when the job is dropped from the history.
   useEffect(() => {
     if (job === null) closeJobTab(host, wsId, id);

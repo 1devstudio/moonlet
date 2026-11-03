@@ -321,6 +321,9 @@ export function outputCount(out: JobOutput): string {
  *  "Show earlier" adds (X81). */
 export const LINES_SHOWN = 2000;
 
+/** A line's key: its number. */
+export const lineKey = (l: OutputLine) => l.n;
+
 export type OutputFilter = "all" | "stdout" | "stderr";
 
 /** The lines **All / stdout / stderr** and **Find in output** leave. */

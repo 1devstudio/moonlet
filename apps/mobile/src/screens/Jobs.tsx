@@ -4,7 +4,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronLeft, Circle, Cloud, Cpu, Laptop, LoaderCircle, RotateCw, Server } from "lucide-react";
 import { rpc } from "@desktop/lib/daemon";
-import { type JobIcon, type JobTone, chipFromJob, going, dur, jobRowLine, jobStateLine, jobsSummary, LINES_SHOWN, type OutputLine, outputCount, outputShown, phaseList, workerLine } from "@desktop/lib/jobs";
+import { type JobIcon, type JobTone, chipFromJob, going, dur, jobRowLine, jobStateLine, jobsSummary, LINES_SHOWN, lineKey, type OutputLine, outputCount, outputShown, phaseList, workerLine } from "@desktop/lib/jobs";
 import { loadOutput, useJobs } from "@desktop/lib/jobsStore";
 import { M, type Job, type Session } from "@desktop/lib/protocol";
 import { useShowEarlier } from "@desktop/lib/showEarlier";
@@ -93,7 +93,7 @@ function JobDetail({ host, session, job, now, onBack }: { host: string; session:
     if (box.current && follow.current) box.current.scrollTop = box.current.scrollHeight;
   }, [out]);
   // The last lines render; Show earlier adds more, keeping the reader's place (X81).
-  const { rendered, earlier, showEarlier } = useShowEarlier(lines ?? NO_LINES, LINES_SHOWN, job.id, box);
+  const { rendered, earlier, showEarlier } = useShowEarlier(lines ?? NO_LINES, { step: LINES_SHOWN, reset: job.id, scroller: box, key: lineKey, atEnd: () => follow.current });
   const state = jobStateLine(job, now, session.name);
   const footer = jobFooter(job, session.name, hostLabel);
   const chip = chipFromJob(job);
