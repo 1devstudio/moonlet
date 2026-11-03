@@ -54,4 +54,30 @@ describe("confirm modal", () => {
     await expect($(sel.sessionRow(SESSION))).not.toBeExisting({ wait: 15_000 });
     expect(branchExists(branch)).toBe(true);
   });
+
+  it("names what still runs in the session, and archiving stops it (X83)", async () => {
+    const name = "Still running";
+    const project = rpc<{ id: string; name: string }[]>(w, "project.list", {}).find((p) => p.name === PROJECT)!;
+    const s = rpc<{ path: string }>(w, "session.create", { project_id: project.id, name, agent: "none" });
+    // A server left to launchd, working in the session's worktree.
+    const pid = Number(execFileSync("/bin/sh", ["-c", "/bin/sleep 120 >/dev/null 2>&1 & echo $!"], { cwd: s.path, encoding: "utf8" }).trim());
+    const alive = () => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    try {
+      await $(sel.sessionRow(name)).click();
+      await openArchive();
+      await expect($(sel.text(`Archive "${name}"? Its terminals stop and the worktree folder is removed. The branch is kept. 1 process still runs: sleep. Archiving stops it.`))).toBeDisplayed();
+      await $(sel.confirmButton("Archive")).click();
+      await expect($(sel.sessionRow(name))).not.toBeExisting({ wait: 15_000 });
+      expect(alive()).toBe(false);
+    } finally {
+      if (alive()) process.kill(pid, "SIGKILL");
+    }
+  });
 });
