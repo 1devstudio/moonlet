@@ -214,12 +214,12 @@ function placeChat(s: ChatStore, key: string, st: ChatState, withItems: boolean)
 }
 
 /** After a host connects: its chat terminals `ids` already in memory read
- *  again, as they were kept, for events missed meanwhile. The others load
- *  when shown (X81). */
+ *  again, as they were kept, for events missed meanwhile, and those shown
+ *  meanwhile, which could not load. The others load when shown (X81). */
 export async function reloadChats(host: string, ids: readonly number[]) {
   const s = useChat.getState();
-  const inMemory = ids.filter((id) => chatSummary(s, host, id));
-  await Promise.all(inMemory.map((id) => loadChat(host, id).catch(() => {})));
+  const wanted = ids.filter((id) => chatSummary(s, host, id) || keepsItems(chatKey(host, id)));
+  await Promise.all(wanted.map((id) => loadChat(host, id).catch(() => {})));
 }
 
 const loading = new Set<string>();

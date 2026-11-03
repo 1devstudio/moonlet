@@ -3,9 +3,15 @@ import { chatKey, chatSummary, holdChat, loadChat, onChatItem, onChatState, relo
 import { newChatContext } from "./chatContext";
 import type { ChatState, TerminalInfo } from "./protocol";
 
-/** What the daemon's `chat.state` answers, by `host:id`. */
+/** What the daemon's `chat.state` answers, by `host:id`; nothing while its
+ *  host is down. */
 const daemon = vi.hoisted(() => ({}) as Record<string, unknown>);
-vi.mock("./daemon", () => ({ rpc: (host: string, _method: string, params: { id: number }) => Promise.resolve(daemon[`${host}:${params.id}`]) }));
+vi.mock("./daemon", () => ({
+  rpc: (host: string, _method: string, params: { id: number }) => {
+    const st = daemon[`${host}:${params.id}`];
+    return st === undefined ? Promise.reject(new Error(`${host} is not connected`)) : Promise.resolve(st);
+  },
+}));
 
 const chat = (text: string, extra: Partial<ChatState> = {}): ChatState => ({
   items: [{ id: `${text}-1`, kind: "assistant", text, ts: 0 }],
@@ -79,6 +85,15 @@ describe("chats kept in memory (X81)", () => {
     expect(chatSummary(useChat.getState(), "e", 2)?.status).toBe("done");
     expect(texts("e", 2)).toBeUndefined();
     expect(chatSummary(useChat.getState(), "e", 3)).toBeUndefined();
+  });
+
+  it("loads on reconnect a chat shown while its host was down", async () => {
+    const release = holdChat("i", 1);
+    await expect(showChat("i", 1)).rejects.toThrow("i is not connected");
+    daemon["i:1"] = chat("read once the host is back");
+    await reloadChats("i", [1]);
+    expect(texts("i", 1)).toEqual(["read once the host is back"]);
+    release();
   });
 
   it("never drops the items of a chat on screen, however many are on screen", async () => {
