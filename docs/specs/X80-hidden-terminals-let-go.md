@@ -50,6 +50,10 @@ attached again and drawn from the daemon's replay.
       `session.detach` answers keeps the new attach's relay: the late answer
       forgets only the relay it detached, so typing still reaches the terminal
       (`a shared terminal shown again while its detach is on its way is typed into through its new relay (X80)`).
+      One let go of and shown again while its first attach is on its way has
+      that first attach's relay detached once it answers, and keeps the
+      relay of the attach sent when it was shown again
+      (`a shared terminal shown again while its first attach is on its way detaches the first relay only (X80)`).
 - [x] A terminal let go of is attached again when it is shown again, and the
       daemon's replay (S2) draws its screen and scrollback
       (`a terminal let go of attaches again when shown, and the replay draws it (X80)`).
@@ -113,7 +117,8 @@ None: no new input crosses a trust boundary.
 
 - Vitest, `daemon.test.ts`, through `rpc` and `sendInput` to a copy host,
   with the Tauri core faked as its central host:
-  `a shared terminal shown again while its detach is on its way is typed into through its new relay (X80)`.
+  `a shared terminal shown again while its detach is on its way is typed into through its new relay (X80)` and
+  `a shared terminal shown again while its first attach is on its way detaches the first relay only (X80)`.
 - Vitest, `terminals.test.ts`, the pure choice of terminals to let go of:
   `lets go of the least recently shown terminals beyond the limit (X80)` and
   `never lets go of a terminal on screen, even past the limit (X80)`.

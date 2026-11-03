@@ -57,15 +57,15 @@ async function rpcCopy<T>(host: string, method: string, params: unknown): Promis
   // Left while its attach is on its way: let go of once the reply comes.
   if (method === "terminal.detach" && attaching.leave(key)) return true as T;
   if (!route) return true as T;
-  if (method === "terminal.attach") attaching.start(key);
+  const pending = method === "terminal.attach" ? attaching.start(key) : null;
   let out: T;
   try {
     out = await rpc<T>(route.host, route.method, route.params);
   } catch (e) {
-    if (method === "terminal.attach") attaching.done(key);
+    if (pending) attaching.done(key, pending);
     throw e;
   }
-  if (method === "terminal.attach" && terminal !== undefined && attaching.done(key)) {
+  if (pending && terminal !== undefined && attaching.done(key, pending)) {
     const relay = (out as unknown as { info: { id: number } }).info.id;
     void rpc(copy.host, "session.detach", { relay }).catch(() => {});
     return out;

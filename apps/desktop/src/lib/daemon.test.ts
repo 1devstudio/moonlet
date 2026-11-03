@@ -58,4 +58,19 @@ describe("a copy host's terminals (X72)", () => {
     await sendInput(host, 5, "ls\r");
     expect(central.typed).toEqual([{ host: "hub", session: 102, data: "ls\r" }]);
   });
+
+  it("a shared terminal shown again while its first attach is on its way detaches the first relay only (X80)", async () => {
+    const host = copyHostId("hub", "s2");
+    central.nextRelay = 201;
+    central.held.add("session.attach");
+    const first = rpc(host, "terminal.attach", { id: 7, cols: 80, rows: 24 });
+    // Let go of, then shown again, before the first attach answers.
+    await rpc(host, "terminal.detach", { id: 7 });
+    const again = rpc(host, "terminal.attach", { id: 7, cols: 80, rows: 24 });
+    central.release("session.attach");
+    await Promise.all([first, again]);
+    await vi.waitFor(() => expect(central.detached).toEqual([{ relay: 201 }]));
+    await sendInput(host, 7, "ls\r");
+    expect(central.typed).toEqual([{ host: "hub", session: 202, data: "ls\r" }]);
+  });
 });

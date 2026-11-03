@@ -90,25 +90,32 @@ export class EarlyOutput {
 }
 
 /** Attaches on their way to a copy host's terminals (X72): a screen that
- * leaves before the reply comes has its relay let go of when it does. */
+ * leaves before the reply comes has its relay let go of when it does. Each
+ * attach is its own relay, so one sent after the screen left, when it is
+ * shown again, is kept (X80). */
 export class PendingAttaches {
-  private pending = new Map<string, boolean>();
+  private pending = new Map<string, { left: boolean }[]>();
 
-  start(key: string) {
-    this.pending.set(key, false);
+  /** An attach of `key` was sent; pass what this returns to `done`. */
+  start(key: string): { left: boolean } {
+    const attach = { left: false };
+    this.pending.set(key, [...(this.pending.get(key) ?? []), attach]);
+    return attach;
   }
 
-  /** The screen left `key`; true while its attach is still on its way. */
+  /** The screen left `key`; true while an attach of it is on its way. */
   leave(key: string): boolean {
-    if (!this.pending.has(key)) return false;
-    this.pending.set(key, true);
+    const list = this.pending.get(key);
+    if (!list) return false;
+    for (const attach of list) attach.left = true;
     return true;
   }
 
-  /** The attach of `key` answered; true when its screen left meanwhile. */
-  done(key: string): boolean {
-    const left = this.pending.get(key) === true;
-    this.pending.delete(key);
-    return left;
+  /** An attach of `key` answered; true when its screen left meanwhile. */
+  done(key: string, attach: { left: boolean }): boolean {
+    const rest = (this.pending.get(key) ?? []).filter((a) => a !== attach);
+    if (rest.length) this.pending.set(key, rest);
+    else this.pending.delete(key);
+    return attach.left;
   }
 }
