@@ -51,9 +51,28 @@ export function stoppingLine(running: Running | null): Line {
 export function interruptedLine(items: readonly ChatItem[], index: number): Line | null {
   const it = items[index];
   if (it?.kind !== "system" || it.text !== "Interrupted") return null;
-  const before = items.slice(0, index).reverse().find((i) => i.kind !== "thinking");
+  return stopLine(it, items.slice(0, index).reverse().find((i) => i.kind !== "thinking"));
+}
+
+/** The divider for an Interrupted note `it`, after `before`, the last item that is not thinking. */
+function stopLine(it: ChatItem, before: ChatItem | undefined): Line | null {
   if (!before?.tool) return null;
   return { text: "Interrupted by you ·", command: before.tool.summary, tail: `stopped at ${clock(it.ts - before.ts)}` };
+}
+
+/** Every Interrupted divider of a transcript, by the note's id, found in
+ *  one pass (X81): `interruptedLine` for each item. */
+export function interruptedLines(items: readonly ChatItem[]): Map<string, Line> {
+  const lines = new Map<string, Line>();
+  let before: ChatItem | undefined;
+  for (const it of items) {
+    if (it.kind === "system" && it.text === "Interrupted") {
+      const line = stopLine(it, before);
+      if (line) lines.set(it.id, line);
+    }
+    if (it.kind !== "thinking") before = it;
+  }
+  return lines;
 }
 
 /** Under an aside's answer: `3s · $0.0015`. */

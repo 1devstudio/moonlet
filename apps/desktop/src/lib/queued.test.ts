@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type Aside, asideFooter, asideSettled, canAskAside, requeue, userSend, composerPlaceholder, interruptedLine, queuedCount, queuedHeader, queuedLine, sendNowLabel, sendNowParams, sendNowWarning, stoppingLine, unqueued, waitingOn } from "./queued";
+import { type Aside, asideFooter, asideSettled, canAskAside, requeue, userSend, composerPlaceholder, interruptedLine, interruptedLines, queuedCount, queuedHeader, queuedLine, sendNowLabel, sendNowParams, sendNowWarning, stoppingLine, unqueued, waitingOn } from "./queued";
 import type { ChatItem, ChatState, QueuedMessage } from "./protocol";
 
 const T0 = 1_792_150_000_000;
@@ -61,6 +61,20 @@ describe("interruptedLine", () => {
   it("leaves other notes, and a stop while Claude wrote, alone", () => {
     expect(interruptedLine([ask, reply, interrupted], 2)).toBeNull();
     expect(interruptedLine([ask, reply, stopped, { ...interrupted, text: "Stopped" }], 3)).toBeNull();
+  });
+
+  it("marks each Interrupted that stopped a command, across the whole transcript", () => {
+    const thought: ChatItem = { id: "think-1", kind: "thinking", text: "The check is slow.", ts: T0 + 400_000 };
+    const again: ChatItem = { id: "user-2", kind: "user", text: "Run it again.", ts: T0 + 600_000 };
+    const rerun: ChatItem = { ...stopped, id: "toolu_02", ts: T0 + 601_000, tool: { ...stopped.tool!, summary: "pnpm stack:check --fast" } };
+    const second: ChatItem = { ...interrupted, id: "system-2", ts: T0 + 601_000 + 65_000 };
+    const writing: ChatItem = { id: "msg_2:0", kind: "assistant", text: "Both runs stopped.", ts: T0 + 690_000 };
+    const whileWriting: ChatItem = { ...interrupted, id: "system-3", ts: T0 + 700_000 };
+    const lines = interruptedLines([ask, reply, stopped, thought, interrupted, again, rerun, second, writing, whileWriting]);
+    expect(Object.fromEntries(lines)).toEqual({
+      "system-1": { text: "Interrupted by you ·", command: "pnpm stack:check", tail: "stopped at 8:12" },
+      "system-2": { text: "Interrupted by you ·", command: "pnpm stack:check --fast", tail: "stopped at 1:05" },
+    });
   });
 });
 

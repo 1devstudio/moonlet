@@ -82,7 +82,7 @@ import { bashChip, shownCommand } from "../lib/jobs";
 import { useToolJob } from "../lib/jobsStore";
 import { WorkerIcon } from "./JobsPanel";
 import { type AsideAnswer, type ChatItem, type ChatState, M, type PermissionAsk, type QueuedMessage, type TerminalInfo, type ToolCall, type TurnTime } from "../lib/protocol";
-import { type Aside, type Line, type Running, asideFooter, asideSettled, canAskAside, composerPlaceholder, interruptedLine, queuedCount, queuedHeader, requeue, sendNowLabel, sendNowParams, sendNowWarning, unqueued, userSend, waitingOn } from "../lib/queued";
+import { type Aside, type Line, type Running, asideFooter, asideSettled, canAskAside, composerPlaceholder, interruptedLines, queuedCount, queuedHeader, requeue, sendNowLabel, sendNowParams, sendNowWarning, unqueued, userSend, waitingOn } from "../lib/queued";
 import { firstWord, suggest } from "../lib/suggest";
 import { canMentionFiles, fileMention, isAttachShortcut, withMention, withSlashCommand } from "../lib/plusMenu";
 import { type ChatImage, base64, splitAttachments } from "../lib/attachments";
@@ -1417,6 +1417,7 @@ export function AgentView({
   useEffect(() => setLimit(BLOCKS_SHOWN), [id]);
   const { shown: shownBlocks, earlier } = useMemo(() => lastBlocks(blocks, limit), [blocks, limit]);
   const shownIds = useMemo(() => new Set(shownBlocks.flatMap((b) => (b.kind === "item" ? [b.item.id] : b.tools.map((t) => t.id)))), [shownBlocks]);
+  const dividers = useMemo(() => interruptedLines(st?.items ?? []), [st?.items]);
   // The distance from the bottom to keep while earlier blocks are added.
   const keepFromBottom = useRef<number | null>(null);
   const showEarlier = () => {
@@ -1729,7 +1730,7 @@ export function AgentView({
                     const note = toolNote(t);
                     return note ? [<Fragment key={`${t.id}-tool-note`}>{note}</Fragment>] : [];
                   });
-                  const divider = b.kind === "item" && b.item.kind === "system" ? interruptedLine(st.items, st.items.indexOf(b.item)) : null;
+                  const divider = b.kind === "item" ? (dividers.get(b.item.id) ?? null) : null;
                   // The command Send now would stop is ringed while it is pointed at (X49).
                   const shown = divider ? (
                     <InterruptedDivider key={ids[0]} line={divider} />
