@@ -26,6 +26,14 @@ export function limitAfter<T, K>(rows: readonly T[], key: (row: T) => K, before:
  *  end is; true without one. */
 export const nearBottom = (el: HTMLElement | null) => !el || el.scrollHeight - el.scrollTop - el.clientHeight < 40;
 
+/** Where a view scrolls once it rendered, `scrollHeight` tall: as far from
+ *  the bottom as before Show earlier (`showEarlier`, that distance), at the
+ *  end after a `reset` such as a new filter, else where it is (null). */
+export function scrollTopAfter(change: { showEarlier: number | null; reset: boolean }, scrollHeight: number): number | null {
+  if (change.showEarlier !== null) return scrollHeight - change.showEarlier;
+  return change.reset ? scrollHeight : null;
+}
+
 /** What Show earlier says: with a `unit`, how many more it shows. */
 export const showEarlierLabel = (earlier: number, unit?: string) =>
   unit ? `Show earlier (${earlier.toLocaleString("en-US")} more ${earlier === 1 ? unit : `${unit}s`})` : "Show earlier";
@@ -45,22 +53,27 @@ export function useShowEarlier<T, K>(
   const [resetSeen, setResetSeen] = useState(reset);
   const last = rows.length ? key(rows[rows.length - 1]) : undefined;
   const [lastSeen, setLastSeen] = useState(last);
+  // The distance from the bottom to keep while earlier rows are added, and
+  // whether the rows were reset, for the scroll once they are drawn.
+  const keepFromBottom = useRef<number | null>(null);
+  const wasReset = useRef(false);
   // Adjusted while rendering, before the rows that came are drawn.
   if (reset !== resetSeen) {
     setResetSeen(reset);
     setLastSeen(last);
     setLimit(step);
+    wasReset.current = true;
   } else if (last !== lastSeen) {
     setLastSeen(last);
     setLimit(limitAfter(rows, key, { limit, last: lastSeen, atEnd: atEnd() }));
   }
-  // The distance from the bottom to keep while earlier rows are added.
-  const keepFromBottom = useRef<number | null>(null);
   useLayoutEffect(() => {
     const el = scroller.current;
-    if (el && keepFromBottom.current !== null) el.scrollTop = el.scrollHeight - keepFromBottom.current;
+    const top = el && scrollTopAfter({ showEarlier: keepFromBottom.current, reset: wasReset.current }, el.scrollHeight);
+    if (el && top !== null) el.scrollTop = top;
     keepFromBottom.current = null;
-  }, [limit, scroller]);
+    wasReset.current = false;
+  }, [limit, resetSeen, scroller]);
   const { rendered, earlier } = useMemo(() => lastOf(rows, limit), [rows, limit]);
   const showEarlier = () => {
     const el = scroller.current;

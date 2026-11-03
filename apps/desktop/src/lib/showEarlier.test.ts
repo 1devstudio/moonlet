@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { lastOf, limitAfter, showEarlierLabel } from "./showEarlier";
+import { lastOf, limitAfter, scrollTopAfter, showEarlierLabel } from "./showEarlier";
 
 describe("Show earlier (X81)", () => {
   it("says how many lines it adds in a job's view, and nothing more in a chat", () => {
@@ -22,6 +22,14 @@ describe("Show earlier (X81)", () => {
     const trimmed = limitAfter(rows(101, 400), key, { limit: 200, last: 350, atEnd: false });
     expect(trimmed).toBe(250);
     expect(lastOf(rows(101, 400), trimmed).rendered[0]).toBe(151);
+  });
+
+  it("keeps the reader as far from the bottom after Show earlier, and at the end after a filter or Find changed", () => {
+    // 300 px from the bottom of 1,000; Show earlier makes it 4,000 tall.
+    expect(scrollTopAfter({ showEarlier: 300, reset: false }, 4000)).toBe(3700);
+    expect(scrollTopAfter({ showEarlier: null, reset: true }, 4000)).toBe(4000);
+    // Rows that only came leave the scroll to the view.
+    expect(scrollTopAfter({ showEarlier: null, reset: false }, 4000)).toBeNull();
   });
 
   it("follows the end while the reader is there, and as it was when the last row only grew or the rows changed", () => {
