@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Job } from "./protocol";
 import { loadJobs, loadOutput, startJobs, useJobs } from "./jobsStore";
+import { outputShown } from "./jobs";
 
 /** What the daemon answers, by method; a function may throw or wait. */
 const answers = vi.hoisted(() => ({}) as Record<string, (params: unknown) => unknown>);
@@ -92,6 +93,23 @@ describe("the jobs the app keeps (X62)", () => {
     };
     await expect(loadOutput("h3", "gone")).resolves.toBeUndefined();
     expect(useJobs.getState().output.gone).toBeUndefined();
+  });
+
+  it("keeps at most 1 MiB of a job's output, however much it printed", async () => {
+    // 18,000 lines of 100 characters, a newline counted, in 3 pages; then
+    // 100 more lines as they are printed.
+    const page = "x".repeat(99) + "\n";
+    let from = 0;
+    answers["job.output"] = () => ({ chunks: [{ stream: 1, text: page.repeat(6000) }], next: ++from, more: from < 3 });
+    await loadOutput("h5", "long");
+    events.emit({ host: "h5", name: "job.output", data: { job: "long", chunks: [{ stream: 1, text: page.repeat(100) }] } });
+    const out = useJobs.getState().output.long;
+    const lines = outputShown(out);
+    // 1,048,576 characters hold 10,485 whole lines: lines 7,616 to 18,100.
+    expect(lines.length).toBe(10_485);
+    expect(lines[0].n).toBe(7_616);
+    expect(lines.at(-1)?.n).toBe(18_100);
+    expect(out.trimmed).toBe(true);
   });
 
   it("forgets the output of a job dropped past the fifty kept", async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bashChip, chipFromJob, chipFromOutput, jobRowLine, jobStateLine, jobTabLine, jobsSummary, jobsTabCount, outputLines, phaseBar, phaseList, shownCommand, shownLines, workerFacts, workerLine } from "./jobs";
+import { bashChip, chipFromJob, chipFromOutput, jobRowLine, jobStateLine, jobTabLine, jobsSummary, jobsTabCount, outputLines, outputShown, phaseBar, readOutput, phaseList, shownCommand, shownLines, workerFacts, workerLine } from "./jobs";
 import type { Job } from "./protocol";
 
 const job = (extra: Partial<Job> = {}): Job => ({
@@ -170,6 +170,34 @@ describe("a job's output (X62)", () => {
 
   it("reads a colour code cut between two chunks as a colour, not as text", () => {
     expect(outputLines([{ stream: 1, text: "\u001b[3" }, { stream: 1, text: "2mok\u001b[0m\n" }])).toEqual([{ n: 1, stream: 1, text: "ok", tone: null }]);
+  });
+
+  it("keeps the end of a long output, numbered as it was, and says earlier output was trimmed", () => {
+    // 4 + 4 + 6 + 5 characters, a newline counted, past 14 kept: "one" goes.
+    const out = readOutput(undefined, [{ stream: 1, text: "one\ntwo\nthree\nfour" }], 14);
+    expect(outputShown(out)).toEqual([
+      { n: 2, stream: 1, text: "two", tone: null },
+      { n: 3, stream: 1, text: "three", tone: null },
+      { n: 4, stream: 1, text: "four", tone: null },
+    ]);
+    expect(out.trimmed).toBe(true);
+    expect(readOutput(undefined, [{ stream: 1, text: "one\ntwo\n" }], 14).trimmed).toBe(false);
+  });
+
+  it("reads output chunk by chunk as it comes, joining a line and a colour code cut between chunks", () => {
+    const first = readOutput(undefined, [{ stream: 1, text: "\u001b[3" }]);
+    const next = readOutput(first, [
+      { stream: 1, text: "2mok\u001b[0m\nne" },
+      { stream: 1, text: "xt\n" },
+      { stream: 2, text: "(node:4211) Deprecation" },
+    ]);
+    const last = readOutput(next, [{ stream: 2, text: "Warning\n" }, { stream: 1, text: "moonlet: running on studio-mini" }]);
+    expect(outputShown(last)).toEqual([
+      { n: 1, stream: 1, text: "ok", tone: null },
+      { n: 2, stream: 1, text: "next", tone: null },
+      { n: 3, stream: 2, text: "(node:4211) DeprecationWarning", tone: "stderr" },
+      { n: 4, stream: 1, text: "moonlet: running on studio-mini", tone: "moonlet" },
+    ]);
   });
 
   it("filters by stream and by what was typed in Find, keeping line numbers", () => {

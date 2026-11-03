@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUpRight, Check, ChevronLeft, Circle, Cloud, Copy, Cpu, Laptop, LoaderCircle, RotateCw, Server } from "lucide-react";
 import { copyJobOutput, openJobTab, stopJob } from "../lib/actions";
 import { rpc } from "../lib/daemon";
-import { type JobIcon, type JobTone, type OutputLine, chipFromJob, going, jobRowLine, jobStateLine, jobsSummary, dur, outputLines, phaseList, workerLine } from "../lib/jobs";
+import { type JobIcon, type JobTone, type OutputLine, chipFromJob, going, jobRowLine, jobStateLine, jobsSummary, dur, outputShown, phaseList, workerLine } from "../lib/jobs";
 import { loadOutput, useJobs } from "../lib/jobsStore";
 import { startupCard, waitingNote, type StartupCard } from "../lib/cloudMachines";
 import { useCloud } from "../lib/cloudStore";
@@ -39,13 +39,19 @@ export function JobDot({ job }: { job: Job }) {
   return <span aria-hidden="true" className={cx("h-[7px] w-[7px] shrink-0 rounded-full", tone, going(job) && "animate-pulse")} />;
 }
 
-/** The job's stored output, then what it prints, as lines. */
+/** The job's stored output, then what it prints, as lines: its last part (X81). */
 export function useJobLines(host: string, job: string): OutputLine[] | null {
-  const chunks = useJobs((s) => s.output[job]);
+  const out = useJobs((s) => s.output[job]);
   useEffect(() => {
     void loadOutput(host, job).catch(errorToast);
   }, [host, job]);
-  return useMemo(() => (chunks ? outputLines(chunks) : null), [chunks]);
+  return useMemo(() => (out ? outputShown(out) : null), [out]);
+}
+
+/** Above a job's output once its start was dropped (X81). */
+export function TrimmedNote({ job }: { job: string }) {
+  const trimmed = useJobs((s) => !!s.output[job]?.trimmed);
+  return trimmed ? <div className="select-none pb-1 text-faint">Earlier output trimmed</div> : null;
 }
 
 export const LINE_TONE: Record<NonNullable<OutputLine["tone"]>, string> = { moonlet: "text-accent", warn: "text-blocked", stderr: "text-blocked" };
@@ -217,6 +223,7 @@ function JobDetail({ host, ws, job, now }: { host: string; ws: Session; job: Job
           </button>
         </div>
         <div ref={box} data-job-output className="selectable mt-2 min-h-[160px] flex-1 overflow-y-auto rounded-lg border border-border bg-panel px-3 py-2 font-mono ui-text-12 leading-[1.55]">
+          <TrimmedNote job={job.id} />
           {lines?.map((l) => (
             <div key={l.n} className={cx("whitespace-pre-wrap break-all", l.tone ? LINE_TONE[l.tone] : "text-fg")}>
               {l.text || " "}

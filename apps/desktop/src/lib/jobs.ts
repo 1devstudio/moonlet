@@ -216,38 +216,75 @@ const ANSI = /\u001b\[[0-?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b
 const lineTone = (stream: 1 | 2, text: string): OutputLine["tone"] =>
   text.startsWith("moonlet: ") ? (text.includes(" went away") ? "warn" : "moonlet") : stream === 2 ? "stderr" : null;
 
+/** How much of a job's output the app keeps, in characters with each
+ *  newline counted: the last 1 MiB (X81). */
+export const OUTPUT_KEPT = 1024 * 1024;
+
+/** A job's output read so far (X81), kept to its last `OUTPUT_KEPT`. */
+export interface JobOutput {
+  /** The ended lines kept. */
+  lines: OutputLine[];
+  /** The line not ended yet, as it came: a colour code may be cut in it. */
+  raw: string;
+  stream: 1 | 2 | null;
+  /** Lines ended so far, the dropped ones too: the next line's number less one. */
+  ended: number;
+  /** Characters kept, a newline counted for each ended line. */
+  size: number;
+  /** Whether earlier output was dropped. */
+  trimmed: boolean;
+}
+
+const lineOf = (n: number, stream: 1 | 2, raw: string): OutputLine => {
+  const text = raw.replace(ANSI, "");
+  return { n, stream, text, tone: lineTone(stream, text) };
+};
+
+/**
+ * `out` with `chunks` read after it: only the new chunks are parsed. A line
+ * ends at a newline or where the other stream takes over; a line cut between
+ * chunks of one stream, or a colour code in it, joins first. Whole lines are
+ * dropped from the start past `max` characters.
+ */
+export function readOutput(out: JobOutput | undefined, chunks: readonly JobChunk[], max = OUTPUT_KEPT): JobOutput {
+  const added: OutputLine[] = [];
+  let { raw, stream, ended, size, trimmed } = out ?? { raw: "", stream: null, ended: 0, size: 0, trimmed: false };
+  size -= raw.length;
+  const end = (line: string) => {
+    added.push(lineOf(++ended, stream!, line));
+    size += added[added.length - 1].text.length + 1;
+  };
+  for (const c of chunks) {
+    if (stream !== c.stream) {
+      // The other stream's open line ends here, unless only escapes are in it.
+      if (stream && raw.replace(ANSI, "")) end(raw);
+      raw = "";
+      stream = c.stream;
+    }
+    const parts = (raw + c.text).split("\n");
+    for (let i = 0; i < parts.length - 1; i++) end(parts[i]);
+    raw = parts[parts.length - 1];
+  }
+  let lines = added.length ? (out?.lines ?? []).concat(added) : (out?.lines ?? []);
+  if (size + raw.length > max) {
+    let drop = 0;
+    while (drop < lines.length && size + raw.length > max) size -= lines[drop++].text.length + 1;
+    lines = lines.slice(drop);
+    if (raw.length > max) raw = raw.slice(-max);
+    trimmed = true;
+  }
+  return { lines, raw, stream, ended, size: size + raw.length, trimmed };
+}
+
+/** The lines a job's output shows: the ended ones, then the one not ended yet. */
+export function outputShown(out: JobOutput): OutputLine[] {
+  const open = out.stream && out.raw.replace(ANSI, "") ? lineOf(out.ended + 1, out.stream, out.raw) : null;
+  return open ? [...out.lines, open] : out.lines;
+}
+
 /** A job's output as lines: a line ends at a newline or where the other stream takes over. */
 export function outputLines(chunks: JobChunk[]): OutputLine[] {
-  const lines: OutputLine[] = [];
-  // The line not ended yet.
-  let stream: 1 | 2 | null = null;
-  let text = "";
-  const end = () => {
-    if (stream) lines.push({ n: lines.length + 1, stream, text, tone: lineTone(stream, text) });
-    stream = null;
-    text = "";
-  };
-  // Chunks of one stream in a row are joined first: a colour code or a
-  // character can be cut between them.
-  const joined: JobChunk[] = [];
-  for (const c of chunks) {
-    const last = joined[joined.length - 1];
-    if (last?.stream === c.stream) last.text += c.text;
-    else joined.push({ ...c });
-  }
-  for (const c of joined) {
-    if (stream && stream !== c.stream) end();
-    const parts = c.text.replace(ANSI, "").split("\n");
-    for (let i = 0; i < parts.length; i++) {
-      if (i > 0) end();
-      if (i < parts.length - 1 || parts[i]) {
-        stream = c.stream;
-        text += parts[i];
-      }
-    }
-  }
-  end();
-  return lines;
+  return outputShown(readOutput(undefined, chunks, Infinity));
 }
 
 export type OutputFilter = "all" | "stdout" | "stderr";

@@ -9,7 +9,7 @@ import { type OutputFilter, chipFromJob, jobTabLine, phaseBar, shownLines, worke
 import { useSessionJob } from "../lib/jobsStore";
 import { errorToast, useStore } from "../lib/store";
 import { useNow } from "../lib/useNow";
-import { JobDot, LINE_TONE, TONE, WorkerIcon, copyText, going, useFollow, useJobLines } from "./JobsPanel";
+import { JobDot, LINE_TONE, TONE, TrimmedNote, WorkerIcon, copyText, going, useFollow, useJobLines } from "./JobsPanel";
 import { cx } from "./ui";
 
 const BAR_TONE = { done: "bg-done", accent: "bg-accent", blocked: "bg-blocked" };
@@ -123,6 +123,7 @@ export default function JobView({ host, wsId, job: id }: { host: string; wsId: s
             </label>
           </div>
           <div ref={box} data-job-output className="selectable min-h-0 flex-1 overflow-y-auto px-7 py-3 font-mono ui-text-12.5 leading-[1.6]">
+            <TrimmedNote job={id} />
             {shown.map((l) => (
               <div key={l.n} className="flex gap-4">
                 <span className="w-10 shrink-0 select-none text-right tabular-nums text-faint">{l.n}</span>

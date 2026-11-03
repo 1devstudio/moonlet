@@ -4,7 +4,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronLeft, Circle, Cloud, Cpu, Laptop, LoaderCircle, RotateCw, Server } from "lucide-react";
 import { rpc } from "@desktop/lib/daemon";
-import { type JobIcon, type JobTone, chipFromJob, going, dur, jobRowLine, jobStateLine, jobsSummary, outputLines, phaseList, workerLine } from "@desktop/lib/jobs";
+import { type JobIcon, type JobTone, chipFromJob, going, dur, jobRowLine, jobStateLine, jobsSummary, outputShown, phaseList, workerLine } from "@desktop/lib/jobs";
 import { loadOutput, useJobs } from "@desktop/lib/jobsStore";
 import { M, type Job, type Session } from "@desktop/lib/protocol";
 import { clock } from "@desktop/lib/subagents";
@@ -76,18 +76,18 @@ const PHASE_ICON = {
 
 function JobDetail({ host, session, job, now, onBack }: { host: string; session: Session; job: Job; now: number; onBack: () => void }) {
   const hostLabel = useApp((s) => s.hosts[host]?.label ?? host);
-  const chunks = useJobs((s) => s.output[job.id]);
+  // Its last part, read as lines as it comes (X81).
+  const out = useJobs((s) => s.output[job.id]);
   useEffect(() => {
     void loadOutput(host, job.id).catch(fail);
   }, [host, job.id]);
-  const lines = useMemo(() => (chunks ? outputLines(chunks) : null), [chunks]);
+  const lines = useMemo(() => (out ? outputShown(out) : null), [out]);
   const box = useRef<HTMLDivElement>(null);
   // Follows new output, also a line that grows, while the reader is at the end.
   const follow = useRef(true);
-  const size = chunks?.reduce((n, c) => n + c.text.length, 0) ?? 0;
   useLayoutEffect(() => {
     if (box.current && follow.current) box.current.scrollTop = box.current.scrollHeight;
-  }, [size]);
+  }, [out]);
   const state = jobStateLine(job, now, session.name);
   const footer = jobFooter(job, session.name, hostLabel);
   const chip = chipFromJob(job);
