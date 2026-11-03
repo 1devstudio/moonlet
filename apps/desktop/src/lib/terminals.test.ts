@@ -97,4 +97,17 @@ describe("live terminals (X80)", () => {
     expect(findEntry("c", 1)).toBe(split);
     expect(detached("c")).toEqual([{ id: 2 }, { id: 3 }]);
   });
+
+  it("a block dropped past the 2000 kept lets go of its marks (X80)", async () => {
+    const entry = show("d", 1);
+    const write = (data: string) => new Promise<void>((done) => entry.term.write(data, done));
+    // A finished command, with its prompt, output and end marks (OSC 133).
+    const block = "\x1b]133;A\x07$ make\r\n\x1b]133;C\x07built\r\n\x1b]133;D;0\x07";
+    await write(block.repeat(2000));
+    const oldest = entry.blocks[0];
+    await write(block);
+    expect(entry.blocks.length).toBe(2000);
+    expect([oldest.prompt.isDisposed, oldest.output?.isDisposed, oldest.end?.isDisposed]).toEqual([true, true, true]);
+    expect(entry.term.markers.length).toBe(6000);
+  });
 });

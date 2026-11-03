@@ -487,7 +487,15 @@ export class TermEntry {
     switch (mark) {
       case "A":
         this.blocks.push({ prompt: marker });
-        if (this.blocks.length > 2000) this.blocks.shift();
+        // The oldest block goes with its marks and the decorations on them,
+        // not when its rows leave the scrollback (X80).
+        if (this.blocks.length > 2000) {
+          const old = this.blocks.shift()!;
+          if (this.selected === old) this.select(null);
+          if (this.hovered === old) this.hover(null);
+          old.header?.dispose();
+          for (const m of [old.prompt, old.output, old.end, old.headerAt]) m?.dispose();
+        }
         break;
       case "B":
         break;
