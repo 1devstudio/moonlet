@@ -42,6 +42,15 @@ describe("motion (X82)", () => {
     expect(getComputedStyle(tabWithSpinner(false)).animationPlayState).not.toBe("paused");
   });
 
+  it("runs an endless animation once when the system asks for reduced motion", () => {
+    // jsdom matches no media query: apply the reduced-motion rules as WebKit would.
+    const reduced = [...page().sheet!.cssRules]
+      .filter((r): r is CSSMediaRule => r.type === 4 && (r as CSSMediaRule).media.mediaText === "(prefers-reduced-motion: reduce)")
+      .flatMap((r) => [...r.cssRules].map((inner) => inner.cssText));
+    page(reduced.join("\n"));
+    expect(getComputedStyle(tabWithSpinner(false)).animationIterationCount).toBe("1");
+  });
+
   it("animates only opacity and transform in every endless animation", () => {
     const sheet = page(styles("moonlet.css")).sheet!;
     const rules = [...sheet.cssRules];

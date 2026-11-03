@@ -11,3 +11,15 @@
 [data-quiet] *::after {
   animation-play-state: paused !important;
 }
+
+/* With Reduce motion on, nothing repeats: each animation runs once. A spinner
+   turns once and stops; short entrances and flashes are unchanged. */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-iteration-count: 1 !important;
+  }
+  *::before,
+  *::after {
+    animation-iteration-count: 1 !important;
+  }
+}
