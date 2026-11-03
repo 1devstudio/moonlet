@@ -112,25 +112,38 @@ impl Doomed {
     /// whether any of them still runs.
     fn signal(&mut self, signal: impl Into<Option<nix::sys::signal::Signal>>) -> bool {
         let signal = signal.into();
-        let group = self.group.is_some_and(|g| nix::sys::signal::killpg(g, signal).is_ok());
+        // A group found empty is gone for good: its id may be a new group's next.
+        let group = match self.group {
+            Some(g) if nix::sys::signal::killpg(g, signal).is_ok() => true,
+            _ => {
+                self.group = None;
+                false
+            }
+        };
         let family = self.family.signal(signal);
         group || family
+    }
+
+    /// Whether any of it still runs.
+    fn running(&mut self) -> bool {
+        self.signal(None)
+    }
+
+    /// Waits up to `limit` for all of it to be gone.
+    async fn gone_within(&mut self, limit: Duration) {
+        let end = Instant::now() + limit;
+        while self.running() && Instant::now() < end {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
 
     /// SIGTERM, then SIGKILL to whatever still runs after [`TERM_GRACE`];
     /// returns once all of it is gone, or a second after the SIGKILL.
     async fn end(mut self) {
-        let start = Instant::now();
         self.signal(nix::sys::signal::Signal::SIGTERM);
-        while self.signal(None) && start.elapsed() < TERM_GRACE {
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-        if !self.signal(nix::sys::signal::Signal::SIGKILL) {
-            return;
-        }
-        let killed = Instant::now();
-        while self.signal(None) && killed.elapsed() < Duration::from_secs(1) {
-            tokio::time::sleep(Duration::from_millis(50)).await;
+        self.gone_within(TERM_GRACE).await;
+        if self.signal(nix::sys::signal::Signal::SIGKILL) {
+            self.gone_within(Duration::from_secs(1)).await;
         }
     }
 }
@@ -146,6 +159,8 @@ pub struct ChatManager {
     held: Mutex<Option<Vec<TerminalId>>>,
     /// Whether the task that notes each agent's processes runs (X79).
     watching: std::sync::atomic::AtomicBool,
+    /// Stopped agents still being ended, for `shutdown` to wait for (X79).
+    ending: Mutex<Vec<tokio::task::JoinHandle<()>>>,
 }
 
 /// An added directory as the agent gets it: absolute and existing, so it
@@ -215,7 +230,7 @@ fn answers_text(ask: &PermissionAsk, answers: &BTreeMap<String, String>) -> Stri
 
 impl ChatManager {
     pub fn new(terms: Arc<TerminalManager>, dir: PathBuf) -> Arc<Self> {
-        let mgr = Arc::new_cyclic(|me| Self { terms: terms.clone(), chats: Mutex::new(HashMap::new()), dir, me: me.clone(), session_env: std::sync::OnceLock::new(), held: Mutex::new(None), watching: Default::default() });
+        let mgr = Arc::new_cyclic(|me| Self { terms: terms.clone(), chats: Mutex::new(HashMap::new()), dir, me: me.clone(), session_env: std::sync::OnceLock::new(), held: Mutex::new(None), watching: Default::default(), ending: Mutex::new(Vec::new()) });
         let weak = Arc::downgrade(&mgr);
         terms.set_chat_stop(Arc::new(move |id, remove| {
             if let Some(m) = weak.upgrade() {
@@ -364,19 +379,17 @@ impl ChatManager {
         if inner.restart || inner.stdin.is_none() {
             // A restart for new settings keeps what the agent left running (a
             // dev server it started): it ends with the new agent instead (X79).
-            let kept = Self::doom(inner).map(|mut doomed| {
-                let family = std::mem::take(&mut doomed.family);
-                tokio::spawn(doomed.end());
-                family
-            });
+            // Handed over first, so a failed start keeps them with the chat.
+            if let Some(mut doomed) = Self::doom(inner, &crate::process::table()) {
+                let left_running = std::mem::take(&mut doomed.family);
+                self.end_later(doomed);
+                inner.family.adopt(left_running);
+            }
             self.settle(chat, inner, "Stopped to apply new settings");
             inner.restart = false;
             if let Err(e) = self.spawn(chat, inner) {
                 self.fail(chat, inner, &format!("{e:#}"));
                 return Err(e);
-            }
-            if let Some(family) = kept {
-                inner.family.adopt(family);
             }
         }
         let Inner { adapter, state, .. } = &mut *inner;
@@ -637,8 +650,14 @@ impl ChatManager {
     pub async fn shutdown(&self) {
         self.save_all();
         let chats: Vec<_> = self.chats.lock().unwrap().values().cloned().collect();
-        let doomed: Vec<_> = chats.iter().filter_map(|c| Self::doom(&mut c.inner.lock().unwrap())).collect();
-        let ending: Vec<_> = doomed.into_iter().map(|d| tokio::spawn(d.end())).collect();
+        let table = crate::process::table();
+        for c in chats {
+            if let Some(doomed) = Self::doom(&mut c.inner.lock().unwrap(), &table) {
+                self.end_later(doomed);
+            }
+        }
+        // Agents stopped or exited a moment ago are still being ended too.
+        let ending = std::mem::take(&mut *self.ending.lock().unwrap());
         for e in ending {
             let _ = e.await;
         }
@@ -750,28 +769,36 @@ impl ChatManager {
     }
 
     fn kill_process(&self, inner: &mut Inner) {
-        if let Some(doomed) = Self::doom(inner) {
-            tokio::spawn(doomed.end());
+        if let Some(doomed) = Self::doom(inner, &crate::process::table()) {
+            self.end_later(doomed);
         }
+    }
+
+    /// Ends `doomed` in the background; `shutdown` waits for it.
+    fn end_later(&self, doomed: Doomed) {
+        let mut ending = self.ending.lock().unwrap();
+        ending.retain(|e| !e.is_finished());
+        ending.push(tokio::spawn(doomed.end()));
     }
 
     /// Detaches the agent process from `inner`, with everything it started,
     /// including processes in a group of their own (X79), for the caller to
     /// end with [`Doomed::end`].
-    fn doom(inner: &mut Inner) -> Option<Doomed> {
+    fn doom(inner: &mut Inner, table: &[crate::process::Proc]) -> Option<Doomed> {
         inner.generation += 1;
         inner.stdin = None;
         inner.adapter = None;
         let pid = inner.pid.take()?;
         let mut family = std::mem::take(&mut inner.family);
         // Children started since the last look count too.
-        family.note(&crate::process::table(), pid);
+        family.note(table, pid);
         Some(Doomed { group: Some(nix::unistd::Pid::from_raw(pid as i32)), family })
     }
 
     /// Notes, every 2 s while any agent runs, the processes each one started:
-    /// once an agent exits they belong to launchd, and nothing links them to
-    /// it any more (X79). One look at the process table serves every agent.
+    /// once an agent exits they belong to launchd (init on Linux), and nothing
+    /// links them to it any more (X79). One look at the process table, off the
+    /// runtime's threads, serves every agent.
     fn watch_families(&self) {
         use std::sync::atomic::Ordering;
         if self.watching.swap(true, Ordering::SeqCst) {
@@ -786,7 +813,7 @@ impl ChatManager {
                 if !chats.iter().any(|c| c.inner.lock().unwrap().pid.is_some()) {
                     continue;
                 }
-                let table = crate::process::table();
+                let Ok(table) = tokio::task::spawn_blocking(crate::process::table).await else { continue };
                 for c in chats {
                     let mut inner = c.inner.lock().unwrap();
                     if let Some(pid) = inner.pid {
@@ -923,7 +950,7 @@ impl ChatManager {
         inner.generation += 1;
         let generation = inner.generation;
         inner.pid = child.id();
-        inner.family = Default::default();
+        let agent = inner.pid;
         self.watch_families();
         if let Some(held) = self.held.lock().unwrap().as_mut()
             && let Some(pid) = inner.pid.and_then(|p| i32::try_from(p).ok())
@@ -965,7 +992,7 @@ impl ChatManager {
         tokio::spawn(async move {
             let mut lines = BufReader::with_capacity(1 << 16, stdout).lines();
             // Whether to keep reading: the manager and this agent are still current.
-            let take = |line: String| -> bool {
+            let keep_reading = |line: String| -> bool {
                 let Some(mgr) = me.upgrade() else { return false };
                 let mut inner = c.inner.lock().unwrap();
                 if inner.generation != generation {
@@ -977,17 +1004,43 @@ impl ChatManager {
                 mgr.apply(&c, &mut inner, outs);
                 true
             };
+            // Once the agent is reaped its pid is free: it no longer counts as
+            // running, and what it left running ends with it (X79).
+            let reaped = || {
+                let Some(mgr) = me.upgrade() else { return };
+                let mut inner = c.inner.lock().unwrap();
+                if inner.generation != generation {
+                    return;
+                }
+                inner.pid = None;
+                let family = std::mem::take(&mut inner.family);
+                // Its process group keeps the agent's id while members remain.
+                let group = agent.map(|pid| nix::unistd::Pid::from_raw(pid as i32));
+                mgr.end_later(Doomed { group, family });
+            };
             let status = loop {
                 tokio::select! {
                     line = lines.next_line() => match line {
-                        Ok(Some(line)) => if !take(line) { return },
-                        _ => break child.wait().await.ok(),
+                        Ok(Some(line)) => if !keep_reading(line) {
+                            // Stopped by the daemon, which ends it: reap it.
+                            let _ = child.wait().await;
+                            return;
+                        },
+                        _ => {
+                            let status = child.wait().await.ok();
+                            reaped();
+                            break status;
+                        }
                     },
                     // A process the agent left running may hold its stdout
                     // open, so its end never comes: the exit counts (X79).
                     status = child.wait() => {
-                        while let Ok(Ok(Some(line))) = tokio::time::timeout(Duration::from_millis(200), lines.next_line()).await {
-                            if !take(line) {
+                        reaped();
+                        // What the agent wrote before it exited, read for at
+                        // most half a second, however much that process writes.
+                        let deadline = tokio::time::Instant::now() + Duration::from_millis(500);
+                        while let Ok(Ok(Some(line))) = tokio::time::timeout_at(deadline, lines.next_line()).await {
+                            if !keep_reading(line) {
                                 return;
                             }
                         }
@@ -1002,10 +1055,6 @@ impl ChatManager {
             }
             inner.stdin = None;
             inner.adapter = None;
-            inner.pid = None;
-            // What the agent left running ends with it (X79).
-            let family = std::mem::take(&mut inner.family);
-            tokio::spawn(Doomed { group: None, family }.end());
             // Subagents die with the agent process (X42).
             if super::stop_subagents(&mut inner.state) {
                 mgr.apply(&c, &mut inner, vec![Out::State]);
@@ -1135,6 +1184,10 @@ while IFS= read -r line; do
       # A background command in a process group of its own that ignores
       # SIGHUP and SIGTERM, like a dev server a Bash tool left running (X79).
       set -m; (trap '' HUP TERM; exec sleep 60) & echo $! > server.pid; set +m
+      echo '{"type":"result","subtype":"success","is_error":false,"usage":{}}' ;;
+    *'start a chatty server'*)
+      # As above, but it keeps writing to the agent's output (X79).
+      set -m; (trap '' HUP TERM; while :; do echo noise; sleep 0.05; done) & echo $! > server.pid; set +m
       echo '{"type":"result","subtype":"success","is_error":false,"usage":{}}' ;;
     *'"send_now":true'*)
       uuid=$(printf '%s' "$line" | sed 's/.*"message_uuid":"\([^"]*\)".*/\1/')
@@ -1859,9 +1912,14 @@ done
     /// A chat whose agent left a server running in a process group of its
     /// own, and that server's pid (X79).
     async fn agent_with_a_server(chats: &ChatManager, cwd: &Path) -> (TerminalId, nix::unistd::Pid) {
+        agent_with(chats, cwd, "start a server").await
+    }
+
+    /// [`agent_with_a_server`], the agent asked with `ask`.
+    async fn agent_with(chats: &ChatManager, cwd: &Path, ask: &str) -> (TerminalId, nix::unistd::Pid) {
         let id = chats.create(ChatCreate { cwd: cwd.display().to_string(), agent: "claude".into(), ..Default::default() }).unwrap().id;
         wait_for(chats, id, |s| s.agent_session.is_some()).await;
-        chats.send(id, "start a server", &[]).unwrap();
+        chats.send(id, ask, &[]).unwrap();
         wait_for(chats, id, |s| s.status == "done").await;
         let pid = std::fs::read_to_string(cwd.join("server.pid")).unwrap().trim().parse().unwrap();
         (id, nix::unistd::Pid::from_raw(pid))
@@ -1912,6 +1970,25 @@ done
         // It still belongs to the chat, and ends with it.
         terms.kill(id, false).unwrap();
         assert!(gone_within(server, 8).await, "the server outlived the restarted agent's chat");
+    }
+
+    #[tokio::test]
+    async fn an_agent_that_exits_leaves_nothing_running_though_its_server_keeps_writing() {
+        let (dir, _terms, chats) = setup().await;
+        let (id, server) = agent_with(&chats, dir.path(), "start a chatty server").await;
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        chats.send(id, "crash now", &[]).unwrap();
+        assert!(gone_within(server, 8).await, "the agent's server outlived the agent");
+    }
+
+    #[tokio::test]
+    async fn the_daemon_stops_only_once_a_just_stopped_agents_server_is_gone() {
+        let (dir, terms, chats) = setup().await;
+        let (id, server) = agent_with_a_server(&chats, dir.path()).await;
+        // Stopped a moment before the daemon stops: its SIGKILL is still to come.
+        terms.kill(id, false).unwrap();
+        chats.shutdown().await;
+        assert!(gone_within(server, 1).await, "the stopped agent's server outlived the daemon");
     }
 
     #[tokio::test]

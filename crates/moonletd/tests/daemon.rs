@@ -5098,3 +5098,62 @@ async fn a_file_written_in_a_session_design_is_announced_with_its_session() {
     let changed = next_change_of(&mut listener, "comments.json").await;
     assert_eq!((&changed["design"], &changed["session"]), (&serde_json::json!("settings-page"), &serde_json::json!(session.id)));
 }
+
+/// A fake `claude` whose agent leaves a server running, in a process group of
+/// its own and ignoring SIGHUP and SIGTERM, like a dev server a Bash tool
+/// started in the background; it writes the server's pid to `server.pid`.
+const FAKE_CLAUDE_WITH_SERVER: &str = r#"#!/bin/sh
+while IFS= read -r line; do
+  case "$line" in
+    *'"subtype":"initialize"'*) echo '{"type":"system","subtype":"init","session_id":"s1","model":"fake"}' ;;
+    *'start a server'*)
+      set -m; (trap '' HUP TERM; exec sleep 60) & echo $! > server.pid.new; mv server.pid.new server.pid; set +m
+      echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}' ;;
+  esac
+done
+"#;
+
+/// A chat in `<home>/work` whose agent left a server running; the server's pid.
+async fn agent_with_a_server(d: &HomeDaemon) -> nix::unistd::Pid {
+    let cwd = d.home.path().join("work");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let mut c = d.client().await;
+    let chat: TerminalInfo = c
+        .request(methods::TERMINAL_CREATE, serde_json::json!({ "cwd": cwd, "kind": "agent", "agent": "claude", "chat": true }))
+        .await
+        .unwrap();
+    let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": chat.id, "text": "start a server"})).await.unwrap();
+    let pid_file = cwd.join("server.pid");
+    for _ in 0..100 {
+        if let Some(pid) = std::fs::read_to_string(&pid_file).ok().and_then(|s| s.trim().parse::<i32>().ok()) {
+            return nix::unistd::Pid::from_raw(pid);
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("the agent never started its server");
+}
+
+/// Waits up to `secs` for process `pid` to be gone; SIGKILLs it otherwise.
+async fn gone_within(pid: nix::unistd::Pid, secs: u64) -> bool {
+    for _ in 0..secs * 10 {
+        if nix::sys::signal::kill(pid, None).is_err() {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGKILL);
+    false
+}
+
+/// X79: a daemon stopped with SIGTERM (as launchd stops it) exits only once
+/// what its agents left running is gone.
+#[tokio::test]
+async fn a_daemon_stopped_with_sigterm_leaves_nothing_its_agents_started() {
+    let mut d = fake_claude_daemon(FAKE_CLAUDE_WITH_SERVER).await;
+    let server = agent_with_a_server(&d).await;
+    let daemon = nix::unistd::Pid::from_raw(d.child.id() as i32);
+    nix::sys::signal::kill(daemon, nix::sys::signal::Signal::SIGTERM).unwrap();
+    let _ = d.child.wait();
+    // Gone by the time the daemon exited, but for launchd reaping it.
+    assert!(gone_within(server, 1).await, "the agent's server outlived the daemon");
+}

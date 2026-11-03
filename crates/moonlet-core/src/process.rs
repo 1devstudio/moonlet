@@ -134,14 +134,31 @@ pub struct Proc {
 
 /// Every process this one may see, with its parent and start time (X79).
 pub fn table() -> Vec<Proc> {
-    crate::pty::all_pids()
-        .into_iter()
-        .filter(|&pid| pid > 0)
-        .filter_map(|pid| {
-            let pid = pid as u32;
-            Some(Proc { pid, ppid: parent(pid)?, start: crate::pty::process_start(pid)? })
-        })
-        .collect()
+    crate::pty::all_pids().into_iter().filter_map(|pid| u32::try_from(pid).ok().filter(|&p| p > 0)).filter_map(proc_of).collect()
+}
+
+/// Process `pid`'s parent and start time, read in one go.
+fn proc_of(pid: u32) -> Option<Proc> {
+    #[cfg(target_os = "macos")]
+    {
+        // SAFETY: proc_pidinfo writes at most `size` bytes into `info`.
+        let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+        let size = std::mem::size_of::<libc::proc_bsdinfo>() as i32;
+        let n = unsafe { libc::proc_pidinfo(pid as i32, libc::PROC_PIDTBSDINFO, 0, (&mut info as *mut libc::proc_bsdinfo).cast(), size) };
+        // The same start as `pty::process_start`: microseconds since the epoch.
+        (n == size).then(|| Proc { pid, ppid: info.pbi_ppid, start: info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec })
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        // Counted after the command name, which may hold spaces: the parent
+        // is the second field there, the start time (as `pty::process_start`)
+        // the twentieth.
+        let mut fields = stat[stat.rfind(')')? + 2..].split(' ');
+        let ppid = fields.nth(1)?.parse().ok()?;
+        let start = fields.nth(17)?.parse().ok()?;
+        Some(Proc { pid, ppid, start })
+    }
 }
 
 /// The processes in `table` that descend from `root`: its children, theirs,
@@ -161,7 +178,8 @@ pub fn descendants(table: &[Proc], root: u32) -> Vec<Proc> {
 }
 
 /// The processes an agent started, noted while the agent still runs: once it
-/// exits, they belong to launchd and nothing links them to it any more (X79).
+/// exits, they belong to launchd (init on Linux) and nothing links them to it
+/// any more (X79).
 #[derive(Debug, Default)]
 pub struct Family {
     known: std::collections::HashMap<u32, u64>,
