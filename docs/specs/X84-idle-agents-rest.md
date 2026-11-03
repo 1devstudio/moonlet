@@ -67,8 +67,9 @@ None.
 ## Data and config
 
 The timeout is 24 hours. Tests set it in milliseconds with
-`MOONLET_TEST_AGENT_REST_MS`, read by the daemon once at start. Nothing is
-persisted: after a daemon restart no agent runs until the next message.
+`MOONLET_TEST_AGENT_REST_MS`, read by the daemon once at start
+(`a_daemon_rests_an_idle_chat_agent_after_the_time_it_was_given`). Nothing
+is persisted: after a daemon restart no agent runs until the next message.
 
 ## Security considerations
 
@@ -95,6 +96,9 @@ and start time noted for them (X79).
   `a_resting_agents_server_keeps_running_and_ends_when_the_chat_stops`,
   `a_resting_agents_server_ends_with_the_agent_that_resumes` and
   `what_a_resting_agent_left_stays_recorded`.
+- Rust, `moonletd/tests/daemon.rs`, a daemon started with
+  `MOONLET_TEST_AGENT_REST_MS`:
+  `a_daemon_rests_an_idle_chat_agent_after_the_time_it_was_given`.
 
 ## Open questions
 

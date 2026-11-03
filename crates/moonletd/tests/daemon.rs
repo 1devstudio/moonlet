@@ -5286,3 +5286,31 @@ async fn a_daemon_started_after_a_crash_ends_what_its_agents_left_running() {
     d.start_again().await;
     assert!(gone_within(server, 8).await, "the agent's server outlived the crashed daemon's restart");
 }
+
+/// X84: a daemon started with `MOONLET_TEST_AGENT_REST_MS` rests a chat's
+/// agent once it has been idle that long, and the chat says so.
+#[tokio::test]
+async fn a_daemon_rests_an_idle_chat_agent_after_the_time_it_was_given() {
+    let d = fake_claude_daemon_with(FAKE_CLAUDE, vec![("MOONLET_TEST_AGENT_REST_MS".into(), "300".into())]).await;
+    let cwd = d.home.path().join("work");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let mut c = d.client().await;
+    let chat: TerminalInfo = c
+        .request(methods::TERMINAL_CREATE, serde_json::json!({ "cwd": cwd, "kind": "agent", "agent": "claude", "chat": true }))
+        .await
+        .unwrap();
+    let mut agent = None;
+    for _ in 0..100 {
+        let list: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
+        agent = list.into_iter().find(|t| t.id == chat.id).and_then(|t| t.pid);
+        if agent.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let agent = nix::unistd::Pid::from_raw(agent.expect("the chat's agent never started") as i32);
+    assert!(gone_within(agent, 8).await, "the idle agent still runs");
+    let st: serde_json::Value = c.request(methods::CHAT_STATE, serde_json::json!({"id": chat.id})).await.unwrap();
+    let last = st["items"].as_array().and_then(|i| i.last()).map(|i| (i["kind"].clone(), i["text"].clone()));
+    assert_eq!(last, Some((serde_json::json!("system"), serde_json::json!("Resting after a day without messages; the next message wakes it"))));
+}
