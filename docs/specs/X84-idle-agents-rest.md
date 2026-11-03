@@ -50,9 +50,10 @@ one of the later parts of X79.
 - [x] Processes the agent left running (a dev server in a process group of
       its own) are not ended by resting. They stay with the chat: the next
       agent takes them on, and they end when the chat is stopped or that
-      agent exits, as after a settings restart (X79)
+      agent exits, or the daemon stops, as after a settings restart (X79)
       (`a_resting_agents_server_keeps_running_and_ends_when_the_chat_stops`,
-      `a_resting_agents_server_ends_with_the_agent_that_resumes`).
+      `a_resting_agents_server_ends_with_the_agent_that_resumes`,
+      `the_daemon_stops_only_once_a_resting_agents_server_is_gone`).
 - [x] While the agent rests, what it left running stays in the leftovers
       record (X79), so a daemon that crashes meanwhile leaves it to the next
       one to end (`what_a_resting_agent_left_stays_recorded`).
@@ -97,7 +98,8 @@ and start time noted for them (X79).
   `an_agent_with_a_running_subagent_does_not_rest`,
   `an_agent_kept_busy_with_messages_does_not_rest`,
   `a_resting_agents_server_keeps_running_and_ends_when_the_chat_stops`,
-  `a_resting_agents_server_ends_with_the_agent_that_resumes` and
+  `a_resting_agents_server_ends_with_the_agent_that_resumes`,
+  `the_daemon_stops_only_once_a_resting_agents_server_is_gone` and
   `what_a_resting_agent_left_stays_recorded`.
 - Rust, `moonletd/tests/daemon.rs`, a daemon started with
   `MOONLET_TEST_AGENT_REST_MS`:

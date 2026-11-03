@@ -2286,6 +2286,18 @@ done
     }
 
     #[tokio::test]
+    async fn the_daemon_stops_only_once_a_resting_agents_server_is_gone() {
+        let (dir, terms, chats) = setup().await;
+        let (id, server) = agent_with_a_server(&chats, dir.path()).await;
+        let agent = agent_pid(&terms, id);
+        chats.set_rest_after(Duration::from_millis(300));
+        assert!(gone_within(agent, 8).await, "the idle agent still runs");
+        chats.shutdown().await;
+        // Gone by then, but for the moment launchd takes to reap it.
+        assert!(gone_within(server, 1).await, "the resting agent's server outlived the daemon");
+    }
+
+    #[tokio::test]
     async fn what_a_resting_agent_left_stays_recorded() {
         let (dir, terms, chats) = setup().await;
         let path = dir.path().join("d.leftovers.json");
