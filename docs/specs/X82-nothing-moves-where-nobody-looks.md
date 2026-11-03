@@ -39,6 +39,9 @@ the system's reduced-motion setting.
       (`animates only opacity and transform in every endless animation`).
 - [x] The agents strip's clock ticks only while agents run and its tab is shown
       (`ticks the strip's clock only while agents run and the strip is shown`).
+- [x] A clock that stopped while its tab was hidden shows the time at once
+      when the tab is shown again, not the time it stopped at
+      (`reads the time at once when its clock starts again`).
 - [x] With reduced motion asked for, no animation repeats: each runs once
       (`runs an endless animation once when the system asks for reduced motion`).
 
@@ -82,6 +85,8 @@ None: no new inputs.
   rules nested in `@media`, `@supports` and `@layer`.
 - Vitest, `subagents.test.ts`: `ticks the strip's clock only while agents run
   and the strip is shown`.
+- Vitest, `useNow.test.ts`: `reads the time at once when its clock starts
+  again`.
 - Manual, in the e2e app with `e2e/snap.ts`: the new shimmer at rest matches
   the old muted label and at its peak the old sweep's light grey; the app's
   WebKit reports `document.getAnimations()` inside a `data-quiet` tab as
