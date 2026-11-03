@@ -803,6 +803,9 @@ export function switchWorkspaceByIndex(n: number) {
   if (row) switchWorkspace({ host: row.host, id: row.ws.id, account: row.account });
 }
 
+/** Whether two daemon answers carry the same data (both come from serde, so keys keep their order). */
+const sameJson = (a: unknown, b: unknown) => a !== undefined && JSON.stringify(a) === JSON.stringify(b);
+
 const gitInflight: Record<string, boolean> = {};
 export async function refreshGit(host: string, id: string) {
   const key = sesKey(host, id);
@@ -811,6 +814,9 @@ export async function refreshGit(host: string, id: string) {
   gitInflight[key] = true;
   try {
     const st = await rpc<GitStatus>(host, M.gitStatus, { path: w.path, base: w.base });
+    // Polls of every open session mostly find nothing new: an unchanged
+    // status must not re-render the app or rebuild the boards (X78).
+    if (sameJson(get().git[key], st)) return;
     set((s) => ({ git: { ...s.git, [key]: st } }));
   } catch {
     /* worktree may be gone */
