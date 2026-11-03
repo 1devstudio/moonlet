@@ -304,7 +304,12 @@ export interface SessionArchived {
 }
 
 /** What a session's process belongs to (X83). */
-export type ProcessOrigin = { kind: "terminal"; id: number; title: string } | { kind: "agent"; id: number; title: string } | { kind: "leftover" };
+export type ProcessOrigin =
+  | { kind: "terminal"; id: number; title: string }
+  /** A Run tab's: a script the session runs. */
+  | { kind: "run"; id: number; title: string }
+  | { kind: "agent"; id: number; title: string }
+  | { kind: "leftover" };
 
 /** One process of a session (X83), named by its executable, never its arguments. */
 export interface SessionProcess {

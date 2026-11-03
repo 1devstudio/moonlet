@@ -36,6 +36,7 @@ fn row(p: &SessionProcess, now: u64) -> String {
     let mem = p.rss.map(memory).unwrap_or_else(dash);
     let mut origin = match &p.origin {
         ProcessOrigin::Terminal { id, title } => format!("terminal {id} ({title})"),
+        ProcessOrigin::Run { id, title } => format!("run {id} ({title})"),
         ProcessOrigin::Agent { id, title } => format!("agent {id} ({title})"),
         ProcessOrigin::Leftover if cfg!(target_os = "macos") => "launchd".into(),
         ProcessOrigin::Leftover => "init".into(),
@@ -159,9 +160,9 @@ mod tests {
                 SessionProcess {
                     pid: 4320,
                     name: "?".into(),
-                    origin: ProcessOrigin::Terminal {
+                    origin: ProcessOrigin::Run {
                         id: 5,
-                        title: "zsh".into(),
+                        title: "test".into(),
                     },
                     tab: false,
                     started: None,
@@ -186,7 +187,7 @@ mod tests {
    4242  vite               2h     1m12s   210.0 MB  terminal 2 (dev)
    4300  claude            45m      8.0s   380.0 MB  agent 3 (claude), the tab's own
    4310  tail              42s      0.0s     900 KB  agent 3 (claude)
-   4320  ?                   -         -          -  terminal 5 (zsh)
+   4320  ?                   -         -          -  run 5 (test)
 
 Left in the worktree, stopped only by pid:
    5151  node               6d     3h05m     3.0 GB  launchd

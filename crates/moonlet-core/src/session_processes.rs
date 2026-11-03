@@ -17,6 +17,8 @@ pub struct Tab {
     pub leader: u32,
     /// Its shell exited, and was reaped: its pid may be another process's.
     pub exited: bool,
+    /// A Run tab: it runs one of the session's scripts.
+    pub run: bool,
 }
 
 /// A chat agent of a session: its process while it runs, and what it
@@ -66,9 +68,11 @@ pub fn belonging(
         if t.exited && sid(t.leader) == Some(t.leader) {
             continue;
         }
-        let origin = ProcessOrigin::Terminal {
-            id: t.id,
-            title: t.title.clone(),
+        let (id, title) = (t.id, t.title.clone());
+        let origin = if t.run {
+            ProcessOrigin::Run { id, title }
+        } else {
+            ProcessOrigin::Terminal { id, title }
         };
         let found = table
             .iter()
@@ -260,7 +264,7 @@ mod tests {
         // Tab 1's zsh (100) runs vite (101) and, in a group of its own, tail
         // (102, started first); another session's shell (200) is not the
         // session's. Tab 2's shell exited and its pid now leads a new session
-        // (400). Tab 3's shell exited too, leaving a job (501). Chat 7's agent
+        // (400). Run tab 3's shell exited too, leaving a job (501). Chat 7's agent
         // (300) started a server (301); 302 has ended and 303's pid is reused.
         let table = [
             p(100, 50, 10),
@@ -287,18 +291,21 @@ mod tests {
                 title: "zsh".into(),
                 leader: 100,
                 exited: false,
+                run: false,
             },
             Tab {
                 id: 2,
                 title: "old".into(),
                 leader: 400,
                 exited: true,
+                run: false,
             },
             Tab {
                 id: 3,
                 title: "dev".into(),
                 leader: 500,
                 exited: true,
+                run: true,
             },
         ];
         let agents = [Agent {
@@ -328,7 +335,7 @@ mod tests {
         );
         assert_eq!(
             found[3].origin,
-            ProcessOrigin::Terminal {
+            ProcessOrigin::Run {
                 id: 3,
                 title: "dev".into()
             }

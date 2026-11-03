@@ -88,7 +88,7 @@ export function processRow(p: SessionProcess, now: number, cpu: number | null): 
   return {
     pid: p.pid,
     name: p.name,
-    origin: o.kind === "terminal" ? `Terminal · ${o.title}` : o.kind === "agent" ? `Agent · ${o.title}` : "launchd",
+    origin: o.kind === "terminal" ? `Terminal · ${o.title}` : o.kind === "run" ? `Run · ${o.title}` : o.kind === "agent" ? `Agent · ${o.title}` : "launchd",
     age: p.started === undefined ? "–" : age(now - p.started),
     cpu: cpu === null ? "–" : `${Math.round(cpu)}%`,
     memory: p.rss === undefined ? "–" : memory(p.rss),

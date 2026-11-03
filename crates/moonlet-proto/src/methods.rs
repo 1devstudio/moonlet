@@ -1771,6 +1771,8 @@ pub struct SessionProcess {
 pub enum ProcessOrigin {
     /// In the session of a terminal tab's shell.
     Terminal { id: TerminalId, title: String },
+    /// In the session of a Run tab's command: a script the session runs.
+    Run { id: TerminalId, title: String },
     /// A chat's agent, or a process it started.
     Agent { id: TerminalId, title: String },
     /// Launchd's (init's), working in the session's worktree.

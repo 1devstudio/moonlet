@@ -39,7 +39,8 @@ Listing (`session.processes`):
 - [x] A session's processes are every process in each of its terminals'
       sessions (their session id is the tab's shell pid), and each of its
       chat agents with the processes it started (X79's family), each with the
-      tab or agent it belongs to. The tab's shell and the chat's agent are
+      tab or agent it belongs to; a Run tab's (one of the session's scripts)
+      say so, as `run`. The tab's shell and the chat's agent are
       marked as the tab's own (`tab`)
       (`a_sessions_processes_are_its_tabs_sessions_and_its_agents_families`,
       `a_sessions_processes_are_listed_by_name_and_stopped`).
@@ -92,8 +93,9 @@ App:
 
 - [x] The Processes tab lists each process with its name, pid, origin, age,
       CPU use and memory, with **Stop** per row and **Stop all**; leftovers
-      follow under **Left in the worktree**, each with **Stop**. It looks
-      again every 3 s while shown (`describes a process row: origin, age, CPU and memory`,
+      follow under **Left in the worktree**, each with **Stop**. The origin is
+      "Terminal · zsh", "Run · dev" for a Run tab's, or "Agent · Claude". It
+      looks again every 3 s while shown (`describes a process row: origin, age, CPU and memory`,
       `works out CPU use from two looks`). **Stop** sends the row's pid with
       the start it was listed with; **Stop all** sends no pids, and the
       daemon stops what it decides: the rows it marks stopping are the same,
@@ -136,7 +138,8 @@ session". A daemon too old to list processes shows the error.
   `{processes: [SessionProcess], leftovers: [SessionProcess]}`, where
   `SessionProcess` is
   `{pid, name, origin, tab, started?, cpu_ms?, rss?}`; `origin` is
-  `{kind: "terminal", id, title}`, `{kind: "agent", id, title}` or
+  `{kind: "terminal", id, title}`, `{kind: "run", id, title}` (a Run tab's),
+  `{kind: "agent", id, title}` or
   `{kind: "leftover"}`; `started` is in milliseconds since the epoch,
   `cpu_ms` the CPU time used so far, `rss` resident memory in bytes.
 - `session.kill_processes {id, pids?}` →

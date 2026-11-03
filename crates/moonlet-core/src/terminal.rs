@@ -249,7 +249,13 @@ impl TerminalManager {
                     return None;
                 }
                 let leader = st.pty.as_ref()?.pid();
-                Some(crate::session_processes::Tab { id: t.id, title: st.info.title.clone(), leader, exited: st.info.exit.is_some() })
+                Some(crate::session_processes::Tab {
+                    id: t.id,
+                    title: st.info.title.clone(),
+                    leader,
+                    exited: st.info.exit.is_some(),
+                    run: st.info.kind == TerminalKind::Run,
+                })
             })
             .collect()
     }

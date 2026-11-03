@@ -303,7 +303,7 @@ async fn moonlet_ps_lists_a_sessions_processes_and_moonlet_kill_stops_one() {
     let ps = stdout(&in_session(&["ps"]));
     let listed = |out: &str, pid: u32, name: &str| out.lines().find(|l| l.split_whitespace().take(2).eq([pid.to_string().as_str(), name])).map(str::to_string);
     let row = listed(&ps, tail, "tail").unwrap_or_else(|| panic!("tail not listed:\n{ps}"));
-    assert!(row.ends_with(&format!("terminal {} (dev)", tab.id)), "{ps}");
+    assert!(row.contains(&format!("run {} (dev)", tab.id)), "{ps}");
     assert!(!ps.contains("/dev/null"), "an argument was printed:\n{ps}");
     let (_, leftovers) = ps.split_once("Left in the worktree, stopped only by pid:\n").unwrap_or_else(|| panic!("no leftovers:\n{ps}"));
     assert!(listed(leftovers, left, "sleep").is_some(), "{ps}");

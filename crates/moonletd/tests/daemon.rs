@@ -5374,7 +5374,7 @@ async fn a_sessions_processes_are_listed_by_name_and_stopped() {
     let t = entry(tail);
     assert_eq!(
         (&t["name"], &t["origin"], &t["tab"]),
-        (&serde_json::json!("tail"), &serde_json::json!({"kind": "terminal", "id": tab.id, "title": "dev"}), &serde_json::json!(false))
+        (&serde_json::json!("tail"), &serde_json::json!({"kind": "run", "id": tab.id, "title": "dev"}), &serde_json::json!(false))
     );
     assert!(t["started"].as_u64().is_some() && t["rss"].as_u64().is_some_and(|r| r > 0) && t["cpu_ms"].as_u64().is_some(), "{t}");
     let s = entry(server);

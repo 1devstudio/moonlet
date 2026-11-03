@@ -42,6 +42,8 @@ describe("the Processes tab (X83)", () => {
     expect(processRow(agent, NOW, null)).toEqual({ pid: 4300, name: "claude", origin: "Agent · Claude", age: "42s", cpu: "–", memory: "900 KB", stop: false });
     const left: SessionProcess = { pid: 5151, name: "node", origin: { kind: "leftover" }, tab: false, started: NOW - 6 * 86_400_000, rss: 3 * 2 ** 30 };
     expect(processRow(left, NOW, 0.2)).toEqual({ pid: 5151, name: "node", origin: "launchd", age: "6d", cpu: "0%", memory: "3.0 GB", stop: true });
+    const script: SessionProcess = { pid: 4250, name: "node", origin: { kind: "run", id: 4, title: "dev" }, tab: false };
+    expect(processRow(script, NOW, null).origin).toBe("Run · dev");
     expect(processesSummary(list)).toBe("5 processes · 1 left in the worktree");
     expect(processesSummary({ processes: [proc(4242, "vite", dev)], leftovers: [] })).toBe("1 process");
   });
