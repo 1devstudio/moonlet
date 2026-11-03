@@ -475,6 +475,16 @@ export function chatBlocks(items: readonly ChatItem[], view: ToolCallView): Chat
   return blocks;
 }
 
+/** How many blocks a chat renders at first, and how many more each
+ *  "Show earlier" adds (X81). */
+export const BLOCKS_SHOWN = 200;
+
+/** The blocks a chat renders: the last `limit`, and how many come before them (X81). */
+export function lastBlocks<T>(blocks: T[], limit: number): { shown: T[]; earlier: number } {
+  const earlier = Math.max(0, blocks.length - limit);
+  return { shown: earlier ? blocks.slice(earlier) : blocks, earlier };
+}
+
 export const toolGroupLabel = (n: number) => `${n} tool call${n === 1 ? "" : "s"}`;
 
 /** A group's status mark: running while any call runs, then the worst outcome. */

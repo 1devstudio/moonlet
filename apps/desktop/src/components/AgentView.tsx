@@ -51,6 +51,8 @@ import {
   elapsed,
   fuzzyFilter,
   joinDraft,
+  BLOCKS_SHOWN,
+  lastBlocks,
   showChat,
   type PlanChoice,
   planAnswer,
@@ -1410,6 +1412,23 @@ export function AgentView({
   const agentNow = useNow(visible && hasRunningAgents(st?.subagents));
   const agentRowsHere = useMemo(() => agentRows([{ id, st }], agentNow), [id, st, agentNow]);
   const placed = useMemo(() => notesByBlock(blocks, st ? agentNotes(st.items, st.subagents ?? []) : []), [blocks, st]);
+  // The last blocks render; "Show earlier" adds more (X81).
+  const [limit, setLimit] = useState(BLOCKS_SHOWN);
+  useEffect(() => setLimit(BLOCKS_SHOWN), [id]);
+  const { shown: shownBlocks, earlier } = useMemo(() => lastBlocks(blocks, limit), [blocks, limit]);
+  const shownIds = useMemo(() => new Set(shownBlocks.flatMap((b) => (b.kind === "item" ? [b.item.id] : b.tools.map((t) => t.id)))), [shownBlocks]);
+  // The distance from the bottom to keep while earlier blocks are added.
+  const keepFromBottom = useRef<number | null>(null);
+  const showEarlier = () => {
+    const el = scroller.current;
+    keepFromBottom.current = el ? el.scrollHeight - el.scrollTop : null;
+    setLimit((n) => n + BLOCKS_SHOWN);
+  };
+  useLayoutEffect(() => {
+    const el = scroller.current;
+    if (el && keepFromBottom.current !== null) el.scrollTop = el.scrollHeight - keepFromBottom.current;
+    keepFromBottom.current = null;
+  }, [limit]);
 
   // Follow new output while the view is scrolled to the bottom.
   useLayoutEffect(() => {
@@ -1684,8 +1703,14 @@ export function AgentView({
               <NewChat host={host} sessionId={wsId} self={id} cwd={cwd} onMention={(m) => editor.current?.mention(m)} />
             ) : (
               [
-                ...placed.lead.map((n, i) => <AgentNoteView key={`lead-${i}`} note={n} />),
-                ...blocks.map((b) => {
+                ...(earlier > 0
+                  ? [
+                      <button key="show-earlier" className="self-center rounded px-2 py-1 ui-text-12.5 text-muted hover:bg-hover hover:text-fg" onClick={showEarlier}>
+                        Show earlier
+                      </button>,
+                    ]
+                  : placed.lead.map((n, i) => <AgentNoteView key={`lead-${i}`} note={n} />)),
+                ...shownBlocks.map((b) => {
                   const own = b.kind === "item" && b.item.kind === "user" ? (userView?.(b.item.text) ?? null) : null;
                   const view =
                     b.kind === "agents" ? (
@@ -1719,7 +1744,8 @@ export function AgentView({
                 }),
               ]
             )}
-            {plan && !plan.itemId && planCard}
+            {/* A plan that waits shows here when its row is among the earlier blocks (X81). */}
+            {plan && (!plan.itemId || (plan.askId && !shownIds.has(plan.itemId))) && planCard}
             {queued.length > 0 && (
               <QueuedArea
                 queued={queued}
