@@ -59,7 +59,7 @@ export function planLabels(status: PlanStatus, mode: string | null): { card: str
 
 /** The chat the Plan tab follows among a session's chats: the one whose plan
  *  waits, else the focused one, else the first (lowest id). */
-export function planChat(focused: number | null, chats: readonly { id: number; st: ChatState | undefined }[]): number | null {
+export function planChat(focused: number | null, chats: readonly { id: number; st: Pick<ChatState, "pending"> | undefined }[]): number | null {
   const waiting = chats.find((c) => c.st?.pending.some((a) => planOf(a)));
   if (waiting) return waiting.id;
   if (chats.some((c) => c.id === focused)) return focused;

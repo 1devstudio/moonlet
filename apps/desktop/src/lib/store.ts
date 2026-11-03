@@ -38,7 +38,7 @@ import { designHost } from "./designCopies";
 import { DEFAULT_MODE } from "./agents";
 import { DEFAULT_SOUNDS, type SoundSettings } from "./sounds";
 import { DoneBursts, agentPlace, alertFor, alertsLikeASession, type BannerSettings } from "./alerts";
-import { type ToolCallView, forgetChat, loadChat, onChatItem, onChatState } from "./chat";
+import { type ToolCallView, forgetChat, onChatItem, onChatState, reloadChats } from "./chat";
 import { autoPulls, fetchDue, justMerged, pullToast, type FetchInfo } from "./baseSync";
 import { gitSettingsOf } from "./gitSettings";
 import { avatarUrl } from "./projectAvatar";
@@ -601,8 +601,9 @@ export async function loadHost(host: string, attempt = 0): Promise<void> {
     }));
     for (const w of sessions) syncLayout(host, w);
     reattachHost(host);
-    // Events may have been missed while disconnected: reload open chats.
-    for (const t of terminals) if (t.chat) void loadChat(host, t.id).catch(() => {});
+    // Events may have been missed while disconnected: reload the chats in
+    // memory. The others load when shown (X81).
+    void reloadChats(host, terminals.filter((t) => t.chat).map((t) => t.id));
     void refreshAllGit(host).then(() => refreshPrs(host));
     timedFetch[host] = Date.now();
     void refreshAllBases(host, { fetch: true });

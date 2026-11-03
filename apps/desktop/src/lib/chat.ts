@@ -9,13 +9,20 @@ import { readStored, writeStored } from "./storage";
 
 export const chatKey = (host: string, id: number) => `${host}:${id}`;
 
+/** A chat without its items (X81): its status, asks and subagents. */
+export type ChatSummary = Omit<ChatState, "items">;
+
 interface ChatStore {
+  /** Chats with their items: the last ones shown (X81). */
   chats: Record<string, ChatState>;
+  /** The other chats loaded, without their items, kept current by
+   *  `chat.state`. A key is in one of the two at most. */
+  summaries: Record<string, ChatSummary>;
 }
 
 const g = globalThis as unknown as { __moonletChat?: ReturnType<typeof makeStore> };
 function makeStore() {
-  return create<ChatStore>(() => ({ chats: {} }));
+  return create<ChatStore>(() => ({ chats: {}, summaries: {} }));
 }
 /** One store across hot reloads (see store.ts). */
 export const useChat = (g.__moonletChat ??= makeStore());
@@ -85,15 +92,69 @@ export function onChatState(host: string, id: number, state: ChatState) {
   }
   useChat.setState((s) => {
     const cur = s.chats[key];
-    if (!cur) return s;
     // The event carries everything but the items.
-    return { chats: { ...s.chats, [key]: { ...state, items: cur.items } } };
+    if (cur) return { chats: { ...s.chats, [key]: { ...state, items: cur.items } } };
+    if (s.summaries[key]) return { summaries: { ...s.summaries, [key]: summary(state) } };
+    return s;
   });
+}
+
+const summary = ({ items: _, ...rest }: ChatState): ChatSummary => rest;
+
+/** A chat's status, asks and subagents, with its items in memory or not
+ *  (X81); undefined until it is loaded. */
+export const chatSummary = (s: ChatStore, host: string, id: number): ChatSummary | undefined => s.chats[chatKey(host, id)] ?? s.summaries[chatKey(host, id)];
+
+/** How many chats keep their items in memory: the last ones shown (X81). */
+export const CHATS_KEPT = 8;
+
+/** The keys of the chats shown last, the latest first, at most CHATS_KEPT. */
+let shown: string[] = [];
+
+/**
+ * A chat is shown (X81): it keeps its items, loaded now when it has none,
+ * and a chat that falls out of the last CHATS_KEPT shown drops its own.
+ */
+export async function showChat(host: string, id: number) {
+  const key = chatKey(host, id);
+  const next = [key, ...shown.filter((k) => k !== key)];
+  const dropped = next.slice(CHATS_KEPT).filter((k) => useChat.getState().chats[k]);
+  shown = next.slice(0, CHATS_KEPT);
+  if (dropped.length) {
+    useChat.setState((s) => {
+      const chats = { ...s.chats };
+      const summaries = { ...s.summaries };
+      for (const k of dropped) {
+        summaries[k] = summary(chats[k]);
+        delete chats[k];
+      }
+      return { chats, summaries };
+    });
+  }
+  // Dropped while its load was in flight, it keeps its summary only.
+  if (!useChat.getState().chats[key]) await loadChat(host, id, { onlyIfShown: true });
+}
+
+/** Reads a chat's status, asks and subagents, such as for the Agents panel;
+ *  its items only if it is among the chats shown last (X81). */
+export const loadChatSummary = (host: string, id: number) => loadChat(host, id, { onlyIfShown: true });
+
+/** After a host connects: its chat terminals `ids` already in memory read
+ *  again, as they were kept, for events missed meanwhile. The others load
+ *  when shown (X81). */
+export async function reloadChats(host: string, ids: readonly number[]) {
+  const s = useChat.getState();
+  const inMemory = ids.filter((id) => chatSummary(s, host, id));
+  await Promise.all(inMemory.map((id) => loadChat(host, id, { onlyIfShown: true }).catch(() => {})));
 }
 
 const loading = new Set<string>();
 
-export async function loadChat(host: string, id: number) {
+/**
+ * Reads a chat's state. With `onlyIfShown`, a chat not among the last shown
+ * keeps its summary only (X81).
+ */
+export async function loadChat(host: string, id: number, opts: { onlyIfShown?: boolean } = {}) {
   const key = chatKey(host, id);
   if (loading.has(key)) return;
   loading.add(key);
@@ -102,10 +163,25 @@ export async function loadChat(host: string, id: number) {
   try {
     const st = await rpc<ChatState>(host, M.chatState, { id });
     const buf = buffered.get(key);
-    let items = st.items;
-    for (const it of buf?.items ?? []) items = mergeItem(items, it);
-    const latest = buf?.state ? { ...buf.state, items } : { ...st, items };
-    useChat.setState((s) => ({ chats: { ...s.chats, [key]: { ...empty, ...latest } } }));
+    const keep = !opts.onlyIfShown || shown.includes(key);
+    let items: ChatItem[] = [];
+    if (keep) {
+      items = st.items;
+      for (const it of buf?.items ?? []) items = mergeItem(items, it);
+    }
+    const latest: ChatState = { ...empty, ...(buf?.state ? { ...buf.state, items } : { ...st, items }) };
+    useChat.setState((s) => {
+      const chats = { ...s.chats };
+      const summaries = { ...s.summaries };
+      if (keep) {
+        chats[key] = latest;
+        delete summaries[key];
+      } else {
+        summaries[key] = summary(latest);
+        delete chats[key];
+      }
+      return { chats, summaries };
+    });
   } catch (e) {
     // A reload of a chat already shown failed: keep the events it held.
     const buf = buffered.get(key);
@@ -120,10 +196,14 @@ export async function loadChat(host: string, id: number) {
 }
 
 export function forgetChat(host: string, id: number) {
+  const key = chatKey(host, id);
+  shown = shown.filter((k) => k !== key);
   useChat.setState((s) => {
     const chats = { ...s.chats };
-    delete chats[chatKey(host, id)];
-    return { chats };
+    const summaries = { ...s.summaries };
+    delete chats[key];
+    delete summaries[key];
+    return { chats, summaries };
   });
   saveChatDraft(host, id, "");
 }

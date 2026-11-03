@@ -51,7 +51,7 @@ import {
   elapsed,
   fuzzyFilter,
   joinDraft,
-  loadChat,
+  showChat,
   type PlanChoice,
   planAnswer,
   planApproveLabel,
@@ -1264,13 +1264,14 @@ function NewChat({ host, sessionId, self, cwd, onMention }: { host: string; sess
   const { transcripts, plans } = useMemo(() => newChatContext(list, byId, { session: sessionId, self, cwd }), [list, byId, sessionId, self, cwd]);
 
   // The other chats' conversations, loaded here once each (a chat whose
-  // load fails isn't asked for again on every terminal update).
+  // load fails isn't asked for again on every terminal update). Their
+  // chips show them, so they count as shown (X81).
   const asked = useRef(new Set<number>());
   useEffect(() => {
     for (const t of otherChats(list, sessionId, self)) {
-      if (asked.current.has(t.id) || useChat.getState().chats[chatKey(host, t.id)]) continue;
+      if (asked.current.has(t.id)) continue;
       asked.current.add(t.id);
-      void loadChat(host, t.id).catch(() => {});
+      void showChat(host, t.id).catch(() => {});
     }
   }, [list, host, sessionId, self]);
 
@@ -1394,9 +1395,12 @@ export function AgentView({
   const stick = useRef(true);
   const scale = useStore((s) => uiScale(s.settings.term.fontSize));
 
+  // Its items load when it is shown, and stay while it is among the last
+  // chats shown (X81).
+  const loaded = !!st;
   useEffect(() => {
-    if (!st) void loadChat(host, id).catch(errorToast);
-  }, [host, id, st]);
+    if (visible) void showChat(host, id).catch(errorToast);
+  }, [host, id, visible, loaded]);
 
   const working = turnRunning(st?.status);
   const exists = useProjectFiles(host, cwd, working);

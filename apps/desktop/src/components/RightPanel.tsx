@@ -10,7 +10,7 @@ import { latestOnly, stackView, type StackView } from "../lib/prStack";
 import { hasRunCommand } from "../lib/projectSettings";
 import { workspaceOpenIn } from "../lib/openIn";
 import { useSync } from "../lib/syncStore";
-import { chatKey, loadChat, useChat } from "../lib/chat";
+import { chatKey, chatSummary, loadChatSummary, showChat, useChat } from "../lib/chat";
 import { planChat, planTabDot, planView } from "../lib/plan";
 import { agentRows, agentsTabClockRuns, agentsTabDot } from "../lib/subagents";
 import { grantMenuLabel } from "../lib/terminalRead";
@@ -224,12 +224,13 @@ function useSessionPlan(host: string, ws: Session) {
   const chatId = useChat((s) =>
     planChat(
       focused,
-      ids ? ids.split(",").map((id) => ({ id: Number(id), st: s.chats[chatKey(host, Number(id))] })) : [],
+      ids ? ids.split(",").map((id) => ({ id: Number(id), st: chatSummary(s, host, Number(id)) })) : [],
     ),
   );
+  // The plan is read from the chat's items, which load when it is shown (X81).
   const st = useChat((s) => (chatId === null ? undefined : s.chats[chatKey(host, chatId)]));
   useEffect(() => {
-    if (chatId !== null && !st) void loadChat(host, chatId).catch(() => {});
+    if (chatId !== null && !st) void showChat(host, chatId).catch(() => {});
   }, [host, chatId, st]);
   return useMemo(() => (st ? planView(st) : null), [st]);
 }
@@ -246,12 +247,13 @@ function useSessionAgents(host: string, ws: Session, tab: RightTab) {
   );
   const list = useMemo(() => (ids ? ids.split(",").map(Number) : []), [ids]);
   // Each chat's subagents and asks, which change only on `chat.state`, so
-  // streaming text does not re-render the panel. Undefined until loaded.
-  const subagents = useChat(useShallow((s) => list.map((id) => s.chats[chatKey(host, id)]?.subagents)));
-  const pending = useChat(useShallow((s) => list.map((id) => s.chats[chatKey(host, id)]?.pending)));
+  // streaming text does not re-render the panel. Undefined until loaded,
+  // and loaded without the chat's items unless it is shown (X81).
+  const subagents = useChat(useShallow((s) => list.map((id) => chatSummary(s, host, id)?.subagents)));
+  const pending = useChat(useShallow((s) => list.map((id) => chatSummary(s, host, id)?.pending)));
   const unloaded = list.filter((_, i) => pending[i] === undefined).join(",");
   useEffect(() => {
-    for (const id of unloaded ? unloaded.split(",") : []) void loadChat(host, Number(id)).catch(() => {});
+    for (const id of unloaded ? unloaded.split(",") : []) void loadChatSummary(host, Number(id)).catch(() => {});
   }, [host, unloaded]);
   const now = useNow(agentsTabClockRuns(tab, subagents));
   const rows = useMemo(
