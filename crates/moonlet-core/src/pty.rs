@@ -270,7 +270,7 @@ pub fn escalate_session(sid: u32, reaped: impl Fn() -> bool + Send + 'static) {
 }
 
 #[cfg(target_os = "macos")]
-fn all_pids() -> Vec<i32> {
+pub(crate) fn all_pids() -> Vec<i32> {
     // SAFETY: a null buffer asks for the count; the second call fills at most
     // `pids.len()` entries and returns how many it wrote.
     unsafe {
@@ -288,7 +288,7 @@ fn all_pids() -> Vec<i32> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn all_pids() -> Vec<i32> {
+pub(crate) fn all_pids() -> Vec<i32> {
     let Ok(dir) = std::fs::read_dir("/proc") else {
         return Vec::new();
     };

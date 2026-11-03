@@ -66,7 +66,8 @@ Chat agents:
 - [ ] Stopping a chat agent stops the processes it started, including those in
       a process group of their own: SIGTERM, then SIGKILL after 3 s.
 - [ ] When a chat agent's process exits by itself, processes it started that
-      are still running are stopped the same way.
+      are still running are stopped the same way, even when one of them keeps
+      the agent's output open.
 - [ ] When the daemon stops (SIGTERM, `daemon.shutdown`, live upgrade), it
       waits up to 3 s for every agent to exit and SIGKILLs those still running
       before it exits.
@@ -131,11 +132,14 @@ feature reads only pids, parent pids, process groups and start times.
   `closing_a_tab_whose_shell_exited_stops_the_job_it_left`,
   `closing_a_tab_that_shows_an_exit_stops_its_shell_still_running` and
   `closing_an_adopted_tab_leaves_alone_the_session_now_on_its_shells_pid`.
-- Rust, `chat/runtime.rs`: with a fake agent that starts a background child in
-  its own process group, stopping the chat stops the child; an agent that exits
-  by itself leaves no child running.
-- Rust, `moonletd/tests`: a daemon stopped with SIGTERM leaves no agent and no
-  agent child running.
+- Rust, `process.rs`: descendants of a process in a captured table; a family
+  forgets a process once it is gone.
+- Rust, `chat/runtime.rs`, with a fake agent that leaves a server running in a
+  process group of its own, ignoring SIGHUP and SIGTERM: stopping the chat stops
+  the server; an agent that exits by itself leaves it no longer running, even
+  though the server held the agent's output open; `shutdown` (what the daemon
+  runs on SIGTERM, `daemon.shutdown` and live upgrade) returns only once the
+  server is gone.
 
 ## Open questions
 

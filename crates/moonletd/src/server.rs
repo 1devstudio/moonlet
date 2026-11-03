@@ -81,7 +81,7 @@ pub async fn serve(daemon: Arc<Daemon>, listener: UnixListener, socket: PathBuf)
             _ = shutdown.wait_for(|stop| *stop) => break,
         }
     }
-    daemon.chats.shutdown();
+    daemon.chats.shutdown().await;
     // Only remove the socket if it is still ours (an upgraded daemon may own it now).
     // After a handoff the socket path belongs to the new daemon.
     if !daemon.handed_off() {

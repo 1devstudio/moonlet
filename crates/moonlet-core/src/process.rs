@@ -122,9 +122,112 @@ pub fn ancestors(pid: u32, hops: usize) -> Vec<(u32, Option<PathBuf>)> {
     out
 }
 
+/// One process as the kernel lists it: its pid, its parent's, and when it
+/// started (see [`crate::pty::process_start`]). Never its arguments, which
+/// can hold tokens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Proc {
+    pub pid: u32,
+    pub ppid: u32,
+    pub start: u64,
+}
+
+/// Every process this one may see, with its parent and start time (X79).
+pub fn table() -> Vec<Proc> {
+    crate::pty::all_pids()
+        .into_iter()
+        .filter(|&pid| pid > 0)
+        .filter_map(|pid| {
+            let pid = pid as u32;
+            Some(Proc { pid, ppid: parent(pid)?, start: crate::pty::process_start(pid)? })
+        })
+        .collect()
+}
+
+/// The processes in `table` that descend from `root`: its children, theirs,
+/// and so on, in no particular order. Not `root` itself.
+pub fn descendants(table: &[Proc], root: u32) -> Vec<Proc> {
+    let mut out = Vec::new();
+    let mut parents = vec![root];
+    while let Some(p) = parents.pop() {
+        for c in table.iter().filter(|c| c.ppid == p && c.pid != root && c.pid != p) {
+            if !out.contains(c) {
+                out.push(*c);
+                parents.push(c.pid);
+            }
+        }
+    }
+    out
+}
+
+/// The processes an agent started, noted while the agent still runs: once it
+/// exits, they belong to launchd and nothing links them to it any more (X79).
+#[derive(Debug, Default)]
+pub struct Family {
+    known: std::collections::HashMap<u32, u64>,
+}
+
+impl Family {
+    /// Notes the descendants of `root` in `table`.
+    pub fn note(&mut self, table: &[Proc], root: u32) {
+        for p in descendants(table, root) {
+            self.known.insert(p.pid, p.start);
+        }
+    }
+
+    /// Sends `signal` (`None` only checks) to every noted process that still
+    /// runs, and forgets the rest. A pid that now belongs to a process
+    /// started later is someone else's, and is left alone. Returns whether
+    /// any noted process still runs.
+    pub fn signal(&mut self, signal: Option<nix::sys::signal::Signal>) -> bool {
+        self.known.retain(|&pid, &mut start| crate::pty::process_start(pid) == Some(start));
+        for &pid in self.known.keys() {
+            let _ = nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), signal);
+        }
+        !self.known.is_empty()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn descendants_are_children_and_theirs_but_not_others() {
+        // An agent (100) with a shell (101) running a pipeline (102, 103) and
+        // an MCP server (104); another session's shell (200) runs `tail` (201).
+        let p = |pid, ppid| Proc { pid, ppid, start: pid as u64 };
+        let table = [p(1, 0), p(100, 50), p(101, 100), p(102, 101), p(103, 101), p(104, 100), p(200, 1), p(201, 200)];
+        let mut pids: Vec<u32> = descendants(&table, 100).iter().map(|p| p.pid).collect();
+        pids.sort();
+        assert_eq!(pids, [101, 102, 103, 104]);
+        assert!(descendants(&table, 104).is_empty());
+    }
+
+    #[test]
+    fn a_family_signals_only_processes_that_still_run() {
+        // A shell whose child sleeps: the shell is the root, the sleep its family.
+        let mut shell = std::process::Command::new("/bin/sh").args(["-c", "/bin/sleep 30 & wait"]).spawn().unwrap();
+        let mut family = Family::default();
+        for _ in 0..50 {
+            family.note(&table(), shell.id());
+            if family.signal(None) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(family.signal(None), "the shell's sleep was never seen");
+        family.signal(Some(nix::sys::signal::Signal::SIGKILL));
+        shell.wait().unwrap();
+        // The sleep, reparented and reaped, is no longer in the family.
+        for _ in 0..50 {
+            if !family.signal(None) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        panic!("the killed sleep still counts as running");
+    }
 
     #[test]
     fn root_is_both_the_real_and_the_effective_uid() {
