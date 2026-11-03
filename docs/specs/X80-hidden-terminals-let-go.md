@@ -1,0 +1,98 @@
+# X80 — Hidden terminals let go of their memory
+
+- **Status:** draft
+- **Priority / phase:** P1 · phase 3
+- **PRD refs:** performance targets in `docs/plan.md` (memory under 600 MB with 10 panes), S2 reattach replay, T1 terminal rendering
+- **Related ADRs:** none
+
+## Summary
+
+The app's web content process grew to 1.5–1.9 GB in a day. Every terminal
+ever shown kept a live xterm.js terminal, with 10,000 rows of scrollback, until
+the terminal itself was removed. Switching tabs or sessions only took the
+terminal off the screen: it stayed attached to the daemon, so hidden terminals
+kept receiving and parsing their output. Agents and dev servers print a lot,
+so the scrollback of every one of them filled up.
+
+The daemon already keeps every terminal's screen and scrollback, and replays
+them when a client attaches (S2). The app therefore keeps only the terminals
+shown most recently, and lets go of the others; a terminal shown again is
+attached again and drawn from the daemon's replay.
+
+## User journey
+
+1. The user works in many sessions, each with agent and shell tabs, and
+   switches between them all day.
+2. The app keeps the eight terminals shown most recently. Older ones are let
+   go of: their xterm is disposed and the daemon stops sending their output.
+3. The user goes back to a terminal shown long ago. It shows its screen and
+   scrollback, as after a reconnect, and its live output carries on.
+
+## Behaviour and acceptance criteria
+
+- [ ] At most 8 terminals keep a live xterm. When a ninth is shown, the one
+      shown longest ago is let go of: its xterm and add-ons are disposed, the
+      app sends `terminal.detach` for it, and it receives no more output
+      (`lets go of the least recently shown terminals beyond the limit (X80)`,
+      `a ninth terminal shown lets go of the one shown longest ago, and detaches it (X80)`).
+- [ ] A terminal let go of is attached again when it is shown again, and the
+      daemon's replay (S2) draws its screen and scrollback
+      (`a terminal let go of attaches again when shown, and the replay draws it (X80)`).
+- [ ] A terminal on screen is never let go of, nor is any pane of a split on
+      screen, even when more than 8 are on screen
+      (`never lets go of a terminal on screen, even past the limit (X80)`,
+      `a terminal in a split on screen is kept however many others are shown (X80)`).
+- [ ] A terminal keeps its newest 2000 command blocks (T4, T8). The marks and
+      decorations of an older block are disposed when it is dropped, not left
+      in the terminal until its rows leave the scrollback
+      (`a block dropped past the 2000 kept lets go of its marks (X80)`).
+
+## UI
+
+- A tab that is not on screen does not create a terminal, so opening a
+  session with several tabs creates only the terminals of its active tab. A
+  hidden tab's pane passes Blocks mode, block header context and the reported
+  directory to its terminal only while one exists; the pane passes them again
+  when the tab is shown.
+- A terminal shown again after it was let go of is drawn from the replay, as
+  after a reconnect: a block's header shows the time the daemon recorded for
+  it (`moonlet_age`), a text selection or selected block is not kept, and the
+  scroll position is back at the bottom.
+
+## Protocol and RPCs
+
+No change. The app now sends `terminal.detach` (already handled by the daemon,
+and routed to `session.detach` for another member's terminal, X72) when it
+lets go of a terminal.
+
+## Data and config
+
+None. The limit is a constant in `apps/desktop/src/lib/terminals.ts`
+(`LIVE_TERMINALS`).
+
+## Security considerations
+
+None: no new input crosses a trust boundary.
+
+## Out of scope
+
+- Fewer rows of scrollback for terminals that stay live.
+- A setting for the number of live terminals.
+- Chat agents (`SessionChat`), whose items are kept by the store, not by
+  xterm.
+
+## Test plan
+
+- Vitest, `terminals.test.ts`, the pure choice of terminals to let go of:
+  `lets go of the least recently shown terminals beyond the limit (X80)` and
+  `never lets go of a terminal on screen, even past the limit (X80)`.
+- Vitest, `terminals.test.ts`, through `getEntry`, `findEntry` and
+  `TermEntry.mount`, with the daemon bridge faked and the RPCs it is sent
+  recorded: `a ninth terminal shown lets go of the one shown longest ago, and detaches it (X80)`,
+  `a terminal let go of attaches again when shown, and the replay draws it (X80)`,
+  `a terminal in a split on screen is kept however many others are shown (X80)`
+  and `a block dropped past the 2000 kept lets go of its marks (X80)`.
+
+## Open questions
+
+- None.
