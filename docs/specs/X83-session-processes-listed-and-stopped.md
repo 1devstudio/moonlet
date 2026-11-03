@@ -65,6 +65,12 @@ Stopping (`session.kill_processes`):
       such as launchd's; one no process runs with any more is
       reported apart, as gone (`stopping_by_pid_skips_pids_that_are_not_the_sessions`,
       `leftovers_in_a_sessions_worktree_are_listed_apart_and_stopped_only_by_pid`).
+      Only those gone after their signals are reported ended; one still
+      running (this user may not signal it, say) is reported as still running:
+      `moonlet kill` fails naming it, and the app says so in a toast
+      (`a_process_still_running_after_its_ending_is_not_reported_ended`,
+      `kill_fails_naming_pids_that_still_run_after_their_stop`,
+      `says which processes still run after their Stop`).
 - [x] With no pids, every process of the session is stopped except the tabs'
       own and the leftovers; an empty list stops nothing
       (`stopping_all_spares_the_tabs_own_processes_and_leftovers`,
@@ -147,8 +153,10 @@ session". A daemon too old to list processes shows the error.
   on a Linux one; `started` is in milliseconds since the epoch,
   `cpu_ms` the CPU time used so far, `rss` resident memory in bytes.
 - `session.kill_processes {id, pids?}` →
-  `{ended: [pid], skipped: [pid], gone: [pid]}`: `skipped` run but are not
-  the session's, `gone` no longer run. Each of `pids` is a pid (`4242`) or a
+  `{ended: [pid], skipped: [pid], gone: [pid], still_running: [pid]}`:
+  `ended` were signalled and are gone, `skipped` run but are not the
+  session's, `gone` no longer ran when named, `still_running` were signalled
+  and outlived SIGKILL. Each of `pids` is a pid (`4242`) or a
   pid with the `started` it was listed with (`{pid, started}`).
 - Both answer the app and the CLI; a worker's link gets `forbidden`
   (`a_workers_link_neither_lists_nor_stops_a_sessions_processes`).
@@ -186,7 +194,8 @@ worktree can be signalled.
   `leftovers_are_launchd_children_working_in_the_worktree`,
   `stopping_all_spares_the_tabs_own_processes_and_leftovers`,
   `stopping_by_pid_skips_pids_that_are_not_the_sessions`,
-  `stopping_a_pid_listed_with_another_start_leaves_it_alone` and
+  `stopping_a_pid_listed_with_another_start_leaves_it_alone`,
+  `a_process_still_running_after_its_ending_is_not_reported_ended` and
   `ending_skips_a_pid_whose_start_changed`.
 - Rust, `moonletd/tests/daemon.rs`: `a_sessions_processes_are_listed_by_name_and_stopped`,
   `leftovers_in_a_sessions_worktree_are_listed_apart_and_stopped_only_by_pid`,
@@ -199,12 +208,14 @@ worktree can be signalled.
   `says nothing when only the tabs' own processes run`,
   `describes a process row: origin, age, CPU and memory`,
   `stops a row by its pid and the start it was listed with; Stop all names none`,
-  `Stop all covers what the daemon stops: neither the tabs' own nor what was left in the worktree` and
+  `Stop all covers what the daemon stops: neither the tabs' own nor what was left in the worktree`,
+  `says which processes still run after their Stop` and
   `works out CPU use from two looks`; `actions.test.ts`:
   `lists the processes still running and stops them before archiving (X83)` and
   `archives as before when the daemon cannot list processes (X83)`.
-- Rust, `moonlet-cli` `src/ps.rs`: `kill_says_which_pids_it_stopped` and
-  `kill_fails_naming_pids_not_the_sessions_apart_from_those_already_ended`.
+- Rust, `moonlet-cli` `src/ps.rs`: `kill_says_which_pids_it_stopped`,
+  `kill_fails_naming_pids_not_the_sessions_apart_from_those_already_ended` and
+  `kill_fails_naming_pids_that_still_run_after_their_stop`.
 - e2e, `confirm-modal.e2e.ts`: `names what still runs in the session, and archiving stops it (X83)`.
 
 ## Open questions

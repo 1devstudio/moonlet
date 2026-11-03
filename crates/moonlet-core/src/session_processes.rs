@@ -200,19 +200,46 @@ pub fn to_stop(
 /// Ends `targets` (pid and start time): SIGTERM, then SIGKILL after
 /// [`crate::process::TERM_GRACE`] to those still running. A pid whose start
 /// time is no longer the one given is another process's, and is left alone.
-/// Returns the pids ended and those left alone, once the ended ones are gone.
-pub async fn end(targets: Vec<(u32, u64)>) -> (Vec<u32>, Vec<u32>) {
+/// Returns once the signalled ones are gone, or SIGKILL could not end them.
+pub async fn end(targets: Vec<(u32, u64)>) -> Ending {
     let (live, gone): (Vec<_>, Vec<_>) = targets
         .into_iter()
         .partition(|&(pid, start)| crate::pty::process_start(pid) == Some(start));
-    let ended = live.iter().map(|t| t.0).collect();
     crate::process::Doomed {
         group: None,
-        family: crate::process::Family::of(live),
+        family: crate::process::Family::of(live.clone()),
     }
     .end()
     .await;
-    (ended, gone.into_iter().map(|t| t.0).collect())
+    Ending {
+        gone: gone.into_iter().map(|t| t.0).collect(),
+        ..after_ending(&live, crate::pty::process_start)
+    }
+}
+
+/// What ending some processes did.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Ending {
+    /// Signalled, and no longer running.
+    pub ended: Vec<u32>,
+    /// Ended, or their pid another process's, before they were signalled.
+    pub gone: Vec<u32>,
+    /// Signalled, and still running: not this user's to signal, say.
+    pub still_running: Vec<u32>,
+}
+
+/// Sorts the `signalled` processes (pid and start time) by whether they
+/// still run with the same start, as `start_of` says now.
+pub fn after_ending(signalled: &[(u32, u64)], start_of: impl Fn(u32) -> Option<u64>) -> Ending {
+    let mut out = Ending::default();
+    for &(pid, start) in signalled {
+        if start_of(pid) == Some(start) {
+            out.still_running.push(pid);
+        } else {
+            out.ended.push(pid);
+        }
+    }
+    out
 }
 
 /// Describes each found process and leftover from what the kernel says now.
@@ -511,17 +538,48 @@ mod tests {
     async fn ending_skips_a_pid_whose_start_changed() {
         let pid = orphan_sleep();
         let start = crate::pty::process_start(pid).unwrap();
-        assert_eq!(end(vec![(pid, start + 1)]).await, (vec![], vec![pid]));
+        assert_eq!(
+            end(vec![(pid, start + 1)]).await,
+            Ending {
+                gone: vec![pid],
+                ..Ending::default()
+            }
+        );
         assert_eq!(
             crate::pty::process_start(pid),
             Some(start),
             "a pid listed with another start was signalled"
         );
-        assert_eq!(end(vec![(pid, start)]).await, (vec![pid], vec![]));
+        assert_eq!(
+            end(vec![(pid, start)]).await,
+            Ending {
+                ended: vec![pid],
+                ..Ending::default()
+            }
+        );
         assert_eq!(
             crate::pty::process_start(pid),
             None,
             "the sleep outlived its ending"
+        );
+    }
+
+    #[test]
+    fn a_process_still_running_after_its_ending_is_not_reported_ended() {
+        // 4242 could not be signalled and runs on; 4250 is gone; 4310's pid
+        // is another process's now, so the one signalled ended.
+        let now = |pid| match pid {
+            4242 => Some(12),
+            4310 => Some(99),
+            _ => None,
+        };
+        assert_eq!(
+            after_ending(&[(4242, 12), (4250, 13), (4310, 14)], now),
+            Ending {
+                ended: vec![4250, 4310],
+                still_running: vec![4242],
+                ..Ending::default()
+            }
         );
     }
 }

@@ -5388,7 +5388,7 @@ async fn a_sessions_processes_are_listed_by_name_and_stopped() {
     assert!(!listed.to_string().contains("/dev/null"), "{listed}");
 
     let killed: serde_json::Value = c.request(methods::SESSION_KILL_PROCESSES, serde_json::json!({"id": ws.id, "pids": [tail]})).await.unwrap();
-    assert_eq!(killed, serde_json::json!({"ended": [tail], "skipped": [], "gone": []}));
+    assert_eq!(killed, serde_json::json!({"ended": [tail], "skipped": [], "gone": [], "still_running": []}));
     assert!(gone_within(nix::unistd::Pid::from_raw(tail as i32), 2).await, "tail outlived its stop");
     assert!(nix::sys::signal::kill(nix::unistd::Pid::from_raw(server as i32), None).is_ok(), "stopping tail stopped the server");
 
@@ -5432,12 +5432,12 @@ async fn leftovers_in_a_sessions_worktree_are_listed_apart_and_stopped_only_by_p
 
     let killed: serde_json::Value =
         c.request(methods::SESSION_KILL_PROCESSES, serde_json::json!({"id": ws.id, "pids": [orphan, outsider.id()]})).await.unwrap();
-    assert_eq!(killed, serde_json::json!({"ended": [orphan], "skipped": [outsider.id()], "gone": []}));
+    assert_eq!(killed, serde_json::json!({"ended": [orphan], "skipped": [outsider.id()], "gone": [], "still_running": []}));
     assert!(gone_within(nix::unistd::Pid::from_raw(orphan as i32), 2).await, "the leftover outlived its stop");
     assert!(outsider.try_wait().unwrap().is_none(), "a process not the session's was stopped");
     // Named again once it ended: gone, not someone else's.
     let killed: serde_json::Value = c.request(methods::SESSION_KILL_PROCESSES, serde_json::json!({"id": ws.id, "pids": [orphan]})).await.unwrap();
-    assert_eq!(killed, serde_json::json!({"ended": [], "skipped": [], "gone": [orphan]}));
+    assert_eq!(killed, serde_json::json!({"ended": [], "skipped": [], "gone": [orphan], "still_running": []}));
     outsider.kill().unwrap();
     outsider.wait().unwrap();
 }
@@ -5457,12 +5457,12 @@ async fn a_pid_named_with_another_start_than_listed_is_left_alone() {
 
     let other = serde_json::json!({"id": ws.id, "pids": [{"pid": orphan, "started": started + 1}]});
     let killed: serde_json::Value = c.request(methods::SESSION_KILL_PROCESSES, other).await.unwrap();
-    assert_eq!(killed, serde_json::json!({"ended": [], "skipped": [], "gone": [orphan]}));
+    assert_eq!(killed, serde_json::json!({"ended": [], "skipped": [], "gone": [orphan], "still_running": []}));
     assert!(nix::sys::signal::kill(nix::unistd::Pid::from_raw(orphan as i32), None).is_ok(), "a pid listed with another start was stopped");
 
     let same = serde_json::json!({"id": ws.id, "pids": [{"pid": orphan, "started": started}]});
     let killed: serde_json::Value = c.request(methods::SESSION_KILL_PROCESSES, same).await.unwrap();
-    assert_eq!(killed, serde_json::json!({"ended": [orphan], "skipped": [], "gone": []}));
+    assert_eq!(killed, serde_json::json!({"ended": [orphan], "skipped": [], "gone": [], "still_running": []}));
     assert!(gone_within(nix::unistd::Pid::from_raw(orphan as i32), 2).await, "the leftover outlived its stop");
 }
 

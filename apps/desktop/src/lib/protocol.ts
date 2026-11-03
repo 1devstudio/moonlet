@@ -352,6 +352,8 @@ export interface ProcessesKilled {
   skipped: number[];
   /** No longer running: ended already, or the pid is another process's now. */
   gone: number[];
+  /** Signalled, but still running when the call returned. */
+  still_running: number[];
 }
 
 /** Work in a session that is only on its host (X55). */

@@ -1812,7 +1812,7 @@ pub struct SessionKillProcesses {
 /// `session.kill_processes`' result (X83).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProcessesKilled {
-    /// Stopped, and gone (or SIGKILLed a second before the call returned).
+    /// Stopped, and no longer running.
     pub ended: Vec<u32>,
     /// Named, running, but neither the session's processes nor its leftovers.
     pub skipped: Vec<u32>,
@@ -1820,6 +1820,10 @@ pub struct ProcessesKilled {
     /// another process's.
     #[serde(default)]
     pub gone: Vec<u32>,
+    /// Signalled, but still running when the call returned: this user may not
+    /// signal it, say.
+    #[serde(default)]
+    pub still_running: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

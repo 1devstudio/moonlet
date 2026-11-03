@@ -4,7 +4,7 @@
 import { rpc, sendInput } from "./daemon";
 import { addTab, closeDiff, closeFile, closeJob, cycleFocus, openDiff, openFile, openJob, splitLeaf, tabOf, type DiffMode } from "./layout";
 import { M, type ProjectConfig, type TerminalInfo, type Session, type SessionArchived, type SessionProcesses, type UnpushedWork } from "./protocol";
-import { killParams, runningLine, toStopOnArchive, withRunning } from "./sessionProcesses";
+import { killParams, runningLine, stillRunningLine, toStopOnArchive, withRunning } from "./sessionProcesses";
 import { checkForUpdates, errorToast, focusTerminal, getLayout, selectedSession, sesKey, sessionState, setLayout, termKey, toast, useStore, sessionTerminals, shownWorkspace, designHostOf, selectSession } from "./store";
 import { lastActive, sharedSessionOrder } from "./sidebar";
 import { findEntry, outputToCopy } from "./terminals";
@@ -338,7 +338,12 @@ export async function archiveSession(target?: { host: string; ws: Session }) {
   try {
     // Its terminals stop with the archive; what was listed stops first. A
     // failure to stop them is said, and the archive goes on.
-    if (stop.length) await rpc(c.host, M.sessionKillProcesses, killParams(c.ws.id, stop)).catch(errorToast);
+    if (stop.length) {
+      await rpc(c.host, M.sessionKillProcesses, killParams(c.ws.id, stop)).then((killed) => {
+        const left = stillRunningLine(killed);
+        if (left) toast(left, "error");
+      }, errorToast);
+    }
     const done = await rpc<SessionArchived | boolean>(c.host, M.sessionArchive, { id: c.ws.id, ...flags });
     if (typeof done === "object" && done.remote_error) toast(`Couldn't delete ${c.ws.branch} on origin: ${done.remote_error}`, "error");
     setArchiving(key, { loader, done: true, folding: false });

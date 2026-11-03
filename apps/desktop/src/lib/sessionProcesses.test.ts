@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { archivePrompt } from "./confirmOptions";
-import type { SessionProcess, SessionProcesses } from "./protocol";
-import { cpuPercent, killParams, processRow, processesSummary, runningLine, stoppedByStopAll, toStopOnArchive, withRunning } from "./sessionProcesses";
+import type { ProcessesKilled, SessionProcess, SessionProcesses } from "./protocol";
+import { cpuPercent, killParams, processRow, processesSummary, runningLine, stillRunningLine, stoppedByStopAll, toStopOnArchive, withRunning } from "./sessionProcesses";
 
 const NOW = 1_793_700_000_000;
 const dev = { kind: "terminal", id: 2, title: "dev" } as const;
@@ -61,6 +61,15 @@ describe("the Processes tab (X83)", () => {
     const unknown: SessionProcess = { pid: 4320, name: "?", origin: dev, tab: false };
     expect(killParams("s1", [vite, unknown])).toEqual({ id: "s1", pids: [{ pid: 4242, started: 1_793_699_880_000 }, 4320] });
     expect(killParams("s1")).toEqual({ id: "s1" });
+  });
+
+  it("says which processes still run after their Stop", () => {
+    expect(stillRunningLine({ ended: [4242], skipped: [], gone: [], still_running: [4250, 4251] })).toBe("2 processes still run after SIGKILL: 4250, 4251.");
+    expect(stillRunningLine({ ended: [], skipped: [], gone: [], still_running: [4250] })).toBe("1 process still runs after SIGKILL: 4250.");
+    expect(stillRunningLine({ ended: [4242], skipped: [], gone: [5151], still_running: [] })).toBeNull();
+    // An older daemon says nothing of them.
+    expect(stillRunningLine({ ended: [4242], skipped: [] } as unknown as ProcessesKilled)).toBeNull();
+    expect(stillRunningLine(true)).toBeNull();
   });
 
   it("works out CPU use from two looks", () => {

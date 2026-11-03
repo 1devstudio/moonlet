@@ -1854,10 +1854,10 @@ impl SessionManager {
         let (found, leftovers) = tokio::task::spawn_blocking(move || me.find_processes(&session)).await??;
         let stopping = crate::session_processes::to_stop(&found, &leftovers, pids.as_deref(), crate::process::started_ms, crate::process::runs);
         // One that ended between the look and its signal ended meanwhile.
-        let (ended, ended_meanwhile) = crate::session_processes::end(stopping.targets).await;
+        let ending = crate::session_processes::end(stopping.targets).await;
         let mut gone = stopping.gone;
-        gone.extend(ended_meanwhile);
-        Ok(moonlet_proto::methods::ProcessesKilled { ended, skipped: stopping.skipped, gone })
+        gone.extend(ending.gone);
+        Ok(moonlet_proto::methods::ProcessesKilled { ended: ending.ended, skipped: stopping.skipped, gone, still_running: ending.still_running })
     }
 
     pub async fn archive(&self, req: SessionArchive) -> Result<SessionArchived> {

@@ -2,7 +2,7 @@
 // archive confirm says about what still runs.
 
 import type { ConfirmOptions } from "./confirmOptions";
-import type { ProcessRef, SessionKillProcesses, SessionProcess, SessionProcesses } from "./protocol";
+import type { ProcessesKilled, ProcessRef, SessionKillProcesses, SessionProcess, SessionProcesses } from "./protocol";
 
 /** What the daemon's Stop all (`session.kill_processes` without pids) stops:
  * every process but those it marks the tabs' own (`tab`), never what was
@@ -44,6 +44,14 @@ export function toStopOnArchive(list: SessionProcesses | null): SessionProcess[]
 export function killParams(id: string, ps?: SessionProcess[]): SessionKillProcesses {
   if (!ps) return { id };
   return { id, pids: ps.map((p): ProcessRef => (p.started === undefined ? p.pid : { pid: p.pid, started: p.started })) };
+}
+
+/** What a Stop says when processes outlived it ("1 process still runs after
+ * SIGKILL: 4250."); null when none did, or the daemon did not say. */
+export function stillRunningLine(killed: unknown): string | null {
+  const left = (killed as Partial<ProcessesKilled> | null)?.still_running;
+  if (!Array.isArray(left) || !left.length) return null;
+  return `${left.length} ${left.length === 1 ? "process still runs" : "processes still run"} after SIGKILL: ${left.join(", ")}.`;
 }
 
 /** `options` with `line` after its message; the same options without one. */

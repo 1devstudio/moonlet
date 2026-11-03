@@ -92,8 +92,8 @@ pub fn stopped(killed: &ProcessesKilled) -> String {
 }
 
 /// What `moonlet kill` fails with for the pids it did not stop: those that
-/// run but are not the session's, and those that had ended; `None` when it
-/// stopped every one.
+/// run but are not the session's, those that had ended, and those that
+/// outlived SIGKILL; `None` when it stopped every one.
 pub fn not_stopped(killed: &ProcessesKilled) -> Option<String> {
     let list = |pids: &[u32]| pids.iter().map(u32::to_string).collect::<Vec<_>>().join(" ");
     let mut parts = Vec::new();
@@ -102,6 +102,9 @@ pub fn not_stopped(killed: &ProcessesKilled) -> Option<String> {
     }
     if !killed.gone.is_empty() {
         parts.push(format!("already ended: {}", list(&killed.gone)));
+    }
+    if !killed.still_running.is_empty() {
+        parts.push(format!("still running after SIGKILL: {}", list(&killed.still_running)));
     }
     (!parts.is_empty()).then(|| parts.join("; "))
 }
@@ -219,6 +222,7 @@ Left in the worktree, stopped only by pid:
             ended: vec![4242],
             skipped,
             gone,
+            ..ProcessesKilled::default()
         };
         assert_eq!(
             not_stopped(&killed(vec![999, 1000], vec![5151])).as_deref(),
@@ -233,5 +237,19 @@ Left in the worktree, stopped only by pid:
             Some("not processes of this session: 999")
         );
         assert_eq!(not_stopped(&killed(vec![], vec![])), None);
+    }
+
+    #[test]
+    fn kill_fails_naming_pids_that_still_run_after_their_stop() {
+        let killed = ProcessesKilled {
+            ended: vec![4242],
+            still_running: vec![4250],
+            ..ProcessesKilled::default()
+        };
+        assert_eq!(stopped(&killed), "stopped 4242\n");
+        assert_eq!(
+            not_stopped(&killed).as_deref(),
+            Some("still running after SIGKILL: 4250")
+        );
     }
 }

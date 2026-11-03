@@ -4,9 +4,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Activity } from "lucide-react";
 import { rpc } from "../lib/daemon";
-import { M, type Session, type SessionProcess, type SessionProcesses } from "../lib/protocol";
-import { type CpuLook, cpuPercent, killParams, processRow, processesSummary, stoppedByStopAll } from "../lib/sessionProcesses";
-import { errorToast } from "../lib/store";
+import { M, type ProcessesKilled, type Session, type SessionProcess, type SessionProcesses } from "../lib/protocol";
+import { type CpuLook, cpuPercent, killParams, processRow, processesSummary, stillRunningLine, stoppedByStopAll } from "../lib/sessionProcesses";
+import { errorToast, toast } from "../lib/store";
 import { Empty, cx } from "./ui";
 
 /** How often the tab looks again while shown. */
@@ -52,7 +52,8 @@ export function ProcessesPanel({ host, ws }: { host: string; ws: Session }) {
     const shown = (ps ?? (list ? stoppedByStopAll(list) : [])).map((p) => p.pid);
     setStopping((s) => [...s, ...shown]);
     try {
-      await rpc(host, M.sessionKillProcesses, killParams(ws.id, ps));
+      const left = stillRunningLine(await rpc<ProcessesKilled>(host, M.sessionKillProcesses, killParams(ws.id, ps)));
+      if (left) toast(left, "error");
     } catch (e) {
       errorToast(e);
     }
