@@ -317,11 +317,6 @@ export function outputCount(out: JobOutput): string {
   return `${n.toLocaleString("en-US")} ${n === 1 ? "line" : "lines"}`;
 }
 
-/** A job's output as lines: a line ends at a newline or where the other stream takes over. */
-export function outputLines(chunks: JobChunk[]): OutputLine[] {
-  return outputShown(readOutput(undefined, chunks, Infinity));
-}
-
 /** How many lines a job's view renders at first, and how many more each
  *  "Show earlier" adds (X81). */
 export const LINES_SHOWN = 2000;

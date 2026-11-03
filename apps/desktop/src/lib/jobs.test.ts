@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { type JobOutput, bashChip, chipFromJob, chipFromOutput, jobRowLine, jobStateLine, jobTabLine, jobsSummary, jobsTabCount, lastLines, LINES_SHOWN, outputCount, outputLines, outputShown, phaseBar, readOutput, phaseList, shownCommand, shownLines, workerFacts, workerLine } from "./jobs";
-import type { Job } from "./protocol";
+import { type JobOutput, bashChip, chipFromJob, chipFromOutput, jobRowLine, jobStateLine, jobTabLine, jobsSummary, jobsTabCount, lastLines, LINES_SHOWN, outputCount, outputShown, phaseBar, readOutput, phaseList, shownCommand, shownLines, workerFacts, workerLine } from "./jobs";
+import type { Job, JobChunk } from "./protocol";
 
 const job = (extra: Partial<Job> = {}): Job => ({
   id: "j1",
@@ -151,6 +151,8 @@ describe("routed Bash rows in the chat (X62)", () => {
 });
 
 describe("a job's output (X62)", () => {
+  // The lines a view shows for `chunks`, read at once and none dropped.
+  const linesOf = (chunks: JobChunk[]) => outputShown(readOutput(undefined, chunks, Infinity));
   const chunks = [
     { stream: 1 as const, text: "moonlet: running on studio-mini\n> vit" },
     { stream: 1 as const, text: "est run\n \u001b[32m\u2713\u001b[39m src/cart.test.ts (38 tests)\n" },
@@ -159,7 +161,7 @@ describe("a job's output (X62)", () => {
   ];
 
   it("reads chunks as numbered lines, stdout and stderr apart, without colours", () => {
-    expect(outputLines(chunks)).toEqual([
+    expect(linesOf(chunks)).toEqual([
       { n: 1, stream: 1, text: "moonlet: running on studio-mini", tone: "moonlet" },
       { n: 2, stream: 1, text: "> vitest run", tone: null },
       { n: 3, stream: 1, text: " \u2713 src/cart.test.ts (38 tests)", tone: null },
@@ -169,7 +171,7 @@ describe("a job's output (X62)", () => {
   });
 
   it("reads a colour code cut between two chunks as a colour, not as text", () => {
-    expect(outputLines([{ stream: 1, text: "\u001b[3" }, { stream: 1, text: "2mok\u001b[0m\n" }])).toEqual([{ n: 1, stream: 1, text: "ok", tone: null }]);
+    expect(linesOf([{ stream: 1, text: "\u001b[3" }, { stream: 1, text: "2mok\u001b[0m\n" }])).toEqual([{ n: 1, stream: 1, text: "ok", tone: null }]);
   });
 
   it("keeps the end of a long output, numbered as it was, and says earlier output was trimmed", () => {
@@ -241,7 +243,7 @@ describe("a job's output (X62)", () => {
   });
 
   it("renders the last 2000 lines of what it keeps, and 2000 more for each Show earlier", () => {
-    const lines = outputLines([{ stream: 1, text: Array.from({ length: 5000 }, (_, i) => `line ${i + 1}`).join("\n") }]);
+    const lines = linesOf([{ stream: 1, text: Array.from({ length: 5000 }, (_, i) => `line ${i + 1}`).join("\n") }]);
     const first = lastLines(lines, LINES_SHOWN);
     expect(first.earlier).toBe(3000);
     expect(first.shown.map((l) => l.text).slice(0, 1)).toEqual(["line 3001"]);
@@ -251,7 +253,7 @@ describe("a job's output (X62)", () => {
   });
 
   it("filters by stream and by what was typed in Find, keeping line numbers", () => {
-    const lines = outputLines(chunks);
+    const lines = linesOf(chunks);
     expect(shownLines(lines, "stderr", "").map((l) => l.n)).toEqual([4]);
     expect(shownLines(lines, "stdout", "").map((l) => l.n)).toEqual([1, 2, 3, 5]);
     expect(shownLines(lines, "all", "STUDIO").map((l) => l.n)).toEqual([1, 5]);
