@@ -125,6 +125,9 @@ describe("live terminals (X80)", () => {
     expect(findEntry("a", 2)).toBeDefined();
     expect(findEntry("a", 9)).toBeDefined();
     expect(detached("a")).toEqual([1]);
+    // The daemon sends it no more output, and none would reach its xterm.
+    expect(daemon.subscribed.has("a:1")).toBe(false);
+    expect(sinks.has("a:1")).toBe(false);
   });
 
   it("a terminal let go of attaches again when shown, and the replay draws it (X80)", async () => {
@@ -157,6 +160,14 @@ describe("live terminals (X80)", () => {
     await settled();
     expect(findEntry("h", 1)).toBe(split);
     expect(detached("h")).toEqual([2]);
+  });
+
+  it("ten terminals on screen at once are all kept (X80)", async () => {
+    const onScreen = [];
+    for (let id = 1; id <= 10; id++) onScreen.push(show("k", id));
+    await settled();
+    for (let id = 1; id <= 10; id++) expect(findEntry("k", id)).toBe(onScreen[id - 1]);
+    expect(detached("k")).toEqual([]);
   });
 
   it("a split tab shown keeps both its panes, though one was shown longest ago (X80)", async () => {
@@ -208,7 +219,6 @@ describe("live terminals (X80)", () => {
     await settled();
     expect(findEntry("e", 1)).toBeUndefined();
     daemon.answer();
-    await vi.waitFor(() => expect(daemon.subscribed.has("e:9")).toBe(true));
     await vi.waitFor(() => expect([...daemon.subscribed].sort()).toEqual(["e:2", "e:3", "e:4", "e:5", "e:6", "e:7", "e:8", "e:9"]));
   });
 

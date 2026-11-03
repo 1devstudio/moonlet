@@ -55,6 +55,7 @@ attached again and drawn from the daemon's replay.
 - [x] A terminal on screen is never let go of, nor is any pane of a split on
       screen, even when more than 8 are on screen
       (`never lets go of a terminal on screen, even past the limit (X80)`,
+      `ten terminals on screen at once are all kept (X80)`,
       `a terminal in a split on screen is kept however many others are shown (X80)`).
 - [x] Terminals are let go of only once every pane shown with the one just
       shown has mounted, so showing a split tab never lets go of its second
@@ -116,6 +117,7 @@ None: no new input crosses a trust boundary.
   `a terminal shown again before its slow attach answers stays subscribed (X80)`,
   `a terminal let go of attaches again when shown, and the replay draws it (X80)`,
   `a terminal shown again attaches at the size its pane fits, not 80x24 (X80)`,
+  `ten terminals on screen at once are all kept (X80)`,
   `a terminal in a split on screen is kept however many others are shown (X80)`,
   `a split tab shown keeps both its panes, though one was shown longest ago (X80)`,
   `a block dropped past the 2000 kept lets go of its marks (X80)` and
