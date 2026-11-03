@@ -69,6 +69,15 @@ describe("live terminals (X80)", () => {
       observe() {}
       disconnect() {}
     } as never;
+    // Characters 8 by 16 px, as xterm measures its font with a hidden span.
+    const measured = (side: number) => ({
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.classList.contains("xterm-char-measure-element") ? side : 0;
+      },
+    });
+    Object.defineProperty(HTMLElement.prototype, "offsetWidth", measured(8 * 32));
+    Object.defineProperty(HTMLElement.prototype, "offsetHeight", measured(16));
   });
 
   const shown: [string, number][] = [];
@@ -80,6 +89,20 @@ describe("live terminals (X80)", () => {
     const entry = getEntry(host, session);
     entry.mount(pane);
     return entry;
+  };
+  /** Shows a terminal in a pane 960 by 480 px, laid out as the window lays
+   * out a tab's pane before its terminal is mounted. */
+  const showSized = (host: string, session: number) => {
+    shown.push([host, session]);
+    const style = document.createElement("style");
+    style.textContent = ".moonlet-term { width: 960px; height: 480px; } .xterm { padding: 0px; }";
+    document.head.append(style);
+    const pane = document.createElement("div");
+    Object.defineProperty(pane, "clientWidth", { value: 960 });
+    Object.defineProperty(pane, "clientHeight", { value: 480 });
+    document.body.append(pane);
+    getEntry(host, session).mount(pane);
+    style.remove();
   };
   const detached = (host: string) => sent.filter(([h, m]) => h === host && m === "terminal.detach").map(([, , p]) => p);
 
@@ -108,6 +131,15 @@ describe("live terminals (X80)", () => {
     sinks.get("b:1")!.reset(new TextEncoder().encode("$ make\r\nbuilt\r\n"));
     await vi.waitFor(() => expect([again.lineText(0), again.lineText(1)]).toEqual(["$ make", "built"]));
     expect(findEntry("b", 1)).toBe(again);
+  });
+
+  it("a terminal shown again attaches at the size its pane fits, not 80x24 (X80)", async () => {
+    for (let id = 1; id <= 9; id++) show("g", id).unmount();
+    sent.length = 0;
+    showSized("g", 1);
+    // Past the 60 ms a resize waits for, so a resize after the attach shows.
+    await new Promise((done) => setTimeout(done, 100));
+    expect(sent.filter(([, , p]) => (p as { id: number }).id === 1)).toEqual([["g", "terminal.attach", { id: 1, cols: 119, rows: 26 }]]);
   });
 
   it("a terminal in a split on screen is kept however many others are shown (X80)", () => {

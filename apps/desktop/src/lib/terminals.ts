@@ -241,6 +241,8 @@ export class TermEntry {
   /** The size the last attach asked for, which its snapshot is drawn at. */
   private snapshotSize: { cols: number; rows: number } | null = null;
   private disposed = false;
+  /** Attached once first mounted, at the size its pane fits (X80). */
+  private attached = false;
   onTitle?: (title: string) => void;
   onFileLink?: FileLinkHandler;
   /** Set while the input editor is shown: printable keys typed into the
@@ -394,6 +396,8 @@ export class TermEntry {
     this.ready = false;
     const { cols, rows } = this.term;
     this.snapshotSize = { cols, rows };
+    // The attach asks for the size itself; a resize waiting to be sent is moot.
+    window.clearTimeout(this.resizeTimer);
     try {
       await rpc(this.host, M.terminalAttach, { id: this.session, cols, rows });
     } catch (e) {
@@ -431,6 +435,13 @@ export class TermEntry {
     this.resizeObs?.disconnect();
     this.resizeObs = new ResizeObserver(() => this.refit());
     this.resizeObs.observe(parent);
+    // Fitted before its first attach, so the daemon draws the replay at the
+    // pane's size rather than 80x24 (X80).
+    this.refit();
+    if (!this.attached) {
+      this.attached = true;
+      void this.attach().catch(() => {});
+    }
     requestAnimationFrame(() => this.refit());
     shown(this);
   }
@@ -953,7 +964,6 @@ export function getEntry(host: string, session: number): TermEntry {
   if (!e) {
     e = new TermEntry(host, session, settings);
     entries.set(key, e);
-    void e.attach().catch(() => {});
   }
   return e;
 }

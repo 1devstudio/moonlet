@@ -45,6 +45,9 @@ attached again and drawn from the daemon's replay.
 - [x] A terminal let go of is attached again when it is shown again, and the
       daemon's replay (S2) draws its screen and scrollback
       (`a terminal let go of attaches again when shown, and the replay draws it (X80)`).
+      A terminal attaches once it is in its pane, fitted to it, so the replay
+      is drawn at the pane's size rather than 80x24, and no resize follows
+      (`a terminal shown again attaches at the size its pane fits, not 80x24 (X80)`).
 - [x] A terminal on screen is never let go of, nor is any pane of a split on
       screen, even when more than 8 are on screen
       (`never lets go of a terminal on screen, even past the limit (X80)`,
@@ -103,6 +106,7 @@ None: no new input crosses a trust boundary.
   `a terminal let go of while its attach is on its way is detached once the attach answers (X80)`,
   `a terminal shown again before its slow attach answers stays subscribed (X80)`,
   `a terminal let go of attaches again when shown, and the replay draws it (X80)`,
+  `a terminal shown again attaches at the size its pane fits, not 80x24 (X80)`,
   `a terminal in a split on screen is kept however many others are shown (X80)`,
   `a block dropped past the 2000 kept lets go of its marks (X80)` and
   `a command's input mark (B) leaves no mark behind in the terminal (X80)`.
