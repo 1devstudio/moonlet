@@ -26,9 +26,9 @@ workspace's board once per change instead of once per component that shows it.
 
 ## Behaviour and acceptance criteria
 
-- [ ] A git poll whose result equals the session's current git status changes
+- [x] A git poll whose result equals the session's current git status changes
       nothing in the store, so nothing re-renders.
-- [ ] A git poll whose result differs updates the session's git status, as
+- [x] A git poll whose result differs updates the session's git status, as
       before.
 - [ ] A workspace's board is built once for a given set of inputs, however many
       components show it (sidebar, mode switch, a session's task, Tasks mode).
@@ -66,8 +66,9 @@ Later parts of the same investigation, each with its own change:
 
 ## Test plan
 
-- Vitest: a poll that returns the same status notifies no store subscriber; a
-  changed status notifies once and is stored.
+- Vitest, `gitPoll.test.ts`: `re-renders nothing when the worktree has not
+  changed since the last poll` and `stores a changed status and tells
+  subscribers once`.
 - Vitest: the board for the same inputs is the same object when asked for
   twice; new inputs give a new board.
 - Vitest: existing `tasks.test.ts`, `tasksBoard.test.ts` and `tasksStore.test.ts`
