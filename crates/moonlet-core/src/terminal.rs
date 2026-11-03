@@ -236,6 +236,24 @@ impl TerminalManager {
             .collect()
     }
 
+    /// The terminal tabs of session `session` with a shell, for listing
+    /// what they run (X83).
+    pub fn session_tabs(&self, session: &str) -> Vec<crate::session_processes::Tab> {
+        let mut terminals: Vec<_> = self.terminals.lock().unwrap().values().cloned().collect();
+        terminals.sort_by_key(|t| t.id);
+        terminals
+            .iter()
+            .filter_map(|t| {
+                let st = t.state.lock().unwrap();
+                if st.info.chat || st.info.session_id.as_deref() != Some(session) {
+                    return None;
+                }
+                let leader = st.pty.as_ref()?.pid();
+                Some(crate::session_processes::Tab { id: t.id, title: st.info.title.clone(), leader, exited: st.info.exit.is_some() })
+            })
+            .collect()
+    }
+
     pub fn list(&self) -> Vec<TerminalInfo> {
         self.terminals
             .lock()

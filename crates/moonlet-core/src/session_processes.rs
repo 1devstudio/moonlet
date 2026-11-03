@@ -1,0 +1,434 @@
+//! A session's processes (X83): what its terminals and agents run, and what
+//! was left working in its worktree, named by their executables and stopped
+//! on request. Never their arguments, which can hold tokens.
+
+use std::path::{Path, PathBuf};
+
+use moonlet_proto::TerminalId;
+use moonlet_proto::methods::{ProcessOrigin, SessionProcess, SessionProcesses};
+
+use crate::process::Proc;
+
+/// A terminal tab of a session: its shell leads the tab's session.
+#[derive(Debug, Clone)]
+pub struct Tab {
+    pub id: TerminalId,
+    pub title: String,
+    pub leader: u32,
+    /// Its shell exited, and was reaped: its pid may be another process's.
+    pub exited: bool,
+}
+
+/// A chat agent of a session: its process while it runs, and what it
+/// started, as pid and start time (X79).
+#[derive(Debug, Clone)]
+pub struct Agent {
+    pub id: TerminalId,
+    pub title: String,
+    pub pid: Option<u32>,
+    pub family: Vec<(u32, u64)>,
+}
+
+/// A process found to be a session's, not yet described.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Found {
+    pub proc: Proc,
+    pub origin: ProcessOrigin,
+    /// The tab's own: its shell, or the chat's agent.
+    pub tab: bool,
+}
+
+/// The processes of `table` that belong to the session of `tabs` and
+/// `agents`: every process in a tab's session (`session_of` says which a
+/// process is in), each agent and what it started that still runs with the
+/// same start. Tabs first, in the order given, then agents; each one's by
+/// start time.
+pub fn belonging(
+    table: &[Proc],
+    session_of: impl Fn(u32) -> Option<u32>,
+    tabs: &[Tab],
+    agents: &[Agent],
+) -> Vec<Found> {
+    let mut out: Vec<Found> = Vec::new();
+    let add = |mut found: Vec<Found>, out: &mut Vec<Found>| {
+        found.sort_by_key(|f| (!f.tab, f.proc.start, f.proc.pid));
+        for f in found {
+            if !out.iter().any(|o| o.proc.pid == f.proc.pid) {
+                out.push(f);
+            }
+        }
+    };
+    let sessions: Vec<(u32, Option<u32>)> =
+        table.iter().map(|p| (p.pid, session_of(p.pid))).collect();
+    let sid = |pid: u32| sessions.iter().find(|s| s.0 == pid).and_then(|s| s.1);
+    for t in tabs {
+        // A reaped shell's pid that now leads a session leads someone else's (X79).
+        if t.exited && sid(t.leader) == Some(t.leader) {
+            continue;
+        }
+        let origin = ProcessOrigin::Terminal {
+            id: t.id,
+            title: t.title.clone(),
+        };
+        let found = table
+            .iter()
+            .filter(|p| sid(p.pid) == Some(t.leader))
+            .map(|p| Found {
+                proc: *p,
+                origin: origin.clone(),
+                tab: p.pid == t.leader && !t.exited,
+            })
+            .collect();
+        add(found, &mut out);
+    }
+    for a in agents {
+        let origin = ProcessOrigin::Agent {
+            id: a.id,
+            title: a.title.clone(),
+        };
+        let own = a
+            .pid
+            .and_then(|pid| table.iter().find(|p| p.pid == pid))
+            .map(|p| Found {
+                proc: *p,
+                origin: origin.clone(),
+                tab: true,
+            });
+        let started = a
+            .family
+            .iter()
+            .filter_map(|&(pid, start)| table.iter().find(|p| p.pid == pid && p.start == start));
+        let found = own
+            .into_iter()
+            .chain(started.map(|p| Found {
+                proc: *p,
+                origin: origin.clone(),
+                tab: false,
+            }))
+            .collect();
+        add(found, &mut out);
+    }
+    out
+}
+
+/// The processes of `table` left working in `worktree`: launchd's (init's)
+/// children whose working directory (`cwd_of`) is the worktree or inside it,
+/// other than those `taken` and `skip` (this daemon), by start time.
+pub fn leftovers(
+    table: &[Proc],
+    taken: &[Found],
+    worktree: &Path,
+    cwd_of: impl Fn(u32) -> Option<PathBuf>,
+    skip: u32,
+) -> Vec<Proc> {
+    let mut out: Vec<Proc> = table
+        .iter()
+        .filter(|p| {
+            p.ppid == 1 && p.pid != skip && p.pid > 1 && !taken.iter().any(|f| f.proc.pid == p.pid)
+        })
+        .filter(|p| cwd_of(p.pid).is_some_and(|c| c.starts_with(worktree)))
+        .copied()
+        .collect();
+    out.sort_by_key(|p| (p.start, p.pid));
+    out
+}
+
+/// What to stop of `found` and `leftovers`, as pid and start time, and the
+/// pids of `pids` that are neither. No `pids`: every found process but the
+/// tabs' own, never a leftover.
+pub fn to_stop(
+    found: &[Found],
+    leftovers: &[Proc],
+    pids: Option<&[u32]>,
+) -> (Vec<(u32, u64)>, Vec<u32>) {
+    let Some(pids) = pids else {
+        return (
+            found
+                .iter()
+                .filter(|f| !f.tab)
+                .map(|f| (f.proc.pid, f.proc.start))
+                .collect(),
+            Vec::new(),
+        );
+    };
+    let mut stop = Vec::new();
+    let mut skipped = Vec::new();
+    for &pid in pids {
+        match found
+            .iter()
+            .map(|f| &f.proc)
+            .chain(leftovers)
+            .find(|p| p.pid == pid)
+        {
+            Some(p) if !stop.contains(&(p.pid, p.start)) => stop.push((p.pid, p.start)),
+            Some(_) => {}
+            None => skipped.push(pid),
+        }
+    }
+    (stop, skipped)
+}
+
+/// Ends `targets` (pid and start time): SIGTERM, then SIGKILL after
+/// [`crate::process::TERM_GRACE`] to those still running. A pid whose start
+/// time is no longer the one given is another process's, and is left alone.
+/// Returns the pids ended and those left alone, once the ended ones are gone.
+pub async fn end(targets: Vec<(u32, u64)>) -> (Vec<u32>, Vec<u32>) {
+    let (live, gone): (Vec<_>, Vec<_>) = targets
+        .into_iter()
+        .partition(|&(pid, start)| crate::pty::process_start(pid) == Some(start));
+    let ended = live.iter().map(|t| t.0).collect();
+    crate::process::Doomed {
+        group: None,
+        family: crate::process::Family::of(live),
+    }
+    .end()
+    .await;
+    (ended, gone.into_iter().map(|t| t.0).collect())
+}
+
+/// Describes each found process and leftover from what the kernel says now.
+pub fn describe(found: &[Found], leftovers: &[Proc]) -> SessionProcesses {
+    let one = |p: &Proc, origin: ProcessOrigin, tab: bool| {
+        let usage = crate::process::usage(p.pid);
+        SessionProcess {
+            pid: p.pid,
+            name: crate::process::name(p.pid)
+                .or_else(|| crate::process::kernel_name(p.pid))
+                .unwrap_or_else(|| "?".into()),
+            origin,
+            tab,
+            started: crate::process::started_ms(p.start),
+            cpu_ms: usage.map(|u| u.cpu_ms),
+            rss: usage.map(|u| u.rss),
+        }
+    };
+    SessionProcesses {
+        processes: found
+            .iter()
+            .map(|f| one(&f.proc, f.origin.clone(), f.tab))
+            .collect(),
+        leftovers: leftovers
+            .iter()
+            .map(|p| one(p, ProcessOrigin::Leftover, false))
+            .collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const fn p(pid: u32, ppid: u32, start: u64) -> Proc {
+        Proc { pid, ppid, start }
+    }
+
+    fn pids(found: &[Found]) -> Vec<(u32, bool)> {
+        found.iter().map(|f| (f.proc.pid, f.tab)).collect()
+    }
+
+    #[test]
+    fn a_sessions_processes_are_its_tabs_sessions_and_its_agents_families() {
+        // Tab 1's zsh (100) runs vite (101) and, in a group of its own, tail
+        // (102, started first); another session's shell (200) is not the
+        // session's. Tab 2's shell exited and its pid now leads a new session
+        // (400). Tab 3's shell exited too, leaving a job (501). Chat 7's agent
+        // (300) started a server (301); 302 has ended and 303's pid is reused.
+        let table = [
+            p(100, 50, 10),
+            p(101, 100, 12),
+            p(102, 1, 11),
+            p(200, 1, 13),
+            p(400, 1, 40),
+            p(501, 1, 50),
+            p(300, 50, 30),
+            p(301, 1, 31),
+            p(303, 1, 99),
+        ];
+        let session_of = |pid| {
+            Some(match pid {
+                101 | 102 => 100,
+                501 => 500,
+                301 => 301,
+                other => other,
+            })
+        };
+        let tabs = [
+            Tab {
+                id: 1,
+                title: "zsh".into(),
+                leader: 100,
+                exited: false,
+            },
+            Tab {
+                id: 2,
+                title: "old".into(),
+                leader: 400,
+                exited: true,
+            },
+            Tab {
+                id: 3,
+                title: "dev".into(),
+                leader: 500,
+                exited: true,
+            },
+        ];
+        let agents = [Agent {
+            id: 7,
+            title: "Claude".into(),
+            pid: Some(300),
+            family: vec![(301, 31), (302, 32), (303, 33)],
+        }];
+        let found = belonging(&table, session_of, &tabs, &agents);
+        assert_eq!(
+            pids(&found),
+            [
+                (100, true),
+                (102, false),
+                (101, false),
+                (501, false),
+                (300, true),
+                (301, false)
+            ]
+        );
+        assert_eq!(
+            found[0].origin,
+            ProcessOrigin::Terminal {
+                id: 1,
+                title: "zsh".into()
+            }
+        );
+        assert_eq!(
+            found[3].origin,
+            ProcessOrigin::Terminal {
+                id: 3,
+                title: "dev".into()
+            }
+        );
+        assert_eq!(
+            found[5].origin,
+            ProcessOrigin::Agent {
+                id: 7,
+                title: "Claude".into()
+            }
+        );
+    }
+
+    #[test]
+    fn leftovers_are_launchd_children_working_in_the_worktree() {
+        let table = [
+            p(600, 1, 60),
+            p(601, 1, 61),
+            p(602, 1, 59),
+            p(603, 5, 63),
+            p(101, 1, 12),
+            p(604, 1, 64),
+            p(50, 1, 5),
+        ];
+        let cwd = |pid| {
+            Some(PathBuf::from(match pid {
+                600 => "/w/s1/web",
+                601 => "/w/s10",
+                602 | 603 | 101 | 50 => "/w/s1",
+                _ => return None,
+            }))
+        };
+        let taken = [Found {
+            proc: p(101, 1, 12),
+            origin: ProcessOrigin::Terminal {
+                id: 1,
+                title: "zsh".into(),
+            },
+            tab: false,
+        }];
+        let left: Vec<u32> = leftovers(&table, &taken, Path::new("/w/s1"), cwd, 50)
+            .iter()
+            .map(|p| p.pid)
+            .collect();
+        assert_eq!(left, [602, 600]);
+    }
+
+    fn listed() -> (Vec<Found>, Vec<Proc>) {
+        let term = ProcessOrigin::Terminal {
+            id: 1,
+            title: "zsh".into(),
+        };
+        let found = vec![
+            Found {
+                proc: p(100, 50, 10),
+                origin: term.clone(),
+                tab: true,
+            },
+            Found {
+                proc: p(101, 100, 12),
+                origin: term,
+                tab: false,
+            },
+            Found {
+                proc: p(300, 50, 30),
+                origin: ProcessOrigin::Agent {
+                    id: 7,
+                    title: "Claude".into(),
+                },
+                tab: true,
+            },
+            Found {
+                proc: p(301, 1, 31),
+                origin: ProcessOrigin::Agent {
+                    id: 7,
+                    title: "Claude".into(),
+                },
+                tab: false,
+            },
+        ];
+        (found, vec![p(600, 1, 60)])
+    }
+
+    #[test]
+    fn stopping_all_spares_the_tabs_own_processes_and_leftovers() {
+        let (found, left) = listed();
+        assert_eq!(
+            to_stop(&found, &left, None),
+            (vec![(101, 12), (301, 31)], vec![])
+        );
+    }
+
+    #[test]
+    fn stopping_by_pid_skips_pids_that_are_not_the_sessions() {
+        let (found, left) = listed();
+        assert_eq!(
+            to_stop(&found, &left, Some(&[101, 600, 999, 100, 101])),
+            (vec![(101, 12), (600, 60), (100, 10)], vec![999])
+        );
+    }
+
+    /// A `sleep` left to launchd, as a leftover is: its pid.
+    fn orphan_sleep() -> u32 {
+        let out = std::process::Command::new("/bin/sh")
+            .args(["-c", "/bin/sleep 30 >/dev/null 2>&1 & echo $!"])
+            .output()
+            .unwrap();
+        String::from_utf8(out.stdout)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn ending_skips_a_pid_whose_start_changed() {
+        let pid = orphan_sleep();
+        let start = crate::pty::process_start(pid).unwrap();
+        assert_eq!(end(vec![(pid, start + 1)]).await, (vec![], vec![pid]));
+        assert_eq!(
+            crate::pty::process_start(pid),
+            Some(start),
+            "a pid listed with another start was signalled"
+        );
+        assert_eq!(end(vec![(pid, start)]).await, (vec![pid], vec![]));
+        assert_eq!(
+            crate::pty::process_start(pid),
+            None,
+            "the sleep outlived its ending"
+        );
+    }
+}

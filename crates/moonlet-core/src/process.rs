@@ -104,6 +104,99 @@ pub fn root_in_status(status: &str) -> bool {
     matches!((ids.next(), ids.next()), (Some(Some(0)), Some(Some(0))))
 }
 
+/// The working directory of process `pid` (X83); `None` when the kernel does
+/// not say, as for another user's process.
+pub fn cwd(pid: u32) -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        // SAFETY: proc_pidinfo writes at most `size` bytes into `info`.
+        let mut info: libc::proc_vnodepathinfo = unsafe { std::mem::zeroed() };
+        let size = std::mem::size_of::<libc::proc_vnodepathinfo>() as i32;
+        let n = unsafe { libc::proc_pidinfo(pid as i32, libc::PROC_PIDVNODEPATHINFO, 0, (&mut info as *mut libc::proc_vnodepathinfo).cast(), size) };
+        if n != size {
+            return None;
+        }
+        // A NUL-terminated path, kept as 32 rows of 32 bytes.
+        let bytes: Vec<u8> = info.pvi_cdir.vip_path.iter().flatten().map(|&c| c as u8).take_while(|&b| b != 0).collect();
+        (!bytes.is_empty()).then(|| PathBuf::from(std::ffi::OsString::from_vec(bytes)))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
+    }
+}
+
+/// What process `pid` used so far, as the kernel counts it (X83).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Usage {
+    /// CPU time, user and system, in milliseconds.
+    pub cpu_ms: u64,
+    /// Resident memory, in bytes.
+    pub rss: u64,
+}
+
+/// The CPU time and memory process `pid` uses; `None` when the kernel does not say.
+pub fn usage(pid: u32) -> Option<Usage> {
+    #[cfg(target_os = "macos")]
+    {
+        // SAFETY: proc_pidinfo writes at most `size` bytes into `info`.
+        let mut info: libc::proc_taskinfo = unsafe { std::mem::zeroed() };
+        let size = std::mem::size_of::<libc::proc_taskinfo>() as i32;
+        let n = unsafe { libc::proc_pidinfo(pid as i32, libc::PROC_PIDTASKINFO, 0, (&mut info as *mut libc::proc_taskinfo).cast(), size) };
+        if n != size {
+            return None;
+        }
+        let (numer, denom) = timebase();
+        let ns = (info.pti_total_user as u128 + info.pti_total_system as u128) * numer / denom;
+        Some(Usage { cpu_ms: (ns / 1_000_000) as u64, rss: info.pti_resident_size })
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        // Counted after the command name, which may hold spaces: utime and
+        // stime are fields 14 and 15, rss (in pages) field 24.
+        let fields: Vec<&str> = stat[stat.rfind(')')? + 2..].split(' ').collect();
+        let ticks: u64 = fields.get(11)?.parse::<u64>().ok()? + fields.get(12)?.parse::<u64>().ok()?;
+        let pages: u64 = fields.get(21)?.parse().ok()?;
+        // SAFETY: sysconf only reads a system setting.
+        let (hz, page) = unsafe { (libc::sysconf(libc::_SC_CLK_TCK), libc::sysconf(libc::_SC_PAGESIZE)) };
+        Some(Usage { cpu_ms: ticks * 1000 / hz.max(1) as u64, rss: pages * page.max(0) as u64 })
+    }
+}
+
+/// Mach ticks to nanoseconds, as a fraction: 1/1 on Intel, not on Apple silicon.
+#[cfg(target_os = "macos")]
+#[allow(deprecated)] // libc points to the mach2 crate for this one call.
+fn timebase() -> (u128, u128) {
+    let mut base = libc::mach_timebase_info { numer: 0, denom: 0 };
+    // SAFETY: mach_timebase_info only fills `base`.
+    let ok = unsafe { libc::mach_timebase_info(&mut base) } == 0 && base.denom != 0;
+    if ok { (base.numer as u128, base.denom as u128) } else { (1, 1) }
+}
+
+/// A start time from [`crate::pty::process_start`] in milliseconds since the epoch.
+pub fn started_ms(start: u64) -> Option<u64> {
+    #[cfg(target_os = "macos")]
+    {
+        Some(start / 1000)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        // Clock ticks since boot, which is in seconds since the epoch.
+        // SAFETY: sysconf only reads a system setting.
+        let hz = unsafe { libc::sysconf(libc::_SC_CLK_TCK) }.max(1) as u64;
+        Some(boot_time()? * 1000 + start * 1000 / hz)
+    }
+}
+
+/// The session process `pid` is in: its leader's pid.
+pub fn session_of(pid: u32) -> Option<u32> {
+    // SAFETY: getsid only reads the process table.
+    let sid = unsafe { libc::getsid(pid as i32) };
+    u32::try_from(sid).ok()
+}
+
 /// The nearest `hops` ancestors of process `pid`, parent first, with the
 /// executable each runs; it stops at the first the kernel does not show,
 /// and before launchd or init.
@@ -465,6 +558,31 @@ mod tests {
         }
         #[cfg(target_os = "macos")]
         assert_eq!((kernel, root), (None, None));
+    }
+
+    #[test]
+    fn a_child_s_working_directory_and_usage_are_what_the_kernel_says() {
+        let dir = tempfile::tempdir().unwrap();
+        let before = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+        let mut child = std::process::Command::new("/bin/sleep").arg("5").current_dir(dir.path()).spawn().unwrap();
+        let pid = child.id();
+        let at = cwd(pid);
+        let used = usage(pid);
+        let started = crate::pty::process_start(pid).and_then(started_ms);
+        let session = session_of(pid);
+        child.kill().unwrap();
+        child.wait().unwrap();
+        let after = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+        assert_eq!(at, Some(dir.path().canonicalize().unwrap()));
+        let used = used.expect("no usage for a child");
+        assert!(used.rss > 0, "a running sleep has resident memory");
+        assert!(used.cpu_ms < 5_000, "a sleep used {} ms of CPU", used.cpu_ms);
+        // Linux counts the start in clock ticks: 10 ms each.
+        let started = started.expect("no start time for a child");
+        assert!(started + 1_000 >= before && started <= after + 1_000, "started {started}, spawned between {before} and {after}");
+        // SAFETY: getsid only reads the process table.
+        assert_eq!(session, Some(unsafe { libc::getsid(0) } as u32));
+        assert_eq!((cwd(99_999_999), usage(99_999_999), session_of(99_999_999)), (None, None, None));
     }
 
     #[test]

@@ -32,6 +32,7 @@ pub mod project_config;
 pub mod process;
 pub mod pty;
 pub mod session;
+pub mod session_processes;
 pub mod shell;
 pub mod tasks;
 pub mod ssh;

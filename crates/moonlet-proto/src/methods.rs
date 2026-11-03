@@ -107,6 +107,11 @@ pub const SESSION_ARCHIVE: &str = "session.archive";
 pub const SESSION_UNARCHIVE: &str = "session.unarchive";
 pub const SESSION_UPDATE: &str = "session.update";
 pub const SESSION_RUN: &str = "session.run";
+/// The processes a session's terminals and agents run, and those left in its
+/// worktree (X83).
+pub const SESSION_PROCESSES: &str = "session.processes";
+/// Stops some or all of a session's processes (X83).
+pub const SESSION_KILL_PROCESSES: &str = "session.kill_processes";
 /// A member opens its session's copy on the central host (X72).
 pub const SESSION_OPEN: &str = "session.open";
 /// A member sends its session's files and commit to the central host's
@@ -1736,6 +1741,67 @@ pub struct SessionArchive {
 
 fn yes() -> bool {
     true
+}
+
+/// One process of a session (X83), named by its executable's file name,
+/// never by its arguments.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionProcess {
+    pub pid: u32,
+    pub name: String,
+    pub origin: ProcessOrigin,
+    /// The tab's own process: a terminal's shell, or a chat's agent. Closing
+    /// the tab ends it; stopping all leaves it.
+    #[serde(default)]
+    pub tab: bool,
+    /// When it started, in milliseconds since the epoch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started: Option<u64>,
+    /// CPU time it used so far, user and system, in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_ms: Option<u64>,
+    /// Resident memory, in bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rss: Option<u64>,
+}
+
+/// What a session's process belongs to (X83).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ProcessOrigin {
+    /// In the session of a terminal tab's shell.
+    Terminal { id: TerminalId, title: String },
+    /// A chat's agent, or a process it started.
+    Agent { id: TerminalId, title: String },
+    /// Launchd's (init's), working in the session's worktree.
+    Leftover,
+}
+
+/// `session.processes`' result (X83).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionProcesses {
+    pub processes: Vec<SessionProcess>,
+    /// Processes nothing in moonlet owns, working in the session's worktree.
+    pub leftovers: Vec<SessionProcess>,
+}
+
+/// `session.kill_processes`' params (X83).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionKillProcesses {
+    pub id: String,
+    /// The pids to stop, of the session's processes or leftovers; none: every
+    /// process of the session but the tabs' own, never a leftover.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pids: Option<Vec<u32>>,
+}
+
+/// `session.kill_processes`' result (X83).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProcessesKilled {
+    /// Stopped, and gone (or SIGKILLed a second before the call returned).
+    pub ended: Vec<u32>,
+    /// Named, but not the session's processes or leftovers.
+    pub skipped: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

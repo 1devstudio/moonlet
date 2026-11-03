@@ -1823,6 +1823,41 @@ impl SessionManager {
         )
     }
 
+    /// What session `id`'s terminals and agents run, and what was left working
+    /// in its worktree (X83). Reads the whole process table: call it off the
+    /// runtime's threads.
+    pub fn processes(&self, id: &str) -> Result<moonlet_proto::methods::SessionProcesses> {
+        let (found, leftovers) = self.find_processes(id)?;
+        Ok(crate::session_processes::describe(&found, &leftovers))
+    }
+
+    fn find_processes(&self, id: &str) -> Result<(Vec<crate::session_processes::Found>, Vec<crate::process::Proc>)> {
+        let ws = self.session(id)?;
+        let table = crate::process::table();
+        let tabs = self.terminals.session_tabs(id);
+        let agents = self.chats.get().map(|c| c.session_agents(id, &table)).unwrap_or_default();
+        let found = crate::session_processes::belonging(&table, crate::process::session_of, &tabs, &agents);
+        // The kernel names a working directory by its real path.
+        let leftovers = match std::fs::canonicalize(&ws.path) {
+            Ok(worktree) => crate::session_processes::leftovers(&table, &found, &worktree, crate::process::cwd, std::process::id()),
+            Err(_) => Vec::new(),
+        };
+        Ok((found, leftovers))
+    }
+
+    /// Stops `pids` of session `id`'s processes and leftovers, or every
+    /// process of it but its tabs' own (X83): SIGTERM, then SIGKILL after 3 s.
+    /// Returns once they are gone.
+    pub async fn kill_processes(self: &Arc<Self>, id: &str, pids: Option<Vec<u32>>) -> Result<moonlet_proto::methods::ProcessesKilled> {
+        let me = self.clone();
+        let session = id.to_string();
+        let (found, leftovers) = tokio::task::spawn_blocking(move || me.find_processes(&session)).await??;
+        let (targets, mut skipped) = crate::session_processes::to_stop(&found, &leftovers, pids.as_deref());
+        let (ended, gone) = crate::session_processes::end(targets).await;
+        skipped.extend(gone);
+        Ok(moonlet_proto::methods::ProcessesKilled { ended, skipped })
+    }
+
     pub async fn archive(&self, req: SessionArchive) -> Result<SessionArchived> {
         // Never while a new session's terminals start (X65).
         let lifecycle = self.lifecycle(&req.id);
