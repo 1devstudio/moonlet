@@ -806,6 +806,12 @@ impl ChatManager {
             && now_ms().saturating_sub(inner.active_at) >= self.rest_after.load(std::sync::atomic::Ordering::SeqCst)
     }
 
+    /// Agents rest once idle for `after` (X84): tests shorten the day.
+    #[cfg(test)]
+    pub(crate) fn set_rest_after(&self, after: Duration) {
+        self.rest_after.store(after.as_millis() as u64, std::sync::atomic::Ordering::SeqCst);
+    }
+
     /// Stops an idle agent (X84). Its conversation stays, for the next
     /// message to resume, and what it left running stays with the chat, as
     /// on a restart for new settings (X79).
@@ -2145,11 +2151,6 @@ done
         assert!(gone_within(server, 1).await, "the stopped agent's server outlived the daemon");
     }
 
-    /// Agents of `chats` rest once idle for `ms` (X84).
-    fn rest_after(chats: &ChatManager, ms: u64) {
-        chats.rest_after.store(ms, std::sync::atomic::Ordering::SeqCst);
-    }
-
     /// The process chat `id`'s agent runs as.
     fn agent_pid(terms: &TerminalManager, id: TerminalId) -> nix::unistd::Pid {
         nix::unistd::Pid::from_raw(terms.get(id).unwrap().info().pid.expect("no agent runs") as i32)
@@ -2168,7 +2169,7 @@ done
         chats.send(id, "hi", &[]).unwrap();
         wait_for(&chats, id, |s| s.status == "done").await;
         let agent = agent_pid(&terms, id);
-        rest_after(&chats, 300);
+        chats.set_rest_after(Duration::from_millis(300));
         assert!(gone_within(agent, 8).await, "the idle agent still runs");
         let st = chats.state(id).unwrap();
         let last = st.items.last().map(|i| (i.kind.as_str(), i.text.as_str()));
@@ -2184,14 +2185,15 @@ done
         assert!(starts[1].contains("--resume sess-1"), "{}", starts[1]);
     }
 
-    /// Asks a new chat's agent `ask`, waits until `ready`, and gives the
-    /// chat once its agent rests after 300 ms would have had two looks to.
+    /// Asks a new chat's agent `ask` and waits until `ready`; then lets
+    /// agents rest after 300 ms and gives the chat once two looks at it
+    /// have passed, in which an idle agent would have rested.
     async fn asked_and_left(chats: &ChatManager, cwd: &Path, ask: &str, ready: impl Fn(&ChatState) -> bool) -> TerminalId {
         let id = chats.create(ChatCreate { cwd: cwd.display().to_string(), agent: "claude".into(), ..Default::default() }).unwrap().id;
         wait_for(chats, id, |s| s.agent_session.is_some()).await;
         chats.send(id, ask, &[]).unwrap();
         wait_for(chats, id, ready).await;
-        rest_after(chats, 300);
+        chats.set_rest_after(Duration::from_millis(300));
         tokio::time::sleep(Duration::from_millis(4500)).await;
         id
     }
@@ -2226,7 +2228,7 @@ done
         let id = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), ..Default::default() }).unwrap().id;
         wait_for(&chats, id, |s| s.agent_session.is_some()).await;
         let agent = agent_pid(&terms, id);
-        rest_after(&chats, 1500);
+        chats.set_rest_after(Duration::from_millis(1500));
         // A message every 0.6 s for longer than two looks.
         for _ in 0..7 {
             chats.send(id, "hi", &[]).unwrap();
@@ -2244,7 +2246,7 @@ done
         let (dir, terms, chats) = setup().await;
         let (id, server) = agent_with_a_server(&chats, dir.path()).await;
         let agent = agent_pid(&terms, id);
-        rest_after(&chats, 300);
+        chats.set_rest_after(Duration::from_millis(300));
         assert!(gone_within(agent, 8).await, "the idle agent still runs");
         // Past the agent's SIGTERM grace and SIGKILL.
         tokio::time::sleep(Duration::from_millis(4500)).await;
@@ -2258,9 +2260,9 @@ done
         let (dir, terms, chats) = setup().await;
         let (id, server) = agent_with_a_server(&chats, dir.path()).await;
         let agent = agent_pid(&terms, id);
-        rest_after(&chats, 300);
+        chats.set_rest_after(Duration::from_millis(300));
         assert!(gone_within(agent, 8).await, "the idle agent still runs");
-        rest_after(&chats, REST_AFTER.as_millis() as u64);
+        chats.set_rest_after(REST_AFTER);
         chats.send(id, "hi", &[]).unwrap();
         wait_for(&chats, id, |s| s.status == "done").await;
         assert!(nix::sys::signal::kill(server, None).is_ok(), "resuming ended the agent's server");
@@ -2275,7 +2277,7 @@ done
         chats.record_leftovers(path.clone(), Default::default());
         let (id, server) = agent_with_a_server(&chats, dir.path()).await;
         let agent = agent_pid(&terms, id);
-        rest_after(&chats, 300);
+        chats.set_rest_after(Duration::from_millis(300));
         assert!(gone_within(agent, 8).await, "the idle agent still runs");
         // Looks after the resting agent itself is gone.
         tokio::time::sleep(Duration::from_millis(4500)).await;
