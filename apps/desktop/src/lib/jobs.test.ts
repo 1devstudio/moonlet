@@ -200,6 +200,12 @@ describe("a job's output (X62)", () => {
     expect(out.trimmed).toBe(true);
   });
 
+  it("never cuts the line not ended yet inside a character of two UTF-16 units", () => {
+    // "ab😀😀" is 6 units; the last 3 would start inside the first 😀.
+    const out = readOutput(undefined, [{ stream: 1, text: "ab😀😀" }], 3);
+    expect(outputShown(out)).toEqual([{ n: 1, stream: 1, text: "😀", tone: null }]);
+  });
+
   it("reads 50,000 progress updates to one line in well under a second", () => {
     let out: JobOutput | undefined;
     const started = performance.now();

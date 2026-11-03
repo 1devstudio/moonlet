@@ -247,6 +247,13 @@ function cutAt(raw: string): number {
   const m = CUT.exec(raw);
   return m && raw.length - m.index <= CUT_MAX ? m.index : raw.length;
 }
+/** The last `n` UTF-16 units of `text`, one fewer when they would start
+ *  inside a character of two. */
+function lastUnits(text: string, n: number): string {
+  const from = text.length - n;
+  const low = text.charCodeAt(from);
+  return text.slice(low >= 0xdc00 && low <= 0xdfff ? from + 1 : from);
+}
 const CUT = /\u001b(?:\[[0-?]*[ -/]*|\][^\u0007\u001b]*\u001b?)?$/;
 const CUT_MAX = 4096;
 
@@ -292,7 +299,7 @@ export function readOutput(out: JobOutput | undefined, chunks: readonly JobChunk
     let drop = 0;
     while (drop < lines.length && size + open.length > max) size -= lines[drop++].text.length + 1;
     lines = lines.slice(drop);
-    if (open.length > max) open = open.slice(-max);
+    if (open.length > max) open = lastUnits(open, max);
     trimmed = true;
   }
   return { lines, open, cut, stream, ended, size: size + open.length, trimmed };
