@@ -138,6 +138,12 @@ None: no new inputs.
   however much it printed`.
 - Vitest: existing `chat.test.ts`, `jobs.test.ts`, `jobsStore.test.ts`,
   `plan.test.ts` and `subagents.test.ts` stay green.
+- Seen in the e2e app (`e2e/snap.ts`): a chat of 251 blocks opens at
+  message 51 under "Show earlier", and after it the view stays at message 51
+  with the earlier ones above; a job that printed 1,500 lines of about
+  1,000 characters keeps 1,042 of them, from line 460, under "Earlier output
+  trimmed"; one that printed 3,001 short lines shows lines 1002–3001 under
+  "Show earlier (1,001 more lines)" in its tab and in the Jobs panel.
 - Manual: `footprint` of the app's web content process with the user's
   sessions loaded, before and after a day of use.
 
