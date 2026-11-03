@@ -41,4 +41,21 @@ describe("motion (X82)", () => {
     page();
     expect(getComputedStyle(tabWithSpinner(false)).animationPlayState).not.toBe("paused");
   });
+
+  it("animates only opacity and transform in every endless animation", () => {
+    const sheet = page(styles("moonlet.css")).sheet!;
+    const rules = [...sheet.cssRules];
+    const endless = rules
+      .filter((r): r is CSSStyleRule => r instanceof CSSStyleRule)
+      .map((r) => r.style.getPropertyValue("animation"))
+      .filter((a) => /\binfinite\b/.test(a))
+      .map((a) => a.split(/\s+/)[0]);
+    // The spinners, pulses, working dots, progress bar and chat shimmer.
+    expect(new Set(endless)).toEqual(new Set(["moonlet-spin", "moonlet-pulse", "moonlet-indeterminate", "chat-shimmer"]));
+    const moved = rules
+      // jsdom has no CSSKeyframesRule class; 7 is CSSRule.KEYFRAMES_RULE.
+      .filter((r): r is CSSKeyframesRule => r.type === 7 && endless.includes((r as CSSKeyframesRule).name))
+      .flatMap((r) => [...r.cssRules].flatMap((k) => Array.from((k as CSSKeyframeRule).style)));
+    expect(new Set(moved)).toEqual(new Set(["opacity", "transform"]));
+  });
 });
