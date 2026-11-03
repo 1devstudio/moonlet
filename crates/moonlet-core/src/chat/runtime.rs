@@ -1026,11 +1026,24 @@ impl ChatManager {
             let status = loop {
                 tokio::select! {
                     line = lines.next_line() => match line {
-                        Ok(Some(line)) => if !keep_reading(line) {
-                            // Stopped by the daemon, which ends it: reap it.
-                            let _ = child.wait().await;
-                            return;
-                        },
+                        Ok(Some(line)) => {
+                            // A turn's end: what the agent started during it is
+                            // noted before the turn shows as done (X79).
+                            if line.contains(r#""type":"result""#)
+                                && let Some(pid) = agent
+                                && let Ok(table) = tokio::task::spawn_blocking(crate::process::table).await
+                            {
+                                let mut inner = c.inner.lock().unwrap();
+                                if inner.generation == generation {
+                                    inner.family.note(&table, pid);
+                                }
+                            }
+                            if !keep_reading(line) {
+                                // Stopped by the daemon, which ends it: reap it.
+                                let _ = child.wait().await;
+                                return;
+                            }
+                        }
                         _ => {
                             let status = child.wait().await.ok();
                             reaped();
@@ -1955,8 +1968,7 @@ done
     async fn an_agent_that_exits_leaves_nothing_running() {
         let (dir, _terms, chats) = setup().await;
         let (id, server) = agent_with_a_server(&chats, dir.path()).await;
-        // Long enough for the daemon to have looked at the agent's processes.
-        tokio::time::sleep(Duration::from_millis(2500)).await;
+        // The turn that started the server has ended: no wait for a periodic look.
         chats.send(id, "crash now", &[]).unwrap();
         assert!(gone_within(server, 8).await, "the agent's server outlived the agent");
     }
@@ -1981,7 +1993,6 @@ done
     async fn an_agent_that_exits_leaves_nothing_running_though_its_server_keeps_writing() {
         let (dir, _terms, chats) = setup().await;
         let (id, server) = agent_with(&chats, dir.path(), "start a chatty server").await;
-        tokio::time::sleep(Duration::from_millis(2500)).await;
         chats.send(id, "crash now", &[]).unwrap();
         assert!(gone_within(server, 8).await, "the agent's server outlived the agent");
     }

@@ -132,9 +132,10 @@ feature reads only pids, parent pids, process groups and start times.
 - `nohup cmd &` in a shell tab no longer outlives the tab. To keep a process
   running after its tab, start it outside moonlet (for example with
   `launchctl`).
-- The daemon looks at each agent's processes every 2 s. One the agent starts
-  less than 2 s before it exits by itself, in a process group of its own, is
-  not known to have been the agent's. Stopping an agent looks once more first.
+- The daemon looks at each agent's processes every 2 s and at the end of each
+  of its turns. One the agent starts less than 2 s before it exits by itself,
+  mid-turn and in a process group of its own, is not known to have been the
+  agent's. Stopping an agent looks once more first.
 
 ## Test plan
 
