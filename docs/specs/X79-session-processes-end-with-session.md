@@ -94,6 +94,26 @@ Chat agents:
       its chats start agents again
       (`chats_start_agents_again_after_a_live_upgrade_that_failed`).
 
+After a crash:
+
+- [x] Every 2 s, while it changes, the daemon records next to its socket
+      (`~/.moonlet/run/moonletd.leftovers.json` for the default one) each
+      running agent and every process it started, and each terminal's session,
+      its shell exited or not, all as pid and start time, with the machine's
+      boot time.
+- [x] A daemon that starts fresh (not by a live-upgrade handoff) ends what that
+      file names and still runs with the same start time: agents and what they
+      started get SIGTERM, then SIGKILL 3 s later; terminal sessions get SIGHUP,
+      SIGTERM and SIGKILL as when a tab closes. A pid that now belongs to a
+      process that started later is left alone, and a record from before a
+      reboot ends nothing
+      (`a_daemon_started_after_a_crash_ends_what_its_agents_left_running`,
+      `reaping_ends_recorded_processes_and_spares_a_reused_pid`,
+      `reaping_ends_a_recorded_terminal_session_whose_shell_is_gone`,
+      `a_record_from_before_a_reboot_ends_nothing`).
+- [x] After a handoff nothing is ended: the new daemon adopted the terminals,
+      and the old one ended its agents (`upgrade_keeps_sessions_alive`).
+
 Later parts of this spec, each with its own change:
 
 - [ ] A registry of each session's processes, kept across daemon restarts, and
@@ -117,7 +137,11 @@ None in this part.
 
 ## Data and config
 
-None in this part.
+`<socket name>.leftovers.json` next to the daemon's socket, written by the
+daemon and read once by the next one on that socket:
+`{"boot": …, "processes": [[pid, start], …], "sessions": [[leader pid, start], …]}`.
+Start and boot times are in microseconds since the epoch on macOS; on Linux a
+start is in clock ticks since boot and the boot time in seconds.
 
 ## Security considerations
 
@@ -157,8 +181,14 @@ feature reads only pids, parent pids, process groups and start times.
   `closing_a_tab_that_shows_an_exit_stops_its_shell_still_running` and
   `closing_an_adopted_tab_leaves_alone_the_session_now_on_its_shells_pid`.
 - Rust, `process.rs`: `descendants_are_children_and_theirs_but_not_others`,
-  `a_deep_tree_is_walked_in_one_pass` and
-  `a_family_signals_only_processes_that_still_run`.
+  `a_family_signals_only_processes_that_still_run` and
+  `a_family_forgets_a_process_no_longer_in_the_table`.
+- Rust, `leftovers.rs`: `reaping_ends_recorded_processes_and_spares_a_reused_pid`,
+  `reaping_ends_a_recorded_terminal_session_whose_shell_is_gone` and
+  `a_record_from_before_a_reboot_ends_nothing`.
+- Rust, `moonletd/tests/daemon.rs`:
+  `a_daemon_started_after_a_crash_ends_what_its_agents_left_running`;
+  `moonletd/tests/upgrade.rs`: `upgrade_keeps_sessions_alive`.
 - Rust, `chat/runtime.rs`, with a fake agent that leaves a server running in a
   process group of its own, ignoring SIGHUP and SIGTERM:
   `stopping_a_chat_stops_what_its_agent_left_running`,

@@ -255,6 +255,23 @@ pub fn is_process(pid: u32, start: Option<u64>) -> bool {
     start.is_some() && process_start(pid) == start
 }
 
+/// Ends session `sid`, recorded before this daemon started with its leader's
+/// start time `started`: SIGHUP, then [`escalate_session`]. A leader that is
+/// now another process means the session is someone else's: left alone,
+/// returning `false`. A leader gone leaves its id unused by any other session
+/// while members remain, so those are ended (X60 setups, X79 terminals).
+pub fn end_recorded_session(sid: u32, started: Option<u64>) -> bool {
+    let leader = process_start(sid);
+    if leader.is_some() && (started.is_none() || leader != started) {
+        return false;
+    }
+    let leader_gone = move || process_start(sid).is_none_or(|now| Some(now) != started);
+    if signal_session(sid, Signal::SIGHUP, leader_gone()) {
+        escalate_session(sid, leader_gone);
+    }
+    true
+}
+
 /// After a SIGHUP to session `sid`: SIGTERM after 1.5 s, then SIGKILL after
 /// 3 s more, while any process is left in it. `reaped` says whether the
 /// session's leader was waited for (see [`signal_session`]).

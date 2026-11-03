@@ -5202,3 +5202,18 @@ async fn chats_start_agents_again_after_a_live_upgrade_that_failed() {
     let _ = d.child.wait();
     assert!(gone_within(again, 1).await, "the new agent's server outlived the daemon");
 }
+
+/// X79: a daemon that crashed while an agent's server ran ends that server
+/// when it starts again, though nothing links the server to moonlet any more.
+#[tokio::test]
+async fn a_daemon_started_after_a_crash_ends_what_its_agents_left_running() {
+    let mut d = fake_claude_daemon(FAKE_CLAUDE_WITH_SERVER).await;
+    let server = agent_with_a_server(&d).await;
+    // Time for the daemon to note the agent's processes.
+    tokio::time::sleep(Duration::from_millis(4500)).await;
+    d.stop();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(nix::sys::signal::kill(server, None).is_ok(), "the crash itself ended the server");
+    d.start_again().await;
+    assert!(gone_within(server, 8).await, "the agent's server outlived the crashed daemon's restart");
+}

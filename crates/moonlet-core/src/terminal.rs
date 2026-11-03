@@ -221,6 +221,19 @@ impl TerminalManager {
         self.terminals.lock().unwrap().get(&id).cloned()
     }
 
+    /// The shell each terminal started, which leads the terminal's session,
+    /// also once it exited: jobs it left may still run in it (X79).
+    pub fn session_leaders(&self) -> Vec<u32> {
+        let terminals: Vec<_> = self.terminals.lock().unwrap().values().cloned().collect();
+        terminals
+            .iter()
+            .filter_map(|t| {
+                let st = t.state.lock().unwrap();
+                st.pty.as_ref().map(|p| p.pid())
+            })
+            .collect()
+    }
+
     pub fn list(&self) -> Vec<TerminalInfo> {
         self.terminals
             .lock()

@@ -132,6 +132,25 @@ pub struct Proc {
     pub start: u64,
 }
 
+/// When the machine booted: microseconds since the epoch on macOS, seconds on
+/// Linux. `None` when the kernel does not say.
+pub fn boot_time() -> Option<u64> {
+    #[cfg(target_os = "macos")]
+    {
+        let mut tv: libc::timeval = unsafe { std::mem::zeroed() };
+        let mut size = std::mem::size_of::<libc::timeval>();
+        let mut mib = [libc::CTL_KERN, libc::KERN_BOOTTIME];
+        // SAFETY: sysctl writes at most `size` bytes into `tv`.
+        let r = unsafe { libc::sysctl(mib.as_mut_ptr(), 2, (&mut tv as *mut libc::timeval).cast(), &mut size, std::ptr::null_mut(), 0) };
+        (r == 0).then(|| tv.tv_sec as u64 * 1_000_000 + tv.tv_usec as u64)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let stat = std::fs::read_to_string("/proc/stat").ok()?;
+        stat.lines().find_map(|l| l.strip_prefix("btime "))?.trim().parse().ok()
+    }
+}
+
 /// Every process this one may see, with its parent and start time (X79).
 pub fn table() -> Table {
     Table::new(crate::pty::all_pids().into_iter().filter_map(|pid| u32::try_from(pid).ok().filter(|&p| p > 0)).filter_map(proc_of))
@@ -143,15 +162,28 @@ pub fn table() -> Table {
 #[derive(Debug, Default)]
 pub struct Table {
     children: std::collections::HashMap<u32, Vec<Proc>>,
+    by_pid: std::collections::HashMap<u32, Proc>,
 }
 
 impl Table {
     pub fn new(procs: impl IntoIterator<Item = Proc>) -> Self {
         let mut children: std::collections::HashMap<u32, Vec<Proc>> = std::collections::HashMap::new();
+        let mut by_pid = std::collections::HashMap::new();
         for p in procs {
             children.entry(p.ppid).or_default().push(p);
+            by_pid.insert(p.pid, p);
         }
-        Self { children }
+        Self { children, by_pid }
+    }
+
+    /// Process `pid` as listed, if it was.
+    pub fn get(&self, pid: u32) -> Option<Proc> {
+        self.by_pid.get(&pid).copied()
+    }
+
+    /// Whether the process listed as `pid` started at `start`.
+    pub fn has(&self, pid: u32, start: u64) -> bool {
+        self.get(pid).is_some_and(|p| p.start == start)
     }
 
     /// The processes that descend from `root`: its children, theirs, and so
@@ -207,9 +239,22 @@ pub struct Family {
 impl Family {
     /// Notes the descendants of `root` in `table`.
     pub fn note(&mut self, table: &Table, root: u32) {
+        // Ended ones go: what is left are processes that still run, the agent's
+        // descendants or, once their parent is gone, launchd's.
+        self.known.retain(|&pid, &mut start| table.has(pid, start));
         for p in table.descendants(root) {
             self.known.insert(p.pid, p.start);
         }
+    }
+
+    /// Each noted process, as pid and start time.
+    pub fn members(&self) -> impl Iterator<Item = (u32, u64)> + '_ {
+        self.known.iter().map(|(&pid, &start)| (pid, start))
+    }
+
+    /// A family of the processes `members` names (pid, start time).
+    pub fn of(members: impl IntoIterator<Item = (u32, u64)>) -> Family {
+        Family { known: members.into_iter().collect() }
     }
 
     /// Takes on what `other` noted, as when a restarted agent inherits what
@@ -233,6 +278,57 @@ impl Family {
             let _ = nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), signal);
         }
         !self.known.is_empty()
+    }
+}
+
+/// How long a stopped agent and what it started get after SIGTERM.
+pub const TERM_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// A stopped agent's process group and the processes it started, or what a
+/// crashed daemon's agents left (X79), on the way out.
+pub struct Doomed {
+    pub group: Option<nix::unistd::Pid>,
+    pub family: Family,
+}
+
+impl Doomed {
+    /// Sends `signal` (`None` only checks) to the group and the family;
+    /// whether any of them still runs.
+    pub fn signal(&mut self, signal: impl Into<Option<nix::sys::signal::Signal>>) -> bool {
+        let signal = signal.into();
+        // A group found empty is gone for good: its id may be a new group's next.
+        let group = match self.group {
+            Some(g) if nix::sys::signal::killpg(g, signal).is_ok() => true,
+            _ => {
+                self.group = None;
+                false
+            }
+        };
+        let family = self.family.signal(signal);
+        group || family
+    }
+
+    /// Whether any of it still runs.
+    pub fn running(&mut self) -> bool {
+        self.signal(None)
+    }
+
+    /// Waits up to `limit` for all of it to be gone.
+    async fn gone_within(&mut self, limit: std::time::Duration) {
+        let end = std::time::Instant::now() + limit;
+        while self.running() && std::time::Instant::now() < end {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
+
+    /// SIGTERM, then SIGKILL to whatever still runs after [`TERM_GRACE`];
+    /// returns once all of it is gone, or a second after the SIGKILL.
+    pub async fn end(mut self) {
+        self.signal(nix::sys::signal::Signal::SIGTERM);
+        self.gone_within(TERM_GRACE).await;
+        if self.signal(nix::sys::signal::Signal::SIGKILL) {
+            self.gone_within(std::time::Duration::from_secs(1)).await;
+        }
     }
 }
 
@@ -262,6 +358,16 @@ mod tests {
         let took = started.elapsed();
         assert_eq!(found, 19_999);
         assert!(took < std::time::Duration::from_secs(1), "took {took:?}");
+    }
+
+    #[test]
+    fn a_family_forgets_a_process_no_longer_in_the_table() {
+        let p = |pid, ppid, start| Proc { pid, ppid, start };
+        let mut family = Family::default();
+        family.note(&Table::new([p(100, 50, 1), p(101, 100, 2), p(102, 100, 3)]), 100);
+        // 101 ended; 102's pid now belongs to a process that started later.
+        family.note(&Table::new([p(100, 50, 1), p(102, 1, 9)]), 100);
+        assert!(family.members().next().is_none());
     }
 
     #[test]

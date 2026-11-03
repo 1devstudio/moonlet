@@ -4243,16 +4243,12 @@ fn save_one(from: &Path, folder: &Path, rel: &Path, link: bool) -> std::io::Resu
 /// leader gone leaves its session's id unused by anyone else while members
 /// remain, so those are ended.
 fn end_recorded_session(sid: u32, started: Option<u64>) {
-    let leader = moonlet_core::pty::process_start(sid);
-    let gone = leader.is_none();
-    if !gone && (started.is_none() || leader != started) {
+    if !moonlet_core::pty::end_recorded_session(sid, started) {
         tracing::info!(
             sid,
             "a setup's recorded session is now another process's; left alone"
         );
-        return;
     }
-    end_session(sid, Arc::new(std::sync::atomic::AtomicBool::new(gone)));
 }
 
 fn end_session(sid: u32, reaped: Arc<std::sync::atomic::AtomicBool>) {
