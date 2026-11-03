@@ -287,10 +287,14 @@ describe("Link a task (X54)", () => {
 
   it("lists a task found by its key first, even when nobody assigned it to the user", () => {
     const unassigned = task("WEB-501", "Audit the footer links", 0);
-    // The key was typed, so the loaded tasks are not filtered by it; the found one leads.
-    expect(linkMenu({ pr: null }, "", [web, other], "WEB-501", unassigned)).toEqual([
+    const near = task("WEB-5010", "Footer spacing", 3);
+    // The found task leads; loaded tasks that match the typed text stay under it.
+    expect(linkMenu({ pr: null }, "", [web, other, near], "WEB-501", unassigned)).toEqual([
       { label: "Pasted", tasks: [{ task: unassigned, hint: null }] },
+      { label: "Recent", tasks: [{ task: near, hint: null }] },
     ]);
+    // A found task that is loaded already is listed once.
+    expect(linkMenu({ pr: null }, "", [web, other], "WEB-279", web)).toEqual([{ label: "Pasted", tasks: [{ task: web, hint: null }] }]);
     // Nothing found and nothing loaded matches: still "No tasks match".
     expect(linkMenu({ pr: null }, "", [web, other], "WEB-501", null)).toEqual([{ label: "No tasks match", tasks: [] }]);
   });

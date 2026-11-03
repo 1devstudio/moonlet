@@ -91,6 +91,20 @@ export function findPasted(p: Pasted, tasks: Task[], originRepo: string | null):
 }
 
 /**
+ * The task a typed key or URL names: a loaded one, else the one its tracker
+ * answers with (whoever it is assigned to). Null for text that is not a key.
+ */
+export async function typedTask(
+  text: string,
+  tasks: Task[],
+  originRepo: string | null,
+  ask: { parse: (text: string) => Promise<Pasted | null>; lookUp: (p: Pasted) => Promise<Task | null> },
+): Promise<Task | null> {
+  const p = await ask.parse(text);
+  return p ? (findPasted(p, tasks, originRepo) ?? (await ask.lookUp(p))) : null;
+}
+
+/**
  * The link dialog's lookups of what was typed or pasted (X46): one at a time,
  * after a short pause. A lookup that a newer one replaced, or that was
  * cancelled, ends as `undefined`, so ↵ never links from it.

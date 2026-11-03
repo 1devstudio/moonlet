@@ -240,15 +240,20 @@ export function showsLinkSlot(f: { task: boolean; worktree: boolean; sources: bo
  * lists (X46) for the session the picks and the prompt would make, named as
  * Create would name it and on the PR's head branch, filtered by `query`.
  * `found` is the task a typed key or URL names, looked up of its tracker
- * (whoever it is assigned to): it leads, alone, as the link dialog's Pasted.
+ * (whoever it is assigned to): it leads as the link dialog's Pasted, and what
+ * else the typed text matches follows.
  */
 export function linkMenu(picks: Pick<Picks, "pr">, prompt: string, tasks: Task[], query: string, found: Task | null = null): { label: string; tasks: { task: Task; hint: string | null }[] }[] {
-  if (found) return [{ label: "Pasted", tasks: [{ task: found, hint: null }] }];
   const session = { name: sessionName({ task: null, ...picks }) ?? prompt.split("\n")[0], branch: picks.pr?.head_branch ?? "" };
   const { suggested, recent } = linkChoices(session, tasks, query);
   const sections = [
     { label: "Suggested", tasks: suggested.map((s) => ({ task: s.task, hint: s.reason })) },
     { label: "Recent", tasks: recent.map((task) => ({ task, hint: null })) },
   ].filter((s) => s.tasks.length);
+  if (found) {
+    // Listed once, first; what else the typed text matches stays under it.
+    const rest = sections.map((s) => ({ ...s, tasks: s.tasks.filter((t) => !(t.task.connection === found.connection && t.task.key === found.key)) })).filter((s) => s.tasks.length);
+    return [{ label: "Pasted", tasks: [{ task: found, hint: null }] }, ...rest];
+  }
   return sections.length ? sections : [{ label: "No tasks match", tasks: [] }];
 }
