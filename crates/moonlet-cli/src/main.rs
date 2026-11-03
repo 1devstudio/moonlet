@@ -7,6 +7,7 @@
 mod design;
 mod exec;
 mod hook;
+mod ps;
 mod session;
 mod term;
 
@@ -83,6 +84,28 @@ enum Cmd {
     Ls {
         #[arg(long)]
         json: bool,
+    },
+    /// List what a session's terminals and agents run, and what was left
+    /// working in its worktree (X83), by name, never with their arguments.
+    Ps {
+        /// Session id (defaults to $MOONLET_SESSION, the one you run in).
+        #[arg(long, env = "MOONLET_SESSION")]
+        session: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Stop processes of a session (X83): SIGTERM, then SIGKILL after 3 s.
+    Kill {
+        /// Pids from `moonlet ps`: the session's processes or its leftovers.
+        #[arg(required_unless_present = "all", conflicts_with = "all")]
+        pids: Vec<u32>,
+        /// Every process of the session but its tabs' own shells and agents;
+        /// never what was left in the worktree.
+        #[arg(long)]
+        all: bool,
+        /// Session id (defaults to $MOONLET_SESSION, the one you run in).
+        #[arg(long, env = "MOONLET_SESSION")]
+        session: Option<String>,
     },
     /// Interact with a pane.
     Pane {
@@ -611,6 +634,28 @@ async fn run(cmd: Cmd, socket: PathBuf) -> Result<()> {
                         s.cwd
                     );
                 }
+            }
+        }
+        Cmd::Ps { session, json } => {
+            let id = session.filter(|s| !s.is_empty()).context("no session: run inside a moonlet session or pass --session")?;
+            let mut c = connect(&socket).await?;
+            let list: methods::SessionProcesses = c.request(methods::SESSION_PROCESSES, methods::IdRef { id }).await.map_err(plain)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&list)?);
+            } else {
+                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis() as u64;
+                print!("{}", ps::table(&list, now));
+            }
+        }
+        Cmd::Kill { pids, all, session } => {
+            let id = session.filter(|s| !s.is_empty()).context("no session: run inside a moonlet session or pass --session")?;
+            let mut c = connect(&socket).await?;
+            let req = methods::SessionKillProcesses { id, pids: (!all).then_some(pids) };
+            let killed: methods::ProcessesKilled = c.request(methods::SESSION_KILL_PROCESSES, req).await.map_err(plain)?;
+            print!("{}", ps::stopped(&killed));
+            if !killed.skipped.is_empty() {
+                let skipped: Vec<String> = killed.skipped.iter().map(u32::to_string).collect();
+                bail!("not processes of this session: {}", skipped.join(" "));
             }
         }
         Cmd::Pane {
