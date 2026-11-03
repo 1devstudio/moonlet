@@ -653,9 +653,8 @@ async fn run(cmd: Cmd, socket: PathBuf) -> Result<()> {
             let req = methods::SessionKillProcesses { id, pids: (!all).then_some(pids) };
             let killed: methods::ProcessesKilled = c.request(methods::SESSION_KILL_PROCESSES, req).await.map_err(plain)?;
             print!("{}", ps::stopped(&killed));
-            if !killed.skipped.is_empty() {
-                let skipped: Vec<String> = killed.skipped.iter().map(u32::to_string).collect();
-                bail!("not processes of this session: {}", skipped.join(" "));
+            if let Some(why) = ps::not_stopped(&killed) {
+                bail!("{why}");
             }
         }
         Cmd::Pane {

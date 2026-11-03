@@ -78,8 +78,10 @@ CLI:
       `moonlet_ps_lists_a_sessions_processes_and_moonlet_kill_stops_one`).
 - [x] `moonlet kill <pid>...` stops those pids of the session;
       `moonlet kill --all` stops every process but the tabs' own. It prints
-      what it stopped, and fails naming what it skipped
-      (`kill_says_which_pids_it_stopped`,
+      what it stopped, and fails naming the pids that are not the session's
+      ("not processes of this session: 999") apart from those already ended
+      ("already ended: 5151") (`kill_says_which_pids_it_stopped`,
+      `kill_fails_naming_pids_not_the_sessions_apart_from_those_already_ended`,
       `moonlet_ps_lists_a_sessions_processes_and_moonlet_kill_stops_one`).
 
 App:
@@ -180,7 +182,8 @@ worktree can be signalled.
   `works out CPU use from two looks`; `actions.test.ts`:
   `lists the processes still running and stops them before archiving (X83)` and
   `archives as before when the daemon cannot list processes (X83)`.
-- Rust, `moonlet-cli` `src/ps.rs`: `kill_says_which_pids_it_stopped`.
+- Rust, `moonlet-cli` `src/ps.rs`: `kill_says_which_pids_it_stopped` and
+  `kill_fails_naming_pids_not_the_sessions_apart_from_those_already_ended`.
 - e2e, `confirm-modal.e2e.ts`: `names what still runs in the session, and archiving stops it (X83)`.
 
 ## Open questions

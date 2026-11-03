@@ -91,6 +91,21 @@ pub fn stopped(killed: &ProcessesKilled) -> String {
         .collect()
 }
 
+/// What `moonlet kill` fails with for the pids it did not stop: those that
+/// run but are not the session's, and those that had ended; `None` when it
+/// stopped every one.
+pub fn not_stopped(killed: &ProcessesKilled) -> Option<String> {
+    let list = |pids: &[u32]| pids.iter().map(u32::to_string).collect::<Vec<_>>().join(" ");
+    let mut parts = Vec::new();
+    if !killed.skipped.is_empty() {
+        parts.push(format!("not processes of this session: {}", list(&killed.skipped)));
+    }
+    if !killed.gone.is_empty() {
+        parts.push(format!("already ended: {}", list(&killed.gone)));
+    }
+    (!parts.is_empty()).then(|| parts.join("; "))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,10 +203,32 @@ Left in the worktree, stopped only by pid:
         assert_eq!(
             stopped(&ProcessesKilled {
                 ended: vec![4242, 5151],
-                skipped: vec![]
+                ..ProcessesKilled::default()
             }),
             "stopped 4242\nstopped 5151\n"
         );
         assert_eq!(stopped(&ProcessesKilled::default()), "nothing to stop\n");
+    }
+
+    #[test]
+    fn kill_fails_naming_pids_not_the_sessions_apart_from_those_already_ended() {
+        let killed = |skipped: Vec<u32>, gone: Vec<u32>| ProcessesKilled {
+            ended: vec![4242],
+            skipped,
+            gone,
+        };
+        assert_eq!(
+            not_stopped(&killed(vec![999, 1000], vec![5151])).as_deref(),
+            Some("not processes of this session: 999 1000; already ended: 5151")
+        );
+        assert_eq!(
+            not_stopped(&killed(vec![], vec![5151])).as_deref(),
+            Some("already ended: 5151")
+        );
+        assert_eq!(
+            not_stopped(&killed(vec![999], vec![])).as_deref(),
+            Some("not processes of this session: 999")
+        );
+        assert_eq!(not_stopped(&killed(vec![], vec![])), None);
     }
 }
