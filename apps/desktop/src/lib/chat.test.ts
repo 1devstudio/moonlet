@@ -18,7 +18,7 @@ import {
   forgetChat,
   diffStat,
   fuzzyFilter,
-  loadChat,
+  showChat,
   mergeItem,
   mergeItems,
   onChatItem,
@@ -99,7 +99,7 @@ describe("chat helpers", () => {
   });
 
   it("keeps events that arrive while the state loads", async () => {
-    const p = loadChat("h", 1);
+    const p = showChat("h", 1);
     onChatItem("h", 1, { id: "a", kind: "assistant", text: "late", ts: 0 });
     onChatState("h", 1, { items: [], pending: [], status: "done", cost_usd: 1, input_tokens: 0, output_tokens: 0, slash_commands: [], queued: [] });
     rpcReply.release({ items: [{ id: "a", kind: "assistant", text: "ear", ts: 0 }], pending: [], status: "working", cost_usd: 0, input_tokens: 0, output_tokens: 0, slash_commands: [], queued: [] });

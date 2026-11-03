@@ -139,24 +139,25 @@ export async function showChat(host: string, id: number) {
   const next = [key, ...shown.filter((k) => k !== key)];
   const dropped = next.slice(CHATS_KEPT).filter((k) => useChat.getState().chats[k]);
   shown = next.slice(0, CHATS_KEPT);
-  if (dropped.length) {
-    useChat.setState((s) => {
-      const chats = { ...s.chats };
-      const summaries = { ...s.summaries };
-      for (const k of dropped) {
-        summaries[k] = summary(chats[k]);
-        delete chats[k];
-      }
-      return { chats, summaries };
-    });
-  }
+  for (const k of dropped) useChat.setState((s) => (s.chats[k] ? placeChat(s, k, s.chats[k], false) : s));
   // Dropped while its load was in flight, it keeps its summary only.
-  if (!useChat.getState().chats[key]) await loadChat(host, id, { onlyIfShown: true });
+  if (!useChat.getState().chats[key]) await loadChat(host, id);
 }
 
-/** Reads a chat's status, asks and subagents, such as for the Agents panel;
- *  its items only if it is among the chats shown last (X81). */
-export const loadChatSummary = (host: string, id: number) => loadChat(host, id, { onlyIfShown: true });
+/** The store with chat `key` read as `st`: with its items when `withItems`,
+ *  else as a summary. A key is in `chats` or `summaries`, never both (X81). */
+function placeChat(s: ChatStore, key: string, st: ChatState, withItems: boolean): Pick<ChatStore, "chats" | "summaries"> {
+  const chats = { ...s.chats };
+  const summaries = { ...s.summaries };
+  if (withItems) {
+    chats[key] = st;
+    delete summaries[key];
+  } else {
+    summaries[key] = summary(st);
+    delete chats[key];
+  }
+  return { chats, summaries };
+}
 
 /** After a host connects: its chat terminals `ids` already in memory read
  *  again, as they were kept, for events missed meanwhile. The others load
@@ -164,16 +165,17 @@ export const loadChatSummary = (host: string, id: number) => loadChat(host, id, 
 export async function reloadChats(host: string, ids: readonly number[]) {
   const s = useChat.getState();
   const inMemory = ids.filter((id) => chatSummary(s, host, id));
-  await Promise.all(inMemory.map((id) => loadChat(host, id, { onlyIfShown: true }).catch(() => {})));
+  await Promise.all(inMemory.map((id) => loadChat(host, id).catch(() => {})));
 }
 
 const loading = new Set<string>();
 
 /**
- * Reads a chat's state. With `onlyIfShown`, a chat not among the last shown
- * keeps its summary only (X81).
+ * Reads a chat's state: its status, asks and subagents, such as for the
+ * Agents panel, and its items only while it is among the chats shown last
+ * (X81).
  */
-export async function loadChat(host: string, id: number, opts: { onlyIfShown?: boolean } = {}) {
+export async function loadChat(host: string, id: number) {
   const key = chatKey(host, id);
   if (loading.has(key)) return;
   loading.add(key);
@@ -182,21 +184,10 @@ export async function loadChat(host: string, id: number, opts: { onlyIfShown?: b
   try {
     const st = await rpc<ChatState>(host, M.chatState, { id });
     const buf = buffered.get(key);
-    const keep = !opts.onlyIfShown || shown.includes(key);
+    const keep = shown.includes(key);
     const items = keep ? mergeItems(st.items, buf?.items ?? []) : [];
     const latest: ChatState = { ...empty, ...(buf?.state ? { ...buf.state, items } : { ...st, items }) };
-    useChat.setState((s) => {
-      const chats = { ...s.chats };
-      const summaries = { ...s.summaries };
-      if (keep) {
-        chats[key] = latest;
-        delete summaries[key];
-      } else {
-        summaries[key] = summary(latest);
-        delete chats[key];
-      }
-      return { chats, summaries };
-    });
+    useChat.setState((s) => placeChat(s, key, latest, keep));
   } catch (e) {
     // A reload of a chat already shown failed: keep the events it held.
     const buf = buffered.get(key);

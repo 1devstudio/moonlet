@@ -10,7 +10,7 @@ import { latestOnly, stackView, type StackView } from "../lib/prStack";
 import { hasRunCommand } from "../lib/projectSettings";
 import { workspaceOpenIn } from "../lib/openIn";
 import { useSync } from "../lib/syncStore";
-import { chatKey, chatSummary, loadChatSummary, showChat, useChat } from "../lib/chat";
+import { chatKey, chatSummary, loadChat, showChat, useChat } from "../lib/chat";
 import { planChat, planTabDot, planView } from "../lib/plan";
 import { agentRows, agentsTabClockRuns, agentsTabDot } from "../lib/subagents";
 import { grantMenuLabel } from "../lib/terminalRead";
@@ -253,7 +253,7 @@ function useSessionAgents(host: string, ws: Session, tab: RightTab) {
   const pending = useChat(useShallow((s) => list.map((id) => chatSummary(s, host, id)?.pending)));
   const unloaded = list.filter((_, i) => pending[i] === undefined).join(",");
   useEffect(() => {
-    for (const id of unloaded ? unloaded.split(",") : []) void loadChatSummary(host, Number(id)).catch(() => {});
+    for (const id of unloaded ? unloaded.split(",") : []) void loadChat(host, Number(id)).catch(() => {});
   }, [host, unloaded]);
   const now = useNow(agentsTabClockRuns(tab, subagents));
   const rows = useMemo(

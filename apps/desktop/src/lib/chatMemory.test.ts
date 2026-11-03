@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { chatKey, chatSummary, loadChatSummary, onChatItem, onChatState, reloadChats, showChat, useChat } from "./chat";
+import { chatKey, chatSummary, loadChat, onChatItem, onChatState, reloadChats, showChat, useChat } from "./chat";
 import type { ChatState } from "./protocol";
 
 /** What the daemon's `chat.state` answers, by `host:id`. */
@@ -56,7 +56,7 @@ describe("chats kept in memory (X81)", () => {
 
   it("keeps only the status and asks of a chat loaded but not shown", async () => {
     daemon["d:1"] = chat("never shown", { status: "working" });
-    await loadChatSummary("d", 1);
+    await loadChat("d", 1);
     expect(chatSummary(useChat.getState(), "d", 1)?.status).toBe("working");
     expect(texts("d", 1)).toBeUndefined();
     // Shown, it reads its items.
@@ -68,7 +68,7 @@ describe("chats kept in memory (X81)", () => {
     daemon["e:1"] = chat("shown");
     daemon["e:2"] = chat("in the Agents panel");
     await showChat("e", 1);
-    await loadChatSummary("e", 2);
+    await loadChat("e", 2);
     // The host reconnects: each chat moved on meanwhile.
     daemon["e:1"] = chat("shown, later");
     daemon["e:2"] = chat("in the Agents panel, later", { status: "done" });
