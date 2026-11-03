@@ -96,7 +96,9 @@ App:
       again every 3 s while shown (`describes a process row: origin, age, CPU and memory`,
       `works out CPU use from two looks`). **Stop** sends the row's pid with
       the start it was listed with; **Stop all** sends no pids, and the
-      daemon stops what it decides (`stops a row by its pid and the start it was listed with; Stop all names none`).
+      daemon stops what it decides: the rows it marks stopping are the same,
+      never a tab's own nor a leftover (`stops a row by its pid and the start it was listed with; Stop all names none`,
+      `Stop all covers what the daemon stops: neither the tabs' own nor what was left in the worktree`).
 - [x] Archiving a session that runs processes other than its tabs' own, or
       has leftovers, says so in the confirm, by name: "3 processes still run:
       vite, tail, node. Archiving stops them." On **Archive** they are stopped,
@@ -189,7 +191,8 @@ worktree can be signalled.
 - Vitest, `sessionProcesses.test.ts`: `names the processes still running, after their count`,
   `says nothing when only the tabs' own processes run`,
   `describes a process row: origin, age, CPU and memory`,
-  `stops a row by its pid and the start it was listed with; Stop all names none` and
+  `stops a row by its pid and the start it was listed with; Stop all names none`,
+  `Stop all covers what the daemon stops: neither the tabs' own nor what was left in the worktree` and
   `works out CPU use from two looks`; `actions.test.ts`:
   `lists the processes still running and stops them before archiving (X83)` and
   `archives as before when the daemon cannot list processes (X83)`.

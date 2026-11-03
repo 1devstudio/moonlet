@@ -4,10 +4,17 @@
 import type { ConfirmOptions } from "./confirmOptions";
 import type { ProcessRef, SessionKillProcesses, SessionProcess, SessionProcesses } from "./protocol";
 
-/** What archiving stops beyond the tabs themselves: their jobs, what agents
- * started, and what was left in the worktree. */
+/** What the daemon's Stop all (`session.kill_processes` without pids) stops:
+ * every process but those it marks the tabs' own (`tab`), never what was
+ * left in the worktree. The rows the Processes tab shows as stopping. */
+export function stoppedByStopAll(list: SessionProcesses): SessionProcess[] {
+  return list.processes.filter((p) => !p.tab);
+}
+
+/** What archiving stops beyond the tabs themselves: what Stop all stops, and
+ * what was left in the worktree. */
 function stopped(list: SessionProcesses | null): SessionProcess[] {
-  return list ? [...list.processes.filter((p) => !p.tab), ...list.leftovers] : [];
+  return list ? [...stoppedByStopAll(list), ...list.leftovers] : [];
 }
 
 /** Names, each once, in the order first seen; a repeated one as `node ×2`. */

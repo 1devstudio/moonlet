@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Activity } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { M, type Session, type SessionProcess, type SessionProcesses } from "../lib/protocol";
-import { type CpuLook, cpuPercent, killParams, processRow, processesSummary } from "../lib/sessionProcesses";
+import { type CpuLook, cpuPercent, killParams, processRow, processesSummary, stoppedByStopAll } from "../lib/sessionProcesses";
 import { errorToast } from "../lib/store";
 import { Empty, cx } from "./ui";
 
@@ -49,7 +49,7 @@ export function ProcessesPanel({ host, ws }: { host: string; ws: Session }) {
   }, [load]);
 
   const stop = async (ps?: SessionProcess[]) => {
-    const shown = (ps ?? list?.processes.filter((p) => !p.tab) ?? []).map((p) => p.pid);
+    const shown = (ps ?? (list ? stoppedByStopAll(list) : [])).map((p) => p.pid);
     setStopping((s) => [...s, ...shown]);
     try {
       await rpc(host, M.sessionKillProcesses, killParams(ws.id, ps));
@@ -75,7 +75,7 @@ export function ProcessesPanel({ host, ws }: { host: string; ws: Session }) {
       </Empty>
     );
   }
-  const stoppable = list.processes.some((p) => !p.tab);
+  const stoppable = stoppedByStopAll(list).length > 0;
   const row = (p: SessionProcess) => {
     const r = processRow(p, Date.now(), cpu[p.pid] ?? null);
     const busy = stopping.includes(p.pid);
