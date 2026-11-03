@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { type JobOutput, bashChip, chipFromJob, chipFromOutput, jobRowLine, jobStateLine, jobTabLine, jobsSummary, jobsTabCount, lastLines, LINES_SHOWN, outputCount, outputShown, phaseBar, readOutput, phaseList, shownCommand, shownLines, workerFacts, workerLine } from "./jobs";
+import { type JobOutput, bashChip, chipFromJob, chipFromOutput, jobRowLine, jobStateLine, jobTabLine, jobsSummary, jobsTabCount, LINES_SHOWN, outputCount, outputShown, phaseBar, readOutput, phaseList, shownCommand, shownLines, workerFacts, workerLine } from "./jobs";
 import type { Job, JobChunk } from "./protocol";
+import { lastOf } from "./showEarlier";
 
 const job = (extra: Partial<Job> = {}): Job => ({
   id: "j1",
@@ -244,12 +245,12 @@ describe("a job's output (X62)", () => {
 
   it("renders the last 2000 lines of what it keeps, and 2000 more for each Show earlier", () => {
     const lines = linesOf([{ stream: 1, text: Array.from({ length: 5000 }, (_, i) => `line ${i + 1}`).join("\n") }]);
-    const first = lastLines(lines, LINES_SHOWN);
+    const first = lastOf(lines, LINES_SHOWN);
     expect(first.earlier).toBe(3000);
-    expect(first.shown.map((l) => l.text).slice(0, 1)).toEqual(["line 3001"]);
-    expect(first.shown.at(-1)?.n).toBe(5000);
-    expect(lastLines(lines, 4000).shown[0].n).toBe(1001);
-    expect(lastLines(lines, 6000)).toEqual({ shown: lines, earlier: 0 });
+    expect(first.rendered.map((l) => l.text).slice(0, 1)).toEqual(["line 3001"]);
+    expect(first.rendered.at(-1)?.n).toBe(5000);
+    expect(lastOf(lines, 4000).rendered[0].n).toBe(1001);
+    expect(lastOf(lines, 6000)).toEqual({ rendered: lines, earlier: 0 });
   });
 
   it("filters by stream and by what was typed in Find, keeping line numbers", () => {

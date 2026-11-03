@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import {
   activeToken,
   BLOCKS_SHOWN,
-  lastBlocks,
   limitShowing,
   itemShown,
   commandOptions,
@@ -43,6 +42,7 @@ import {
 const rpcReply = vi.hoisted(() => ({ release: (_v: unknown) => {} }));
 vi.mock("./daemon", () => ({ rpc: () => new Promise((r) => (rpcReply.release = r)) }));
 import type { ChatItem } from "./protocol";
+import { lastOf } from "./showEarlier";
 
 const item = (id: string, text: string, kind: ChatItem["kind"] = "assistant"): ChatItem => ({ id, kind, text, ts: 0 });
 
@@ -390,17 +390,17 @@ describe("a message as a chat shows it (X65)", () => {
 describe("a long transcript (X81)", () => {
   // 450 messages, m0 to m449, one block each.
   const blocks = chatBlocks(Array.from({ length: 450 }, (_, i) => item(`m${i}`, `message ${i}`)), "collapsed");
-  const ids = (bs: ReturnType<typeof chatBlocks>) => bs.map((b) => (b.kind === "item" ? b.item.id : b.id));
+  const ids = (bs: readonly ReturnType<typeof chatBlocks>[number][]) => bs.map((b) => (b.kind === "item" ? b.item.id : b.id));
 
   it("shows the last 200 blocks and counts the earlier ones", () => {
-    const first = lastBlocks(blocks, BLOCKS_SHOWN);
+    const first = lastOf(blocks, BLOCKS_SHOWN);
     expect(first.earlier).toBe(250);
-    expect(ids(first.shown).slice(0, 2)).toEqual(["m250", "m251"]);
-    expect(ids(first.shown).at(-1)).toBe("m449");
+    expect(ids(first.rendered).slice(0, 2)).toEqual(["m250", "m251"]);
+    expect(ids(first.rendered).at(-1)).toBe("m449");
     // Show earlier, twice: 200 more, then the rest.
-    expect(lastBlocks(blocks, 400).earlier).toBe(50);
-    expect(ids(lastBlocks(blocks, 400).shown)[0]).toBe("m50");
-    expect(lastBlocks(blocks, 600)).toEqual({ shown: blocks, earlier: 0 });
+    expect(lastOf(blocks, 400).earlier).toBe(50);
+    expect(ids(lastOf(blocks, 400).rendered)[0]).toBe("m50");
+    expect(lastOf(blocks, 600)).toEqual({ rendered: blocks, earlier: 0 });
   });
 
   it("shows earlier blocks, 200 at a time, until the item a jump goes to is among them", () => {

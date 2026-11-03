@@ -539,12 +539,6 @@ export function chatBlocks(items: readonly ChatItem[], view: ToolCallView): Chat
  *  "Show earlier" adds (X81). */
 export const BLOCKS_SHOWN = 200;
 
-/** The blocks a chat renders: the last `limit`, and how many come before them (X81). */
-export function lastBlocks<T>(blocks: T[], limit: number): { shown: T[]; earlier: number } {
-  const earlier = Math.max(0, blocks.length - limit);
-  return { shown: earlier ? blocks.slice(earlier) : blocks, earlier };
-}
-
 /** The blocks to render so that the last one holding an item `isTarget`
  *  picks is among them: `limit`, plus as many steps of BLOCKS_SHOWN as it
  *  takes; `limit` when it is shown already or not there (X81). */

@@ -4,10 +4,12 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronLeft, Circle, Cloud, Cpu, Laptop, LoaderCircle, RotateCw, Server } from "lucide-react";
 import { rpc } from "@desktop/lib/daemon";
-import { type JobIcon, type JobTone, chipFromJob, going, dur, jobRowLine, jobStateLine, jobsSummary, lastLines, LINES_SHOWN, outputCount, outputShown, phaseList, workerLine } from "@desktop/lib/jobs";
+import { type JobIcon, type JobTone, chipFromJob, going, dur, jobRowLine, jobStateLine, jobsSummary, LINES_SHOWN, type OutputLine, outputCount, outputShown, phaseList, workerLine } from "@desktop/lib/jobs";
 import { loadOutput, useJobs } from "@desktop/lib/jobsStore";
 import { M, type Job, type Session } from "@desktop/lib/protocol";
+import { useShowEarlier } from "@desktop/lib/showEarlier";
 import { clock } from "@desktop/lib/subagents";
+import { ShowEarlier } from "@desktop/components/ShowEarlier";
 import { useApp } from "../lib/app";
 import { atEnd, jobFooter } from "../lib/jobsView";
 import { useNow } from "../lib/now";
@@ -15,6 +17,7 @@ import { Btn, cx } from "../components/ui";
 
 const TONE: Record<JobTone, string> = { muted: "text-muted", accent: "text-accent", blocked: "text-blocked", error: "text-error", done: "text-done" };
 const ICONS = { mac: Laptop, host: Server, central: Server, cloud: Cloud, rerun: RotateCw, worker: Cpu };
+const NO_LINES: OutputLine[] = [];
 const LINE_TONE = { moonlet: "text-accent", warn: "text-blocked", stderr: "text-blocked" };
 
 function WorkerIcon({ icon, className }: { icon: JobIcon; className?: string }) {
@@ -90,19 +93,7 @@ function JobDetail({ host, session, job, now, onBack }: { host: string; session:
     if (box.current && follow.current) box.current.scrollTop = box.current.scrollHeight;
   }, [out]);
   // The last lines render; Show earlier adds more, keeping the reader's place (X81).
-  const [limit, setLimit] = useState(LINES_SHOWN);
-  useEffect(() => setLimit(LINES_SHOWN), [job.id]);
-  const { shown, earlier } = useMemo(() => lastLines(lines ?? [], limit), [lines, limit]);
-  const keepFromBottom = useRef<number | null>(null);
-  useLayoutEffect(() => {
-    const el = box.current;
-    if (el && keepFromBottom.current !== null) el.scrollTop = el.scrollHeight - keepFromBottom.current;
-    keepFromBottom.current = null;
-  }, [limit]);
-  const showEarlier = () => {
-    keepFromBottom.current = box.current ? box.current.scrollHeight - box.current.scrollTop : null;
-    setLimit((n) => n + LINES_SHOWN);
-  };
+  const { rendered, earlier, showEarlier } = useShowEarlier(lines ?? NO_LINES, LINES_SHOWN, job.id, box);
   const state = jobStateLine(job, now, session.name);
   const footer = jobFooter(job, session.name, hostLabel);
   const chip = chipFromJob(job);
@@ -153,13 +144,11 @@ function JobDetail({ host, session, job, now, onBack }: { host: string; session:
         </div>
         <div ref={box} onScroll={(e) => (follow.current = atEnd(e.currentTarget))} className="mt-2 max-h-[50vh] min-h-[160px] overflow-y-auto rounded-[10px] border border-border bg-bg px-3 py-2 font-mono text-[12px] leading-[1.55]">
           {earlier > 0 ? (
-            <button type="button" onClick={showEarlier} className="mb-1 font-sans text-muted">
-              Show earlier ({earlier.toLocaleString("en-US")} more {earlier === 1 ? "line" : "lines"})
-            </button>
+            <ShowEarlier earlier={earlier} unit="line" onClick={showEarlier} className="mb-1 font-sans" />
           ) : (
             out?.trimmed && <div className="pb-1 text-faint">Earlier output trimmed</div>
           )}
-          {shown.map((l) => (
+          {rendered.map((l) => (
             <div key={l.n} className={cx("break-all whitespace-pre-wrap", l.tone ? LINE_TONE[l.tone] : "text-fg")}>
               {l.text || " "}
             </div>

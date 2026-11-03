@@ -321,12 +321,6 @@ export function outputCount(out: JobOutput): string {
  *  "Show earlier" adds (X81). */
 export const LINES_SHOWN = 2000;
 
-/** The lines a job's view renders: the last `limit`, and how many come before them (X81). */
-export function lastLines(lines: OutputLine[], limit: number): { shown: OutputLine[]; earlier: number } {
-  const earlier = Math.max(0, lines.length - limit);
-  return { shown: earlier ? lines.slice(earlier) : lines, earlier };
-}
-
 export type OutputFilter = "all" | "stdout" | "stderr";
 
 /** The lines **All / stdout / stderr** and **Find in output** leave. */

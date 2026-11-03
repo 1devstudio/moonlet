@@ -52,7 +52,6 @@ import {
   fuzzyFilter,
   joinDraft,
   BLOCKS_SHOWN,
-  lastBlocks,
   limitShowing,
   showChats,
   useChatOnScreen,
@@ -83,6 +82,8 @@ import { openAgents, openChanges, openFileTab, openJobs } from "../lib/actions";
 import { bashChip, shownCommand } from "../lib/jobs";
 import { useToolJob } from "../lib/jobsStore";
 import { WorkerIcon } from "./JobsPanel";
+import { ShowEarlier } from "./ShowEarlier";
+import { useShowEarlier } from "../lib/showEarlier";
 import { type AsideAnswer, type ChatItem, type ChatState, M, type PermissionAsk, type QueuedMessage, type TerminalInfo, type ToolCall, type TurnTime } from "../lib/protocol";
 import { type Aside, type Line, type Running, asideFooter, asideSettled, canAskAside, composerPlaceholder, interruptedLines, queuedCount, queuedHeader, requeue, sendNowLabel, sendNowParams, sendNowWarning, unqueued, userSend, waitingOn } from "../lib/queued";
 import { firstWord, suggest } from "../lib/suggest";
@@ -1406,8 +1407,7 @@ export function AgentView({
   const agentRowsHere = useMemo(() => agentRows([{ id, st }], agentNow), [id, st, agentNow]);
   const placed = useMemo(() => notesByBlock(blocks, st ? agentNotes(st.items, st.subagents ?? []) : []), [blocks, st]);
   // The last blocks render; "Show earlier" adds more (X81).
-  const [limit, setLimit] = useState(BLOCKS_SHOWN);
-  useEffect(() => setLimit(BLOCKS_SHOWN), [id]);
+  const { rendered: renderedBlocks, earlier, showEarlier, setLimit } = useShowEarlier(blocks, BLOCKS_SHOWN, id, scroller);
   // A jump to an item among the earlier blocks shows them (X81); it is
   // done once the transcript it looks in has loaded.
   const reveal = useChat((s) => (s.reveal?.key === chatKey(host, id) ? s.reveal : null));
@@ -1415,22 +1415,9 @@ export function AgentView({
     if (!reveal || !st) return;
     setLimit((n) => limitShowing(blocks, n, reveal.find));
     useChat.setState({ reveal: null });
-  }, [reveal, blocks, st]);
-  const { shown: shownBlocks, earlier } = useMemo(() => lastBlocks(blocks, limit), [blocks, limit]);
-  const shownIds = useMemo(() => new Set(shownBlocks.flatMap((b) => (b.kind === "item" ? [b.item.id] : b.tools.map((t) => t.id)))), [shownBlocks]);
+  }, [reveal, blocks, st, setLimit]);
+  const renderedIds = useMemo(() => new Set(renderedBlocks.flatMap((b) => (b.kind === "item" ? [b.item.id] : b.tools.map((t) => t.id)))), [renderedBlocks]);
   const dividers = useMemo(() => interruptedLines(st?.items ?? []), [st?.items]);
-  // The distance from the bottom to keep while earlier blocks are added.
-  const keepFromBottom = useRef<number | null>(null);
-  const showEarlier = () => {
-    const el = scroller.current;
-    keepFromBottom.current = el ? el.scrollHeight - el.scrollTop : null;
-    setLimit((n) => n + BLOCKS_SHOWN);
-  };
-  useLayoutEffect(() => {
-    const el = scroller.current;
-    if (el && keepFromBottom.current !== null) el.scrollTop = el.scrollHeight - keepFromBottom.current;
-    keepFromBottom.current = null;
-  }, [limit]);
 
   // Follow new output while the view is scrolled to the bottom.
   useLayoutEffect(() => {
@@ -1706,13 +1693,9 @@ export function AgentView({
             ) : (
               [
                 ...(earlier > 0
-                  ? [
-                      <button key="show-earlier" className="self-center rounded px-2 py-1 ui-text-12.5 text-muted hover:bg-hover hover:text-fg" onClick={showEarlier}>
-                        Show earlier
-                      </button>,
-                    ]
+                  ? [<ShowEarlier key="show-earlier" earlier={earlier} onClick={showEarlier} className="self-center px-2 py-1 ui-text-12.5" />]
                   : placed.lead.map((n, i) => <AgentNoteView key={`lead-${i}`} note={n} />)),
-                ...shownBlocks.map((b) => {
+                ...renderedBlocks.map((b) => {
                   const own = b.kind === "item" && b.item.kind === "user" ? (userView?.(b.item.text) ?? null) : null;
                   const view =
                     b.kind === "agents" ? (
@@ -1747,7 +1730,7 @@ export function AgentView({
               ]
             )}
             {/* A plan that waits shows here when its row is among the earlier blocks (X81). */}
-            {plan && (!plan.itemId || (plan.askId && !shownIds.has(plan.itemId))) && planCard}
+            {plan && (!plan.itemId || (plan.askId && !renderedIds.has(plan.itemId))) && planCard}
             {queued.length > 0 && (
               <QueuedArea
                 queued={queued}

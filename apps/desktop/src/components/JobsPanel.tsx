@@ -1,11 +1,11 @@
 // The Jobs tab (X62): every routed command of the session, newest first, or
 // one job in detail, the way the Agents tab shows subagents.
 
-import { type RefObject, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUpRight, Check, ChevronLeft, Circle, Cloud, Copy, Cpu, Laptop, LoaderCircle, RotateCw, Server } from "lucide-react";
 import { copyJobOutput, openJobTab, stopJob } from "../lib/actions";
 import { rpc } from "../lib/daemon";
-import { type JobIcon, type JobTone, type OutputLine, chipFromJob, going, jobRowLine, jobStateLine, jobsSummary, dur, lastLines, LINES_SHOWN, outputCount, outputShown, phaseList, workerLine } from "../lib/jobs";
+import { type JobIcon, type JobTone, type OutputLine, chipFromJob, going, jobRowLine, jobStateLine, jobsSummary, dur, LINES_SHOWN, outputCount, outputShown, phaseList, workerLine } from "../lib/jobs";
 import { loadOutput, useJobs } from "../lib/jobsStore";
 import { startupCard, waitingNote, type StartupCard } from "../lib/cloudMachines";
 import { useCloud } from "../lib/cloudStore";
@@ -14,6 +14,8 @@ import { clock } from "../lib/subagents";
 import { useNow } from "../lib/useNow";
 import { errorToast, useStore } from "../lib/store";
 import { Empty, cx } from "./ui";
+import { ShowEarlier } from "./ShowEarlier";
+import { useShowEarlier } from "../lib/showEarlier";
 
 export const TONE: Record<JobTone, string> = {
   muted: "text-muted",
@@ -68,36 +70,11 @@ export function useFollow(follow: boolean, count: number) {
   return box;
 }
 
-/** The last lines of `lines` to render in `box`, with Show earlier for
- *  more, kept where the reader was (X81); from the end again when `reset`
- *  changes. */
-export function useLastLines(lines: OutputLine[], reset: string, box: RefObject<HTMLDivElement | null>) {
-  const [limit, setLimit] = useState(LINES_SHOWN);
-  useEffect(() => setLimit(LINES_SHOWN), [reset]);
-  const keepFromBottom = useRef<number | null>(null);
-  useLayoutEffect(() => {
-    const el = box.current;
-    if (el && keepFromBottom.current !== null) el.scrollTop = el.scrollHeight - keepFromBottom.current;
-    keepFromBottom.current = null;
-  }, [limit, box]);
-  const { shown, earlier } = useMemo(() => lastLines(lines, limit), [lines, limit]);
-  const showEarlier = () => {
-    const el = box.current;
-    keepFromBottom.current = el ? el.scrollHeight - el.scrollTop : null;
-    setLimit((n) => n + LINES_SHOWN);
-  };
-  return { shown, earlier, showEarlier };
-}
-
 /** Above the lines rendered: Show earlier while some are not, else the
  *  note that earlier output was trimmed (X81). */
 export function EarlierLines({ job, earlier, onShow }: { job: string; earlier: number; onShow: () => void }) {
   if (!earlier) return <TrimmedNote job={job} />;
-  return (
-    <button className="mb-1 select-none rounded px-1.5 py-0.5 font-sans text-muted hover:bg-hover hover:text-fg" onClick={onShow}>
-      Show earlier ({earlier.toLocaleString("en-US")} more {earlier === 1 ? "line" : "lines"})
-    </button>
-  );
+  return <ShowEarlier earlier={earlier} unit="line" onClick={onShow} className="mb-1 px-1.5 py-0.5 font-sans" />;
 }
 
 const NO_LINES: OutputLine[] = [];
@@ -202,7 +179,7 @@ function JobDetail({ host, ws, job, now }: { host: string; ws: Session; job: Job
   const count = useJobCount(job.id);
   const [follow, setFollow] = useState(true);
   const box = useFollow(follow, lines?.length ?? 0);
-  const last = useLastLines(lines ?? NO_LINES, job.id, box);
+  const last = useShowEarlier(lines ?? NO_LINES, LINES_SHOWN, job.id, box);
   const central = useStore((s) => s.hosts[host]?.label) ?? "this Mac";
   const chip = chipFromJob(job);
   const runHere = () => void rpc(host, M.jobRunHere, { job: job.id }).catch(errorToast);
@@ -263,7 +240,7 @@ function JobDetail({ host, ws, job, now }: { host: string; ws: Session; job: Job
         </div>
         <div ref={box} data-job-output className="selectable mt-2 min-h-[160px] flex-1 overflow-y-auto rounded-lg border border-border bg-panel px-3 py-2 font-mono ui-text-12 leading-[1.55]">
           <EarlierLines job={job.id} earlier={last.earlier} onShow={last.showEarlier} />
-          {last.shown.map((l) => (
+          {last.rendered.map((l) => (
             <div key={l.n} className={cx("whitespace-pre-wrap break-all", l.tone ? LINE_TONE[l.tone] : "text-fg")}>
               {l.text || " "}
             </div>
