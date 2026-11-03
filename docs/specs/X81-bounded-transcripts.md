@@ -1,6 +1,6 @@
 # X81 — Transcripts and job output stay bounded
 
-- **Status:** draft
+- **Status:** implemented
 - **Priority / phase:** P1 · phase 3
 - **PRD refs:** performance targets in `docs/plan.md` (memory under 600 MB with 10 panes); X6 structured chats, X62 jobs
 - **Related ADRs:** none
@@ -29,29 +29,48 @@ the end of a long transcript, and keeps the end of a job's output.
 
 ## Behaviour and acceptance criteria
 
-- [ ] The app loads a chat's transcript when the chat is shown, not every
-      chat's when it connects. On reconnect it reloads only the chats already
-      in memory.
-- [ ] The transcripts of the last 8 chats shown stay in memory. A chat that
-      falls out of them drops its transcript, and loads it again from the
-      daemon (`chat.state`) when it is shown again.
-- [ ] A chat without its transcript in memory keeps its status, asks and
+- [x] The app loads a chat's transcript when the chat is shown (a visible
+      chat tab, the Plan panel's chat, a new chat's context chips, a design
+      system's syncing agent), not every chat's when it connects. On reconnect
+      it reloads only the chats already in memory
+      (`reloads on connect only the chats already in memory`).
+- [x] The transcripts of the last 8 chats shown stay in memory, on the
+      desktop and the phone. A chat that falls out of them drops its
+      transcript, and loads it again from the daemon (`chat.state`) when it
+      is shown again
+      (`keeps the items of the last 8 chats shown and drops the others'`,
+      `loads a dropped chat's items again when it is shown again`).
+- [x] A chat without its transcript in memory keeps its status, asks and
       subagents, kept current by `chat.state` events, so the Agents and Plan
-      panels show them without loading the transcript. A chat loaded only for
-      them (not shown) keeps nothing more.
-- [ ] A chat renders its last 200 blocks. "Show earlier" shows 200 more each
-      time it is clicked.
-- [ ] Each Interrupted divider is found in one pass over the transcript, not
-      by searching it once per divider. The dividers are the same as before.
-- [ ] A streamed item replaces its earlier version by id as before; held
-      events replayed after a load are applied together.
-- [ ] A job's view keeps at most the last 1 MiB of its output (counted in
+      panels show them without loading the transcript; its streamed items are
+      not kept (`keeps a dropped chat's status and asks current, without its
+      items`). A chat loaded only for them (not shown) keeps nothing more
+      (`keeps only the status and asks of a chat loaded but not shown`).
+- [x] A chat renders its last 200 blocks. "Show earlier" shows 200 more each
+      time it is clicked, keeping the view where it was
+      (`shows the last 200 blocks and counts the earlier ones`). A plan that
+      waits for approval shows its card under the blocks when its row is
+      among the earlier ones.
+- [x] Each Interrupted divider is found in one pass over the transcript, not
+      by searching it once per divider. The dividers are the same as before
+      (`marks each Interrupted that stopped a command, across the whole
+      transcript`).
+- [x] A streamed item replaces its earlier version by id as before, found
+      from the end of the transcript, where it streams. Events held during a
+      load are merged with one copy of the transcript
+      (`applies events held during a load in order, the latest version of an
+      item winning`).
+- [x] A job's view keeps at most the last 1 MiB of its output (counted in
       characters, a newline included), dropping whole lines from the start,
       and says "Earlier output trimmed" above what it keeps. Lines keep the
-      numbers they had.
-- [ ] A job's output is read chunk by chunk as it arrives: only the new
+      numbers they had (`keeps the end of a long output, numbered as it was,
+      and says earlier output was trimmed`, `keeps at most 1 MiB of a job's
+      output, however much it printed`). Stored output is read page by page
+      into what is kept, never held whole.
+- [x] A job's output is read chunk by chunk as it arrives: only the new
       chunks are parsed, and a line or colour code cut between chunks reads
-      as before.
+      as before (`reads output chunk by chunk as it comes, joining a line and
+      a colour code cut between chunks`).
 
 ## UI
 
