@@ -355,11 +355,7 @@ impl ChatManager {
             // A restart for new settings keeps what the agent left running (a
             // dev server it started): it ends with the new agent instead (X79).
             // Handed over first, so a failed start keeps them with the chat.
-            if let Some(mut doomed) = Self::doom(inner, &crate::process::table()) {
-                let left_running = std::mem::take(&mut doomed.family);
-                self.end_later(doomed);
-                inner.family.adopt(left_running);
-            }
+            self.end_agent_only(inner, &crate::process::table());
             self.settle(chat, inner, "Stopped to apply new settings");
             inner.restart = false;
             if let Err(e) = self.spawn(chat, inner) {
@@ -786,6 +782,17 @@ impl ChatManager {
         Some(crate::process::Doomed { group: pid.map(|p| nix::unistd::Pid::from_raw(p as i32)), agent, family })
     }
 
+    /// Ends the agent of `inner`, its process group, and keeps with the chat
+    /// what it left running, for the next agent to take on: a restart for
+    /// new settings (X79) and resting (X84).
+    fn end_agent_only(&self, inner: &mut Inner, table: &crate::process::Table) {
+        if let Some(mut doomed) = Self::doom(inner, table) {
+            let left_running = std::mem::take(&mut doomed.family);
+            self.end_later(doomed);
+            inner.family.adopt(left_running);
+        }
+    }
+
     /// Whether the agent of a chat may rest (X84): it runs, has been idle
     /// long enough, and nothing in the chat waits for it or for the user.
     fn may_rest(&self, inner: &Inner) -> bool {
@@ -803,11 +810,7 @@ impl ChatManager {
     /// message to resume, and what it left running stays with the chat, as
     /// on a restart for new settings (X79).
     fn rest(&self, chat: &Chat, inner: &mut Inner, table: &crate::process::Table) {
-        if let Some(mut doomed) = Self::doom(inner, table) {
-            let left_running = std::mem::take(&mut doomed.family);
-            self.end_later(doomed);
-            inner.family.adopt(left_running);
-        }
+        self.end_agent_only(inner, table);
         self.terms.update_info(chat.id, |i| i.pid = None);
         let o = upsert(&mut inner.state, item(super::local_id("system"), "system", "Resting after a day without messages; the next message wakes it"));
         self.apply(chat, inner, vec![o]);
