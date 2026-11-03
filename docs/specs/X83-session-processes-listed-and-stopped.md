@@ -59,7 +59,8 @@ Stopping (`session.kill_processes`):
 - [x] Named pids are stopped with SIGTERM, then SIGKILL after 3 s for those
       still running; the call returns once they are gone. A named pid may be
       a tab's own process. A pid that runs but is not one of the session's
-      processes or leftovers is skipped; one no process runs with any more is
+      processes or leftovers is skipped, even one this user may not read,
+      such as launchd's; one no process runs with any more is
       reported apart, as gone (`stopping_by_pid_skips_pids_that_are_not_the_sessions`,
       `leftovers_in_a_sessions_worktree_are_listed_apart_and_stopped_only_by_pid`).
 - [x] With no pids, every process of the session is stopped except the tabs'

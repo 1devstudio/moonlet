@@ -35,6 +35,21 @@ pub fn name(pid: u32) -> Option<String> {
     exe.file_name().map(|n| n.to_string_lossy().into_owned())
 }
 
+/// Whether a process runs with `pid`, one this user may signal or not, such
+/// as launchd (X83). Never signals it.
+pub fn runs(pid: u32) -> bool {
+    let Ok(pid) = i32::try_from(pid) else {
+        return false;
+    };
+    if pid <= 0 {
+        return false;
+    }
+    match nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None) {
+        Ok(()) => true,
+        Err(e) => e == nix::errno::Errno::EPERM,
+    }
+}
+
 /// The parent of process `pid`.
 pub fn parent(pid: u32) -> Option<u32> {
     #[cfg(target_os = "macos")]

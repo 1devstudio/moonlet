@@ -145,21 +145,23 @@ pub struct Stopping {
     /// Named pids of processes that run but are neither the session's nor
     /// left in its worktree.
     pub skipped: Vec<u32>,
-    /// Named pids no process runs with any more.
+    /// Named pids no process runs with any more, or whose listed process has
+    /// ended and left its pid to another.
     pub gone: Vec<u32>,
 }
 
-/// What to stop of `found` and `leftovers`, of the processes in `table`. No
-/// `pids`: every found process but the tabs' own, never a leftover. An
-/// empty `pids` stops nothing; a tab's own process is stopped when named. A
-/// pid named with the start it was listed with (`started_ms` says a
-/// process's) is gone once its start differs: the pid is another's now.
+/// What to stop of `found` and `leftovers`. No `pids`: every found process
+/// but the tabs' own, never a leftover. An empty `pids` stops nothing; a
+/// tab's own process is stopped when named. A pid named with the start it
+/// was listed with (`started_ms` says a process's) is gone once its start
+/// differs. A pid that is neither is skipped while a process `runs` with it,
+/// readable by this user or not, and gone otherwise.
 pub fn to_stop(
-    table: &[Proc],
     found: &[Found],
     leftovers: &[Proc],
     pids: Option<&[ProcessRef]>,
     started_ms: impl Fn(u64) -> Option<u64>,
+    runs: impl Fn(u32) -> bool,
 ) -> Stopping {
     let Some(pids) = pids else {
         return Stopping {
@@ -177,25 +179,19 @@ pub fn to_stop(
             ProcessRef::Pid(pid) => (pid, None),
             ProcessRef::Listed { pid, started } => (pid, Some(started)),
         };
-        let Some(now) = table
-            .iter()
-            .find(|p| p.pid == pid)
-            .filter(|p| started.is_none() || started_ms(p.start) == started)
-        else {
-            out.gone.push(pid);
-            continue;
-        };
         match found
             .iter()
             .map(|f| &f.proc)
             .chain(leftovers)
-            .find(|p| p.pid == pid && p.start == now.start)
+            .find(|p| p.pid == pid)
         {
+            Some(p) if started.is_some() && started_ms(p.start) != started => out.gone.push(pid),
             Some(p) if !out.targets.contains(&(p.pid, p.start)) => {
                 out.targets.push((p.pid, p.start))
             }
             Some(_) => {}
-            None => out.skipped.push(pid),
+            None if runs(pid) => out.skipped.push(pid),
+            None => out.gone.push(pid),
         }
     }
     out
@@ -423,7 +419,7 @@ mod tests {
     fn stopping_all_spares_the_tabs_own_processes_and_leftovers() {
         let (found, left) = listed();
         assert_eq!(
-            to_stop(&running(), &found, &left, None, Some),
+            to_stop(&found, &left, None, Some, runs),
             Stopping {
                 targets: vec![(101, 12), (301, 31)],
                 ..Stopping::default()
@@ -431,13 +427,10 @@ mod tests {
         );
     }
 
-    /// The listed processes, another session's shell (999), and nothing
-    /// with pid 998.
-    fn running() -> Vec<Proc> {
-        let (found, left) = listed();
-        let mut table: Vec<Proc> = found.iter().map(|f| f.proc).chain(left).collect();
-        table.push(p(999, 1, 90));
-        table
+    /// Whether a process runs with `pid`: no process has 998; 999 is another
+    /// session's shell, and 1 is launchd, which this user may not read.
+    fn runs(pid: u32) -> bool {
+        pid != 998
     }
 
     fn plain(pids: &[u32]) -> Vec<ProcessRef> {
@@ -449,20 +442,20 @@ mod tests {
         let (found, left) = listed();
         assert_eq!(
             to_stop(
-                &running(),
                 &found,
                 &left,
-                Some(&plain(&[101, 600, 999, 100, 101, 998])),
-                Some
+                Some(&plain(&[101, 600, 999, 100, 101, 998, 1])),
+                Some,
+                runs
             ),
             Stopping {
                 targets: vec![(101, 12), (600, 60), (100, 10)],
-                skipped: vec![999],
+                skipped: vec![999, 1],
                 gone: vec![998],
             }
         );
         assert_eq!(
-            to_stop(&running(), &found, &left, Some(&[]), Some),
+            to_stop(&found, &left, Some(&[]), Some, runs),
             Stopping::default(),
             "an empty list stops nothing"
         );
@@ -484,7 +477,7 @@ mod tests {
             ProcessRef::Pid(301),
         ];
         assert_eq!(
-            to_stop(&running(), &found, &left, Some(&named), Some),
+            to_stop(&found, &left, Some(&named), Some, runs),
             Stopping {
                 targets: vec![(101, 12), (301, 31)],
                 skipped: vec![],

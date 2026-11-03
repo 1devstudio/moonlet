@@ -1827,12 +1827,11 @@ impl SessionManager {
     /// in its worktree (X83). Reads the whole process table: call it off the
     /// runtime's threads.
     pub fn processes(&self, id: &str) -> Result<moonlet_proto::methods::SessionProcesses> {
-        let (_, found, leftovers) = self.find_processes(id)?;
+        let (found, leftovers) = self.find_processes(id)?;
         Ok(crate::session_processes::describe(&found, &leftovers))
     }
 
-    /// The process table, and of it session `id`'s processes and leftovers.
-    fn find_processes(&self, id: &str) -> Result<(Vec<crate::process::Proc>, Vec<crate::session_processes::Found>, Vec<crate::process::Proc>)> {
+    fn find_processes(&self, id: &str) -> Result<(Vec<crate::session_processes::Found>, Vec<crate::process::Proc>)> {
         let ws = self.session(id)?;
         let table = crate::process::table();
         let tabs = self.terminals.session_tabs(id);
@@ -1843,7 +1842,7 @@ impl SessionManager {
             Ok(worktree) => crate::session_processes::leftovers(&table, &found, &worktree, crate::process::cwd, std::process::id()),
             Err(_) => Vec::new(),
         };
-        Ok((table, found, leftovers))
+        Ok((found, leftovers))
     }
 
     /// Stops `pids` of session `id`'s processes and leftovers, or every
@@ -1852,8 +1851,8 @@ impl SessionManager {
     pub async fn kill_processes(self: &Arc<Self>, id: &str, pids: Option<Vec<moonlet_proto::methods::ProcessRef>>) -> Result<moonlet_proto::methods::ProcessesKilled> {
         let me = self.clone();
         let session = id.to_string();
-        let (table, found, leftovers) = tokio::task::spawn_blocking(move || me.find_processes(&session)).await??;
-        let stopping = crate::session_processes::to_stop(&table, &found, &leftovers, pids.as_deref(), crate::process::started_ms);
+        let (found, leftovers) = tokio::task::spawn_blocking(move || me.find_processes(&session)).await??;
+        let stopping = crate::session_processes::to_stop(&found, &leftovers, pids.as_deref(), crate::process::started_ms, crate::process::runs);
         // One that ended between the look and its signal ended meanwhile.
         let (ended, ended_meanwhile) = crate::session_processes::end(stopping.targets).await;
         let mut gone = stopping.gone;
