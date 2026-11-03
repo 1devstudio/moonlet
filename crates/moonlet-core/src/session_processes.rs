@@ -279,8 +279,18 @@ pub fn describe(found: &[Found], leftovers: &[Proc]) -> SessionProcesses {
         leftovers: leftovers
             .iter()
             .map(|p| {
-                let parent = if cfg!(target_os = "macos") { "launchd" } else { "init" };
-                one(p, ProcessOrigin::Leftover { parent: parent.into() }, false)
+                let parent = if cfg!(target_os = "macos") {
+                    "launchd"
+                } else {
+                    "init"
+                };
+                one(
+                    p,
+                    ProcessOrigin::Leftover {
+                        parent: parent.into(),
+                    },
+                    false,
+                )
             })
             .collect(),
     }

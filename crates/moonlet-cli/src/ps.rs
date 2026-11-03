@@ -11,13 +11,20 @@ pub fn table(list: &SessionProcesses, now: u64) -> String {
         return "Nothing runs in this session.\n".into();
     }
     let all = || list.processes.iter().chain(&list.leftovers);
-    let width = all().map(|p| origin(p).chars().count()).max().unwrap_or(0).max("ORIGIN".len());
+    let width = all()
+        .map(|p| origin(p).chars().count())
+        .max()
+        .unwrap_or(0)
+        .max("ORIGIN".len());
     let line = |pid: &str, name: &str, origin: &str, age: &str, cpu: &str, mem: &str| {
         format!("{pid:>7}  {name:<16}  {origin:<width$}  {age:>5}  {cpu:>8}  {mem:>9}\n")
     };
     let row = |p: &SessionProcess| {
         let dash = || "-".to_string();
-        let age = p.started.map(|s| age(now.saturating_sub(s) / 1000)).unwrap_or_else(dash);
+        let age = p
+            .started
+            .map(|s| age(now.saturating_sub(s) / 1000))
+            .unwrap_or_else(dash);
         let cpu = p.cpu_ms.map(cpu).unwrap_or_else(dash);
         let mem = p.rss.map(memory).unwrap_or_else(dash);
         line(&p.pid.to_string(), &p.name, &origin(p), &age, &cpu, &mem)
@@ -96,16 +103,27 @@ pub fn stopped(killed: &ProcessesKilled) -> String {
 /// run but are not the session's, those that had ended, and those that
 /// outlived SIGKILL; `None` when it stopped every one.
 pub fn not_stopped(killed: &ProcessesKilled) -> Option<String> {
-    let list = |pids: &[u32]| pids.iter().map(u32::to_string).collect::<Vec<_>>().join(" ");
+    let list = |pids: &[u32]| {
+        pids.iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
     let mut parts = Vec::new();
     if !killed.skipped.is_empty() {
-        parts.push(format!("not processes of this session: {}", list(&killed.skipped)));
+        parts.push(format!(
+            "not processes of this session: {}",
+            list(&killed.skipped)
+        ));
     }
     if !killed.gone.is_empty() {
         parts.push(format!("already ended: {}", list(&killed.gone)));
     }
     if !killed.still_running.is_empty() {
-        parts.push(format!("still running after SIGKILL: {}", list(&killed.still_running)));
+        parts.push(format!(
+            "still running after SIGKILL: {}",
+            list(&killed.still_running)
+        ));
     }
     (!parts.is_empty()).then(|| parts.join("; "))
 }
