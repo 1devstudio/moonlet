@@ -95,7 +95,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { errorToast, getLayout, setLayout, termKey, toast, useStore } from "../lib/store";
 import { signInFor } from "../lib/profiles";
 import { addTab, tabOf } from "../lib/layout";
-import { type PlanView, planLabels, planView } from "../lib/plan";
+import { type PlanView, planCardBelow, planLabels, planView } from "../lib/plan";
 import { AGENT_STATE, type AgentNote, type AgentRow, agentCount, agentMs, agentNotes, agentRows, askerName, clock, hasRunningAgents, launchedRows, notesByBlock } from "../lib/subagents";
 import { uiScale } from "../lib/uiScale";
 import { useNow } from "../lib/useNow";
@@ -1731,7 +1731,7 @@ export function AgentView({
               ]
             )}
             {/* A plan that waits shows here when its row is among the earlier blocks (X81). */}
-            {plan && (!plan.itemId || (plan.askId && !renderedIds.has(plan.itemId))) && planCard}
+            {planCardBelow(plan, renderedIds) && planCard}
             {queued.length > 0 && (
               <QueuedArea
                 queued={queued}

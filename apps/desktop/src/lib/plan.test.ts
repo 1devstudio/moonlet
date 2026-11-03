@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { planChat, planLabels, planTabDot, planView, planWaits } from "./plan";
+import { planCardBelow, planChat, planLabels, planTabDot, planView, planWaits } from "./plan";
 import type { ChatItem, ChatState, PermissionAsk } from "./protocol";
 
 // The input of an ExitPlanMode call as claude 2.1.291 sent it.
@@ -103,6 +103,19 @@ describe("planChat (X24)", () => {
     // The focused pane is a shell, or its chat has not loaded.
     expect(planChat(12, [{ id: 7, st: plain }, { id: 3, st: undefined }])).toBe(3);
     expect(planChat(null, [])).toBeNull();
+  });
+});
+
+describe("planCardBelow (X81)", () => {
+  it("shows a waiting plan's card under the blocks when its row is among the earlier ones", () => {
+    const waiting = planView(chat([user, call("t1", "running")], [ask]));
+    expect(planCardBelow(waiting, new Set(["u1"]))).toBe(true);
+    expect(planCardBelow(waiting, new Set(["u1", "t1"]))).toBe(false);
+    // An answered plan stays with its row, rendered or not.
+    expect(planCardBelow(planView(chat([user, call("t1", "ok")])), new Set(["u1"]))).toBe(false);
+    // Only the ask is known: no row to show it with.
+    expect(planCardBelow(planView(chat([user], [ask])), new Set(["u1"]))).toBe(true);
+    expect(planCardBelow(null, new Set())).toBe(false);
   });
 });
 

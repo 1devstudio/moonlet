@@ -76,3 +76,9 @@ export function planWaits(st: ChatState | ChatSummary | undefined): boolean {
 
 /** The Plan tab's dot: a plan waits and the tab is not showing it. */
 export const planTabDot = (tab: string, waiting: boolean) => waiting && tab !== "plan";
+
+/** Whether the plan's card shows under a chat's blocks rather than after
+ *  its row: it has no row, or it waits and its row is not among the
+ *  `rendered` ids, but among the earlier blocks (X81). */
+export const planCardBelow = (plan: PlanView | null, rendered: ReadonlySet<string>): boolean =>
+  !!plan && (!plan.itemId || (!!plan.askId && !rendered.has(plan.itemId)));
