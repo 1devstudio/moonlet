@@ -341,11 +341,14 @@ export function SessionView({ host, ws }: { host: string; ws: Session }) {
         </div>
       )}
       <div className="relative min-h-0 flex-1">
-        {layout?.tabs.map((t) => (
-          <div key={t.id} className="absolute inset-0" style={{ visibility: t.id === layout.active ? "visible" : "hidden" }} {...quietWhen(t.id !== layout.active)}>
-            <PaneTree host={host} wsId={ws.id} tabId={t.id} node={t.root} path={[]} focused={layout.focused} visible={t.id === layout.active} />
-          </div>
-        ))}
+        {layout?.tabs.map((t) => {
+          const shown = t.id === layout.active;
+          return (
+            <div key={t.id} className="absolute inset-0" style={{ visibility: shown ? "visible" : "hidden" }} {...quietWhen(!shown)}>
+              <PaneTree host={host} wsId={ws.id} tabId={t.id} node={t.root} path={[]} focused={layout.focused} visible={shown} />
+            </div>
+          );
+        })}
         {(!layout || layout.tabs.length === 0) && (
           <div className="flex h-full flex-col items-center justify-center gap-3 text-muted">
             <div className="ui-text-14">No terminals in this session.</div>
