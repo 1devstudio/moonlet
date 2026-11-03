@@ -800,10 +800,14 @@ impl ChatManager {
 
     /// Ends the agent of `inner`, its process group, and keeps with the chat
     /// what it left running, for the next agent to take on: a restart for
-    /// new settings (X79) and resting (X84).
+    /// new settings (X79) and resting (X84). The agent stays recorded until
+    /// it is gone, so a crash meanwhile leaves it to the next daemon.
     fn end_agent_only(&self, inner: &mut Inner, table: &crate::process::Table) {
+        // As `table` saw it: a pid freed since is never taken for the agent.
+        let agent = inner.pid.and_then(|pid| table.get(pid)).map(|p| (p.pid, p.start));
         if let Some(mut doomed) = Self::doom(inner, table) {
             let left_running = std::mem::take(&mut doomed.family);
+            self.dying.lock().unwrap().processes.extend(agent);
             self.end_later(doomed);
             inner.family.adopt(left_running);
         }
@@ -1308,6 +1312,10 @@ while IFS= read -r line; do
     *'queue this'*) ;;
     *'end the turn'*)
       echo '{"type":"result","subtype":"success","is_error":false,"usage":{}}' ;;
+    *'ignore sigterm'*)
+      # From now on only SIGKILL ends this agent, which outlives its stdin.
+      trap '' TERM; stubborn=1
+      echo '{"type":"result","subtype":"success","is_error":false,"usage":{}}' ;;
     *'crash now'*) exit 3 ;;
     *'write a long reply and exit'*)
       # A reply that takes a while to read, all written before the agent
@@ -1360,6 +1368,7 @@ while IFS= read -r line; do
       echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.01,"usage":{"input_tokens":3,"output_tokens":2}}' ;;
   esac
 done
+[ -n "$stubborn" ] && exec sleep 60
 "#;
 
     /// An environment whose PATH finds the fake `claude`, written under `dir`.
@@ -2383,6 +2392,51 @@ done
         assert!(nix::sys::signal::kill(server, None).is_ok(), "the server ended before its SIGKILL");
         assert!(recorded(&path).contains(&server.as_raw()), "a crash now would leave the server running");
         assert!(gone_within(server, 4).await);
+    }
+
+    /// A chat recording its leftovers in `<dir>/d.leftovers.json`, whose
+    /// agent ignores SIGTERM; that file and the agent.
+    async fn recorded_agent_that_ignores_sigterm(dir: &Path, terms: &TerminalManager, chats: &ChatManager) -> (PathBuf, TerminalId, nix::unistd::Pid) {
+        let path = dir.join("d.leftovers.json");
+        chats.record_leftovers(path.clone(), Default::default());
+        let id = chats.create(ChatCreate { cwd: dir.display().to_string(), agent: "claude".into(), ..Default::default() }).unwrap().id;
+        wait_for(chats, id, |s| s.agent_session.is_some()).await;
+        chats.send(id, "ignore sigterm", &[]).unwrap();
+        wait_for(chats, id, |s| s.status == "done").await;
+        (path, id, agent_pid(terms, id))
+    }
+
+    #[tokio::test]
+    async fn a_resting_agent_stays_recorded_until_it_is_gone() {
+        let (dir, terms, chats) = setup().await;
+        let (path, id, agent) = recorded_agent_that_ignores_sigterm(dir.path(), &terms, &chats).await;
+        chats.set_rest_after(Duration::from_millis(300));
+        // Rested: the tab has no process, though the agent waits for its SIGKILL.
+        for _ in 0..100 {
+            if terms.get(id).unwrap().info().pid.is_none() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert_eq!(terms.get(id).unwrap().info().pid, None, "the idle agent never rested");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert!(nix::sys::signal::kill(agent, None).is_ok(), "the agent ended before its SIGKILL");
+        assert!(recorded(&path).contains(&agent.as_raw()), "a crash now would leave the resting agent running");
+        assert!(gone_within(agent, 4).await);
+    }
+
+    #[tokio::test]
+    async fn an_agent_restarted_for_new_settings_stays_recorded_until_it_is_gone() {
+        let (dir, terms, chats) = setup().await;
+        let (path, id, agent) = recorded_agent_that_ignores_sigterm(dir.path(), &terms, &chats).await;
+        chats.settings(id, Some("opus".into()), None, None).unwrap();
+        chats.send(id, "hi", &[]).unwrap();
+        wait_for(&chats, id, |s| s.items.iter().any(|i| i.kind == "assistant" && i.text == "hello")).await;
+        // A look after the restart, within the old agent's SIGTERM grace.
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        assert!(nix::sys::signal::kill(agent, None).is_ok(), "the old agent ended before its SIGKILL");
+        assert!(recorded(&path).contains(&agent.as_raw()), "a crash now would leave the old agent running");
+        assert!(gone_within(agent, 4).await);
     }
 
     #[tokio::test]
