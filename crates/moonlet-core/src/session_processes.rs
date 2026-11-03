@@ -478,13 +478,18 @@ mod tests {
                 started: 59,
             },
             ProcessRef::Pid(301),
+            // A row listed before pid 100 went to the tab's new shell.
+            ProcessRef::Listed {
+                pid: 100,
+                started: 7,
+            },
         ];
         assert_eq!(
             to_stop(&found, &left, Some(&named), Some, runs),
             Stopping {
                 targets: vec![(101, 12), (301, 31)],
                 skipped: vec![],
-                gone: vec![600],
+                gone: vec![600, 100],
             }
         );
     }
