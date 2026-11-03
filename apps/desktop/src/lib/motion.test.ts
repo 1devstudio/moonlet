@@ -18,8 +18,10 @@ function sheet(css: string): CSSStyleSheet {
   return style.sheet!;
 }
 
-/** The app's motion rules, with an endless spinner like the app's own. */
-const page = (css = motionCss) => sheet(`.spin { animation-name: moonlet-spin; animation-iteration-count: infinite; }\n${css}`);
+/** The app's motion rules, with an endless spinner like the app's own. Its
+ *  play state is written out: jsdom computes none, where WebKit's is `running`. */
+const page = (css = motionCss) =>
+  sheet(`.spin { animation-name: moonlet-spin; animation-iteration-count: infinite; animation-play-state: running; }\n${css}`);
 
 /** A tab's container holding a spinner, `hidden` as the session view hides it. */
 function tabWithSpinner(hidden: boolean): HTMLElement {
@@ -110,7 +112,7 @@ describe("motion (X82)", () => {
 
   it("keeps an animation in the shown tab running", () => {
     page();
-    expect(getComputedStyle(tabWithSpinner(false)).animationPlayState).not.toBe("paused");
+    expect(getComputedStyle(tabWithSpinner(false)).animationPlayState).toBe("running");
   });
 
   it("runs an endless animation once when the system asks for reduced motion", () => {
