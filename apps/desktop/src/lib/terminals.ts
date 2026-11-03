@@ -941,8 +941,13 @@ export function terminalsToLetGo(order: readonly string[], onScreen: ReadonlySet
 const entries = new Map<string, TermEntry>();
 let settings = defaultTermSettings;
 
+/** A terminal's key in `entries`: its id is unique per host only. */
+function entryKey(host: string, session: number) {
+  return `${host}:${session}`;
+}
+
 export function getEntry(host: string, session: number): TermEntry {
-  const key = `${host}:${session}`;
+  const key = entryKey(host, session);
   let e = entries.get(key);
   if (!e) {
     e = new TermEntry(host, session, settings);
@@ -952,18 +957,25 @@ export function getEntry(host: string, session: number): TermEntry {
   return e;
 }
 
+/** Disposes a live terminal and forgets it: showing it again creates it
+ * anew. */
+function letGo(key: string) {
+  const e = entries.get(key);
+  entries.delete(key);
+  e?.dispose();
+  return e;
+}
+
 /** A terminal was shown (X80): it becomes the most recently shown, and
  * those beyond the limit are let go of. */
 function shown(entry: TermEntry) {
-  const key = `${entry.host}:${entry.session}`;
+  const key = entryKey(entry.host, entry.session);
   if (entries.get(key) !== entry) return;
   entries.delete(key);
   entries.set(key, entry);
   const onScreen = new Set([...entries].flatMap(([k, e]) => (e.mounted ? [k] : [])));
   for (const k of terminalsToLetGo([...entries.keys()], onScreen, LIVE_TERMINALS)) {
-    const e = entries.get(k)!;
-    entries.delete(k);
-    e.dispose();
+    const e = letGo(k)!;
     // The daemon stops sending its output; showing it again attaches anew,
     // and the replay draws its screen and scrollback (S2).
     void rpc(e.host, M.terminalDetach, { id: e.session }).catch(() => {});
@@ -971,13 +983,11 @@ function shown(entry: TermEntry) {
 }
 
 export function findEntry(host: string, session: number): TermEntry | undefined {
-  return entries.get(`${host}:${session}`);
+  return entries.get(entryKey(host, session));
 }
 
 export function disposeEntry(host: string, session: number) {
-  const key = `${host}:${session}`;
-  entries.get(key)?.dispose();
-  entries.delete(key);
+  letGo(entryKey(host, session));
 }
 
 /** After a reconnect the daemon has forgotten our subscriptions. */
