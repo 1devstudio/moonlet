@@ -133,39 +133,57 @@ pub fn leftovers(
     out
 }
 
-/// What to stop of `found` and `leftovers`, as pid and start time, and the
-/// pids of `pids` that are neither. No `pids`: every found process but the
-/// tabs' own, never a leftover.
+/// What stopping some pids of a session does, before any is signalled.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Stopping {
+    /// The processes to end, as pid and start time.
+    pub targets: Vec<(u32, u64)>,
+    /// Named pids of processes that run but are neither the session's nor
+    /// left in its worktree.
+    pub skipped: Vec<u32>,
+    /// Named pids no process runs with any more.
+    pub gone: Vec<u32>,
+}
+
+/// What to stop of `found` and `leftovers`, of the processes in `table`. No
+/// `pids`: every found process but the tabs' own, never a leftover. An
+/// empty `pids` stops nothing; a tab's own process is stopped when named.
 pub fn to_stop(
+    table: &[Proc],
     found: &[Found],
     leftovers: &[Proc],
     pids: Option<&[u32]>,
-) -> (Vec<(u32, u64)>, Vec<u32>) {
+) -> Stopping {
     let Some(pids) = pids else {
-        return (
-            found
+        return Stopping {
+            targets: found
                 .iter()
                 .filter(|f| !f.tab)
                 .map(|f| (f.proc.pid, f.proc.start))
                 .collect(),
-            Vec::new(),
-        );
+            ..Stopping::default()
+        };
     };
-    let mut stop = Vec::new();
-    let mut skipped = Vec::new();
+    let mut out = Stopping::default();
     for &pid in pids {
+        if !table.iter().any(|p| p.pid == pid) {
+            out.gone.push(pid);
+            continue;
+        }
         match found
             .iter()
             .map(|f| &f.proc)
             .chain(leftovers)
             .find(|p| p.pid == pid)
         {
-            Some(p) if !stop.contains(&(p.pid, p.start)) => stop.push((p.pid, p.start)),
+            Some(p) if !out.targets.contains(&(p.pid, p.start)) => {
+                out.targets.push((p.pid, p.start))
+            }
             Some(_) => {}
-            None => skipped.push(pid),
+            None => out.skipped.push(pid),
         }
     }
-    (stop, skipped)
+    out
 }
 
 /// Ends `targets` (pid and start time): SIGTERM, then SIGKILL after
@@ -387,17 +405,38 @@ mod tests {
     fn stopping_all_spares_the_tabs_own_processes_and_leftovers() {
         let (found, left) = listed();
         assert_eq!(
-            to_stop(&found, &left, None),
-            (vec![(101, 12), (301, 31)], vec![])
+            to_stop(&running(), &found, &left, None),
+            Stopping {
+                targets: vec![(101, 12), (301, 31)],
+                ..Stopping::default()
+            }
         );
+    }
+
+    /// The listed processes, another session's shell (999), and nothing
+    /// with pid 998.
+    fn running() -> Vec<Proc> {
+        let (found, left) = listed();
+        let mut table: Vec<Proc> = found.iter().map(|f| f.proc).chain(left).collect();
+        table.push(p(999, 1, 90));
+        table
     }
 
     #[test]
     fn stopping_by_pid_skips_pids_that_are_not_the_sessions() {
         let (found, left) = listed();
         assert_eq!(
-            to_stop(&found, &left, Some(&[101, 600, 999, 100, 101])),
-            (vec![(101, 12), (600, 60), (100, 10)], vec![999])
+            to_stop(&running(), &found, &left, Some(&[101, 600, 999, 100, 101, 998])),
+            Stopping {
+                targets: vec![(101, 12), (600, 60), (100, 10)],
+                skipped: vec![999],
+                gone: vec![998],
+            }
+        );
+        assert_eq!(
+            to_stop(&running(), &found, &left, Some(&[])),
+            Stopping::default(),
+            "an empty list stops nothing"
         );
     }
 

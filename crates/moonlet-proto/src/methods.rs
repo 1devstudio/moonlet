@@ -1800,8 +1800,12 @@ pub struct SessionKillProcesses {
 pub struct ProcessesKilled {
     /// Stopped, and gone (or SIGKILLed a second before the call returned).
     pub ended: Vec<u32>,
-    /// Named, but not the session's processes or leftovers.
+    /// Named, running, but neither the session's processes nor its leftovers.
     pub skipped: Vec<u32>,
+    /// Named, but no longer running: ended already, or its pid is now
+    /// another process's.
+    #[serde(default)]
+    pub gone: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

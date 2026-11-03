@@ -331,7 +331,10 @@ export interface SessionProcesses {
 /** `session.kill_processes`' result (X83). */
 export interface ProcessesKilled {
   ended: number[];
+  /** Running, but not the session's processes nor its leftovers. */
   skipped: number[];
+  /** No longer running: ended already, or the pid is another process's now. */
+  gone: number[];
 }
 
 /** Work in a session that is only on its host (X55). */

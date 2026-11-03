@@ -56,11 +56,15 @@ Listing (`session.processes`):
 Stopping (`session.kill_processes`):
 
 - [x] Named pids are stopped with SIGTERM, then SIGKILL after 3 s for those
-      still running; the call returns once they are gone. A pid that is not
-      one of the session's processes or leftovers is skipped and reported as
-      such (`stopping_by_pid_skips_pids_that_are_not_the_sessions`).
+      still running; the call returns once they are gone. A named pid may be
+      a tab's own process. A pid that runs but is not one of the session's
+      processes or leftovers is skipped; one no process runs with any more is
+      reported apart, as gone (`stopping_by_pid_skips_pids_that_are_not_the_sessions`,
+      `leftovers_in_a_sessions_worktree_are_listed_apart_and_stopped_only_by_pid`).
 - [x] With no pids, every process of the session is stopped except the tabs'
-      own and the leftovers (`stopping_all_spares_the_tabs_own_processes_and_leftovers`).
+      own and the leftovers; an empty list stops nothing
+      (`stopping_all_spares_the_tabs_own_processes_and_leftovers`,
+      `stopping_by_pid_skips_pids_that_are_not_the_sessions`).
 - [x] A process is signalled only while its start time is the one it had when
       listed: a pid reused meanwhile is left alone
       (`ending_skips_a_pid_whose_start_changed`).
@@ -124,7 +128,9 @@ session". A daemon too old to list processes shows the error.
   `{kind: "terminal", id, title}`, `{kind: "agent", id, title}` or
   `{kind: "leftover"}`; `started` is in milliseconds since the epoch,
   `cpu_ms` the CPU time used so far, `rss` resident memory in bytes.
-- `session.kill_processes {id, pids?}` → `{ended: [pid], skipped: [pid]}`.
+- `session.kill_processes {id, pids?}` →
+  `{ended: [pid], skipped: [pid], gone: [pid]}`: `skipped` run but are not
+  the session's, `gone` no longer run.
 - Both answer the app and the CLI; a worker's link gets `forbidden`
   (`a_workers_link_neither_lists_nor_stops_a_sessions_processes`).
 - CLI: `moonlet ps [--session <id>] [--json]`,
