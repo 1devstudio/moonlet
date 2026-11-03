@@ -38,8 +38,7 @@ fn row(p: &SessionProcess, now: u64) -> String {
         ProcessOrigin::Terminal { id, title } => format!("terminal {id} ({title})"),
         ProcessOrigin::Run { id, title } => format!("run {id} ({title})"),
         ProcessOrigin::Agent { id, title } => format!("agent {id} ({title})"),
-        ProcessOrigin::Leftover if cfg!(target_os = "macos") => "launchd".into(),
-        ProcessOrigin::Leftover => "init".into(),
+        ProcessOrigin::Leftover { parent } => parent.clone(),
     };
     if p.tab {
         origin.push_str(", the tab's own");
@@ -170,10 +169,13 @@ mod tests {
                     rss: None,
                 },
             ],
+            // On a Linux host, left to init.
             leftovers: vec![process(
                 5151,
                 "node",
-                ProcessOrigin::Leftover,
+                ProcessOrigin::Leftover {
+                    parent: "init".into(),
+                },
                 false,
                 6 * 86_400,
                 3 * 3600 * 1000 + 5 * 60_000,
@@ -190,7 +192,7 @@ mod tests {
    4320  ?                   -         -          -  run 5 (test)
 
 Left in the worktree, stopped only by pid:
-   5151  node               6d     3h05m     3.0 GB  launchd
+   5151  node               6d     3h05m     3.0 GB  init
 "
         );
         assert_eq!(

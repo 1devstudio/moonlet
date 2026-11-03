@@ -10,7 +10,7 @@ const proc = (pid: number, name: string, origin: SessionProcess["origin"], tab =
 
 const list: SessionProcesses = {
   processes: [proc(4100, "zsh", dev, true), proc(4242, "vite", dev), proc(4250, "tail", dev), proc(4300, "claude", claude, true), proc(4310, "node", claude)],
-  leftovers: [proc(5151, "node", { kind: "leftover" })],
+  leftovers: [proc(5151, "node", { kind: "leftover", parent: "launchd" })],
 };
 
 describe("archiving a session with processes (X83)", () => {
@@ -40,9 +40,12 @@ describe("the Processes tab (X83)", () => {
     expect(processRow(vite, NOW, 12.4)).toEqual({ pid: 4242, name: "vite", origin: "Terminal · dev", age: "2h", cpu: "12%", memory: "210 MB", stop: true });
     const agent: SessionProcess = { pid: 4300, name: "claude", origin: claude, tab: true, started: NOW - 42_000, rss: 900 << 10 };
     expect(processRow(agent, NOW, null)).toEqual({ pid: 4300, name: "claude", origin: "Agent · Claude", age: "42s", cpu: "–", memory: "900 KB", stop: false });
-    const left: SessionProcess = { pid: 5151, name: "node", origin: { kind: "leftover" }, tab: false, started: NOW - 6 * 86_400_000, rss: 3 * 2 ** 30 };
+    const left: SessionProcess = { pid: 5151, name: "node", origin: { kind: "leftover", parent: "launchd" }, tab: false, started: NOW - 6 * 86_400_000, rss: 3 * 2 ** 30 };
     expect(processRow(left, NOW, 0.2)).toEqual({ pid: 5151, name: "node", origin: "launchd", age: "6d", cpu: "0%", memory: "3.0 GB", stop: true });
-    const script: SessionProcess = { pid: 4250, name: "node", origin: { kind: "run", id: 4, title: "dev" }, tab: false };
+    // A Linux host's leftovers were left to init.
+    const linux: SessionProcess = { pid: 5152, name: "node", origin: { kind: "leftover", parent: "init" }, tab: false };
+    expect(processRow(linux, NOW, null).origin).toBe("init");
+    const script: SessionProcess ={ pid: 4250, name: "node", origin: { kind: "run", id: 4, title: "dev" }, tab: false };
     expect(processRow(script, NOW, null).origin).toBe("Run · dev");
     expect(processesSummary(list)).toBe("5 processes · 1 left in the worktree");
     expect(processesSummary({ processes: [proc(4242, "vite", dev)], leftovers: [] })).toBe("1 process");
@@ -50,7 +53,7 @@ describe("the Processes tab (X83)", () => {
 
   it("Stop all covers what the daemon stops: neither the tabs' own nor what was left in the worktree", () => {
     expect(stoppedByStopAll(list).map((p) => p.pid)).toEqual([4242, 4250, 4310]);
-    expect(stoppedByStopAll({ processes: [proc(4100, "zsh", dev, true)], leftovers: [proc(5151, "node", { kind: "leftover" })] })).toEqual([]);
+    expect(stoppedByStopAll({ processes: [proc(4100, "zsh", dev, true)], leftovers: [proc(5151, "node", { kind: "leftover", parent: "launchd" })] })).toEqual([]);
   });
 
   it("stops a row by its pid and the start it was listed with; Stop all names none", () => {

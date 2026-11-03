@@ -1775,8 +1775,9 @@ pub enum ProcessOrigin {
     Run { id: TerminalId, title: String },
     /// A chat's agent, or a process it started.
     Agent { id: TerminalId, title: String },
-    /// Launchd's (init's), working in the session's worktree.
-    Leftover,
+    /// Launchd's (init's), working in the session's worktree. `parent` names
+    /// what it was left to on the host's system: "launchd" or "init".
+    Leftover { parent: String },
 }
 
 /// `session.processes`' result (X83).

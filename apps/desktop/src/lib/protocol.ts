@@ -309,7 +309,8 @@ export type ProcessOrigin =
   /** A Run tab's: a script the session runs. */
   | { kind: "run"; id: number; title: string }
   | { kind: "agent"; id: number; title: string }
-  | { kind: "leftover" };
+  /** What it was left to on the host's system: "launchd" or "init". */
+  | { kind: "leftover"; parent: string };
 
 /** One process of a session (X83), named by its executable, never its arguments. */
 export interface SessionProcess {

@@ -50,7 +50,9 @@ Listing (`session.processes`):
       (`a_child_s_working_directory_and_usage_are_what_the_kernel_says`).
 - [x] Leftovers are listed apart: processes whose parent is launchd (init on
       Linux), that are not already the session's, whose working directory is
-      the session's worktree or inside it. They are never stopped unless named
+      the session's worktree or inside it. Each says what it was left to on
+      the host's system, which the app and `moonlet ps` show as its origin:
+      "launchd" on macOS, "init" on Linux. They are never stopped unless named
       by pid (`leftovers_are_launchd_children_working_in_the_worktree`,
       `leftovers_in_a_sessions_worktree_are_listed_apart_and_stopped_only_by_pid`).
 
@@ -141,7 +143,8 @@ session". A daemon too old to list processes shows the error.
   `{pid, name, origin, tab, started?, cpu_ms?, rss?}`; `origin` is
   `{kind: "terminal", id, title}`, `{kind: "run", id, title}` (a Run tab's),
   `{kind: "agent", id, title}` or
-  `{kind: "leftover"}`; `started` is in milliseconds since the epoch,
+  `{kind: "leftover", parent}`, `parent` "launchd" on a macOS host and "init"
+  on a Linux one; `started` is in milliseconds since the epoch,
   `cpu_ms` the CPU time used so far, `rss` resident memory in bytes.
 - `session.kill_processes {id, pids?}` →
   `{ended: [pid], skipped: [pid], gone: [pid]}`: `skipped` run but are not

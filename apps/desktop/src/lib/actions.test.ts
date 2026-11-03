@@ -111,7 +111,7 @@ describe("archiveSession", () => {
       { pid: 4242, name: "vite", origin: { kind: "terminal", id: 1, title: "zsh" }, tab: false, started: 1_793_700_000_000 },
       { pid: 4310, name: "tail", origin: { kind: "agent", id: 3, title: "Claude" }, tab: false },
     ],
-    leftovers: [{ pid: 5151, name: "node", origin: { kind: "leftover" }, tab: false, started: 1_793_100_000_000 }],
+    leftovers: [{ pid: 5151, name: "node", origin: { kind: "leftover", parent: "launchd" }, tab: false, started: 1_793_100_000_000 }],
   };
 
   it("lists the processes still running and stops them before archiving (X83)", async () => {

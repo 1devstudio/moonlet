@@ -5420,7 +5420,9 @@ async fn leftovers_in_a_sessions_worktree_are_listed_apart_and_stopped_only_by_p
     let listed: serde_json::Value = c.request(methods::SESSION_PROCESSES, serde_json::json!({"id": ws.id})).await.unwrap();
     let left: Vec<&serde_json::Value> = listed["leftovers"].as_array().unwrap().iter().filter(|e| e["pid"] == orphan).collect();
     assert_eq!(left.len(), 1, "{listed}");
-    assert_eq!((&left[0]["name"], &left[0]["origin"]), (&serde_json::json!("sleep"), &serde_json::json!({"kind": "leftover"})));
+    // Named by what it was left to on this host's system.
+    let parent = if cfg!(target_os = "macos") { "launchd" } else { "init" };
+    assert_eq!((&left[0]["name"], &left[0]["origin"]), (&serde_json::json!("sleep"), &serde_json::json!({"kind": "leftover", "parent": parent})));
     assert!(!listed["processes"].as_array().unwrap().iter().any(|e| e["pid"] == orphan), "{listed}");
     assert!(!listed.to_string().contains(&format!("\"pid\":{}", outsider.id())), "{listed}");
 
