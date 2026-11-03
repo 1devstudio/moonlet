@@ -119,4 +119,5 @@ Each feature of moonlet has its own spec in this directory. Write the spec befor
 | X80 | Hidden terminals let go of their memory | P1 | 3 | implemented | [X80-hidden-terminals-let-go.md](X80-hidden-terminals-let-go.md) |
 | X81 | Transcripts and job output stay bounded | P1 | 3 | implemented | [X81-bounded-transcripts.md](X81-bounded-transcripts.md) |
 | X82 | Nothing moves where nobody looks: hidden tabs pause their animations, a compositor-only shimmer, reduced motion | P1 | 3 | implemented | [X82-nothing-moves-where-nobody-looks.md](X82-nothing-moves-where-nobody-looks.md) |
+| X83 | A session's processes, listed and stopped | P1 | 3 | draft | [X83-session-processes-listed-and-stopped.md](X83-session-processes-listed-and-stopped.md) |
 | X84 | Idle agents rest: a chat agent idle for a day is stopped, and the next message resumes it | P1 | 3 | implemented | [X84-idle-agents-rest.md](X84-idle-agents-rest.md) |

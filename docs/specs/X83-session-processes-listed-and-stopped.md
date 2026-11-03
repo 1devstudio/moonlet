@@ -1,0 +1,170 @@
+# X83 — A session's processes, listed and stopped
+
+- **Status:** draft
+- **Priority / phase:** P1 · phase 3
+- **PRD refs:** S1 daemon-owned sessions, X1 repo scripts, A6 CLI and socket API
+- **Related:** [X79](X79-session-processes-end-with-session.md) (a session's processes end with it), [X23](X23-confirm-modal.md) (confirm modal), [X55](X55-git-settings.md) (archive settings)
+
+## Summary
+
+Processes started in moonlet sessions leaked for days: dev servers, `tail`
+pipelines, test daemons, re-parented to launchd and invisible in the app.
+X79 makes them end with their tab or agent. X83 lets the user see what a
+session runs now, and stop it: from the app, with `moonlet ps` and
+`moonlet kill`, and when archiving the session. Processes are shown by the
+name of the file they run, never by their arguments, which can hold tokens.
+
+## User journey
+
+1. The user opens a session's **⋯** menu and picks **Processes…**. A
+   Processes tab opens in the right panel, listing what the session's
+   terminals and agents run: name, pid, the tab or agent it belongs to, how
+   long it has run, its CPU use and memory.
+2. A dev server they forgot eats a core. They click **Stop** on its row; it
+   is gone a moment later. **Stop all** stops everything the tabs and agents
+   started, leaving the tabs themselves.
+3. Under **Left in the worktree** the tab lists processes nothing in moonlet
+   owns any more (launchd's), which work in the session's worktree, such as a
+   server a crashed tool left. Each has its own **Stop**.
+4. The user archives the session. The confirm says
+   "3 processes still run: vite, tail, node. Archiving stops them." and, on
+   **Archive**, they are stopped with the session.
+5. In a terminal, `moonlet ps` lists the current session's processes, and
+   `moonlet kill 4242` or `moonlet kill --all` stops them.
+
+## Behaviour and acceptance criteria
+
+Listing (`session.processes`):
+
+- [ ] A session's processes are every process in each of its terminals'
+      sessions (their session id is the tab's shell pid), and each of its
+      chat agents with the processes it started (X79's family), each with the
+      tab or agent it belongs to. The tab's shell and the chat's agent are
+      marked as the tab's own (`tab`)
+      (`a_sessions_processes_are_its_tabs_sessions_and_its_agents_families`,
+      `a_sessions_processes_are_listed_by_name_and_stopped`).
+- [ ] Each process is named by the file name of its executable as the kernel
+      says, never its arguments; it has its start time, its CPU time and its
+      resident memory where the kernel tells them
+      (`a_child_s_working_directory_and_usage_are_what_the_kernel_says`).
+- [ ] Leftovers are listed apart: processes whose parent is launchd (init on
+      Linux), that are not already the session's, whose working directory is
+      the session's worktree or inside it. They are never stopped unless named
+      by pid (`leftovers_are_launchd_children_working_in_the_worktree`,
+      `leftovers_in_a_sessions_worktree_are_listed_apart_and_stopped_only_by_pid`).
+
+Stopping (`session.kill_processes`):
+
+- [ ] Named pids are stopped with SIGTERM, then SIGKILL after 3 s for those
+      still running; the call returns once they are gone. A pid that is not
+      one of the session's processes or leftovers is skipped and reported as
+      such (`stopping_by_pid_skips_pids_that_are_not_the_sessions`).
+- [ ] With no pids, every process of the session is stopped except the tabs'
+      own and the leftovers (`stopping_all_spares_the_tabs_own_processes_and_leftovers`).
+- [ ] A process is signalled only while its start time is the one it had when
+      listed: a pid reused meanwhile is left alone
+      (`ending_skips_a_pid_whose_start_changed`).
+
+CLI:
+
+- [ ] `moonlet ps [--session <id>]` prints the session's processes (the
+      current one, from `MOONLET_SESSION`, by default) as pid, name, origin,
+      age, CPU and memory, then the leftovers under their own heading
+      (`ps_prints_name_pid_origin_age_cpu_and_memory_never_arguments`,
+      `moonlet_ps_lists_a_sessions_processes_and_moonlet_kill_stops_one`).
+- [ ] `moonlet kill <pid>...` stops those pids of the session;
+      `moonlet kill --all` stops every process but the tabs' own. It prints
+      what it stopped and what it skipped
+      (`moonlet_ps_lists_a_sessions_processes_and_moonlet_kill_stops_one`).
+
+App:
+
+- [ ] The Processes tab lists each process with its name, pid, origin, age,
+      CPU use and memory, with **Stop** per row and **Stop all**; leftovers
+      follow under **Left in the worktree**, each with **Stop**. It looks
+      again every 3 s while shown (`describes a process row: origin, age, CPU and memory`,
+      `works out CPU use from two looks`).
+- [ ] Archiving a session that runs processes other than its tabs' own, or
+      has leftovers, says so in the confirm, by name: "3 processes still run:
+      vite, tail, node. Archiving stops them." On **Archive** they are stopped
+      before the session is archived; a daemon that cannot list them archives
+      as before (`names the processes still running, after their count`,
+      `says nothing when only the tabs' own processes run`,
+      `lists the processes still running and stops them before archiving (X83)`,
+      `archives as before when the daemon cannot list processes (X83)`).
+
+## UI
+
+**⋯** menu → **Processes…** opens the Processes tab in the right panel; the
+tab shows while it is the chosen one.
+
+```
+┌ 4 processes · 1 left in the worktree         Stop all ┐
+│ vite        4242  Run · run         2h   12%  210 MB  Stop │
+│ tail        4250  Terminal · zsh    3d    0%    1 MB  Stop │
+│ zsh         4100  Terminal · zsh    3d    0%    4 MB  tab  │
+│ claude      4300  Agent · Claude    1h    3%  380 MB  tab  │
+│ Left in the worktree                                       │
+│ node        5151  launchd           6d   40%  900 MB  Stop │
+└────────────────────────────────────────────────────────────┘
+```
+
+The tabs' own processes (a shell, a chat's agent) show "tab" instead of
+**Stop**: closing the tab ends them. Empty state: "Nothing runs in this
+session". A daemon too old to list processes shows the error.
+
+## Protocol and RPCs
+
+- `session.processes {id}` →
+  `{processes: [SessionProcess], leftovers: [SessionProcess]}`, where
+  `SessionProcess` is
+  `{pid, name, origin, tab, started?, cpu_ms?, rss?}`; `origin` is
+  `{kind: "terminal", id, title}`, `{kind: "agent", id, title}` or
+  `{kind: "leftover"}`; `started` is in milliseconds since the epoch,
+  `cpu_ms` the CPU time used so far, `rss` resident memory in bytes.
+- `session.kill_processes {id, pids?}` → `{ended: [pid], skipped: [pid]}`.
+- CLI: `moonlet ps [--session <id>] [--json]`,
+  `moonlet kill [--session <id>] (<pid>... | --all)`.
+
+## Data and config
+
+None: listed from the kernel's process table at each call.
+
+## Security considerations
+
+Command-line arguments of other processes can hold tokens: only pids, parent
+pids, sessions, start times, executable paths (shown by file name), working
+directories (compared with the worktree, never shown), CPU time and memory are
+read. `session.kill_processes` signals only processes it lists for that
+session at the time of the call, and only while their start time is
+unchanged, so it cannot be used to signal any process of the user's.
+
+## Out of scope
+
+- Processes on a remote host's copy of the session are listed by that host's
+  daemon only; the app asks the session's own host.
+- Leftovers whose working directory moved out of the worktree are not found.
+
+## Test plan
+
+- Rust, `process.rs`: `a_child_s_working_directory_and_usage_are_what_the_kernel_says`.
+- Rust, `session_processes.rs`: `a_sessions_processes_are_its_tabs_sessions_and_its_agents_families`,
+  `leftovers_are_launchd_children_working_in_the_worktree`,
+  `stopping_all_spares_the_tabs_own_processes_and_leftovers`,
+  `stopping_by_pid_skips_pids_that_are_not_the_sessions` and
+  `ending_skips_a_pid_whose_start_changed`.
+- Rust, `moonletd/tests/daemon.rs`: `a_sessions_processes_are_listed_by_name_and_stopped`
+  and `leftovers_in_a_sessions_worktree_are_listed_apart_and_stopped_only_by_pid`.
+- Rust, `moonlet-cli`: `ps_prints_name_pid_origin_age_cpu_and_memory_never_arguments`
+  (`src/ps.rs`) and `moonlet_ps_lists_a_sessions_processes_and_moonlet_kill_stops_one`
+  (`tests/session_e2e.rs`).
+- Vitest, `sessionProcesses.test.ts`: `names the processes still running, after their count`,
+  `says nothing when only the tabs' own processes run`,
+  `describes a process row: origin, age, CPU and memory` and
+  `works out CPU use from two looks`; `actions.test.ts`:
+  `lists the processes still running and stops them before archiving (X83)` and
+  `archives as before when the daemon cannot list processes (X83)`.
+
+## Open questions
+
+- None.
