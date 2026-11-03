@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { planChat, planLabels, planTabDot, planView } from "./plan";
+import { planChat, planLabels, planTabDot, planView, planWaits } from "./plan";
 import type { ChatItem, ChatState, PermissionAsk } from "./protocol";
 
 // The input of an ExitPlanMode call as claude 2.1.291 sent it.
@@ -111,5 +111,15 @@ describe("planTabDot (X24)", () => {
     expect(planTabDot("files", true)).toBe(true);
     expect(planTabDot("plan", true)).toBe(false);
     expect(planTabDot("files", false)).toBe(false);
+  });
+
+  it("knows a plan waits from its chat's asks while the Plan tab is closed and the chat's items are not in memory (X81)", () => {
+    const { items: _, ...summary } = chat([], [ask]);
+    expect(planWaits(summary)).toBe(true);
+    expect(planWaits({ ...summary, pending: [] })).toBe(false);
+    expect(planWaits(undefined)).toBe(false);
+    // With its items, a call that runs before its ask arrives waits too.
+    expect(planWaits(chat([user, call("t1", "running")]))).toBe(true);
+    expect(planWaits(chat([user, call("t1", "ok")]))).toBe(false);
   });
 });

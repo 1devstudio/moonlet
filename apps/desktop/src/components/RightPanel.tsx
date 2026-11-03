@@ -10,8 +10,8 @@ import { latestOnly, stackView, type StackView } from "../lib/prStack";
 import { hasRunCommand } from "../lib/projectSettings";
 import { workspaceOpenIn } from "../lib/openIn";
 import { useSync } from "../lib/syncStore";
-import { chatKey, chatSummary, loadChat, showChat, useChat } from "../lib/chat";
-import { planChat, planTabDot, planView } from "../lib/plan";
+import { chatKey, chatSummary, loadChat, useChat, useChatOnScreen } from "../lib/chat";
+import { planChat, planTabDot, planView, planWaits } from "../lib/plan";
 import { agentRows, agentsTabClockRuns, agentsTabDot } from "../lib/subagents";
 import { grantMenuLabel } from "../lib/terminalRead";
 import { ChecksPanel } from "./ChecksPanel";
@@ -211,8 +211,9 @@ function TopActions({ host, ws }: { host: string; ws: Session }) {
   );
 }
 
-/** The latest plan of the session's chat the Plan tab follows (X24). */
-function useSessionPlan(host: string, ws: Session) {
+/** The latest plan of the session's chat the Plan tab follows (X24), read
+ *  while the tab is `open`, and whether a plan waits. */
+function useSessionPlan(host: string, ws: Session, open: boolean) {
   // A string, so the selector result compares by value.
   const ids = useStore((s) =>
     Object.values(s.terminals[host] ?? {})
@@ -227,12 +228,13 @@ function useSessionPlan(host: string, ws: Session) {
       ids ? ids.split(",").map((id) => ({ id: Number(id), st: chatSummary(s, host, Number(id)) })) : [],
     ),
   );
-  // The plan is read from the chat's items, which load when it is shown (X81).
+  // The plan is read from the chat's items, which the open Plan tab shows;
+  // closed, the tab's dot reads the chat's asks (X81).
   const st = useChat((s) => (chatId === null ? undefined : s.chats[chatKey(host, chatId)]));
-  useEffect(() => {
-    if (chatId !== null && !st) void showChat(host, chatId).catch(() => {});
-  }, [host, chatId, st]);
-  return useMemo(() => (st ? planView(st) : null), [st]);
+  const waits = useChat((s) => chatId !== null && planWaits(chatSummary(s, host, chatId)));
+  useChatOnScreen(host, chatId, open);
+  const view = useMemo(() => (st ? planView(st) : null), [st]);
+  return { view, waits };
 }
 
 /** The subagents of every chat in the session (X42), loading chats not yet
@@ -276,7 +278,7 @@ export function RightPanel({ host, ws }: { host: string; ws: Session }) {
   const withJobs = jobs.length ? TABS.flatMap((t) => (t.id === "agents" ? [t, { id: "jobs" as const, label: "Jobs" }] : [t])) : TABS;
   const shown = design ? [...withJobs, { id: "design" as const, label: "Design" }] : withJobs;
   const tabs = linked ? [{ id: "task" as const, label: "Task" }, ...shown] : shown;
-  const plan = useSessionPlan(host, ws);
+  const { view: plan, waits: planWaiting } = useSessionPlan(host, ws, tab === "plan");
   const agents = useSessionAgents(host, ws, tab);
   // Plan file links (X30) check the worktree while the Plan tab shows, and again whenever the plan changes.
   const exists = useProjectFiles(host, tab === "plan" ? ws.path : "", plan?.plan);
@@ -313,7 +315,7 @@ export function RightPanel({ host, ws }: { host: string; ws: Session }) {
             {t.label}
             {t.id === "jobs" && <span className="ui-text-12 tabular-nums text-faint">{jobsTabCount(jobs)}</span>}
             {t.id === "design" && !!design?.count && <span aria-label={`${design.count} open comments`} className="ui-text-12 tabular-nums text-faint">{design.count}</span>}
-            {t.id === "plan" && planTabDot(tab, plan?.status === "pending") && <span aria-label="plan waiting" className="h-1.5 w-1.5 rounded-full bg-blocked" />}
+            {t.id === "plan" && planTabDot(tab, planWaiting) && <span aria-label="plan waiting" className="h-1.5 w-1.5 rounded-full bg-blocked" />}
             {t.id === "agents" && agentsTabDot(tab, agents.rows) && <span aria-label="agent waiting" className="h-1.5 w-1.5 rounded-full bg-blocked" />}
           </button>
         ))}

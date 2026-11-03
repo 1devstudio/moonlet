@@ -1,7 +1,7 @@
 // The plan panel (X24): the latest plan of a chat, where it stands, and
 // which chat of a session the Plan tab follows.
 
-import { planOf } from "./chat";
+import { type ChatSummary, planOf } from "./chat";
 import type { ChatState } from "./protocol";
 
 export type PlanStatus = "pending" | "revising" | "stopped" | "approved";
@@ -64,6 +64,14 @@ export function planChat(focused: number | null, chats: readonly { id: number; s
   if (waiting) return waiting.id;
   if (chats.some((c) => c.id === focused)) return focused;
   return chats.length ? Math.min(...chats.map((c) => c.id)) : null;
+}
+
+/** Whether the chat's latest plan waits for approval: by its plan with its
+ *  items in memory, else by its asks, as the Plan tab's dot reads it while
+ *  the tab is closed (X81). */
+export function planWaits(st: ChatState | ChatSummary | undefined): boolean {
+  if (!st) return false;
+  return "items" in st ? planView(st)?.status === "pending" : st.pending.some((a) => planOf(a));
 }
 
 /** The Plan tab's dot: a plan waits and the tab is not showing it. */
