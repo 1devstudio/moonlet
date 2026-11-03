@@ -3,7 +3,8 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Check, ChevronDown, ChevronRight, CornerDownLeft, FileCode, FileText, FolderPlus, GitBranch, GitPullRequest, MoreHorizontal, PenTool, Plus, X } from "lucide-react";
 import { hostsApi, rpc } from "../lib/daemon";
 import type { Task, TaskStart } from "../lib/tasks";
-import { branchUser, composerTask, ensureTasks, leaveTasksMode, placedTasks, startedFromTask, useTasks } from "../lib/tasksStore";
+import { branchUser, composerTask, ensureTasks, leaveTasksMode, lookUpPasted, originRepoOf, placedTasks, startedFromTask, useTasks } from "../lib/tasksStore";
+import { pasteLookup, typedTask } from "../lib/taskLinking";
 import { composerOptions, composerPick, composerProjects, composerTarget, composerWorkspace, wsKey } from "../lib/workspaces";
 import { afterCreate, attachments, branchRow, firstMessage, linkMenu, newBranch, pickerBranches, pickerHint, pickerSearch, placeholder, sessionName, showsLinkSlot, suggestedTask, type Attachment, type PickerList, type PickerTab } from "../lib/composer";
 import { M, type IssueRef, type Project, type ProjectConfig, type Session } from "../lib/protocol";
@@ -429,6 +430,37 @@ export function Composer({
     if (target) ensureTasks(target.host, target.id);
   }, [target?.host, target?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const [taskQuery, setTaskQuery] = useState("");
+  // A key or URL typed into Link a task is asked of its tracker when it is not among the
+  // loaded tasks, so a task assigned to someone else, or off the boards, links too.
+  // The answer is kept with the text it is for, so a newer keystroke never shows the last one's.
+  const [typed, setTyped] = useState<{ query: string; task: Task | null } | null>(null);
+  const foundTask = typed?.query === taskQuery ? typed.task : null;
+  const [lookup] = useState(() => pasteLookup());
+  const latestTasks = useRef(wsTasks);
+  latestTasks.current = wsTasks;
+  const originRepo = useStore((s) => (current && target && taskData ? originRepoOf(s, target.host, taskData, current.host, current.project.id) : null));
+  // What the last lookup was asked with: new tasks, another project or its repository ask again.
+  const askedWith = useRef("");
+  const tasksLoaded = !!taskData;
+  useEffect(() => {
+    if (!current || !taskQuery.trim()) {
+      lookup.cancel();
+      askedWith.current = "";
+      return;
+    }
+    const context = `${tasksLoaded} ${originRepo} ${current.host} ${current.project.path}`;
+    const force = askedWith.current !== "" && askedWith.current !== context;
+    askedWith.current = context;
+    const asked = taskQuery;
+    void lookup
+      .query(
+        asked,
+        () => typedTask(asked, latestTasks.current, originRepo, { parse: hostsApi.parsePasted, lookUp: (p) => lookUpPasted(current.host, current.project.path, p, originRepo) }),
+        force,
+      )
+      .then((task) => task !== undefined && setTyped({ query: asked, task }));
+  }, [taskQuery, current?.host, current?.project.path, originRepo, tasksLoaded]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => lookup.cancel(), [lookup]);
   const ta = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -593,13 +625,14 @@ export function Composer({
     if (!target) return;
     const start = composerTask(target.host, target.id, t);
     setTask(start);
-    setAssign(!!start.assign?.checked);
+    // A task found by its key off the boards may be someone else's: it is not assigned to the user unless they tick the box.
+    setAssign(!!start.assign?.checked && wsTasks.includes(t));
     setTaskQuery("");
   };
   const canLink = !!target && showsLinkSlot({ task: !!task, worktree: !!worktree, sources: !!taskData?.sources.length });
   const suggestion = canLink ? suggestedTask({ pr }, wsTasks) : null;
   const linkItems: MenuItem[] = canLink
-    ? linkMenu({ pr }, prompt, wsTasks, taskQuery).flatMap((section) => [
+    ? linkMenu({ pr }, prompt, wsTasks, taskQuery, foundTask).flatMap((section) => [
         { kind: "label" as const, label: section.label },
         ...section.tasks.map(({ task: t, hint }) => ({ label: `${t.key} ${t.title}`, hint: hint ?? undefined, onSelect: () => linkTo(t) })),
       ])

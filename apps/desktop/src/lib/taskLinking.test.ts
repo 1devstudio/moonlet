@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { acceptanceCriteria, enterChoice, findPasted, firstChoice, linkChoices, pasteLookup } from "./taskLinking";
+import { acceptanceCriteria, enterChoice, findPasted, firstChoice, linkChoices, pasteLookup, typedTask } from "./taskLinking";
 import type { Task } from "./tasks";
 
 const task = (key: string, title: string, o: Partial<Task> = {}): Task => ({
@@ -87,6 +87,26 @@ describe("findPasted", () => {
     expect(findPasted({ kind: "github", key: "#42", site: null }, tasks, "acme/web")).toBe(gh);
     expect(findPasted({ kind: "github", key: "#42", site: null }, tasks, "other/repo")).toBe(null);
     expect(findPasted({ kind: "jira", key: "OPS-12", site: "acme.atlassian.net" }, tasks, null)).toBe(null);
+  });
+});
+
+describe("typedTask (composer Link a task)", () => {
+  const loaded = task("OPS-12", "Rotate keys", { connection: "jira:acme" });
+  const outside = task("OPS-501", "Audit the footer links", { connection: "jira:acme", assignees: ["Mia Krystof"] });
+  const parse = (input: string) => Promise.resolve(/^[A-Z]+-\d+$/.test(input) ? { kind: null, key: input, site: null } : null);
+  const lookUp = () => Promise.resolve(outside);
+
+  it("answers a key among the loaded tasks with that task, without asking the tracker", async () => {
+    expect(await typedTask("OPS-12", [loaded], null, { parse, lookUp })).toBe(loaded);
+  });
+
+  it("asks the tracker for a key no loaded task has, whoever it is assigned to", async () => {
+    expect(await typedTask("OPS-501", [loaded], null, { parse, lookUp })).toBe(outside);
+    expect(await typedTask("OPS-404", [loaded], null, { parse, lookUp: () => Promise.resolve(null) })).toBe(null);
+  });
+
+  it("answers text that is not a key or URL with nothing", async () => {
+    expect(await typedTask("rotate", [loaded], null, { parse, lookUp })).toBe(null);
   });
 });
 

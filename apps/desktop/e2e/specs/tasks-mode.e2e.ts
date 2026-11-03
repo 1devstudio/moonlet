@@ -377,6 +377,9 @@ describe("Tasks mode", () => {
     await slot.$('.//button[normalize-space()="Link a task"]').click();
     // The link dialog's lists (X46): the workspace's tasks under Recent.
     await expect($('//div[normalize-space()="Recent"]')).toBeDisplayed();
+    // A task outside the workspace's tasks, named by its URL, is asked of its tracker.
+    await fill('//input[@placeholder="Search tasks by key or title"]', "https://github.com/acme/other/issues/99");
+    await expect($('//button[starts-with(normalize-space(), "acme/other#99")]')).toBeDisplayed({ wait: 10_000 });
     await fill('//input[@placeholder="Search tasks by key or title"]', "Saved");
     await $('//button[starts-with(normalize-space(), "acme/storefront#19 Saved carts")]').click();
     await expect($('//*[@aria-label="Task acme/storefront#19"]')).toBeDisplayed();
