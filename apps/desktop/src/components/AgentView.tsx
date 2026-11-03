@@ -54,7 +54,7 @@ import {
   BLOCKS_SHOWN,
   lastBlocks,
   limitShowing,
-  showChat,
+  showChats,
   useChatOnScreen,
   type PlanChoice,
   planAnswer,
@@ -1259,7 +1259,7 @@ function ContextChip({ icon, title, onClick }: { icon: React.ReactNode; title: s
 
 /** An empty chat (X38): where it runs, and the session's other chats and
  * plans to start from. A chip writes its file and mentions it in the input. */
-function NewChat({ host, sessionId, self, cwd, onMention }: { host: string; sessionId: string; self: number; cwd: string; onMention: (mention: string) => void }) {
+function NewChat({ host, sessionId, self, cwd, visible, onMention }: { host: string; sessionId: string; self: number; cwd: string; visible: boolean; onMention: (mention: string) => void }) {
   const terminals = useStore((s) => s.terminals[host]);
   const home = useStore((s) => s.hosts[host]?.home ?? null);
   const chats = useChat((s) => s.chats);
@@ -1267,17 +1267,11 @@ function NewChat({ host, sessionId, self, cwd, onMention }: { host: string; sess
   const byId = useMemo(() => Object.fromEntries(list.map((t) => [t.id, chats[chatKey(host, t.id)]])), [list, chats, host]);
   const { transcripts, plans } = useMemo(() => newChatContext(list, byId, { session: sessionId, self, cwd }), [list, byId, sessionId, self, cwd]);
 
-  // The other chats' conversations, loaded here once each (a chat whose
-  // load fails isn't asked for again on every terminal update). Their
-  // chips show them, so they count as shown (X81).
-  const asked = useRef(new Set<number>());
-  useEffect(() => {
-    for (const t of otherChats(list, sessionId, self)) {
-      if (asked.current.has(t.id)) continue;
-      asked.current.add(t.id);
-      void showChat(host, t.id).catch(() => {});
-    }
-  }, [list, host, sessionId, self]);
+  // The other chats' conversations, which the chips read: on screen while
+  // this chat shows, so none drops its items (X81). A string, so a terminal
+  // update that leaves the chats as they were asks for nothing again.
+  const others = useMemo(() => otherChats(list, sessionId, self).map((t) => t.id).join(","), [list, sessionId, self]);
+  useEffect(() => (visible && others ? showChats(host, others.split(",").map(Number)) : undefined), [host, others, visible]);
 
   const add = async (files: ContextFiles) => {
     try {
@@ -1708,7 +1702,7 @@ export function AgentView({
             {!st ? (
               <div className="py-10 text-center ui-text-13 text-faint">Loading conversation…</div>
             ) : st.items.length === 0 ? (
-              <NewChat host={host} sessionId={wsId} self={id} cwd={cwd} onMention={(m) => editor.current?.mention(m)} />
+              <NewChat host={host} sessionId={wsId} self={id} cwd={cwd} visible={visible} onMention={(m) => editor.current?.mention(m)} />
             ) : (
               [
                 ...(earlier > 0

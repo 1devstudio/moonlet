@@ -189,6 +189,15 @@ export function useChatOnScreen(host: string, id: number | null, on: boolean, on
   }, [host, id, on, loaded]);
 }
 
+/** Chats `ids` go on screen together, as a new chat's context chips show
+ *  them, and come off with the function returned (X81). A chat whose load
+ *  fails shows no chip, and is asked for again when they are shown again. */
+export function showChats(host: string, ids: readonly number[]): () => void {
+  const release = ids.map((id) => holdChat(host, id));
+  for (const id of ids) void showChat(host, id).catch(() => {});
+  return () => release.forEach((r) => r());
+}
+
 /** The store with chat `key` read as `st`: with its items when `withItems`,
  *  else as a summary. A key is in `chats` or `summaries`, never both (X81). */
 function placeChat(s: ChatStore, key: string, st: ChatState, withItems: boolean): Pick<ChatStore, "chats" | "summaries"> {
