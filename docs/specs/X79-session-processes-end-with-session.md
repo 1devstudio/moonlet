@@ -45,10 +45,14 @@ while the parent links are still there.
 
 Tabs:
 
-- [ ] Closing a shell tab stops every process in the tab's session, including
+- [x] Closing a shell tab stops every process in the tab's session, including
       jobs in their own process group that ignore SIGHUP: SIGHUP, then SIGTERM
-      after 1.5 s, then SIGKILL after 3 s more, as for Run tabs (X1).
-- [ ] The same holds for an agent tab that runs in a terminal.
+      after 1.5 s, then SIGKILL after 3 s more, as for Run tabs (X1)
+      (`closing_a_shell_tab_stops_jobs_that_outlive_the_shell`).
+- [x] The same holds for an agent tab that runs in a terminal
+      (`closing_an_agent_tab_stops_jobs_that_outlive_the_shell`).
+- [x] The same holds once the tab's shell has exited and left such a job
+      running (`closing_a_tab_whose_shell_exited_stops_the_job_it_left`).
 
 Chat agents:
 
@@ -89,7 +93,9 @@ None in this part.
 
 Stopping processes by pid races with pid reuse: a process found as a
 descendant is signalled only if its start time is still the one recorded when
-it was found. Command-line arguments of other processes can hold tokens; this
+it was found. A tab's session is signalled by its shell's session id; once the
+shell's pid belongs to a process that started later, that process's own
+session is left alone. Command-line arguments of other processes can hold tokens; this
 feature reads only pids, parent pids, process groups and start times.
 
 ## Out of scope
@@ -102,8 +108,9 @@ feature reads only pids, parent pids, process groups and start times.
 
 ## Test plan
 
-- Rust, `terminal.rs`: closing a shell tab, and an agent tab, stops a job in
-  its own process group that ignores SIGHUP.
+- Rust, `terminal.rs`: `closing_a_shell_tab_stops_jobs_that_outlive_the_shell`,
+  `closing_an_agent_tab_stops_jobs_that_outlive_the_shell` and
+  `closing_a_tab_whose_shell_exited_stops_the_job_it_left`.
 - Rust, `chat/runtime.rs`: with a fake agent that starts a background child in
   its own process group, stopping the chat stops the child; an agent that exits
   by itself leaves no child running.

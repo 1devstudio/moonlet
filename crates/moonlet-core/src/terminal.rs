@@ -524,27 +524,30 @@ impl TerminalManager {
             // A tab owns every process it starts, including jobs a
             // job-control shell moved to their own process group, which
             // outlive the shell when they ignore SIGHUP: a script's (X1),
-            // and a dev server left running in a shell or agent tab (X79).
-            let session = st.pty.as_ref().filter(|_| !exited).map(|pty| pty.pid());
-            if let Some(sid) = session {
-                crate::pty::signal_session(sid, nix::sys::signal::Signal::SIGHUP, false);
+            // and a dev server left running in a shell or agent tab, also
+            // once the shell itself has exited (X79). The shell's start
+            // time tells its pid apart from a later process's.
+            let session = st.pty.as_ref().map(|pty| (pty.pid(), crate::pty::process_start(pty.pid())));
+            if let Some((sid, _)) = session {
+                crate::pty::signal_session(sid, nix::sys::signal::Signal::SIGHUP, exited);
             }
             if remove && !exited {
                 st.remove_on_exit = true;
             }
             (exited, session)
         };
-        if let Some(sid) = session {
+        if let Some((sid, started)) = session {
             // Keep escalating after the shell exits, until the session is empty.
             let weak = Arc::downgrade(&s);
-            // The read loop records the exit after reaping the shell, and
-            // only removes the terminal after that.
             crate::pty::escalate_session(sid, move || {
-                weak.upgrade()
-                    .is_none_or(|s| s.state.lock().unwrap().info.exit.is_some())
+                // The read loop records the exit after reaping the shell. An
+                // adopted shell (S3) is launchd's to reap, so its pid can be
+                // free and then another process's before the exit shows.
+                let reaped = weak.upgrade().is_none_or(|s| s.state.lock().unwrap().info.exit.is_some());
+                reaped || crate::pty::process_start(sid).is_some_and(|now| Some(now) != started)
             });
         }
-        // Otherwise the read loop removes it once the process is gone.
+        // A tab still running is removed by the read loop once it ends.
         if remove && exited {
             self.remove(id);
         }
@@ -1242,6 +1245,42 @@ mod tests {
         closing_stops_jobs_that_outlive_the_shell(TerminalKind::Agent).await;
     }
 
+    #[tokio::test]
+    async fn closing_a_tab_whose_shell_exited_stops_the_job_it_left() {
+        // The shell started a job that let go of the terminal and ignores
+        // SIGHUP, then exited: the tab shows the exit, the job runs on (X79).
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("job.pid");
+        let mgr = manager();
+        let info = mgr
+            .create(TerminalCreate {
+                cwd: "/tmp".into(),
+                command: vec![
+                    "/bin/sh".into(),
+                    "-c".into(),
+                    format!("set -m; (trap '' HUP; exec sleep 60) </dev/null >/dev/null 2>&1 & echo $! > {}", pid_file.display()),
+                ],
+                ..Default::default()
+            })
+            .unwrap();
+        let start = std::time::Instant::now();
+        while mgr.get(info.id).is_some_and(|t| t.info().exit.is_none()) {
+            assert!(start.elapsed() < Duration::from_secs(10), "the shell never exited");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let job = nix::unistd::Pid::from_raw(std::fs::read_to_string(&pid_file).unwrap().trim().parse().unwrap());
+        assert!(nix::sys::signal::kill(job, None).is_ok(), "the job ended with its shell");
+        mgr.kill(info.id, true).unwrap();
+        let start = std::time::Instant::now();
+        while nix::sys::signal::kill(job, None).is_ok() {
+            if start.elapsed() > Duration::from_secs(8) {
+                let _ = nix::sys::signal::kill(job, nix::sys::signal::Signal::SIGKILL);
+                panic!("the job outlived its closed tab");
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
     async fn closing_stops_jobs_that_outlive_the_shell(kind: TerminalKind) {
         // A job-control shell puts the job in its own process group, and the
         // job ignores SIGHUP, so it keeps running after the shell exits.
@@ -1259,7 +1298,7 @@ mod tests {
                         pid_file.display()
                     ),
                 ],
-                kind: kind,
+                kind,
                 ..Default::default()
             })
             .unwrap();
