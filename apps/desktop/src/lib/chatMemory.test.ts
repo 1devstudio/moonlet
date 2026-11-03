@@ -118,7 +118,9 @@ describe("chats kept in memory (X81)", () => {
   it("keeps the chats a new chat's chips read while it is shown, however many there are", async () => {
     const terms = Array.from({ length: 11 }, (_, i) => ({ id: i + 1, kind: "agent", title: "claude", cwd: "/Users/jane/code/app", command: ["claude"], session_id: "s1", agent: "claude", cols: 120, rows: 32, pid: 1, chat: true, created_at: i + 1 }) as TerminalInfo);
     for (let id = 1; id <= 10; id++) daemon[`h:${id}`] = { ...chat(""), items: [{ id: `u${id}`, kind: "user", text: `Task ${id}`, ts: 0 }] };
-    // Chat 11 is new: its chips offer the other ten.
+    daemon["h:11"] = { ...chat(""), items: [] };
+    // Chat 11 is new and shown: its chips offer the other ten.
+    await showChat("h", 11);
     const release = showChats("h", [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
     await vi.waitFor(() => expect(texts("h", 10)).toEqual(["Task 10"]));
     const chips = () => {
@@ -128,11 +130,11 @@ describe("chats kept in memory (X81)", () => {
     expect(chips()).toEqual(["Task 10", "Task 9", "Task 8", "Task 7", "Task 6", "Task 5", "Task 4", "Task 3", "Task 2", "Task 1"]);
     // Clicked, the first chip still has its transcript.
     expect(texts("h", 1)).toEqual(["Task 1"]);
-    // The new chat goes off screen: the two shown first drop their items.
+    // The chips do not count among the last 8 shown: the new chat stays
+    // among them, and off screen they drop their items.
     release();
-    expect(texts("h", 1)).toBeUndefined();
-    expect(texts("h", 2)).toBeUndefined();
-    expect(texts("h", 3)).toEqual(["Task 3"]);
+    for (let id = 1; id <= 10; id++) expect(texts("h", id)).toBeUndefined();
+    expect(texts("h", 11)).toEqual([]);
   });
 
   it("keeps a chat two views show until both let it go", async () => {

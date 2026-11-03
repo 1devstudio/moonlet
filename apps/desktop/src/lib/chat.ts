@@ -190,11 +190,13 @@ export function useChatOnScreen(host: string, id: number | null, on: boolean, on
 }
 
 /** Chats `ids` go on screen together, as a new chat's context chips show
- *  them, and come off with the function returned (X81). A chat whose load
- *  fails shows no chip, and is asked for again when they are shown again. */
+ *  them, and come off with the function returned (X81). They keep their
+ *  items only meanwhile: they do not count among the last CHATS_KEPT shown.
+ *  A chat whose load fails shows no chip, and is asked for again when they
+ *  are shown again. */
 export function showChats(host: string, ids: readonly number[]): () => void {
   const release = ids.map((id) => holdChat(host, id));
-  for (const id of ids) void showChat(host, id).catch(() => {});
+  for (const id of ids) if (!useChat.getState().chats[chatKey(host, id)]) void loadChat(host, id).catch(() => {});
   return () => release.forEach((r) => r());
 }
 
