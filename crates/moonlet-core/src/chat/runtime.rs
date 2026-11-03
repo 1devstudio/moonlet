@@ -793,12 +793,11 @@ impl ChatManager {
         }
     }
 
-    /// Whether the agent of a chat may rest (X84): it runs, has been idle
+    /// Whether the running agent of a chat may rest (X84): it has been idle
     /// long enough, and nothing in the chat waits for it or for the user.
     fn may_rest(&self, inner: &Inner) -> bool {
         let st = &inner.state;
-        inner.pid.is_some()
-            && !super::busy(st)
+        !super::busy(st)
             && st.pending.is_empty()
             && st.queued.is_empty()
             && inner.kept.is_empty()
