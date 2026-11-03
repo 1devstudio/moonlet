@@ -417,7 +417,8 @@ export class TermEntry {
   }
 
   mount(parent: HTMLElement) {
-    if (this.parent === parent && parent.contains(this.el)) return;
+    // Already in this pane: nothing to move, but it is shown all the same.
+    if (this.parent === parent && parent.contains(this.el)) return shown(this);
     this.parent = parent;
     parent.appendChild(this.el);
     if (this.settings.webgl && !this.webgl) {
