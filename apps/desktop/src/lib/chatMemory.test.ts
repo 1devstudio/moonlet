@@ -137,6 +137,22 @@ describe("chats kept in memory (X81)", () => {
     expect(texts("h", 11)).toEqual([]);
   });
 
+  it("keeps the items of a chat on screen that falls out of the last 8 shown while it loads", async () => {
+    let answer = (_st: ChatState) => {};
+    daemon["j:1"] = new Promise<ChatState>((r) => (answer = r));
+    const release = holdChat("j", 1);
+    const loading = showChat("j", 1);
+    // Eight other chats are shown before its `chat.state` answers.
+    for (let id = 2; id <= 9; id++) {
+      daemon[`j:${id}`] = chat(`chat ${id}`);
+      await showChat("j", id);
+    }
+    answer(chat("the visible chat"));
+    await loading;
+    expect(texts("j", 1)).toEqual(["the visible chat"]);
+    release();
+  });
+
   it("keeps a chat two views show until both let it go", async () => {
     daemon["g:1"] = chat("in a pane and in the Plan tab");
     const pane = holdChat("g", 1);
