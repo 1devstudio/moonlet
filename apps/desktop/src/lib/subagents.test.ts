@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type AgentNote, agentCount, agentNotes, agentRows, agentsHeader, askLine, askerName, launchedRows, agentsTabDot, modelLabel, notesByBlock, retryMessage, stoppable, stripDismissAt, stripRetry, stripTicks, stripView } from "./subagents";
+import { type AgentNote, agentCount, agentNotes, agentRows, agentsHeader, askLine, askerName, launchedRows, agentsTabDot, modelLabel, notesByBlock, retryMessage, stoppable, stripDismissAt, stripRetry, stripClockRuns, stripView } from "./subagents";
 import type { ChatItem, ChatState, PermissionAsk, Subagent } from "./protocol";
 import { chatBlocks } from "./chat";
 
@@ -368,11 +368,11 @@ describe("stripView (X42)", () => {
   });
 });
 
-describe("stripTicks (X82)", () => {
+describe("stripClockRuns (X82)", () => {
   it("ticks the strip's clock only while agents run and the strip is shown", () => {
-    expect(stripTicks(chat([write, list]), true)).toBe(true);
-    expect(stripTicks(chat([write, list]), false)).toBe(false);
-    expect(stripTicks(chat([list, audit, bench]), true)).toBe(false);
+    expect(stripClockRuns(chat([write, list]), true)).toBe(true);
+    expect(stripClockRuns(chat([write, list]), false)).toBe(false);
+    expect(stripClockRuns(chat([list, audit, bench]), true)).toBe(false);
   });
 });
 

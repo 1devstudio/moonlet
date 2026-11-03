@@ -12,7 +12,7 @@ import { workspaceOpenIn } from "../lib/openIn";
 import { useSync } from "../lib/syncStore";
 import { chatKey, loadChat, useChat } from "../lib/chat";
 import { planChat, planTabDot, planView } from "../lib/plan";
-import { agentRows, agentsTabDot } from "../lib/subagents";
+import { agentRows, agentsTabDot, hasRunningAgents } from "../lib/subagents";
 import { grantMenuLabel } from "../lib/terminalRead";
 import { ChecksPanel } from "./ChecksPanel";
 import { PlanPanel } from "./PlanPanel";
@@ -251,7 +251,7 @@ function useSessionAgents(host: string, ws: Session) {
   useEffect(() => {
     for (const id of unloaded ? unloaded.split(",") : []) void loadChat(host, Number(id)).catch(() => {});
   }, [host, unloaded]);
-  const now = useNow(subagents.some((agents) => agents?.some((a) => a.status === "running")));
+  const now = useNow(subagents.some(hasRunningAgents));
   const rows = useMemo(
     () => agentRows(list.map((id, i) => ({ id, st: pending[i] && { subagents: subagents[i], pending: pending[i] } })), now),
     [list, subagents, pending, now],
