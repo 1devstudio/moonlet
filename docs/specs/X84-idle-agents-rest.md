@@ -40,6 +40,10 @@ one of the later parts of X79.
       `an_agent_waiting_for_an_answer_does_not_rest`,
       `an_agent_with_a_queued_message_does_not_rest`,
       `an_agent_with_a_running_subagent_does_not_rest`).
+- [x] An agent frozen while the Mac sleeps or its session moves (X73) does
+      not rest: a stopped process cannot exit on SIGTERM. Once it thaws it
+      rests at the next look if it is still idle
+      (`an_agent_frozen_while_the_mac_sleeps_rests_only_once_it_thaws`).
 - [x] Idle time counts from the last activity: a message sent, an answer to
       an ask, anything the agent says. A chat written to more often than the
       timeout keeps its agent, which rests once the messages stop
@@ -99,6 +103,7 @@ and start time noted for them (X79).
   `an_agent_waiting_for_an_answer_does_not_rest`,
   `an_agent_with_a_queued_message_does_not_rest`,
   `an_agent_with_a_running_subagent_does_not_rest`,
+  `an_agent_frozen_while_the_mac_sleeps_rests_only_once_it_thaws`,
   `an_agent_kept_busy_with_messages_does_not_rest`,
   `new_settings_do_not_keep_an_idle_agent_awake`,
   `a_resting_agents_server_keeps_running_and_ends_when_the_chat_stops`,

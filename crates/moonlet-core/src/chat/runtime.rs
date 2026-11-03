@@ -79,6 +79,9 @@ struct Inner {
     /// (X84). New settings, notes and other state the daemon changes itself
     /// do not count.
     active_at: u64,
+    /// Whether the agent is frozen (SIGSTOP) while the Mac sleeps or its
+    /// session moves (X73): it does not rest until it thaws (X84).
+    frozen: bool,
 }
 
 struct Chat {
@@ -298,6 +301,7 @@ impl ChatManager {
                 saved_at: Instant::now(),
                 dirty: true,
                 active_at: now_ms(),
+                frozen: false,
             }),
         });
         self.chats.lock().unwrap().insert(info.id, chat.clone());
@@ -572,13 +576,17 @@ impl ChatManager {
     /// it runs no process.
     pub fn freeze(&self, id: TerminalId, frozen: bool) -> bool {
         let Ok(chat) = self.get(id) else { return false };
-        let pid = chat.inner.lock().unwrap().pid;
-        let Some(pid) = pid.and_then(|p| i32::try_from(p).ok()) else {
+        let mut inner = chat.inner.lock().unwrap();
+        let Some(pid) = inner.pid.and_then(|p| i32::try_from(p).ok()) else {
             return false;
         };
         let sig = if frozen { libc::SIGSTOP } else { libc::SIGCONT };
         // The agent runs in a process group of its own (`process_group(0)`).
-        unsafe { libc::kill(-pid, sig) == 0 }
+        let sent = unsafe { libc::kill(-pid, sig) == 0 };
+        if sent {
+            inner.frozen = frozen;
+        }
+        sent
     }
 
     /// As the Mac goes to sleep (X73): every agent that starts from now on
@@ -717,6 +725,7 @@ impl ChatManager {
                     saved_at: Instant::now(),
                     dirty: true,
                     active_at: now_ms(),
+                    frozen: false,
                 }),
             });
             self.chats.lock().unwrap().insert(chat.id, chat.clone());
@@ -774,6 +783,7 @@ impl ChatManager {
         inner.generation += 1;
         inner.stdin = None;
         inner.adapter = None;
+        inner.frozen = false;
         let mut family = std::mem::take(&mut inner.family);
         let pid = inner.pid.take();
         // Children started since the last look count too.
@@ -800,10 +810,12 @@ impl ChatManager {
     }
 
     /// Whether the running agent of a chat may rest (X84): it has been idle
-    /// long enough, and nothing in the chat waits for it or for the user.
+    /// long enough, is not frozen (X73), and nothing in the chat waits for
+    /// it or for the user.
     fn may_rest(&self, inner: &Inner) -> bool {
         let st = &inner.state;
-        !super::busy(st)
+        !inner.frozen
+            && !super::busy(st)
             && st.pending.is_empty()
             && st.queued.is_empty()
             && inner.kept.is_empty()
@@ -1045,13 +1057,14 @@ impl ChatManager {
         let generation = inner.generation;
         inner.pid = child.id();
         inner.active_at = now_ms();
+        inner.frozen = false;
         let agent = inner.pid;
         self.watch_families();
         if let Some(held) = self.held.lock().unwrap().as_mut()
             && let Some(pid) = inner.pid.and_then(|p| i32::try_from(p).ok())
         {
             // While the Mac sleeps (X73): frozen before it reads a line.
-            unsafe { libc::kill(-pid, libc::SIGSTOP) };
+            inner.frozen = unsafe { libc::kill(-pid, libc::SIGSTOP) == 0 };
             held.push(chat.id);
         }
         inner.stderr.clear();
@@ -2258,6 +2271,22 @@ done
         assert_eq!(starts(dir.path()).len(), 1);
         // Once the messages stop, it rests.
         assert!(gone_within(agent, 8).await, "the agent never rested");
+    }
+
+    #[tokio::test]
+    async fn an_agent_frozen_while_the_mac_sleeps_rests_only_once_it_thaws() {
+        let (dir, terms, chats) = setup().await;
+        let id = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), ..Default::default() }).unwrap().id;
+        wait_for(&chats, id, |s| s.agent_session.is_some()).await;
+        chats.send(id, "hi", &[]).unwrap();
+        wait_for(&chats, id, |s| s.status == "done").await;
+        let agent = agent_pid(&terms, id);
+        assert!(chats.freeze(id, true));
+        chats.set_rest_after(Duration::from_millis(300));
+        tokio::time::sleep(Duration::from_millis(4500)).await;
+        assert_eq!(terms.get(id).unwrap().info().pid, Some(agent.as_raw() as u32), "the frozen agent rested");
+        assert!(chats.freeze(id, false));
+        assert!(gone_within(agent, 8).await, "the thawed agent never rested");
     }
 
     #[tokio::test]
