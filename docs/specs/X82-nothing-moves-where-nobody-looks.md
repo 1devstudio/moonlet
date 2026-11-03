@@ -1,6 +1,6 @@
 # X82 — Nothing moves where nobody looks
 
-- **Status:** draft
+- **Status:** implemented
 - **Priority / phase:** P1 · phase 3
 - **PRD refs:** performance targets in `docs/plan.md`; follows X78
 - **Related ADRs:** none
@@ -30,15 +30,15 @@ the system's reduced-motion setting.
 
 ## Behaviour and acceptance criteria
 
-- [ ] Animations inside a tab that is not shown are paused, and run again once
+- [x] Animations inside a tab that is not shown are paused, and run again once
       the tab is shown (`pauses an animation inside a hidden tab`,
       `keeps an animation in the shown tab running`).
-- [ ] Every endless animation moves only opacity and transform, which the
+- [x] Every endless animation moves only opacity and transform, which the
       compositor animates without painting; the chat's shimmer is one of them
       (`animates only opacity and transform in every endless animation`).
-- [ ] The agents strip's clock ticks only while agents run and its tab is shown
+- [x] The agents strip's clock ticks only while agents run and its tab is shown
       (`ticks the strip's clock only while agents run and the strip is shown`).
-- [ ] With reduced motion asked for, no animation repeats: each runs once
+- [x] With reduced motion asked for, no animation repeats: each runs once
       (`runs an endless animation once when the system asks for reduced motion`).
 
 ## UI
@@ -77,7 +77,11 @@ None: no new inputs.
   `runs an endless animation once when the system asks for reduced motion`.
 - Vitest, `subagents.test.ts`: `ticks the strip's clock only while agents run
   and the strip is shown`.
-- Manual: the shimmer in the real app, screenshot with `e2e/snap.ts`.
+- Manual, in the e2e app with `e2e/snap.ts`: the new shimmer at rest matches
+  the old muted label and at its peak the old sweep's light grey; the app's
+  WebKit reports `document.getAnimations()` inside a `data-quiet` tab as
+  `paused` and the shown ones as `running`. Reduce motion untried in WebKit
+  (the system setting was off).
 
 ## Open questions
 
