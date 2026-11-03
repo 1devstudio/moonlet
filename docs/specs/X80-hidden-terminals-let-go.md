@@ -39,6 +39,12 @@ attached again and drawn from the daemon's replay.
       that is closed, or whose tab is hidden, is shown more recently than any
       terminal hidden before it
       (`a terminal that leaves the screen counts as shown just then (X80)`).
+      Terminals beyond the limit that were kept only because they were on
+      screen are let go of once they leave it, as when a split of more than
+      8 panes is hidden; a pane unmounted and mounted again at once, as its
+      effect runs again, is kept
+      (`a split of ten hidden lets go of the two shown longest ago (X80)`,
+      `a pane unmounted and mounted again in one go is kept (X80)`).
 - [x] A terminal let go of while its attach is still on its way ends up
       detached: once the attach answers, the app sends `terminal.detach`
       again, since the daemon may have taken the first one before the attach
@@ -127,6 +133,8 @@ None: no new input crosses a trust boundary.
   recorded and the terminals it would send output for tracked:
   `a ninth terminal shown lets go of the one shown longest ago, and detaches it (X80)`,
   `a terminal that leaves the screen counts as shown just then (X80)`,
+  `a split of ten hidden lets go of the two shown longest ago (X80)`,
+  `a pane unmounted and mounted again in one go is kept (X80)`,
   `a terminal let go of while its attach is on its way is detached once the attach answers (X80)`,
   `a terminal shown again before its slow attach answers stays subscribed (X80)`,
   `a terminal let go of attaches again when shown, and the replay draws it (X80)`,

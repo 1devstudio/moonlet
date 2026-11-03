@@ -185,6 +185,33 @@ describe("live terminals (X80)", () => {
     expect(findEntry("l", 1)).toBe(again);
   });
 
+  it("a split of ten hidden lets go of the two shown longest ago (X80)", async () => {
+    const split = [];
+    for (let id = 1; id <= 10; id++) split.push(show("m", id));
+    await settled();
+    // Another tab is shown: the split's panes unmount, first to last.
+    for (const pane of split) pane.unmount();
+    await settled();
+    expect(detached("m")).toEqual([1, 2]);
+    expect(findEntry("m", 1)).toBeUndefined();
+    expect(findEntry("m", 3)).toBe(split[2]);
+  });
+
+  it("a pane unmounted and mounted again in one go is kept (X80)", async () => {
+    const panes = [];
+    for (let id = 1; id <= 9; id++) panes.push(show("n", id));
+    await settled();
+    // Its pane's effect runs again: cleanup, then mount at once.
+    const first = panes[0];
+    const pane = document.createElement("div");
+    document.body.append(pane);
+    first.unmount();
+    first.mount(pane);
+    await settled();
+    expect(findEntry("n", 1)).toBe(first);
+    expect(detached("n")).toEqual([]);
+  });
+
   it("a split tab shown keeps both its panes, though one was shown longest ago (X80)", async () => {
     const second = show("i", 1);
     second.unmount();
