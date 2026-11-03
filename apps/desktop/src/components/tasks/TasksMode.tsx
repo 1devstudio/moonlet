@@ -3,17 +3,16 @@
 import { Bot, ChevronDown, ChevronRight, ChevronUp, Copy, ExternalLink, Filter, GitBranch, LayoutGrid, List, MoreHorizontal, PenTool, Plus, RotateCw, Search, Settings, SquareTerminal, Trash2, X } from "lucide-react";
 import { type DragEvent, useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { errorToast, hostWorkspaces, selectSession, shownWorkspace, toast, useStore, designHostOf } from "../../lib/store";
+import { errorToast, selectSession, shownWorkspace, toast, useStore, designHostOf } from "../../lib/store";
 import { rpc } from "../../lib/daemon";
 import { M } from "../../lib/protocol";
 import { askConfirm } from "../../lib/confirm";
 import { createLockOn, createsIn, createTarget } from "../../lib/newIssue";
 import { type Column, type Task, taskId, trackerName, trackerOf } from "../../lib/tasks";
 import { enterOpensFirst, findsTask, glyphShape, sessionCard, stateOptions } from "../../lib/taskDetails";
-import { type BoardWorktree, type Card, type CardRow, isDimmed, sessionsWithoutTask, outOfSync } from "../../lib/tasksBoard";
+import { type BoardWorktree, type Card, type CardRow, isDimmed, outOfSync } from "../../lib/tasksBoard";
 import {
   activityOf,
-  boardInput,
   composerTask,
   failureOf,
   fixDrift,
@@ -43,16 +42,17 @@ import {
   useTasks,
 } from "../../lib/tasksStore";
 import { boardListGroups, cleanUps, listRow } from "../../lib/tasksList";
-import { removeWorktreeAsk, withoutPutOffCard, withRules } from "../../lib/keepInStep";
+import { removeWorktreeAsk } from "../../lib/keepInStep";
 import { effectiveKeys, keyLabel } from "../../lib/runActions";
 import { keepCard, modeSwitch } from "../../lib/tasksView";
 import { modeOf, setMode } from "../../lib/mode";
 import { useNow } from "../../lib/useNow";
 import { TaskComments } from "./TaskComments";
-import { parseWsKey, workspaceMembers, wsKey, type WorkspaceRef } from "../../lib/workspaces";
-import { assigneeOf, type BoardColumn, type BoardConfig, type Category, CATEGORY_BAR, CATEGORY_LABEL, type CardField, cardFields, footerTracker, NO_STATUS, projectMoveLock, syncedColumns, workspaceBoards } from "../../lib/boards";
+import { parseWsKey, wsKey, type WorkspaceRef } from "../../lib/workspaces";
+import { assigneeOf, type BoardColumn, type BoardConfig, type Category, CATEGORY_BAR, CATEGORY_LABEL, type CardField, cardFields, footerTracker, NO_STATUS, projectMoveLock, syncedColumns } from "../../lib/boards";
 import { type ColumnView, switcherGroups } from "../../lib/boardColumns";
-import { asBoard, boardHeader, boardProblem, boardStats, footerLine, cardFace, columnCounts, dropTarget, mapCards, shownBoardOf, sidebarBoards, stateChoices, workspaceViews } from "../../lib/boardScreen";
+import { boardHeader, boardProblem, boardStats, footerLine, cardFace, columnCounts, dropTarget, mapCards, sidebarBoards, stateChoices } from "../../lib/boardScreen";
+import { boardDeps, workspaceBoard } from "../../lib/workspaceBoard";
 import { Markdown } from "../AgentView";
 import { BoardTile, Button, cx, Empty, IconButton, inputCls, Kbd, StateGlyph } from "../ui";
 import { Menu, type MenuItem } from "../Menu";
@@ -135,21 +135,10 @@ export function useWorkspaceBoard(ws: WorkspaceRef | null) {
   // Moves under way show their cards in the new column (X53).
   const moving = useTasks((t) => t.moving);
   const shownId = useTasks((t) => (ws ? (t.shownBoard[wsKey(ws.host, ws.id)] ?? null) : null));
-  // What the board reads of the main store; other changes (terminal output) don't rebuild it.
-  const deps = useStore(useShallow((s) => [s.sessions, s.prs, s.git, s.terminals, s.reads, s.accounts, s.workspaces]));
-  return useMemo(() => {
-    if (!ws || !data) return { ws, data, board: null, unlinked: [], shown: null, all: [] };
-    const key = wsKey(ws.host, ws.id);
-    // Every member's sessions of the workspace (X68).
-    const st = useStore.getState();
-    const input = boardInput(st, ws.host, ws.id, data, config, workspaceMembers(ws, hostWorkspaces(st)));
-    // A chip whose rule is Off, or that the user put off with Not now, is not shown.
-    const clean = (c: Card) => withoutPutOffCard(withRules(c, (x) => rulesFor(config, x.task)), notNow);
-    const all = workspaceViews(workspaceBoards(config.boards, key, shownId), data, input).map((b) => ({ ...b, views: mapCards(b.views, clean) }));
-    const shownBoard = shownBoardOf(config.boards, key, shownId);
-    const shown = shownBoard ? { board: shownBoard, views: all.find((b) => b.board.id === shownBoard.id)?.views ?? [] } : null;
-    return { ws, data, board: asBoard(all), unlinked: sessionsWithoutTask(input.sessions, data.tasks, input.link), shown, all };
-  }, [ws, data, notNow, config, paused, moving, shownId, ...deps]);
+  // Re-renders on what the board reads of the main store; other changes (terminal output) don't.
+  useStore(useShallow(boardDeps));
+  // Built once per change for every component that shows it (X78).
+  return workspaceBoard(useStore.getState(), ws, data, { notNow, config, paused, moving, shownId });
 }
 
 /** The sidebar body in Tasks mode (X50): Find a task, the workspace's pinned boards, then the sync line. */
