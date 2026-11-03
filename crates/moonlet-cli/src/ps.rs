@@ -69,12 +69,13 @@ fn cpu(ms: u64) -> String {
     }
 }
 
-/// "900 KB", "210.0 MB", "3.0 GB".
+/// "900 KB", "210 MB", "3.0 GB": as the app's Processes tab shows it
+/// (`apps/desktop/src/lib/sessionProcesses.ts`).
 fn memory(bytes: u64) -> String {
     const MB: u64 = 1 << 20;
     match bytes {
         b if b < MB => format!("{} KB", b >> 10),
-        b if b < MB << 10 => format!("{:.1} MB", b as f64 / MB as f64),
+        b if b < MB << 10 => format!("{} MB", (b as f64 / MB as f64).round()),
         b => format!("{:.1} GB", b as f64 / (MB << 10) as f64),
     }
 }
@@ -188,9 +189,9 @@ mod tests {
         assert_eq!(
             table(&list, NOW),
             "    PID  NAME              ORIGIN                             AGE       CPU     MEMORY
-   4100  zsh               terminal 2 (dev), the tab's own     3d      1.2s     4.0 MB
-   4242  vite              terminal 2 (dev)                    2h     1m12s   210.0 MB
-   4300  claude            agent 3 (claude), the tab's own    45m      8.0s   380.0 MB
+   4100  zsh               terminal 2 (dev), the tab's own     3d      1.2s       4 MB
+   4242  vite              terminal 2 (dev)                    2h     1m12s     210 MB
+   4300  claude            agent 3 (claude), the tab's own    45m      8.0s     380 MB
    4310  tail              agent 3 (claude)                   42s      0.0s     900 KB
    4320  ?                 run 5 (test)                         -         -          -
 

@@ -86,8 +86,9 @@ Stopping (`session.kill_processes`):
 CLI:
 
 - [x] `moonlet ps [--session <id>]` prints the session's processes (the
-      current one, from `MOONLET_SESSION`, by default) as pid, name, origin,
-      age, CPU and memory, then the leftovers under their own heading
+      current one, from `MOONLET_SESSION`, by default) in the columns PID
+      NAME ORIGIN AGE CPU MEMORY, memory as the app shows it ("900 KB",
+      "210 MB", "3.0 GB"), then the leftovers under their own heading
       (`ps_prints_name_pid_origin_age_cpu_and_memory_never_arguments`,
       `moonlet_ps_lists_a_sessions_processes_and_moonlet_kill_stops_one`).
 - [x] `moonlet kill <pid>...` stops those pids of the session;

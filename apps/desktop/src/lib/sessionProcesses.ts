@@ -81,7 +81,8 @@ function age(ms: number): string {
   return `${Math.floor(s / 86_400)}d`;
 }
 
-/** "900 KB", "210 MB", "3.0 GB". */
+/** "900 KB", "210 MB", "3.0 GB": as `moonlet ps` prints it
+ * (`crates/moonlet-cli/src/ps.rs`). */
 function memory(bytes: number): string {
   const mb = 1 << 20;
   if (bytes < mb) return `${Math.floor(bytes / 1024)} KB`;
