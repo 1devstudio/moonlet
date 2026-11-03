@@ -34,7 +34,8 @@ the system's reduced-motion setting.
       the tab is shown (`pauses an animation inside a hidden tab`,
       `keeps an animation in the shown tab running`).
 - [x] Every endless animation moves only opacity and transform, which the
-      compositor animates without painting; the chat's shimmer is one of them
+      compositor animates without painting; the chat's shimmer is one of them,
+      and so are Tailwind's `animate-*` classes the app uses
       (`animates only opacity and transform in every endless animation`).
 - [x] The agents strip's clock ticks only while agents run and its tab is shown
       (`ticks the strip's clock only while agents run and the strip is shown`).
@@ -75,6 +76,10 @@ None: no new inputs.
   `keeps an animation in the shown tab running`,
   `animates only opacity and transform in every endless animation` and
   `runs an endless animation once when the system asks for reduced motion`.
+  The endless-animation test builds the app's stylesheet with Tailwind from
+  `index.css` and every file it imports, with the `animate-*` classes found in
+  the app's sources, and reads the `animation` shorthand, its longhands and
+  rules nested in `@media`, `@supports` and `@layer`.
 - Vitest, `subagents.test.ts`: `ticks the strip's clock only while agents run
   and the strip is shown`.
 - Manual, in the e2e app with `e2e/snap.ts`: the new shimmer at rest matches
