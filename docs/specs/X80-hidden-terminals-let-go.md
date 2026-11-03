@@ -46,6 +46,9 @@ attached again and drawn from the daemon's replay.
       decorations of an older block are disposed when it is dropped, not left
       in the terminal until its rows leave the scrollback
       (`a block dropped past the 2000 kept lets go of its marks (X80)`).
+- [x] Only a block's prompt (`A`), output (`C`) and end (`D`) marks keep a
+      marker in the terminal. A shell's input mark (`B`) leaves none behind
+      (`a command's input mark (B) leaves no mark behind in the terminal (X80)`).
 
 ## UI
 
@@ -90,8 +93,9 @@ None: no new input crosses a trust boundary.
   `TermEntry.mount`, with the daemon bridge faked and the RPCs it is sent
   recorded: `a ninth terminal shown lets go of the one shown longest ago, and detaches it (X80)`,
   `a terminal let go of attaches again when shown, and the replay draws it (X80)`,
-  `a terminal in a split on screen is kept however many others are shown (X80)`
-  and `a block dropped past the 2000 kept lets go of its marks (X80)`.
+  `a terminal in a split on screen is kept however many others are shown (X80)`,
+  `a block dropped past the 2000 kept lets go of its marks (X80)` and
+  `a command's input mark (B) leaves no mark behind in the terminal (X80)`.
 
 ## Open questions
 

@@ -481,6 +481,9 @@ export class TermEntry {
 
   private onOsc133(data: string): boolean {
     const [mark, ...rest] = data.split(";");
+    // Only a block's prompt, output and end keep a marker; any other mark
+    // (B) would leave one in the terminal until its row is trimmed (X80).
+    if (mark !== "A" && mark !== "C" && mark !== "D") return true;
     const marker = this.term.registerMarker(0);
     if (!marker) return true;
     const last = this.blocks[this.blocks.length - 1];
@@ -496,8 +499,6 @@ export class TermEntry {
           old.header?.dispose();
           for (const m of [old.prompt, old.output, old.end, old.headerAt]) m?.dispose();
         }
-        break;
-      case "B":
         break;
       case "C": {
         // No open block when the prompt came before we attached and the

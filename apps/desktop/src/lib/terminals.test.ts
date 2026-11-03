@@ -110,4 +110,13 @@ describe("live terminals (X80)", () => {
     expect([oldest.prompt.isDisposed, oldest.output?.isDisposed, oldest.end?.isDisposed]).toEqual([true, true, true]);
     expect(entry.term.markers.length).toBe(6000);
   });
+
+  it("a command's input mark (B) leaves no mark behind in the terminal (X80)", async () => {
+    const entry = show("d", 2);
+    // As a shell sends it: prompt, input start, command start and end.
+    const block = "\x1b]133;A\x07$ \x1b]133;B\x07make\r\n\x1b]133;C\x07built\r\n\x1b]133;D;0\x07";
+    await new Promise<void>((done) => entry.term.write(block, done));
+    expect(entry.blocks.length).toBe(1);
+    expect(entry.term.markers.length).toBe(3);
+  });
 });
