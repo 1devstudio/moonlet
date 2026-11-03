@@ -5530,6 +5530,16 @@ impl Daemon {
                 ok(w.unarchive(&r.id).await.map_err(internal)?)
             }
             m::SESSION_UPDATE => ok(w.update(params(p)?).map_err(internal)?),
+            m::SESSION_PROCESSES => {
+                let r: m::IdRef = params(p)?;
+                let sessions = self.sessions.clone();
+                // The whole process table is read: off the runtime's threads.
+                ok(tokio::task::spawn_blocking(move || sessions.processes(&r.id)).await.map_err(internal)?.map_err(internal)?)
+            }
+            m::SESSION_KILL_PROCESSES => {
+                let r: m::SessionKillProcesses = params(p)?;
+                ok(self.sessions.kill_processes(&r.id, r.pids).await.map_err(internal)?)
+            }
             m::SESSION_RUN => {
                 let r: m::SessionRun = params(p)?;
                 ok(w.run_script(&r.id, &r.script, r.cols, r.rows)
