@@ -192,6 +192,16 @@ export function outOfSync(board: Board): Card[] {
 }
 
 const words = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+/** Each task's title as [`words`], made once per task (X78). */
+const titleWords = new WeakMap<Task, string>();
+const wordsOf = (t: Task) => {
+  let w = titleWords.get(t);
+  if (w === undefined) {
+    w = words(t.title);
+    titleWords.set(t, w);
+  }
+  return w;
+};
 
 /**
  * Live sessions no task claims (X45 "Sessions without a task"), each with a
@@ -205,7 +215,7 @@ export function sessionsWithoutTask(sessions: BoardSession[], tasks: Task[], lin
     .map((session) => {
       if (!link.title) return { session, hint: "" };
       const name = words(session.name);
-      const like = tasks.find((t) => words(t.title) === name);
+      const like = tasks.find((t) => wordsOf(t) === name);
       return { session, hint: like ? `Looks like ${like.key} ${like.title}` : "No matching issue" };
     });
 }

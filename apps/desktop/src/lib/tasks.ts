@@ -140,11 +140,25 @@ export function prPointsAt(task: Task, pr: { number: number; texts: string[] }, 
   return pointsAt(task, pr.number, pr.texts.map((x) => x.toLowerCase()), repo?.toLowerCase() ?? null);
 }
 
+/** A task's key and GitHub repository in lower case, made once per task (X78). */
+const loweredTasks = new WeakMap<Task, { key: string; repo: string | null }>();
+function lowered(t: Task): { key: string; repo: string | null } {
+  let l = loweredTasks.get(t);
+  if (!l) {
+    l = { key: t.key.toLowerCase(), repo: t.github?.repo.toLowerCase() ?? null };
+    loweredTasks.set(t, l);
+  }
+  return l;
+}
+
+/** Whether `t` is a GitHub issue of `repo`, given in lower case. */
+const inRepo = (t: Task, repo: string | null) => !!repo && lowered(t).repo === repo;
+
 /** `prPointsAt` with the PR's texts and repository already lower-cased (X78). */
-function pointsAt(task: Task, number: number, texts: string[], repo: string | null): boolean {
-  if (task.github) return !!repo && task.github.repo.toLowerCase() === repo && task.github.closingPrs.includes(number);
-  const key = task.key.toLowerCase();
-  return texts.some((x) => mentionsLowered(x, key));
+function pointsAt(task: Task, number: number, loweredTexts: string[], loweredRepo: string | null): boolean {
+  if (task.github) return inRepo(task, loweredRepo) && task.github.closingPrs.includes(number);
+  const key = lowered(task).key;
+  return loweredTexts.some((x) => mentionsLowered(x, key));
 }
 
 export function taskForSession(
@@ -156,12 +170,11 @@ export function taskForSession(
 ): Task | null {
   if (s.task) return tasks.find((t) => t.connection === s.task?.connection && t.key === s.task.key) ?? null;
   if (s.task_unlinked) return null;
-  // Lower-cased once here, not once per task (X78).
+  // The session's side lower-cased once here, each task's once per task (X78).
   const repo = originRepo?.toLowerCase() ?? null;
   const branch = s.branch.toLowerCase();
-  const sameRepo = (t: Task) => !!t.github && !!repo && t.github.repo.toLowerCase() === repo;
   const number = githubBranchNumber(s.branch);
-  const byBranch = rules.branch ? tasks.find((t) => (t.github ? sameRepo(t) && t.github.number === number : mentionsLowered(branch, t.key.toLowerCase()))) : undefined;
+  const byBranch = rules.branch ? tasks.find((t) => (t.github ? inRepo(t, repo) && t.github.number === number : mentionsLowered(branch, lowered(t).key))) : undefined;
   if (byBranch) return byBranch;
   if (!pr || !rules.pr) return null;
   const texts = [pr.title.toLowerCase()];

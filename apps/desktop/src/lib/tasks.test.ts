@@ -110,6 +110,14 @@ describe("taskForSession (X46 links)", () => {
     expect(taskForSession(session({ branch: "13876-skills" }), null, "other/repo", tasks)).toBe(null);
   });
 
+  it("matches repositories, keys and branches whatever their case", () => {
+    // A clone of github.com/CLI/CLI, a branch and a PR title in another case than the key.
+    expect(taskForSession(session({ branch: "13876-skills" }), null, "CLI/Cli", tasks)).toBe(gh);
+    expect(taskForSession(session({}), pr(13894, "Fix skills"), "Cli/CLI", tasks)).toBe(gh);
+    expect(taskForSession(session({ branch: "MOON-142-Remote-Hosts" }), null, null, tasks)).toBe(hosts);
+    expect(taskForSession(session({}), pr(7, "moon-144: Tabs"), null, tasks)).toBe(tabs);
+  });
+
   it("finds the task from the session's PR: a title with the key, or a PR that closes the issue", () => {
     expect(taskForSession(session({}), pr(7, "MOON-144: tabs"), null, tasks)).toBe(tabs);
     expect(taskForSession(session({}), pr(13894, "Fix skills"), "cli/cli", tasks)).toBe(gh);
