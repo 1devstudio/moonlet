@@ -1414,7 +1414,7 @@ export function AgentView({
   const reveal = useChat((s) => (s.reveal?.key === chatKey(host, id) ? s.reveal : null));
   useEffect(() => {
     if (!reveal || !st) return;
-    setLimit((n) => limitShowing(blocks, n, reveal.find));
+    setLimit((n) => limitShowing(blocks, n, reveal.isTarget));
     useChat.setState({ reveal: null });
   }, [reveal, blocks, st, setLimit]);
   const renderedIds = useMemo(() => new Set(renderedBlocks.flatMap((b) => (b.kind === "item" ? [b.item.id] : b.tools.map((t) => t.id)))), [renderedBlocks]);

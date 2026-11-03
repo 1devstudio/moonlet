@@ -20,7 +20,7 @@ interface ChatStore {
    *  `chat.state`. A key is in one of the two at most. */
   summaries: Record<string, ChatSummary>;
   /** A jump to an item a chat may not render yet (`revealInChat`). */
-  reveal: { key: string; find: (item: ChatItem) => boolean } | null;
+  reveal: { key: string; isTarget: (item: ChatItem) => boolean } | null;
 }
 
 const g = globalThis as unknown as { __moonletChat?: ReturnType<typeof makeStore> };
@@ -593,11 +593,16 @@ export function limitShowing(blocks: readonly ChatBlock[], limit: number, isTarg
   return need <= limit ? limit : limit + Math.ceil((need - limit) / BLOCKS_SHOWN) * BLOCKS_SHOWN;
 }
 
-/** Asks chat `id` to render earlier blocks until the last item `find`
+/** Asks chat `id` to render earlier blocks until the last item `isTarget`
  *  picks is among them, for a jump to it such as Show in chat (X81). */
-export function revealInChat(host: string, id: number, find: (item: ChatItem) => boolean) {
-  useChat.setState({ reveal: { key: chatKey(host, id), find } });
+export function revealInChat(host: string, id: number, isTarget: (item: ChatItem) => boolean) {
+  useChat.setState({ reveal: { key: chatKey(host, id), isTarget } });
 }
+
+/** Whether chat `id`'s items in memory hold one `isTarget` picks, rendered
+ *  or among its earlier blocks, as a jump looks for it (X81). Read once, not
+ *  followed. */
+export const chatHasItem = (host: string, id: number, isTarget: (item: ChatItem) => boolean) => !!useChat.getState().chats[chatKey(host, id)]?.items.some(isTarget);
 
 export const toolGroupLabel = (n: number) => `${n} tool call${n === 1 ? "" : "s"}`;
 

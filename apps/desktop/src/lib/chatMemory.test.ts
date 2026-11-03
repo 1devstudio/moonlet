@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { chatKey, chatSummary, holdChat, loadChatSummaries, onChatItem, onChatState, reloadChats, showChat, showChats, useChat } from "./chat";
+import { chatHasItem, chatKey, chatSummary, holdChat, loadChatSummaries, onChatItem, onChatState, reloadChats, showChat, showChats, useChat } from "./chat";
 import { newChatContext } from "./chatContext";
-import type { ChatState, TerminalInfo } from "./protocol";
+import type { ChatItem, ChatState, TerminalInfo } from "./protocol";
 
 /** What the daemon's `chat.state` answers, by `host:id`; nothing while its
  *  host is down. `chat.summaries` answers each of the host's without items.
@@ -161,6 +161,15 @@ describe("chats kept in memory (X81)", () => {
     await loading;
     expect(texts("j", 1)).toEqual(["the visible chat"]);
     release();
+  });
+
+  it("knows whether a chat in memory has the item a jump goes to, rendered or not", async () => {
+    daemon["k:1"] = chat("Comment 3 on the login page");
+    const isPin = (item: ChatItem) => item.text.startsWith("Comment 3");
+    expect(chatHasItem("k", 1, isPin)).toBe(false);
+    await showChat("k", 1);
+    expect(chatHasItem("k", 1, isPin)).toBe(true);
+    expect(chatHasItem("k", 1, (item) => item.text.startsWith("Comment 4"))).toBe(false);
   });
 
   it("keeps a chat two views show until both let it go", async () => {

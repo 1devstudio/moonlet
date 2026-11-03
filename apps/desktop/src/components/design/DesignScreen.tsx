@@ -8,7 +8,7 @@
 import { ArrowRight, ChevronDown, GitBranch, History as HistoryIcon, LayoutGrid, Loader2, Lock, MessageSquare, MoreHorizontal, PanelLeftClose, PanelLeftOpen, PanelRight, SwatchBook, Trash2, Undo2 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type Dispatch, type MutableRefObject, type ReactNode, type RefObject, type SetStateAction } from "react";
 import { errorToast, toast, updateSettings, useStore } from "../../lib/store";
-import { chatKey, revealInChat, useChat } from "../../lib/chat";
+import { chatHasItem, chatKey, revealInChat, useChat } from "../../lib/chat";
 import type { ChatItem, Design, DesignComment, DesignSnapshot, DesignToken } from "../../lib/protocol";
 import { briefShown, designSubtitle } from "../../lib/design";
 import {
@@ -575,15 +575,15 @@ export function DesignCanvas({
   // Show in chat: the chat opens, then scrolls to the pin's last card, its
   // design's (commentCardSelector), once its messages have loaded
   // (chatCardLookup).
-  const [shownPin, setShownPin] = useState<{ n: number; folder: string | null; at: number; find: (item: ChatItem) => boolean } | null>(null);
+  const [shownPin, setShownPin] = useState<{ n: number; folder: string | null; at: number; isTarget: (item: ChatItem) => boolean } | null>(null);
   const chatLoaded = useChat((c) => agent !== null && !!c.chats[chatKey(host, agent)]);
   const showInChat = (pin: DesignComment) => {
     setChatOpen(true);
     // Its design's card: a session's chat has every design's comments.
     const folder = toldFolder(peers, design.slug);
-    const find = (item: ChatItem) => item.kind === "user" && showsPin(item.text, pin, folder);
-    if (agent !== null) revealInChat(host, agent, find);
-    setShownPin({ n: pin.n, folder, at: Date.now(), find });
+    const isTarget = (item: ChatItem) => item.kind === "user" && showsPin(item.text, pin, folder);
+    if (agent !== null) revealInChat(host, agent, isTarget);
+    setShownPin({ n: pin.n, folder, at: Date.now(), isTarget });
   };
   useEffect(() => {
     if (!shownPin || !chatOpen) return;
@@ -594,7 +594,7 @@ export function DesignCanvas({
       const card = cards?.[cards.length - 1];
       // Whether its message is in the chat, rendered or among the earlier
       // blocks the chat shows once asked (X81); read only while looking.
-      const listed = !card && agent !== null && !!useChat.getState().chats[chatKey(host, agent)]?.items.some(shownPin.find);
+      const listed = !card && agent !== null && chatHasItem(host, agent, shownPin.isTarget);
       const step = chatCardLookup({ found: !!card, loaded: chatLoaded, listed, waitedMs: Date.now() - shownPin.at });
       if (step === "wait") return;
       clearInterval(again);
