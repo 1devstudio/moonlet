@@ -74,6 +74,9 @@ struct Inner {
     stderr: Vec<String>,
     saved_at: Instant,
     dirty: bool,
+    /// When the user or the agent last did something in the chat, in ms
+    /// since the epoch: the agent rests once it is a day ago (X84).
+    active_at: u64,
 }
 
 struct Chat {
@@ -98,6 +101,16 @@ pub const WORKSPACE_KEY: &str = "workspace:";
 
 /// How often the processes each agent started are noted (X79).
 const FAMILY_LOOK: Duration = Duration::from_secs(2);
+
+/// How long an agent stays idle before it rests (X84).
+const REST_AFTER: Duration = Duration::from_secs(24 * 3600);
+
+/// [`REST_AFTER`] in milliseconds, or `MOONLET_TEST_AGENT_REST_MS` in tests,
+/// read once.
+fn rest_after() -> u64 {
+    static MS: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *MS.get_or_init(|| std::env::var("MOONLET_TEST_AGENT_REST_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(REST_AFTER.as_millis() as u64))
+}
 pub struct ChatManager {
     terms: Arc<TerminalManager>,
     chats: Mutex<HashMap<TerminalId, Arc<Chat>>>,
@@ -113,6 +126,8 @@ pub struct ChatManager {
     ending: Mutex<Vec<tokio::task::JoinHandle<()>>>,
     /// Set once `shutdown` starts: no agent starts after it (X79).
     stopping: std::sync::atomic::AtomicBool,
+    /// How long, in milliseconds, an agent stays idle before it rests (X84).
+    rest_after: std::sync::atomic::AtomicU64,
     /// Where to keep what agents and terminals run, for the next daemon to
     /// end after a crash, and what was written there last (X79).
     leftovers: Mutex<Option<(PathBuf, Option<crate::leftovers::Leftovers>)>>,
@@ -189,7 +204,7 @@ fn answers_text(ask: &PermissionAsk, answers: &BTreeMap<String, String>) -> Stri
 
 impl ChatManager {
     pub fn new(terms: Arc<TerminalManager>, dir: PathBuf) -> Arc<Self> {
-        let mgr = Arc::new_cyclic(|me| Self { terms: terms.clone(), chats: Mutex::new(HashMap::new()), dir, me: me.clone(), session_env: std::sync::OnceLock::new(), held: Mutex::new(None), watching: Default::default(), ending: Mutex::new(Vec::new()), stopping: Default::default(), leftovers: Mutex::new(None), dying: Default::default() });
+        let mgr = Arc::new_cyclic(|me| Self { terms: terms.clone(), chats: Mutex::new(HashMap::new()), dir, me: me.clone(), session_env: std::sync::OnceLock::new(), held: Mutex::new(None), watching: Default::default(), ending: Mutex::new(Vec::new()), stopping: Default::default(), rest_after: rest_after().into(), leftovers: Mutex::new(None), dying: Default::default() });
         let weak = Arc::downgrade(&mgr);
         terms.set_chat_stop(Arc::new(move |id, remove| {
             if let Some(m) = weak.upgrade() {
@@ -280,6 +295,7 @@ impl ChatManager {
                 stderr: Vec::new(),
                 saved_at: Instant::now(),
                 dirty: true,
+                active_at: now_ms(),
             }),
         });
         self.chats.lock().unwrap().insert(info.id, chat.clone());
@@ -698,6 +714,7 @@ impl ChatManager {
                     stderr: Vec::new(),
                     saved_at: Instant::now(),
                     dirty: true,
+                    active_at: now_ms(),
                 }),
             });
             self.chats.lock().unwrap().insert(chat.id, chat.clone());
@@ -769,6 +786,34 @@ impl ChatManager {
         Some(crate::process::Doomed { group: pid.map(|p| nix::unistd::Pid::from_raw(p as i32)), agent, family })
     }
 
+    /// Whether the agent of a chat may rest (X84): it runs, has been idle
+    /// long enough, and nothing in the chat waits for it or for the user.
+    fn may_rest(&self, inner: &Inner) -> bool {
+        let st = &inner.state;
+        inner.pid.is_some()
+            && !super::busy(st)
+            && st.pending.is_empty()
+            && st.queued.is_empty()
+            && inner.kept.is_empty()
+            && !st.subagents.iter().any(|a| a.status == "running")
+            && now_ms().saturating_sub(inner.active_at) >= self.rest_after.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Stops an idle agent (X84). Its conversation stays, for the next
+    /// message to resume, and what it left running stays with the chat, as
+    /// on a restart for new settings (X79).
+    fn rest(&self, chat: &Chat, inner: &mut Inner, table: &crate::process::Table) {
+        if let Some(mut doomed) = Self::doom(inner, table) {
+            let left_running = std::mem::take(&mut doomed.family);
+            self.end_later(doomed);
+            inner.family.adopt(left_running);
+        }
+        self.terms.update_info(chat.id, |i| i.pid = None);
+        let o = upsert(&mut inner.state, item(super::local_id("system"), "system", "Resting after a day without messages; the next message wakes it"));
+        self.apply(chat, inner, vec![o]);
+        self.save(chat, inner);
+    }
+
     /// Keeps in `path`, every few seconds while it changes, what agents and
     /// terminals run, for the next daemon to end if this one crashes (X79).
     /// `inherited` is what the daemon before recorded, being ended after a
@@ -831,11 +876,23 @@ impl ChatManager {
                 let mut processes = Vec::new();
                 if chats.iter().any(|c| c.inner.lock().unwrap().pid.is_some()) {
                     let Ok(table) = tokio::task::spawn_blocking(crate::process::table).await else { continue };
-                    for c in chats {
+                    for c in &chats {
                         let mut inner = c.inner.lock().unwrap();
                         let Some(pid) = inner.pid else { continue };
                         inner.family.note(&table, pid);
+                        if mgr.may_rest(&inner) {
+                            mgr.rest(c, &mut inner, &table);
+                            continue;
+                        }
                         processes.extend(table.get(pid).map(|p| (p.pid, p.start)));
+                        processes.extend(inner.family.members());
+                    }
+                }
+                // What a resting agent left running is the chat's until it
+                // ends, and recorded as long (X84).
+                for c in &chats {
+                    let mut inner = c.inner.lock().unwrap();
+                    if inner.pid.is_none() && inner.family.signal(None) {
                         processes.extend(inner.family.members());
                     }
                 }
@@ -973,6 +1030,7 @@ impl ChatManager {
         inner.generation += 1;
         let generation = inner.generation;
         inner.pid = child.id();
+        inner.active_at = now_ms();
         let agent = inner.pid;
         self.watch_families();
         if let Some(held) = self.held.lock().unwrap().as_mut()
@@ -1125,6 +1183,10 @@ impl ChatManager {
     /// Carries out an adapter's requests: stdin writes, client events,
     /// agent state and persistence.
     fn apply(&self, chat: &Chat, inner: &mut Inner, outs: Vec<Out>) {
+        // Something was said or done in the chat: its agent is not idle (X84).
+        if !outs.is_empty() {
+            inner.active_at = now_ms();
+        }
         let mut state_changed = false;
         for o in outs {
             match o {
@@ -2078,6 +2140,145 @@ done
         terms.kill(id, false).unwrap();
         chats.shutdown().await;
         assert!(gone_within(server, 1).await, "the stopped agent's server outlived the daemon");
+    }
+
+    /// Agents of `chats` rest once idle for `ms` (X84).
+    fn rest_after(chats: &ChatManager, ms: u64) {
+        chats.rest_after.store(ms, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// The process chat `id`'s agent runs as.
+    fn agent_pid(terms: &TerminalManager, id: TerminalId) -> nix::unistd::Pid {
+        nix::unistd::Pid::from_raw(terms.get(id).unwrap().info().pid.expect("no agent runs") as i32)
+    }
+
+    /// Each start of the fake `claude` in `dir`, as its arguments.
+    fn starts(dir: &Path) -> Vec<String> {
+        std::fs::read_to_string(dir.join("claude-args")).unwrap().lines().map(String::from).collect()
+    }
+
+    #[tokio::test]
+    async fn an_idle_agent_rests_and_the_next_message_resumes_it() {
+        let (dir, terms, chats) = setup().await;
+        let id = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), ..Default::default() }).unwrap().id;
+        wait_for(&chats, id, |s| s.agent_session.is_some()).await;
+        chats.send(id, "hi", &[]).unwrap();
+        wait_for(&chats, id, |s| s.status == "done").await;
+        let agent = agent_pid(&terms, id);
+        rest_after(&chats, 300);
+        assert!(gone_within(agent, 8).await, "the idle agent still runs");
+        let st = chats.state(id).unwrap();
+        let last = st.items.last().map(|i| (i.kind.as_str(), i.text.as_str()));
+        assert_eq!(last, Some(("system", "Resting after a day without messages; the next message wakes it")));
+        chats.send(id, "again", &[]).unwrap();
+        // The fake `claude` answers every message as m1, so its answer
+        // replaces the first one in place.
+        let st = wait_for(&chats, id, |s| s.status == "done").await;
+        let users: Vec<_> = st.items.iter().filter(|i| i.kind == "user").map(|i| i.text.as_str()).collect();
+        assert_eq!(users, ["hi", "again"]);
+        let starts = starts(dir.path());
+        assert_eq!(starts.len(), 2, "{starts:?}");
+        assert!(starts[1].contains("--resume sess-1"), "{}", starts[1]);
+    }
+
+    /// Asks a new chat's agent `ask`, waits until `ready`, and gives the
+    /// chat once its agent rests after 300 ms would have had two looks to.
+    async fn asked_and_left(chats: &ChatManager, cwd: &Path, ask: &str, ready: impl Fn(&ChatState) -> bool) -> TerminalId {
+        let id = chats.create(ChatCreate { cwd: cwd.display().to_string(), agent: "claude".into(), ..Default::default() }).unwrap().id;
+        wait_for(chats, id, |s| s.agent_session.is_some()).await;
+        chats.send(id, ask, &[]).unwrap();
+        wait_for(chats, id, ready).await;
+        rest_after(chats, 300);
+        tokio::time::sleep(Duration::from_millis(4500)).await;
+        id
+    }
+
+    #[tokio::test]
+    async fn a_working_agent_does_not_rest() {
+        let (dir, terms, chats) = setup().await;
+        let id = asked_and_left(&chats, dir.path(), "run a long command", |s| s.items.iter().any(|i| i.tool.is_some())).await;
+        assert!(nix::sys::signal::kill(agent_pid(&terms, id), None).is_ok(), "the working agent rested");
+        assert_eq!(starts(dir.path()).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_agent_waiting_for_an_answer_does_not_rest() {
+        let (dir, terms, chats) = setup().await;
+        let id = asked_and_left(&chats, dir.path(), "run a command", |s| !s.pending.is_empty()).await;
+        assert!(nix::sys::signal::kill(agent_pid(&terms, id), None).is_ok(), "the agent waiting for an answer rested");
+        assert_eq!(starts(dir.path()).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_agent_with_a_running_subagent_does_not_rest() {
+        let (dir, terms, chats) = setup().await;
+        let id = asked_and_left(&chats, dir.path(), "launch an agent", |s| s.status == "done" && !s.subagents.is_empty()).await;
+        assert!(nix::sys::signal::kill(agent_pid(&terms, id), None).is_ok(), "the agent with a running subagent rested");
+        assert_eq!(starts(dir.path()).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_agent_kept_busy_with_messages_does_not_rest() {
+        let (dir, terms, chats) = setup().await;
+        let id = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), ..Default::default() }).unwrap().id;
+        wait_for(&chats, id, |s| s.agent_session.is_some()).await;
+        let agent = agent_pid(&terms, id);
+        rest_after(&chats, 1500);
+        // A message every 0.6 s for longer than two looks.
+        for _ in 0..7 {
+            chats.send(id, "hi", &[]).unwrap();
+            wait_for(&chats, id, |s| s.status == "done").await;
+            tokio::time::sleep(Duration::from_millis(600)).await;
+        }
+        assert!(nix::sys::signal::kill(agent, None).is_ok(), "the agent rested while written to");
+        assert_eq!(starts(dir.path()).len(), 1);
+        // Once the messages stop, it rests.
+        assert!(gone_within(agent, 8).await, "the agent never rested");
+    }
+
+    #[tokio::test]
+    async fn a_resting_agents_server_keeps_running_and_ends_when_the_chat_stops() {
+        let (dir, terms, chats) = setup().await;
+        let (id, server) = agent_with_a_server(&chats, dir.path()).await;
+        let agent = agent_pid(&terms, id);
+        rest_after(&chats, 300);
+        assert!(gone_within(agent, 8).await, "the idle agent still runs");
+        // Past the agent's SIGTERM grace and SIGKILL.
+        tokio::time::sleep(Duration::from_millis(4500)).await;
+        assert!(nix::sys::signal::kill(server, None).is_ok(), "resting ended the agent's server");
+        terms.kill(id, false).unwrap();
+        assert!(gone_within(server, 8).await, "the server outlived the resting agent's chat");
+    }
+
+    #[tokio::test]
+    async fn a_resting_agents_server_ends_with_the_agent_that_resumes() {
+        let (dir, terms, chats) = setup().await;
+        let (id, server) = agent_with_a_server(&chats, dir.path()).await;
+        let agent = agent_pid(&terms, id);
+        rest_after(&chats, 300);
+        assert!(gone_within(agent, 8).await, "the idle agent still runs");
+        rest_after(&chats, REST_AFTER.as_millis() as u64);
+        chats.send(id, "hi", &[]).unwrap();
+        wait_for(&chats, id, |s| s.status == "done").await;
+        assert!(nix::sys::signal::kill(server, None).is_ok(), "resuming ended the agent's server");
+        chats.send(id, "crash now", &[]).unwrap();
+        assert!(gone_within(server, 8).await, "the server outlived the agent that resumed");
+    }
+
+    #[tokio::test]
+    async fn what_a_resting_agent_left_stays_recorded() {
+        let (dir, terms, chats) = setup().await;
+        let path = dir.path().join("d.leftovers.json");
+        chats.record_leftovers(path.clone(), Default::default());
+        let (id, server) = agent_with_a_server(&chats, dir.path()).await;
+        let agent = agent_pid(&terms, id);
+        rest_after(&chats, 300);
+        assert!(gone_within(agent, 8).await, "the idle agent still runs");
+        // Looks after the resting agent itself is gone.
+        tokio::time::sleep(Duration::from_millis(4500)).await;
+        assert!(recorded(&path).contains(&server.as_raw()), "a crash now would leave the server running");
+        terms.kill(id, false).unwrap();
+        assert!(gone_within(server, 8).await);
     }
 
     /// The pids the leftovers file at `path` names among its processes.

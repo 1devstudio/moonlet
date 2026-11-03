@@ -1,6 +1,6 @@
 # X84 — Idle agents rest
 
-- **Status:** draft
+- **Status:** implemented
 - **Priority / phase:** P1 · phase 3
 - **PRD refs:** S1 daemon-owned sessions, S4 restore after restart
 - **Related ADRs:** none
@@ -26,31 +26,32 @@ one of the later parts of X79.
 
 ## Behaviour and acceptance criteria
 
-- [ ] A chat agent idle for 24 hours is stopped (SIGTERM to its process
+- [x] A chat agent idle for 24 hours is stopped (SIGTERM to its process
       group, SIGKILL 3 s later). Idle means no turn running (status neither
       working nor blocked), nothing waiting for the user (no asks or
       approvals, no queued messages) and no running subagents. The chat
       keeps its conversation and shows the note "Resting after a day without
       messages; the next message wakes it"
       (`an_idle_agent_rests_and_the_next_message_resumes_it`).
-- [ ] A busy agent does not rest: one whose turn runs, one waiting for the
+- [x] A busy agent does not rest: one whose turn runs, one waiting for the
       user's answer, and one with a subagent still running
       (`a_working_agent_does_not_rest`,
       `an_agent_waiting_for_an_answer_does_not_rest`,
       `an_agent_with_a_running_subagent_does_not_rest`).
-- [ ] Idle time counts from the last activity: a message sent, an answer to
+- [x] Idle time counts from the last activity: a message sent, an answer to
       an ask, anything the agent says. A chat written to more often than the
       timeout keeps its agent, which rests once the messages stop
       (`an_agent_kept_busy_with_messages_does_not_rest`).
-- [ ] The next message starts the agent with `--resume` and the chat's
+- [x] The next message starts the agent with `--resume` and the chat's
       agent session, as after a daemon restart
       (`an_idle_agent_rests_and_the_next_message_resumes_it`).
-- [ ] Processes the agent left running (a dev server in a process group of
+- [x] Processes the agent left running (a dev server in a process group of
       its own) are not ended by resting. They stay with the chat: the next
       agent takes them on, and they end when the chat is stopped or that
       agent exits, as after a settings restart (X79)
-      (`a_resting_agents_server_keeps_running_and_ends_when_the_chat_stops`).
-- [ ] While the agent rests, what it left running stays in the leftovers
+      (`a_resting_agents_server_keeps_running_and_ends_when_the_chat_stops`,
+      `a_resting_agents_server_ends_with_the_agent_that_resumes`).
+- [x] While the agent rests, what it left running stays in the leftovers
       record (X79), so a daemon that crashes meanwhile leaves it to the next
       one to end (`what_a_resting_agent_left_stays_recorded`).
 
@@ -91,7 +92,8 @@ and start time noted for them (X79).
   `an_agent_waiting_for_an_answer_does_not_rest`,
   `an_agent_with_a_running_subagent_does_not_rest`,
   `an_agent_kept_busy_with_messages_does_not_rest`,
-  `a_resting_agents_server_keeps_running_and_ends_when_the_chat_stops` and
+  `a_resting_agents_server_keeps_running_and_ends_when_the_chat_stops`,
+  `a_resting_agents_server_ends_with_the_agent_that_resumes` and
   `what_a_resting_agent_left_stays_recorded`.
 
 ## Open questions
