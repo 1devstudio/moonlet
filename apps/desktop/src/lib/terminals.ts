@@ -1,5 +1,7 @@
 // xterm.js instances live outside React so switching tabs or sessions
-// never re-attaches or loses scrollback. A terminal renders with WebGL
+// does not re-attach. Only the terminals shown most recently stay live; an
+// older one is let go of, and attached again from the daemon's replay when
+// it is shown (X80). A terminal renders with WebGL
 // only while it is on screen (WebKit caps live WebGL contexts), and falls
 // back to the DOM renderer if WebGL is unavailable (T1).
 
@@ -426,6 +428,12 @@ export class TermEntry {
     this.resizeObs = new ResizeObserver(() => this.refit());
     this.resizeObs.observe(parent);
     requestAnimationFrame(() => this.refit());
+    shown(this);
+  }
+
+  /** In a pane (X80), shown or in a split: never let go of. */
+  get mounted() {
+    return this.parent !== null;
   }
 
   unmount() {
@@ -899,6 +907,25 @@ export class TermEntry {
   }
 }
 
+/** How many terminals keep a live xterm (X80). The daemon keeps every
+ * terminal's screen and scrollback, and replays them on attach (S2). */
+export const LIVE_TERMINALS = 8;
+
+/** The terminals to let go of (X80): of `order`, least recently shown
+ * first, the oldest ones beyond `max`, skipping those on screen. */
+export function terminalsToLetGo(order: readonly string[], onScreen: ReadonlySet<string>, max: number): string[] {
+  let excess = order.length - max;
+  const out: string[] = [];
+  for (const key of order) {
+    if (excess <= 0) break;
+    if (onScreen.has(key)) continue;
+    out.push(key);
+    excess--;
+  }
+  return out;
+}
+
+/** Live terminals, least recently shown first (X80). */
 const entries = new Map<string, TermEntry>();
 let settings = defaultTermSettings;
 
@@ -911,6 +938,24 @@ export function getEntry(host: string, session: number): TermEntry {
     void e.attach().catch(() => {});
   }
   return e;
+}
+
+/** A terminal was shown (X80): it becomes the most recently shown, and
+ * those beyond the limit are let go of. */
+function shown(entry: TermEntry) {
+  const key = `${entry.host}:${entry.session}`;
+  if (entries.get(key) !== entry) return;
+  entries.delete(key);
+  entries.set(key, entry);
+  const onScreen = new Set([...entries].flatMap(([k, e]) => (e.mounted ? [k] : [])));
+  for (const k of terminalsToLetGo([...entries.keys()], onScreen, LIVE_TERMINALS)) {
+    const e = entries.get(k)!;
+    entries.delete(k);
+    e.dispose();
+    // The daemon stops sending its output; showing it again attaches anew,
+    // and the replay draws its screen and scrollback (S2).
+    void rpc(e.host, M.terminalDetach, { id: e.session }).catch(() => {});
+  }
 }
 
 export function findEntry(host: string, session: number): TermEntry | undefined {
