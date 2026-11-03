@@ -1807,7 +1807,7 @@ export function AgentView({
           onAttach={() => void attach()}
           onAside={canAskAside(agent, working, revising) ? askAside : undefined}
           handle={editor}
-          top={st && <AgentsStrip host={host} id={id} st={st} onSend={(text) => send(text, [])} />}
+          top={st && <AgentsStrip host={host} id={id} st={st} visible={visible} onSend={(text) => send(text, [])} />}
           layout={layout}
           designSlash={designSlash}
         />

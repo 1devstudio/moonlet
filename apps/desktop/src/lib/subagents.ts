@@ -210,6 +210,9 @@ function dotPhase(since: number): StripDot["phase"] {
   return since < DOT_POP ? "pop" : "on";
 }
 
+/** Whether the strip's clock ticks: while agents run, in a tab that is shown (X82). */
+export const stripTicks = (st: ChatState, visible: boolean) => visible && (st.subagents ?? []).some((a) => a.status === "running");
+
 /** The strip's × hides it until an agent starts after this. */
 export const stripDismissAt = (st: ChatState) => Math.max(0, ...batchOf(st).map((a) => a.started_at));
 

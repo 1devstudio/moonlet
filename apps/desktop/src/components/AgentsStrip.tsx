@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { ChevronRight, X } from "lucide-react";
 import type { ChatState } from "../lib/protocol";
-import { AGENT_STATE, stripDismissAt, stripRetry, stripView } from "../lib/subagents";
+import { AGENT_STATE, stripDismissAt, stripRetry, stripTicks, stripView } from "../lib/subagents";
 import { termKey, useStore } from "../lib/store";
 import { openAgents, openChanges } from "../lib/actions";
 import { useNow } from "../lib/useNow";
@@ -10,12 +10,11 @@ import { cx } from "./ui";
 /** The top row of the chat input (X42): the agents launched since the
  *  user's last message. Ended agents' dots pop and hide, and the row folds away
  *  once all are done. */
-export function AgentsStrip({ host, id, st, onSend }: { host: string; id: number; st: ChatState; onSend: (text: string) => void }) {
+export function AgentsStrip({ host, id, st, visible, onSend }: { host: string; id: number; st: ChatState; visible: boolean; onSend: (text: string) => void }) {
   const dismissedAt = useStore((s) => s.stripDismissed[termKey(host, id)] ?? 0);
-  const active = (st.subagents ?? []).some((a) => a.status === "running");
-  // The clock ticks while agents run; `steppedAt` moves the animation along between ticks.
+  // The clock ticks while agents run and the tab is shown; `steppedAt` moves the animation along between ticks.
   const [steppedAt, setSteppedAt] = useState(0);
-  const now = Math.max(useNow(active), steppedAt);
+  const now = Math.max(useNow(stripTicks(st, visible)), steppedAt);
   const view = stripView(st, now, dismissedAt);
   const wake = view?.wake ?? null;
   useEffect(() => {
