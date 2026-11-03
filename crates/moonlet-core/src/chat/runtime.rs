@@ -161,6 +161,8 @@ pub struct ChatManager {
     watching: std::sync::atomic::AtomicBool,
     /// Stopped agents still being ended, for `shutdown` to wait for (X79).
     ending: Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    /// Set once `shutdown` starts: no agent starts after it (X79).
+    stopping: std::sync::atomic::AtomicBool,
 }
 
 /// An added directory as the agent gets it: absolute and existing, so it
@@ -230,7 +232,7 @@ fn answers_text(ask: &PermissionAsk, answers: &BTreeMap<String, String>) -> Stri
 
 impl ChatManager {
     pub fn new(terms: Arc<TerminalManager>, dir: PathBuf) -> Arc<Self> {
-        let mgr = Arc::new_cyclic(|me| Self { terms: terms.clone(), chats: Mutex::new(HashMap::new()), dir, me: me.clone(), session_env: std::sync::OnceLock::new(), held: Mutex::new(None), watching: Default::default(), ending: Mutex::new(Vec::new()) });
+        let mgr = Arc::new_cyclic(|me| Self { terms: terms.clone(), chats: Mutex::new(HashMap::new()), dir, me: me.clone(), session_env: std::sync::OnceLock::new(), held: Mutex::new(None), watching: Default::default(), ending: Mutex::new(Vec::new()), stopping: Default::default() });
         let weak = Arc::downgrade(&mgr);
         terms.set_chat_stop(Arc::new(move |id, remove| {
             if let Some(m) = weak.upgrade() {
@@ -619,9 +621,13 @@ impl ChatManager {
     /// Stops the agent process; `remove` also forgets the conversation.
     pub fn stop(&self, id: TerminalId, remove: bool) {
         let Ok(chat) = self.get(id) else { return };
+        // Looked at before taking the chat's lock, which other calls wait on.
+        let table = crate::process::table();
         {
             let mut inner = chat.inner.lock().unwrap();
-            self.kill_process(&mut inner);
+            if let Some(doomed) = Self::doom(&mut inner, &table) {
+                self.end_later(doomed);
+            }
             if !remove {
                 self.settle(&chat, &mut inner, "Stopped");
                 self.save(&chat, &mut inner);
@@ -648,6 +654,8 @@ impl ChatManager {
     /// 3 s later SIGKILL, before this returns: the daemon exits next, and a
     /// timer would die with it (X79).
     pub async fn shutdown(&self) {
+        // First, so an agent cannot start between the look and the wait.
+        self.stopping.store(true, std::sync::atomic::Ordering::SeqCst);
         self.save_all();
         let chats: Vec<_> = self.chats.lock().unwrap().values().cloned().collect();
         let table = crate::process::table();
@@ -765,12 +773,6 @@ impl ChatManager {
         };
         if let Err(e) = write() {
             tracing::warn!(chat = chat.id, "saving chat failed: {e:#}");
-        }
-    }
-
-    fn kill_process(&self, inner: &mut Inner) {
-        if let Some(doomed) = Self::doom(inner, &crate::process::table()) {
-            self.end_later(doomed);
         }
     }
 
@@ -917,6 +919,9 @@ impl ChatManager {
     }
 
     fn spawn(&self, chat: &Arc<Chat>, inner: &mut Inner) -> Result<()> {
+        if self.stopping.load(std::sync::atomic::Ordering::SeqCst) {
+            bail!("the daemon is stopping");
+        }
         let adapter = adapter_for(&inner.cfg.agent).context("unknown agent")?;
         let launch = self.launch(inner);
         // A Claude conversation lives in its profile's folder (X33): after
@@ -1989,6 +1994,18 @@ done
         terms.kill(id, false).unwrap();
         chats.shutdown().await;
         assert!(gone_within(server, 1).await, "the stopped agent's server outlived the daemon");
+    }
+
+    #[tokio::test]
+    async fn no_agent_starts_once_the_daemon_is_stopping() {
+        let (dir, _terms, chats) = setup().await;
+        let id = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), ..Default::default() }).unwrap().id;
+        wait_for(&chats, id, |s| s.agent_session.is_some()).await;
+        chats.shutdown().await;
+        // A message that came in over a connection still open.
+        assert!(chats.send(id, "hi", &[]).is_err(), "an agent started after shutdown");
+        // The fake `claude` notes each start: still only the first.
+        assert_eq!(std::fs::read_to_string(dir.path().join("claude-args")).unwrap().lines().count(), 1);
     }
 
     #[tokio::test]

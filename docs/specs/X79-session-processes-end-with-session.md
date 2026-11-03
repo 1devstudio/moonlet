@@ -76,8 +76,9 @@ Chat agents:
       restarted agent (`new_settings_restart_the_agent_but_keep_what_it_left_running`).
 - [x] When the daemon stops (SIGTERM, `daemon.shutdown`, live upgrade), it
       waits up to 3 s for every agent to exit, those stopped a moment before
-      included, and SIGKILLs those still running before it exits
-      (`the_daemon_stops_only_once_what_agents_left_running_is_gone`,
+      included, and SIGKILLs those still running before it exits. Once it
+      begins to stop, no agent starts (`no_agent_starts_once_the_daemon_is_stopping`,
+      `the_daemon_stops_only_once_what_agents_left_running_is_gone`,
       `the_daemon_stops_only_once_a_just_stopped_agents_server_is_gone`,
       `a_daemon_stopped_with_sigterm_leaves_nothing_its_agents_started`).
 
@@ -150,8 +151,9 @@ feature reads only pids, parent pids, process groups and start times.
   `an_agent_that_exits_leaves_nothing_running`,
   `an_agent_that_exits_leaves_nothing_running_though_its_server_keeps_writing`,
   `new_settings_restart_the_agent_but_keep_what_it_left_running`,
-  `the_daemon_stops_only_once_what_agents_left_running_is_gone` and
-  `the_daemon_stops_only_once_a_just_stopped_agents_server_is_gone`.
+  `the_daemon_stops_only_once_what_agents_left_running_is_gone`,
+  `the_daemon_stops_only_once_a_just_stopped_agents_server_is_gone` and
+  `no_agent_starts_once_the_daemon_is_stopping`.
 - Rust, `moonletd/tests/daemon.rs`:
   `a_daemon_stopped_with_sigterm_leaves_nothing_its_agents_started`.
 
