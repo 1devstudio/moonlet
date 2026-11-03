@@ -792,10 +792,11 @@ fn request_timeout(method: &str) -> Duration {
         660
     } else if method.starts_with("gh.") || method.starts_with("workspace.") || method.starts_with("repo.") {
         180
-    } else if method == moonlet_proto::methods::SESSION_ARCHIVE {
-        // The project's archive script (a minute) and a big worktree's
-        // removal (ten) both run in the daemon first.
-        900
+    } else if method == moonlet_proto::methods::SESSION_ARCHIVE || method == moonlet_proto::methods::PROJECT_WORKTREE_REMOVE {
+        // The daemon's longest archive: the project's script (a minute), a
+        // worktree's removal (ten), then its prune and the branch deletes
+        // (a minute each).
+        1200
     } else if method.starts_with("signins.") {
         // A sign-in waits for the user for up to 10 minutes (X75), and is
         // stopped then: its end still comes back.
@@ -847,9 +848,11 @@ mod tests {
 
     #[test]
     fn waits_for_an_archive_that_runs_a_script_and_deletes_a_big_folder() {
-        // The archive script gets a minute and removing a worktree ten more
-        // in the daemon: the app must not report a timeout before then.
-        assert_eq!(request_timeout("session.archive"), Duration::from_secs(900));
+        // The daemon gives an archive script a minute and a worktree's removal
+        // ten more: the app must not report a timeout before then.
+        assert_eq!(request_timeout("session.archive"), Duration::from_secs(1200));
+        // Clean up removes a worktree the same way.
+        assert_eq!(request_timeout("project.worktree_remove"), Duration::from_secs(1200));
     }
 
     #[test]
