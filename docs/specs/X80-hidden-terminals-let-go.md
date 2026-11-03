@@ -75,7 +75,9 @@ attached again and drawn from the daemon's replay.
   session with several tabs creates only the terminals of its active tab. A
   hidden tab's pane passes Blocks mode, block header context and the reported
   directory to its terminal only while one exists; the pane passes them again
-  when the tab is shown.
+  when the tab is shown. The pane asks `entryFor` in
+  `apps/desktop/src/lib/terminals.ts` for its terminal
+  (`a hidden pane creates no terminal, nor brings back one let go of (X80)`).
 - A terminal shown again after it was let go of is drawn from the replay, as
   after a reconnect: a block's header shows the time the daemon recorded for
   it (`moonlet_age`), a text selection or selected block is not kept, and the
@@ -108,8 +110,8 @@ None: no new input crosses a trust boundary.
 - Vitest, `terminals.test.ts`, the pure choice of terminals to let go of:
   `lets go of the least recently shown terminals beyond the limit (X80)` and
   `never lets go of a terminal on screen, even past the limit (X80)`.
-- Vitest, `terminals.test.ts`, through `getEntry`, `findEntry` and
-  `TermEntry.mount`, with the daemon bridge faked, the RPCs it is sent
+- Vitest, `terminals.test.ts`, through `getEntry`, `findEntry`, `entryFor`
+  and `TermEntry.mount`, with the daemon bridge faked, the RPCs it is sent
   recorded and the terminals it would send output for tracked:
   `a ninth terminal shown lets go of the one shown longest ago, and detaches it (X80)`,
   `a terminal that leaves the screen counts as shown just then (X80)`,
@@ -120,6 +122,7 @@ None: no new input crosses a trust boundary.
   `ten terminals on screen at once are all kept (X80)`,
   `a terminal in a split on screen is kept however many others are shown (X80)`,
   `a split tab shown keeps both its panes, though one was shown longest ago (X80)`,
+  `a hidden pane creates no terminal, nor brings back one let go of (X80)`,
   `a block dropped past the 2000 kept lets go of its marks (X80)` and
   `a command's input mark (B) leaves no mark behind in the terminal (X80)`.
 

@@ -36,7 +36,7 @@ vi.mock("./daemon", () => ({
 }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: async () => {} }));
 
-import { disposeEntry, findEntry, getEntry, shortPath, terminalsToLetGo } from "./terminals";
+import { disposeEntry, entryFor, findEntry, getEntry, shortPath, terminalsToLetGo } from "./terminals";
 
 describe("shortPath", () => {
   it("shortens a path under the home folder to ~, as a new chat shows its folder (X38)", () => {
@@ -168,6 +168,21 @@ describe("live terminals (X80)", () => {
     await settled();
     for (let id = 1; id <= 10; id++) expect(findEntry("k", id)).toBe(onScreen[id - 1]);
     expect(detached("k")).toEqual([]);
+  });
+
+  it("a hidden pane creates no terminal, nor brings back one let go of (X80)", async () => {
+    expect(entryFor("l", 1, false)).toBeUndefined();
+    expect(findEntry("l", 1)).toBeUndefined();
+    const live = show("l", 1);
+    live.unmount();
+    expect(entryFor("l", 1, false)).toBe(live);
+    for (let id = 2; id <= 9; id++) show("l", id).unmount();
+    await settled();
+    expect(entryFor("l", 1, false)).toBeUndefined();
+    // Shown, its pane creates it anew.
+    const again = entryFor("l", 1, true);
+    expect(again).toBeDefined();
+    expect(findEntry("l", 1)).toBe(again);
   });
 
   it("a split tab shown keeps both its panes, though one was shown longest ago (X80)", async () => {

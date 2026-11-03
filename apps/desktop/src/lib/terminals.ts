@@ -1014,6 +1014,12 @@ export function findEntry(host: string, session: number): TermEntry | undefined 
   return entries.get(entryKey(host, session));
 }
 
+/** A pane's terminal (X80): a pane on screen creates it if needed; a
+ * hidden one creates none, nor brings back one let go of. */
+export function entryFor(host: string, session: number, visible: boolean): TermEntry | undefined {
+  return visible ? getEntry(host, session) : findEntry(host, session);
+}
+
 export function disposeEntry(host: string, session: number) {
   letGo(entryKey(host, session));
 }

@@ -4,7 +4,7 @@ import { rpc } from "../lib/daemon";
 import { M } from "../lib/protocol";
 import { draftToAgent, openFileTab, setClassic } from "../lib/actions";
 import { errorToast, getLayout, sesKey, setLayout, toast, useStore } from "../lib/store";
-import { findEntry, getEntry } from "../lib/terminals";
+import { entryFor, findEntry, getEntry } from "../lib/terminals";
 import { InputEditor } from "./InputEditor";
 import { uncommitted } from "../lib/chips";
 import { Button } from "./ui";
@@ -56,9 +56,8 @@ export function TerminalPane({ host, session, wsId, focused, visible }: { host: 
   const editing = blockMode && info.prompt === true && !info.alt_screen;
   // A hidden tab creates no terminal, nor brings back one let go of (X80);
   // these effects run again when it is shown.
-  const live = () => (visible ? getEntry(host, session) : findEntry(host, session));
   useEffect(() => {
-    const entry = live();
+    const entry = entryFor(host, session, visible);
     entry?.setBlockMode(blockMode);
     entry?.setEditorActive(editing);
   }, [host, session, visible, blockMode, editing]);
@@ -68,14 +67,14 @@ export function TerminalPane({ host, session, wsId, focused, visible }: { host: 
   const nodeVersion = info?.node_version;
   const changes = useMemo(() => (files ? uncommitted(files) : undefined), [files]);
   useEffect(() => {
-    const entry = live();
+    const entry = entryFor(host, session, visible);
     if (entry) entry.context = { home, worktree, branch, nodeVersion, changes };
   }, [host, session, visible, home, worktree, branch, nodeVersion, changes]);
   // Snapshots carry no OSC 7, so a shell that reported its directory before
   // the app attached starts from the daemon's record (T8 block headers).
   const reportedCwd = info?.reported_cwd;
   useEffect(() => {
-    if (reportedCwd) live()?.seedCwd(reportedCwd);
+    if (reportedCwd) entryFor(host, session, visible)?.seedCwd(reportedCwd);
   }, [host, session, visible, reportedCwd]);
 
   useEffect(() => {
