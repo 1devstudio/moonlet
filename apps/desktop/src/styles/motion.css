@@ -1,0 +1,13 @@
+/* Nothing moves where nobody looks (X82). */
+
+/* A tab not shown stays mounted under `visibility: hidden`, and WebKit keeps
+   running its animations: pause them until the tab is shown (quietWhen).
+   Pseudo-elements have a rule of their own: a selector engine that cannot
+   match them (jsdom's, in the tests) then still applies the first. */
+[data-quiet] * {
+  animation-play-state: paused !important;
+}
+[data-quiet] *::before,
+[data-quiet] *::after {
+  animation-play-state: paused !important;
+}

@@ -10,6 +10,7 @@ import { FileIcon } from "./FileIcon";
 import { WorkerIcon, going } from "./JobsPanel";
 import { chipFromJob } from "../lib/jobs";
 import { useSessionJob } from "../lib/jobsStore";
+import { quietWhen } from "../lib/motion";
 import { PaneTree } from "./PaneTree";
 import { AgentIcon, Kbd, cx } from "./ui";
 import { agentLabel } from "../lib/agents";
@@ -341,7 +342,7 @@ export function SessionView({ host, ws }: { host: string; ws: Session }) {
       )}
       <div className="relative min-h-0 flex-1">
         {layout?.tabs.map((t) => (
-          <div key={t.id} className="absolute inset-0" style={{ visibility: t.id === layout.active ? "visible" : "hidden" }}>
+          <div key={t.id} className="absolute inset-0" style={{ visibility: t.id === layout.active ? "visible" : "hidden" }} {...quietWhen(t.id !== layout.active)}>
             <PaneTree host={host} wsId={ws.id} tabId={t.id} node={t.root} path={[]} focused={layout.focused} visible={t.id === layout.active} />
           </div>
         ))}
