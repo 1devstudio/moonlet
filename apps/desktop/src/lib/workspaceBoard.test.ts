@@ -41,6 +41,7 @@ const ws = { host: "local", id: "personal" };
 const unlinked = (b: ReturnType<typeof workspaceBoard>) => b.unlinked.map((u) => [u.session.name, u.hint]);
 
 describe("a workspace's board (X78)", () => {
+  // A new sessions list for each test, so a board built by the one before is never reused.
   beforeEach(() => {
     useStore.setState({ sessions: { local: [session("s1", "Fix login")] }, git: {} });
   });

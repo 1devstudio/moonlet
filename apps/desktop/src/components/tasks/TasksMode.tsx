@@ -52,7 +52,7 @@ import { parseWsKey, wsKey, type WorkspaceRef } from "../../lib/workspaces";
 import { assigneeOf, type BoardColumn, type BoardConfig, type Category, CATEGORY_BAR, CATEGORY_LABEL, type CardField, cardFields, footerTracker, NO_STATUS, projectMoveLock, syncedColumns } from "../../lib/boards";
 import { type ColumnView, switcherGroups } from "../../lib/boardColumns";
 import { boardHeader, boardProblem, boardStats, footerLine, cardFace, columnCounts, dropTarget, mapCards, sidebarBoards, stateChoices } from "../../lib/boardScreen";
-import { boardDeps, workspaceBoard } from "../../lib/workspaceBoard";
+import { boardStore, workspaceBoard } from "../../lib/workspaceBoard";
 import { Markdown } from "../AgentView";
 import { BoardTile, Button, cx, Empty, IconButton, inputCls, Kbd, StateGlyph } from "../ui";
 import { Menu, type MenuItem } from "../Menu";
@@ -135,10 +135,10 @@ export function useWorkspaceBoard(ws: WorkspaceRef | null) {
   // Moves under way show their cards in the new column (X53).
   const moving = useTasks((t) => t.moving);
   const shownId = useTasks((t) => (ws ? (t.shownBoard[wsKey(ws.host, ws.id)] ?? null) : null));
-  // Re-renders on what the board reads of the main store; other changes (terminal output) don't.
-  useStore(useShallow(boardDeps));
+  // What the board reads of the main store; other changes (terminal output) don't re-render.
+  const store = useStore(useShallow(boardStore));
   // Built once per change for every component that shows it (X78).
-  return workspaceBoard(useStore.getState(), ws, data, { notNow, config, paused, moving, shownId });
+  return workspaceBoard(store, ws, data, { notNow, config, paused, moving, shownId });
 }
 
 /** The sidebar body in Tasks mode (X50): Find a task, the workspace's pinned boards, then the sync line. */
