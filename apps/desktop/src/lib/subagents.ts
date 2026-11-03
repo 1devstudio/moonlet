@@ -102,6 +102,10 @@ export function spanClock(agents: Subagent[], now: number): string {
 /** The Agents tab shows a dot while an agent needs the user elsewhere. */
 export const agentsTabDot = (tab: string, rows: AgentRow[]) => tab !== "agents" && rows.some((r) => r.state === "needs");
 
+/** Whether the Agents tab's clock ticks: while an agent of the session's chats
+ *  runs and the tab is shown (X82). */
+export const agentsTabClockRuns = (tab: string, chats: (Subagent[] | undefined)[]) => tab === "agents" && chats.some(hasRunningAgents);
+
 /** What Retry sends the main agent for failed agents. */
 export function retryMessage(agents: Subagent[]): string {
   const names = agents.map((a) => `"${a.description}"`);

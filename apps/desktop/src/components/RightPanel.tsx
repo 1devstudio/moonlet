@@ -12,7 +12,7 @@ import { workspaceOpenIn } from "../lib/openIn";
 import { useSync } from "../lib/syncStore";
 import { chatKey, loadChat, useChat } from "../lib/chat";
 import { planChat, planTabDot, planView } from "../lib/plan";
-import { agentRows, agentsTabDot, hasRunningAgents } from "../lib/subagents";
+import { agentRows, agentsTabClockRuns, agentsTabDot } from "../lib/subagents";
 import { grantMenuLabel } from "../lib/terminalRead";
 import { ChecksPanel } from "./ChecksPanel";
 import { PlanPanel } from "./PlanPanel";
@@ -234,8 +234,10 @@ function useSessionPlan(host: string, ws: Session) {
   return useMemo(() => (st ? planView(st) : null), [st]);
 }
 
-/** The subagents of every chat in the session (X42), loading chats not yet loaded. */
-function useSessionAgents(host: string, ws: Session) {
+/** The subagents of every chat in the session (X42), loading chats not yet
+ *  loaded. Their clock ticks only while `tab`, the panel's tab shown, is
+ *  Agents (X82). */
+function useSessionAgents(host: string, ws: Session, tab: RightTab) {
   const ids = useStore((s) =>
     Object.values(s.terminals[host] ?? {})
       .filter((t) => t.session_id === ws.id && t.chat && !t.exit)
@@ -251,7 +253,7 @@ function useSessionAgents(host: string, ws: Session) {
   useEffect(() => {
     for (const id of unloaded ? unloaded.split(",") : []) void loadChat(host, Number(id)).catch(() => {});
   }, [host, unloaded]);
-  const now = useNow(subagents.some(hasRunningAgents));
+  const now = useNow(agentsTabClockRuns(tab, subagents));
   const rows = useMemo(
     () => agentRows(list.map((id, i) => ({ id, st: pending[i] && { subagents: subagents[i], pending: pending[i] } })), now),
     [list, subagents, pending, now],
@@ -273,7 +275,7 @@ export function RightPanel({ host, ws }: { host: string; ws: Session }) {
   const shown = design ? [...withJobs, { id: "design" as const, label: "Design" }] : withJobs;
   const tabs = linked ? [{ id: "task" as const, label: "Task" }, ...shown] : shown;
   const plan = useSessionPlan(host, ws);
-  const agents = useSessionAgents(host, ws);
+  const agents = useSessionAgents(host, ws, tab);
   // Plan file links (X30) check the worktree while the Plan tab shows, and again whenever the plan changes.
   const exists = useProjectFiles(host, tab === "plan" ? ws.path : "", plan?.plan);
 

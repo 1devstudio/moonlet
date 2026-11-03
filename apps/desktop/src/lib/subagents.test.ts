@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type AgentNote, agentCount, agentNotes, agentRows, agentsHeader, askLine, askerName, launchedRows, agentsTabDot, modelLabel, notesByBlock, retryMessage, stoppable, stripDismissAt, stripRetry, stripClockRuns, stripView } from "./subagents";
+import { type AgentNote, agentCount, agentsTabClockRuns, agentNotes, agentRows, agentsHeader, askLine, askerName, launchedRows, agentsTabDot, modelLabel, notesByBlock, retryMessage, stoppable, stripDismissAt, stripRetry, stripClockRuns, stripView } from "./subagents";
 import type { ChatItem, ChatState, PermissionAsk, Subagent } from "./protocol";
 import { chatBlocks } from "./chat";
 
@@ -373,6 +373,14 @@ describe("stripClockRuns (X82)", () => {
     expect(stripClockRuns(chat([write, list]), true)).toBe(true);
     expect(stripClockRuns(chat([write, list]), false)).toBe(false);
     expect(stripClockRuns(chat([list, audit, bench]), true)).toBe(false);
+  });
+});
+
+describe("agentsTabClockRuns (X82)", () => {
+  it("ticks the Agents tab's clock only while agents run and the tab is shown", () => {
+    expect(agentsTabClockRuns("agents", [undefined, [list], [write, list]])).toBe(true);
+    expect(agentsTabClockRuns("files", [[write, list]])).toBe(false);
+    expect(agentsTabClockRuns("agents", [undefined, [list, audit, bench]])).toBe(false);
   });
 });
 

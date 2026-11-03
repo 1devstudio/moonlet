@@ -14,8 +14,9 @@ chat's "Working" shimmer. Tabs that are not shown stay mounted under
 `visibility: hidden`, so their animations keep running although nobody sees
 them. The shimmer animates `background-position` of text clipped to its
 background, which the compositor cannot move: WebKit paints it again on every
-frame. The agents strip above the chat input re-renders every second while
-agents run, even in a hidden tab. This spec stops animations and tickers where
+frame. The agents strip above the chat input, and the right panel behind
+another of its tabs, re-render every second while agents run, though the
+clock they show cannot be seen. This spec stops animations and tickers where
 they cannot be seen, makes the shimmer a compositor-only animation, and honours
 the system's reduced-motion setting.
 
@@ -39,6 +40,9 @@ the system's reduced-motion setting.
       (`animates only opacity and transform in every endless animation`).
 - [x] The agents strip's clock ticks only while agents run and its tab is shown
       (`ticks the strip's clock only while agents run and the strip is shown`).
+- [x] The right panel's agents clock ticks only while agents run and its
+      Agents tab is shown
+      (`ticks the Agents tab's clock only while agents run and the tab is shown`).
 - [x] A clock that stopped while its tab was hidden shows the time at once
       when the tab is shown again, not the time it stopped at
       (`reads the time at once when its clock starts again`).
@@ -84,7 +88,8 @@ None: no new inputs.
   the app's sources, and reads the `animation` shorthand, its longhands and
   rules nested in `@media`, `@supports` and `@layer`.
 - Vitest, `subagents.test.ts`: `ticks the strip's clock only while agents run
-  and the strip is shown`.
+  and the strip is shown` and `ticks the Agents tab's clock only while agents
+  run and the tab is shown`.
 - Vitest, `useNow.test.ts`: `reads the time at once when its clock starts
   again`.
 - Manual, in the e2e app with `e2e/snap.ts`: the new shimmer at rest matches
