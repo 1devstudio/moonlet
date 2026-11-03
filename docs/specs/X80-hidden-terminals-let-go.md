@@ -35,6 +35,10 @@ attached again and drawn from the daemon's replay.
       app sends `terminal.detach` for it, and it receives no more output
       (`lets go of the least recently shown terminals beyond the limit (X80)`,
       `a ninth terminal shown lets go of the one shown longest ago, and detaches it (X80)`).
+- [x] A terminal let go of while its attach is still on its way ends up
+      detached: once the attach answers, the app sends `terminal.detach`
+      again, since the daemon may have taken the first one before the attach
+      (`a terminal let go of while its attach is on its way is detached once the attach answers (X80)`).
 - [x] A terminal let go of is attached again when it is shown again, and the
       daemon's replay (S2) draws its screen and scrollback
       (`a terminal let go of attaches again when shown, and the replay draws it (X80)`).
@@ -90,8 +94,10 @@ None: no new input crosses a trust boundary.
   `lets go of the least recently shown terminals beyond the limit (X80)` and
   `never lets go of a terminal on screen, even past the limit (X80)`.
 - Vitest, `terminals.test.ts`, through `getEntry`, `findEntry` and
-  `TermEntry.mount`, with the daemon bridge faked and the RPCs it is sent
-  recorded: `a ninth terminal shown lets go of the one shown longest ago, and detaches it (X80)`,
+  `TermEntry.mount`, with the daemon bridge faked, the RPCs it is sent
+  recorded and the terminals it would send output for tracked:
+  `a ninth terminal shown lets go of the one shown longest ago, and detaches it (X80)`,
+  `a terminal let go of while its attach is on its way is detached once the attach answers (X80)`,
   `a terminal let go of attaches again when shown, and the replay draws it (X80)`,
   `a terminal in a split on screen is kept however many others are shown (X80)`,
   `a block dropped past the 2000 kept lets go of its marks (X80)` and

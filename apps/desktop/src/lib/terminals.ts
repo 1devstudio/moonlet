@@ -405,6 +405,9 @@ export class TermEntry {
       if (!gone && !this.disposed) window.setTimeout(() => !this.disposed && void this.attach().catch(() => {}), 2000);
       throw e;
     }
+    // Let go of while the attach was on its way (X80): the daemon may have
+    // taken the detach first, and subscribed this client after it.
+    if (this.disposed) void rpc(this.host, M.terminalDetach, { id: this.session }).catch(() => {});
     this.lastSize = `${cols}x${rows}`;
   }
 

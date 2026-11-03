@@ -1,13 +1,29 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OutputSink } from "./daemon";
 
-// The daemon bridge, faked: what the app sends it, and the output sinks it
-// would feed with the daemon's replay and live output.
+// The daemon bridge, faked: what the app sends it, the output sinks it
+// would feed with the daemon's replay and live output, and the terminals
+// the daemon sends output for. While `daemon.hold` is set, attaches are
+// answered (and subscribe) only once `daemon.answer()` is called.
 const sent: [string, string, unknown][] = [];
 const sinks = new Map<string, OutputSink>();
+const daemon = {
+  subscribed: new Set<string>(),
+  hold: false,
+  waiting: [] as (() => void)[],
+  answer() {
+    for (const done of this.waiting.splice(0)) done();
+  },
+};
 vi.mock("./daemon", () => ({
   rpc: async (host: string, method: string, params: unknown) => {
     sent.push([host, method, params]);
+    const key = `${host}:${(params as { id: number }).id}`;
+    if (method === "terminal.attach") {
+      if (daemon.hold) await new Promise<void>((done) => daemon.waiting.push(done));
+      daemon.subscribed.add(key);
+    }
+    if (method === "terminal.detach") daemon.subscribed.delete(key);
     return {};
   },
   sendInput: async () => {},
@@ -71,6 +87,9 @@ describe("live terminals (X80)", () => {
     for (const [host, session] of shown) disposeEntry(host, session);
     shown.length = 0;
     sent.length = 0;
+    daemon.hold = false;
+    daemon.answer();
+    daemon.subscribed.clear();
   });
 
   it("a ninth terminal shown lets go of the one shown longest ago, and detaches it (X80)", () => {
@@ -118,5 +137,14 @@ describe("live terminals (X80)", () => {
     await new Promise<void>((done) => entry.term.write(block, done));
     expect(entry.blocks.length).toBe(1);
     expect(entry.term.markers.length).toBe(3);
+  });
+
+  it("a terminal let go of while its attach is on its way is detached once the attach answers (X80)", async () => {
+    daemon.hold = true;
+    for (let id = 1; id <= 9; id++) show("e", id).unmount();
+    expect(findEntry("e", 1)).toBeUndefined();
+    daemon.answer();
+    await vi.waitFor(() => expect(daemon.subscribed.has("e:9")).toBe(true));
+    await vi.waitFor(() => expect([...daemon.subscribed].sort()).toEqual(["e:2", "e:3", "e:4", "e:5", "e:6", "e:7", "e:8", "e:9"]));
   });
 });
