@@ -5440,6 +5440,30 @@ async fn leftovers_in_a_sessions_worktree_are_listed_apart_and_stopped_only_by_p
     outsider.wait().unwrap();
 }
 
+/// X83: a pid sent with the start it was listed with is stopped only while
+/// that is its start: another start means the listed process has ended.
+#[tokio::test]
+async fn a_pid_named_with_another_start_than_listed_is_left_alone() {
+    let d = TestDaemon::start().await;
+    let mut c = d.client().await;
+    let ws = bare_session(d.home.path(), &mut c).await;
+    let out = Command::new("/bin/sh").args(["-c", "/bin/sleep 63 >/dev/null 2>&1 & echo $!"]).current_dir(&ws.path).output().unwrap();
+    let orphan: u32 = String::from_utf8(out.stdout).unwrap().trim().parse().unwrap();
+    let _reap = Reap(orphan);
+    let listed: serde_json::Value = c.request(methods::SESSION_PROCESSES, serde_json::json!({"id": ws.id})).await.unwrap();
+    let started = listed["leftovers"].as_array().unwrap().iter().find(|e| e["pid"] == orphan).and_then(|e| e["started"].as_u64()).unwrap_or_else(|| panic!("{listed}"));
+
+    let other = serde_json::json!({"id": ws.id, "pids": [{"pid": orphan, "started": started + 1}]});
+    let killed: serde_json::Value = c.request(methods::SESSION_KILL_PROCESSES, other).await.unwrap();
+    assert_eq!(killed, serde_json::json!({"ended": [], "skipped": [], "gone": [orphan]}));
+    assert!(nix::sys::signal::kill(nix::unistd::Pid::from_raw(orphan as i32), None).is_ok(), "a pid listed with another start was stopped");
+
+    let same = serde_json::json!({"id": ws.id, "pids": [{"pid": orphan, "started": started}]});
+    let killed: serde_json::Value = c.request(methods::SESSION_KILL_PROCESSES, same).await.unwrap();
+    assert_eq!(killed, serde_json::json!({"ended": [orphan], "skipped": [], "gone": []}));
+    assert!(gone_within(nix::unistd::Pid::from_raw(orphan as i32), 2).await, "the leftover outlived its stop");
+}
+
 /// X83: a worker's link neither lists nor stops a session's processes; the
 /// CLI, which an agent in the session runs, does.
 #[tokio::test]

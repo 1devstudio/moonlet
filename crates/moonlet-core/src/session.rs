@@ -1849,11 +1849,11 @@ impl SessionManager {
     /// Stops `pids` of session `id`'s processes and leftovers, or every
     /// process of it but its tabs' own (X83): SIGTERM, then SIGKILL after 3 s.
     /// Returns once they are gone.
-    pub async fn kill_processes(self: &Arc<Self>, id: &str, pids: Option<Vec<u32>>) -> Result<moonlet_proto::methods::ProcessesKilled> {
+    pub async fn kill_processes(self: &Arc<Self>, id: &str, pids: Option<Vec<moonlet_proto::methods::ProcessRef>>) -> Result<moonlet_proto::methods::ProcessesKilled> {
         let me = self.clone();
         let session = id.to_string();
         let (table, found, leftovers) = tokio::task::spawn_blocking(move || me.find_processes(&session)).await??;
-        let stopping = crate::session_processes::to_stop(&table, &found, &leftovers, pids.as_deref());
+        let stopping = crate::session_processes::to_stop(&table, &found, &leftovers, pids.as_deref(), crate::process::started_ms);
         // One that ended between the look and its signal ended meanwhile.
         let (ended, ended_meanwhile) = crate::session_processes::end(stopping.targets).await;
         let mut gone = stopping.gone;

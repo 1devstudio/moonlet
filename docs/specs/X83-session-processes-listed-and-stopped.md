@@ -67,7 +67,11 @@ Stopping (`session.kill_processes`):
       `stopping_by_pid_skips_pids_that_are_not_the_sessions`).
 - [x] A process is signalled only while its start time is the one it had when
       listed: a pid reused meanwhile is left alone
-      (`ending_skips_a_pid_whose_start_changed`).
+      (`ending_skips_a_pid_whose_start_changed`). A pid may be sent with the
+      start `session.processes` listed it with, as the app does; it is
+      stopped only while that is still its start, and is gone otherwise
+      (`stopping_a_pid_listed_with_another_start_leaves_it_alone`,
+      `a_pid_named_with_another_start_than_listed_is_left_alone`).
 
 CLI:
 
@@ -132,7 +136,8 @@ session". A daemon too old to list processes shows the error.
   `cpu_ms` the CPU time used so far, `rss` resident memory in bytes.
 - `session.kill_processes {id, pids?}` →
   `{ended: [pid], skipped: [pid], gone: [pid]}`: `skipped` run but are not
-  the session's, `gone` no longer run.
+  the session's, `gone` no longer run. Each of `pids` is a pid (`4242`) or a
+  pid with the `started` it was listed with (`{pid, started}`).
 - Both answer the app and the CLI; a worker's link gets `forbidden`
   (`a_workers_link_neither_lists_nor_stops_a_sessions_processes`).
 - CLI: `moonlet ps [--session <id>] [--json]`,
@@ -168,11 +173,13 @@ worktree can be signalled.
 - Rust, `session_processes.rs`: `a_sessions_processes_are_its_tabs_sessions_and_its_agents_families`,
   `leftovers_are_launchd_children_working_in_the_worktree`,
   `stopping_all_spares_the_tabs_own_processes_and_leftovers`,
-  `stopping_by_pid_skips_pids_that_are_not_the_sessions` and
+  `stopping_by_pid_skips_pids_that_are_not_the_sessions`,
+  `stopping_a_pid_listed_with_another_start_leaves_it_alone` and
   `ending_skips_a_pid_whose_start_changed`.
 - Rust, `moonletd/tests/daemon.rs`: `a_sessions_processes_are_listed_by_name_and_stopped`,
-  `leftovers_in_a_sessions_worktree_are_listed_apart_and_stopped_only_by_pid`
-  and `a_workers_link_neither_lists_nor_stops_a_sessions_processes`.
+  `leftovers_in_a_sessions_worktree_are_listed_apart_and_stopped_only_by_pid`,
+  `a_pid_named_with_another_start_than_listed_is_left_alone` and
+  `a_workers_link_neither_lists_nor_stops_a_sessions_processes`.
 - Rust, `moonlet-cli`: `ps_prints_name_pid_origin_age_cpu_and_memory_never_arguments`
   (`src/ps.rs`) and `moonlet_ps_lists_a_sessions_processes_and_moonlet_kill_stops_one`
   (`tests/session_e2e.rs`).

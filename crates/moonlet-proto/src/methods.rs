@@ -1785,14 +1785,25 @@ pub struct SessionProcesses {
     pub leftovers: Vec<SessionProcess>,
 }
 
+/// A process to stop (X83): a pid as typed, `4242`, or a pid with the start
+/// `session.processes` listed it with, `{pid: 4242, started: 1793700000000}`,
+/// stopped only while that is still its start.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ProcessRef {
+    Pid(u32),
+    Listed { pid: u32, started: u64 },
+}
+
 /// `session.kill_processes`' params (X83).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionKillProcesses {
     pub id: String,
-    /// The pids to stop, of the session's processes or leftovers; none: every
-    /// process of the session but the tabs' own, never a leftover.
+    /// The processes to stop, of the session's processes or leftovers, a tab's
+    /// own among them if named; empty: none. Absent: every process of the
+    /// session but the tabs' own, never a leftover.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pids: Option<Vec<u32>>,
+    pub pids: Option<Vec<ProcessRef>>,
 }
 
 /// `session.kill_processes`' result (X83).

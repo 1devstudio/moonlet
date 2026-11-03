@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use moonlet_proto::TerminalId;
-use moonlet_proto::methods::{ProcessOrigin, SessionProcess, SessionProcesses};
+use moonlet_proto::methods::{ProcessOrigin, ProcessRef, SessionProcess, SessionProcesses};
 
 use crate::process::Proc;
 
@@ -147,12 +147,15 @@ pub struct Stopping {
 
 /// What to stop of `found` and `leftovers`, of the processes in `table`. No
 /// `pids`: every found process but the tabs' own, never a leftover. An
-/// empty `pids` stops nothing; a tab's own process is stopped when named.
+/// empty `pids` stops nothing; a tab's own process is stopped when named. A
+/// pid named with the start it was listed with (`started_ms` says a
+/// process's) is gone once its start differs: the pid is another's now.
 pub fn to_stop(
     table: &[Proc],
     found: &[Found],
     leftovers: &[Proc],
-    pids: Option<&[u32]>,
+    pids: Option<&[ProcessRef]>,
+    started_ms: impl Fn(u64) -> Option<u64>,
 ) -> Stopping {
     let Some(pids) = pids else {
         return Stopping {
@@ -165,16 +168,24 @@ pub fn to_stop(
         };
     };
     let mut out = Stopping::default();
-    for &pid in pids {
-        if !table.iter().any(|p| p.pid == pid) {
+    for &named in pids {
+        let (pid, started) = match named {
+            ProcessRef::Pid(pid) => (pid, None),
+            ProcessRef::Listed { pid, started } => (pid, Some(started)),
+        };
+        let Some(now) = table
+            .iter()
+            .find(|p| p.pid == pid)
+            .filter(|p| started.is_none() || started_ms(p.start) == started)
+        else {
             out.gone.push(pid);
             continue;
-        }
+        };
         match found
             .iter()
             .map(|f| &f.proc)
             .chain(leftovers)
-            .find(|p| p.pid == pid)
+            .find(|p| p.pid == pid && p.start == now.start)
         {
             Some(p) if !out.targets.contains(&(p.pid, p.start)) => {
                 out.targets.push((p.pid, p.start))
@@ -405,7 +416,7 @@ mod tests {
     fn stopping_all_spares_the_tabs_own_processes_and_leftovers() {
         let (found, left) = listed();
         assert_eq!(
-            to_stop(&running(), &found, &left, None),
+            to_stop(&running(), &found, &left, None, Some),
             Stopping {
                 targets: vec![(101, 12), (301, 31)],
                 ..Stopping::default()
@@ -422,11 +433,21 @@ mod tests {
         table
     }
 
+    fn plain(pids: &[u32]) -> Vec<ProcessRef> {
+        pids.iter().map(|&pid| ProcessRef::Pid(pid)).collect()
+    }
+
     #[test]
     fn stopping_by_pid_skips_pids_that_are_not_the_sessions() {
         let (found, left) = listed();
         assert_eq!(
-            to_stop(&running(), &found, &left, Some(&[101, 600, 999, 100, 101, 998])),
+            to_stop(
+                &running(),
+                &found,
+                &left,
+                Some(&plain(&[101, 600, 999, 100, 101, 998])),
+                Some
+            ),
             Stopping {
                 targets: vec![(101, 12), (600, 60), (100, 10)],
                 skipped: vec![999],
@@ -434,9 +455,34 @@ mod tests {
             }
         );
         assert_eq!(
-            to_stop(&running(), &found, &left, Some(&[])),
+            to_stop(&running(), &found, &left, Some(&[]), Some),
             Stopping::default(),
             "an empty list stops nothing"
+        );
+    }
+
+    #[test]
+    fn stopping_a_pid_listed_with_another_start_leaves_it_alone() {
+        let (found, left) = listed();
+        // Each start is shown as is: vite started at 12, the leftover at 60.
+        let named = [
+            ProcessRef::Listed {
+                pid: 101,
+                started: 12,
+            },
+            ProcessRef::Listed {
+                pid: 600,
+                started: 59,
+            },
+            ProcessRef::Pid(301),
+        ];
+        assert_eq!(
+            to_stop(&running(), &found, &left, Some(&named), Some),
+            Stopping {
+                targets: vec![(101, 12), (301, 31)],
+                skipped: vec![],
+                gone: vec![600],
+            }
         );
     }
 

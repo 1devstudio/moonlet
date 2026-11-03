@@ -650,6 +650,7 @@ async fn run(cmd: Cmd, socket: PathBuf) -> Result<()> {
         Cmd::Kill { pids, all, session } => {
             let id = session.filter(|s| !s.is_empty()).context("no session: run inside a moonlet session or pass --session")?;
             let mut c = connect(&socket).await?;
+            let pids = pids.into_iter().map(methods::ProcessRef::Pid).collect();
             let req = methods::SessionKillProcesses { id, pids: (!all).then_some(pids) };
             let killed: methods::ProcessesKilled = c.request(methods::SESSION_KILL_PROCESSES, req).await.map_err(plain)?;
             print!("{}", ps::stopped(&killed));
