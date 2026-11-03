@@ -104,7 +104,10 @@ describe("live terminals (X80)", () => {
     getEntry(host, session).mount(pane);
     style.remove();
   };
-  const detached = (host: string) => sent.filter(([h, m]) => h === host && m === "terminal.detach").map(([, , p]) => p);
+  /** The terminals of `host` the app sent `terminal.detach` for. */
+  const detached = (host: string) => [...new Set(sent.filter(([h, m]) => h === host && m === "terminal.detach").map(([, , p]) => (p as { id: number }).id))];
+  /** Once the panes shown together have all mounted. */
+  const settled = () => new Promise((done) => setTimeout(done, 0));
 
   afterEach(() => {
     for (const [host, session] of shown) disposeEntry(host, session);
@@ -115,16 +118,18 @@ describe("live terminals (X80)", () => {
     daemon.subscribed.clear();
   });
 
-  it("a ninth terminal shown lets go of the one shown longest ago, and detaches it (X80)", () => {
+  it("a ninth terminal shown lets go of the one shown longest ago, and detaches it (X80)", async () => {
     for (let id = 1; id <= 9; id++) show("a", id).unmount();
+    await settled();
     expect(findEntry("a", 1)).toBeUndefined();
     expect(findEntry("a", 2)).toBeDefined();
     expect(findEntry("a", 9)).toBeDefined();
-    expect(detached("a")).toEqual([{ id: 1 }]);
+    expect(detached("a")).toEqual([1]);
   });
 
   it("a terminal let go of attaches again when shown, and the replay draws it (X80)", async () => {
     for (let id = 1; id <= 9; id++) show("b", id).unmount();
+    await settled();
     sent.length = 0;
     const again = show("b", 1);
     expect(sent.filter(([, m]) => m === "terminal.attach")).toEqual([["b", "terminal.attach", { id: 1, cols: 80, rows: 24 }]]);
@@ -135,6 +140,7 @@ describe("live terminals (X80)", () => {
 
   it("a terminal shown again attaches at the size its pane fits, not 80x24 (X80)", async () => {
     for (let id = 1; id <= 9; id++) show("g", id).unmount();
+    await settled();
     sent.length = 0;
     showSized("g", 1);
     // Past the 60 ms a resize waits for, so a resize after the attach shows.
@@ -142,21 +148,36 @@ describe("live terminals (X80)", () => {
     expect(sent.filter(([, , p]) => (p as { id: number }).id === 1)).toEqual([["g", "terminal.attach", { id: 1, cols: 119, rows: 26 }]]);
   });
 
-  it("a terminal that leaves the screen counts as shown just then (X80)", () => {
+  it("a terminal that leaves the screen counts as shown just then (X80)", async () => {
     const split = show("h", 1);
     for (let id = 2; id <= 8; id++) show("h", id).unmount();
     // The split is closed after the others were shown.
     split.unmount();
     show("h", 9).unmount();
+    await settled();
     expect(findEntry("h", 1)).toBe(split);
-    expect(detached("h")).toEqual([{ id: 2 }]);
+    expect(detached("h")).toEqual([2]);
   });
 
-  it("a terminal in a split on screen is kept however many others are shown (X80)", () => {
+  it("a split tab shown keeps both its panes, though one was shown longest ago (X80)", async () => {
+    const second = show("i", 1);
+    second.unmount();
+    for (let id = 2; id <= 8; id++) show("i", id).unmount();
+    // A split tab is shown: its panes mount one after the other, the first a
+    // new terminal, the second the one shown longest ago.
+    show("i", 9);
+    show("i", 1);
+    await settled();
+    expect(findEntry("i", 1)).toBe(second);
+    expect(detached("i")).toEqual([2]);
+  });
+
+  it("a terminal in a split on screen is kept however many others are shown (X80)", async () => {
     const split = show("c", 1);
     for (let id = 2; id <= 10; id++) show("c", id).unmount();
+    await settled();
     expect(findEntry("c", 1)).toBe(split);
-    expect(detached("c")).toEqual([{ id: 2 }, { id: 3 }]);
+    expect(detached("c")).toEqual([2, 3]);
   });
 
   it("a block dropped past the 2000 kept lets go of its marks (X80)", async () => {
@@ -184,6 +205,7 @@ describe("live terminals (X80)", () => {
   it("a terminal let go of while its attach is on its way is detached once the attach answers (X80)", async () => {
     daemon.hold = true;
     for (let id = 1; id <= 9; id++) show("e", id).unmount();
+    await settled();
     expect(findEntry("e", 1)).toBeUndefined();
     daemon.answer();
     await vi.waitFor(() => expect(daemon.subscribed.has("e:9")).toBe(true));
@@ -193,11 +215,12 @@ describe("live terminals (X80)", () => {
   it("a terminal shown again before its slow attach answers stays subscribed (X80)", async () => {
     daemon.hold = true;
     for (let id = 1; id <= 9; id++) show("f", id).unmount();
+    await settled();
     // Shown again while the attach of the terminal let go of is on its way.
     show("f", 1);
     daemon.answer();
     await vi.waitFor(() => expect(daemon.subscribed.has("f:9")).toBe(true));
-    await new Promise((done) => setTimeout(done, 0));
+    await settled();
     expect([...daemon.subscribed].sort()).toEqual(["f:1", "f:3", "f:4", "f:5", "f:6", "f:7", "f:8", "f:9"]);
   });
 });

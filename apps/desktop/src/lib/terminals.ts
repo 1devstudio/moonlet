@@ -982,12 +982,24 @@ function letGo(key: string) {
 }
 
 /** A terminal was shown (X80): it becomes the most recently shown, and
- * those beyond the limit are let go of. */
+ * those beyond the limit are let go of once the panes shown with it have
+ * mounted too. */
 function shown(entry: TermEntry) {
   const key = entryKey(entry.host, entry.session);
   if (entries.get(key) !== entry) return;
   entries.delete(key);
   entries.set(key, entry);
+  if (letGoQueued) return;
+  letGoQueued = true;
+  // React mounts a split tab's panes one after the other in one commit; a
+  // pane not mounted yet is not let go of for the one before it.
+  queueMicrotask(letGoBeyondLimit);
+}
+
+let letGoQueued = false;
+
+function letGoBeyondLimit() {
+  letGoQueued = false;
   const onScreen = new Set([...entries].flatMap(([k, e]) => (e.mounted ? [k] : [])));
   for (const k of terminalsToLetGo([...entries.keys()], onScreen, LIVE_TERMINALS)) {
     const e = letGo(k)!;
