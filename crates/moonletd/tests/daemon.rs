@@ -773,10 +773,7 @@ async fn archiving_keeps_the_session_listed_when_its_worktree_cannot_be_removed(
         .request::<_, serde_json::Value>(methods::SESSION_ARCHIVE, serde_json::json!({"id": s.id, "remove_worktree": true}))
         .await;
     std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o755)).unwrap();
-    // Running as root ignores the permissions: the folder went, nothing to check.
-    if !folder.exists() {
-        return;
-    }
+    assert!(folder.exists(), "the test needs a folder removal cannot delete; run it without root");
     assert!(result.is_err());
     let list: Vec<Session> = c.request(methods::SESSION_LIST, ()).await.unwrap();
     assert!(!list.iter().find(|x| x.id == s.id).unwrap().archived);
