@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bashChip, chipFromJob, chipFromOutput, jobRowLine, jobStateLine, jobTabLine, jobsSummary, jobsTabCount, lastLines, LINES_SHOWN, outputLines, outputShown, phaseBar, readOutput, phaseList, shownCommand, shownLines, workerFacts, workerLine } from "./jobs";
+import { type JobOutput, bashChip, chipFromJob, chipFromOutput, jobRowLine, jobStateLine, jobTabLine, jobsSummary, jobsTabCount, lastLines, LINES_SHOWN, outputLines, outputShown, phaseBar, readOutput, phaseList, shownCommand, shownLines, workerFacts, workerLine } from "./jobs";
 import type { Job } from "./protocol";
 
 const job = (extra: Partial<Job> = {}): Job => ({
@@ -182,6 +182,34 @@ describe("a job's output (X62)", () => {
     ]);
     expect(out.trimmed).toBe(true);
     expect(readOutput(undefined, [{ stream: 1, text: "one\ntwo\n" }], 14).trimmed).toBe(false);
+  });
+
+  it("counts the line not ended yet by the text it shows, as it counts ended lines", () => {
+    // 3 + 4 characters shown, within 10: the colour codes count for nothing.
+    const out = readOutput(undefined, [{ stream: 1, text: "ab\n\u001b[31mcdef\u001b[0m" }], 10);
+    expect(outputShown(out)).toEqual([
+      { n: 1, stream: 1, text: "ab", tone: null },
+      { n: 2, stream: 1, text: "cdef", tone: null },
+    ]);
+    expect(out.trimmed).toBe(false);
+  });
+
+  it("never cuts the line not ended yet inside a colour code", () => {
+    const out = readOutput(undefined, [{ stream: 1, text: "abcdefg\u001b[31mh" }], 5);
+    expect(outputShown(out)).toEqual([{ n: 1, stream: 1, text: "defgh", tone: null }]);
+    expect(out.trimmed).toBe(true);
+  });
+
+  it("reads 50,000 progress updates to one line in well under a second", () => {
+    let out: JobOutput | undefined;
+    const started = performance.now();
+    for (let i = 0; i < 50_000; i++) out = readOutput(out, [{ stream: 1, text: `\r${String(i).padStart(5)} of 50000 done` }]);
+    expect(performance.now() - started).toBeLessThan(1000);
+    const [line] = outputShown(out!);
+    expect(line.n).toBe(1);
+    expect(line.text.length).toBe(950_000);
+    expect(line.text.slice(0, 38)).toBe("    0 of 50000 done    1 of 50000 done");
+    expect(line.text.slice(-19)).toBe("49999 of 50000 done");
   });
 
   it("reads output chunk by chunk as it comes, joining a line and a colour code cut between chunks", () => {

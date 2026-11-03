@@ -224,62 +224,83 @@ export const OUTPUT_KEPT = 1024 * 1024;
 export interface JobOutput {
   /** The ended lines kept. */
   lines: OutputLine[];
-  /** The line not ended yet, as it came: a colour code may be cut in it. */
-  raw: string;
+  /** The line not ended yet, as it shows: without colour codes. */
+  open: string;
+  /** A colour code cut at the end of the line not ended yet, read once the
+   *  rest of it comes. */
+  cut: string;
   stream: 1 | 2 | null;
   /** Lines ended so far, the dropped ones too: the next line's number less one. */
   ended: number;
-  /** Characters kept, a newline counted for each ended line. */
+  /** Characters kept, as they show: each line's text and its newline, and
+   *  the line not ended yet. */
   size: number;
   /** Whether earlier output was dropped. */
   trimmed: boolean;
 }
 
-const lineOf = (n: number, stream: 1 | 2, raw: string): OutputLine => {
-  const text = raw.replace(ANSI, "");
-  return { n, stream, text, tone: lineTone(stream, text) };
-};
+const lineOf = (n: number, stream: 1 | 2, text: string): OutputLine => ({ n, stream, text, tone: lineTone(stream, text) });
+
+/** Where a colour code not finished yet starts at the end of `raw`, else
+ *  its length. One longer than `CUT_MAX` reads as text. */
+function cutAt(raw: string): number {
+  const m = CUT.exec(raw);
+  return m && raw.length - m.index <= CUT_MAX ? m.index : raw.length;
+}
+const CUT = /\u001b(?:\[[0-?]*[ -/]*|\][^\u0007\u001b]*\u001b?)?$/;
+const CUT_MAX = 4096;
 
 /**
- * `out` with `chunks` read after it: only the new chunks are parsed. A line
- * ends at a newline or where the other stream takes over; a line cut between
- * chunks of one stream, or a colour code in it, joins first. Whole lines are
- * dropped from the start past `max` characters.
+ * `out` with `chunks` read after it: only the new chunks are parsed, so a
+ * long line not ended yet is not read again. A line ends at a newline or
+ * where the other stream takes over; a line cut between chunks of one
+ * stream, or a colour code in it, joins first. Past `max` characters as
+ * they show, whole lines are dropped from the start, and then the start of
+ * the line not ended yet.
  */
 export function readOutput(out: JobOutput | undefined, chunks: readonly JobChunk[], max = OUTPUT_KEPT): JobOutput {
   const added: OutputLine[] = [];
-  let { raw, stream, ended, size, trimmed } = out ?? { raw: "", stream: null, ended: 0, size: 0, trimmed: false };
-  size -= raw.length;
-  const end = (line: string) => {
-    added.push(lineOf(++ended, stream!, line));
-    size += added[added.length - 1].text.length + 1;
+  let { open, cut, stream, ended, size, trimmed } = out ?? { open: "", cut: "", stream: null, ended: 0, size: 0, trimmed: false };
+  // `size` counts the ended lines here, the open one added at the end.
+  size -= open.length;
+  const end = (text: string) => {
+    added.push(lineOf(++ended, stream!, text));
+    size += text.length + 1;
   };
   for (const c of chunks) {
     if (stream !== c.stream) {
       // The other stream's open line ends here, unless only escapes are in it.
-      if (stream && raw.replace(ANSI, "")) end(raw);
-      raw = "";
+      if (stream && open) end(open);
+      open = cut = "";
       stream = c.stream;
     }
-    const parts = (raw + c.text).split("\n");
-    for (let i = 0; i < parts.length - 1; i++) end(parts[i]);
-    raw = parts[parts.length - 1];
+    const parts = c.text.split("\n");
+    for (let i = 0; i < parts.length; i++) {
+      const raw = cut + parts[i];
+      if (i < parts.length - 1) {
+        end(open + raw.replace(ANSI, ""));
+        open = cut = "";
+      } else {
+        const at = cutAt(raw);
+        open += raw.slice(0, at).replace(ANSI, "");
+        cut = raw.slice(at);
+      }
+    }
   }
   let lines = added.length ? (out?.lines ?? []).concat(added) : (out?.lines ?? []);
-  if (size + raw.length > max) {
+  if (size + open.length > max) {
     let drop = 0;
-    while (drop < lines.length && size + raw.length > max) size -= lines[drop++].text.length + 1;
+    while (drop < lines.length && size + open.length > max) size -= lines[drop++].text.length + 1;
     lines = lines.slice(drop);
-    if (raw.length > max) raw = raw.slice(-max);
+    if (open.length > max) open = open.slice(-max);
     trimmed = true;
   }
-  return { lines, raw, stream, ended, size: size + raw.length, trimmed };
+  return { lines, open, cut, stream, ended, size: size + open.length, trimmed };
 }
 
 /** The lines a job's output shows: the ended ones, then the one not ended yet. */
 export function outputShown(out: JobOutput): OutputLine[] {
-  const open = out.stream && out.raw.replace(ANSI, "") ? lineOf(out.ended + 1, out.stream, out.raw) : null;
-  return open ? [...out.lines, open] : out.lines;
+  return out.stream && out.open ? [...out.lines, lineOf(out.ended + 1, out.stream, out.open)] : out.lines;
 }
 
 /** A job's output as lines: a line ends at a newline or where the other stream takes over. */
