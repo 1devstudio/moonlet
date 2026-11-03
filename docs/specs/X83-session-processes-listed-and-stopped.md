@@ -1,6 +1,6 @@
 # X83 — A session's processes, listed and stopped
 
-- **Status:** draft
+- **Status:** implemented (2026-11-03; the Processes tab checked in the running app with `snap.ts`)
 - **Priority / phase:** P1 · phase 3
 - **PRD refs:** S1 daemon-owned sessions, X1 repo scripts, A6 CLI and socket API
 - **Related:** [X79](X79-session-processes-end-with-session.md) (a session's processes end with it), [X23](X23-confirm-modal.md) (confirm modal), [X55](X55-git-settings.md) (archive settings)
@@ -36,18 +36,18 @@ name of the file they run, never by their arguments, which can hold tokens.
 
 Listing (`session.processes`):
 
-- [ ] A session's processes are every process in each of its terminals'
+- [x] A session's processes are every process in each of its terminals'
       sessions (their session id is the tab's shell pid), and each of its
       chat agents with the processes it started (X79's family), each with the
       tab or agent it belongs to. The tab's shell and the chat's agent are
       marked as the tab's own (`tab`)
       (`a_sessions_processes_are_its_tabs_sessions_and_its_agents_families`,
       `a_sessions_processes_are_listed_by_name_and_stopped`).
-- [ ] Each process is named by the file name of its executable as the kernel
+- [x] Each process is named by the file name of its executable as the kernel
       says, never its arguments; it has its start time, its CPU time and its
       resident memory where the kernel tells them
       (`a_child_s_working_directory_and_usage_are_what_the_kernel_says`).
-- [ ] Leftovers are listed apart: processes whose parent is launchd (init on
+- [x] Leftovers are listed apart: processes whose parent is launchd (init on
       Linux), that are not already the session's, whose working directory is
       the session's worktree or inside it. They are never stopped unless named
       by pid (`leftovers_are_launchd_children_working_in_the_worktree`,
@@ -55,43 +55,45 @@ Listing (`session.processes`):
 
 Stopping (`session.kill_processes`):
 
-- [ ] Named pids are stopped with SIGTERM, then SIGKILL after 3 s for those
+- [x] Named pids are stopped with SIGTERM, then SIGKILL after 3 s for those
       still running; the call returns once they are gone. A pid that is not
       one of the session's processes or leftovers is skipped and reported as
       such (`stopping_by_pid_skips_pids_that_are_not_the_sessions`).
-- [ ] With no pids, every process of the session is stopped except the tabs'
+- [x] With no pids, every process of the session is stopped except the tabs'
       own and the leftovers (`stopping_all_spares_the_tabs_own_processes_and_leftovers`).
-- [ ] A process is signalled only while its start time is the one it had when
+- [x] A process is signalled only while its start time is the one it had when
       listed: a pid reused meanwhile is left alone
       (`ending_skips_a_pid_whose_start_changed`).
 
 CLI:
 
-- [ ] `moonlet ps [--session <id>]` prints the session's processes (the
+- [x] `moonlet ps [--session <id>]` prints the session's processes (the
       current one, from `MOONLET_SESSION`, by default) as pid, name, origin,
       age, CPU and memory, then the leftovers under their own heading
       (`ps_prints_name_pid_origin_age_cpu_and_memory_never_arguments`,
       `moonlet_ps_lists_a_sessions_processes_and_moonlet_kill_stops_one`).
-- [ ] `moonlet kill <pid>...` stops those pids of the session;
+- [x] `moonlet kill <pid>...` stops those pids of the session;
       `moonlet kill --all` stops every process but the tabs' own. It prints
-      what it stopped and what it skipped
-      (`moonlet_ps_lists_a_sessions_processes_and_moonlet_kill_stops_one`).
+      what it stopped, and fails naming what it skipped
+      (`kill_says_which_pids_it_stopped`,
+      `moonlet_ps_lists_a_sessions_processes_and_moonlet_kill_stops_one`).
 
 App:
 
-- [ ] The Processes tab lists each process with its name, pid, origin, age,
+- [x] The Processes tab lists each process with its name, pid, origin, age,
       CPU use and memory, with **Stop** per row and **Stop all**; leftovers
       follow under **Left in the worktree**, each with **Stop**. It looks
       again every 3 s while shown (`describes a process row: origin, age, CPU and memory`,
       `works out CPU use from two looks`).
-- [ ] Archiving a session that runs processes other than its tabs' own, or
+- [x] Archiving a session that runs processes other than its tabs' own, or
       has leftovers, says so in the confirm, by name: "3 processes still run:
       vite, tail, node. Archiving stops them." On **Archive** they are stopped
       before the session is archived; a daemon that cannot list them archives
       as before (`names the processes still running, after their count`,
       `says nothing when only the tabs' own processes run`,
       `lists the processes still running and stops them before archiving (X83)`,
-      `archives as before when the daemon cannot list processes (X83)`).
+      `archives as before when the daemon cannot list processes (X83)`;
+      e2e `names what still runs in the session, and archiving stops it (X83)`).
 
 ## UI
 
@@ -164,6 +166,8 @@ unchanged, so it cannot be used to signal any process of the user's.
   `works out CPU use from two looks`; `actions.test.ts`:
   `lists the processes still running and stops them before archiving (X83)` and
   `archives as before when the daemon cannot list processes (X83)`.
+- Rust, `moonlet-cli` `src/ps.rs`: `kill_says_which_pids_it_stopped`.
+- e2e, `confirm-modal.e2e.ts`: `names what still runs in the session, and archiving stops it (X83)`.
 
 ## Open questions
 
