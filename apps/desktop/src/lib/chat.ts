@@ -18,11 +18,13 @@ interface ChatStore {
   /** The other chats loaded, without their items, kept current by
    *  `chat.state`. A key is in one of the two at most. */
   summaries: Record<string, ChatSummary>;
+  /** A jump to an item a chat may not render yet (`revealInChat`). */
+  reveal: { key: string; find: (item: ChatItem) => boolean } | null;
 }
 
 const g = globalThis as unknown as { __moonletChat?: ReturnType<typeof makeStore> };
 function makeStore() {
-  return create<ChatStore>(() => ({ chats: {}, summaries: {} }));
+  return create<ChatStore>(() => ({ chats: {}, summaries: {}, reveal: null }));
 }
 /** One store across hot reloads (see store.ts). */
 export const useChat = (g.__moonletChat ??= makeStore());
@@ -496,6 +498,21 @@ export const BLOCKS_SHOWN = 200;
 export function lastBlocks<T>(blocks: T[], limit: number): { shown: T[]; earlier: number } {
   const earlier = Math.max(0, blocks.length - limit);
   return { shown: earlier ? blocks.slice(earlier) : blocks, earlier };
+}
+
+/** The blocks to render so that the last one holding an item `isTarget`
+ *  picks is among them: `limit`, plus as many steps of BLOCKS_SHOWN as it
+ *  takes; `limit` when it is shown already or not there (X81). */
+export function limitShowing(blocks: readonly ChatBlock[], limit: number, isTarget: (item: ChatItem) => boolean): number {
+  const at = blocks.findLastIndex((b) => (b.kind === "item" ? isTarget(b.item) : b.tools.some(isTarget)));
+  const need = at < 0 ? 0 : blocks.length - at;
+  return need <= limit ? limit : limit + Math.ceil((need - limit) / BLOCKS_SHOWN) * BLOCKS_SHOWN;
+}
+
+/** Asks chat `id` to render earlier blocks until the last item `find`
+ *  picks is among them, for a jump to it such as Show in chat (X81). */
+export function revealInChat(host: string, id: number, find: (item: ChatItem) => boolean) {
+  useChat.setState({ reveal: { key: chatKey(host, id), find } });
 }
 
 export const toolGroupLabel = (n: number) => `${n} tool call${n === 1 ? "" : "s"}`;

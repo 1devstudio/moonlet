@@ -51,6 +51,15 @@ the end of a long transcript, and keeps the end of a job's output.
       (`shows the last 200 blocks and counts the earlier ones`). A plan that
       waits for approval shows its card under the blocks when its row is
       among the earlier ones.
+- [x] "Show in chat" from a design comment, the one jump to a chat item,
+      shows earlier blocks, 200 at a time, until the comment's message is
+      among them, then scrolls to its card
+      (`shows earlier blocks, 200 at a time, until the item a jump goes to is
+      among them`, `knows the message that carries a pin's card, by its
+      design's folder (X81)`). It waits up to 5 s for a card its chat has but
+      does not render yet before saying the message is not in the chat
+      (`waits for a card its chat has but does not render yet, among the
+      earlier blocks (X81)`).
 - [x] Each Interrupted divider is found in one pass over the transcript, not
       by searching it once per divider. The dividers are the same as before
       (`marks each Interrupted that stopped a command, across the whole
@@ -98,8 +107,6 @@ None: no new inputs.
 - Terminals of sessions not shown keep a live xterm (X78's out of scope).
 - A job view renders every kept line; with 1 MiB kept, that is bounded, not
   virtualized.
-- "Show in chat" from a design comment scrolls to a card only among the
-  blocks shown.
 
 ## Test plan
 
@@ -109,8 +116,12 @@ None: no new inputs.
   items`, `keeps only the status and asks of a chat loaded but not shown` and
   `reloads on connect only the chats already in memory`.
 - Vitest, `chat.test.ts`: `shows the last 200 blocks and counts the earlier
-  ones` and `applies events held during a load in order, the latest version
-  of an item winning`.
+  ones`, `applies events held during a load in order, the latest version
+  of an item winning` and `shows earlier blocks, 200 at a time, until the
+  item a jump goes to is among them`.
+- Vitest, `designComments.test.ts`: `waits for a card its chat has but does
+  not render yet, among the earlier blocks (X81)` and `knows the message
+  that carries a pin's card, by its design's folder (X81)`.
 - Vitest, `queued.test.ts`: `marks each Interrupted that stopped a command,
   across the whole transcript`.
 - Vitest, `jobs.test.ts`: `keeps the end of a long output, numbered as it

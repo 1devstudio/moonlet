@@ -53,6 +53,7 @@ import {
   joinDraft,
   BLOCKS_SHOWN,
   lastBlocks,
+  limitShowing,
   showChat,
   type PlanChoice,
   planAnswer,
@@ -1415,6 +1416,14 @@ export function AgentView({
   // The last blocks render; "Show earlier" adds more (X81).
   const [limit, setLimit] = useState(BLOCKS_SHOWN);
   useEffect(() => setLimit(BLOCKS_SHOWN), [id]);
+  // A jump to an item among the earlier blocks shows them (X81); it is
+  // done once the transcript it looks in has loaded.
+  const reveal = useChat((s) => (s.reveal?.key === chatKey(host, id) ? s.reveal : null));
+  useEffect(() => {
+    if (!reveal || !st) return;
+    setLimit((n) => limitShowing(blocks, n, reveal.find));
+    useChat.setState({ reveal: null });
+  }, [reveal, blocks, st]);
   const { shown: shownBlocks, earlier } = useMemo(() => lastBlocks(blocks, limit), [blocks, limit]);
   const shownIds = useMemo(() => new Set(shownBlocks.flatMap((b) => (b.kind === "item" ? [b.item.id] : b.tools.map((t) => t.id)))), [shownBlocks]);
   const dividers = useMemo(() => interruptedLines(st?.items ?? []), [st?.items]);

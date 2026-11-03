@@ -3,6 +3,7 @@ import {
   activeToken,
   BLOCKS_SHOWN,
   lastBlocks,
+  limitShowing,
   itemShown,
   commandOptions,
   withCompletion,
@@ -400,6 +401,20 @@ describe("a long transcript (X81)", () => {
     expect(lastBlocks(blocks, 400).earlier).toBe(50);
     expect(ids(lastBlocks(blocks, 400).shown)[0]).toBe("m50");
     expect(lastBlocks(blocks, 600)).toEqual({ shown: blocks, earlier: 0 });
+  });
+
+  it("shows earlier blocks, 200 at a time, until the item a jump goes to is among them", () => {
+    const is = (id: string) => (it: ChatItem) => it.id === id;
+    // m40 is the 410th block from the end: two more steps of 200.
+    expect(limitShowing(blocks, BLOCKS_SHOWN, is("m40"))).toBe(600);
+    expect(limitShowing(blocks, BLOCKS_SHOWN, is("m249"))).toBe(400);
+    // Shown already, or not in the transcript: as it was.
+    expect(limitShowing(blocks, BLOCKS_SHOWN, is("m250"))).toBe(200);
+    expect(limitShowing(blocks, BLOCKS_SHOWN, is("gone"))).toBe(200);
+    // A call folded into a group of tool calls counts as its group's block.
+    const tool = (id: string): ChatItem => ({ ...item(id, "", "tool"), tool: { name: "Bash", summary: id, input: {}, status: "ok" } });
+    const grouped = chatBlocks([tool("b1"), tool("b2"), ...Array.from({ length: 200 }, (_, i) => item(`n${i}`, "text"))], "collapsed");
+    expect(limitShowing(grouped, BLOCKS_SHOWN, is("b2"))).toBe(400);
   });
 
   it("applies events held during a load in order, the latest version of an item winning", () => {
