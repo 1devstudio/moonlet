@@ -2,6 +2,7 @@
 //! was left working in its worktree, named by their executables and stopped
 //! on request. Never their arguments, which can hold tokens.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use moonlet_proto::TerminalId;
@@ -60,9 +61,13 @@ pub fn belonging(
             }
         }
     };
-    let sessions: Vec<(u32, Option<u32>)> =
-        table.iter().map(|p| (p.pid, session_of(p.pid))).collect();
-    let sid = |pid: u32| sessions.iter().find(|s| s.0 == pid).and_then(|s| s.1);
+    // Each process's session, asked of the kernel once.
+    let sessions: HashMap<u32, u32> = table
+        .iter()
+        .filter_map(|p| Some((p.pid, session_of(p.pid)?)))
+        .collect();
+    let sid = |pid: u32| sessions.get(&pid).copied();
+    let by_pid: HashMap<u32, &Proc> = table.iter().map(|p| (p.pid, p)).collect();
     for t in tabs {
         // A reaped shell's pid that now leads a session leads someone else's (X79).
         if t.exited && sid(t.leader) == Some(t.leader) {
@@ -92,7 +97,7 @@ pub fn belonging(
         };
         let own = a
             .pid
-            .and_then(|pid| table.iter().find(|p| p.pid == pid))
+            .and_then(|pid| by_pid.get(&pid).copied())
             .map(|p| Found {
                 proc: *p,
                 origin: origin.clone(),
@@ -101,7 +106,7 @@ pub fn belonging(
         let started = a
             .family
             .iter()
-            .filter_map(|&(pid, start)| table.iter().find(|p| p.pid == pid && p.start == start));
+            .filter_map(|&(pid, start)| by_pid.get(&pid).copied().filter(|p| p.start == start));
         let found = own
             .into_iter()
             .chain(started.map(|p| Found {
