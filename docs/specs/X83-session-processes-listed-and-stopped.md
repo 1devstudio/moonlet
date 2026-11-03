@@ -104,8 +104,10 @@ App:
       CPU use and memory, with **Stop** per row and **Stop all**; leftovers
       follow under **Left in the worktree**, each with **Stop**. The origin is
       "Terminal · zsh", "Run · dev" for a Run tab's, or "Agent · Claude". It
-      looks again every 3 s while shown (`describes a process row: origin, age, CPU and memory`,
-      `works out CPU use from two looks`). **Stop** sends the row's pid with
+      looks again every 3 s while shown; a look answering after a newer one,
+      or for a session shown before (as a Stop's refresh after a switch), is
+      dropped (`describes a process row: origin, age, CPU and memory`,
+      `works out CPU use from two looks`, `keeps only the latest look at the session shown`). **Stop** sends the row's pid with
       the start it was listed with; **Stop all** sends no pids, and the
       daemon stops what it decides: the rows it marks stopping are the same,
       never a tab's own nor a leftover (`stops a row by its pid and the start it was listed with; Stop all names none`,
@@ -209,7 +211,8 @@ worktree can be signalled.
   `describes a process row: origin, age, CPU and memory`,
   `stops a row by its pid and the start it was listed with; Stop all names none`,
   `Stop all covers what the daemon stops: neither the tabs' own nor what was left in the worktree`,
-  `says which processes still run after their Stop` and
+  `says which processes still run after their Stop`,
+  `keeps only the latest look at the session shown` and
   `works out CPU use from two looks`; `actions.test.ts`:
   `lists the processes still running and stops them before archiving (X83)` and
   `archives as before when the daemon cannot list processes (X83)`.

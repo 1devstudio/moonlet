@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Activity } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { M, type ProcessesKilled, type Session, type SessionProcess, type SessionProcesses } from "../lib/protocol";
-import { type CpuLook, cpuPercent, killParams, processRow, processesSummary, stillRunningLine, stoppedByStopAll } from "../lib/sessionProcesses";
+import { type CpuLook, cpuPercent, killParams, processLooks, processRow, processesSummary, stillRunningLine, stoppedByStopAll } from "../lib/sessionProcesses";
 import { errorToast, toast } from "../lib/store";
 import { Empty, cx } from "./ui";
 
@@ -18,10 +18,14 @@ export function ProcessesPanel({ host, ws }: { host: string; ws: Session }) {
   const [cpu, setCpu] = useState<Record<number, number | null>>({});
   const [stopping, setStopping] = useState<number[]>([]);
   const looks = useRef(new Map<number, CpuLook>());
+  // A look answering late, or for a session shown before, changes nothing.
+  const gate = useRef(processLooks());
 
   const load = useCallback(async () => {
+    const token = gate.current.begin(host, ws.id);
     try {
       const got = await rpc<SessionProcesses>(host, M.sessionProcesses, { id: ws.id });
+      if (!gate.current.current(token)) return;
       const at = Date.now();
       const next = new Map<number, CpuLook>();
       const use: Record<number, number | null> = {};
@@ -36,17 +40,22 @@ export function ProcessesPanel({ host, ws }: { host: string; ws: Session }) {
       setList(got);
       setError(null);
     } catch (e) {
+      if (!gate.current.current(token)) return;
       setError(e instanceof Error ? e.message : String(e));
     }
   }, [host, ws.id]);
 
   useEffect(() => {
+    gate.current.show(host, ws.id);
     looks.current = new Map();
     setList(null);
+    setError(null);
+    setCpu({});
+    setStopping([]);
     void load();
     const t = setInterval(() => void load(), LOOK_MS);
     return () => clearInterval(t);
-  }, [load]);
+  }, [host, ws.id, load]);
 
   const stop = async (ps?: SessionProcess[]) => {
     const shown = (ps ?? (list ? stoppedByStopAll(list) : [])).map((p) => p.pid);

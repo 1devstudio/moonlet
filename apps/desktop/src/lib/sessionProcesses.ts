@@ -111,6 +111,30 @@ export function processesSummary(list: SessionProcesses): string {
   return list.leftovers.length ? `${head} · ${list.leftovers.length} left in the worktree` : head;
 }
 
+/** Which of the Processes tab's looks still count: only the latest begun,
+ * and only while its session (host and id) is the one shown. A slow look, or
+ * a Stop's refresh of a session shown before, is dropped. */
+export function processLooks() {
+  let shown: { host: string; id: string } | null = null;
+  let latest = 0;
+  return {
+    /** Session `id` of `host` shows now: every earlier look is dropped. */
+    show(host: string, id: string) {
+      shown = { host, id };
+      latest++;
+    },
+    /** A look at session `id` of `host` starts; its token. */
+    begin(host: string, id: string): number {
+      latest++;
+      return shown?.host === host && shown.id === id ? latest : -1;
+    },
+    /** Whether what the look of `token` found may be shown. */
+    current(token: number): boolean {
+      return token === latest;
+    },
+  };
+}
+
 /** A process's CPU time at one look, and when it was taken. */
 export interface CpuLook {
   cpu_ms: number;

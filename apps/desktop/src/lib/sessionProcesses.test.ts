@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { archivePrompt } from "./confirmOptions";
 import type { ProcessesKilled, SessionProcess, SessionProcesses } from "./protocol";
-import { cpuPercent, killParams, processRow, processesSummary, runningLine, stillRunningLine, stoppedByStopAll, toStopOnArchive, withRunning } from "./sessionProcesses";
+import { cpuPercent, killParams, processLooks, processRow, processesSummary, runningLine, stillRunningLine, stoppedByStopAll, toStopOnArchive, withRunning } from "./sessionProcesses";
 
 const NOW = 1_793_700_000_000;
 const dev = { kind: "terminal", id: 2, title: "dev" } as const;
@@ -70,6 +70,24 @@ describe("the Processes tab (X83)", () => {
     // An older daemon says nothing of them.
     expect(stillRunningLine({ ended: [4242], skipped: [] } as unknown as ProcessesKilled)).toBeNull();
     expect(stillRunningLine(true)).toBeNull();
+  });
+
+  it("keeps only the latest look at the session shown", () => {
+    const looks = processLooks();
+    looks.show("local", "s1");
+    const first = looks.begin("local", "s1");
+    const second = looks.begin("local", "s1");
+    // A slow look answering after a newer one is dropped.
+    expect(looks.current(first)).toBe(false);
+    expect(looks.current(second)).toBe(true);
+    // Once another session shows, its looks and a Stop's refresh of s1 are dropped.
+    looks.show("local", "s2");
+    expect(looks.current(second)).toBe(false);
+    expect(looks.current(looks.begin("local", "s1"))).toBe(false);
+    expect(looks.current(looks.begin("local", "s2"))).toBe(true);
+    // The same session id on another host is another session.
+    looks.show("mini", "s2");
+    expect(looks.current(looks.begin("local", "s2"))).toBe(false);
   });
 
   it("works out CPU use from two looks", () => {
