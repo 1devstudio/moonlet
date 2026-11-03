@@ -39,9 +39,9 @@ workspace's board once per change instead of once per component that shows it.
       once the workspace's projects change`, `is built again once the
       workspace's hosts change`, `keeps the boards of the last 8 workspaces
       shown`).
-- [ ] Linking sessions to tasks lower-cases each task key, repository and title
-      once per task list, not once per session and task pair. Links found are
-      the same as before.
+- [x] Linking a session to tasks lower-cases the session's branch, PR title,
+      repository and name once, not once per task. Links found are the same as
+      before.
 
 ## UI
 
@@ -84,7 +84,8 @@ Later parts of the same investigation, each with its own change:
   the workspace's projects change` and `is built again once a session it shows
   changes`.
 - Vitest: existing `tasks.test.ts`, `tasksBoard.test.ts` and `tasksStore.test.ts`
-  link tests stay green.
+  link tests stay green. A board built from 306 sessions and 165 tasks took
+  7.7–7.9 ms before and 4.0–5.4 ms after (best of 10, Node).
 - Manual: `footprint -p <pid>` and `ps -o pcpu` of the app's web content process
   (found with `launchctl print pid/<pid>`, bundle ID `dev.onedevstudio.moonlet`)
   before and after, with the user's sessions loaded and the app idle.
