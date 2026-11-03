@@ -310,6 +310,13 @@ export function outputShown(out: JobOutput): OutputLine[] {
   return out.stream && out.open ? [...out.lines, lineOf(out.ended + 1, out.stream, out.open)] : out.lines;
 }
 
+/** How many lines a job printed, as its views say it: the trimmed ones
+ *  too, and the one not ended yet (X81). */
+export function outputCount(out: JobOutput): string {
+  const n = out.ended + (out.stream && out.open ? 1 : 0);
+  return `${n.toLocaleString("en-US")} ${n === 1 ? "line" : "lines"}`;
+}
+
 /** A job's output as lines: a line ends at a newline or where the other stream takes over. */
 export function outputLines(chunks: JobChunk[]): OutputLine[] {
   return outputShown(readOutput(undefined, chunks, Infinity));

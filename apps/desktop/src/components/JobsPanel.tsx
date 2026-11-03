@@ -5,7 +5,7 @@ import { type RefObject, useEffect, useLayoutEffect, useMemo, useRef, useState }
 import { ArrowUpRight, Check, ChevronLeft, Circle, Cloud, Copy, Cpu, Laptop, LoaderCircle, RotateCw, Server } from "lucide-react";
 import { copyJobOutput, openJobTab, stopJob } from "../lib/actions";
 import { rpc } from "../lib/daemon";
-import { type JobIcon, type JobTone, type OutputLine, chipFromJob, going, jobRowLine, jobStateLine, jobsSummary, dur, lastLines, LINES_SHOWN, outputShown, phaseList, workerLine } from "../lib/jobs";
+import { type JobIcon, type JobTone, type OutputLine, chipFromJob, going, jobRowLine, jobStateLine, jobsSummary, dur, lastLines, LINES_SHOWN, outputCount, outputShown, phaseList, workerLine } from "../lib/jobs";
 import { loadOutput, useJobs } from "../lib/jobsStore";
 import { startupCard, waitingNote, type StartupCard } from "../lib/cloudMachines";
 import { useCloud } from "../lib/cloudStore";
@@ -47,6 +47,9 @@ export function useJobLines(host: string, job: string): OutputLine[] | null {
   }, [host, job]);
   return useMemo(() => (out ? outputShown(out) : null), [out]);
 }
+
+/** How many lines the job printed, once its output is read (X81). */
+export const useJobCount = (job: string) => useJobs((s) => (s.output[job] ? outputCount(s.output[job]) : ""));
 
 /** Above a job's output once its start was dropped (X81). */
 export function TrimmedNote({ job }: { job: string }) {
@@ -196,6 +199,7 @@ function MachineCard({ card }: { card: StartupCard }) {
 function JobDetail({ host, ws, job, now }: { host: string; ws: Session; job: Job; now: number }) {
   const state = jobStateLine(job, now, ws.name);
   const lines = useJobLines(host, job.id);
+  const count = useJobCount(job.id);
   const [follow, setFollow] = useState(true);
   const box = useFollow(follow, lines?.length ?? 0);
   const last = useLastLines(lines ?? NO_LINES, job.id, box);
@@ -248,7 +252,7 @@ function JobDetail({ host, ws, job, now }: { host: string; ws: Session; job: Job
         )}
         <div className="mt-4 flex items-center gap-2 ui-text-12.5">
           <span className="text-fg">Output</span>
-          <span className="text-faint">{lines ? `${lines.length} ${lines.length === 1 ? "line" : "lines"}` : ""}</span>
+          <span className="text-faint">{count}</span>
           <label className="ml-auto flex items-center gap-1.5 text-muted">
             <input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} />
             Follow

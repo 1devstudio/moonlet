@@ -9,7 +9,7 @@ import { type OutputFilter, chipFromJob, jobTabLine, phaseBar, shownLines, worke
 import { useSessionJob } from "../lib/jobsStore";
 import { errorToast, useStore } from "../lib/store";
 import { useNow } from "../lib/useNow";
-import { EarlierLines, JobDot, LINE_TONE, TONE, WorkerIcon, copyText, going, useFollow, useJobLines, useLastLines } from "./JobsPanel";
+import { EarlierLines, JobDot, LINE_TONE, TONE, WorkerIcon, copyText, going, useFollow, useJobCount, useJobLines, useLastLines } from "./JobsPanel";
 import { cx } from "./ui";
 
 const BAR_TONE = { done: "bg-done", accent: "bg-accent", blocked: "bg-blocked" };
@@ -32,6 +32,7 @@ export default function JobView({ host, wsId, job: id }: { host: string; wsId: s
   const central = useStore((s) => s.hosts[host]?.label) ?? "this Mac";
   const now = useNow(!!job && going(job));
   const lines = useJobLines(host, id);
+  const count = useJobCount(id);
   const [filter, setFilter] = useState<OutputFilter>("all");
   const [find, setFind] = useState("");
   const [follow, setFollow] = useState(false);
@@ -118,7 +119,7 @@ export default function JobView({ host, wsId, job: id }: { host: string; wsId: s
               <Search size={13} />
               <input aria-label="Find in output" placeholder="Find in output" value={find} onChange={(e) => setFind(e.target.value)} className="min-w-0 flex-1 bg-transparent ui-text-12.5 text-fg outline-none placeholder:text-faint" />
             </label>
-            <span className="ml-auto whitespace-nowrap font-mono ui-text-12 tabular-nums text-muted">{lines ? `${lines.length.toLocaleString("en-US")} lines` : ""}</span>
+            <span className="ml-auto whitespace-nowrap font-mono ui-text-12 tabular-nums text-muted">{count}</span>
             <label className="flex shrink-0 items-center gap-1.5 ui-text-12.5 text-muted">
               <input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} />
               Follow

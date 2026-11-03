@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type JobOutput, bashChip, chipFromJob, chipFromOutput, jobRowLine, jobStateLine, jobTabLine, jobsSummary, jobsTabCount, lastLines, LINES_SHOWN, outputLines, outputShown, phaseBar, readOutput, phaseList, shownCommand, shownLines, workerFacts, workerLine } from "./jobs";
+import { type JobOutput, bashChip, chipFromJob, chipFromOutput, jobRowLine, jobStateLine, jobTabLine, jobsSummary, jobsTabCount, lastLines, LINES_SHOWN, outputCount, outputLines, outputShown, phaseBar, readOutput, phaseList, shownCommand, shownLines, workerFacts, workerLine } from "./jobs";
 import type { Job } from "./protocol";
 
 const job = (extra: Partial<Job> = {}): Job => ({
@@ -198,6 +198,12 @@ describe("a job's output (X62)", () => {
     const out = readOutput(undefined, [{ stream: 1, text: "abcdefg\u001b[31mh" }], 5);
     expect(outputShown(out)).toEqual([{ n: 1, stream: 1, text: "defgh", tone: null }]);
     expect(out.trimmed).toBe(true);
+  });
+
+  it("counts every line the job printed, the trimmed ones too", () => {
+    expect(outputCount(readOutput(undefined, [{ stream: 1, text: "one\ntwo\nthree\nfour" }], 14))).toBe("4 lines");
+    expect(outputCount(readOutput(undefined, [{ stream: 1, text: "only\n" }]))).toBe("1 line");
+    expect(outputCount(readOutput(undefined, [{ stream: 1, text: "x\n".repeat(1500) }], 100))).toBe("1,500 lines");
   });
 
   it("never cuts the line not ended yet inside a character of two UTF-16 units", () => {

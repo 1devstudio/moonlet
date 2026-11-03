@@ -4,7 +4,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronLeft, Circle, Cloud, Cpu, Laptop, LoaderCircle, RotateCw, Server } from "lucide-react";
 import { rpc } from "@desktop/lib/daemon";
-import { type JobIcon, type JobTone, chipFromJob, going, dur, jobRowLine, jobStateLine, jobsSummary, lastLines, LINES_SHOWN, outputShown, phaseList, workerLine } from "@desktop/lib/jobs";
+import { type JobIcon, type JobTone, chipFromJob, going, dur, jobRowLine, jobStateLine, jobsSummary, lastLines, LINES_SHOWN, outputCount, outputShown, phaseList, workerLine } from "@desktop/lib/jobs";
 import { loadOutput, useJobs } from "@desktop/lib/jobsStore";
 import { M, type Job, type Session } from "@desktop/lib/protocol";
 import { clock } from "@desktop/lib/subagents";
@@ -82,6 +82,7 @@ function JobDetail({ host, session, job, now, onBack }: { host: string; session:
     void loadOutput(host, job.id).catch(fail);
   }, [host, job.id]);
   const lines = useMemo(() => (out ? outputShown(out) : null), [out]);
+  const count = out ? outputCount(out) : "";
   const box = useRef<HTMLDivElement>(null);
   // Follows new output, also a line that grows, while the reader is at the end.
   const follow = useRef(true);
@@ -148,7 +149,7 @@ function JobDetail({ host, session, job, now, onBack }: { host: string; session:
         )}
         <div className="mt-4 flex items-center gap-2 text-[13px]">
           <span>Output</span>
-          <span className="text-faint">{lines ? `${lines.length} ${lines.length === 1 ? "line" : "lines"}` : ""}</span>
+          <span className="text-faint">{count}</span>
         </div>
         <div ref={box} onScroll={(e) => (follow.current = atEnd(e.currentTarget))} className="mt-2 max-h-[50vh] min-h-[160px] overflow-y-auto rounded-[10px] border border-border bg-bg px-3 py-2 font-mono text-[12px] leading-[1.55]">
           {earlier > 0 ? (
