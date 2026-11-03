@@ -74,8 +74,10 @@ struct Inner {
     stderr: Vec<String>,
     saved_at: Instant,
     dirty: bool,
-    /// When the user or the agent last did something in the chat, in ms
-    /// since the epoch: the agent rests once it is a day ago (X84).
+    /// When the chat last had a message, an answer or anything from its
+    /// agent, in ms since the epoch: the agent rests once it is a day ago
+    /// (X84). New settings, notes and other state the daemon changes itself
+    /// do not count.
     active_at: u64,
 }
 
@@ -348,6 +350,8 @@ impl ChatManager {
 
     /// Sends a user message, starting or restarting the agent first when needed.
     fn deliver(&self, chat: &Arc<Chat>, inner: &mut Inner, text: &str, images: &[ChatImage]) -> Result<()> {
+        // A message: the agent is not idle (X84).
+        inner.active_at = now_ms();
         // A new message instead of an answer: the kept asks are moot.
         let kept = inner.kept.clone();
         self.close_kept(chat, inner, &kept, "error", None);
@@ -430,6 +434,8 @@ impl ChatManager {
         }
         let chat = self.get(id)?;
         let mut inner = chat.inner.lock().unwrap();
+        // An answer: the agent is not idle (X84).
+        inner.active_at = now_ms();
         // A session-wide mode change answers a plan, never a single tool call.
         if mode.is_some() && !inner.state.pending.iter().any(|p| p.id == ask && p.tool == "ExitPlanMode") {
             bail!("only a plan approval can switch the mode");
@@ -1090,6 +1096,8 @@ impl ChatManager {
                 let Inner { adapter, state, .. } = &mut *inner;
                 let Some(a) = adapter.as_mut() else { return false };
                 let outs = a.on_line(&line, state);
+                // Anything the agent says: it is not idle (X84).
+                inner.active_at = now_ms();
                 mgr.apply(&c, &mut inner, outs);
                 true
             };
@@ -1191,10 +1199,6 @@ impl ChatManager {
     /// Carries out an adapter's requests: stdin writes, client events,
     /// agent state and persistence.
     fn apply(&self, chat: &Chat, inner: &mut Inner, outs: Vec<Out>) {
-        // Something was said or done in the chat: its agent is not idle (X84).
-        if !outs.is_empty() {
-            inner.active_at = now_ms();
-        }
         let mut state_changed = false;
         for o in outs {
             match o {
@@ -2254,6 +2258,25 @@ done
         assert_eq!(starts(dir.path()).len(), 1);
         // Once the messages stop, it rests.
         assert!(gone_within(agent, 8).await, "the agent never rested");
+    }
+
+    #[tokio::test]
+    async fn new_settings_do_not_keep_an_idle_agent_awake() {
+        let (dir, terms, chats) = setup().await;
+        let id = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), ..Default::default() }).unwrap().id;
+        wait_for(&chats, id, |s| s.agent_session.is_some()).await;
+        chats.send(id, "hi", &[]).unwrap();
+        wait_for(&chats, id, |s| s.status == "done").await;
+        let agent = agent_pid(&terms, id);
+        chats.set_rest_after(Duration::from_millis(300));
+        // New settings every 0.1 s for longer than two looks: they apply
+        // from the next message, and the agent is as idle as before.
+        let end = Instant::now() + Duration::from_millis(4500);
+        while Instant::now() < end {
+            chats.settings(id, Some("opus".into()), None, None).unwrap();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(gone_within(agent, 1).await, "new settings kept the idle agent awake");
     }
 
     #[tokio::test]

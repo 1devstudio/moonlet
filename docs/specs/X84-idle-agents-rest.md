@@ -43,7 +43,10 @@ one of the later parts of X79.
 - [x] Idle time counts from the last activity: a message sent, an answer to
       an ask, anything the agent says. A chat written to more often than the
       timeout keeps its agent, which rests once the messages stop
-      (`an_agent_kept_busy_with_messages_does_not_rest`).
+      (`an_agent_kept_busy_with_messages_does_not_rest`). Nothing else
+      counts: not new settings, which apply from the next message, nor the
+      notes and state the daemon changes itself, the resting note among them
+      (`new_settings_do_not_keep_an_idle_agent_awake`).
 - [x] The next message starts the agent with `--resume` and the chat's
       agent session, as after a daemon restart
       (`an_idle_agent_rests_and_the_next_message_resumes_it`).
@@ -97,6 +100,7 @@ and start time noted for them (X79).
   `an_agent_with_a_queued_message_does_not_rest`,
   `an_agent_with_a_running_subagent_does_not_rest`,
   `an_agent_kept_busy_with_messages_does_not_rest`,
+  `new_settings_do_not_keep_an_idle_agent_awake`,
   `a_resting_agents_server_keeps_running_and_ends_when_the_chat_stops`,
   `a_resting_agents_server_ends_with_the_agent_that_resumes`,
   `the_daemon_stops_only_once_a_resting_agents_server_is_gone` and
