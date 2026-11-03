@@ -73,7 +73,8 @@ Later parts of the same investigation, each with its own change:
   changed since the last poll` and `stores a changed status and tells
   subscribers once`.
 - Vitest, `workspaceBoard.test.ts`: `is built once however many components ask
-  for it`, `is built again once a Tasks setting changes`, `is built again once
+  for it`, `is a workspace's own, even for another account's workspace of the
+  same id`, `is built again once a Tasks setting changes`, `is built again once
   the workspace's projects change` and `is built again once a session it shows
   changes`.
 - Vitest: existing `tasks.test.ts`, `tasksBoard.test.ts` and `tasksStore.test.ts`

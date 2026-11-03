@@ -52,6 +52,13 @@ describe("a workspace's board (X78)", () => {
     expect(workspaceBoard(useStore.getState(), { ...ws }, data, knobs)).toBe(first);
   });
 
+  it("is a workspace's own, even for another account's workspace of the same id", () => {
+    const first = workspaceBoard(useStore.getState(), ws, data, knobs);
+    const theirs = workspaceBoard(useStore.getState(), { ...ws, account: "acme" }, data, knobs);
+    expect(theirs).not.toBe(first);
+    expect(theirs.ws?.account).toBe("acme");
+  });
+
   it("is built again once a Tasks setting changes", () => {
     const first = workspaceBoard(useStore.getState(), ws, data, knobs);
     // Linking by title turned off: the unlinked session no longer gets a hint.

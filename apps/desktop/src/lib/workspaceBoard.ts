@@ -51,7 +51,8 @@ const KEPT_BOARDS = 8;
  */
 export function workspaceBoard(st: StoreState, ws: WorkspaceRef | null, data: TasksData | undefined, k: BoardKnobs): WorkspaceBoard {
   const key = ws ? wsKey(ws.host, ws.id) : "";
-  const inputs = [data, k.notNow, k.config, k.paused, k.moving, k.shownId, ...boardDeps(st)];
+  // The workspace itself counts too: two that share a key never share a board.
+  const inputs = [ws?.account, ws?.host, ws?.id, data, k.notNow, k.config, k.paused, k.moving, k.shownId, ...boardDeps(st)];
   const last = built.get(key);
   if (last && last.inputs.length === inputs.length && last.inputs.every((x, i) => x === inputs[i])) return last.board;
   const board = build(st, ws, data, k);
