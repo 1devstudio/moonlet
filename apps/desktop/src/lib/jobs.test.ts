@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type JobOutput, bashChip, chipFromJob, chipFromOutput, jobRowLine, jobStateLine, jobTabLine, jobsSummary, jobsTabCount, LINES_SHOWN, outputCount, outputShown, phaseBar, readOutput, phaseList, shownCommand, shownLines, workerFacts, workerLine } from "./jobs";
+import { type JobOutput, bashChip, chipFromJob, chipFromOutput, jobRowLine, jobStateLine, jobTabLine, jobsSummary, jobsTabCount, LINES_SHOWN, outputCount, outputEnd, outputShown, phaseBar, readOutput, phaseList, shownCommand, shownLines, workerFacts, workerLine } from "./jobs";
 import type { Job, JobChunk } from "./protocol";
 import { lastOf } from "./showEarlier";
 
@@ -201,6 +201,18 @@ describe("a job's output (X62)", () => {
     const out = readOutput(undefined, [{ stream: 1, text: "abcdefg\u001b[31mh" }], 5);
     expect(outputShown(out)).toEqual([{ n: 1, stream: 1, text: "defgh", tone: null }]);
     expect(out.trimmed).toBe(true);
+  });
+
+  it("marks the end of a job's output anew for each chunk, once it is trimmed too", () => {
+    // Kept to 4 characters, the output keeps 2 lines however many come.
+    const first = readOutput(undefined, [{ stream: 1, text: "a\nb\n" }], 4);
+    const next = readOutput(first, [{ stream: 1, text: "c\n" }], 4);
+    expect(outputShown(next)).toHaveLength(2);
+    expect(outputEnd(outputShown(first))).toBe("2:1");
+    expect(outputEnd(outputShown(next))).toBe("3:1");
+    // The line not ended yet grows.
+    expect(outputEnd(outputShown(readOutput(next, [{ stream: 1, text: "de" }], 4)))).toBe("4:2");
+    expect(outputEnd([])).toBe("");
   });
 
   it("counts every line the job printed, the trimmed ones too", () => {

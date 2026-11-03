@@ -324,6 +324,14 @@ export const LINES_SHOWN = 2000;
 /** A line's key: its number. */
 export const lineKey = (l: OutputLine) => l.n;
 
+/** The end of the lines a job's view shows, changing with each chunk read,
+ *  trimmed or not, so Follow scrolls to it (X81): the last line's number and
+ *  length. */
+export function outputEnd(lines: readonly OutputLine[]): string {
+  const last = lines[lines.length - 1];
+  return last ? `${last.n}:${last.text.length}` : "";
+}
+
 export type OutputFilter = "all" | "stdout" | "stderr";
 
 /** The lines **All / stdout / stderr** and **Find in output** leave. */

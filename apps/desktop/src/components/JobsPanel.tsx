@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUpRight, Check, ChevronLeft, Circle, Cloud, Copy, Cpu, Laptop, LoaderCircle, RotateCw, Server } from "lucide-react";
 import { copyJobOutput, openJobTab, stopJob } from "../lib/actions";
 import { rpc } from "../lib/daemon";
-import { type JobIcon, type JobTone, type OutputLine, chipFromJob, going, jobRowLine, jobStateLine, jobsSummary, dur, LINES_SHOWN, lineKey, outputCount, outputShown, phaseList, workerLine } from "../lib/jobs";
+import { type JobIcon, type JobTone, type OutputLine, chipFromJob, going, jobRowLine, jobStateLine, jobsSummary, dur, LINES_SHOWN, lineKey, outputCount, outputEnd, outputShown, phaseList, workerLine } from "../lib/jobs";
 import { loadOutput, useJobs } from "../lib/jobsStore";
 import { startupCard, waitingNote, type StartupCard } from "../lib/cloudMachines";
 import { useCloud } from "../lib/cloudStore";
@@ -62,11 +62,11 @@ export function TrimmedNote({ job }: { job: string }) {
 export const LINE_TONE: Record<NonNullable<OutputLine["tone"]>, string> = { moonlet: "text-accent", warn: "text-blocked", stderr: "text-blocked" };
 
 /** Keeps the end of the output in view while **Follow** is on. */
-export function useFollow(follow: boolean, count: number) {
+export function useFollow(follow: boolean, end: string) {
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (follow && box.current) box.current.scrollTop = box.current.scrollHeight;
-  }, [follow, count]);
+  }, [follow, end]);
   return box;
 }
 
@@ -178,7 +178,7 @@ function JobDetail({ host, ws, job, now }: { host: string; ws: Session; job: Job
   const lines = useJobLines(host, job.id);
   const count = useJobCount(job.id);
   const [follow, setFollow] = useState(true);
-  const box = useFollow(follow, lines?.length ?? 0);
+  const box = useFollow(follow, outputEnd(lines ?? NO_LINES));
   const last = useShowEarlier(lines ?? NO_LINES, { step: LINES_SHOWN, reset: job.id, scroller: box, key: lineKey, atEnd: () => follow || nearBottom(box.current) });
   const central = useStore((s) => s.hosts[host]?.label) ?? "this Mac";
   const chip = chipFromJob(job);
