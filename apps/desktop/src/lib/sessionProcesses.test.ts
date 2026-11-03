@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { archivePrompt } from "./confirmOptions";
 import type { SessionProcess, SessionProcesses } from "./protocol";
-import { cpuPercent, processRow, processesSummary, runningLine, toStopOnArchive, withRunning } from "./sessionProcesses";
+import { cpuPercent, killParams, processRow, processesSummary, runningLine, toStopOnArchive, withRunning } from "./sessionProcesses";
 
 const NOW = 1_793_700_000_000;
 const dev = { kind: "terminal", id: 2, title: "dev" } as const;
@@ -17,7 +17,7 @@ describe("archiving a session with processes (X83)", () => {
   it("names the processes still running, after their count", () => {
     expect(runningLine(list)).toBe("4 processes still run: vite, tail, node ×2. Archiving stops them.");
     expect(runningLine({ processes: [proc(4242, "vite", dev)], leftovers: [] })).toBe("1 process still runs: vite. Archiving stops it.");
-    expect(toStopOnArchive(list)).toEqual([4242, 4250, 4310, 5151]);
+    expect(toStopOnArchive(list).map((p) => p.pid)).toEqual([4242, 4250, 4310, 5151]);
     const shown = withRunning(archivePrompt("Login page"), runningLine(list));
     expect(typeof shown.message === "function" && shown.message(false)).toBe(
       'Archive "Login page"? Its terminals stop and the worktree folder is removed. The branch is kept. 4 processes still run: vite, tail, node ×2. Archiving stops them.',
@@ -44,6 +44,13 @@ describe("the Processes tab (X83)", () => {
     expect(processRow(left, NOW, 0.2)).toEqual({ pid: 5151, name: "node", origin: "launchd", age: "6d", cpu: "0%", memory: "3.0 GB", stop: true });
     expect(processesSummary(list)).toBe("5 processes · 1 left in the worktree");
     expect(processesSummary({ processes: [proc(4242, "vite", dev)], leftovers: [] })).toBe("1 process");
+  });
+
+  it("stops a row by its pid and the start it was listed with; Stop all names none", () => {
+    const vite: SessionProcess = { pid: 4242, name: "vite", origin: dev, tab: false, started: 1_793_699_880_000 };
+    const unknown: SessionProcess = { pid: 4320, name: "?", origin: dev, tab: false };
+    expect(killParams("s1", [vite, unknown])).toEqual({ id: "s1", pids: [{ pid: 4242, started: 1_793_699_880_000 }, 4320] });
+    expect(killParams("s1")).toEqual({ id: "s1" });
   });
 
   it("works out CPU use from two looks", () => {

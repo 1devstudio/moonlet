@@ -328,6 +328,17 @@ export interface SessionProcesses {
   leftovers: SessionProcess[];
 }
 
+/** A process to stop (X83): a pid, or a pid with the start it was listed
+ * with, stopped only while that is still its start. */
+export type ProcessRef = number | { pid: number; started: number };
+
+/** `session.kill_processes`' params (X83): no `pids`, every process but the
+ * tabs' own; an empty list, none. */
+export interface SessionKillProcesses {
+  id: string;
+  pids?: ProcessRef[];
+}
+
 /** `session.kill_processes`' result (X83). */
 export interface ProcessesKilled {
   ended: number[];

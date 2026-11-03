@@ -2,7 +2,7 @@
 // archive confirm says about what still runs.
 
 import type { ConfirmOptions } from "./confirmOptions";
-import type { SessionProcess, SessionProcesses } from "./protocol";
+import type { ProcessRef, SessionKillProcesses, SessionProcess, SessionProcesses } from "./protocol";
 
 /** What archiving stops beyond the tabs themselves: their jobs, what agents
  * started, and what was left in the worktree. */
@@ -26,9 +26,17 @@ export function runningLine(list: SessionProcesses | null): string | null {
   return ps.length === 1 ? `1 process still runs: ${names(ps)}. Archiving stops it.` : `${ps.length} processes still run: ${names(ps)}. Archiving stops them.`;
 }
 
-/** The pids archiving stops before the session is archived. */
-export function toStopOnArchive(list: SessionProcesses | null): number[] {
-  return stopped(list).map((p) => p.pid);
+/** What archiving stops before the session is archived. */
+export function toStopOnArchive(list: SessionProcesses | null): SessionProcess[] {
+  return stopped(list);
+}
+
+/** `session.kill_processes`' params: each of `ps` by its pid and the start
+ * it was listed with, so a pid reused since is left alone (a plain pid when
+ * the start is not known); no `ps`, Stop all, which the daemon decides. */
+export function killParams(id: string, ps?: SessionProcess[]): SessionKillProcesses {
+  if (!ps) return { id };
+  return { id, pids: ps.map((p): ProcessRef => (p.started === undefined ? p.pid : { pid: p.pid, started: p.started })) };
 }
 
 /** `options` with `line` after its message; the same options without one. */

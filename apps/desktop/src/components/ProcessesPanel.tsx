@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Activity } from "lucide-react";
 import { rpc } from "../lib/daemon";
 import { M, type Session, type SessionProcess, type SessionProcesses } from "../lib/protocol";
-import { type CpuLook, cpuPercent, processRow, processesSummary } from "../lib/sessionProcesses";
+import { type CpuLook, cpuPercent, killParams, processRow, processesSummary } from "../lib/sessionProcesses";
 import { errorToast } from "../lib/store";
 import { Empty, cx } from "./ui";
 
@@ -48,11 +48,11 @@ export function ProcessesPanel({ host, ws }: { host: string; ws: Session }) {
     return () => clearInterval(t);
   }, [load]);
 
-  const stop = async (pids?: number[]) => {
-    const shown = pids ?? (list?.processes.filter((p) => !p.tab).map((p) => p.pid) ?? []);
+  const stop = async (ps?: SessionProcess[]) => {
+    const shown = (ps ?? list?.processes.filter((p) => !p.tab) ?? []).map((p) => p.pid);
     setStopping((s) => [...s, ...shown]);
     try {
-      await rpc(host, M.sessionKillProcesses, pids ? { id: ws.id, pids } : { id: ws.id });
+      await rpc(host, M.sessionKillProcesses, killParams(ws.id, ps));
     } catch (e) {
       errorToast(e);
     }
@@ -100,7 +100,7 @@ export function ProcessesPanel({ host, ws }: { host: string; ws: Session }) {
         {r.stop ? (
           <button
             className={cx("w-11 rounded px-1.5 py-0.5 text-right ui-text-12 text-muted hover:bg-hover hover:text-error", busy && "pointer-events-none text-faint")}
-            onClick={() => void stop([p.pid])}
+            onClick={() => void stop([p])}
           >
             {busy ? "…" : "Stop"}
           </button>

@@ -94,11 +94,14 @@ App:
       CPU use and memory, with **Stop** per row and **Stop all**; leftovers
       follow under **Left in the worktree**, each with **Stop**. It looks
       again every 3 s while shown (`describes a process row: origin, age, CPU and memory`,
-      `works out CPU use from two looks`).
+      `works out CPU use from two looks`). **Stop** sends the row's pid with
+      the start it was listed with; **Stop all** sends no pids, and the
+      daemon stops what it decides (`stops a row by its pid and the start it was listed with; Stop all names none`).
 - [x] Archiving a session that runs processes other than its tabs' own, or
       has leftovers, says so in the confirm, by name: "3 processes still run:
-      vite, tail, node. Archiving stops them." On **Archive** they are stopped
-      before the session is archived; a daemon that cannot list them archives
+      vite, tail, node. Archiving stops them." On **Archive** they are stopped,
+      each by its pid and the start it was listed with, before the session is
+      archived; a daemon that cannot list them archives
       as before (`names the processes still running, after their count`,
       `says nothing when only the tabs' own processes run`,
       `lists the processes still running and stops them before archiving (X83)`,
@@ -185,7 +188,8 @@ worktree can be signalled.
   (`tests/session_e2e.rs`).
 - Vitest, `sessionProcesses.test.ts`: `names the processes still running, after their count`,
   `says nothing when only the tabs' own processes run`,
-  `describes a process row: origin, age, CPU and memory` and
+  `describes a process row: origin, age, CPU and memory`,
+  `stops a row by its pid and the start it was listed with; Stop all names none` and
   `works out CPU use from two looks`; `actions.test.ts`:
   `lists the processes still running and stops them before archiving (X83)` and
   `archives as before when the daemon cannot list processes (X83)`.
