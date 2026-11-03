@@ -362,12 +362,21 @@ impl ChatManager {
         let kept = inner.kept.clone();
         self.close_kept(chat, inner, &kept, "error", None);
         if inner.restart || inner.stdin.is_none() {
-            self.kill_process(inner);
+            // A restart for new settings keeps what the agent left running (a
+            // dev server it started): it ends with the new agent instead (X79).
+            let kept = Self::doom(inner).map(|mut doomed| {
+                let family = std::mem::take(&mut doomed.family);
+                tokio::spawn(doomed.end());
+                family
+            });
             self.settle(chat, inner, "Stopped to apply new settings");
             inner.restart = false;
             if let Err(e) = self.spawn(chat, inner) {
                 self.fail(chat, inner, &format!("{e:#}"));
                 return Err(e);
+            }
+            if let Some(family) = kept {
+                inner.family.adopt(family);
             }
         }
         let Inner { adapter, state, .. } = &mut *inner;
@@ -1887,6 +1896,22 @@ done
         tokio::time::sleep(Duration::from_millis(2500)).await;
         chats.send(id, "crash now", &[]).unwrap();
         assert!(gone_within(server, 8).await, "the agent's server outlived the agent");
+    }
+
+    #[tokio::test]
+    async fn new_settings_restart_the_agent_but_keep_what_it_left_running() {
+        let (dir, terms, chats) = setup().await;
+        let (id, server) = agent_with_a_server(&chats, dir.path()).await;
+        // A new model restarts the agent before the next message.
+        chats.settings(id, Some("opus".into()), None, None).unwrap();
+        chats.send(id, "hi", &[]).unwrap();
+        wait_for(&chats, id, |s| s.items.iter().any(|i| i.kind == "assistant" && i.text == "hello")).await;
+        // Past the old agent's SIGTERM grace and SIGKILL.
+        tokio::time::sleep(Duration::from_millis(4500)).await;
+        assert!(nix::sys::signal::kill(server, None).is_ok(), "the restart ended the agent's server");
+        // It still belongs to the chat, and ends with it.
+        terms.kill(id, false).unwrap();
+        assert!(gone_within(server, 8).await, "the server outlived the restarted agent's chat");
     }
 
     #[tokio::test]

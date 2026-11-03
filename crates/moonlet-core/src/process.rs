@@ -175,6 +175,12 @@ impl Family {
         }
     }
 
+    /// Takes on what `other` noted, as when a restarted agent inherits what
+    /// the one before it left running.
+    pub fn adopt(&mut self, other: Family) {
+        self.known.extend(other.known);
+    }
+
     /// Sends `signal` (`None` only checks) to every noted process that still
     /// runs, and forgets the rest. A pid that now belongs to a process
     /// started later is someone else's, and is left alone. Returns whether

@@ -68,6 +68,8 @@ Chat agents:
 - [ ] When a chat agent's process exits by itself, processes it started that
       are still running are stopped the same way, even when one of them keeps
       the agent's output open.
+- [ ] New settings (model, effort, mode) restart the agent without ending what
+      it left running; those processes then end with the restarted agent.
 - [ ] When the daemon stops (SIGTERM, `daemon.shutdown`, live upgrade), it
       waits up to 3 s for every agent to exit and SIGKILLs those still running
       before it exits.
@@ -137,7 +139,8 @@ feature reads only pids, parent pids, process groups and start times.
 - Rust, `chat/runtime.rs`, with a fake agent that leaves a server running in a
   process group of its own, ignoring SIGHUP and SIGTERM: stopping the chat stops
   the server; an agent that exits by itself leaves it no longer running, even
-  though the server held the agent's output open; `shutdown` (what the daemon
+  though the server held the agent's output open; new settings restart the
+  agent and leave the server running until the chat stops; `shutdown` (what the daemon
   runs on SIGTERM, `daemon.shutdown` and live upgrade) returns only once the
   server is gone.
 
