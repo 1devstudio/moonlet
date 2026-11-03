@@ -4,7 +4,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronLeft, Circle, Cloud, Cpu, Laptop, LoaderCircle, RotateCw, Server } from "lucide-react";
 import { rpc } from "@desktop/lib/daemon";
-import { type JobIcon, type JobTone, chipFromJob, going, dur, jobRowLine, jobStateLine, jobsSummary, outputShown, phaseList, workerLine } from "@desktop/lib/jobs";
+import { type JobIcon, type JobTone, chipFromJob, going, dur, jobRowLine, jobStateLine, jobsSummary, lastLines, LINES_SHOWN, outputShown, phaseList, workerLine } from "@desktop/lib/jobs";
 import { loadOutput, useJobs } from "@desktop/lib/jobsStore";
 import { M, type Job, type Session } from "@desktop/lib/protocol";
 import { clock } from "@desktop/lib/subagents";
@@ -88,6 +88,20 @@ function JobDetail({ host, session, job, now, onBack }: { host: string; session:
   useLayoutEffect(() => {
     if (box.current && follow.current) box.current.scrollTop = box.current.scrollHeight;
   }, [out]);
+  // The last lines render; Show earlier adds more, keeping the reader's place (X81).
+  const [limit, setLimit] = useState(LINES_SHOWN);
+  useEffect(() => setLimit(LINES_SHOWN), [job.id]);
+  const { shown, earlier } = useMemo(() => lastLines(lines ?? [], limit), [lines, limit]);
+  const keepFromBottom = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (el && keepFromBottom.current !== null) el.scrollTop = el.scrollHeight - keepFromBottom.current;
+    keepFromBottom.current = null;
+  }, [limit]);
+  const showEarlier = () => {
+    keepFromBottom.current = box.current ? box.current.scrollHeight - box.current.scrollTop : null;
+    setLimit((n) => n + LINES_SHOWN);
+  };
   const state = jobStateLine(job, now, session.name);
   const footer = jobFooter(job, session.name, hostLabel);
   const chip = chipFromJob(job);
@@ -137,7 +151,14 @@ function JobDetail({ host, session, job, now, onBack }: { host: string; session:
           <span className="text-faint">{lines ? `${lines.length} ${lines.length === 1 ? "line" : "lines"}` : ""}</span>
         </div>
         <div ref={box} onScroll={(e) => (follow.current = atEnd(e.currentTarget))} className="mt-2 max-h-[50vh] min-h-[160px] overflow-y-auto rounded-[10px] border border-border bg-bg px-3 py-2 font-mono text-[12px] leading-[1.55]">
-          {lines?.map((l) => (
+          {earlier > 0 ? (
+            <button type="button" onClick={showEarlier} className="mb-1 font-sans text-muted">
+              Show earlier ({earlier.toLocaleString("en-US")} more {earlier === 1 ? "line" : "lines"})
+            </button>
+          ) : (
+            out?.trimmed && <div className="pb-1 text-faint">Earlier output trimmed</div>
+          )}
+          {shown.map((l) => (
             <div key={l.n} className={cx("break-all whitespace-pre-wrap", l.tone ? LINE_TONE[l.tone] : "text-fg")}>
               {l.text || " "}
             </div>

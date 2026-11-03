@@ -9,7 +9,7 @@ import { type OutputFilter, chipFromJob, jobTabLine, phaseBar, shownLines, worke
 import { useSessionJob } from "../lib/jobsStore";
 import { errorToast, useStore } from "../lib/store";
 import { useNow } from "../lib/useNow";
-import { JobDot, LINE_TONE, TONE, TrimmedNote, WorkerIcon, copyText, going, useFollow, useJobLines } from "./JobsPanel";
+import { EarlierLines, JobDot, LINE_TONE, TONE, WorkerIcon, copyText, going, useFollow, useJobLines, useLastLines } from "./JobsPanel";
 import { cx } from "./ui";
 
 const BAR_TONE = { done: "bg-done", accent: "bg-accent", blocked: "bg-blocked" };
@@ -36,8 +36,10 @@ export default function JobView({ host, wsId, job: id }: { host: string; wsId: s
   const [find, setFind] = useState("");
   const [follow, setFollow] = useState(false);
   const [menu, setMenu] = useState(false);
-  const shown = useMemo(() => (lines ? shownLines(lines, filter, find) : []), [lines, filter, find]);
-  const box = useFollow(follow, shown.length);
+  const filtered = useMemo(() => (lines ? shownLines(lines, filter, find) : []), [lines, filter, find]);
+  const box = useFollow(follow, filtered.length);
+  // The last lines render; Show earlier adds more (X81).
+  const { shown, earlier, showEarlier } = useLastLines(filtered, `${id}\n${filter}\n${find}`, box);
   // The tab closes when the job is dropped from the history.
   useEffect(() => {
     if (job === null) closeJobTab(host, wsId, id);
@@ -123,7 +125,7 @@ export default function JobView({ host, wsId, job: id }: { host: string; wsId: s
             </label>
           </div>
           <div ref={box} data-job-output className="selectable min-h-0 flex-1 overflow-y-auto px-7 py-3 font-mono ui-text-12.5 leading-[1.6]">
-            <TrimmedNote job={id} />
+            <EarlierLines job={id} earlier={earlier} onShow={showEarlier} />
             {shown.map((l) => (
               <div key={l.n} className="flex gap-4">
                 <span className="w-10 shrink-0 select-none text-right tabular-nums text-faint">{l.n}</span>

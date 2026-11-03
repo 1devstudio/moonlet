@@ -76,6 +76,12 @@ the end of a long transcript, and keeps the end of a job's output.
       and says earlier output was trimmed`, `keeps at most 1 MiB of a job's
       output, however much it printed`). Stored output is read page by page
       into what is kept, never held whole.
+- [x] A job's view, the Jobs panel's job detail and the phone's render the
+      last 2000 lines of what they keep (after the stream filter and Find),
+      and "Show earlier" adds 2000 more each time, keeping the view where it
+      was; "Earlier output trimmed" shows once every kept line is rendered
+      (`renders the last 2000 lines of what it keeps, and 2000 more for each
+      Show earlier`).
 - [x] A job's output is read chunk by chunk as it arrives: only the new
       chunks are parsed, and a line or colour code cut between chunks reads
       as before (`reads output chunk by chunk as it comes, joining a line and
@@ -86,9 +92,10 @@ the end of a long transcript, and keeps the end of a job's output.
 - Chat: a "Show earlier" button above the first block shown, only when
   earlier blocks are hidden. Notes placed before the first block show only
   once every block is shown.
-- Job tab and the Jobs panel's job detail: a faint "Earlier output trimmed"
-  line above the output when some was dropped. **Copy output** copies what is
-  kept.
+- Job tab and the Jobs panel's job detail: "Show earlier (N more lines)"
+  above the lines rendered while some kept ones are not; then a faint
+  "Earlier output trimmed" line when some output was dropped. **Copy
+  output** copies what is kept.
 
 ## Protocol and RPCs
 
@@ -105,8 +112,6 @@ None: no new inputs.
 ## Out of scope
 
 - Terminals of sessions not shown keep a live xterm (X78's out of scope).
-- A job view renders every kept line; with 1 MiB kept, that is bounded, not
-  virtualized.
 
 ## Test plan
 
@@ -125,8 +130,10 @@ None: no new inputs.
 - Vitest, `queued.test.ts`: `marks each Interrupted that stopped a command,
   across the whole transcript`.
 - Vitest, `jobs.test.ts`: `keeps the end of a long output, numbered as it
-  was, and says earlier output was trimmed` and `reads output chunk by chunk
-  as it comes, joining a line and a colour code cut between chunks`.
+  was, and says earlier output was trimmed`, `reads output chunk by chunk
+  as it comes, joining a line and a colour code cut between chunks` and
+  `renders the last 2000 lines of what it keeps, and 2000 more for each Show
+  earlier`.
 - Vitest, `jobsStore.test.ts`: `keeps at most 1 MiB of a job's output,
   however much it printed`.
 - Vitest: existing `chat.test.ts`, `jobs.test.ts`, `jobsStore.test.ts`,
