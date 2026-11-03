@@ -117,5 +117,6 @@ Each feature of moonlet has its own spec in this directory. Write the spec befor
 | X78 | The app stays quiet while nothing changes | P1 | 3 | implemented | [X78-idle-app-cpu.md](X78-idle-app-cpu.md) |
 | X79 | A session's processes end with it | P1 | 3 | draft | [X79-session-processes-end-with-session.md](X79-session-processes-end-with-session.md) |
 | X80 | Hidden terminals let go of their memory | P1 | 3 | implemented | [X80-hidden-terminals-let-go.md](X80-hidden-terminals-let-go.md) |
+| X81 | Transcripts and job output stay bounded | P1 | 3 | draft | [X81-bounded-transcripts.md](X81-bounded-transcripts.md) |
 | X82 | Nothing moves where nobody looks: hidden tabs pause their animations, a compositor-only shimmer, reduced motion | P1 | 3 | implemented | [X82-nothing-moves-where-nobody-looks.md](X82-nothing-moves-where-nobody-looks.md) |
 | X84 | Idle agents rest: a chat agent idle for a day is stopped, and the next message resumes it | P1 | 3 | implemented | [X84-idle-agents-rest.md](X84-idle-agents-rest.md) |
