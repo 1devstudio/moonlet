@@ -3,7 +3,8 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Check, ChevronDown, ChevronRight, CornerDownLeft, FileCode, FileText, FolderPlus, GitBranch, GitPullRequest, MoreHorizontal, PenTool, Plus, X } from "lucide-react";
 import { hostsApi, rpc } from "../lib/daemon";
 import type { Task, TaskStart } from "../lib/tasks";
-import { branchUser, composerTask, ensureTasks, leaveTasksMode, placedTasks, startedFromTask, useTasks } from "../lib/tasksStore";
+import { branchUser, composerTask, ensureTasks, leaveTasksMode, lookUpPasted, originRepoOf, placedTasks, startedFromTask, useTasks } from "../lib/tasksStore";
+import { findPasted, pasteLookup } from "../lib/taskLinking";
 import { composerOptions, composerPick, composerProjects, composerTarget, composerWorkspace, wsKey } from "../lib/workspaces";
 import { afterCreate, attachments, branchRow, firstMessage, linkMenu, newBranch, pickerBranches, pickerHint, pickerSearch, placeholder, sessionName, showsLinkSlot, suggestedTask, type Attachment, type PickerList, type PickerTab } from "../lib/composer";
 import { M, type IssueRef, type Project, type ProjectConfig, type Session } from "../lib/protocol";
@@ -429,6 +430,27 @@ export function Composer({
     if (target) ensureTasks(target.host, target.id);
   }, [target?.host, target?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const [taskQuery, setTaskQuery] = useState("");
+  // A key or URL typed into Link a task is asked of its tracker when it is not among the
+  // loaded tasks, so a task assigned to someone else, or off the boards, links too.
+  const [foundTask, setFoundTask] = useState<Task | null>(null);
+  const [lookup] = useState(() => pasteLookup());
+  const latestTasks = useRef(wsTasks);
+  latestTasks.current = wsTasks;
+  const originRepo = useStore((s) => (current && target && taskData ? originRepoOf(s, target.host, taskData, current.host, current.project.id) : null));
+  useEffect(() => {
+    if (!current || !taskQuery.trim()) {
+      lookup.cancel();
+      return setFoundTask(null);
+    }
+    setFoundTask(null);
+    void lookup
+      .query(taskQuery, async () => {
+        const p = await hostsApi.parsePasted(taskQuery);
+        return p ? (findPasted(p, latestTasks.current, originRepo) ?? (await lookUpPasted(current.host, current.project.path, p, originRepo))) : null;
+      })
+      .then((found) => found !== undefined && setFoundTask(found));
+  }, [taskQuery, current?.host, current?.project.path, originRepo]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => lookup.cancel(), [lookup]);
   const ta = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -599,7 +621,7 @@ export function Composer({
   const canLink = !!target && showsLinkSlot({ task: !!task, worktree: !!worktree, sources: !!taskData?.sources.length });
   const suggestion = canLink ? suggestedTask({ pr }, wsTasks) : null;
   const linkItems: MenuItem[] = canLink
-    ? linkMenu({ pr }, prompt, wsTasks, taskQuery).flatMap((section) => [
+    ? linkMenu({ pr }, prompt, wsTasks, taskQuery, foundTask).flatMap((section) => [
         { kind: "label" as const, label: section.label },
         ...section.tasks.map(({ task: t, hint }) => ({ label: `${t.key} ${t.title}`, hint: hint ?? undefined, onSelect: () => linkTo(t) })),
       ])

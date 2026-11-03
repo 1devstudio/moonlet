@@ -284,4 +284,14 @@ describe("Link a task (X54)", () => {
     expect(linkMenu({ pr: null }, "Saved carts\nfor guests", [web, other], "")[0]).toEqual({ label: "Suggested", tasks: [{ task: other, hint: "Title matches the session name" }] });
     expect(linkMenu({ pr: null }, "", [web, other], "zzz")).toEqual([{ label: "No tasks match", tasks: [] }]);
   });
+
+  it("lists a task found by its key first, even when nobody assigned it to the user", () => {
+    const unassigned = task("WEB-501", "Audit the footer links", 0);
+    // The key was typed, so the loaded tasks are not filtered by it; the found one leads.
+    expect(linkMenu({ pr: null }, "", [web, other], "WEB-501", unassigned)).toEqual([
+      { label: "Pasted", tasks: [{ task: unassigned, hint: null }] },
+    ]);
+    // Nothing found and nothing loaded matches: still "No tasks match".
+    expect(linkMenu({ pr: null }, "", [web, other], "WEB-501", null)).toEqual([{ label: "No tasks match", tasks: [] }]);
+  });
 });

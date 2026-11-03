@@ -239,8 +239,11 @@ export function showsLinkSlot(f: { task: boolean; worktree: boolean; sources: bo
  * The Link a task menu's sections: the link dialog's Suggested and Recent
  * lists (X46) for the session the picks and the prompt would make, named as
  * Create would name it and on the PR's head branch, filtered by `query`.
+ * `found` is the task a typed key or URL names, looked up of its tracker
+ * (whoever it is assigned to): it leads, alone, as the link dialog's Pasted.
  */
-export function linkMenu(picks: Pick<Picks, "pr">, prompt: string, tasks: Task[], query: string): { label: string; tasks: { task: Task; hint: string | null }[] }[] {
+export function linkMenu(picks: Pick<Picks, "pr">, prompt: string, tasks: Task[], query: string, found: Task | null = null): { label: string; tasks: { task: Task; hint: string | null }[] }[] {
+  if (found) return [{ label: "Pasted", tasks: [{ task: found, hint: null }] }];
   const session = { name: sessionName({ task: null, ...picks }) ?? prompt.split("\n")[0], branch: picks.pr?.head_branch ?? "" };
   const { suggested, recent } = linkChoices(session, tasks, query);
   const sections = [
