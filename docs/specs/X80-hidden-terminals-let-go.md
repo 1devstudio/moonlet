@@ -35,6 +35,10 @@ attached again and drawn from the daemon's replay.
       app sends `terminal.detach` for it, and it receives no more output
       (`lets go of the least recently shown terminals beyond the limit (X80)`,
       `a ninth terminal shown lets go of the one shown longest ago, and detaches it (X80)`).
+- [x] A terminal counts as shown until it leaves the screen: one in a split
+      that is closed, or whose tab is hidden, is shown more recently than any
+      terminal hidden before it
+      (`a terminal that leaves the screen counts as shown just then (X80)`).
 - [x] A terminal let go of while its attach is still on its way ends up
       detached: once the attach answers, the app sends `terminal.detach`
       again, since the daemon may have taken the first one before the attach
@@ -103,6 +107,7 @@ None: no new input crosses a trust boundary.
   `TermEntry.mount`, with the daemon bridge faked, the RPCs it is sent
   recorded and the terminals it would send output for tracked:
   `a ninth terminal shown lets go of the one shown longest ago, and detaches it (X80)`,
+  `a terminal that leaves the screen counts as shown just then (X80)`,
   `a terminal let go of while its attach is on its way is detached once the attach answers (X80)`,
   `a terminal shown again before its slow attach answers stays subscribed (X80)`,
   `a terminal let go of attaches again when shown, and the replay draws it (X80)`,

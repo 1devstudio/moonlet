@@ -142,6 +142,16 @@ describe("live terminals (X80)", () => {
     expect(sent.filter(([, , p]) => (p as { id: number }).id === 1)).toEqual([["g", "terminal.attach", { id: 1, cols: 119, rows: 26 }]]);
   });
 
+  it("a terminal that leaves the screen counts as shown just then (X80)", () => {
+    const split = show("h", 1);
+    for (let id = 2; id <= 8; id++) show("h", id).unmount();
+    // The split is closed after the others were shown.
+    split.unmount();
+    show("h", 9).unmount();
+    expect(findEntry("h", 1)).toBe(split);
+    expect(detached("h")).toEqual([{ id: 2 }]);
+  });
+
   it("a terminal in a split on screen is kept however many others are shown (X80)", () => {
     const split = show("c", 1);
     for (let id = 2; id <= 10; id++) show("c", id).unmount();

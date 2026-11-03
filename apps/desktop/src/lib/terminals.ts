@@ -457,7 +457,11 @@ export class TermEntry {
     this.webgl?.dispose();
     this.webgl = null;
     if (this.el.parentElement) this.el.parentElement.removeChild(this.el);
+    const wasMounted = this.parent !== null;
     this.parent = null;
+    // On screen until now, so shown more recently than any terminal that
+    // was hidden meanwhile (X80).
+    if (wasMounted) shown(this);
   }
 
   refit() {
