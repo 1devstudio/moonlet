@@ -34,9 +34,11 @@ one of the later parts of X79.
       messages; the next message wakes it"
       (`an_idle_agent_rests_and_the_next_message_resumes_it`).
 - [x] A busy agent does not rest: one whose turn runs, one waiting for the
-      user's answer, and one with a subagent still running
+      user's answer, one with a message still queued for it, and one with a
+      subagent still running
       (`a_working_agent_does_not_rest`,
       `an_agent_waiting_for_an_answer_does_not_rest`,
+      `an_agent_with_a_queued_message_does_not_rest`,
       `an_agent_with_a_running_subagent_does_not_rest`).
 - [x] Idle time counts from the last activity: a message sent, an answer to
       an ask, anything the agent says. A chat written to more often than the
@@ -91,6 +93,7 @@ and start time noted for them (X79).
   `an_idle_agent_rests_and_the_next_message_resumes_it`,
   `a_working_agent_does_not_rest`,
   `an_agent_waiting_for_an_answer_does_not_rest`,
+  `an_agent_with_a_queued_message_does_not_rest`,
   `an_agent_with_a_running_subagent_does_not_rest`,
   `an_agent_kept_busy_with_messages_does_not_rest`,
   `a_resting_agents_server_keeps_running_and_ends_when_the_chat_stops`,

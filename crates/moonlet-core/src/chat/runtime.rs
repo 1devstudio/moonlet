@@ -1289,6 +1289,8 @@ while IFS= read -r line; do
     *'run a long command'*)
       echo '{"type":"assistant","message":{"id":"m5","content":[{"type":"tool_use","id":"t6","name":"Bash","input":{"command":"pnpm stack:check"}}]}}' ;;
     *'queue this'*) ;;
+    *'end the turn'*)
+      echo '{"type":"result","subtype":"success","is_error":false,"usage":{}}' ;;
     *'crash now'*) exit 3 ;;
     *'write a long reply and exit'*)
       # A reply that takes a while to read, all written before the agent
@@ -2218,6 +2220,20 @@ done
         let (dir, terms, chats) = setup().await;
         let id = asked_and_left(&chats, dir.path(), "launch an agent", |s| s.status == "done" && !s.subagents.is_empty()).await;
         assert!(nix::sys::signal::kill(agent_pid(&terms, id), None).is_ok(), "the agent with a running subagent rested");
+        assert_eq!(starts(dir.path()).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_agent_with_a_queued_message_does_not_rest() {
+        let (dir, terms, chats) = setup().await;
+        let id = holding_a_queued_message(&chats, dir.path()).await;
+        // The turn ends before Claude reads the messages queued during it.
+        chats.send(id, "end the turn", &[]).unwrap();
+        wait_for(&chats, id, |s| s.status == "done" && !s.queued.is_empty()).await;
+        let agent = agent_pid(&terms, id);
+        chats.set_rest_after(Duration::from_millis(300));
+        tokio::time::sleep(Duration::from_millis(4500)).await;
+        assert!(nix::sys::signal::kill(agent, None).is_ok(), "the agent with a queued message rested");
         assert_eq!(starts(dir.path()).len(), 1);
     }
 
