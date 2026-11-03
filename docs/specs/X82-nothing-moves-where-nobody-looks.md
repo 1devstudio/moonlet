@@ -99,8 +99,10 @@ None: no new inputs.
 - Manual, in the e2e app with `e2e/snap.ts`: the new shimmer at rest matches
   the old muted label and at its peak the old sweep's light grey; the app's
   WebKit reports `document.getAnimations()` inside a `data-quiet` tab as
-  `paused` and the shown ones as `running`. Reduce motion untried in WebKit
-  (the system setting was off).
+  `paused` and the shown ones as `running`, `::after` (the progress bar) and
+  `::before` animations too. With the reduced-motion rules applied outside
+  their `@media`, every one of those animations, pseudo-elements too, runs
+  once. The system setting itself is untried (it was off).
 
 ## Open questions
 
