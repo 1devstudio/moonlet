@@ -1,6 +1,6 @@
 # X79 — A session's processes end with it
 
-- **Status:** draft
+- **Status:** implemented
 - **Priority / phase:** P1 · phase 3
 - **PRD refs:** S1 daemon-owned sessions, S3 live upgrade, S4 restore after restart, X1 repo scripts
 - **Related ADRs:** none
@@ -148,8 +148,12 @@ After a crash:
 
 Later parts of this spec, each with its own change:
 
-- [ ] A registry of each session's processes, kept across daemon restarts, and
-      a reaper at startup that stops the processes of archived sessions.
+- [x] A registry of each session's processes, kept across daemon restarts, and
+      a reaper at startup that stops the processes of archived sessions:
+      archiving stops a session's processes, those left in its worktree
+      included ([X83](X83-session-processes-listed-and-stopped.md)), and the
+      leftovers record above, kept across restarts, ends what a crashed daemon
+      left. No separate registry per session is kept.
 - [x] Archiving a session with processes still running asks first, listing
       them by name: [X83](X83-session-processes-listed-and-stopped.md).
 - [x] A chat agent idle for 24 hours (no turn running, nothing waiting for the
@@ -172,7 +176,8 @@ None in this part.
 
 `<socket name>.leftovers.json` next to the daemon's socket, written by the
 daemon and read once by the next one on that socket:
-`{"boot": …, "boot_id": "…", "processes": [[pid, start], …], "sessions": [[leader pid, start], …]}`.
+`{"boot": …, "processes": [{"pid": …, "start": …}, …], "sessions": [{"pid": <leader>, "start": …}, …]}`.
+A record written as `[pid, start]` pairs, as earlier daemons did, still reads.
 Start and boot times are in microseconds since the epoch on macOS; on Linux a
 start is in clock ticks since boot and the boot time in seconds. The boot id
 is `kern.bootsessionuuid` on macOS and `/proc/sys/kernel/random/boot_id` on

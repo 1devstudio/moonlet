@@ -115,7 +115,7 @@ Each feature of moonlet has its own spec in this directory. Write the spec befor
 | X76 | Tasks on the phone: boards shared through the daemon, moves, creates, comments and links relayed to the Mac | P1 | 3 | implemented (phone screens untried on a device) | [X76-tasks-on-the-phone.md](X76-tasks-on-the-phone.md) |
 | X77 | A changed file's diff opens in a tab of the main window, with a Markdown preview | P1 | 3 | implemented | [X77-diff-tabs.md](X77-diff-tabs.md) |
 | X78 | The app stays quiet while nothing changes | P1 | 3 | implemented | [X78-idle-app-cpu.md](X78-idle-app-cpu.md) |
-| X79 | A session's processes end with it | P1 | 3 | draft | [X79-session-processes-end-with-session.md](X79-session-processes-end-with-session.md) |
+| X79 | A session's processes end with it | P1 | 3 | implemented | [X79-session-processes-end-with-session.md](X79-session-processes-end-with-session.md) |
 | X80 | Hidden terminals let go of their memory | P1 | 3 | implemented | [X80-hidden-terminals-let-go.md](X80-hidden-terminals-let-go.md) |
 | X81 | Transcripts and job output stay bounded | P1 | 3 | implemented | [X81-bounded-transcripts.md](X81-bounded-transcripts.md) |
 | X82 | Nothing moves where nobody looks: hidden tabs pause their animations, a compositor-only shimmer, reduced motion | P1 | 3 | implemented | [X82-nothing-moves-where-nobody-looks.md](X82-nothing-moves-where-nobody-looks.md) |
