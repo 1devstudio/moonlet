@@ -41,7 +41,8 @@ Listing (`session.processes`):
       chat agents with the processes it started (X79's family), each with the
       tab or agent it belongs to; a Run tab's (one of the session's scripts)
       say so, as `run`. The tab's shell and the chat's agent are
-      marked as the tab's own (`tab`)
+      marked as the tab's own (`tab`, a name kept on the wire: it says whose
+      the process is, not that it is a tab)
       (`a_sessions_processes_are_its_tabs_sessions_and_its_agents_families`,
       `a_sessions_processes_are_listed_by_name_and_stopped`).
 - [x] Each process is named by the file name of its executable as the kernel
@@ -191,6 +192,8 @@ worktree can be signalled.
 - Processes on a remote host's copy of the session are listed by that host's
   daemon only; the app asks the session's own host.
 - Leftovers whose working directory moved out of the worktree are not found.
+- On Linux, leftovers re-parented to a subreaper (such as `systemd --user`)
+  rather than init are not found: only init's children are looked at.
 
 ## Test plan
 

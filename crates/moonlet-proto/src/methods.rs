@@ -1751,7 +1751,8 @@ pub struct SessionProcess {
     pub name: String,
     pub origin: ProcessOrigin,
     /// The tab's own process: a terminal's shell, or a chat's agent. Closing
-    /// the tab ends it; stopping all leaves it.
+    /// the tab ends it; stopping all leaves it. On the wire as `tab`: it says
+    /// whose the process is, not that it is a tab.
     #[serde(default)]
     pub tab: bool,
     /// When it started, in milliseconds since the epoch.
