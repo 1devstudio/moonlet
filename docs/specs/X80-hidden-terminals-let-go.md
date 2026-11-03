@@ -39,6 +39,9 @@ attached again and drawn from the daemon's replay.
       detached: once the attach answers, the app sends `terminal.detach`
       again, since the daemon may have taken the first one before the attach
       (`a terminal let go of while its attach is on its way is detached once the attach answers (X80)`).
+      It does not when the terminal was shown again meanwhile: the new
+      terminal's attach keeps it subscribed
+      (`a terminal shown again before its slow attach answers stays subscribed (X80)`).
 - [x] A terminal let go of is attached again when it is shown again, and the
       daemon's replay (S2) draws its screen and scrollback
       (`a terminal let go of attaches again when shown, and the replay draws it (X80)`).
@@ -98,6 +101,7 @@ None: no new input crosses a trust boundary.
   recorded and the terminals it would send output for tracked:
   `a ninth terminal shown lets go of the one shown longest ago, and detaches it (X80)`,
   `a terminal let go of while its attach is on its way is detached once the attach answers (X80)`,
+  `a terminal shown again before its slow attach answers stays subscribed (X80)`,
   `a terminal let go of attaches again when shown, and the replay draws it (X80)`,
   `a terminal in a split on screen is kept however many others are shown (X80)`,
   `a block dropped past the 2000 kept lets go of its marks (X80)` and

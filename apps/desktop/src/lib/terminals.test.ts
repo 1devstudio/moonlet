@@ -147,4 +147,15 @@ describe("live terminals (X80)", () => {
     await vi.waitFor(() => expect(daemon.subscribed.has("e:9")).toBe(true));
     await vi.waitFor(() => expect([...daemon.subscribed].sort()).toEqual(["e:2", "e:3", "e:4", "e:5", "e:6", "e:7", "e:8", "e:9"]));
   });
+
+  it("a terminal shown again before its slow attach answers stays subscribed (X80)", async () => {
+    daemon.hold = true;
+    for (let id = 1; id <= 9; id++) show("f", id).unmount();
+    // Shown again while the attach of the terminal let go of is on its way.
+    show("f", 1);
+    daemon.answer();
+    await vi.waitFor(() => expect(daemon.subscribed.has("f:9")).toBe(true));
+    await new Promise((done) => setTimeout(done, 0));
+    expect([...daemon.subscribed].sort()).toEqual(["f:1", "f:3", "f:4", "f:5", "f:6", "f:7", "f:8", "f:9"]);
+  });
 });

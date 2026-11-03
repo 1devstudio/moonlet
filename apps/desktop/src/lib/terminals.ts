@@ -406,8 +406,9 @@ export class TermEntry {
       throw e;
     }
     // Let go of while the attach was on its way (X80): the daemon may have
-    // taken the detach first, and subscribed this client after it.
-    if (this.disposed) void rpc(this.host, M.terminalDetach, { id: this.session }).catch(() => {});
+    // taken the detach first, and subscribed this client after it. Unless
+    // the terminal was shown again meanwhile: its new entry wants the output.
+    if (this.disposed && !findEntry(this.host, this.session)) void rpc(this.host, M.terminalDetach, { id: this.session }).catch(() => {});
     this.lastSize = `${cols}x${rows}`;
   }
 
