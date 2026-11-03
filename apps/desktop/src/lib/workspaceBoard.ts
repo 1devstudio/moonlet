@@ -6,7 +6,9 @@ import { type Card, sessionsWithoutTask } from "./tasksBoard";
 import { boardInput, type Moving, rulesFor, type TasksData, type TrackersConfig } from "./tasksStore";
 import { workspaceMembers, wsKey, type WorkspaceRef } from "./workspaces";
 
-/** What a workspace's board reads besides its tasks: Tasks-mode state from `useTasks`. */
+/** What a workspace's board depends on besides its tasks: Tasks-mode state
+ *  from `useTasks`. `paused` and `moving` are read through `useTasks` while
+ *  the board is built; they are here so that a change builds it again. */
 export interface BoardKnobs {
   notNow: Record<string, true>;
   config: TrackersConfig;
@@ -15,8 +17,10 @@ export interface BoardKnobs {
   shownId: string | null;
 }
 
-/** The parts of the main store a board reads; other changes (terminal output) leave it as it is. */
-export const boardDeps = (s: StoreState) => [s.sessions, s.prs, s.git, s.terminals, s.reads, s.accounts, s.workspaces];
+/** The parts of the main store a board reads, its workspace's members
+ *  (hosts, sections, profiles) and projects included; other changes (terminal
+ *  output) leave it as it is. */
+export const boardDeps = (s: StoreState) => [s.sessions, s.prs, s.git, s.terminals, s.reads, s.accounts, s.workspaces, s.projects, s.hosts, s.sections, s.profiles];
 
 function build(st: StoreState, ws: WorkspaceRef | null, data: TasksData | undefined, k: BoardKnobs) {
   if (!ws || !data) return { ws, data, board: null, unlinked: [], shown: null, all: [] };
@@ -35,7 +39,10 @@ export type WorkspaceBoard = ReturnType<typeof build>;
 
 type StoreState = ReturnType<typeof useStore.getState>;
 
+/** The last board of each workspace shown lately, newest last. */
 const built = new Map<string, { inputs: unknown[]; board: WorkspaceBoard }>();
+/** How many workspaces' boards are kept: each holds on to whole store slices. */
+const KEPT_BOARDS = 8;
 
 /**
  * A workspace's boards laid out (X50), built once for the same inputs however
@@ -43,11 +50,14 @@ const built = new Map<string, { inputs: unknown[]; board: WorkspaceBoard }>();
  * and Tasks mode each ask on every store change (X78).
  */
 export function workspaceBoard(st: StoreState, ws: WorkspaceRef | null, data: TasksData | undefined, k: BoardKnobs): WorkspaceBoard {
-  const key = ws ? `${ws.account ?? ""}|${ws.host}|${ws.id}` : "";
+  const key = ws ? wsKey(ws.host, ws.id) : "";
   const inputs = [data, k.notNow, k.config, k.paused, k.moving, k.shownId, ...boardDeps(st)];
   const last = built.get(key);
   if (last && last.inputs.length === inputs.length && last.inputs.every((x, i) => x === inputs[i])) return last.board;
   const board = build(st, ws, data, k);
+  built.delete(key);
   built.set(key, { inputs, board });
+  const oldest = built.keys().next().value;
+  if (built.size > KEPT_BOARDS && oldest !== undefined) built.delete(oldest);
   return board;
 }

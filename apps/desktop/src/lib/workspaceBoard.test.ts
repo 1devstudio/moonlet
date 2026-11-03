@@ -52,6 +52,21 @@ describe("a workspace's board (X78)", () => {
     expect(workspaceBoard(useStore.getState(), { ...ws }, data, knobs)).toBe(first);
   });
 
+  it("is built again once a Tasks setting changes", () => {
+    const first = workspaceBoard(useStore.getState(), ws, data, knobs);
+    // Linking by title turned off: the unlinked session no longer gets a hint.
+    const titlesOff = { ...knobs, config: { ...DEFAULT_CONFIG, link: { branch: true, pr: true, title: false } } };
+    const next = workspaceBoard(useStore.getState(), ws, data, titlesOff);
+    expect(next).not.toBe(first);
+    expect(unlinked(next)).toEqual([["Fix login", ""]]);
+  });
+
+  it("is built again once the workspace's projects change", () => {
+    const first = workspaceBoard(useStore.getState(), ws, data, knobs);
+    useStore.setState({ projects: { local: [] } });
+    expect(workspaceBoard(useStore.getState(), ws, data, knobs)).not.toBe(first);
+  });
+
   it("is built again once a session it shows changes", () => {
     const first = workspaceBoard(useStore.getState(), ws, data, knobs);
     useStore.setState({ sessions: { local: [session("s1", "Fix login"), session("s2", "Add dark mode")] } });

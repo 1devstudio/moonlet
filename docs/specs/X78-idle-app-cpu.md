@@ -31,8 +31,10 @@ workspace's board once per change instead of once per component that shows it.
       the worktree has not changed since the last poll`).
 - [x] A git poll whose result differs updates the session's git status, as
       before (`stores a changed status and tells subscribers once`).
-- [ ] A workspace's board is built once for a given set of inputs, however many
+- [x] A workspace's board is built once for a given set of inputs, however many
       components show it (sidebar, mode switch, a session's task, Tasks mode).
+      It is built again when anything it reads changes, projects and the
+      workspace's hosts included. Boards of the last 8 workspaces are kept.
 - [ ] Linking sessions to tasks lower-cases each task key, repository and title
       once per task list, not once per session and task pair. Links found are
       the same as before.
@@ -70,8 +72,10 @@ Later parts of the same investigation, each with its own change:
 - Vitest, `gitPoll.test.ts`: `re-renders nothing when the worktree has not
   changed since the last poll` and `stores a changed status and tells
   subscribers once`.
-- Vitest: the board for the same inputs is the same object when asked for
-  twice; new inputs give a new board.
+- Vitest, `workspaceBoard.test.ts`: `is built once however many components ask
+  for it`, `is built again once a Tasks setting changes`, `is built again once
+  the workspace's projects change` and `is built again once a session it shows
+  changes`.
 - Vitest: existing `tasks.test.ts`, `tasksBoard.test.ts` and `tasksStore.test.ts`
   link tests stay green.
 - Manual: `footprint -p <pid>` and `ps -o pcpu` of the app's web content process
