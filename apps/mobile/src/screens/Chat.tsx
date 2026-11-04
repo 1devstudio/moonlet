@@ -4,7 +4,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArrowUp, CornerDownLeft, ListChecks, Loader2, MessageCircleQuestion, MessageSquareDashed, Plus, Square, SquareTerminal } from "lucide-react";
 import { rpc } from "@desktop/lib/daemon";
-import { askQuestions, chatBlocks, chatDraft, chatKey, loadChat, questionAnswers, saveChatDraft, turnRunning, useChat } from "@desktop/lib/chat";
+import { askQuestions, chatBlocks, chatDraft, chatKey, questionAnswers, saveChatDraft, turnRunning, useChat, useChatOnScreen } from "@desktop/lib/chat";
 import { CLAUDE_MODELS, CLAUDE_MODES, EFFORTS } from "@desktop/lib/agents";
 import { type AsideAnswer, type ChatState, M, type PermissionAsk, type QueuedMessage, type Session } from "@desktop/lib/protocol";
 import { type Aside, asideFooter, asideSettled, queuedHeader, waitingOn } from "@desktop/lib/queued";
@@ -251,9 +251,8 @@ export function ChatView({ host, terminal, cwd, from }: { host: string; terminal
     );
   }, [st, unqueuing]); // eslint-disable-line react-hooks/exhaustive-deps
   const scroller = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    void loadChat(host, terminal).catch(console.error);
-  }, [host, terminal]);
+  // On screen, its items load, and load again should they go (X81).
+  useChatOnScreen(host, terminal, true, console.error);
   const blocks = st ? chatBlocks(st.items, "collapsed") : [];
   // Follow the conversation's end as it grows.
   useLayoutEffect(() => {

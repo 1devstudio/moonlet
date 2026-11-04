@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { DesignComment } from "./protocol";
 import { editsMessage, type Untold } from "./designEdits";
-import { boxLabel, boxPlace, chatCardLookup, commentCardAttrs, commentCardSelector, commentCardTitle, commentsRail, pinPlace, withMid, keepAction, openCommentsLabel, commentCards, footerLabel, pinLabel, sentLabel, commentLine, commentsMessage, commentsTab, isOrphaned, messageView, pageCounts, parseCommentLine, sendAll, withPins, type PageMids } from "./designComments";
+import { boxLabel, boxPlace, chatCardLookup, showsPin, commentCardAttrs, commentCardSelector, commentCardTitle, commentsRail, pinPlace, withMid, keepAction, openCommentsLabel, commentCards, footerLabel, pinLabel, sentLabel, commentLine, commentsMessage, commentsTab, isOrphaned, messageView, pageCounts, parseCommentLine, sendAll, withPins, type PageMids } from "./designComments";
 
 const pin = (n: number, over: Partial<DesignComment> = {}): DesignComment => ({
   n,
@@ -218,6 +218,22 @@ describe("Show in chat (X65)", () => {
     expect(chatCardLookup({ found: true, loaded: true, waitedMs: 300 })).toBe("found");
     expect(chatCardLookup({ found: false, loaded: true, waitedMs: 300 })).toBe("missing");
     expect(chatCardLookup({ found: false, loaded: false, waitedMs: 5000 })).toBe("missing");
+  });
+
+  it("waits for a card its chat has but does not render yet, among the earlier blocks (X81)", () => {
+    expect(chatCardLookup({ found: false, loaded: true, listed: true, waitedMs: 300 })).toBe("wait");
+    expect(chatCardLookup({ found: false, loaded: true, listed: true, waitedMs: 5000 })).toBe("missing");
+    expect(chatCardLookup({ found: false, loaded: true, listed: false, waitedMs: 300 })).toBe("missing");
+  });
+
+  it("knows the message that carries a pin's card, by its design's folder (X81)", () => {
+    const nav = pin(1, { text: "General Appearance", comment: "Collapse it", sent_at: 1 });
+    const sent = 'Comment on docs/design/settings-page/pages/index.html [data-mid=m12] (nav "General Appearance"): Collapse it';
+    expect(showsPin(sent, nav, "docs/design/settings-page")).toBe(true);
+    expect(showsPin(sent, nav, "docs/design/onboarding")).toBe(false);
+    expect(showsPin('Comment on index.html [data-mid=m12] (nav "General Appearance"): Collapse it', nav, null)).toBe(true);
+    expect(showsPin('Comment on index.html [data-mid=m12] (nav "General Appearance"): Make it blue', nav, null)).toBe(false);
+    expect(showsPin("Collapse it", nav, null)).toBe(false);
   });
 
   it("finds a card by its design's folder and its pin's number, as two designs of a session can each have a pin 1", () => {

@@ -6,13 +6,15 @@ import { parseCopyHost } from "./copyHost";
 import { useEffect } from "react";
 import { create } from "zustand";
 import { DaemonError, onDaemonEvent, onHostStatus, rpc } from "./daemon";
+import { type JobOutput, readOutput } from "./jobs";
 import { EV, M, type Job, type JobChunk } from "./protocol";
 
 interface JobsState {
   /** By `host/session`, newest first as `job.list` gives them. */
   jobs: Record<string, Job[]>;
-  /** By job id, for the jobs whose output a view has loaded. */
-  output: Record<string, JobChunk[]>;
+  /** By job id, for the jobs whose output a view has loaded: its last
+   *  part, read as lines as it comes (X81). */
+  output: Record<string, JobOutput>;
 }
 
 export const useJobs = create<JobsState>(() => ({ jobs: {}, output: {} }));
@@ -102,16 +104,18 @@ export function useSessionJob(host: string, session: string, job: string): Job |
 export async function loadOutput(host: string, job: string) {
   if (pending[job]) return;
   pending[job] = [];
-  const chunks: JobChunk[] = [];
+  // Each page is read as it comes, so a long output is never held whole.
+  let out: JobOutput | undefined;
   try {
     let from = 0;
     for (;;) {
       const r = await rpc<{ chunks: JobChunk[]; next: number; more: boolean }>(host, M.jobOutput, { job, from });
-      chunks.push(...r.chunks);
+      out = readOutput(out, r.chunks);
       from = r.next;
       if (!r.more) break;
     }
-    useJobs.setState((s) => ({ output: { ...s.output, [job]: [...chunks, ...pending[job]] } }));
+    const read = readOutput(out, pending[job]);
+    useJobs.setState((s) => ({ output: { ...s.output, [job]: read } }));
   } catch (e) {
     // A job dropped from the history has no output to show.
     if (!(e instanceof DaemonError && e.code === "not_found")) throw e;
@@ -137,7 +141,7 @@ export function startJobs() {
     } else if (e.name === EV.jobOutput) {
       const ev = e.data as { job: string; chunks: JobChunk[] };
       if (pending[ev.job]) pending[ev.job].push(...ev.chunks);
-      else useJobs.setState((s) => (s.output[ev.job] ? { output: { ...s.output, [ev.job]: [...s.output[ev.job], ...ev.chunks] } } : s));
+      else useJobs.setState((s) => (s.output[ev.job] ? { output: { ...s.output, [ev.job]: readOutput(s.output[ev.job], ev.chunks) } } : s));
     }
   });
   // A host that comes back may have ended or lost jobs meanwhile.

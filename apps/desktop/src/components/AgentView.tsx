@@ -51,7 +51,11 @@ import {
   elapsed,
   fuzzyFilter,
   joinDraft,
-  loadChat,
+  BLOCKS_SHOWN,
+  blockKey,
+  limitShowing,
+  showChats,
+  useChatOnScreen,
   type PlanChoice,
   planAnswer,
   planApproveLabel,
@@ -79,8 +83,10 @@ import { openAgents, openChanges, openFileTab, openJobs } from "../lib/actions";
 import { bashChip, shownCommand } from "../lib/jobs";
 import { useToolJob } from "../lib/jobsStore";
 import { WorkerIcon } from "./JobsPanel";
+import { ShowEarlier } from "./ShowEarlier";
+import { useShowEarlier } from "../lib/showEarlier";
 import { type AsideAnswer, type ChatItem, type ChatState, M, type PermissionAsk, type QueuedMessage, type TerminalInfo, type ToolCall, type TurnTime } from "../lib/protocol";
-import { type Aside, type Line, type Running, asideFooter, asideSettled, canAskAside, composerPlaceholder, interruptedLine, queuedCount, queuedHeader, requeue, sendNowLabel, sendNowParams, sendNowWarning, unqueued, userSend, waitingOn } from "../lib/queued";
+import { type Aside, type Line, type Running, asideFooter, asideSettled, canAskAside, composerPlaceholder, interruptedLines, queuedCount, queuedHeader, requeue, sendNowLabel, sendNowParams, sendNowWarning, unqueued, userSend, waitingOn } from "../lib/queued";
 import { firstWord, suggest } from "../lib/suggest";
 import { canMentionFiles, fileMention, isAttachShortcut, withMention, withSlashCommand } from "../lib/plusMenu";
 import { type ChatImage, base64, splitAttachments } from "../lib/attachments";
@@ -89,7 +95,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { errorToast, getLayout, setLayout, termKey, toast, useStore } from "../lib/store";
 import { signInFor } from "../lib/profiles";
 import { addTab, tabOf } from "../lib/layout";
-import { type PlanView, planLabels, planView } from "../lib/plan";
+import { type PlanView, planCardBelow, planLabels, planView } from "../lib/plan";
 import { AGENT_STATE, type AgentNote, type AgentRow, agentCount, agentMs, agentNotes, agentRows, askerName, clock, hasRunningAgents, launchedRows, notesByBlock } from "../lib/subagents";
 import { uiScale } from "../lib/uiScale";
 import { useNow } from "../lib/useNow";
@@ -1255,7 +1261,7 @@ function ContextChip({ icon, title, onClick }: { icon: React.ReactNode; title: s
 
 /** An empty chat (X38): where it runs, and the session's other chats and
  * plans to start from. A chip writes its file and mentions it in the input. */
-function NewChat({ host, sessionId, self, cwd, onMention }: { host: string; sessionId: string; self: number; cwd: string; onMention: (mention: string) => void }) {
+function NewChat({ host, sessionId, self, cwd, visible, onMention }: { host: string; sessionId: string; self: number; cwd: string; visible: boolean; onMention: (mention: string) => void }) {
   const terminals = useStore((s) => s.terminals[host]);
   const home = useStore((s) => s.hosts[host]?.home ?? null);
   const chats = useChat((s) => s.chats);
@@ -1263,16 +1269,11 @@ function NewChat({ host, sessionId, self, cwd, onMention }: { host: string; sess
   const byId = useMemo(() => Object.fromEntries(list.map((t) => [t.id, chats[chatKey(host, t.id)]])), [list, chats, host]);
   const { transcripts, plans } = useMemo(() => newChatContext(list, byId, { session: sessionId, self, cwd }), [list, byId, sessionId, self, cwd]);
 
-  // The other chats' conversations, loaded here once each (a chat whose
-  // load fails isn't asked for again on every terminal update).
-  const asked = useRef(new Set<number>());
-  useEffect(() => {
-    for (const t of otherChats(list, sessionId, self)) {
-      if (asked.current.has(t.id) || useChat.getState().chats[chatKey(host, t.id)]) continue;
-      asked.current.add(t.id);
-      void loadChat(host, t.id).catch(() => {});
-    }
-  }, [list, host, sessionId, self]);
+  // The other chats' conversations, which the chips read: on screen while
+  // this chat shows, so none drops its items (X81). A string, so a terminal
+  // update that leaves the chats as they were asks for nothing again.
+  const others = useMemo(() => otherChats(list, sessionId, self).map((t) => t.id).join(","), [list, sessionId, self]);
+  useEffect(() => (visible && others ? showChats(host, others.split(",").map(Number)) : undefined), [host, others, visible]);
 
   const add = async (files: ContextFiles) => {
     try {
@@ -1394,9 +1395,9 @@ export function AgentView({
   const stick = useRef(true);
   const scale = useStore((s) => uiScale(s.settings.term.fontSize));
 
-  useEffect(() => {
-    if (!st) void loadChat(host, id).catch(errorToast);
-  }, [host, id, st]);
+  // Its items load when it is shown, and stay while it is on screen or
+  // among the last chats shown (X81).
+  useChatOnScreen(host, id, visible, errorToast);
 
   const working = turnRunning(st?.status);
   const exists = useProjectFiles(host, cwd, working);
@@ -1406,6 +1407,18 @@ export function AgentView({
   const agentNow = useNow(visible && hasRunningAgents(st?.subagents));
   const agentRowsHere = useMemo(() => agentRows([{ id, st }], agentNow), [id, st, agentNow]);
   const placed = useMemo(() => notesByBlock(blocks, st ? agentNotes(st.items, st.subagents ?? []) : []), [blocks, st]);
+  // The last blocks render; "Show earlier" adds more (X81).
+  const { rendered: renderedBlocks, earlier, showEarlier, setLimit } = useShowEarlier(blocks, { step: BLOCKS_SHOWN, reset: id, scroller, key: blockKey, atEnd: () => stick.current });
+  // A jump to an item among the earlier blocks shows them (X81); it is
+  // done once the transcript it looks in has loaded.
+  const reveal = useChat((s) => (s.reveal?.key === chatKey(host, id) ? s.reveal : null));
+  useEffect(() => {
+    if (!reveal || !st) return;
+    setLimit((n) => limitShowing(blocks, n, reveal.isTarget));
+    useChat.setState({ reveal: null });
+  }, [reveal, blocks, st, setLimit]);
+  const renderedIds = useMemo(() => new Set(renderedBlocks.flatMap((b) => (b.kind === "item" ? [b.item.id] : b.tools.map((t) => t.id)))), [renderedBlocks]);
+  const dividers = useMemo(() => interruptedLines(st?.items ?? []), [st?.items]);
 
   // Follow new output while the view is scrolled to the bottom.
   useLayoutEffect(() => {
@@ -1677,11 +1690,13 @@ export function AgentView({
             {!st ? (
               <div className="py-10 text-center ui-text-13 text-faint">Loading conversation…</div>
             ) : st.items.length === 0 ? (
-              <NewChat host={host} sessionId={wsId} self={id} cwd={cwd} onMention={(m) => editor.current?.mention(m)} />
+              <NewChat host={host} sessionId={wsId} self={id} cwd={cwd} visible={visible} onMention={(m) => editor.current?.mention(m)} />
             ) : (
               [
-                ...placed.lead.map((n, i) => <AgentNoteView key={`lead-${i}`} note={n} />),
-                ...blocks.map((b) => {
+                ...(earlier > 0
+                  ? [<ShowEarlier key="show-earlier" earlier={earlier} onClick={showEarlier} className="self-center px-2 py-1 ui-text-12.5" />]
+                  : placed.lead.map((n, i) => <AgentNoteView key={`lead-${i}`} note={n} />)),
+                ...renderedBlocks.map((b) => {
                   const own = b.kind === "item" && b.item.kind === "user" ? (userView?.(b.item.text) ?? null) : null;
                   const view =
                     b.kind === "agents" ? (
@@ -1700,7 +1715,7 @@ export function AgentView({
                     const note = toolNote(t);
                     return note ? [<Fragment key={`${t.id}-tool-note`}>{note}</Fragment>] : [];
                   });
-                  const divider = b.kind === "item" && b.item.kind === "system" ? interruptedLine(st.items, st.items.indexOf(b.item)) : null;
+                  const divider = b.kind === "item" ? (dividers.get(b.item.id) ?? null) : null;
                   // The command Send now would stop is ringed while it is pointed at (X49).
                   const shown = divider ? (
                     <InterruptedDivider key={ids[0]} line={divider} />
@@ -1715,7 +1730,8 @@ export function AgentView({
                 }),
               ]
             )}
-            {plan && !plan.itemId && planCard}
+            {/* A plan that waits shows here when its row is among the earlier blocks (X81). */}
+            {planCardBelow(plan, renderedIds) && planCard}
             {queued.length > 0 && (
               <QueuedArea
                 queued={queued}

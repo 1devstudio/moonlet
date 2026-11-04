@@ -8,8 +8,8 @@
 import { ArrowRight, ChevronDown, GitBranch, History as HistoryIcon, LayoutGrid, Loader2, Lock, MessageSquare, MoreHorizontal, PanelLeftClose, PanelLeftOpen, PanelRight, SwatchBook, Trash2, Undo2 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type Dispatch, type MutableRefObject, type ReactNode, type RefObject, type SetStateAction } from "react";
 import { errorToast, toast, updateSettings, useStore } from "../../lib/store";
-import { chatKey, useChat } from "../../lib/chat";
-import type { Design, DesignComment, DesignSnapshot, DesignToken } from "../../lib/protocol";
+import { chatHasItem, chatKey, revealInChat, useChat } from "../../lib/chat";
+import type { ChatItem, Design, DesignComment, DesignSnapshot, DesignToken } from "../../lib/protocol";
 import { briefShown, designSubtitle } from "../../lib/design";
 import {
   addPageMid,
@@ -51,7 +51,7 @@ import { previewBar, previewStep, snapshotTime, type Preview } from "../../lib/d
 import { VIEWPORTS, canvasKey, canvasScale, canvasZoom, customViewports, fitBox, sizeOf, sizeText, viewportLabel, viewportOf, viewportText, withCustomViewport, type Size } from "../../lib/designViewport";
 import { canvasTakesKeys, inTabAfter, breadcrumb, dragEdit, hintLine, pickEdit, canvasPage, canvasStep, chatAfter, editorStep, isTyping, keyAct, layerPick, modeEntered, onReport, undoOpen, writingPage, type CanvasAct, type CanvasMode, type CanvasState, type ChatPanel, type KeyAct, type RailTab } from "../../lib/designCanvas";
 import { keyId } from "../../lib/runActions";
-import { chatCardLookup, commentCardSelector, commentsRail, commentsTab, keepAction, openCommentsLabel, pageCounts, sendAll } from "../../lib/designComments";
+import { chatCardLookup, commentCardSelector, showsPin, commentsRail, commentsTab, keepAction, openCommentsLabel, pageCounts, sendAll } from "../../lib/designComments";
 import { bridgeMessage, editMessage, helloMessage, modeMessage, paletteMessage, pinsMessage, scrollMessage, selectMessage, type DragOver, type DragResult, type Layer, type PickedElement, type Rect } from "../../lib/designBridge";
 import { pageFile, pagePath } from "../../lib/designPage";
 import { barProblems, chatOpensOn, designBar, loadFixMessage, pageFixMessage, type Bar, type BarAction, type PageProblem } from "../../lib/designBars";
@@ -575,12 +575,15 @@ export function DesignCanvas({
   // Show in chat: the chat opens, then scrolls to the pin's last card, its
   // design's (commentCardSelector), once its messages have loaded
   // (chatCardLookup).
-  const [shownPin, setShownPin] = useState<{ n: number; folder: string | null; at: number } | null>(null);
+  const [shownPin, setShownPin] = useState<{ n: number; folder: string | null; at: number; isTarget: (item: ChatItem) => boolean } | null>(null);
   const chatLoaded = useChat((c) => agent !== null && !!c.chats[chatKey(host, agent)]);
   const showInChat = (pin: DesignComment) => {
     setChatOpen(true);
     // Its design's card: a session's chat has every design's comments.
-    setShownPin({ n: pin.n, folder: toldFolder(peers, design.slug), at: Date.now() });
+    const folder = toldFolder(peers, design.slug);
+    const isTarget = (item: ChatItem) => item.kind === "user" && showsPin(item.text, pin, folder);
+    if (agent !== null) revealInChat(host, agent, isTarget);
+    setShownPin({ n: pin.n, folder, at: Date.now(), isTarget });
   };
   useEffect(() => {
     if (!shownPin || !chatOpen) return;
@@ -589,7 +592,10 @@ export function DesignCanvas({
     const look = () => {
       const cards = chatRef.current?.querySelectorAll<HTMLElement>(commentCardSelector(shownPin.n, shownPin.folder));
       const card = cards?.[cards.length - 1];
-      const step = chatCardLookup({ found: !!card, loaded: chatLoaded, waitedMs: Date.now() - shownPin.at });
+      // Whether its message is in the chat, rendered or among the earlier
+      // blocks the chat shows once asked (X81); read only while looking.
+      const listed = !card && agent !== null && chatHasItem(host, agent, shownPin.isTarget);
+      const step = chatCardLookup({ found: !!card, loaded: chatLoaded, listed, waitedMs: Date.now() - shownPin.at });
       if (step === "wait") return;
       clearInterval(again);
       if (!card) return toast("Its message is not in the chat any more", "info");
@@ -605,7 +611,7 @@ export function DesignCanvas({
       clearTimeout(done);
       ringed?.classList.remove("ring-2", "ring-accent");
     };
-  }, [shownPin, chatOpen, chatLoaded]);
+  }, [shownPin, chatOpen, chatLoaded, host, agent]);
   // A pin picked in the rail: its page, with its box open.
   const openPin = (pin: DesignComment) => {
     if (!pin.page) return;

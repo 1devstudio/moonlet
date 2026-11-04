@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   activeToken,
+  BLOCKS_SHOWN,
+  limitShowing,
   itemShown,
   commandOptions,
   withCompletion,
@@ -15,8 +17,9 @@ import {
   forgetChat,
   diffStat,
   fuzzyFilter,
-  loadChat,
+  showChat,
   mergeItem,
+  mergeItems,
   onChatItem,
   onChatState,
   planAnswer,
@@ -39,6 +42,7 @@ import {
 const rpcReply = vi.hoisted(() => ({ release: (_v: unknown) => {} }));
 vi.mock("./daemon", () => ({ rpc: () => new Promise((r) => (rpcReply.release = r)) }));
 import type { ChatItem } from "./protocol";
+import { lastOf } from "./showEarlier";
 
 const item = (id: string, text: string, kind: ChatItem["kind"] = "assistant"): ChatItem => ({ id, kind, text, ts: 0 });
 
@@ -95,7 +99,7 @@ describe("chat helpers", () => {
   });
 
   it("keeps events that arrive while the state loads", async () => {
-    const p = loadChat("h", 1);
+    const p = showChat("h", 1);
     onChatItem("h", 1, { id: "a", kind: "assistant", text: "late", ts: 0 });
     onChatState("h", 1, { items: [], pending: [], status: "done", cost_usd: 1, input_tokens: 0, output_tokens: 0, slash_commands: [], queued: [] });
     rpcReply.release({ items: [{ id: "a", kind: "assistant", text: "ear", ts: 0 }], pending: [], status: "working", cost_usd: 0, input_tokens: 0, output_tokens: 0, slash_commands: [], queued: [] });
@@ -380,5 +384,46 @@ describe("a message as a chat shows it (X65)", () => {
     const firstOnly = (text: string, first: boolean) => (first ? text.split("\n")[0] : null);
     expect(itemShown(user, firstOnly, true).text).toBe("A left nav");
     expect(itemShown(user, firstOnly, false)).toEqual(user);
+  });
+});
+
+describe("a long transcript (X81)", () => {
+  // 450 messages, m0 to m449, one block each.
+  const blocks = chatBlocks(Array.from({ length: 450 }, (_, i) => item(`m${i}`, `message ${i}`)), "collapsed");
+  const ids = (bs: readonly ReturnType<typeof chatBlocks>[number][]) => bs.map((b) => (b.kind === "item" ? b.item.id : b.id));
+
+  it("shows the last 200 blocks and counts the earlier ones", () => {
+    const first = lastOf(blocks, BLOCKS_SHOWN);
+    expect(first.earlier).toBe(250);
+    expect(ids(first.rendered).slice(0, 2)).toEqual(["m250", "m251"]);
+    expect(ids(first.rendered).at(-1)).toBe("m449");
+    // Show earlier, twice: 200 more, then the rest.
+    expect(lastOf(blocks, 400).earlier).toBe(50);
+    expect(ids(lastOf(blocks, 400).rendered)[0]).toBe("m50");
+    expect(lastOf(blocks, 600)).toEqual({ rendered: blocks, earlier: 0 });
+  });
+
+  it("shows earlier blocks, 200 at a time, until the item a jump goes to is among them", () => {
+    const is = (id: string) => (it: ChatItem) => it.id === id;
+    // m40 is the 410th block from the end: two more steps of 200.
+    expect(limitShowing(blocks, BLOCKS_SHOWN, is("m40"))).toBe(600);
+    expect(limitShowing(blocks, BLOCKS_SHOWN, is("m249"))).toBe(400);
+    // Shown already, or not in the transcript: as it was.
+    expect(limitShowing(blocks, BLOCKS_SHOWN, is("m250"))).toBe(200);
+    expect(limitShowing(blocks, BLOCKS_SHOWN, is("gone"))).toBe(200);
+    // A call folded into a group of tool calls counts as its group's block.
+    const tool = (id: string): ChatItem => ({ ...item(id, "", "tool"), tool: { name: "Bash", summary: id, input: {}, status: "ok" } });
+    const grouped = chatBlocks([tool("b1"), tool("b2"), ...Array.from({ length: 200 }, (_, i) => item(`n${i}`, "text"))], "collapsed");
+    expect(limitShowing(grouped, BLOCKS_SHOWN, is("b2"))).toBe(400);
+  });
+
+  it("applies events held during a load in order, the latest version of an item winning", () => {
+    const loaded = [item("u", "fix it", "user"), item("a", "Look")];
+    const held = [item("a", "Looking"), item("t", "", "tool"), item("a", "Looking at it."), item("b", "Done.")];
+    const merged = mergeItems(loaded, held);
+    expect(merged.map((i) => `${i.id}:${i.text}`)).toEqual(["u:fix it", "a:Looking at it.", "t:", "b:Done."]);
+    // The loaded transcript is left as it was.
+    expect(loaded.map((i) => i.text)).toEqual(["fix it", "Look"]);
+    expect(mergeItems(loaded, [])).toBe(loaded);
   });
 });

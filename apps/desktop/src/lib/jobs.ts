@@ -216,38 +216,127 @@ const ANSI = /\u001b\[[0-?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b
 const lineTone = (stream: 1 | 2, text: string): OutputLine["tone"] =>
   text.startsWith("moonlet: ") ? (text.includes(" went away") ? "warn" : "moonlet") : stream === 2 ? "stderr" : null;
 
-/** A job's output as lines: a line ends at a newline or where the other stream takes over. */
-export function outputLines(chunks: JobChunk[]): OutputLine[] {
-  const lines: OutputLine[] = [];
-  // The line not ended yet.
-  let stream: 1 | 2 | null = null;
-  let text = "";
-  const end = () => {
-    if (stream) lines.push({ n: lines.length + 1, stream, text, tone: lineTone(stream, text) });
-    stream = null;
-    text = "";
+/** How much of a job's output the app keeps, in characters with each
+ *  newline counted: the last 1 MiB (X81). */
+export const OUTPUT_KEPT = 1024 * 1024;
+
+/** A job's output read so far (X81), kept to its last `OUTPUT_KEPT`. */
+export interface JobOutput {
+  /** The ended lines kept. */
+  lines: OutputLine[];
+  /** The line not ended yet, as it shows: without colour codes. */
+  open: string;
+  /** A colour code cut at the end of the line not ended yet, read once the
+   *  rest of it comes. */
+  cut: string;
+  stream: 1 | 2 | null;
+  /** Lines ended so far, the dropped ones too: the next line's number less one. */
+  ended: number;
+  /** Of those, the ones on stderr, counted as they end (X81). */
+  stderr: number;
+  /** Characters kept, as they show: each line's text and its newline, and
+   *  the line not ended yet. */
+  size: number;
+  /** Whether earlier output was dropped. */
+  trimmed: boolean;
+}
+
+const lineOf = (n: number, stream: 1 | 2, text: string): OutputLine => ({ n, stream, text, tone: lineTone(stream, text) });
+
+/** Where a colour code not finished yet starts at the end of `raw`, else
+ *  its length. One longer than `CUT_MAX` reads as text. */
+function cutAt(raw: string): number {
+  const m = CUT.exec(raw);
+  return m && raw.length - m.index <= CUT_MAX ? m.index : raw.length;
+}
+/** The last `n` UTF-16 units of `text`, one fewer when they would start
+ *  inside a character of two. */
+function lastUnits(text: string, n: number): string {
+  const from = text.length - n;
+  const low = text.charCodeAt(from);
+  return text.slice(low >= 0xdc00 && low <= 0xdfff ? from + 1 : from);
+}
+const CUT = /\u001b(?:\[[0-?]*[ -/]*|\][^\u0007\u001b]*\u001b?)?$/;
+const CUT_MAX = 4096;
+
+/**
+ * `out` with `chunks` read after it: only the new chunks are parsed, so a
+ * long line not ended yet is not read again. A line ends at a newline or
+ * where the other stream takes over; a line cut between chunks of one
+ * stream, or a colour code in it, joins first. Past `max` characters as
+ * they show, whole lines are dropped from the start, and then the start of
+ * the line not ended yet.
+ */
+export function readOutput(out: JobOutput | undefined, chunks: readonly JobChunk[], max = OUTPUT_KEPT): JobOutput {
+  const added: OutputLine[] = [];
+  let { open, cut, stream, ended, stderr, size, trimmed } = out ?? { open: "", cut: "", stream: null, ended: 0, stderr: 0, size: 0, trimmed: false };
+  // `size` counts the ended lines here, the open one added at the end.
+  size -= open.length;
+  const end = (text: string) => {
+    added.push(lineOf(++ended, stream!, text));
+    if (stream === 2) stderr++;
+    size += text.length + 1;
   };
-  // Chunks of one stream in a row are joined first: a colour code or a
-  // character can be cut between them.
-  const joined: JobChunk[] = [];
   for (const c of chunks) {
-    const last = joined[joined.length - 1];
-    if (last?.stream === c.stream) last.text += c.text;
-    else joined.push({ ...c });
-  }
-  for (const c of joined) {
-    if (stream && stream !== c.stream) end();
-    const parts = c.text.replace(ANSI, "").split("\n");
+    if (stream !== c.stream) {
+      // The other stream's open line ends here, unless only escapes are in it.
+      if (stream && open) end(open);
+      open = cut = "";
+      stream = c.stream;
+    }
+    const parts = c.text.split("\n");
     for (let i = 0; i < parts.length; i++) {
-      if (i > 0) end();
-      if (i < parts.length - 1 || parts[i]) {
-        stream = c.stream;
-        text += parts[i];
+      const raw = cut + parts[i];
+      if (i < parts.length - 1) {
+        end(open + raw.replace(ANSI, ""));
+        open = cut = "";
+      } else {
+        const at = cutAt(raw);
+        open += raw.slice(0, at).replace(ANSI, "");
+        cut = raw.slice(at);
       }
     }
   }
-  end();
-  return lines;
+  let lines = added.length ? (out?.lines ?? []).concat(added) : (out?.lines ?? []);
+  if (size + open.length > max) {
+    let drop = 0;
+    while (drop < lines.length && size + open.length > max) size -= lines[drop++].text.length + 1;
+    lines = lines.slice(drop);
+    if (open.length > max) open = lastUnits(open, max);
+    trimmed = true;
+  }
+  return { lines, open, cut, stream, ended, stderr, size: size + open.length, trimmed };
+}
+
+/** The lines a job's output shows: the ended ones, then the one not ended yet. */
+export function outputShown(out: JobOutput): OutputLine[] {
+  return out.stream && out.open ? [...out.lines, lineOf(out.ended + 1, out.stream, out.open)] : out.lines;
+}
+
+/** How many lines a job printed, as its views say it: the trimmed ones
+ *  too, and the one not ended yet (X81). */
+export function outputCount(out: JobOutput): string {
+  const n = out.ended + (out.stream && out.open ? 1 : 0);
+  return `${n.toLocaleString("en-US")} ${n === 1 ? "line" : "lines"}`;
+}
+
+/** How many lines a job printed on stderr, for its view's stderr badge: the
+ *  trimmed ones too, and the one not ended yet (X81). */
+export const stderrCount = (out: JobOutput): number => out.stderr + (out.stream === 2 && out.open ? 1 : 0);
+
+/** How many lines a job's view renders at first, and how many more each
+ *  "Show earlier" adds (X81). */
+export const LINES_SHOWN = 2000;
+
+/** A line's key: its number. */
+export const lineKey = (l: OutputLine) => l.n;
+
+/** The end of the lines a job's view shows, changing with each chunk read,
+ *  trimmed or not, so Follow scrolls to it (X81): the last line's number and
+ *  length. */
+export function outputEnd(lines: readonly OutputLine[]): string {
+  const last = lines[lines.length - 1];
+  return last ? `${last.n}:${last.text.length}` : "";
 }
 
 export type OutputFilter = "all" | "stdout" | "stderr";

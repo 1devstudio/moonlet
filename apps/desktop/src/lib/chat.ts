@@ -1,6 +1,7 @@
 // Structured agent conversations (X6): a mirror of each chat terminal's
 // ChatState, loaded with `chat.state` and kept current by `chat.*` events.
 
+import { useEffect } from "react";
 import { create } from "zustand";
 import type { PlanApproveMode } from "./agents";
 import { rpc } from "./daemon";
@@ -9,13 +10,23 @@ import { readStored, writeStored } from "./storage";
 
 export const chatKey = (host: string, id: number) => `${host}:${id}`;
 
+/** A chat without its items (X81): its status, asks and subagents. */
+export type ChatSummary = Omit<ChatState, "items">;
+
 interface ChatStore {
+  /** Chats with their items: the last ones shown (X81). */
   chats: Record<string, ChatState>;
+  /** The other chats loaded, or with a `chat.state` event since, without
+   *  their items, kept current by `chat.state`. A key is in one of the two
+   *  at most. */
+  summaries: Record<string, ChatSummary>;
+  /** A jump to an item a chat may not render yet (`revealInChat`). */
+  reveal: { key: string; isTarget: (item: ChatItem) => boolean } | null;
 }
 
 const g = globalThis as unknown as { __moonletChat?: ReturnType<typeof makeStore> };
 function makeStore() {
-  return create<ChatStore>(() => ({ chats: {} }));
+  return create<ChatStore>(() => ({ chats: {}, summaries: {}, reveal: null }));
 }
 /** One store across hot reloads (see store.ts). */
 export const useChat = (g.__moonletChat ??= makeStore());
@@ -51,10 +62,27 @@ export function itemShown(item: ChatItem, userText: ((text: string, first: boole
 }
 
 export function mergeItem(items: ChatItem[], item: ChatItem): ChatItem[] {
-  const i = items.findIndex((x) => x.id === item.id);
+  // A streamed item is the last one, or near it (X81).
+  const i = items.findLastIndex((x) => x.id === item.id);
   if (i < 0) return [...items, item];
   const next = items.slice();
   next[i] = item;
+  return next;
+}
+
+/** `items` with each of `incoming` merged in turn, as `mergeItem` would,
+ *  copying `items` once rather than once per item (X81). */
+export function mergeItems(items: ChatItem[], incoming: readonly ChatItem[]): ChatItem[] {
+  if (!incoming.length) return items;
+  const next = items.slice();
+  const at = new Map(next.map((it, i) => [it.id, i]));
+  for (const it of incoming) {
+    const i = at.get(it.id);
+    if (i === undefined) {
+      at.set(it.id, next.length);
+      next.push(it);
+    } else next[i] = it;
+  }
   return next;
 }
 
@@ -76,8 +104,13 @@ export function onChatItem(host: string, id: number, item: ChatItem) {
   });
 }
 
+/** How many `chat.state` events came, by key: a summary asked for before
+ *  the latest one is older than it (`loadChatSummaries`). */
+const stateEvents = new Map<string, number>();
+
 export function onChatState(host: string, id: number, state: ChatState) {
   const key = chatKey(host, id);
+  stateEvents.set(key, (stateEvents.get(key) ?? 0) + 1);
   const buf = buffered.get(key);
   if (buf) {
     buf.state = state;
@@ -85,14 +118,161 @@ export function onChatState(host: string, id: number, state: ChatState) {
   }
   useChat.setState((s) => {
     const cur = s.chats[key];
-    if (!cur) return s;
     // The event carries everything but the items.
-    return { chats: { ...s.chats, [key]: { ...state, items: cur.items } } };
+    if (cur) return { chats: { ...s.chats, [key]: { ...state, items: cur.items } } };
+    // Kept even for a chat not read yet: a `chat.summaries` in flight skips
+    // it as older than this event (`loadChatSummaries`).
+    return { summaries: { ...s.summaries, [key]: summary(state) } };
   });
+}
+
+const summary = ({ items: _, ...rest }: ChatState): ChatSummary => rest;
+
+/** A chat's status, asks and subagents, with its items in memory or not
+ *  (X81); undefined until it is loaded. */
+export const chatSummary = (s: ChatStore, host: string, id: number): ChatSummary | undefined => s.chats[chatKey(host, id)] ?? s.summaries[chatKey(host, id)];
+
+/** How many chats off screen keep their items in memory: the last ones
+ *  shown (X81). */
+export const CHATS_KEPT = 8;
+
+/** The keys of the chats shown last, the latest first, at most CHATS_KEPT. */
+let lastShown: string[] = [];
+/** How many views have each chat on screen now, by key (`holdChat`). */
+const onScreen = new Map<string, number>();
+
+/** Whether a chat keeps its items: it is on screen, or among the last shown. */
+const keepsItems = (key: string) => onScreen.has(key) || lastShown.includes(key);
+
+/** The chats among `keys` that no longer keep their items drop them. */
+function dropItems(keys: readonly string[]) {
+  for (const k of keys) if (!keepsItems(k)) useChat.setState((s) => (s.chats[k] ? placeChat(s, k, s.chats[k], false) : s));
+}
+
+/**
+ * A chat is shown (X81): it keeps its items, loaded now when it has none,
+ * and a chat off screen that falls out of the last CHATS_KEPT shown drops
+ * its own. A chat on screen never does, however many are.
+ */
+export async function showChat(host: string, id: number) {
+  const key = chatKey(host, id);
+  const before = lastShown;
+  lastShown = [key, ...lastShown.filter((k) => k !== key)].slice(0, CHATS_KEPT);
+  dropItems(before.filter((k) => !lastShown.includes(k)));
+  // Dropped while its load was in flight, it keeps its summary only.
+  if (!useChat.getState().chats[key]) await loadChat(host, id);
+}
+
+/**
+ * A view puts chat `id` on screen (X81): it keeps its items until every
+ * view that holds it lets go with the function returned. Let go of, it drops
+ * them unless it is among the last CHATS_KEPT shown.
+ */
+export function holdChat(host: string, id: number): () => void {
+  const key = chatKey(host, id);
+  onScreen.set(key, (onScreen.get(key) ?? 0) + 1);
+  let held = true;
+  return () => {
+    if (!held) return;
+    held = false;
+    const n = (onScreen.get(key) ?? 1) - 1;
+    if (n > 0) onScreen.set(key, n);
+    else {
+      onScreen.delete(key);
+      dropItems([key]);
+    }
+  };
+}
+
+/**
+ * A view shows chat `id` while `on` (X81): it holds it on screen and shows
+ * it, loading its items, and loads them again should they go.
+ */
+export function useChatOnScreen(host: string, id: number | null, on: boolean, onError: (e: unknown) => void = () => {}) {
+  const loaded = useChat((s) => id !== null && !!s.chats[chatKey(host, id)]);
+  useEffect(() => (on && id !== null ? holdChat(host, id) : undefined), [host, id, on]);
+  useEffect(() => {
+    if (on && id !== null) void showChat(host, id).catch(onError);
+  }, [host, id, on, loaded]);
+}
+
+/** Chats `ids` go on screen together, as a new chat's context chips show
+ *  them, and come off with the function returned (X81). They keep their
+ *  items only meanwhile: they do not count among the last CHATS_KEPT shown.
+ *  A chat whose load fails shows no chip, and is asked for again when they
+ *  are shown again. */
+export function showChats(host: string, ids: readonly number[]): () => void {
+  const release = ids.map((id) => holdChat(host, id));
+  for (const id of ids) if (!useChat.getState().chats[chatKey(host, id)]) void loadChat(host, id).catch(() => {});
+  return () => release.forEach((r) => r());
+}
+
+/** The store with chat `key` read as `st`: with its items when `withItems`,
+ *  else as a summary. A key is in `chats` or `summaries`, never both (X81). */
+function placeChat(s: ChatStore, key: string, st: ChatState, withItems: boolean): Pick<ChatStore, "chats" | "summaries"> {
+  const chats = { ...s.chats };
+  const summaries = { ...s.summaries };
+  if (withItems) {
+    chats[key] = st;
+    delete summaries[key];
+  } else {
+    summaries[key] = summary(st);
+    delete chats[key];
+  }
+  return { chats, summaries };
+}
+
+/** After a host connects: its chat terminals `ids` already in memory read
+ *  again, as they were kept, for events missed meanwhile, and those shown
+ *  meanwhile, which could not load. The others load when shown (X81). */
+export async function reloadChats(host: string, ids: readonly number[]) {
+  const s = useChat.getState();
+  const withItems = ids.filter((id) => s.chats[chatKey(host, id)] || keepsItems(chatKey(host, id)));
+  // The summaries are read again together, without their items.
+  const summarized = ids.some((id) => !withItems.includes(id) && s.summaries[chatKey(host, id)]);
+  await Promise.all([
+    ...withItems.map((id) => loadChat(host, id).catch(() => {})),
+    ...(summarized ? [loadChatSummaries(host, { refresh: true }).catch(() => {})] : []),
+  ]);
+}
+
+const summariesLoading = new Set<string>();
+
+/**
+ * Reads the status, asks and subagents of `host`'s chats, without their
+ * items, with one `chat.summaries`, such as for the Agents panel (X81).
+ * With `refresh`, only of the chats with a summary already. A chat with its
+ * items in memory, loading them, or moved on by an event meanwhile keeps
+ * what it has.
+ */
+export async function loadChatSummaries(host: string, opts: { refresh?: boolean } = {}) {
+  if (summariesLoading.has(host)) return;
+  summariesLoading.add(host);
+  const before = new Map(stateEvents);
+  try {
+    const list = await rpc<{ id: number; state: ChatState }[]>(host, M.chatSummaries);
+    useChat.setState((s) => {
+      const summaries = { ...s.summaries };
+      for (const { id, state } of list) {
+        const key = chatKey(host, id);
+        if (s.chats[key] || buffered.has(key) || stateEvents.get(key) !== before.get(key)) continue;
+        if (opts.refresh && !s.summaries[key]) continue;
+        summaries[key] = summary({ ...empty, ...state });
+      }
+      return { summaries };
+    });
+  } finally {
+    summariesLoading.delete(host);
+  }
 }
 
 const loading = new Set<string>();
 
+/**
+ * Reads a chat's state with its items (`chat.state`), for a chat shown: it
+ * keeps them only while it is on screen or among the chats shown last, and
+ * else only its summary (X81).
+ */
 export async function loadChat(host: string, id: number) {
   const key = chatKey(host, id);
   if (loading.has(key)) return;
@@ -102,10 +282,10 @@ export async function loadChat(host: string, id: number) {
   try {
     const st = await rpc<ChatState>(host, M.chatState, { id });
     const buf = buffered.get(key);
-    let items = st.items;
-    for (const it of buf?.items ?? []) items = mergeItem(items, it);
-    const latest = buf?.state ? { ...buf.state, items } : { ...st, items };
-    useChat.setState((s) => ({ chats: { ...s.chats, [key]: { ...empty, ...latest } } }));
+    const keep = keepsItems(key);
+    const items = keep ? mergeItems(st.items, buf?.items ?? []) : [];
+    const latest: ChatState = { ...empty, ...(buf?.state ? { ...buf.state, items } : { ...st, items }) };
+    useChat.setState((s) => placeChat(s, key, latest, keep));
   } catch (e) {
     // A reload of a chat already shown failed: keep the events it held.
     const buf = buffered.get(key);
@@ -120,10 +300,14 @@ export async function loadChat(host: string, id: number) {
 }
 
 export function forgetChat(host: string, id: number) {
+  const key = chatKey(host, id);
+  lastShown = lastShown.filter((k) => k !== key);
   useChat.setState((s) => {
     const chats = { ...s.chats };
-    delete chats[chatKey(host, id)];
-    return { chats };
+    const summaries = { ...s.summaries };
+    delete chats[key];
+    delete summaries[key];
+    return { chats, summaries };
   });
   saveChatDraft(host, id, "");
 }
@@ -394,6 +578,33 @@ export function chatBlocks(items: readonly ChatItem[], view: ToolCallView): Chat
   }
   return blocks;
 }
+
+/** How many blocks a chat renders at first, and how many more each
+ *  "Show earlier" adds (X81). */
+export const BLOCKS_SHOWN = 200;
+
+/** A block's key: its item's id, or its group's. */
+export const blockKey = (b: ChatBlock) => (b.kind === "item" ? b.item.id : b.id);
+
+/** The blocks to render so that the last one holding an item `isTarget`
+ *  picks is among them: `limit`, plus as many steps of BLOCKS_SHOWN as it
+ *  takes; `limit` when it is shown already or not there (X81). */
+export function limitShowing(blocks: readonly ChatBlock[], limit: number, isTarget: (item: ChatItem) => boolean): number {
+  const at = blocks.findLastIndex((b) => (b.kind === "item" ? isTarget(b.item) : b.tools.some(isTarget)));
+  const need = at < 0 ? 0 : blocks.length - at;
+  return need <= limit ? limit : limit + Math.ceil((need - limit) / BLOCKS_SHOWN) * BLOCKS_SHOWN;
+}
+
+/** Asks chat `id` to render earlier blocks until the last item `isTarget`
+ *  picks is among them, for a jump to it such as Show in chat (X81). */
+export function revealInChat(host: string, id: number, isTarget: (item: ChatItem) => boolean) {
+  useChat.setState({ reveal: { key: chatKey(host, id), isTarget } });
+}
+
+/** Whether chat `id`'s items in memory hold one `isTarget` picks, rendered
+ *  or among its earlier blocks, as a jump looks for it (X81). Read once, not
+ *  followed. */
+export const chatHasItem = (host: string, id: number, isTarget: (item: ChatItem) => boolean) => !!useChat.getState().chats[chatKey(host, id)]?.items.some(isTarget);
 
 export const toolGroupLabel = (n: number) => `${n} tool call${n === 1 ? "" : "s"}`;
 

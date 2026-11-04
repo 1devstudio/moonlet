@@ -1,7 +1,7 @@
 // The plan panel (X24): the latest plan of a chat, where it stands, and
 // which chat of a session the Plan tab follows.
 
-import { planOf } from "./chat";
+import { type ChatSummary, planOf } from "./chat";
 import type { ChatState } from "./protocol";
 
 export type PlanStatus = "pending" | "revising" | "stopped" | "approved";
@@ -59,12 +59,26 @@ export function planLabels(status: PlanStatus, mode: string | null): { card: str
 
 /** The chat the Plan tab follows among a session's chats: the one whose plan
  *  waits, else the focused one, else the first (lowest id). */
-export function planChat(focused: number | null, chats: readonly { id: number; st: ChatState | undefined }[]): number | null {
+export function planChat(focused: number | null, chats: readonly { id: number; st: Pick<ChatState, "pending"> | undefined }[]): number | null {
   const waiting = chats.find((c) => c.st?.pending.some((a) => planOf(a)));
   if (waiting) return waiting.id;
   if (chats.some((c) => c.id === focused)) return focused;
   return chats.length ? Math.min(...chats.map((c) => c.id)) : null;
 }
 
+/** Whether the chat's latest plan waits for approval: by its plan with its
+ *  items in memory, else by its asks, as the Plan tab's dot reads it while
+ *  the tab is closed (X81). */
+export function planWaits(st: ChatState | ChatSummary | undefined): boolean {
+  if (!st) return false;
+  return "items" in st ? planView(st)?.status === "pending" : st.pending.some((a) => planOf(a));
+}
+
 /** The Plan tab's dot: a plan waits and the tab is not showing it. */
 export const planTabDot = (tab: string, waiting: boolean) => waiting && tab !== "plan";
+
+/** Whether the plan's card shows under a chat's blocks rather than after
+ *  its row: it has no row, or it waits and its row is not among the
+ *  `rendered` ids, but among the earlier blocks (X81). */
+export const planCardBelow = (plan: PlanView | null, rendered: ReadonlySet<string>): boolean =>
+  !!plan && (!plan.itemId || (!!plan.askId && !rendered.has(plan.itemId)));

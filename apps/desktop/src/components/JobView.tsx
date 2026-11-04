@@ -5,11 +5,12 @@ import { useEffect, useMemo, useState } from "react";
 import { Copy, Folder, MoreHorizontal, Search } from "lucide-react";
 import { closeJobTab, copyJobOutput, openJobs, stopJob } from "../lib/actions";
 import { hostsApi } from "../lib/daemon";
-import { type OutputFilter, chipFromJob, jobTabLine, phaseBar, shownLines, workerFacts } from "../lib/jobs";
+import { type OutputFilter, LINES_SHOWN, chipFromJob, lineKey, outputEnd, jobTabLine, phaseBar, shownLines, workerFacts } from "../lib/jobs";
+import { nearBottom, useShowEarlier } from "../lib/showEarlier";
 import { useSessionJob } from "../lib/jobsStore";
 import { errorToast, useStore } from "../lib/store";
 import { useNow } from "../lib/useNow";
-import { JobDot, LINE_TONE, TONE, WorkerIcon, copyText, going, useFollow, useJobLines } from "./JobsPanel";
+import { EarlierLines, JobDot, LINE_TONE, TONE, WorkerIcon, copyText, going, useFollow, useJobCount, useJobLines, useJobStderr } from "./JobsPanel";
 import { cx } from "./ui";
 
 const BAR_TONE = { done: "bg-done", accent: "bg-accent", blocked: "bg-blocked" };
@@ -32,12 +33,16 @@ export default function JobView({ host, wsId, job: id }: { host: string; wsId: s
   const central = useStore((s) => s.hosts[host]?.label) ?? "this Mac";
   const now = useNow(!!job && going(job));
   const lines = useJobLines(host, id);
+  const count = useJobCount(id);
+  const stderr = useJobStderr(id);
   const [filter, setFilter] = useState<OutputFilter>("all");
   const [find, setFind] = useState("");
   const [follow, setFollow] = useState(false);
   const [menu, setMenu] = useState(false);
-  const shown = useMemo(() => (lines ? shownLines(lines, filter, find) : []), [lines, filter, find]);
-  const box = useFollow(follow, shown.length);
+  const filtered = useMemo(() => (lines ? shownLines(lines, filter, find) : []), [lines, filter, find]);
+  const box = useFollow(follow, outputEnd(filtered));
+  // The last lines render; Show earlier adds more (X81).
+  const { rendered, earlier, showEarlier } = useShowEarlier(filtered, { step: LINES_SHOWN, reset: `${id}\n${filter}\n${find}`, scroller: box, key: lineKey, atEnd: () => follow || nearBottom(box.current) });
   // The tab closes when the job is dropped from the history.
   useEffect(() => {
     if (job === null) closeJobTab(host, wsId, id);
@@ -45,7 +50,6 @@ export default function JobView({ host, wsId, job: id }: { host: string; wsId: s
   if (!job) return null;
   const state = jobTabLine(job, now, session);
   const chip = chipFromJob(job);
-  const stderr = lines?.filter((l) => l.stream === 2).length ?? 0;
   const reveal = (folder: string) => void hostsApi.openIn("reveal", folder).catch(errorToast);
   return (
     <div data-job-view={job.command} className="flex h-full min-h-0 flex-col bg-bg">
@@ -116,14 +120,15 @@ export default function JobView({ host, wsId, job: id }: { host: string; wsId: s
               <Search size={13} />
               <input aria-label="Find in output" placeholder="Find in output" value={find} onChange={(e) => setFind(e.target.value)} className="min-w-0 flex-1 bg-transparent ui-text-12.5 text-fg outline-none placeholder:text-faint" />
             </label>
-            <span className="ml-auto whitespace-nowrap font-mono ui-text-12 tabular-nums text-muted">{lines ? `${lines.length.toLocaleString("en-US")} lines` : ""}</span>
+            <span className="ml-auto whitespace-nowrap font-mono ui-text-12 tabular-nums text-muted">{count}</span>
             <label className="flex shrink-0 items-center gap-1.5 ui-text-12.5 text-muted">
               <input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} />
               Follow
             </label>
           </div>
           <div ref={box} data-job-output className="selectable min-h-0 flex-1 overflow-y-auto px-7 py-3 font-mono ui-text-12.5 leading-[1.6]">
-            {shown.map((l) => (
+            <EarlierLines job={id} earlier={earlier} onShow={showEarlier} />
+            {rendered.map((l) => (
               <div key={l.n} className="flex gap-4">
                 <span className="w-10 shrink-0 select-none text-right tabular-nums text-faint">{l.n}</span>
                 <span className={cx("min-w-0 flex-1 whitespace-pre-wrap break-all", l.tone ? LINE_TONE[l.tone] : "text-fg")}>{l.text || " "}</span>

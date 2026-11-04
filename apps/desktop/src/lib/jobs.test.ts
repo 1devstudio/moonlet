@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { bashChip, chipFromJob, chipFromOutput, jobRowLine, jobStateLine, jobTabLine, jobsSummary, jobsTabCount, outputLines, phaseBar, phaseList, shownCommand, shownLines, workerFacts, workerLine } from "./jobs";
-import type { Job } from "./protocol";
+import { type JobOutput, bashChip, chipFromJob, chipFromOutput, jobRowLine, jobStateLine, jobTabLine, jobsSummary, jobsTabCount, LINES_SHOWN, outputCount, outputEnd, outputShown, phaseBar, readOutput, phaseList, shownCommand, shownLines, stderrCount, workerFacts, workerLine } from "./jobs";
+import type { Job, JobChunk } from "./protocol";
+import { lastOf } from "./showEarlier";
 
 const job = (extra: Partial<Job> = {}): Job => ({
   id: "j1",
@@ -151,6 +152,8 @@ describe("routed Bash rows in the chat (X62)", () => {
 });
 
 describe("a job's output (X62)", () => {
+  // The lines a view shows for `chunks`, read at once and none dropped.
+  const linesOf = (chunks: JobChunk[]) => outputShown(readOutput(undefined, chunks, Infinity));
   const chunks = [
     { stream: 1 as const, text: "moonlet: running on studio-mini\n> vit" },
     { stream: 1 as const, text: "est run\n \u001b[32m\u2713\u001b[39m src/cart.test.ts (38 tests)\n" },
@@ -159,7 +162,7 @@ describe("a job's output (X62)", () => {
   ];
 
   it("reads chunks as numbered lines, stdout and stderr apart, without colours", () => {
-    expect(outputLines(chunks)).toEqual([
+    expect(linesOf(chunks)).toEqual([
       { n: 1, stream: 1, text: "moonlet: running on studio-mini", tone: "moonlet" },
       { n: 2, stream: 1, text: "> vitest run", tone: null },
       { n: 3, stream: 1, text: " \u2713 src/cart.test.ts (38 tests)", tone: null },
@@ -169,11 +172,112 @@ describe("a job's output (X62)", () => {
   });
 
   it("reads a colour code cut between two chunks as a colour, not as text", () => {
-    expect(outputLines([{ stream: 1, text: "\u001b[3" }, { stream: 1, text: "2mok\u001b[0m\n" }])).toEqual([{ n: 1, stream: 1, text: "ok", tone: null }]);
+    expect(linesOf([{ stream: 1, text: "\u001b[3" }, { stream: 1, text: "2mok\u001b[0m\n" }])).toEqual([{ n: 1, stream: 1, text: "ok", tone: null }]);
+  });
+
+  it("keeps the end of a long output, numbered as it was, and says earlier output was trimmed", () => {
+    // 4 + 4 + 6 + 5 characters, a newline counted, past 14 kept: "one" goes.
+    const out = readOutput(undefined, [{ stream: 1, text: "one\ntwo\nthree\nfour" }], 14);
+    expect(outputShown(out)).toEqual([
+      { n: 2, stream: 1, text: "two", tone: null },
+      { n: 3, stream: 1, text: "three", tone: null },
+      { n: 4, stream: 1, text: "four", tone: null },
+    ]);
+    expect(out.trimmed).toBe(true);
+    expect(readOutput(undefined, [{ stream: 1, text: "one\ntwo\n" }], 14).trimmed).toBe(false);
+  });
+
+  it("counts the line not ended yet by the text it shows, as it counts ended lines", () => {
+    // 3 + 4 characters shown, within 10: the colour codes count for nothing.
+    const out = readOutput(undefined, [{ stream: 1, text: "ab\n\u001b[31mcdef\u001b[0m" }], 10);
+    expect(outputShown(out)).toEqual([
+      { n: 1, stream: 1, text: "ab", tone: null },
+      { n: 2, stream: 1, text: "cdef", tone: null },
+    ]);
+    expect(out.trimmed).toBe(false);
+  });
+
+  it("never cuts the line not ended yet inside a colour code", () => {
+    const out = readOutput(undefined, [{ stream: 1, text: "abcdefg\u001b[31mh" }], 5);
+    expect(outputShown(out)).toEqual([{ n: 1, stream: 1, text: "defgh", tone: null }]);
+    expect(out.trimmed).toBe(true);
+  });
+
+  it("marks the end of a job's output anew for each chunk, once it is trimmed too", () => {
+    // Kept to 4 characters, the output keeps 2 lines however many come.
+    const first = readOutput(undefined, [{ stream: 1, text: "a\nb\n" }], 4);
+    const next = readOutput(first, [{ stream: 1, text: "c\n" }], 4);
+    expect(outputShown(next)).toHaveLength(2);
+    expect(outputEnd(outputShown(first))).toBe("2:1");
+    expect(outputEnd(outputShown(next))).toBe("3:1");
+    // The line not ended yet grows.
+    expect(outputEnd(outputShown(readOutput(next, [{ stream: 1, text: "de" }], 4)))).toBe("4:2");
+    expect(outputEnd([])).toBe("");
+  });
+
+  it("counts every line the job printed, the trimmed ones too", () => {
+    expect(outputCount(readOutput(undefined, [{ stream: 1, text: "one\ntwo\nthree\nfour" }], 14))).toBe("4 lines");
+    expect(outputCount(readOutput(undefined, [{ stream: 1, text: "only\n" }]))).toBe("1 line");
+    expect(outputCount(readOutput(undefined, [{ stream: 1, text: "x\n".repeat(1500) }], 100))).toBe("1,500 lines");
+  });
+
+  it("counts every stderr line the job printed, the trimmed ones too", () => {
+    // Two errors, then 3 + 3 + 3 characters of stdout: past 9 kept, both errors go.
+    const out = readOutput(undefined, [{ stream: 2, text: "Error: one\nError: two\n" }], 9);
+    const next = readOutput(out, [{ stream: 1, text: "ab\ncd\nef\n" }], 9);
+    expect(outputShown(next).map((l) => l.text)).toEqual(["ab", "cd", "ef"]);
+    expect(stderrCount(next)).toBe(2);
+    // A stderr line not ended yet counts, as the view shows it.
+    expect(stderrCount(readOutput(next, [{ stream: 2, text: "Warning" }], 9))).toBe(3);
+    expect(stderrCount(readOutput(undefined, [{ stream: 1, text: "ok\n" }]))).toBe(0);
+  });
+
+  it("never cuts the line not ended yet inside a character of two UTF-16 units", () => {
+    // "ab😀😀" is 6 units; the last 3 would start inside the first 😀.
+    const out = readOutput(undefined, [{ stream: 1, text: "ab😀😀" }], 3);
+    expect(outputShown(out)).toEqual([{ n: 1, stream: 1, text: "😀", tone: null }]);
+  });
+
+  it("reads 50,000 progress updates to one line in well under a second", () => {
+    let out: JobOutput | undefined;
+    const started = performance.now();
+    for (let i = 0; i < 50_000; i++) out = readOutput(out, [{ stream: 1, text: `\r${String(i).padStart(5)} of 50000 done` }]);
+    expect(performance.now() - started).toBeLessThan(1000);
+    const [line] = outputShown(out!);
+    expect(line.n).toBe(1);
+    expect(line.text.length).toBe(950_000);
+    expect(line.text.slice(0, 38)).toBe("    0 of 50000 done    1 of 50000 done");
+    expect(line.text.slice(-19)).toBe("49999 of 50000 done");
+  });
+
+  it("reads output chunk by chunk as it comes, joining a line and a colour code cut between chunks", () => {
+    const first = readOutput(undefined, [{ stream: 1, text: "\u001b[3" }]);
+    const next = readOutput(first, [
+      { stream: 1, text: "2mok\u001b[0m\nne" },
+      { stream: 1, text: "xt\n" },
+      { stream: 2, text: "(node:4211) Deprecation" },
+    ]);
+    const last = readOutput(next, [{ stream: 2, text: "Warning\n" }, { stream: 1, text: "moonlet: running on studio-mini" }]);
+    expect(outputShown(last)).toEqual([
+      { n: 1, stream: 1, text: "ok", tone: null },
+      { n: 2, stream: 1, text: "next", tone: null },
+      { n: 3, stream: 2, text: "(node:4211) DeprecationWarning", tone: "stderr" },
+      { n: 4, stream: 1, text: "moonlet: running on studio-mini", tone: "moonlet" },
+    ]);
+  });
+
+  it("renders the last 2000 lines of what it keeps, and 2000 more for each Show earlier", () => {
+    const lines = linesOf([{ stream: 1, text: Array.from({ length: 5000 }, (_, i) => `line ${i + 1}`).join("\n") }]);
+    const first = lastOf(lines, LINES_SHOWN);
+    expect(first.earlier).toBe(3000);
+    expect(first.rendered.map((l) => l.text).slice(0, 1)).toEqual(["line 3001"]);
+    expect(first.rendered.at(-1)?.n).toBe(5000);
+    expect(lastOf(lines, 4000).rendered[0].n).toBe(1001);
+    expect(lastOf(lines, 6000)).toEqual({ rendered: lines, earlier: 0 });
   });
 
   it("filters by stream and by what was typed in Find, keeping line numbers", () => {
-    const lines = outputLines(chunks);
+    const lines = linesOf(chunks);
     expect(shownLines(lines, "stderr", "").map((l) => l.n)).toEqual([4]);
     expect(shownLines(lines, "stdout", "").map((l) => l.n)).toEqual([1, 2, 3, 5]);
     expect(shownLines(lines, "all", "STUDIO").map((l) => l.n)).toEqual([1, 5]);

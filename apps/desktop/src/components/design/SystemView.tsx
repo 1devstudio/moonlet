@@ -22,7 +22,7 @@ import { Menu } from "../Menu";
 import { AfterSyncBar, ChangedSection, NeedsYouSection, StepBar } from "./SyncParts";
 import { agentShown, rewritingCard, stepBar } from "../../lib/designSync";
 import { CopyBar } from "./CopyBar";
-import { chatKey, useChat } from "../../lib/chat";
+import { chatKey, useChat, useChatOnScreen } from "../../lib/chat";
 import { askConfirm } from "../../lib/confirm";
 import { AgentView } from "../AgentView";
 import { useShallow } from "zustand/react/shallow";
@@ -99,6 +99,8 @@ export function DesignSystemView({ host, workspace, sys, label, working, inset }
     const items = agent !== null && syncing ? c.chats[chatKey(host, agent)]?.items : undefined;
     return items && agentDir ? rewritingCard(items, agentDir) : null;
   });
+  // Its items load when shown (X81): the card it writes is read from them.
+  useChatOnScreen(host, agent, syncing);
   // Hidden as the user left it, but open while the agent asks something.
   const showAgent = agent !== null && agentShown(hidden, sys);
   const stop = () => agent !== null && void stopAgent(host, agent).catch(errorToast);

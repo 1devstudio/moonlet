@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUpRight, Check, ChevronLeft, Circle, Cloud, Copy, Cpu, Laptop, LoaderCircle, RotateCw, Server } from "lucide-react";
 import { copyJobOutput, openJobTab, stopJob } from "../lib/actions";
 import { rpc } from "../lib/daemon";
-import { type JobIcon, type JobTone, type OutputLine, chipFromJob, going, jobRowLine, jobStateLine, jobsSummary, dur, outputLines, phaseList, workerLine } from "../lib/jobs";
+import { type JobIcon, type JobTone, type OutputLine, chipFromJob, going, jobRowLine, jobStateLine, jobsSummary, dur, LINES_SHOWN, lineKey, outputCount, outputEnd, outputShown, phaseList, stderrCount, workerLine } from "../lib/jobs";
 import { loadOutput, useJobs } from "../lib/jobsStore";
 import { startupCard, waitingNote, type StartupCard } from "../lib/cloudMachines";
 import { useCloud } from "../lib/cloudStore";
@@ -14,6 +14,8 @@ import { clock } from "../lib/subagents";
 import { useNow } from "../lib/useNow";
 import { errorToast, useStore } from "../lib/store";
 import { Empty, cx } from "./ui";
+import { ShowEarlier } from "./ShowEarlier";
+import { nearBottom, useShowEarlier } from "../lib/showEarlier";
 
 export const TONE: Record<JobTone, string> = {
   muted: "text-muted",
@@ -39,25 +41,46 @@ export function JobDot({ job }: { job: Job }) {
   return <span aria-hidden="true" className={cx("h-[7px] w-[7px] shrink-0 rounded-full", tone, going(job) && "animate-pulse")} />;
 }
 
-/** The job's stored output, then what it prints, as lines. */
+/** The job's stored output, then what it prints, as lines: its last part (X81). */
 export function useJobLines(host: string, job: string): OutputLine[] | null {
-  const chunks = useJobs((s) => s.output[job]);
+  const out = useJobs((s) => s.output[job]);
   useEffect(() => {
     void loadOutput(host, job).catch(errorToast);
   }, [host, job]);
-  return useMemo(() => (chunks ? outputLines(chunks) : null), [chunks]);
+  return useMemo(() => (out ? outputShown(out) : null), [out]);
+}
+
+/** How many lines the job printed, once its output is read (X81). */
+export const useJobCount = (job: string) => useJobs((s) => (s.output[job] ? outputCount(s.output[job]) : ""));
+
+/** How many lines the job printed on stderr, the trimmed ones too (X81). */
+export const useJobStderr = (job: string) => useJobs((s) => (s.output[job] ? stderrCount(s.output[job]) : 0));
+
+/** Above a job's output once its start was dropped (X81). */
+export function TrimmedNote({ job }: { job: string }) {
+  const trimmed = useJobs((s) => !!s.output[job]?.trimmed);
+  return trimmed ? <div className="select-none pb-1 text-faint">Earlier output trimmed</div> : null;
 }
 
 export const LINE_TONE: Record<NonNullable<OutputLine["tone"]>, string> = { moonlet: "text-accent", warn: "text-blocked", stderr: "text-blocked" };
 
 /** Keeps the end of the output in view while **Follow** is on. */
-export function useFollow(follow: boolean, count: number) {
+export function useFollow(follow: boolean, end: string) {
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (follow && box.current) box.current.scrollTop = box.current.scrollHeight;
-  }, [follow, count]);
+  }, [follow, end]);
   return box;
 }
+
+/** Above the lines rendered: Show earlier while some are not, else the
+ *  note that earlier output was trimmed (X81). */
+export function EarlierLines({ job, earlier, onShow }: { job: string; earlier: number; onShow: () => void }) {
+  if (!earlier) return <TrimmedNote job={job} />;
+  return <ShowEarlier earlier={earlier} unit="line" onClick={onShow} className="mb-1 px-1.5 py-0.5 font-sans" />;
+}
+
+const NO_LINES: OutputLine[] = [];
 
 export const copyText = (lines: OutputLine[]) => lines.map((l) => l.text).join("\n");
 
@@ -156,8 +179,10 @@ function MachineCard({ card }: { card: StartupCard }) {
 function JobDetail({ host, ws, job, now }: { host: string; ws: Session; job: Job; now: number }) {
   const state = jobStateLine(job, now, ws.name);
   const lines = useJobLines(host, job.id);
+  const count = useJobCount(job.id);
   const [follow, setFollow] = useState(true);
-  const box = useFollow(follow, lines?.length ?? 0);
+  const box = useFollow(follow, outputEnd(lines ?? NO_LINES));
+  const last = useShowEarlier(lines ?? NO_LINES, { step: LINES_SHOWN, reset: job.id, scroller: box, key: lineKey, atEnd: () => follow || nearBottom(box.current) });
   const central = useStore((s) => s.hosts[host]?.label) ?? "this Mac";
   const chip = chipFromJob(job);
   const runHere = () => void rpc(host, M.jobRunHere, { job: job.id }).catch(errorToast);
@@ -207,7 +232,7 @@ function JobDetail({ host, ws, job, now }: { host: string; ws: Session; job: Job
         )}
         <div className="mt-4 flex items-center gap-2 ui-text-12.5">
           <span className="text-fg">Output</span>
-          <span className="text-faint">{lines ? `${lines.length} ${lines.length === 1 ? "line" : "lines"}` : ""}</span>
+          <span className="text-faint">{count}</span>
           <label className="ml-auto flex items-center gap-1.5 text-muted">
             <input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} />
             Follow
@@ -217,7 +242,8 @@ function JobDetail({ host, ws, job, now }: { host: string; ws: Session; job: Job
           </button>
         </div>
         <div ref={box} data-job-output className="selectable mt-2 min-h-[160px] flex-1 overflow-y-auto rounded-lg border border-border bg-panel px-3 py-2 font-mono ui-text-12 leading-[1.55]">
-          {lines?.map((l) => (
+          <EarlierLines job={job.id} earlier={last.earlier} onShow={last.showEarlier} />
+          {last.rendered.map((l) => (
             <div key={l.n} className={cx("whitespace-pre-wrap break-all", l.tone ? LINE_TONE[l.tone] : "text-fg")}>
               {l.text || " "}
             </div>

@@ -205,11 +205,19 @@ export function commentCardSelector(n: number, folder: string | null): string {
 const SHOW_IN_CHAT_WAIT_MS = 5000;
 
 /** What Show in chat does after looking for the pin's card: scrolls to it
- *  when `found`; else, while the chat's messages have not `loaded`, looks
- *  again, for at most 5 s; else says its message is not in the chat. */
-export function chatCardLookup(l: { found: boolean; loaded: boolean; waitedMs: number }): "found" | "wait" | "missing" {
+ *  when `found`; else, while the chat's messages have not `loaded`, or
+ *  while they have its message (`listed`) among blocks not rendered yet
+ *  (X81), looks again, for at most 5 s; else says its message is not in
+ *  the chat. */
+export function chatCardLookup(l: { found: boolean; loaded: boolean; listed?: boolean; waitedMs: number }): "found" | "wait" | "missing" {
   if (l.found) return "found";
-  return !l.loaded && l.waitedMs < SHOW_IN_CHAT_WAIT_MS ? "wait" : "missing";
+  return (!l.loaded || l.listed) && l.waitedMs < SHOW_IN_CHAT_WAIT_MS ? "wait" : "missing";
+}
+
+/** Whether a message of the user's shows `pin`'s card, its lines naming
+ *  the design's `folder` (a session design's) or none (X81). */
+export function showsPin(text: string, pin: DesignComment, folder: string | null): boolean {
+  return !!messageView(text, [pin])?.cards?.some((c) => c.n === pin.n && (c.folder ?? null) === folder);
 }
 
 /** What the Comments rail's buttons may do (X65): Send and Send all need
