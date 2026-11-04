@@ -208,6 +208,8 @@ pub fn signal_session(sid: u32, signal: Signal, leader_reaped: bool) -> bool {
     }
     let mut any = false;
     for pid in all_pids() {
+        // A member that exits between these two calls frees its pid, which
+        // goes to another process only once pids wrap around (X79).
         // SAFETY: getsid only reads the process table.
         if unsafe { libc::getsid(pid) } == sid as i32 {
             any = true;

@@ -107,7 +107,13 @@ daemon waits for it; a shell handed over in a live upgrade is told apart by
 the start time recorded when it was spawned, which the handoff carries (a
 handoff from a daemon before X79 has none, and then the start time is read
 when the shell is adopted). The tab showing an exit is not taken to mean the
-shell is gone. Command-line arguments of other processes can hold tokens; this
+shell is gone. Each other member of the session is found by its session id
+and signalled in the next call: no call does both (macOS has no pidfd), and
+checking a member's start time first would leave the same gap between two
+calls. A member that exits in that gap frees its pid, but pids are handed
+out in turn and wrap around only at the system's limit (99999 on macOS), so
+another process gets that pid only after all the others have been used.
+Command-line arguments of other processes can hold tokens; this
 feature reads only pids, parent pids, process groups and start times.
 
 ## Out of scope
