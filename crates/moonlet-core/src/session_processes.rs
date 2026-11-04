@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use moonlet_proto::TerminalId;
 use moonlet_proto::methods::{ProcessOrigin, ProcessRef, SessionProcess, SessionProcesses};
 
-use crate::process::Proc;
+use crate::process::{Proc, Started};
 
 /// A terminal tab of a session: its shell leads the tab's session.
 #[derive(Debug, Clone)]
@@ -29,7 +29,7 @@ pub struct Agent {
     pub id: TerminalId,
     pub title: String,
     pub pid: Option<u32>,
-    pub family: Vec<(u32, u64)>,
+    pub family: Vec<Started>,
 }
 
 /// A process found to be a session's, not yet described.
@@ -106,7 +106,7 @@ pub fn belonging(
         let started = a
             .family
             .iter()
-            .filter_map(|&(pid, start)| by_pid.get(&pid).copied().filter(|p| p.start == start));
+            .filter_map(|m| by_pid.get(&m.pid).copied().filter(|p| p.started() == *m));
         let found = own
             .into_iter()
             .chain(started.map(|p| Found {
@@ -142,11 +142,11 @@ pub fn leftovers(
     out
 }
 
-/// What stopping some pids of a session does, before any is signalled.
+/// The plan for stopping some pids of a session, made before any is signalled.
 #[derive(Debug, Default, PartialEq, Eq)]
-pub struct Stopping {
+pub struct StopPlan {
     /// The processes to end, as pid and start time.
-    pub targets: Vec<(u32, u64)>,
+    pub targets: Vec<Started>,
     /// Named pids of processes that run but are neither the session's nor
     /// left in its worktree.
     pub skipped: Vec<u32>,
@@ -166,18 +166,18 @@ pub fn to_stop(
     leftovers: &[Proc],
     pids: Option<&[ProcessRef]>,
     runs: impl Fn(u32) -> bool,
-) -> Stopping {
+) -> StopPlan {
     let Some(pids) = pids else {
-        return Stopping {
+        return StopPlan {
             targets: found
                 .iter()
                 .filter(|f| !f.tab)
-                .map(|f| (f.proc.pid, f.proc.start))
+                .map(|f| f.proc.started())
                 .collect(),
-            ..Stopping::default()
+            ..StopPlan::default()
         };
     };
-    let mut out = Stopping::default();
+    let mut out = StopPlan::default();
     for &named in pids {
         let (pid, start) = match named {
             ProcessRef::Pid(pid) => (pid, None),
@@ -190,9 +190,7 @@ pub fn to_stop(
             .find(|p| p.pid == pid)
         {
             Some(p) if start.is_some_and(|s| s != p.start) => out.gone.push(pid),
-            Some(p) if !out.targets.contains(&(p.pid, p.start)) => {
-                out.targets.push((p.pid, p.start))
-            }
+            Some(p) if !out.targets.contains(&p.started()) => out.targets.push(p.started()),
             Some(_) => {}
             None if runs(pid) => out.skipped.push(pid),
             None => out.gone.push(pid),
@@ -205,11 +203,9 @@ pub fn to_stop(
 /// [`crate::process::TERM_GRACE`] to those still running. A pid whose start
 /// time is no longer the one given is another process's, and is left alone.
 /// Returns once the signalled ones are gone, or SIGKILL could not end them.
-pub async fn end(targets: Vec<(u32, u64)>) -> Ending {
-    let (live, gone): (Vec<_>, Vec<_>) = targets
-        .into_iter()
-        .partition(|&(pid, start)| crate::pty::process_start(pid) == Some(start));
-    crate::process::Doomed {
+pub async fn end(targets: Vec<Started>) -> Ending {
+    let (live, gone): (Vec<_>, Vec<_>) = targets.into_iter().partition(Started::running);
+    crate::process::Stopping {
         group: None,
         agent: None,
         family: crate::process::Family::of(live.clone()),
@@ -217,7 +213,7 @@ pub async fn end(targets: Vec<(u32, u64)>) -> Ending {
     .end()
     .await;
     Ending {
-        gone: gone.into_iter().map(|t| t.0).collect(),
+        gone: gone.into_iter().map(|t| t.pid).collect(),
         ..after_ending(&live, crate::pty::process_start)
     }
 }
@@ -235,13 +231,13 @@ pub struct Ending {
 
 /// Sorts the `signalled` processes (pid and start time) by whether they
 /// still run with the same start, as `start_of` says now.
-pub fn after_ending(signalled: &[(u32, u64)], start_of: impl Fn(u32) -> Option<u64>) -> Ending {
+pub fn after_ending(signalled: &[Started], start_of: impl Fn(u32) -> Option<u64>) -> Ending {
     let mut out = Ending::default();
-    for &(pid, start) in signalled {
-        if start_of(pid) == Some(start) {
-            out.still_running.push(pid);
+    for s in signalled {
+        if start_of(s.pid) == Some(s.start) {
+            out.still_running.push(s.pid);
         } else {
-            out.ended.push(pid);
+            out.ended.push(s.pid);
         }
     }
     out
@@ -300,6 +296,11 @@ pub fn describe(found: &[Found], leftovers: &[Proc]) -> SessionProcesses {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A process as pid and start time.
+    fn started(pid: u32, start: u64) -> Started {
+        Started { pid, start }
+    }
 
     const fn p(pid: u32, ppid: u32, start: u64) -> Proc {
         Proc { pid, ppid, start }
@@ -362,7 +363,7 @@ mod tests {
             id: 7,
             title: "Claude".into(),
             pid: Some(300),
-            family: vec![(301, 31), (302, 32), (303, 33)],
+            family: vec![started(301, 31), started(302, 32), started(303, 33)],
         }];
         let found = belonging(&table, session_of, &tabs, &agents);
         assert_eq!(
@@ -474,9 +475,9 @@ mod tests {
         let (found, left) = listed();
         assert_eq!(
             to_stop(&found, &left, None, runs),
-            Stopping {
-                targets: vec![(101, 12), (301, 31)],
-                ..Stopping::default()
+            StopPlan {
+                targets: vec![started(101, 12), started(301, 31)],
+                ..StopPlan::default()
             }
         );
     }
@@ -501,15 +502,15 @@ mod tests {
                 Some(&plain(&[101, 600, 999, 100, 101, 998, 1])),
                 runs
             ),
-            Stopping {
-                targets: vec![(101, 12), (600, 60), (100, 10)],
+            StopPlan {
+                targets: vec![started(101, 12), started(600, 60), started(100, 10)],
                 skipped: vec![999, 1],
                 gone: vec![998],
             }
         );
         assert_eq!(
             to_stop(&found, &left, Some(&[]), runs),
-            Stopping::default(),
+            StopPlan::default(),
             "an empty list stops nothing"
         );
     }
@@ -535,8 +536,8 @@ mod tests {
         ];
         assert_eq!(
             to_stop(&found, &left, Some(&named), runs),
-            Stopping {
-                targets: vec![(101, 12), (301, 31)],
+            StopPlan {
+                targets: vec![started(101, 12), started(301, 31)],
                 skipped: vec![],
                 gone: vec![600, 100],
             }
@@ -561,7 +562,7 @@ mod tests {
         let pid = orphan_sleep();
         let start = crate::pty::process_start(pid).unwrap();
         assert_eq!(
-            end(vec![(pid, start + 1)]).await,
+            end(vec![started(pid, start + 1)]).await,
             Ending {
                 gone: vec![pid],
                 ..Ending::default()
@@ -573,7 +574,7 @@ mod tests {
             "a pid listed with another start was signalled"
         );
         assert_eq!(
-            end(vec![(pid, start)]).await,
+            end(vec![started(pid, start)]).await,
             Ending {
                 ended: vec![pid],
                 ..Ending::default()
@@ -604,7 +605,10 @@ mod tests {
             _ => None,
         };
         assert_eq!(
-            after_ending(&[(4242, 12), (4250, 13), (4310, 14)], now),
+            after_ending(
+                &[started(4242, 12), started(4250, 13), started(4310, 14)],
+                now
+            ),
             Ending {
                 ended: vec![4250, 4310],
                 still_running: vec![4242],

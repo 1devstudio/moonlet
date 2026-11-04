@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::process::{Doomed, Family};
+use crate::process::{Family, Started, Stopping};
 
 /// Processes and terminal sessions, each as pid and start time, so a pid that
 /// another process got since is left alone.
@@ -22,14 +22,14 @@ pub struct Leftovers {
     #[serde(default)]
     pub boot_id: Option<String>,
     /// The agents and every process they started.
-    pub processes: Vec<(u32, u64)>,
+    pub processes: Vec<Started>,
     /// Each terminal's session, by its leader: the shell the PTY started.
-    pub sessions: Vec<(u32, u64)>,
+    pub sessions: Vec<Started>,
 }
 
 impl Leftovers {
     /// A record of `processes` and `sessions` made during this boot.
-    pub fn of(processes: Vec<(u32, u64)>, sessions: Vec<(u32, u64)>) -> Leftovers {
+    pub fn of(processes: Vec<Started>, sessions: Vec<Started>) -> Leftovers {
         Leftovers { boot: crate::process::boot_time(), boot_id: crate::process::boot_id(), processes, sessions }
     }
 }
@@ -119,13 +119,13 @@ pub fn load(path: &Path) -> Leftovers {
 /// another user could have written ends nothing.
 pub fn reap(path: &Path) -> Leftovers {
     let left = load(path);
-    let mut doomed = Doomed { group: None, agent: None, family: Family::of(left.processes.clone()) };
-    if doomed.signal(None) {
+    let mut stopping = Stopping { group: None, agent: None, family: Family::of(left.processes.clone()) };
+    if stopping.signal(None) {
         tracing::info!("ending processes the previous daemon's agents left running");
-        tokio::spawn(doomed.end());
+        tokio::spawn(stopping.end());
     }
-    for &(sid, started) in &left.sessions {
-        crate::pty::end_recorded_session(sid, Some(started));
+    for s in &left.sessions {
+        crate::pty::end_recorded_session(s.pid, Some(s.start));
     }
     left
 }
@@ -158,7 +158,7 @@ mod tests {
         let started = process_start(shell.id()).unwrap();
         shell.wait().unwrap();
         let job = nix::unistd::Pid::from_raw(std::fs::read_to_string(&pid_file).unwrap().trim().parse().unwrap());
-        save(&path, &Leftovers::of(vec![], vec![(shell.id(), started)])).unwrap();
+        save(&path, &Leftovers::of(vec![], vec![Started { pid: shell.id(), start: started }])).unwrap();
         reap(&path);
         for _ in 0..80 {
             if nix::sys::signal::kill(job, None).is_err() {
@@ -176,7 +176,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = file(&dir.path().join("d.sock"));
         let mut sleeper = std::process::Command::new("/bin/sleep").arg("30").spawn().unwrap();
-        let mut left = Leftovers::of(vec![(sleeper.id(), process_start(sleeper.id()).unwrap())], vec![]);
+        let mut left = Leftovers::of(vec![Started::of(sleeper.id()).unwrap()], vec![]);
         made(&mut left);
         save(&path, &left).unwrap();
         reap(&path);
@@ -225,7 +225,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = file(&dir.path().join("d.sock"));
         let mut sleeper = std::process::Command::new("/bin/sleep").arg("30").spawn().unwrap();
-        save(&path, &Leftovers::of(vec![(sleeper.id(), process_start(sleeper.id()).unwrap())], vec![])).unwrap();
+        save(&path, &Leftovers::of(vec![Started::of(sleeper.id()).unwrap()], vec![])).unwrap();
         // As if another user had written it, in a shared folder such as /tmp.
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666)).unwrap();
         assert_eq!(reap(&path), Leftovers::default());
@@ -241,7 +241,7 @@ mod tests {
         let path = file(&dir.path().join("d.sock"));
         let mut sleeper = std::process::Command::new("/bin/sleep").arg("30").spawn().unwrap();
         let elsewhere = dir.path().join("elsewhere.json");
-        save(&elsewhere, &Leftovers::of(vec![(sleeper.id(), process_start(sleeper.id()).unwrap())], vec![])).unwrap();
+        save(&elsewhere, &Leftovers::of(vec![Started::of(sleeper.id()).unwrap()], vec![])).unwrap();
         std::os::unix::fs::symlink(&elsewhere, &path).unwrap();
         assert_eq!(reap(&path), Leftovers::default());
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
@@ -280,7 +280,7 @@ mod tests {
         let start = |pid| process_start(pid).unwrap();
         // `other` was recorded with a start time that is not its own: its pid
         // belonged to an earlier process.
-        let left = Leftovers::of(vec![(stubborn.id(), start(stubborn.id())), (other.id(), start(other.id()) - 1)], vec![]);
+        let left = Leftovers::of(vec![Started { pid: stubborn.id(), start: start(stubborn.id()) }, Started { pid: other.id(), start: start(other.id()) - 1 }], vec![]);
         save(&path, &left).unwrap();
         assert_eq!(reap(&path), left, "what it ends is returned");
         let status = ended(stubborn).await;
@@ -288,5 +288,21 @@ mod tests {
         assert!(other.try_wait().unwrap().is_none(), "a reused pid was signalled");
         other.kill().unwrap();
         other.wait().unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_record_written_as_pid_and_start_pairs_still_ends_its_processes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = file(&dir.path().join("d.sock"));
+        let sleeper = std::process::Command::new("/bin/sleep").arg("30").spawn().unwrap();
+        let (pid, start) = (sleeper.id(), process_start(sleeper.id()).unwrap());
+        // As daemons before the pid and start were named wrote it.
+        let boot_id = serde_json::to_string(&crate::process::boot_id()).unwrap();
+        let old = format!(r#"{{"boot": {}, "boot_id": {boot_id}, "processes": [[{pid}, {start}]], "sessions": []}}"#, crate::process::boot_time().unwrap());
+        std::fs::write(&path, old).unwrap();
+        std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
+        assert_eq!(reap(&path).processes, [Started { pid, start }]);
+        let status = ended(sleeper).await;
+        assert_eq!(std::os::unix::process::ExitStatusExt::signal(&status), Some(libc::SIGTERM));
     }
 }

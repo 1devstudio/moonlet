@@ -38,13 +38,10 @@ pub fn name(pid: u32) -> Option<String> {
 /// Whether a process runs with `pid`, one this user may signal or not, such
 /// as launchd (X83). Never signals it.
 pub fn runs(pid: u32) -> bool {
-    let Ok(pid) = i32::try_from(pid) else {
+    let Some(pid) = target(pid) else {
         return false;
     };
-    if pid <= 0 {
-        return false;
-    }
-    match nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None) {
+    match nix::sys::signal::kill(pid, None) {
         Ok(()) => true,
         Err(e) => e == nix::errno::Errno::EPERM,
     }
@@ -243,6 +240,46 @@ pub struct Proc {
     pub start: u64,
 }
 
+impl Proc {
+    /// This process as pid and start time.
+    pub fn started(&self) -> Started {
+        Started { pid: self.pid, start: self.start }
+    }
+}
+
+/// A process as its pid and when it started: the same pair always names the
+/// same process, while a pid alone may name a later one (X79). Written as
+/// `{"pid": …, "start": …}`; read from that or, as serde reads any struct,
+/// from the `[pid, start]` pair earlier daemons wrote.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+pub struct Started {
+    pub pid: u32,
+    pub start: u64,
+}
+
+impl Started {
+    /// Process `pid` as it is now; `None` when there is none.
+    pub fn of(pid: u32) -> Option<Started> {
+        Some(Started { pid, start: crate::pty::process_start(pid)? })
+    }
+
+    /// Whether this very process still runs.
+    pub fn running(&self) -> bool {
+        crate::pty::process_start(self.pid) == Some(self.start)
+    }
+
+    /// Its pid as a signal target; `None` for one no signal can name.
+    pub fn target(&self) -> Option<nix::unistd::Pid> {
+        target(self.pid)
+    }
+}
+
+/// `pid` as a signal target; `None` for 0 or one past `i32::MAX`, which would
+/// name a group or every process.
+pub fn target(pid: u32) -> Option<nix::unistd::Pid> {
+    i32::try_from(pid).ok().filter(|&p| p > 0).map(nix::unistd::Pid::from_raw)
+}
+
 /// When the machine booted: microseconds since the epoch on macOS, seconds on
 /// Linux. `None` when the kernel does not say.
 pub fn boot_time() -> Option<u64> {
@@ -385,7 +422,7 @@ fn proc_of(pid: u32) -> Option<Proc> {
 /// any more (X79).
 #[derive(Debug, Default)]
 pub struct Family {
-    known: std::collections::HashMap<u32, u64>,
+    known: std::collections::HashSet<Started>,
 }
 
 impl Family {
@@ -393,19 +430,19 @@ impl Family {
     pub fn note(&mut self, table: &Table, root: u32) {
         // Ended ones go: what is left are processes that still run, the agent's
         // descendants or, once their parent is gone, launchd's.
-        self.known.retain(|&pid, &mut start| table.has(pid, start));
+        self.known.retain(|k| table.has(k.pid, k.start));
         for p in table.descendants(root) {
-            self.known.insert(p.pid, p.start);
+            self.known.insert(p.started());
         }
     }
 
     /// Each noted process, as pid and start time.
-    pub fn members(&self) -> impl Iterator<Item = (u32, u64)> + '_ {
-        self.known.iter().map(|(&pid, &start)| (pid, start))
+    pub fn members(&self) -> impl Iterator<Item = Started> + '_ {
+        self.known.iter().copied()
     }
 
     /// A family of the processes `members` names (pid, start time).
-    pub fn of(members: impl IntoIterator<Item = (u32, u64)>) -> Family {
+    pub fn of(members: impl IntoIterator<Item = Started>) -> Family {
         Family { known: members.into_iter().collect() }
     }
 
@@ -425,9 +462,9 @@ impl Family {
     /// started later is someone else's, and is left alone. Returns whether
     /// any noted process still runs.
     pub fn signal(&mut self, signal: Option<nix::sys::signal::Signal>) -> bool {
-        self.known.retain(|&pid, &mut start| crate::pty::process_start(pid) == Some(start));
-        for &pid in self.known.keys() {
-            let _ = nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), signal);
+        self.known.retain(Started::running);
+        for p in self.known.iter().filter_map(Started::target) {
+            let _ = nix::sys::signal::kill(p, signal);
         }
         !self.known.is_empty()
     }
@@ -438,15 +475,15 @@ pub const TERM_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// A stopped agent's process group and the processes it started, or what a
 /// crashed daemon's agents left (X79), on the way out.
-pub struct Doomed {
+pub struct Stopping {
     pub group: Option<nix::unistd::Pid>,
     /// The agent that leads `group`, as pid and start time, when it still
     /// ran as it was stopped: until it exits, a crash would leave it running.
-    pub agent: Option<(u32, u64)>,
+    pub agent: Option<Started>,
     pub family: Family,
 }
 
-impl Doomed {
+impl Stopping {
     /// Sends `signal` (`None` only checks) to the group and the family;
     /// whether any of them still runs.
     pub fn signal(&mut self, signal: impl Into<Option<nix::sys::signal::Signal>>) -> bool {
@@ -490,6 +527,26 @@ impl Doomed {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_started_reads_as_pid_and_start_or_as_the_pair_earlier_daemons_wrote() {
+        let named: Vec<Started> = serde_json::from_str(r#"[{"pid": 4242, "start": 1730000000123456}]"#).unwrap();
+        let pair: Vec<Started> = serde_json::from_str("[[4242, 1730000000123456]]").unwrap();
+        assert_eq!(named, [Started { pid: 4242, start: 1730000000123456 }]);
+        assert_eq!(pair, [Started { pid: 4242, start: 1730000000123456 }]);
+        assert_eq!(
+            serde_json::to_string(&Started { pid: 4242, start: 1730000000123456 }).unwrap(),
+            r#"{"pid":4242,"start":1730000000123456}"#
+        );
+    }
+
+    #[test]
+    fn a_signal_target_is_never_a_group_or_every_process() {
+        assert_eq!(target(0), None);
+        assert_eq!(target(2_147_483_648), None);
+        assert_eq!(target(u32::MAX), None);
+        assert_eq!(target(4242), Some(nix::unistd::Pid::from_raw(4242)));
+    }
 
     #[test]
     fn descendants_are_children_and_theirs_but_not_others() {
