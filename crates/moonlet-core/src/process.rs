@@ -199,6 +199,11 @@ impl Family {
         self.known.extend(other.known);
     }
 
+    /// Whether nothing is noted.
+    pub fn is_empty(&self) -> bool {
+        self.known.is_empty()
+    }
+
     /// Sends `signal` (`None` only checks) to every noted process that still
     /// runs, and forgets the rest. A pid that now belongs to a process
     /// started later is someone else's, and is left alone. Returns whether

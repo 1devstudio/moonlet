@@ -785,16 +785,22 @@ impl ChatManager {
 
     /// Detaches the agent process from `inner`, with everything it started,
     /// including processes in a group of their own (X79), for the caller to
-    /// end with [`Doomed::end`].
+    /// end with [`Doomed::end`]. With no agent running, what an earlier one
+    /// left (kept through a restart that failed to start) is detached too.
     fn doom(inner: &mut Inner, table: &[crate::process::Proc]) -> Option<Doomed> {
         inner.generation += 1;
         inner.stdin = None;
         inner.adapter = None;
-        let pid = inner.pid.take()?;
         let mut family = std::mem::take(&mut inner.family);
+        let pid = inner.pid.take();
         // Children started since the last look count too.
-        family.note(table, pid);
-        Some(Doomed { group: Some(nix::unistd::Pid::from_raw(pid as i32)), family })
+        if let Some(pid) = pid {
+            family.note(table, pid);
+        }
+        if pid.is_none() && family.is_empty() {
+            return None;
+        }
+        Some(Doomed { group: pid.map(|p| nix::unistd::Pid::from_raw(p as i32)), family })
     }
 
     /// Notes, every 2 s while any agent runs, the processes each one started:
@@ -1987,6 +1993,18 @@ done
         // It still belongs to the chat, and ends with it.
         terms.kill(id, false).unwrap();
         assert!(gone_within(server, 8).await, "the server outlived the restarted agent's chat");
+    }
+
+    #[tokio::test]
+    async fn what_an_agent_left_running_ends_with_its_chat_after_a_restart_that_failed() {
+        let (dir, terms, chats) = setup().await;
+        let (id, server) = agent_with_a_server(&chats, dir.path()).await;
+        chats.settings(id, Some("opus".into()), None, None).unwrap();
+        // The restarted agent cannot start: `claude` is gone from PATH.
+        std::fs::remove_file(dir.path().join("bin/claude")).unwrap();
+        assert!(chats.send(id, "hi", &[]).is_err(), "an agent started without claude");
+        terms.kill(id, false).unwrap();
+        assert!(gone_within(server, 8).await, "the server outlived its chat");
     }
 
     #[tokio::test]

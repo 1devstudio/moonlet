@@ -73,7 +73,9 @@ Chat agents:
       `an_agent_that_exits_leaves_nothing_running_though_its_server_keeps_writing`).
 - [x] New settings (model, effort, mode) restart the agent without ending what
       it left in a process group of its own; those processes then end with the
-      restarted agent (`new_settings_restart_the_agent_but_keep_what_it_left_running`).
+      restarted agent (`new_settings_restart_the_agent_but_keep_what_it_left_running`),
+      or with the chat when the restarted agent fails to start
+      (`what_an_agent_left_running_ends_with_its_chat_after_a_restart_that_failed`).
 - [x] When the daemon stops (SIGTERM, `daemon.shutdown`, live upgrade), it
       waits up to 3 s for every agent to exit, those stopped a moment before
       included, and SIGKILLs those still running before it exits. Once it
@@ -152,6 +154,7 @@ feature reads only pids, parent pids, process groups and start times.
   `an_agent_that_exits_leaves_nothing_running`,
   `an_agent_that_exits_leaves_nothing_running_though_its_server_keeps_writing`,
   `new_settings_restart_the_agent_but_keep_what_it_left_running`,
+  `what_an_agent_left_running_ends_with_its_chat_after_a_restart_that_failed`,
   `the_daemon_stops_only_once_what_agents_left_running_is_gone`,
   `the_daemon_stops_only_once_a_just_stopped_agents_server_is_gone` and
   `no_agent_starts_once_the_daemon_is_stopping`.
