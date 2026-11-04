@@ -437,11 +437,15 @@ export class TermEntry {
     this.resizeObs = new ResizeObserver(() => this.refit());
     this.resizeObs.observe(parent);
     // Fitted before its first attach, so the daemon draws the replay at the
-    // pane's size rather than 80x24 (X80).
+    // pane's size rather than 80x24 (X80). The attach waits for the pane's
+    // other effects in the same commit, as Blocks mode's taller rows: it asks
+    // for the rows the pane ends up with, and no resize follows the replay.
     this.refit();
     if (!this.attached) {
       this.attached = true;
-      void this.attach().catch(() => {});
+      queueMicrotask(() => {
+        if (!this.disposed) void this.attach().catch(() => {});
+      });
     }
     requestAnimationFrame(() => this.refit());
     shown(this);

@@ -49,7 +49,7 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: async () => () => {} }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: async () => {} }));
 
 import { subscribeHost } from "./daemon";
-import { disposeEntry, entryFor, findEntry, getEntry, shortPath, terminalsToLetGo } from "./terminals";
+import { defaultTermSettings, disposeEntry, entryFor, findEntry, getEntry, setTermSettings, shortPath, terminalsToLetGo, type TermEntry } from "./terminals";
 
 describe("shortPath", () => {
   it("shortens a path under the home folder to ~, as a new chat shows its folder (X38)", () => {
@@ -76,6 +76,9 @@ describe("live terminals (X80)", () => {
   beforeAll(() => {
     // What jsdom lacks and xterm needs to open a terminal.
     const ctx: object = new Proxy({}, { get: (_t, k) => (k === "measureText" ? () => ({ width: 8 }) : k === "canvas" ? undefined : () => {}), set: () => true });
+    // jsdom has no WebGL: terminals draw with xterm's DOM renderer, as the
+    // app falls back to.
+    setTermSettings({ ...defaultTermSettings, webgl: false });
     HTMLCanvasElement.prototype.getContext = (() => ctx) as never;
     window.matchMedia ??= (() => ({ matches: false, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {} })) as never;
     globalThis.ResizeObserver ??= class {
@@ -104,8 +107,9 @@ describe("live terminals (X80)", () => {
     return entry;
   };
   /** Shows a terminal in a pane 960 by 480 px, laid out as the window lays
-   * out a tab's pane before its terminal is mounted. */
-  const showSized = (host: string, session: number) => {
+   * out a tab's pane before its terminal is mounted. `effects` are the
+   * pane's other effects, run in the same commit once it is mounted. */
+  const showSized = (host: string, session: number, effects?: (entry: TermEntry) => void) => {
     shown.push([host, session]);
     const style = document.createElement("style");
     style.textContent = ".moonlet-term { width: 960px; height: 480px; } .xterm { padding: 0px; }";
@@ -114,7 +118,9 @@ describe("live terminals (X80)", () => {
     Object.defineProperty(pane, "clientWidth", { value: 960 });
     Object.defineProperty(pane, "clientHeight", { value: 480 });
     document.body.append(pane);
-    getEntry(host, session).mount(pane);
+    const entry = getEntry(host, session);
+    entry.mount(pane);
+    effects?.(entry);
     style.remove();
   };
   /** The terminals of `host` the app sent `terminal.detach` for. */
@@ -165,6 +171,15 @@ describe("live terminals (X80)", () => {
     // Past the 60 ms a resize waits for, so a resize after the attach shows.
     await new Promise((done) => setTimeout(done, 100));
     expect(sent.filter(([, , p]) => (p as { id: number }).id === 1)).toEqual([["g", "terminal.attach", { id: 1, cols: 119, rows: 26 }]]);
+  });
+
+  it("a terminal shown in Blocks mode attaches at the rows Blocks mode fits, and no resize follows (X80)", async () => {
+    // Its pane's effects, in one commit: mounted, then told it is in Blocks mode.
+    showSized("p", 1, (entry) => entry.setBlockMode(true));
+    // Past the 60 ms a resize waits for, so a resize after the attach shows.
+    await new Promise((done) => setTimeout(done, 100));
+    // 480 px of rows 20 px tall: 16 px characters at Blocks mode's 1.3.
+    expect(sent.filter(([, , p]) => (p as { id: number }).id === 1)).toEqual([["p", "terminal.attach", { id: 1, cols: 119, rows: 24 }]]);
   });
 
   it("a terminal that leaves the screen counts as shown just then (X80)", async () => {

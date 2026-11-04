@@ -66,6 +66,10 @@ attached again and drawn from the daemon's replay.
       A terminal attaches once it is in its pane, fitted to it, so the replay
       is drawn at the pane's size rather than 80x24, and no resize follows
       (`a terminal shown again attaches at the size its pane fits, not 80x24 (X80)`).
+      The attach waits for the pane's other effects in the same commit, so a
+      terminal in Blocks mode attaches at the rows its taller line height
+      fits, not the classic ones, and no resize follows the replay
+      (`a terminal shown in Blocks mode attaches at the rows Blocks mode fits, and no resize follows (X80)`).
 - [x] A terminal on screen is never let go of, nor is any pane of a split on
       screen, even when more than 8 are on screen
       (`never lets go of a terminal on screen, even past the limit (X80)`,
@@ -141,6 +145,7 @@ None: no new input crosses a trust boundary.
   `a terminal shown again before its slow attach answers stays subscribed (X80)`,
   `a terminal let go of attaches again when shown, and the replay draws it (X80)`,
   `a terminal shown again attaches at the size its pane fits, not 80x24 (X80)`,
+  `a terminal shown in Blocks mode attaches at the rows Blocks mode fits, and no resize follows (X80)`,
   `ten terminals on screen at once are all kept (X80)`,
   `a terminal in a split on screen is kept however many others are shown (X80)`,
   `a split tab shown keeps both its panes, though one was shown longest ago (X80)`,
