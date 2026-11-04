@@ -75,6 +75,22 @@ describe("a workspace's board (X78)", () => {
     expect(workspaceBoard(useStore.getState(), ws, data, knobs)).not.toBe(first);
   });
 
+  it("is built again once the workspace's hosts change", () => {
+    const first = workspaceBoard(useStore.getState(), ws, data, knobs);
+    // A host joined, left or was renamed: the hosts list is a new one.
+    useStore.setState({ hosts: { ...useStore.getState().hosts } });
+    expect(workspaceBoard(useStore.getState(), ws, data, knobs)).not.toBe(first);
+  });
+
+  it("keeps the boards of the last 8 workspaces shown", () => {
+    const shownFirst = workspaceBoard(useStore.getState(), { host: "local", id: "w1" }, data, knobs);
+    for (let i = 2; i <= 9; i++) workspaceBoard(useStore.getState(), { host: "local", id: `w${i}` }, data, knobs);
+    const shownLast = workspaceBoard(useStore.getState(), { host: "local", id: "w9" }, data, knobs);
+    // w9 is among the last 8 and is not built again; w1 was let go of and is.
+    expect(workspaceBoard(useStore.getState(), { host: "local", id: "w9" }, data, knobs)).toBe(shownLast);
+    expect(workspaceBoard(useStore.getState(), { host: "local", id: "w1" }, data, knobs)).not.toBe(shownFirst);
+  });
+
   it("is built again once a session it shows changes", () => {
     const first = workspaceBoard(useStore.getState(), ws, data, knobs);
     useStore.setState({ sessions: { local: [session("s1", "Fix login"), session("s2", "Add dark mode")] } });

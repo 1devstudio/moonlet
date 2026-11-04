@@ -34,7 +34,11 @@ workspace's board once per change instead of once per component that shows it.
 - [x] A workspace's board is built once for a given set of inputs, however many
       components show it (sidebar, mode switch, a session's task, Tasks mode).
       It is built again when anything it reads changes, projects and the
-      workspace's hosts included. Boards of the last 8 workspaces are kept.
+      workspace's hosts included. Boards of the last 8 workspaces are kept
+      (`is built once however many components ask for it`, `is built again
+      once the workspace's projects change`, `is built again once the
+      workspace's hosts change`, `keeps the boards of the last 8 workspaces
+      shown`).
 - [ ] Linking sessions to tasks lower-cases each task key, repository and title
       once per task list, not once per session and task pair. Links found are
       the same as before.
@@ -74,7 +78,9 @@ Later parts of the same investigation, each with its own change:
   subscribers once`.
 - Vitest, `workspaceBoard.test.ts`: `is built once however many components ask
   for it`, `is a workspace's own, even for another account's workspace of the
-  same id`, `is built again once a Tasks setting changes`, `is built again once
+  same id`, `is built again once a Tasks setting changes`, `is built again
+  once the workspace's hosts change`, `keeps the boards of the last 8
+  workspaces shown`, `is built again once
   the workspace's projects change` and `is built again once a session it shows
   changes`.
 - Vitest: existing `tasks.test.ts`, `tasksBoard.test.ts` and `tasksStore.test.ts`
