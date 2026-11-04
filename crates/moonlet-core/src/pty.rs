@@ -29,7 +29,8 @@ pub struct SpawnSpec {
 pub struct Pty {
     master: OwnedFd,
     pid: u32,
-    /// When the child started (see [`process_start`]).
+    /// When the child started ([`process_start`]), taken while it surely
+    /// runs: once it exits, its pid may be another process's.
     start: Option<u64>,
     /// `Some` only when this process spawned the child and can reap it.
     child: Option<std::process::Child>,
@@ -95,6 +96,7 @@ impl Pty {
         Ok(Pty {
             master: pair.master,
             pid: child.id(),
+            // Not reaped before this, so the pid is still the child's.
             start: process_start(child.id()),
             child: Some(child),
         })
@@ -114,6 +116,8 @@ impl Pty {
         Ok(Pty {
             master,
             pid,
+            // Handed over with the start the previous daemon recorded at spawn;
+            // a daemon older than X79 recorded none, so it is read now.
             start: start.or_else(|| process_start(pid)),
             child: None,
         })

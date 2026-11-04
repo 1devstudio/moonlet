@@ -100,7 +100,10 @@ After a crash:
       (`~/.moonlet/run/moonletd.leftovers.json` for the default one) each
       running agent and every process it started, and each terminal's session,
       its shell exited or not, all as pid and start time, with the machine's
-      boot id and boot time.
+      boot id and boot time. A terminal's shell start time is taken when the
+      terminal starts (or is adopted in a handoff), never looked up once the
+      shell may have exited and its pid gone to another process
+      (`a_terminal_is_recorded_with_its_shells_start_though_the_shell_exited_first`).
 - [x] A daemon that starts fresh (not by a live-upgrade handoff) ends what that
       file names and still runs with the same start time: agents and what they
       started get SIGTERM, then SIGKILL 3 s later; terminal sessions get SIGHUP,
@@ -175,18 +178,8 @@ Stopping processes by pid races with pid reuse: a process found as a
 descendant is signalled only if its start time is still the one recorded when
 it was found. A tab's session is signalled by its shell's session id; once the
 shell's pid belongs to a process that started later, that process's own
-session is left alone. A shell the daemon started keeps its pid until the
-daemon waits for it; a shell handed over in a live upgrade is told apart by
-the start time recorded when it was spawned, which the handoff carries (a
-handoff from a daemon before X79 has none, and then the start time is read
-when the shell is adopted). The tab showing an exit is not taken to mean the
-shell is gone. Each other member of the session is found by its session id
-and signalled in the next call: no call does both (macOS has no pidfd), and
-checking a member's start time first would leave the same gap between two
-calls. A member that exits in that gap frees its pid, but pids are handed
-out in turn and wrap around only at the system's limit (99999 on macOS), so
-another process gets that pid only after all the others have been used.
-Command-line arguments of other processes can hold tokens; this
+session is left alone; for that, the shell's start time is taken when the
+terminal starts, while the pid is surely the shell's. Command-line arguments of other processes can hold tokens; this
 feature reads only pids, parent pids, process groups and start times.
 
 The record next to the socket says which processes the next daemon ends. A
@@ -223,7 +216,8 @@ it is first written.
   `a_record_behind_a_link_ends_nothing` and
   `a_record_is_written_for_its_owner_alone_and_never_through_a_link`.
 - Rust, `chat/runtime.rs`: `what_a_stopped_agent_left_stays_recorded_until_it_is_gone`,
-  `a_stopped_agent_stays_recorded_until_it_is_gone` and
+  `a_stopped_agent_stays_recorded_until_it_is_gone`,
+  `a_terminal_is_recorded_with_its_shells_start_though_the_shell_exited_first` and
   `what_a_crashed_daemon_left_stays_recorded_until_it_is_gone`.
 - Rust, `moonletd/tests/daemon.rs`:
   `a_daemon_started_after_a_crash_ends_what_its_agents_left_running`;

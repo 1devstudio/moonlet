@@ -783,19 +783,10 @@ impl ChatManager {
 
     /// Writes what runs now to the leftovers file, when recording and changed.
     fn record(&self, mut processes: Vec<(u32, u64)>) {
-        let (path, last_sessions) = {
-            let rec = self.leftovers.lock().unwrap();
-            let Some((path, last)) = rec.as_ref() else { return };
-            (path.clone(), last.as_ref().map(|l| l.sessions.clone()).unwrap_or_default())
-        };
+        let Some(path) = self.leftovers.lock().unwrap().as_ref().map(|(path, _)| path.clone()) else { return };
         // A shell that exited may leave jobs in its session: it stays, with
         // the start time it had, until its tab closes.
-        let mut sessions: Vec<_> = self
-            .terms
-            .session_leaders()
-            .into_iter()
-            .filter_map(|pid| Some((pid, crate::pty::process_start(pid).or_else(|| last_sessions.iter().find(|s| s.0 == pid).map(|s| s.1))?)))
-            .collect();
+        let mut sessions = self.terms.session_leaders();
         {
             let mut dying = self.dying.lock().unwrap();
             dying.processes.retain(|&(pid, start)| crate::pty::process_start(pid) == Some(start));
@@ -2106,6 +2097,36 @@ done
         assert!(nix::sys::signal::kill(server, None).is_ok(), "the server ended before its SIGKILL");
         assert!(recorded(&path).contains(&server.as_raw()), "a crash now would leave the server running");
         assert!(gone_within(server, 4).await);
+    }
+
+    #[tokio::test]
+    async fn a_terminal_is_recorded_with_its_shells_start_though_the_shell_exited_first() {
+        let (dir, terms, chats) = setup().await;
+        let path = dir.path().join("d.leftovers.json");
+        let go = dir.path().join("go");
+        let job_file = dir.path().join("job.pid");
+        // A shell that leaves a job ignoring SIGHUP, and exits when told.
+        let script = format!(
+            "set -m; (trap '' HUP; exec sleep 60) </dev/null >/dev/null 2>&1 & echo $! > '{}'; while [ ! -e '{}' ]; do sleep 0.05; done",
+            job_file.display(),
+            go.display()
+        );
+        let info = terms.create(moonlet_proto::methods::TerminalCreate { cwd: "/tmp".into(), command: vec!["/bin/sh".into(), "-c".into(), script], ..Default::default() }).unwrap();
+        let shell = info.pid.unwrap();
+        let started = crate::pty::process_start(shell).unwrap();
+        std::fs::write(&go, "").unwrap();
+        let end = Instant::now() + Duration::from_secs(10);
+        while terms.get(info.id).is_some_and(|t| t.info().exit.is_none()) {
+            assert!(Instant::now() < end, "the shell never exited");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let job = nix::unistd::Pid::from_raw(std::fs::read_to_string(&job_file).unwrap().trim().parse().unwrap());
+        // The first look comes after the shell is gone.
+        chats.record_leftovers(path.clone(), Default::default());
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        let left: crate::leftovers::Leftovers = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let _ = nix::sys::signal::kill(job, nix::sys::signal::Signal::SIGKILL);
+        assert_eq!(left.sessions, vec![(shell, started)], "a crash now would leave the shell's job running");
     }
 
     #[tokio::test]

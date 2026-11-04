@@ -222,14 +222,16 @@ impl TerminalManager {
     }
 
     /// The shell each terminal started, which leads the terminal's session,
-    /// also once it exited: jobs it left may still run in it (X79).
-    pub fn session_leaders(&self) -> Vec<u32> {
+    /// also once it exited: jobs it left may still run in it (X79). Each as
+    /// pid and the start time taken when the terminal started, never looked
+    /// up later, when the pid may be another process's.
+    pub fn session_leaders(&self) -> Vec<(u32, u64)> {
         let terminals: Vec<_> = self.terminals.lock().unwrap().values().cloned().collect();
         terminals
             .iter()
             .filter_map(|t| {
                 let st = t.state.lock().unwrap();
-                st.pty.as_ref().map(|p| p.pid())
+                st.pty.as_ref().and_then(|p| Some((p.pid(), p.start()?)))
             })
             .collect()
     }
