@@ -152,9 +152,10 @@ Later parts of this spec, each with its own change:
       a reaper at startup that stops the processes of archived sessions.
 - [ ] Archiving a session with processes still running asks first, listing
       them by name.
-- [ ] A chat agent idle for 24 hours (no turn running, nothing waiting for the
+- [x] A chat agent idle for 24 hours (no turn running, nothing waiting for the
       user) is stopped; the next message resumes its conversation
-      (`--resume`), as after a daemon restart.
+      (`--resume`), as after a daemon restart: X84
+      ([X84-idle-agents-rest.md](X84-idle-agents-rest.md)).
 - [ ] A session's processes can be listed and stopped from the app and with
       `moonlet ps` and `moonlet kill`, by name only, never with their
       arguments.
