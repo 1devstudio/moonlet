@@ -260,3 +260,61 @@ async fn a_session_an_agent_opens_without_naming_an_agent_runs_one() {
     assert_eq!(stdout(&d.moonlet(None, &["session", "wait", &s.id, "--timeout", "20"])), "done\n");
     assert_eq!(stdout(&d.moonlet(None, &["session", "read", &s.id])), "reply 1\n");
 }
+
+/// X83: `moonlet ps` in a session lists what its terminals run, and what was
+/// left in its worktree; `moonlet kill` stops a pid of it and refuses others.
+#[tokio::test]
+async fn moonlet_ps_lists_a_sessions_processes_and_moonlet_kill_stops_one() {
+    let d = Daemon::start().await;
+    let web = d.home.path().join("code/web");
+    git_repo(&web);
+    let mut c = Client::connect(&d.socket, "test").await.unwrap();
+    let p: Project = c.request(methods::PROJECT_ADD, serde_json::json!({"path": web})).await.unwrap();
+    let s: Session = c.request(methods::SESSION_CREATE, serde_json::json!({"project_id": p.id, "name": "Procs", "agent": "none"})).await.unwrap();
+    let shell = ["/bin/sh", "-c", "/usr/bin/tail -f /dev/null & echo $! > tail.pid; read line"];
+    let tab: moonlet_proto::types::TerminalInfo = c
+        .request(methods::TERMINAL_CREATE, serde_json::json!({"cwd": "", "session_id": s.id, "kind": "run", "title": "dev", "command": shell}))
+        .await
+        .unwrap();
+    let pid_file = Path::new(&s.path).join("tail.pid");
+    let mut tail = None;
+    for _ in 0..100 {
+        tail = std::fs::read_to_string(&pid_file).ok().and_then(|t| t.trim().parse::<u32>().ok());
+        if tail.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let tail = tail.expect("the tab never started tail");
+    let left = Command::new("/bin/sh").args(["-c", "/bin/sleep 63 >/dev/null 2>&1 & echo $!"]).current_dir(&s.path).output().unwrap();
+    let left: u32 = String::from_utf8(left.stdout).unwrap().trim().parse().unwrap();
+    let kill = |pid: u32| nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), nix::sys::signal::Signal::SIGKILL);
+    let in_session = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_moonlet"))
+            .args(args)
+            .env("MOONLET_HOME", d.home.path())
+            .env("MOONLET_SOCK", &d.socket)
+            .env("MOONLET_SESSION", &s.id)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+    };
+
+    let ps = stdout(&in_session(&["ps"]));
+    let listed = |out: &str, pid: u32, name: &str| out.lines().find(|l| l.split_whitespace().take(2).eq([pid.to_string().as_str(), name])).map(str::to_string);
+    let row = listed(&ps, tail, "tail").unwrap_or_else(|| panic!("tail not listed:\n{ps}"));
+    assert!(row.contains(&format!("run {} (dev)", tab.id)), "{ps}");
+    assert!(!ps.contains("/dev/null"), "an argument was printed:\n{ps}");
+    let (_, leftovers) = ps.split_once("Left in the worktree, stopped only by pid:\n").unwrap_or_else(|| panic!("no leftovers:\n{ps}"));
+    assert!(listed(leftovers, left, "sleep").is_some(), "{ps}");
+
+    let stopped = stdout(&in_session(&["kill", &tail.to_string()]));
+    let refused = in_session(&["kill", "1"]);
+    let tail_gone = nix::sys::signal::kill(nix::unistd::Pid::from_raw(tail as i32), None).is_err();
+    let _ = (kill(left), kill(tail));
+    assert_eq!(stopped, format!("stopped {tail}\n"));
+    assert!(tail_gone, "tail outlived moonlet kill");
+    assert!(!refused.status.success());
+    assert_eq!(String::from_utf8_lossy(&refused.stdout), "nothing to stop\n");
+    assert_eq!(String::from_utf8_lossy(&refused.stderr), "moonlet: not processes of this session: 1\n");
+}

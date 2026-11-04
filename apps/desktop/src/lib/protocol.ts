@@ -303,6 +303,62 @@ export interface SessionArchived {
   remote_error?: string | null;
 }
 
+/** What a session's process belongs to (X83). */
+export type ProcessOrigin =
+  | { kind: "terminal"; id: number; title: string }
+  /** A Run tab's: a script the session runs. */
+  | { kind: "run"; id: number; title: string }
+  | { kind: "agent"; id: number; title: string }
+  /** What it was left to on the host's system: "launchd" or "init". */
+  | { kind: "leftover"; parent: string };
+
+/** One process of a session (X83), named by its executable, never its arguments. */
+export interface SessionProcess {
+  pid: number;
+  name: string;
+  origin: ProcessOrigin;
+  /** The tab's own: a terminal's shell or a chat's agent, which closing the tab ends. */
+  tab: boolean;
+  /** When it started as the kernel keeps it (microseconds since the epoch on
+   * macOS, clock ticks since boot on Linux): what a Stop names, never shown. */
+  start?: number;
+  /** Milliseconds since the epoch, for showing: on Linux a clock change moves it. */
+  started?: number;
+  /** CPU time used so far. */
+  cpu_ms?: number;
+  /** Resident memory in bytes. */
+  rss?: number;
+}
+
+/** `session.processes`' result (X83). */
+export interface SessionProcesses {
+  processes: SessionProcess[];
+  /** launchd's processes working in the session's worktree. */
+  leftovers: SessionProcess[];
+}
+
+/** A process to stop (X83): a pid, or a pid with the kernel's start it was
+ * listed with, stopped only while that is still its start. */
+export type ProcessRef = number | { pid: number; start: number };
+
+/** `session.kill_processes`' params (X83): no `pids`, every process but the
+ * tabs' own; an empty list, none. */
+export interface SessionKillProcesses {
+  id: string;
+  pids?: ProcessRef[];
+}
+
+/** `session.kill_processes`' result (X83). */
+export interface ProcessesKilled {
+  ended: number[];
+  /** Running, but not the session's processes nor its leftovers. */
+  skipped: number[];
+  /** No longer running: ended already, or the pid is another process's now. */
+  gone: number[];
+  /** Signalled, but still running when the call returned. */
+  still_running: number[];
+}
+
 /** Work in a session that is only on its host (X55). */
 export interface UnpushedWork {
   /** Uncommitted files with git's one-letter status (`M`, `A`, `D`, `R`, `?`). */
@@ -1343,6 +1399,10 @@ export const M = {
   sessionUnarchive: "session.unarchive",
   sessionUpdate: "session.update",
   sessionRun: "session.run",
+  /** X83: what a session's terminals and agents run, and what was left in its worktree. */
+  sessionProcesses: "session.processes",
+  /** X83: stops some of a session's processes, or all but its tabs' own. */
+  sessionKillProcesses: "session.kill_processes",
   gitStatus: "git.status",
   gitFileVersions: "git.file_versions",
   gitDiff: "git.diff",

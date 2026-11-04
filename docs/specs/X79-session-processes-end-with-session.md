@@ -150,15 +150,15 @@ Later parts of this spec, each with its own change:
 
 - [ ] A registry of each session's processes, kept across daemon restarts, and
       a reaper at startup that stops the processes of archived sessions.
-- [ ] Archiving a session with processes still running asks first, listing
-      them by name.
+- [x] Archiving a session with processes still running asks first, listing
+      them by name: [X83](X83-session-processes-listed-and-stopped.md).
 - [x] A chat agent idle for 24 hours (no turn running, nothing waiting for the
       user) is stopped; the next message resumes its conversation
       (`--resume`), as after a daemon restart: X84
       ([X84-idle-agents-rest.md](X84-idle-agents-rest.md)).
-- [ ] A session's processes can be listed and stopped from the app and with
+- [x] A session's processes can be listed and stopped from the app and with
       `moonlet ps` and `moonlet kill`, by name only, never with their
-      arguments.
+      arguments: [X83](X83-session-processes-listed-and-stopped.md).
 
 ## UI
 

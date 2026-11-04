@@ -888,6 +888,26 @@ impl ChatManager {
         }
     }
 
+    /// The chat agents of session `session`, each with what it started,
+    /// noted again from `table` (X83).
+    pub fn session_agents(&self, session: &str, table: &crate::process::Table) -> Vec<crate::session_processes::Agent> {
+        let mut chats: Vec<_> = self.chats.lock().unwrap().values().cloned().collect();
+        chats.sort_by_key(|c| c.id);
+        chats
+            .iter()
+            .filter_map(|c| {
+                let mut inner = c.inner.lock().unwrap();
+                if inner.info.session_id.as_deref() != Some(session) {
+                    return None;
+                }
+                if let Some(pid) = inner.pid {
+                    inner.family.note(table, pid);
+                }
+                Some(crate::session_processes::Agent { id: c.id, title: inner.info.title.clone(), pid: inner.pid, family: inner.family.members().collect() })
+            })
+            .collect()
+    }
+
     /// Notes, every 2 s while any agent runs, the processes each one started:
     /// once an agent exits they belong to launchd (init on Linux), and nothing
     /// links them to it any more (X79). One look at the process table, off the

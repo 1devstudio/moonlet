@@ -5314,3 +5314,175 @@ async fn a_daemon_rests_an_idle_chat_agent_after_the_time_it_was_given() {
     let last = st["items"].as_array().and_then(|i| i.last()).map(|i| (i["kind"].clone(), i["text"].clone()));
     assert_eq!(last, Some((serde_json::json!("system"), serde_json::json!("Resting after a day without messages; the next message wakes it"))));
 }
+
+/// A session of a project in `home`, with no agent.
+async fn bare_session(home: &std::path::Path, c: &mut Client) -> moonlet_proto::types::Session {
+    let repo = home.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    git_in(&repo, &["init", "-q", "-b", "main"]).unwrap();
+    git_in(&repo, &["commit", "-q", "--allow-empty", "-m", "init"]).unwrap();
+    let p: moonlet_proto::types::Project = c.request(methods::PROJECT_ADD, serde_json::json!({"path": repo})).await.unwrap();
+    new_session(c, &p.id, "procs").await
+}
+
+/// The pid a test process wrote to `file`, waited for.
+async fn pid_in(file: &std::path::Path) -> u32 {
+    for _ in 0..100 {
+        if let Some(pid) = std::fs::read_to_string(file).ok().and_then(|s| s.trim().parse().ok()) {
+            return pid;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("nothing wrote {}", file.display());
+}
+
+/// SIGKILLs a process the test started when the test ends, passed or not.
+struct Reap(u32);
+
+impl Drop for Reap {
+    fn drop(&mut self) {
+        let _ = nix::sys::signal::kill(nix::unistd::Pid::from_raw(self.0 as i32), nix::sys::signal::Signal::SIGKILL);
+    }
+}
+
+/// X83: a terminal's job and what an agent started are listed by name with
+/// what they belong to, and stopped by pid or all at once, leaving the tabs'
+/// own processes.
+#[tokio::test]
+async fn a_sessions_processes_are_listed_by_name_and_stopped() {
+    let d = fake_claude_daemon(FAKE_CLAUDE_WITH_SERVER).await;
+    let mut c = d.client().await;
+    let ws = bare_session(d.home.path(), &mut c).await;
+    let shell = ["/bin/sh", "-c", "/usr/bin/tail -f /dev/null & echo $! > tail.pid; read line"];
+    let tab: TerminalInfo = c
+        .request(methods::TERMINAL_CREATE, serde_json::json!({"cwd": "", "session_id": ws.id, "kind": "run", "title": "dev", "command": shell}))
+        .await
+        .unwrap();
+    let chat: TerminalInfo = c
+        .request(methods::TERMINAL_CREATE, serde_json::json!({"cwd": "", "session_id": ws.id, "kind": "agent", "agent": "claude", "chat": true}))
+        .await
+        .unwrap();
+    let _: serde_json::Value = c.request(methods::CHAT_SEND, serde_json::json!({"id": chat.id, "text": "start a server"})).await.unwrap();
+    let worktree = std::path::Path::new(&ws.path);
+    let (tail, server) = (pid_in(&worktree.join("tail.pid")).await, pid_in(&worktree.join("server.pid")).await);
+    let _reap = (Reap(tail), Reap(server));
+
+    let listed: serde_json::Value = c.request(methods::SESSION_PROCESSES, serde_json::json!({"id": ws.id})).await.unwrap();
+    let entry = |pid: u32| {
+        listed["processes"].as_array().unwrap().iter().find(|e| e["pid"] == pid).cloned().unwrap_or_else(|| panic!("{pid} not listed: {listed}"))
+    };
+    let t = entry(tail);
+    assert_eq!(
+        (&t["name"], &t["origin"], &t["tab"]),
+        (&serde_json::json!("tail"), &serde_json::json!({"kind": "run", "id": tab.id, "title": "dev"}), &serde_json::json!(false))
+    );
+    assert!(t["started"].as_u64().is_some() && t["rss"].as_u64().is_some_and(|r| r > 0) && t["cpu_ms"].as_u64().is_some(), "{t}");
+    let s = entry(server);
+    assert_eq!(
+        (&s["name"], &s["origin"]["kind"], &s["origin"]["id"], &s["tab"]),
+        (&serde_json::json!("sleep"), &serde_json::json!("agent"), &serde_json::json!(chat.id), &serde_json::json!(false))
+    );
+    let own: Vec<serde_json::Value> = listed["processes"].as_array().unwrap().iter().filter(|e| e["tab"] == true).cloned().collect();
+    assert_eq!(own.len(), 3, "the session's first shell, the Run tab's and the chat's agent: {listed}");
+    // Names only: no argument of any process.
+    assert!(!listed.to_string().contains("/dev/null"), "{listed}");
+
+    let killed: serde_json::Value = c.request(methods::SESSION_KILL_PROCESSES, serde_json::json!({"id": ws.id, "pids": [tail]})).await.unwrap();
+    assert_eq!(killed, serde_json::json!({"ended": [tail], "skipped": [], "gone": [], "still_running": []}));
+    assert!(gone_within(nix::unistd::Pid::from_raw(tail as i32), 2).await, "tail outlived its stop");
+    assert!(nix::sys::signal::kill(nix::unistd::Pid::from_raw(server as i32), None).is_ok(), "stopping tail stopped the server");
+
+    // The server ignores SIGTERM: the call returns once SIGKILL ended it.
+    let killed: serde_json::Value = c.request(methods::SESSION_KILL_PROCESSES, serde_json::json!({"id": ws.id})).await.unwrap();
+    assert!(killed["ended"].as_array().unwrap().contains(&serde_json::json!(server)), "{killed}");
+    assert!(gone_within(nix::unistd::Pid::from_raw(server as i32), 1).await, "the agent's server outlived Stop all");
+    for e in own {
+        let pid = nix::unistd::Pid::from_raw(e["pid"].as_i64().unwrap() as i32);
+        assert!(nix::sys::signal::kill(pid, None).is_ok(), "Stop all stopped the tab's own {e}");
+    }
+}
+
+/// X83: a process left to launchd working in the session's worktree is listed
+/// apart, is not stopped with all, and is stopped by pid; a pid that is not
+/// the session's is skipped.
+#[tokio::test]
+async fn leftovers_in_a_sessions_worktree_are_listed_apart_and_stopped_only_by_pid() {
+    let d = TestDaemon::start().await;
+    let mut c = d.client().await;
+    let ws = bare_session(d.home.path(), &mut c).await;
+    let out = Command::new("/bin/sh").args(["-c", "/bin/sleep 61 >/dev/null 2>&1 & echo $!"]).current_dir(&ws.path).output().unwrap();
+    let orphan: u32 = String::from_utf8(out.stdout).unwrap().trim().parse().unwrap();
+    let _reap = Reap(orphan);
+    // In the worktree too, but its parent is this test, not launchd.
+    let mut outsider = Command::new("/bin/sleep").arg("62").current_dir(&ws.path).spawn().unwrap();
+    let _reap_outsider = Reap(outsider.id());
+
+    let listed: serde_json::Value = c.request(methods::SESSION_PROCESSES, serde_json::json!({"id": ws.id})).await.unwrap();
+    let left: Vec<&serde_json::Value> = listed["leftovers"].as_array().unwrap().iter().filter(|e| e["pid"] == orphan).collect();
+    assert_eq!(left.len(), 1, "{listed}");
+    // Named by what it was left to on this host's system.
+    let parent = if cfg!(target_os = "macos") { "launchd" } else { "init" };
+    assert_eq!((&left[0]["name"], &left[0]["origin"]), (&serde_json::json!("sleep"), &serde_json::json!({"kind": "leftover", "parent": parent})));
+    assert!(!listed["processes"].as_array().unwrap().iter().any(|e| e["pid"] == orphan), "{listed}");
+    assert!(!listed.to_string().contains(&format!("\"pid\":{}", outsider.id())), "{listed}");
+
+    let killed: serde_json::Value = c.request(methods::SESSION_KILL_PROCESSES, serde_json::json!({"id": ws.id})).await.unwrap();
+    assert!(!killed["ended"].as_array().unwrap().contains(&serde_json::json!(orphan)), "{killed}");
+    assert!(nix::sys::signal::kill(nix::unistd::Pid::from_raw(orphan as i32), None).is_ok(), "Stop all stopped a leftover");
+
+    let killed: serde_json::Value =
+        c.request(methods::SESSION_KILL_PROCESSES, serde_json::json!({"id": ws.id, "pids": [orphan, outsider.id()]})).await.unwrap();
+    assert_eq!(killed, serde_json::json!({"ended": [orphan], "skipped": [outsider.id()], "gone": [], "still_running": []}));
+    assert!(gone_within(nix::unistd::Pid::from_raw(orphan as i32), 2).await, "the leftover outlived its stop");
+    assert!(outsider.try_wait().unwrap().is_none(), "a process not the session's was stopped");
+    // Named again once it ended: gone, not someone else's.
+    let killed: serde_json::Value = c.request(methods::SESSION_KILL_PROCESSES, serde_json::json!({"id": ws.id, "pids": [orphan]})).await.unwrap();
+    assert_eq!(killed, serde_json::json!({"ended": [], "skipped": [], "gone": [orphan], "still_running": []}));
+    outsider.kill().unwrap();
+    outsider.wait().unwrap();
+}
+
+/// X83: a pid sent with the start it was listed with is stopped only while
+/// that is its start: another start means the listed process has ended. The
+/// start compared is the kernel's own (`start`), never the wall-clock
+/// `started` shown, which moves with the clock on Linux.
+#[tokio::test]
+async fn a_pid_named_with_another_start_than_listed_is_left_alone() {
+    let d = TestDaemon::start().await;
+    let mut c = d.client().await;
+    let ws = bare_session(d.home.path(), &mut c).await;
+    let out = Command::new("/bin/sh").args(["-c", "/bin/sleep 63 >/dev/null 2>&1 & echo $!"]).current_dir(&ws.path).output().unwrap();
+    let orphan: u32 = String::from_utf8(out.stdout).unwrap().trim().parse().unwrap();
+    let _reap = Reap(orphan);
+    let listed: serde_json::Value = c.request(methods::SESSION_PROCESSES, serde_json::json!({"id": ws.id})).await.unwrap();
+    let row = listed["leftovers"].as_array().unwrap().iter().find(|e| e["pid"] == orphan).cloned().unwrap_or_else(|| panic!("{listed}"));
+    let start = row["start"].as_u64().unwrap_or_else(|| panic!("no kernel start: {row}"));
+    assert!(row["started"].is_u64(), "no start time to show: {row}");
+
+    let other = serde_json::json!({"id": ws.id, "pids": [{"pid": orphan, "start": start + 1}]});
+    let killed: serde_json::Value = c.request(methods::SESSION_KILL_PROCESSES, other).await.unwrap();
+    assert_eq!(killed, serde_json::json!({"ended": [], "skipped": [], "gone": [orphan], "still_running": []}));
+    assert!(nix::sys::signal::kill(nix::unistd::Pid::from_raw(orphan as i32), None).is_ok(), "a pid listed with another start was stopped");
+
+    let same = serde_json::json!({"id": ws.id, "pids": [{"pid": orphan, "start": start}]});
+    let killed: serde_json::Value = c.request(methods::SESSION_KILL_PROCESSES, same).await.unwrap();
+    assert_eq!(killed, serde_json::json!({"ended": [orphan], "skipped": [], "gone": [], "still_running": []}));
+    assert!(gone_within(nix::unistd::Pid::from_raw(orphan as i32), 2).await, "the leftover outlived its stop");
+}
+
+/// X83: a worker's link neither lists nor stops a session's processes; the
+/// CLI, which an agent in the session runs, does.
+#[tokio::test]
+async fn a_workers_link_neither_lists_nor_stops_a_sessions_processes() {
+    let d = TestDaemon::start().await;
+    let mut c = d.client().await;
+    let ws = bare_session(d.home.path(), &mut c).await;
+    let mut worker = Client::connect(&d.socket, "moonletd-worker").await.unwrap();
+    for method in [methods::SESSION_PROCESSES, methods::SESSION_KILL_PROCESSES] {
+        let e = worker.request::<_, serde_json::Value>(method, serde_json::json!({"id": ws.id})).await.unwrap_err();
+        assert_eq!(e.to_string(), "forbidden: only the moonlet app and the moonlet CLI manage a session's processes", "{method}");
+    }
+    let mut cli = Client::connect(&d.socket, "moonlet-cli").await.unwrap();
+    let listed: serde_json::Value = cli.request(methods::SESSION_PROCESSES, serde_json::json!({"id": ws.id})).await.unwrap();
+    assert!(listed["processes"].is_array(), "{listed}");
+}

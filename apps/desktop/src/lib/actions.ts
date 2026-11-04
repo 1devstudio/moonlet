@@ -3,7 +3,8 @@
 
 import { rpc, sendInput } from "./daemon";
 import { addTab, closeDiff, closeFile, closeJob, cycleFocus, openDiff, openFile, openJob, splitLeaf, tabOf, type DiffMode } from "./layout";
-import { M, type ProjectConfig, type TerminalInfo, type Session, type SessionArchived, type UnpushedWork } from "./protocol";
+import { M, type ProcessesKilled, type ProjectConfig, type TerminalInfo, type Session, type SessionArchived, type SessionProcesses, type UnpushedWork } from "./protocol";
+import { killParams, runningLine, stillRunningLine, withRunning } from "./sessionProcesses";
 import { checkForUpdates, errorToast, focusTerminal, getLayout, selectedSession, sesKey, sessionState, setLayout, termKey, toast, useStore, sessionTerminals, shownWorkspace, designHostOf, selectSession } from "./store";
 import { lastActive, sharedSessionOrder } from "./sidebar";
 import { findEntry, outputToCopy } from "./terminals";
@@ -303,10 +304,20 @@ export async function archiveSession(target?: { host: string; ws: Session }) {
   // Work only on this machine that the archive would take (X55).
   const where = c.host === "local" ? "this Mac" : (s.hosts[c.host]?.label ?? c.host);
   const params = unpushedParams(c.ws, pr);
-  const work = git.warn_unpushed ? await rpc<UnpushedWork>(c.host, M.gitUnpushed, params).catch(() => null) : null;
+  // What still runs in it, beyond its tabs, is named and stopped too (X83);
+  // a daemon that cannot say archives as before.
+  const [work, running] = await Promise.all([
+    git.warn_unpushed ? rpc<UnpushedWork>(c.host, M.gitUnpushed, params).catch(() => null) : null,
+    rpc<SessionProcesses>(c.host, M.sessionProcesses, { id: c.ws.id }).then(
+      (r) => (Array.isArray(r?.processes) && Array.isArray(r?.leftovers) ? r : null),
+      () => null,
+    ),
+  ]);
   const view = work && unpushedView(work, plan, c.ws.branch, where);
-  const answer = await askConfirm(view ? unpushedPrompt(c.ws.name, plan, view) : archivePrompt(c.ws.name, plan));
+  const answer = await askConfirm(withRunning(view ? unpushedPrompt(c.ws.name, plan, view) : archivePrompt(c.ws.name, plan), runningLine(running)));
   if (!answer) return;
+  // A daemon that cannot list processes cannot stop them either.
+  const stops = running !== null;
   const flags = archiveFlags(plan, answer.checked, !!answer.alt);
   if (answer.alt) {
     try {
@@ -326,6 +337,8 @@ export async function archiveSession(target?: { host: string; ws: Session }) {
   const started = Date.now();
   setArchiving(key, { loader, done: false, folding: false });
   try {
+    // Its terminals stop with the archive; what else it runs stops first.
+    if (stops) await stopForArchive(c.host, c.ws.id);
     const done = await rpc<SessionArchived | boolean>(c.host, M.sessionArchive, { id: c.ws.id, ...flags });
     if (typeof done === "object" && done.remote_error) toast(`Couldn't delete ${c.ws.branch} on origin: ${done.remote_error}`, "error");
     setArchiving(key, { loader, done: true, folding: false });
@@ -337,6 +350,24 @@ export async function archiveSession(target?: { host: string; ws: Session }) {
   } catch (e) {
     setArchiving(key, null);
     if (wasSelected && !useStore.getState().selected) useStore.setState({ selected: sel });
+    errorToast(e);
+  }
+}
+
+/** Stops what session `id` of `host` runs as Archive is chosen (X83), not
+ * only what the confirm listed: Stop all, which the daemon works out as it is
+ * asked, then what is left in the worktree now, each by the start it is
+ * listed with now. What outlives it is said; a failure to stop is said, and
+ * the archive goes on. */
+async function stopForArchive(host: string, id: string) {
+  try {
+    const all = await rpc<ProcessesKilled>(host, M.sessionKillProcesses, killParams(id));
+    const now = await rpc<SessionProcesses>(host, M.sessionProcesses, { id });
+    const leftovers = Array.isArray(now?.leftovers) ? now.leftovers : [];
+    const left = leftovers.length ? await rpc<ProcessesKilled>(host, M.sessionKillProcesses, killParams(id, leftovers)) : null;
+    const line = stillRunningLine(all, left);
+    if (line) toast(line, "error");
+  } catch (e) {
     errorToast(e);
   }
 }
