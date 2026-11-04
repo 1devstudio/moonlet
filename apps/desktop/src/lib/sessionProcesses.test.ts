@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { archivePrompt } from "./confirmOptions";
 import type { ProcessesKilled, SessionProcess, SessionProcesses } from "./protocol";
-import { cpuPercent, killParams, processLooks, processRow, processesSummary, runningLine, stillRunningLine, stoppedByStopAll, toStopOnArchive, withRunning } from "./sessionProcesses";
+import { cpuPercent, killParams, processLooks, processRow, processesSummary, runningLine, stillRunningLine, stoppedByStopAll, withRunning } from "./sessionProcesses";
 
 const NOW = 1_793_700_000_000;
 const dev = { kind: "terminal", id: 2, title: "dev" } as const;
@@ -17,7 +17,6 @@ describe("archiving a session with processes (X83)", () => {
   it("names the processes still running, after their count", () => {
     expect(runningLine(list)).toBe("4 processes still run: vite, tail, node ×2. Archiving stops them.");
     expect(runningLine({ processes: [proc(4242, "vite", dev)], leftovers: [] })).toBe("1 process still runs: vite. Archiving stops it.");
-    expect(toStopOnArchive(list).map((p) => p.pid)).toEqual([4242, 4250, 4310, 5151]);
     const shown = withRunning(archivePrompt("Login page"), runningLine(list));
     expect(typeof shown.message === "function" && shown.message(false)).toBe(
       'Archive "Login page"? Its terminals stop and the worktree folder is removed. The branch is kept. 4 processes still run: vite, tail, node ×2. Archiving stops them.',
@@ -28,7 +27,6 @@ describe("archiving a session with processes (X83)", () => {
     const tabs = { processes: [proc(4100, "zsh", dev, true), proc(4300, "claude", claude, true)], leftovers: [] };
     expect(runningLine(tabs)).toBeNull();
     expect(runningLine(null)).toBeNull();
-    expect(toStopOnArchive(tabs)).toEqual([]);
     const prompt = archivePrompt("Login page");
     expect(withRunning(prompt, null)).toBe(prompt);
   });

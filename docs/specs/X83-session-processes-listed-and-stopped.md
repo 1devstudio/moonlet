@@ -28,7 +28,8 @@ name of the file they run, never by their arguments, which can hold tokens.
    server a crashed tool left. Each has its own **Stop**.
 4. The user archives the session. The confirm says
    "3 processes still run: vite, tail, node. Archiving stops them." and, on
-   **Archive**, they are stopped with the session.
+   **Archive**, they are stopped with the session, and so is anything
+   started while the confirm was open.
 5. In a terminal, `moonlet ps` lists the current session's processes, and
    `moonlet kill 4242` or `moonlet kill --all` stops them.
 
@@ -121,12 +122,17 @@ App:
       `Stop all covers what the daemon stops: neither the tabs' own nor what was left in the worktree`).
 - [x] Archiving a session that runs processes other than its tabs' own, or
       has leftovers, says so in the confirm, by name: "3 processes still run:
-      vite, tail, node. Archiving stops them." On **Archive** they are stopped,
-      each by its pid and the start it was listed with, before the session is
-      archived; a daemon that cannot list them archives
+      vite, tail, node. Archiving stops them." On **Archive**, before the
+      session is archived, what it runs at that moment is stopped, not only
+      what the confirm listed: Stop all, which the daemon works out as it is
+      asked, then what is left in the worktree then, listed again and each
+      stopped by its pid and the start it is listed with. Processes that
+      outlive it are named in a toast; a daemon that cannot list them archives
       as before (`names the processes still running, after their count`,
       `says nothing when only the tabs' own processes run`,
       `lists the processes still running and stops them before archiving (X83)`,
+      `stops what the session runs once Archive is chosen, not only what the confirm listed (X83)`,
+      `says what still runs after archiving's Stop, from both of its stops (X83)`,
       `archives as before when the daemon cannot list processes (X83)`;
       e2e `names what still runs in the session, and archiving stops it (X83)`).
 
@@ -198,6 +204,8 @@ worktree can be signalled.
 - Processes on a remote host's copy of the session are listed by that host's
   daemon only; the app asks the session's own host.
 - Leftovers whose working directory moved out of the worktree are not found.
+- The project's archive script runs inside `session.archive`, after the
+  app's stop: what it starts and leaves running is not stopped.
 - On Linux, leftovers re-parented to a subreaper (such as `systemd --user`)
   rather than init are not found: only init's children are looked at.
 
@@ -227,7 +235,9 @@ worktree can be signalled.
   `says which processes still run after their Stop`,
   `keeps only the latest look at the session shown` and
   `works out CPU use from two looks`; `actions.test.ts`:
-  `lists the processes still running and stops them before archiving (X83)` and
+  `lists the processes still running and stops them before archiving (X83)`,
+  `stops what the session runs once Archive is chosen, not only what the confirm listed (X83)`,
+  `says what still runs after archiving's Stop, from both of its stops (X83)` and
   `archives as before when the daemon cannot list processes (X83)`.
 - Rust, `moonlet-cli` `src/ps.rs`: `kill_says_which_pids_it_stopped`,
   `kill_fails_naming_pids_not_the_sessions_apart_from_those_already_ended` and

@@ -33,11 +33,6 @@ export function runningLine(list: SessionProcesses | null): string | null {
   return ps.length === 1 ? `1 process still runs: ${names(ps)}. Archiving stops it.` : `${ps.length} processes still run: ${names(ps)}. Archiving stops them.`;
 }
 
-/** What archiving stops before the session is archived. */
-export function toStopOnArchive(list: SessionProcesses | null): SessionProcess[] {
-  return stopped(list);
-}
-
 /** `session.kill_processes`' params: each of `ps` by its pid and the start
  * the kernel listed it with, so a pid reused since is left alone, whatever
  * the clock did meanwhile (a plain pid when the start is not known); no
@@ -48,10 +43,14 @@ export function killParams(id: string, ps?: SessionProcess[]): SessionKillProces
 }
 
 /** What a Stop says when processes outlived it ("1 process still runs after
- * SIGKILL: 4250."); null when none did, or the daemon did not say. */
-export function stillRunningLine(killed: unknown): string | null {
-  const left = (killed as Partial<ProcessesKilled> | null)?.still_running;
-  if (!Array.isArray(left) || !left.length) return null;
+ * SIGKILL: 4250."), from each `session.kill_processes` result it got; null
+ * when none did, or the daemon did not say. */
+export function stillRunningLine(...killed: unknown[]): string | null {
+  const left = killed.flatMap((k) => {
+    const pids = (k as Partial<ProcessesKilled> | null)?.still_running;
+    return Array.isArray(pids) ? pids : [];
+  });
+  if (!left.length) return null;
   return `${left.length} ${left.length === 1 ? "process still runs" : "processes still run"} after SIGKILL: ${left.join(", ")}.`;
 }
 
