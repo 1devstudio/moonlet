@@ -63,13 +63,36 @@ Tabs:
 
 Chat agents:
 
-- [ ] Stopping a chat agent stops the processes it started, including those in
-      a process group of their own: SIGTERM, then SIGKILL after 3 s.
-- [ ] When a chat agent's process exits by itself, processes it started that
-      are still running are stopped the same way.
-- [ ] When the daemon stops (SIGTERM, `daemon.shutdown`, live upgrade), it
-      waits up to 3 s for every agent to exit and SIGKILLs those still running
-      before it exits.
+- [x] Stopping a chat agent stops the processes it started, including those in
+      a process group of their own: SIGTERM, then SIGKILL after 3 s
+      (`stopping_a_chat_stops_what_its_agent_left_running`).
+- [x] When a chat agent's process exits by itself, processes it started that
+      are still running are stopped the same way, even when one of them keeps
+      the agent's output open, and writes to it
+      (`an_agent_that_exits_leaves_nothing_running`,
+      `an_agent_that_exits_leaves_nothing_running_though_its_server_keeps_writing`).
+      Everything the agent wrote before it exited is still read, however long
+      reading it takes; only the wait for more output after the exit is
+      bounded, to half a second
+      (`a_long_reply_is_read_to_its_end_though_the_agent_exits_before_it_is`).
+- [x] Finding the processes an agent started looks at each process once,
+      however many it started and however deep they nest
+      (`a_deep_tree_is_walked_in_one_pass`).
+- [x] New settings (model, effort, mode) restart the agent without ending what
+      it left in a process group of its own; those processes then end with the
+      restarted agent (`new_settings_restart_the_agent_but_keep_what_it_left_running`),
+      or with the chat when the restarted agent fails to start
+      (`what_an_agent_left_running_ends_with_its_chat_after_a_restart_that_failed`).
+- [x] When the daemon stops (SIGTERM, `daemon.shutdown`, live upgrade), it
+      waits up to 3 s for every agent to exit, those stopped a moment before
+      included, and SIGKILLs those still running before it exits. Once it
+      begins to stop, no agent starts (`no_agent_starts_once_the_daemon_is_stopping`,
+      `the_daemon_stops_only_once_what_agents_left_running_is_gone`,
+      `the_daemon_stops_only_once_a_just_stopped_agents_server_is_gone`,
+      `a_daemon_stopped_with_sigterm_leaves_nothing_its_agents_started`).
+      When a live upgrade fails after that, the old daemon goes on serving and
+      its chats start agents again
+      (`chats_start_agents_again_after_a_live_upgrade_that_failed`).
 
 Later parts of this spec, each with its own change:
 
@@ -121,8 +144,10 @@ feature reads only pids, parent pids, process groups and start times.
 - `nohup cmd &` in a shell tab no longer outlives the tab. To keep a process
   running after its tab, start it outside moonlet (for example with
   `launchctl`).
-- Processes that call `setsid()` or double-fork away from their parent before
-  the daemon looks are found only by the later registry and reaper.
+- The daemon looks at each agent's processes every 2 s and at the end of each
+  of its turns. One the agent starts less than 2 s before it exits by itself,
+  mid-turn and in a process group of its own, is not known to have been the
+  agent's. Stopping an agent looks once more first.
 
 ## Test plan
 
@@ -131,11 +156,23 @@ feature reads only pids, parent pids, process groups and start times.
   `closing_a_tab_whose_shell_exited_stops_the_job_it_left`,
   `closing_a_tab_that_shows_an_exit_stops_its_shell_still_running` and
   `closing_an_adopted_tab_leaves_alone_the_session_now_on_its_shells_pid`.
-- Rust, `chat/runtime.rs`: with a fake agent that starts a background child in
-  its own process group, stopping the chat stops the child; an agent that exits
-  by itself leaves no child running.
-- Rust, `moonletd/tests`: a daemon stopped with SIGTERM leaves no agent and no
-  agent child running.
+- Rust, `process.rs`: `descendants_are_children_and_theirs_but_not_others`,
+  `a_deep_tree_is_walked_in_one_pass` and
+  `a_family_signals_only_processes_that_still_run`.
+- Rust, `chat/runtime.rs`, with a fake agent that leaves a server running in a
+  process group of its own, ignoring SIGHUP and SIGTERM:
+  `stopping_a_chat_stops_what_its_agent_left_running`,
+  `an_agent_that_exits_leaves_nothing_running`,
+  `an_agent_that_exits_leaves_nothing_running_though_its_server_keeps_writing`,
+  `a_long_reply_is_read_to_its_end_though_the_agent_exits_before_it_is`,
+  `new_settings_restart_the_agent_but_keep_what_it_left_running`,
+  `what_an_agent_left_running_ends_with_its_chat_after_a_restart_that_failed`,
+  `the_daemon_stops_only_once_what_agents_left_running_is_gone`,
+  `the_daemon_stops_only_once_a_just_stopped_agents_server_is_gone` and
+  `no_agent_starts_once_the_daemon_is_stopping`.
+- Rust, `moonletd/tests/daemon.rs`:
+  `a_daemon_stopped_with_sigterm_leaves_nothing_its_agents_started` and
+  `chats_start_agents_again_after_a_live_upgrade_that_failed`.
 
 ## Open questions
 
