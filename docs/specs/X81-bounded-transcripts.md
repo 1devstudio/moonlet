@@ -63,7 +63,10 @@ the end of a long transcript, and keeps the end of a job's output.
       items`). The Agents panel reads them for every chat of a host with one
       `chat.summaries`, never their transcripts, and a chat read so keeps
       nothing more (`keeps only the status and asks of a chat loaded but not
-      shown`). With the Plan tab closed, its dot reads a waiting plan from the
+      shown`). A `chat.state` event that comes while that read is in flight
+      is kept, even for a chat not read yet, so the chat shows in the Agents
+      panel with its latest status (`keeps the status of a chat whose state
+      comes while its first summary is read`). With the Plan tab closed, its dot reads a waiting plan from the
       chat's asks (`knows a plan waits from its chat's asks while the Plan tab
       is closed and the chat's items are not in memory (X81)`).
 - [x] A chat renders its last 200 blocks. "Show earlier" shows 200 more each
@@ -113,7 +116,10 @@ the end of a long transcript, and keeps the end of a job's output.
       inside a colour code`, `never cuts the line not ended yet inside a
       character of two UTF-16 units`).
 - [x] A job's views say how many lines it printed, the trimmed ones too
-      (`counts every line the job printed, the trimmed ones too`).
+      (`counts every line the job printed, the trimmed ones too`). The job
+      tab's stderr badge counts every stderr line it printed, counted as
+      chunks are read, the trimmed ones too (`counts every stderr line the
+      job printed, the trimmed ones too`).
 - [x] A job's view, the Jobs panel's job detail and the phone's render the
       last 2000 lines of what they keep (after the stream filter and Find),
       and "Show earlier (N more lines)" adds 2000 more each time, keeping
@@ -164,7 +170,8 @@ None: no new inputs.
   drops the others'`, `loads a dropped chat's items again when it is shown
   again`, `keeps a dropped chat's status and asks current, without its
   items`, `keeps only the status and asks of a chat loaded but not shown`,
-  `reloads on connect only the chats already in memory`, `loads on reconnect
+  `keeps the status of a chat whose state comes while its first summary is
+  read`, `reloads on connect only the chats already in memory`, `loads on reconnect
   a chat shown while its host was down`, `never drops the items of a chat on
   screen, however many are on screen`, `keeps the chats a new chat's chips
   read while it is shown, however many there are`, `keeps the items of a
@@ -199,7 +206,8 @@ None: no new inputs.
   code`, `never cuts the line not ended yet inside a character of two UTF-16
   units`, `reads 50,000 progress updates to one line in well under a
   second`, `marks the end of a job's output anew for each chunk, once it is
-  trimmed too` and `counts every line the job printed, the trimmed ones
+  trimmed too`, `counts every line the job printed, the trimmed ones
+  too` and `counts every stderr line the job printed, the trimmed ones
   too`.
 - Vitest, `jobsStore.test.ts`: `keeps at most 1 MiB of a job's output,
   however much it printed`.
