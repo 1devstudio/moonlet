@@ -793,7 +793,7 @@ impl ChatManager {
     /// including processes in a group of their own (X79), for the caller to
     /// end with [`Doomed::end`]. With no agent running, what an earlier one
     /// left (kept through a restart that failed to start) is detached too.
-    fn doom(inner: &mut Inner, table: &[crate::process::Proc]) -> Option<Doomed> {
+    fn doom(inner: &mut Inner, table: &crate::process::Table) -> Option<Doomed> {
         inner.generation += 1;
         inner.stdin = None;
         inner.adapter = None;

@@ -75,6 +75,9 @@ Chat agents:
       reading it takes; only the wait for more output after the exit is
       bounded, to half a second
       (`a_long_reply_is_read_to_its_end_though_the_agent_exits_before_it_is`).
+- [x] Finding the processes an agent started looks at each process once,
+      however many it started and however deep they nest
+      (`a_deep_tree_is_walked_in_one_pass`).
 - [x] New settings (model, effort, mode) restart the agent without ending what
       it left in a process group of its own; those processes then end with the
       restarted agent (`new_settings_restart_the_agent_but_keep_what_it_left_running`),
@@ -153,8 +156,9 @@ feature reads only pids, parent pids, process groups and start times.
   `closing_a_tab_whose_shell_exited_stops_the_job_it_left`,
   `closing_a_tab_that_shows_an_exit_stops_its_shell_still_running` and
   `closing_an_adopted_tab_leaves_alone_the_session_now_on_its_shells_pid`.
-- Rust, `process.rs`: `descendants_are_children_and_theirs_but_not_others`
-  and `a_family_signals_only_processes_that_still_run`.
+- Rust, `process.rs`: `descendants_are_children_and_theirs_but_not_others`,
+  `a_deep_tree_is_walked_in_one_pass` and
+  `a_family_signals_only_processes_that_still_run`.
 - Rust, `chat/runtime.rs`, with a fake agent that leaves a server running in a
   process group of its own, ignoring SIGHUP and SIGTERM:
   `stopping_a_chat_stops_what_its_agent_left_running`,

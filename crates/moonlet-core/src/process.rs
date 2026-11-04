@@ -133,8 +133,43 @@ pub struct Proc {
 }
 
 /// Every process this one may see, with its parent and start time (X79).
-pub fn table() -> Vec<Proc> {
-    crate::pty::all_pids().into_iter().filter_map(|pid| u32::try_from(pid).ok().filter(|&p| p > 0)).filter_map(proc_of).collect()
+pub fn table() -> Table {
+    Table::new(crate::pty::all_pids().into_iter().filter_map(|pid| u32::try_from(pid).ok().filter(|&p| p > 0)).filter_map(proc_of))
+}
+
+/// Processes as the kernel listed them at one moment, each under its
+/// parent, so a process's descendants are found by looking at each of them
+/// once, not at every process for each (X79).
+#[derive(Debug, Default)]
+pub struct Table {
+    children: std::collections::HashMap<u32, Vec<Proc>>,
+}
+
+impl Table {
+    pub fn new(procs: impl IntoIterator<Item = Proc>) -> Self {
+        let mut children: std::collections::HashMap<u32, Vec<Proc>> = std::collections::HashMap::new();
+        for p in procs {
+            children.entry(p.ppid).or_default().push(p);
+        }
+        Self { children }
+    }
+
+    /// The processes that descend from `root`: its children, theirs, and so
+    /// on, in no particular order. Not `root` itself.
+    pub fn descendants(&self, root: u32) -> Vec<Proc> {
+        let mut out = Vec::new();
+        let mut seen = std::collections::HashSet::from([root]);
+        let mut parents = vec![root];
+        while let Some(p) = parents.pop() {
+            for c in self.children.get(&p).into_iter().flatten() {
+                if seen.insert(c.pid) {
+                    out.push(*c);
+                    parents.push(c.pid);
+                }
+            }
+        }
+        out
+    }
 }
 
 /// Process `pid`'s parent and start time, read in one go.
@@ -161,22 +196,6 @@ fn proc_of(pid: u32) -> Option<Proc> {
     }
 }
 
-/// The processes in `table` that descend from `root`: its children, theirs,
-/// and so on, in no particular order. Not `root` itself.
-pub fn descendants(table: &[Proc], root: u32) -> Vec<Proc> {
-    let mut out = Vec::new();
-    let mut parents = vec![root];
-    while let Some(p) = parents.pop() {
-        for c in table.iter().filter(|c| c.ppid == p && c.pid != root && c.pid != p) {
-            if !out.contains(c) {
-                out.push(*c);
-                parents.push(c.pid);
-            }
-        }
-    }
-    out
-}
-
 /// The processes an agent started, noted while the agent still runs: once it
 /// exits, they belong to launchd (init on Linux) and nothing links them to it
 /// any more (X79).
@@ -187,8 +206,8 @@ pub struct Family {
 
 impl Family {
     /// Notes the descendants of `root` in `table`.
-    pub fn note(&mut self, table: &[Proc], root: u32) {
-        for p in descendants(table, root) {
+    pub fn note(&mut self, table: &Table, root: u32) {
+        for p in table.descendants(root) {
             self.known.insert(p.pid, p.start);
         }
     }
@@ -226,11 +245,23 @@ mod tests {
         // An agent (100) with a shell (101) running a pipeline (102, 103) and
         // an MCP server (104); another session's shell (200) runs `tail` (201).
         let p = |pid, ppid| Proc { pid, ppid, start: pid as u64 };
-        let table = [p(1, 0), p(100, 50), p(101, 100), p(102, 101), p(103, 101), p(104, 100), p(200, 1), p(201, 200)];
-        let mut pids: Vec<u32> = descendants(&table, 100).iter().map(|p| p.pid).collect();
+        let table = Table::new([p(1, 0), p(100, 50), p(101, 100), p(102, 101), p(103, 101), p(104, 100), p(200, 1), p(201, 200)]);
+        let mut pids: Vec<u32> = table.descendants(100).iter().map(|p| p.pid).collect();
         pids.sort();
         assert_eq!(pids, [101, 102, 103, 104]);
-        assert!(descendants(&table, 104).is_empty());
+        assert!(table.descendants(104).is_empty());
+    }
+
+    #[test]
+    fn a_deep_tree_is_walked_in_one_pass() {
+        // 20,000 processes, each the child of the one before: one look at
+        // each, not one look at the whole table per process.
+        let table = Table::new((1..=20_000).map(|pid| Proc { pid, ppid: pid - 1, start: pid as u64 }));
+        let started = std::time::Instant::now();
+        let found = table.descendants(1).len();
+        let took = started.elapsed();
+        assert_eq!(found, 19_999);
+        assert!(took < std::time::Duration::from_secs(1), "took {took:?}");
     }
 
     #[test]
