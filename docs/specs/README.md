@@ -114,3 +114,4 @@ Each feature of moonlet has its own spec in this directory. Write the spec befor
 | X75 | Sign-ins open where you are: a browser opener, localhost callbacks forwarded, sign in on every member (ADR 0015) | P1 | 4 | implemented | [X75-sign-ins-open-where-you-are.md](X75-sign-ins-open-where-you-are.md) |
 | X76 | Tasks on the phone: boards shared through the daemon, moves, creates, comments and links relayed to the Mac | P1 | 3 | implemented (phone screens untried on a device) | [X76-tasks-on-the-phone.md](X76-tasks-on-the-phone.md) |
 | X77 | A changed file's diff opens in a tab of the main window, with a Markdown preview | P1 | 3 | implemented | [X77-diff-tabs.md](X77-diff-tabs.md) |
+| X78 | The app stays quiet while nothing changes | P1 | 3 | draft | [X78-idle-app-cpu.md](X78-idle-app-cpu.md) |
