@@ -545,7 +545,7 @@ export function selectedSession(s: State = get()): Session | undefined {
   return s.sessions[s.selected.host]?.find((w) => w.id === s.selected!.session);
 }
 
-export function sessionTerminals(s: State, host: string, wsId: string): TerminalInfo[] {
+export function sessionTerminals(s: Pick<State, "terminals">, host: string, wsId: string): TerminalInfo[] {
   return Object.values(s.terminals[host] ?? {})
     .filter((x) => x.session_id === wsId)
     .sort((a, b) => a.id - b.id);
@@ -554,7 +554,7 @@ export function sessionTerminals(s: State, host: string, wsId: string): Terminal
 const RANK: Record<AgentState, number> = { blocked: 5, error: 4, working: 3, done: 2, idle: 1 };
 
 /** The most urgent agent state among a workspace's sessions. */
-export function sessionState(s: State, host: string, wsId: string): AgentState | null {
+export function sessionState(s: Pick<State, "terminals" | "reads">, host: string, wsId: string): AgentState | null {
   // An agent waiting for the user to share a terminal needs them (X31).
   if (readWaits(s.reads, host, wsId)) return "blocked";
   let best: AgentState | null = null;
@@ -718,7 +718,7 @@ export function selectSession(host: string, id: string, keepMode = false) {
 }
 
 /** Every host's workspaces, local first, as the switcher lists them (X32). */
-export function hostWorkspaces(s: State): HostWorkspaces[] {
+export function hostWorkspaces(s: Pick<State, "hosts" | "accounts" | "workspaces" | "sections" | "sessions" | "profiles">): HostWorkspaces[] {
   return Object.values(s.hosts)
     .sort((a, b) => Number(a.remote) - Number(b.remote) || a.id.localeCompare(b.id))
     .map((h) => ({ host: h.id, label: h.label, account: s.accounts[h.id]?.account, workspaces: s.workspaces[h.id] ?? [], sections: s.sections[h.id] ?? [], sessions: s.sessions[h.id] ?? [], profiles: s.profiles[h.id] ?? [] }));

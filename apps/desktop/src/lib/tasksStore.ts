@@ -827,7 +827,7 @@ export function originRepoOf(s: Pick<StoreState, "projects">, host: string, data
  * show too, each with its host, and with the GitHub repository of the
  * board's own project of the same identity.
  */
-export function boardInput(s: StoreState, host: string, workspaceId: string, data: TasksData, config: TrackersConfig = DEFAULT_CONFIG, members: string[] = [host]): BoardInput {
+export function boardInput(s: Pick<StoreState, "sessions" | "prs" | "git" | "projects" | "terminals" | "reads">, host: string, workspaceId: string, data: TasksData, config: TrackersConfig = DEFAULT_CONFIG, members: string[] = [host]): BoardInput {
   const repoOf = (h: string, projectId: string) => originRepoOf(s, host, data, h, projectId);
   const sessions: BoardSession[] = members.flatMap((h) =>
     (s.sessions[h] ?? [])
