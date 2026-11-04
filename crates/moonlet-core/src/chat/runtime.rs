@@ -890,7 +890,7 @@ impl ChatManager {
 
     /// The chat agents of session `session`, each with what it started,
     /// noted again from `table` (X83).
-    pub fn session_agents(&self, session: &str, table: &[crate::process::Proc]) -> Vec<crate::session_processes::Agent> {
+    pub fn session_agents(&self, session: &str, table: &crate::process::Table) -> Vec<crate::session_processes::Agent> {
         let mut chats: Vec<_> = self.chats.lock().unwrap().values().cloned().collect();
         chats.sort_by_key(|c| c.id);
         chats

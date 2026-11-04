@@ -303,19 +303,29 @@ pub fn table() -> Table {
 /// once, not at every process for each (X79).
 #[derive(Debug, Default)]
 pub struct Table {
+    all: Vec<Proc>,
     children: std::collections::HashMap<u32, Vec<Proc>>,
     by_pid: std::collections::HashMap<u32, Proc>,
+}
+
+/// Every process listed, for a look through them all.
+impl std::ops::Deref for Table {
+    type Target = [Proc];
+    fn deref(&self) -> &[Proc] {
+        &self.all
+    }
 }
 
 impl Table {
     pub fn new(procs: impl IntoIterator<Item = Proc>) -> Self {
         let mut children: std::collections::HashMap<u32, Vec<Proc>> = std::collections::HashMap::new();
         let mut by_pid = std::collections::HashMap::new();
-        for p in procs {
+        let all: Vec<Proc> = procs.into_iter().collect();
+        for &p in &all {
             children.entry(p.ppid).or_default().push(p);
             by_pid.insert(p.pid, p);
         }
-        Self { children, by_pid }
+        Self { all, children, by_pid }
     }
 
     /// Process `pid` as listed, if it was.

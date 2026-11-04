@@ -211,6 +211,7 @@ pub async fn end(targets: Vec<(u32, u64)>) -> Ending {
         .partition(|&(pid, start)| crate::pty::process_start(pid) == Some(start));
     crate::process::Doomed {
         group: None,
+        agent: None,
         family: crate::process::Family::of(live.clone()),
     }
     .end()
