@@ -27,9 +27,10 @@ workspace's board once per change instead of once per component that shows it.
 ## Behaviour and acceptance criteria
 
 - [x] A git poll whose result equals the session's current git status changes
-      nothing in the store, so nothing re-renders.
+      nothing in the store, so nothing re-renders (`re-renders nothing when
+      the worktree has not changed since the last poll`).
 - [x] A git poll whose result differs updates the session's git status, as
-      before.
+      before (`stores a changed status and tells subscribers once`).
 - [ ] A workspace's board is built once for a given set of inputs, however many
       components show it (sidebar, mode switch, a session's task, Tasks mode).
 - [ ] Linking sessions to tasks lower-cases each task key, repository and title
