@@ -71,6 +71,10 @@ Chat agents:
       the agent's output open, and writes to it
       (`an_agent_that_exits_leaves_nothing_running`,
       `an_agent_that_exits_leaves_nothing_running_though_its_server_keeps_writing`).
+      Everything the agent wrote before it exited is still read, however long
+      reading it takes; only the wait for more output after the exit is
+      bounded, to half a second
+      (`a_long_reply_is_read_to_its_end_though_the_agent_exits_before_it_is`).
 - [x] New settings (model, effort, mode) restart the agent without ending what
       it left in a process group of its own; those processes then end with the
       restarted agent (`new_settings_restart_the_agent_but_keep_what_it_left_running`),
@@ -153,6 +157,7 @@ feature reads only pids, parent pids, process groups and start times.
   `stopping_a_chat_stops_what_its_agent_left_running`,
   `an_agent_that_exits_leaves_nothing_running`,
   `an_agent_that_exits_leaves_nothing_running_though_its_server_keeps_writing`,
+  `a_long_reply_is_read_to_its_end_though_the_agent_exits_before_it_is`,
   `new_settings_restart_the_agent_but_keep_what_it_left_running`,
   `what_an_agent_left_running_ends_with_its_chat_after_a_restart_that_failed`,
   `the_daemon_stops_only_once_what_agents_left_running_is_gone`,

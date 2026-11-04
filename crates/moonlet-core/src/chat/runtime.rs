@@ -1060,8 +1060,12 @@ impl ChatManager {
                     // open, so its end never comes: the exit counts (X79).
                     status = child.wait() => {
                         reaped();
-                        // What the agent wrote before it exited, read for at
-                        // most half a second, however much that process writes.
+                        // What the agent wrote before it exited is in the pipe
+                        // or the reader's buffer already, and `timeout_at`
+                        // takes a line that is ready before it looks at the
+                        // deadline: all of it is read, however long that takes.
+                        // Only waiting for more stops half a second after the
+                        // exit, so a process left running cannot hold it back.
                         let deadline = tokio::time::Instant::now() + Duration::from_millis(500);
                         while let Ok(Ok(Some(line))) = tokio::time::timeout_at(deadline, lines.next_line()).await {
                             if !keep_reading(line) {
@@ -1204,6 +1208,20 @@ while IFS= read -r line; do
       echo '{"type":"assistant","message":{"id":"m5","content":[{"type":"tool_use","id":"t6","name":"Bash","input":{"command":"pnpm stack:check"}}]}}' ;;
     *'queue this'*) ;;
     *'crash now'*) exit 3 ;;
+    *'write a long reply and exit'*)
+      # A reply that takes a while to read, all written before the agent
+      # exits: a long text, then many changes of mode, each saved with it.
+      text=$(head -c 100000 /dev/zero | tr '\0' a)
+      echo '{"type":"assistant","message":{"id":"m7","content":[{"type":"text","text":"'"$text"'"}]}}'
+      i=0
+      while [ $i -lt 500 ]; do
+        echo '{"type":"system","subtype":"status","permissionMode":"plan"}'
+        echo '{"type":"system","subtype":"status","permissionMode":"auto"}'
+        i=$((i+1))
+      done
+      echo '{"type":"assistant","message":{"id":"m8","content":[{"type":"text","text":"The end."}]}}'
+      echo '{"type":"result","subtype":"success","is_error":false,"usage":{}}'
+      exit 0 ;;
     *'start a server'*)
       # A background command in a process group of its own that ignores
       # SIGHUP and SIGTERM, like a dev server a Bash tool left running (X79).
@@ -1993,6 +2011,26 @@ done
         // It still belongs to the chat, and ends with it.
         terms.kill(id, false).unwrap();
         assert!(gone_within(server, 8).await, "the server outlived the restarted agent's chat");
+    }
+
+    /// On worker threads, as in the daemon: the agent's exit is seen while
+    /// its reply is still being read.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_long_reply_is_read_to_its_end_though_the_agent_exits_before_it_is() {
+        let (dir, _terms, chats) = setup().await;
+        let id = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), ..Default::default() }).unwrap().id;
+        wait_for(&chats, id, |s| s.agent_session.is_some()).await;
+        chats.send(id, "write a long reply and exit", &[]).unwrap();
+        let end = Instant::now() + Duration::from_secs(60);
+        let st = loop {
+            let st = chats.state(id).unwrap();
+            if matches!(st.status.as_str(), "done" | "error") || Instant::now() > end {
+                break st;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        };
+        let last = st.items.last().map(|i| (i.kind.as_str(), i.text.as_str()));
+        assert_eq!((st.status.as_str(), last), ("done", Some(("assistant", "The end."))));
     }
 
     #[tokio::test]
