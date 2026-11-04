@@ -105,7 +105,7 @@ pub type SessionEnv = Box<dyn Fn(&str) -> SessionLaunch + Send + Sync>;
 pub const WORKSPACE_KEY: &str = "workspace:";
 
 /// How often the processes each agent started are noted (X79).
-const FAMILY_LOOK: Duration = Duration::from_secs(2);
+const LOOK_EVERY: Duration = Duration::from_secs(2);
 
 /// How long an agent stays idle before it rests (X84).
 const REST_AFTER: Duration = Duration::from_secs(24 * 3600);
@@ -608,8 +608,8 @@ impl ChatManager {
         let table = crate::process::table();
         {
             let mut inner = chat.inner.lock().unwrap();
-            if let Some(doomed) = Self::doom(&mut inner, &table) {
-                self.end_later(doomed);
+            if let Some(stopping) = Self::detach_agent(&mut inner, &table) {
+                self.end_later(stopping);
             }
             if !remove {
                 self.settle(&chat, &mut inner, "Stopped");
@@ -643,8 +643,8 @@ impl ChatManager {
         let chats: Vec<_> = self.chats.lock().unwrap().values().cloned().collect();
         let table = crate::process::table();
         for c in chats {
-            if let Some(doomed) = Self::doom(&mut c.inner.lock().unwrap(), &table) {
-                self.end_later(doomed);
+            if let Some(stopping) = Self::detach_agent(&mut c.inner.lock().unwrap(), &table) {
+                self.end_later(stopping);
             }
         }
         // Agents stopped or exited a moment ago are still being ended too.
@@ -767,19 +767,19 @@ impl ChatManager {
         }
     }
 
-    /// Ends `doomed` in the background; `shutdown` waits for it.
-    fn end_later(&self, doomed: crate::process::Doomed) {
-        self.dying.lock().unwrap().processes.extend(doomed.agent.into_iter().chain(doomed.family.members()));
+    /// Ends `stopping` in the background; `shutdown` waits for it.
+    fn end_later(&self, stopping: crate::process::Stopping) {
+        self.dying.lock().unwrap().processes.extend(stopping.agent.into_iter().chain(stopping.family.members()));
         let mut ending = self.ending.lock().unwrap();
         ending.retain(|e| !e.is_finished());
-        ending.push(tokio::spawn(doomed.end()));
+        ending.push(tokio::spawn(stopping.end()));
     }
 
     /// Detaches the agent process from `inner`, with everything it started,
     /// including processes in a group of their own (X79), for the caller to
-    /// end with [`crate::process::Doomed::end`]. With no agent running, what an earlier one
+    /// end with [`crate::process::Stopping::end`]. With no agent running, what an earlier one
     /// left (kept through a restart that failed to start) is detached too.
-    fn doom(inner: &mut Inner, table: &crate::process::Table) -> Option<crate::process::Doomed> {
+    fn detach_agent(inner: &mut Inner, table: &crate::process::Table) -> Option<crate::process::Stopping> {
         inner.generation += 1;
         inner.stdin = None;
         inner.adapter = None;
@@ -794,8 +794,8 @@ impl ChatManager {
             return None;
         }
         // As `table` saw it: a pid freed since is never taken for the agent.
-        let agent = pid.and_then(|p| table.get(p)).map(|p| (p.pid, p.start));
-        Some(crate::process::Doomed { group: pid.map(|p| nix::unistd::Pid::from_raw(p as i32)), agent, family })
+        let agent = pid.and_then(|p| table.get(p)).map(|p| p.started());
+        Some(crate::process::Stopping { group: pid.and_then(crate::process::target), agent, family })
     }
 
     /// Ends the agent of `inner`, its process group, and keeps with the chat
@@ -804,11 +804,11 @@ impl ChatManager {
     /// it is gone, so a crash meanwhile leaves it to the next daemon.
     fn end_agent_only(&self, inner: &mut Inner, table: &crate::process::Table) {
         // As `table` saw it: a pid freed since is never taken for the agent.
-        let agent = inner.pid.and_then(|pid| table.get(pid)).map(|p| (p.pid, p.start));
-        if let Some(mut doomed) = Self::doom(inner, table) {
-            let left_running = std::mem::take(&mut doomed.family);
+        let agent = inner.pid.and_then(|pid| table.get(pid)).map(|p| p.started());
+        if let Some(mut stopping) = Self::detach_agent(inner, table) {
+            let left_running = std::mem::take(&mut stopping.family);
             self.dying.lock().unwrap().processes.extend(agent);
-            self.end_later(doomed);
+            self.end_later(stopping);
             inner.family.adopt(left_running);
         }
     }
@@ -858,15 +858,15 @@ impl ChatManager {
     }
 
     /// Writes what runs now to the leftovers file, when recording and changed.
-    fn record(&self, mut processes: Vec<(u32, u64)>) {
+    fn record(&self, mut processes: Vec<crate::process::Started>) {
         let Some(path) = self.leftovers.lock().unwrap().as_ref().map(|(path, _)| path.clone()) else { return };
         // A shell that exited may leave jobs in its session: it stays, with
         // the start time it had, until its tab closes.
         let mut sessions = self.terms.session_leaders();
         {
             let mut dying = self.dying.lock().unwrap();
-            dying.processes.retain(|&(pid, start)| crate::pty::process_start(pid) == Some(start));
-            dying.sessions.retain(|&(sid, _)| crate::pty::session_has_members(sid));
+            dying.processes.retain(crate::process::Started::running);
+            dying.sessions.retain(|s| crate::pty::session_has_members(s.pid));
             processes.extend(dying.processes.iter().copied());
             sessions.extend(dying.sessions.iter().copied());
         }
@@ -920,7 +920,7 @@ impl ChatManager {
         let me = self.me.clone();
         tokio::spawn(async move {
             loop {
-                tokio::time::sleep(FAMILY_LOOK).await;
+                tokio::time::sleep(LOOK_EVERY).await;
                 let Some(mgr) = me.upgrade() else { return };
                 let chats: Vec<_> = mgr.chats.lock().unwrap().values().cloned().collect();
                 let mut processes = Vec::new();
@@ -934,7 +934,7 @@ impl ChatManager {
                             mgr.rest(c, &mut inner, &table);
                             continue;
                         }
-                        processes.extend(table.get(pid).map(|p| (p.pid, p.start)));
+                        processes.extend(table.get(pid).map(|p| p.started()));
                         processes.extend(inner.family.members());
                     }
                 }
@@ -1149,8 +1149,8 @@ impl ChatManager {
                 inner.pid = None;
                 let family = std::mem::take(&mut inner.family);
                 // Its process group keeps the agent's id while members remain.
-                let group = agent.map(|pid| nix::unistd::Pid::from_raw(pid as i32));
-                mgr.end_later(crate::process::Doomed { group, agent: None, family });
+                let group = agent.and_then(crate::process::target);
+                mgr.end_later(crate::process::Stopping { group, agent: None, family });
             };
             let status = loop {
                 tokio::select! {
@@ -2397,7 +2397,7 @@ done
     /// The pids the leftovers file at `path` names among its processes.
     fn recorded(path: &Path) -> Vec<i32> {
         let left: crate::leftovers::Leftovers = std::fs::read(path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
-        left.processes.iter().map(|p| p.0 as i32).collect()
+        left.processes.iter().map(|p| p.pid as i32).collect()
     }
 
     #[tokio::test]
@@ -2486,7 +2486,7 @@ done
         tokio::time::sleep(Duration::from_millis(2500)).await;
         let left: crate::leftovers::Leftovers = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         let _ = nix::sys::signal::kill(job, nix::sys::signal::Signal::SIGKILL);
-        assert_eq!(left.sessions, vec![(shell, started)], "a crash now would leave the shell's job running");
+        assert_eq!(left.sessions, vec![crate::process::Started { pid: shell, start: started }], "a crash now would leave the shell's job running");
     }
 
     #[tokio::test]
@@ -2513,7 +2513,7 @@ done
         let path = dir.path().join("d.leftovers.json");
         let mut left = std::process::Command::new("/bin/sleep").arg("30").spawn().unwrap();
         let start = crate::pty::process_start(left.id()).unwrap();
-        let inherited = crate::leftovers::Leftovers { processes: vec![(left.id(), start)], ..Default::default() };
+        let inherited = crate::leftovers::Leftovers { processes: vec![crate::process::Started { pid: left.id(), start }], ..Default::default() };
         chats.record_leftovers(path.clone(), inherited);
         tokio::time::sleep(Duration::from_millis(2500)).await;
         assert!(recorded(&path).contains(&(left.id() as i32)), "a second crash now would leave it running");
