@@ -2,7 +2,7 @@
 // session from the ⋯ menu.
 
 import { execFileSync } from "node:child_process";
-import { $, expect } from "@wdio/globals";
+import { $, browser, expect } from "@wdio/globals";
 import { PROJECT, rpc, sel, world } from "../fixtures";
 
 const w = world();
@@ -74,8 +74,10 @@ describe("confirm modal", () => {
       await openArchive();
       await expect($(sel.text(`Archive "${name}"? Its terminals stop and the worktree folder is removed. The branch is kept. 1 process still runs: sleep. Archiving stops it.`))).toBeDisplayed();
       await $(sel.confirmButton("Archive")).click();
+      // The row turns into the archive's scene at once; the stop comes before
+      // the archive itself, so wait for the process rather than the row.
+      await browser.waitUntil(() => !alive(), { timeout: 15_000, timeoutMsg: "the process outlived the archive" });
       await expect($(sel.sessionRow(name))).not.toBeExisting({ wait: 15_000 });
-      expect(alive()).toBe(false);
     } finally {
       if (alive()) process.kill(pid, "SIGKILL");
     }
