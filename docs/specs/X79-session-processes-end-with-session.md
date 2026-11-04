@@ -127,9 +127,10 @@ After a crash:
       `a_record_behind_a_link_ends_nothing`,
       `a_record_is_written_for_its_owner_alone_and_never_through_a_link`).
 - [x] What is being ended stays in the record until it is gone: a stopped
-      agent's processes during their grace, and what the daemon before left,
-      so a crash meanwhile still leaves them to the next daemon
+      agent and its processes during their grace, and what the daemon before
+      left, so a crash meanwhile still leaves them to the next daemon
       (`what_a_stopped_agent_left_stays_recorded_until_it_is_gone`,
+      `a_stopped_agent_stays_recorded_until_it_is_gone`,
       `what_a_crashed_daemon_left_stays_recorded_until_it_is_gone`).
 - [x] A daemon that stopped cleanly ended its agents and what they started.
       Jobs in its terminals' sessions that ignored the hangup end at the next
@@ -221,8 +222,9 @@ it is first written.
   `a_record_others_may_write_ends_nothing`,
   `a_record_behind_a_link_ends_nothing` and
   `a_record_is_written_for_its_owner_alone_and_never_through_a_link`.
-- Rust, `chat/runtime.rs`: `what_a_stopped_agent_left_stays_recorded_until_it_is_gone`
-  and `what_a_crashed_daemon_left_stays_recorded_until_it_is_gone`.
+- Rust, `chat/runtime.rs`: `what_a_stopped_agent_left_stays_recorded_until_it_is_gone`,
+  `a_stopped_agent_stays_recorded_until_it_is_gone` and
+  `what_a_crashed_daemon_left_stays_recorded_until_it_is_gone`.
 - Rust, `moonletd/tests/daemon.rs`:
   `a_daemon_started_after_a_crash_ends_what_its_agents_left_running`;
   `moonletd/tests/upgrade.rs`: `upgrade_keeps_sessions_alive`.

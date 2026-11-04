@@ -741,7 +741,7 @@ impl ChatManager {
 
     /// Ends `doomed` in the background; `shutdown` waits for it.
     fn end_later(&self, doomed: crate::process::Doomed) {
-        self.dying.lock().unwrap().processes.extend(doomed.family.members());
+        self.dying.lock().unwrap().processes.extend(doomed.agent.into_iter().chain(doomed.family.members()));
         let mut ending = self.ending.lock().unwrap();
         ending.retain(|e| !e.is_finished());
         ending.push(tokio::spawn(doomed.end()));
@@ -764,7 +764,9 @@ impl ChatManager {
         if pid.is_none() && family.is_empty() {
             return None;
         }
-        Some(crate::process::Doomed { group: pid.map(|p| nix::unistd::Pid::from_raw(p as i32)), family })
+        // As `table` saw it: a pid freed since is never taken for the agent.
+        let agent = pid.and_then(|p| table.get(p)).map(|p| (p.pid, p.start));
+        Some(crate::process::Doomed { group: pid.map(|p| nix::unistd::Pid::from_raw(p as i32)), agent, family })
     }
 
     /// Keeps in `path`, every few seconds while it changes, what agents and
@@ -1045,7 +1047,7 @@ impl ChatManager {
                 let family = std::mem::take(&mut inner.family);
                 // Its process group keeps the agent's id while members remain.
                 let group = agent.map(|pid| nix::unistd::Pid::from_raw(pid as i32));
-                mgr.end_later(crate::process::Doomed { group, family });
+                mgr.end_later(crate::process::Doomed { group, agent: None, family });
             };
             let status = loop {
                 tokio::select! {
@@ -1240,6 +1242,11 @@ while IFS= read -r line; do
       echo '{"type":"assistant","message":{"id":"m8","content":[{"type":"text","text":"The end."}]}}'
       echo '{"type":"result","subtype":"success","is_error":false,"usage":{}}'
       exit 0 ;;
+    *'ignore stops'*)
+      # The agent itself ignores SIGTERM and its input closing (X79).
+      trap '' TERM; echo $$ > agent.pid
+      echo '{"type":"result","subtype":"success","is_error":false,"usage":{}}'
+      exec sleep 60 ;;
     *'start a server'*)
       # A background command in a process group of its own that ignores
       # SIGHUP and SIGTERM, like a dev server a Bash tool left running (X79).
@@ -2099,6 +2106,24 @@ done
         assert!(nix::sys::signal::kill(server, None).is_ok(), "the server ended before its SIGKILL");
         assert!(recorded(&path).contains(&server.as_raw()), "a crash now would leave the server running");
         assert!(gone_within(server, 4).await);
+    }
+
+    #[tokio::test]
+    async fn a_stopped_agent_stays_recorded_until_it_is_gone() {
+        let (dir, terms, chats) = setup().await;
+        let path = dir.path().join("d.leftovers.json");
+        chats.record_leftovers(path.clone(), Default::default());
+        let id = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), ..Default::default() }).unwrap().id;
+        wait_for(&chats, id, |s| s.agent_session.is_some()).await;
+        chats.send(id, "ignore stops", &[]).unwrap();
+        wait_for(&chats, id, |s| s.status == "done").await;
+        let agent = nix::unistd::Pid::from_raw(std::fs::read_to_string(dir.path().join("agent.pid")).unwrap().trim().parse().unwrap());
+        terms.kill(id, false).unwrap();
+        // A look after the stop, within the agent's SIGTERM grace.
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        assert!(nix::sys::signal::kill(agent, None).is_ok(), "the agent ended before its SIGKILL");
+        assert!(recorded(&path).contains(&agent.as_raw()), "a crash now would leave the agent running");
+        assert!(gone_within(agent, 4).await);
     }
 
     #[tokio::test]

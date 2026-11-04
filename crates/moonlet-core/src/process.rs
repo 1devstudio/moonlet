@@ -319,6 +319,9 @@ pub const TERM_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
 /// crashed daemon's agents left (X79), on the way out.
 pub struct Doomed {
     pub group: Option<nix::unistd::Pid>,
+    /// The agent that leads `group`, as pid and start time, when it still
+    /// ran as it was stopped: until it exits, a crash would leave it running.
+    pub agent: Option<(u32, u64)>,
     pub family: Family,
 }
 

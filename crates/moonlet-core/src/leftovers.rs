@@ -110,7 +110,7 @@ pub fn reap(path: &Path) -> Leftovers {
         tracing::info!("not ending what {} names: it is from before the machine restarted", path.display());
         return Leftovers::default();
     }
-    let mut doomed = Doomed { group: None, family: Family::of(left.processes.clone()) };
+    let mut doomed = Doomed { group: None, agent: None, family: Family::of(left.processes.clone()) };
     if doomed.signal(None) {
         tracing::info!("ending processes the previous daemon's agents left running");
         tokio::spawn(doomed.end());
