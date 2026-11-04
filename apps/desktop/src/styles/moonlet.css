@@ -405,6 +405,15 @@ body:not(.kbd-nav) button:focus {
     transform: translateX(250%);
   }
 }
+/* With Reduce motion on, the segment stands still: stripes across the whole
+   track, so it never reads as a bar stopped at 40% (X82). */
+@media (prefers-reduced-motion: reduce) {
+  .moonlet-indeterminate::after {
+    animation: none;
+    width: 100%;
+    background: repeating-linear-gradient(-45deg, var(--color-accent) 0 3px, transparent 3px 7px);
+  }
+}
 
 /* App text. The root sets --ui-scale from the terminal font size (see
    uiScale), so `ui-text-13` is 13px at the default size and grows with it. */
@@ -484,17 +493,16 @@ body:not(.kbd-nav) button:focus {
 :is(.chat-md, .code-hl) .hljs-code { color: #8fd18e; }
 :is(.chat-md, .code-hl) .hljs-strong { font-weight: 600; }
 :is(.chat-md, .code-hl) .hljs-emphasis { font-style: italic; }
+/* A label that brightens from muted to light grey and back while the agent
+   works. Opacity only, so the compositor animates it without painting (X82):
+   #d8d8d8 at 0.62 over the background is about --color-muted. */
 .chat-shimmer {
-  background: linear-gradient(90deg, var(--color-muted) 0%, #d8d8d8 50%, var(--color-muted) 100%);
-  background-size: 200% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  animation: chat-shimmer 1.6s linear infinite;
+  color: #d8d8d8;
+  opacity: 0.62;
+  animation: chat-shimmer 1.6s ease-in-out infinite;
 }
 @keyframes chat-shimmer {
-  from { background-position: 200% 0; }
-  to { background-position: -200% 0; }
+  50% { opacity: 1; }
 }
 
 /* A setting opened from the settings search (X43). */

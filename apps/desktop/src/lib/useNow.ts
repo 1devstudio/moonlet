@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 
-/** The time, ticking every second while `active`. */
+/** The time, ticking every second while `active`. A clock that starts again
+ *  reads the time at once, not the time it stopped at (X82). */
 export function useNow(active: boolean) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     if (!active) return;
+    setNow(Date.now());
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, [active]);

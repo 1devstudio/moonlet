@@ -1,0 +1,22 @@
+/* Nothing moves where nobody looks (X82). */
+
+/* A tab not shown stays mounted under `visibility: hidden`, and WebKit keeps
+   running its animations: pause them until the tab is shown (quietWhen).
+   Pseudo-elements are named too: they do not take the property from their
+   element. */
+[data-quiet] *,
+[data-quiet] *::before,
+[data-quiet] *::after {
+  animation-play-state: paused !important;
+}
+
+/* With Reduce motion on, nothing repeats: each animation runs once. A spinner
+   turns once and stops; short entrances and flashes are unchanged. A progress
+   bar without a percentage stands still as stripes (moonlet.css). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-iteration-count: 1 !important;
+  }
+}

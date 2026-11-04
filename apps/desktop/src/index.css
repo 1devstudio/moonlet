@@ -1,6 +1,7 @@
 @import "tailwindcss";
 @import "@xterm/xterm/css/xterm.css";
 @import "./styles/moonlet.css";
+@import "./styles/motion.css";
 
 /* App shell: a fixed, non-scrolling window. */
 html,

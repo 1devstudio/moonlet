@@ -90,7 +90,7 @@ import { errorToast, getLayout, setLayout, termKey, toast, useStore } from "../l
 import { signInFor } from "../lib/profiles";
 import { addTab, tabOf } from "../lib/layout";
 import { type PlanView, planLabels, planView } from "../lib/plan";
-import { AGENT_STATE, type AgentNote, type AgentRow, agentCount, agentMs, agentNotes, agentRows, askerName, clock, launchedRows, notesByBlock } from "../lib/subagents";
+import { AGENT_STATE, type AgentNote, type AgentRow, agentCount, agentMs, agentNotes, agentRows, askerName, clock, hasRunningAgents, launchedRows, notesByBlock } from "../lib/subagents";
 import { uiScale } from "../lib/uiScale";
 import { useNow } from "../lib/useNow";
 import { useWidth } from "../lib/useWidth";
@@ -1403,8 +1403,7 @@ export function AgentView({
   const fileLinks = useMemo(() => (wsId ? { host, wsId, cwd, exists } : null), [host, wsId, cwd, exists]);
   const now = useNow(working && visible);
   // Subagents (X42): their launch cards, notes and asks.
-  const agentsRunning = (st?.subagents ?? []).some((a) => a.status === "running");
-  const agentNow = useNow(agentsRunning && visible);
+  const agentNow = useNow(visible && hasRunningAgents(st?.subagents));
   const agentRowsHere = useMemo(() => agentRows([{ id, st }], agentNow), [id, st, agentNow]);
   const placed = useMemo(() => notesByBlock(blocks, st ? agentNotes(st.items, st.subagents ?? []) : []), [blocks, st]);
 
@@ -1807,7 +1806,7 @@ export function AgentView({
           onAttach={() => void attach()}
           onAside={canAskAside(agent, working, revising) ? askAside : undefined}
           handle={editor}
-          top={st && <AgentsStrip host={host} id={id} st={st} onSend={(text) => send(text, [])} />}
+          top={st && <AgentsStrip host={host} id={id} st={st} visible={visible} onSend={(text) => send(text, [])} />}
           layout={layout}
           designSlash={designSlash}
         />

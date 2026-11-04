@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type AgentNote, agentCount, agentNotes, agentRows, agentsHeader, askLine, askerName, launchedRows, agentsTabDot, modelLabel, notesByBlock, retryMessage, stoppable, stripDismissAt, stripRetry, stripView } from "./subagents";
+import { type AgentNote, agentCount, agentsTabClockRuns, agentNotes, agentRows, agentsHeader, askLine, askerName, launchedRows, agentsTabDot, modelLabel, notesByBlock, retryMessage, stoppable, stripDismissAt, stripRetry, stripClockRuns, stripView } from "./subagents";
 import type { ChatItem, ChatState, PermissionAsk, Subagent } from "./protocol";
 import { chatBlocks } from "./chat";
 
@@ -365,6 +365,22 @@ describe("stripView (X42)", () => {
     const st = { ...withItems([done("a1", T0 - 60_000, 10_000), running("a3", T0)]), items: [user(T0 - 90_000), user(T0 - 1_000)] };
     expect(stripView(st, T0 + 1_000, 0)).toMatchObject({ title: null, counts: [{ state: "running", text: "1 running" }] });
     expect(stripView({ ...st, items: [user(T0 + 500)] }, T0 + 1_000, 0)).toBeNull();
+  });
+});
+
+describe("stripClockRuns (X82)", () => {
+  it("ticks the strip's clock only while agents run and the strip is shown", () => {
+    expect(stripClockRuns(chat([write, list]), true)).toBe(true);
+    expect(stripClockRuns(chat([write, list]), false)).toBe(false);
+    expect(stripClockRuns(chat([list, audit, bench]), true)).toBe(false);
+  });
+});
+
+describe("agentsTabClockRuns (X82)", () => {
+  it("ticks the Agents tab's clock only while agents run and the tab is shown", () => {
+    expect(agentsTabClockRuns("agents", [undefined, [list], [write, list]])).toBe(true);
+    expect(agentsTabClockRuns("files", [[write, list]])).toBe(false);
+    expect(agentsTabClockRuns("agents", [undefined, [list, audit, bench]])).toBe(false);
   });
 });
 

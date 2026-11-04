@@ -42,6 +42,9 @@ export function clock(ms: number): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
+/** Whether any of a chat's agents still runs. */
+export const hasRunningAgents = (agents: Subagent[] | undefined) => (agents ?? []).some((a) => a.status === "running");
+
 /** How long an agent ran, or runs until `now`. */
 export function agentMs(a: Subagent, now: number): number {
   if (a.status === "running") return now - a.started_at;
@@ -92,12 +95,16 @@ export const stoppable = (rows: AgentRow[]) => rows.filter((r) => isActive(r.sta
 /** From the first start to now while any runs, else to the last end. */
 export function spanClock(agents: Subagent[], now: number): string {
   const start = Math.min(...agents.map((a) => a.started_at));
-  const end = agents.some((a) => a.status === "running") ? now : Math.max(...agents.map((a) => a.started_at + agentMs(a, now)));
+  const end = hasRunningAgents(agents) ? now : Math.max(...agents.map((a) => a.started_at + agentMs(a, now)));
   return clock(end - start);
 }
 
 /** The Agents tab shows a dot while an agent needs the user elsewhere. */
 export const agentsTabDot = (tab: string, rows: AgentRow[]) => tab !== "agents" && rows.some((r) => r.state === "needs");
+
+/** Whether the Agents tab's clock ticks: while an agent of the session's chats
+ *  runs and the tab is shown (X82). */
+export const agentsTabClockRuns = (tab: string, chats: (Subagent[] | undefined)[]) => tab === "agents" && chats.some(hasRunningAgents);
 
 /** What Retry sends the main agent for failed agents. */
 export function retryMessage(agents: Subagent[]): string {
@@ -210,6 +217,9 @@ function dotPhase(since: number): StripDot["phase"] {
   return since < DOT_POP ? "pop" : "on";
 }
 
+/** Whether the strip's clock ticks: while agents run, in a tab that is shown (X82). */
+export const stripClockRuns = (st: ChatState, visible: boolean) => visible && hasRunningAgents(st.subagents);
+
 /** The strip's × hides it until an agent starts after this. */
 export const stripDismissAt = (st: ChatState) => Math.max(0, ...batchOf(st).map((a) => a.started_at));
 
@@ -286,7 +296,7 @@ export function agentNotes(items: ChatItem[], subagents: Subagent[]): { after: s
   const batches = new Map<number, Subagent[]>();
   for (const a of subagents) batches.set(batchOfAgent(a), [...(batches.get(batchOfAgent(a)) ?? []), a]);
   for (const batch of batches.values()) {
-    if (batch.length < 2 || batch.some((a) => a.status === "running")) continue;
+    if (batch.length < 2 || hasRunningAgents(batch)) continue;
     const last = Math.max(...batch.map(endedAt));
     const finished = batch.every((a) => a.status === "done");
     const note: AgentNote = { kind: "all", title: `${agentCount(batch.length)} ${finished ? "finished" : "ended"}`, clock: spanClock(batch, last), diff: diffLine(batchDiff(batch)) };
