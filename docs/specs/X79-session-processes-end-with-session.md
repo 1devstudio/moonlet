@@ -87,6 +87,9 @@ Chat agents:
       `the_daemon_stops_only_once_what_agents_left_running_is_gone`,
       `the_daemon_stops_only_once_a_just_stopped_agents_server_is_gone`,
       `a_daemon_stopped_with_sigterm_leaves_nothing_its_agents_started`).
+      When a live upgrade fails after that, the old daemon goes on serving and
+      its chats start agents again
+      (`chats_start_agents_again_after_a_live_upgrade_that_failed`).
 
 Later parts of this spec, each with its own change:
 
@@ -164,7 +167,8 @@ feature reads only pids, parent pids, process groups and start times.
   `the_daemon_stops_only_once_a_just_stopped_agents_server_is_gone` and
   `no_agent_starts_once_the_daemon_is_stopping`.
 - Rust, `moonletd/tests/daemon.rs`:
-  `a_daemon_stopped_with_sigterm_leaves_nothing_its_agents_started`.
+  `a_daemon_stopped_with_sigterm_leaves_nothing_its_agents_started` and
+  `chats_start_agents_again_after_a_live_upgrade_that_failed`.
 
 ## Open questions
 

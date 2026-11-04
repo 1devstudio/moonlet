@@ -99,8 +99,10 @@ pub async fn hand_off(daemon: Arc<Daemon>, binary: Option<PathBuf>) -> Result<()
 pub async fn hand_off_claimed(daemon: Arc<Daemon>, binary: Option<PathBuf>) -> Result<()> {
     let result = hand_off_once(daemon.clone(), binary).await;
     if result.is_err() {
-        // Terminal I/O may have been stopped for the export: keep serving.
+        // Terminal I/O may have been stopped for the export, and the chats'
+        // agents for the handoff: keep serving.
         daemon.terminals.resume_io();
+        daemon.chats.resume();
         daemon.end_upgrade();
     }
     result

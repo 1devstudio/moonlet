@@ -671,6 +671,12 @@ impl ChatManager {
         }
     }
 
+    /// Undoes [`Self::shutdown`] for a daemon that goes on serving, as after
+    /// a live upgrade that failed: agents start again (X79).
+    pub fn resume(&self) {
+        self.stopping.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
     /// Brings back saved conversations after a daemon start. Agents are not
     /// started until the next message, which resumes them.
     pub fn restore(&self) -> usize {

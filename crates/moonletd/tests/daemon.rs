@@ -5157,3 +5157,48 @@ async fn a_daemon_stopped_with_sigterm_leaves_nothing_its_agents_started() {
     // Gone by the time the daemon exited, but for launchd reaping it.
     assert!(gone_within(server, 1).await, "the agent's server outlived the daemon");
 }
+
+/// X79: a live upgrade stops the chats' agents before the handoff; when the
+/// handoff fails, the old daemon goes on serving and its chats start agents
+/// again.
+#[tokio::test]
+async fn chats_start_agents_again_after_a_live_upgrade_that_failed() {
+    use std::os::unix::fs::PermissionsExt;
+    let mut d = fake_claude_daemon(FAKE_CLAUDE_WITH_SERVER).await;
+    let server = agent_with_a_server(&d).await;
+    let mut c = d.client().await;
+    let terminals: Vec<TerminalInfo> = c.request(methods::TERMINAL_LIST, ()).await.unwrap();
+    let chat = terminals.iter().find(|t| t.chat).expect("the agent's chat").id;
+    // A new daemon that exits at once, after the old one stopped its agents.
+    let broken = d.home.path().join("broken-moonletd");
+    std::fs::write(&broken, "#!/bin/sh\nexit 1\n").unwrap();
+    std::fs::set_permissions(&broken, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let _: bool = c.request(methods::DAEMON_UPGRADE, serde_json::json!({ "binary": broken })).await.unwrap();
+    assert!(gone_within(server, 10).await, "the upgrade did not stop the agent's server");
+
+    let mut sent = Err(String::new());
+    for _ in 0..50 {
+        sent = c
+            .request::<_, serde_json::Value>(methods::CHAT_SEND, serde_json::json!({"id": chat, "text": "start a server"}))
+            .await
+            .map_err(|e| e.to_string());
+        if sent.is_ok() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(sent.is_ok(), "no agent starts after the failed upgrade: {sent:?}");
+    let pid_file = d.home.path().join("work/server.pid");
+    let mut again = None;
+    for _ in 0..100 {
+        again = std::fs::read_to_string(&pid_file).ok().and_then(|s| s.trim().parse::<i32>().ok()).map(nix::unistd::Pid::from_raw).filter(|p| *p != server);
+        if again.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let again = again.expect("the new agent never started its server");
+    nix::sys::signal::kill(nix::unistd::Pid::from_raw(d.child.id() as i32), nix::sys::signal::Signal::SIGTERM).unwrap();
+    let _ = d.child.wait();
+    assert!(gone_within(again, 1).await, "the new agent's server outlived the daemon");
+}
