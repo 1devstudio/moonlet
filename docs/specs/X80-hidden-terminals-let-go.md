@@ -63,6 +63,9 @@ attached again and drawn from the daemon's replay.
 - [x] A terminal let go of is attached again when it is shown again, and the
       daemon's replay (S2) draws its screen and scrollback
       (`a terminal let go of attaches again when shown, and the replay draws it (X80)`).
+      One let go of and shown again at once keeps its live output: the
+      daemon never handles the detach after the attach sent after it
+      (`a_terminal_detached_and_attached_again_at_once_keeps_its_live_output`).
       A terminal attaches once it is in its pane, fitted to it, so the replay
       is drawn at the pane's size rather than 80x24, and no resize follows
       (`a terminal shown again attaches at the size its pane fits, not 80x24 (X80)`).
@@ -103,9 +106,14 @@ attached again and drawn from the daemon's replay.
 
 ## Protocol and RPCs
 
-No change. The app now sends `terminal.detach` (already handled by the daemon,
-and routed to `session.detach` for another member's terminal, X72) when it
-lets go of a terminal.
+No new RPC. The app now sends `terminal.detach` (already handled by the
+daemon, and routed to `session.detach` for another member's terminal, X72)
+when it lets go of a terminal. The daemon handles `terminal.detach` in its
+read loop, in frame order with `terminal.attach`, rather than on a task of its
+own: a terminal let go of and shown again at once sends a detach then an
+attach, and a detach handled late would undo the attach, leaving the terminal
+without live output
+(`a_terminal_detached_and_attached_again_at_once_keeps_its_live_output`).
 
 ## Data and config
 
@@ -125,6 +133,9 @@ None: no new input crosses a trust boundary.
 
 ## Test plan
 
+- Rust, `crates/moonletd/tests/daemon.rs`, against a real daemon, with a
+  detach and an attach of one terminal sent in one write:
+  `a_terminal_detached_and_attached_again_at_once_keeps_its_live_output`.
 - Vitest, `daemon.test.ts`, through `rpc` and `sendInput` to a copy host,
   with the Tauri core faked as its central host:
   `a shared terminal shown again while its detach is on its way is typed into through its new relay (X80)` and

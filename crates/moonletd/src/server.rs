@@ -525,6 +525,17 @@ where
                         let _ = conn.tx.send(Frame::Json(Message::err(id, e)));
                     }
                 }
+                // Inline too, in frame order with `terminal.attach`: a detach
+                // sent before an attach of the same terminal never undoes it
+                // (X80). `handle` still refuses a cloud machine.
+                Frame::Json(Message::Request { id, method, params })
+                    if method == moonlet_proto::methods::TERMINAL_DETACH =>
+                {
+                    let _ = conn.tx.send(Frame::Json(match daemon.handle(&conn, &method, params).await {
+                        Ok(value) => Message::Response { id, result: Some(value), error: None },
+                        Err(e) => Message::err(id, e),
+                    }));
+                }
                 Frame::Json(Message::Request { id, method, params }) => {
                     let daemon = daemon.clone();
                     let conn = conn.clone();
