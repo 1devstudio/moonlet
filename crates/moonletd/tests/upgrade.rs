@@ -240,6 +240,72 @@ async fn start_takes_over_a_jaunt_daemon() {
     let _ = nix_kill(after.pid);
 }
 
+/// X79: a job an exited shell left running is not handed over (only running
+/// terminals are), yet stays recorded by the new daemon, so a crash of that
+/// one still leaves it to the next daemon to end.
+#[tokio::test]
+async fn after_an_upgrade_a_crash_still_ends_what_an_exited_shell_left() {
+    let home = tempfile::tempdir().unwrap();
+    let socket = home.path().join("run/d.sock");
+    let _old = Kill(moonletd(home.path(), &socket, &["daemon"]).spawn().unwrap());
+    wait_for_socket(&socket, Duration::from_secs(15)).await.unwrap();
+    let job_file = home.path().join("job.pid");
+    let mut c = Client::connect(&socket, "test").await.unwrap();
+    let _: TerminalInfo = c
+        .request(
+            methods::TERMINAL_CREATE,
+            TerminalCreate {
+                cwd: home.path().display().to_string(),
+                command: vec![
+                    "/bin/sh".into(),
+                    "-c".into(),
+                    format!("set -m; (trap '' HUP; exec sleep 60) </dev/null >/dev/null 2>&1 & echo $! > '{}'", job_file.display()),
+                ],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let mut job = None;
+    for _ in 0..100 {
+        job = std::fs::read_to_string(&job_file).ok().and_then(|s| s.trim().parse::<i32>().ok());
+        if job.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let job = nix::unistd::Pid::from_raw(job.expect("the shell never started its job"));
+    drop(c);
+    // Time for the old daemon to record the shell's session.
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    assert!(moonletd(home.path(), &socket, &["upgrade"]).status().unwrap().success(), "moonletd upgrade failed");
+    let mut c = Client::connect(&socket, "test").await.unwrap();
+    let new: DaemonInfo = c.request(methods::DAEMON_INFO, ()).await.unwrap();
+    drop(c);
+    // Time for the new daemon to write its own record, then it crashes.
+    tokio::time::sleep(Duration::from_millis(4500)).await;
+    nix::sys::signal::kill(nix::unistd::Pid::from_raw(new.pid as i32), nix::sys::signal::Signal::SIGKILL).unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let _ = std::fs::remove_file(&socket);
+    assert!(nix::sys::signal::kill(job, None).is_ok(), "the crash itself ended the job");
+    let _next = Kill(moonletd(home.path(), &socket, &["daemon"]).spawn().unwrap());
+    wait_for_socket(&socket, Duration::from_secs(15)).await.unwrap();
+    let mut gone = false;
+    for _ in 0..80 {
+        if nix::sys::signal::kill(job, None).is_err() {
+            gone = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    if !gone {
+        let _ = nix::sys::signal::kill(job, nix::sys::signal::Signal::SIGKILL);
+    }
+    let mut c = Client::connect(&socket, "test").await.unwrap();
+    let _: bool = c.request(methods::DAEMON_SHUTDOWN, ()).await.unwrap();
+    assert!(gone, "the exited shell's job outlived the upgraded daemon's crash");
+}
+
 /// Reads one systemd notification from the socket a test plays systemd on.
 fn next_notification(sock: &std::os::unix::net::UnixDatagram) -> String {
     let mut buf = [0u8; 512];

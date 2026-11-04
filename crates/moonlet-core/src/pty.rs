@@ -29,7 +29,8 @@ pub struct SpawnSpec {
 pub struct Pty {
     master: OwnedFd,
     pid: u32,
-    /// When the child started (see [`process_start`]).
+    /// When the child started ([`process_start`]), taken while it surely
+    /// runs: once it exits, its pid may be another process's.
     start: Option<u64>,
     /// `Some` only when this process spawned the child and can reap it.
     child: Option<std::process::Child>,
@@ -95,6 +96,7 @@ impl Pty {
         Ok(Pty {
             master: pair.master,
             pid: child.id(),
+            // Not reaped before this, so the pid is still the child's.
             start: process_start(child.id()),
             child: Some(child),
         })
@@ -114,6 +116,8 @@ impl Pty {
         Ok(Pty {
             master,
             pid,
+            // Handed over with the start the previous daemon recorded at spawn;
+            // a daemon older than X79 recorded none, so it is read now.
             start: start.or_else(|| process_start(pid)),
             child: None,
         })
@@ -219,6 +223,12 @@ pub fn signal_session(sid: u32, signal: Signal, leader_reaped: bool) -> bool {
     any
 }
 
+/// Whether any process is in session `sid`.
+pub fn session_has_members(sid: u32) -> bool {
+    // SAFETY: getsid only reads the process table.
+    all_pids().into_iter().any(|pid| unsafe { libc::getsid(pid) } == sid as i32)
+}
+
 /// When process `pid` started, in microseconds since the epoch on macOS
 /// and clock ticks since boot on Linux: the same number for one process,
 /// a different one for another that later got the same pid. `None` when
@@ -253,6 +263,23 @@ pub fn process_start(pid: u32) -> Option<u64> {
 /// when `start` is unknown.
 pub fn is_process(pid: u32, start: Option<u64>) -> bool {
     start.is_some() && process_start(pid) == start
+}
+
+/// Ends session `sid`, recorded before this daemon started with its leader's
+/// start time `started`: SIGHUP, then [`escalate_session`]. A leader that is
+/// now another process means the session is someone else's: left alone,
+/// returning `false`. A leader gone leaves its id unused by any other session
+/// while members remain, so those are ended (X60 setups, X79 terminals).
+pub fn end_recorded_session(sid: u32, started: Option<u64>) -> bool {
+    let leader = process_start(sid);
+    if leader.is_some() && (started.is_none() || leader != started) {
+        return false;
+    }
+    let leader_gone = move || process_start(sid).is_none_or(|now| Some(now) != started);
+    if signal_session(sid, Signal::SIGHUP, leader_gone()) {
+        escalate_session(sid, leader_gone);
+    }
+    true
 }
 
 /// After a SIGHUP to session `sid`: SIGTERM after 1.5 s, then SIGKILL after

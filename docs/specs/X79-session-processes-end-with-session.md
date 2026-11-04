@@ -94,6 +94,58 @@ Chat agents:
       its chats start agents again
       (`chats_start_agents_again_after_a_live_upgrade_that_failed`).
 
+After a crash:
+
+- [x] Every 2 s, while it changes, the daemon records next to its socket
+      (`~/.moonlet/run/moonletd.leftovers.json` for the default one) each
+      running agent and every process it started, and each terminal's session,
+      its shell exited or not, all as pid and start time, with the machine's
+      boot id and boot time. A terminal's shell start time is taken when the
+      terminal starts (or is adopted in a handoff), never looked up once the
+      shell may have exited and its pid gone to another process
+      (`a_terminal_is_recorded_with_its_shells_start_though_the_shell_exited_first`).
+- [x] A daemon that starts fresh (not by a live-upgrade handoff) ends what that
+      file names and still runs with the same start time: agents and what they
+      started get SIGTERM, then SIGKILL 3 s later; terminal sessions get SIGHUP,
+      SIGTERM and SIGKILL as when a tab closes. A pid that now belongs to a
+      process that started later is left alone, and a record from before a
+      reboot ends nothing
+      (`a_daemon_started_after_a_crash_ends_what_its_agents_left_running`,
+      `reaping_ends_recorded_processes_and_spares_a_reused_pid`,
+      `reaping_ends_a_recorded_terminal_session_whose_shell_is_gone`,
+      `a_record_from_before_a_reboot_ends_nothing`).
+- [x] A record is from before a reboot when its boot id differs from the
+      machine's (`kern.bootsessionuuid` on macOS, the kernel's `boot_id` on
+      Linux). Without a boot id on either side, it is when the boot times are
+      more than 2 s apart. A clock change since the record, which moves the
+      boot time, still lets it end what it names
+      (`a_record_from_before_a_reboot_ends_nothing`,
+      `a_clock_change_since_the_record_still_ends_what_it_names`).
+- [x] The record is the user's own: written readable and writable by the
+      user alone, never through a link, and read only when it is a file, not
+      a link, owned by the user and that no one else may write. Any other
+      record ends nothing, as another user may have planted it next to a
+      socket in a shared folder such as /tmp
+      (`a_record_others_may_write_ends_nothing`,
+      `a_record_behind_a_link_ends_nothing`,
+      `a_record_is_written_for_its_owner_alone_and_never_through_a_link`).
+- [x] What is being ended stays in the record until it is gone: a stopped
+      agent and its processes during their grace, and what the daemon before
+      left, so a crash meanwhile still leaves them to the next daemon
+      (`what_a_stopped_agent_left_stays_recorded_until_it_is_gone`,
+      `a_stopped_agent_stays_recorded_until_it_is_gone`,
+      `what_a_crashed_daemon_left_stays_recorded_until_it_is_gone`).
+- [x] A daemon that stopped cleanly ended its agents and what they started.
+      Jobs in its terminals' sessions that ignored the hangup end at the next
+      start, as after a crash.
+- [x] After a handoff nothing is ended: the new daemon adopted the terminals,
+      and the old one ended its agents (`upgrade_keeps_sessions_alive`). The
+      new daemon keeps recording what the old one's record names and still
+      runs, as a fresh daemon does with what it is ending: the sessions of
+      shells that exited, whose terminals are not handed over, and agents
+      still being ended. A crash of the new daemon then leaves those to the
+      next one too (`after_an_upgrade_a_crash_still_ends_what_an_exited_shell_left`).
+
 Later parts of this spec, each with its own change:
 
 - [ ] A registry of each session's processes, kept across daemon restarts, and
@@ -117,7 +169,13 @@ None in this part.
 
 ## Data and config
 
-None in this part.
+`<socket name>.leftovers.json` next to the daemon's socket, written by the
+daemon and read once by the next one on that socket:
+`{"boot": …, "boot_id": "…", "processes": [[pid, start], …], "sessions": [[leader pid, start], …]}`.
+Start and boot times are in microseconds since the epoch on macOS; on Linux a
+start is in clock ticks since boot and the boot time in seconds. The boot id
+is `kern.bootsessionuuid` on macOS and `/proc/sys/kernel/random/boot_id` on
+Linux.
 
 ## Security considerations
 
@@ -125,19 +183,15 @@ Stopping processes by pid races with pid reuse: a process found as a
 descendant is signalled only if its start time is still the one recorded when
 it was found. A tab's session is signalled by its shell's session id; once the
 shell's pid belongs to a process that started later, that process's own
-session is left alone. A shell the daemon started keeps its pid until the
-daemon waits for it; a shell handed over in a live upgrade is told apart by
-the start time recorded when it was spawned, which the handoff carries (a
-handoff from a daemon before X79 has none, and then the start time is read
-when the shell is adopted). The tab showing an exit is not taken to mean the
-shell is gone. Each other member of the session is found by its session id
-and signalled in the next call: no call does both (macOS has no pidfd), and
-checking a member's start time first would leave the same gap between two
-calls. A member that exits in that gap frees its pid, but pids are handed
-out in turn and wrap around only at the system's limit (99999 on macOS), so
-another process gets that pid only after all the others have been used.
-Command-line arguments of other processes can hold tokens; this
+session is left alone; for that, the shell's start time is taken when the
+terminal starts, while the pid is surely the shell's. Command-line arguments of other processes can hold tokens; this
 feature reads only pids, parent pids, process groups and start times.
+
+The record next to the socket says which processes the next daemon ends. A
+socket may be in a folder other users can write to, so a record is read only
+when it is a file, not a link, owned by the user and not writable by anyone
+else; it is written with mode 0600, and never through a link planted where
+it is first written.
 
 ## Out of scope
 
@@ -157,8 +211,23 @@ feature reads only pids, parent pids, process groups and start times.
   `closing_a_tab_that_shows_an_exit_stops_its_shell_still_running` and
   `closing_an_adopted_tab_leaves_alone_the_session_now_on_its_shells_pid`.
 - Rust, `process.rs`: `descendants_are_children_and_theirs_but_not_others`,
-  `a_deep_tree_is_walked_in_one_pass` and
-  `a_family_signals_only_processes_that_still_run`.
+  `a_family_signals_only_processes_that_still_run` and
+  `a_family_forgets_a_process_no_longer_in_the_table`.
+- Rust, `leftovers.rs`: `reaping_ends_recorded_processes_and_spares_a_reused_pid`,
+  `reaping_ends_a_recorded_terminal_session_whose_shell_is_gone`,
+  `a_record_from_before_a_reboot_ends_nothing`,
+  `a_clock_change_since_the_record_still_ends_what_it_names`,
+  `a_record_others_may_write_ends_nothing`,
+  `a_record_behind_a_link_ends_nothing` and
+  `a_record_is_written_for_its_owner_alone_and_never_through_a_link`.
+- Rust, `chat/runtime.rs`: `what_a_stopped_agent_left_stays_recorded_until_it_is_gone`,
+  `a_stopped_agent_stays_recorded_until_it_is_gone`,
+  `a_terminal_is_recorded_with_its_shells_start_though_the_shell_exited_first` and
+  `what_a_crashed_daemon_left_stays_recorded_until_it_is_gone`.
+- Rust, `moonletd/tests/daemon.rs`:
+  `a_daemon_started_after_a_crash_ends_what_its_agents_left_running`;
+  `moonletd/tests/upgrade.rs`: `upgrade_keeps_sessions_alive` and
+  `after_an_upgrade_a_crash_still_ends_what_an_exited_shell_left`.
 - Rust, `chat/runtime.rs`, with a fake agent that leaves a server running in a
   process group of its own, ignoring SIGHUP and SIGTERM:
   `stopping_a_chat_stops_what_its_agent_left_running`,

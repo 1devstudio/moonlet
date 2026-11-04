@@ -281,6 +281,13 @@ fn run_daemon(
         if chats > 0 {
             tracing::info!(chats, "restored structured agent conversations");
         }
+        // A daemon that crashed left its agents' processes and its terminals'
+        // jobs running; after a handoff the terminals are this daemon's own,
+        // and what the old one recorded stays recorded while it runs: jobs
+        // of exited shells, which are not handed over, among it (X79).
+        let leftovers = moonlet_core::leftovers::file(&socket);
+        let inherited = if fresh { moonlet_core::leftovers::reap(&leftovers) } else { moonlet_core::leftovers::load(&leftovers) };
+        daemon.chats.record_leftovers(leftovers, inherited);
         daemon.sessions.relink_terminals();
         // Before anything can ask, phones and the socket alike, so
         // `project.list` never lacks one (X41).

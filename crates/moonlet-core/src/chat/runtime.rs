@@ -98,56 +98,6 @@ pub const WORKSPACE_KEY: &str = "workspace:";
 
 /// How often the processes each agent started are noted (X79).
 const FAMILY_LOOK: Duration = Duration::from_secs(2);
-/// How long a stopped agent and what it started get after SIGTERM.
-const TERM_GRACE: Duration = Duration::from_secs(3);
-
-/// A stopped agent's process group, and the processes it started (X79).
-struct Doomed {
-    group: Option<nix::unistd::Pid>,
-    family: crate::process::Family,
-}
-
-impl Doomed {
-    /// Sends `signal` (`None` only checks) to the group and the family;
-    /// whether any of them still runs.
-    fn signal(&mut self, signal: impl Into<Option<nix::sys::signal::Signal>>) -> bool {
-        let signal = signal.into();
-        // A group found empty is gone for good: its id may be a new group's next.
-        let group = match self.group {
-            Some(g) if nix::sys::signal::killpg(g, signal).is_ok() => true,
-            _ => {
-                self.group = None;
-                false
-            }
-        };
-        let family = self.family.signal(signal);
-        group || family
-    }
-
-    /// Whether any of it still runs.
-    fn running(&mut self) -> bool {
-        self.signal(None)
-    }
-
-    /// Waits up to `limit` for all of it to be gone.
-    async fn gone_within(&mut self, limit: Duration) {
-        let end = Instant::now() + limit;
-        while self.running() && Instant::now() < end {
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    }
-
-    /// SIGTERM, then SIGKILL to whatever still runs after [`TERM_GRACE`];
-    /// returns once all of it is gone, or a second after the SIGKILL.
-    async fn end(mut self) {
-        self.signal(nix::sys::signal::Signal::SIGTERM);
-        self.gone_within(TERM_GRACE).await;
-        if self.signal(nix::sys::signal::Signal::SIGKILL) {
-            self.gone_within(Duration::from_secs(1)).await;
-        }
-    }
-}
-
 pub struct ChatManager {
     terms: Arc<TerminalManager>,
     chats: Mutex<HashMap<TerminalId, Arc<Chat>>>,
@@ -163,6 +113,13 @@ pub struct ChatManager {
     ending: Mutex<Vec<tokio::task::JoinHandle<()>>>,
     /// Set once `shutdown` starts: no agent starts after it (X79).
     stopping: std::sync::atomic::AtomicBool,
+    /// Where to keep what agents and terminals run, for the next daemon to
+    /// end after a crash, and what was written there last (X79).
+    leftovers: Mutex<Option<(PathBuf, Option<crate::leftovers::Leftovers>)>>,
+    /// Processes and terminal sessions being ended (a stopped agent's, or
+    /// those a crashed daemon left), recorded until they are gone, so a crash
+    /// meanwhile still leaves them to the next daemon (X79).
+    dying: Mutex<crate::leftovers::Leftovers>,
 }
 
 /// An added directory as the agent gets it: absolute and existing, so it
@@ -232,7 +189,7 @@ fn answers_text(ask: &PermissionAsk, answers: &BTreeMap<String, String>) -> Stri
 
 impl ChatManager {
     pub fn new(terms: Arc<TerminalManager>, dir: PathBuf) -> Arc<Self> {
-        let mgr = Arc::new_cyclic(|me| Self { terms: terms.clone(), chats: Mutex::new(HashMap::new()), dir, me: me.clone(), session_env: std::sync::OnceLock::new(), held: Mutex::new(None), watching: Default::default(), ending: Mutex::new(Vec::new()), stopping: Default::default() });
+        let mgr = Arc::new_cyclic(|me| Self { terms: terms.clone(), chats: Mutex::new(HashMap::new()), dir, me: me.clone(), session_env: std::sync::OnceLock::new(), held: Mutex::new(None), watching: Default::default(), ending: Mutex::new(Vec::new()), stopping: Default::default(), leftovers: Mutex::new(None), dying: Default::default() });
         let weak = Arc::downgrade(&mgr);
         terms.set_chat_stop(Arc::new(move |id, remove| {
             if let Some(m) = weak.upgrade() {
@@ -783,7 +740,8 @@ impl ChatManager {
     }
 
     /// Ends `doomed` in the background; `shutdown` waits for it.
-    fn end_later(&self, doomed: Doomed) {
+    fn end_later(&self, doomed: crate::process::Doomed) {
+        self.dying.lock().unwrap().processes.extend(doomed.agent.into_iter().chain(doomed.family.members()));
         let mut ending = self.ending.lock().unwrap();
         ending.retain(|e| !e.is_finished());
         ending.push(tokio::spawn(doomed.end()));
@@ -791,9 +749,9 @@ impl ChatManager {
 
     /// Detaches the agent process from `inner`, with everything it started,
     /// including processes in a group of their own (X79), for the caller to
-    /// end with [`Doomed::end`]. With no agent running, what an earlier one
+    /// end with [`crate::process::Doomed::end`]. With no agent running, what an earlier one
     /// left (kept through a restart that failed to start) is detached too.
-    fn doom(inner: &mut Inner, table: &crate::process::Table) -> Option<Doomed> {
+    fn doom(inner: &mut Inner, table: &crate::process::Table) -> Option<crate::process::Doomed> {
         inner.generation += 1;
         inner.stdin = None;
         inner.adapter = None;
@@ -806,7 +764,53 @@ impl ChatManager {
         if pid.is_none() && family.is_empty() {
             return None;
         }
-        Some(Doomed { group: pid.map(|p| nix::unistd::Pid::from_raw(p as i32)), family })
+        // As `table` saw it: a pid freed since is never taken for the agent.
+        let agent = pid.and_then(|p| table.get(p)).map(|p| (p.pid, p.start));
+        Some(crate::process::Doomed { group: pid.map(|p| nix::unistd::Pid::from_raw(p as i32)), agent, family })
+    }
+
+    /// Keeps in `path`, every few seconds while it changes, what agents and
+    /// terminals run, for the next daemon to end if this one crashes (X79).
+    /// `inherited` is what the daemon before recorded, being ended after a
+    /// crash: it stays recorded until it is gone.
+    pub fn record_leftovers(&self, path: PathBuf, inherited: crate::leftovers::Leftovers) {
+        let mut dying = self.dying.lock().unwrap();
+        dying.processes.extend(inherited.processes);
+        dying.sessions.extend(inherited.sessions);
+        drop(dying);
+        *self.leftovers.lock().unwrap() = Some((path, None));
+        self.watch_families();
+    }
+
+    /// Writes what runs now to the leftovers file, when recording and changed.
+    fn record(&self, mut processes: Vec<(u32, u64)>) {
+        let Some(path) = self.leftovers.lock().unwrap().as_ref().map(|(path, _)| path.clone()) else { return };
+        // A shell that exited may leave jobs in its session: it stays, with
+        // the start time it had, until its tab closes.
+        let mut sessions = self.terms.session_leaders();
+        {
+            let mut dying = self.dying.lock().unwrap();
+            dying.processes.retain(|&(pid, start)| crate::pty::process_start(pid) == Some(start));
+            dying.sessions.retain(|&(sid, _)| crate::pty::session_has_members(sid));
+            processes.extend(dying.processes.iter().copied());
+            sessions.extend(dying.sessions.iter().copied());
+        }
+        processes.sort_unstable();
+        processes.dedup();
+        sessions.sort_unstable();
+        sessions.dedup();
+        let now = crate::leftovers::Leftovers::of(processes, sessions);
+        if self.leftovers.lock().unwrap().as_ref().is_some_and(|(_, last)| last.as_ref() == Some(&now)) {
+            return;
+        }
+        match crate::leftovers::save(&path, &now) {
+            Ok(()) => {
+                if let Some((_, last)) = self.leftovers.lock().unwrap().as_mut() {
+                    *last = Some(now);
+                }
+            }
+            Err(e) => tracing::warn!("cannot record running processes in {}: {e}", path.display()),
+        }
     }
 
     /// Notes, every 2 s while any agent runs, the processes each one started:
@@ -824,16 +828,18 @@ impl ChatManager {
                 tokio::time::sleep(FAMILY_LOOK).await;
                 let Some(mgr) = me.upgrade() else { return };
                 let chats: Vec<_> = mgr.chats.lock().unwrap().values().cloned().collect();
-                if !chats.iter().any(|c| c.inner.lock().unwrap().pid.is_some()) {
-                    continue;
-                }
-                let Ok(table) = tokio::task::spawn_blocking(crate::process::table).await else { continue };
-                for c in chats {
-                    let mut inner = c.inner.lock().unwrap();
-                    if let Some(pid) = inner.pid {
+                let mut processes = Vec::new();
+                if chats.iter().any(|c| c.inner.lock().unwrap().pid.is_some()) {
+                    let Ok(table) = tokio::task::spawn_blocking(crate::process::table).await else { continue };
+                    for c in chats {
+                        let mut inner = c.inner.lock().unwrap();
+                        let Some(pid) = inner.pid else { continue };
                         inner.family.note(&table, pid);
+                        processes.extend(table.get(pid).map(|p| (p.pid, p.start)));
+                        processes.extend(inner.family.members());
                     }
                 }
+                mgr.record(processes);
             }
         });
     }
@@ -1033,7 +1039,7 @@ impl ChatManager {
                 let family = std::mem::take(&mut inner.family);
                 // Its process group keeps the agent's id while members remain.
                 let group = agent.map(|pid| nix::unistd::Pid::from_raw(pid as i32));
-                mgr.end_later(Doomed { group, family });
+                mgr.end_later(crate::process::Doomed { group, agent: None, family });
             };
             let status = loop {
                 tokio::select! {
@@ -1228,6 +1234,11 @@ while IFS= read -r line; do
       echo '{"type":"assistant","message":{"id":"m8","content":[{"type":"text","text":"The end."}]}}'
       echo '{"type":"result","subtype":"success","is_error":false,"usage":{}}'
       exit 0 ;;
+    *'ignore stops'*)
+      # The agent itself ignores SIGTERM and its input closing (X79).
+      trap '' TERM; echo $$ > agent.pid
+      echo '{"type":"result","subtype":"success","is_error":false,"usage":{}}'
+      exec sleep 60 ;;
     *'start a server'*)
       # A background command in a process group of its own that ignores
       # SIGHUP and SIGTERM, like a dev server a Bash tool left running (X79).
@@ -2067,6 +2078,90 @@ done
         terms.kill(id, false).unwrap();
         chats.shutdown().await;
         assert!(gone_within(server, 1).await, "the stopped agent's server outlived the daemon");
+    }
+
+    /// The pids the leftovers file at `path` names among its processes.
+    fn recorded(path: &Path) -> Vec<i32> {
+        let left: crate::leftovers::Leftovers = std::fs::read(path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+        left.processes.iter().map(|p| p.0 as i32).collect()
+    }
+
+    #[tokio::test]
+    async fn what_a_stopped_agent_left_stays_recorded_until_it_is_gone() {
+        let (dir, terms, chats) = setup().await;
+        let path = dir.path().join("d.leftovers.json");
+        chats.record_leftovers(path.clone(), Default::default());
+        let (id, server) = agent_with_a_server(&chats, dir.path()).await;
+        terms.kill(id, false).unwrap();
+        // A look after the stop, within the server's SIGTERM grace.
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        assert!(nix::sys::signal::kill(server, None).is_ok(), "the server ended before its SIGKILL");
+        assert!(recorded(&path).contains(&server.as_raw()), "a crash now would leave the server running");
+        assert!(gone_within(server, 4).await);
+    }
+
+    #[tokio::test]
+    async fn a_terminal_is_recorded_with_its_shells_start_though_the_shell_exited_first() {
+        let (dir, terms, chats) = setup().await;
+        let path = dir.path().join("d.leftovers.json");
+        let go = dir.path().join("go");
+        let job_file = dir.path().join("job.pid");
+        // A shell that leaves a job ignoring SIGHUP, and exits when told.
+        let script = format!(
+            "set -m; (trap '' HUP; exec sleep 60) </dev/null >/dev/null 2>&1 & echo $! > '{}'; while [ ! -e '{}' ]; do sleep 0.05; done",
+            job_file.display(),
+            go.display()
+        );
+        let info = terms.create(moonlet_proto::methods::TerminalCreate { cwd: "/tmp".into(), command: vec!["/bin/sh".into(), "-c".into(), script], ..Default::default() }).unwrap();
+        let shell = info.pid.unwrap();
+        let started = crate::pty::process_start(shell).unwrap();
+        std::fs::write(&go, "").unwrap();
+        let end = Instant::now() + Duration::from_secs(10);
+        while terms.get(info.id).is_some_and(|t| t.info().exit.is_none()) {
+            assert!(Instant::now() < end, "the shell never exited");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let job = nix::unistd::Pid::from_raw(std::fs::read_to_string(&job_file).unwrap().trim().parse().unwrap());
+        // The first look comes after the shell is gone.
+        chats.record_leftovers(path.clone(), Default::default());
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        let left: crate::leftovers::Leftovers = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let _ = nix::sys::signal::kill(job, nix::sys::signal::Signal::SIGKILL);
+        assert_eq!(left.sessions, vec![(shell, started)], "a crash now would leave the shell's job running");
+    }
+
+    #[tokio::test]
+    async fn a_stopped_agent_stays_recorded_until_it_is_gone() {
+        let (dir, terms, chats) = setup().await;
+        let path = dir.path().join("d.leftovers.json");
+        chats.record_leftovers(path.clone(), Default::default());
+        let id = chats.create(ChatCreate { cwd: dir.path().display().to_string(), agent: "claude".into(), ..Default::default() }).unwrap().id;
+        wait_for(&chats, id, |s| s.agent_session.is_some()).await;
+        chats.send(id, "ignore stops", &[]).unwrap();
+        wait_for(&chats, id, |s| s.status == "done").await;
+        let agent = nix::unistd::Pid::from_raw(std::fs::read_to_string(dir.path().join("agent.pid")).unwrap().trim().parse().unwrap());
+        terms.kill(id, false).unwrap();
+        // A look after the stop, within the agent's SIGTERM grace.
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        assert!(nix::sys::signal::kill(agent, None).is_ok(), "the agent ended before its SIGKILL");
+        assert!(recorded(&path).contains(&agent.as_raw()), "a crash now would leave the agent running");
+        assert!(gone_within(agent, 4).await);
+    }
+
+    #[tokio::test]
+    async fn what_a_crashed_daemon_left_stays_recorded_until_it_is_gone() {
+        let (dir, _terms, chats) = setup().await;
+        let path = dir.path().join("d.leftovers.json");
+        let mut left = std::process::Command::new("/bin/sleep").arg("30").spawn().unwrap();
+        let start = crate::pty::process_start(left.id()).unwrap();
+        let inherited = crate::leftovers::Leftovers { processes: vec![(left.id(), start)], ..Default::default() };
+        chats.record_leftovers(path.clone(), inherited);
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        assert!(recorded(&path).contains(&(left.id() as i32)), "a second crash now would leave it running");
+        left.kill().unwrap();
+        left.wait().unwrap();
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        assert!(!recorded(&path).contains(&(left.id() as i32)), "an ended process stays recorded");
     }
 
     #[tokio::test]
