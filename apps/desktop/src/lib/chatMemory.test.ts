@@ -79,6 +79,17 @@ describe("chats kept in memory (X81)", () => {
     expect(texts("d", 1)).toEqual(["never shown"]);
   });
 
+  it("keeps the status of a chat whose state comes while its first summary is read", async () => {
+    daemon["l:1"] = chat("", { status: "idle" });
+    // The Agents panel asks for the summaries; the chat starts working
+    // before they come.
+    const read = loadChatSummaries("l");
+    onChatState("l", 1, { ...chat(""), items: [], status: "working" });
+    await read;
+    expect(chatSummary(useChat.getState(), "l", 1)?.status).toBe("working");
+    expect(texts("l", 1)).toBeUndefined();
+  });
+
   it("reloads on connect only the chats already in memory", async () => {
     daemon["e:1"] = chat("shown");
     daemon["e:2"] = chat("in the Agents panel");

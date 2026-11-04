@@ -16,8 +16,9 @@ export type ChatSummary = Omit<ChatState, "items">;
 interface ChatStore {
   /** Chats with their items: the last ones shown (X81). */
   chats: Record<string, ChatState>;
-  /** The other chats loaded, without their items, kept current by
-   *  `chat.state`. A key is in one of the two at most. */
+  /** The other chats loaded, or with a `chat.state` event since, without
+   *  their items, kept current by `chat.state`. A key is in one of the two
+   *  at most. */
   summaries: Record<string, ChatSummary>;
   /** A jump to an item a chat may not render yet (`revealInChat`). */
   reveal: { key: string; isTarget: (item: ChatItem) => boolean } | null;
@@ -119,8 +120,9 @@ export function onChatState(host: string, id: number, state: ChatState) {
     const cur = s.chats[key];
     // The event carries everything but the items.
     if (cur) return { chats: { ...s.chats, [key]: { ...state, items: cur.items } } };
-    if (s.summaries[key]) return { summaries: { ...s.summaries, [key]: summary(state) } };
-    return s;
+    // Kept even for a chat not read yet: a `chat.summaries` in flight skips
+    // it as older than this event (`loadChatSummaries`).
+    return { summaries: { ...s.summaries, [key]: summary(state) } };
   });
 }
 
