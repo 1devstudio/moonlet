@@ -413,19 +413,13 @@ impl TerminalManager {
 
     /// Installs a PTY received from a previous daemon (S3): the terminal
     /// state is rebuilt by replaying its snapshot, the agent state carries over.
-    pub fn adopt(
-        self: &Arc<Self>,
-        info: TerminalInfo,
-        rows: u16,
-        cols: u16,
-        snapshot: &[u8],
-        fd: std::os::fd::RawFd,
-    ) -> Result<()> {
+    pub fn adopt(self: &Arc<Self>, e: &ExportedTerminal, fd: std::os::fd::RawFd) -> Result<()> {
+        let info = e.info.clone();
         let pid = info.pid.context("adopted terminal has no pid")?;
         // SAFETY: the fd was received via SCM_RIGHTS and is owned by us now.
-        let pty = unsafe { Pty::adopt(fd, pid)? };
-        let mut term = TermState::new(rows, cols);
-        term.process(snapshot);
+        let pty = unsafe { Pty::adopt(fd, pid, e.start)? };
+        let mut term = TermState::new(e.rows, e.cols);
+        term.process(e.snapshot.as_bytes());
         let id = info.id;
         let (state, message) = (info.agent_state, info.agent_message.clone());
         self.install(info, term, pty)?;
@@ -725,11 +719,12 @@ impl TerminalManager {
             }
             let Some(pty) = st.pty.as_mut() else { continue };
             pty.forget_child();
-            let fd = pty.master_fd();
+            let (fd, start) = (pty.master_fd(), pty.start());
             let (rows, cols) = st.term.size();
             let snapshot = String::from_utf8_lossy(&st.term.snapshot()).into_owned();
             out.push(ExportedTerminal {
                 info: st.info.clone(),
+                start,
                 fd,
                 rows,
                 cols,
@@ -743,6 +738,11 @@ impl TerminalManager {
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct ExportedTerminal {
     pub info: TerminalInfo,
+    /// When the shell started (see [`crate::pty::process_start`]), so the
+    /// next daemon tells its pid apart from a later process's. Absent in
+    /// handoffs from daemons before X79.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<u64>,
     #[serde(skip)]
     pub fd: std::os::fd::RawFd,
     pub rows: u16,
@@ -1298,10 +1298,15 @@ mod tests {
         cmd.spawn().unwrap()
     }
 
-    /// Adopts a tab whose shell is `pid`, as after a live upgrade (S3), on
-    /// a terminal nothing else holds open. Returns its id.
-    fn adopt_shell_tab(mgr: &Arc<TerminalManager>, pid: u32) -> TerminalId {
-        let info: TerminalInfo = serde_json::from_value(serde_json::json!({
+    /// Adopts tab 41 as a previous daemon handed it over (S3): `handoff` is
+    /// its entry in the handoff, here without `info`. Returns the terminal's
+    /// other end, which keeps it open.
+    fn adopt_shell_tab(
+        mgr: &Arc<TerminalManager>,
+        pid: u32,
+        mut handoff: serde_json::Value,
+    ) -> std::os::fd::OwnedFd {
+        handoff["info"] = serde_json::json!({
             "id": 41,
             "kind": "shell",
             "title": "zsh",
@@ -1313,13 +1318,33 @@ mod tests {
             "pid": pid,
             "created_at": 0,
             "last_output_at": 0,
-        }))
-        .unwrap();
+        });
+        let exported: ExportedTerminal = serde_json::from_value(handoff).unwrap();
         let pair = nix::pty::openpty(None, None).unwrap();
-        drop(pair.slave);
         use std::os::fd::IntoRawFd;
-        mgr.adopt(info, 24, 80, b"", pair.master.into_raw_fd()).unwrap();
-        41
+        mgr.adopt(&exported, pair.master.into_raw_fd()).unwrap();
+        pair.slave
+    }
+
+    #[tokio::test]
+    async fn closing_an_adopted_tab_leaves_alone_the_session_now_on_its_shells_pid() {
+        // The shell exited while a job keeps the terminal open, and its pid
+        // now leads another session (X79).
+        let mut other = session_leader_ignoring_sighup();
+        let mgr = manager();
+        // The shell started 1 µs after the epoch, the process now on its pid did not.
+        let _job = adopt_shell_tab(
+            &mgr,
+            other.id(),
+            serde_json::json!({"rows": 24, "cols": 80, "snapshot": "", "start": 1}),
+        );
+        mgr.kill(41, true).unwrap();
+        // Past the SIGKILL, 4.5 s after the SIGHUP.
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        let running = other.try_wait().unwrap().is_none();
+        let _ = other.kill();
+        let _ = other.wait();
+        assert!(running, "the other session was stopped");
     }
 
     #[tokio::test]
@@ -1328,7 +1353,14 @@ mod tests {
         // tab shows an exit once it stops waiting for the shell (X79).
         let mut shell = session_leader_ignoring_sighup();
         let mgr = manager();
-        let id = adopt_shell_tab(&mgr, shell.id());
+        // From a daemon before X79, whose handoff has no start time.
+        let terminal = adopt_shell_tab(
+            &mgr,
+            shell.id(),
+            serde_json::json!({"rows": 24, "cols": 80, "snapshot": ""}),
+        );
+        drop(terminal);
+        let id = 41;
         let start = std::time::Instant::now();
         while mgr.get(id).is_some_and(|t| t.info().exit.is_none()) {
             assert!(start.elapsed() < Duration::from_secs(10), "the tab never showed an exit");

@@ -101,17 +101,20 @@ impl Pty {
     }
 
     /// Wraps a master fd received from a previous daemon (live upgrade).
+    /// `start` is the child's, as recorded when it was spawned; a daemon
+    /// before X79 did not send it, and then the process now on `pid` is
+    /// taken for the child.
     ///
     /// # Safety
     /// `fd` must be an open PTY master owned by the caller.
-    pub unsafe fn adopt(fd: RawFd, pid: u32) -> io::Result<Pty> {
+    pub unsafe fn adopt(fd: RawFd, pid: u32, start: Option<u64>) -> io::Result<Pty> {
         let master = unsafe { OwnedFd::from_raw_fd(fd) };
         set_cloexec(fd)?;
         set_nonblocking(fd)?;
         Ok(Pty {
             master,
             pid,
-            start: process_start(pid),
+            start: start.or_else(|| process_start(pid)),
             child: None,
         })
     }

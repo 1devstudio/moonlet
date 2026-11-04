@@ -315,9 +315,7 @@ pub fn adopt(incoming: Incoming, terminals: &Arc<TerminalManager>) -> Result<()>
         ..
     } = incoming;
     for (e, fd) in exported.iter().zip(fds) {
-        if let Err(err) =
-            terminals.adopt(e.info.clone(), e.rows, e.cols, e.snapshot.as_bytes(), fd.into_raw_fd())
-        {
+        if let Err(err) = terminals.adopt(e, fd.into_raw_fd()) {
             tracing::error!(session = e.info.id, "could not adopt session: {err:#}");
         }
     }

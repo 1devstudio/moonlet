@@ -57,6 +57,9 @@ Tabs:
       closed and the daemon stopped waiting for the shell. Closing it stops
       the shell too
       (`closing_a_tab_that_shows_an_exit_stops_its_shell_still_running`).
+- [x] After a live upgrade (S3), closing a tab whose shell exited, and whose
+      pid now leads another session, leaves that session running
+      (`closing_an_adopted_tab_leaves_alone_the_session_now_on_its_shells_pid`).
 
 Chat agents:
 
@@ -100,8 +103,10 @@ descendant is signalled only if its start time is still the one recorded when
 it was found. A tab's session is signalled by its shell's session id; once the
 shell's pid belongs to a process that started later, that process's own
 session is left alone. A shell the daemon started keeps its pid until the
-daemon waits for it; any other shell is told apart by the start time
-recorded when it started. The tab showing an exit is not taken to mean the
+daemon waits for it; a shell handed over in a live upgrade is told apart by
+the start time recorded when it was spawned, which the handoff carries (a
+handoff from a daemon before X79 has none, and then the start time is read
+when the shell is adopted). The tab showing an exit is not taken to mean the
 shell is gone. Command-line arguments of other processes can hold tokens; this
 feature reads only pids, parent pids, process groups and start times.
 
@@ -117,8 +122,9 @@ feature reads only pids, parent pids, process groups and start times.
 
 - Rust, `terminal.rs`: `closing_a_shell_tab_stops_jobs_that_outlive_the_shell`,
   `closing_an_agent_tab_stops_jobs_that_outlive_the_shell`,
-  `closing_a_tab_whose_shell_exited_stops_the_job_it_left` and
-  `closing_a_tab_that_shows_an_exit_stops_its_shell_still_running`.
+  `closing_a_tab_whose_shell_exited_stops_the_job_it_left`,
+  `closing_a_tab_that_shows_an_exit_stops_its_shell_still_running` and
+  `closing_an_adopted_tab_leaves_alone_the_session_now_on_its_shells_pid`.
 - Rust, `chat/runtime.rs`: with a fake agent that starts a background child in
   its own process group, stopping the chat stops the child; an agent that exits
   by itself leaves no child running.
