@@ -1,41 +1,54 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import type { OutputSink } from "./daemon";
 
-// The daemon bridge, faked: what the app sends it, the output sinks it
-// would feed with the daemon's replay and live output, and the terminals
-// the daemon sends output for. While `daemon.hold` is set, attaches are
-// answered (and subscribe) only once `daemon.answer()` is called.
+// The Tauri core, faked as the daemons behind it: what the app sends them,
+// and the terminals they send output for. An attach is answered as the core
+// answers it: the terminal's replay (`daemon.screens`) comes first, on its
+// host's output channel, flagged as a reset (S2), then the reply. While
+// `daemon.hold` is set, attaches are answered (and subscribe) only once
+// `daemon.answer()` is called.
+type OutputChannel = { onmessage?: (msg: ArrayBuffer) => void };
 const sent: [string, string, unknown][] = [];
-const sinks = new Map<string, OutputSink>();
 const daemon = {
   subscribed: new Set<string>(),
+  screens: new Map<string, string>(),
+  channels: new Map<string, OutputChannel>(),
   hold: false,
   waiting: [] as (() => void)[],
   answer() {
     for (const done of this.waiting.splice(0)) done();
   },
 };
-vi.mock("./daemon", () => ({
-  rpc: async (host: string, method: string, params: unknown) => {
+/** A replay record on the output channel: `[u32 session | reset][u32 len][bytes]`. */
+const replay = (session: number, screen: string) => {
+  const bytes = new TextEncoder().encode(screen);
+  const view = new DataView(new ArrayBuffer(8 + bytes.length));
+  view.setUint32(0, session + 0x8000_0000);
+  view.setUint32(4, bytes.length);
+  new Uint8Array(view.buffer, 8).set(bytes);
+  return view.buffer;
+};
+vi.mock("@tauri-apps/api/core", () => ({
+  Channel: class {},
+  invoke: async (cmd: string, args: { host: string; method: string; params: { id: number }; channel: OutputChannel }) => {
+    if (cmd === "host_subscribe") daemon.channels.set(args.host, args.channel);
+    if (cmd !== "rpc") return;
+    const { host, method, params } = args;
     sent.push([host, method, params]);
-    const key = `${host}:${(params as { id: number }).id}`;
+    const key = `${host}:${params.id}`;
     if (method === "terminal.attach") {
       if (daemon.hold) await new Promise<void>((done) => daemon.waiting.push(done));
       daemon.subscribed.add(key);
+      daemon.channels.get(host)?.onmessage?.(replay(params.id, daemon.screens.get(key) ?? ""));
+      return { info: { id: params.id } };
     }
     if (method === "terminal.detach") daemon.subscribed.delete(key);
-    return {};
-  },
-  sendInput: async () => {},
-  registerSink: (host: string, session: number, sink: OutputSink) => {
-    sinks.set(`${host}:${session}`, sink);
-    return () => {
-      if (sinks.get(`${host}:${session}`) === sink) sinks.delete(`${host}:${session}`);
-    };
+    return true;
   },
 }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: async () => () => {} }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: async () => {} }));
 
+import { subscribeHost } from "./daemon";
 import { disposeEntry, entryFor, findEntry, getEntry, shortPath, terminalsToLetGo } from "./terminals";
 
 describe("shortPath", () => {
@@ -116,6 +129,7 @@ describe("live terminals (X80)", () => {
     daemon.hold = false;
     daemon.answer();
     daemon.subscribed.clear();
+    daemon.screens.clear();
   });
 
   it("a ninth terminal shown lets go of the one shown longest ago, and detaches it (X80)", async () => {
@@ -125,19 +139,21 @@ describe("live terminals (X80)", () => {
     expect(findEntry("a", 2)).toBeDefined();
     expect(findEntry("a", 9)).toBeDefined();
     expect(detached("a")).toEqual([1]);
-    // The daemon sends it no more output, and none would reach its xterm.
+    // The daemon sends it no more output.
     expect(daemon.subscribed.has("a:1")).toBe(false);
-    expect(sinks.has("a:1")).toBe(false);
   });
 
   it("a terminal let go of attaches again when shown, and the replay draws it (X80)", async () => {
+    // The app takes the host's output once it connects.
+    await subscribeHost("b");
     for (let id = 1; id <= 9; id++) show("b", id).unmount();
     await settled();
+    // What the daemon keeps of the screen of the terminal let go of.
+    daemon.screens.set("b:1", "$ make\r\nbuilt\r\n");
     sent.length = 0;
     const again = show("b", 1);
-    expect(sent.filter(([, m]) => m === "terminal.attach")).toEqual([["b", "terminal.attach", { id: 1, cols: 80, rows: 24 }]]);
-    sinks.get("b:1")!.reset(new TextEncoder().encode("$ make\r\nbuilt\r\n"));
     await vi.waitFor(() => expect([again.lineText(0), again.lineText(1)]).toEqual(["$ make", "built"]));
+    expect(sent.filter(([, m]) => m === "terminal.attach")).toEqual([["b", "terminal.attach", { id: 1, cols: 80, rows: 24 }]]);
     expect(findEntry("b", 1)).toBe(again);
   });
 

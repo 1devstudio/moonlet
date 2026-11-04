@@ -129,8 +129,10 @@ None: no new input crosses a trust boundary.
   `lets go of the least recently shown terminals beyond the limit (X80)` and
   `never lets go of a terminal on screen, even past the limit (X80)`.
 - Vitest, `terminals.test.ts`, through `getEntry`, `findEntry`, `entryFor`
-  and `TermEntry.mount`, with the daemon bridge faked, the RPCs it is sent
-  recorded and the terminals it would send output for tracked:
+  and `TermEntry.mount`, through the app's daemon bridge (`daemon.ts`) to a
+  faked Tauri core: the RPCs it is sent are recorded, the terminals it would
+  send output for tracked, and an attach is answered as the core answers it,
+  with the terminal's replay on its host's output channel before the reply:
   `a ninth terminal shown lets go of the one shown longest ago, and detaches it (X80)`,
   `a terminal that leaves the screen counts as shown just then (X80)`,
   `a split of ten hidden lets go of the two shown longest ago (X80)`,
