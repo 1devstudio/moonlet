@@ -56,12 +56,12 @@ describe("relay output before the attach reply (X72)", () => {
 describe("leaving a terminal while its attach is on its way (X72)", () => {
   it("lets go of the relay once the reply comes", () => {
     const a = new PendingAttaches();
-    a.start("studio-mini#copy:s1:4");
+    const four = a.start("studio-mini#copy:s1:4");
     expect(a.leave("studio-mini#copy:s1:4")).toBe(true);
-    expect(a.done("studio-mini#copy:s1:4")).toBe(true);
+    expect(a.done("studio-mini#copy:s1:4", four)).toBe(true);
     // Left after the reply: nothing pending, the usual detach applies.
-    a.start("studio-mini#copy:s1:5");
-    expect(a.done("studio-mini#copy:s1:5")).toBe(false);
+    const five = a.start("studio-mini#copy:s1:5");
+    expect(a.done("studio-mini#copy:s1:5", five)).toBe(false);
     expect(a.leave("studio-mini#copy:s1:5")).toBe(false);
   });
 });

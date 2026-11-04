@@ -4,7 +4,7 @@ import { rpc } from "../lib/daemon";
 import { M } from "../lib/protocol";
 import { draftToAgent, openFileTab, setClassic } from "../lib/actions";
 import { errorToast, getLayout, sesKey, setLayout, toast, useStore } from "../lib/store";
-import { findEntry, getEntry } from "../lib/terminals";
+import { entryFor, findEntry, getEntry } from "../lib/terminals";
 import { InputEditor } from "./InputEditor";
 import { uncommitted } from "../lib/chips";
 import { Button } from "./ui";
@@ -54,25 +54,28 @@ export function TerminalPane({ host, session, wsId, focused, visible }: { host: 
   // (T6), unless the tab is in classic mode (T7).
   const blockMode = !!info && info.kind === "shell" && info.prompt !== undefined && !info.classic && !info.exit;
   const editing = blockMode && info.prompt === true && !info.alt_screen;
+  // A hidden tab creates no terminal, nor brings back one let go of (X80);
+  // these effects run again when it is shown.
   useEffect(() => {
-    const entry = getEntry(host, session);
-    entry.setBlockMode(blockMode);
-    entry.setEditorActive(editing);
-  }, [host, session, blockMode, editing]);
+    const entry = entryFor(host, session, visible);
+    entry?.setBlockMode(blockMode);
+    entry?.setEditorActive(editing);
+  }, [host, session, visible, blockMode, editing]);
   const branch = useStore((s) => (info?.session_id ? s.sessions[host]?.find((x) => x.id === info.session_id)?.branch : undefined));
   const worktree = useStore((s) => (info?.session_id ? s.sessions[host]?.find((x) => x.id === info.session_id)?.path : undefined));
   const files = useStore((s) => (info?.session_id ? s.git[sesKey(host, info.session_id)]?.files : undefined));
   const nodeVersion = info?.node_version;
   const changes = useMemo(() => (files ? uncommitted(files) : undefined), [files]);
   useEffect(() => {
-    getEntry(host, session).context = { home, worktree, branch, nodeVersion, changes };
-  }, [host, session, home, worktree, branch, nodeVersion, changes]);
+    const entry = entryFor(host, session, visible);
+    if (entry) entry.context = { home, worktree, branch, nodeVersion, changes };
+  }, [host, session, visible, home, worktree, branch, nodeVersion, changes]);
   // Snapshots carry no OSC 7, so a shell that reported its directory before
   // the app attached starts from the daemon's record (T8 block headers).
   const reportedCwd = info?.reported_cwd;
   useEffect(() => {
-    if (reportedCwd) getEntry(host, session).seedCwd(reportedCwd);
-  }, [host, session, reportedCwd]);
+    if (reportedCwd) entryFor(host, session, visible)?.seedCwd(reportedCwd);
+  }, [host, session, visible, reportedCwd]);
 
   useEffect(() => {
     if (focused && visible && !editing) getEntry(host, session).focus();

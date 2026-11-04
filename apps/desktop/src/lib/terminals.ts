@@ -1,5 +1,7 @@
 // xterm.js instances live outside React so switching tabs or sessions
-// never re-attaches or loses scrollback. A terminal renders with WebGL
+// does not re-attach. Only the terminals shown most recently stay live; an
+// older one is let go of, and attached again from the daemon's replay when
+// it is shown (X80). A terminal renders with WebGL
 // only while it is on screen (WebKit caps live WebGL contexts), and falls
 // back to the DOM renderer if WebGL is unavailable (T1).
 
@@ -239,6 +241,8 @@ export class TermEntry {
   /** The size the last attach asked for, which its snapshot is drawn at. */
   private snapshotSize: { cols: number; rows: number } | null = null;
   private disposed = false;
+  /** Attached once first mounted, at the size its pane fits (X80). */
+  private attached = false;
   onTitle?: (title: string) => void;
   onFileLink?: FileLinkHandler;
   /** Set while the input editor is shown: printable keys typed into the
@@ -392,6 +396,8 @@ export class TermEntry {
     this.ready = false;
     const { cols, rows } = this.term;
     this.snapshotSize = { cols, rows };
+    // The attach asks for the size itself; a resize waiting to be sent is moot.
+    window.clearTimeout(this.resizeTimer);
     try {
       await rpc(this.host, M.terminalAttach, { id: this.session, cols, rows });
     } catch (e) {
@@ -403,11 +409,16 @@ export class TermEntry {
       if (!gone && !this.disposed) window.setTimeout(() => !this.disposed && void this.attach().catch(() => {}), 2000);
       throw e;
     }
+    // Let go of while the attach was on its way (X80): the daemon may have
+    // taken the detach first, and subscribed this client after it. Unless
+    // the terminal was shown again meanwhile: its new entry wants the output.
+    if (this.disposed && !findEntry(this.host, this.session)) void rpc(this.host, M.terminalDetach, { id: this.session }).catch(() => {});
     this.lastSize = `${cols}x${rows}`;
   }
 
   mount(parent: HTMLElement) {
-    if (this.parent === parent && parent.contains(this.el)) return;
+    // Already in this pane: nothing to move, but it is shown all the same.
+    if (this.parent === parent && parent.contains(this.el)) return shown(this);
     this.parent = parent;
     parent.appendChild(this.el);
     if (this.settings.webgl && !this.webgl) {
@@ -425,7 +436,24 @@ export class TermEntry {
     this.resizeObs?.disconnect();
     this.resizeObs = new ResizeObserver(() => this.refit());
     this.resizeObs.observe(parent);
+    // Fitted before its first attach, so the daemon draws the replay at the
+    // pane's size rather than 80x24 (X80). The attach waits for the pane's
+    // other effects in the same commit, as Blocks mode's taller rows: it asks
+    // for the rows the pane ends up with, and no resize follows the replay.
+    this.refit();
+    if (!this.attached) {
+      this.attached = true;
+      queueMicrotask(() => {
+        if (!this.disposed) void this.attach().catch(() => {});
+      });
+    }
     requestAnimationFrame(() => this.refit());
+    shown(this);
+  }
+
+  /** In a pane (X80), shown or in a split: never let go of. */
+  get mounted() {
+    return this.parent !== null;
   }
 
   unmount() {
@@ -434,7 +462,11 @@ export class TermEntry {
     this.webgl?.dispose();
     this.webgl = null;
     if (this.el.parentElement) this.el.parentElement.removeChild(this.el);
+    const wasMounted = this.parent !== null;
     this.parent = null;
+    // On screen until now, so shown more recently than any terminal that
+    // was hidden meanwhile (X80).
+    if (wasMounted) shown(this);
   }
 
   refit() {
@@ -473,15 +505,24 @@ export class TermEntry {
 
   private onOsc133(data: string): boolean {
     const [mark, ...rest] = data.split(";");
+    // Only a block's prompt, output and end keep a marker; any other mark
+    // (B) would leave one in the terminal until its row is trimmed (X80).
+    if (mark !== "A" && mark !== "C" && mark !== "D") return true;
     const marker = this.term.registerMarker(0);
     if (!marker) return true;
     const last = this.blocks[this.blocks.length - 1];
     switch (mark) {
       case "A":
         this.blocks.push({ prompt: marker });
-        if (this.blocks.length > 2000) this.blocks.shift();
-        break;
-      case "B":
+        // The oldest block goes with its marks and the decorations on them,
+        // not when its rows leave the scrollback (X80).
+        if (this.blocks.length > 2000) {
+          const old = this.blocks.shift()!;
+          if (this.selected === old) this.select(null);
+          if (this.hovered === old) this.hover(null);
+          old.header?.dispose();
+          for (const m of [old.prompt, old.output, old.end, old.headerAt]) m?.dispose();
+        }
         break;
       case "C": {
         // No open block when the prompt came before we attached and the
@@ -899,28 +940,92 @@ export class TermEntry {
   }
 }
 
+/** How many terminals keep a live xterm (X80). The daemon keeps every
+ * terminal's screen and scrollback, and replays them on attach (S2). */
+export const LIVE_TERMINALS = 8;
+
+/** The terminals to let go of (X80): of `order`, least recently shown
+ * first, the oldest ones beyond `max`, skipping those on screen. */
+export function terminalsToLetGo(order: readonly string[], onScreen: ReadonlySet<string>, max: number): string[] {
+  let excess = order.length - max;
+  const out: string[] = [];
+  for (const key of order) {
+    if (excess <= 0) break;
+    if (onScreen.has(key)) continue;
+    out.push(key);
+    excess--;
+  }
+  return out;
+}
+
+/** Live terminals, least recently shown first (X80). */
 const entries = new Map<string, TermEntry>();
 let settings = defaultTermSettings;
 
+/** A terminal's key in `entries`: its id is unique per host only. */
+function entryKey(host: string, session: number) {
+  return `${host}:${session}`;
+}
+
 export function getEntry(host: string, session: number): TermEntry {
-  const key = `${host}:${session}`;
+  const key = entryKey(host, session);
   let e = entries.get(key);
   if (!e) {
     e = new TermEntry(host, session, settings);
     entries.set(key, e);
-    void e.attach().catch(() => {});
   }
   return e;
 }
 
+/** Disposes a live terminal and forgets it: showing it again creates it
+ * anew. */
+function letGo(key: string) {
+  const e = entries.get(key);
+  entries.delete(key);
+  e?.dispose();
+  return e;
+}
+
+/** A terminal was shown (X80): it becomes the most recently shown, and
+ * those beyond the limit are let go of once the panes shown with it have
+ * mounted too. */
+function shown(entry: TermEntry) {
+  const key = entryKey(entry.host, entry.session);
+  if (entries.get(key) !== entry) return;
+  entries.delete(key);
+  entries.set(key, entry);
+  if (letGoQueued) return;
+  letGoQueued = true;
+  // React mounts a split tab's panes one after the other in one commit; a
+  // pane not mounted yet is not let go of for the one before it.
+  queueMicrotask(letGoBeyondLimit);
+}
+
+let letGoQueued = false;
+
+function letGoBeyondLimit() {
+  letGoQueued = false;
+  const onScreen = new Set([...entries].flatMap(([k, e]) => (e.mounted ? [k] : [])));
+  for (const k of terminalsToLetGo([...entries.keys()], onScreen, LIVE_TERMINALS)) {
+    const e = letGo(k)!;
+    // The daemon stops sending its output; showing it again attaches anew,
+    // and the replay draws its screen and scrollback (S2).
+    void rpc(e.host, M.terminalDetach, { id: e.session }).catch(() => {});
+  }
+}
+
 export function findEntry(host: string, session: number): TermEntry | undefined {
-  return entries.get(`${host}:${session}`);
+  return entries.get(entryKey(host, session));
+}
+
+/** A pane's terminal (X80): a pane on screen creates it if needed; a
+ * hidden one creates none, nor brings back one let go of. */
+export function entryFor(host: string, session: number, visible: boolean): TermEntry | undefined {
+  return visible ? getEntry(host, session) : findEntry(host, session);
 }
 
 export function disposeEntry(host: string, session: number) {
-  const key = `${host}:${session}`;
-  entries.get(key)?.dispose();
-  entries.delete(key);
+  letGo(entryKey(host, session));
 }
 
 /** After a reconnect the daemon has forgotten our subscriptions. */

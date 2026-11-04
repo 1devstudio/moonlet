@@ -193,6 +193,75 @@ async fn session_survives_client_disconnect_and_replays_on_reattach() {
         .unwrap();
 }
 
+/// X80: the app lets go of a hidden terminal with `terminal.detach`, and
+/// attaches it again when it is shown. Sent back to back, the detach never
+/// undoes the attach after it.
+#[tokio::test]
+async fn a_terminal_detached_and_attached_again_at_once_keeps_its_live_output() {
+    use tokio::io::AsyncWriteExt;
+    let d = TestDaemon::start().await;
+    let mut c = d.client().await;
+    let s: TerminalInfo = c
+        .request(
+            methods::TERMINAL_CREATE,
+            TerminalCreate {
+                cwd: d.home.path().display().to_string(),
+                command: vec!["/bin/sh".into()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let _: AttachResult = c
+        .request(
+            methods::TERMINAL_ATTACH,
+            TerminalAttach {
+                id: s.id,
+                cols: None,
+                rows: None,
+            },
+        )
+        .await
+        .unwrap();
+    // Let go of and shown again at once: both requests in one write.
+    let request = |id: u64, method: &str| {
+        moonlet_proto::encode_frame(&Frame::Json(Message::Request {
+            id,
+            method: method.into(),
+            params: serde_json::json!({"id": s.id}),
+        }))
+        .unwrap()
+    };
+    let mut both = request(900, methods::TERMINAL_DETACH);
+    both.extend(request(901, methods::TERMINAL_ATTACH));
+    let mut stream = c.into_stream();
+    stream.write_all(&both).await.unwrap();
+    let mut answered = Vec::new();
+    while answered.len() < 2 {
+        if let Some(Frame::Json(Message::Response { id, error: None, .. })) = read_frame(&mut stream).await.unwrap() {
+            answered.push(id);
+        }
+    }
+    write_frame(
+        &mut stream,
+        &Frame::Input {
+            terminal: s.id,
+            data: b"echo live-$((40+2))\n".to_vec(),
+        },
+    )
+    .await
+    .unwrap();
+    let mut seen = String::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while !seen.contains("live-42") {
+        match tokio::time::timeout_at(deadline, read_frame(&mut stream)).await {
+            Ok(Ok(Some(Frame::Output { data, .. }))) => seen.push_str(&String::from_utf8_lossy(&data)),
+            Ok(Ok(Some(_))) => {}
+            other => panic!("no live output after the attach: {other:?}, seen {seen:?}"),
+        }
+    }
+}
+
 #[tokio::test]
 async fn unknown_method_is_an_error_not_a_disconnect() {
     let d = TestDaemon::start().await;
