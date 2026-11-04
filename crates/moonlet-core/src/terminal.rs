@@ -525,12 +525,14 @@ impl TerminalManager {
             // job-control shell moved to their own process group, which
             // outlive the shell when they ignore SIGHUP: a script's (X1),
             // and a dev server left running in a shell or agent tab, also
-            // once the shell itself has exited (X79). The shell's start
-            // time tells its pid apart from a later process's.
-            let session = st.pty.as_ref().map(|pty| (pty.pid(), crate::pty::process_start(pty.pid())));
-            if let Some((sid, _)) = session {
-                crate::pty::signal_session(sid, nix::sys::signal::Signal::SIGHUP, exited);
-            }
+            // once the shell itself has exited (X79). A tab can show an
+            // exit while its shell still runs: the read loop stops waiting
+            // for it after the terminal closes.
+            let session = st.pty.as_mut().map(|pty| {
+                let reaped = pty.leader_reaped();
+                crate::pty::signal_session(pty.pid(), nix::sys::signal::Signal::SIGHUP, reaped);
+                (pty.pid(), pty.start())
+            });
             if remove && !exited {
                 st.remove_on_exit = true;
             }
@@ -539,12 +541,11 @@ impl TerminalManager {
         if let Some((sid, started)) = session {
             // Keep escalating after the shell exits, until the session is empty.
             let weak = Arc::downgrade(&s);
-            crate::pty::escalate_session(sid, move || {
-                // The read loop records the exit after reaping the shell. An
-                // adopted shell (S3) is launchd's to reap, so its pid can be
-                // free and then another process's before the exit shows.
-                let reaped = weak.upgrade().is_none_or(|s| s.state.lock().unwrap().info.exit.is_some());
-                reaped || crate::pty::process_start(sid).is_some_and(|now| Some(now) != started)
+            crate::pty::escalate_session(sid, move || match weak.upgrade() {
+                Some(s) => s.state.lock().unwrap().pty.as_mut().is_none_or(Pty::leader_reaped),
+                // Removed: its pid is still the shell's only while the
+                // process there started when the shell did.
+                None => !crate::pty::is_process(sid, started),
             });
         }
         // A tab still running is removed by the read loop once it ends.
@@ -1276,6 +1277,71 @@ mod tests {
             if start.elapsed() > Duration::from_secs(8) {
                 let _ = nix::sys::signal::kill(job, nix::sys::signal::Signal::SIGKILL);
                 panic!("the job outlived its closed tab");
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    /// A shell of its own session that ignores SIGHUP, standing in for the
+    /// shell of a tab a previous daemon handed over (S3).
+    fn session_leader_ignoring_sighup() -> std::process::Child {
+        use std::os::unix::process::CommandExt;
+        let mut cmd = std::process::Command::new("/bin/sh");
+        cmd.args(["-c", "trap '' HUP; exec sleep 60"]);
+        // SAFETY: setsid is async-signal-safe.
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
+        }
+        cmd.spawn().unwrap()
+    }
+
+    /// Adopts a tab whose shell is `pid`, as after a live upgrade (S3), on
+    /// a terminal nothing else holds open. Returns its id.
+    fn adopt_shell_tab(mgr: &Arc<TerminalManager>, pid: u32) -> TerminalId {
+        let info: TerminalInfo = serde_json::from_value(serde_json::json!({
+            "id": 41,
+            "kind": "shell",
+            "title": "zsh",
+            "cwd": "/tmp",
+            "command": ["/bin/zsh"],
+            "agent_state": "idle",
+            "cols": 80,
+            "rows": 24,
+            "pid": pid,
+            "created_at": 0,
+            "last_output_at": 0,
+        }))
+        .unwrap();
+        let pair = nix::pty::openpty(None, None).unwrap();
+        drop(pair.slave);
+        use std::os::fd::IntoRawFd;
+        mgr.adopt(info, 24, 80, b"", pair.master.into_raw_fd()).unwrap();
+        41
+    }
+
+    #[tokio::test]
+    async fn closing_a_tab_that_shows_an_exit_stops_its_shell_still_running() {
+        // The terminal closed while the shell runs on, ignoring SIGHUP: the
+        // tab shows an exit once it stops waiting for the shell (X79).
+        let mut shell = session_leader_ignoring_sighup();
+        let mgr = manager();
+        let id = adopt_shell_tab(&mgr, shell.id());
+        let start = std::time::Instant::now();
+        while mgr.get(id).is_some_and(|t| t.info().exit.is_none()) {
+            assert!(start.elapsed() < Duration::from_secs(10), "the tab never showed an exit");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(shell.try_wait().unwrap().is_none(), "the shell ended by itself");
+        mgr.kill(id, true).unwrap();
+        let start = std::time::Instant::now();
+        while shell.try_wait().unwrap().is_none() {
+            if start.elapsed() > Duration::from_secs(8) {
+                shell.kill().unwrap();
+                shell.wait().unwrap();
+                panic!("the shell outlived its closed tab");
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }

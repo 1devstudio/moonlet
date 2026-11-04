@@ -29,6 +29,8 @@ pub struct SpawnSpec {
 pub struct Pty {
     master: OwnedFd,
     pid: u32,
+    /// When the child started (see [`process_start`]).
+    start: Option<u64>,
     /// `Some` only when this process spawned the child and can reap it.
     child: Option<std::process::Child>,
 }
@@ -93,6 +95,7 @@ impl Pty {
         Ok(Pty {
             master: pair.master,
             pid: child.id(),
+            start: process_start(child.id()),
             child: Some(child),
         })
     }
@@ -108,6 +111,7 @@ impl Pty {
         Ok(Pty {
             master,
             pid,
+            start: process_start(pid),
             child: None,
         })
     }
@@ -142,6 +146,22 @@ impl Pty {
     pub fn signal(&self, signal: Signal) -> io::Result<()> {
         let _ = kill(Pid::from_raw(-(self.pid as i32)), signal);
         kill(Pid::from_raw(self.pid as i32), signal).map_err(io::Error::from)
+    }
+
+    /// When the child started, as [`process_start`] gave it then.
+    pub fn start(&self) -> Option<u64> {
+        self.start
+    }
+
+    /// Whether the child's pid may no longer be its session's leader, as
+    /// [`signal_session`] takes it. A child this process spawned keeps its
+    /// pid until it is reaped, which this may do. An adopted one (S3) is
+    /// launchd's to reap: its pid is its own only while [`is_process`].
+    pub fn leader_reaped(&mut self) -> bool {
+        match self.child.as_mut() {
+            Some(child) => !matches!(child.try_wait(), Ok(None)),
+            None => !is_process(self.pid, self.start),
+        }
     }
 
     pub fn is_alive(&self) -> bool {
@@ -222,6 +242,12 @@ pub fn process_start(pid: u32) -> Option<u64> {
         let rest = &stat[stat.rfind(')')? + 2..];
         rest.split(' ').nth(19)?.parse().ok()
     }
+}
+
+/// Whether `pid` is still the process that started at `start`; `false`
+/// when `start` is unknown.
+pub fn is_process(pid: u32, start: Option<u64>) -> bool {
+    start.is_some() && process_start(pid) == start
 }
 
 /// After a SIGHUP to session `sid`: SIGTERM after 1.5 s, then SIGKILL after

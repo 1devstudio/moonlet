@@ -53,6 +53,10 @@ Tabs:
       (`closing_an_agent_tab_stops_jobs_that_outlive_the_shell`).
 - [x] The same holds once the tab's shell has exited and left such a job
       running (`closing_a_tab_whose_shell_exited_stops_the_job_it_left`).
+- [x] A tab can show an exit while its shell still runs, once the terminal
+      closed and the daemon stopped waiting for the shell. Closing it stops
+      the shell too
+      (`closing_a_tab_that_shows_an_exit_stops_its_shell_still_running`).
 
 Chat agents:
 
@@ -95,7 +99,10 @@ Stopping processes by pid races with pid reuse: a process found as a
 descendant is signalled only if its start time is still the one recorded when
 it was found. A tab's session is signalled by its shell's session id; once the
 shell's pid belongs to a process that started later, that process's own
-session is left alone. Command-line arguments of other processes can hold tokens; this
+session is left alone. A shell the daemon started keeps its pid until the
+daemon waits for it; any other shell is told apart by the start time
+recorded when it started. The tab showing an exit is not taken to mean the
+shell is gone. Command-line arguments of other processes can hold tokens; this
 feature reads only pids, parent pids, process groups and start times.
 
 ## Out of scope
@@ -109,8 +116,9 @@ feature reads only pids, parent pids, process groups and start times.
 ## Test plan
 
 - Rust, `terminal.rs`: `closing_a_shell_tab_stops_jobs_that_outlive_the_shell`,
-  `closing_an_agent_tab_stops_jobs_that_outlive_the_shell` and
-  `closing_a_tab_whose_shell_exited_stops_the_job_it_left`.
+  `closing_an_agent_tab_stops_jobs_that_outlive_the_shell`,
+  `closing_a_tab_whose_shell_exited_stops_the_job_it_left` and
+  `closing_a_tab_that_shows_an_exit_stops_its_shell_still_running`.
 - Rust, `chat/runtime.rs`: with a fake agent that starts a background child in
   its own process group, stopping the chat stops the child; an agent that exits
   by itself leaves no child running.
