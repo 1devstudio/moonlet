@@ -139,7 +139,12 @@ After a crash:
       Jobs in its terminals' sessions that ignored the hangup end at the next
       start, as after a crash.
 - [x] After a handoff nothing is ended: the new daemon adopted the terminals,
-      and the old one ended its agents (`upgrade_keeps_sessions_alive`).
+      and the old one ended its agents (`upgrade_keeps_sessions_alive`). The
+      new daemon keeps recording what the old one's record names and still
+      runs, as a fresh daemon does with what it is ending: the sessions of
+      shells that exited, whose terminals are not handed over, and agents
+      still being ended. A crash of the new daemon then leaves those to the
+      next one too (`after_an_upgrade_a_crash_still_ends_what_an_exited_shell_left`).
 
 Later parts of this spec, each with its own change:
 
@@ -221,7 +226,8 @@ it is first written.
   `what_a_crashed_daemon_left_stays_recorded_until_it_is_gone`.
 - Rust, `moonletd/tests/daemon.rs`:
   `a_daemon_started_after_a_crash_ends_what_its_agents_left_running`;
-  `moonletd/tests/upgrade.rs`: `upgrade_keeps_sessions_alive`.
+  `moonletd/tests/upgrade.rs`: `upgrade_keeps_sessions_alive` and
+  `after_an_upgrade_a_crash_still_ends_what_an_exited_shell_left`.
 - Rust, `chat/runtime.rs`, with a fake agent that leaves a server running in a
   process group of its own, ignoring SIGHUP and SIGTERM:
   `stopping_a_chat_stops_what_its_agent_left_running`,

@@ -94,6 +94,21 @@ fn this_boot(left: &Leftovers) -> bool {
     }
 }
 
+/// What the daemon before this one recorded in `path`, when this user wrote
+/// it since the machine last booted, ending none of it. After a handoff the
+/// new daemon records it on while it runs: the jobs of shells that exited
+/// (their terminals are not handed over) and the old daemon's stopping agents.
+pub fn load(path: &Path) -> Leftovers {
+    let Some(left) = read_own(path) else {
+        return Leftovers::default();
+    };
+    if !this_boot(&left) {
+        tracing::info!("not ending what {} names: it is from before the machine restarted", path.display());
+        return Leftovers::default();
+    }
+    left
+}
+
 /// Ends what the daemon before this one recorded in `path` and still runs,
 /// and returns it, for the next record to keep naming until it is gone. A
 /// daemon that crashed ended nothing; one that stopped cleanly ended its
@@ -103,13 +118,7 @@ fn this_boot(left: &Leftovers) -> bool {
 /// then SIGKILL 3 s later; terminal sessions as when a tab closes). A record
 /// another user could have written ends nothing.
 pub fn reap(path: &Path) -> Leftovers {
-    let Some(left) = read_own(path) else {
-        return Leftovers::default();
-    };
-    if !this_boot(&left) {
-        tracing::info!("not ending what {} names: it is from before the machine restarted", path.display());
-        return Leftovers::default();
-    }
+    let left = load(path);
     let mut doomed = Doomed { group: None, agent: None, family: Family::of(left.processes.clone()) };
     if doomed.signal(None) {
         tracing::info!("ending processes the previous daemon's agents left running");

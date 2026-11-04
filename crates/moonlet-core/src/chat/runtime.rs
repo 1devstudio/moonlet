@@ -771,7 +771,8 @@ impl ChatManager {
 
     /// Keeps in `path`, every few seconds while it changes, what agents and
     /// terminals run, for the next daemon to end if this one crashes (X79).
-    /// `inherited` is what the daemon before left and is being ended.
+    /// `inherited` is what the daemon before recorded, being ended after a
+    /// crash: it stays recorded until it is gone.
     pub fn record_leftovers(&self, path: PathBuf, inherited: crate::leftovers::Leftovers) {
         let mut dying = self.dying.lock().unwrap();
         dying.processes.extend(inherited.processes);
