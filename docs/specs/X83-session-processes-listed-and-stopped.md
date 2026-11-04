@@ -199,6 +199,16 @@ unchanged. Such a leftover is any process of the user's that works in the
 worktree, so the CLI can stop it by pid; nothing outside the session and its
 worktree can be signalled.
 
+A worker's link is told apart by the name in its hello, which keeps the
+link's own code away from these calls; it is not a credential. A paired
+Mac's daemon and its app reach this host with the same device token (the app
+hands its own to `link.set` when it makes this host its central host), so
+nothing the connection proves tells them apart. That token is not a smaller
+grant either: it already creates terminals in a session and types into them
+(`terminal.create`, `terminal.write`, input frames), which reaches every
+process of the user's, and a cloud machine's token is held to
+`CLOUD_METHODS`, which leave these calls out.
+
 ## Out of scope
 
 - Processes on a remote host's copy of the session are listed by that host's
