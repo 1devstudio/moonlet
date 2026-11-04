@@ -142,6 +142,29 @@ describe("motion (X82)", () => {
     expect(getComputedStyle(tabWithSpinner(false)).animationIterationCount).toBe("1");
   });
 
+  it("shows a progress bar without a percentage as a still, striped bar across the track when the system asks for reduced motion", async () => {
+    // jsdom applies only `@media screen`, and computes no style for `::after`:
+    // the reduced-motion rules are read as screen ones, and a child stands in
+    // for the bar's `::after` segment.
+    page(
+      oneSelectorEach(await appCss())
+        .replaceAll("(prefers-reduced-motion: reduce)", "screen")
+        .replace(/::after\b/g, " > .after"),
+    );
+    const bar = document.createElement("div");
+    bar.className = "moonlet-indeterminate";
+    const segment = document.createElement("span");
+    segment.className = "after";
+    bar.append(segment);
+    document.body.append(bar);
+    const style = getComputedStyle(segment);
+    expect({ animation: style.animation, width: style.width, striped: style.background.startsWith("repeating-linear-gradient(") }).toEqual({
+      animation: "none",
+      width: "100%",
+      striped: true,
+    });
+  });
+
   it("animates only opacity and transform in every endless animation", async () => {
     const rules = [...allRules(sheet(await appCss()).cssRules)];
     const vars = new Map(

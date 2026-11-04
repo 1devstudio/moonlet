@@ -405,6 +405,15 @@ body:not(.kbd-nav) button:focus {
     transform: translateX(250%);
   }
 }
+/* With Reduce motion on, the segment stands still: stripes across the whole
+   track, so it never reads as a bar stopped at 40% (X82). */
+@media (prefers-reduced-motion: reduce) {
+  .moonlet-indeterminate::after {
+    animation: none;
+    width: 100%;
+    background: repeating-linear-gradient(-45deg, var(--color-accent) 0 3px, transparent 3px 7px);
+  }
+}
 
 /* App text. The root sets --ui-scale from the terminal font size (see
    uiScale), so `ui-text-13` is 13px at the default size and grows with it. */

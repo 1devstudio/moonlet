@@ -11,7 +11,8 @@
 }
 
 /* With Reduce motion on, nothing repeats: each animation runs once. A spinner
-   turns once and stops; short entrances and flashes are unchanged. */
+   turns once and stops; short entrances and flashes are unchanged. A progress
+   bar without a percentage stands still as stripes (moonlet.css). */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

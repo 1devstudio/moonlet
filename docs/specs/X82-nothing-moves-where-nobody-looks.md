@@ -48,6 +48,10 @@ the system's reduced-motion setting.
       (`reads the time at once when its clock starts again`).
 - [x] With reduced motion asked for, no animation repeats: each runs once
       (`runs an endless animation once when the system asks for reduced motion`).
+- [x] With reduced motion asked for, a progress bar without a percentage
+      stands still as stripes across its whole track, so it never reads as a
+      bar stopped part way
+      (`shows a progress bar without a percentage as a still, striped bar across the track when the system asks for reduced motion`).
 
 ## UI
 
@@ -55,6 +59,11 @@ The shimmer on "Working", "Thinking…" and "Answering from the conversation"
 becomes a brightening of the whole label, from the muted grey to the light grey
 the sweep peaked at, and back. It no longer sweeps from left to right. Nothing
 else looks different while a tab is shown.
+
+With "Reduce motion" on, a progress bar without a percentage no longer sweeps:
+accent stripes fill its whole track and stand still. Run once and stopped, the
+sweep would leave its segment over the track's left 40%, which reads as 40%
+done.
 
 ## Protocol and RPCs
 
@@ -81,8 +90,9 @@ None: no new inputs.
 
 - Vitest, `motion.test.ts`: `pauses an animation inside a hidden tab`,
   `keeps an animation in the shown tab running`,
-  `animates only opacity and transform in every endless animation` and
-  `runs an endless animation once when the system asks for reduced motion`.
+  `animates only opacity and transform in every endless animation`,
+  `runs an endless animation once when the system asks for reduced motion` and
+  `shows a progress bar without a percentage as a still, striped bar across the track when the system asks for reduced motion`.
   The endless-animation test builds the app's stylesheet with Tailwind from
   `index.css` and every file it imports, with the `animate-*` classes found in
   the app's sources, and reads the `animation` shorthand, its longhands and
@@ -90,7 +100,10 @@ None: no new inputs.
   reduced-motion rules name `::before` and `::after` in the same selector list
   as the elements; jsdom drops a list holding a pseudo-element, so the tests
   give it each selector as a rule of its own, and cannot check the
-  pseudo-elements themselves (jsdom computes no style for them).
+  pseudo-elements themselves (jsdom computes no style for them). The progress
+  bar's test reads the app's stylesheet with the reduced-motion rules as
+  `@media screen` ones (the only media jsdom applies) and a child element
+  standing in for the bar's `::after`.
 - Vitest, `subagents.test.ts`: `ticks the strip's clock only while agents run
   and the strip is shown` and `ticks the Agents tab's clock only while agents
   run and the tab is shown`.
