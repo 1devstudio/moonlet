@@ -90,9 +90,12 @@ const alnum = (c: string | undefined) => !!c && /[a-z0-9]/i.test(c);
  * `MOON-142`, `moon-1420` does not.
  */
 export function mentionsKey(text: string, key: string): boolean {
-  if (!key) return false;
-  const hay = text.toLowerCase();
-  const needle = key.toLowerCase();
+  return !!key && mentionsLowered(text.toLowerCase(), key.toLowerCase());
+}
+
+/** `mentionsKey` on text and key already lower-cased, so a caller matching one text against many keys lower-cases it once (X78). */
+function mentionsLowered(hay: string, needle: string): boolean {
+  if (!needle) return false;
   for (let at = hay.indexOf(needle); at >= 0; at = hay.indexOf(needle, at + 1)) {
     if (!alnum(hay[at - 1]) && !alnum(hay[at + needle.length])) return true;
   }
@@ -134,8 +137,28 @@ export const DEFAULT_LINK: LinkRules = { branch: true, pr: true, title: true };
  * (its title, and more where wanted) carries the tracker issue's key.
  */
 export function prPointsAt(task: Task, pr: { number: number; texts: string[] }, repo: string | null): boolean {
-  if (task.github) return !!repo && task.github.repo.toLowerCase() === repo.toLowerCase() && task.github.closingPrs.includes(pr.number);
-  return pr.texts.some((x) => mentionsKey(x, task.key));
+  return pointsAt(task, pr.number, pr.texts.map((x) => x.toLowerCase()), repo?.toLowerCase() ?? null);
+}
+
+/** A task's key and GitHub repository in lower case, made once per task (X78). */
+const loweredTasks = new WeakMap<Task, { key: string; repo: string | null }>();
+function lowered(t: Task): { key: string; repo: string | null } {
+  let l = loweredTasks.get(t);
+  if (!l) {
+    l = { key: t.key.toLowerCase(), repo: t.github?.repo.toLowerCase() ?? null };
+    loweredTasks.set(t, l);
+  }
+  return l;
+}
+
+/** Whether `t` is a GitHub issue of `repo`, given in lower case. */
+const inRepo = (t: Task, repo: string | null) => !!repo && lowered(t).repo === repo;
+
+/** `prPointsAt` with the PR's texts and repository already lower-cased (X78). */
+function pointsAt(task: Task, number: number, loweredTexts: string[], loweredRepo: string | null): boolean {
+  if (task.github) return inRepo(task, loweredRepo) && task.github.closingPrs.includes(number);
+  const key = lowered(task).key;
+  return loweredTexts.some((x) => mentionsLowered(x, key));
 }
 
 export function taskForSession(
@@ -147,12 +170,15 @@ export function taskForSession(
 ): Task | null {
   if (s.task) return tasks.find((t) => t.connection === s.task?.connection && t.key === s.task.key) ?? null;
   if (s.task_unlinked) return null;
-  const sameRepo = (t: Task) => !!t.github && !!originRepo && t.github.repo.toLowerCase() === originRepo.toLowerCase();
+  // The session's side lower-cased once here, each task's once per task (X78).
+  const repo = originRepo?.toLowerCase() ?? null;
+  const branch = s.branch.toLowerCase();
   const number = githubBranchNumber(s.branch);
-  const byBranch = rules.branch ? tasks.find((t) => (t.github ? sameRepo(t) && t.github.number === number : mentionsKey(s.branch, t.key))) : undefined;
+  const byBranch = rules.branch ? tasks.find((t) => (t.github ? inRepo(t, repo) && t.github.number === number : mentionsLowered(branch, lowered(t).key))) : undefined;
   if (byBranch) return byBranch;
   if (!pr || !rules.pr) return null;
-  return tasks.find((t) => prPointsAt(t, { number: pr.number, texts: [pr.title] }, originRepo)) ?? null;
+  const texts = [pr.title.toLowerCase()];
+  return tasks.find((t) => pointsAt(t, pr.number, texts, repo)) ?? null;
 }
 
 /** The `owner/repo` of an `origin` URL (https, ssh or scp-like) on github.com. */

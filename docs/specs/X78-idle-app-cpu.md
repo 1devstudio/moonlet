@@ -1,6 +1,6 @@
 # X78 — The app stays quiet while nothing changes
 
-- **Status:** draft
+- **Status:** implemented
 - **Priority / phase:** P1 · phase 3
 - **PRD refs:** performance targets in `docs/plan.md` (memory under 600 MB with 10 panes)
 - **Related ADRs:** none
@@ -39,9 +39,14 @@ workspace's board once per change instead of once per component that shows it.
       once the workspace's projects change`, `is built again once the
       workspace's hosts change`, `keeps the boards of the last 8 workspaces
       shown`).
-- [ ] Linking sessions to tasks lower-cases each task key, repository and title
-      once per task list, not once per session and task pair. Links found are
-      the same as before.
+- [x] Linking sessions to tasks lower-cases each task's key, repository and
+      title once per task, and each session's branch, PR title, repository and
+      name once per session, not once per session and task pair. Links found
+      are the same as before, whatever the case
+      (`matches repositories, keys and branches whatever their case`,
+      `finds the key in the branch name`, `finds a GitHub issue by the
+      branch's leading number, only in that repository`, `finds the task from
+      the session's PR: a title with the key, or a PR that closes the issue`).
 
 ## UI
 
@@ -83,8 +88,13 @@ Later parts of the same investigation, each with its own change:
   workspaces shown`, `is built again once
   the workspace's projects change` and `is built again once a session it shows
   changes`.
-- Vitest: existing `tasks.test.ts`, `tasksBoard.test.ts` and `tasksStore.test.ts`
-  link tests stay green.
+- Vitest, `tasks.test.ts`: `matches repositories, keys and branches whatever
+  their case`, `finds the key in the branch name`, `finds a GitHub issue by the
+  branch's leading number, only in that repository` and `finds the task from
+  the session's PR: a title with the key, or a PR that closes the issue`; the
+  rest of `tasks.test.ts`, `tasksBoard.test.ts` and `tasksStore.test.ts` stay
+  green. A board built from 306 sessions and 165 tasks
+  took 7.7–7.9 ms before and 2.7–3.6 ms after (best of 10, Node).
 - Manual: `footprint -p <pid>` and `ps -o pcpu` of the app's web content process
   (found with `launchctl print pid/<pid>`, bundle ID `dev.onedevstudio.moonlet`)
   before and after, with the user's sessions loaded and the app idle.
