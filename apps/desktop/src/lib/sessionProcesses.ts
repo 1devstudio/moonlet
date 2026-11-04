@@ -39,11 +39,12 @@ export function toStopOnArchive(list: SessionProcesses | null): SessionProcess[]
 }
 
 /** `session.kill_processes`' params: each of `ps` by its pid and the start
- * it was listed with, so a pid reused since is left alone (a plain pid when
- * the start is not known); no `ps`, Stop all, which the daemon decides. */
+ * the kernel listed it with, so a pid reused since is left alone, whatever
+ * the clock did meanwhile (a plain pid when the start is not known); no
+ * `ps`, Stop all, which the daemon decides. */
 export function killParams(id: string, ps?: SessionProcess[]): SessionKillProcesses {
   if (!ps) return { id };
-  return { id, pids: ps.map((p): ProcessRef => (p.started === undefined ? p.pid : { pid: p.pid, started: p.started })) };
+  return { id, pids: ps.map((p): ProcessRef => (p.start === undefined ? p.pid : { pid: p.pid, start: p.start })) };
 }
 
 /** What a Stop says when processes outlived it ("1 process still runs after

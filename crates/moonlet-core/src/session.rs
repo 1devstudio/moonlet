@@ -1852,7 +1852,7 @@ impl SessionManager {
         let me = self.clone();
         let session = id.to_string();
         let (found, leftovers) = tokio::task::spawn_blocking(move || me.find_processes(&session)).await??;
-        let stopping = crate::session_processes::to_stop(&found, &leftovers, pids.as_deref(), crate::process::started_ms, crate::process::runs);
+        let stopping = crate::session_processes::to_stop(&found, &leftovers, pids.as_deref(), crate::process::runs);
         // One that ended between the look and its signal ended meanwhile.
         let ending = crate::session_processes::end(stopping.targets).await;
         let mut gone = stopping.gone;

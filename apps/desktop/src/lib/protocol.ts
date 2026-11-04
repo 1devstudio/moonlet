@@ -319,7 +319,10 @@ export interface SessionProcess {
   origin: ProcessOrigin;
   /** The tab's own: a terminal's shell or a chat's agent, which closing the tab ends. */
   tab: boolean;
-  /** Milliseconds since the epoch. */
+  /** When it started as the kernel keeps it (microseconds since the epoch on
+   * macOS, clock ticks since boot on Linux): what a Stop names, never shown. */
+  start?: number;
+  /** Milliseconds since the epoch, for showing: on Linux a clock change moves it. */
   started?: number;
   /** CPU time used so far. */
   cpu_ms?: number;
@@ -334,9 +337,9 @@ export interface SessionProcesses {
   leftovers: SessionProcess[];
 }
 
-/** A process to stop (X83): a pid, or a pid with the start it was listed
- * with, stopped only while that is still its start. */
-export type ProcessRef = number | { pid: number; started: number };
+/** A process to stop (X83): a pid, or a pid with the kernel's start it was
+ * listed with, stopped only while that is still its start. */
+export type ProcessRef = number | { pid: number; start: number };
 
 /** `session.kill_processes`' params (X83): no `pids`, every process but the
  * tabs' own; an empty list, none. */

@@ -190,7 +190,10 @@ fn timebase() -> (u128, u128) {
     if ok { (base.numer as u128, base.denom as u128) } else { (1, 1) }
 }
 
-/// A start time from [`crate::pty::process_start`] in milliseconds since the epoch.
+/// A start time from [`crate::pty::process_start`] in milliseconds since the
+/// epoch, for showing only: on Linux it is worked out from the boot time the
+/// kernel gives now, which moves when the clock is adjusted. Compare starts
+/// as the kernel keeps them (X83).
 pub fn started_ms(start: u64) -> Option<u64> {
     #[cfg(target_os = "macos")]
     {

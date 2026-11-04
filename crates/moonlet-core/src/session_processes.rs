@@ -158,14 +158,13 @@ pub struct Stopping {
 /// What to stop of `found` and `leftovers`. No `pids`: every found process
 /// but the tabs' own, never a leftover. An empty `pids` stops nothing; a
 /// tab's own process is stopped when named. A pid named with the start it
-/// was listed with (`started_ms` says a process's) is gone once its start
-/// differs. A pid that is neither is skipped while a process `runs` with it,
+/// was listed with, as the kernel keeps it, is gone once its start differs.
+/// A pid that is neither is skipped while a process `runs` with it,
 /// readable by this user or not, and gone otherwise.
 pub fn to_stop(
     found: &[Found],
     leftovers: &[Proc],
     pids: Option<&[ProcessRef]>,
-    started_ms: impl Fn(u64) -> Option<u64>,
     runs: impl Fn(u32) -> bool,
 ) -> Stopping {
     let Some(pids) = pids else {
@@ -180,9 +179,9 @@ pub fn to_stop(
     };
     let mut out = Stopping::default();
     for &named in pids {
-        let (pid, started) = match named {
+        let (pid, start) = match named {
             ProcessRef::Pid(pid) => (pid, None),
-            ProcessRef::Listed { pid, started } => (pid, Some(started)),
+            ProcessRef::Listed { pid, start } => (pid, Some(start)),
         };
         match found
             .iter()
@@ -190,7 +189,7 @@ pub fn to_stop(
             .chain(leftovers)
             .find(|p| p.pid == pid)
         {
-            Some(p) if started.is_some() && started_ms(p.start) != started => out.gone.push(pid),
+            Some(p) if start.is_some_and(|s| s != p.start) => out.gone.push(pid),
             Some(p) if !out.targets.contains(&(p.pid, p.start)) => {
                 out.targets.push((p.pid, p.start))
             }
@@ -266,6 +265,7 @@ pub fn describe(found: &[Found], leftovers: &[Proc]) -> SessionProcesses {
                 .unwrap_or_else(|| "?".into()),
             origin,
             tab,
+            start: p.start,
             started: crate::process::started_ms(p.start),
             cpu_ms: usage.map(|u| u.cpu_ms),
             rss: usage.map(|u| u.rss),
@@ -472,7 +472,7 @@ mod tests {
     fn stopping_all_spares_the_tabs_own_processes_and_leftovers() {
         let (found, left) = listed();
         assert_eq!(
-            to_stop(&found, &left, None, Some, runs),
+            to_stop(&found, &left, None, runs),
             Stopping {
                 targets: vec![(101, 12), (301, 31)],
                 ..Stopping::default()
@@ -498,7 +498,6 @@ mod tests {
                 &found,
                 &left,
                 Some(&plain(&[101, 600, 999, 100, 101, 998, 1])),
-                Some,
                 runs
             ),
             Stopping {
@@ -508,7 +507,7 @@ mod tests {
             }
         );
         assert_eq!(
-            to_stop(&found, &left, Some(&[]), Some, runs),
+            to_stop(&found, &left, Some(&[]), runs),
             Stopping::default(),
             "an empty list stops nothing"
         );
@@ -517,25 +516,24 @@ mod tests {
     #[test]
     fn stopping_a_pid_listed_with_another_start_leaves_it_alone() {
         let (found, left) = listed();
-        // Each start is shown as is: vite started at 12, the leftover at 60.
+        // Each named by the start the kernel keeps (on Linux, ticks since
+        // boot, which no clock change moves): vite started at 12, the
+        // leftover at 60.
         let named = [
             ProcessRef::Listed {
                 pid: 101,
-                started: 12,
+                start: 12,
             },
             ProcessRef::Listed {
                 pid: 600,
-                started: 59,
+                start: 59,
             },
             ProcessRef::Pid(301),
             // A row listed before pid 100 went to the tab's new shell.
-            ProcessRef::Listed {
-                pid: 100,
-                started: 7,
-            },
+            ProcessRef::Listed { pid: 100, start: 7 },
         ];
         assert_eq!(
-            to_stop(&found, &left, Some(&named), Some, runs),
+            to_stop(&found, &left, Some(&named), runs),
             Stopping {
                 targets: vec![(101, 12), (301, 31)],
                 skipped: vec![],

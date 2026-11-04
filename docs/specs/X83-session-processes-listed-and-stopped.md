@@ -82,7 +82,10 @@ Stopping (`session.kill_processes`):
       listed: a pid reused meanwhile is left alone
       (`ending_skips_a_pid_whose_start_changed`). A pid may be sent with the
       start `session.processes` listed it with, as the app does; it is
-      stopped only while that is still its start, and is gone otherwise
+      stopped only while that is still its start, and is gone otherwise.
+      That start is the kernel's own (`start`: clock ticks since boot on
+      Linux), never the wall-clock `started` shown, which on Linux moves
+      when the clock is adjusted
       (`stopping_a_pid_listed_with_another_start_leaves_it_alone`,
       `a_pid_named_with_another_start_than_listed_is_left_alone`).
 
@@ -152,18 +155,21 @@ session". A daemon too old to list processes shows the error.
 - `session.processes {id}` →
   `{processes: [SessionProcess], leftovers: [SessionProcess]}`, where
   `SessionProcess` is
-  `{pid, name, origin, tab, started?, cpu_ms?, rss?}`; `origin` is
+  `{pid, name, origin, tab, start, started?, cpu_ms?, rss?}`; `origin` is
   `{kind: "terminal", id, title}`, `{kind: "run", id, title}` (a Run tab's),
   `{kind: "agent", id, title}` or
   `{kind: "leftover", parent}`, `parent` "launchd" on a macOS host and "init"
-  on a Linux one; `started` is in milliseconds since the epoch,
+  on a Linux one; `start` is when it started as the kernel keeps it
+  (microseconds since the epoch on macOS, clock ticks since boot on Linux),
+  compared and never shown; `started` is in milliseconds since the epoch,
+  for showing only,
   `cpu_ms` the CPU time used so far, `rss` resident memory in bytes.
 - `session.kill_processes {id, pids?}` →
   `{ended: [pid], skipped: [pid], gone: [pid], still_running: [pid]}`:
   `ended` were signalled and are gone, `skipped` run but are not the
   session's, `gone` no longer ran when named, `still_running` were signalled
   and outlived SIGKILL. Each of `pids` is a pid (`4242`) or a
-  pid with the `started` it was listed with (`{pid, started}`).
+  pid with the `start` it was listed with (`{pid, start}`).
 - Both answer the app and the CLI; a worker's link gets `forbidden`
   (`a_workers_link_neither_lists_nor_stops_a_sessions_processes`).
 - CLI: `moonlet ps [--session <id>] [--json]`,

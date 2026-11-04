@@ -5443,7 +5443,9 @@ async fn leftovers_in_a_sessions_worktree_are_listed_apart_and_stopped_only_by_p
 }
 
 /// X83: a pid sent with the start it was listed with is stopped only while
-/// that is its start: another start means the listed process has ended.
+/// that is its start: another start means the listed process has ended. The
+/// start compared is the kernel's own (`start`), never the wall-clock
+/// `started` shown, which moves with the clock on Linux.
 #[tokio::test]
 async fn a_pid_named_with_another_start_than_listed_is_left_alone() {
     let d = TestDaemon::start().await;
@@ -5453,14 +5455,16 @@ async fn a_pid_named_with_another_start_than_listed_is_left_alone() {
     let orphan: u32 = String::from_utf8(out.stdout).unwrap().trim().parse().unwrap();
     let _reap = Reap(orphan);
     let listed: serde_json::Value = c.request(methods::SESSION_PROCESSES, serde_json::json!({"id": ws.id})).await.unwrap();
-    let started = listed["leftovers"].as_array().unwrap().iter().find(|e| e["pid"] == orphan).and_then(|e| e["started"].as_u64()).unwrap_or_else(|| panic!("{listed}"));
+    let row = listed["leftovers"].as_array().unwrap().iter().find(|e| e["pid"] == orphan).cloned().unwrap_or_else(|| panic!("{listed}"));
+    let start = row["start"].as_u64().unwrap_or_else(|| panic!("no kernel start: {row}"));
+    assert!(row["started"].is_u64(), "no start time to show: {row}");
 
-    let other = serde_json::json!({"id": ws.id, "pids": [{"pid": orphan, "started": started + 1}]});
+    let other = serde_json::json!({"id": ws.id, "pids": [{"pid": orphan, "start": start + 1}]});
     let killed: serde_json::Value = c.request(methods::SESSION_KILL_PROCESSES, other).await.unwrap();
     assert_eq!(killed, serde_json::json!({"ended": [], "skipped": [], "gone": [orphan], "still_running": []}));
     assert!(nix::sys::signal::kill(nix::unistd::Pid::from_raw(orphan as i32), None).is_ok(), "a pid listed with another start was stopped");
 
-    let same = serde_json::json!({"id": ws.id, "pids": [{"pid": orphan, "started": started}]});
+    let same = serde_json::json!({"id": ws.id, "pids": [{"pid": orphan, "start": start}]});
     let killed: serde_json::Value = c.request(methods::SESSION_KILL_PROCESSES, same).await.unwrap();
     assert_eq!(killed, serde_json::json!({"ended": [orphan], "skipped": [], "gone": [], "still_running": []}));
     assert!(gone_within(nix::unistd::Pid::from_raw(orphan as i32), 2).await, "the leftover outlived its stop");

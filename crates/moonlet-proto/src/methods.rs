@@ -1755,7 +1755,12 @@ pub struct SessionProcess {
     /// whose the process is, not that it is a tab.
     #[serde(default)]
     pub tab: bool,
-    /// When it started, in milliseconds since the epoch.
+    /// When it started as the kernel keeps it: microseconds since the epoch
+    /// on macOS, clock ticks since boot on Linux. Compared, never shown: a
+    /// Stop names it, and no clock change moves it.
+    pub start: u64,
+    /// When it started, in milliseconds since the epoch: for showing only,
+    /// as on Linux it moves when the clock is adjusted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started: Option<u64>,
     /// CPU time it used so far, user and system, in milliseconds.
@@ -1789,14 +1794,14 @@ pub struct SessionProcesses {
     pub leftovers: Vec<SessionProcess>,
 }
 
-/// A process to stop (X83): a pid as typed, `4242`, or a pid with the start
-/// `session.processes` listed it with, `{pid: 4242, started: 1793700000000}`,
-/// stopped only while that is still its start.
+/// A process to stop (X83): a pid as typed, `4242`, or a pid with the
+/// kernel's `start` `session.processes` listed it with, `{pid: 4242, start:
+/// 171234}`, stopped only while that is still its start.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ProcessRef {
     Pid(u32),
-    Listed { pid: u32, started: u64 },
+    Listed { pid: u32, start: u64 },
 }
 
 /// `session.kill_processes`' params (X83).

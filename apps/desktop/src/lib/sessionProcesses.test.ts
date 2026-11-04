@@ -57,9 +57,11 @@ describe("the Processes tab (X83)", () => {
   });
 
   it("stops a row by its pid and the start it was listed with; Stop all names none", () => {
-    const vite: SessionProcess = { pid: 4242, name: "vite", origin: dev, tab: false, started: 1_793_699_880_000 };
+    // The start the kernel keeps (on Linux, ticks since boot), never the
+    // time shown, which a clock change moves.
+    const vite: SessionProcess = { pid: 4242, name: "vite", origin: dev, tab: false, start: 171_234, started: 1_793_699_880_000 };
     const unknown: SessionProcess = { pid: 4320, name: "?", origin: dev, tab: false };
-    expect(killParams("s1", [vite, unknown])).toEqual({ id: "s1", pids: [{ pid: 4242, started: 1_793_699_880_000 }, 4320] });
+    expect(killParams("s1", [vite, unknown])).toEqual({ id: "s1", pids: [{ pid: 4242, start: 171_234 }, 4320] });
     expect(killParams("s1")).toEqual({ id: "s1" });
   });
 
