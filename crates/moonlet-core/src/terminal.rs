@@ -413,19 +413,13 @@ impl TerminalManager {
 
     /// Installs a PTY received from a previous daemon (S3): the terminal
     /// state is rebuilt by replaying its snapshot, the agent state carries over.
-    pub fn adopt(
-        self: &Arc<Self>,
-        info: TerminalInfo,
-        rows: u16,
-        cols: u16,
-        snapshot: &[u8],
-        fd: std::os::fd::RawFd,
-    ) -> Result<()> {
+    pub fn adopt(self: &Arc<Self>, e: &ExportedTerminal, fd: std::os::fd::RawFd) -> Result<()> {
+        let info = e.info.clone();
         let pid = info.pid.context("adopted terminal has no pid")?;
         // SAFETY: the fd was received via SCM_RIGHTS and is owned by us now.
-        let pty = unsafe { Pty::adopt(fd, pid)? };
-        let mut term = TermState::new(rows, cols);
-        term.process(snapshot);
+        let pty = unsafe { Pty::adopt(fd, pid, e.start)? };
+        let mut term = TermState::new(e.rows, e.cols);
+        term.process(e.snapshot.as_bytes());
         let id = info.id;
         let (state, message) = (info.agent_state, info.agent_message.clone());
         self.install(info, term, pty)?;
@@ -521,55 +515,34 @@ impl TerminalManager {
         let (exited, session) = {
             let mut st = s.state.lock().unwrap();
             let exited = st.info.exit.is_some();
-            // A script owns every process it starts, including jobs a
+            // A tab owns every process it starts, including jobs a
             // job-control shell moved to their own process group, which
-            // outlive the shell when they ignore SIGHUP.
-            let script = matches!(st.info.kind, TerminalKind::Run | TerminalKind::Setup);
-            let session = st
-                .pty
-                .as_ref()
-                .filter(|_| script && !exited)
-                .map(|pty| pty.pid());
-            if let Some(sid) = session {
-                crate::pty::signal_session(sid, nix::sys::signal::Signal::SIGHUP, false);
-            } else if let Some(pty) = &st.pty {
-                let _ = pty.signal(nix::sys::signal::Signal::SIGHUP);
-            }
+            // outlive the shell when they ignore SIGHUP: a script's (X1),
+            // and a dev server left running in a shell or agent tab, also
+            // once the shell itself has exited (X79). A tab can show an
+            // exit while its shell still runs: the read loop stops waiting
+            // for it after the terminal closes.
+            let session = st.pty.as_mut().map(|pty| {
+                let reaped = pty.leader_reaped();
+                crate::pty::signal_session(pty.pid(), nix::sys::signal::Signal::SIGHUP, reaped);
+                (pty.pid(), pty.start())
+            });
             if remove && !exited {
                 st.remove_on_exit = true;
             }
             (exited, session)
         };
-        if let Some(sid) = session {
+        if let Some((sid, started)) = session {
             // Keep escalating after the shell exits, until the session is empty.
             let weak = Arc::downgrade(&s);
-            // The read loop records the exit after reaping the shell, and
-            // only removes the terminal after that.
-            crate::pty::escalate_session(sid, move || {
-                weak.upgrade()
-                    .is_none_or(|s| s.state.lock().unwrap().info.exit.is_some())
-            });
-        } else if !exited {
-            // Some programs (agents included) ignore SIGHUP: escalate.
-            let weak = Arc::downgrade(&s);
-            tokio::spawn(async move {
-                for (delay, sig) in [
-                    (1500, nix::sys::signal::Signal::SIGTERM),
-                    (3000, nix::sys::signal::Signal::SIGKILL),
-                ] {
-                    tokio::time::sleep(Duration::from_millis(delay)).await;
-                    let Some(s) = weak.upgrade() else { return };
-                    let st = s.state.lock().unwrap();
-                    if st.info.exit.is_some() {
-                        return;
-                    }
-                    if let Some(pty) = &st.pty {
-                        let _ = pty.signal(sig);
-                    }
-                }
+            crate::pty::escalate_session(sid, move || match weak.upgrade() {
+                Some(s) => s.state.lock().unwrap().pty.as_mut().is_none_or(Pty::leader_reaped),
+                // Removed: its pid is still the shell's only while the
+                // process there started when the shell did.
+                None => !crate::pty::is_process(sid, started),
             });
         }
-        // Otherwise the read loop removes it once the process is gone.
+        // A tab still running is removed by the read loop once it ends.
         if remove && exited {
             self.remove(id);
         }
@@ -746,11 +719,12 @@ impl TerminalManager {
             }
             let Some(pty) = st.pty.as_mut() else { continue };
             pty.forget_child();
-            let fd = pty.master_fd();
+            let (fd, start) = (pty.master_fd(), pty.start());
             let (rows, cols) = st.term.size();
             let snapshot = String::from_utf8_lossy(&st.term.snapshot()).into_owned();
             out.push(ExportedTerminal {
                 info: st.info.clone(),
+                start,
                 fd,
                 rows,
                 cols,
@@ -764,6 +738,11 @@ impl TerminalManager {
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct ExportedTerminal {
     pub info: TerminalInfo,
+    /// When the shell started (see [`crate::pty::process_start`]), so the
+    /// next daemon tells its pid apart from a later process's. Absent in
+    /// handoffs from daemons before X79.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<u64>,
     #[serde(skip)]
     pub fd: std::os::fd::RawFd,
     pub rows: u16,
@@ -1253,6 +1232,154 @@ mod tests {
 
     #[tokio::test]
     async fn closing_a_run_tab_stops_jobs_that_outlive_the_shell() {
+        closing_stops_jobs_that_outlive_the_shell(TerminalKind::Run).await;
+    }
+
+    #[tokio::test]
+    async fn closing_a_shell_tab_stops_jobs_that_outlive_the_shell() {
+        // A dev server left running in the background of a terminal (X79).
+        closing_stops_jobs_that_outlive_the_shell(TerminalKind::Shell).await;
+    }
+
+    #[tokio::test]
+    async fn closing_an_agent_tab_stops_jobs_that_outlive_the_shell() {
+        closing_stops_jobs_that_outlive_the_shell(TerminalKind::Agent).await;
+    }
+
+    #[tokio::test]
+    async fn closing_a_tab_whose_shell_exited_stops_the_job_it_left() {
+        // The shell started a job that let go of the terminal and ignores
+        // SIGHUP, then exited: the tab shows the exit, the job runs on (X79).
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("job.pid");
+        let mgr = manager();
+        let info = mgr
+            .create(TerminalCreate {
+                cwd: "/tmp".into(),
+                command: vec![
+                    "/bin/sh".into(),
+                    "-c".into(),
+                    format!("set -m; (trap '' HUP; exec sleep 60) </dev/null >/dev/null 2>&1 & echo $! > {}", pid_file.display()),
+                ],
+                ..Default::default()
+            })
+            .unwrap();
+        let start = std::time::Instant::now();
+        while mgr.get(info.id).is_some_and(|t| t.info().exit.is_none()) {
+            assert!(start.elapsed() < Duration::from_secs(10), "the shell never exited");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let job = nix::unistd::Pid::from_raw(std::fs::read_to_string(&pid_file).unwrap().trim().parse().unwrap());
+        assert!(nix::sys::signal::kill(job, None).is_ok(), "the job ended with its shell");
+        mgr.kill(info.id, true).unwrap();
+        let start = std::time::Instant::now();
+        while nix::sys::signal::kill(job, None).is_ok() {
+            if start.elapsed() > Duration::from_secs(8) {
+                let _ = nix::sys::signal::kill(job, nix::sys::signal::Signal::SIGKILL);
+                panic!("the job outlived its closed tab");
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    /// A shell of its own session that ignores SIGHUP, standing in for the
+    /// shell of a tab a previous daemon handed over (S3).
+    fn session_leader_ignoring_sighup() -> std::process::Child {
+        use std::os::unix::process::CommandExt;
+        let mut cmd = std::process::Command::new("/bin/sh");
+        cmd.args(["-c", "trap '' HUP; exec sleep 60"]);
+        // SAFETY: setsid is async-signal-safe.
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
+        }
+        cmd.spawn().unwrap()
+    }
+
+    /// Adopts tab 41 as a previous daemon handed it over (S3): `handoff` is
+    /// its entry in the handoff, here without `info`. Returns the terminal's
+    /// other end, which keeps it open.
+    fn adopt_shell_tab(
+        mgr: &Arc<TerminalManager>,
+        pid: u32,
+        mut handoff: serde_json::Value,
+    ) -> std::os::fd::OwnedFd {
+        handoff["info"] = serde_json::json!({
+            "id": 41,
+            "kind": "shell",
+            "title": "zsh",
+            "cwd": "/tmp",
+            "command": ["/bin/zsh"],
+            "agent_state": "idle",
+            "cols": 80,
+            "rows": 24,
+            "pid": pid,
+            "created_at": 0,
+            "last_output_at": 0,
+        });
+        let exported: ExportedTerminal = serde_json::from_value(handoff).unwrap();
+        let pair = nix::pty::openpty(None, None).unwrap();
+        use std::os::fd::IntoRawFd;
+        mgr.adopt(&exported, pair.master.into_raw_fd()).unwrap();
+        pair.slave
+    }
+
+    #[tokio::test]
+    async fn closing_an_adopted_tab_leaves_alone_the_session_now_on_its_shells_pid() {
+        // The shell exited while a job keeps the terminal open, and its pid
+        // now leads another session (X79).
+        let mut other = session_leader_ignoring_sighup();
+        let mgr = manager();
+        // The shell started 1 µs after the epoch, the process now on its pid did not.
+        let _job = adopt_shell_tab(
+            &mgr,
+            other.id(),
+            serde_json::json!({"rows": 24, "cols": 80, "snapshot": "", "start": 1}),
+        );
+        mgr.kill(41, true).unwrap();
+        // Past the SIGKILL, 4.5 s after the SIGHUP.
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        let running = other.try_wait().unwrap().is_none();
+        let _ = other.kill();
+        let _ = other.wait();
+        assert!(running, "the other session was stopped");
+    }
+
+    #[tokio::test]
+    async fn closing_a_tab_that_shows_an_exit_stops_its_shell_still_running() {
+        // The terminal closed while the shell runs on, ignoring SIGHUP: the
+        // tab shows an exit once it stops waiting for the shell (X79).
+        let mut shell = session_leader_ignoring_sighup();
+        let mgr = manager();
+        // From a daemon before X79, whose handoff has no start time.
+        let terminal = adopt_shell_tab(
+            &mgr,
+            shell.id(),
+            serde_json::json!({"rows": 24, "cols": 80, "snapshot": ""}),
+        );
+        drop(terminal);
+        let id = 41;
+        let start = std::time::Instant::now();
+        while mgr.get(id).is_some_and(|t| t.info().exit.is_none()) {
+            assert!(start.elapsed() < Duration::from_secs(10), "the tab never showed an exit");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(shell.try_wait().unwrap().is_none(), "the shell ended by itself");
+        mgr.kill(id, true).unwrap();
+        let start = std::time::Instant::now();
+        while shell.try_wait().unwrap().is_none() {
+            if start.elapsed() > Duration::from_secs(8) {
+                shell.kill().unwrap();
+                shell.wait().unwrap();
+                panic!("the shell outlived its closed tab");
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    async fn closing_stops_jobs_that_outlive_the_shell(kind: TerminalKind) {
         // A job-control shell puts the job in its own process group, and the
         // job ignores SIGHUP, so it keeps running after the shell exits.
         let dir = tempfile::tempdir().unwrap();
@@ -1269,7 +1396,7 @@ mod tests {
                         pid_file.display()
                     ),
                 ],
-                kind: TerminalKind::Run,
+                kind,
                 ..Default::default()
             })
             .unwrap();
@@ -1290,7 +1417,7 @@ mod tests {
         while nix::sys::signal::kill(job, None).is_ok() {
             assert!(
                 start.elapsed() < Duration::from_secs(8),
-                "the run tab's job is still running"
+                "the {kind:?} tab's job is still running"
             );
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
