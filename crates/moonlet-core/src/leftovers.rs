@@ -17,10 +17,21 @@ pub struct Leftovers {
     /// before a reboot names no process that still runs.
     #[serde(default)]
     pub boot: Option<u64>,
+    /// Which boot of the machine this is ([`crate::process::boot_id`]),
+    /// where the kernel says: unlike the boot time, a clock change leaves it.
+    #[serde(default)]
+    pub boot_id: Option<String>,
     /// The agents and every process they started.
     pub processes: Vec<(u32, u64)>,
     /// Each terminal's session, by its leader: the shell the PTY started.
     pub sessions: Vec<(u32, u64)>,
+}
+
+impl Leftovers {
+    /// A record of `processes` and `sessions` made during this boot.
+    pub fn of(processes: Vec<(u32, u64)>, sessions: Vec<(u32, u64)>) -> Leftovers {
+        Leftovers { boot: crate::process::boot_time(), boot_id: crate::process::boot_id(), processes, sessions }
+    }
 }
 
 /// Where the daemon on `socket` keeps its [`Leftovers`]: next to the socket,
@@ -70,6 +81,19 @@ fn read_own(path: &Path) -> Option<Leftovers> {
     serde_json::from_slice(&bytes).ok()
 }
 
+/// Whether `left` was recorded since the machine last booted: by the boot id
+/// where both have one, else by the boot time within 2 s, as the boot time
+/// is the clock less the time since boot, read at two moments.
+fn this_boot(left: &Leftovers) -> bool {
+    if let (Some(then), Some(now)) = (&left.boot_id, crate::process::boot_id()) {
+        return *then == now;
+    }
+    match (left.boot, crate::process::boot_time()) {
+        (Some(then), Some(now)) => then.abs_diff(now) <= 2 * crate::process::BOOT_TIME_PER_SEC,
+        _ => true,
+    }
+}
+
 /// Ends what the daemon before this one recorded in `path` and still runs,
 /// and returns it, for the next record to keep naming until it is gone. A
 /// daemon that crashed ended nothing; one that stopped cleanly ended its
@@ -82,7 +106,8 @@ pub fn reap(path: &Path) -> Leftovers {
     let Some(left) = read_own(path) else {
         return Leftovers::default();
     };
-    if left.boot.is_some() && left.boot != crate::process::boot_time() {
+    if !this_boot(&left) {
+        tracing::info!("not ending what {} names: it is from before the machine restarted", path.display());
         return Leftovers::default();
     }
     let mut doomed = Doomed { group: None, family: Family::of(left.processes.clone()) };
@@ -124,7 +149,7 @@ mod tests {
         let started = process_start(shell.id()).unwrap();
         shell.wait().unwrap();
         let job = nix::unistd::Pid::from_raw(std::fs::read_to_string(&pid_file).unwrap().trim().parse().unwrap());
-        save(&path, &Leftovers { boot: crate::process::boot_time(), processes: vec![], sessions: vec![(shell.id(), started)] }).unwrap();
+        save(&path, &Leftovers::of(vec![], vec![(shell.id(), started)])).unwrap();
         reap(&path);
         for _ in 0..80 {
             if nix::sys::signal::kill(job, None).is_err() {
@@ -136,18 +161,53 @@ mod tests {
         panic!("the recorded session's job still runs");
     }
 
-    #[tokio::test]
-    async fn a_record_from_before_a_reboot_ends_nothing() {
+    /// A record naming a fresh `sleep`, changed by `made`; whether reaping
+    /// it ended the `sleep`.
+    async fn reaping_ends(made: impl FnOnce(&mut Leftovers)) -> bool {
         let dir = tempfile::tempdir().unwrap();
         let path = file(&dir.path().join("d.sock"));
         let mut sleeper = std::process::Command::new("/bin/sleep").arg("30").spawn().unwrap();
-        let boot = crate::process::boot_time().map(|b| b - 1);
-        save(&path, &Leftovers { boot, processes: vec![(sleeper.id(), process_start(sleeper.id()).unwrap())], sessions: vec![] }).unwrap();
+        let mut left = Leftovers::of(vec![(sleeper.id(), process_start(sleeper.id()).unwrap())], vec![]);
+        made(&mut left);
+        save(&path, &left).unwrap();
         reap(&path);
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-        assert!(sleeper.try_wait().unwrap().is_none(), "a process from another boot's record was signalled");
-        sleeper.kill().unwrap();
+        let ended = sleeper.try_wait().unwrap().is_some();
+        let _ = sleeper.kill();
         sleeper.wait().unwrap();
+        ended
+    }
+
+    #[tokio::test]
+    async fn a_record_from_before_a_reboot_ends_nothing() {
+        let second = crate::process::BOOT_TIME_PER_SEC;
+        // Another boot, though at the same time by the clock.
+        assert!(!reaping_ends(|l| l.boot_id = Some("00000000-0000-0000-0000-000000000000".into())).await, "a process from another boot's record was signalled");
+        // Without a boot id, a boot 3 s apart is another.
+        assert!(
+            !reaping_ends(|l| {
+                l.boot_id = None;
+                l.boot = l.boot.map(|b| b - 3 * second);
+            })
+            .await,
+            "a process from another boot's record was signalled"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_clock_change_since_the_record_still_ends_what_it_names() {
+        let second = crate::process::BOOT_TIME_PER_SEC;
+        // The clock went an hour back since: the boot time with it.
+        assert!(reaping_ends(|l| l.boot = l.boot.map(|b| b + 3600 * second)).await, "a clock change made the record end nothing");
+        // Without a boot id, within 2 s of the boot time is the same boot.
+        assert!(
+            reaping_ends(|l| {
+                l.boot_id = None;
+                l.boot = l.boot.map(|b| b - second);
+            })
+            .await,
+            "a boot time 1 s off made the record end nothing"
+        );
     }
 
     #[tokio::test]
@@ -156,7 +216,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = file(&dir.path().join("d.sock"));
         let mut sleeper = std::process::Command::new("/bin/sleep").arg("30").spawn().unwrap();
-        save(&path, &Leftovers { boot: crate::process::boot_time(), processes: vec![(sleeper.id(), process_start(sleeper.id()).unwrap())], sessions: vec![] }).unwrap();
+        save(&path, &Leftovers::of(vec![(sleeper.id(), process_start(sleeper.id()).unwrap())], vec![])).unwrap();
         // As if another user had written it, in a shared folder such as /tmp.
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666)).unwrap();
         assert_eq!(reap(&path), Leftovers::default());
@@ -172,7 +232,7 @@ mod tests {
         let path = file(&dir.path().join("d.sock"));
         let mut sleeper = std::process::Command::new("/bin/sleep").arg("30").spawn().unwrap();
         let elsewhere = dir.path().join("elsewhere.json");
-        save(&elsewhere, &Leftovers { boot: crate::process::boot_time(), processes: vec![(sleeper.id(), process_start(sleeper.id()).unwrap())], sessions: vec![] }).unwrap();
+        save(&elsewhere, &Leftovers::of(vec![(sleeper.id(), process_start(sleeper.id()).unwrap())], vec![])).unwrap();
         std::os::unix::fs::symlink(&elsewhere, &path).unwrap();
         assert_eq!(reap(&path), Leftovers::default());
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
@@ -211,7 +271,7 @@ mod tests {
         let start = |pid| process_start(pid).unwrap();
         // `other` was recorded with a start time that is not its own: its pid
         // belonged to an earlier process.
-        let left = Leftovers { boot: crate::process::boot_time(), processes: vec![(stubborn.id(), start(stubborn.id())), (other.id(), start(other.id()) - 1)], sessions: vec![] };
+        let left = Leftovers::of(vec![(stubborn.id(), start(stubborn.id())), (other.id(), start(other.id()) - 1)], vec![]);
         save(&path, &left).unwrap();
         assert_eq!(reap(&path), left, "what it ends is returned");
         let status = ended(stubborn).await;

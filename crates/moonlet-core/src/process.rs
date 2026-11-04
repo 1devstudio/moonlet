@@ -151,6 +151,37 @@ pub fn boot_time() -> Option<u64> {
     }
 }
 
+/// How many units of [`boot_time`] make a second.
+#[cfg(target_os = "macos")]
+pub const BOOT_TIME_PER_SEC: u64 = 1_000_000;
+/// How many units of [`boot_time`] make a second.
+#[cfg(not(target_os = "macos"))]
+pub const BOOT_TIME_PER_SEC: u64 = 1;
+
+/// Which boot of the machine this is, a new id at each: `kern.bootsessionuuid`
+/// on macOS, `/proc/sys/kernel/random/boot_id` on Linux. Unlike
+/// [`boot_time`], which is the clock now less the time since boot, a clock
+/// change leaves it as it was. `None` when the kernel does not say.
+pub fn boot_id() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        let mut buf = [0u8; 64];
+        let mut size = buf.len();
+        // SAFETY: sysctlbyname writes at most `size` bytes into `buf`.
+        let r = unsafe { libc::sysctlbyname(c"kern.bootsessionuuid".as_ptr(), buf.as_mut_ptr().cast(), &mut size, std::ptr::null_mut(), 0) };
+        if r != 0 {
+            return None;
+        }
+        let id = std::ffi::CStr::from_bytes_until_nul(&buf[..size]).ok()?.to_str().ok()?.trim().to_string();
+        (!id.is_empty()).then_some(id)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let id = std::fs::read_to_string("/proc/sys/kernel/random/boot_id").ok()?.trim().to_string();
+        (!id.is_empty()).then_some(id)
+    }
+}
+
 /// Every process this one may see, with its parent and start time (X79).
 pub fn table() -> Table {
     Table::new(crate::pty::all_pids().into_iter().filter_map(|pid| u32::try_from(pid).ok().filter(|&p| p > 0)).filter_map(proc_of))

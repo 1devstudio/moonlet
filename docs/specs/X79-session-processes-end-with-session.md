@@ -100,7 +100,7 @@ After a crash:
       (`~/.moonlet/run/moonletd.leftovers.json` for the default one) each
       running agent and every process it started, and each terminal's session,
       its shell exited or not, all as pid and start time, with the machine's
-      boot time.
+      boot id and boot time.
 - [x] A daemon that starts fresh (not by a live-upgrade handoff) ends what that
       file names and still runs with the same start time: agents and what they
       started get SIGTERM, then SIGKILL 3 s later; terminal sessions get SIGHUP,
@@ -111,6 +111,13 @@ After a crash:
       `reaping_ends_recorded_processes_and_spares_a_reused_pid`,
       `reaping_ends_a_recorded_terminal_session_whose_shell_is_gone`,
       `a_record_from_before_a_reboot_ends_nothing`).
+- [x] A record is from before a reboot when its boot id differs from the
+      machine's (`kern.bootsessionuuid` on macOS, the kernel's `boot_id` on
+      Linux). Without a boot id on either side, it is when the boot times are
+      more than 2 s apart. A clock change since the record, which moves the
+      boot time, still lets it end what it names
+      (`a_record_from_before_a_reboot_ends_nothing`,
+      `a_clock_change_since_the_record_still_ends_what_it_names`).
 - [x] The record is the user's own: written readable and writable by the
       user alone, never through a link, and read only when it is a file, not
       a link, owned by the user and that no one else may write. Any other
@@ -155,9 +162,11 @@ None in this part.
 
 `<socket name>.leftovers.json` next to the daemon's socket, written by the
 daemon and read once by the next one on that socket:
-`{"boot": …, "processes": [[pid, start], …], "sessions": [[leader pid, start], …]}`.
+`{"boot": …, "boot_id": "…", "processes": [[pid, start], …], "sessions": [[leader pid, start], …]}`.
 Start and boot times are in microseconds since the epoch on macOS; on Linux a
-start is in clock ticks since boot and the boot time in seconds.
+start is in clock ticks since boot and the boot time in seconds. The boot id
+is `kern.bootsessionuuid` on macOS and `/proc/sys/kernel/random/boot_id` on
+Linux.
 
 ## Security considerations
 
@@ -208,6 +217,7 @@ it is first written.
 - Rust, `leftovers.rs`: `reaping_ends_recorded_processes_and_spares_a_reused_pid`,
   `reaping_ends_a_recorded_terminal_session_whose_shell_is_gone`,
   `a_record_from_before_a_reboot_ends_nothing`,
+  `a_clock_change_since_the_record_still_ends_what_it_names`,
   `a_record_others_may_write_ends_nothing`,
   `a_record_behind_a_link_ends_nothing` and
   `a_record_is_written_for_its_owner_alone_and_never_through_a_link`.

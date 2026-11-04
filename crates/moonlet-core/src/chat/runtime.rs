@@ -805,7 +805,7 @@ impl ChatManager {
         processes.dedup();
         sessions.sort_unstable();
         sessions.dedup();
-        let now = crate::leftovers::Leftovers { boot: crate::process::boot_time(), processes, sessions };
+        let now = crate::leftovers::Leftovers::of(processes, sessions);
         if self.leftovers.lock().unwrap().as_ref().is_some_and(|(_, last)| last.as_ref() == Some(&now)) {
             return;
         }
