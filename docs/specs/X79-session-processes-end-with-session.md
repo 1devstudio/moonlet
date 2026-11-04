@@ -111,6 +111,14 @@ After a crash:
       `reaping_ends_recorded_processes_and_spares_a_reused_pid`,
       `reaping_ends_a_recorded_terminal_session_whose_shell_is_gone`,
       `a_record_from_before_a_reboot_ends_nothing`).
+- [x] The record is the user's own: written readable and writable by the
+      user alone, never through a link, and read only when it is a file, not
+      a link, owned by the user and that no one else may write. Any other
+      record ends nothing, as another user may have planted it next to a
+      socket in a shared folder such as /tmp
+      (`a_record_others_may_write_ends_nothing`,
+      `a_record_behind_a_link_ends_nothing`,
+      `a_record_is_written_for_its_owner_alone_and_never_through_a_link`).
 - [x] What is being ended stays in the record until it is gone: a stopped
       agent's processes during their grace, and what the daemon before left,
       so a crash meanwhile still leaves them to the next daemon
@@ -171,6 +179,12 @@ another process gets that pid only after all the others have been used.
 Command-line arguments of other processes can hold tokens; this
 feature reads only pids, parent pids, process groups and start times.
 
+The record next to the socket says which processes the next daemon ends. A
+socket may be in a folder other users can write to, so a record is read only
+when it is a file, not a link, owned by the user and not writable by anyone
+else; it is written with mode 0600, and never through a link planted where
+it is first written.
+
 ## Out of scope
 
 - `nohup cmd &` in a shell tab no longer outlives the tab. To keep a process
@@ -192,8 +206,11 @@ feature reads only pids, parent pids, process groups and start times.
   `a_family_signals_only_processes_that_still_run` and
   `a_family_forgets_a_process_no_longer_in_the_table`.
 - Rust, `leftovers.rs`: `reaping_ends_recorded_processes_and_spares_a_reused_pid`,
-  `reaping_ends_a_recorded_terminal_session_whose_shell_is_gone` and
-  `a_record_from_before_a_reboot_ends_nothing`.
+  `reaping_ends_a_recorded_terminal_session_whose_shell_is_gone`,
+  `a_record_from_before_a_reboot_ends_nothing`,
+  `a_record_others_may_write_ends_nothing`,
+  `a_record_behind_a_link_ends_nothing` and
+  `a_record_is_written_for_its_owner_alone_and_never_through_a_link`.
 - Rust, `chat/runtime.rs`: `what_a_stopped_agent_left_stays_recorded_until_it_is_gone`
   and `what_a_crashed_daemon_left_stays_recorded_until_it_is_gone`.
 - Rust, `moonletd/tests/daemon.rs`:

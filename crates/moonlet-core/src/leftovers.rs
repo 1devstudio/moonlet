@@ -30,14 +30,44 @@ pub fn file(socket: &Path) -> PathBuf {
     socket.with_file_name(format!("{stem}.leftovers.json"))
 }
 
-/// Writes `leftovers` to `path`, whole or not at all.
+/// Writes `leftovers` to `path`, whole or not at all, readable and writable
+/// by this user alone. The socket may be in a folder others can write to,
+/// such as /tmp: a link planted where the record is first written is
+/// replaced, never written through.
 pub fn save(path: &Path, leftovers: &Leftovers) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
     let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, serde_json::to_vec(leftovers)?)?;
+    match std::fs::remove_file(&tmp) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+        _ => {}
+    }
+    let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).custom_flags(libc::O_NOFOLLOW).open(&tmp)?;
+    f.write_all(&serde_json::to_vec(leftovers)?)?;
+    drop(f);
     std::fs::rename(&tmp, path)
+}
+
+/// The record in `path`, if this user wrote it: a file, not a link, owned by
+/// this user and that no one else may write. Anything else may have been
+/// planted by another user, to have their processes ended.
+fn read_own(path: &Path) -> Option<Leftovers> {
+    use std::io::Read;
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    let mut f = std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW).open(path).ok()?;
+    let meta = f.metadata().ok()?;
+    // SAFETY: geteuid only reads this process's credentials.
+    let me = unsafe { libc::geteuid() };
+    if !meta.is_file() || meta.uid() != me || meta.mode() & 0o022 != 0 {
+        tracing::warn!("ignoring {}: it is not this user's own", path.display());
+        return None;
+    }
+    let mut bytes = Vec::new();
+    f.read_to_end(&mut bytes).ok()?;
+    serde_json::from_slice(&bytes).ok()
 }
 
 /// Ends what the daemon before this one recorded in `path` and still runs,
@@ -46,9 +76,10 @@ pub fn save(path: &Path, leftovers: &Leftovers) -> std::io::Result<()> {
 /// agents and what they started, but jobs that ignored its terminals' hangup
 /// still run, and end now. Reads the file at once, so a new record cannot
 /// overwrite it first, and ends the processes in the background (SIGTERM,
-/// then SIGKILL 3 s later; terminal sessions as when a tab closes).
+/// then SIGKILL 3 s later; terminal sessions as when a tab closes). A record
+/// another user could have written ends nothing.
 pub fn reap(path: &Path) -> Leftovers {
-    let Some(left) = std::fs::read(path).ok().and_then(|b| serde_json::from_slice::<Leftovers>(&b).ok()) else {
+    let Some(left) = read_own(path) else {
         return Leftovers::default();
     };
     if left.boot.is_some() && left.boot != crate::process::boot_time() {
@@ -117,6 +148,52 @@ mod tests {
         assert!(sleeper.try_wait().unwrap().is_none(), "a process from another boot's record was signalled");
         sleeper.kill().unwrap();
         sleeper.wait().unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_record_others_may_write_ends_nothing() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = file(&dir.path().join("d.sock"));
+        let mut sleeper = std::process::Command::new("/bin/sleep").arg("30").spawn().unwrap();
+        save(&path, &Leftovers { boot: crate::process::boot_time(), processes: vec![(sleeper.id(), process_start(sleeper.id()).unwrap())], sessions: vec![] }).unwrap();
+        // As if another user had written it, in a shared folder such as /tmp.
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666)).unwrap();
+        assert_eq!(reap(&path), Leftovers::default());
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        assert!(sleeper.try_wait().unwrap().is_none(), "a process a record others may write names was signalled");
+        sleeper.kill().unwrap();
+        sleeper.wait().unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_record_behind_a_link_ends_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = file(&dir.path().join("d.sock"));
+        let mut sleeper = std::process::Command::new("/bin/sleep").arg("30").spawn().unwrap();
+        let elsewhere = dir.path().join("elsewhere.json");
+        save(&elsewhere, &Leftovers { boot: crate::process::boot_time(), processes: vec![(sleeper.id(), process_start(sleeper.id()).unwrap())], sessions: vec![] }).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &path).unwrap();
+        assert_eq!(reap(&path), Leftovers::default());
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        assert!(sleeper.try_wait().unwrap().is_none(), "a process a linked record names was signalled");
+        sleeper.kill().unwrap();
+        sleeper.wait().unwrap();
+    }
+
+    #[test]
+    fn a_record_is_written_for_its_owner_alone_and_never_through_a_link() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = file(&dir.path().join("d.sock"));
+        // Planted where the record is first written, pointing at a file of
+        // the user's own.
+        let victim = dir.path().join("victim");
+        std::fs::write(&victim, "mine").unwrap();
+        std::os::unix::fs::symlink(&victim, path.with_extension("json.tmp")).unwrap();
+        save(&path, &Leftovers::default()).unwrap();
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "mine");
+        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
     }
 
     #[tokio::test]
