@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUpRight, Check, ChevronLeft, Circle, Cloud, Copy, Cpu, Laptop, LoaderCircle, RotateCw, Server } from "lucide-react";
 import { copyJobOutput, openJobTab, stopJob } from "../lib/actions";
 import { rpc } from "../lib/daemon";
-import { type JobIcon, type JobTone, type OutputLine, chipFromJob, going, jobRowLine, jobStateLine, jobsSummary, dur, LINES_SHOWN, lineKey, outputCount, outputEnd, outputShown, phaseList, workerLine } from "../lib/jobs";
+import { type JobIcon, type JobTone, type OutputLine, chipFromJob, going, jobRowLine, jobStateLine, jobsSummary, dur, LINES_SHOWN, lineKey, outputCount, outputEnd, outputShown, phaseList, stderrCount, workerLine } from "../lib/jobs";
 import { loadOutput, useJobs } from "../lib/jobsStore";
 import { startupCard, waitingNote, type StartupCard } from "../lib/cloudMachines";
 import { useCloud } from "../lib/cloudStore";
@@ -52,6 +52,9 @@ export function useJobLines(host: string, job: string): OutputLine[] | null {
 
 /** How many lines the job printed, once its output is read (X81). */
 export const useJobCount = (job: string) => useJobs((s) => (s.output[job] ? outputCount(s.output[job]) : ""));
+
+/** How many lines the job printed on stderr, the trimmed ones too (X81). */
+export const useJobStderr = (job: string) => useJobs((s) => (s.output[job] ? stderrCount(s.output[job]) : 0));
 
 /** Above a job's output once its start was dropped (X81). */
 export function TrimmedNote({ job }: { job: string }) {

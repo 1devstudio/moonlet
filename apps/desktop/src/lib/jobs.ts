@@ -232,6 +232,8 @@ export interface JobOutput {
   stream: 1 | 2 | null;
   /** Lines ended so far, the dropped ones too: the next line's number less one. */
   ended: number;
+  /** Of those, the ones on stderr, counted as they end (X81). */
+  stderr: number;
   /** Characters kept, as they show: each line's text and its newline, and
    *  the line not ended yet. */
   size: number;
@@ -267,11 +269,12 @@ const CUT_MAX = 4096;
  */
 export function readOutput(out: JobOutput | undefined, chunks: readonly JobChunk[], max = OUTPUT_KEPT): JobOutput {
   const added: OutputLine[] = [];
-  let { open, cut, stream, ended, size, trimmed } = out ?? { open: "", cut: "", stream: null, ended: 0, size: 0, trimmed: false };
+  let { open, cut, stream, ended, stderr, size, trimmed } = out ?? { open: "", cut: "", stream: null, ended: 0, stderr: 0, size: 0, trimmed: false };
   // `size` counts the ended lines here, the open one added at the end.
   size -= open.length;
   const end = (text: string) => {
     added.push(lineOf(++ended, stream!, text));
+    if (stream === 2) stderr++;
     size += text.length + 1;
   };
   for (const c of chunks) {
@@ -302,7 +305,7 @@ export function readOutput(out: JobOutput | undefined, chunks: readonly JobChunk
     if (open.length > max) open = lastUnits(open, max);
     trimmed = true;
   }
-  return { lines, open, cut, stream, ended, size: size + open.length, trimmed };
+  return { lines, open, cut, stream, ended, stderr, size: size + open.length, trimmed };
 }
 
 /** The lines a job's output shows: the ended ones, then the one not ended yet. */
@@ -316,6 +319,10 @@ export function outputCount(out: JobOutput): string {
   const n = out.ended + (out.stream && out.open ? 1 : 0);
   return `${n.toLocaleString("en-US")} ${n === 1 ? "line" : "lines"}`;
 }
+
+/** How many lines a job printed on stderr, for its view's stderr badge: the
+ *  trimmed ones too, and the one not ended yet (X81). */
+export const stderrCount = (out: JobOutput): number => out.stderr + (out.stream === 2 && out.open ? 1 : 0);
 
 /** How many lines a job's view renders at first, and how many more each
  *  "Show earlier" adds (X81). */

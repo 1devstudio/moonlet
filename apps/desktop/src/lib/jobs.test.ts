@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type JobOutput, bashChip, chipFromJob, chipFromOutput, jobRowLine, jobStateLine, jobTabLine, jobsSummary, jobsTabCount, LINES_SHOWN, outputCount, outputEnd, outputShown, phaseBar, readOutput, phaseList, shownCommand, shownLines, workerFacts, workerLine } from "./jobs";
+import { type JobOutput, bashChip, chipFromJob, chipFromOutput, jobRowLine, jobStateLine, jobTabLine, jobsSummary, jobsTabCount, LINES_SHOWN, outputCount, outputEnd, outputShown, phaseBar, readOutput, phaseList, shownCommand, shownLines, stderrCount, workerFacts, workerLine } from "./jobs";
 import type { Job, JobChunk } from "./protocol";
 import { lastOf } from "./showEarlier";
 
@@ -219,6 +219,17 @@ describe("a job's output (X62)", () => {
     expect(outputCount(readOutput(undefined, [{ stream: 1, text: "one\ntwo\nthree\nfour" }], 14))).toBe("4 lines");
     expect(outputCount(readOutput(undefined, [{ stream: 1, text: "only\n" }]))).toBe("1 line");
     expect(outputCount(readOutput(undefined, [{ stream: 1, text: "x\n".repeat(1500) }], 100))).toBe("1,500 lines");
+  });
+
+  it("counts every stderr line the job printed, the trimmed ones too", () => {
+    // Two errors, then 3 + 3 + 3 characters of stdout: past 9 kept, both errors go.
+    const out = readOutput(undefined, [{ stream: 2, text: "Error: one\nError: two\n" }], 9);
+    const next = readOutput(out, [{ stream: 1, text: "ab\ncd\nef\n" }], 9);
+    expect(outputShown(next).map((l) => l.text)).toEqual(["ab", "cd", "ef"]);
+    expect(stderrCount(next)).toBe(2);
+    // A stderr line not ended yet counts, as the view shows it.
+    expect(stderrCount(readOutput(next, [{ stream: 2, text: "Warning" }], 9))).toBe(3);
+    expect(stderrCount(readOutput(undefined, [{ stream: 1, text: "ok\n" }]))).toBe(0);
   });
 
   it("never cuts the line not ended yet inside a character of two UTF-16 units", () => {

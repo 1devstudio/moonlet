@@ -10,7 +10,7 @@ import { nearBottom, useShowEarlier } from "../lib/showEarlier";
 import { useSessionJob } from "../lib/jobsStore";
 import { errorToast, useStore } from "../lib/store";
 import { useNow } from "../lib/useNow";
-import { EarlierLines, JobDot, LINE_TONE, TONE, WorkerIcon, copyText, going, useFollow, useJobCount, useJobLines } from "./JobsPanel";
+import { EarlierLines, JobDot, LINE_TONE, TONE, WorkerIcon, copyText, going, useFollow, useJobCount, useJobLines, useJobStderr } from "./JobsPanel";
 import { cx } from "./ui";
 
 const BAR_TONE = { done: "bg-done", accent: "bg-accent", blocked: "bg-blocked" };
@@ -34,6 +34,7 @@ export default function JobView({ host, wsId, job: id }: { host: string; wsId: s
   const now = useNow(!!job && going(job));
   const lines = useJobLines(host, id);
   const count = useJobCount(id);
+  const stderr = useJobStderr(id);
   const [filter, setFilter] = useState<OutputFilter>("all");
   const [find, setFind] = useState("");
   const [follow, setFollow] = useState(false);
@@ -49,7 +50,6 @@ export default function JobView({ host, wsId, job: id }: { host: string; wsId: s
   if (!job) return null;
   const state = jobTabLine(job, now, session);
   const chip = chipFromJob(job);
-  const stderr = lines?.filter((l) => l.stream === 2).length ?? 0;
   const reveal = (folder: string) => void hostsApi.openIn("reveal", folder).catch(errorToast);
   return (
     <div data-job-view={job.command} className="flex h-full min-h-0 flex-col bg-bg">
